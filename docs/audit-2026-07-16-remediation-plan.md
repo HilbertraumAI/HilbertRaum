@@ -78,7 +78,7 @@ before the next numbered phase.
 | id | found in | description + location | proposed phase | status |
 |---|---|---|---|---|
 | Q-1 | Phase 3 (F-05) | **#59 warning-copy half.** F-05 fixed the provisioning root cause (DIY `--with-assets` now fetches the `ocr` family), but the in-app scanned-PDF/photo dead-end warning (`shared/i18n/en.ts:488,1811` + de.ts counterparts) still says "OCR files not on this drive" without telling the user how to get them. Renderer-copy change: add an actionable EN+DE `unavailable → how to get it` hint keyed off the packaging docs (`fetch-runtime --family ocr`, or rebuild with `--with-assets`). Overlaps `user-guide.md:356-363` / `troubleshooting.md:185-197`. | Phase 7 | **resolved (P7, 2026-07-17)** — `docs.scan.ocrMissing` + `main.task.needsOcr` gained an EN+DE `--with-assets` / `fetch-runtime --family ocr` remedy hint; `imageNeedsOcr` (persist-canonical) left byte-stable, covered by docs; user-guide + troubleshooting cross-refs added. See §L Phase-7. |
-| Q-2 | Phase 4 (F-02) | **Real-server error-frame smoke owed.** The F-02 in-band error-frame shapes (`data: {"error":{…}}` + bare `error: {…}` field line) are pinned from the TA-4-verified wire contract + hand-authored fixtures — CI green does NOT evidence the real b9849 wire format (TS-3(a)). At the next manual smoke-drive session, force a real llama-server mid-stream error (tiny ctx + context-shift disabled, `HILBERTRAUM_*` env) and verify the reader rejects + the friendly copy surfaces. Also watch the PARTIAL error-frame case: an error frame whose JSON is truncated mid-write (`data: {"error":{"mess` + close, no `[DONE]`) still parses as a keep-alive and the stream ends CLEANLY — inside Phase 4's §N close-without-`[DONE]` scope-out, and the real server is where it would surface if it occurs. COUPLES with Phase 9's F-40 b9849 re-capture — Phase 9: register this into the ONE consolidated smoke-session checklist (BUILD_STATE §5 item 7 TS-3 bullet) rather than as a scattered note. | Phase 9 | open |
+| Q-2 | Phase 4 (F-02) | **Real-server error-frame smoke owed.** The F-02 in-band error-frame shapes (`data: {"error":{…}}` + bare `error: {…}` field line) are pinned from the TA-4-verified wire contract + hand-authored fixtures — CI green does NOT evidence the real b9849 wire format (TS-3(a)). At the next manual smoke-drive session, force a real llama-server mid-stream error (tiny ctx + context-shift disabled, `HILBERTRAUM_*` env) and verify the reader rejects + the friendly copy surfaces. Also watch the PARTIAL error-frame case: an error frame whose JSON is truncated mid-write (`data: {"error":{"mess` + close, no `[DONE]`) still parses as a keep-alive and the stream ends CLEANLY — inside Phase 4's §N close-without-`[DONE]` scope-out, and the real server is where it would surface if it occurs. COUPLES with Phase 9's F-40 b9849 re-capture — Phase 9: register this into the ONE consolidated smoke-session checklist (BUILD_STATE §5 item 7 TS-3 bullet) rather than as a scattered note. | Phase 9 | **resolved-by-registration (P9, 2026-07-17)** — folded into BUILD_STATE §5 item 7 TS-3 as new checklist item **(i)** "real-server mid-stream error-frame smoke (F-02 / §Q Q-2)" (tiny ctx + context-shift disabled, `HILBERTRAUM_*`, reader rejects + friendly `main.chat.streamError`; PARTIAL-frame `data: {"error":{"mess` + close, no `[DONE]` → keep-alive, clean end), coupled with F-40's re-capture item **(h)**. Runs at the next manual smoke-drive session. See §L Phase-9. |
 
 ---
 
@@ -476,6 +476,70 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 > - Messages to later phases: <"Phase 7: …" | none>
 > - Docs touched: <files> · BUILD_STATE entry added: <yes>
 > ```
+
+### Phase 9 — 2026-07-17 — branch fix/audit-2026-07-16-p9 (stacked on p8 @ 70a52b2); commits F-40+F-41+ratchet @ 29427a4, docs+§Q+ledger @ this commit
+- Gate: **4,271 passed / 49 skipped** (baseline entering P9 was 4,270/49; +1 = the new ratchet
+  test; the five cast conversions retyped stubs only — no test added/removed, no assertion
+  changed). `typecheck` clean (both `tsconfig.node.json` + `tsconfig.web.json`, `--composite false`).
+  `build` **n/a** — test-only phase; nothing under `apps/desktop/src` touched (the CONTRIBUTING +
+  BUILD_STATE edits don't count as src). Hygiene: every edited/new file LF, BOM-free, NUL-free
+  (byte-verified).
+- Fixed (in listed order):
+  - **F-40** — corrected the stale `tests/unit/gpu.test.ts:16-24` comment: the `--list-devices`
+    fixture was *captured on b9585*; the runtime pin is now b9849 (runtime-sources.yaml:34), and a
+    b9849 re-capture is OWED. Removed the false "if an upstream release changes the device-line
+    shape, this fixture-backed parse fails in CI" guarantee (it only holds if the capture tracks
+    the pin, which it doesn't — M-A5 is observation-triggered), replacing it with the honest scope:
+    the frozen b9585 capture reddens only if the PARSER regresses against the b9585 shape, and it
+    points at the consolidated smoke checklist. NO fixture bytes or assertions moved — the full
+    b9849 re-capture (and the moving `gpu.test.ts` freeMb / `vision-sse.test.ts` split-UTF-8
+    assertions) rides the next manual smoke-drive session, registered below.
+  - **F-41** — converted the five heaviest `as never` stub-cast files to typed payloads, so the
+    outer `stubApi(...)` re-engages the `Partial<PreloadApi>` check (method-name + return-shape
+    renames now redden typecheck). Real casts removed per file: `fileTranslateSession` 28→0,
+    `ImagesScreen` 23→0, `TranslateScreen` 21→0, `AppLock` 12→0, `translateSession` 9→0. Technique:
+    typed builders returning the real shared type (`translateJob`, `unavailable(reason)`,
+    `appStatus`/`docTask` already existed) + `Partial<PreloadApi>`-typed `api` bags; for the handful
+    of DELIBERATELY-partial or contract-violating payloads (a "keep the shell calm" AppStatus/
+    PreflightResult, a preview-only DecodedImage without `bytes`, the L6b malformed-`translateStart`
+    resolve) a NARROW named `as unknown as <Type>` at exactly that value (the HomeScreenPoll
+    pattern), never a blanket `} as never)`. **New one-way ratchet** `tests/unit/as-never-ratchet.test.ts`
+    counts real `as never` casts under tests/ (comments stripped so prose mentions don't inflate it)
+    and fails if the count exceeds **BASELINE = 110** — TEETH shown red-green: planted a real cast
+    → 111 > 110 red → removed → green.
+  - **Real top-5 vs the audit's list (ledgered delta per the orchestrator note):** the audit's HEAD
+    census named ImagesScreen 23 / translateSession 9 / TranslateScreen 7 / doctasksStore 7 / +1.
+    Phases 4–8 shifted counts; the current grep-census top by raw count was fileTranslateSession 28,
+    ImagesScreen 23, TranslateScreen 21, settings-write-gate 15, AppLock 12, translateSession 9,
+    doctasksStore 8. **settings-write-gate (15) was EXCLUDED** — its `as never` are deliberate
+    invalid-VALUE casts (`null as never`, `42 as never`) testing the write-gate's runtime rejection,
+    NOT PreloadApi stub-payload erasure (the audit's own "triage separately" class), so converting
+    them to typed builders is meaningless. Actual F-41-class top-5 converted: fileTranslateSession,
+    ImagesScreen, TranslateScreen, AppLock, translateSession. doctasksStore (8) is the next candidate
+    for the fix-when-touched sweep.
+- Deviations from plan: none material. F-40's full re-capture is deferred-by-design to the smoke
+  session (the plan scoped Phase 9 to the interim comment fix + registration); the F-41 top-5 list
+  was re-derived by current grep count with the ledgered exclusion above.
+- New findings: none (NF-* none). No new §Q items.
+- **§Q sweep — table now EMPTY (all rows resolved/registered):**
+  - **Q-1** — resolved in Phase 7 (verified; the #59 copy half, `docs.scan.ocrMissing` +
+    `main.task.needsOcr` EN+DE remedy hint).
+  - **Q-2** — **resolved-by-registration** here: folded into BUILD_STATE §5 item 7 TS-3 as the ONE
+    consolidated smoke-session checklist — new item **(i)** "real-server mid-stream error-frame
+    smoke (F-02 / Q-2)" (tiny ctx + context-shift disabled, `HILBERTRAUM_*`; reader rejects +
+    friendly `main.chat.streamError`; the PARTIAL-frame `data: {"error":{"mess` + close, no `[DONE]`
+    → keep-alive → clean end), coupled with F-40's re-capture item **(h)**. No scattered duplicate
+    left in the living §5 text (the Phase-4 §L note and the `gpu.test.ts` comment point here; dated
+    journal entries left byte-untouched).
+- Messages to later phases:
+  - **Phase 10:** durable §50 dispositions — F-40 comment-corrected + the b9849 re-capture registered
+    to the smoke checklist (items (h)/(i)); F-41 five-file typed-stub conversion + the `as never`
+    ratchet (baseline 110) as a new standing invariant; the CONTRIBUTING "type stub payloads" bullet.
+    §Q closed empty. No parked GitHub-issue text owed from this phase.
+- Docs touched: `apps/desktop/tests/unit/gpu.test.ts` (comment), the five converted test files, new
+  `apps/desktop/tests/unit/as-never-ratchet.test.ts`, `CONTRIBUTING.md` (test-guidance bullet),
+  `BUILD_STATE.md` (§5 item 7 TS-3 items (h)/(i) + item 14 Phase-9 line), this plan (§Q Q-2 + §L).
+  BUILD_STATE entry added: yes.
 
 ### Phase 8 — 2026-07-17 — branch fix/audit-2026-07-16-p8 (stacked on p7 @ c47c50d); commits F-29 @ 314ce66, F-30 @ 11a556c, F-31 @ 150fd0c, F-35 @ 42e5d32, F-39 @ 306f7bb, F-12 @ 88dd8f5, NF-1 @ 7b90210, docs+ledger @ this commit
 - Gate: **4,270 passed / 49 skipped** (baseline entering P8 was 4,267/49; +3 = F-29 memo test + F-30

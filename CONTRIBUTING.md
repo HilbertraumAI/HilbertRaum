@@ -96,6 +96,16 @@ npm run test:watch                              # watch mode (re-runs affected t
   advance for timestamp ordering, a timeout simulation where the timer IS the semantics, a
   single-macrotask hop with no observable — must carry a comment saying so; everything else
   is a bug.
+- **Type renderer stub payloads — don't reach for `as never`.** `stubApi(overrides)` takes
+  `Partial<PreloadApi>` (`tests/helpers/renderer.ts`) so a stub's shape is checked against the real
+  preload bridge; a blanket `... as never` opts it out, and a later shared-type rename leaves the
+  stub compiling against a stale shape (vacuous green). Build payloads with typed factories that
+  return the real shared type (the `runtimeStatus`/`appStatus`/`docTask` pattern in
+  `HomeScreenPoll`/`TranslateScreen`/`fileTranslateSession`); for a deliberately-partial "keep the
+  shell calm" payload use a narrow, named `as unknown as <Type>` at exactly that value, never a
+  blanket `} as never)`. A one-way ratchet (`tests/unit/as-never-ratchet.test.ts`) fails if the
+  tests/ `as never` count climbs — the remaining casts get converted **fix-when-touched** (lower
+  the ratchet baseline when you remove some).
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the

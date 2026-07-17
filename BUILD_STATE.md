@@ -1129,6 +1129,23 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
        - (f) **all perf numbers** (tok/s, peak RSS, model load time).
        - (g) **real GPU behavior** — the fake-spawn unit tests cover the ladder LOGIC, not drivers;
          see item 1b's ①–⑨ hardware matrix for the driver-level legs.
+       - (h) **b9849 verbatim-capture re-take (F-40, audit-2026-07-16)** — the GPU `--list-devices`
+         fixture (`list-devices-b9585-vulkan-rtx3080ti.txt`) and the vision SSE sample
+         (`vision-sse-sample.txt`, still `system_fingerprint b9585-…`) were captured on b9585; the
+         runtime pin is b9849. On the next smoke session re-run `llama-server --list-devices` + one
+         vision stream, commit b9849-named captures, and MOVE the byte-pinned assertions with them
+         (`gpu.test.ts` freeMb 11525 / the CRLF check; `vision-sse.test.ts` the split-UTF-8
+         "Müller & Söhne" reconstruction — a fresh capture must preserve a multibyte-split frame).
+         If the parse fails, that parser fix is the real payload. Until then the b9585 fixtures
+         guard the b9585 shape only (M-A5 is observation-triggered — see the `gpu.test.ts` header).
+       - (i) **real-server mid-stream error-frame smoke (F-02 / §Q Q-2, audit-2026-07-16)** —
+         Phase 4 made `readChatSSE` REJECT on an in-band error frame (`data: {"error":{…}}` or a
+         bare `error: {…}` field line), pinned only against hand-authored b9849-shaped fixtures.
+         Force a REAL llama-server mid-stream failure (tiny `--ctx-size` + context-shift disabled,
+         `HILBERTRAUM_*` env) and verify the reader rejects and the friendly `main.chat.streamError`
+         copy surfaces (never raw model/runtime text). Also watch the PARTIAL-frame case: an error
+         frame truncated mid-write (`data: {"error":{"mess` + close, no `[DONE]`) must parse as a
+         keep-alive and end the stream CLEANLY (Phase 4's scoped close-without-`[DONE]` semantics).
    - **TS-7 (owner call — CI minutes):** add a `macos-latest` CI leg. The suite is offline and
      Electron-binary-free, and cross-platform path bugs have historically been caught only by the
      Ubuntu leg.
@@ -1617,6 +1634,20 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     F-31 red-green-demonstrated; **NF-1** (unlisted F-12 pinning test `vision-security.test.ts`
     waited on job state → now waits on the streamed done event) fixed in-phase. Gate **4270/49**
     (+3), typecheck + build green. Details: plan §L Phase-8 ledger entry.
+
+    **Phase 9 done 2026-07-17** (branch `fix/audit-2026-07-16-p9`): test-infra hygiene + §Q sweep —
+    F-40 (corrected the stale `gpu.test.ts` comment — the `--list-devices` fixture was captured on
+    b9585, the pin is b9849, a re-capture is owed; the false "fails in CI" guarantee is gone), F-41
+    (converted the five heaviest `as never` stub-cast files to typed builders/narrow named casts —
+    `fileTranslateSession` 28, `ImagesScreen` 23, `TranslateScreen` 21, `AppLock` 12,
+    `translateSession` 9 → all real casts removed; the outer `stubApi(...)` payloads are now checked
+    against `Partial<PreloadApi>`. New one-way ratchet `as-never-ratchet.test.ts` (baseline **110**,
+    comments stripped) fails if the tests/ cast count ever climbs — TEETH shown 110→111 red→110).
+    **§Q swept EMPTY:** Q-2 (real-server error-frame smoke, incl. the partial-frame case) resolved
+    by registration into item 7's consolidated smoke checklist above (new items (h) b9849 re-capture
+    / (i) mid-stream error-frame smoke, coupling F-40 + F-02). Cast conversions changed no assertion.
+    Gate **4271/49** (+1 = the ratchet test), typecheck green (test-only phase — no
+    `apps/desktop/src` touched, build n/a). Details: plan §L Phase-9 ledger entry.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
