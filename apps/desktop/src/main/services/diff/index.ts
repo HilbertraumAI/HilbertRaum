@@ -251,6 +251,14 @@ export function wordDiff(
 ): DiffResult | null {
   const a = tokenizeForDiff(oldText)
   const b = tokenizeForDiff(newText)
+  // F-23 (audit 2026-07-16): two ZERO-word texts are word-for-word identical (the documented
+  // `identical` contract) — return that directly. Without this, the Myers d=0/k=0 iteration's
+  // down-move read `v[offset + k + 1]` OUT OF BOUNDS on the length-1 Int32Array (undefined → NaN
+  // termination test → the loop fell through to the "too different" null), misrouting the
+  // degenerate case to the expensive thematic fallback.
+  if (a.length === 0 && b.length === 0) {
+    return { ops: [], changes: [], stats: { added: 0, removed: 0, equal: 0 }, identical: true }
+  }
   const maxWords = opts.maxWords ?? DEFAULT_MAX_WORDS
   if (a.length > maxWords || b.length > maxWords) return null // too large — fall back to modes
   const context = opts.context ?? 6

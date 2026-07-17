@@ -23,6 +23,39 @@ describe('wordDiff — the core cases', () => {
     expect(r!.stats).toEqual({ added: 0, removed: 0, equal: 4 })
   })
 
+  // F-23 (audit 2026-07-16): two ZERO-word texts used to return null ("too different") instead of
+  // identical — with n=m=0 the Myers d=0/k=0 iteration read v[1] on a length-1 Int32Array
+  // (undefined), x=undefined poisoned the termination test, and myers fell through to the
+  // too-different bail. Two empty texts are word-for-word identical per the DiffResult contract.
+  it('two empty texts are identical, with zero stats (F-23)', () => {
+    const r = wordDiff('', '')
+    expect(r).not.toBeNull()
+    expect(r!.identical).toBe(true)
+    expect(r!.changes).toHaveLength(0)
+    expect(r!.ops).toHaveLength(0)
+    expect(r!.stats).toEqual({ added: 0, removed: 0, equal: 0 })
+  })
+
+  it('whitespace-only texts tokenize to zero words and are identical too (F-23)', () => {
+    const r = wordDiff('   ', '\n')
+    expect(r).not.toBeNull()
+    expect(r!.identical).toBe(true)
+    expect(r!.stats).toEqual({ added: 0, removed: 0, equal: 0 })
+  })
+
+  it('empty vs non-empty still yields a pure insert / pure delete (F-23 regression guard)', () => {
+    const ins = wordDiff('', 'a b')
+    expect(ins!.identical).toBe(false)
+    expect(ins!.changes).toHaveLength(1)
+    expect(ins!.changes[0].added).toEqual(['a', 'b'])
+    expect(ins!.changes[0].removed).toEqual([])
+    expect(ins!.stats).toEqual({ added: 2, removed: 0, equal: 0 })
+    const del = wordDiff('a b', '   ')
+    expect(del!.identical).toBe(false)
+    expect(del!.changes[0].removed).toEqual(['a', 'b'])
+    expect(del!.stats).toEqual({ added: 0, removed: 2, equal: 0 })
+  })
+
   it('the real regression: a single deleted word deep in repetitive text is caught exactly', () => {
     // Doc 2 dropped "tempor" from "…eirmod tempor invidunt…" — the change the LLM missed.
     const a = 'sed diam nonumy eirmod tempor invidunt ut labore et dolore'
