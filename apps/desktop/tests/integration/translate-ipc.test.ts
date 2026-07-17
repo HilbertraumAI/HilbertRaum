@@ -433,6 +433,22 @@ describe('registerTranslateIpc — translate job contract', () => {
     expect(event.sender.listenerCount('destroyed')).toBe(0) // detached on the cancel terminal
   })
 
+  it('stop() (lock/quit purge) detaches every job destroyed listener too (F-25, the third terminal)', async () => {
+    // A stop()-purged job emits neither trDone nor trError, and lock does NOT destroy the window —
+    // so the F-4 detach (done/error/cancel only) never ran and each 'Lock now' pressed mid-translate
+    // leaked one 'destroyed' listener + one detachers entry (MaxListenersExceededWarning after ~11).
+    // The purge hook on the service must run the detach path here.
+    const gated = gatedTranslator()
+    const svc = service({ translator: gated.translator })
+    registerTranslateIpc(ctxFor(), svc)
+    const event = makeEvent()
+    await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())
+    while (!gated.sawSignal()) await new Promise((r) => setTimeout(r, 1)) // in flight
+    expect(event.sender.listenerCount('destroyed')).toBe(1) // wired at start
+    await svc.stop() // the lock/quit terminal — no trDone/trError, window not destroyed
+    expect(event.sender.listenerCount('destroyed')).toBe(0) // detached via the F-25 purge hook
+  })
+
   it('translateStart refuses a locked workspace (never respawns the suspended sidecar)', async () => {
     registerTranslateIpc(ctxFor(false), service({ translator: scriptedTranslator() }))
     await expect(invoke(handlers, IPC.translateStart, goodReq())).rejects.toThrow()

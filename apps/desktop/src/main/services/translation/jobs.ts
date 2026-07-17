@@ -62,8 +62,18 @@ export class TranslateJobService {
   private readonly controllers = new Map<string, AbortController>()
   /** The single in-flight job (the view's own one-at-a-time serialization). Null when idle. */
   private activeJobId: string | null = null
+  /** F-25: purge observers. `stop()` (the lock/quit terminal) emits neither trDone nor trError and
+   *  does NOT destroy the window, so it is the THIRD terminal the F-4 IPC detach missed — the IPC
+   *  layer subscribes here to run its per-job `destroyed`-listener detach on a purge. */
+  private readonly stopListeners = new Set<() => void>()
 
   constructor(private readonly deps: TranslateJobServiceDeps) {}
+
+  /** Subscribe to `stop()` purges (lock/quit). Returns an unsubscribe. */
+  onStop(listener: () => void): () => void {
+    this.stopListeners.add(listener)
+    return () => this.stopListeners.delete(listener)
+  }
 
   /**
    * Start a view translation. Validates (a model is present, both languages are curated codes,
@@ -308,6 +318,10 @@ export class TranslateJobService {
     this.jobs.clear()
     this.controllers.clear()
     this.activeJobId = null
+    // F-25: notify the IPC layer so it detaches each job's `destroyed` once-listener + detachers
+    // entry — this terminal fires no trDone/trError and lock does not destroy the window, so without
+    // this each lock-during-in-flight cycle leaks one listener (MaxListenersExceededWarning at ~11).
+    for (const listener of [...this.stopListeners]) listener()
   }
 
   /** Append a streamed delta to the job's accumulated text AND forward it to the renderer.

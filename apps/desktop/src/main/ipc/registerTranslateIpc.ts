@@ -34,8 +34,17 @@ export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobServ
   // long-lived window running many translations does not pile up one listener per call (Node's
   // MaxListenersExceededWarning at 11). `emit.done`/`emit.error` detach inline, but a CANCELLED job
   // emits neither — so the detach for each queued job is also registered here by jobId and invoked
-  // from the two cancel terminals (the translateCancel handler and the destroyed-cancel path).
+  // from the two cancel terminals (the translateCancel handler and the destroyed-cancel path) AND
+  // from the lock/quit purge (F-25: `jobs.onStop` below — the third terminal, which emits nothing).
   const detachers = new Map<string, () => void>()
+
+  // F-25: the lock/quit purge (`jobs.stop()`) is the THIRD terminal — it aborts + clears the job map
+  // but emits neither trDone nor trError, and a workspace lock does NOT destroy the window (App swaps
+  // the React shell in place), so the per-job `destroyed` once-listener + detachers entry would leak
+  // one per lock-during-in-flight cycle. Observe the purge and run every outstanding detach.
+  jobs.onStop(() => {
+    for (const detach of [...detachers.values()]) detach()
+  })
 
   // Per-renderer streaming emitter, isDestroyed-guarded (the chat-stream / vision precedent).
   const emitterFor = (event: {

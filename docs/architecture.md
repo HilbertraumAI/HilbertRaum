@@ -1996,6 +1996,10 @@ Per-finding disposition (F-1…F-8):
   resumes the poll under a fresh generation (`pollDocTask` extracted + shared with the fresh start).
 - **F-4 (LOW, leak) — FIXED (FA-1).** `registerTranslateIpc` keeps a `jobId → detach` map; the
   `destroyed` listener is now detached on the cancel terminals (which emit neither done nor error) too.
+  _(Addendum, audit 2026-07-16 F-25: FA-1 missed a THIRD terminal — the lock/quit purge `jobs.stop()`
+  emits neither done nor error AND does not destroy the window, so its listeners leaked one per
+  lock-during-in-flight cycle. `TranslateJobService.onStop` now notifies the IPC layer, which runs
+  every outstanding detach on a purge.)_
 - **F-5 (LOW, hardening) — FIXED (FA-2).** `sanitizeSourceText` rewrites the full Gemma special-token
   family (`<bos>`/`<eos>`/`<unk>`/`<pad>`/`<start_of_image>`/`<end_of_image>` + the two turn markers) to
   the visually-identical `⟨…⟩` non-token spelling; exact-marker alternation leaves ordinary `<…>` HTML
