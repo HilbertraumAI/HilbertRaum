@@ -85,6 +85,43 @@ describe('visionSession — F8 superseded-analyze teardown', () => {
   })
 })
 
+describe('visionSession — L6a busy guard (F-26)', () => {
+  it('busy-guards a second analyze during the start round-trip; analyzing stays owned by the first', async () => {
+    // The old guard (visionSession.ts:232) checked only `activeJobId`, which isn't set until AFTER
+    // the imageAnalyze create round-trip resolves. A second analyze entering that window slipped
+    // through; main busy-rejected it, and call 2's busy branch ran set({ analyzing:false }),
+    // clobbering the still-live first job's flag (re-enabling the composer/drop-zone mid-stream — a
+    // dropped image then cancels the live analyze). Port translateSession's L6a `|| analyzing` guard.
+    const resolvers: Array<(j: unknown) => void> = []
+    let calls = 0
+    const imageAnalyze = vi.fn(() => {
+      calls += 1
+      // Call 1 parks (create in flight, activeJobId not set yet); any later call resolves as the
+      // deterministic main-side busy-reject (services/vision/index.ts one-at-a-time).
+      if (calls === 1) return new Promise((res) => resolvers.push(res))
+      return Promise.resolve({ jobId: 'jobB', state: 'failed', error: 'busy' })
+    })
+    stubApi({
+      imageAnalyze,
+      imageCancel: vi.fn(async () => ({ jobId: 'x', state: 'cancelled' })),
+      onImageToken: vi.fn(() => () => {}),
+      onImageDone: vi.fn(() => () => {}),
+      onImageError: vi.fn(() => () => {})
+    } as never)
+
+    selectImage(img('a.png'))
+    const first = analyze('question A') // flips analyzing:true, parked on imageAnalyze
+    const second = await analyze('question B') // enters DURING the first's start round-trip
+    expect(second).toBe('busy') // guarded at the store level, not sent to the backend
+    expect(imageAnalyze).toHaveBeenCalledTimes(1) // the second never reached main
+    expect(getVisionSession().analyzing).toBe(true) // still owned by the first, live job
+
+    resolvers[0]({ jobId: 'jobA', state: 'starting' })
+    await first
+    expect(getVisionSession().activeJobId).toBe('jobA') // the first job wired normally
+  })
+})
+
 /** Poll until `pred` holds (the store's flush window is 40 ms) — a deterministic gate, no fixed sleep. */
 async function until(pred: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now()
