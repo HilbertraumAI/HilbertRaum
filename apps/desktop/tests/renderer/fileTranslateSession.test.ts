@@ -100,6 +100,7 @@ describe('fileTranslateSession — happy path', () => {
     expect(snap.output).toBe('Hello world.')
     expect(snap.resultDocumentId).toBe('gen1')
     expect(snap.truncated).toBe(false)
+    expect(snap.gaps).toBeNull() // #58: a complete translation carries no gap accounting
     expect(snap.busy).toBe(false)
     expect(api.startDocTask).toHaveBeenCalledWith({
       kind: 'translation',
@@ -117,6 +118,20 @@ describe('fileTranslateSession — happy path', () => {
       destination: { kind: 'temporary' },
       pickerToken: 'tok1'
     })
+  }, 8000)
+
+  it('#58: the done status’ completeness accounting (gaps) reaches the snapshot', async () => {
+    const gaps = { missingPageRanges: [{ from: 3, to: 3 }], failedWindows: 1 }
+    const api = {
+      ...happyApi(),
+      getDocTask: vi.fn(async () =>
+        docTask({ state: 'done', progress: { stepsDone: 2, stepsTotal: 2 }, resultRef: { documentId: 'gen1' }, gaps })
+      )
+    }
+    stubApi(api)
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: 5000 })
+    expect(getFileTranslate().gaps).toEqual(gaps)
   }, 8000)
 
   it('the window label EXCLUDES the materialize step on a fresh start (a 2-window doc shows 1/2, not 1/3) — F-8', async () => {

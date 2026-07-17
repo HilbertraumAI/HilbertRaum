@@ -664,6 +664,13 @@ export interface DocumentPreview {
    */
   totalSegments?: number
   nextOffset?: number | null
+  /**
+   * Total pages of the SOURCE file when the parser knows them (PDF: the declared page count),
+   * independent of how many pages yielded text. Absent/null for page-less formats. Issue #58:
+   * this is what lets the translation task detect a page whose extraction came back EMPTY —
+   * such a page produces no segment, so `segments` alone cannot reveal a trailing gap.
+   */
+  pageCount?: number | null
 }
 
 export interface DocumentPreviewSegment {
@@ -1100,6 +1107,25 @@ export interface DocTaskStatus {
    * translation: the NEW materialized document).
    */
   resultRef?: { documentId: string } | null
+  /**
+   * Honest completeness accounting for a DONE translation (issue #58). Set only when the
+   * output is incomplete — source pages that yielded no translatable text and/or windows the
+   * model failed (both are also marked inline in the generated document). Absent/null means
+   * the output covers the whole source. Other task kinds never set it.
+   */
+  gaps?: DocTaskGaps | null
+}
+
+/** The two gap classes a finished translation can carry (issue #58). */
+export interface DocTaskGaps {
+  /**
+   * 1-based, inclusive SOURCE page ranges with no extractable text (scanned/empty pages).
+   * Ranges, not a flat list — a crafted PDF can declare an enormous page count (audit M-2)
+   * and consecutive empty pages collapse to one entry either way.
+   */
+  missingPageRanges: Array<{ from: number; to: number }>
+  /** Windows the model failed after retry (original text kept under an inline notice). */
+  failedWindows: number
 }
 
 /**

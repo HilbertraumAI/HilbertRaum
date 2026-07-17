@@ -1155,7 +1155,8 @@ export async function extractDocumentPreview(
         text: s.text,
         pageNumber: s.pageNumber ?? null,
         sectionLabel: s.sectionLabel ?? null
-      }))
+      })),
+      pageCount: parsed.pageCount ?? null
     }
   } finally {
     for (const t of transients) shredFile(t)

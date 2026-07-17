@@ -523,4 +523,54 @@ describe('TranslateScreen — document translation (TG-5)', () => {
       await screen.findByText(t('en', 'translate.file.truncated'), {}, { timeout: 8000 })
     ).toBeInTheDocument()
   }, 10000)
+
+  it('#58: a done task with gaps shows the page-gap AND failed-parts warnings', async () => {
+    const f = fileStubs({
+      terminal: docTask({
+        state: 'done',
+        progress: { stepsDone: 3, stepsTotal: 3 },
+        resultRef: { documentId: 'gen1' },
+        gaps: {
+          missingPageRanges: [
+            { from: 3, to: 4 },
+            { from: 7, to: 7 }
+          ],
+          failedWindows: 2
+        }
+      })
+    })
+    stubApi(f.api)
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await screen.findByLabelText(t('en', 'translate.input.label'))
+
+    act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })]))
+    // 3 missing pages across two ranges → the plural copy with the formatted "3–4, 7".
+    expect(
+      await screen.findByText(
+        t('en', 'translate.file.gapPages.other', { count: 3, pages: '3–4, 7' }),
+        {},
+        { timeout: 8000 }
+      )
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(t('en', 'translate.file.failedParts.other', { count: 2 }))
+    ).toBeInTheDocument()
+  }, 10000)
+
+  it('#58: a complete translation shows NO completeness warning', async () => {
+    const f = fileStubs()
+    stubApi(f.api)
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await screen.findByLabelText(t('en', 'translate.input.label'))
+
+    act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })]))
+    const outPanel = await screen.findByLabelText(t('en', 'translate.output.label'))
+    await within(outPanel).findByText('Hello world.', {}, { timeout: 8000 })
+    expect(
+      screen.queryByText(t('en', 'translate.file.gapPages.one', { count: 1, pages: '3' }))
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(t('en', 'translate.file.failedParts.one', { count: 1 }))
+    ).not.toBeInTheDocument()
+  }, 10000)
 })

@@ -21,10 +21,12 @@ import {
   TASK_TRANSLATION_NO_MODEL_MESSAGE,
   TASK_TRANSLATION_TARGET_MESSAGE,
   failedWindowNotice,
+  missingPageNotice,
   translationAttributionLine,
   translationBudgetWords,
   type DocTaskDeps
 } from '../../src/main/services/doctasks'
+import { makeMixedPdf } from '../helpers/fixtures'
 import type { Translator } from '../../src/main/services/translation'
 import type { TranslateOptions, CompletionFinal } from '../../src/main/services/translation'
 import { TRANSLATION_STOP_TOKEN, TranslationStartError } from '../../src/main/services/translation'
@@ -1100,5 +1102,145 @@ describe('encrypted workspace', () => {
 
     // Without the cipher (locked context) the export refuses, never garbles.
     await expect(readStoredDocumentText(db, storeDir, newId)).rejects.toThrow(/unlock the workspace/)
+  })
+})
+
+describe('issue #58 — a source page with no extractable text must never vanish silently', () => {
+  /** Write a synthetic PDF buffer and run it through the REAL ingestion pipeline. */
+  async function importPdf(buf: Buffer, name: string): Promise<string> {
+    const p = join(tmp, name)
+    writeFileSync(p, buf)
+    const info = createQueuedDocument(db, p)
+    const done = await processDocument(db, storeDir, info.id, {})
+    expect(done.status).toBe('indexed')
+    return info.id
+  }
+
+  /** One distinctive text page for makeMixedPdf — long enough to clear PDF_TEXT_PAGE_MIN_CHARS. */
+  const textPage = (n: number): { kind: 'text'; lines: string[] } => ({
+    kind: 'text',
+    lines: [`UNIQUEPAGE${n}MARKER this page carries enough real prose to count as text-bearing.`]
+  })
+
+  async function translate(docId: string): Promise<{
+    status: Awaited<ReturnType<typeof waitTerminal>>
+    text: string
+  }> {
+    const manager = makeManager({ translator: scriptedTranslator() })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'de', targetLang: 'en' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('done')
+    const newId = status.resultRef?.documentId as string
+    const { text } = await readStoredDocumentText(db, storeDir, newId)
+    return { status, text }
+  }
+
+  it('REPRO: an image-only page 3 of 5 is marked in the output AND reported on the status', async () => {
+    // The issue-#58 shape: a hybrid PDF — pages 1,2,4,5 carry text, page 3 is a scan
+    // (image XObject, empty text layer). Scan detection does NOT fire (4 text pages).
+    const docId = await importPdf(
+      makeMixedPdf([textPage(1), textPage(2), { kind: 'image' }, textPage(4), textPage(5)]),
+      'fivepager.pdf'
+    )
+    const { status, text } = await translate(docId)
+
+    // The gap reaches the UI: the task status carries honest completeness accounting.
+    expect(status.gaps).toEqual({ missingPageRanges: [{ from: 3, to: 3 }], failedWindows: 0 })
+
+    // The generated document marks the gap IN PLACE — between page 2's and page 4's text.
+    const notice = missingPageNotice({ from: 3, to: 3 })
+    expect(text).toContain(notice)
+    expect(text.indexOf('UNIQUEPAGE2MARKER')).toBeGreaterThanOrEqual(0)
+    expect(text.indexOf(notice)).toBeGreaterThan(text.indexOf('UNIQUEPAGE2MARKER'))
+    expect(text.indexOf(notice)).toBeLessThan(text.indexOf('UNIQUEPAGE4MARKER'))
+    // Every text-bearing page made it into the output (nothing else was dropped).
+    for (const n of [1, 2, 4, 5]) expect(text).toContain(`UNIQUEPAGE${n}MARKER`)
+  })
+
+  it('detects a TRAILING empty page — page numbering alone could never reveal it', async () => {
+    const docId = await importPdf(
+      makeMixedPdf([textPage(1), textPage(2), { kind: 'image' }]),
+      'trailing.pdf'
+    )
+    const { status, text } = await translate(docId)
+    expect(status.gaps).toEqual({ missingPageRanges: [{ from: 3, to: 3 }], failedWindows: 0 })
+    const notice = missingPageNotice({ from: 3, to: 3 })
+    // The notice sits AFTER the last translated text.
+    expect(text.indexOf(notice)).toBeGreaterThan(text.indexOf('UNIQUEPAGE2MARKER'))
+  })
+
+  it('collapses consecutive empty pages into ONE range notice', async () => {
+    const docId = await importPdf(
+      makeMixedPdf([textPage(1), { kind: 'image' }, { kind: 'image' }, textPage(4)]),
+      'range.pdf'
+    )
+    const { status, text } = await translate(docId)
+    expect(status.gaps).toEqual({ missingPageRanges: [{ from: 2, to: 3 }], failedWindows: 0 })
+    const notice = missingPageNotice({ from: 2, to: 3 })
+    expect(text).toContain(notice)
+    // The single-page phrasing is NOT used for a range.
+    expect(text).not.toContain(missingPageNotice({ from: 2, to: 2 }))
+    expect(text.indexOf(notice)).toBeGreaterThan(text.indexOf('UNIQUEPAGE1MARKER'))
+    expect(text.indexOf(notice)).toBeLessThan(text.indexOf('UNIQUEPAGE4MARKER'))
+  })
+
+  it('a complete PDF reports NO gaps and carries no notice', async () => {
+    const docId = await importPdf(makeMixedPdf([textPage(1), textPage(2)]), 'complete.pdf')
+    const { status, text } = await translate(docId)
+    expect(status.gaps ?? null).toBeNull()
+    expect(text).not.toContain('⚠')
+  })
+
+  it('a page-less source (.txt) is untouched by page accounting', async () => {
+    const docId = await importDoc(40, 'plain.txt')
+    const manager = makeManager({ translator: scriptedTranslator() })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('done')
+    expect(status.gaps ?? null).toBeNull()
+  })
+
+  it('failed MODEL windows also reach the status (the other gap class, until now doc-only)', async () => {
+    const docId = await importDoc(600)
+    const budget = translationBudgetWords(1024)
+    const translator = scriptedTranslator({
+      contextTokens: 1024,
+      reply: (call) => {
+        if (call.text.split(/\s+/)[0] === `word${budget}`) throw new Error('boom: model refused')
+        return call.text
+      }
+    })
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('done')
+    expect(status.gaps).toEqual({ missingPageRanges: [], failedWindows: 1 })
+  })
+
+  it('L12: the gap notice persists in the app language (de) at materialization time', async () => {
+    const docId = await importPdf(
+      makeMixedPdf([textPage(1), { kind: 'image' }, textPage(3)]),
+      'lokalisiert.pdf'
+    )
+    applyUiLanguageSetting('de')
+    try {
+      const { text } = await translate(docId)
+      expect(text).toContain(t('de', 'main.translation.missingPageNotice', { page: 2 }))
+      expect(text).not.toContain(t('en', 'main.translation.missingPageNotice', { page: 2 }))
+    } finally {
+      applyUiLanguageSetting('en')
+    }
   })
 })

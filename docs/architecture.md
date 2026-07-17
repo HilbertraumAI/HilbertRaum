@@ -1692,6 +1692,22 @@ sentinel-tested), zero native deps.
   retry lives in `handlers/translation.ts`), then **marked visibly** in the output with
   the original text kept below — never silently dropped; only an all-windows failure fails
   the task. Attribution + provenance stamp the TRANSLATION model's id.
+  **Page-completeness accounting (issue #58, 2026-07-17):** the failed-window honesty above
+  starts at the MODEL — a source page whose extraction is EMPTY (a scanned page inside a
+  hybrid PDF) used to emit no segment and vanish from the output without a trace. The parser
+  now reports the source's declared `pageCount` (`ParsedDocument`/`DocumentPreview`, additive),
+  `extractTranslationSource` keeps per-segment page numbers, and `planTranslationBlocks`
+  (doctasks/translation.ts) plans BLOCKS: segment runs packed into windows exactly as before,
+  interleaved with `gap` blocks (`computeMissingPageRanges` — O(segments), ranges not lists, so
+  a crafted M-2 page count can't balloon memory) that materialize as inline
+  `missingPageNotice` markers at their true reading position (L12 posture: localized at
+  materialization). The finished task carries `DocTaskStatus.gaps { missingPageRanges,
+  failedWindows }` (set only when incomplete) → the Translate screen's `hint warn` lines; the
+  failed-window count thereby reaches the UI too (previously in-document only). A per-segment
+  packing invariant (`assertNoTextDropped`: non-whitespace chars in == out) turns any future
+  planner drop into a loud task failure. With no gaps the block plan degenerates to exactly
+  `planTranslationWindows` (pinned by unit test). Page accounting applies to formats WITH
+  pages (PDF incl. the stored-OCR path); page-less sources rely on the packing invariant.
 - **Compare (Phase 35, D28/D37): two documents in, one materialized report out.** The
   strategy auto-switches on token math (the D25 budget shape: `(max(1024, ctx) − 512 −
   300) / 1.3` input words per call). Both full texts fit ⇒ **mode (a)**: one

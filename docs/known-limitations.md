@@ -1670,6 +1670,24 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   whole job VISIBLY rather than completing with a mid-sentence-truncated or missing paragraph — a
   visible failure beats a silent gap. Before TA-5 a truncated window was stitched in silently as a
   clean translation; that honesty hole is closed.
+- **A source PAGE with no extractable text is marked in place, never silently skipped (issue #58,
+  2026-07-17).** The failed-window honesty above starts at the MODEL; issue #58 was the class
+  BEFORE it: a PDF page whose text layer is empty (a scanned page inside an otherwise-text
+  "hybrid" PDF, a blank page) produces no parser segment at all, so a 5-page document used to
+  materialize as a seamless 4-page translation — no warning, no gap marker, nothing to notice
+  unless you counted pages. Now the parser reports the source's DECLARED page count alongside its
+  segments, and the translation task accounts every page: each gap becomes an inline
+  "Page N … could not be translated — no readable text (it may be a scanned image)" notice at its
+  true reading position in the generated document, and the Translate screen shows a per-range
+  warning next to the finished output (`DocTaskStatus.gaps`). The same accounting also surfaces
+  the failed-window count in the UI (previously in-document only). On top of the page ledger, a
+  per-segment invariant (`assertNoTextDropped`) verifies window packing preserved every
+  non-whitespace character of the re-extracted input — a planner regression fails the task
+  loudly instead of shipping a silently incomplete document. Limits: page accounting exists only
+  for formats that HAVE pages (PDF, including the stored-OCR path); txt/md/docx/audio have no
+  page semantics and rely on the segment invariant alone. The remedy for a genuinely scanned
+  page inside a hybrid PDF remains out of scope here: per-page OCR for hybrids is a separate
+  feature (scan detection + "Make searchable (OCR)" fires only for FULLY image-only PDFs).
 - **Long documents take time — linearly (on CPU).** There is deliberately NO window ceiling (a
   faithful translation may not cover "the beginning" only, unlike the summary). Since issue #42
   the sidecar **auto-offloads to the GPU** under the same signals as chat (`gpuMode: 'auto'` and

@@ -75,12 +75,23 @@ const FILE_ERR_KEY: Record<FileTranslateErrorCode, MessageKey> = {
   runtimeFailed: 'translate.file.err.runtimeFailed'
 }
 
+/** "3" / "3–4" / "3–4, 7" — the {pages} value for the #58 gap warning (en-dash, like the
+ *  in-document range notice). */
+function formatPageRanges(ranges: Array<{ from: number; to: number }>): string {
+  return ranges.map((r) => (r.from === r.to ? String(r.from) : `${r.from}–${r.to}`)).join(', ')
+}
+
+/** Total missing pages across the ranges — drives the one/other plural of the gap warning. */
+function countMissingPages(ranges: Array<{ from: number; to: number }>): number {
+  return ranges.reduce((sum, r) => sum + (r.to - r.from + 1), 0)
+}
+
 export function TranslateScreen({
   onNavigate
 }: {
   onNavigate: (target: string) => void
 }): JSX.Element {
-  const { t, lang } = useT()
+  const { t, tCount, lang } = useT()
   const showToast = useToast()
   // null while the first availability read is in flight (a calm placeholder, never a spinner).
   const [available, setAvailable] = useState<boolean | null>(null)
@@ -304,6 +315,20 @@ export function TranslateScreen({
             )}
           </div>
           {done && fileTx.truncated && <p className="hint">{t('translate.file.truncated')}</p>}
+          {/* Issue #58: honest completeness — pages with no readable text / model-failed parts.
+              Both are ALSO marked inline in the generated document; this is the at-a-glance UI. */}
+          {done && fileTx.gaps && fileTx.gaps.missingPageRanges.length > 0 && (
+            <p className="hint warn">
+              {tCount('translate.file.gapPages', countMissingPages(fileTx.gaps.missingPageRanges), {
+                pages: formatPageRanges(fileTx.gaps.missingPageRanges)
+              })}
+            </p>
+          )}
+          {done && fileTx.gaps && fileTx.gaps.failedWindows > 0 && (
+            <p className="hint warn">
+              {tCount('translate.file.failedParts', fileTx.gaps.failedWindows)}
+            </p>
+          )}
           <div className="actions">
             {(fileTx.state === 'importing' || fileTx.state === 'translating') && (
               <Button onClick={onStop}>{t('translate.stop')}</Button>

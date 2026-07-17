@@ -26,6 +26,13 @@ export interface ParsedDocument {
   segments: ExtractedSegment[]
   /** MIME type the parser is responsible for (recorded on the document row). */
   mimeType: string
+  /**
+   * Total pages of the source when the format has them (PDF: the DECLARED page count),
+   * independent of how many pages yielded a segment. Unset for page-less formats.
+   * Issue #58: a page whose text-layer trims empty emits NO segment, so downstream
+   * completeness accounting (translation) needs the real total to detect the gap.
+   */
+  pageCount?: number | null
 }
 
 /**
