@@ -235,3 +235,52 @@ describe('chunkSegments boundaries + overlap', () => {
     ])
   })
 })
+
+// F-24 (audit 2026-07-16): astral (surrogate-pair) characters — emoji, CJK ext-B — are NOT in
+// SPACELESS_SCRIPT_RE (BMP-only), so a long glued astral run takes the over-long-WORD path and used to
+// be hard-cut at fixed `sliceChars` code-unit offsets with no pair alignment. Interior glued pieces
+// re-join losslessly, but at a WINDOW boundary the unaligned cut became the stored chunk-text boundary:
+// one chunk ended with a lone HIGH surrogate, the next began with the lone LOW one — U+FFFD after every
+// downstream UTF-8 conversion (SQLite, FTS, embedder JSON). The slice loop now retracts (or, for
+// degenerate 1-unit slices, extends) the cut by ONE code unit when it lands between a high/low pair.
+// Boundary-only: BMP text hits identical cut positions, so chunk counts/bytes are unchanged for
+// non-astral corpora (pinned below — the no-churn acceptance).
+describe('chunker — surrogate-pair-safe slicing of astral runs (F-24)', () => {
+  /** A chunk edge is corrupted iff it STARTS with a lone low or ENDS with a lone high surrogate. */
+  const LONE_SURROGATE_EDGE = /(^[\uDC00-\uDFFF])|([\uD800-\uDBFF]$)/
+
+  it('a 3000-unit glued emoji run chunks with NO lone surrogate at any chunk edge (defaults)', () => {
+    // 'a' + 1500×😀 (U+1F600, 2 units each) = 3001 code units, one whitespace-free "word"; the odd
+    // leading unit forces every fixed-offset cut to land mid-pair (the audit's verified repro).
+    const glued = 'a' + '😀'.repeat(1500)
+    const chunks = chunkSegments([{ text: glued }]) // CHUNK_DEFAULTS 500/80
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const c of chunks) {
+      expect(c.text, `chunk ${c.chunkIndex} edge must not split a surrogate pair`).not.toMatch(
+        LONE_SURROGATE_EDGE
+      )
+    }
+  })
+
+  it('an overlap-0 partition of an astral run stays lossless (windows re-join to the original)', () => {
+    const glued = 'a' + '😀'.repeat(1500)
+    const wins = windowByTokens(glued, 500, 0)
+    expect(wins.length).toBeGreaterThan(1)
+    for (const w of wins) expect(w).not.toMatch(LONE_SURROGATE_EDGE)
+    expect(wins.join('')).toBe(glued) // shifted cuts still partition — no unit dropped/duplicated
+  })
+
+  // No-churn acceptance: the correction is BOUNDARY-ONLY (a charCodeAt pair check at the cut), so
+  // non-astral corpora — CJK, Thai, prose, glued Latin — hit byte-identical cut positions. These
+  // counts were computed on the PRE-FIX chunker and must never move.
+  it('chunk counts on the existing non-astral test corpora are unchanged (no churn)', () => {
+    const latin = Array.from({ length: 2400 }, (_, i) => String.fromCharCode(65 + (i % 26))).join('')
+    expect(
+      chunkSegments([{ text: '情報'.repeat(3000) }], { chunkSizeTokens: 500, chunkOverlapTokens: 0 }).length
+    ).toBe(12)
+    expect(chunkSegments([{ text: words(1000) }]).length).toBe(3)
+    expect(windowByTokens('情'.repeat(1100), 500, 80).length).toBe(3)
+    expect(windowByTokens(latin, 500, 80).length).toBe(2)
+    expect(chunkSegments([{ text: 'สวัสดี '.repeat(200) + words(600) }]).length).toBe(5)
+  })
+})
