@@ -1,0 +1,248 @@
+# Evidence Pack / Review Mode (EP-1) — Implementation Plan
+
+**Status:** OPEN (working paper — retire per the CLAUDE.md doc-lifecycle rule at close-out)
+**Source spec:** [`docs/evidence-pack-review-mode-feature-spec.md`](evidence-pack-review-mode-feature-spec.md) — will be **deleted** at close-out; §12 below maps every spec section to its durable home in the general docs.
+**Execution model:** orchestrator (main session) + sub-agents per phase; handoff protocol in §10.
+
+---
+
+## §1 Verdict
+
+The feature is implementable as specified, **with three deviations from the spec's letter**:
+
+1. **PDF export ships via Electron `printToPDF` (owner-ratified 2026-07-18, research-backed — see §4 D-1), HTML-first ordering kept.** There is no PDF-writing dependency in the tree (only the reader `pdfjs-dist`) and no `printToPDF` precedent — but Electron 37's built-in `webContents.printToPDF` covers every spec §17.1 requirement with zero new dependencies, and the golden-tested HTML template stays the single source of truth for both formats. HTML export lands in Phase 3, PDF in Phase 6. Scope note: this does **not** resolve BUILD_STATE §5 item 6 — that item is *format-preserving* PDF output for translated documents (a rewrite problem); the evidence pack is report generation from our own template. The item's "needs its own plan" posture is unaffected, though the Phase-6 hidden-window print harness may inform it.
+2. **Source freshness for legacy answers is best-effort by title.** The persisted `Citation` (`shared/types.ts:725`) carries only `label / sourceTitle / pageNumber / section / snippet` — **no `documentId`, no `chunkId`, no hash** (dropped at `rag/index.ts:976-982`). Spec §21 (hash comparison) is fully achievable only for answers created *after* Phase 1 adds an additive optional `documentId` to `Citation`. For older answers, review creation resolves documents by title (tolerant: ambiguous/missing → honest "identity unresolved" state in the snapshot). This is exactly the spec's §8.1 "legacy answers, provided the limitation is shown".
+3. **Generation metadata is synthesized at review creation, not read from the message.** No per-message model id / app version / display name exists (only `conversations.model_id`, `messages.created_at`, `messages.skill_id`, `messages.truncated`, `messages.coverage_json`). The `EvidenceGenerationSnapshot` is assembled at snapshot time from the conversation row + live catalog + `AppStatus.appVersion`; all fields optional, absent = "Unavailable", never invented (spec §20.2/§25.5).
+
+Everything else in the spec maps cleanly onto existing contracts: the review tables inherit encrypted-at-rest for free (same workspace DB), the export seam (`saveTextExport` + tmp→fsync→rename + content-free audit event) exists and is the result-tables §4 precedent, the citation/provenance semantic split the spec demands is already the as-built `SourcesDisclosure` behavior, and the additive-nullable + tolerant-JSON rules the spec restates in §34 are the repo's standing data-contract rules.
+
+---
+
+## §2 Fact base (verified against the code, 2026-07-17)
+
+What exists and is reused (file:line refs verified):
+
+| Need | Existing mechanism |
+|---|---|
+| Message provenance | `messages.citations_json` (`db.ts:77`), `coverage_json` (`db.ts:938`), `truncated` (`db.ts:949`), `skill_id` (`db.ts:928`); tolerant readers `parseCitations` (`chat.ts:244`), `parseCoverage` (`chat.ts:263`) |
+| Coverage semantics | `CoverageMode = 'tree'\|'relevance'\|'capped'\|'extract'` (`types.ts:1173`); INPUT vs OUTPUT truncation split (rag-design §14.10); whole-doc leaf provenance ≠ inline citations (rag-design §14.4, M2/F11) |
+| Document identity | `documents.sha256` in DB (`db.ts:82-94`) — **not** on the `DocumentInfo` DTO; freshness checks read it main-side |
+| Encrypted-at-rest | New tables live in the one workspace DB opened by `openDatabase` (`db.ts:868`); vault lock/unlock wraps the whole file — nothing extra to build (spec §18.5 satisfied structurally) |
+| Schema evolution | `CREATE TABLE IF NOT EXISTS` in the `SCHEMA` string + `ensureColumn` additive ALTERs (`db.ts:490,888`); FK CASCADE precedent: `result_tables.message_id` (`db.ts:279`) |
+| IPC conventions | Channel registry `shared/ipc.ts` (`namespace:action`); `register<Feature>Ipc(ctx)` in `main/ipc/`, wired at `main/index.ts:394-409`; per-handler `requireUnlocked()` + localized `main.<area>.locked` key; manual payload guards (`safeIdArray`, union-narrowing); preload = one typed object exposed as `window.api` (`preload/index.ts:611`) |
+| Export | `saveTextExport` (`main/ipc/save-export.ts:38`) — native save dialog + BOM; atomic write idiom tmp→`fsyncSync`→`renameSync` (`workspace-vault.ts:204-213`); `sha256Of` (`assets.ts:722`) |
+| Audit | `ctx.audit?.(type, msg, metadata)`; `AuditEventType` union (`types.ts:2099`); **ids/counts only — never titles, notes, content**; sentinel-grep enforcement in `tests/integration/audit-ipc.test.ts` |
+| Renderer navigation | `ScreenId` union + `resolveNavTarget` (`navigation.ts:15,35`); lazy screens in `App.tsx:16-33`; handoff-state idiom `App.tsx:98-101,182`; back-button precedent `ImagesScreen` |
+| Message action row | `MessageActions.tsx` (Try again · Export CSV · Copy · Save), optional-callback gating; eligibility data already on `Message` (citations/coverage/truncated) |
+| Citation display | machine `[S1]` stored, localized at render (`displayMap.ts:106,119`, DE `Q{n}`); code-span exclusion `CITE_CODE_SPLIT_RE` (`displayMap.ts:102`); provenance relabeling + 24-card cap in `SourcesDisclosure.tsx` |
+| i18n | EN/DE catalogs `shared/i18n/{en,de}.ts`, compile-time parity; `tMain` for main-process emissions; persisted text = canonical English + `displayMap` reverse lookup |
+| Store idiom | module store + `useSyncExternalStore` + snapshot-stability compare (`lib/doctasks.ts`); test reset hooks |
+| Test harness | vitest; IPC tests via mocked-electron handler map + temp workspace (`tests/integration/docs-ipc.test.ts:11-101`); renderer via jsdom + RTL + `stubApi`; `GermanSmoke.test.tsx` per-screen DE smoke; `ipc-lock-coverage.test.ts` auto-checks lock guards |
+
+What does **not** exist (net-new builds):
+
+- **No HTML-escaping/template/export-renderer infrastructure** (only `xmlEscape` in `docx-rewrite.ts:68`). The self-contained-HTML pack renderer is a new module with its own escaping primitive and injection tests.
+- **No PDF writing** anywhere (see §1.1).
+- **No deterministic markdown block segmenter** exposed as reusable code (Streamdown's block split is internal). A pure `segmentAnswerBlocks()` function is new; the code-fence/code-span split idiom to copy is `CITE_CODE_SPLIT_RE`.
+- **No debounced auto-save pattern** in the renderer (Save is explicit today). Review auto-save = new module store + debounced IPC flush.
+- **No review-shaped tables**; conversation deletion (`chat.ts:903-918`) deletes messages manually in a transaction — review rows need FK CASCADE off `messages(id)` (the `result_tables` template) **plus** a renderer confirm that mentions attached reviews (spec §25.4).
+
+---
+
+## §3 Blast radius
+
+**Additive, no behavior change (low risk):**
+`shared/types.ts` (+ review types, + optional `Citation.documentId`, + audit event literals) · `shared/ipc.ts` (+ ~13 channels) · `db.ts` SCHEMA (+4 tables, + indexes) · `preload/index.ts` (+ bridge methods) · `main/index.ts` (+1 registrar call) · i18n catalogs (+ `review.*`, `main.evidenceReviews.*`, `main.dialog.exportEvidencePack` keys, EN+DE) · new files: `main/services/evidence-reviews.ts`, `main/services/evidence-pack/` (segmenter, snapshot builder, pack model, html renderer), `main/ipc/registerEvidenceReviewsIpc.ts`, `renderer/screens/ReviewScreen.tsx` + `renderer/review/*`, `renderer/lib/reviewSession.ts`.
+
+**Touches existing behavior (watch closely):**
+- `rag/index.ts:976-982` + `whole-doc-tree.ts:697-706` — citation construction gains optional `documentId` (and `chunkId` where cheap). Risk: none to rendering (renderer ignores unknown fields; tolerant parsers pass them through) — but `parseCitations`' `isCitation` guard and data-contracts.md must be updated together.
+- `chat.ts` `deleteConversation` — must also delete review rows (or rely on CASCADE through the messages delete; **verify FK path is actually exercised**, since messages are deleted by explicit SQL with `foreign_keys=ON`, CASCADE on `evidence_reviews.message_id` does fire). Renderer delete-confirm copy change.
+- `MessageActions.tsx` / `Transcript.tsx` / `ChatScreen.tsx` — new optional action + eligibility wiring + navigation handoff. Risk: action-row layout/focus order; German smoke.
+- `SourcesDisclosure.tsx` — one quiet "Review answer and sources" action at the bottom of the expanded region (spec §9.2).
+- `App.tsx` / `navigation.ts` — new `ScreenId` (`review` is NOT in the nav rail; reachable only via chat handoff). `resolveNavTarget` unknown→home behavior must keep review reachable only with a review id in the handoff slot.
+- `audit-ipc.test.ts` sentinel sweep — new legs (review title, notes, reviewer label pushed through real handlers, asserted absent from `runtime_events` and audit export).
+- `ipc-lock-coverage.test.ts` — will automatically demand lock guards on every new handler.
+
+**Docs (per-phase ritual + close-out):** data-contracts.md (new section + IPC list), rag-design.md (new § for the snapshot read-model over §8/§14.4/§14.9/§14.10), architecture.md (new "Evidence Pack / Review Mode — design record"), security-model.md (export/plaintext boundary note), design-guidelines.md (§11.x rollout record), known-limitations.md (honesty entry), user-guide.md (§7 subsection), BUILD_STATE.md (per-phase entries), CHANGELOG.md.
+
+**Explicitly untouched:** chat streaming/send path, retrieval, ingestion, doc-tasks, skills, models, translation, vision. No model call and no network anywhere in the feature (spec FR-2/FR-12 — enforced by tests).
+
+---
+
+## §4 Decisions to ratify before Phase 0 (owner)
+
+Proposed resolutions for the spec's §33 open decisions — **defaults chosen so work can start; only D-1 hard-blocks a phase (Phase 6)**:
+
+| # | Decision | Proposed v1 resolution |
+|---|---|---|
+| D-1 | PDF implementation | **RESOLVED (owner, 2026-07-18): Electron `webContents.printToPDF` on a dedicated hidden window rendering the same HTML template.** Research findings behind the resolution (recorded so Phase 6 doesn't re-derive them): (a) Electron 37's option set covers the spec §17.1 requirements — `footerTemplate` with `pageNumber`/`totalPages`/custom-markup classes gives the repeating pack-ID + page-number footer; `generateDocumentOutline: true` gives bookmarks from headings; `generateTaggedPDF: true` gives an accessible tagged PDF (**experimental per Electron docs — may not fully meet PDF/UA; state this honestly in the design record, don't claim PDF/UA**); text is natively searchable/selectable; Chromium's layout engine handles tables, page breaks, and full Unicode incl. German with system fonts. (b) Alternatives rejected: `pdf-lib` has **no layout engine** (hand-positioning a flowing multi-page report is the wrong tool); `pdfkit`/`pdfmake` mean a **second renderer to maintain** (divergence risk vs. the golden HTML), font-asset shipping for Unicode, and a new-dependency sign-off, for no capability gain; Puppeteer/Playwright would download a Chromium we already ship. (c) Known `printToPDF` pitfalls to design around, from Electron/Chromium issue history: header/footer templates **cannot use `@font-face` custom fonts** (print fails) → system font stack + inline styles only in templates; print-CSS handling is quirky → drive layout via `@page` + `preferCSSPageSize` and test; print only after `did-finish-load` **and** `document.fonts.ready`; render in a dedicated hidden sandboxed window, never the app window (avoids the documented resize/reflow bugs); PDF bytes are nondeterministic (CreationDate/ID) → golden-test the HTML input, smoke-test the PDF output via the already-shipped `pdfjs-dist`. |
+| D-2 | Conversation deletion | Warn-and-cascade after confirmation (spec recommendation). FK `ON DELETE CASCADE` via `messages(id)`; renderer confirm names the review count. |
+| D-3 | Reviewer identity | Free-text label only. |
+| D-4 | Pack manifest | Review-record only in v1 (stored in `evidence_exports.options_json` + hash columns); no sidecar file. |
+| D-5 | Source context | Extracted text around the citation (existing preview limits); no page-image rendering in v1. |
+| D-6 | Review title | Conversation title default, renameable. |
+| D-7 | Ready gate | All non-heading answer blocks decided (Not applicable counts as decided). |
+| D-8 | Export retention | Metadata + hash only; no duplicate file in the workspace. |
+| D-9 | Build hash in pack | App version always; build hash only under Technical details. |
+| D-10 | Branch strategy | **RESOLVED (owner, 2026-07-18): per-phase PRs to master.** One branch `feat/ep1-p<N>-<slug>` off current master per phase; PR opened at phase close, merged only with `ci-success` green; the next phase starts from the merged master. Master stays releasable between phases. |
+
+---
+
+## §5 Phase 0 — Contracts, storage, service core (no UI)
+
+**Goal:** the entire persisted layer + service CRUD exists, round-trips, and is honest about legacy data — before any UI or IPC.
+
+Work items:
+1. **Shared types** (`shared/types.ts`): `EvidenceReview`, `EvidenceReviewDetail`, `EvidenceReviewSummary`, `EvidenceReviewItem` (kinds `block | selection`), `EvidenceLink` (`origin: 'answer_marker' | 'reviewer'`, `relation?: 'supports'|'qualifies'|'contradicts'|'context'`), `EvidenceSourceSnapshot`, `EvidenceGenerationSnapshot`, `ReviewDecision` union, `EvidenceReviewStatus = 'draft'|'ready'` + derived `outdated` overlay flag (spec §18.4: outdated must not erase ready), `EvidenceExportRecord`. Patch/input types for IPC.
+2. **`Citation.documentId?` (+ `chunkId?`) additive enrichment** at the two construction sites (`rag/index.ts`, `whole-doc-tree.ts`); extend `isCitation` tolerantly; data-contracts.md entry. Older rows parse unchanged.
+3. **Schema** (`db.ts`): `evidence_reviews` (FK `message_id` → `messages(id) ON DELETE CASCADE`, snapshot JSON columns per spec §18.1 — all JSON columns nullable), `evidence_review_items` (FK → reviews CASCADE), `evidence_review_links` (FK → items CASCADE), `evidence_exports` (FK → reviews CASCADE). Indexes on `message_id`, `review_id`. One active review per message enforced in service code (not a UNIQUE constraint — spec allows relaxing later).
+4. **Service** (`main/services/evidence-reviews.ts`): CRUD + tolerant row→DTO parsers (the `parseCitations` idiom per JSON column); status derivation (`draft`/`ready` + required-items rule D-7); **no export, no snapshot builder yet** (Phase 1).
+5. **Audit literals**: `evidence_review_created | evidence_review_ready | evidence_review_deleted | evidence_pack_exported` in `AuditEventType`.
+
+Tests (unit + integration): schema creation on fresh + existing DBs (`listTables`); full round-trip of every table through SQLite incl. Unicode/markdown/hostile strings; tolerant parsing of malformed snapshot JSON (→ safe defaults, never throw); cascade behavior — deleting a conversation via the real `deleteConversation` removes reviews/items/links/exports; status derivation matrix; citation enrichment (new answers carry `documentId`, legacy fixtures still parse; renderer snapshot untouched — existing `SourcesProvenance`/`CitationMarkers` tests stay green unchanged).
+
+Docs: data-contracts.md (tables + types + Citation change). BUILD_STATE entry.
+
+**Exit gate:** `npm test` + `npm run typecheck` green; zero renderer/behavioral diffs (existing suites byte-green).
+
+---
+
+## §6 Phase 1 — Snapshot engine + IPC surface
+
+**Goal:** `createEvidenceReview(messageId)` produces a complete, honest, deterministic draft review from persisted data only; the full IPC surface exists.
+
+Work items:
+1. **Answer-block segmenter** (`main/services/evidence-pack/segment.ts`, pure): deterministic split of persisted markdown into blocks (paragraph / list item / heading / fence / table / blockquote) with stable `block_key`s (ordinal + kind + content-hash — spec Risk 7: keys against the snapshot, not live rendering). Reuse the `CITE_CODE_SPLIT_RE` fence-aware idiom; headings default `not_applicable`.
+2. **Marker extraction**: `[S{n}]` machine labels per block, code spans/fences excluded (mirror `displayMap.ts:102` semantics exactly — same regex source, tested against the same fixtures).
+3. **Snapshot builder** (`evidence-pack/snapshot.ts`): 
+   - source snapshots from `Citation[]` — resolve `documentId` when present (post-Phase-0 answers) else best-effort by exact `sourceTitle` match (0 matches → `availabilityAtCreation:'missing'`? No — **`identity:'unresolved'`**, distinct from missing; >1 match → unresolved too, never guess); snapshot `documents.sha256`, `mime_type`, title;
+   - `kind` from `coverage.mode`: `relevance`→`direct_excerpt`, `tree|capped`→`whole_document_provenance`, `extract`→`structured_record`;
+   - generation snapshot per §1.3 (conversation `model_id`, live catalog display name, `AppStatus.appVersion`, `message.createdAt`, `skillId/skillTitle`, `truncated`, `coverage.mode`); every field optional;
+   - auto-links: relevance answers only, marker→citation by machine label; **whole-doc answers get zero auto-links** (spec §13.3 — hard rule, tested).
+4. **IPC**: channels + `registerEvidenceReviewsIpc.ts` (~13 handlers per spec §19, incl. `getEvidenceReviewForMessage` for the entry-point state) + preload methods + `requireUnlocked` + payload guards + audit calls (ids only). `refreshEvidenceReviewState` stubbed to "fresh" (Phase 4 implements).
+5. Eligibility rule (spec §9.1) as a pure shared helper `isReviewEligible(message)` used by renderer later.
+
+Tests: segmenter unit matrix (markdown zoo: nested lists, unclosed fences, tables, `[S1]` in code vs prose, empty answer); marker extraction parity with `localizeCitationMarkers` exclusion behavior; snapshot integration per answer class — relevance (2 citations, auto-links land), whole-doc `mode:'tree'` (no auto-links, kinds correct), `extract`, no-citation legacy, unresolved-title legacy, deleted-source; **no-model/no-network assertion** (mock runtime not invoked; offline tripwire silent); IPC round-trips via the mocked-electron harness (`evidence-reviews-ipc.test.ts`); lock-guard coverage (auto via `ipc-lock-coverage.test.ts`); audit sentinel legs.
+
+Docs: data-contracts (IPC surface), rag-design new § (snapshot read-model + honesty mapping). BUILD_STATE entry.
+
+**Exit gate:** create→read→update→delete a review for all four answer classes entirely from persisted data, model runtime never started, suite green. **Spec §30 Phase-1 exit gate ("complete and reopen a review without model or network activity") is split across this phase (data) and Phase 2 (UI).**
+
+---
+
+## §7 Phase 2 — Review workspace UI
+
+**Goal:** the full spec §10/§11 user journey minus export and freshness: open from chat, review items, record decisions/notes, auto-save, summary, mark ready, reopen after restart.
+
+Work items:
+1. Navigation: `ScreenId` +`'review'` (no nav-rail entry); `App.tsx` lazy screen + handoff slot (`openReview(reviewId | messageId)` mirroring `chatScope`); back → `onNavigate('chat')`.
+2. Entry points: `MessageActions` gains **Review evidence / Continue review** (+ small status chip Draft/Ready; Outdated arrives Phase 4) gated by `isReviewEligible` + `getEvidenceReviewForMessage`; `SourcesDisclosure` quiet footer action.
+3. `ReviewScreen` two-pane layout (spec §11 wireframe): answer pane (immutable snapshot text rendered via `AssistantMarkdown`, block boundaries, decision chips text+icon, localized markers), evidence pane (source cards reusing the `SourcesDisclosure` card idiom + per-mode honesty caption per spec §11.4/§24.3; provenance cap + reveal per `PROVENANCE_CARD_CAP` precedent), link/unlink actions, footer progress + Review summary. Narrow window: evidence pane as modal-drawer via existing `Modal` (no drawer component exists — use `Modal width='wide'`, focus-return via `useReturnFocus`).
+4. Decisions: 6-value control as accessible radio group (SegmentedControl roving-tabindex idiom); notes textarea; reviewer relation flags on links; conservative bulk actions (headings→N/A, clear, →follow-up; **no "mark all supported"** — tested).
+5. Auto-save: `renderer/lib/reviewSession.ts` module store (doctasks idiom + snapshot-stability compare) with debounced patch flush; flush on screen exit/lock.
+6. Summary view + **Mark review ready** gating (D-7); conversation-delete confirm gains review-count warning (D-2).
+7. i18n: full EN/DE key set (spec §24 copy incl. the review disclaimer); decision labels; German draft flagged for native review (Phase 6 polish).
+
+Tests (renderer): entry-point visibility matrix (eligible/ineligible/streaming/plain-chat); create→decide→note→summary→ready flow with `stubApi`; auto-save debounce + flush-on-exit; whole-doc wording (never presents provenance as citations — assert exact keys); completion gating; bulk-action absence of "mark all supported"; keyboard-only walk (spec §28.10); focus restoration on drawer close; `GermanSmoke` + `InformationArchitecture` + `LazyScreens` additions. Integration: review survives DB close/reopen (restart) and vault lock/unlock.
+
+Docs: design-guidelines §11.x rollout record; user-guide §7 subsection (first cut). BUILD_STATE entry.
+
+**Exit gate:** spec §30 Phase-1 gate fully met: a user completes and reopens a review with zero model/network activity; suite + typecheck + build green.
+
+---
+
+## §8 Phase 3 — Evidence pack export (self-contained HTML)
+
+**Goal:** deterministic, atomic, hashed, local HTML export per spec §16/§17.2/§20.
+
+Work items:
+1. **Pack model** (`evidence-pack/pack-model.ts`, pure): normalized structure covering the nine mandatory sections (§16.1) + option flags (§16.2, privacy-sensitive default off) — built from stored review data only; malformed metadata → "Unavailable" (never invented).
+2. **HTML renderer** (`evidence-pack/render-html.ts`, pure): fixed local template, new `escapeHtml` primitive (xmlEscape shape + quotes), zero scripts/remote refs, embedded styles, print stylesheet, EN/DE (localize at generation from the pack's language option — persisted pack text is a snapshot, not re-localized later). **Design the template print-aware from day one so Phase 6 reuses it unchanged:** `@page` rules for A4 + margins, `break-inside: avoid` on evidence cards and warning blocks, semantic heading hierarchy (`h1`–`h3` — Phase 6's `generateDocumentOutline` builds bookmarks from it), system font stack only, grayscale-readable warning blocks (border+icon+text, per spec §17.1).
+3. **Export pipeline** (spec §20.1): load → validate → build model → render → `saveTextExport`-style dialog **but** atomic variant: write tmp sibling → fsync → `sha256Of` → rename → insert `evidence_exports` row → audit `evidence_pack_exported {reviewId, format}`. Failure leaves no destination file, no export row (spec §28.9). Encryption-boundary warning in the export dialog (§24.3).
+4. Export history in the summary view; `status` gains exported timestamps (display-only; status enum unchanged).
+
+Tests: golden HTML packs (relevance / whole-doc / partial-coverage / missing-source / German) with normalized timestamps + pack ids (spec §29.5); injection suite — hostile markdown/HTML/script in answer, snippets, notes, document titles → escaped in output (spec §29.4); atomicity — interrupted render leaves no file + no row; option-flag matrix (paths excluded by default); BOM/encoding; no-network + no-model assertions across export; audit sentinel (path + title never audited); hash recorded matches file bytes.
+
+Docs: security-model export-boundary note; user-guide export subsection; known-limitations honesty entry ("supports human review, not certification"; pack reflects indexed/scanned content only). BUILD_STATE entry.
+
+**Exit gate:** spec §30 Phase-2 gate: deterministic golden packs + atomic export tests pass.
+
+---
+
+## §9 Phase 4 — Freshness, source context, lifecycle
+
+**Goal:** spec §21/§15.4–15.5/§25 states: missing/changed sources, Outdated overlay, source-in-context.
+
+Work items:
+1. `refreshEvidenceReviewState` real implementation: on review open compare snapshot vs workspace — document exists (by snapshotted `documentId`, else unresolved-identity stays unresolved), `documents.sha256` vs snapshot hash (**no re-hashing** — spec §21.2), message text vs `answer_snapshot`, coverage match. Result → `outdated` overlay + per-source availability states.
+2. UI: Outdated banner + acknowledge action; per-card availability/changed badges (text+icon); export allowed after acknowledge, pack records the mismatch (spec §28.6); missing-source copy §15.4.
+3. **Source-in-context** (D-5): main-side handler resolving snapshotted `documentId` → stored extracted text around the snippet (existing preview limits; no arbitrary paths from renderer); modal with highlighted snippet + hash-state line.
+4. Entry-point chip gains Outdated.
+
+Tests: integration — change/delete a source doc, reopen review → correct states, decisions intact, export carries warnings (spec §28.6/§28.7); unresolved-identity legacy answers never flip to "changed" (they can't be compared — honest "cannot verify" copy); source-context handler rejects unknown ids; renderer states + German parity.
+
+Docs: rag-design/known-limitations freshness notes. BUILD_STATE entry.
+
+**Exit gate:** spec §30 Phase-3 gate: historical reviews remain understandable after source change or deletion.
+
+---
+
+## §10 Phase 5 — Workflow polish
+
+Reviewer text selections (`kind:'selection'`, offsets against `text_snapshot` — spec Risk 7); source search/filter + incremental reveal for large provenance sets (virtualize with `@tanstack/react-virtual` if item count warrants — DocumentsScreen precedent); bulk heading-N/A; refined German copy (native review pass); accessibility audit against design-guidelines §9 checklist; performance pass (spec §26: ≤1 s open with 24 cards, no sidecar starts — add a test asserting no runtime start on open).
+
+**Exit gate:** spec §30 Phase-4 scope done; a11y checklist recorded.
+
+## §11 Phase 6 — PDF export (`printToPDF`, per resolved D-1) + close-out
+
+1. **PDF via `webContents.printToPDF`** (D-1 is resolved — the full research record incl. pitfalls lives in the D-1 row; Phase 6's brief must include it verbatim):
+   - **Print harness** (`evidence-pack/print-pdf.ts`, main): dedicated hidden `BrowserWindow` with `SECURE_WINDOW_WEB_PREFERENCES` posture (sandbox, no preload, no node) — the OCR rasterizer is the hidden-window precedent; load the Phase-3 HTML (temp file or data URL, inside the atomic pipeline); wait for `did-finish-load` + `document.fonts.ready`; then `printToPDF({ pageSize: 'A4', preferCSSPageSize: true, printBackground: true, displayHeaderFooter: true, footerTemplate: <pack-ID + pageNumber/totalPages, system fonts + inline styles only>, generateDocumentOutline: true, generateTaggedPDF: true })`; destroy the window in a `finally`.
+   - Same atomic tail as HTML: tmp → fsync → `sha256Of` → rename → `evidence_exports` row (`format:'pdf'`) → audit event. Failure/cancel leaves no file, no row; the hidden window must be torn down on failure and on app quit.
+   - **Tests:** HTML input stays golden (Phase 3 suite); PDF smoke via `pdfjs-dist` — page count > 0, extracted text contains question/answer/pack-ID sentinel strings and the German strings in the DE pack, outline present; no-network tripwire silent across the print; atomic-failure case (kill mid-print → no destination file, no export row); the export dialog offers PDF and HTML.
+   - **Honesty note for the docs:** tagged-PDF output is experimental in Electron — record "accessible headings/reading order best-effort, not a PDF/UA claim" in known-limitations + the design record.
+2. **Doc close-out (the spec-retirement step):** execute §12 transfer map; add "Evidence Pack / Review Mode — design record §1–§N" to architecture.md with decision ladder + §-anchor legend; **delete both `evidence-pack-review-mode-feature-spec.md` and this plan** (full text stays in git history; leave `git show` pointers in the record); BUILD_STATE close-out entry → build-log per retention rule; CHANGELOG.
+
+**Exit gate:** spec §35 Definition of Done items 1–12 all checked (item 7 as resolved by D-1); no standalone plan files remain.
+
+---
+
+## §12 Spec → durable-docs transfer map (for spec deletion)
+
+| Spec sections | Durable home |
+|---|---|
+| §1–§5, §7 (rationale, principles, personas) | architecture.md design record §1 (intent + principles, condensed); product-vision.md gets one roadmap line |
+| §6, §18 (terminology, data model as built) | data-contracts.md (shapes) + design record §2 |
+| §8–§15, §25 (scope, journeys, UI, decisions, edge states) | design record §3–§4 (as-built, condensed) + design-guidelines §11.x + user-guide §7 subsection |
+| §16–§17, §20 (pack contents, formats, pipeline) | design record §5 (export architecture) + security-model boundary note |
+| §19 (IPC) | data-contracts.md IPC command surface |
+| §21 (freshness) | design record §6 + rag-design snapshot § |
+| §22 (privacy/security) | security-model.md + audit section note |
+| §23–§24 (a11y, copy) | design-guidelines (§7 glossary additions, §9) + i18n catalogs (the copy itself) |
+| §26–§29 (perf, FRs, acceptance, testing) | the tests themselves + design record §7 (test inventory pointer) |
+| §30–§33 (rollout, risks, metrics, decisions) | design record §8 (decision ladder D-1…D-10 + risk dispositions); BUILD_STATE dated entries |
+| §34–§36 | design record preamble; known-limitations honesty entry (§36's "not a certification") |
+
+---
+
+## §13 Orchestration & inter-phase handoff protocol
+
+**Roles.** The main session (Fable) is the orchestrator: it never implements a phase in its own context; it spawns one implementation sub-agent per phase (plus reviewer/verifier sub-agents), keeps this plan + the handoff log as its working state, and gates each phase transition.
+
+**Per-phase loop:**
+1. Orchestrator writes the phase brief: the relevant §5–§11 section verbatim + the **current Handoff Log (§14)** + any deviations from earlier phases.
+2. Implementation agent works on the phase branch (D-10), runs `npm test` + `npm run typecheck`, updates affected docs + BUILD_STATE (per-phase ritual — a phase is not done without them).
+3. Independent review agent(s) check: exit-gate criteria, hard rules (no network/model/telemetry), honesty semantics (citation vs provenance), audit content rules, EN/DE parity.
+4. Orchestrator verifies (suite green, gate met), **appends a Handoff Log entry (§14)**, commits, opens the PR (green CI required — public repo, never push master).
+5. Deviations that change a later phase's brief are edited **into this plan file directly** (it is the single source of truth while open); genuinely new owner decisions go to §4's table and block only their dependent phase.
+
+**Information transfer between phases** is therefore triple-anchored, all in-repo (survives session/context loss): (a) the Handoff Log below — compact facts later phases depend on (final names, deviations, deferred items); (b) BUILD_STATE dated entries — the repo's existing session-handoff mechanism; (c) the code/tests themselves. A fresh orchestrator session recovers full state from CLAUDE.md → BUILD_STATE → this plan.
+
+**Concurrency note:** the owner runs concurrent sessions in one working tree — sub-agents must stage explicit files only (never `git add -A`) and should use worktree isolation when phases could overlap.
+
+---
+
+## §14 Handoff Log (append-only; one entry per phase close)
+
+> Format: `### P<N> — <date> — <branch> — <status>` then bullets: *shipped* (final names/shapes if they differ from plan), *deviations*, *deferred*, *watch-out for next phase*.
+
+*(empty — no phase started)*
