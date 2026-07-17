@@ -471,14 +471,33 @@ export class DownloadManager {
         // F-13: a `Range` resume answered 416 — the `.part` is already complete (size unknown,
         // so the pre-download short-circuit above could not fire). Verify it in place: a match
         // renames into place, a mismatch discards + restarts clean. Same recovery, reached via
-        // the network this time.
+        // the network this time. GUARDED (Phase-5 review fix-up): unlike the try-path settle —
+        // whose throws fall into THIS catch — a throw escaping here (renameSync on an
+        // AV-interfered destination, an I/O fault out of the verify) would leave runOne, become
+        // an unhandled rejection (run()/start() never catch), and strand the job at non-terminal
+        // 'verifying' forever with no error copy. Route it to the shared failure handling below.
         if (err instanceof RangeNotSatisfiableError && existsSync(part)) {
-          const settled = await this.settleCompletePart(job, task, controller, hashStore, baseBytes)
-          if (settled === 'restart') {
-            allowResume = false
-            continue
+          try {
+            const settled = await this.settleCompletePart(job, task, controller, hashStore, baseBytes)
+            if (settled === 'restart') {
+              allowResume = false
+              continue
+            }
+            return settled === 'done'
+          } catch (settleErr) {
+            job.status = 'failed'
+            job.error = friendlyDownloadError(settleErr)
+            this.deps.log?.('Model download failed settling a complete partial', {
+              modelId: job.modelId,
+              error: String(settleErr)
+            })
+            this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
+              modelId: job.modelId,
+              jobId: job.jobId,
+              reason: String(settleErr).slice(0, 300)
+            })
+            return false
           }
-          return settled === 'done'
         }
         // A misaligned 206 resume (the server served a slice starting at the wrong byte): the on-disk
         // `.part` can't be safely continued, so discard it — the NEXT attempt restarts from scratch

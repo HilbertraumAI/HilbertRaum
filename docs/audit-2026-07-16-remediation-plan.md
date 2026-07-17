@@ -514,7 +514,9 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
     SIGTERM→SIGKILL escalation (whisper REL-2) + abort handling, and `installOne` threads
     `controller.signal` through `install()` into the extractor. A `runSettled` latch makes
     `activeJob()`/`start()` treat a not-yet-settled `run()` as busy regardless of `job.status`,
-    closing the second-install-into-the-same-dir window. Both new cases (signal reaches a
+    NARROWING the second-install-into-the-same-dir window to the ≤2 s SIGKILL grace (the extractor
+    rejects after signalling the child, not after its exit — see the review fix-up block below;
+    corrected from "closing"). Both new cases (signal reaches a
     signal-aware extract; a cancelled-but-unsettled run refuses a second start) watched RED.
     **Blast-radius deviation (smaller than the audit's estimate):** because `signal` is OPTIONAL,
     the ~12 injected 2-arg `extractImpl` sites AND `engine-extract-containment.test.ts` compile +
@@ -556,6 +558,31 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
   additive, the dated TA-6 M1 row + §46–§49 ledgers untouched), `docs/packaging.md` (in-app
   engine-install record: extraction-bound + per-family-guard clauses), `BUILD_STATE.md` (§5 item 14
   Phase-5 line), this plan (§L). BUILD_STATE entry added: yes.
+- **Review fix-up (2026-07-17, same branch @ the fix-up commit; independent Phase-5 review verdict
+  FIX-UP NEEDED — 1 should-fix + 2 nits):**
+  - **Should-fix (code):** the 416-CATCH-path invocation of `settleCompletePart` had no exception
+    protection — a throw inside it (renameSync on an AV-interfered destination, an I/O fault out of
+    the verify) escaped `runOne`, became an UNHANDLED REJECTION (`run()`/`start()` never catch),
+    and stranded the job at non-terminal 'verifying' forever (no error copy; never pruned). The
+    try-path settle was already safe (its throws fall into the same catch). Fixed by wrapping the
+    catch-path settle: any throw now lands the job in 'failed' with `friendlyDownloadError` + the
+    audit hook, mirroring the generic failure handling. RED first: new downloads.test.ts case
+    (verifyImpl ok → `.part` vanishes before the rename, the AV-quarantine stand-in) timed out at
+    'verifying' WITH a recorded unhandled rejection pre-fix; green post-fix (job 'failed', friendly
+    copy, nothing half-renamed). Note: the first red attempt used dest-as-directory, which trips
+    PLANNING (`verifyChecksum` EISDIR in `start()`) instead of the settle — replaced with the
+    injectable verifyImpl shape; the honest red is the second run.
+  - **Nit 2 (honesty clause — DOCS chosen, no code change):** the F-33 "concurrent-install window
+    closed" phrasing was inaccurate — `extractWithTar`'s stop path rejects after SIGNALLING the
+    child (arming the 2 s SIGKILL grace), not after its exit, so `run()` settles and a retry's
+    pre-clean can interleave with the dying tar for up to ~2 s (longer if tar is wedged in
+    uninterruptible I/O). Corrected to "narrowed to the ≤2 s kill grace (accepted residual)" in
+    `packaging.md`, the BUILD_STATE Phase-5 line, and the F-33 bullet above. Deliberately NOT
+    changed in code: rejecting only after the child's exit would reintroduce the unbounded wait
+    F-33 removes for an unkillable child.
+  - **Nit 3 (doc drift — DONE):** the audit F-13 blast radius named `model-policy.md` (~:276) and
+    `data-contracts.md` (~:510) resume-contract sentences; both now carry the one-sentence
+    complete-`.part` verify-in-place mention alongside the still-true partial-resume contract.
 
 ### Phase 4 — 2026-07-17 — branch fix/audit-2026-07-16-p4 @ this commit (stacked on p3 @ 16b6438; F-02 landed separately @ d57cfd9)
 - Gate: **4,233 passed / 49 skipped** · typecheck clean · build green (`apps/desktop/src` touched).
