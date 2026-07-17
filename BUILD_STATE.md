@@ -1510,8 +1510,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       tracked file references it; final gate green.
 14. **Full-audit 2026-07-16 — REMEDIATION IN PROGRESS (wave opened 2026-07-17).** Baseline
     `4e02a48` (v0.1.50); 41 verified findings (F-01…F-41; 0 Critical/High, 14 Medium, 27 Low).
-    Report: `docs/audit-2026-07-16.md` (frozen working paper); executable plan + wave ledger:
-    `docs/audit-2026-07-16-remediation-plan.md` (the repo's sanctioned open plan; §D owner
+    Report: `git show 886be68:docs/audit-2026-07-16.md` (frozen working paper, deleted at
+    close-out); executable plan + wave ledger:
+    `git show bb2da00:docs/audit-2026-07-16-remediation-plan.md` (deleted at close-out; §D owner
     decisions recorded 2026-07-17 — D-A add CSV BOM, D-B relabel/drop cached read figure,
     D-C approve async image-history port, D-D CSP investigation pre-authorized both ways,
     D-E stacked branches + one wave-close PR). Branch chain `fix/audit-2026-07-16-p1…p9`,
@@ -1655,14 +1656,14 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     Q-1/Q-2/NF-1 + review outcomes + deviations, clean verdicts, residuals, §-anchor legend —
     every `audit 2026-07-16 F-xx` citation resolves there; layout block updated §24–§49 →
     §24–§50). Final wave gate **4271/49** (kickoff baseline 4217/49; +54), typecheck clean.
-    Both working papers still on disk (deletion is owner-gated). **OWNER actions to close this
-    item:** ① confirm + delete `docs/audit-2026-07-16.md` and
-    `docs/audit-2026-07-16-remediation-plan.md` (full text stays in wave-branch history —
-    git-show pointers in §50) and restore the CLAUDE.md doc-lifecycle sentence to "none are
-    currently open" (coupled edits); ② open the stacked-chain PR `fix/audit-2026-07-16-p9` →
-    `master`, merge on green `ci-success`, then post the parked #59 both-halves comment (text
-    in plan §L Phase-7) and close #59; ③ version checkpoint tag after merge (v0.1.51-style,
-    owner-pushed per the standing tag policy).
+    **Owner confirmations received 2026-07-17 (all three):** ① DONE — both working papers
+    deleted (full text: `git show 886be68:docs/audit-2026-07-16.md`,
+    `git show bb2da00:docs/audit-2026-07-16-remediation-plan.md`; §50 carries the pointers) and
+    the CLAUDE.md doc-lifecycle sentence restored to "none are currently open" (coupled edits,
+    same commit); ② IN PROGRESS — stacked-chain PR `fix/audit-2026-07-16-p9` → `master`, merge
+    on green `ci-success`, then post the parked #59 both-halves comment and close #59; ③ after
+    merge: version checkpoint tag v0.1.51 (local until owner-pushed per the standing tag
+    policy).
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
