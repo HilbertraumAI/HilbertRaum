@@ -34,7 +34,7 @@ import { saveResultTable } from '../services/tables/store'
 import { log } from '../services/logging'
 import { buildDocumentSegmentReader } from './documentSegments'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
-import { routeQuestion } from '../services/analysis/router'
+import { isAggregationShaped, routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -584,7 +584,14 @@ export function registerRagIpc(ctx: AppContext): void {
         // per-doc count never reads as covering the whole multi-doc scope, and stamp the skill so the turn
         // keeps its provenance glyph (A1). `scopeNotice` is null and `skill` undefined on every ordinary
         // (non-skill / non-narrowed) coverage-extract turn, so this is byte-unchanged there.
-        const listingAnswer = buildListingAnswer(ctx.db, listing, (key, params) => tMain(key, params))
+        // #54: an aggregation-shaped ask (categorize / group by / sum per …) is deliberately
+        // routed here (#37 — never a silent top-k sum), but this engine can only list values
+        // with counts. The renderer leads such an answer with an honest shape hint (+ the
+        // bank-statement-skill pointer for `amount`) so a frequency list is never presented
+        // as the requested categories/sums.
+        const listingAnswer = buildListingAnswer(ctx.db, listing, (key, params) => tMain(key, params), {
+          aggregationAsk: isAggregationShaped(text)
+        })
         const answer = scopeNotice ? `${scopeNotice}\n\n${listingAnswer}` : listingAnswer
         return withChatStream(
           event,

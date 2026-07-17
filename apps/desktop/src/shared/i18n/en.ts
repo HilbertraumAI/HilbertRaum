@@ -655,6 +655,16 @@ export const en = {
   'analysis.listing.unparsedHintAmountSkill':
     'For a bank statement, the bank-statement skill in the chat’s skill menu reads the ' +
     'amounts exactly.',
+  // #54: an aggregation-shaped ask (categorize / group by / sum per category) is deliberately
+  // served by the whole-document listing (never a lossy top-k sum, #37) — but the listing can
+  // only COUNT values, not categorize or sum them. Lead with the shape mismatch so the list
+  // below is never mistaken for the requested result, and point at the engine that can do it.
+  'analysis.listing.aggregationHint':
+    '**Heads-up:** you asked for categories or sums, but this answer can only list the values ' +
+    'found in the document, with how often each appears — it cannot group or add them up.',
+  'analysis.listing.aggregationHintAmountSkill':
+    'For a bank statement, enable the bank-statement skill in the chat’s skill menu and ask ' +
+    'again — it groups the transactions into categories and adds up each category exactly.',
   // #37/#38: the router recognised a whole-document question (list / count / categorize /
   // sum per category) but no deep index exists in scope, so the answer below comes from
   // top-k retrieval. Say so ACTIVELY and point at the fix — the coverage fraction alone

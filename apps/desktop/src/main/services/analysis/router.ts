@@ -108,6 +108,18 @@ const TYPE_SYNONYMS: Array<{ type: ExtractRecordType; re: RegExp }> = [
   }
 ]
 
+/**
+ * Did the #37 aggregation lexicon (categorize / group by / sum per …) fire — as opposed to a
+ * plain list/count trigger? Pure, issue #54: the coverage-extract listing engine can only GROUP
+ * BY value with counts, so an aggregation-shaped ask served by it gets an answer of the WRONG
+ * SHAPE (a frequency list, not the requested categories/sums). The listing renderer uses this
+ * to lead such an answer with an honest shape hint + the bank-statement-skill pointer instead
+ * of presenting the list as if it were what was asked for.
+ */
+export function isAggregationShaped(question: string): boolean {
+  return AGGREGATION_RE.test(question ?? '')
+}
+
 /** Map a free-text "list every {X}" to the closed extract type set (default `generic`). */
 export function mapQuestionToRecordType(question: string): ExtractRecordType {
   for (const { type, re } of TYPE_SYNONYMS) {

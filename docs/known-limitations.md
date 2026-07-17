@@ -774,6 +774,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   relevance answer ("based on the most relevant passages"). v1 has no live full-scan for unmapped
   types and does not auto-run the extract pass at import (it is started on request) — both are later
   phases. The extract pass, like the deep index, requires a fully-chunked (re-indexed if legacy) doc.
+  **The listing cannot categorize or sum — and since issue #54 (2026-07-17) it says so.** An
+  aggregation-shaped ask ("categorize the transactions, sum per category") deliberately routes here
+  (never a lossy top-k sum, #37), but the engine only groups values with counts; the answer used to
+  present the raw frequency list with no hint that it wasn't what was asked. A non-empty listing for
+  such an ask now LEADS with an honest shape hint, plus the bank-statement-skill pointer for amounts
+  (that skill's category engine is the one path that groups transactions and sums each category
+  exactly). Plain "list / how many" asks are unchanged. A generic no-skill categorized-sums path
+  (tabular routing over a generic row extractor) remains deferred (architecture.md result-tables
+  record §5/§6).
 - **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
   (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
   coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the

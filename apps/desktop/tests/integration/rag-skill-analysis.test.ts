@@ -1092,6 +1092,68 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     expect(h.runtime.calls).toBe(1)
   })
 
+  // Issue #54 — the wrong-shape half of the #37 incident: WITH extract data the aggregation
+  // question deterministically got the amounts frequency list ("Found 193 amounts …"), which is
+  // NOT the requested categories-with-sums, and (unlike the no-data case above) carried no hint
+  // at all — the categorization intent is structurally unrepresentable in the listing engine.
+  // Owner decision 2026-07-17: keep the honest listing, but LEAD it with the shape hint + the
+  // bank-statement-skill pointer for amounts (option 1 of 3; auto-routing to the skill would
+  // reverse the ratified default-off auto-fire posture, a bare redirect would withhold data).
+  it('#54: the aggregation question WITH extract data leads the listing with the shape hint + skill pointer', async () => {
+    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
+    const chunkId = (
+      h.db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(h.docId) as { id: string }
+    ).id
+    const insertRec = (recordType: string, value: string, normalized: string): void => {
+      h.db
+        .prepare(
+          `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text, normalized_value, content_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(randomUUID(), h.docId, chunkId, recordType, value, normalized, `hash-${normalized}`, '2026-07-10T00:00:00.000Z')
+    }
+    insertRec(SCAN_MARKER_TYPE, '', 'ok')
+    insertRec('amount', '45,90 EUR', '45.90')
+
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'kategorisiere alle transaktionen und erstelle eine summe pro kategorie',
+      null // the #54 configuration: no skill on the turn
+    )
+    const msg = result as Message
+
+    // Still the deterministic listing (0 model calls) — the hint LEADS it, never replaces it.
+    expect(h.runtime.calls).toBe(0)
+    expect(msg.content.startsWith(t('en', 'analysis.listing.aggregationHint'))).toBe(true)
+    expect(msg.content).toContain(t('en', 'analysis.listing.aggregationHintAmountSkill'))
+    expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
+  })
+
+  it('#54: a plain count question keeps its listing WITHOUT the shape hint (byte-unchanged)', async () => {
+    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
+    const chunkId = (
+      h.db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(h.docId) as { id: string }
+    ).id
+    const insertRec = (recordType: string, value: string, normalized: string): void => {
+      h.db
+        .prepare(
+          `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text, normalized_value, content_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(randomUUID(), h.docId, chunkId, recordType, value, normalized, `hash-${normalized}`, '2026-07-10T00:00:00.000Z')
+    }
+    insertRec(SCAN_MARKER_TYPE, '', 'ok')
+    insertRec('amount', '45,90 EUR', '45.90')
+
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
+    const msg = result as Message
+    expect(h.runtime.calls).toBe(0)
+    expect(msg.content).not.toContain(t('en', 'analysis.listing.aggregationHint'))
+    expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
+  })
+
   it('the same #37 question WITH the bank skill takes the whole-document engine — no hint, no top-k', async () => {
     // The user-facing guarantee behind #37: a bank-statement aggregation ask with the skill
     // attached is answered from the WHOLE statement (deterministic extract, honest extract

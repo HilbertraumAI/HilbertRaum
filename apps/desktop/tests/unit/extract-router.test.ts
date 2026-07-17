@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  isAggregationShaped,
   routeQuestion,
   mapQuestionToRecordType
 } from '../../src/main/services/analysis/router'
@@ -285,5 +286,37 @@ describe('parseExtraction — tolerant JSON-array parse (H7)', () => {
       expect(parseExtraction('', { salvageTruncated: true })).toBeNull()
       expect(parseExtraction('thinking… no array here', { salvageTruncated: true })).toBeNull()
     })
+  })
+})
+
+// Issue #54 — the pure detector behind the listing's shape hint: DID the aggregation lexicon
+// fire (categorize / group / sum per …), as opposed to a plain list/count trigger? The listing
+// engine can only count values; an aggregation-shaped ask served by it needs the honest hint.
+describe('isAggregationShaped (#54)', () => {
+  it('true for aggregation/categorization asks — EN + DE, incl. the #54 repro verbatim', () => {
+    for (const q of [
+      'kategorisiere alle transaktionen und erstelle eine summe pro kategorie', // the #54 repro
+      'kategorisiere die ausgaben und erstelle eine summe pro kategorie auf', // the #37 repro
+      'gruppiere die Ausgaben nach Monat',
+      'summiere die Beträge',
+      'categorize the expenses',
+      'group by vendor and total per month',
+      'sum per category please'
+    ]) {
+      expect(isAggregationShaped(q), q).toBe(true)
+    }
+  })
+
+  it('false for plain list/count asks and ordinary questions — the hint must not over-fire', () => {
+    for (const q of [
+      'liste alle Beträge auf',
+      'Zähle die Ausgaben',
+      'list every deadline',
+      'how many payments are there?',
+      'who wrote this letter?',
+      ''
+    ]) {
+      expect(isAggregationShaped(q), q).toBe(false)
+    }
   })
 })
