@@ -1577,6 +1577,24 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     untested) closed with a coprime-config test, mutation-red-proven → **4265/49**. Details:
     plan §L Phase-6 ledger entry (incl. the review note).
 
+    **Phase 7 done 2026-07-17** (branch `fix/audit-2026-07-16-p7`): renderer & IPC correctness
+    polish — F-25 (translate IPC now detaches each job's `destroyed` listener on the lock/quit
+    purge — the third stream terminal the F-4 detach missed, via `TranslateJobService.onStop`;
+    no more one-listener-per-lock leak), F-26 (visionSession.analyze ports translate's L6a busy
+    guard `activeJobId || analyzing` — a second analyze during the start round-trip no longer
+    clobbers the live job's flag), F-28 (preload `listDocuments` smart filter typed as the shared
+    `SmartListView`; dead `ChatOptions.useDocuments` removed — type-only), F-36 (marketing
+    `getWorkspaceState` override is now case-aware `encrypted` under `isMkt()`, so shell captures
+    show the Lock-now rail control that matches the encrypted privacy card — captures re-run +
+    eyeballed), F-38 (StagedShell keeps observing after readiness and clears the sticky
+    `data-marketing-ready` flag if the goal vanishes, so a post-readiness remount can't yield a
+    silently-wrong capture; give-up path now prints — verified). Plus **Q-1** (#59 copy half): the
+    scanned-PDF/OCR dead-end warnings (`docs.scan.ocrMissing`, `main.task.needsOcr`) gained an
+    actionable EN+DE "how to get the OCR files" hint (`--with-assets` / `fetch-runtime --family
+    ocr`); user-guide + troubleshooting cross-refs added. F-25/F-26 red-green-demonstrated. Gate
+    **4267/49** (+2), typecheck + build green. Details: plan §L Phase-7 ledger entry (incl. the
+    updated #59 comment for Phase 10 and the §Q Q-1 disposition).
+
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
 round complete at the 4165/47 gate. The tag is on origin (observed 2026-07-12), so the
