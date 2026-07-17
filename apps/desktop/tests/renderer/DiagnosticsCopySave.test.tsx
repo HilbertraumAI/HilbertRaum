@@ -100,7 +100,9 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
 
     expect(lastCopied).toContain('Hardware benchmark')
     expect(lastCopied).toContain('Test CPU')
-    expect(lastCopied).toContain('120 MB/s')
+    // F-35 (audit 2026-07-16): the read figure is a page-cached readback, so it is labelled "(cached)"
+    // (and driveWriteMbps is the honest headline). The value still renders; the label carries the caveat.
+    expect(lastCopied).toContain('Drive read (cached): 120 MB/s')
     // Issue #52: the tok/s line names the model that produced the number (the loaded one,
     // not the recommended one) in the card AND the copied report.
     expect(lastCopied).toContain('Tokens / sec: 30 (measured with the loaded model mock-chat-8b)')

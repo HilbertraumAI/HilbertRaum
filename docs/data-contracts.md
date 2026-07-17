@@ -305,7 +305,9 @@ document answers always run balanced (deep-grounded = wave 2).
   RAM → `UNKNOWN`.
 - **`measureDriveSpeed(workspacePath)`** → `{ readMbps, writeMbps, error? }`; 8 MB temp file
   written **inside the workspace**, timed write(`fsync`)+read, **always cleaned up**, failure
-  → `null` + `error`.
+  → `null` + `error`. `writeMbps` is the honest headline; `readMbps` is **page-cached** (RAM speed,
+  not the drive — audit 2026-07-16 F-35), shown labelled "(cached)" and NOT used for the slow-drive
+  gate. See `docs/benchmark.md`.
 - **`measureTokensPerSecond(runtime)`** → number | `null` (only when a runtime is active;
   prompt + ≤64 tokens). Mock now, real in Phase 10.
 - **`buildWarnings(...)`** — spec §11.4 friendly copy (weak hardware / slow drive /

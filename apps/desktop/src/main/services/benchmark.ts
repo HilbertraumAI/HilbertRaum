@@ -146,6 +146,12 @@ export async function measureDriveSpeed(workspacePath: string): Promise<DriveSpe
     }
 
     // ---- read ----
+    // F-35 (audit 2026-07-16): this reads back the 8 MB file we JUST wrote, which is still resident in
+    // the OS page cache (fsync flushes dirty pages to the device but does NOT evict them), so the timing
+    // reflects RAM, not the drive — readMbps runs ~100× inflated on slow media. node:fs exposes no
+    // unbuffered/cache-bypassing read, so a genuine cold read is not measurable here. Kept as a rough
+    // "(cached)" figure (labelled as such in Diagnostics); the honest drive signal is the fsync-bound
+    // WRITE leg, which is what buildWarnings gates the slow-drive warning on.
     const rfd = openSync(file, 'r')
     let readMs: number
     try {
@@ -259,14 +265,12 @@ export function buildWarnings(input: WarningInputs): string[] {
 
   if (input.driveError) {
     warnings.push(t('en', 'main.benchmark.warnDriveProbe'))
-  } else {
-    const slowest = Math.min(
-      input.driveReadMbps ?? Number.POSITIVE_INFINITY,
-      input.driveWriteMbps ?? Number.POSITIVE_INFINITY
-    )
-    if (Number.isFinite(slowest) && slowest < SLOW_DRIVE_MBPS) {
-      warnings.push(t('en', 'main.benchmark.warnSlowDrive'))
-    }
+  } else if (input.driveWriteMbps != null && input.driveWriteMbps < SLOW_DRIVE_MBPS) {
+    // F-35 (audit 2026-07-16): gate on the fsync-bound WRITE figure only. The read probe reads back a
+    // page-cached file (RAM speed, ~100× inflated on slow media), so a `min(read, write)` gate never
+    // fired on the read leg anyway — using write alone makes the code match the honest "(cached)" read
+    // label and the documented "write < SLOW_DRIVE_MBPS" condition (benchmark.md).
+    warnings.push(t('en', 'main.benchmark.warnSlowDrive'))
   }
 
   return warnings
