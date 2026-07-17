@@ -12,6 +12,7 @@ import type {
   StartSkillRunResult
 } from '../../shared/types'
 import { buildDocumentSegmentReader, buildOriginalDocumentReader } from './documentSegments'
+import { bomFor } from './save-export'
 import { getLatestUserMessage } from '../services/chat'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -90,7 +91,11 @@ export function registerSkillsIpc(ctx: AppContext): void {
     }
     const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return false
-    await writeFile(result.filePath, content, 'utf8')
+    // Prefix by the CHOSEN path's extension (audit 2026-07-16 F-10, owner decision D-A 2026-07-17):
+    // `.csv` gets the UTF-8 BOM so Excel — the primary consumer of the transactions/invoice CSVs —
+    // detects the encoding on double-click (no more garbled umlauts); `.txt` (redacted.txt/edited.txt)
+    // now gets the BOM the P4 posture always mandated for plain text. JSON/XML stay BOM-free (bomFor).
+    await writeFile(result.filePath, bomFor(result.filePath) + content, 'utf8')
     return true
   }
 

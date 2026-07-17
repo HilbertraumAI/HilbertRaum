@@ -158,6 +158,19 @@ describe('CsvParser', () => {
     expect(out.segments[0].text).toContain('role: Admiral')
   })
 
+  // F-10 (audit 2026-07-16, owner decision D-A 2026-07-17): .csv exports now carry a UTF-8 BOM
+  // (Excel-friendly). papaparse strips a leading BOM itself, so the app's own CSV re-import flow
+  // (e.g. an exported transactions CSV re-imported as a taxonomy/document) survives the prefix.
+  it("re-imports a BOM'd CSV cleanly — the app-export round-trip (F-10)", async () => {
+    expect(bomFor('export.csv')).toBe('\ufeff') // the exact prefix the CSV exports now write
+    const p = write('exported.csv', bomFor('export.csv') + 'date,description\n2026-01-02,Müller')
+    const out = await CsvParser.parse(p)
+    const text = out.segments[0].text
+    expect(text.startsWith('date: 2026-01-02')).toBe(true) // header intact — no BOM glued to it
+    expect(text).toContain('description: Müller')
+    expect(text.includes('\ufeff')).toBe(false)
+  })
+
   // BL-5: a data row WIDER than the header used to drop its overflow cells (header.map only),
   // losing content silently — unsearchable, no failure signal. Now every overflow cell rides
   // along under a generated `colN` label.

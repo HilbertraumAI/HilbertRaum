@@ -137,11 +137,11 @@ describe('chat:exportMessageTable IPC (Phase 2)', () => {
     expect(result).toBe(outPath)
 
     const csv = readFileSync(outPath, 'utf8')
-    const lines = csv.trimEnd().split('\r\n')
+    expect(csv.startsWith('\ufeff')).toBe(true) // UTF-8 BOM on .csv (audit F-10, D-A 2026-07-17 — Excel-friendly)
+    const lines = csv.replace(/^\ufeff/, '').trimEnd().split('\r\n')
     expect(lines[0]).toBe('date,description,amount,category')
     expect(lines[1]).toBe("2026-01-02,'=EVIL(),-45.90,Lebensmittel") // formula-neutralized text cell
     expect(lines[2]).toBe('2026-01-03,Salary,2500.00,Sonstiges')
-    expect(csv.startsWith('﻿')).toBe(false) // no BOM on .csv (bomFor is md/txt-only)
 
     // Dialog metadata: the CSV filter + a .csv default name.
     expect(dialogState.lastSaveOptions?.filters?.[0]?.extensions).toEqual(['csv'])
