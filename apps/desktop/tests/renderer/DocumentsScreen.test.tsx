@@ -737,6 +737,52 @@ describe('DocumentsScreen', () => {
     }
   })
 
+  // ---- F-31: coalesce rapid file-completion refreshes during a bulk import -------------
+  it('coalesces rapid file-completion refreshes to the leading edge within the throttle window (F-31)', async () => {
+    vi.useFakeTimers()
+    try {
+      const listDocuments = vi.fn(async () => [doc({})])
+      // A NEW file finishes on every poll tick (0 → 1 → 2 …), so every tick is a completion
+      // transition — the exact bulk-import shape. Old behavior refreshed the whole list per tick;
+      // the F-31 throttle coalesces a burst inside REFRESH_THROTTLE_MS (1.5 s) to one leading refresh.
+      let poll = 0
+      const total = 10
+      const getImportJob = vi.fn(async () => {
+        const completed = Math.min(poll, total)
+        poll += 1
+        return { jobId: 'j1', total, completed, failed: 0, done: completed >= total }
+      })
+      stubApi({
+        listDocuments,
+        pickDocuments: vi.fn(async () => ({ token: 'tokF31', paths: ['/u/a.pdf', '/u/b.pdf'] })),
+        importPreflight: vi.fn(async () => ({ fileCount: 2, audioFileCount: 0, audioBytes: 0 })),
+        importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1', 'd2'] })),
+        getImportJob
+      })
+      const flush = async (): Promise<void> => {
+        await act(async () => {
+          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
+        })
+      }
+      const { unmount } = render(<DocumentsScreen />)
+      await flush() // mount refresh + ocr status
+      fireEvent.click(screen.getByRole('button', { name: /import files/i }))
+      await flush()
+      const listAfterStart = listDocuments.mock.calls.length
+
+      // Three 400 ms ticks, a NEW completion on EACH (three transitions in 1.2 s < 1.5 s window).
+      // Without the throttle the full list would reload three times (+3); coalesced it reloads once.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1200)
+      })
+      expect(getImportJob.mock.calls.length).toBeGreaterThanOrEqual(3)
+      expect(listDocuments.mock.calls.length).toBe(listAfterStart + 1)
+      unmount() // stop the (still-running) poll before restoring real timers
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   // ---- FE-4: a late import-poll tick after unmount must not refresh the list ----------
   it('drops an in-flight import-poll tick after unmount — no list refresh on a dead component', async () => {
     vi.useFakeTimers()

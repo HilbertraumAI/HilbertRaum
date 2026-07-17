@@ -60,6 +60,40 @@ import { RAIL_COLLAPSED_KEY, type DocSection, type RareViewKind } from './docume
 export { friendlyMimeLabel, isRetryableFailure, __docRowRenderCounts } from './documents/format'
 export { RAIL_COLLAPSED_KEY, VIEWS_MORE_KEY } from './documents/types'
 
+// F-31 (audit 2026-07-16): during a bulk import (or a re-index-all) files settle on almost every 400 ms
+// poll tick, and the completion-triggered `refresh()` re-runs the registered PF-5 whole-library
+// `listDocuments` load-all + collection re-derive up to ~2.5×/s for the import's whole lifetime — exactly
+// during the sessions that grow a library toward the PF-5 threshold. This coalesces the transition-
+// triggered refreshes to at most one per REFRESH_THROTTLE_MS: the LEADING edge fires so the list stays
+// responsive on the first completion, further transitions inside the window are folded into ONE trailing
+// refresh, and the terminal `job.done` refresh always runs immediately so the final state is never
+// stale. The throttle piggybacks on the existing poll ticks (no nested timer), so it stays deterministic
+// under fake timers and composes cleanly with the DR-2 refreshSeq choke point.
+const REFRESH_THROTTLE_MS = 1500
+
+/** A trailing-edge throttle over completion-triggered refreshes (F-31). One coalescer per live job. */
+function makeRefreshCoalescer(
+  refresh: () => Promise<void>
+): (transitioned: boolean, done: boolean) => Promise<void> {
+  let lastRefreshAt = -Infinity
+  let pending = false
+  return async (transitioned, done) => {
+    if (transitioned) pending = true
+    if (done) {
+      // Terminal refresh: always immediate + authoritative (also flushes any pending coalesced state).
+      pending = false
+      lastRefreshAt = Date.now()
+      await refresh()
+      return
+    }
+    if (pending && Date.now() - lastRefreshAt >= REFRESH_THROTTLE_MS) {
+      pending = false
+      lastRefreshAt = Date.now()
+      await refresh()
+    }
+  }
+}
+
 // Documents screen (spec §7.7). Import files or a folder via the OS picker
 // (opened in the main process), watch each file move through the ingestion statuses, and
 // delete / re-index documents. Import runs async in the backend; this screen polls
@@ -269,15 +303,18 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   }, [refresh])
 
   // Poll the import job until ingestion settles (FE-7). The 400 ms tick reads ONLY the small
-  // `getImportJob` status; the full `listDocuments` + collections refresh (which re-derives the
-  // whole screen) runs only when a file actually finishes — i.e. the job's completed/failed count
-  // changes — and once more at completion, instead of every tick. This is the ModelsScreen
-  // download-poll pattern (refresh on a status transition, not every poll). The visible list
-  // therefore updates at file-completion granularity rather than re-deriving 2.5×/s.
+  // `getImportJob` status; the full `listDocuments` + collections refresh (which re-derives the whole
+  // screen) runs on a file-completion transition — i.e. the job's completed/failed count changes — but
+  // COALESCED to at most one per REFRESH_THROTTLE_MS (F-31): the first completion refreshes immediately
+  // (leading edge), a burst of rapid completions folds into one trailing refresh, and the terminal
+  // completion refreshes immediately. This is the ModelsScreen download-poll pattern (refresh on a
+  // status transition, not every poll) with a throttle so a rapid small-file import can't re-derive the
+  // whole library ~2.5×/s.
   const watchJob = useCallback(
     (jobId: string): void => {
       if (pollRef.current) clearInterval(pollRef.current)
       let lastSettled = -1
+      const coalesceRefresh = makeRefreshCoalescer(refresh)
       pollRef.current = setInterval(async () => {
         try {
           const job = await window.api.getImportJob(jobId)
@@ -287,7 +324,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
           const settled = job.completed + job.failed
           const transitioned = settled !== lastSettled
           lastSettled = settled
-          if (transitioned || job.done) await refresh()
+          // F-31: coalesced completion refresh (leading + trailing throttle); done stays immediate.
+          await coalesceRefresh(transitioned, job.done)
           if (job.done) {
             if (pollRef.current) clearInterval(pollRef.current)
             pollRef.current = null
@@ -312,6 +350,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   const watchReindex = useCallback((): void => {
     if (reindexPollRef.current) clearInterval(reindexPollRef.current)
     let lastSettled = -1
+    const coalesceRefresh = makeRefreshCoalescer(refresh)
     reindexPollRef.current = setInterval(async () => {
       try {
         const job = await window.api.getReindexAllJob?.()
@@ -328,7 +367,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         const settled = job.completed + job.failed
         const transitioned = settled !== lastSettled
         lastSettled = settled
-        if (transitioned || job.done) await refresh()
+        // F-31: coalesced completion refresh (leading + trailing throttle); done stays immediate.
+        await coalesceRefresh(transitioned, job.done)
         if (job.done) {
           if (reindexPollRef.current) clearInterval(reindexPollRef.current)
           reindexPollRef.current = null

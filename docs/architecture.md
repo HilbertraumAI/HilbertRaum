@@ -277,11 +277,17 @@ noted below.
 - **FE-7 — poll the import job, not the whole list.** **CONTRACT/behavioral note:** both import
   watchers (DocumentsScreen `watchJob`, ChatScreen `watchAttachJob`) now read only the small
   `getImportJob` status on the 400 ms tick; the full `listDocuments` (+ attachment) refresh runs
-  only when the job's `completed + failed` count changes (a file finished) and once at completion —
-  the ModelsScreen download-poll pattern. The list therefore updates at **file-completion
-  granularity** instead of re-deriving the whole screen 2.5×/s. For attachments this is exactly when
-  the FK-guarded `conversation_documents` link row appears, so the "Files in this chat" reveal is
-  unchanged.
+  when the job's `completed + failed` count changes (a file finished) and once at completion —
+  the ModelsScreen download-poll pattern. For attachments this is exactly when the FK-guarded
+  `conversation_documents` link row appears, so the "Files in this chat" reveal is unchanged.
+  **Amended by audit 2026-07-16 F-31:** DocumentsScreen's completion-triggered refreshes
+  (`watchJob` + `watchReindex`) are now COALESCED by a leading-edge-plus-trailing throttle
+  (`makeRefreshCoalescer`, `REFRESH_THROTTLE_MS = 1500`) — the first completion refreshes
+  immediately, a burst of rapid completions folds into at most one refresh per 1.5 s window, and the
+  terminal `job.done` refresh stays immediate. So a rapid small-file bulk import no longer re-derives
+  the whole library ~2.5×/s (it amplified the registered PF-5 load-all during exactly the sessions
+  that grow a library). ChatScreen's `watchAttachJob` is unchanged (small attach batches; its
+  per-transition refresh is already id-scoped via CODE-21 `listAttachments`).
 
 **Deferred within Wave P2** (lower-confidence under the behavior-preserving mandate; tracked in the
 audit §6 / §4.4): the remainder of FE-3 (memoizing `Composer` + moving `input` state into it —
