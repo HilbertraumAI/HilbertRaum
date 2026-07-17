@@ -5,11 +5,11 @@ role: chat
 format: gguf
 runtime: llama_cpp
 license: apache-2.0
-size_on_disk_gb: 15.7
+size_on_disk_gb: 16.8
 recommended_min_ram_gb: 20
 # recommended_ram_gb recalibrated 32→24 at productization (2026-07-12): same physical tier as
 # the 12-14B pair (gemma4-12b / qwen3-14b, both 24), so the §6.2 rank decides the tier winner
-# instead of capacity alone. Weight is ~15.7 GiB; 24 GB is the honest comfortable floor.
+# instead of capacity alone. Weight is ~16.8 GB (15.7 GiB); 24 GB is the honest comfortable floor.
 recommended_ram_gb: 24
 # Rank 3 (owner decision 2026-07-12, newest-generation preference; model-benchmarks.md §6.4):
 # the newest-generation model is recommended per tier (a subjective owner judgment; follow-up

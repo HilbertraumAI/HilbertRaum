@@ -8,10 +8,14 @@ license: apache-2.0
 size_on_disk_gb: 8.9
 recommended_min_ram_gb: 14
 recommended_ram_gb: 32
-# Raised from 32768 to 96k (2026-06-18). GGUF native context_length=262144 (rope freq_base
-# 10M, no YaRN needed); real ceiling here is VRAM. At 96k the KV cache (~12 GB f16) + Q8 weight
-# (~8.9 GB) ≈ 22 GB on the 24 GB RTX 3090 — tight but full-GPU. Becomes llama-server --ctx-size.
-recommended_context_tokens: 98304
+# Safe LOCAL runtime budget: 8192 = the catalog convention (every chat manifest), not the native
+# window. Normalized 2026-07-17 from 98304 (full-audit 2026-07-16 F-06): recommended_context_tokens
+# becomes llama-server --ctx-size verbatim, and recommended_min_ram_gb (14) is the HARD start gate,
+# so a 96k context here promised machines that pass the 14 GB gate a spawn they cannot fit — at 96k
+# the KV cache (~12 GB f16) + Q8 weight (~8.9 GB) ≈ 22 GB. The GGUF native context_length is 262144
+# (rope freq_base 10M, no YaRN); a 24 GB RTX 3090 owner restores a big context via the in-app
+# Settings context override, not the manifest default.
+recommended_context_tokens: 8192
 supports_thinking_mode: true
 local_path: models/chat/qwen3.5-9b-q8.gguf
 # Placeholder (non-hex) on purpose: a real 64-hex hash forces the app to hash the

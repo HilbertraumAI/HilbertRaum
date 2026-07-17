@@ -476,6 +476,51 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 > - Docs touched: <files> · BUILD_STATE entry added: <yes>
 > ```
 
+### Phase 2 — 2026-07-17 — branch fix/audit-2026-07-16-p2 @ this commit (stacked on p1 @ e8e1313)
+- Gate: **4,219 passed / 49 skipped** · typecheck clean · build n/a (only `tests/`, `model-manifests/`,
+  and docs touched — nothing under `apps/desktop/src`). Baseline was 4,217/49 (entry 0); +2 = the two
+  new invariants. Hygiene: all six edited files LF, no BOM, no NUL (verified by byte count).
+- Fixed:
+  - **F-06** — `model-manifests/chat/qwen3.5-9b-q8.yaml`: `recommended_context_tokens` 98304 → **8192**
+    (the DEFAULT resolution per §D — owner batch-accepted; drop ctx to the catalog convention, capable
+    owners re-raise via the in-app Settings override). Rewrote the manifest's own sizing comment
+    (lines ~11-14) to record the normalization + why (ctx becomes `--ctx-size` verbatim, min-RAM 14 is
+    the hard gate, 96k KV ~12 GB + Q8 weight ~8.9 GB ≈ 22 GB > 14). The rank-0 posture, the private
+    G3/register-D license-provenance review, and every other field are untouched (not conflated).
+  - **F-16** — `qwen3.6-27b-q4.yaml` `size_on_disk_gb` 15.7 → **16.8**, `qwen3.6-27b-q5.yaml` 18.2 →
+    **19.5** (decimal GB = `size_bytes/1e9`: 16,817,244,384 and 19,509,790,944). Blast-radius display
+    cells moved in the same commit: `README.md:223-224`, `docs/model-policy.md:28-29`. Also made both
+    manifests' incidental GiB-labelled comments decimal-GB-primary (`~16.8 GB (15.7 GiB)` /
+    `~19.5 GB (18.2 GiB)`) so the field and its comment stop reading as a unit mismatch — q4's comment
+    line is in the audit F-16 blast radius; q5's sibling line was matched for parity (same finding,
+    same file family, §N-a in-scope). The new size invariant now fences any silent revert.
+  - **New invariants** in `apps/desktop/tests/integration/committed-catalog.test.ts` (new describe block
+    "internal coherence invariants (F-06, F-16)"): (1) every chat manifest's
+    `recommended_context_tokens ≤ recommended_min_ram_gb × 2048` (tok/GB plausibility bound — whole
+    committed catalog sits ≤ 1024 tok/GB, tightest gemma4-coding-q8 at 16384@16; 2x headroom); (2)
+    `|size_on_disk_gb − size_bytes/1e9| < 0.15` for every manifest with a numeric `download.size_bytes`
+    (single-file; the vision manifest carries no `size_bytes` — composite GGUF+mmproj — so the
+    numeric guard excludes it; largest honest gap in the catalog is qwen3.5-0.8b at 0.061).
+- TEETH (red-green ritual, plan-required): the YAML started at pre-fix values, so the invariants were
+  added FIRST and run against pre-fix — **both reddened**: F-06 invariant "expected 98304 to be ≤ 28672
+  (14 GB × 2048)"; F-16 invariant "expected 1.117 (15.7 vs 16.817) to be < 0.15". After the YAML fixes
+  the whole `committed-catalog.test.ts` (13 tests) + `benchmark.test.ts` (31) run green.
+- Recommendation mapping UNCHANGED — re-verified: `benchmark.test.ts` (31/31) byte-identical; the
+  size tiebreak is not decisive for either 27B (24 GB tier decided rank-3 vs gemma4-12b rank-2; Q5 is
+  the sole rank-3 at recRam 32), and ctx/size are not picker inputs at all for the 9B-Q8 (rank 0).
+- Deviations from plan: none material. The q5 comment-line touch (F-16 parity) is the only edit beyond
+  the condensed plan's literal list; it is the same finding in the same file, recorded here per §N-a.
+- New findings: none. (Noted but NOT actioned: qwen3.5-0.8b declares `size_on_disk_gb: 0.7` vs 0.639
+  actual — a 0.061 rounding-up, not the GiB/GB unit class F-16 targets; the audit did not flag it and
+  it clears the 0.15 tolerance. Left as-is, not queued — mentioned for the record only.)
+- Messages to later phases: **none owed.** Verified the Phase-1 benchmark.md four-tier table quotes no
+  ctx value (F-06's ctx change needs no benchmark.md edit, as Phase 1 flagged). The §5-item-8 owner
+  ratification sequence now reads a coherent 8192 ctx for qwen3.5-9b-q8 and decimal 16.8/19.5 sizes.
+- Docs touched: `README.md`, `docs/model-policy.md`, three chat manifests
+  (`qwen3.5-9b-q8.yaml`, `qwen3.6-27b-q4.yaml`, `qwen3.6-27b-q5.yaml`),
+  `apps/desktop/tests/integration/committed-catalog.test.ts`, `BUILD_STATE.md` (§5 item 14 Phase-2
+  line), this plan (§L). BUILD_STATE entry added: yes.
+
 ### Phase 1 — 2026-07-17 — branch fix/audit-2026-07-16-p1 @ this commit (sha is this Phase-1 commit; also carries the Phase-0 kickoff sha backfill)
 - Gate: **4,217 passed / 49 skipped** · typecheck clean · build green (src comments touched, so
   built to be safe). Matches the entry-0 baseline exactly — docs/comment-only neutrality proven.
