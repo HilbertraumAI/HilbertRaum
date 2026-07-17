@@ -143,3 +143,69 @@ describe('docx-rewrite — applySpansToDocx', () => {
     expect(afterDoc).toBe(beforeDoc)
   })
 })
+
+// F-11 (audit 2026-07-16): a SELF-CLOSING `<w:t …/>` (attribute-bearing empty node — Apache POI /
+// lxml-style OOXML producers emit these for empty runs; Word itself rarely does) used to be read as an
+// OPENING tag: `(?:\s[^>]*)?` consumed the trailing `/`, and the lazy body then swallowed every
+// character up to the NEXT `</w:t>` — raw run/formatting markup entered the text layer, and a span
+// overlapping the pseudo-node re-emitted that markup xmlEscape'd as VISIBLE text in the saved copy
+// (destroying the intervening runs' formatting — a D77 guarantee violation). The regex now matches the
+// self-closing form explicitly (an empty node, before the paired-tag alternative).
+describe('docx-rewrite — self-closing <w:t …/> nodes (F-11)', () => {
+  const SELF_CLOSING_XML =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' +
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+    '<w:p><w:r><w:t xml:space="preserve"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>Hello Jane</w:t></w:r></w:p>' +
+    '<w:p><w:r><w:t>Second paragraph.</w:t></w:r></w:p>' +
+    '</w:body></w:document>'
+
+  async function makeSelfClosingDocx(): Promise<Buffer> {
+    const zip = new JSZip()
+    zip.file('[Content_Types].xml', CONTENT_TYPES)
+    zip.file('_rels/.rels', RELS)
+    zip.file('word/document.xml', SELF_CLOSING_XML)
+    zip.file('word/styles.xml', STYLES)
+    return zip.generateAsync({ type: 'nodebuffer' })
+  }
+
+  it('the text layer contains NO markup when a run holds a self-closing <w:t xml:space="preserve"/>', async () => {
+    const bytes = await makeSelfClosingDocx()
+    const { text, nodes } = await readDocxTextLayer(bytes)
+    // The empty node contributes nothing; the following runs' markup must NOT leak into the layer.
+    expect(text).toBe('Hello Jane\nSecond paragraph.\n')
+    expect(text).not.toContain('<')
+    // Only the two REAL text nodes are mapped (the empty self-closing node has no inner text).
+    expect(nodes).toHaveLength(2)
+    expect(nodes[0].layerText).toBe('Hello Jane')
+  })
+
+  it('a span in the run FOLLOWING the self-closing node splices only that run\'s text', async () => {
+    const bytes = await makeSelfClosingDocx()
+    const { text } = await readDocxTextLayer(bytes)
+    const at = text.indexOf('Jane')
+    const out = await applySpansToDocx(bytes, [{ start: at, length: 4, replacement: '████' } satisfies TransformSpan])
+    const layer = await readDocxTextLayer(out)
+    expect(layer.text).toBe('Hello ████\nSecond paragraph.\n')
+    expect(layer.text).not.toContain('Jane')
+    // The intervening run/formatting markup survives AS MARKUP — never re-emitted as escaped text.
+    const doc = await (await JSZip.loadAsync(out)).file('word/document.xml')!.async('string')
+    expect(doc).toContain('<w:t xml:space="preserve"/>')
+    expect(doc).toContain('<w:rPr><w:b/></w:rPr>')
+    expect(doc).not.toContain('&lt;w:')
+  })
+
+  it('a bare self-closing <w:t/> (no attributes) still contributes nothing (regression)', async () => {
+    const zip = new JSZip()
+    zip.file('[Content_Types].xml', CONTENT_TYPES)
+    zip.file('_rels/.rels', RELS)
+    zip.file(
+      'word/document.xml',
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+        '<w:p><w:r><w:t/></w:r><w:r><w:t>Tail</w:t></w:r></w:p></w:body></w:document>'
+    )
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    const { text, nodes } = await readDocxTextLayer(bytes)
+    expect(text).toBe('Tail\n')
+    expect(nodes).toHaveLength(1)
+  })
+})
