@@ -170,8 +170,30 @@ export function engineStatus(
   }
 }
 
-/** Extract a release archive into `destDir`. Injected so tests never shell out. */
-export type ExtractFn = (archivePath: string, destDir: string) => Promise<void>
+/**
+ * Extract a release archive into `destDir`. Injected so tests never shell out. The optional
+ * `signal` (F-33) lets a job cancel reach the child: without it `extractWithTar` was the only
+ * unbounded child in the repo — a wedged tar pinned the job in 'extracting' with no way to stop
+ * it, and a cancel merely flipped the status while tar kept writing.
+ */
+export type ExtractFn = (archivePath: string, destDir: string, signal?: AbortSignal) => Promise<void>
+
+/**
+ * Hard ceiling on ONE archive extraction (F-33). tar is short-lived + local, but a child wedged
+ * by a removed/failing USB drive or AV interference otherwise pins the engine job in 'extracting'
+ * forever (recovery = app restart). Every other child in the repo is bounded (whisper 15-min
+ * watchdog, GPU probe 10 s, llama-server 180 s health); this brings the extractor in line.
+ * Env-overridable (`HILBERTRAUM_EXTRACT_DEADLINE_MS`) for tuning/tests.
+ */
+export const DEFAULT_EXTRACT_DEADLINE_MS = 5 * 60 * 1000
+/** Grace after SIGTERM before escalating to SIGKILL on a wedged/cancelled tar (F-33; the whisper
+ *  REL-2 killWithEscalation grace — native decode/IO code can ignore the polite signal). */
+const EXTRACT_KILL_GRACE_MS = 2_000
+
+function extractDeadlineMs(): number {
+  const raw = Number(process.env.HILBERTRAUM_EXTRACT_DEADLINE_MS)
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_EXTRACT_DEADLINE_MS
+}
 
 /**
  * Resolve `tar` to an ABSOLUTE path. A BARE `spawn('tar', …)` is unsafe on Windows: libuv
@@ -211,7 +233,7 @@ export function resolveTarBinary(
  * bsdtar + GNU tar both auto-detect the .tar.gz gzip. The DIY scripts use the same native
  * tools (unzip/ditto/tar); this is the in-app equivalent.
  */
-export const extractWithTar: ExtractFn = (archivePath, destDir) =>
+export const extractWithTar: ExtractFn = (archivePath, destDir, signal) =>
   new Promise<void>((resolvePromise, reject) => {
     const child = spawn(resolveTarBinary(), ['-xf', archivePath, '-C', destDir], {
       stdio: 'ignore',
@@ -220,9 +242,64 @@ export const extractWithTar: ExtractFn = (archivePath, destDir) =>
       cwd: destDir,
       windowsHide: true
     })
-    child.on('error', reject)
+    let settled = false
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    const onAbort = (): void => stopChild(new Error('tar extraction cancelled'))
+
+    // SIGTERM then SIGKILL if the child ignores it (whisper REL-2), then settle: a tar wedged in
+    // native I/O on a failing USB can ignore the polite signal and never emit 'close', so the
+    // deadline/abort path rejects rather than waiting on a 'close' that may never come. The child
+    // is still killed (best-effort) so no orphan tar keeps writing into the extract dir.
+    const stopChild = (err: Error): void => {
+      if (settled) return
+      settled = true
+      if (deadline) clearTimeout(deadline)
+      signal?.removeEventListener('abort', onAbort)
+      let gone = false
+      const escalate = setTimeout(() => {
+        if (!gone) {
+          try {
+            child.kill('SIGKILL')
+          } catch {
+            /* already gone */
+          }
+        }
+      }, EXTRACT_KILL_GRACE_MS)
+      escalate.unref?.()
+      const onGone = (): void => {
+        gone = true
+        clearTimeout(escalate)
+      }
+      child.once('exit', onGone)
+      child.once('close', onGone)
+      child.once('error', onGone)
+      try {
+        child.kill()
+      } catch {
+        /* already gone */
+      }
+      reject(err)
+    }
+    const settle = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      if (deadline) clearTimeout(deadline)
+      signal?.removeEventListener('abort', onAbort)
+      fn()
+    }
+
+    deadline = setTimeout(
+      () => stopChild(new Error(`tar extraction exceeded ${extractDeadlineMs()} ms; aborted`)),
+      extractDeadlineMs()
+    )
+    // Never let the deadline timer keep Electron alive by itself (mirrors the whisper grace unref).
+    deadline.unref?.()
+    if (signal?.aborted) onAbort()
+    else signal?.addEventListener('abort', onAbort, { once: true })
+
+    child.on('error', (err) => settle(() => reject(err)))
     child.on('close', (code) =>
-      code === 0 ? resolvePromise() : reject(new Error(`tar exited with code ${code}`))
+      settle(() => (code === 0 ? resolvePromise() : reject(new Error(`tar exited with code ${code}`))))
     )
   })
 
@@ -270,6 +347,14 @@ const MAX_TERMINAL_JOBS = 10
 export class EngineDownloadManager {
   private jobs = new Map<string, EngineDownloadJob>()
   private active: { jobId: string; controller: AbortController } | null = null
+  /**
+   * False while a `run()` promise is still in flight (F-33). `job.status` flips to 'cancelled'
+   * the instant `cancel()` is called, but the `run()` — and the tar child it awaits — can still
+   * be settling; `activeJob()` used to report null in that window, so a retry launched a SECOND
+   * install into the same `extractTo` while the first tar kept writing (mixed build + a possible
+   * valid marker). This latch keeps the manager busy until `run()` actually settles.
+   */
+  private runSettled = true
 
   constructor(private readonly deps: EngineDownloadDeps = {}) {}
 
@@ -317,11 +402,13 @@ export class EngineDownloadManager {
     this.jobs.set(job.jobId, job)
     const controller = new AbortController()
     this.active = { jobId: job.jobId, controller }
+    this.runSettled = false // F-33: busy until run() actually settles (not just until cancelled)
     this.deps.log?.('Engine download started', {
       jobId: job.jobId,
       families: installs.map((e) => `${e.family}:${e.build.os}/${e.build.arch}/${e.build.backend}`)
     })
     void this.run(job, installs, controller).finally(() => {
+      this.runSettled = true
       if (this.active?.jobId === job.jobId) this.active = null
     })
     return { ...job }
@@ -374,7 +461,10 @@ export class EngineDownloadManager {
       job.status === 'downloading' ||
       job.status === 'verifying' ||
       job.status === 'extracting'
-    return live ? this.active.jobId : null
+    // F-33: a cancelled-but-not-yet-settled run() still owns `extractTo` (the tar child may still
+    // be writing), so treat it as busy regardless of `job.status` — `start()`'s single guard then
+    // refuses a second install that would interleave with the late extraction.
+    return live || !this.runSettled ? this.active.jobId : null
   }
 
   private pruneTerminalJobs(): void {
@@ -484,7 +574,10 @@ export class EngineDownloadManager {
       if (verify.reason === 'placeholder') job.unverified = true
 
       job.status = 'extracting'
-      await this.install(plan)
+      // F-33: thread the job's abort signal into the extractor so a cancel actually kills the
+      // tar child (and a deadline bounds a wedged one), instead of the status flipping while tar
+      // keeps writing into `extractTo`.
+      await this.install(plan, controller.signal)
       // CODE-13: honour a cancel that landed DURING the extraction, BEFORE the marker
       // write. The extracted files may exist, but without a marker the install is not
       // "current" (`runtimeInstallCurrent`), so the next job re-installs cleanly — and the
@@ -553,7 +646,7 @@ export class EngineDownloadManager {
    * the extract-dir root (the macOS/Linux tarballs + the whisper Windows zip nest under a
    * release/Release folder). Mirrors the fetch-runtime scripts' extract + flatten steps.
    */
-  private async install(plan: RuntimeDownloadPlan): Promise<void> {
+  private async install(plan: RuntimeDownloadPlan, signal?: AbortSignal): Promise<void> {
     // Remove the previous install before extracting so two builds never mix — but keep the
     // just-downloaded archive and the `cpu/` safety-net subdir (audit fix: the cpu→vulkan
     // upgrade path; a stale root binary would otherwise satisfy the flatten guard).
@@ -564,7 +657,7 @@ export class EngineDownloadManager {
     }
 
     const extract = this.deps.extractImpl ?? extractWithTar
-    await extract(plan.zipDest, plan.extractTo)
+    await extract(plan.zipDest, plan.extractTo, signal)
     await this.flattenNestedBinary(plan)
 
     // SEC-2 (full-audit 2026-07-12): post-extract containment sweep. The OS tar already
