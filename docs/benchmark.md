@@ -34,6 +34,15 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    write (with `fsync`) then a read, and reports MB/s. The temp file is **always removed**
    (`try/finally`), the probe is **bounded** (8 MB) so it never hangs the UI, and any failure
    returns `null` Mbps + an `error` string instead of throwing.
+   **`driveWriteMbps` is the honest headline** (the write is `fsync`-bound, so it times real device
+   I/O). **`driveReadMbps` is CACHED, not a drive speed** (audit 2026-07-16 F-35): the read reads back
+   the 8 MB file the write just flushed, which is still resident in the OS page cache (`fsync` flushes
+   dirty pages to the device but does not evict them), so on any OS the read is served from RAM — it
+   runs ~100× inflated on slow media. `node:fs` exposes no cache-bypassing/unbuffered read, so a
+   genuine cold read is not measurable here; rather than build a synthetic cold read, the figure is
+   kept as a rough diagnostic and **labelled "(cached)"** in Diagnostics (`diag.bench.driveRead` →
+   "Drive read (cached)"). Old persisted `lastBenchmark` values (inflated) render sanely under the new
+   label — no migration.
 4. **Tokens/sec** (`measureTokensPerSecond`): **optional**. Only runs when a runtime is
    active — it streams the prompt *"Write one sentence about privacy."* and times up to 64
    tokens. It is `null` when no runtime is running. Because `measureTokensPerSecond`
@@ -114,8 +123,11 @@ bad":
 
 - **TINY** → *"This device is best suited for the smallest, quickest model. Larger models may run slowly."*
 - **UNKNOWN** → a friendly "we picked a safe, lightweight model" note.
-- **Slow drive** (read or write `< SLOW_DRIVE_MBPS = 30` MB/s) → a non-blocking "models will
-  still work, but loading may take longer" note. Slow drives **warn, never block**.
+- **Slow drive** (write `< SLOW_DRIVE_MBPS = 30` MB/s) → a non-blocking "models will
+  still work, but loading may take longer" note. Slow drives **warn, never block**. Gated on the
+  `fsync`-bound **write** figure only (audit 2026-07-16 F-35): the read probe is page-cached (see the
+  Drive-speed step above), so a `min(read, write)` gate never fired on the read leg — the write is the
+  honest signal.
 - **Drive un-measurable** → "drive speed could not be measured; recommendation uses RAM + CPU
   only."
 - **Very low tok/s downgrade** (issue #52) → *"Text generation was very slow with the loaded

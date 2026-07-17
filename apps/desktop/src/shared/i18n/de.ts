@@ -1583,7 +1583,9 @@ export const de: Record<keyof typeof en, string> = {
   'diag.bench.osArch': 'OS / Architektur',
   'diag.bench.gpu': 'GPU',
   'diag.bench.notDetected': 'nicht erkannt',
-  'diag.bench.driveRead': 'Laufwerk lesen',
+  // F-35 (audit 2026-07-16): der Lesewert kommt aus dem OS-Seitencache (RAM, nicht Laufwerk) —
+  // als „(zwischengespeichert)" gekennzeichnet; die ehrliche Kennzahl ist „Laufwerk schreiben".
+  'diag.bench.driveRead': 'Laufwerk lesen (zwischengespeichert)',
   'diag.bench.driveWrite': 'Laufwerk schreiben',
   'diag.bench.notMeasured': 'nicht gemessen',
   // RD-3-Glossar: „Token", nicht „Tokens" — steht auf Diagnose direkt neben
