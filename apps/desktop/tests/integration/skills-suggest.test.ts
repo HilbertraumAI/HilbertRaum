@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
 import { suggestSkillsForTurn } from '../../src/main/services/skills/suggest'
+import { __suggestSignalMaterializations } from '../../src/main/services/skills/scope-signals'
 import { createConversation, getConversationDefaultSkill } from '../../src/main/services/chat'
 
 // Skills plan §10.2/§16 (S8) — suggestSkills orchestration. Proves: scope is resolved MAIN-side from
@@ -158,6 +159,38 @@ describe('suggestSkillsForTurn (S8)', () => {
     suggestSkillsForTurn(db, conv.id, 'bank statement')
     // The offer is computed but NOT applied: the sticky default is untouched.
     expect(getConversationDefaultSkill(db, conv.id)).toBeNull()
+  })
+
+  // F-29 (audit 2026-07-16): the whole-corpus suggestion signals are re-materialized on every
+  // debounced composer pause; memoize them keyed by the documents-table `(COUNT, MAX(rowid))`
+  // signature and invalidate on a corpus change. Suggestions must stay byte-identical.
+  it('memoizes whole-corpus doc signals across repeated suggestions; re-materializes on a corpus change (F-29)', () => {
+    const db = freshDb()
+    const d = dirs()
+    writeSkill(d.userSkillsDir, 'bank', {
+      keywords: ['bank statement'],
+      mimeTypes: ['application/pdf'],
+      filenamePatterns: ['*statement*']
+    })
+    reconcileSkills(db, d)
+    setSkillEnabled(db, 'user:bank', true)
+    seedIndexedDoc(db, 'march-statement.pdf', 'application/pdf')
+    const conv = createConversation(db, {}) // whole-corpus (Library) scope — the expensive path
+
+    expect(__suggestSignalMaterializations(db)).toBe(0)
+    // Five debounced-pause suggestions over an UNCHANGED corpus materialize the whole-corpus signals
+    // exactly ONCE; the resident cache serves the other four, and every offer is byte-identical.
+    const first = suggestSkillsForTurn(db, conv.id, 'reconcile my bank statement')
+    for (let i = 0; i < 4; i++) {
+      expect(suggestSkillsForTurn(db, conv.id, 'reconcile my bank statement')).toEqual(first)
+    }
+    expect(first).toEqual([{ installId: 'user:bank', title: 'Skill bank' }])
+    expect(__suggestSignalMaterializations(db)).toBe(1)
+
+    // Importing another indexed doc changes the signature → the next call re-materializes (invalidation).
+    seedIndexedDoc(db, 'april-statement.pdf', 'application/pdf')
+    suggestSkillsForTurn(db, conv.id, 'reconcile my bank statement')
+    expect(__suggestSignalMaterializations(db)).toBe(2)
   })
 
   it('returns nothing for an unknown conversation + no keyword match (empty-tolerant)', () => {
