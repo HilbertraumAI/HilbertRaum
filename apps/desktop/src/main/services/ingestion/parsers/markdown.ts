@@ -23,7 +23,10 @@ export const MarkdownParser: DocumentParser = {
   readsWholeFileToString: true, // PERF-4: reads the whole file into one JS string then `split`s it
 
   async parse(filePath: string): Promise<ParsedDocument> {
-    const raw = await readFile(filePath, 'utf8')
+    // F-22 (audit 2026-07-16): strip one leading UTF-8 BOM — `readFile(..,'utf8')` keeps U+FEFF, which
+    // made line 1 fail the `^`-anchored HEADING regex, so a BOM'd file's FIRST heading lost section
+    // detection. The app's own .md exports carry the BOM (`bomFor`, P4), as do Notepad-style editors.
+    const raw = (await readFile(filePath, 'utf8')).replace(/^\uFEFF/, '')
     const lines = raw.split(/\r?\n/)
 
     const segments: ExtractedSegment[] = []
