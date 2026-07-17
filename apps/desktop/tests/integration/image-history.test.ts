@@ -51,12 +51,12 @@ function leaks(dir: string, needle: Uint8Array): string[] {
 }
 
 describe('image history — encrypted storage', () => {
-  it('stores the image ENCRYPTED (no plaintext leak) and round-trips it byte-for-byte', () => {
+  it('stores the image ENCRYPTED (no plaintext leak) and round-trips it byte-for-byte', async () => {
     const { db, workspacePath } = freshWorkspace()
     const dir = imagesDir(workspacePath)
     const cipher = testCipher()
 
-    const id = createImageSession(
+    const id = await createImageSession(
       db,
       dir,
       { imageBytes: SENTINEL, mimeType: 'image/png', name: 'secret.png', width: 4, height: 2 },
@@ -70,7 +70,7 @@ describe('image history — encrypted storage', () => {
     expect(leaks(dir, SENTINEL)).toEqual([])
 
     // Reopening decrypts back to the original bytes.
-    const detail = getImageSession(db, dir, id, cipher)
+    const detail = await getImageSession(db, dir, id, cipher)
     expect(detail).not.toBeNull()
     expect(Buffer.from(detail!.imageBytes).equals(Buffer.from(SENTINEL))).toBe(true)
     expect(detail!.title).toBe('secret.png')
@@ -79,11 +79,11 @@ describe('image history — encrypted storage', () => {
     expect(detail!.height).toBe(2)
   })
 
-  it('stores a RAW copy in plaintext mode (no cipher), like documents', () => {
+  it('stores a RAW copy in plaintext mode (no cipher), like documents', async () => {
     const { db, workspacePath } = freshWorkspace()
     const dir = imagesDir(workspacePath)
 
-    const id = createImageSession(
+    const id = await createImageSession(
       db,
       dir,
       { imageBytes: SENTINEL, mimeType: 'image/jpeg', name: 'plain.jpg' },
@@ -93,7 +93,7 @@ describe('image history — encrypted storage', () => {
     expect(stored).toHaveLength(1)
     expect(stored[0]).toMatch(/\.jpg$/)
 
-    const detail = getImageSession(db, dir, id, null)
+    const detail = await getImageSession(db, dir, id, null)
     expect(Buffer.from(detail!.imageBytes).equals(Buffer.from(SENTINEL))).toBe(true)
   })
 })
@@ -103,14 +103,14 @@ describe('image history — turns + list', () => {
     const { db, workspacePath } = freshWorkspace()
     const dir = imagesDir(workspacePath)
 
-    const a = createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'a.png' }, null)
+    const a = await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'a.png' }, null)
     addImageTurn(db, a, 'q1', 'answer one')
     addImageTurn(db, a, 'q2', 'answer two')
     // A small gap so b's updated_at is strictly later (ISO-8601 ms resolution) — the list is
     // ordered newest-first by updated_at. A clock-advance, not a sync point (TS-1: justified
     // fixed sleep).
     await new Promise((r) => setTimeout(r, 5))
-    const b = createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'b.png' }, null)
+    const b = await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'b.png' }, null)
     addImageTurn(db, b, 'only', 'b answer')
 
     const list = listImageSessions(db)
@@ -123,24 +123,24 @@ describe('image history — turns + list', () => {
     expect(aRow.turnCount).toBe(2)
     expect(aRow.firstQuestion).toBe('q1')
 
-    const detail = getImageSession(db, dir, a, null)!
+    const detail = (await getImageSession(db, dir, a, null))!
     expect(detail.turns.map((t) => t.question)).toEqual(['q1', 'q2'])
     expect(detail.turns.map((t) => t.answer)).toEqual(['answer one', 'answer two'])
   })
 })
 
 describe('image history — delete', () => {
-  it('shreds the stored image and CASCADE-removes its turns', () => {
+  it('shreds the stored image and CASCADE-removes its turns', async () => {
     const { db, workspacePath } = freshWorkspace()
     const dir = imagesDir(workspacePath)
     const cipher = testCipher()
 
-    const id = createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'gone.png' }, cipher)
+    const id = await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'gone.png' }, cipher)
     addImageTurn(db, id, 'q', 'a')
     const storedName = readdirSync(dir)[0]
     expect(existsSync(join(dir, storedName))).toBe(true)
 
-    deleteImageSession(db, dir, id)
+    await deleteImageSession(db, dir, id)
 
     // File shredded + unlinked; rows gone (turns cascade).
     expect(existsSync(join(dir, storedName))).toBe(false)
@@ -150,17 +150,17 @@ describe('image history — delete', () => {
     }
     expect(turns.n).toBe(0)
     // Reopening a deleted session is a clean null.
-    expect(getImageSession(db, dir, id, cipher)).toBeNull()
+    expect(await getImageSession(db, dir, id, cipher)).toBeNull()
   })
 
-  it('REL-5: a failed row delete leaves the image intact — no undeletable ghost session', () => {
+  it('REL-5: a failed row delete leaves the image intact — no undeletable ghost session', async () => {
     // The fix deletes the ROW first, then shreds. Inject a failure on the row delete and assert the
     // file was NOT already shredded (the pre-fix shred-then-delete order would leave a row whose
     // image is gone — an unopenable, self-only-healing ghost). With the reorder, a failed delete
     // means nothing was destroyed: the session stays fully openable.
     const { db, workspacePath } = freshWorkspace()
     const dir = imagesDir(workspacePath)
-    const id = createImageSession(
+    const id = await createImageSession(
       db,
       dir,
       { imageBytes: SENTINEL, mimeType: 'image/png', name: 'keep.png' },
@@ -184,11 +184,13 @@ describe('image history — delete', () => {
       }
     } as unknown as Db
 
-    expect(() => deleteImageSession(wrapped, dir, id)).toThrow(/injected/)
+    // deleteImageSession is async (F-12): the row delete throws synchronously, so the returned
+    // promise REJECTS. REL-5 ordering is unchanged (row-delete-first), so nothing was destroyed.
+    await expect(deleteImageSession(wrapped, dir, id)).rejects.toThrow(/injected/)
 
     // File never shredded (delete ran first and failed) → the session is still whole + openable.
     expect(existsSync(storedPath)).toBe(true)
     expect(listImageSessions(db)).toHaveLength(1)
-    expect(getImageSession(db, dir, id, null)).not.toBeNull()
+    expect(await getImageSession(db, dir, id, null)).not.toBeNull()
   })
 })

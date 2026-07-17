@@ -6032,6 +6032,17 @@ async-crypto ×4); typecheck + `npm run build` green.
     on the synchronous functions. Net effect: the PERF-1 "freeze on **every import**" is gone; the
     once-per-session unlock/lock decrypt freeze is an available follow-up (adopt the async siblings there once
     the crash-lock keeps a synchronous path — `encryptFile` is retained for exactly that).
+    - **SUPERSEDE (audit 2026-07-16 F-12, 2026-07-17):** the "image-history via the vision emitter stays on
+      the synchronous functions" carve-out above is **retired**. That path stored/opened/deleted the full
+      image (~60 MiB of sync fs+crypto+shred for a 20 MiB image on an encrypted vault) on the main thread AT
+      the answer-complete moment — the finding's seconds-scale USB freeze. The vision history (`vision/history.ts`)
+      now uses `encryptFileAsync`/`decryptFileAsync` + `fs.promises` + a new **`shredFileAsync`** twin, and the
+      analyze handler **awaits** `ensureSession` before firing `done` (so `sessionId` still rides the done
+      event — the renderer's follow-up contract). Only the **crash-lock / export / DB-lifecycle** callers
+      remain on the sync `encryptFile`/`shredFile`. Dev-box measurement (local SSD, 16 MiB encrypted store,
+      `monitorEventLoopDelay`): main-thread stall **mean 22.4 ms → 3.4 ms, max ~95 ms → ~24 ms** per store; a
+      real USB-stick + encrypted-workspace run was not reproducible on the dev box (the target medium's stall
+      scales with `(2–3×size)/throughput`, so the win is proportionally larger there).
 - **PERF-4 (Medium) — string-safe byte cap for the read-whole-file-to-string formats.** The text / Markdown /
   CSV parsers materialize the file as one UTF-16 JS string (CSV then derives the papaparse row array + the
   rebuilt `lines.join` ≈ 3 full copies at once), so a file approaching the generous 1 GiB `maxBytes` exceeds
@@ -8552,10 +8563,16 @@ instead of plain `pre-wrap` text).
   **relative** filename (drive-portability), resolved against `imagesDir(workspacePath)` at call time.
 - **Storage + crypto** (`services/vision/history.ts`): mirrors the document cache. When the vault is
   encrypted (`ctx.workspace.documentCipher()` ≠ null) the image is written to a short-lived plaintext
-  temp, `cipher.encryptFile`-d to `workspace/images/<id><ext>.enc`, and the temp `shredFile`-d; in
-  plaintext mode a raw `<id><ext>` copy is written (same as documents). `getImageSession` decrypts to a
-  temp, reads, shreds; `deleteImageSession` shreds the stored image then deletes the row (turns
-  cascade). Turn order uses SQLite `rowid` (monotonic insertion order), not the ms-resolution timestamp.
+  temp, encrypted to `workspace/images/<id><ext>.enc`, and the temp shredded; in plaintext mode a raw
+  `<id><ext>` copy is written (same as documents). `getImageSession` decrypts to a temp, reads, shreds;
+  `deleteImageSession` deletes the row first (in a txn) and shreds the stored image only AFTER (REL-5;
+  turns cascade). Turn order uses SQLite `rowid` (monotonic insertion order), not the ms-resolution
+  timestamp. **ASYNC (audit 2026-07-16 F-12):** the three functions are `async` and run the up-to-~20 MiB
+  file I/O + AES-GCM + shred on `encryptFileAsync`/`decryptFileAsync` + `fs.promises` + `shredFileAsync`
+  (yielding between 8 MiB chunks), so an encrypted store/open/delete no longer freezes the main process
+  on the USB medium — previously ~60 MiB of SYNC fs+crypto+shred landed on the main thread at the
+  answer-complete moment. The analyze handler `await`s persistence before firing `done`, so the sessionId
+  still rides the done event (below).
 - **Save trigger:** AUTOMATIC, like chat — the session is created **lazily on the first completed
   answer** (the `done` wrapper in `registerImagesIpc`), so a busy/failed/cancelled/empty job persists
   **nothing** (no turnless sessions). `ImageAnalyzeRequest` carries `name`/`width`/`height`/`sessionId`;

@@ -12,7 +12,7 @@ import {
   closeSync,
   fsyncSync
 } from 'node:fs'
-import { open as openFileAsync, rename as renameAsync, rm as rmAsync } from 'node:fs/promises'
+import { open as openFileAsync, rename as renameAsync, rm as rmAsync, stat as statAsync } from 'node:fs/promises'
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { tMain } from './i18n'
@@ -227,19 +227,27 @@ export function writeVaultDescriptor(descriptorPath: string, d: VaultDescriptor)
 //   • `encryptFile`/`decryptFile` (SYNC) — the original `readSync`/`writeSync` loop. Used by the
 //     DB-`.enc` lifecycle (create/unlock/lock/checkpoint/rekey) and the crash-only lock, which
 //     must run to completion BEFORE `process.exit` in the `uncaughtException` handler (an async
-//     lock can't finish before exit → committed in-session data would be lost), and by the
-//     bounded, user-triggered image-history / text-export paths reached through SYNCHRONOUS
-//     callers (the vision streaming emitter; the export reader). These are NOT the per-import freeze.
+//     lock can't finish before exit → committed in-session data would be lost), and by the bounded
+//     text-export path reached through a SYNCHRONOUS caller (the export reader). NOT the per-import freeze.
 //   • `encryptFileAsync`/`decryptFileAsync` (ASYNC) — the same loop on `fs.promises` FileHandles,
 //     awaiting each chunk so it YIELDS to the event loop between chunks (AES-GCM `update` on an
 //     8 MiB chunk is sub-ms). Used by the document-CACHE import/re-index/preview/OCR path — the
 //     "freeze on every import" PERF-1 targets (a large scanned PDF over USB, paid twice in an
-//     encrypted workspace). DIVERGENCE from the audit's "convert the vault loop" wording: rather
-//     than make the shared functions async-in-place (which cascades into the DB lock/unlock/rekey
-//     lifecycle + the synchronous crash-lock + the synchronous vision emitter — the highest-stakes,
-//     most-tested code, with a real vault-corruption blast radius the audit itself flagged), we
-//     ADDED async siblings used by the actual per-import harm and left the session-boundary DB
-//     lifecycle + bounded sync paths on the sync functions. See architecture.md §35.
+//     encrypted workspace) — AND, since audit 2026-07-16 F-12, the image-history store/open path
+//     (see below). DIVERGENCE from the audit's "convert the vault loop" wording: rather than make the
+//     shared functions async-in-place (which cascades into the DB lock/unlock/rekey lifecycle + the
+//     synchronous crash-lock — the highest-stakes, most-tested code, with a real vault-corruption blast
+//     radius the audit itself flagged), we ADDED async siblings used by the actual per-import harm and
+//     left the session-boundary DB lifecycle + the sync export path on the sync functions. See
+//     architecture.md §35.
+//
+//   SUPERSEDE (audit 2026-07-16 F-12, 2026-07-17): the "image-history via the vision emitter stays on
+//   the SYNC path" carve-out above is RETIRED. On an encrypted workspace, storing/opening/deleting a
+//   ~20 MiB image ran ~60 MiB of sync fs+crypto+shred on the main thread AT the answer-complete moment
+//   (freezing all IPC on the USB medium the product targets). The vision history now uses the async
+//   cipher twins + `fs.promises` + `shredFileAsync` (below), and the analyze handler awaits the
+//   persistence before firing `done` (so sessionId still rides the event). The sync `shredFile` and the
+//   sync cipher stay for the crash-lock / export / vault-lifecycle callers. See architecture.md §35.
 
 /** Chunk size for streaming crypto + shredding. Bounds memory regardless of file size. */
 export const FILE_CHUNK_BYTES = 8 * 1024 * 1024
@@ -494,6 +502,42 @@ export function shredFile(path: string): void {
   }
   try {
     rmSync(path, { force: true })
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * ASYNC twin of {@link shredFile} (audit 2026-07-16 F-12): the SAME best-effort secure delete
+ * (overwrite with random bytes in bounded chunks, then unlink), on an `fs.promises` FileHandle so it
+ * YIELDS to the event loop between chunks. Additive — the ~25 sync `shredFile` callers (vault/crash-lock
+ * lifecycle, ingestion, dictation, doctasks, transcriber) stay sync; only the async image-history path
+ * uses this twin so a ~20 MiB image store/open/delete on an encrypted USB workspace no longer freezes
+ * the main process. Same caveat as the sync twin (SSD wear-levelling may leave original blocks).
+ */
+export async function shredFileAsync(path: string): Promise<void> {
+  try {
+    const size = (await statAsync(path)).size
+    if (size > 0) {
+      const fd = await openFileAsync(path, 'r+')
+      try {
+        const chunk = randomBytes(Math.min(size, FILE_CHUNK_BYTES))
+        let pos = 0
+        while (pos < size) {
+          const n = Math.min(chunk.length, size - pos)
+          await fd.write(chunk, 0, n, pos)
+          pos += n
+        }
+        await fd.sync()
+      } finally {
+        await fd.close().catch(() => {})
+      }
+    }
+  } catch {
+    /* best-effort overwrite (missing/unstatable file too); still unlink below */
+  }
+  try {
+    await rmAsync(path, { force: true })
   } catch {
     /* best-effort */
   }

@@ -57,7 +57,7 @@ import type {
 import type { AppContext } from '../../src/main/services/context'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { encryptFile, decryptFile, encryptFileAsync, decryptFileAsync } from '../../src/main/services/workspace-vault'
-import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -139,6 +139,22 @@ async function waitForTerminal(jobId: string): Promise<ImageJob> {
     await new Promise((r) => setTimeout(r, 5))
   }
   throw new Error('analyze job never reached a terminal state')
+}
+
+// F-12 (audit 2026-07-16): history persistence is now ASYNC and the done EVENT is streamed only AFTER
+// createImageSession/addImageTurn complete (so sessionId still rides it). The job STATE flips to 'done'
+// a step earlier (in the service, before emit.done), so `waitForTerminal` alone can return before the
+// session/turn/stored image exist. Wait for the streamed terminal (imgDone/imgError) — the renderer's
+// real signal — which guarantees persistence is done. Returns the streamed job payload.
+async function waitForImgSend(event: FakeIpcEvent, jobId: string): Promise<ImageJob> {
+  for (let i = 0; i < 200; i++) {
+    const call = event.sender.send.mock.calls.find(
+      (c: unknown[]) => c[0] === STREAM.imgDone(jobId) || c[0] === STREAM.imgError(jobId)
+    )
+    if (call) return call[1] as ImageJob
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  throw new Error('analyze job never streamed a terminal event')
 }
 
 beforeEach(() => {
@@ -436,7 +452,8 @@ describe('registerImagesIpc — history persistence', () => {
     const event = makeEvent()
     const initial = (await invokeWithEvent(handlers, IPC.imageAnalyze, event, histReq())) as ImageJob
     release()
-    const done = await waitForTerminal(initial.jobId)
+    // F-12: wait for the streamed done EVENT (fired after async persistence), not just job state.
+    const done = await waitForImgSend(event, initial.jobId)
     expect(done.state).toBe('done')
 
     // The streamed done EVENT carries the sessionId (the renderer's contract for follow-ups).
@@ -470,15 +487,16 @@ describe('registerImagesIpc — history persistence', () => {
     const { ctx, imagesPath } = ctxWithDb()
     registerImagesIpc(ctx, service)
 
-    const first = (await invoke(handlers, IPC.imageAnalyze, histReq())).result as ImageJob
-    expect((await waitForTerminal(first.jobId)).state).toBe('done')
+    const firstInv = await invoke(handlers, IPC.imageAnalyze, histReq())
+    const first = firstInv.result as ImageJob
+    expect((await waitForImgSend(firstInv.event, first.jobId)).state).toBe('done')
     const afterFirst = (await invoke(handlers, IPC.imageListSessions)).result as ImageSessionSummary[]
     expect(afterFirst).toHaveLength(1)
     const sessionId = afterFirst[0].id
 
-    const second = (await invoke(handlers, IPC.imageAnalyze, histReq({ question: 'and now?', sessionId })))
-      .result as ImageJob
-    await waitForTerminal(second.jobId)
+    const secondInv = await invoke(handlers, IPC.imageAnalyze, histReq({ question: 'and now?', sessionId }))
+    const second = secondInv.result as ImageJob
+    await waitForImgSend(secondInv.event, second.jobId)
 
     const list = (await invoke(handlers, IPC.imageListSessions)).result as ImageSessionSummary[]
     expect(list).toHaveLength(1)
@@ -493,11 +511,12 @@ describe('registerImagesIpc — history persistence', () => {
     const { ctx } = ctxWithDb()
     registerImagesIpc(ctx, service)
 
-    const first = (await invoke(handlers, IPC.imageAnalyze, histReq())).result as ImageJob
+    const firstInv = await invoke(handlers, IPC.imageAnalyze, histReq())
+    const first = firstInv.result as ImageJob
     const busy = (await invoke(handlers, IPC.imageAnalyze, histReq())).result as ImageJob
     expect(busy.error).toBe('busy')
     release()
-    await waitForTerminal(first.jobId)
+    await waitForImgSend(firstInv.event, first.jobId)
 
     // Only the first (completed) analyze created a session.
     const list = (await invoke(handlers, IPC.imageListSessions)).result as ImageSessionSummary[]
@@ -509,8 +528,9 @@ describe('registerImagesIpc — history persistence', () => {
     const { ctx, imagesPath } = ctxWithDb()
     registerImagesIpc(ctx, service)
 
-    const job = (await invoke(handlers, IPC.imageAnalyze, histReq())).result as ImageJob
-    await waitForTerminal(job.jobId)
+    const jobInv = await invoke(handlers, IPC.imageAnalyze, histReq())
+    const job = jobInv.result as ImageJob
+    await waitForImgSend(jobInv.event, job.jobId)
     const list = (await invoke(handlers, IPC.imageListSessions)).result as ImageSessionSummary[]
     expect(readdirSync(imagesPath)).toHaveLength(1)
 

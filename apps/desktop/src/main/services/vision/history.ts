@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Db } from '../db'
-import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
+import { ENCRYPTED_DOC_SUFFIX, shredFileAsync, type DocumentCipher } from '../workspace-vault'
 import type {
   ImageAnalyzeRequest,
   ImageSessionDetail,
@@ -56,13 +57,17 @@ function getRow(db: Db, id: string): SessionRow | undefined {
  * Create a history session for a freshly analyzed image: store the bytes (encrypted when a
  * cipher is supplied — i.e. the vault is encrypted) and insert the metadata row. Returns the
  * new session id. The caller appends turns via {@link addImageTurn} as answers complete.
+ *
+ * ASYNC (audit 2026-07-16 F-12): the up-to-~20 MiB file write + AES-GCM encrypt + temp shred run on
+ * `fs.promises` + the async cipher/shred twins, yielding between chunks, so storing an image on an
+ * encrypted USB workspace no longer freezes the main process at the answer-complete moment.
  */
-export function createImageSession(
+export async function createImageSession(
   db: Db,
   dir: string,
   req: Pick<ImageAnalyzeRequest, 'imageBytes' | 'mimeType' | 'name' | 'width' | 'height'>,
   cipher: DocumentCipher | null
-): string {
+): Promise<string> {
   const id = randomUUID()
   const ext = extForMime(req.mimeType)
   const now = new Date().toISOString()
@@ -74,15 +79,15 @@ export function createImageSession(
     // then shred the temp — identical to how the document cache handles imported copies.
     storedName = `${id}${ext}${ENCRYPTED_DOC_SUFFIX}`
     const tmp = join(dir, `${id}.tmp`)
-    writeFileSync(tmp, bytes)
+    await writeFile(tmp, bytes)
     try {
-      cipher.encryptFile(tmp, join(dir, storedName))
+      await cipher.encryptFileAsync(tmp, join(dir, storedName))
     } finally {
-      shredFile(tmp)
+      await shredFileAsync(tmp)
     }
   } else {
     storedName = `${id}${ext}`
-    writeFileSync(join(dir, storedName), bytes)
+    await writeFile(join(dir, storedName), bytes)
   }
 
   db.prepare(
@@ -157,12 +162,12 @@ export function listImageSessions(db: Db): ImageSessionSummary[] {
  * is, since the workspace is unlocked to reach here). Returns null if the session is unknown
  * or its stored image is missing.
  */
-export function getImageSession(
+export async function getImageSession(
   db: Db,
   dir: string,
   id: string,
   cipher: DocumentCipher | null
-): ImageSessionDetail | null {
+): Promise<ImageSessionDetail | null> {
   const row = getRow(db, id)
   if (!row) return null
 
@@ -179,15 +184,17 @@ export function getImageSession(
     // writes / a premature shred yielded corrupted bytes or an ENOENT. The randomUUID makes each
     // read (and `decryptFile`'s own `<tmp>.tmp` stage) collision-free; both are still swept by
     // shredStalePlaintext on crash.
+    // ASYNC (audit 2026-07-16 F-12): decrypt + read + shred off the main thread (fs/promises + the
+    // async cipher/shred twins) so opening a ~20 MiB image from history doesn't freeze the app.
     const tmp = join(dir, `${id}.read-${process.pid}-${randomUUID()}.tmp`)
     try {
-      cipher.decryptFile(stored, tmp)
-      imageBytes = readFileSync(tmp)
+      await cipher.decryptFileAsync(stored, tmp)
+      imageBytes = await readFile(tmp)
     } finally {
-      if (existsSync(tmp)) shredFile(tmp)
+      if (existsSync(tmp)) await shredFileAsync(tmp)
     }
   } else {
-    imageBytes = readFileSync(stored)
+    imageBytes = await readFile(stored)
   }
 
   const turns = db
@@ -226,8 +233,11 @@ export function getImageSession(
  * deleteDocument/deleteConversation; the single statement is already atomic, but the wrap keeps the
  * "row first, shred after commit" ordering explicit). The shred is best-effort AFTER the commit — a
  * missing/locked copy must not resurrect the already-deleted row.
+ *
+ * ASYNC (audit 2026-07-16 F-12): the post-commit shred runs on `shredFileAsync` (off the main thread).
+ * REL-5 ordering is unchanged — the row delete + commit happen first (synchronously), then the shred.
  */
-export function deleteImageSession(db: Db, dir: string, id: string): void {
+export async function deleteImageSession(db: Db, dir: string, id: string): Promise<void> {
   const row = getRow(db, id)
   if (!row) return
   db.exec('BEGIN')
@@ -243,5 +253,5 @@ export function deleteImageSession(db: Db, dir: string, id: string): void {
     throw err
   }
   const stored = join(dir, row.stored_name)
-  if (existsSync(stored)) shredFile(stored)
+  if (existsSync(stored)) await shredFileAsync(stored)
 }
