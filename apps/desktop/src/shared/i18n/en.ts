@@ -2329,6 +2329,9 @@ export const en = {
     'That item has no file on disk. Drag a document from a folder, or use “choose a document”.',
   'translate.file.err.unsupported':
     "That file type can't be translated. Try a PDF, Word, Markdown, or text file.",
+  'translate.file.err.scanned':
+    'This PDF looks like a scan with no readable text. Make it searchable first in Documents — ' +
+    '"Make searchable (OCR)" — then translate it.',
   'translate.file.err.importFailed': "The document couldn't be read. Try again.",
   'translate.file.err.runtimeFailed': "The document couldn't be translated. Try again.",
 

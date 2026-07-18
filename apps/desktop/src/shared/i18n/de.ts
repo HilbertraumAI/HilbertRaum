@@ -2393,6 +2393,9 @@ export const de: Record<keyof typeof en, string> = {
     'Dieses Element hat keine Datei auf dem Datenträger. Ziehe ein Dokument aus einem Ordner oder nutze „ein Dokument auswählen".',
   'translate.file.err.unsupported':
     'Dieser Dateityp kann nicht übersetzt werden. Versuche eine PDF-, Word-, Markdown- oder Textdatei.',
+  'translate.file.err.scanned':
+    'Dieses PDF sieht aus wie ein Scan ohne lesbaren Text. Mache es zuerst unter „Dokumente“ ' +
+    'durchsuchbar — „Durchsuchbar machen (OCR)“ — und übersetze es dann.',
   'translate.file.err.importFailed': 'Das Dokument konnte nicht gelesen werden. Versuche es erneut.',
   'translate.file.err.runtimeFailed': 'Das Dokument konnte nicht übersetzt werden. Versuche es erneut.',
 

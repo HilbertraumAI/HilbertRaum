@@ -639,9 +639,11 @@ languages first, just like text. The document is read, translated a section at a
 panel. From there, **Export…** saves it as a file, **Show in Documents** opens it in your library,
 or **Copy** puts it on the clipboard. For a long document the panel shows the **start** of the
 translation — export it or open it in Documents to read the whole thing. Drop **one document at a
-time**; a file type that can't be read shows a short, friendly note. (This is the same job as the
-**⋯ → Translate** action under Documents, §7 — the translated copy is saved either way; the
-original you dropped is kept as a **temporary** document.)
+time**; a file type that can't be read shows a short, friendly note. A **scanned PDF** (pictures of
+pages, with no readable text) can't be translated as-is — the note points you to make it searchable
+first under **Documents** with **Make searchable (OCR)** (§7), then translate the result. (This is
+the same job as the **⋯ → Translate** action under Documents, §7 — the translated copy is saved
+either way; the original you dropped is kept as a **temporary** document.)
 
 Everything stays on the drive — your text and its translation are **never uploaded**. Typed text is
 transient: leave the screen (or lock the workspace) and it is gone. A translated **document**,

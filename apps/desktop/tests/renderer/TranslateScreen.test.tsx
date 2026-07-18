@@ -8,7 +8,7 @@ import { resetFileTranslateSessionForTests } from '../../src/renderer/lib/fileTr
 import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
 import { en, t } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
-import type { AppStatus, DocTaskStatus, TranslateJob } from '../../src/shared/types'
+import type { AppStatus, DocTaskStatus, DocumentInfo, TranslateJob } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
@@ -457,6 +457,104 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
     act(() => dropOnZone([new File(['x'], 'a.xyz', { type: '' })]))
     expect(await screen.findByText(t('en', 'translate.file.err.unsupported'))).toBeInTheDocument()
+    expect(f.startDocTask).not.toHaveBeenCalled()
+  }, 10000)
+
+  // ---- FE-3 (OCR-R P2): honest handoff when a SUPPORTED file imports but INGESTION fails ----
+  // A PDF imports fine, then ingestion fails: an image-only scan with no text, or a corrupt/
+  // encrypted PDF. Pre-fix every such case collapsed to the misleading "unsupported file type"
+  // copy. Now the failed row's persisted reason drives the banner — a scan → the OCR handoff;
+  // anything else → its localized real message. The genuinely-unsupported EXTENSION path
+  // (nothing imported at all) is unchanged (the control below).
+
+  /** A failed `documents` row as `listDocuments` reports it after a failed ingestion. */
+  function failedDoc(over: Partial<DocumentInfo> = {}): DocumentInfo {
+    return {
+      id: 'd1',
+      title: 'a.pdf',
+      originalPath: 'C:\\docs\\a.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: 2048,
+      status: 'failed',
+      errorMessage: null,
+      chunkCount: 0,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+      ...over
+    }
+  }
+
+  /** getImportJob reporting an import that finished with nothing ingested. */
+  const importFailedJob = () =>
+    vi.fn(async () => ({ jobId: 'imp1', total: 1, completed: 0, failed: 1, done: true }))
+
+  it('FE-3: a scanned PDF (imported, ingestion failed) shows the OCR handoff, not "unsupported"', async () => {
+    const f = fileStubs({ documentIds: ['d1'] })
+    const listDocuments = vi.fn(async () => [
+      failedDoc({ scanDetected: true, errorMessage: en['main.ingest.pdfScanDetected'] })
+    ])
+    stubApi({ ...f.api, getImportJob: importFailedJob(), listDocuments })
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await screen.findByLabelText(t('en', 'translate.input.label'))
+
+    act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })]))
+
+    // The new scan copy points at the Documents "Make searchable (OCR)" action.
+    expect(
+      await screen.findByText(t('en', 'translate.file.err.scanned'), {}, { timeout: 8000 })
+    ).toBeInTheDocument()
+    // And NONE of the misleading "Try a PDF, Word, Markdown, or text file." unsupported copy.
+    expect(screen.queryByText(t('en', 'translate.file.err.unsupported'))).not.toBeInTheDocument()
+    // No translation task runs over a document that has no text.
+    expect(f.startDocTask).not.toHaveBeenCalled()
+  }, 10000)
+
+  it('FE-3: a corrupt/encrypted PDF surfaces its localized real failure, not "unsupported" (DE)', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    try {
+      const f = fileStubs({ documentIds: ['d1'] })
+      const listDocuments = vi.fn(async () => [
+        failedDoc({ scanDetected: false, errorMessage: en['main.ingest.parseTimeout'] })
+      ])
+      stubApi({ ...f.api, getImportJob: importFailedJob(), listDocuments })
+      render(
+        <I18nProvider>
+          <TranslateScreen onNavigate={() => {}} />
+        </I18nProvider>
+      )
+      await screen.findByLabelText(t('de', 'translate.input.label'))
+
+      act(() =>
+        dropOnZone(
+          [new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })],
+          t('de', 'translate.drop.title')
+        )
+      )
+
+      // The German real message shows — routed through localizeServerCopy, not the raw English
+      // constant, and not the misleading "unsupported" copy.
+      expect(
+        await screen.findByText(t('de', 'main.ingest.parseTimeout'), {}, { timeout: 8000 })
+      ).toBeInTheDocument()
+      expect(screen.queryByText(en['main.ingest.parseTimeout'])).not.toBeInTheDocument()
+      expect(screen.queryByText(t('de', 'translate.file.err.unsupported'))).not.toBeInTheDocument()
+    } finally {
+      window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
+    }
+  }, 10000)
+
+  it('FE-3 control: a genuinely-unsupported extension (nothing imported) is byte-identical', async () => {
+    // main imported nothing supported — the PRE-import path (`documentIds: []`). This must stay
+    // exactly the old "unsupported" copy AND never reach the failed-row resolver (no row exists).
+    const f = fileStubs({ documentIds: [] })
+    const listDocuments = vi.fn(async () => [])
+    stubApi({ ...f.api, listDocuments })
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await screen.findByLabelText(t('en', 'translate.input.label'))
+
+    act(() => dropOnZone([new File(['x'], 'a.xyz', { type: '' })]))
+    expect(await screen.findByText(t('en', 'translate.file.err.unsupported'))).toBeInTheDocument()
+    expect(listDocuments).not.toHaveBeenCalled()
     expect(f.startDocTask).not.toHaveBeenCalled()
   }, 10000)
 

@@ -36,6 +36,7 @@ export type FileTranslateErrorCode =
   | 'multiDrop'
   | 'noPath'
   | 'unsupported'
+  | 'scanned'
   | 'importFailed'
   | 'docTaskBusy'
   | 'runtimeFailed'
@@ -303,8 +304,11 @@ async function runImport(paths: string[], token: string | undefined, choice: Cho
         if (status.done) {
           stopPolling()
           if (status.completed === 0) {
-            // Imported but ingestion failed (e.g. an unreadable/encrypted PDF) — no doc to translate.
-            fail('unsupported')
+            // Imported as a SUPPORTED type but ingestion failed (an image-only scan with no text,
+            // a corrupt/encrypted PDF) — there is no document to translate. FE-3: read WHY from the
+            // failed row and surface an honest reason (a scan → the OCR handoff; else the real
+            // message) instead of the misleading "unsupported file type" copy.
+            void resolveImportFailure(docId, myGen)
             return
           }
           void startTranslationTask(docId, choice, myGen)
@@ -318,6 +322,37 @@ async function runImport(paths: string[], token: string | undefined, choice: Cho
     })()
   }, POLL_MS)
   return 'started'
+}
+
+/**
+ * FE-3: an import that finished with nothing ingested — the source imported as a supported type
+ * but its INGESTION failed. Read the failed document's persisted reason (read-only `listDocuments`
+ * — no new IPC surface) to tell the user WHY:
+ *  - a detected image-only scan (`scanDetected`, derived main-side from the exact scan notice) →
+ *    the `scanned` code, whose copy points at the Documents row's "Make searchable (OCR)" action;
+ *  - any other ingest failure → surface its localized `error_message` verbatim (the screen routes
+ *    it through `localizeServerCopy`, like DocumentsScreen), falling back to the generic
+ *    import-failed frame when the row or its message can't be read.
+ * The genuinely-unsupported EXTENSION path (nothing imported at all) stays `fail('unsupported')` in
+ * `runImport` — this resolver is only reached once a document row exists.
+ */
+async function resolveImportFailure(docId: string, myGen: number): Promise<void> {
+  if (myGen !== gen) return
+  let failed
+  try {
+    const docs = await window.api.listDocuments()
+    failed = docs.find((d) => d.id === docId)
+  } catch {
+    // The list read failed — fall through to the generic import-failed frame below.
+  }
+  if (myGen !== gen) return
+  if (failed?.scanDetected) {
+    fail('scanned')
+  } else if (failed?.errorMessage) {
+    failWith(failed.errorMessage)
+  } else {
+    fail('importFailed')
+  }
 }
 
 /** Start the translation doc-task over the ingested temporary document, then poll it to completion. */

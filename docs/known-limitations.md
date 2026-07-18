@@ -1709,6 +1709,13 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   until that retention ships or they delete them by hand. Deliberate: bespoke deletion here
   would risk the source of a translation the user may still want re-run. The same
   ~2K-window cross-window terminology drift above applies to dropped documents.
+- **A scanned PDF can't be translated as-is — the Translate view points you to OCR first
+  (FE-3).** A dropped/chosen PDF that is only pictures of pages imports but then fails
+  ingestion (no readable text). The banner names the real reason: for a detected scan it says
+  to make it searchable first under **Documents** with **Make searchable (OCR)**, then
+  translate the result; any other import failure (a corrupt/encrypted PDF) shows its own
+  localized reason rather than the old, misleading "unsupported file type" note. A genuinely
+  unsupported extension still shows the unsupported note.
 - **The Translate view shows only the START of a long translated document.** To bound
   renderer memory the output panel loads the materialized doc's bounded first page; a long
   translation shows a "showing the start" hint. Use **Export…** or **Show in Documents**
