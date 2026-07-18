@@ -2306,5 +2306,125 @@ export const en = {
   'translate.file.err.unsupported':
     "That file type can't be translated. Try a PDF, Word, Markdown, or text file.",
   'translate.file.err.importFailed': "The document couldn't be read. Try again.",
-  'translate.file.err.runtimeFailed': "The document couldn't be translated. Try again."
+  'translate.file.err.runtimeFailed': "The document couldn't be translated. Try again.",
+
+  // ---- Evidence review (EP-1 plan §7 — ReviewScreen.tsx + chat entry points) ----
+  // Entry points (spec §9): the per-message action + the quiet sources-disclosure footer action.
+  'review.action.start': 'Review evidence',
+  'review.action.continue': 'Continue review',
+  'review.entry.sources': 'Review answer and sources',
+  'review.status.draft': 'Draft',
+  'review.status.ready': 'Ready',
+  // Screen chrome
+  'review.back': 'Back to chat',
+  'review.rename': 'Rename',
+  'review.rename.label': 'Review title',
+  'review.rename.save': 'Save',
+  'review.loading': 'Loading review…',
+  'review.notFound': 'This review could not be found. It may have been deleted.',
+  'review.question.toggle': 'Question',
+  'review.answerPane.aria': 'Answer under review',
+  // Auto-save status (plan §7.5) — quiet text, never an unlabeled spinner (guidelines §6).
+  'review.autosave.saving': 'Saving…',
+  'review.autosave.saved': 'Saved',
+  'review.autosave.error': 'Some changes could not be saved yet.',
+  'review.autosave.retry': 'Try again',
+  // Evidence pane honesty captions (spec §11.4/§24.3). The whole-document caption is the
+  // load-bearing "provenance, not citations" claim — asserted by exact key in tests.
+  'review.evidence.title': 'Evidence',
+  'review.evidence.captionRelevance':
+    'The sources shown are the excerpts supplied to the local AI model for this answer.',
+  'review.evidence.captionWholeDoc':
+    'This answer was derived through whole-document analysis. The sections shown are provenance, not individual sentence citations.',
+  'review.evidence.captionStructured':
+    'This answer used locally extracted data. The source passages behind the extraction are shown below.',
+  'review.evidence.none':
+    'This answer has no persisted source excerpts. You can record a general review, but source-level verification is unavailable.',
+  'review.disclaimer':
+    'A citation shows where information came from. It does not by itself prove that the answer is correct.',
+  // Evidence cards
+  'review.source.kind.direct_excerpt': 'Direct excerpt',
+  'review.source.kind.whole_document_provenance': 'Whole-document provenance',
+  'review.source.kind.structured_record': 'Extracted record',
+  'review.source.unresolved': 'Source identity could not be determined',
+  'review.source.missingAtCreation': 'Source was not available when this review was created',
+  'review.link.add': 'Link to item',
+  'review.link.remove': 'Remove link',
+  'review.link.cited': 'Cited by the answer',
+  'review.link.reviewer': 'Reviewer linked',
+  'review.link.selectHint': 'Select a review item to link or unlink evidence.',
+  'review.relation.label': 'Relation',
+  'review.relation.none': 'No flag',
+  'review.relation.supports': 'Supports',
+  'review.relation.qualifies': 'Qualifies',
+  'review.relation.contradicts': 'Contradicts',
+  'review.relation.context': 'Context only',
+  // Review items
+  'review.item.aria': 'Review item {n}',
+  'review.item.noMarker': 'No direct source marker in this text',
+  'review.item.wholeDocDerived': 'Derived through whole-document analysis',
+  'review.item.noteLabel': 'Note',
+  'review.item.notePlaceholder': 'Add a note (optional)',
+  'review.item.viewEvidence': 'View evidence',
+  // Decisions (spec §14.1/§24.2) — the persisted machine values never change; display only.
+  'review.decision.groupAria': 'Decision',
+  'review.decision.supported': 'Reviewed — supported',
+  'review.decision.partly_supported': 'Reviewed — partly supported',
+  'review.decision.not_supported': 'Reviewed — not supported',
+  'review.decision.follow_up': 'Needs follow-up',
+  'review.decision.not_reviewed': 'Not reviewed',
+  'review.decision.not_applicable': 'Not applicable',
+  // Bulk actions (spec §14.4 — conservative; "mark all supported" must NOT exist, tested).
+  'review.bulk.menu': 'Bulk actions',
+  'review.bulk.headingsNa': 'Mark headings Not applicable',
+  'review.bulk.followUp': 'Mark undecided as Needs follow-up',
+  'review.bulk.clear': 'Clear all decisions',
+  'review.bulk.clearConfirmTitle': 'Clear all decisions?',
+  'review.bulk.clearConfirmBody':
+    'Every decision in this review goes back to Not reviewed. Notes are kept.',
+  'review.bulk.clearConfirm': 'Clear decisions',
+  // Footer + progress (D-7 wording: decided/required, "not applicable" counts as decided)
+  'review.progress': '{decided} of {required} decided',
+  'review.progress.followUps.one': '{count} follow-up',
+  'review.progress.followUps.other': '{count} follow-ups',
+  'review.footer.summary': 'Review summary',
+  // Summary view (spec §11.6). Phase 3 mounts the "Create evidence pack" action here.
+  'review.summary.status': 'Status',
+  'review.summary.decisions': 'Decisions',
+  'review.summary.sources': 'Sources',
+  'review.summary.sourcesCount.one': '{count} source',
+  'review.summary.sourcesCount.other': '{count} sources',
+  'review.summary.sourcesUnresolved.one': '{count} source identity could not be determined',
+  'review.summary.sourcesUnresolved.other': '{count} source identities could not be determined',
+  'review.summary.sourcesMissing.one':
+    '{count} source was not available when this review was created',
+  'review.summary.sourcesMissing.other':
+    '{count} sources were not available when this review was created',
+  'review.summary.truncated':
+    'The generated answer may be incomplete — it was cut off at the model’s output limit.',
+  'review.summary.generation': 'Generation details',
+  'review.summary.model': 'Model',
+  'review.summary.generatedAt': 'Generated',
+  'review.summary.appVersion': 'App version',
+  'review.summary.skill': 'Skill',
+  'review.summary.unavailable': 'Unavailable',
+  'review.summary.reviewerLabel': 'Reviewer',
+  'review.summary.reviewerPlaceholder': 'Your name or label (optional)',
+  'review.summary.generalNote': 'General note',
+  'review.summary.generalNotePlaceholder': 'Overall observations (optional)',
+  'review.summary.exports': 'Export history',
+  'review.summary.markReady': 'Mark review ready',
+  'review.summary.reopen': 'Reopen review',
+  'review.summary.gateHint':
+    'Every answer block needs a decision before the review can be marked ready ({decided} of {required} decided). Not applicable counts as decided.',
+  'review.toast.ready': 'Review marked ready.',
+  'review.completedAt': 'Completed {date}',
+  // D-2 delete-confirm warning (spec §25.4). `.unknown` is the honest fallback when the
+  // count could not be read — never silence about a cascade.
+  'review.deleteWithConversation.one':
+    '{count} evidence review attached to this conversation will also be deleted.',
+  'review.deleteWithConversation.other':
+    '{count} evidence reviews attached to this conversation will also be deleted.',
+  'review.deleteWithConversation.unknown':
+    'Any evidence reviews attached to this conversation will also be deleted.'
 } as const

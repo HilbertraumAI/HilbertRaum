@@ -159,6 +159,32 @@ export const ConversationList = memo(function ConversationList({
 }: Props): JSX.Element {
   const { t, tCount } = useT()
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
+  // D-2 (EP-1 plan §7.6, spec §25.4): how many evidence reviews the delete would cascade
+  // away. null = not fetched / none pending; 'unknown' = the count could not be read —
+  // then the confirm still warns generically (never silent about a cascade).
+  const [pendingDeleteReviews, setPendingDeleteReviews] = useState<number | 'unknown' | null>(null)
+  useEffect(() => {
+    if (!pendingDelete) {
+      setPendingDeleteReviews(null)
+      return
+    }
+    let cancelled = false
+    // Promise.resolve-wrapped: an older preload bridge without the channel (or a partial
+    // test stub) yields a non-number — then the confirm warns GENERICALLY rather than
+    // guessing 0 (never silent about a cascade). A number is the real count.
+    Promise.resolve(
+      window.api.countEvidenceReviewsForConversation?.(pendingDelete.id)
+    )
+      .then((n) => {
+        if (!cancelled) setPendingDeleteReviews(typeof n === 'number' ? n : 'unknown')
+      })
+      .catch(() => {
+        if (!cancelled) setPendingDeleteReviews('unknown')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [pendingDelete])
   // One controlled menu so right-click (context menu) can open the same "⋯" menu.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   // Search: a non-empty query swaps the column to results. `results` is null
@@ -335,6 +361,14 @@ export const ConversationList = memo(function ConversationList({
         onCancel={() => setPendingDelete(null)}
       >
         <p>{t('chat.delete.body', { title: localizeServerCopy(t, pendingDelete?.title ?? '') })}</p>
+        {/* D-2 (spec §25.4): deletion cascades attached evidence reviews — say so, with the
+            count when known; an unreadable count still warns (the honest fallback). */}
+        {pendingDeleteReviews === 'unknown' && (
+          <p>{t('review.deleteWithConversation.unknown')}</p>
+        )}
+        {typeof pendingDeleteReviews === 'number' && pendingDeleteReviews > 0 && (
+          <p>{tCount('review.deleteWithConversation', pendingDeleteReviews)}</p>
+        )}
       </ConfirmDialog>
     </aside>
   )

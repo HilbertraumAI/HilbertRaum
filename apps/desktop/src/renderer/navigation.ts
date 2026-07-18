@@ -21,6 +21,11 @@ export type ScreenId =
   | 'models'
   | 'skills'
   | 'settings'
+  // Evidence review workspace (EP-1 plan §7.1): a full-window screen with NO nav-rail entry.
+  // Deliberately NOT resolvable via resolveNavTarget — without a review/message id in App's
+  // handoff slot the screen has nothing to show, so 'review' as a plain target falls through
+  // to home and the screen is reachable ONLY via App.openReview (the chatScope idiom).
+  | 'review'
 
 export type SettingsTab = 'general' | 'privacy' | 'diagnostics'
 
@@ -57,6 +62,8 @@ export function resolveNavTarget(target: string): NavResolution {
       return { screen: target }
     default:
       // Unknown target: land somewhere sensible rather than rendering nothing.
+      // 'review' lands here ON PURPOSE (see the ScreenId note): the review screen is
+      // meaningless without App's handoff slot, so it never resolves as a plain target.
       return { screen: 'home' }
   }
 }

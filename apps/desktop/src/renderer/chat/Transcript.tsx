@@ -1,6 +1,7 @@
 import { Fragment, memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AssistantMarkdown } from './AssistantMarkdownLazy'
-import type { ConversationSummaryMarker, Message } from '@shared/types'
+import type { ConversationSummaryMarker, EvidenceReviewSummary, Message } from '@shared/types'
+import { isReviewEligible } from '@shared/evidence-review'
 import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
 import { CoverageMeter, Icon, Spinner } from '../components'
@@ -50,6 +51,21 @@ interface TranscriptProps {
    * save dialog. Absent ⇒ the affordance never renders.
    */
   onExportTable?: (messageId: string) => void
+  /**
+   * Open (or continue) the evidence review for one answer (EP-1 plan §7.2, spec §9.1). Rendered
+   * only on `isReviewEligible` assistant turns — assistant ∧ (citations ∨ coverage ∨ documents
+   * conversation via `reviewConversation`). Absent ⇒ the affordance never renders. The
+   * STREAMING gate is the row's shared `actionsDisabled` (a live bubble has no action row at
+   * all — only persisted turns reach MessageActions).
+   */
+  onOpenReview?: (messageId: string) => void
+  /**
+   * Known review state per message id (null = checked, none exists) — drives the
+   * "Review evidence" vs "Continue review" label + the Draft/Ready chip (spec §9.4).
+   */
+  reviewSummaries?: ReadonlyMap<string, EvidenceReviewSummary | null>
+  /** The active conversation's mode for the documents-mode eligibility leg (spec §9.1). */
+  reviewConversation?: { mode: 'chat' | 'documents' } | null
   actionsDisabled: boolean
   /**
    * Resolve a skill's per-message glyph title in the UI language (installId → localized title),
@@ -89,6 +105,9 @@ export const Transcript = memo(function Transcript({
   onCopy,
   onSave,
   onExportTable,
+  onOpenReview,
+  reviewSummaries,
+  reviewConversation,
   actionsDisabled,
   resolveSkillTitle,
   progressNotice,
@@ -154,6 +173,9 @@ export const Transcript = memo(function Transcript({
               onCopy={onCopy}
               onSave={onSave}
               onExportTable={onExportTable}
+              onOpenReview={onOpenReview}
+              reviewSummary={reviewSummaries?.get(m.id) ?? null}
+              reviewConversation={reviewConversation}
               actionsDisabled={actionsDisabled}
               resolveSkillTitle={resolveSkillTitle}
             />
@@ -257,6 +279,9 @@ const MessageBlock = memo(function MessageBlock({
   onCopy,
   onSave,
   onExportTable,
+  onOpenReview,
+  reviewSummary,
+  reviewConversation,
   actionsDisabled,
   resolveSkillTitle
 }: {
@@ -269,9 +294,17 @@ const MessageBlock = memo(function MessageBlock({
   onCopy: (content: string) => void
   onSave: () => void
   onExportTable?: (messageId: string) => void
+  onOpenReview?: (messageId: string) => void
+  reviewSummary?: EvidenceReviewSummary | null
+  reviewConversation?: { mode: 'chat' | 'documents' } | null
   actionsDisabled: boolean
   resolveSkillTitle?: (installId: string | null | undefined, fallbackTitle: string) => string
 }): JSX.Element {
+  // Review-entry eligibility (spec §9.1) via the ONE shared predicate — the action row and
+  // the sources-disclosure footer can never disagree. A persisted turn only; the live
+  // streaming bubble never reaches MessageBlock (the caller's streaming gate, P1 handoff).
+  const reviewable = onOpenReview != null && isReviewEligible(m, reviewConversation)
+  const openReview = reviewable ? () => onOpenReview(m.id) : undefined
   return (
     <div className={`msg-block ${m.role}`}>
       <div className={`msg ${m.role}`}>
@@ -292,7 +325,7 @@ const MessageBlock = memo(function MessageBlock({
                 excerpts (relevance) or whole-document LEAF PROVENANCE (tree/capped/extract) —
                 FE-B / F11 renderer half. A NULL-coverage relevance turn passes undefined and
                 renders byte-identically to before. */}
-            <SourcesDisclosure citations={m.citations} mode={m.coverage?.mode} />
+            <SourcesDisclosure citations={m.citations} mode={m.coverage?.mode} onReview={openReview} />
             {/* Honesty (whole-document-analysis §4.5/§5.2; full-doc-skills §3.3/D48): render the
                 answer's PERSISTED coverage when we have it, else fall back to the relevance label —
                 "based on the most relevant passages, NOT the whole document". A pre-migration row
@@ -372,6 +405,8 @@ const MessageBlock = memo(function MessageBlock({
           onExportTable={
             m.hasResultTable && onExportTable ? () => onExportTable(m.id) : undefined
           }
+          onReview={openReview}
+          reviewStatus={reviewSummary?.status ?? null}
           disabled={actionsDisabled}
         />
       )}

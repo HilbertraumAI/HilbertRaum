@@ -792,6 +792,51 @@ reasoning-retires-it) + the `warm-up tracking (#39)` block in `tests/unit/runtim
 Related: #36 (the header `model · GPU/CPU` hint) names the *persistent* speed context; this names
 the *one-time* cost.
 
+### 11.12 Evidence-review workspace — EP-1 Phase 2 rollout (IMPLEMENTED 2026-07-18, plan §7)
+
+The review workspace (`ReviewScreen.tsx` + `renderer/review/*`) is the first **handoff-only
+full-window screen**: `ScreenId` gained `'review'` with NO nav-rail entry — the rail stays 8
+items, and `resolveNavTarget('review')` deliberately falls through to home because the screen
+is meaningless without App's `openReview(reviewId | messageId)` handoff slot (the `chatScope`
+idiom). Entry points are quiet and progressive (spec §9): the message action row gains
+**Review evidence / Continue review** last in row plus a text+glyph Draft/Ready chip
+(`.msg-review-chip` — never color-only, §9), and the expanded SourcesDisclosure carries the
+`.sources-review` footer link. Patterns this rollout added or reused, for future screens:
+
+- **Two-pane workspace, drawer under 980px:** answer pane (immutable snapshot markdown via
+  `AssistantMarkdown`, selectable item cards with `aria-current`) + evidence sidebar. On
+  narrow windows the sidebar is NOT squeezed — it mounts as the existing `Modal width='wide'`
+  opened per item ("View evidence"), inheriting the focus trap + focus-return for free. The
+  breakpoint lives in ONE `matchMedia` subscription (`useSyncExternalStore`), not CSS
+  `display:none` duplication, so tests and behavior can't diverge.
+- **6-value decision chips as a radio group:** `review/DecisionControl.tsx` reimplements the
+  SegmentedControl roving-tabindex idiom as WRAPPING chips (6 values don't fit a pill track):
+  one tab stop per group, arrows move focus+selection, Home/End jump, each chip = glyph +
+  localized text. Selection recolors via border+weight, never color alone.
+- **Debounced auto-save with a labelled status line:** the repo's first auto-save
+  (`lib/reviewSession.ts`, 600 ms debounce, loss-free flush; flush on screen exit and BEFORE
+  vault lock). The UI voice is a quiet `role="status"` "Saving… / Saved" line and a
+  `role="alert"` + retry on failure — no unlabeled spinner (§6), no toast spam.
+- **Honesty captions are keys, not prose:** the evidence pane's per-mode caption
+  (`review.evidence.captionRelevance|WholeDoc|Structured`) and the per-item
+  "No direct source marker" / "Derived through whole-document analysis" notes are asserted
+  BY EXACT KEY in tests — whole-document provenance is never worded as citations, and
+  provenance cards render no `[Sn]` label (the SourcesDisclosure rule, reused via the
+  exported `PROVENANCE_CARD_CAP` + card markup idiom).
+- **Deliberate deviation from spec §11.2:** no per-screen "Local · Offline" header indicator —
+  the rail-foot indicator is THE single ambient privacy signal on every screen (§12.1 #2);
+  duplicating it per screen is exactly what that record forbids.
+- **Conservative bulk actions only** (spec §14.4): headings→N/A, undecided→follow-up,
+  clear-all (confirmed via ConfirmDialog). "Mark all supported" does not exist and a test
+  pins its absence; the store exports no bulk pathway that can write a supported verdict.
+
+Tests: `ReviewScreen.test.tsx` (journey, exact-key wording, D-7 gating, bulk absence,
+keyboard walk §28.10, drawer focus-return), `ReviewEntryPoints.test.tsx` (visibility matrix +
+D-2 delete-confirm count), `reviewSession.test.ts` (debounce/loss-free/purge), plus
+`GermanSmoke`/`InformationArchitecture`/`LazyScreens` legs and the restart + lock/unlock
+integration legs in `evidence-reviews-ipc.test.ts`. German copy is a DRAFT pending the
+native review pass (Phase 6, D-L7 — flagged in `de.ts`).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

@@ -18,6 +18,7 @@ import { tMain } from '../services/i18n'
 import { findManifestById } from '../services/models'
 import { createEvidenceReviewFromMessage } from '../services/evidence-pack/snapshot'
 import {
+  countEvidenceReviewsForConversation,
   createEvidenceSelection,
   deleteEvidenceReview,
   deleteEvidenceSelection,
@@ -281,4 +282,16 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
     return deleted
   })
+
+  // D-2 (spec §25.4, plan §7.6): the conversation-delete confirm names how many reviews the
+  // cascade will remove. A pure COUNT — no titles, notes, or content ever cross this channel;
+  // a malformed id reads as "no reviews" (0), matching the other unknown-id results.
+  ipcMain.handle(
+    IPC.countEvidenceReviewsForConversation,
+    (_e, conversationId: unknown): number => {
+      requireUnlocked()
+      const id = safeId(conversationId)
+      return id ? countEvidenceReviewsForConversation(ctx.db, id) : 0
+    }
+  )
 }

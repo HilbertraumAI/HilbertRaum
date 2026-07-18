@@ -1786,6 +1786,175 @@ code, pre, kbd { font-family: var(--font-mono); }
    radio-mark slot for its check indicator), so persisting a pick as the default is explicit. */
 .menu-item.skill-keep { color: var(--text-muted); }
 
+/* ---- Evidence review workspace (EP-1 plan §7 — ReviewScreen.tsx) ---- */
+/* Two-pane layout (spec §11.1): the answer is the canvas (flexible), evidence a fixed
+   sidebar. Below the narrow breakpoint the JS swaps the aside for a Modal drawer, so no
+   display:none dance is needed here — the pane simply isn't mounted. */
+.review-screen { display: flex; flex-direction: column; min-height: 0; }
+.review-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.review-title {
+  font-size: var(--text-lg);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40ch;
+}
+.review-rename-input {
+  font-size: var(--text-md);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  min-width: 220px;
+}
+/* Status chip: text + glyph, never color-only (guidelines §9). */
+.review-status-chip,
+.msg-review-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 1px 10px;
+  white-space: nowrap;
+}
+.review-save-state { font-size: var(--text-sm); color: var(--text-muted); margin-left: auto; }
+.review-save-state.error { color: var(--error); }
+.review-panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+  padding-top: 12px;
+}
+.review-panes.narrow { grid-template-columns: minmax(0, 1fr); }
+.review-answer-pane { min-width: 0; overflow-y: auto; }
+.review-evidence-pane { min-width: 0; overflow-y: auto; border-left: 1px solid var(--border); padding-left: 20px; }
+.review-question-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  margin-top: 6px;
+  font-size: var(--text-sm);
+}
+.review-bulk-row { margin: 10px 0; }
+.review-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+/* One review item: a quiet card; the selected item gets the accent hairline so the
+   evidence pane's "Link to item" target is visible (plus aria-current for AT). */
+.review-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--surface);
+}
+.review-item.selected { border-color: var(--accent); box-shadow: var(--shadow-1); }
+.review-item-note { margin: 6px 0 0; }
+.review-item-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.review-item-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 1px 8px;
+  color: var(--text-muted);
+}
+.review-link-origin { color: var(--text-muted); font-size: var(--text-sm); }
+/* Decision chips: the SegmentedControl vocabulary, but wrapping (6 values). */
+.review-decisions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.review-decision-chip {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+.review-decision-chip:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
+.review-decision-chip.selected {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}
+.review-note-label { display: block; margin-top: 8px; }
+.review-note-input,
+.review-reviewer-input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  resize: vertical;
+}
+.review-evidence-title { font-size: var(--text-md); margin: 0 0 6px; }
+.review-evidence-caption { margin: 0 0 4px; }
+.review-disclaimer { margin: 0 0 10px; }
+.review-source-card { margin-bottom: 8px; }
+.review-source-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; color: var(--text-muted); font-size: var(--text-sm); }
+.review-source-state { color: var(--text-muted); }
+.review-source-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.review-relation select {
+  font-size: var(--text-sm);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+}
+.review-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 12px;
+}
+.review-foot-spacer { flex: 1; }
+.review-summary section { margin-bottom: 16px; }
+.review-summary h3 { font-size: var(--text-md); margin: 0 0 6px; }
+.review-summary-counts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--text-sm); }
+.review-summary-meta { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; font-size: var(--text-sm); margin: 0; }
+.review-summary-meta dt { color: var(--text-muted); }
+.review-summary-meta dd { margin: 0; }
+.review-summary-exports { list-style: none; margin: 0; padding: 0; font-size: var(--text-sm); }
+.review-summary-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.review-gate-hint { margin: 0; }
+/* The quiet sources-disclosure footer entry (spec §9.2) — the .sources-more idiom. */
+.sources-review {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--link);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  padding: 2px 0;
+}
+.sources-review:hover { text-decoration: underline; }
+
 /* ---- Settings → Skills (skills plan §15) ---- */
 /* Toolbar: the intro line takes the flex space, the Import action stays right + shrink:0. */
 .skills-toolbar { display: flex; align-items: flex-start; gap: 16px; }

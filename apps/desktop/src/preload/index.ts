@@ -558,6 +558,9 @@ const api = {
   /** Delete a review (items/links/export records CASCADE); true when a row was deleted. */
   deleteEvidenceReview: (reviewId: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.deleteEvidenceReview, reviewId),
+  /** How many reviews this conversation's messages carry — the D-2 delete-confirm count. */
+  countEvidenceReviewsForConversation: (conversationId: string): Promise<number> =>
+    ipcRenderer.invoke(IPC.countEvidenceReviewsForConversation, conversationId),
 
   // Skills (instruction packages; skills plan §16).
   /** All installed skills (app first, then by title). */

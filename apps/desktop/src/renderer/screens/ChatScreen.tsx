@@ -9,12 +9,15 @@ import {
   type ConversationSummaryMarker,
   type DocumentInfo,
   type DocumentScope,
+  type EvidenceReviewSummary,
   type Message,
   type RunnableTool,
   type RuntimeStatus,
   type SkillInfo,
   type SkillSuggestion
 } from '@shared/types'
+import { isReviewEligible } from '@shared/evidence-review'
+import type { ReviewHandoffTarget } from '../lib/reviewSession'
 import { cancelActiveDocTask } from '../lib/doctasks'
 import {
   acknowledgeSkillRun,
@@ -169,12 +172,19 @@ interface Props {
   initialMode?: Mode
   /** Retrieval scope for the NEXT documents conversation ("Ask these documents"). */
   initialScopeDocumentIds?: string[] | null
+  /**
+   * Open the evidence-review workspace via App's handoff slot (EP-1 plan §7.1 — the
+   * chatScope idiom): an existing review passes its id, a first review passes the message
+   * id (the idempotent main-side create resolves both). Absent ⇒ review entry points hide.
+   */
+  onOpenReview?: (target: ReviewHandoffTarget) => void
 }
 
 export function ChatScreen({
   onNavigate,
   initialMode,
-  initialScopeDocumentIds
+  initialScopeDocumentIds,
+  onOpenReview
 }: Props): JSX.Element {
   const { t, lang } = useT()
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -549,6 +559,51 @@ export function ChatScreen({
     }
   }, [activeId, refreshContextInfo])
 
+  // ---- Evidence review entry-point state (EP-1 plan §7.2) --------------------------------
+  // Which persisted answers already carry a review (drives "Review evidence" vs "Continue
+  // review" + the Draft/Ready chip, spec §9.4). Keyed by message id; `null` = checked, none
+  // exists. Fetched once per eligible assistant message per conversation view — a pure local
+  // SQLite read per id, no model, no network. A fetch failure reads as "none" (the create
+  // path surfaces real errors with friendly copy). Reset on conversation switch; returning
+  // from the review screen remounts ChatScreen, so the chip state is re-read fresh.
+  const [reviewSummaries, setReviewSummaries] = useState<
+    ReadonlyMap<string, EvidenceReviewSummary | null>
+  >(new Map())
+  useEffect(() => {
+    setReviewSummaries(new Map())
+  }, [activeId])
+  useEffect(() => {
+    if (!activeId || messages.length === 0) return
+    // Older preload bridges (mixed-version dev drives) may lack the method — hide quietly.
+    if (typeof window.api.getEvidenceReviewForMessage !== 'function') return
+    const conv = conversations.find((c) => c.id === activeId)
+    const scope = conv ? { mode: conv.mode } : null
+    const unknown = messages.filter(
+      (m) => m.role === 'assistant' && isReviewEligible(m, scope) && !reviewSummaries.has(m.id)
+    )
+    if (unknown.length === 0) return
+    let cancelled = false
+    void (async () => {
+      const entries: Array<[string, EvidenceReviewSummary | null]> = []
+      for (const m of unknown) {
+        try {
+          entries.push([m.id, await window.api.getEvidenceReviewForMessage(m.id)])
+        } catch {
+          entries.push([m.id, null])
+        }
+      }
+      if (cancelled) return
+      setReviewSummaries((prev) => {
+        const next = new Map(prev)
+        for (const [id, summary] of entries) next.set(id, summary)
+        return next
+      })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [messages, activeId, conversations, reviewSummaries])
+
   // Load the conversation's chat attachments (plan C3) when it changes. Best-effort: a
   // failed load (or an older preload without the channel) just hides the affordance.
   const refreshAttachments = useCallback(async (convId: string | null): Promise<void> => {
@@ -898,6 +953,12 @@ export function ChatScreen({
   const handleCopyMessage = useEventCallback(onCopyMessage)
   const handleSaveConversation = useEventCallback(onSaveConversation)
   const handleExportMessageTable = useEventCallback(onExportMessageTable)
+  // EP-1 plan §7.2: hand off to the review workspace — an existing review by id, a first
+  // review by message id (main's create is idempotent either way).
+  const handleOpenReviewMessage = useEventCallback((messageId: string) => {
+    const summary = reviewSummaries.get(messageId)
+    onOpenReview?.(summary ? { reviewId: summary.id } : { messageId })
+  })
   const handleTryAgain = useEventCallback(onTryAgain)
   const handleAnswerWithoutSkill = useEventCallback(onAnswerWithoutSkill)
   const handleSelectConversation = useEventCallback(onSelectConversation)
@@ -1666,6 +1727,14 @@ export function ChatScreen({
 
   const activeConv = activeId ? conversations.find((c) => c.id === activeId) : undefined
 
+  // Stable {mode} object for the memoized Transcript's review-eligibility check (spec §9.1
+  // documents-mode leg) — rebuilt only when the MODE actually changes, not per render.
+  const activeConvMode = activeConv?.mode ?? null
+  const reviewConversation = useMemo(
+    () => (activeConvMode ? { mode: activeConvMode } : null),
+    [activeConvMode]
+  )
+
   // The composite source scope shown in the picker (plan §13.2/D1). From the active
   // conversation's stored scope, falling back to its legacy fields, else the Library
   // default; a dangling/archived anchor falls back to Library with a quiet notice (§13.4).
@@ -2041,6 +2110,12 @@ export function ChatScreen({
           onCopy={handleCopyMessage}
           onSave={handleSaveConversation}
           onExportTable={handleExportMessageTable}
+          // EP-1 plan §7.2: the review entry points (action row + sources footer). Only wired
+          // when App provides the handoff (onOpenReview); per-message eligibility + labels are
+          // resolved inside Transcript via the shared isReviewEligible + reviewSummaries.
+          onOpenReview={onOpenReview ? handleOpenReviewMessage : undefined}
+          reviewSummaries={reviewSummaries}
+          reviewConversation={reviewConversation}
           actionsDisabled={busyStreaming}
           resolveSkillTitle={resolveGlyphSkillTitle}
           progressNotice={streamConvId === activeId ? progressNotice : null}

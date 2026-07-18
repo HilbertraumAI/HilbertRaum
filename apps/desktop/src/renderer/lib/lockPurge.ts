@@ -1,6 +1,7 @@
 import { clearTranslateSession } from './translateSession'
 import { clearFileTranslate } from './fileTranslateSession'
 import { clearVisionSession } from './visionSession'
+import { purgeReviewSession } from './reviewSession'
 
 // The single renderer lock seam (TA-2 / H3). The Translate text/document stores and the vision
 // store are module-level ON PURPOSE — a running job keeps streaming when you navigate away and
@@ -20,4 +21,8 @@ export function purgeSessionStores(): void {
   clearTranslateSession()
   clearFileTranslate()
   clearVisionSession()
+  // Evidence review (EP-1 plan §7.5): decrypted answer/source snapshots + notes. Pending
+  // auto-save edits were already flushed by App.lockNow BEFORE lockWorkspace (the vault
+  // must still be writable for the flush); this drops the resident copy in lockstep.
+  purgeReviewSession()
 }

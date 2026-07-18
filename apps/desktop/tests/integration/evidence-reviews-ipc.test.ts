@@ -71,16 +71,19 @@ interface Harness {
   ctx: AppContext
   db: Db
   runtimeTouched: string[]
+  root: string
 }
 
-function makeHarness(): Harness {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-epipc-'))
+/** `root` reopens an existing workspace file (the restart legs); `unlocked` makes the
+ *  lock state test-controllable (the vault lock/unlock legs). Defaults unchanged. */
+function makeHarness(opts: { root?: string; unlocked?: () => boolean } = {}): Harness {
+  const root = opts.root ?? mkdtempSync(join(tmpdir(), 'hilbertraum-epipc-'))
   const db = openDatabase(join(root, 'test.sqlite'))
   const runtimeTouched: string[] = []
   const ctx = {
     db,
     paths: { workspacePath: root, rootPath: root, configPath: join(root, 'config.json') },
-    workspace: { isUnlocked: () => true },
+    workspace: { isUnlocked: opts.unlocked ?? (() => true) },
     runtime: tripwireRuntime(runtimeTouched),
     embedder: {
       id: 'tripwire-embedder',
@@ -94,7 +97,7 @@ function makeHarness(): Harness {
     isDev: true,
     audit: createAuditRecorder(() => db)
   } as unknown as AppContext
-  return { ctx, db, runtimeTouched }
+  return { ctx, db, runtimeTouched, root }
 }
 
 function seedDocument(db: Db, opts: { title: string; sha256?: string; mime?: string }): string {
@@ -441,6 +444,100 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'evidence_review_ready')).toHaveLength(1)
 
     expect(runtimeTouched).toEqual([])
+    expect(offlineViolations).toEqual([])
+  })
+})
+
+// ---- Phase 2 (plan §7): the review survives restart and vault lock/unlock -------------
+describe('review persistence across restart + lock (EP-1 plan §7 exit gate)', () => {
+  it('a decided review reopens INTACT after DB close + reopen (app restart), zero model/network', async () => {
+    const first = makeHarness()
+    registerEvidenceReviewsIpc(first.ctx)
+    const docId = seedDocument(first.db, { title: 'A.pdf' })
+    const { messageId } = seedAnswer(first.db, {
+      content: RELEVANCE.content,
+      citations: [{ label: 'S1', sourceTitle: 'A.pdf', documentId: docId }],
+      coverage: RELEVANCE.coverage
+    })
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
+    const created = createdRaw as EvidenceReviewDetail
+    const target = created.items.find((i) => i.blockKind === 'paragraph')!
+    await invoke(handlers, IPC.updateEvidenceReviewItem, target.id, {
+      decision: 'supported',
+      reviewerNote: 'checked against page 12'
+    })
+    await invoke(handlers, IPC.updateEvidenceReview, created.id, { reviewerLabel: 'QA' })
+
+    // "Restart": close the DB, reopen the SAME workspace file, re-register the handlers.
+    first.db.close()
+    ipcState.handlers.clear()
+    const second = makeHarness({ root: first.root })
+    registerEvidenceReviewsIpc(second.ctx)
+
+    const { result: reloadedRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
+    const reloaded = reloadedRaw as EvidenceReviewDetail
+    expect(reloaded.reviewerLabel).toBe('QA')
+    const reloadedItem = reloaded.items.find((i) => i.id === target.id)!
+    expect(reloadedItem.decision).toBe('supported')
+    expect(reloadedItem.reviewerNote).toBe('checked against page 12')
+    // The frozen snapshots also survived (the review renders THESE, never the live message).
+    expect(reloaded.answerSnapshot).toBe(RELEVANCE.content)
+    expect(reloaded.sources[0]!.documentTitle).toBe('A.pdf')
+
+    expect(first.runtimeTouched).toEqual([])
+    expect(second.runtimeTouched).toEqual([])
+    expect(offlineViolations).toEqual([])
+  })
+
+  it('vault lock refuses EVERY evidence channel with the friendly copy; unlock restores the data', async () => {
+    let unlocked = true
+    const h = makeHarness({ unlocked: () => unlocked })
+    registerEvidenceReviewsIpc(h.ctx)
+    const { conversationId, messageId } = seedAnswer(h.db, {
+      content: RELEVANCE.content,
+      citations: RELEVANCE.citations,
+      coverage: RELEVANCE.coverage
+    })
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
+    const created = createdRaw as EvidenceReviewDetail
+    const target = created.items.find((i) => i.blockKind === 'paragraph')!
+    await invoke(handlers, IPC.updateEvidenceReviewItem, target.id, { decision: 'follow_up' })
+
+    unlocked = false
+    await expect(invoke(handlers, IPC.getEvidenceReview, created.id)).rejects.toThrow(
+      'Workspace is locked. Unlock it to work on evidence reviews.'
+    )
+    await expect(
+      invoke(handlers, IPC.updateEvidenceReviewItem, target.id, { decision: 'supported' })
+    ).rejects.toThrow('Workspace is locked.')
+    await expect(
+      invoke(handlers, IPC.countEvidenceReviewsForConversation, conversationId)
+    ).rejects.toThrow('Workspace is locked.')
+
+    unlocked = true
+    const { result: afterRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
+    const after = afterRaw as EvidenceReviewDetail
+    // The pre-lock decision is intact; the locked-out write never landed.
+    expect(after.items.find((i) => i.id === target.id)!.decision).toBe('follow_up')
+    expect(h.runtimeTouched).toEqual([])
+    expect(offlineViolations).toEqual([])
+  })
+
+  it('countEvidenceReviewsForConversation (D-2): per-conversation counts, ids-only, malformed → 0', async () => {
+    const h = makeHarness()
+    registerEvidenceReviewsIpc(h.ctx)
+    const a = seedAnswer(h.db, { content: RELEVANCE.content, citations: RELEVANCE.citations })
+    const b = seedAnswer(h.db, { content: 'Other. [S1]', citations: RELEVANCE.citations })
+
+    expect((await invoke(handlers, IPC.countEvidenceReviewsForConversation, a.conversationId)).result).toBe(0)
+    await invoke(handlers, IPC.createEvidenceReview, a.messageId)
+    expect((await invoke(handlers, IPC.countEvidenceReviewsForConversation, a.conversationId)).result).toBe(1)
+    // Isolation: conversation B still counts zero.
+    expect((await invoke(handlers, IPC.countEvidenceReviewsForConversation, b.conversationId)).result).toBe(0)
+    // Malformed ids read as "no reviews", matching the surface's unknown-id results.
+    expect((await invoke(handlers, IPC.countEvidenceReviewsForConversation, 42)).result).toBe(0)
+    expect((await invoke(handlers, IPC.countEvidenceReviewsForConversation, '')).result).toBe(0)
+    expect(h.runtimeTouched).toEqual([])
     expect(offlineViolations).toEqual([])
   })
 })
