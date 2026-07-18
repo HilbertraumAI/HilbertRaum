@@ -280,6 +280,40 @@ export const IPC = {
   cancelSkillRun: 'skills:cancelToolRun',
   /** Drop a terminal run main-side once the renderer has shown its outcome (the acknowledge handshake). */
   clearSkillRun: 'skills:clearToolRun',
+  // Evidence Pack / Review Mode (EP-1 plan §6.4, spec §19). Handlers in
+  // registerEvidenceReviewsIpc.ts; ALL DB-backed → every one requireUnlocked. The renderer
+  // sends ids + user-entered review text ONLY (spec §19 security rules) — snapshots, source
+  // resolution and derived state are main-side. Audit metadata is ids/counts only.
+  /** Create the draft review for one assistant message (idempotent: an existing review is
+   *  returned, never duplicated). No model call, no network — persisted data only. */
+  createEvidenceReview: 'evidence:create',
+  /** The full review read-model (`EvidenceReviewDetail`), or null on an unknown id. */
+  getEvidenceReview: 'evidence:get',
+  /** The message's review as a light `EvidenceReviewSummary` (entry-point state), or null. */
+  getEvidenceReviewForMessage: 'evidence:getForMessage',
+  /** Patch head fields (title D-6 / reviewer label D-3 / general note); null on unknown id. */
+  updateEvidenceReview: 'evidence:update',
+  /** Patch one item's decision/note; null on unknown id. */
+  updateEvidenceReviewItem: 'evidence:updateItem',
+  /** Carve a reviewer selection from one block (UTF-16 offsets into its `textSnapshot`);
+   *  null = refused (unknown block, out-of-range or surrogate-splitting offsets). */
+  createEvidenceSelection: 'evidence:createSelection',
+  /** Delete a reviewer SELECTION (block items are structural and refuse). */
+  deleteEvidenceSelection: 'evidence:deleteSelection',
+  /** Upsert one item→source link; null on unknown item/source key. */
+  setEvidenceLink: 'evidence:setLink',
+  /** Remove one item→source link. */
+  removeEvidenceLink: 'evidence:removeLink',
+  /** Mark ready (D-7 gated) — returns `{ review, gate }`; refuses (gate says why) while
+   *  required items are undecided. Null on unknown id. */
+  markEvidenceReviewReady: 'evidence:markReady',
+  /** Reopen a ready review to draft (spec §18.4). Null on unknown id. */
+  reopenEvidenceReview: 'evidence:reopen',
+  /** Freshness check (spec §21) — Phase 1 STUB: reports `outdated: false` for every known
+   *  review (Phase 4 implements the real snapshot-vs-workspace comparison). */
+  refreshEvidenceReviewState: 'evidence:refreshState',
+  /** Delete a review (items/links/exports CASCADE). */
+  deleteEvidenceReview: 'evidence:delete',
   // Encrypted workspace lifecycle
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',

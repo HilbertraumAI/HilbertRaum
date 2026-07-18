@@ -35,6 +35,7 @@ import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { registerDocsIpc } from '../../src/main/ipc/registerDocsIpc'
 import { registerCollectionsIpc } from '../../src/main/ipc/registerCollectionsIpc'
+import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
 import { registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { registerDownloadIpc } from '../../src/main/ipc/registerDownloadIpc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
@@ -46,6 +47,7 @@ import { DownloadManager } from '../../src/main/services/downloads'
 import type { FetchFn } from '../../src/main/services/assets'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
+import { appendMessage } from '../../src/main/services/chat'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import { createAuditRecorder, listAuditEvents, recordEvent } from '../../src/main/services/audit'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
@@ -65,6 +67,7 @@ import type {
   DocTaskStatus,
   DocumentInfo,
   DownloadJob,
+  EvidenceReviewDetail,
   ImportJob,
   ImportJobStatus,
   Message,
@@ -87,6 +90,15 @@ const PROJECT_SENTINEL = 'XPROJECT_SENTINEL_lawsuit_mueller_divorce'
 // materialize audit events must record documentId + status + counts only, never the
 // title/basename — this sentinel (used as the imported file's basename) proves it.
 const FILENAME_SENTINEL = 'XFILE_SENTINEL_biopsy-results'
+// EP-1 Phase 1: EVERY review-shaped string is content (plan §5 audit contract) — the
+// review title, reviewer label, notes, the answer/block text and the snapshotted source
+// title/snippet. The evidence events must record ids/counts ONLY; these sentinels flow
+// through the REAL evidence handlers below and must never reach `runtime_events`.
+const REVIEW_TITLE_SENTINEL = 'XREVTITLE_SENTINEL_asbestos_settlement_draft'
+const REVIEWER_SENTINEL = 'XREVIEWER_SENTINEL_dr_meyer_private'
+const REVIEW_NOTE_SENTINEL = 'XREVNOTE_SENTINEL_the_witness_recants'
+const REVIEW_ANSWER_SENTINEL = 'XREVANSWER_SENTINEL_the_patent_expires_in_may'
+const REVIEW_SOURCE_SENTINEL = 'XREVSOURCE_SENTINEL_merger-term-sheet'
 const SENTINELS = [
   CHAT_SENTINEL,
   DOC_SENTINEL,
@@ -95,7 +107,12 @@ const SENTINELS = [
   SETTING_SENTINEL,
   PASSWORD_SENTINEL,
   PROJECT_SENTINEL,
-  FILENAME_SENTINEL
+  FILENAME_SENTINEL,
+  REVIEW_TITLE_SENTINEL,
+  REVIEWER_SENTINEL,
+  REVIEW_NOTE_SENTINEL,
+  REVIEW_ANSWER_SENTINEL,
+  REVIEW_SOURCE_SENTINEL
 ]
 
 const BODY = 'downloaded-model-bytes'
@@ -262,6 +279,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     registerChatIpc(ctx)
     registerDocsIpc(ctx)
     registerCollectionsIpc(ctx)
+    registerEvidenceReviewsIpc(ctx)
     registerDocTasksIpc(ctx)
     registerAuditIpc(ctx) // S1: drive the real exportAuditLog plaintext payload too
     registerModelIpc(ctx)
@@ -447,6 +465,53 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     await invoke(handlers, IPC.deleteCollection, proj.id, 'membershipOnly')
     await invoke(handlers, IPC.deleteDocument, orgDocId)
 
+    // -- evidence reviews (EP-1 Phase 1): sentinel-bearing review content pushed through
+    // the REAL handlers — the answer text, snapshotted source title/snippet, review title,
+    // reviewer label and notes are ALL content; the three lifecycle events must record
+    // ids/counts only.
+    const { result: revConvRaw } = await invoke(handlers, IPC.createConversation, {
+      title: 'Evidence audit chat'
+    })
+    const revConv = revConvRaw as Conversation
+    appendMessage(db, { conversationId: revConv.id, role: 'user', content: 'What was agreed?' })
+    const revMsg = appendMessage(db, {
+      conversationId: revConv.id,
+      role: 'assistant',
+      content: `${REVIEW_ANSWER_SENTINEL}. [S1]`,
+      citations: [
+        { label: 'S1', sourceTitle: REVIEW_SOURCE_SENTINEL, snippet: `${REVIEW_SOURCE_SENTINEL} clause 4` }
+      ],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 3 }
+    })
+    const { result: reviewRaw } = await invoke(handlers, IPC.createEvidenceReview, revMsg.id)
+    const review = reviewRaw as EvidenceReviewDetail
+    await invoke(handlers, IPC.updateEvidenceReview, review.id, {
+      title: REVIEW_TITLE_SENTINEL,
+      reviewerLabel: REVIEWER_SENTINEL,
+      generalNote: REVIEW_NOTE_SENTINEL
+    })
+    for (const item of review.items) {
+      await invoke(handlers, IPC.updateEvidenceReviewItem, item.id, {
+        decision: 'supported',
+        reviewerNote: REVIEW_NOTE_SENTINEL
+      })
+    }
+    await invoke(handlers, IPC.markEvidenceReviewReady, review.id)
+    // The created event carries ids + counts only.
+    const createdEvent = listAuditEvents(db, { limit: 5000 }).find(
+      (e) => e.type === 'evidence_review_created'
+    )
+    expect(createdEvent?.message).toBe('Evidence review created')
+    expect(createdEvent?.metadata).toEqual({
+      reviewId: review.id,
+      messageId: revMsg.id,
+      conversationId: revConv.id,
+      itemCount: review.items.length,
+      sourceCount: 1,
+      autoLinkCount: 1
+    })
+    await invoke(handlers, IPC.deleteEvidenceReview, review.id)
+
     // -- models + runtime: select, verify, start (mock fallback), stop.
     await invoke(handlers, IPC.selectModel, 'test-model-q4')
     await invoke(handlers, IPC.verifyModel, 'test-model-q4')
@@ -485,7 +550,11 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       'collection_deleted',
       'documents_added_to_collection',
       'documents_removed_from_collection',
-      'document_lifecycle_changed'
+      'document_lifecycle_changed',
+      // EP-1 Phase 1 lifecycle events (evidence_pack_exported first fires in Phase 3).
+      'evidence_review_created',
+      'evidence_review_ready',
+      'evidence_review_deleted'
     ]) {
       expect(types, `missing audit event: ${expected}`).toContain(expected)
     }

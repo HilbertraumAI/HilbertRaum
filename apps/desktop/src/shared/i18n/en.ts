@@ -1745,6 +1745,9 @@ export const en = {
   // maybeSetTitleFromFirstMessage (the first-message title rewrite), so it is part of the
   // data contract like the rest of this section.
   'main.chat.defaultTitle': 'New chat',
+  // EP-1 Phase 1: fallback review title — persisted into evidence_reviews.title when a
+  // conversation title trims empty (evidence-pack/snapshot.ts), display-map translated.
+  'main.evidenceReviews.defaultTitle': 'Evidence review',
   'main.benchmark.warnTiny':
     'This device is best suited for the smallest, quickest model. Larger models may run slowly.',
   'main.benchmark.warnUnknown':
@@ -1922,6 +1925,10 @@ export const en = {
   'main.models.locked': 'Workspace is locked. Unlock it to manage AI models.',
   'main.audit.locked': 'Workspace is locked. Unlock it to view activity.',
   'main.settings.locked': 'Workspace is locked. Unlock it to change settings.',
+  // Evidence Pack / Review Mode (EP-1 Phase 1): the lock/guard copy of the evidence IPC
+  // surface (its persist-canonical defaultTitle sibling lives in the section above).
+  'main.evidenceReviews.locked': 'Workspace is locked. Unlock it to work on evidence reviews.',
+  'main.evidenceReviews.invalidRequest': 'This review request is not valid.',
   // BE-1 (full-audit 2026-07-10): a null/non-object settings patch is rejected up front with
   // this friendly copy instead of the raw TypeError `Object.keys(null)` used to throw.
   'main.settings.invalidPatch': 'This settings change is not valid and was not saved.',

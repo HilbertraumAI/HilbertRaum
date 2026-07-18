@@ -22,6 +22,16 @@ import type {
   DriveStatus,
   EngineDownloadJob,
   EngineStatus,
+  EvidenceLinkInput,
+  EvidenceReadyGate,
+  EvidenceReview,
+  EvidenceReviewDetail,
+  EvidenceReviewFreshness,
+  EvidenceReviewItem,
+  EvidenceReviewItemPatch,
+  EvidenceReviewPatch,
+  EvidenceReviewSummary,
+  EvidenceSelectionInput,
   ExtractionListing,
   ExtractionListingRequest,
   ImageAnalyzeRequest,
@@ -481,6 +491,73 @@ const api = {
   /** Delete a project — 'membershipOnly' keeps docs; 'withDocuments' deletes project-only docs (C2). */
   deleteCollection: (id: string, mode: 'membershipOnly' | 'withDocuments'): Promise<void> =>
     ipcRenderer.invoke(IPC.deleteCollection, id, mode),
+
+  // ---- Evidence Pack / Review Mode (EP-1 plan §6.4, spec §19) ----
+  // All handlers are DB-backed (unlock-gated) and touch NO model runtime and NO network.
+  // The renderer sends ids + user-entered review text only; snapshots and source
+  // resolution stay main-side.
+  /** Create the draft review for one assistant message from PERSISTED data (idempotent:
+   *  an existing review is returned, never duplicated; no model call ever). */
+  createEvidenceReview: (messageId: string): Promise<EvidenceReviewDetail> =>
+    ipcRenderer.invoke(IPC.createEvidenceReview, messageId),
+  /** The full review read-model, or null on an unknown id. */
+  getEvidenceReview: (reviewId: string): Promise<EvidenceReviewDetail | null> =>
+    ipcRenderer.invoke(IPC.getEvidenceReview, reviewId),
+  /** The message's review as a light summary (the entry-point/action-row state), or null. */
+  getEvidenceReviewForMessage: (messageId: string): Promise<EvidenceReviewSummary | null> =>
+    ipcRenderer.invoke(IPC.getEvidenceReviewForMessage, messageId),
+  /** Patch head fields (title D-6, reviewer label D-3, general note); null on unknown id. */
+  updateEvidenceReview: (
+    reviewId: string,
+    patch: EvidenceReviewPatch
+  ): Promise<EvidenceReview | null> =>
+    ipcRenderer.invoke(IPC.updateEvidenceReview, reviewId, patch),
+  /** Patch one item's decision/note; null on unknown id. */
+  updateEvidenceReviewItem: (
+    itemId: string,
+    patch: EvidenceReviewItemPatch
+  ): Promise<EvidenceReviewItem | null> =>
+    ipcRenderer.invoke(IPC.updateEvidenceReviewItem, itemId, patch),
+  /** Carve a reviewer selection from one block (UTF-16 offsets into its `textSnapshot`,
+   *  exclusive end). Null = refused (unknown block, out-of-range or surrogate-splitting
+   *  offsets — never clamped). */
+  createEvidenceSelection: (
+    reviewId: string,
+    input: EvidenceSelectionInput
+  ): Promise<EvidenceReviewItem | null> =>
+    ipcRenderer.invoke(IPC.createEvidenceSelection, reviewId, input),
+  /** Delete a reviewer SELECTION (block items are structural and refuse — false). */
+  deleteEvidenceSelection: (itemId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.deleteEvidenceSelection, itemId),
+  /** Upsert one item→source link. Reviewer-made links are ALWAYS `origin: 'reviewer'`
+   *  ("Reviewer linked" — main forces it; only the snapshot builder mints 'answer_marker').
+   *  Returns the refreshed item, or null on an unknown item/source key. */
+  setEvidenceLink: (
+    itemId: string,
+    evidenceKey: string,
+    input: EvidenceLinkInput
+  ): Promise<EvidenceReviewItem | null> =>
+    ipcRenderer.invoke(IPC.setEvidenceLink, itemId, evidenceKey, input),
+  /** Remove one item→source link; true when a link was removed. */
+  removeEvidenceLink: (itemId: string, evidenceKey: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.removeEvidenceLink, itemId, evidenceKey),
+  /** Mark a review ready (D-7 gated): `{ review, gate }` — while ineligible the review is
+   *  returned UNCHANGED with the gate saying why. Null on unknown id. */
+  markEvidenceReviewReady: (
+    reviewId: string
+  ): Promise<{ review: EvidenceReview; gate: EvidenceReadyGate } | null> =>
+    ipcRenderer.invoke(IPC.markEvidenceReviewReady, reviewId),
+  /** Reopen a ready review to draft (spec §18.4); null on unknown id. */
+  reopenEvidenceReview: (reviewId: string): Promise<EvidenceReview | null> =>
+    ipcRenderer.invoke(IPC.reopenEvidenceReview, reviewId),
+  /** Freshness check — Phase-1 STUB: a known review reports `outdated: false` (the same
+   *  not-known-to-be-outdated overlay every read carries); Phase 4 implements the real
+   *  snapshot-vs-workspace comparison. Null on unknown id. */
+  refreshEvidenceReviewState: (reviewId: string): Promise<EvidenceReviewFreshness | null> =>
+    ipcRenderer.invoke(IPC.refreshEvidenceReviewState, reviewId),
+  /** Delete a review (items/links/export records CASCADE); true when a row was deleted. */
+  deleteEvidenceReview: (reviewId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.deleteEvidenceReview, reviewId),
 
   // Skills (instruction packages; skills plan §16).
   /** All installed skills (app first, then by title). */

@@ -244,8 +244,11 @@ function isCitation(v: unknown): v is Citation {
   return true
 }
 
-/** Parse stored citations: a JSON array of `Citation`s, else undefined. Validates shape. */
-function parseCitations(json: string | null): Citation[] | undefined {
+/** Parse stored citations: a JSON array of `Citation`s, else undefined. Validates shape.
+ *  Exported for EP-1 (evidence-pack/snapshot.ts): the snapshot builder reads the SAME
+ *  `messages.citations_json` payload, so it must parse it with THIS validator verbatim
+ *  (the `parseCoverage` export precedent). */
+export function parseCitations(json: string | null): Citation[] | undefined {
   if (!json) return undefined
   try {
     const v = JSON.parse(json) as unknown

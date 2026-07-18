@@ -107,6 +107,9 @@ describe('localizeServerCopy (D-L4)', () => {
       'main.rag.reindexNeeded',
       'main.chat.docTaskBusy',
       'main.chat.defaultTitle',
+      // EP-1 Phase 1: the fallback review title (evidence_reviews.title when a
+      // conversation title trims empty) — persist-canonical English, like defaultTitle.
+      'main.evidenceReviews.defaultTitle',
       'main.benchmark.warnTiny',
       'main.benchmark.warnUnknown',
       'main.benchmark.warnDriveProbe',
