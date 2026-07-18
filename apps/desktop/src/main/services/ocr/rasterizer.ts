@@ -48,8 +48,12 @@ export type RasterizePdf = (
   opts: RasterizePdfOptions
 ) => Promise<{ pageCount: number }>
 
-/** Per-page render+open timeout — a wedged renderer must fail the task, not hang it. */
-const RASTER_STEP_TIMEOUT_MS = 60_000
+/**
+ * Per-page render+open timeout — a wedged renderer must fail the task, not hang it.
+ * Exported for the wiring harness (tests/unit/ocr-rasterizer-harness.test.ts), the
+ * PRINT_STEP_TIMEOUT_MS idiom.
+ */
+export const RASTER_STEP_TIMEOUT_MS = 60_000
 
 function abortError(): DOMException {
   return new DOMException('PDF rasterization aborted', 'AbortError')

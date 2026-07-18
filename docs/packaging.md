@@ -134,6 +134,18 @@ Key config points:
   once the desktop package was renamed to the scoped name). The explicit `executableName` gives every
   platform a path-safe binary name. **Keep it in sync with `productName`** (both are `HilbertRaum`);
   `tests/integration/packaging.test.ts` asserts they match and that the name carries no `@`.
+- **The renderer CSP `<meta>` tags are generated at build time** (BE-2, ocr-audit 2026-07-18):
+  the `hilbertraum:csp-meta` transform in `electron.vite.config.ts` rewrites the
+  `Content-Security-Policy` meta in `index.html`/`ocr.html` from the single source of truth
+  `window-security.ts` `buildMetaCsp(isDev, page)`. The checked-in HTML carries the **dev** policy
+  (Vite HMR needs `ws://localhost:*`/`http://localhost:*` in `connect-src`); `electron-vite build`
+  bakes the **strict prod** policy — same directives with the localhost entries stripped. The
+  transform throws if a page has no CSP meta tag, and `tests/integration/csp-build-output.test.ts`
+  asserts the built HTML matches `buildMetaCsp(false, …)` byte-for-byte (CI builds before it
+  tests, so the guard runs on every PR). Measured on a packaged Windows build (2026-07-18): the
+  `onHeadersReceived` response-header CSP **does attach and enforce on `file://` loads** in both
+  windows, so the header is the load-bearing prod policy and the meta is the defence-in-depth
+  second layer — see `docs/security-model.md` "Content-Security-Policy".
 - **Electron ≥ 37 (Node 22.x)** is required so the packaged main process has `node:sqlite`
   (`electron` is pinned `^37`). A downgraded/stripped runtime would lose it — do not downgrade.
   Because `electron` is pinned as a **range** and hoisted to the repo-root `node_modules`,

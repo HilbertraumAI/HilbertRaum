@@ -26,19 +26,46 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | Renderer talks only to a typed `contextBridge` (`window.api`) | `preload/index.ts` |
 | `will-navigate` **and `will-redirect`** block remote origins (SEC-3) | `services/navigation-guard.ts`, installed in `main/index.ts` + OCR window |
 | `setWindowOpenHandler` opens external links in the OS browser, denies in-app | `main/index.ts` |
-| **Content-Security-Policy** (meta tag + response header) | `renderer/index.html`, `main/index.ts` |
+| **Content-Security-Policy** (response header + build-time-generated meta tag) | `main/window-security.ts` (both policies), applied in `main/index.ts` + `electron.vite.config.ts` |
 | **Deny-by-default permission handlers** — both the *request* and the *check* path (Phase 31; single scoped microphone allow added in Phase 37; check handler added SEC-2) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
 | **Encrypted workspace** (AES-256-GCM at rest, Argon2id KDF — scrypt still supported, password never stored) | `services/security/crypto.ts`, `services/workspace-vault.ts` |
 
 ### Content-Security-Policy (dev vs prod)
-A strict CSP is applied as a response header via `session.webRequest.onHeadersReceived`, on top of
-the `index.html` meta tag (defence in depth).
+Two CSP layers cover every renderer page (`index.html` in the main window, `ocr.html` in the
+hidden OCR rasterizer window — both windows share the default session); the **effective policy is
+the intersection of both**. All four policy strings live in `main/window-security.ts`
+(`buildCsp` for the header, `buildMetaCsp` for the per-page meta tags), pinned by
+`tests/unit/window-security.test.ts`.
 
-- **Production** (strict): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+1. **Response header** — `buildCsp(isDev)`, injected via `session.webRequest.onHeadersReceived`
+   in `main/index.ts`. **Measured on a packaged Windows build (2026-07-18, ocr-audit BE-2 /
+   OCR-R P5): the hook fires for `file://` loads in BOTH windows and the injected header is
+   ENFORCED** — a probe `fetch` that the (then dev-relaxed) meta tag allowed was blocked with
+   the strict header string as the violation's `originalPolicy`. The header is therefore the
+   load-bearing production policy, on `file://` as well as http(s). (Electron's security
+   tutorial recommends the meta fallback for `file://`; on the Electron 37 in use the header
+   demonstrably attaches there too.)
+2. **`<meta http-equiv="Content-Security-Policy">`** in each page — `buildMetaCsp(isDev, page)`,
+   **generated at build time** by the `hilbertraum:csp-meta` transform in
+   `electron.vite.config.ts`. The checked-in HTML carries the dev policy (Vite HMR needs the
+   localhost websocket); the production build bakes the same directives with the localhost
+   `connect-src` entries stripped. Before OCR-R P5 the dev meta shipped verbatim into packaged
+   builds (BE-2): not the effective policy — the enforced header intersection already denied
+   localhost — but a defence-in-depth erosion, since a regression in the session header wiring
+   would have left a meta that advertises `http://localhost:*` to the one window that renders
+   hostile bytes (untrusted PDFs through pdfjs). Now the meta alone denies every remote origin
+   in prod. `tests/integration/csp-build-output.test.ts` asserts the built HTML equals
+   `buildMetaCsp(false, …)` byte-for-byte (CI builds before it tests).
+
+- **Production header** (strict): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
   connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none';
-  frame-ancestors 'none'`. No remote origins are reachable from the renderer.
+  frame-ancestors 'none'`. No remote origins are reachable from the renderer. The production
+  **meta** policies match the checked-in page metas minus the localhost entries (the `ocr` page
+  keeps `worker-src 'self' blob:` / `img-src 'self' data: blob:` — the bundled pdfjs allowances;
+  its worker itself resolves as a plain same-origin asset, and a packaged-build rasterization
+  was verified under the stricter header intersection).
   **Why prod keeps `style-src 'unsafe-inline'` (audit 2026-07-16 F-39 — investigated, kept):** it is
   load-bearing for **KaTeX** math. `katex.renderToString` (used via `@streamdown/math` → rehype-katex
   in `AssistantMarkdown`) emits many per-expression inline `style="height:…;vertical-align:…"`
@@ -51,9 +78,12 @@ the `index.html` meta tag (defence in depth).
   channel, so the only reachable effect of injected CSS is same-origin cosmetic manipulation
   (content hiding / UI redressing) of rendered untrusted markdown — no script execution, no data
   disclosure. The directive is therefore an accepted defence-in-depth trade-off, not a gap.
-- **Development** (HMR-compatible): relaxes `connect-src` to allow `ws://localhost:*` /
-  `http://localhost:*`, and adds `'unsafe-inline'`/`'unsafe-eval'` to `script-src` (and
-  `'unsafe-inline'` to `style-src`) for Vite hot-reload. Without this split, `npm run dev` would break.
+- **Development** (HMR-compatible): both layers relax `connect-src` to allow `ws://localhost:*` /
+  `http://localhost:*`, and the header additionally adds `'unsafe-inline'`/`'unsafe-eval'` to
+  `script-src` for Vite hot-reload (and omits the prod hardening tail `object-src`/`base-uri`/
+  `frame-ancestors`). Without this split, `npm run dev` would break. The localhost `connect-src`
+  relaxation is the ONLY dev/prod difference in the meta layer, and no policy in either layer
+  ever names a non-localhost origin (test-pinned).
 
 ### Renderer permissions: deny by default, one scoped exception — request *and* check (Phases 31 + 37; SEC-2)
 Electron's default with **no** permission handler installed is to **GRANT** every permission

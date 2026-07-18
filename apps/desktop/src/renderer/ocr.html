@@ -5,7 +5,11 @@
     <!--
       Hidden OCR rasterizer window: renders PDF pages to PNG bytes for
       main-side text recognition. Same offline-first CSP as the main window — only
-      same-origin resources; blob:/data: workers are what bundled pdfjs uses.
+      same-origin resources; blob:/data: workers are what bundled pdfjs uses. The
+      content below is the DEV policy and is REWRITTEN AT BUILD TIME from
+      window-security.ts `buildMetaCsp(isDev, 'ocr')` by the csp-meta transform in
+      electron.vite.config.ts (BE-2, ocr-audit 2026-07-18) — packaged builds bake the
+      strict prod policy with no localhost.
     -->
     <meta
       http-equiv="Content-Security-Policy"
