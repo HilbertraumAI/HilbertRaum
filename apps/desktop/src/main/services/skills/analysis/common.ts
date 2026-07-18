@@ -94,6 +94,8 @@ export function fmt(n: number): string {
 
 /** One `chunks` row projected for citation — the columns both domains' citation builders read. */
 export interface ChunkRow {
+  /** The chunk's id (EP-1 Phase 0 plan §5 item 2) — stamped onto the citation as `chunkId`. */
+  id: string
   chunk_index: number
   text: string
   source_label: string | null
@@ -114,7 +116,7 @@ export interface ChunkRow {
 export function loadCitationChunks(db: Db, documentId: string): ChunkRow[] {
   return db
     .prepare(
-      `SELECT chunk_index, substr(text, 1, 281) AS text, source_label, page_number, section_label
+      `SELECT id, chunk_index, substr(text, 1, 281) AS text, source_label, page_number, section_label
        FROM chunks WHERE document_id = ? ORDER BY chunk_index`
     )
     .all(documentId) as unknown as ChunkRow[]
@@ -126,12 +128,16 @@ export function loadCitationChunks(db: Db, documentId: string): ChunkRow[] {
  *  snippet ending in a lone surrogate. The P-6 `substr(text,1,281)` head above counts SQLite code
  *  points, so comparing code points here keeps the 281st char working as the ">280 ⇒ truncate"
  *  sentinel even for astral-bearing heads (281 SQL code points ⇒ 281 JS code points ⇒ still > 280). */
-export function chunksToCitations(chunks: ChunkRow[], title: string): Citation[] {
+export function chunksToCitations(chunks: ChunkRow[], title: string, documentId: string): Citation[] {
   return chunks.map((c, i) => ({
     label: `S${i + 1}`,
     sourceTitle: c.source_label ?? title,
     pageNumber: c.page_number,
     section: c.section_label,
-    snippet: truncateByCodePoints(c.text, 280)
+    snippet: truncateByCodePoints(c.text, 280),
+    // EP-1 Phase 0 (plan §5 item 2): additive source-identity enrichment — the skill-analysis
+    // citation path pins its document + chunk like the RAG/provenance builders.
+    documentId,
+    chunkId: c.id
   }))
 }

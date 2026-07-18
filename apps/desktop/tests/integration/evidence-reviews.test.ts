@@ -29,9 +29,16 @@ import {
   updateEvidenceReviewItem
 } from '../../src/main/services/evidence-reviews'
 import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
-import { ragSettingsFrom, retrieve, retrieveWholeDocument } from '../../src/main/services/rag'
+import {
+  answerWholeDocFromChunks,
+  ragSettingsFrom,
+  retrieve,
+  retrieveCompareDiff,
+  retrieveWholeDocument
+} from '../../src/main/services/rag'
 import { documentLeafProvenance } from '../../src/main/services/analysis/coverage'
-import { DEFAULT_SETTINGS, type EvidenceSourceSnapshot } from '../../src/shared/types'
+import type { ModelRuntime } from '../../src/main/services/runtime'
+import { DEFAULT_SETTINGS, type EvidenceSourceSnapshot, type ReviewDecision } from '../../src/shared/types'
 
 // EP-1 Phase 0 (evidence-pack plan §5) — the persisted layer: schema creation, full
 // round-trips through SQLite (incl. Unicode/markdown/hostile strings), tolerant parsing of
@@ -288,6 +295,42 @@ describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile
       createEvidenceReview(db, { messageId: 'nope', title: 't', answerSnapshot: 'a', questionSnapshot: 'q' })
     ).toThrow(/message not found/)
   })
+
+  it('the D-6 "never unnamed" invariant holds at birth: an empty/whitespace title is refused, a padded one is trimmed', () => {
+    const db = freshDb()
+    const { messageId } = seedAnswer(db)
+    expect(() =>
+      createEvidenceReview(db, { messageId, title: '   ', answerSnapshot: 'a', questionSnapshot: 'q' })
+    ).toThrow(/title must not be empty/)
+    // The refused create left no half-written row — the message slot is still free.
+    expect(getEvidenceReviewForMessage(db, messageId)).toBeNull()
+    const review = createEvidenceReview(db, {
+      messageId,
+      title: '  Trimmed at birth  ',
+      answerSnapshot: 'a',
+      questionSnapshot: 'q'
+    })
+    expect(review.title).toBe('Trimmed at birth')
+    expect(getEvidenceReview(db, review.id)?.title).toBe('Trimmed at birth')
+  })
+
+  it('write-side decision hygiene: a garbage PATCHED decision never enters storage', () => {
+    const db = freshDb()
+    const { messageId } = seedAnswer(db)
+    const review = createEvidenceReview(db, { messageId, title: 't', answerSnapshot: 'a', questionSnapshot: 'q' })
+    const [item] = createEvidenceReviewItems(db, review.id, [
+      { kind: 'block', blockKey: 'b0', blockKind: 'paragraph', textSnapshot: 'a', decision: 'supported' }
+    ])
+    // The ReviewDecision type only guards compile time — simulate a buggy/hostile caller.
+    const patched = updateEvidenceReviewItem(db, item.id, {
+      decision: 'definitely_true' as unknown as ReviewDecision
+    })
+    expect(patched?.decision).toBe('not_reviewed') // normalized ON WRITE, not just on read…
+    const raw = db
+      .prepare('SELECT decision FROM evidence_review_items WHERE id = ?')
+      .get(item.id) as { decision: string }
+    expect(raw.decision).toBe('not_reviewed') // …so the stored literal is already honest
+  })
 })
 
 describe('tolerant parsing of stored rows (malformed → safe defaults, never a throw)', () => {
@@ -338,7 +381,9 @@ describe('tolerant parsing of stored rows (malformed → safe defaults, never a 
     expect(parsedItem.blockKind).toBeNull() // unknown class → REQUIRED, not exempt
     expect(parsedItem.decision).toBe('not_reviewed') // never an invented judgment
     expect(parsedItem.links).toEqual([{ evidenceKey: 'S1', origin: 'reviewer', relation: null }]) // claim-nothing origin
-    expect(detail?.exports[0].format).toBe('html')
+    // The stored format is passed through RAW — never repaired to a concrete format the
+    // export may not have had (an unknown value would otherwise become a false 'html' claim).
+    expect(detail?.exports[0].format).toBe('docx')
     expect(detail?.exports[0].options).toBeNull()
     // The corrupted-but-required block keeps the gate honest: not eligible.
     expect(detail?.gate).toEqual({ eligible: false, requiredTotal: 1, decidedTotal: 0 })
@@ -504,6 +549,34 @@ describe('status derivation through the service (D-7 + spec §18.4)', () => {
     expect(createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: -1, endOffset: 1 })).toBeNull()
     expect(createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: 0, endOffset: 2 })).not.toBeNull()
   })
+
+  it('selection offsets inside a surrogate pair are refused — a lone surrogate never persists (F-15)', () => {
+    const db = freshDb()
+    const { messageId } = seedAnswer(db)
+    const review = createEvidenceReview(db, {
+      messageId,
+      title: 't',
+      answerSnapshot: 'ok 😀 done',
+      questionSnapshot: 'q'
+    })
+    // '😀' (U+1F600) is astral: UTF-16 units [3]=high surrogate, [4]=low surrogate.
+    const text = 'ok 😀 done'
+    createEvidenceReviewItems(db, review.id, [
+      { kind: 'block', blockKey: 'b0', blockKind: 'paragraph', textSnapshot: text }
+    ])
+    // A boundary INSIDE the pair (unit 4) is refused on either side — refuse, never clamp.
+    expect(createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: 0, endOffset: 4 })).toBeNull()
+    expect(createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: 4, endOffset: 8 })).toBeNull()
+    // Aligned boundaries around/after the pair work, and the snapshot keeps the char whole.
+    const whole = createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: 0, endOffset: 5 })
+    expect(whole?.textSnapshot).toBe('ok 😀')
+    const after = createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: 5, endOffset: 10 })
+    expect(after?.textSnapshot).toBe(' done')
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+    for (const item of getEvidenceReview(db, review.id)!.items) {
+      expect(loneSurrogate.test(item.textSnapshot)).toBe(false)
+    }
+  })
 })
 
 describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)', () => {
@@ -598,6 +671,68 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
     expect(provenance).toHaveLength(2)
     expect(provenance.map((c) => c.chunkId)).toEqual(chunks.map((c) => c.id))
     expect(provenance.every((c) => c.documentId === docId)).toBe(true)
+  })
+
+  it('chunk map-reduce rep citations (answerWholeDocFromChunks) carry them too', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    const { docId, chunks } = await seedDocument(db, embedder, 'big.txt', [
+      'alpha section body text here',
+      'beta section body text here'
+    ])
+    const conv = createConversation(db, { mode: 'documents' })
+    // Minimal mock runtime (the recordingRuntime idiom): one reduce reply, no model process.
+    const runtime = {
+      modelId: 'mock',
+      contextWindow: () => 4096,
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream() {
+        yield 'Zusammenfassung.'
+      }
+    } as unknown as ModelRuntime
+    const msg = await answerWholeDocFromChunks({
+      db,
+      runtime,
+      conversationId: conv.id,
+      documentId: docId,
+      question: 'summarize the document',
+      contextTokens: 4096
+    })
+    expect(msg).not.toBeNull()
+    expect(msg!.citations!.length).toBeGreaterThan(0)
+    for (const c of msg!.citations!) {
+      expect(c.documentId).toBe(docId)
+      expect(chunks.map((x) => x.id)).toContain(c.chunkId)
+    }
+  })
+
+  it('compare-diff citations (retrieveCompareDiff) carry them too', () => {
+    const db = freshDb()
+    // The rag-compare-diff-truncation seeding idiom: one chunk per doc; three shared 'keep'
+    // words per changed token keep the changed fraction under the precise-diff usefulness bar.
+    const now = new Date().toISOString()
+    const seedDoc = (id: string, prefix: string): void => {
+      const text = [0, 1, 2].map((i) => `${prefix}${i}`).join(' keep keep keep ')
+      db.prepare(
+        `INSERT INTO documents (id, title, status, origin_json, created_at, updated_at)
+         VALUES (?, ?, 'indexed', NULL, ?, ?)`
+      ).run(id, `${id}.txt`, now, now)
+      db.prepare(
+        `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
+         VALUES (?, ?, 0, ?, ?, NULL, NULL, NULL, ?)`
+      ).run(`${id}-c0`, id, text, `${id}.txt`, now)
+    }
+    seedDoc('docA', 'A')
+    seedDoc('docB', 'B')
+    const result = retrieveCompareDiff(db, ['docA', 'docB'], 1_000_000)
+    expect(result).not.toBeNull()
+    expect(result!.citations.length).toBeGreaterThan(0)
+    for (const c of result!.citations) {
+      expect(['docA', 'docB']).toContain(c.documentId)
+      expect(c.chunkId).toBe(`${c.documentId}-c0`)
+    }
   })
 
   it('enriched citations round-trip through messages.citations_json', () => {

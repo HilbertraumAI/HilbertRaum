@@ -113,12 +113,6 @@ function normalizeRelation(v: unknown): 'supports' | 'qualifies' | 'contradicts'
     : null
 }
 
-function normalizeFormat(v: unknown): EvidenceExportFormat {
-  // The plan ships 'html' (Phase 3) then 'pdf' (Phase 6); unknown → 'html' (display-only —
-  // the recorded hash/file name stay exact regardless).
-  return v === 'pdf' ? 'pdf' : 'html'
-}
-
 // ---------------------------------------------------------------------------
 // Tolerant JSON-column parsers (the parseCitations idiom: element-validated,
 // malformed → safe default, never a throw).
@@ -322,7 +316,11 @@ function rowToExport(r: ExportRow): EvidenceExportRecord {
   return {
     id: r.id,
     reviewId: r.review_id,
-    format: normalizeFormat(r.format),
+    // RAW passthrough — deliberately NOT normalized: repairing an unknown stored format to a
+    // concrete one would invent a claim about what was exported (writes are typed; see
+    // `EvidenceExportRecord.format`). The only tolerant default that would point TOWARD a
+    // positive claim, so it has none.
+    format: r.format,
     schemaVersion: r.schema_version,
     fileName: r.file_name,
     fileSha256: r.file_sha256,
@@ -450,12 +448,18 @@ export interface CreateEvidenceReviewInput {
 
 /**
  * Create a draft review for one assistant message. The conversation id is read from the
- * message row (never trusted from the caller). Throws on an unknown message and on a message
+ * message row (never trusted from the caller). Throws on an unknown message, on a message
  * that already has a review (one ACTIVE review per message in v1 — the spec-mandated
- * service-code enforcement; callers check `getEvidenceReviewForMessage` first). Error
- * messages carry ids only — never content.
+ * service-code enforcement; callers check `getEvidenceReviewForMessage` first), and on a
+ * title that trims empty (the D-6 "never unnamed" invariant is enforced at birth, matching
+ * `updateEvidenceReview`'s refusal to un-name later; the stored title is the trimmed form).
+ * Error messages carry ids only — never content.
  */
 export function createEvidenceReview(db: Db, input: CreateEvidenceReviewInput): EvidenceReview {
+  const title = input.title.trim()
+  if (title.length === 0) {
+    throw new Error('evidence review: title must not be empty')
+  }
   const msg = prepareCached(db, 'SELECT id, conversation_id FROM messages WHERE id = ?').get(
     input.messageId
   ) as { id: string; conversation_id: string } | undefined
@@ -475,7 +479,7 @@ export function createEvidenceReview(db: Db, input: CreateEvidenceReviewInput): 
     conversationId: msg.conversation_id,
     messageId: input.messageId,
     questionMessageId: input.questionMessageId ?? null,
-    title: input.title,
+    title,
     status: 'draft',
     outdated: false,
     reviewerLabel: input.reviewerLabel ?? null,
@@ -727,9 +731,12 @@ export function updateEvidenceReviewItem(
 ): EvidenceReviewItem | null {
   const row = readItemRowById(db, itemId)
   if (!row) return null
-  // A note-only patch keeps the stored decision byte-identical (even a malformed one is
-  // only normalized on READ — an unrelated write never silently rewrites it).
-  const decision: string = patch.decision !== undefined ? patch.decision : row.decision
+  // Write-side hygiene (the setEvidenceLink normalize-on-write pattern): a PATCHED decision
+  // is normalized before persisting, so an unknown literal (a compromised/buggy caller — the
+  // type only guards compile time) can never enter storage; garbage degrades to the honest
+  // 'not_reviewed', never an invented judgment. A note-only patch still passes the stored
+  // decision through byte-identical (an unrelated write never silently rewrites it).
+  const decision: string = patch.decision !== undefined ? normalizeDecision(patch.decision) : row.decision
   const reviewerNote = patch.reviewerNote !== undefined ? patch.reviewerNote : row.reviewer_note
   const now = nowIso()
   prepareCached(
@@ -741,10 +748,24 @@ export function updateEvidenceReviewItem(
 }
 
 /**
+ * True when cutting `text` AT `offset` would split a surrogate pair — i.e. the unit before
+ * the boundary is a HIGH surrogate whose LOW partner sits at the boundary. Slicing there
+ * persists a lone surrogate (permanent `�` — the F-15/RAG-2 defect class every snippet
+ * persistence site guards against). Boundaries at 0/length are always aligned.
+ */
+function splitsSurrogatePair(text: string, offset: number): boolean {
+  if (offset <= 0 || offset >= text.length) return false
+  const before = text.charCodeAt(offset - 1)
+  const at = text.charCodeAt(offset)
+  return before >= 0xd800 && before <= 0xdbff && at >= 0xdc00 && at <= 0xdfff
+}
+
+/**
  * Create a reviewer selection (spec §12.1) carved from one existing BLOCK item: offsets are
  * UTF-16 code-unit indexes into that block's `text_snapshot` (exclusive end); the selection's
- * own snapshot is the exact slice. Returns null when the review or block is unknown or the
- * offsets are out of range — never a clamped/fabricated selection.
+ * own snapshot is the exact slice. Returns null when the review or block is unknown, the
+ * offsets are out of range, or a boundary would split a surrogate pair (F-15: a misaligned
+ * cut persists a lone surrogate) — never a clamped/repaired/fabricated selection.
  */
 export function createEvidenceSelection(
   db: Db,
@@ -762,7 +783,9 @@ export function createEvidenceSelection(
     !Number.isInteger(endOffset) ||
     startOffset < 0 ||
     endOffset <= startOffset ||
-    endOffset > block.text_snapshot.length
+    endOffset > block.text_snapshot.length ||
+    splitsSurrogatePair(block.text_snapshot, startOffset) ||
+    splitsSurrogatePair(block.text_snapshot, endOffset)
   ) {
     return null
   }

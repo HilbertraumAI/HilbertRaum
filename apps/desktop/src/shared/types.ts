@@ -2496,7 +2496,13 @@ export type EvidenceExportFormat = 'html' | 'pdf'
 export interface EvidenceExportRecord {
   id: string
   reviewId: string
-  format: EvidenceExportFormat
+  /**
+   * The recorded format, passed through RAW from storage: writes are typed
+   * `EvidenceExportFormat`, but a read never repairs an unknown stored value to a concrete
+   * format (that would be an invented claim about what was exported). Display code maps the
+   * known values and falls back verbatim for anything else.
+   */
+  format: string
   /** Pack schema version stamped into the export. */
   schemaVersion: number
   fileName: string
@@ -2522,7 +2528,9 @@ export interface EvidenceReviewItemPatch {
 }
 
 /** Create a reviewer selection (spec §12.1): UTF-16 code-unit offsets into the parent
- *  block's `textSnapshot`, exclusive end. */
+ *  block's `textSnapshot`, exclusive end. Boundaries must not split a surrogate pair —
+ *  a misaligned offset is REFUSED, never clamped (F-15: a cut inside an astral char would
+ *  persist a lone surrogate into the selection snapshot). */
 export interface EvidenceSelectionInput {
   blockKey: string
   startOffset: number

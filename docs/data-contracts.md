@@ -591,14 +591,20 @@ Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.
 section records the AS-BUILT Phase-0 shapes; the IPC surface arrives in Phase 1).
 
 ✅ **`Citation` enrichment (ADDITIVE, `shared/types.ts`):** `documentId?: string | null`
-  (`chunks.document_id`) + `chunkId?: string | null` (`chunks.id`), stamped at every citation
-  construction site — relevance retrieval, whole-document read, chunk map-reduce reps,
-  compare-diff (`rag/index.ts`) and deep-index leaf provenance (`analysis/coverage.ts`,
-  reached via `whole-doc-tree.ts`). `isCitation` (`chat.ts`) validates them tolerantly:
-  **rows persisted before EP-1 parse byte-identically** (fields absent, never null-filled);
-  a mistyped value rejects that element only, exactly like the existing optional fields.
-  Purpose: post-EP-1 answers pin source identity exactly; legacy answers resolve best-effort
-  by title with an honest `identity: 'unresolved'` state (plan §1.2).
+  (`chunks.document_id`) + `chunkId?: string | null` (`chunks.id`), stamped at the **six**
+  citation constructors that existed when this landed (enumerated deliberately — a FUTURE
+  constructor must add the stamp itself, nothing enforces it globally):
+  (1) relevance retrieval, (2) `retrieveWholeDocument`, (3) chunk map-reduce reps
+  (`answerWholeDocFromChunks`), (4) compare-diff (`buildDiffResult`) — all `rag/index.ts`;
+  (5) deep-index leaf provenance (`documentLeafProvenance`, `analysis/coverage.ts`, reached
+  via `whole-doc-tree.ts`); (6) the skill-analysis projection (`chunksToCitations`,
+  `skills/analysis/common.ts` — behind the bank/invoice deterministic answers persisted via
+  `rag:ask`; `loadCitationChunks` now SELECTs `id`, `chunksToCitations` takes the
+  `documentId`). Each site is pinned by a test. `isCitation` (`chat.ts`) validates the fields
+  tolerantly: **rows persisted before EP-1 parse byte-identically** (fields absent, never
+  null-filled); a mistyped value rejects that element only, exactly like the existing
+  optional fields. Purpose: post-EP-1 answers pin source identity exactly; legacy answers
+  resolve best-effort by title with an honest `identity: 'unresolved'` state (plan §1.2).
 ✅ **Tables (`db.ts` SCHEMA, idempotent `IF NOT EXISTS`):** `evidence_reviews` (head + frozen
   `answer_snapshot`/`question_snapshot` TEXT + nullable JSON snapshot columns
   `source_snapshot_json`/`coverage_snapshot_json`/`generation_snapshot_json`; FK `message_id →
@@ -622,25 +628,33 @@ section records the AS-BUILT Phase-0 shapes; the IPC surface arrives in Phase 1)
   `EvidenceGenerationSnapshot` (spec §18.3 but **every field optional** per plan §1.3 — absent
   renders "Unavailable", never invented), `EvidenceLink`, `EvidenceReviewItem`,
   `EvidenceReadyGate`, `EvidenceReview`, `EvidenceReviewSummary`, `EvidenceReviewDetail`,
-  `EvidenceExportFormat` ('html'|'pdf' — the formats the plan ships), `EvidenceExportRecord`;
+  `EvidenceExportFormat` ('html'|'pdf' — the write-side type; `EvidenceExportRecord.format`
+  reads as the RAW stored string, see the service bullet), `EvidenceExportRecord`;
   IPC patch/input shapes `EvidenceReviewPatch`, `EvidenceReviewItemPatch`,
   `EvidenceSelectionInput` (UTF-16 offsets into the parent block's `textSnapshot`, exclusive
-  end — spec Risk 7), `EvidenceLinkInput`.
+  end — spec Risk 7; boundaries must not split a surrogate pair, misaligned offsets are
+  REFUSED never clamped — F-15), `EvidenceLinkInput`.
 ✅ **Service (`main/services/evidence-reviews.ts`):** storage CRUD + tolerant row→DTO parsing
   (the `parseCitations` idiom per JSON column; `coverage_snapshot_json` reuses chat.ts's
   now-exported `parseCoverage`). Safe defaults always point AWAY from unearned confidence:
   unknown decision → 'not_reviewed', unknown status → 'draft', unknown link origin →
   'reviewer', unknown source kind → 'whole_document_provenance', unknown identity →
-  'unresolved'; malformed JSON → `[]`/null, never a throw. Exports: `createEvidenceReview`
-  (reads `conversation_id` from the message row — never trusted from the caller; throws on
-  unknown message / existing review, ids-only messages), `getEvidenceReview`,
-  `getEvidenceReviewForMessage`, `countEvidenceReviewsForConversation` (the D-2 confirm
-  count), `updateEvidenceReview`, `markEvidenceReviewReady` (refuses + returns the gate while
-  ineligible), `reopenEvidenceReview`, `deleteEvidenceReview`, `createEvidenceReviewItems`
-  (batch, one transaction), `updateEvidenceReviewItem`, `createEvidenceSelection` (refuses
-  out-of-range offsets — never clamps), `deleteEvidenceSelection` (selections only — block
-  items are structural), `setEvidenceLink` (upsert per (item, key); refuses unknown source
-  keys), `removeEvidenceLink`, `recordEvidenceExport`, `listEvidenceExports`, and the pure
+  'unresolved'; malformed JSON → `[]`/null, never a throw. The one deliberate NON-default:
+  `evidence_exports.format` passes through RAW on read (writes are typed 'html'|'pdf') — a
+  repair-default here would point TOWARD a positive claim about what was exported, so it has
+  none. Exports: `createEvidenceReview` (reads `conversation_id` from the message row — never
+  trusted from the caller; throws on unknown message / existing review / a title that trims
+  empty — the D-6 "never unnamed" invariant holds from birth, stored title is the trimmed
+  form; ids-only messages), `getEvidenceReview`, `getEvidenceReviewForMessage`,
+  `countEvidenceReviewsForConversation` (the D-2 confirm count), `updateEvidenceReview`,
+  `markEvidenceReviewReady` (refuses + returns the gate while ineligible),
+  `reopenEvidenceReview`, `deleteEvidenceReview`, `createEvidenceReviewItems` (batch, one
+  transaction), `updateEvidenceReviewItem` (patched decisions are normalized ON WRITE — an
+  unknown literal never enters storage; a note-only patch leaves the stored decision
+  byte-identical), `createEvidenceSelection` (refuses out-of-range AND surrogate-splitting
+  offsets — never clamps; F-15), `deleteEvidenceSelection` (selections only — block items are
+  structural), `setEvidenceLink` (upsert per (item, key); refuses unknown source keys),
+  `removeEvidenceLink`, `recordEvidenceExport`, `listEvidenceExports`, and the pure
   `deriveReadyGate` (D-7: required = non-heading block items, NULL `blockKind` counts as
   required; 'not_applicable' counts as decided; selections never gate).
 ✅ **Audit literals (types only — no emitter until Phase 1):** `evidence_review_created`,
@@ -652,7 +666,8 @@ section records the AS-BUILT Phase-0 shapes; the IPC surface arrives in Phase 1)
   `tests/integration/evidence-reviews.test.ts` (schema on fresh/reopened DBs via `listTables`;
   full round-trip incl. Unicode/markdown/hostile strings; malformed-JSON tolerance; cascade
   through the REAL `deleteConversation`; service-level status derivation; citation enrichment
-  incl. byte-identical legacy parsing).
+  pinned at sites 1–5 incl. byte-identical legacy parsing) + the EP-1 enrichment leg in
+  `tests/unit/citation-snippet-boundary.test.ts` (site 6, `chunksToCitations`).
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |
