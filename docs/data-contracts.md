@@ -830,10 +830,17 @@ only the wave close-out remains open).
   Determinism: same detail + options + language ⇒ byte-identical except packId/generatedAt.
 ✅ **Export pipeline (`main/services/evidence-pack/export.ts`):**
   `exportEvidencePackToFile(db, reviewId, rawOptions, deps {chooseDestination, renderPdf,
-  newPackId?, now?})` — load → resolve format+options → build → render → dialog (injected;
-  the electron dialog lives at the IPC layer; `chooseDestination(suggestedFileName, format)`)
-  → [PDF only, P6: `renderPdf(html, {packId, sourceHtmlPath})` — the injected hidden-window
-  print, AFTER the dialog, fed the render output VERBATIM] → `writePackFileAtomic` (tmp
+  newPackId?, now?})` — load → resolve format+options → mint packId+generatedAt
+  (PRE-dialog — the P4 TOCTOU posture: verdict + stamps all pre-dialog) → dialog
+  (injected; the electron dialog lives at the IPC layer; `chooseDestination(
+  suggestedFileName, format)`) → build+render ONCE, AFTER the dialog (P6 FIX-1: the
+  EFFECTIVE format is threaded into the model — `EvidencePackModel.format:
+  EvidenceExportFormat`, meta gains `format` — so the cover/Integrity "Format" line
+  states what the artifact IS: `packExport.meta.formatValuePdf` on PDFs, the P3
+  `formatValue` on HTML; exactly ONE line branches — pinned by a byte-level swap test —
+  and cancel renders nothing) → [PDF only, P6: `renderPdf(html, {packId,
+  sourceHtmlPath})` — the injected hidden-window print, fed the render output VERBATIM]
+  → `writePackFileAtomic` (tmp
   sibling → fsync → hash the READ-BACK on-disk bytes → rename; accepts string OR Buffer —
   the SAME tail serves both formats; failure removes the tmp and rethrows — no half-written
   destination ever) → `recordEvidenceExport` (row only AFTER the final file exists + is
@@ -997,10 +1004,15 @@ only the wave close-out remains open).
   electron: the D-1 option literals + footer no-@font-face/escaping pins, preload-free
   sandboxed posture + deny-all navigation, teardown on success/print-failure/load-failure/
   app-quit-mid-print/step-timeout — runs everywhere incl. CI) + `evidence-pack-export.
-  test.ts` P6 describe ×5 (seam contract: verbatim html + `${dest}.print.tmp.html`;
-  extension-override both directions; killed-print ⇒ no file/no siblings/no row;
-  outdated-refusal BEFORE dialog AND print; post-rename unlink on PDF) + helpers ×4
-  (Buffer atomic write, format resolvers) + `evidence-reviews-ipc.test.ts` ×2 (dialog
+  test.ts` P6 describe ×6 (seam contract: verbatim html + `${dest}.print.tmp.html` + the
+  PDF self-description line; extension-override both directions incl. the format line
+  following the EFFECTIVE format; cancel-under-PDF ⇒ no render/no print/no file/no row;
+  killed-print ⇒ no file/no siblings/no row; outdated-refusal BEFORE dialog AND print;
+  post-rename unlink on PDF) + helpers +3 new (Buffer atomic write, both format
+  resolvers; the pre-existing `suggestedPackFileName` test extended for the format
+  param) + `evidence-pack-html.test.ts` +2 (format-line branch: PDF wording on cover AND
+  integrity, byte-level one-line-swap equivalence pin, DE leg) +
+  `evidence-reviews-ipc.test.ts` ×2 (dialog
   filter list both-formats/requested-first through the REAL handler + REAL harness on a
   fake BrowserWindow; audit `{reviewId, format:'pdf'}`; malformed format → html-first) +
   `ReviewExport.test.tsx` +1 (PDF sends `format:'pdf'`; the defaults test now pins the

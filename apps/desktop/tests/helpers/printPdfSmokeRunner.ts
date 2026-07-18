@@ -21,6 +21,13 @@ import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard
 // destroy the hidden window mid-flight (after load, before print bytes exist), the
 // promise must REJECT, and no output may be written. Deterministic: the emit is
 // sequenced by the load itself, not by a timer.
+//
+// Honest scope of that leg (FIX-4): `app.emit('before-quit')` fires the HOOK — it does
+// NOT run Electron's real quit sequence (window teardown ordering, will-quit handlers).
+// What it proves: the registered hook destroys the window, the in-flight step rejects,
+// and no output file appears. What it cannot prove: the harness `finally` racing a real
+// quit's own window destruction — but the export invariant holds regardless, because the
+// destination write sits AFTER the awaited print, which has already rejected by then.
 
 interface SmokeJob {
   name: string

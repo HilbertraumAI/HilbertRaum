@@ -1,5 +1,6 @@
 import type {
   CoverageInfo,
+  EvidenceExportFormat,
   EvidenceGenerationSnapshot,
   EvidencePackLanguage,
   EvidencePackOptions,
@@ -164,7 +165,10 @@ export interface EvidencePackFreshness {
 export interface EvidencePackModel {
   packId: string
   schemaVersion: number
-  format: 'html'
+  /** The artifact's format (P6): drives the cover/integrity "Format" line so a PDF never
+   *  self-describes as HTML. Injected by the pipeline (the effective, extension-decided
+   *  format) — one template renders both; only this one line branches. */
+  format: EvidenceExportFormat
   language: EvidencePackLanguage
   /** Pack generation timestamp (ISO) — the §16.1.1 export date and §16.1.8 export stamp. */
   generatedAt: string
@@ -221,7 +225,7 @@ function textOrNull(v: string | null | undefined): string | null {
 export function buildEvidencePackModel(
   detail: EvidenceReviewDetail,
   options: EvidencePackOptions,
-  meta: { packId: string; generatedAt: string },
+  meta: { packId: string; generatedAt: string; format: EvidenceExportFormat },
   freshness?: EvidenceReviewFreshness | null
 ): EvidencePackModel {
   const stateByKey = new Map<string, EvidenceSourceFreshnessState>(
@@ -349,7 +353,7 @@ export function buildEvidencePackModel(
   return {
     packId: meta.packId,
     schemaVersion: EVIDENCE_PACK_SCHEMA_VERSION,
-    format: 'html',
+    format: meta.format,
     language: options.language,
     generatedAt: meta.generatedAt,
     options,

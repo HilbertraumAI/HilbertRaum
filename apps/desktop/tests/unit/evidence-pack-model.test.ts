@@ -19,7 +19,7 @@ import { makeDetail, makeItem } from '../helpers/evidenceReview'
 // sourceKindForMode semantics — unknown-PRESENT modes stay WEAK), and the malformed→
 // "Unavailable" (null, never invented) degradations.
 
-const META = { packId: 'pack-1', generatedAt: '2026-07-18T12:00:00.000Z' }
+const META = { packId: 'pack-1', generatedAt: '2026-07-18T12:00:00.000Z', format: 'html' } as const
 
 function opts(over: Partial<EvidencePackOptions> = {}): EvidencePackOptions {
   return { language: 'en', ...EVIDENCE_PACK_OPTION_DEFAULTS, ...over }

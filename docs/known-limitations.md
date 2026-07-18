@@ -1977,10 +1977,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   What is verified (real-Electron smoke): the text is genuinely extractable/searchable,
   the bookmark outline mirrors the heading tree, and the tagged (`/MarkInfo Marked`)
   structure exists. If accessibility of the artifact matters, prefer the HTML pack — it
-  is the accessibility-first format (real DOM semantics, reflow, user styles). The PDF's
-  cover also names the pack's SCHEMA as "Self-contained HTML · pack schema v1" — the PDF
-  is a print rendition of exactly that HTML pack (one template, by design), not a second
-  format with its own schema.
+  is the accessibility-first format (real DOM semantics, reflow, user styles). The PDF
+  states on its cover and Integrity section that it is a print of the same evidence-pack
+  template ("PDF — printed from the same evidence-pack template · pack schema v1") — one
+  template renders both formats by design; only that self-description line differs.
 
 ## Internationalization ([`architecture.md`](architecture.md) i18n record)
 

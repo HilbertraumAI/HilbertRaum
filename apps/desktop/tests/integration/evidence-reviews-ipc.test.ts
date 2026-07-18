@@ -831,6 +831,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     ])
     expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.html$/)
     expect(h.runtimeTouched).toEqual([])
+    expect(offlineViolations).toEqual([])
   })
 })
 

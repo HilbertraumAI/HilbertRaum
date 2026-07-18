@@ -27,6 +27,7 @@ import {
   updateEvidenceReviewItem
 } from '../../src/main/services/evidence-reviews'
 import { sha256Of } from '../../src/main/services/assets'
+import { t } from '../../src/shared/i18n'
 import type { Citation, CoverageInfo } from '../../src/shared/types'
 
 // EP-1 plan §8 exit gate (spec §30 Phase-2 gate) — the export pipeline end to end against
@@ -481,6 +482,10 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
     // The print harness got the Phase-3 render output UNCHANGED (D-1: one template)…
     expect(printed!.html.startsWith('<!DOCTYPE html>')).toBe(true)
     expect(printed!.html).toContain(FIXED_PACK_ID)
+    // …and it self-describes as a PDF (FIX-1): the printed rendition line, never the
+    // "Self-contained HTML" claim, on the artifact a verifier actually reads.
+    expect(printed!.html).toContain(t('en', 'packExport.meta.formatValuePdf', { version: 1 }))
+    expect(printed!.html).not.toContain(t('en', 'packExport.meta.formatValue', { version: 1 }))
     // …the pipeline's pack id for the footer, and a `.html` print-source SIBLING of the
     // destination (file:// MIME is sniffed from the extension).
     expect(printed!.packId).toBe(FIXED_PACK_ID)
@@ -508,7 +513,11 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
       renderPdf: NEVER_PDF
     })
     expect(first!.format).toBe('html')
-    expect(readFileSync(asHtml, 'utf8').startsWith('<!DOCTYPE html>')).toBe(true)
+    const flippedHtml = readFileSync(asHtml, 'utf8')
+    expect(flippedHtml.startsWith('<!DOCTYPE html>')).toBe(true)
+    // FIX-1: the EFFECTIVE format drives the self-description — this file IS HTML.
+    expect(flippedHtml).toContain(t('en', 'packExport.meta.formatValue', { version: 1 }))
+    expect(flippedHtml).not.toContain(t('en', 'packExport.meta.formatValuePdf', { version: 1 }))
 
     // Requested (default) HTML, saved as .pdf → printed PDF, recorded as such.
     const asPdf = join(root, 'flipped.pdf')
@@ -578,6 +587,23 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
       renderPdf: async () => PDF_BYTES
     })
     expect(record!.format).toBe('pdf')
+  })
+
+  it('cancel under a PDF request: no print, no file, no row (FIX-3 — also pins render-after-dialog: a cancel does no render work)', async () => {
+    const { db, root } = freshDb()
+    const reviewId = seedSimpleReview(db)
+    let printCalled = false
+    const result = await exportEvidencePackToFile(db, reviewId, { format: 'pdf' }, {
+      chooseDestination: async () => null,
+      renderPdf: async () => {
+        printCalled = true
+        return PDF_BYTES
+      }
+    })
+    expect(result).toBeNull()
+    expect(printCalled).toBe(false)
+    expect(readdirSync(root).filter((f) => !f.startsWith('test.sqlite'))).toEqual([])
+    expect(listEvidenceExports(db, reviewId)).toEqual([])
   })
 
   it('post-rename record failure unlinks the PDF too — the SAME tail semantics (P3 FIX-1b)', async () => {

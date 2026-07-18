@@ -2596,6 +2596,10 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.meta.status': 'Prüfstatus',
   'packExport.meta.format': 'Format',
   'packExport.meta.formatValue': 'Eigenständiges HTML · Paketschema v{version}',
+  // P6: the PDF artifact's honest self-description (FIX-1) — a print of the same pack
+  // template, never claiming to BE the HTML file.
+  'packExport.meta.formatValuePdf':
+    'PDF — gedruckt aus derselben Nachweispaket-Vorlage · Paketschema v{version}',
   'packExport.section.qa': 'Frage und Antwort',
   'packExport.qa.question': 'Frage',
   'packExport.qa.answer': 'Antwort',

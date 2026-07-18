@@ -20,7 +20,11 @@ import { makeDetail, makeItem } from '../helpers/evidenceReview'
 // h1–h3 semantic hierarchy, system fonts, grayscale warnings), EN/DE localization frozen
 // at generation, and byte determinism.
 
-const META = { packId: '00000000-0000-4000-8000-000000000001', generatedAt: '2026-07-18T12:34:00.000Z' }
+const META = {
+  packId: '00000000-0000-4000-8000-000000000001',
+  generatedAt: '2026-07-18T12:34:00.000Z',
+  format: 'html'
+} as const
 
 function opts(over: Partial<EvidencePackOptions> = {}): EvidencePackOptions {
   return { language: 'en', ...EVIDENCE_PACK_OPTION_DEFAULTS, ...over }
@@ -473,7 +477,8 @@ describe('determinism (plan §8 boundary)', () => {
     const b = renderEvidencePackHtml(
       buildEvidencePackModel(detail, opts(), {
         packId: '00000000-0000-4000-8000-000000000002',
-        generatedAt: '2026-07-19T00:01:00.000Z'
+        generatedAt: '2026-07-19T00:01:00.000Z',
+        format: 'html'
       })
     )
     const normalize = (s: string): string =>
@@ -490,5 +495,36 @@ describe('determinism (plan §8 boundary)', () => {
       buildEvidencePackModel(detail, resolveEvidencePackOptions({ language: 'en' }), META)
     )
     expect(viaResolver).toBe(renderEvidencePackHtml(buildEvidencePackModel(detail, opts(), META)))
+  })
+})
+
+describe('P6 format line (FIX-1 — the ONE model-format-dependent line)', () => {
+  const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1
+
+  it('format "pdf" states the printed-rendition wording on cover AND integrity; "html" keeps the P3 line — and NOTHING else differs', () => {
+    const detail = makeDetail()
+    const pdfLine = t('en', 'packExport.meta.formatValuePdf', { version: 1 })
+    const htmlLine = t('en', 'packExport.meta.formatValue', { version: 1 })
+    const asPdf = renderEvidencePackHtml(
+      buildEvidencePackModel(detail, opts(), { ...META, format: 'pdf' })
+    )
+    const asHtml = renderEvidencePackHtml(buildEvidencePackModel(detail, opts(), META))
+    // A .pdf artifact never self-describes as "Self-contained HTML" (cover + integrity —
+    // the section a verifier reads next to the hash note).
+    expect(count(asPdf, pdfLine)).toBe(2)
+    expect(asPdf).not.toContain(htmlLine)
+    expect(count(asHtml, htmlLine)).toBe(2)
+    expect(asHtml).not.toContain(pdfLine)
+    // The strong pin: swapping that one line converts one output into the other byte-for-
+    // byte — the format branches exactly one line, so the HTML goldens stay green.
+    expect(asHtml.replaceAll(htmlLine, pdfLine)).toBe(asPdf)
+  })
+
+  it('DE: the PDF line localizes from the current catalog like every pack string', () => {
+    const html = renderEvidencePackHtml(
+      buildEvidencePackModel(makeDetail(), opts({ language: 'de' }), { ...META, format: 'pdf' })
+    )
+    expect(html).toContain(t('de', 'packExport.meta.formatValuePdf', { version: 1 }))
+    expect(html).not.toContain(t('de', 'packExport.meta.formatValue', { version: 1 }))
   })
 })

@@ -39,7 +39,11 @@ import { escapeHtml } from './render-html'
 // can never leave a hidden window pinning the process; `window-all-closed` counts hidden
 // windows too). Each print gets its OWN window and shares no channels, so concurrent
 // prints are independent — no busy latch needed (unlike the rasterizer's fixed IPC
-// channel pair). A wedged renderer fails the step timeout rather than hanging the export.
+// channel pair). The one shared thing two concurrent exports COULD collide on is the
+// `.print.tmp.html` sibling when both target the SAME destination path: the loser's
+// load/remove races the winner's, and it fails cleanly like any other print failure —
+// no destination file, no row (the same posture as the atomic writer's shared
+// `${dest}.tmp`). A wedged renderer fails the step timeout rather than hanging the export.
 //
 // The print SOURCE is a transient `.print.tmp.html` SIBLING of the user-chosen
 // destination (the atomic pipeline hands the path in): `loadFile` needs a real file with
@@ -133,7 +137,6 @@ export async function printEvidencePackHtmlToPdf(
   html: string,
   opts: PrintEvidencePackPdfOptions
 ): Promise<Buffer> {
-  writeFileSync(opts.sourceHtmlPath, html, 'utf8')
   let win: BrowserWindow | null = null
   // App-quit teardown (plan §11): destroying the window rejects the pending load/print
   // step, so the export fails cleanly (no file, no row) instead of stalling the quit.
@@ -141,6 +144,9 @@ export async function printEvidencePackHtmlToPdf(
     if (win && !win.isDestroyed()) win.destroy()
   }
   try {
+    // Inside the try (FIX-2): a partial write (ENOSPC mid-stream) is decrypted pack
+    // content on disk — the finally's force-remove must cover it, not just later steps.
+    writeFileSync(opts.sourceHtmlPath, html, 'utf8')
     win = new BrowserWindow({
       show: false,
       // A worker, not a UI: never in the taskbar or any window list (rasterizer posture).

@@ -16,11 +16,12 @@ import { renderEvidencePackHtml } from './render-html'
 // Evidence-pack export pipeline (EP-1 plan §8.3 + §11, spec §20.1):
 //   load persisted review → refresh freshness (P4 — the §20.1 step; stored-fact comparison
 //   only, no re-hashing §21.2; refuses an OUTDATED review whose drift is unacknowledged,
-//   §28.6) → resolve format + options → build model (freshness INJECTED — the model stays
-//   pure) → render fixed template → choose destination (both format filters offered) →
-//   [PDF only: print the SAME HTML via the injected hidden-window harness, P6/D-1] →
-//   write tmp sibling → fsync → hash the ON-DISK bytes → atomic rename → record
-//   `evidence_exports` row.
+//   §28.6) → resolve format + options → mint packId + generatedAt (pre-dialog, the P4
+//   TOCTOU posture) → choose destination (both format filters offered; the extension
+//   decides the EFFECTIVE format) → build model (freshness + format INJECTED — the model
+//   stays pure) → render fixed template ONCE → [PDF only: print the SAME HTML via the
+//   injected hidden-window harness, P6/D-1] → write tmp sibling → fsync → hash the
+//   ON-DISK bytes → atomic rename → record `evidence_exports` row. Cancel renders nothing.
 // No model runtime, no network, no re-retrieval anywhere on this path (spec FR-2/FR-12 —
 // pinned by the no-model/no-network test assertions). Failure semantics (spec §20.2/§20.3/
 // §28.9): any failure or cancel UP TO AND INCLUDING the rename leaves NO destination file
@@ -213,24 +214,26 @@ export async function exportEvidencePackToFile(
   }
   const requestedFormat = resolvePackExportFormat(rawOptions)
   const options = resolveEvidencePackOptions(rawOptions)
-  const model = buildEvidencePackModel(
-    detail,
-    options,
-    {
-      packId: deps.newPackId?.() ?? randomUUID(),
-      generatedAt: deps.now?.() ?? new Date().toISOString()
-    },
-    freshness
-  )
-  // BOTH formats render the same Phase-3 HTML: it is the pack for 'html' and the print
-  // harness's verbatim input for 'pdf' (D-1 — one template, no second renderer).
-  const html = renderEvidencePackHtml(model)
+  // PRE-dialog stamps — the P4 TOCTOU posture is preserved: the freshness verdict,
+  // `packId` and `generatedAt` are all minted BEFORE the dialog opens (spec §20.1 order;
+  // the pack's generation stamp is the pre-dialog check time, and its wording is
+  // accurate for exactly that). The detail was loaded above, pre-dialog, likewise.
+  const packId = deps.newPackId?.() ?? randomUUID()
+  const generatedAt = deps.now?.() ?? new Date().toISOString()
   const destPath = await deps.chooseDestination(
     suggestedPackFileName(detail.title, requestedFormat),
     requestedFormat
   )
   if (!destPath) return null
   const format = packFormatForDestination(destPath, requestedFormat)
+  // Build + render AFTER the destination decided the EFFECTIVE format (FIX-1): the ONE
+  // format-dependent line (cover/integrity "Format") must state what the artifact IS —
+  // a .pdf that self-describes as "Self-contained HTML" would be a false claim right
+  // next to the hash note. Still ONE template rendered ONCE per export: 'html' packs are
+  // byte-identical to before (goldens prove it), and the print harness receives this
+  // render output UNCHANGED. A cancel above renders nothing at all.
+  const model = buildEvidencePackModel(detail, options, { packId, generatedAt, format }, freshness)
+  const html = renderEvidencePackHtml(model)
   const content =
     format === 'pdf'
       ? await deps.renderPdf(html, {
