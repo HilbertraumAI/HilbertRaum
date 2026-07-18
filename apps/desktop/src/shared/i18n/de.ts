@@ -23,19 +23,25 @@ import type { en } from './en'
 //   settings                   → Einstellungen
 //   plaintext (developer) mode → unverschlüsselt (Entwickler)
 //
-// EP-1 review glossary (P5 native pass; recorded in design-guidelines §7):
-//   evidence                   → Nachweis(e) — nie „Beleg“ als Substantiv; „belegt“ nur als
-//                                Partizip in den Entscheidungs-Labels („Geprüft — belegt“)
+// EP-1 review glossary (P5 native pass — MIRROR of the canonical record in
+// design-guidelines §7; change BOTH together):
+//   evidence                   → Nachweis(e) — das SUBSTANTIV „Beleg“ ist verboten; das
+//                                Verb „belegen“ ist die sanktionierte Form, wo es um
+//                                Gestütztheit geht („Geprüft — belegt“, „Er allein belegt
+//                                nicht …“)
 //   review (the artifact)      → Prüfung (evidence review → Nachweis-Prüfung)
 //   review item                → Prüfpunkt
 //   evidence pack              → Nachweispaket
 //   citation / source marker   → Quellenverweis (nie „Quellenangabe“/„Zitat“)
-//   whole-document provenance  → Herkunft aus einer Gesamtdokument-Analyse
+//   whole-document provenance  → Herkunft aus einer Gesamtdokument-Analyse; die Negation
+//                                ist immer „keine satzgenauen Quellenverweise“
 //   direct excerpt             → direkter Auszug
 //   source (document)          → Quelle / Quelldokument
 //   reviewer                   → Prüfer (label) / die prüfende Person (prose)
 //   mark ready / reopen        → Prüfung abschließen / Prüfung wieder öffnen
 //   outdated                   → veraltet
+//   review creation            → „Anlegen der Prüfung“ (die ANTWORT ist „erstellt“ —
+//                                nie mischen)
 
 export const de: Record<keyof typeof en, string> = {
   // ---- App shell ----
@@ -2429,7 +2435,7 @@ export const de: Record<keyof typeof en, string> = {
   'review.evidence.filterNone': 'Keine Quelle passt zu deinem Filter.',
   'review.evidence.shownCount': '{shown} von {total} Quellen angezeigt',
   // P5 (Spec §23): sichtbare Zeile, die den Nachweisbereich mit dem gewählten Prüfpunkt
-  // verbindet — das programmatische Regions-Label trägt denselben Kontext.
+  // verbindet; zugleich die programmatische BESCHREIBUNG der Region (`aria-describedby`).
   'review.evidence.linkingItem': 'Nachweise für Prüfpunkt {n} verknüpfen',
   'review.source.kind.direct_excerpt': 'Direkter Auszug',
   'review.source.kind.whole_document_provenance': 'Herkunft: Gesamtdokument-Analyse',

@@ -39,15 +39,18 @@ const CAPTION_KEY = {
 const RELATIONS = ['supports', 'qualifies', 'contradicts', 'context'] as const
 type Relation = (typeof RELATIONS)[number]
 
-/** True when `source` matches the filter query (already lowercased). Matches the visible
- *  card facts: title, snippet, section label, machine label ("S1" — the localized "Q1"
- *  form is a fixed transform of it), and the page number. */
-function matchesSourceFilter(source: EvidenceSourceSnapshot, q: string): boolean {
+/** True when `source` matches the filter query (already lowercased). Matches the VISIBLE
+ *  card facts: title, snippet, section label, the marker as DISPLAYED (review FIX-2 —
+ *  `formatCitationLabel`, so a German reviewer typing the "Q3" the card shows matches;
+ *  the raw machine "S3" keeps matching too), and the page number. */
+function matchesSourceFilter(source: EvidenceSourceSnapshot, q: string, t: I18n['t']): boolean {
   return (
     source.documentTitle.toLowerCase().includes(q) ||
     (source.snippet ?? '').toLowerCase().includes(q) ||
     (source.sectionLabel ?? '').toLowerCase().includes(q) ||
     (source.machineLabel ?? '').toLowerCase().includes(q) ||
+    (source.machineLabel != null &&
+      formatCitationLabel(t, source.machineLabel).toLowerCase().includes(q)) ||
     (source.pageNumber != null && String(source.pageNumber).includes(q))
   )
 }
@@ -96,16 +99,28 @@ export function EvidencePane({
   const [filter, setFilter] = useState('')
   const filterId = useId()
   const query = filter.trim().toLowerCase()
-  const filtered = query === '' ? sources : sources.filter((s) => matchesSourceFilter(s, query))
+  const filtered =
+    query === '' ? sources : sources.filter((s) => matchesSourceFilter(s, query, t))
   const shown = filtered.length > revealed ? filtered.slice(0, revealed) : filtered
   const remaining = filtered.length - shown.length
   const paneMode = evidencePaneMode(coverage)
   const headId = useId()
+  const linkingId = useId()
+  const showLinkingLine = sources.length > 0 && selectedItem != null && selectedItemNumber != null
   const stateByKey = new Map<string, EvidenceSourceFreshnessState>(
     (freshness?.sources ?? []).map((s) => [s.key, s.state])
   )
   return (
-    <div className="review-evidence" role="region" aria-labelledby={headId}>
+    <div
+      className="review-evidence"
+      role="region"
+      aria-labelledby={headId}
+      // Spec §23 (review FIX-3): the region's accessible DESCRIPTION carries the selected-
+      // item context ("Linking evidence for review item N") — the NAME stays the stable
+      // "Evidence" title. The SAME region (this component) mounts in the wide aside and in
+      // the narrow drawer Modal, so both layouts carry the association.
+      aria-describedby={showLinkingLine ? linkingId : undefined}
+    >
       <h2 id={headId} className="review-evidence-title">
         {t('review.evidence.title')}
       </h2>
@@ -116,8 +131,8 @@ export function EvidencePane({
       {sources.length > 0 && selectedItem == null && (
         <p className="hint review-link-hint">{t('review.link.selectHint')}</p>
       )}
-      {sources.length > 0 && selectedItem != null && selectedItemNumber != null && (
-        <p className="hint review-linking-item">
+      {showLinkingLine && (
+        <p className="hint review-linking-item" id={linkingId}>
           {t('review.evidence.linkingItem', { n: selectedItemNumber })}
         </p>
       )}
@@ -152,9 +167,12 @@ export function EvidencePane({
           )}
         </div>
       )}
-      {query !== '' && filtered.length === 0 && (
+      {/* Persistent live region (review FIX-5a): mounted EMPTY alongside the filter and
+          filled on the no-match state — a region that first APPEARS with its content is
+          missed by some screen readers; text changing inside an existing region is not. */}
+      {sources.length > PROVENANCE_CARD_CAP && (
         <p className="hint review-evidence-filter-none" role="status">
-          {t('review.evidence.filterNone')}
+          {query !== '' && filtered.length === 0 ? t('review.evidence.filterNone') : ''}
         </p>
       )}
       {shown.map((s) => (
@@ -173,7 +191,9 @@ export function EvidencePane({
       ))}
       {remaining > 0 && (
         <>
-          <p className="hint review-evidence-shown" role="status">
+          {/* Plain text, deliberately NOT a live region (review FIX-5a): it changes only
+              in direct response to the user's own reveal click, right beside the button. */}
+          <p className="hint review-evidence-shown">
             {t('review.evidence.shownCount', { shown: shown.length, total: filtered.length })}
           </p>
           <button

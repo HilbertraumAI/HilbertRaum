@@ -761,11 +761,12 @@ function SelectionComposer({
           {t('review.selection.close')}
         </Button>
       </div>
-      {refused && (
-        <p className="hint review-selection-refused" role="status">
-          {t('review.selection.refused')}
-        </p>
-      )}
+      {/* Persistent live region (review FIX-5a): mounted EMPTY with the composer and
+          filled on refusal — text changing inside an existing region announces reliably;
+          a region that first appears WITH content is missed by some screen readers. */}
+      <p className="hint review-selection-refused" role="status">
+        {refused ? t('review.selection.refused') : ''}
+      </p>
     </div>
   )
 }

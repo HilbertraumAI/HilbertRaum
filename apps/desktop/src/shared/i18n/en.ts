@@ -2379,8 +2379,8 @@ export const en = {
   'review.evidence.filterClear': 'Clear filter',
   'review.evidence.filterNone': 'No sources match your filter.',
   'review.evidence.shownCount': '{shown} of {total} sources shown',
-  // P5 (spec §23): the visible line tying the pane to the selected item — the programmatic
-  // region label carries the same context.
+  // P5 (spec §23): the visible line tying the pane to the selected item; it is also the
+  // pane region's programmatic DESCRIPTION (`aria-describedby` on the region element).
   'review.evidence.linkingItem': 'Linking evidence for review item {n}',
   // Evidence cards
   'review.source.kind.direct_excerpt': 'Direct excerpt',

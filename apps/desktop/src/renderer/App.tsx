@@ -194,9 +194,14 @@ function AppShell(): JSX.Element {
 
   // Documents screen → "Ask these documents" (spec §10.4): open Chat in
   // documents mode with the selection as the next conversation's retrieval scope.
+  // P5 review FIX-1: this path mounts chat WITHOUT going through navigate(), so it must
+  // clear the review back-handoff itself — a surviving `chatConversation` would make the
+  // mount re-attach an OLD conversation and stomp the just-set documents mode (pinned by
+  // an App-level test). The only setScreen('chat') paths are navigate() and this one.
   function askSelectedDocuments(documentIds: string[]): void {
     setChatMode('documents')
     setChatScope(documentIds.length > 0 ? documentIds : null)
+    setChatConversation(null)
     setScreen('chat')
   }
 

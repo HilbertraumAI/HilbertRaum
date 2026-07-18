@@ -312,8 +312,10 @@ Qualität bleibt top.").
   password → Passwort · settings → Einstellungen · plaintext (developer) mode →
   unverschlüsselt (Entwickler).
 - **EP-1 review glossary** (native pass, P5 2026-07-18 — the legal-adjacent register for the
-  evidence-review surface; also pinned atop `de.ts`): evidence → **Nachweis(e)** — never
-  „Beleg“ as a noun; „belegt“ only as the participle in decision labels („Geprüft — belegt“) ·
+  evidence-review surface; the CANONICAL record — the `de.ts` header comment mirrors it):
+  evidence → **Nachweis(e)** — the NOUN „Beleg“ is banned; the verb „belegen“ is the
+  sanctioned form wherever supported-ness is stated (decision labels „Geprüft — belegt“,
+  the disclaimers’ „Er allein belegt nicht …“) ·
   review (the artifact) → **Prüfung** (evidence review → Nachweis-Prüfung) · review item →
   **Prüfpunkt** · evidence pack → **Nachweispaket** · citation / source marker →
   **Quellenverweis** (never „Quellenangabe“/„Zitat“ — one term carries the honesty claim) ·
@@ -875,12 +877,16 @@ Selections, source filter, back-to-conversation, the German native pass, and the
   mid-markdown slice is not valid markdown; the pack renders them as plain text too).
 - **Large provenance sets: filter + stepped reveal, NO virtualization.** The evidence pane
   keeps the `PROVENANCE_CARD_CAP` (24) initial render and now reveals cap-sized batches
-  ("Show 24 more" + a "{shown} of {total}" status line) plus a filter input (title /
-  snippet / section / marker / page) once the set exceeds the cap. Measured before
-  virtualizing (plan §10): with 30 sources the full IPC open path runs in ~3 ms and the
-  mounted DOM never exceeds the revealed batch (pinned in `ReviewEvidencePane.test.tsx` +
-  `evidence-review-open-perf.test.ts`), so `@tanstack/react-virtual` stays out — no new
-  dependency.
+  ("Show 24 more" + a "{shown} of {total}" count line) plus a filter input once the set
+  exceeds the cap. The filter matches the facts the card DISPLAYS: title / snippet /
+  section / page / the marker in BOTH its raw machine form ("S3") and its localized
+  display form via `formatCitationLabel` (DE "Q3" — fix round). The no-virtualization
+  decision rests on the MEASUREMENT (plan §10 "measure first"): with 30 sources the full
+  IPC open path runs in ~3 ms and the mounted DOM never exceeds the revealed batch
+  (pinned in `ReviewEvidencePane.test.tsx` + `evidence-review-open-perf.test.ts`) — the
+  cap+reveal already bounds the work, so virtualizing the pane buys nothing at these
+  counts. (`@tanstack/react-virtual` itself pre-exists in the tree for DocumentsScreen's
+  long list — availability was never the question; need was.)
 - **Back to chat returns to the ORIGINATING conversation** (the named P2 UX debt): the
   review's `conversationId` flows App-side (`backToConversation` → `chatConversation`
   handoff slot, the chatScope idiom; cleared by every plain chat navigation) and ChatScreen
@@ -892,7 +898,8 @@ Selections, source filter, back-to-conversation, the German native pass, and the
   (`evidence-review-open-perf.test.ts`; the 1 000 ms assert is the spec's own budget as an
   order-of-magnitude regression tripwire).
 - **German native pass (D-L7) over ALL EP-1 keys** (`review.*` 152, `packExport.*` 96,
-  `main.evidenceReviews.*` 6 — EN=DE parity, incl. the 16 new P5 keys): consistent du-form, legal-adjacent
+  `main.evidenceReviews.*` 6 — EN=DE parity, incl. the 15 new P5 keys: 6
+  `review.evidence.*` + 8 `review.selection.*` + `review.item.selectionTag`): consistent du-form, legal-adjacent
   register, terminology per the §7 EP-1 glossary (Nachweis / Prüfung / Prüfpunkt /
   Quellenverweis / „Anlegen der Prüfung“); the „Prüfstand“ mistranslation and the
   Quellenangabe/Quellenverweis split are gone; ellipsis spacing unified; the ENTWURFSSTAND
@@ -910,17 +917,23 @@ Selections, source filter, back-to-conversation, the German native pass, and the
 | Drag needs a non-drag path (2.5.7) | PASS — text selection via the read-only textarea works with keyboard (Shift+arrows) as well as pointer drag. |
 | Password gate paste (3.3.8) | N/A on this surface. |
 | `prefers-reduced-motion` | PASS — global kill-switch; the phase adds no motion. |
-| Async states announced | PASS — SaveStateLine `role=status/alert` (P2), Outdated banner `role=status` (P4); NEW: selection-refused hint, filter no-match, and shown-count are `role=status`; selection add announces via the polite toast region. |
+| Async states announced | PASS — SaveStateLine `role=status/alert` (P2), Outdated banner `role=status` (P4); NEW: the selection-refused hint and the filter no-match line are PERSISTENT `role=status` regions that mount EMPTY and fill on state change (fix round — a region first appearing WITH content is missed by some screen readers; `:empty` collapses the idle element). The shown-count line is deliberately NOT live (it changes only on the user's own reveal click, beside the button). Selection add announces via the polite toast region. |
 | Never color-alone (1.4.1) | PASS — chips/badges are glyph+text; decision selection = border+weight+text; new states are text. |
-| Spec §23: pane↔item association | PASS with rationale — a visible + programmatic "Linking evidence for review item N" line ties the pane to the selection; `aria-controls` is deliberately NOT stamped on the non-interactive `<li>` rows (they are not widgets; the narrow drawer gets real dialog semantics from Radix). |
+| Spec §23: pane↔item association | PASS — the visible "Linking evidence for review item N" line IS the evidence region's programmatic DESCRIPTION: its id is the region's `aria-describedby` (fix round; the region NAME stays the stable "Evidence" title, and the SAME region component mounts in the wide aside and the narrow drawer, so both layouts carry it — pinned incl. the no-selection no-dangling-attribute case). `aria-controls` is deliberately NOT stamped on the non-interactive `<li>` rows (they are not widgets; the narrow drawer gets real dialog semantics from Radix). |
 | Spec §23: progress as text · excerpts selectable/readable · 200 % zoom · drawer focus-return · localized markers | PASS — footer text gate; cards + surface are selectable text (surface line-height 1.5); the 980 px drawer reflow is the 200 % posture; focus-return pinned since P2; markers share the display regexes (P1). |
 | Spec §23: exported PDF heading order | DEFERRED to P6 (PDF phase) — the P3 HTML template already carries the semantic h1–h3 tree. |
 
-Tests: `ReviewSelections.test.tsx` (raw-source surface, exact UTF-16 offsets incl. astral
-chars, refusal hint, delete, READY hides the affordance, D-7 exemption, back-nav callback),
-`ReviewEvidencePane.test.tsx` (cap/stepped reveal/filter/empty state/context line),
-`ChatBackToConversation.test.tsx` (handoff select, deleted-id degrade, baseline),
-`evidence-review-open-perf.test.ts` (spec §26 tripwire + numbers above).
+Tests: `ReviewSelections.test.tsx` (raw-source surface EN + DE — the DE leg pins the
+textarea carrying the RAW `[S1]` snapshot while the rendered block shows `[Q1]`; exact
+UTF-16 offsets incl. astral chars; refusal hint; delete; READY hides the composer and
+disables Remove; D-7 exemption; back-nav callback), `ReviewEvidencePane.test.tsx`
+(cap/stepped reveal/reveal-reset-on-filter-change/filter facets incl. DE `Q3` + section +
+page/empty state/`aria-describedby` tie + no-dangling case),
+`ChatBackToConversation.test.tsx` (handoff select, deleted-id degrade, baseline, and the
+App-LEVEL one-shot-slot test: review → back → Documents → "Ask these documents" wins —
+the FIX-1 blocker repro, mutation-verified), `reviewSession.test.ts` selection token-race
+legs (post-purge create/delete + post-switch create), `evidence-review-open-perf.test.ts`
+(spec §26 tripwire + numbers above).
 
 ---
 

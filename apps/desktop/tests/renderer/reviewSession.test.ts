@@ -8,10 +8,12 @@ import type {
 } from '../../src/shared/types'
 import {
   REVIEW_SAVE_DEBOUNCE_MS,
+  addReviewSelection,
   bulkClearDecisions,
   bulkMarkHeadingsNotApplicable,
   bulkMarkUndecidedFollowUp,
   computeReadyGate,
+  deleteReviewSelection,
   editReviewHead,
   editReviewItem,
   flushReviewSession,
@@ -391,6 +393,106 @@ describe('reviewSession — race hardening (FIX-2)', () => {
     expect(s.detail?.id).toBe('r2')
     expect(s.detail?.gate).toBeDefined()
     expect(s.detail?.items.every((i) => i.links.length === 0)).toBe(true)
+  })
+
+  it('a selection CREATE resolving AFTER purge never re-inserts content (P5 review FIX-5d)', async () => {
+    const detail = makeDetail()
+    let releaseCreate: (() => void) | null = null
+    const createEvidenceSelection = vi.fn(
+      () =>
+        new Promise<EvidenceReviewItem>((resolve) => {
+          releaseCreate = () =>
+            resolve(
+              makeItem({
+                id: 'sel1',
+                ordinal: 2,
+                kind: 'selection',
+                startOffset: 0,
+                endOffset: 5,
+                textSnapshot: 'Alpha'
+              })
+            )
+        })
+    )
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => detail), createEvidenceSelection })
+    await openWith(detail)
+
+    const pending = addReviewSelection('b0-paragraph-abc', 0, 5)
+    purgeReviewSession() // the lock seam
+    releaseCreate!()
+    // Truthful outcome (the row exists main-side) but the purged store stays EMPTY —
+    // no decrypted snapshot slice comes back after the lock.
+    expect(await pending).toBe('added')
+    expect(getReviewSessionSnapshot()).toMatchObject({
+      detail: null,
+      saveState: 'idle',
+      saveError: null,
+      openError: null
+    })
+  })
+
+  it('a selection CREATE resolving after a REVIEW SWITCH never lands in the new detail (FIX-5d)', async () => {
+    const first = makeDetail()
+    const second = makeDetail({ id: 'r2', messageId: 'm2' })
+    let releaseCreate: (() => void) | null = null
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async (id: string) => (id === 'r2' ? second : first)),
+      createEvidenceSelection: vi.fn(
+        () =>
+          new Promise<EvidenceReviewItem>((resolve) => {
+            releaseCreate = () =>
+              resolve(
+                makeItem({
+                  id: 'sel1',
+                  ordinal: 2,
+                  kind: 'selection',
+                  startOffset: 0,
+                  endOffset: 5,
+                  textSnapshot: 'Alpha'
+                })
+              )
+          })
+      )
+    })
+    await openWith(first)
+    const pending = addReviewSelection('b0-paragraph-abc', 0, 5)
+    await openReviewSession({ reviewId: 'r2' })
+    releaseCreate!()
+    expect(await pending).toBe('added')
+    // r2's items are untouched — r1's stale selection never appended.
+    const s = getReviewSessionSnapshot()
+    expect(s.detail?.id).toBe('r2')
+    expect(s.detail?.items.map((i) => i.id)).toEqual(['i1', 'i2'])
+  })
+
+  it('a selection DELETE resolving AFTER purge never touches the store (FIX-5d)', async () => {
+    const selection = makeItem({
+      id: 'sel1',
+      ordinal: 2,
+      kind: 'selection',
+      startOffset: 0,
+      endOffset: 5,
+      textSnapshot: 'Alpha'
+    })
+    const detail = makeDetail({
+      items: [makeItem({ id: 'i1' }), makeItem({ id: 'i2', ordinal: 1 }), selection]
+    })
+    let releaseDelete: (() => void) | null = null
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      deleteEvidenceSelection: vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            releaseDelete = () => resolve(true)
+          })
+      )
+    })
+    await openWith(detail)
+    const pending = deleteReviewSelection('sel1')
+    purgeReviewSession()
+    releaseDelete!()
+    await pending
+    expect(getReviewSessionSnapshot()).toMatchObject({ detail: null, saveState: 'idle' })
   })
 
   it('a FAILED item write resolving after purge never repopulates pending (2a — note plaintext)', async () => {

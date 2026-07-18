@@ -113,7 +113,7 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
     expect(cardTitles()).toHaveLength(0)
   })
 
-  it('selected item renders the visible "linking evidence for item N" context line (spec §23)', () => {
+  it('selected item: visible context line IS the region\'s programmatic description (spec §23, FIX-3)', () => {
     const detail = makeDetail()
     render(
       <EvidencePane
@@ -135,5 +135,67 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
     ).toBeInTheDocument()
     // The unselected-state hint is gone while an item is selected.
     expect(screen.queryByText(tEn('review.link.selectHint'))).not.toBeInTheDocument()
+    // FIX-3: the region's aria-describedby points AT the linking line — the association
+    // is programmatic, not just visual (same component mounts in aside AND drawer).
+    const region = screen.getByRole('region', { name: tEn('review.evidence.title') })
+    const descId = region.getAttribute('aria-describedby')
+    expect(descId).toBeTruthy()
+    expect(document.getElementById(descId!)).toHaveTextContent(
+      tEn('review.evidence.linkingItem', { n: 2 })
+    )
+  })
+
+  it('no selected item → no dangling aria-describedby on the region (FIX-3)', () => {
+    renderPane(makeSources(3))
+    const region = screen.getByRole('region', { name: tEn('review.evidence.title') })
+    expect(region).not.toHaveAttribute('aria-describedby')
+  })
+
+  it('DE: the filter matches the DISPLAYED [Qn] marker, not only the machine label (FIX-2)', () => {
+    const tDe = (key: MessageKey, params?: MessageParams): string => t('de', key, params)
+    const tCountDe = (key: CountMessageKey, count: number, params?: MessageParams): string =>
+      tCount('de', key, count, params)
+    render(
+      <EvidencePane
+        sources={makeSources(30)}
+        coverage={{ mode: 'relevance', chunksCovered: 2, chunksTotal: 9 }}
+        selectedItem={null}
+        readOnly={false}
+        freshness={null}
+        onLink={vi.fn()}
+        onUnlink={vi.fn()}
+        onSetRelation={vi.fn()}
+        t={tDe}
+        tCount={tCountDe}
+      />
+    )
+    const input = screen.getByLabelText(tDe('review.evidence.filterLabel'))
+    // The DE card displays [Q3]; typing what the card SHOWS must match source S3.
+    fireEvent.change(input, { target: { value: 'Q3' } })
+    expect(cardTitles()).toContain('doc-3.pdf')
+    // The raw machine label keeps matching too (both facets honest).
+    fireEvent.change(input, { target: { value: 'S3' } })
+    expect(cardTitles()).toContain('doc-3.pdf')
+  })
+
+  it('matcher covers section label and page number; filter change RESETS the reveal (FIX-5b)', () => {
+    const sources = makeSources(60).map((s, i) =>
+      i === 40 ? { ...s, sectionLabel: 'Anhang B', pageNumber: 77 } : s
+    )
+    renderPane(sources)
+    // Reveal out to 48 first…
+    fireEvent.click(screen.getByRole('button', { name: tCountEn('chat.sources.more', 24) }))
+    expect(cardTitles()).toHaveLength(48)
+
+    const input = screen.getByLabelText(tEn('review.evidence.filterLabel'))
+    // …section-label facet (a source PAST the original cap)…
+    fireEvent.change(input, { target: { value: 'anhang b' } })
+    expect(cardTitles()).toEqual(['doc-41.pdf'])
+    // …page-number facet…
+    fireEvent.change(input, { target: { value: '77' } })
+    expect(cardTitles()).toContain('doc-41.pdf')
+    // …and clearing the filter RESTARTS the reveal at the cap (not the previous 48).
+    fireEvent.click(screen.getByRole('button', { name: tEn('review.evidence.filterClear') }))
+    expect(cardTitles()).toHaveLength(PROVENANCE_CARD_CAP)
   })
 })

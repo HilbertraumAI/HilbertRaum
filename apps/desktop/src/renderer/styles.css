@@ -1990,7 +1990,10 @@ code, pre, kbd { font-family: var(--font-mono); }
   white-space: pre-wrap;
 }
 .review-selection-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+/* Persistent live regions mount EMPTY (FIX-5a) — collapse them until they carry text. */
 .review-selection-refused { margin: 6px 0 0; }
+.review-selection-refused:empty,
+.review-evidence-filter-none:empty { margin: 0; }
 
 /* P5 evidence-pane filter + stepped reveal (spec §25.6). */
 .review-evidence-filter { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }

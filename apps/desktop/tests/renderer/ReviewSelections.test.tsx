@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vite
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import type { EvidenceSelectionInput } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
@@ -29,6 +30,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  window.localStorage.clear() // the DE-surface leg seeds the language mirror
   assertNoUnexpectedApiCalls()
 })
 
@@ -304,6 +306,33 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
     expect(
       screen.getByText(t('en', 'review.progress', { decided: 2, required: 2 }))
     ).toBeInTheDocument()
+    assertNoUnexpectedApiCalls()
+  })
+
+  it('DE: the surface stays the RAW snapshot even where the display transform rewrites it (FIX-5c)', async () => {
+    // The rendered DE item shows [Q1] (localizeServerCopy → marker localization) — the
+    // EN fixture can't see that divergence (the transform is ≈ identity there). The
+    // textarea must carry the RAW stored [S1] string: the offsets index into IT.
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => detailWithRawBlock()) })
+    render(
+      <I18nProvider>
+        <ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />
+      </I18nProvider>
+    )
+    await screen.findByText('Beta')
+
+    const item = screen.getByRole('listitem', { name: t('de', 'review.item.aria', { n: 1 }) })
+    fireEvent.click(
+      within(item).getByRole('button', { name: t('de', 'review.selection.start') })
+    )
+    const surface = (await within(item).findByRole('textbox', {
+      name: t('de', 'review.selection.surfaceAria', { n: 1 })
+    })) as HTMLTextAreaElement
+    // Raw machine marker + raw markdown — NOT the [Q1] the rendered block above shows.
+    expect(surface.value).toBe(RAW_BLOCK)
+    expect(surface.value).toContain('[S1]')
+    expect(surface.value).not.toContain('[Q1]')
     assertNoUnexpectedApiCalls()
   })
 
