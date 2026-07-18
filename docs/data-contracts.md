@@ -586,9 +586,9 @@ document answers always run balanced (deep-grounded = wave 2).
   threading + `formatPlan`; `assertCommercialDrive` passes verified-commercial, fails network/plaintext/
   placeholder-weight/user-data). **Signing + notarization + the real USB launch = manual (R5/R7).**
 
-### Evidence Pack / Review Mode (EP-1 Phases 0–1 live — contracts, storage, snapshot engine + IPC; no UI yet)
-Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.md` §5–§6 (this
-section records the AS-BUILT Phase-0/1 shapes; the renderer arrives in Phase 2).
+### Evidence Pack / Review Mode (EP-1 Phases 0–3 live — contracts, storage, snapshot engine + IPC, review UI, HTML export)
+Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.md` §5–§8 (this
+section records the AS-BUILT shapes; freshness engine (P4) and PDF (P6) are still open).
 
 ✅ **`Citation` enrichment (ADDITIVE, `shared/types.ts`):** `documentId?: string | null`
   (`chunks.document_id`) + `chunkId?: string | null` (`chunks.id`), stamped at the **six**
@@ -723,10 +723,11 @@ section records the AS-BUILT Phase-0/1 shapes; the renderer arrives in Phase 2).
   conversation?)` (spec §9.1): assistant ∧ (citations non-empty ∨ coverage present ∨
   `conversation.mode === 'documents'`). "Persisted and not streaming" stays the caller's
   gate (a streaming reply has no row yet) — Phase 2 wires it.
-✅ **IPC surface (14 channels, `evidence:*` in `shared/ipc.ts`; handlers in
+✅ **IPC surface (15 channels, `evidence:*` in `shared/ipc.ts`; handlers in
   `main/ipc/registerEvidenceReviewsIpc.ts`, wired in `main/index.ts`; preload methods of the
   same names on `window.api` — 13 shipped in Phase 1, `evidence:countForConversation` added
-  in Phase 2 for the D-2 delete confirm):**
+  in Phase 2 for the D-2 delete confirm, `evidence:export` added in Phase 3 with its
+  pipeline):**
   | preload method | channel | shape |
   |---|---|---|
   | `createEvidenceReview(messageId)` | `evidence:create` | → `EvidenceReviewDetail`; IDEMPOTENT (existing review returned, audit only on real creation); throws localized `invalidRequest` on a malformed id, ids-only errors on unknown/non-assistant message |
@@ -743,6 +744,7 @@ section records the AS-BUILT Phase-0/1 shapes; the renderer arrives in Phase 2).
   | `refreshEvidenceReviewState(reviewId)` | `evidence:refreshState` | → `EvidenceReviewFreshness \| null` — **Phase-4 STUB**: `{ reviewId, outdated: false }` for a known review (the same not-known-to-be-outdated overlay every read carries) |
   | `deleteEvidenceReview(reviewId)` | `evidence:delete` | → `boolean` |
   | `countEvidenceReviewsForConversation(conversationId)` | `evidence:countForConversation` | → `number` — Phase 2 (plan §7.6, D-2): the conversation-delete confirm names how many reviews the cascade removes. Count only, never content; malformed/unknown ids read `0` |
+  | `exportEvidencePack(reviewId, options)` | `evidence:export` | → `EvidenceExportRecord \| null` — Phase 3 (plan §8.3): save dialog → deterministic HTML render → ATOMIC write (tmp sibling → fsync → sha256 of the ON-DISK bytes → rename) → `evidence_exports` row. Null on unknown/malformed id (no dialog) or user cancel; any failure UP TO the rename leaves no destination file and no row (spec §28.9). A POST-rename record failure (workspace-DB error, or the review deleted in another window while the dialog was open) UNLINKS the just-written file and REJECTS with distinct localized copy (`main.evidenceReviews.exportNotRecorded`; if even the unlink fails, `…exportFileNotRecorded` states the file exists WITHOUT a history record) — null never means "exported", and a real export is never reported as a cancel (fix round FIX-1). Works on draft AND ready reviews (the ready guard covers item mutations only — tested). `options: Partial<EvidencePackOptions>` resolves against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; the RESOLVED set persists to `options_json` |
   Every handler `requireUnlocked()` (`main.evidenceReviews.locked`, EN+DE; auto-enforced by
   `ipc-lock-coverage.test.ts`). **Ready-state write guard (Phase-2 review FIX-1, spec
   §18.4):** while a review is `ready`, the five ITEM-LEVEL mutations (`updateEvidenceReviewItem`,
@@ -751,14 +753,13 @@ section records the AS-BUILT Phase-0/1 shapes; the renderer arrives in Phase 2).
   can never produce, so it must be unreachable by mutation too; reopen first. HEAD edits
   (`updateEvidenceReview`: title D-6 / reviewer label D-3 / general note) stay allowed.
   New type `EvidenceReviewFreshness { reviewId, outdated }`.
-  `exportEvidencePack` deliberately NOT yet registered — the pipeline is Phase 3 (a channel
-  with no pipeline would be a dead promise).
-✅ **Audit emitters (first ones):** `evidence_review_created` (`{reviewId, messageId,
+✅ **Audit emitters:** `evidence_review_created` (`{reviewId, messageId,
   conversationId, itemCount, sourceCount, autoLinkCount}`), `evidence_review_ready`
-  (`{reviewId, requiredTotal, decidedTotal}`), `evidence_review_deleted` (`{reviewId}`) —
-  ids/counts ONLY; review titles/labels/notes/answer text/source titles are sentinel-swept
-  through the REAL handlers in `audit-ipc.test.ts`. `evidence_pack_exported` still has no
-  emitter (Phase 3).
+  (`{reviewId, requiredTotal, decidedTotal}`), `evidence_review_deleted` (`{reviewId}`),
+  and — Phase 3 — `evidence_pack_exported` (`{reviewId, format}` **only**: the destination
+  path, the bare file name and the review title, which seeds the suggested name, are content
+  and never audited) — ids/counts ONLY; review titles/labels/notes/answer text/source titles
+  AND the export path are sentinel-swept through the REAL handlers in `audit-ipc.test.ts`.
 ✅ **i18n:** `main.evidenceReviews.locked` + `main.evidenceReviews.invalidRequest` (emission
   set) and persist-canonical `main.evidenceReviews.defaultTitle` ('Evidence review' — the
   fallback written to `evidence_reviews.title` when a conversation title trims empty; in
@@ -777,6 +778,94 @@ section records the AS-BUILT Phase-0/1 shapes; the renderer arrives in Phase 2).
   **runtime-tripwire + real offline connect-guard asserted in every test of the file** —
   the plan §6 no-model/no-network assertions) + new legs in `audit-ipc.test.ts` and
   `ipc-lock-coverage.test.ts`.
+
+**Phase 3 — evidence-pack export, self-contained HTML (as built):**
+
+✅ **Types (`shared/types.ts`):** `EvidencePackLanguage` ('en'|'de' — the pack's content
+  language, chosen at export and FROZEN into the file; never re-localized later) and
+  `EvidencePackOptions { language, includeReviewerNotes, includeSourceExcerpts,
+  includeDocumentHashes, includeUnreviewedItems, includeTechnicalDetails }` (spec §16.2).
+  Defaults live in `EVIDENCE_PACK_OPTION_DEFAULTS` (`shared/evidence-review.ts`): everything
+  §16.1-mandated ON, `includeTechnicalDetails` OFF. **There is NO source-path flag**: the
+  review snapshot carries no file paths, so no pack can ever contain one — structurally
+  stronger than the spec's "default off" (recorded in known-limitations + security-model).
+  `evidencePaneMode(coverage)` MOVED from `renderer/review/EvidencePane.tsx` to
+  `shared/evidence-review.ts` (re-exported from the old site; semantics unchanged) so the
+  pack's coverage-honesty section reuses the ONE mapping (unknown-PRESENT modes stay
+  whole-doc/WEAK).
+✅ **Pack model (`main/services/evidence-pack/pack-model.ts`, pure):**
+  `resolveEvidencePackOptions(raw)` (untrusted-boundary resolver — literal booleans only,
+  unknown keys dropped, language 'de' only on the literal) and
+  `buildEvidencePackModel(detail, options, {packId, generatedAt}) → EvidencePackModel` —
+  the nine §16.1 sections normalized from the STORED review read-model only: cover, Q&A
+  (frozen snapshots), review summary (fixed-order decision counts, `lastExportedAt` =
+  newest PRIOR export), item-by-item (links resolve to 1-based register indexes; option
+  filters honest — hidden unreviewed items are COUNTED, their register relations kept),
+  evidence + source registers, coverage/limitations (creation-time facts + an explicit
+  not-re-verified statement — the freshness engine is P4), generation (absent → null →
+  "Unavailable"), integrity. `EVIDENCE_PACK_SCHEMA_VERSION = 1` stamps the pack AND the
+  `evidence_exports.schema_version` column.
+✅ **HTML renderer (`main/services/evidence-pack/render-html.ts`, pure):** new `escapeHtml`
+  (the docx `xmlEscape` shape widened to quotes — `& < > " '`; every content string escaped
+  exactly once, AFTER i18n interpolation) + `renderEvidencePackHtml(model)` — ONE fixed
+  self-contained template: zero scripts, zero remote refs (no `url()`/`@import`/
+  `@font-face`/`http(s)`), one embedded `<style>`, index-derived internal anchors only
+  (`#src-N`, `#item-N`). **Print contract (D-1 — Phase 6 feeds THIS SAME HTML to
+  `printToPDF`):** `@page { size: A4 }`, `break-inside: avoid` on item/source cards +
+  warnings + table rows, semantic `h1→h2→h3` hierarchy (= the PDF bookmark tree), system
+  font stack only, grayscale-readable warning blocks (border + ⚠ + text). Answer/item text
+  renders as ESCAPED plain text (`white-space: pre-wrap`) — deliberately NO main-side
+  markdown-to-HTML conversion (injection surface + determinism risk); the pack says so.
+  Inline `[S{n}]` markers localize per pack language via the SHARED citation-marker regexes
+  (DE `[Q{n}]`; code spans/fences stay literal — display parity). Timestamps render through
+  `formatPackTimestamp` (`YYYY-MM-DD HH:MM UTC` — locale-independent; unparseable →
+  verbatim). i18n: `packExport.*` EN+DE + reused `review.*`/`chat.sources.marker` keys.
+  Determinism: same detail + options + language ⇒ byte-identical except packId/generatedAt.
+✅ **Export pipeline (`main/services/evidence-pack/export.ts`):**
+  `exportEvidencePackToFile(db, reviewId, rawOptions, deps {chooseDestination, newPackId?,
+  now?})` — load → resolve → build → render → dialog (injected; the electron dialog lives at
+  the IPC layer) → `writePackFileAtomic` (tmp sibling → fsync → hash the READ-BACK on-disk
+  bytes → rename; failure removes the tmp and rethrows — no half-written destination ever)
+  → `recordEvidenceExport` (row only AFTER the final file exists + is hashed, spec §20.3;
+  bare `file_name`, resolved options into `options_json`). Encoding: UTF-8 **without** BOM
+  (unlike md/txt/csv `bomFor` — the `<meta charset>` is the contract; recorded hash =
+  on-disk bytes). `suggestedPackFileName(title)` slugs the review title (content — which is
+  why path/name never reach audit).
+✅ **Renderer:** `ReviewSummaryView` actions row gains **Create evidence pack** (draft AND
+  ready), opening an INLINE options panel (no nested modal): §24.3 encryption-boundary
+  warning + the five §16.2 checkboxes at the shared defaults; the status line shows
+  `review.status.lastExported` (display-only — the status ENUM is unchanged); the export
+  history renders real `detail.exports` rows **including the recorded SHA-256** (truncated
+  mono display + a copy-full-hash action via `copyToClipboard` — the pack's own integrity
+  note and the user guide point the reader here, fix round FIX-2). Store
+  (`reviewSession.ts`): `exportReviewPack(options)` FLUSHES pending edits first (the pack
+  renders persisted data; a failed flush REFUSES — pinned by test), then merges the
+  returned record into `detail.exports` newest-first under the `openToken` staleness
+  guard. Outcomes: 'exported' | 'cancelled' (native-dialog cancel — silent) | 'failed'
+  (+friendly copy, rendered inline in the panel). A token change (lock/switch) landing
+  AFTER a successful export still returns 'exported' (state untouched — the export is
+  real; only a genuine rejection reports 'failed').
+✅ **Phase-3 tests:** `tests/unit/evidence-pack-model.test.ts` ×13 (option boundary, §16.1
+  normalization, honesty-mapping reuse pin, option matrix) +
+  `tests/unit/evidence-pack-html.test.ts` ×26 (escapeHtml, §29.4 injection suite incl.
+  hostile source key/machineLabel/sha256/raw coverage mode + the structural remote-ref
+  sweep over the HOSTILE render, §17.2 self-containment, D-1 print contract, EN/DE
+  freezing, ordinal-stable item numbering, zone-less-timestamp verbatim, determinism) +
+  `tests/integration/evidence-pack-export.test.ts` ×15 (the five §29.5 GOLDEN packs under
+  `tests/fixtures/evidence-packs/` — relevance/whole-doc/partial-coverage/missing-source/
+  German, normalized timestamps + pack ids, regenerate via `UPDATE_EVIDENCE_PACK_GOLDENS=1`;
+  atomicity: failing write AND failing rename leave no file/no tmp/no row; the two
+  POST-rename record-failure paths — injected INSERT trigger, review deleted mid-dialog —
+  unlink the destination and throw `EvidencePackRecordError`; cancel → nothing; no-BOM
+  encoding; recorded-hash-matches-file-bytes; ready-review export; real offline guard
+  across every test) + export legs in `evidence-reviews-ipc.test.ts` (ready-review export
+  over the wire, cancel, post-rename failure surfaces the LOCALIZED distinct copy with no
+  file/row/audit event, boundary guards, hostile options → resolved defaults persisted,
+  runtime tripwire) and `audit-ipc.test.ts` (path-sentinel destination; event =
+  `{reviewId, format}` exactly) + `tests/renderer/ReviewExport.test.tsx` ×9 (panel
+  defaults, payload shape, history merge, cancel/failure, flush-before-export ordering,
+  flush-FAILURE refusal, ready-review export, hash display + full-hash copy;
+  `exportEvidencePack` in the stub sets under the structural no-call tripwire).
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |

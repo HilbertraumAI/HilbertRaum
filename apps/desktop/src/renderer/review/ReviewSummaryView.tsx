@@ -1,5 +1,9 @@
+import { useState } from 'react'
 import type { EvidenceReviewDetail, ReviewDecision } from '@shared/types'
-import { CoverageMeter, Button } from '../components'
+import { EVIDENCE_PACK_OPTION_DEFAULTS } from '@shared/evidence-review'
+import { CoverageMeter, Button, useToast } from '../components'
+import { localizeServerCopy } from '../lib/displayMap'
+import { exportReviewPack } from '../lib/reviewSession'
 import { DECISION_GLYPH, DECISION_ORDER, decisionLabelKey } from './DecisionControl'
 import type { I18n } from '../i18n'
 
@@ -9,9 +13,13 @@ import type { I18n } from '../i18n'
 // D-7-gated "Mark review ready" / "Reopen review" actions. Rendered inside the wide Modal
 // the screen opens from its footer.
 //
-// Phase 3 seam: the "Create evidence pack" export action MOUNTS IN THE ACTIONS ROW at the
-// bottom of this view (beside Mark ready), and the export-history list below it stops
-// being empty. Keep both anchors when restructuring.
+// Phase 3 (plan §8.4): the "Create evidence pack" action lives IN THE ACTIONS ROW beside
+// Mark ready; it opens the inline export panel (spec §16.2 option checkboxes with shared
+// defaults + the §24.3 encryption-boundary warning) rather than a nested modal — the
+// summary already renders inside one Modal, and an inline disclosure keeps the focus
+// order flat. Export works on draft AND ready reviews (the ready write-guard covers item
+// mutations only). The export-history list above the actions renders the real
+// `detail.exports` rows, which the store refreshes after each successful export.
 
 export function ReviewSummaryView({
   detail,
@@ -33,6 +41,8 @@ export function ReviewSummaryView({
   tCount: I18n['tCount']
   lang: I18n['lang']
 }): JSX.Element {
+  const [exportOpen, setExportOpen] = useState(false)
+  const showToast = useToast()
   const counts = new Map<ReviewDecision, number>()
   for (const item of detail.items) {
     counts.set(item.decision, (counts.get(item.decision) ?? 0) + 1)
@@ -53,6 +63,16 @@ export function ReviewSummaryView({
             {t(detail.status === 'ready' ? 'review.status.ready' : 'review.status.draft')}
           </span>{' '}
           {completed && <span className="hint">{t('review.completedAt', { date: completed })}</span>}
+          {/* Plan §8.4: exported timestamp on the status display ONLY — the status enum is
+              unchanged; exports[0] is newest (DESC read order + newest-first store merge). */}
+          {detail.exports.length > 0 && (
+            <span className="hint review-last-exported">
+              {' '}
+              {t('review.status.lastExported', {
+                date: formatWhen(detail.exports[0]!.createdAt, lang)
+              })}
+            </span>
+          )}
         </p>
       </section>
 
@@ -144,11 +164,35 @@ export function ReviewSummaryView({
             {detail.exports.map((x) => (
               <li key={x.id}>
                 {x.fileName} · {x.format} · {formatWhen(x.createdAt, lang)}
+                {/* FIX-2: the recorded SHA-256 the docs + the pack's own integrity note
+                    point the reader at — truncated for display, FULL hash on copy (the
+                    Electron-clipboard copyToClipboard idiom). */}
+                <span className="review-export-hash">
+                  <code className="review-hash-mono" title={x.fileSha256}>
+                    {x.fileSha256.slice(0, 12)}…
+                  </code>
+                  <button
+                    type="button"
+                    className="msg-action"
+                    aria-label={`${t('review.export.copyHash')}: ${x.fileName}`}
+                    onClick={() => {
+                      void Promise.resolve(window.api?.copyToClipboard?.(x.fileSha256)).then(
+                        (ok) => {
+                          if (ok) showToast(t('review.export.hashCopied'))
+                        }
+                      )
+                    }}
+                  >
+                    {t('review.export.copyHash')}
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
         </section>
       )}
+
+      {exportOpen && <ExportPackPanel onClose={() => setExportOpen(false)} t={t} lang={lang} />}
 
       <div className="review-summary-actions">
         {/* D-7 gate: disabled until every required item is decided; the hint says WHY in
@@ -177,9 +221,99 @@ export function ReviewSummaryView({
             {t('review.summary.reopen')}
           </Button>
         )}
-        {/* Phase 3 mounts the "Create evidence pack" action here (plan §8.4). */}
+        {/* Phase 3 (plan §8.4): the export action — available for draft AND ready reviews;
+            the pack records the status honestly either way. */}
+        <Button
+          className="review-export-toggle"
+          aria-expanded={exportOpen}
+          onClick={() => setExportOpen((v) => !v)}
+        >
+          {t('review.export.action')}
+        </Button>
       </div>
     </div>
+  )
+}
+
+/**
+ * Inline export panel (plan §8.3/§8.4): the §16.2 option checkboxes (shared defaults —
+ * privacy-sensitive extras OFF; file paths have no flag because no pack can contain one)
+ * and the §24.3 encryption-boundary warning, always visible before the native save dialog
+ * opens. The pack's language is FROZEN to the current UI language at generation.
+ */
+function ExportPackPanel({
+  onClose,
+  t,
+  lang
+}: {
+  onClose: () => void
+  t: I18n['t']
+  lang: I18n['lang']
+}): JSX.Element {
+  const showToast = useToast()
+  const [flags, setFlags] = useState({ ...EVIDENCE_PACK_OPTION_DEFAULTS })
+  const [exporting, setExporting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const OPTION_LABELS = [
+    ['includeReviewerNotes', 'review.export.optNotes'],
+    ['includeSourceExcerpts', 'review.export.optExcerpts'],
+    ['includeDocumentHashes', 'review.export.optHashes'],
+    ['includeUnreviewedItems', 'review.export.optUnreviewed'],
+    ['includeTechnicalDetails', 'review.export.optTechnical']
+  ] as const
+  async function handleExport(): Promise<void> {
+    setExporting(true)
+    setError(null)
+    try {
+      const result = await exportReviewPack({ ...flags, language: lang })
+      if (result.outcome === 'exported') {
+        showToast(t('review.export.done'))
+        onClose()
+      } else if (result.outcome === 'failed') {
+        // '' = no main-side copy → the generic localized error line.
+        setError(result.message ?? '')
+      }
+      // 'cancelled' (the native dialog) keeps the panel open, silently — the user may
+      // adjust options and retry, or collapse the panel.
+    } finally {
+      setExporting(false)
+    }
+  }
+  return (
+    <section className="review-export-panel" aria-label={t('review.export.title')}>
+      <h3>{t('review.export.title')}</h3>
+      {/* §24.3: the encryption-boundary warning, on every platform, BEFORE the dialog. */}
+      <p className="hint review-export-warning">
+        <span aria-hidden="true">⚠</span> {t('review.export.encryptionWarning')}
+      </p>
+      <fieldset className="review-export-options">
+        <legend className="hint">{t('review.export.options')}</legend>
+        {OPTION_LABELS.map(([flag, key]) => (
+          <label key={flag} className="review-export-option">
+            <input
+              type="checkbox"
+              checked={flags[flag]}
+              disabled={exporting}
+              onChange={(e) => setFlags((f) => ({ ...f, [flag]: e.target.checked }))}
+            />{' '}
+            {t(key)}
+          </label>
+        ))}
+      </fieldset>
+      {error !== null && (
+        <p className="hint review-export-error" role="alert">
+          {error.length > 0 ? localizeServerCopy(t, error) : t('review.export.error')}
+        </p>
+      )}
+      <div className="review-export-actions">
+        <Button variant="primary" disabled={exporting} onClick={() => void handleExport()}>
+          {t('review.export.confirm')}
+        </Button>
+        <Button disabled={exporting} onClick={onClose}>
+          {t('review.export.cancel')}
+        </Button>
+      </div>
+    </section>
   )
 }
 

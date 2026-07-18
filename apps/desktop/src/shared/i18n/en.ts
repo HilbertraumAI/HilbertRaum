@@ -1929,6 +1929,12 @@ export const en = {
   // surface (its persist-canonical defaultTitle sibling lives in the section above).
   'main.evidenceReviews.locked': 'Workspace is locked. Unlock it to work on evidence reviews.',
   'main.evidenceReviews.invalidRequest': 'This review request is not valid.',
+  // Post-rename export failures (EP-1 P3 FIX-1): the pack file was already written when
+  // recording it failed — two DISTINCT honest outcomes, never reported as a cancel.
+  'main.evidenceReviews.exportNotRecorded':
+    'The evidence pack could not be recorded in the export history, so the exported file was removed. Nothing was saved — try the export again.',
+  'main.evidenceReviews.exportFileNotRecorded':
+    'The evidence pack file was saved, but it could not be recorded in the export history and could not be removed. Its hash is not on record — export again and replace the file.',
   // BE-1 (full-audit 2026-07-10): a null/non-object settings patch is rejected up front with
   // this friendly copy instead of the raw TypeError `Object.keys(null)` used to throw.
   'main.settings.invalidPatch': 'This settings change is not valid and was not saved.',
@@ -1948,6 +1954,7 @@ export const en = {
   'main.dialog.exportChat': 'Export chat transcript',
   'main.dialog.exportTableCsv': 'Export table as CSV',
   'main.dialog.exportAudit': 'Export activity log',
+  'main.dialog.exportEvidencePack': 'Export evidence pack',
   'main.dialog.exportLog': 'Save diagnostic logs',
   'main.dialog.filterDocuments': 'Documents',
   'main.dialog.filterAll': 'All files',
@@ -2428,5 +2435,129 @@ export const en = {
   'review.deleteWithConversation.other':
     '{count} evidence reviews attached to this conversation will also be deleted.',
   'review.deleteWithConversation.unknown':
-    'Any evidence reviews attached to this conversation will also be deleted.'
+    'Any evidence reviews attached to this conversation will also be deleted.',
+
+  // ---- Evidence-pack export (EP-1 plan §8 — summary panel + status line) ----
+  'review.status.lastExported': 'Last exported {date}',
+  'review.export.action': 'Create evidence pack',
+  'review.export.title': 'Export evidence pack',
+  // Spec §24.3 encryption-boundary warning — shown in the panel on every platform (and in
+  // the macOS save sheet via the dialog `message`).
+  'review.export.encryptionWarning':
+    'This exported file is stored outside the encrypted HilbertRaum workspace and is not protected by your workspace password.',
+  'review.export.options': 'Include in the pack',
+  'review.export.optNotes': 'Reviewer notes',
+  'review.export.optExcerpts': 'Source excerpts',
+  'review.export.optHashes': 'Document hashes',
+  'review.export.optUnreviewed': 'Unreviewed items',
+  'review.export.optTechnical': 'Technical details',
+  'review.export.confirm': 'Export pack…',
+  'review.export.cancel': 'Close',
+  'review.export.done': 'Evidence pack exported.',
+  'review.export.error': 'The evidence pack could not be exported. No file was written.',
+  'review.export.copyHash': 'Copy SHA-256',
+  'review.export.hashCopied': 'SHA-256 copied to the clipboard.',
+
+  // ---- Evidence-pack contents (plan §8.2 — localized AT GENERATION into the exported
+  // HTML from the pack's language option; a persisted pack is a frozen snapshot and is
+  // never re-localized later). Reused in the pack: review.status.*, review.decision.*,
+  // review.relation.*, review.link.cited/.reviewer, review.summary.unavailable/.truncated,
+  // review.summary.sourcesUnresolved/.sourcesMissing, chat.sources.marker. ----
+  'packExport.docTitle': 'Evidence pack',
+  'packExport.privacy': 'Created locally by HilbertRaum. No cloud services were involved.',
+  'packExport.disclaimer':
+    'A citation shows where information came from. It does not by itself prove that the answer is correct.',
+  'packExport.support': 'This pack supports human review; it is not a certification.',
+  'packExport.meta.packId': 'Pack ID',
+  'packExport.meta.generatedAt': 'Generated',
+  'packExport.meta.status': 'Review status',
+  'packExport.meta.format': 'Format',
+  'packExport.meta.formatValue': 'Self-contained HTML · pack schema v{version}',
+  'packExport.section.qa': 'Question and answer',
+  'packExport.qa.question': 'Question',
+  'packExport.qa.answer': 'Answer',
+  'packExport.qa.noQuestion': 'No question was recorded for this answer.',
+  'packExport.qa.verbatim':
+    'The answer is reproduced verbatim as plain text, exactly as frozen when the review was created.',
+  'packExport.section.summary': 'Review summary',
+  'packExport.summary.reviewer': 'Reviewer',
+  'packExport.summary.created': 'Review created',
+  'packExport.summary.updated': 'Last updated',
+  'packExport.summary.completed': 'Marked ready',
+  'packExport.summary.lastExported': 'Previous export',
+  'packExport.summary.decisions': 'Decisions',
+  'packExport.summary.progress': '{decided} of {required} required items decided',
+  'packExport.summary.followUps': 'Outstanding follow-ups: {count}',
+  'packExport.summary.generalNote': 'General note',
+  'packExport.summary.noGeneralNote': 'No general note was recorded.',
+  'packExport.excluded.notes': 'Reviewer notes were excluded from this pack by export options.',
+  'packExport.excluded.excerpts': 'Source excerpts were excluded from this pack by export options.',
+  'packExport.section.items': 'Item-by-item review',
+  'packExport.item.number': 'Item {n}',
+  'packExport.item.heading': 'Heading',
+  'packExport.item.selection': 'Reviewer selection',
+  'packExport.item.decision': 'Decision',
+  'packExport.item.note': 'Reviewer note',
+  'packExport.item.evidence': 'Linked evidence',
+  'packExport.item.noEvidence': 'No evidence linked to this item.',
+  'packExport.items.unreviewedExcluded.one':
+    '{count} unreviewed item was excluded from this pack by export options.',
+  'packExport.items.unreviewedExcluded.other':
+    '{count} unreviewed items were excluded from this pack by export options.',
+  'packExport.section.evidence': 'Evidence register',
+  'packExport.evidence.none': 'No source excerpts or provenance were persisted for this answer.',
+  'packExport.evidence.kindDirect': 'Direct excerpt — supplied to the local model for this answer',
+  'packExport.evidence.kindProvenance':
+    'Whole-document provenance — not an individual sentence citation',
+  'packExport.evidence.kindStructured': 'Structured extraction record',
+  'packExport.evidence.page': 'Page {n}',
+  'packExport.evidence.sectionLabel': 'Section',
+  'packExport.evidence.excerpt': 'Persisted excerpt',
+  'packExport.evidence.noExcerpt': 'No excerpt was persisted for this source.',
+  'packExport.evidence.relations': 'Reviewer relations',
+  'packExport.evidence.identityUnresolved':
+    'The identity of this source document could not be verified against the workspace.',
+  'packExport.evidence.missingAtCreation':
+    'This source document was already missing from the workspace when the review was created.',
+  'packExport.section.coverage': 'Coverage and limitations',
+  // Spec §24.3 honesty copy, verbatim.
+  'packExport.coverage.modeRelevance':
+    'The sources shown are the excerpts supplied to the local AI model for this answer.',
+  'packExport.coverage.modeWholeDoc':
+    'This answer was derived through whole-document analysis. The sections shown are provenance, not individual sentence citations.',
+  'packExport.coverage.modeStructured':
+    'This answer is a structured extraction produced deterministically from the source documents.',
+  'packExport.coverage.inputStatement':
+    'Input coverage: {covered} of {total} indexed sections were available to the model.',
+  'packExport.coverage.inputUnknown': 'No input-coverage information was recorded for this answer.',
+  'packExport.coverage.noTruncationRecord': 'No output truncation was recorded for this answer.',
+  'packExport.coverage.freshnessNote':
+    'Source availability reflects the workspace at review creation; it was not re-verified for this export.',
+  'packExport.section.sources': 'Source register',
+  'packExport.sources.colTitle': 'Document',
+  'packExport.sources.colType': 'File type',
+  'packExport.sources.colSha': 'SHA-256 at review time',
+  'packExport.sources.colAvailability': 'Availability at review creation',
+  'packExport.sources.availabilityAvailable': 'Available',
+  'packExport.sources.availabilityMissing': 'Missing',
+  'packExport.sources.availabilityUnknown': 'Cannot be verified',
+  'packExport.sources.hashExcluded': 'Excluded by export options',
+  'packExport.sources.pathNote': 'Original file paths are never included in an evidence pack.',
+  'packExport.section.generation': 'Generation details',
+  'packExport.generation.model': 'Model',
+  'packExport.generation.modelId': 'Model ID',
+  'packExport.generation.skill': 'Skill',
+  'packExport.generation.generatedAt': 'Answer generated',
+  'packExport.generation.appVersion': 'Application version',
+  'packExport.generation.exportedAt': 'Pack generated',
+  'packExport.generation.technical': 'Technical details',
+  'packExport.generation.techMode': 'Recorded answer mode',
+  'packExport.generation.techCoverage': 'Coverage counters',
+  'packExport.generation.techSourceKeys': 'Source keys',
+  'packExport.section.integrity': 'Integrity details',
+  'packExport.integrity.hashNote':
+    'The SHA-256 hash of this file is calculated after generation and recorded in the review’s export history inside the encrypted workspace. Recompute it to verify this file is unmodified.',
+  'packExport.integrity.options': 'Export options',
+  'packExport.integrity.optIncluded': 'Included',
+  'packExport.integrity.optExcluded': 'Excluded'
 } as const

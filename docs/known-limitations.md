@@ -1926,6 +1926,36 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   half-installed vision model (GGUF already present, projector missing) fetches just the projector
   (`downloads.test.ts`). The `fetch-models.{sh,ps1}` scripts remain the offline/CLI two-file path.
 
+## Evidence review & evidence packs (EP-1, wave open — plan `docs/evidence-pack-implementation-plan.md`)
+
+- **An evidence pack supports human review — it is not a certification.** The pack records
+  what a human decided against the persisted sources; it does not (and cannot) prove the
+  answer correct, and it says so on its cover ("A citation shows where information came
+  from. It does not by itself prove that the answer is correct." / "This pack supports
+  human review; it is not a certification."). Treat it as a working paper for professional
+  judgment, not an attestation.
+- **The pack reflects indexed/scanned content only.** Excerpts, provenance and coverage
+  describe what THIS drive extracted and supplied to the model at answer time. Text the
+  extractor missed (bad OCR, unsupported regions, capped coverage) is invisible to both the
+  answer and the pack — the coverage section states the recorded breadth honestly, nothing
+  more.
+- **Source availability in a pack is a creation-time fact (until the Phase-4 freshness
+  engine).** The source register shows availability as recorded when the review was
+  created, plus an explicit "was not re-verified for this export" statement. A document
+  deleted or changed AFTER review creation is not detected by Phase 3; Phase 4 adds the
+  snapshot-vs-workspace comparison and the Outdated overlay, and the pack will then record
+  mismatches (spec §28.6).
+- **The answer appears in the pack as plain text, not rendered markdown.** Deliberate: a
+  main-process markdown-to-HTML renderer would be a second injection surface and a
+  determinism risk for the golden-tested template. The pack states the answer is reproduced
+  verbatim as frozen at review creation; formatting characters (`#`, `*`, backticks) show
+  as typed.
+- **Pack language is frozen at generation.** An exported pack is a snapshot in the UI
+  language chosen at export (EN or DE) — switching the app language later does not (and
+  must not) re-localize an existing file. The stored SHA-256 pins the exact bytes.
+- **No file paths, by construction.** The review snapshot never captures paths, so no
+  export option can include one — the spec's "paths default off" is satisfied by absence.
+
 ## Internationalization ([`architecture.md`](architecture.md) i18n record)
 
 - **Task/summary output language follows the model, not the UI (D-L6 — RESOLVED as

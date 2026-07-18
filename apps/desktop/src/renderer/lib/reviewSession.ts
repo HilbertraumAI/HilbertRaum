@@ -1,4 +1,5 @@
 import type {
+  EvidencePackOptions,
   EvidenceReadyGate,
   EvidenceReview,
   EvidenceReviewDetail,
@@ -354,6 +355,54 @@ export async function markReviewReady(): Promise<
     if (token !== openToken) return { outcome: 'failed' }
     setState({ saveState: 'error', saveError: friendlyIpcError(e) })
     return { outcome: 'failed' }
+  }
+}
+
+/** Outcome of `exportReviewPack`: cancelled = the user closed the save dialog (no file, no
+ *  row — not an error); failed carries friendly copy when main sent any. */
+export type ReviewExportOutcome =
+  | { outcome: 'exported' }
+  | { outcome: 'cancelled' }
+  | { outcome: 'failed'; message: string | null }
+
+/**
+ * Export the open review as an evidence pack (Phase 3, plan §8.3/§8.4). Flushes pending
+ * edits FIRST — the pack renders PERSISTED review data, so unsaved decisions/notes must
+ * land before the render (the markReviewReady idiom); a failed flush refuses the export
+ * rather than shipping a pack that silently misses on-screen edits. On success the
+ * returned record is MERGED into `detail.exports` (newest-first — the store has no other
+ * export-aware mutation; P2 handoff), behind the `openToken` staleness guard like every
+ * post-await write. Export works on draft AND ready reviews — the ready-state write-guard
+ * covers item/link mutations only.
+ */
+export async function exportReviewPack(
+  options: Partial<EvidencePackOptions>
+): Promise<ReviewExportOutcome> {
+  const reviewId = state.detail?.id
+  if (!reviewId) return { outcome: 'failed', message: null }
+  const token = openToken
+  await flushReviewSession()
+  if (token !== openToken) return { outcome: 'failed', message: null }
+  if (state.saveState === 'error') return { outcome: 'failed', message: null }
+  try {
+    const record = await window.api.exportEvidencePack(reviewId, options)
+    if (!record) return { outcome: 'cancelled' }
+    if (token !== openToken) {
+      // The export COMPLETED (file + row exist) but the session moved on mid-dialog
+      // (lock purge / review switch). Never touch the purged/foreign store — and never
+      // report a real export as a failure: 'exported' is the truthful outcome (the
+      // history row surfaces on the next detail read).
+      return { outcome: 'exported' }
+    }
+    const detail = state.detail
+    if (detail && detail.id === reviewId) {
+      setState({ detail: { ...detail, exports: [record, ...detail.exports] } })
+    }
+    return { outcome: 'exported' }
+  } catch (e) {
+    // Post-token-change throws stay 'failed' too: the export genuinely did not complete
+    // (main rejected), and failed-with-no-copy renders nothing if the panel is gone.
+    return { outcome: 'failed', message: token === openToken ? friendlyIpcError(e) : null }
   }
 }
 
