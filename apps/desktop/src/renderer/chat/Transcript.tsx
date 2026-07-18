@@ -325,7 +325,12 @@ const MessageBlock = memo(function MessageBlock({
                 excerpts (relevance) or whole-document LEAF PROVENANCE (tree/capped/extract) —
                 FE-B / F11 renderer half. A NULL-coverage relevance turn passes undefined and
                 renders byte-identically to before. */}
-            <SourcesDisclosure citations={m.citations} mode={m.coverage?.mode} onReview={openReview} />
+            <SourcesDisclosure
+              citations={m.citations}
+              mode={m.coverage?.mode}
+              onReview={openReview}
+              reviewDisabled={actionsDisabled}
+            />
             {/* Honesty (whole-document-analysis §4.5/§5.2; full-doc-skills §3.3/D48): render the
                 answer's PERSISTED coverage when we have it, else fall back to the relevance label —
                 "based on the most relevant passages, NOT the whole document". A pre-migration row

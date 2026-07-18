@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vite
 import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
+import { evidencePaneMode } from '../../src/renderer/review/EvidencePane'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
 import { t } from '../../src/shared/i18n'
 import type { EvidenceReviewItemPatch } from '../../src/shared/types'
@@ -12,14 +13,14 @@ import { makeDetail, makeItem } from '../helpers/evidenceReview'
 // EP-1 plan §7.3/§7.4/§7.6 — the review workspace itself: the create→decide→note→
 // summary→ready journey over stubApi, the whole-document honesty wording (asserted by
 // EXACT catalog keys — provenance is never presented as citations), the D-7 completion
-// gate, the conservative-bulk-actions guarantee (NO "mark all supported"), the keyboard
-// walk (spec §28.10 minus export), and drawer focus restoration.
+// gate, ready-state read-only behavior (FIX-1), the conservative-bulk-actions guarantee
+// (NO "mark all supported"), the keyboard walk (spec §28.10 minus export), and drawer
+// focus restoration.
 //
-// Hard rule (spec FR-2/FR-12): each test stubs ONLY `evidence:*` bridge methods and ends
-// with assertNoUnexpectedApiCalls() — ANY other window.api call (runtime, rag, network
-// surfaces) fails the test. That is the renderer half of the zero-model/zero-network gate.
-
-afterEach(cleanup)
+// Hard rule (spec FR-2/FR-12): every test stubs ONLY `evidence:*` bridge methods, and a
+// file-wide afterEach runs assertNoUnexpectedApiCalls() (review FIX-5 — structural, not
+// per-test opt-in) — ANY other window.api call (runtime, rag, network surfaces) in ANY
+// test fails the suite. That is the renderer half of the zero-model/zero-network gate.
 
 beforeAll(() => {
   Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
@@ -27,6 +28,13 @@ beforeAll(() => {
 
 beforeEach(() => {
   resetReviewSessionForTests()
+})
+
+afterEach(() => {
+  // Unmount first: the flush-on-exit path runs against the SAME stub set, so a flush
+  // hitting an unstubbed method is caught too.
+  cleanup()
+  assertNoUnexpectedApiCalls()
 })
 
 function noop(): void {}
@@ -257,6 +265,135 @@ describe('ReviewScreen — whole-document honesty wording (spec §11.4/§13.3, e
   })
 })
 
+describe('ReviewScreen — ready review is read-only until reopened (FIX-1)', () => {
+  function readyDetail() {
+    return makeDetail({
+      status: 'ready',
+      completedAt: '2026-07-18T11:00:00.000Z',
+      items: [
+        makeItem({ id: 'i1', decision: 'supported' }),
+        makeItem({
+          id: 'i2',
+          ordinal: 1,
+          blockKey: 'b1-paragraph-def',
+          textSnapshot: 'Beta',
+          decision: 'not_applicable',
+          links: [{ evidenceKey: 's1', origin: 'reviewer', relation: null }]
+        })
+      ]
+    })
+  }
+
+  it('disables decisions, notes, links and hides bulk — with the quiet reopen hint', async () => {
+    stubApi({ getEvidenceReview: vi.fn(async () => readyDetail()) })
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await screen.findByText('Beta')
+
+    // The quiet "why is everything disabled" line sits next to the Ready chip.
+    expect(screen.getByText(t('en', 'review.readonlyHint'))).toBeInTheDocument()
+    // Every decision chip and note field is disabled…
+    for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
+    for (const note of screen.getAllByPlaceholderText(t('en', 'review.item.notePlaceholder'))) {
+      expect(note).toBeDisabled()
+    }
+    // …the item's unlink ✕ is disabled…
+    expect(
+      screen.getByRole('button', { name: new RegExp(t('en', 'review.link.remove')) })
+    ).toBeDisabled()
+    // …the bulk menu is GONE entirely (every bulk action is an item-level write)…
+    expect(
+      screen.queryByRole('button', { name: new RegExp(t('en', 'review.bulk.menu')) })
+    ).toBeNull()
+    // …and the evidence pane's link/relation controls are disabled for the selected item.
+    fireEvent.click(screen.getAllByRole('listitem')[0])
+    expect(screen.getByRole('button', { name: t('en', 'review.link.add') })).toBeDisabled()
+  })
+
+  it('Reopen restores editability (hint gone, controls live again)', async () => {
+    const detail = readyDetail()
+    const reopenEvidenceReview = vi.fn(async () => ({
+      id: 'r1',
+      conversationId: 'c1',
+      messageId: 'm1',
+      questionMessageId: 'q1',
+      title: 'Evidence review',
+      status: 'draft' as const,
+      outdated: false,
+      reviewerLabel: null,
+      generalNote: null,
+      createdAt: detail.createdAt,
+      updatedAt: detail.updatedAt,
+      completedAt: null
+    }))
+    stubApi({ getEvidenceReview: vi.fn(async () => detail), reopenEvidenceReview })
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await screen.findByText('Beta')
+
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.footer.summary') }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'review.summary.reopen') }))
+    await waitFor(() => expect(reopenEvidenceReview).toHaveBeenCalledWith('r1'))
+    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'common.close') }))
+
+    await waitFor(() =>
+      expect(screen.queryByText(t('en', 'review.readonlyHint'))).toBeNull()
+    )
+    const items = screen.getAllByRole('listitem')
+    expect(
+      within(items[0]).getByRole('radio', { name: new RegExp(t('en', 'review.decision.supported')) })
+    ).toBeEnabled()
+    expect(
+      screen.getByRole('button', { name: new RegExp(t('en', 'review.bulk.menu')) })
+    ).toBeInTheDocument()
+  })
+})
+
+describe('ReviewScreen — answer_marker links render as "Cited by the answer" (FIX-7b)', () => {
+  it('the citation origin renders on the item chip AND the evidence card — read-only relation', async () => {
+    const detail = makeDetail({
+      items: [
+        makeItem({
+          id: 'i1',
+          links: [{ evidenceKey: 's1', origin: 'answer_marker', relation: null }]
+        }),
+        makeItem({ id: 'i2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta' })
+      ]
+    })
+    stubApi({ getEvidenceReview: vi.fn(async () => detail) })
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await screen.findByText('Beta')
+
+    // Item chip: the auto-link carries the citation claim.
+    expect(screen.getAllByText(new RegExp(t('en', 'review.link.cited'))).length).toBeGreaterThan(0)
+    // Select item 1 → the card labels the link "Cited by the answer" with NO relation
+    // editor (a relation write would silently rewrite the origin to 'reviewer').
+    fireEvent.click(screen.getAllByRole('listitem')[0])
+    const card = document.querySelector('.review-source-card') as HTMLElement
+    expect(within(card).getByText(t('en', 'review.link.cited'))).toBeInTheDocument()
+    expect(within(card).queryByText(t('en', 'review.link.reviewer'))).toBeNull()
+    expect(within(card).queryByRole('combobox')).toBeNull()
+    // Remove link stays offered (spec §10.2 — removal is a reviewer act on the working set).
+    expect(within(card).getByRole('button', { name: t('en', 'review.link.remove') })).toBeEnabled()
+  })
+})
+
+describe('evidencePaneMode — weak-degrade mapping (FIX-7c)', () => {
+  it('relevance/absent → relevance; extract → structured; tree/capped AND unknown-PRESENT modes → whole_doc', () => {
+    const cov = (mode: string) =>
+      ({ mode, chunksCovered: 1, chunksTotal: 1 }) as unknown as NonNullable<
+        Parameters<typeof evidencePaneMode>[0]
+      >
+    expect(evidencePaneMode(null)).toBe('relevance')
+    expect(evidencePaneMode(cov('relevance'))).toBe('relevance')
+    expect(evidencePaneMode(cov('extract'))).toBe('structured')
+    expect(evidencePaneMode(cov('tree'))).toBe('whole_doc')
+    expect(evidencePaneMode(cov('capped'))).toBe('whole_doc')
+    // A PRESENT-but-unrecognized mode (workspace written by a newer app) degrades to the
+    // WEAKEST claim — whole-document provenance, never citation framing (P1 FIX-1 mirror).
+    expect(evidencePaneMode(cov('psychic'))).toBe('whole_doc')
+  })
+})
+
 describe('ReviewScreen — completion gating (D-7)', () => {
   it('Mark ready stays disabled with the N-of-M hint until every required item is decided', async () => {
     const detail = makeDetail() // two required paragraphs, both not_reviewed
@@ -362,47 +499,113 @@ describe('ReviewScreen — conservative bulk actions (spec §14.4)', () => {
 })
 
 describe('ReviewScreen — keyboard-only walk (spec §28.10, export lands P3)', () => {
-  it('keyboard alone: move among items, set a decision, add a note, open the summary', async () => {
+  /** Press Tab (keyboard only — FIX-7a) until the active element satisfies `match`. */
+  async function tabUntil(
+    user: ReturnType<typeof userEvent.setup>,
+    match: (el: Element) => boolean,
+    max = 25
+  ): Promise<HTMLElement> {
+    for (let i = 0; i < max; i++) {
+      const active = document.activeElement
+      if (active && active !== document.body && match(active)) return active as HTMLElement
+      await user.tab()
+    }
+    throw new Error('tabUntil: never reached the expected tab stop')
+  }
+
+  it('keyboard ALONE: reach both items, decide them, note, link evidence, open summary, mark ready', async () => {
     const user = userEvent.setup()
     const detail = makeDetail()
+    const setEvidenceLink = vi.fn(async (id: string) =>
+      makeItem({ id, links: [{ evidenceKey: 's1', origin: 'reviewer' as const, relation: null }] })
+    )
+    const markEvidenceReviewReady = vi.fn(async () => ({
+      review: {
+        id: 'r1',
+        conversationId: 'c1',
+        messageId: 'm1',
+        questionMessageId: 'q1',
+        title: 'Evidence review',
+        status: 'ready' as const,
+        outdated: false,
+        reviewerLabel: null,
+        generalNote: null,
+        createdAt: detail.createdAt,
+        updatedAt: detail.updatedAt,
+        completedAt: '2026-07-18T11:00:00.000Z'
+      },
+      gate: { eligible: true, requiredTotal: 2, decidedTotal: 2 }
+    }))
     stubApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem: vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
         makeItem({ id, ...patch })
-      )
+      ),
+      setEvidenceLink,
+      markEvidenceReviewReady
     })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     await screen.findByText('Beta')
-
-    // Roving tabindex: the group exposes ONE tab stop; arrows move focus AND selection.
     const items = screen.getAllByRole('listitem')
-    const firstRadio = within(items[0]).getByRole('radio', {
-      name: new RegExp(t('en', 'review.decision.supported'))
-    })
-    act(() => firstRadio.focus())
-    // Focusing a control inside item 1 SELECTS item 1 (keyboard parity with click).
+
+    // Tab (from the document root) to item 1's decision group — ONE stop, roving tabindex:
+    // the tab stop is the SELECTED chip, here the initial "Not reviewed".
+    const stop = await tabUntil(
+      user,
+      (el) => el.getAttribute('role') === 'radio' && items[0].contains(el)
+    )
+    expect(stop.textContent).toContain(t('en', 'review.decision.not_reviewed'))
+    // Focusing a control inside item 1 SELECTS item 1 (keyboard parity with click)…
     expect(items[0]).toHaveAttribute('aria-current', 'true')
+    // …arrows move focus AND selection (wrap from "Not reviewed" to "Not applicable")…
     await user.keyboard('{ArrowRight}')
     expect(
       within(items[0]).getByRole('radio', {
-        name: new RegExp(t('en', 'review.decision.partly_supported'))
+        name: new RegExp(t('en', 'review.decision.not_applicable'))
       })
     ).toHaveFocus()
+    // …and Home jumps to "supported", DECIDING item 1.
     await user.keyboard('{Home}')
-    expect(firstRadio).toHaveFocus()
-    expect(firstRadio).toHaveAttribute('aria-checked', 'true')
+    expect(
+      within(items[0]).getByRole('radio', { name: new RegExp(t('en', 'review.decision.supported')) })
+    ).toHaveAttribute('aria-checked', 'true')
 
-    // Tab reaches the note field; typing records the note.
-    const note = within(items[0]).getByPlaceholderText(t('en', 'review.item.notePlaceholder'))
-    note.focus()
-    await user.keyboard('checked')
-    expect(note).toHaveValue('checked')
+    // Tab to item 1's note and type it.
+    await tabUntil(user, (el) => el.tagName === 'TEXTAREA' && items[0].contains(el))
+    await user.keyboard('checked against the excerpt')
+    expect(
+      within(items[0]).getByPlaceholderText(t('en', 'review.item.notePlaceholder'))
+    ).toHaveValue('checked against the excerpt')
 
-    // Tab onward to item 2's radio group (one stop per group), then the summary opens by keyboard.
-    const summaryBtn = screen.getByRole('button', { name: t('en', 'review.footer.summary') })
-    summaryBtn.focus()
+    // Tab ONWARD to item 2's decision group and decide it (selection follows focus).
+    await tabUntil(user, (el) => el.getAttribute('role') === 'radio' && items[1].contains(el))
+    expect(items[1]).toHaveAttribute('aria-current', 'true')
+    await user.keyboard('{Home}')
+
+    // Tab to the evidence pane's "Link to item" and link by keyboard (item 2 selected).
+    const linkBtn = await tabUntil(
+      user,
+      (el) => el.textContent === t('en', 'review.link.add') && el.tagName === 'BUTTON'
+    )
+    expect(linkBtn).toHaveFocus()
     await user.keyboard('{Enter}')
-    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(setEvidenceLink).toHaveBeenCalledWith('i2', 's1', { origin: 'reviewer', relation: null })
+    )
+
+    // Tab to the footer's Review summary and open it.
+    await tabUntil(user, (el) => el.textContent === t('en', 'review.footer.summary'))
+    await user.keyboard('{Enter}')
+    const dialog = await screen.findByRole('dialog')
+
+    // Inside the (focus-trapped) summary: tab to Mark review ready and fire it.
+    await tabUntil(
+      user,
+      (el) => el.textContent === t('en', 'review.summary.markReady') && dialog.contains(el),
+      40
+    )
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(markEvidenceReviewReady).toHaveBeenCalledWith('r1'))
   })
 })
 

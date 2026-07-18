@@ -2315,6 +2315,8 @@ export const en = {
   'review.entry.sources': 'Review answer and sources',
   'review.status.draft': 'Draft',
   'review.status.ready': 'Ready',
+  // Ready-state read-only hint (review FIX-1): item-level editing refuses while ready.
+  'review.readonlyHint': 'Marked ready — reopen the review to edit.',
   // Screen chrome
   'review.back': 'Back to chat',
   'review.rename': 'Rename',

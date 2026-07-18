@@ -16,6 +16,7 @@ import {
   markReviewReady,
   openReviewSession,
   reopenReview,
+  retryReviewSave,
   subscribeReviewSession,
   unlinkEvidence,
   type ReviewHandoffTarget
@@ -147,12 +148,17 @@ export function ReviewScreen({
 
   const paneMode = evidencePaneMode(detail.coverageSnapshot)
   const followUps = detail.items.filter((i) => i.decision === 'follow_up').length
+  // Ready = read-only for ITEM-LEVEL editing (FIX-1, spec §18.4): decisions, notes, links
+  // and bulk actions disable (main refuses their writes too); head edits (rename, reviewer
+  // label, general note) and the summary's Reopen stay live.
+  const readOnly = detail.status === 'ready'
 
   const evidencePane = (
     <EvidencePane
       sources={detail.sources}
       coverage={detail.coverageSnapshot}
       selectedItem={selectedItem}
+      readOnly={readOnly}
       onLink={(itemId, key) => void linkEvidence(itemId, key, null)}
       onUnlink={(itemId, key) => void unlinkEvidence(itemId, key)}
       onSetRelation={(itemId, key, relation) => void linkEvidence(itemId, key, relation)}
@@ -200,6 +206,8 @@ export function ReviewScreen({
           <span aria-hidden="true">{detail.status === 'ready' ? '✓' : '○'}</span>{' '}
           {t(detail.status === 'ready' ? 'review.status.ready' : 'review.status.draft')}
         </span>
+        {/* FIX-1: the quiet "why is everything disabled" line next to the chip. */}
+        {readOnly && <span className="hint review-readonly-hint">{t('review.readonlyHint')}</span>}
         <SaveStateLine state={session.saveState} error={session.saveError} t={t} />
       </div>
 
@@ -231,6 +239,9 @@ export function ReviewScreen({
             </div>
           )}
 
+          {/* Bulk actions hide entirely while ready (FIX-1) — every one of them is an
+              item-level write the main side now refuses. */}
+          {!readOnly && (
           <div className="review-bulk-row">
             {/* Conservative bulk actions ONLY (spec §14.4) — there is deliberately no
                 "mark all supported" anywhere on this screen (tested). */}
@@ -259,6 +270,7 @@ export function ReviewScreen({
               </DropdownMenu.Portal>
             </DropdownMenu.Root>
           </div>
+          )}
 
           <ol className="review-items">
             {detail.items.map((item, index) => (
@@ -271,6 +283,7 @@ export function ReviewScreen({
                 selected={selectedItemId === item.id}
                 onSelect={() => setSelectedItemId(item.id)}
                 narrow={narrow}
+                readOnly={readOnly}
                 onOpenDrawer={() => {
                   setSelectedItemId(item.id)
                   setDrawerOpen(true)
@@ -369,7 +382,9 @@ function SaveStateLine({
     return (
       <span className="review-save-state error" role="alert">
         {error != null ? localizeServerCopy(t, error) : t('review.autosave.error')}{' '}
-        <button type="button" className="msg-action" onClick={() => void flushReviewSession()}>
+        {/* FIX-2d: retry re-flushes pending edits; with nothing pending (stale handle)
+            it reconciles with the DB instead of no-oping forever. */}
+        <button type="button" className="msg-action" onClick={() => void retryReviewSave()}>
           {t('review.autosave.retry')}
         </button>
       </span>
@@ -395,6 +410,7 @@ function ReviewItemRow({
   selected,
   onSelect,
   narrow,
+  readOnly,
   onOpenDrawer,
   t
 }: {
@@ -405,6 +421,8 @@ function ReviewItemRow({
   selected: boolean
   onSelect: () => void
   narrow: boolean
+  /** Ready review (FIX-1): decision/note/unlink controls disable until reopened. */
+  readOnly: boolean
   onOpenDrawer: () => void
   t: I18n['t']
 }): JSX.Element {
@@ -453,6 +471,7 @@ function ReviewItemRow({
                   type="button"
                   className="chip-remove"
                   aria-label={`${t('review.link.remove')}: ${title}`}
+                  disabled={readOnly}
                   onClick={() => void unlinkEvidence(item.id, link.evidenceKey)}
                 >
                   ✕
@@ -466,6 +485,7 @@ function ReviewItemRow({
         value={item.decision}
         onChange={(decision) => editReviewItem(item.id, { decision })}
         t={t}
+        disabled={readOnly}
       />
       <label className="review-note-label">
         <span className="hint">{t('review.item.noteLabel')}</span>
@@ -474,6 +494,7 @@ function ReviewItemRow({
           rows={2}
           placeholder={t('review.item.notePlaceholder')}
           value={item.reviewerNote ?? ''}
+          disabled={readOnly}
           onChange={(e) =>
             editReviewItem(item.id, {
               reviewerNote: e.target.value === '' ? null : e.target.value

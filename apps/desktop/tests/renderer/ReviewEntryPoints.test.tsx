@@ -1,19 +1,31 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { ConversationList } from '../../src/renderer/chat/ConversationList'
 import { t } from '../../src/shared/i18n'
 import type { Conversation, EvidenceReviewSummary, Message } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 
 // EP-1 plan §7.2 — the review entry points: the per-message "Review evidence" /
 // "Continue review" action + Draft/Ready chip (spec §9.1/§9.4), the quiet
 // SourcesDisclosure footer action (spec §9.2), and the D-2 delete-confirm review-count
 // warning (spec §25.4). The visibility matrix pins the shared `isReviewEligible` gate:
 // eligible / ineligible / streaming / plain-chat.
+//
+// Zero-model/zero-network (review FIX-5, structural): every test runs against a FRESH
+// stubApi (an empty install for the pure-prop matrix tests; D-2 tests re-install their
+// count stub), and a file-wide afterEach runs assertNoUnexpectedApiCalls() — any window.api
+// call outside the supplied evidence/count stubs fails the suite.
 
-afterEach(cleanup)
+beforeEach(() => {
+  stubApi({})
+})
+
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 beforeAll(() => {
   Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
@@ -184,6 +196,21 @@ describe('SourcesDisclosure footer entry (spec §9.2)', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: /sources \(1\)/i }))
     expect(screen.queryByRole('button', { name: t('en', 'review.entry.sources') })).toBeNull()
+  })
+
+  it('STREAMING: the footer action honors the same gate as the action row (FIX-6)', () => {
+    const onOpenReview = vi.fn()
+    renderTranscript({
+      messages: [msg({ id: 'm1', ...CITED })],
+      onOpenReview,
+      reviewConversation: { mode: 'documents' },
+      actionsDisabled: true
+    })
+    fireEvent.click(screen.getByRole('button', { name: /sources \(1\)/i }))
+    const footer = screen.getByRole('button', { name: t('en', 'review.entry.sources') })
+    expect(footer).toBeDisabled()
+    fireEvent.click(footer)
+    expect(onOpenReview).not.toHaveBeenCalled()
   })
 })
 

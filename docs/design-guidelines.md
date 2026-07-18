@@ -829,6 +829,10 @@ idiom). Entry points are quiet and progressive (spec §9): the message action ro
 - **Conservative bulk actions only** (spec §14.4): headings→N/A, undecided→follow-up,
   clear-all (confirmed via ConfirmDialog). "Mark all supported" does not exist and a test
   pins its absence; the store exports no bulk pathway that can write a supported verdict.
+- **Ready is read-only** (spec §18.4, fix round): a review marked Ready disables all
+  item-level editing (decisions, notes, links; bulk hides) with a quiet "reopen to edit"
+  hint by the status chip — main refuses those writes too, so `ready` + undecided is
+  unreachable from both sides. Head edits (rename, reviewer label, general note) stay live.
 
 Tests: `ReviewScreen.test.tsx` (journey, exact-key wording, D-7 gating, bulk absence,
 keyboard walk §28.10, drawer focus-return), `ReviewEntryPoints.test.tsx` (visibility matrix +

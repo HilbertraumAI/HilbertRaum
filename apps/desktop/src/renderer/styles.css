@@ -1953,7 +1953,8 @@ code, pre, kbd { font-family: var(--font-mono); }
   cursor: pointer;
   padding: 2px 0;
 }
-.sources-review:hover { text-decoration: underline; }
+.sources-review:hover:not(:disabled) { text-decoration: underline; }
+.sources-review:disabled { opacity: 0.5; cursor: default; }
 
 /* ---- Settings → Skills (skills plan §15) ---- */
 /* Toolbar: the intro line takes the flex space, the Import action stays right + shrink:0. */

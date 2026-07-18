@@ -489,7 +489,9 @@ describe('review persistence across restart + lock (EP-1 plan §7 exit gate)', (
     expect(offlineViolations).toEqual([])
   })
 
-  it('vault lock refuses EVERY evidence channel with the friendly copy; unlock restores the data', async () => {
+  // The EVERY-channel lock guarantee lives in ipc-lock-coverage.test.ts (it enumerates all
+  // registered handlers); this leg samples read/write/count through a REAL lock→unlock cycle.
+  it('vault lock refuses sampled evidence channels (read/write/count) with the friendly copy; unlock restores the data', async () => {
     let unlocked = true
     const h = makeHarness({ unlocked: () => unlocked })
     registerEvidenceReviewsIpc(h.ctx)

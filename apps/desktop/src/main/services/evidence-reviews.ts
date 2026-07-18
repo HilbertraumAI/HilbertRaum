@@ -748,7 +748,21 @@ export function createEvidenceReviewItems(
   }
 }
 
-/** Patch one item's decision/note; bumps the item AND the head activity stamp. Null on unknown id. */
+/**
+ * Ready-state write guard (spec §18.4, review FIX-1): a review marked READY is a completed
+ * human judgment — item-level mutations (decisions, notes, selections, links) would
+ * silently invalidate it (`ready` + undecided items is a state the D-7 gate can never
+ * produce), so they REFUSE through the established null/false channel until the review is
+ * reopened. HEAD edits (title D-6, reviewer label D-3, general note) stay allowed — they
+ * never touch decisions.
+ */
+function isReviewLockedReady(db: Db, reviewId: string): boolean {
+  const review = readReviewRow(db, reviewId)
+  return review != null && normalizeStatus(review.status) === 'ready'
+}
+
+/** Patch one item's decision/note; bumps the item AND the head activity stamp. Null on
+ *  unknown id AND on a READY review (reopen first — FIX-1). */
 export function updateEvidenceReviewItem(
   db: Db,
   itemId: string,
@@ -756,6 +770,7 @@ export function updateEvidenceReviewItem(
 ): EvidenceReviewItem | null {
   const row = readItemRowById(db, itemId)
   if (!row) return null
+  if (isReviewLockedReady(db, row.review_id)) return null
   // Write-side hygiene (the setEvidenceLink normalize-on-write pattern): a PATCHED decision
   // is normalized before persisting, so an unknown literal (a compromised/buggy caller — the
   // type only guards compile time) can never enter storage; garbage degrades to the honest
@@ -797,6 +812,7 @@ export function createEvidenceSelection(
   reviewId: string,
   input: EvidenceSelectionInput
 ): EvidenceReviewItem | null {
+  if (isReviewLockedReady(db, reviewId)) return null
   const block = prepareCached(
     db,
     "SELECT * FROM evidence_review_items WHERE review_id = ? AND block_key = ? AND kind = 'block' LIMIT 1"
@@ -828,10 +844,11 @@ export function createEvidenceSelection(
 }
 
 /** Delete a reviewer SELECTION. Block items are structural (the gate counts them) and are
- *  never deleted here — returns false for them and for unknown ids. */
+ *  never deleted here — returns false for them, for unknown ids, and on a READY review. */
 export function deleteEvidenceSelection(db: Db, itemId: string): boolean {
   const row = readItemRowById(db, itemId)
   if (!row || normalizeItemKind(row.kind) !== 'selection') return false
+  if (isReviewLockedReady(db, row.review_id)) return false
   prepareCached(db, 'DELETE FROM evidence_review_items WHERE id = ?').run(itemId)
   touchReview(db, row.review_id, nowIso())
   return true
@@ -857,6 +874,7 @@ export function setEvidenceLink(
   if (!item) return null
   const review = readReviewRow(db, item.review_id)
   if (!review) return null
+  if (normalizeStatus(review.status) === 'ready') return null // FIX-1: reopen first
   const known = parseSourceSnapshots(review.source_snapshot_json).some((s) => s.key === evidenceKey)
   if (!known) return null
   const origin = normalizeLinkOrigin(input.origin)
@@ -882,10 +900,12 @@ export function setEvidenceLink(
   return readItemById(db, itemId)
 }
 
-/** Remove one link by (item, key). Returns true when a row was deleted. */
+/** Remove one link by (item, key). Returns true when a row was deleted; false on unknown
+ *  ids and on a READY review (reopen first — FIX-1). */
 export function removeEvidenceLink(db: Db, itemId: string, evidenceKey: string): boolean {
   const item = readItemRowById(db, itemId)
   if (!item) return false
+  if (isReviewLockedReady(db, item.review_id)) return false
   const result = prepareCached(
     db,
     'DELETE FROM evidence_review_links WHERE review_item_id = ? AND evidence_key = ?'

@@ -1,8 +1,12 @@
 import type { EvidenceReviewDetail, EvidenceReviewItem } from '../../src/shared/types'
-import { computeReadyGate } from '../../src/renderer/lib/reviewSession'
+import { deriveReadyGate } from '../../src/main/services/evidence-reviews'
 
 // Shared renderer-test fixtures for the EP-1 review workspace (plan §7): one detail shaped
 // exactly like the Phase-1 `getEvidenceReview` read-model. Tests override per case.
+// The fixture gate comes from MAIN's `deriveReadyGate` — the authority a real detail would
+// carry — NOT from the renderer's `computeReadyGate` mirror, so footer/gating tests never
+// validate the mirror against itself (review FIX-4; the mirror's equivalence is pinned
+// separately in tests/unit/evidence-review-gate.test.ts).
 
 export function makeItem(over: Partial<EvidenceReviewItem> & { id: string }): EvidenceReviewItem {
   return {
@@ -72,7 +76,7 @@ export function makeDetail(over: Partial<EvidenceReviewDetail> = {}): EvidenceRe
       answerMode: 'relevance'
     },
     exports: [],
-    gate: computeReadyGate(items),
+    gate: deriveReadyGate(items),
     ...over,
     items
   }

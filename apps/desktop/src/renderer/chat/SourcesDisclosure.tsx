@@ -29,7 +29,8 @@ export const PROVENANCE_CARD_CAP = 24
 export function SourcesDisclosure({
   citations,
   mode,
-  onReview
+  onReview,
+  reviewDisabled
 }: {
   citations: Citation[]
   /** The answer's coverage mode; any whole-document mode (≠ relevance) renders as provenance. */
@@ -37,6 +38,9 @@ export function SourcesDisclosure({
   /** EP-1 plan §7.2 (spec §9.2): the quiet "Review answer and sources" footer action at the
    *  bottom of the expanded region. Absent ⇒ never rendered (optional-callback gating). */
   onReview?: () => void
+  /** Same streaming gate as the action row (`actionsDisabled` — review FIX-6): the footer
+   *  entry must not open a review while a reply is streaming. */
+  reviewDisabled?: boolean
 }): JSX.Element {
   // tCount for the provenance labels (full-audit 2026-07-11 CODE-8): a one-section document
   // ("— 1 section") and a one-section reveal tail ("and 1 more section") are both reachable.
@@ -106,7 +110,12 @@ export function SourcesDisclosure({
           {/* The quiet review entry (spec §9.2) — a footer action, deliberately styled like
               the reveal link above, never a loud button inside the disclosure. */}
           {onReview && (
-            <button type="button" className="sources-review" onClick={onReview}>
+            <button
+              type="button"
+              className="sources-review"
+              disabled={reviewDisabled}
+              onClick={onReview}
+            >
               {t('review.entry.sources')}
             </button>
           )}

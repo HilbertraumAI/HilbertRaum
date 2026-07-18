@@ -512,6 +512,57 @@ describe('status derivation through the service (D-7 + spec §18.4)', () => {
     expect(getEvidenceReview(db, review.id)?.completedAt).toBeNull()
   })
 
+  it('a READY review refuses every ITEM-LEVEL mutation until reopened; head edits stay allowed (FIX-1)', () => {
+    const db = freshDb()
+    const { messageId } = seedAnswer(db)
+    const review = createEvidenceReview(db, {
+      messageId,
+      title: 't',
+      answerSnapshot: 'p1',
+      questionSnapshot: 'q',
+      sources: SOURCES
+    })
+    const [para] = createEvidenceReviewItems(db, review.id, [
+      { kind: 'block', blockKey: 'b1', blockKind: 'paragraph', textSnapshot: 'p1', decision: 'supported' }
+    ])
+    setEvidenceLink(db, para.id, 'S1', { origin: 'reviewer', relation: null })
+    const sel = createEvidenceSelection(db, review.id, { blockKey: 'b1', startOffset: 0, endOffset: 2 })
+    expect(sel).not.toBeNull()
+    expect(markEvidenceReviewReady(db, review.id)?.review.status).toBe('ready')
+
+    // Item-level writes refuse through the established null/false channel — ready +
+    // undecided (a state the D-7 gate can never produce) must stay unreachable.
+    expect(updateEvidenceReviewItem(db, para.id, { decision: 'not_reviewed' })).toBeNull()
+    expect(updateEvidenceReviewItem(db, para.id, { reviewerNote: 'late note' })).toBeNull()
+    expect(setEvidenceLink(db, para.id, 'S2', { origin: 'reviewer', relation: null })).toBeNull()
+    expect(removeEvidenceLink(db, para.id, 'S1')).toBe(false)
+    expect(createEvidenceSelection(db, review.id, { blockKey: 'b1', startOffset: 0, endOffset: 1 })).toBeNull()
+    expect(deleteEvidenceSelection(db, sel!.id)).toBe(false)
+    // Nothing moved: decision, note, links, and both items are byte-intact.
+    const frozen = getEvidenceReview(db, review.id)!
+    expect(frozen.status).toBe('ready')
+    const frozenPara = frozen.items.find((i) => i.id === para.id)!
+    expect(frozenPara.decision).toBe('supported')
+    expect(frozenPara.reviewerNote).toBeNull()
+    expect(frozenPara.links.map((l) => l.evidenceKey)).toEqual(['S1'])
+    expect(frozen.items).toHaveLength(2)
+
+    // HEAD edits stay allowed (D-6 renameable; reviewer label + general note are not decisions).
+    const renamed = updateEvidenceReview(db, review.id, {
+      title: 'Renamed while ready',
+      reviewerLabel: 'QA',
+      generalNote: 'overall fine'
+    })
+    expect(renamed?.title).toBe('Renamed while ready')
+    expect(renamed?.status).toBe('ready')
+
+    // Reopen restores item-level editability.
+    expect(reopenEvidenceReview(db, review.id)?.status).toBe('draft')
+    expect(updateEvidenceReviewItem(db, para.id, { decision: 'follow_up' })?.decision).toBe('follow_up')
+    expect(removeEvidenceLink(db, para.id, 'S1')).toBe(true)
+    expect(deleteEvidenceSelection(db, sel!.id)).toBe(true)
+  })
+
   it('a heading left not_reviewed never blocks readiness; a selection never blocks either', () => {
     const db = freshDb()
     const { messageId } = seedAnswer(db)

@@ -2359,6 +2359,7 @@ export const de: Record<keyof typeof en, string> = {
   'review.entry.sources': 'Antwort und Quellen prüfen',
   'review.status.draft': 'Entwurf',
   'review.status.ready': 'Abgeschlossen',
+  'review.readonlyHint': 'Abgeschlossen — öffne die Prüfung wieder, um sie zu bearbeiten.',
   'review.back': 'Zurück zum Chat',
   'review.rename': 'Umbenennen',
   'review.rename.label': 'Titel der Prüfung',

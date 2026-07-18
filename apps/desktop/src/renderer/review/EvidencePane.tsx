@@ -46,6 +46,7 @@ export function EvidencePane({
   sources,
   coverage,
   selectedItem,
+  readOnly,
   onLink,
   onUnlink,
   onSetRelation,
@@ -56,6 +57,8 @@ export function EvidencePane({
   coverage: CoverageInfo | null
   /** The review item link/unlink actions operate on; null = none selected (actions hint). */
   selectedItem: EvidenceReviewItem | null
+  /** Ready review (FIX-1): link/unlink/relation controls disable until reopened. */
+  readOnly?: boolean
   onLink: (itemId: string, evidenceKey: string) => void
   onUnlink: (itemId: string, evidenceKey: string) => void
   onSetRelation: (itemId: string, evidenceKey: string, relation: Relation | null) => void
@@ -86,6 +89,7 @@ export function EvidencePane({
           key={s.key}
           source={s}
           selectedItem={selectedItem}
+          readOnly={readOnly === true}
           onLink={onLink}
           onUnlink={onUnlink}
           onSetRelation={onSetRelation}
@@ -104,6 +108,7 @@ export function EvidencePane({
 function EvidenceCard({
   source,
   selectedItem,
+  readOnly,
   onLink,
   onUnlink,
   onSetRelation,
@@ -111,6 +116,7 @@ function EvidenceCard({
 }: {
   source: EvidenceSourceSnapshot
   selectedItem: EvidenceReviewItem | null
+  readOnly: boolean
   onLink: (itemId: string, evidenceKey: string) => void
   onUnlink: (itemId: string, evidenceKey: string) => void
   onSetRelation: (itemId: string, evidenceKey: string, relation: Relation | null) => void
@@ -158,6 +164,7 @@ function EvidenceCard({
             <button
               type="button"
               className="msg-action"
+              disabled={readOnly}
               onClick={() => onLink(selectedItem.id, source.key)}
             >
               {t('review.link.add')}
@@ -174,6 +181,7 @@ function EvidenceCard({
                   <select
                     id={relationId}
                     value={link.relation ?? ''}
+                    disabled={readOnly}
                     onChange={(e) =>
                       onSetRelation(
                         selectedItem.id,
@@ -194,6 +202,7 @@ function EvidenceCard({
               <button
                 type="button"
                 className="msg-action"
+                disabled={readOnly}
                 onClick={() => onUnlink(selectedItem.id, source.key)}
               >
                 {t('review.link.remove')}

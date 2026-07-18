@@ -744,7 +744,13 @@ section records the AS-BUILT Phase-0/1 shapes; the renderer arrives in Phase 2).
   | `deleteEvidenceReview(reviewId)` | `evidence:delete` | → `boolean` |
   | `countEvidenceReviewsForConversation(conversationId)` | `evidence:countForConversation` | → `number` — Phase 2 (plan §7.6, D-2): the conversation-delete confirm names how many reviews the cascade removes. Count only, never content; malformed/unknown ids read `0` |
   Every handler `requireUnlocked()` (`main.evidenceReviews.locked`, EN+DE; auto-enforced by
-  `ipc-lock-coverage.test.ts`). New type `EvidenceReviewFreshness { reviewId, outdated }`.
+  `ipc-lock-coverage.test.ts`). **Ready-state write guard (Phase-2 review FIX-1, spec
+  §18.4):** while a review is `ready`, the five ITEM-LEVEL mutations (`updateEvidenceReviewItem`,
+  `setEvidenceLink`, `removeEvidenceLink`, `createEvidenceSelection`, `deleteEvidenceSelection`)
+  REFUSE through their normal null/false channel — `ready` + undecided is a state the D-7 gate
+  can never produce, so it must be unreachable by mutation too; reopen first. HEAD edits
+  (`updateEvidenceReview`: title D-6 / reviewer label D-3 / general note) stay allowed.
+  New type `EvidenceReviewFreshness { reviewId, outdated }`.
   `exportEvidencePack` deliberately NOT yet registered — the pipeline is Phase 3 (a channel
   with no pipeline would be a dead promise).
 ✅ **Audit emitters (first ones):** `evidence_review_created` (`{reviewId, messageId,
