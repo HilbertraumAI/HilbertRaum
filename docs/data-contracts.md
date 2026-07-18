@@ -586,9 +586,10 @@ document answers always run balanced (deep-grounded = wave 2).
   threading + `formatPlan`; `assertCommercialDrive` passes verified-commercial, fails network/plaintext/
   placeholder-weight/user-data). **Signing + notarization + the real USB launch = manual (R5/R7).**
 
-### Evidence Pack / Review Mode (EP-1 Phases 0–4 live — contracts, storage, snapshot engine + IPC, review UI, HTML export, freshness)
-Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.md` §5–§9 (this
-section records the AS-BUILT shapes; selection UI (P5) and PDF (P6) are still open).
+### Evidence Pack / Review Mode (EP-1 Phases 0–6 live — contracts, storage, snapshot engine + IPC, review UI, HTML + PDF export, freshness, selections)
+Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.md` §5–§11 (this
+section records the AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes;
+only the wave close-out remains open).
 
 ✅ **`Citation` enrichment (ADDITIVE, `shared/types.ts`):** `documentId?: string | null`
   (`chunks.document_id`) + `chunkId?: string | null` (`chunks.id`), stamped at the **six**
@@ -749,7 +750,7 @@ section records the AS-BUILT shapes; selection UI (P5) and PDF (P6) are still op
   | `getEvidenceSourceContext(reviewId, sourceKey)` | `evidence:sourceContext` | → `EvidenceSourceContext \| null` — Phase 4 (D-5, spec §10.2.4): the STORED extracted text (`chunks` table — never a source-file read) around one source's persisted excerpt, resolved from the review's OWN snapshot (`documentId` never crosses the wire from the renderer). Ladder: snapshotted `sourceChunkId` (verified to belong to the snapshotted document — a foreign chunk id never leaks another document's text) → stored-text containment search (`instr`) → honest `located:false`. Context = located chunk ± one neighbor, ≤1200 chars/side, surrogate-safe boundaries. Null on unknown review/key and on unresolved-identity sources |
   | `deleteEvidenceReview(reviewId)` | `evidence:delete` | → `boolean` |
   | `countEvidenceReviewsForConversation(conversationId)` | `evidence:countForConversation` | → `number` — Phase 2 (plan §7.6, D-2): the conversation-delete confirm names how many reviews the cascade removes. Count only, never content; malformed/unknown ids read `0` |
-  | `exportEvidencePack(reviewId, options)` | `evidence:export` | → `EvidenceExportRecord \| null` — Phase 3 (plan §8.3): save dialog → deterministic HTML render → ATOMIC write (tmp sibling → fsync → sha256 of the ON-DISK bytes → rename) → `evidence_exports` row. Null on unknown/malformed id (no dialog) or user cancel; any failure UP TO the rename leaves no destination file and no row (spec §28.9). A POST-rename record failure (workspace-DB error, or the review deleted in another window while the dialog was open) UNLINKS the just-written file and REJECTS with distinct localized copy (`main.evidenceReviews.exportNotRecorded`; if even the unlink fails, `…exportFileNotRecorded` states the file exists WITHOUT a history record) — null never means "exported", and a real export is never reported as a cancel (fix round FIX-1). Works on draft AND ready reviews (the ready guard covers item mutations only — tested). `options: Partial<EvidencePackOptions>` resolves against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; the RESOLVED set persists to `options_json` |
+  | `exportEvidencePack(reviewId, options)` | `evidence:export` | → `EvidenceExportRecord \| null` — Phase 3 (plan §8.3): save dialog → deterministic HTML render → ATOMIC write (tmp sibling → fsync → sha256 of the ON-DISK bytes → rename) → `evidence_exports` row. Null on unknown/malformed id (no dialog) or user cancel; any failure UP TO the rename leaves no destination file and no row (spec §28.9). A POST-rename record failure (workspace-DB error, or the review deleted in another window while the dialog was open) UNLINKS the just-written file and REJECTS with distinct localized copy (`main.evidenceReviews.exportNotRecorded`; if even the unlink fails, `…exportFileNotRecorded` states the file exists WITHOUT a history record) — null never means "exported", and a real export is never reported as a cancel (fix round FIX-1). Works on draft AND ready reviews (the ready guard covers item mutations only — tested). `options: EvidencePackExportRequest` (= `Partial<EvidencePackOptions> & {format?}`) resolves against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; the RESOLVED option set persists to `options_json` (the format NEVER does — `evidence_exports.format` is its column). **P6 (plan §11): PDF over the SAME channel** — `format: 'pdf'` (literal only; anything else reads 'html') prints the SAME rendered HTML through the hidden-window harness AFTER the dialog; the save dialog OFFERS both filters (requested first) and the chosen extension has the final word (`packFormatForDestination`: `.pdf`⇒pdf, `.html`/`.htm`⇒html, else the request — file content, extension and recorded format always agree). A failed/killed print = a pre-rename failure: no file, no row |
   Every handler `requireUnlocked()` (`main.evidenceReviews.locked`, EN+DE; auto-enforced by
   `ipc-lock-coverage.test.ts`). **Ready-state write guard (Phase-2 review FIX-1, spec
   §18.4):** while a review is `ready`, the five ITEM-LEVEL mutations (`updateEvidenceReviewItem`,
@@ -828,18 +829,45 @@ section records the AS-BUILT shapes; selection UI (P5) and PDF (P6) are still op
   verbatim). i18n: `packExport.*` EN+DE + reused `review.*`/`chat.sources.marker` keys.
   Determinism: same detail + options + language ⇒ byte-identical except packId/generatedAt.
 ✅ **Export pipeline (`main/services/evidence-pack/export.ts`):**
-  `exportEvidencePackToFile(db, reviewId, rawOptions, deps {chooseDestination, newPackId?,
-  now?})` — load → resolve → build → render → dialog (injected; the electron dialog lives at
-  the IPC layer) → `writePackFileAtomic` (tmp sibling → fsync → hash the READ-BACK on-disk
-  bytes → rename; failure removes the tmp and rethrows — no half-written destination ever)
-  → `recordEvidenceExport` (row only AFTER the final file exists + is hashed, spec §20.3;
-  bare `file_name`, resolved options into `options_json`). Encoding: UTF-8 **without** BOM
-  (unlike md/txt/csv `bomFor` — the `<meta charset>` is the contract; recorded hash =
-  on-disk bytes). `suggestedPackFileName(title)` slugs the review title (content — which is
-  why path/name never reach audit).
+  `exportEvidencePackToFile(db, reviewId, rawOptions, deps {chooseDestination, renderPdf,
+  newPackId?, now?})` — load → resolve format+options → build → render → dialog (injected;
+  the electron dialog lives at the IPC layer; `chooseDestination(suggestedFileName, format)`)
+  → [PDF only, P6: `renderPdf(html, {packId, sourceHtmlPath})` — the injected hidden-window
+  print, AFTER the dialog, fed the render output VERBATIM] → `writePackFileAtomic` (tmp
+  sibling → fsync → hash the READ-BACK on-disk bytes → rename; accepts string OR Buffer —
+  the SAME tail serves both formats; failure removes the tmp and rethrows — no half-written
+  destination ever) → `recordEvidenceExport` (row only AFTER the final file exists + is
+  hashed, spec §20.3; bare `file_name`, the EFFECTIVE format, resolved options into
+  `options_json`). `renderPdf` is REQUIRED (a missing printer can never silently degrade a
+  PDF request); the transient print source is `${dest}.print.tmp.html` — a SIBLING in the
+  user-sanctioned directory (never an OS temp dir), removed by the harness in `finally`.
+  Encoding (string content): UTF-8 **without** BOM (unlike md/txt/csv `bomFor` — the
+  `<meta charset>` is the contract; recorded hash = on-disk bytes).
+  `suggestedPackFileName(title, format)` slugs the review title (content — which is why
+  path/name never reach audit) + the format's extension.
+✅ **PDF print harness (P6, `main/services/evidence-pack/print-pdf.ts` — plan §11/D-1):**
+  `printEvidencePackHtmlToPdf(html, {packId, sourceHtmlPath})` → PDF `Buffer`. Dedicated
+  hidden `BrowserWindow` per print — `SECURE_WINDOW_WEB_PREFERENCES` spread (sandboxed),
+  **no preload at all** (no IPC surface; wiring-pinned in `window-security.test.ts`),
+  window-open + will-navigate/will-redirect ALL denied; writes the source html sibling,
+  `loadFile` (= did-finish-load) → `document.fonts.ready` → `printToPDF` with the FULL
+  D-1 option set (verified supported by the installed Electron 37 types): `pageSize:'A4'`,
+  `preferCSSPageSize` (the template's `@page` is authoritative), `printBackground`,
+  `displayHeaderFooter` + empty-span `headerTemplate` (suppresses Chromium's default
+  date/title header) + `footerTemplate` = escaped pack-id + `pageNumber`/`totalPages`
+  (system-font stack + inline styles ONLY — a template `@font-face` fails the print),
+  `generateDocumentOutline` (the h1→h2→h3 tree becomes bookmarks),
+  `generateTaggedPDF` (EXPERIMENTAL per Electron — best-effort accessibility, never a
+  PDF/UA claim; known-limitations.md). Teardown in `finally` on success/failure AND on
+  app quit (`before-quit` hook destroys the window; a killed print rejects → the pipeline
+  writes nothing); 60 s per-step timeout (rasterizer discipline); concurrent prints are
+  independent (own window, no shared channels). PDF bytes are NONDETERMINISTIC
+  (CreationDate/ID) — goldens stay HTML-side; PDFs are smoke-verified via pdfjs.
 ✅ **Renderer:** `ReviewSummaryView` actions row gains **Create evidence pack** (draft AND
   ready), opening an INLINE options panel (no nested modal): §24.3 encryption-boundary
-  warning + the five §16.2 checkboxes at the shared defaults; the status line shows
+  warning + the five §16.2 checkboxes at the shared defaults + (P6) the file-format radio
+  (`review.export.format*` — HTML default, PDF opt-in; sent as `format` on the same wire
+  object); the status line shows
   `review.status.lastExported` (display-only — the status ENUM is unchanged); the export
   history renders real `detail.exports` rows **including the recorded SHA-256** (truncated
   mono display + a copy-full-hash action via `copyToClipboard` — the pack's own integrity
@@ -965,6 +993,25 @@ section records the AS-BUILT shapes; selection UI (P5) and PDF (P6) are still op
   chip joins Ready), `GermanSmoke` (outdated overlay DE). Review renderer test files
   (incl. `lockPurge.test.ts`'s review leg) stub the refresh structurally via
   `stubReviewApi` (`tests/helpers/evidenceReview.ts`).
+✅ **Phase-6 tests (PDF):** `tests/unit/evidence-pack-print-pdf.test.ts` ×9 (fake
+  electron: the D-1 option literals + footer no-@font-face/escaping pins, preload-free
+  sandboxed posture + deny-all navigation, teardown on success/print-failure/load-failure/
+  app-quit-mid-print/step-timeout — runs everywhere incl. CI) + `evidence-pack-export.
+  test.ts` P6 describe ×5 (seam contract: verbatim html + `${dest}.print.tmp.html`;
+  extension-override both directions; killed-print ⇒ no file/no siblings/no row;
+  outdated-refusal BEFORE dialog AND print; post-rename unlink on PDF) + helpers ×4
+  (Buffer atomic write, format resolvers) + `evidence-reviews-ipc.test.ts` ×2 (dialog
+  filter list both-formats/requested-first through the REAL handler + REAL harness on a
+  fake BrowserWindow; audit `{reviewId, format:'pdf'}`; malformed format → html-first) +
+  `ReviewExport.test.tsx` +1 (PDF sends `format:'pdf'`; the defaults test now pins the
+  radio: HTML checked) + `window-security.test.ts` +1 (print window preload-free) +
+  **`evidence-pack-pdf-smoke.test.ts` ×6 — REAL Electron** (spawns the installed binary
+  on an esbuild bundle of the REAL harness; SKIPS where the binary/display is absent —
+  CI never installs Electron — and always runs on the Windows dev box): EN+DE golden
+  prints verified with pdfjs — page count, CURRENT-catalog sentinels (DE umlauts/ß),
+  pack-id + `1/{totalPages}` footer, outline depth EXACTLY 3 with catalog section titles,
+  `/MarkInfo Marked` (tagged) true, kill-after-load rejection with no output, and EVERY
+  Chromium request `file://` + the REAL offline guard silent across the run.
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |

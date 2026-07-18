@@ -9,8 +9,11 @@ import { appendMessage, createConversation } from '../../src/main/services/chat'
 import { createEvidenceReviewFromMessage } from '../../src/main/services/evidence-pack/snapshot'
 import {
   exportEvidencePackToFile,
+  packFormatForDestination,
+  resolvePackExportFormat,
   suggestedPackFileName,
   writePackFileAtomic,
+  EvidencePackOutdatedError,
   EvidencePackRecordError
 } from '../../src/main/services/evidence-pack/export'
 import { acknowledgeEvidenceReviewFreshness } from '../../src/main/services/evidence-pack/freshness'
@@ -103,8 +106,15 @@ function seedAnswer(
   return msg.id
 }
 
+/** P6: the printer seam is REQUIRED — this stub doubles as the assertion that no
+ *  HTML-format path ever touches the hidden-window print harness. */
+const NEVER_PDF: Parameters<typeof exportEvidencePackToFile>[3]['renderPdf'] = async () => {
+  throw new Error('renderPdf must not be called for an HTML export')
+}
+
 const EXPORT_DEPS = (dest: string): Parameters<typeof exportEvidencePackToFile>[3] => ({
   chooseDestination: async () => dest,
+  renderPdf: NEVER_PDF,
   newPackId: () => FIXED_PACK_ID,
   now: () => FIXED_NOW
 })
@@ -357,7 +367,8 @@ describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
     })
     const detail = createEvidenceReviewFromMessage(db, messageId, {})
     const result = await exportEvidencePackToFile(db, detail.id, {}, {
-      chooseDestination: async () => null
+      chooseDestination: async () => null,
+      renderPdf: NEVER_PDF
     })
     expect(result).toBeNull()
     expect(listEvidenceExports(db, detail.id)).toEqual([])
@@ -381,7 +392,8 @@ describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
             "CREATE TRIGGER fail_export BEFORE INSERT ON evidence_exports BEGIN SELECT RAISE(ABORT, 'injected record failure'); END"
           )
           return dest
-        }
+        },
+        renderPdf: NEVER_PDF
       })
     ).rejects.toBeInstanceOf(EvidencePackRecordError)
     // The invariant is RESTORED: the freshly-renamed destination was unlinked…
@@ -409,7 +421,8 @@ describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
           // recordEvidenceExport will return null (its no-orphan-rows guard).
           expect(deleteEvidenceReview(db, detail.id)).toBe(true)
           return dest
-        }
+        },
+        renderPdf: NEVER_PDF
       })
     ).rejects.toBeInstanceOf(EvidencePackRecordError)
     expect(existsSync(dest)).toBe(false)
@@ -423,10 +436,165 @@ describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
       chooseDestination: async () => {
         dialogShown = true
         return null
-      }
+      },
+      renderPdf: NEVER_PDF
     })
     expect(result).toBeNull()
     expect(dialogShown).toBe(false)
+  })
+})
+
+// ---- P6: PDF through the SAME pipeline (plan §11; the harness itself is unit + smoke
+// tested — here the seam contract, the shared atomic tail, and the format rules) --------
+
+describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => {
+  const PDF_BYTES = Buffer.from('%PDF-1.7\nfake-pack-pdf-bytes\n%%EOF', 'utf8')
+
+  function seedSimpleReview(db: Db): string {
+    const messageId = seedAnswer(db, {
+      content: 'PDF claim.',
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
+    })
+    return createEvidenceReviewFromMessage(db, messageId, {}).id
+  }
+
+  it('prints the rendered HTML verbatim, writes the PDF bytes atomically, records format "pdf"', async () => {
+    const { db, root } = freshDb()
+    const reviewId = seedSimpleReview(db)
+    const dest = join(root, 'pack.pdf')
+    const suggested: Array<[string, string]> = []
+    let printed: { html: string; packId: string; sourceHtmlPath: string } | null = null
+    const record = await exportEvidencePackToFile(db, reviewId, { format: 'pdf' }, {
+      chooseDestination: async (name, format) => {
+        suggested.push([name, format])
+        return dest
+      },
+      renderPdf: async (html, opts) => {
+        printed = { html, ...opts }
+        return PDF_BYTES
+      },
+      newPackId: () => FIXED_PACK_ID,
+      now: () => FIXED_NOW
+    })
+    // The suggested name follows the requested format; the dialog is told the format too.
+    expect(suggested).toEqual([['Contract questions.pdf', 'pdf']])
+    // The print harness got the Phase-3 render output UNCHANGED (D-1: one template)…
+    expect(printed!.html.startsWith('<!DOCTYPE html>')).toBe(true)
+    expect(printed!.html).toContain(FIXED_PACK_ID)
+    // …the pipeline's pack id for the footer, and a `.html` print-source SIBLING of the
+    // destination (file:// MIME is sniffed from the extension).
+    expect(printed!.packId).toBe(FIXED_PACK_ID)
+    expect(printed!.sourceHtmlPath).toBe(`${dest}.print.tmp.html`)
+    // The destination holds the PRINTER's bytes, atomically, hash-of-file recorded.
+    expect(readFileSync(dest)).toEqual(PDF_BYTES)
+    expect(existsSync(`${dest}.tmp`)).toBe(false)
+    expect(record).not.toBeNull()
+    expect(record!.format).toBe('pdf')
+    expect(record!.fileName).toBe('pack.pdf')
+    expect(record!.schemaVersion).toBe(EVIDENCE_PACK_SCHEMA_VERSION)
+    expect(record!.fileSha256).toBe(sha256Of(readFileSync(dest)))
+    // The format NEVER enters options_json — `evidence_exports.format` is its column.
+    expect(record!.options).not.toHaveProperty('format')
+  })
+
+  it('the chosen extension has the final word: a .html destination under a PDF request stays HTML (and vice versa)', async () => {
+    const { db, root } = freshDb()
+    const reviewId = seedSimpleReview(db)
+
+    // Requested PDF, saved as .html via the dialog's type dropdown → real HTML, no print.
+    const asHtml = join(root, 'flipped.html')
+    const first = await exportEvidencePackToFile(db, reviewId, { format: 'pdf' }, {
+      chooseDestination: async () => asHtml,
+      renderPdf: NEVER_PDF
+    })
+    expect(first!.format).toBe('html')
+    expect(readFileSync(asHtml, 'utf8').startsWith('<!DOCTYPE html>')).toBe(true)
+
+    // Requested (default) HTML, saved as .pdf → printed PDF, recorded as such.
+    const asPdf = join(root, 'flipped.pdf')
+    const second = await exportEvidencePackToFile(db, reviewId, {}, {
+      chooseDestination: async () => asPdf,
+      renderPdf: async () => PDF_BYTES
+    })
+    expect(second!.format).toBe('pdf')
+    expect(readFileSync(asPdf)).toEqual(PDF_BYTES)
+  })
+
+  it('kill mid-print (a rejecting printer) leaves NO destination file, NO siblings, NO row', async () => {
+    const { db, root } = freshDb()
+    const reviewId = seedSimpleReview(db)
+    const dest = join(root, 'killed.pdf')
+    await expect(
+      exportEvidencePackToFile(db, reviewId, { format: 'pdf' }, {
+        chooseDestination: async () => dest,
+        // The harness rejects like a window destroyed mid-print (app quit, crash, wedge).
+        renderPdf: async () => {
+          throw new Error('Object has been destroyed')
+        }
+      })
+    ).rejects.toThrow('Object has been destroyed')
+    expect(existsSync(dest)).toBe(false)
+    // No pack residue of ANY kind — destination, atomic tmp, or print source.
+    expect(readdirSync(root).filter((f) => !f.startsWith('test.sqlite'))).toEqual([])
+    expect(listEvidenceExports(db, reviewId)).toEqual([])
+  })
+
+  it('outdated-unacknowledged refuses BEFORE any dialog or print work — the P4 order holds for PDF', async () => {
+    const { db, root } = freshDb()
+    const docId = seedDocument(db, { title: 'drift.pdf', sha256: 'ab'.repeat(32) })
+    const messageId = seedAnswer(db, {
+      content: 'Drifting claim. [S1]',
+      citations: [
+        { label: 'S1', sourceTitle: 'drift.pdf', documentId: docId, snippet: 'The drifting fact.' }
+      ],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
+    })
+    const reviewId = createEvidenceReviewFromMessage(db, messageId, {}).id
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
+
+    let dialogShown = false
+    let printCalled = false
+    await expect(
+      exportEvidencePackToFile(db, reviewId, { format: 'pdf' }, {
+        chooseDestination: async () => {
+          dialogShown = true
+          return join(root, 'refused.pdf')
+        },
+        renderPdf: async () => {
+          printCalled = true
+          return PDF_BYTES
+        }
+      })
+    ).rejects.toBeInstanceOf(EvidencePackOutdatedError)
+    expect(dialogShown).toBe(false)
+    expect(printCalled).toBe(false)
+    expect(listEvidenceExports(db, reviewId)).toEqual([])
+
+    // Acknowledged → the PDF path unlocks like HTML did in P4.
+    expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
+    const dest = join(root, 'acked.pdf')
+    const record = await exportEvidencePackToFile(db, reviewId, { format: 'pdf' }, {
+      chooseDestination: async () => dest,
+      renderPdf: async () => PDF_BYTES
+    })
+    expect(record!.format).toBe('pdf')
+  })
+
+  it('post-rename record failure unlinks the PDF too — the SAME tail semantics (P3 FIX-1b)', async () => {
+    const { db, root } = freshDb()
+    const reviewId = seedSimpleReview(db)
+    const dest = join(root, 'unrecorded.pdf')
+    await expect(
+      exportEvidencePackToFile(db, reviewId, { format: 'pdf' }, {
+        chooseDestination: async () => {
+          expect(deleteEvidenceReview(db, reviewId)).toBe(true)
+          return dest
+        },
+        renderPdf: async () => PDF_BYTES
+      })
+    ).rejects.toBeInstanceOf(EvidencePackRecordError)
+    expect(existsSync(dest)).toBe(false)
+    expect(existsSync(`${dest}.tmp`)).toBe(false)
   })
 })
 
@@ -479,10 +647,12 @@ describe('encoding + hash + record contents', () => {
     const detail = createEvidenceReviewFromMessage(db, messageId, {})
     const first = await exportEvidencePackToFile(db, detail.id, {}, {
       chooseDestination: async () => join(root, 'one.html'),
+      renderPdf: NEVER_PDF,
       now: () => '2026-07-18T10:00:00.000Z'
     })
     const second = await exportEvidencePackToFile(db, detail.id, {}, {
       chooseDestination: async () => join(root, 'two.html'),
+      renderPdf: NEVER_PDF,
       now: () => '2026-07-18T11:00:00.000Z'
     })
     expect(first).not.toBeNull()
@@ -495,12 +665,14 @@ describe('encoding + hash + record contents', () => {
 })
 
 describe('helpers', () => {
-  it('suggestedPackFileName slugs content titles and never returns empty', () => {
-    expect(suggestedPackFileName('Contract questions')).toBe('Contract questions.html')
-    expect(suggestedPackFileName('a/b\\c:d*e?f"g<h>i|j')).toBe('abcdefghij.html')
-    expect(suggestedPackFileName('   ')).toBe('evidence-pack.html')
-    expect(suggestedPackFileName('<script>')).toBe('script.html')
-    expect(suggestedPackFileName('Ärger — größer')).toBe('Ärger  größer.html')
+  it('suggestedPackFileName slugs content titles, never returns empty, and follows the format (P6)', () => {
+    expect(suggestedPackFileName('Contract questions', 'html')).toBe('Contract questions.html')
+    expect(suggestedPackFileName('a/b\\c:d*e?f"g<h>i|j', 'html')).toBe('abcdefghij.html')
+    expect(suggestedPackFileName('   ', 'html')).toBe('evidence-pack.html')
+    expect(suggestedPackFileName('<script>', 'html')).toBe('script.html')
+    expect(suggestedPackFileName('Ärger — größer', 'html')).toBe('Ärger  größer.html')
+    expect(suggestedPackFileName('Contract questions', 'pdf')).toBe('Contract questions.pdf')
+    expect(suggestedPackFileName('   ', 'pdf')).toBe('evidence-pack.pdf')
   })
 
   it('writePackFileAtomic writes-through and returns the on-disk hash', () => {
@@ -510,5 +682,35 @@ describe('helpers', () => {
     expect(readFileSync(dest, 'utf8')).toBe('content-ä')
     expect(hash).toBe(sha256Of(readFileSync(dest)))
     expect(existsSync(`${dest}.tmp`)).toBe(false)
+  })
+
+  it('writePackFileAtomic writes Buffer content VERBATIM (P6: the printToPDF bytes)', () => {
+    const { root } = freshDb()
+    const dest = join(root, 'atomic.pdf')
+    const bytes = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0x80])
+    const hash = writePackFileAtomic(dest, bytes)
+    expect(readFileSync(dest)).toEqual(bytes)
+    expect(hash).toBe(sha256Of(bytes))
+    expect(existsSync(`${dest}.tmp`)).toBe(false)
+  })
+
+  it('resolvePackExportFormat: literal "pdf" only; everything else reads html (P6)', () => {
+    expect(resolvePackExportFormat({ format: 'pdf' })).toBe('pdf')
+    expect(resolvePackExportFormat({ format: 'html' })).toBe('html')
+    expect(resolvePackExportFormat({ format: 'PDF' })).toBe('html') // never normalized
+    expect(resolvePackExportFormat({ format: 'docx' })).toBe('html')
+    expect(resolvePackExportFormat({})).toBe('html')
+    expect(resolvePackExportFormat(null)).toBe('html')
+    expect(resolvePackExportFormat('pdf')).toBe('html') // not an object → default
+  })
+
+  it('packFormatForDestination: the extension wins, case-insensitively; else the request (P6)', () => {
+    expect(packFormatForDestination('C:/x/pack.pdf', 'html')).toBe('pdf')
+    expect(packFormatForDestination('C:/x/pack.PDF', 'html')).toBe('pdf')
+    expect(packFormatForDestination('/x/pack.html', 'pdf')).toBe('html')
+    expect(packFormatForDestination('/x/pack.htm', 'pdf')).toBe('html')
+    expect(packFormatForDestination('/x/pack.dat', 'pdf')).toBe('pdf')
+    expect(packFormatForDestination('/x/pack', 'pdf')).toBe('pdf')
+    expect(packFormatForDestination('/x/pack', 'html')).toBe('html')
   })
 })

@@ -1969,6 +1969,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   must not) re-localize an existing file. The stored SHA-256 pins the exact bytes.
 - **No file paths, by construction.** The review snapshot never captures paths, so no
   export option can include one — the spec's "paths default off" is satisfied by absence.
+- **PDF accessibility is best-effort — not a PDF/UA claim.** The PDF export (P6) asks
+  Chromium for a tagged PDF with a document outline (`generateTaggedPDF` +
+  `generateDocumentOutline`), and the input HTML carries a strict semantic h1→h2→h3
+  heading tree — but Electron marks tagged-PDF generation **experimental** ("may not
+  adhere fully to PDF/UA and WCAG standards"), and this app cannot verify conformance.
+  What is verified (real-Electron smoke): the text is genuinely extractable/searchable,
+  the bookmark outline mirrors the heading tree, and the tagged (`/MarkInfo Marked`)
+  structure exists. If accessibility of the artifact matters, prefer the HTML pack — it
+  is the accessibility-first format (real DOM semantics, reflow, user styles). The PDF's
+  cover also names the pack's SCHEMA as "Self-contained HTML · pack schema v1" — the PDF
+  is a print rendition of exactly that HTML pack (one template, by design), not a second
+  format with its own schema.
 
 ## Internationalization ([`architecture.md`](architecture.md) i18n record)
 

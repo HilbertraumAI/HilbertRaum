@@ -76,6 +76,37 @@ describe('summary export panel (plan §8.4)', () => {
     expect(byLabel('review.export.optUnreviewed').checked).toBe(true)
     // The one privacy-conservative default: technical details OFF.
     expect(byLabel('review.export.optTechnical').checked).toBe(false)
+    // P6 (plan §11): the format radio group — both formats offered, HTML the default.
+    const html = within(dialog).getByRole('radio', {
+      name: t('en', 'review.export.formatHtml')
+    }) as HTMLInputElement
+    const pdf = within(dialog).getByRole('radio', {
+      name: t('en', 'review.export.formatPdf')
+    }) as HTMLInputElement
+    expect(html.checked).toBe(true)
+    expect(pdf.checked).toBe(false)
+  })
+
+  it('P6: choosing PDF sends format "pdf" on the same wire object (options untouched)', async () => {
+    const record = makeExportRecord()
+    const exportEvidencePack = vi.fn(async () => record)
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    const dialog = await openSummary()
+    await openExportPanel(dialog)
+
+    fireEvent.click(
+      within(dialog).getByRole('radio', { name: t('en', 'review.export.formatPdf') })
+    )
+    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'review.export.confirm') }))
+
+    await waitFor(() =>
+      expect(exportEvidencePack).toHaveBeenCalledWith('r1', {
+        ...EVIDENCE_PACK_OPTION_DEFAULTS,
+        language: 'en',
+        format: 'pdf'
+      })
+    )
   })
 
   it('exports with the chosen flags + the CURRENT UI language, merges the record into the history, and shows Last exported', async () => {
@@ -96,7 +127,9 @@ describe('summary export panel (plan §8.4)', () => {
       expect(exportEvidencePack).toHaveBeenCalledWith('r1', {
         ...EVIDENCE_PACK_OPTION_DEFAULTS,
         includeReviewerNotes: false,
-        language: 'en'
+        language: 'en',
+        // P6: the format rides the same wire object; HTML is the untouched default.
+        format: 'html'
       })
     )
     // The store merged the returned record (P2 handoff: detail.exports refresh) — the

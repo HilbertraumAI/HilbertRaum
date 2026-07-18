@@ -1,5 +1,10 @@
 import { useState } from 'react'
-import type { EvidenceReviewDetail, EvidenceReviewFreshness, ReviewDecision } from '@shared/types'
+import type {
+  EvidenceExportFormat,
+  EvidenceReviewDetail,
+  EvidenceReviewFreshness,
+  ReviewDecision
+} from '@shared/types'
 import { EVIDENCE_PACK_OPTION_DEFAULTS } from '@shared/evidence-review'
 import { CoverageMeter, Button, useToast } from '../components'
 import { localizeServerCopy } from '../lib/displayMap'
@@ -283,10 +288,13 @@ export function ReviewSummaryView({
 }
 
 /**
- * Inline export panel (plan §8.3/§8.4): the §16.2 option checkboxes (shared defaults —
- * privacy-sensitive extras OFF; file paths have no flag because no pack can contain one)
- * and the §24.3 encryption-boundary warning, always visible before the native save dialog
- * opens. The pack's language is FROZEN to the current UI language at generation.
+ * Inline export panel (plan §8.3/§8.4; P6 plan §11 adds the format choice): the file
+ * format (HTML default, PDF via the hidden-window print), the §16.2 option checkboxes
+ * (shared defaults — privacy-sensitive extras OFF; file paths have no flag because no
+ * pack can contain one) and the §24.3 encryption-boundary warning, always visible before
+ * the native save dialog opens. The pack's language is FROZEN to the current UI language
+ * at generation. The save dialog offers both formats too (requested one preselected) —
+ * the chosen file extension has the final word main-side.
  */
 function ExportPackPanel({
   onClose,
@@ -299,6 +307,7 @@ function ExportPackPanel({
 }): JSX.Element {
   const showToast = useToast()
   const [flags, setFlags] = useState({ ...EVIDENCE_PACK_OPTION_DEFAULTS })
+  const [format, setFormat] = useState<EvidenceExportFormat>('html')
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const OPTION_LABELS = [
@@ -308,11 +317,15 @@ function ExportPackPanel({
     ['includeUnreviewedItems', 'review.export.optUnreviewed'],
     ['includeTechnicalDetails', 'review.export.optTechnical']
   ] as const
+  const FORMAT_LABELS: ReadonlyArray<readonly [EvidenceExportFormat, Parameters<I18n['t']>[0]]> = [
+    ['html', 'review.export.formatHtml'],
+    ['pdf', 'review.export.formatPdf']
+  ]
   async function handleExport(): Promise<void> {
     setExporting(true)
     setError(null)
     try {
-      const result = await exportReviewPack({ ...flags, language: lang })
+      const result = await exportReviewPack({ ...flags, language: lang, format })
       if (result.outcome === 'exported') {
         showToast(t('review.export.done'))
         onClose()
@@ -333,6 +346,24 @@ function ExportPackPanel({
       <p className="hint review-export-warning">
         <span aria-hidden="true">⚠</span> {t('review.export.encryptionWarning')}
       </p>
+      {/* P6 (plan §11): the format choice — a native radio group; HTML stays the default,
+          PDF prints the same pack through the hidden window (A4, footer, bookmarks). */}
+      <fieldset className="review-export-options review-export-format">
+        <legend className="hint">{t('review.export.format')}</legend>
+        {FORMAT_LABELS.map(([value, key]) => (
+          <label key={value} className="review-export-option">
+            <input
+              type="radio"
+              name="review-export-format"
+              value={value}
+              checked={format === value}
+              disabled={exporting}
+              onChange={() => setFormat(value)}
+            />{' '}
+            {t(key)}
+          </label>
+        ))}
+      </fieldset>
       <fieldset className="review-export-options">
         <legend className="hint">{t('review.export.options')}</legend>
         {OPTION_LABELS.map(([flag, key]) => (

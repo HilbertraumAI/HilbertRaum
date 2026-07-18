@@ -1,5 +1,5 @@
 import type {
-  EvidencePackOptions,
+  EvidencePackExportRequest,
   EvidenceReadyGate,
   EvidenceReview,
   EvidenceReviewDetail,
@@ -436,7 +436,7 @@ export type ReviewExportOutcome =
  * covers item/link mutations only.
  */
 export async function exportReviewPack(
-  options: Partial<EvidencePackOptions>
+  options: EvidencePackExportRequest
 ): Promise<ReviewExportOutcome> {
   const reviewId = state.detail?.id
   if (!reviewId) return { outcome: 'failed', message: null }

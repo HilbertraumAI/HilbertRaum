@@ -2531,6 +2531,10 @@ export const en = {
   'review.export.optHashes': 'Document hashes',
   'review.export.optUnreviewed': 'Unreviewed items',
   'review.export.optTechnical': 'Technical details',
+  // P6 (plan §11): the export format choice — HTML default, PDF via printToPDF (D-1).
+  'review.export.format': 'File format',
+  'review.export.formatHtml': 'HTML — self-contained web page',
+  'review.export.formatPdf': 'PDF — print-ready (A4)',
   'review.export.confirm': 'Export pack…',
   'review.export.cancel': 'Close',
   'review.export.done': 'Evidence pack exported.',

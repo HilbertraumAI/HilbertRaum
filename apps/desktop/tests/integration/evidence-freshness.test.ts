@@ -47,6 +47,12 @@ import {
   exportEvidencePackToFile,
   EvidencePackOutdatedError
 } from '../../src/main/services/evidence-pack/export'
+
+/** P6: the printer seam is REQUIRED - this stub doubles as the assertion that no
+ *  HTML-format path here ever touches the hidden-window print harness. */
+const NEVER_PDF: Parameters<typeof exportEvidencePackToFile>[3]['renderPdf'] = async () => {
+  throw new Error('renderPdf must not be called for an HTML export')
+}
 import {
   getEvidenceReview,
   listEvidenceExports,
@@ -436,7 +442,8 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
         chooseDestination: async () => {
           dialogShown = true
           return join(root, 'refused.html')
-        }
+        },
+        renderPdf: NEVER_PDF
       })
     ).rejects.toBeInstanceOf(EvidencePackOutdatedError)
     expect(dialogShown).toBe(false)
@@ -447,7 +454,8 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
     expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
     const dest = join(root, 'acked.html')
     const record = await exportEvidencePackToFile(db, reviewId, {}, {
-      chooseDestination: async () => dest
+      chooseDestination: async () => dest,
+      renderPdf: NEVER_PDF
     })
     expect(record).not.toBeNull()
     const html = readFileSync(dest, 'utf8')
@@ -489,14 +497,14 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
 
     // Un-acknowledged → export refuses (the gate fires from the CHANGED source).
     await expect(
-      exportEvidencePackToFile(db, detail.id, {}, { chooseDestination: async () => join(root, 'x.html') })
+      exportEvidencePackToFile(db, detail.id, {}, { chooseDestination: async () => join(root, 'x.html'), renderPdf: NEVER_PDF })
     ).rejects.toBeInstanceOf(EvidencePackOutdatedError)
 
     // Re-acknowledge → export succeeds; the pack records BOTH drift kinds honestly.
     expect(acknowledgeEvidenceReviewFreshness(db, detail.id)!.acknowledgedAt).toBeTruthy()
     const dest = join(root, 'mixed.html')
     expect(
-      await exportEvidencePackToFile(db, detail.id, {}, { chooseDestination: async () => dest })
+      await exportEvidencePackToFile(db, detail.id, {}, { chooseDestination: async () => dest, renderPdf: NEVER_PDF })
     ).not.toBeNull()
     const html = readFileSync(dest, 'utf8')
     expect(html).toContain('This review is outdated')
@@ -516,7 +524,8 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
     db.prepare('DELETE FROM documents WHERE id = ?').run(docId)
     const dest = join(root, 'missing.html')
     const record = await exportEvidencePackToFile(db, reviewId, {}, {
-      chooseDestination: async () => dest
+      chooseDestination: async () => dest,
+      renderPdf: NEVER_PDF
     })
     expect(record).not.toBeNull()
     const html = readFileSync(dest, 'utf8')

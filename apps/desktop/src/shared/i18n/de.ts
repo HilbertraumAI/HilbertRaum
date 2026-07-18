@@ -2573,6 +2573,10 @@ export const de: Record<keyof typeof en, string> = {
   'review.export.optHashes': 'Dokument-Hashes',
   'review.export.optUnreviewed': 'Ungeprüfte Punkte',
   'review.export.optTechnical': 'Technische Details',
+  // P6 (plan §11): the export format choice — HTML default, PDF via printToPDF (D-1).
+  'review.export.format': 'Dateiformat',
+  'review.export.formatHtml': 'HTML — eigenständige Webseite',
+  'review.export.formatPdf': 'PDF — druckfertig (A4)',
   'review.export.confirm': 'Paket exportieren…',
   'review.export.cancel': 'Schließen',
   'review.export.done': 'Nachweispaket exportiert.',

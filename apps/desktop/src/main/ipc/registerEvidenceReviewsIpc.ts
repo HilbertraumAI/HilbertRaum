@@ -30,6 +30,7 @@ import {
   EvidencePackRecordError,
   EvidencePackUnrecordedFileError
 } from '../services/evidence-pack/export'
+import { printEvidencePackHtmlToPdf } from '../services/evidence-pack/print-pdf'
 import {
   countEvidenceReviewsForConversation,
   createEvidenceSelection,
@@ -349,14 +350,17 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   )
 
   // Evidence-pack export (plan §8.3 — the 15th channel, deliberately registered in Phase 3
-  // alongside its implementation): deterministic HTML render + ATOMIC write; null on an
+  // alongside its implementation; P6 adds PDF over the SAME channel): deterministic HTML
+  // render (+ hidden-window print for PDF, plan §11/D-1) + ATOMIC write; null on an
   // unknown id or user cancel, and a failure up to the rename leaves NO file and NO row
   // (spec §28.9). A POST-rename record failure unlinks the just-written file and rejects
   // with honest localized copy (never reported as a cancel); if even the unlink fails, a
   // DISTINCT message says the file exists but is not in the export history. Works on draft
   // AND ready reviews — the ready-state write-guard covers item/link mutations only. The
   // dialog + fs run in MAIN (the renderer has no fs/dialog access), and the options
-  // payload is resolved through the tolerant boundary resolver — unknown keys drop. Audit
+  // payload is resolved through the tolerant boundary resolvers — unknown keys drop, an
+  // unknown format reads 'html'. The save dialog OFFERS both formats (requested first);
+  // the chosen extension decides the effective one (`packFormatForDestination`). Audit
   // is {reviewId, format} ONLY: the chosen path and the review TITLE (which seeds the
   // suggested file name) are content and never recorded (sentinel-tested).
   ipcMain.handle(
@@ -368,12 +372,16 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
       let record: EvidenceExportRecord | null
       try {
         record = await exportEvidencePackToFile(ctx.db, id, options, {
-          chooseDestination: async (suggestedFileName) => {
+          chooseDestination: async (suggestedFileName, format) => {
             const win = BrowserWindow.getFocusedWindow()
+            const htmlFilter = { name: 'HTML', extensions: ['html'] }
+            const pdfFilter = { name: 'PDF', extensions: ['pdf'] }
             const dialogOptions: Electron.SaveDialogOptions = {
               title: tMain('main.dialog.exportEvidencePack'),
               defaultPath: suggestedFileName,
-              filters: [{ name: 'HTML', extensions: ['html'] }],
+              // Both formats on offer (plan §11), the requested one first — the first
+              // filter is the dialog's preselected "Save as type".
+              filters: format === 'pdf' ? [pdfFilter, htmlFilter] : [htmlFilter, pdfFilter],
               // §24.3 encryption-boundary warning: the renderer's export panel shows it on
               // every platform; `message` additionally surfaces it inside the macOS sheet.
               message: tMain('review.export.encryptionWarning')
@@ -382,7 +390,10 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
               ? await dialog.showSaveDialog(win, dialogOptions)
               : await dialog.showSaveDialog(dialogOptions)
             return result.canceled || !result.filePath ? null : result.filePath
-          }
+          },
+          // The P6 hidden-window print harness — sandboxed, preload-free, torn down in
+          // `finally` and on app quit; fed the rendered pack HTML verbatim.
+          renderPdf: printEvidencePackHtmlToPdf
         })
       } catch (err) {
         // Localize the named outcomes (service messages are ids-only English);

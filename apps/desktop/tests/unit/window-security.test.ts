@@ -119,10 +119,16 @@ describe('call-site wiring (the flags cannot be re-inlined)', () => {
     join(__dirname, '../../src/main/services/ocr/rasterizer.ts'),
     'utf8'
   )
+  // P6: the evidence-pack PDF print harness is the THIRD hidden-window call site.
+  const printPdfSrc = readFileSync(
+    join(__dirname, '../../src/main/services/evidence-pack/print-pdf.ts'),
+    'utf8'
+  )
 
-  it('both windows spread SECURE_WINDOW_WEB_PREFERENCES', () => {
+  it('all three windows spread SECURE_WINDOW_WEB_PREFERENCES', () => {
     expect(indexSrc).toContain('...SECURE_WINDOW_WEB_PREFERENCES')
     expect(rasterizerSrc).toContain('...SECURE_WINDOW_WEB_PREFERENCES')
+    expect(printPdfSrc).toContain('...SECURE_WINDOW_WEB_PREFERENCES')
   })
 
   it('index.ts takes the CSP from buildCsp and the window-open handler from createWindowOpenPolicy', () => {
@@ -130,13 +136,19 @@ describe('call-site wiring (the flags cannot be re-inlined)', () => {
     expect(indexSrc).toContain('createWindowOpenPolicy(')
   })
 
-  it('no security literal survives inline at either call site', () => {
-    for (const src of [indexSrc, rasterizerSrc]) {
+  it('no security literal survives inline at any call site', () => {
+    for (const src of [indexSrc, rasterizerSrc, printPdfSrc]) {
       expect(src).not.toMatch(/contextIsolation\s*:/)
       expect(src).not.toMatch(/nodeIntegration\s*:/)
       expect(src).not.toMatch(/\bsandbox\s*:/)
       expect(src).not.toMatch(/webSecurity\s*:/)
       expect(src).not.toContain('default-src') // the CSP is not re-inlined either
     }
+  })
+
+  it('the print window is preload-FREE (plan §11: sandbox, no preload, no node)', () => {
+    // Unlike the other two windows, the print page has no IPC surface at all — a
+    // `preload:` appearing in print-pdf.ts would silently widen it.
+    expect(printPdfSrc).not.toMatch(/preload\s*:/)
   })
 })
