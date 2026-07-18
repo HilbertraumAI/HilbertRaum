@@ -438,14 +438,18 @@ describe('fileTranslateSession — doc-task terminal + failure edges', () => {
     expect(getFileTranslate().errorMessage).toBeTruthy()
   }, 8000)
 
-  it('an import that ingests nothing (completed === 0) is unsupported', async () => {
+  // FE-3 (ocr-audit 2026-07-18): imported-but-nothing-ingested no longer collapses to
+  // 'unsupported' (the file IS a supported type) — the session reads the failed row's reason
+  // via listDocuments; with no readable row (unstubbed here) it lands the generic
+  // import-failed frame. The scanned/real-message branches are covered in TranslateScreen tests.
+  it('an import that ingests nothing (completed === 0) fails as importFailed when the row is unreadable', async () => {
     const api = {
       ...happyApi(),
       getImportJob: vi.fn(async () => ({ jobId: 'imp1', total: 1, completed: 0, failed: 1, done: true }))
     }
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().error).toBe('unsupported'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().error).toBe('importFailed'), { timeout: 5000 })
     expect(api.startDocTask).not.toHaveBeenCalled()
   }, 8000)
 })

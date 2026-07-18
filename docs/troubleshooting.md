@@ -190,7 +190,9 @@ only — they are not detected as scans.
 If the action reports *"…the OCR files, which are not on this drive"*, the drive was built
 without them. Add them by re-running `prepare-drive --with-assets`, or fetch only the OCR
 family with `fetch-runtime --family ocr` (`.ps1 -Family ocr` on Windows) — see
-[`packaging.md`](packaging.md). Commercially-built drives already include them.
+[`packaging.md`](packaging.md). Commercially-built drives already include them. **Restart the
+app after adding the files** — OCR availability is resolved once at startup, so a fetch done
+while the app is running won't be offered until the next launch.
 
 ---
 

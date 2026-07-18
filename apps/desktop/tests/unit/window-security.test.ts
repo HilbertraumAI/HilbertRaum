@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import {
   SECURE_WINDOW_WEB_PREFERENCES,
   buildCsp,
+  buildMetaCsp,
   createWindowOpenPolicy
 } from '../../src/main/window-security'
 
@@ -64,6 +65,50 @@ describe('buildCsp', () => {
     const prod = buildCsp(false)
     expect(prod).not.toContain('unsafe-eval')
     expect(prod).not.toContain('localhost')
+  })
+})
+
+describe('buildMetaCsp (BE-2, ocr-audit 2026-07-18 — the meta tags baked into index.html/ocr.html)', () => {
+  // On packaged `file://` loads the META is the effective policy (the buildCsp response
+  // header only reaches http(s) — see security-model.md), so these strings ARE the
+  // production renderer posture. electron.vite.config.ts rewrites both pages' meta tags
+  // from this function at build time; tests/integration/csp-build-output.test.ts proves
+  // the built HTML matches these strings byte for byte.
+  it('index page: prod is the dev policy with the localhost connect-src entries stripped', () => {
+    expect(buildMetaCsp(false, 'index')).toBe(
+      "default-src 'self'; script-src 'self'; connect-src 'self'; " +
+        "img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'"
+    )
+    expect(buildMetaCsp(true, 'index')).toBe(
+      "default-src 'self'; script-src 'self'; connect-src 'self' ws://localhost:* http://localhost:*; " +
+        "img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'"
+    )
+  })
+
+  it('ocr page: same split, plus the pdfjs allowances (worker-src blob:, img-src blob:)', () => {
+    expect(buildMetaCsp(false, 'ocr')).toBe(
+      "default-src 'self'; script-src 'self'; connect-src 'self'; " +
+        "img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'"
+    )
+    expect(buildMetaCsp(true, 'ocr')).toBe(
+      "default-src 'self'; script-src 'self'; connect-src 'self' ws://localhost:* http://localhost:*; " +
+        "img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'"
+    )
+  })
+
+  it('no prod meta ever carries a remote origin, localhost, or an unsafe-eval', () => {
+    for (const page of ['index', 'ocr'] as const) {
+      const prod = buildMetaCsp(false, page)
+      expect(prod).not.toContain('localhost')
+      expect(prod).not.toContain('unsafe-eval')
+      // Every scheme://host source in the DEV meta must be a localhost dev-server origin.
+      const origins = buildMetaCsp(true, page).match(/[a-z]+:\/\/[^\s;]+/g) ?? []
+      for (const origin of origins) {
+        expect(origin).toMatch(/^(ws|http):\/\/localhost:\*$/)
+      }
+      // And prod allows NO scheme://host origin at all (blob:/data: carry no host).
+      expect(prod).not.toMatch(/[a-z]+:\/\//)
+    }
   })
 })
 

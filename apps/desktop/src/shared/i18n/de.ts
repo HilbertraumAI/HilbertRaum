@@ -452,6 +452,13 @@ export const de: Record<keyof typeof en, string> = {
     'Das ganze Dokument wird durchsucht, damit es „Liste alle…"-Fragen beantworten kann',
   'docs.task.categorizeBusy': 'Kategorisiert Umsätze…',
   'docs.task.categorizeBusyTitle': 'Die Umsätze des Kontoauszugs werden kategorisiert',
+  // OCR-R P1 (FE-4/FE-5): der letzte Schritt der OCR-Aufgabe ist die minutenlange
+  // Neu-Indexierung, kein Seitenlesen — das Beschäftigt-Label wechselt hierauf, sobald der
+  // letzte Schritt erreicht ist (der Zähler behält „Seiten + 1“). Nach einem Abbrechen-Klick
+  // zeigt der Knopf das ehrliche „wenn möglich“ — ein Abbruch während der Neu-Indexierung
+  // wird bewusst ignoriert (der GAP-7-Vertrag).
+  'docs.task.ocrFinishing': 'Wird abgeschlossen — der Text wird durchsuchbar gemacht…',
+  'docs.task.stopping': 'Wird gestoppt, wenn möglich…',
   'docs.error.noSupported': 'In dieser Auswahl wurden keine unterstützten Dokumente gefunden.',
   'docs.removedDocFallback': 'einem entfernten Dokument',
   'docs.provenance.compareBefore': 'Vergleich von ',
@@ -518,7 +525,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.meta.type': 'Typ',
   'docs.meta.summary': 'Zusammenfassung',
   'docs.scan.ocrOffer':
-    'Nutze unten „Durchsuchbar machen (OCR)“, um die Seiten auf diesem Laufwerk zu lesen.',
+    'Nutze „Durchsuchbar machen (OCR)“ in dieser Zeile, um die Seiten auf diesem Laufwerk zu lesen.',
   'docs.scan.ocrMissing':
     'Zum Durchsuchbar-Machen fehlen die OCR-Dateien auf diesem Laufwerk. Um sie zu ergänzen, ' +
     'die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur die OCR-Dateien ' +
@@ -540,6 +547,13 @@ export const de: Record<keyof typeof en, string> = {
   'docs.makeSearchable': 'Durchsuchbar machen (OCR)',
   'docs.makeSearchableTitle':
     'Die gescannten Seiten mit lokaler Texterkennung lesen — nichts verlässt dieses Laufwerk',
+  // Das explizite D33-Redo (OCR-R P1 FE-2): ein bereits erkanntes PDF kann erneut gelesen
+  // werden (bessere Dateien / ein schlechter erster Durchlauf) — anders als „Neu indexieren“,
+  // das die gespeicherte Erkennung WEITERVERWENDET.
+  'docs.makeSearchableAgain': 'Erneut lesen (OCR)',
+  'docs.makeSearchableAgainTitle':
+    'Die lokale Texterkennung erneut ausführen und die gespeicherte Erkennung ersetzen — ' +
+    '„Neu indexieren“ verwendet sie weiter',
   'docs.summarize': 'Zusammenfassen',
   'docs.summarizeAgain': 'Erneut zusammenfassen',
   'docs.summarizeTitle':
@@ -1925,6 +1939,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.task.ocrFailed':
     'Dieser Scan konnte nicht gelesen werden. Stell sicher, dass das Dokument noch auf dem ' +
     'Laufwerk ist, und versuch es dann noch einmal.',
+  'main.task.documentBusyIngesting':
+    'Dieses Dokument wird noch importiert oder neu indexiert. Warte, bis das abgeschlossen ' +
+    'ist, und versuch es dann noch einmal.',
   'main.task.pickOneTranslate': 'Wähle genau ein Dokument zum Übersetzen aus.',
   'main.task.pickOneOcr':
     'Wähle genau ein gescanntes PDF aus, das durchsuchbar gemacht werden soll.',
@@ -2376,6 +2393,9 @@ export const de: Record<keyof typeof en, string> = {
     'Dieses Element hat keine Datei auf dem Datenträger. Ziehe ein Dokument aus einem Ordner oder nutze „ein Dokument auswählen".',
   'translate.file.err.unsupported':
     'Dieser Dateityp kann nicht übersetzt werden. Versuche eine PDF-, Word-, Markdown- oder Textdatei.',
+  'translate.file.err.scanned':
+    'Dieses PDF sieht aus wie ein Scan ohne lesbaren Text. Mache es zuerst unter „Dokumente“ ' +
+    'durchsuchbar — „Durchsuchbar machen (OCR)“ — und übersetze es dann.',
   'translate.file.err.importFailed': 'Das Dokument konnte nicht gelesen werden. Versuche es erneut.',
   'translate.file.err.runtimeFailed': 'Das Dokument konnte nicht übersetzt werden. Versuche es erneut.',
 

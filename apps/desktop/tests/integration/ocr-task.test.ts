@@ -14,11 +14,13 @@ import {
 } from '../../src/main/services/ingestion'
 import {
   DocTaskManager,
+  TASK_DOCUMENT_BUSY_INGESTING_MESSAGE,
   TASK_NEEDS_OCR_MESSAGE,
   TASK_OCR_NOT_A_SCAN_MESSAGE,
   TASK_OCR_NO_TEXT_MESSAGE,
   TASK_REFUSED_CHAT_STREAMING_MESSAGE
 } from '../../src/main/services/doctasks'
+import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { OcrEngine } from '../../src/main/services/ocr'
 import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
 import { createMockEmbedder } from '../../src/main/services/embeddings'
@@ -330,6 +332,40 @@ describe('Make searchable (OCR) end to end', () => {
     expect(() => busy.startDocTask({ kind: 'ocr', documentIds: [docId] })).toThrow(
       TASK_REFUSED_CHAT_STREAMING_MESSAGE
     )
+  })
+
+  // OCR-R P1 (BE-1, ocr-audit 2026-07-18): task admission must mirror the docs IPC
+  // `requireNoActiveTask` guard — refuse EVERY kind while the ingestion layer reports the
+  // target document mid-import/re-index (an OCR task admitted mid-re-index would interleave
+  // two chunk DELETE/INSERT transactions + two embed phases on one document). The predicate
+  // is optional: absent/unwired ⇒ admission unchanged. Watched fail pre-fix.
+  it('BE-1: refuses to start ANY kind while the target document is mid-import/re-index', async () => {
+    const docId = await importScan()
+    const busyDeps = {
+      getDb: () => db,
+      // Truthy runtime so the summary path reaches the NEW guard, not the no-model refusal.
+      getRuntime: () => ({}) as unknown as ModelRuntime,
+      getTranslator: () => null,
+      isChatStreaming: () => false,
+      getContextTokens: () => 4096,
+      getStoreDir: () => storeDir,
+      getIngestionDeps: () => ({ embedder: createMockEmbedder() }),
+      beginDocumentWork: () => () => {},
+      getOcrEngine: () => fakeEngine((n) => `Seite ${n}.`),
+      rasterizePdf: fakeRasterizer(2),
+      isDocumentProcessing: () => true
+    }
+    const busy = new DocTaskManager(busyDeps)
+    expect(() => busy.startDocTask({ kind: 'ocr', documentIds: [docId] })).toThrow(
+      TASK_DOCUMENT_BUSY_INGESTING_MESSAGE
+    )
+    expect(() => busy.startDocTask({ kind: 'summary', documentIds: [docId] })).toThrow(
+      TASK_DOCUMENT_BUSY_INGESTING_MESSAGE
+    )
+    // A false predicate admits normally — the guard must never refuse outside a live ingestion.
+    const idle = new DocTaskManager({ ...busyDeps, isDocumentProcessing: () => false })
+    const { jobId } = idle.startDocTask({ kind: 'ocr', documentIds: [docId] })
+    expect((await waitTerminal(idle, jobId)).state).toBe('done')
   })
 
   it('re-running OCR on an already-recognized PDF is allowed and overwrites', async () => {

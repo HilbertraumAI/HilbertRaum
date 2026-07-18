@@ -46,7 +46,9 @@ export const ImageParser: DocumentParser = {
     let text: string
     try {
       const image = await readFile(filePath)
-      const result = await engine.recognize(image)
+      // BE-8: forward the parse context's abort signal so a cancelled import aborts the
+      // recognition in flight instead of waiting it out (bounded by the 2-min ceiling).
+      const result = await engine.recognize(image, { signal: ctx?.signal })
       text = result.text.trim()
     } catch (err) {
       // §11.4: the documents table gets friendly copy; the technical reason goes to

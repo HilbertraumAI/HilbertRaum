@@ -426,6 +426,12 @@ export const en = {
     'The whole document is being scanned so it can answer "list every…" questions',
   'docs.task.categorizeBusy': 'Categorizing transactions…',
   'docs.task.categorizeBusyTitle': 'The statement’s transactions are being categorized',
+  // OCR-R P1 (FE-4/FE-5): the OCR task's final step is the minutes-long re-ingest, not page
+  // reading — the busy label switches to this once the last step is reached (the count keeps
+  // the "pages + 1" total). After a cancel click the button reads the honest "stopping if
+  // possible" — a cancel during the re-ingest is deliberately ignored (the GAP-7 contract).
+  'docs.task.ocrFinishing': 'Finishing — making the text searchable…',
+  'docs.task.stopping': 'Stopping if possible…',
   'docs.error.noSupported': 'No supported documents were found in that selection.',
   'docs.removedDocFallback': 'a removed document',
   // Provenance lines render around inline <b>title</b> elements.
@@ -487,7 +493,7 @@ export const en = {
   'docs.meta.sectionsCount.other': '{count} sections',
   'docs.meta.type': 'Type',
   'docs.meta.summary': 'Summary',
-  'docs.scan.ocrOffer': 'Use "Make searchable (OCR)" below to read the pages on this drive.',
+  'docs.scan.ocrOffer': 'Use "Make searchable (OCR)" on this row to read the pages on this drive.',
   'docs.scan.ocrMissing':
     'Making it searchable needs the OCR files, which are not on this drive. To add them, re-run ' +
     'the drive setup with "--with-assets", or fetch only the OCR files with ' +
@@ -509,6 +515,11 @@ export const en = {
   'docs.makeSearchable': 'Make searchable (OCR)',
   'docs.makeSearchableTitle':
     'Read the scanned pages with local text recognition — nothing leaves this drive',
+  // The D33 explicit redo (OCR-R P1 FE-2): an already-OCR'd PDF can be read again (better
+  // assets / a bad first pass) — distinct from Re-index, which REUSES the stored recognition.
+  'docs.makeSearchableAgain': 'Read again (OCR)',
+  'docs.makeSearchableAgainTitle':
+    'Run the local text recognition again and replace the stored reading — Re-index reuses it',
   'docs.summarize': 'Summarize',
   'docs.summarizeAgain': 'Summarize again',
   'docs.summarizeTitle': 'Write a summary with the local model — nothing leaves this drive',
@@ -1854,6 +1865,8 @@ export const en = {
     'No readable text was found in this scan. The pages may be blank or too blurry.',
   'main.task.ocrFailed':
     "This scan couldn't be read. Make sure the document is still on the drive, then try again.",
+  'main.task.documentBusyIngesting':
+    'This document is still being imported or re-indexed. Wait for that to finish, then try again.',
   'main.task.pickOneTranslate': 'Pick exactly one document to translate.',
   'main.task.pickOneOcr': 'Pick exactly one scanned PDF to make searchable.',
   'main.task.pickOneSummarize': 'Pick exactly one document to summarize.',
@@ -2316,6 +2329,9 @@ export const en = {
     'That item has no file on disk. Drag a document from a folder, or use “choose a document”.',
   'translate.file.err.unsupported':
     "That file type can't be translated. Try a PDF, Word, Markdown, or text file.",
+  'translate.file.err.scanned':
+    'This PDF looks like a scan with no readable text. Make it searchable first in Documents — ' +
+    '"Make searchable (OCR)" — then translate it.',
   'translate.file.err.importFailed': "The document couldn't be read. Try again.",
   'translate.file.err.runtimeFailed': "The document couldn't be translated. Try again.",
 

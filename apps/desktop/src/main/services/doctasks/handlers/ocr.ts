@@ -50,7 +50,8 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
         task.status.progress.stepsTotal = n + 1
       },
       onPage: async (pageNumber, png) => {
-        // Backpressure: the next page is not rendered until this recognition ends.
+        // Backpressure: recognitions serialize; the rasterizer keeps at most a 1-deep
+        // render look-ahead (ING-5).
         const result = await engine.recognize(png, { signal })
         pages.push({ pageNumber, text: result.text.trim() })
         task.status.progress.stepsDone += 1

@@ -59,6 +59,42 @@ export function buildCsp(isDev: boolean): string {
 }
 
 /**
+ * The CSP that ships INSIDE the HTML (`<meta http-equiv="Content-Security-Policy">`) of
+ * `index.html` (main window) and `ocr.html` (hidden OCR rasterizer window) — the SINGLE
+ * source of truth for both pages' meta tags (BE-2, ocr-audit 2026-07-18). The tags are
+ * REWRITTEN AT BUILD TIME from this function by the `hilbertraum:csp-meta` transform in
+ * electron.vite.config.ts: the dev server serves the dev policy (Vite HMR needs the
+ * localhost websocket), the production build bakes the prod policy. Before BE-2 the
+ * checked-in meta carried the dev localhost relaxation verbatim into packaged builds.
+ *
+ * Measured on a packaged Windows build (2026-07-18, OCR-R P5 Step A): the
+ * `onHeadersReceived` buildCsp() header DOES attach to `file://` loads in BOTH windows
+ * and is ENFORCED (a fetch the meta allowed was blocked with the header string as the
+ * violation's originalPolicy) — the header, not the meta, is the load-bearing prod
+ * policy. The meta is the second, defence-in-depth layer (the effective policy is the
+ * INTERSECTION of both), so it must not advertise localhost in prod: if the session
+ * header wiring ever regresses, the meta alone must still deny every remote origin.
+ *
+ * Prod therefore strips the `ws://localhost:*` / `http://localhost:*` connect-src
+ * entries; every other directive is byte-identical to the dev policy of the same page.
+ * The `ocr` page keeps `worker-src 'self' blob:` and `img-src … data: blob:` — the
+ * bundled pdfjs's allowances (its worker itself loads as a plain 'self' asset; measured:
+ * packaged rasterization runs under the stricter header intersection) — so this meta
+ * never becomes the directive that breaks rasterization only in packaged builds, the one
+ * place CI cannot see. Pinned by tests/unit/window-security.test.ts and by the
+ * built-output test tests/integration/csp-build-output.test.ts (no `localhost` in a
+ * built meta, ever).
+ */
+export function buildMetaCsp(isDev: boolean, page: 'index' | 'ocr'): string {
+  const connectSrc = isDev ? "'self' ws://localhost:* http://localhost:*" : "'self'"
+  return page === 'index'
+    ? `default-src 'self'; script-src 'self'; connect-src ${connectSrc}; ` +
+        "img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'"
+    : `default-src 'self'; script-src 'self'; connect-src ${connectSrc}; ` +
+        "img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'"
+}
+
+/**
  * Main-window window-open policy: open external links in the OS browser, never inside
  * the app window — but only safe web schemes. Handing an arbitrary renderer-supplied
  * URL (e.g. file://, smb://) to the OS handler is a known Electron pitfall, so anything

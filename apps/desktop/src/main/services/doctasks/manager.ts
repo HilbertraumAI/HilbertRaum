@@ -87,6 +87,7 @@ export const TASK_NEEDS_OCR_MESSAGE = t('en', 'main.task.needsOcr')
 export const TASK_OCR_NOT_A_SCAN_MESSAGE = t('en', 'main.task.ocrNotAScan')
 export const TASK_OCR_NO_TEXT_MESSAGE = t('en', 'main.task.ocrNoText')
 export const TASK_OCR_FAILED_MESSAGE = t('en', 'main.task.ocrFailed')
+export const TASK_DOCUMENT_BUSY_INGESTING_MESSAGE = t('en', 'main.task.documentBusyIngesting')
 
 const TERMINAL: ReadonlySet<DocTaskStatus['state']> = new Set(['done', 'failed', 'cancelled'])
 
@@ -302,6 +303,18 @@ export class DocTaskManager {
               ? tMain('main.task.pickOneOcr')
               : tMain('main.task.pickOneSummarize')
       )
+    }
+    // BE-1 (ocr-audit 2026-07-18): the mirror of the docs IPC `requireNoActiveTask` guard —
+    // refuse EVERY kind while the ingestion layer (import loop / re-index) is mid-flight on a
+    // target document. Without this an OCR re-run admitted mid-re-index interleaves two chunk
+    // DELETE/INSERT transactions + two embed phases on one document (an already-OCR'd PDF
+    // keeps its `ocr` admission metadata through the whole re-index; every other kind is
+    // shielded only incidentally by `status === 'indexed'`). Optional predicate: absent ⇒
+    // never busy (partial test deps stay byte-green).
+    for (const id of documentIds) {
+      if (this.deps.isDocumentProcessing?.(id)) {
+        throw new Error(tMain('main.task.documentBusyIngesting'))
+      }
     }
     if (kind === 'ocr') {
       // The target is a scan-DETECTED PDF (step 0 marked it), or an already-OCR'd PDF
@@ -693,7 +706,8 @@ const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.task.needsOcr',
   'main.task.ocrNotAScan',
   'main.task.ocrNoText',
-  'main.task.ocrFailed'
+  'main.task.ocrFailed',
+  'main.task.documentBusyIngesting'
 ]
 
 /**

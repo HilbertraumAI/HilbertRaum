@@ -490,8 +490,11 @@ handlers/IPC; only the **presentation** changed. Code/i18n comments cite this se
    `ConfirmDialog` pattern (decision D-UI1, `react-dropdown-menu@2.1.17`). The trigger is
    `aria-label`led "More actions for <filename>", is keyboard-focusable/tabbable even though it
    is revealed on hover, and right-clicking the row opens the same menu (one controlled
-   `menuOpenId`). Contextual items appear only when applicable ("Make searchable (OCR)" for a
-   scan, "Build deep index" until deeply indexed, "Export" for generated docs).
+   `menuOpenId`). Contextual items appear only when applicable ("Read again (OCR)" on an
+   already-OCR'd PDF, "Build deep index" until deeply indexed, "Export" for generated docs).
+   A detected scan is a FAILED row — failed rows have no overflow, so its "Make searchable
+   (OCR)" is an inline button on the row itself (OCR-R P1; see the architecture.md OCR
+   remediation ledger).
 2. **State = badges, not buttons.** The three scattered "done" signals — "✓ Ready" (top-right),
    "Summary ✓" (metadata row), and "✓ Deeply indexed" (a green *button* in the action row) — are
    consolidated into ONE right-aligned **Badge cluster** (`Badge`, icon + word, never color-only

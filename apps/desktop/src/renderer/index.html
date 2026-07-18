@@ -4,9 +4,13 @@
     <meta charset="UTF-8" />
     <!--
       Offline-first CSP: only same-origin resources. No remote origins are
-      permitted, so the renderer cannot reach any cloud service. The localhost
-      entries exist solely for the dev server's hot-reload. The main process
-      hardens this further via response headers (strict in prod, HMR-relaxed in dev).
+      permitted, so the renderer cannot reach any cloud service. The content below is
+      the DEV policy (the localhost entries exist solely for Vite hot-reload) and is
+      REWRITTEN AT BUILD TIME from window-security.ts `buildMetaCsp(isDev, 'index')` by
+      the csp-meta transform in electron.vite.config.ts (BE-2, ocr-audit 2026-07-18) —
+      packaged builds bake the strict prod policy with no localhost. The main process
+      additionally enforces buildCsp() via response headers (measured load-bearing on
+      packaged file:// loads — see docs/security-model.md).
     -->
     <meta
       http-equiv="Content-Security-Policy"

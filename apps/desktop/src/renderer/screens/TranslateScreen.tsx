@@ -70,6 +70,7 @@ const FILE_ERR_KEY: Record<FileTranslateErrorCode, MessageKey> = {
   multiDrop: 'translate.file.err.multiDrop',
   noPath: 'translate.file.err.noPath',
   unsupported: 'translate.file.err.unsupported',
+  scanned: 'translate.file.err.scanned',
   importFailed: 'translate.file.err.importFailed',
   docTaskBusy: 'translate.err.docTaskBusy',
   runtimeFailed: 'translate.file.err.runtimeFailed'

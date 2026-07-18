@@ -3,7 +3,7 @@
 // conditionals and the PERF-5 memo discipline are byte-identical; only the per-row formatters
 // and constants now come from `./format` rather than module scope. Behavior unchanged.
 
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Badge, Banner, Button, Chip, Icon, Spinner } from '../../components'
 import type { DocumentInfo, DocumentLifecycle } from '@shared/types'
@@ -142,14 +142,36 @@ export const DocRow = memo(function DocRow({
   const deepIndexComplete = d.treeStatus === 'ready' && d.extractStatus === 'ready'
   const canDeepIndex = canDocTasks && !d.origin && !deepIndexComplete
   const showOcr = Boolean(d.scanDetected && ocrAvailable)
+  // OCR-R P1 FE-2: the D33 explicit redo — an already-OCR'd, INDEXED PDF can be read again
+  // (better assets / a bad first pass; the backend admits it). Distinct from `showOcr`: a
+  // detected scan is a FAILED row and gets the inline button in the failed branch instead.
+  const showOcrRedo = Boolean(d.ocr != null && ocrAvailable)
   const stale = d.origin ? generatedStaleness(d, sourcesById) : { stale: false as const }
+  // OCR-R P1 FE-4: the OCR task's final step is the minutes-long re-ingest, not page reading —
+  // "Reading the scan… (4/4)" through it lied. The count keeps the design record's "pages +
+  // the final re-ingest step" total (unlike Translate's display-side subtraction — the two
+  // conventions are documented, not silently converged); only the LABEL switches once the
+  // last step is reached. The ~ms pre-persist instant sharing this state is accepted.
+  const ocrFinishing =
+    rowTask?.kind === 'ocr' &&
+    rowTask.status != null &&
+    rowTask.status.progress.stepsTotal > 1 &&
+    rowTask.status.progress.stepsDone >= rowTask.status.progress.stepsTotal - 1
   const rowBusyLabel = rowTask
-    ? `${t(TASK_BUSY_LABEL[rowTask.kind])}${
-        rowTask.status && rowTask.status.progress.stepsTotal > 1
-          ? ` (${rowTask.status.progress.stepsDone}/${rowTask.status.progress.stepsTotal})`
-          : ''
-      }`
+    ? ocrFinishing
+      ? t('docs.task.ocrFinishing')
+      : `${t(TASK_BUSY_LABEL[rowTask.kind])}${
+          rowTask.status && rowTask.status.progress.stepsTotal > 1
+            ? ` (${rowTask.status.progress.stepsDone}/${rowTask.status.progress.stepsTotal})`
+            : ''
+        }`
     : ''
+  // OCR-R P1 FE-5: after a cancel click on an OCR row the button renders disabled as
+  // "Stopping if possible…" — honest about the GAP-7 duality (a cancel landing during the
+  // final re-ingest is deliberately ignored and the task completes 'done'). Keyed by jobId
+  // so a later task on this row gets a fresh button; other kinds keep today's rendering.
+  const [cancelRequestedJob, setCancelRequestedJob] = useState<string | null>(null)
+  const ocrStopping = rowTask?.kind === 'ocr' && cancelRequestedJob === rowTask.jobId
   return (
     <div
       className={`doc-row ${selected ? 'selected' : ''}`}
@@ -267,10 +289,18 @@ export const DocRow = memo(function DocRow({
             </Button>
             <Button
               size="sm"
-              onClick={onCancelTask}
+              // FE-5: Cancel stays ENABLED through the finishing step (a legitimately
+              // cancellable pre-persist instant shares this renderer-visible state —
+              // handlers/ocr.ts); only a cancel already CLICKED disables it, as the honest
+              // "Stopping if possible…" — the backend may legally ignore it (GAP-7).
+              disabled={ocrStopping}
+              onClick={() => {
+                if (rowTask.kind === 'ocr') setCancelRequestedJob(rowTask.jobId)
+                onCancelTask()
+              }}
               title={t(rowTask.kind === 'ocr' ? 'docs.cancelOcrTitle' : 'docs.cancelTaskTitle')}
             >
-              {t('docs.cancel')}
+              {ocrStopping ? t('docs.task.stopping') : t('docs.cancel')}
             </Button>
           </>
         ) : d.status === 'failed' ? (
@@ -280,6 +310,21 @@ export const DocRow = memo(function DocRow({
           // (a read/parse error), never for an unsupported type. Works in both the
           // All-documents list and the "Failed imports" view (same row markup).
           <>
+            {/* OCR-R P1 FE-1 (ocr-audit 2026-07-18): a detected scan is by definition a
+                FAILED row, and failed rows have no "⋯" overflow — so the scan banner's
+                promised "Make searchable (OCR)" control must live HERE, inline ahead of
+                Try again/Remove. Strictly showOcr-gated: ordinary failures are unchanged. */}
+            {showOcr && (
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={busy !== null || anyTaskActive}
+                title={t('docs.makeSearchableTitle')}
+                onClick={() => void onMakeSearchable(d)}
+              >
+                {t('docs.makeSearchable')}
+              </Button>
+            )}
             {isRetryableFailure(d.errorMessage) && (
               <Button
                 size="sm"
@@ -352,10 +397,17 @@ export const DocRow = memo(function DocRow({
                       {t('docs.translateNoModel')}
                     </DropdownMenu.Item>
                   )}
-                  {/* Contextual: make a detected scan searchable (OCR). */}
-                  {showOcr && (
-                    <DropdownMenu.Item className="menu-item" disabled={anyTaskActive} onSelect={() => void onMakeSearchable(d)}>
-                      {t('docs.makeSearchable')}
+                  {/* OCR-R P1 FE-2: the D33 explicit redo for an already-OCR'd PDF. (The old
+                      `showOcr` item here was dead code — a detected scan is a FAILED row and
+                      never reaches this branch; its control is the inline button above.) */}
+                  {showOcrRedo && (
+                    <DropdownMenu.Item
+                      className="menu-item"
+                      disabled={anyTaskActive}
+                      title={t('docs.makeSearchableAgainTitle')}
+                      onSelect={() => void onMakeSearchable(d)}
+                    >
+                      {t('docs.makeSearchableAgain')}
                     </DropdownMenu.Item>
                   )}
                   {/* Build deep index — disappears once the doc is deeply indexed (Task 2);

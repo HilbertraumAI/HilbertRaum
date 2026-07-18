@@ -1553,7 +1553,12 @@ sentinel-tested), zero native deps.
   the worker (cleared → recreated lazily) and reject — which frees the serialized chain so
   the next page proceeds with a fresh worker. A plain recognition error still leaves the
   worker intact (unchanged). The OCR document task surfaces a timed-out page as a friendly
-  task failure (the recognition stays unpersisted; Cancel/redo unchanged).
+  task failure (the recognition stays unpersisted; Cancel/redo unchanged). **A second,
+  independent ceiling bounds rendering, not recognition:** the hidden-window rasterizer's
+  per-page open+render round-trip is capped at a fixed `RASTER_STEP_TIMEOUT_MS` (60 s,
+  `services/ocr/rasterizer.ts`), with no env override — a page that renders slowly fails
+  the task at 60 s regardless of `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS`, which only governs the
+  main-side recognition step.
 - **D33: OCR is NEVER automatic for PDFs.** Detection marks the row; "Make searchable
   (OCR)" runs as a **Phase-33 document task** (kind `'ocr'` — queue, progress
   "pages + 1", cancel; the D26 guards hold, but it needs the OCR engine instead of the
@@ -1564,9 +1569,36 @@ sentinel-tested), zero native deps.
   `ExtractedSegment{ pageNumber }` per page ⇒ **page citations work unchanged**.
   `ocr_json` survives re-index (like `origin_json`): re-index and preview reuse the
   stored pages instead of silently re-OCRing; re-running the task is the explicit redo.
-  Cancel persists nothing. **Photos are the D33 asymmetry:** the `ImageParser` OCRs on
+  **Cancel contract (GAP-7, two-part):** a cancel landing before the persist point
+  (`setDocumentOcr`) persists nothing — the document stays a detected scan; a cancel
+  landing after it (during the signal-less, minutes-long re-ingest) is deliberately
+  IGNORED and the task completes `'done'`, because the recognition is already persisted
+  and the chunks/index are being rebuilt from it. **Photos are the D33 asymmetry:** the `ImageParser` OCRs on
   import directly (one small image, seconds) via the engine injected through
   `ParseContext` — the transcriber-injection precedent.
+- **Initiation surface, admission guard & finishing-step display (OCR-R P1; ocr-audit
+  2026-07-18 FE-1/FE-2/BE-1/FE-4/FE-5).** A detected scan is by definition a FAILED row,
+  and failed rows have no "⋯" overflow (§11.6) — so the offer is an **inline "Make
+  searchable (OCR)" button** on the failed row itself (strictly `showOcr`-gated; ordinary
+  failed rows are unchanged), and the D33 explicit redo is a separate **"Read again
+  (OCR)"** overflow item on already-OCR'd INDEXED PDFs (`d.ocr != null && ocrAvailable`).
+  Task admission mirrors the docs-IPC `requireNoActiveTask` guard in the reverse
+  direction: `DocTaskDeps.isDocumentProcessing` — late-bound to `registerDocsIpc`'s
+  module-local `processing` set via `ctx.docIngestionActive` (the `skillRunActive`
+  pattern; predicate injection chosen over extracting the set into a shared service) —
+  refuses `startDocTask` for EVERY kind while a target document is mid-import/re-index
+  (`main.task.documentBusyIngesting`); without it an OCR re-run admitted mid-re-index
+  would interleave two chunk rebuilds + two embed phases on one document. **Finishing-step
+  display contract:** progress stays "pages + the final re-ingest step" (stepsTotal =
+  n + 1), but once the last step is reached the row's busy label switches to
+  `docs.task.ocrFinishing` ("Finishing — making the text searchable…") instead of
+  "Reading the scan… (n/n)" — Documents keeps the +1 by LABEL while Translate subtracts
+  the step for display; the two conventions are deliberate, not drift. Cancel stays
+  ENABLED through the finishing step (a legitimately cancellable pre-persist instant
+  shares that renderer-visible state); after a cancel click the button renders disabled as
+  "Stopping if possible…" (`docs.task.stopping`) — honest about the two-part cancel
+  contract above. The ~ms ambiguity (the pre-persist instant already reads "Finishing") is
+  accepted.
 - **Availability-driven (D14/D9):** `createSelectedOcrEngine` returns the engine iff
   `<root>/ocr/*.traineddata.gz` exist, else **null** (no mock — invented text would
   corrupt the corpus). `AppStatus.ocrAvailable` gates the UI; absent assets ⇒ the scan
@@ -9101,6 +9133,91 @@ retirement; resolve them as:
 | `EP-1 plan` (bare) | The plan as a whole | this record + the git-show pointer |
 | D-1…D-10 | Owner decisions | §8 ladder above |
 | `review FIX-N` | Phase-scoped review-round findings (each phase numbered its own) | the phase's build-log entry (fix-round paragraph) + §8's verdict column |
+
+## OCR audit (2026-07-18) — remediation ledger (wave OCR-R, PR #75)
+
+A three-agent audit of the Phase-38 "Scanned-PDF / photo OCR" feature end to end (backend
+pipeline, doc-task handler, ingestion integration, IPC + window security, every renderer
+surface, every living doc) found **18 findings** (1 Critical, 1 High, 7 Medium, 9 Low) and
+**5 test-coverage gaps**, all remediated or explicitly deferred in wave **OCR-R** — a single
+branch merged as **PR #75** (owner-amended from the stacked per-phase convention), phases
+P0–P6 with per-phase RED→GREEN teeth, closed by an independent adversarial verification pass
+that re-derived every fix against the audit's mechanism descriptions (no wave-introduced
+regressions found). The audit's headline clean verdicts also held: the documented invariants
+(GAP-7 cancel contract, ING-5/REL-4 memory bounds, reply-slot hardening, offline guarantee,
+encrypted-workspace hygiene, EN/DE parity) were verified in code and test-pinned. Both
+working papers (audit report + remediation plan) were committed for the wave's lifetime on
+the wave-open commit and deleted at close-out per the doc-lifecycle rule — full text:
+`git show 0b6951ea --name-only` lists them under `docs/`, `git show '0b6951ea:docs/<name>'`
+prints them. **§-anchor legend:** citations of the form `ocr-audit 2026-07-18 <ID>` (in
+commits, code comments, and tests) resolve to the disposition table below; `OCR-R P<n>`
+resolves to the phase column / commit table; `test-gap #n` to the gaps table.
+
+**Phase commits** (suite 4625/49 → 4664/50 across the wave; typecheck + build green at every
+gate): P0 `0b6951ea` wave open · P1 `6fa66995` initiation interlock · P2 `f2d5b550`
+Translate handoff · P3 `0687a437` docs truth · P4 `f8f3dc29` backend hardening · P5
+`d0579d25` packaged CSP + harness · P6 = the close-out commit on PR #75.
+
+### Finding dispositions
+
+| ID | Sev | Finding (self-contained) | Disposition |
+|---|---|---|---|
+| FE-1 | Critical | A scan-detected doc is by definition a `failed` row; failed rows render no ⋯ overflow, and the only "Make searchable (OCR)" entry lived in the overflow — the scan banner promised a control that never rendered; OCR was uninitiable from the UI | Fixed @ P1: inline primary "Make searchable (OCR)" button in the failed-row branch, strictly `showOcr`-gated (ordinary failures byte-identical); the dead overflow item removed; banner copy "below" → "on this row". Teeth: DocumentsScreen initiation suite (click → `startDocTask('ocr')`, controls, missing-assets, busy-disable) |
+| DOC-1 | High | The Phase-38 design record still claimed "Cancel persists nothing", contradicting the deliberate GAP-7 two-part contract the code implements | Fixed @ P3: record paragraph now states both halves (pre-persist cancel persists nothing; a cancel during the signal-less final re-ingest is deliberately ignored and completes `'done'`) |
+| BE-1 | Medium | `startDocTask` never consulted the ingestion `processing` set — an OCR re-run admitted mid-re-index would interleave two chunk rebuilds + two embed phases on one doc (the reverse guard `requireNoActiveTask` existed only in one direction) | Fixed @ P1: `DocTaskDeps.isDocumentProcessing` predicate (late-bound via `AppContext.docIngestionActive`, assigned where the set lives) refuses EVERY task kind against a mid-import/re-index target with `main.task.documentBusyIngesting`. Teeth: every-kind unit test + gated-slow-re-index integration test (refused mid-flight, admitted after release) |
+| BE-2 | Medium | The strict prod CSP was header-injected only; both windows load over `file://` where header delivery was believed unavailable, and the baked meta carried the dev `connect-src localhost` relaxation into packaged builds — the hidden OCR window renders hostile PDF bytes | Fixed @ P5, **measured first**: an autonomous instrumented probe of a real packaged Windows build showed the `onHeadersReceived` header DOES attach and enforce on `file://` in both windows (Electron 37) — the header is load-bearing; the meta is defence-in-depth and must still not advertise localhost. `buildMetaCsp(isDev, page)` (window-security.ts) is now the single source of truth, baked at build time by the `hilbertraum:csp-meta` transform; prod strips only the localhost connect-src entries; the ocr page keeps pdfjs's `worker-src 'self' blob:` / `img-src data: blob:`; packaged rasterization re-verified under the new policy. Teeth: build-output CSP test (no `localhost` in a built meta, ever) + window-security pins |
+| FE-2 | Medium | The backend explicitly admits re-running OCR on an already-OCR'd PDF (D33 "explicit redo"), but no UI offered it | Fixed @ P1: "Read again (OCR)" overflow item on indexed OCR'd PDFs (`d.ocr != null && ocrAvailable`), title distinguishing redo from Re-index (which reuses the stored recognition) |
+| FE-3 | Medium | Translate collapsed every imported-but-ingest-failed case to "unsupported file type" — nonsensical for a scanned PDF, with no OCR handoff | Fixed @ P2: the session reads the failed row (read-only `listDocuments`, generation-guarded) — `scanDetected` → `scanned` code ("make it searchable first in Documents"); other ingest failures surface their localized real `errorMessage`; unreadable row → generic import-failed frame; unsupported-extension path byte-identical. Teeth: scan/corrupt/unsupported triple |
+| DOC-2 | Medium | Nothing user-facing said a cancel landing during the final re-index is deliberately ignored | Fixed @ P3: known-limitations bullet + user-guide "always cancel" softened with the OCR-finishing exception |
+| DOC-4 | Medium | Docs described one per-page ceiling (2 min, env-tunable) — the fixed 60 s per-step render timeout was undocumented | Fixed @ P3: `RASTER_STEP_TIMEOUT_MS` (60 s, not env-tunable) documented beside `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS` in known-limitations + the architecture timeout ¶ |
+| DOC-5 + BE-4 | Medium | OCR assets installed mid-session need a restart (engine composed once at startup) — undocumented, and the `getOcrEngine` comment claimed the opposite | Docs/comment half fixed @ P3 (troubleshooting + drive-layout restart sentences; comment corrected). The behavioral mid-session refresh is a **registered deferral** (below) |
+| BE-3 | Low | Stale "next page is not rendered until this recognition ends" comment contradicted the shipped ING-5 look-ahead | Fixed @ P3: comment states the truth (recognitions serialize; 1-deep render look-ahead) |
+| BE-5 | Low | `ensureWorker()` ignored `this.stopped` (a queued recognition could respawn a worker past the will-quit teardown), and the workspace-lock teardown omitted the OCR engine (warm WASM worker survived a lock) | Fixed @ P4: stopped-guard in `ensureWorker`; new non-latching `OcrEngine.suspend()` in the lock teardown (`stop()` stays quit-only — a terminal stop in the lock list would brick OCR until relaunch). Teeth: queued-past-stop rejects with no respawn; suspend → respawn-and-succeed; lock calls suspend |
+| BE-6 | Low | The OCR pipeline walked every declared page with no clamp, unlike the text parser's M-2 `pdfMaxPages` posture | Fixed @ P4: `pipelinePages` enforces `maxPages` (pure, unit-tested); the rasterizer resolves `resolveIngestionLimits().pdfMaxPages`, logs truncation, and reports the clamped count so `stepsTotal`/progress/`ocr_json.pageCount` stay truthful |
+| BE-7 | Low | The hidden window never called `page.cleanup()` (pdfjs caches grow across a long scan), and a dead renderer burned the 60 s step timeout per remaining step | Fixed @ P4: `page.cleanup()` in a `finally` per page; `render-process-gone` → immediate slot failure (listener torn down in the rasterizer `finally`). Fast-fail teeth in the P5 harness; the memory profile is a registered deferral. Residual: a gone event landing in the microtask gap between a reply and the next expect degrades to a single 60 s timeout (bounded, not per-step) |
+| BE-8 | Low | `ImageParser` called `engine.recognize(image)` without the parse abort signal — a cancelled photo import waited out the recognition | Fixed @ P4: `{ signal: ctx?.signal }` forwarded; signal-identity test |
+| BE-9 | Low | No advisory-review cadence documented for the pinned parser libraries, and the engine id hardcoded `'tesseract.js-7.0.0'` | Fixed @ P3 (security-model: review pdfjs/tesseract.js advisories each release; the offline posture has no auto-update channel) + P4 (id derived from the installed package version via `createRequire`, injection seam for provability) |
+| FE-4 | Low | The busy label read "Reading the scan… (n/n)" through the minutes-long final re-ingest step | Fixed @ P1: label switches to `docs.task.ocrFinishing` at the final step; the count keeps the record's "pages + 1" total. **Display contract:** Documents keeps the +1 by label while Translate subtracts the step for display — deliberate, documented, not drift |
+| FE-5 | Low | Cancel stayed enabled through the deliberately-uncancellable window and clicking it silently did nothing | Fixed @ P1: Cancel stays enabled (a real pre-persist cancel window shares the state); after a click it renders disabled as `docs.task.stopping` ("Stopping if possible…"). Cosmetic residual: the clicked-state is component state, so a scroll-away/return under list windowing re-enables the button (the backend cancel is already registered; a second click is a harmless no-op) |
+| DOC-3 | Low | "Recognized text survives re-index" was written as if it covered photos — the `ocrPages` reuse hook is PDF-only | Fixed @ P3: PDF-only disclosed; a photo re-recognizes from scratch each re-index (seconds, by design) |
+
+### Test gaps
+
+| Gap | Disposition |
+|---|---|
+| #1 — no renderer test exercised OCR initiation/display | Closed @ P1/P2 (initiation clicks, busy/finishing/stopping states, Translate failure copy). Residual registered: the PreviewModal `ocrInfo` line remains untested |
+| #2 — the real rasterizer wiring had no automated teeth | Closed @ P5: fake-Electron harness (destroy on success/error/timeout/abort, in-use latch, exact 60 s step-timeout pin, sender-spoof rejection on all three reply channels, listener removal, gone-event fast-fail) |
+| #3 — no concurrency test for task-start vs re-index | Closed @ P1 (unit + gated-re-index integration). Residual registered: two-queued-OCR-tasks-on-one-doc remains unpinned (behavior is benign — serialize + overwrite = the D33 redo) |
+| #4 — `renderer/ocr/main.ts` pdfjs side untested | **Deferred** (registered below) |
+| #5 — transient name + engineId unpinned | Closed @ P4: `<id>.parse-ocr.pdf` pinned to the crash-sweep matcher; engineId = `tesseract.js-<installed version>` test |
+
+### Design decisions (with declined alternatives)
+
+| # | Decision | Alternative declined (why) |
+|---|---|---|
+| 1 | FE-1: inline button in the failed-row branch | Remodel scan-detected as a non-failed sub-state (touches status consumers everywhere — smart views, counts, reconcile sweep, retry logic — for no user-visible gain) |
+| 2 | FE-4: finishing label; the step count keeps the +1 | Translate-style display subtraction (would silently diverge the two surfaces' honesty conventions; instead both are documented) |
+| 3 | FE-5: Cancel stays enabled + "Stopping if possible…" after click | Hard-disable at the final step (would remove a real pre-persist cancel window that shares the renderer-visible state) |
+| 4 | BE-1: the admission guard applies to ALL task kinds | ocr-only guard (the race exists in principle for any future kind not gated on `status === 'indexed'`) |
+| 5 | BE-5: non-latching `suspend()` joins the lock teardown; `stop()` stays quit-only | Terminal `stop()` in the lock list (bricks OCR until relaunch — a new bug) |
+| 6 | BE-6: clamp to `pdfMaxPages` | Recorded exemption (a cap asymmetry with no upside) |
+| 7 | DOC-5/BE-4: document the restart; defer the mid-session refresh | Per-`getAppStatus` fs re-probe (4 s-interval disk scans on USB drives) |
+| 8 | BE-2 (P5): meta = dev policy minus localhost only, pdfjs allowances kept | Grafting the header's full directive tail onto the meta (the enforced header already carries it; byte-minimal meta keeps the packaged effective policy — header ∩ meta — provably unchanged) |
+| 9 | BE-1 wiring: predicate injection | Extracting the `processing` set into a shared service (bigger diff, touches the DB-3 sweep, no added safety) |
+
+### Registered deferrals (owner follow-ups)
+
+1. **Mid-session OCR-asset refresh** (translator-#40 analogue or a "Check again" affordance on the `ocrMissing` banner) — needs an owner UX call; until then: restart after installing assets (documented).
+2. **Packaged OCR smoke, recognition leg** — the wave's build machine carries no `*.traineddata.gz`; the CSP-exposed rasterizer leg WAS verified inside a packaged build (P5). Run the full `tests/manual/ocr-smoke.test.ts` flow on an asset-carrying drive before the next release.
+3. **macOS/Linux packaged CSP + OCR smoke** (P5 measured Windows).
+4. **BE-7 memory profile** of a real 300+-page scan (manual, real assets) — confirms `page.cleanup()` keeps the hidden renderer flat.
+5. **`renderer/ocr/main.ts` pdfjs-side automated tests** (audit test-gap #4; the P5 harness covers the protocol level).
+6. **PreviewModal `ocrInfo` line renderer test** + **two-queued-OCR-tasks-on-one-doc pin** (P6 review residuals of gaps #1/#3).
+
+Historical note: dated design-record narratives elsewhere in the docs (e.g. the §11.6/S-wave
+records in `design-guidelines.md`) describe the pre-wave overflow-item placement as it was
+when written — they are snapshots, kept verbatim by convention; the present-tense guidance
+was updated.
 
 ## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
 

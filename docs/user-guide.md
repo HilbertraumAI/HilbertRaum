@@ -356,24 +356,27 @@ search model than the one currently active, and takes a moment per file.
 **Scanned PDFs — "Make searchable (OCR)".** A PDF that is only pictures of pages (a
 scanner's output) has no readable text, so the app tells you honestly: *"This PDF looks
 like a scan — it has no readable text yet."* If your drive has the OCR files, the row
-offers **Make searchable (OCR)** in its **⋯** menu (if it says the OCR files are *not on
-this drive*, add them with `prepare-drive --with-assets` or `fetch-runtime --family ocr` —
+offers a **Make searchable (OCR)** button right on the row (if it says the OCR files are
+*not on this drive*, add them with `prepare-drive --with-assets` or `fetch-runtime --family ocr` —
 see the Troubleshooting guide): the pages are read **on this drive** (no cloud OCR —
-German and English are included), with per-page progress and a Cancel button. When it
-finishes, the document is a normal searchable document; answers cite it **by page**, and
-**Preview** shows the recognized text per page with a *"Text recognized on this drive
-(OCR)"* note — recognition is good on clean scans but can contain errors on blurry ones.
-Reading a scan is never automatic (it takes a couple of seconds per page); you choose
-when. **Photos of pages** (PNG/JPG) are the small exception: they are read immediately
-on import.
+German and English are included), with per-page progress and a Cancel button; the last
+step reads *"Finishing — making the text searchable…"* while the recognized text is
+indexed. When it finishes, the document is a normal searchable document; answers cite it
+**by page**, and **Preview** shows the recognized text per page with a *"Text recognized
+on this drive (OCR)"* note — recognition is good on clean scans but can contain errors on
+blurry ones. If a first reading came out poorly (or you added better OCR files later),
+**Read again (OCR)** in the document's **⋯** menu reads the pages again — unlike
+**Re-index**, which reuses the stored reading. Reading a scan is never automatic (it takes
+a couple of seconds per page); you choose when. **Photos of pages** (PNG/JPG) are the
+small exception: they are read immediately on import.
 
 **Each document is a compact row.** On the **Documents** screen every file is one row:
 its name and a muted line of details (type, size, sections), any **location/project tags**,
 a **status badge** (and small **Summary** / **Deeply indexed** badges once those exist), one
 inline **Preview** button, and a **⋯** menu. The **⋯** menu (also opened by right-clicking the
 row) holds the document's actions — **Summarize**, **Translate**, **Re-index**, **Build deep
-index**, **Make searchable (OCR)**, **Move to project…**, **Export**, and a **Delete** at the
-bottom (which always confirms first). Tick a document's checkbox and a **selection toolbar**
+index**, **Read again (OCR)** (on documents read with OCR), **Move to project…**, **Export**,
+and a **Delete** at the bottom (which always confirms first). Tick a document's checkbox and a **selection toolbar**
 appears at the top of the list with the actions that work across documents — **Ask these
 documents**, **Compare (2)**, **Move to project…**, **Mark temporary**, **Archive**, and **Delete**.
 
@@ -395,8 +398,10 @@ A few honest notes:
 
 - A model must be **running** first (the AI Model screen), and the app runs one job at a
   time: while a summary is being written, chat asks you to wait or **cancel the task**, and
-  vice versa. You can always cancel — while a task runs, the row shows its progress and a
-  Cancel button in place of Preview and **⋯**.
+  vice versa. You can cancel most tasks at any point — while a task runs, the row shows its
+  progress and a Cancel button in place of Preview and **⋯**. The one exception is OCR's
+  final "Finishing…" step: by then the recognized text is already saved, so Cancel there
+  can't stop the document from becoming searchable (see "Scanned PDFs" above).
 - For **very long documents** *without* a deep index, the summary covers the beginning of the
   document (the app tells you when that happens). Build a deep index for whole-document coverage. The
   whole document stays searchable and answerable in *Ask my documents* regardless.
@@ -636,9 +641,11 @@ languages first, just like text. The document is read, translated a section at a
 panel. From there, **Export…** saves it as a file, **Show in Documents** opens it in your library,
 or **Copy** puts it on the clipboard. For a long document the panel shows the **start** of the
 translation — export it or open it in Documents to read the whole thing. Drop **one document at a
-time**; a file type that can't be read shows a short, friendly note. (This is the same job as the
-**⋯ → Translate** action under Documents, §7 — the translated copy is saved either way; the
-original you dropped is kept as a **temporary** document.)
+time**; a file type that can't be read shows a short, friendly note. A **scanned PDF** (pictures of
+pages, with no readable text) can't be translated as-is — the note points you to make it searchable
+first under **Documents** with **Make searchable (OCR)** (§7), then translate the result. (This is
+the same job as the **⋯ → Translate** action under Documents, §7 — the translated copy is saved
+either way; the original you dropped is kept as a **temporary** document.)
 
 Everything stays on the drive — your text and its translation are **never uploaded**. Typed text is
 transient: leave the screen (or lock the workspace) and it is gone. A translated **document**,

@@ -1709,6 +1709,13 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   until that retention ships or they delete them by hand. Deliberate: bespoke deletion here
   would risk the source of a translation the user may still want re-run. The same
   ~2K-window cross-window terminology drift above applies to dropped documents.
+- **A scanned PDF can't be translated as-is — the Translate view points you to OCR first
+  (FE-3).** A dropped/chosen PDF that is only pictures of pages imports but then fails
+  ingestion (no readable text). The banner names the real reason: for a detected scan it says
+  to make it searchable first under **Documents** with **Make searchable (OCR)**, then
+  translate the result; any other import failure (a corrupt/encrypted PDF) shows its own
+  localized reason rather than the old, misleading "unsupported file type" note. A genuinely
+  unsupported extension still shows the unsupported note.
 - **The Translate view shows only the START of a long translated document.** To bound
   renderer memory the output panel loads the materialized doc's bounded first page; a long
   translation shows a "showing the start" hint. Use **Export…** or **Show in Documents**
@@ -1869,7 +1876,16 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
 - **The recognized text survives re-index; re-running OCR is the explicit redo.**
   Re-index (e.g. after an embedder switch) reuses the stored recognition rather than
   silently re-OCRing for minutes; if the recognition itself was bad, run "Make
-  searchable (OCR)" again — it overwrites.
+  searchable (OCR)" again — it overwrites. **This is a PDF-only guarantee:** a photo's
+  recognition is never persisted separately from the document, so re-index re-runs it
+  from scratch (seconds) instead of reusing a stored reading, unlike a scanned PDF's
+  stored pages.
+- **A cancel that lands during the final "Finishing…" step no longer stops the task.**
+  Cancel works normally while pages are being read; once recognition is done and the
+  text is being persisted and re-indexed, a cancel click is deliberately ignored — the
+  row shows "Stopping if possible…" but the document completes and comes back
+  searchable anyway, because the recognition is already saved and the index rebuild is
+  already underway.
 - **Photos are read on import** (the D33 asymmetry — one image, seconds). A photo
   import without the OCR files on the drive fails per-file with friendly copy.
 - **A single crafted/huge page can't wedge OCR for the session** (backend audit
@@ -1877,6 +1893,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   job isn't cooperatively cancellable, so a page that exceeds a 2-minute per-page ceiling
   (env-tunable) — or a Cancel landing mid-page — terminates the worker (recreated lazily on
   the next page) and fails that OCR task friendly; the engine recovers for the next document.
+  A second, fixed 60-second ceiling separately bounds each page's **render** step
+  (`RASTER_STEP_TIMEOUT_MS`, not env-tunable) — a slow-rendering page can fail the task at
+  60 s even when the 2-minute recognition ceiling would have allowed more time.
+- **OCR walks at most the ingestion page cap (5 000 pages).** A tiny PDF can declare an
+  enormous page count, so — mirroring the text parser's M-2 ceiling — the OCR page walk
+  clamps to `pdfMaxPages` (5 000 by default, `HILBERTRAUM_PDF_MAX_PAGES`). Progress, the
+  step total, and the persisted `ocr_json.pageCount` all report the **clamped** count (so
+  they stay truthful), and a truncation is logged locally. A genuine ≤5 000-page scan is
+  unaffected; beyond that, the tail of pages is not recognized.
 - **Packaged-app OCR needs the asar-unpacked tesseract packages** (worker_threads
   cannot load scripts from inside `app.asar`). Wired in `electron-builder.yml`;
   verifying a real OCR run from the produced portable .exe is a release-acceptance
