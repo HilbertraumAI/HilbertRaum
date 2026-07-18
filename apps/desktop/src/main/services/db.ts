@@ -475,6 +475,82 @@ CREATE TABLE IF NOT EXISTS image_turns (
   FOREIGN KEY (session_id) REFERENCES image_sessions(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_image_turns_session ON image_turns(session_id);
+
+-- Evidence Pack / Review Mode (EP-1 plan §5, spec §18.1). One review per assistant message
+-- (v1, service-enforced — deliberately NOT a UNIQUE constraint so relaxing later is additive).
+-- ALL review text/snapshot columns are CONTENT — never logged/audited (audit stays ids/counts).
+-- The tables live in the one workspace DB, so they inherit encrypted-at-rest for free (spec
+-- §18.5 satisfied structurally — nothing extra built). status stores ONLY 'draft'|'ready';
+-- outdated is DERIVED at read time (spec §18.4 — it must never erase ready). JSON snapshot
+-- columns are nullable (plan §5 item 3) and parsed tolerantly (the parseCitations idiom).
+-- The message FK CASCADEs (the result_tables template): deleteConversation deletes messages
+-- with explicit SQL under PRAGMA foreign_keys = ON, which drops the whole review chain
+-- (reviews → items → links, reviews → exports) automatically.
+CREATE TABLE IF NOT EXISTS evidence_reviews (
+  id                        TEXT PRIMARY KEY,
+  conversation_id           TEXT NOT NULL,      -- denormalized for the delete-confirm count (D-2)
+  message_id                TEXT NOT NULL,      -- the reviewed assistant message
+  question_message_id       TEXT,               -- the question turn, when identifiable
+  title                     TEXT NOT NULL,      -- content (D-6: conversation title default, renameable)
+  status                    TEXT NOT NULL,      -- 'draft' | 'ready'
+  reviewer_label            TEXT,               -- content (D-3: free-text label only)
+  general_note              TEXT,               -- content
+  answer_snapshot           TEXT NOT NULL,      -- content: the frozen answer markdown
+  question_snapshot         TEXT NOT NULL,      -- content: the frozen question text ('' when none)
+  source_snapshot_json      TEXT,               -- JSON EvidenceSourceSnapshot[] (content)
+  coverage_snapshot_json    TEXT,               -- JSON CoverageInfo (counts/mode only)
+  generation_snapshot_json  TEXT,               -- JSON EvidenceGenerationSnapshot (ids/flags only)
+  created_at                TEXT NOT NULL,
+  updated_at                TEXT NOT NULL,
+  completed_at              TEXT,               -- last marked ready; NULL while draft
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_reviews_message ON evidence_reviews(message_id);
+
+CREATE TABLE IF NOT EXISTS evidence_review_items (
+  id             TEXT PRIMARY KEY,
+  review_id      TEXT NOT NULL,
+  ordinal        INTEGER NOT NULL,              -- creation/render order within the review
+  kind           TEXT NOT NULL,                 -- 'block' | 'selection'
+  block_key      TEXT NOT NULL,                 -- stable segment key against the snapshot (plan §6.1)
+  block_kind     TEXT,                          -- 'paragraph'|'list_item'|'heading'|'fence'|'table'|'blockquote';
+                                                -- NULL = unknown → REQUIRED by the D-7 gate (safe direction)
+  start_offset   INTEGER,                       -- selections: UTF-16 offsets into the parent block's text_snapshot
+  end_offset     INTEGER,
+  text_snapshot  TEXT NOT NULL,                 -- content: the unit's frozen text
+  decision       TEXT NOT NULL,                 -- ReviewDecision ('not_reviewed' default)
+  reviewer_note  TEXT,                          -- content
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  FOREIGN KEY (review_id) REFERENCES evidence_reviews(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_review_items_review ON evidence_review_items(review_id);
+
+CREATE TABLE IF NOT EXISTS evidence_review_links (
+  id                TEXT PRIMARY KEY,
+  review_item_id    TEXT NOT NULL,
+  evidence_key      TEXT NOT NULL,              -- EvidenceSourceSnapshot.key (one link per item+key)
+  link_origin       TEXT NOT NULL,              -- 'answer_marker' | 'reviewer' (honesty split, spec §13.3)
+  reviewer_relation TEXT,                       -- 'supports'|'qualifies'|'contradicts'|'context'
+  created_at        TEXT NOT NULL,
+  FOREIGN KEY (review_item_id) REFERENCES evidence_review_items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_review_links_item ON evidence_review_links(review_item_id);
+
+-- Export history (D-8): metadata + content hash ONLY — no file copy, and the destination
+-- path is deliberately NOT persisted (spec §18.1; file_name is the bare chosen name).
+CREATE TABLE IF NOT EXISTS evidence_exports (
+  id              TEXT PRIMARY KEY,
+  review_id       TEXT NOT NULL,
+  format          TEXT NOT NULL,                -- 'html' | 'pdf' (plain TEXT — later formats additive)
+  schema_version  INTEGER NOT NULL,
+  file_name       TEXT NOT NULL,                -- content-adjacent (user-chosen name; never audited)
+  file_sha256     TEXT NOT NULL,
+  options_json    TEXT,                         -- JSON option flags (D-4); nullable
+  created_at      TEXT NOT NULL,
+  FOREIGN KEY (review_id) REFERENCES evidence_reviews(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_exports_review ON evidence_exports(review_id);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT

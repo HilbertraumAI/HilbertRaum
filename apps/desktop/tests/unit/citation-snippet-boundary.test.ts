@@ -11,6 +11,7 @@ const hasLoneSurrogate = (s: string): boolean =>
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s)
 
 const row = (text: string): ChunkRow => ({
+  id: 'chunk-1',
   chunk_index: 0,
   text,
   source_label: null,
@@ -27,7 +28,7 @@ describe('chunksToCitations — surrogate-safe snippet truncation (F-15)', () =>
     // '😀' (U+1F600) is astral: two UTF-16 code units, placed as code point index 279 so a raw
     // `.slice(0, 280)` keeps only its HIGH surrogate; padded past the cap so we truncate.
     const text = 'a'.repeat(279) + '😀' + 'b'.repeat(60)
-    const snippet = chunksToCitations([row(text)], 'doc.pdf')[0].snippet ?? ''
+    const snippet = chunksToCitations([row(text)], 'doc.pdf', 'doc-1')[0].snippet ?? ''
     expect(snippet.endsWith('…')).toBe(true)
     // Teeth: revert to `c.text.slice(0, 280)` → the high surrogate is kept alone → this trips.
     expect(hasLoneSurrogate(snippet)).toBe(false)
@@ -36,9 +37,9 @@ describe('chunksToCitations — surrogate-safe snippet truncation (F-15)', () =>
   })
 
   it('returns short text unchanged and truncates plain long text with an ellipsis', () => {
-    expect(chunksToCitations([row('hello world')], 't')[0].snippet).toBe('hello world')
-    expect(chunksToCitations([row('x'.repeat(280))], 't')[0].snippet).toBe('x'.repeat(280))
-    expect(chunksToCitations([row('x'.repeat(281))], 't')[0].snippet).toBe('x'.repeat(280) + '…')
+    expect(chunksToCitations([row('hello world')], 't', 'doc-1')[0].snippet).toBe('hello world')
+    expect(chunksToCitations([row('x'.repeat(280))], 't', 'doc-1')[0].snippet).toBe('x'.repeat(280))
+    expect(chunksToCitations([row('x'.repeat(281))], 't', 'doc-1')[0].snippet).toBe('x'.repeat(280) + '…')
   })
 
   // The P-6 SQL head (`substr(text, 1, 281)`) counts CODE POINTS in SQLite while the old JS guard
@@ -55,7 +56,7 @@ describe('chunksToCitations — surrogate-safe snippet truncation (F-15)', () =>
     const astralHead = head(astralFull)
     expect([...astralHead].length).toBe(281)
     expect(astralHead.length).toBe(562) // > 281 UTF-16 units — the unit-vs-point mismatch is real
-    const snippet = chunksToCitations([row(astralHead)], 't')[0].snippet ?? ''
+    const snippet = chunksToCitations([row(astralHead)], 't', 'doc-1')[0].snippet ?? ''
     expect(snippet.endsWith('…')).toBe(true)
     expect(hasLoneSurrogate(snippet)).toBe(false)
     expect([...snippet].length).toBe(281) // 280 code points + the ellipsis
@@ -63,6 +64,25 @@ describe('chunksToCitations — surrogate-safe snippet truncation (F-15)', () =>
     // A text that fits (≤ 280 code points) comes back whole and untouched.
     const short = 'ä'.repeat(280)
     expect(head(short)).toBe(short)
-    expect(chunksToCitations([row(head(short))], 't')[0].snippet).toBe(short)
+    expect(chunksToCitations([row(head(short))], 't', 'doc-1')[0].snippet).toBe(short)
+  })
+})
+
+// EP-1 Phase 0 (plan §5 item 2): the skill-analysis citation path (bank/invoice deterministic
+// answers, persisted via rag:ask) pins source identity like the RAG/provenance builders do.
+describe('chunksToCitations — additive documentId/chunkId enrichment (EP-1)', () => {
+  it('stamps the documentId and each row id as chunkId', () => {
+    const citations = chunksToCitations(
+      [
+        { ...row('first chunk'), id: 'chunk-a' },
+        { ...row('second chunk'), id: 'chunk-b' }
+      ],
+      'statement.pdf',
+      'doc-42'
+    )
+    expect(citations.map((c) => c.chunkId)).toEqual(['chunk-a', 'chunk-b'])
+    expect(citations.every((c) => c.documentId === 'doc-42')).toBe(true)
+    // The rest of the projection is untouched by the enrichment.
+    expect(citations[0]).toMatchObject({ label: 'S1', sourceTitle: 'statement.pdf', snippet: 'first chunk' })
   })
 })

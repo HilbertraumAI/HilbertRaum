@@ -378,7 +378,7 @@ function buildBankCitations(
     0,
     MAX_CITATIONS
   )
-  return chunksToCitations(picked, title)
+  return chunksToCitations(picked, title, documentId)
 }
 
 type Tr = (key: MessageKey, params?: MessageParams) => string

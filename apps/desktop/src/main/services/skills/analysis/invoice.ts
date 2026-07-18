@@ -267,7 +267,7 @@ function buildInvoiceCitations(db: Db, documentId: string, title: string): Citat
     all.length > MAX_CITATIONS
       ? [...all.slice(0, MAX_CITATIONS - TAIL_CITATIONS), ...all.slice(all.length - TAIL_CITATIONS)]
       : all
-  return chunksToCitations(selected, title)
+  return chunksToCitations(selected, title, documentId)
 }
 
 type Tr = (key: MessageKey, params?: MessageParams) => string

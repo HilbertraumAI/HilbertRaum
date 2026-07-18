@@ -359,7 +359,11 @@ export async function retrieve(
     sourceTitle: c.sourceTitle,
     pageNumber: c.pageNumber,
     section: c.sectionLabel,
-    snippet: truncateSnippet(c.text)
+    snippet: truncateSnippet(c.text),
+    // EP-1 Phase 0 (plan §5 item 2): additive source-identity enrichment — lets a later
+    // evidence review pin the document exactly instead of best-effort by title.
+    documentId: c.documentId,
+    chunkId: c.chunkId
   }))
   return { chunks, citations }
 }
@@ -534,7 +538,10 @@ export function retrieveWholeDocument(
     sourceTitle: c.sourceTitle,
     pageNumber: c.pageNumber,
     section: c.sectionLabel,
-    snippet: truncateSnippet(c.text)
+    snippet: truncateSnippet(c.text),
+    // EP-1 Phase 0 (plan §5 item 2): additive source-identity enrichment.
+    documentId: c.documentId,
+    chunkId: c.chunkId
   }))
   return { chunks, citations, chunksCovered: chunks.length, chunksTotal, truncated: chunks.length < chunksTotal }
 }
@@ -587,7 +594,10 @@ export async function answerWholeDocFromChunks(deps: WholeDocChunksDeps): Promis
     sourceTitle: c.row.source_label ?? 'Untitled',
     pageNumber: c.row.page_number,
     section: c.row.section_label,
-    snippet: truncateSnippet(c.text)
+    snippet: truncateSnippet(c.text),
+    // EP-1 Phase 0 (plan §5 item 2): additive source-identity enrichment.
+    documentId: c.row.document_id,
+    chunkId: c.row.id
   }))
 
   // The whole document IS the source ⇒ covered == total (documentChunkCount is the whole-doc denominator
@@ -978,7 +988,10 @@ function buildDiffResult(
     sourceTitle: c.sourceTitle,
     pageNumber: c.pageNumber,
     section: c.sectionLabel,
-    snippet: truncateSnippet(c.text)
+    snippet: truncateSnippet(c.text),
+    // EP-1 Phase 0 (plan §5 item 2): additive source-identity enrichment.
+    documentId: c.documentId,
+    chunkId: c.chunkId
   }))
   return {
     chunks,

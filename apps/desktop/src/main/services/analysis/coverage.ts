@@ -114,7 +114,11 @@ export function documentLeafProvenance(db: Db, documentId: string, title: string
       section: r.section_label,
       // Cut by CODE POINT (F-15, the RAG-2 class): a raw slice(0, 280) could split a surrogate
       // pair and persist a snippet ending in a lone surrogate (permanent `�` in the sources panel).
-      snippet: truncateByCodePoints(r.text, 280)
+      snippet: truncateByCodePoints(r.text, 280),
+      // EP-1 Phase 0 (plan §5 item 2): additive source-identity enrichment — provenance
+      // citations pin their document + leaf chunk for later evidence-review snapshots.
+      documentId,
+      chunkId: id
     })
   })
   return out

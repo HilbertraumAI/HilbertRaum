@@ -67,7 +67,13 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
   skill_disabled: 'diag.audit.skill_disabled',
   skill_run_started: 'diag.audit.skill_run_started',
   skill_run_done: 'diag.audit.skill_run_done',
-  skill_run_failed: 'diag.audit.skill_run_failed'
+  skill_run_failed: 'diag.audit.skill_run_failed',
+  // Evidence Pack / Review Mode (EP-1 Phase 0): labels land with the type literals because
+  // this record is exhaustive; no event of these types exists until the Phase-1 IPC emits one.
+  evidence_review_created: 'diag.audit.evidence_review_created',
+  evidence_review_ready: 'diag.audit.evidence_review_ready',
+  evidence_review_deleted: 'diag.audit.evidence_review_deleted',
+  evidence_pack_exported: 'diag.audit.evidence_pack_exported'
 }
 
 function auditLabel(type: AuditEventType, t: I18n['t']): string {
