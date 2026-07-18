@@ -230,7 +230,11 @@ export function ReviewScreen({
       {/* P4 Outdated banner (spec §15.5/§21.3): names the drift, keeps the §21.3 options
           visible, and carries the acknowledge action. It never blocks reading or editing —
           only export waits for the acknowledge (§28.6). role=status: it appears async
-          after the freshness check lands. */}
+          after the freshness check lands. The fact list includes NEWLY-missing sources
+          (fix round FIX-5): a new deletion lapses a prior acknowledge by adding a drift
+          fact, so the re-demand must NAME that fact — even though deletion alone never
+          opens this banner (it does not flip outdated). Creation-missing sources are not
+          drift and stay off the list (their badge lives on the card). */}
       {freshness?.outdated && (
         <div className="review-outdated-banner" role="status">
           <p className="review-outdated-title">
@@ -248,6 +252,9 @@ export function ReviewScreen({
                   (freshness.sources ?? []).filter((s) => s.state === 'changed').length
                 )}
               </li>
+            )}
+            {countMissingNow(freshness, detail) > 0 && (
+              <li>{tCount('review.summary.sourcesMissingNow', countMissingNow(freshness, detail))}</li>
             )}
           </ul>
           <p className="hint">{t('review.outdated.keepNote')}</p>
@@ -432,6 +439,21 @@ export function ReviewScreen({
       </ConfirmDialog>
     </div>
   )
+}
+
+/** NEWLY-missing sources in a freshness verdict: state 'missing' minus the ones already
+ *  missing at creation (the same rule the summary + pack use — creation-missing is a
+ *  recorded fact, not drift). */
+function countMissingNow(
+  freshness: { sources?: { key: string; state: string }[] },
+  detail: EvidenceReviewDetail
+): number {
+  const missingAtCreation = new Set(
+    detail.sources.filter((s) => s.availabilityAtCreation === 'missing').map((s) => s.key)
+  )
+  return (freshness.sources ?? []).filter(
+    (s) => s.state === 'missing' && !missingAtCreation.has(s.key)
+  ).length
 }
 
 /** Locale-aware acknowledge stamp (the ReviewSummaryView `formatWhen` idiom); raw string

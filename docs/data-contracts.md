@@ -895,9 +895,15 @@ section records the AS-BUILT shapes; selection UI (P5) and PDF (P6) are still op
   fixed semantic projection (mode/counts/treeStatus/treeLevels/tier/truncated/
   unparsedChunks/fullyChunked) — `nodeIds` + unknown extras excluded (plumbing, not claims).
   `acknowledgeEvidenceReviewFreshness(db, reviewId)` writes `freshness_ack_json`
-  `{acknowledgedAt, fingerprint}`; `freshnessFingerprint` = sorted canonical string of
-  every non-'unchanged' fact, so ANY later drift change lapses the acknowledge. Also
-  exports `compareStoredHashes`, `parseFreshnessAck`.
+  `{acknowledgedAt, fingerprint}`; the fingerprint is the sorted canonical string of every
+  non-'unchanged' fact **including the observed current value** (fix round FIX-1:
+  `src:{key}=changed:{current sha}`, `answer=changed:{digest(current text)}`,
+  `coverage=changed:{digest(canonical current)}`; missing/unverifiable stay state
+  literals — no value exists), so ANY later drift change lapses the acknowledge — incl. a
+  RE-change of an already-changed fact (sha ff→ee after acknowledging aa→ff), a second
+  answer edit, changed→recovered→changed-again (no stale-ack resurrection), and a NEW
+  deletion (adds a fact). Hashes only, inside the encrypted row. Also exports
+  `compareStoredHashes`, `parseFreshnessAck`.
 ✅ **Read overlay (IPC boundary):** `evidence:get` + `evidence:getForMessage` responses
   carry the REAL computed `outdated` (the chat chip + a fresh open render truthfully);
   SERVICE-level reads and every write-path return (`update`/`markReady`/`reopen`/`create`)
@@ -937,22 +943,27 @@ section records the AS-BUILT shapes; selection UI (P5) and PDF (P6) are still op
   `review.sourceContext.*`, +4 `review.summary.sources{Changed,Missing}Now.*`,
   `review.status.outdated`, +13 `packExport.*` freshness keys,
   `main.evidenceReviews.exportOutdated` — EN+DE (DE draft register, P6 native pass).
-✅ **Phase-4 tests:** `tests/integration/evidence-freshness.test.ts` ×22 (engine verdicts
+✅ **Phase-4 tests:** `tests/integration/evidence-freshness.test.ts` ×28 (engine verdicts
   incl. unresolved-never-changed under mutation AND deletion of same-titled docs,
-  hash-absent unverifiable, answer/coverage drift, ready-not-erased; acknowledge persist/
-  no-op/lapse-on-new-drift/malformed-record/lifecycle-stamps-untouched; export gate
-  refused-before-dialog + §28.6 pack recording + §28.7 deleted-source export; IPC legs for
-  the new channels + real read overlay; source-context located/mismatch/stale-chunk-id/
+  hash-absent unverifiable, answer/coverage drift, reserialized-coverage false-positive
+  pin, ready-not-erased; acknowledge persist/no-op/lapse-on-new-drift/malformed-record/
+  lifecycle-stamps-untouched + the FIX-1 value-bearing-fingerprint legs (re-change lapse,
+  second answer edit, changed→recovered→changed-again no-resurrect, canonical stored
+  shape); export gate refused-before-dialog + §28.6 pack recording + §28.7 deleted-source
+  export + MIXED changed+deleted drift end-to-end incl. new-deletion-lapses-acknowledge;
+  IPC legs for the new channels + real read overlay + the LOCALIZED outdated-export
+  rejection over the wire; source-context located/mismatch/stale-chunk-id/
   foreign-chunk-id-leak-guard/missing/not-located/truncated-snippet — all under the REAL
   offline guard, with NO document files on disk anywhere) + the 6th GOLDEN
   `outdated-acknowledged` (+ regenerated 5 — freshness note + at-export column) + P4
-  describe blocks in `evidence-pack-html.test.ts` ×6, `ReviewScreen.test.tsx` ×7 (refresh
-  ON OPEN, banner/chip/badges, acknowledge flow, missing-without-banner,
-  unresolved-badge-only, context modal ×2), `ReviewExport.test.tsx` ×3 (export gate),
-  `reviewSession.test.ts` ×5 (refresh-on-open, no-refresh-on-failed-open, openToken purge
-  guard, acknowledge merge/failure), `ReviewEntryPoints.test.tsx` (Outdated chip joins
-  Ready), `GermanSmoke` (outdated overlay DE). Review test files stub the refresh
-  structurally via `stubReviewApi` (`tests/helpers/evidenceReview.ts`).
+  describe blocks in `evidence-pack-html.test.ts` ×5, `ReviewScreen.test.tsx` ×8 (refresh
+  ON OPEN, banner/chip/badges, banner names newly-missing facts, acknowledge flow,
+  missing-without-banner, unresolved-badge-only, context modal ×2), `ReviewExport.test.tsx`
+  ×3 (export gate), `reviewSession.test.ts` ×5 (refresh-on-open, no-refresh-on-failed-open,
+  openToken purge guard, acknowledge merge/failure), `ReviewEntryPoints.test.tsx` (Outdated
+  chip joins Ready), `GermanSmoke` (outdated overlay DE). Review renderer test files
+  (incl. `lockPurge.test.ts`'s review leg) stub the refresh structurally via
+  `stubReviewApi` (`tests/helpers/evidenceReview.ts`).
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |

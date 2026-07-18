@@ -727,6 +727,45 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
     assertNoUnexpectedApiCalls()
   })
 
+  it('FIX-5: the banner names NEWLY-missing sources in its drift list (a new deletion lapses the acknowledge — the re-demand must say why)', async () => {
+    const base = makeDetail()
+    const detail = makeDetail({
+      sources: [
+        base.sources[0]!,
+        {
+          ...base.sources[0]!,
+          key: 's2',
+          machineLabel: 'S2',
+          documentId: 'd2',
+          documentTitle: 'appendix.pdf',
+          availabilityAtCreation: 'available'
+        }
+      ]
+    })
+    stubReviewApi(
+      { getEvidenceReview: vi.fn(async () => detail) },
+      makeFreshness({
+        outdated: true,
+        sources: [
+          { key: 's1', state: 'changed' },
+          { key: 's2', state: 'missing' }
+        ]
+      })
+    )
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await screen.findByText(t('en', 'review.outdated.title'))
+    const banner = screen.getByRole('status')
+    expect(
+      within(banner).getByText(t('en', 'review.outdated.sourcesChanged.one', { count: 1 }))
+    ).toBeInTheDocument()
+    expect(
+      within(banner).getByText(t('en', 'review.summary.sourcesMissingNow.one', { count: 1 }))
+    ).toBeInTheDocument()
+    // The deleted source's card carries the §15.4 badge too.
+    expect(screen.getByText(t('en', 'review.source.missingNow'))).toBeInTheDocument()
+    assertNoUnexpectedApiCalls()
+  })
+
   it('a NEWLY-missing source shows the §15.4 badge WITHOUT the outdated banner (spec §25.2/§28.7)', async () => {
     stubReviewApi(
       { getEvidenceReview: vi.fn(async () => makeDetail()) },

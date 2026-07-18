@@ -9,6 +9,7 @@ import type {
 import { prepareCached, type Db } from '../db'
 import { parseCoverage } from '../chat'
 import { parseSourceSnapshots } from '../evidence-reviews'
+import { sha256Of } from '../assets'
 
 // Evidence-review freshness engine (EP-1 plan §9.1, spec §21.2/§18.4/§15.4–15.5): compare
 // one review's FROZEN snapshot against the CURRENT workspace, from STORED facts ONLY —
@@ -35,12 +36,20 @@ import { parseSourceSnapshots } from '../evidence-reviews'
 //
 // Acknowledge (spec §15.5/§21.3/§28.6): the user explicitly accepts the CURRENT drift.
 // Persisted as `evidence_reviews.freshness_ack_json` = { acknowledgedAt, fingerprint }
-// where the fingerprint canonicalizes the drift facts — if the drift CHANGES after the
-// acknowledge (another source changes, a changed source is later deleted, …), the stored
-// fingerprint no longer matches and the acknowledge honestly lapses (a new warning demands
-// a new acknowledge). Acknowledging never rewrites `status`, `completed_at` or even
-// `updated_at` (§18.4: outdated is an overlay; the acknowledge is lifecycle metadata, not
-// a review edit — which is also why the READY write-guard does not apply to it).
+// where the fingerprint canonicalizes the drift facts INCLUDING the observed current
+// values (the CURRENT stored sha of a changed source; a hash of the current answer text /
+// canonical coverage when those changed) — so the acknowledge lapses on ANY later drift
+// change: another source changes, a changed source changes AGAIN (sha ff→ee after the
+// user acknowledged aa→ff — the in-place re-ingest path makes this real), a second answer
+// edit, a changed source that recovers and then changes to something new, or a changed
+// source that is later deleted. State-literal-only fingerprints would treat all of those
+// as "the same drift" and silently keep a stale acknowledge alive (P4 review FIX-1).
+// 'missing'/'unverifiable' facts carry state literals only — no observed value exists —
+// and a NEW deletion still lapses the acknowledge because it ADDS a fact. The fingerprint
+// holds hashes only (never text) and lives inside the review's own encrypted row.
+// Acknowledging never rewrites `status`, `completed_at` or even `updated_at` (§18.4:
+// outdated is an overlay; the acknowledge is lifecycle metadata, not a review edit —
+// which is also why the READY write-guard does not apply to it).
 
 interface FreshnessReviewRow {
   id: string
@@ -93,47 +102,37 @@ export function compareStoredHashes(
   return snapshotSha === currentSha ? 'match' : 'mismatch'
 }
 
-function sourceFreshnessState(
+/** One source's verdict + the observed CURRENT stored hash when there is one (the
+ *  fingerprint's value component for 'changed'; null otherwise). */
+function sourceVerdict(
   db: Db,
   s: EvidenceSourceSnapshot
-): EvidenceSourceFreshnessState {
+): { state: EvidenceSourceFreshnessState; currentSha: string | null } {
   // BINDING (plan §14 P3 watch-out): an unresolved identity has nothing to compare —
   // it can only ever be 'unverifiable', never 'changed' and never 'missing'.
-  if (s.identity !== 'resolved' || !s.documentId) return 'unverifiable'
+  if (s.identity !== 'resolved' || !s.documentId) return { state: 'unverifiable', currentSha: null }
   const row = prepareCached(db, 'SELECT id, sha256 FROM documents WHERE id = ?').get(
     s.documentId
   ) as DocumentHashRow | undefined
-  if (!row) return 'missing'
+  if (!row) return { state: 'missing', currentSha: null }
   switch (compareStoredHashes(s.documentSha256, row.sha256)) {
     case 'match':
-      return 'unchanged'
+      return { state: 'unchanged', currentSha: row.sha256 }
     case 'mismatch':
-      return 'changed'
+      return { state: 'changed', currentSha: row.sha256 }
     default:
-      return 'unverifiable'
+      return { state: 'unverifiable', currentSha: null }
   }
 }
 
-/**
- * Canonical fingerprint of every NON-'unchanged' freshness fact, stored inside the
- * acknowledge record so a LATER drift change (new source changed, changed→missing, …)
- * lapses the acknowledge. Content-free: source KEYS (machine labels like "S1") + state
- * literals only — it lives inside the review's own encrypted row and never reaches logs
- * or audit anyway.
- */
-export function freshnessFingerprint(
-  fresh: Pick<EvidenceReviewFreshness, 'answerState' | 'coverageState' | 'sources'>
-): string {
-  const parts: string[] = []
-  if (fresh.answerState && fresh.answerState !== 'unchanged') parts.push(`answer=${fresh.answerState}`)
-  if (fresh.coverageState && fresh.coverageState !== 'unchanged') {
-    parts.push(`coverage=${fresh.coverageState}`)
-  }
-  for (const s of fresh.sources ?? []) {
-    if (s.state !== 'unchanged') parts.push(`src:${s.key}=${s.state}`)
-  }
-  parts.sort()
-  return parts.join(';')
+/** Short digest of an observed current value for the fingerprint (never the text itself). */
+function valueDigest(value: string): string {
+  return sha256Of(value).slice(0, 16)
+}
+
+/** Sorted canonical join of the drift facts — deterministic regardless of source order. */
+function driftFingerprint(parts: string[]): string {
+  return [...parts].sort().join(';')
 }
 
 interface StoredFreshnessAck {
@@ -157,15 +156,22 @@ export function parseFreshnessAck(json: string | null): StoredFreshnessAck | nul
   }
 }
 
+/** Verdict + the canonical drift fingerprint it fingerprints to (internal — the wire
+ *  shape never carries the fingerprint; only the ack record stores it). */
+interface FreshnessComputation {
+  fresh: EvidenceReviewFreshness
+  fingerprint: string
+}
+
 /**
- * Compute one review's freshness verdict (spec §21.2) from stored facts only. Null on an
- * unknown review id. Cheap by construction: one review read, one message read, one indexed
- * `documents` lookup per resolved source — no hashing, no file reads, no model, no network.
+ * One pass over the stored facts: the freshness verdict AND its drift fingerprint. The
+ * fingerprint canonicalizes every NON-'unchanged' fact WITH its observed current value
+ * (P4 review FIX-1 — see the module header): `src:{key}=changed:{currentSha}`,
+ * `answer=changed:{digest(current content)}`, `coverage=changed:{digest(canonical
+ * current)}`; 'missing'/'unverifiable' facts are state literals (no value exists). Sorted,
+ * so it is deterministic regardless of source order.
  */
-export function computeEvidenceReviewFreshness(
-  db: Db,
-  reviewId: string
-): EvidenceReviewFreshness | null {
+function computeFreshness(db: Db, reviewId: string): FreshnessComputation | null {
   const row = prepareCached(
     db,
     `SELECT id, message_id, answer_snapshot, source_snapshot_json, coverage_snapshot_json,
@@ -173,6 +179,8 @@ export function computeEvidenceReviewFreshness(
        FROM evidence_reviews WHERE id = ?`
   ).get(reviewId) as FreshnessReviewRow | undefined
   if (!row) return null
+
+  const parts: string[] = []
 
   // Answer + coverage vs the live message row. The row is normally guaranteed by the FK
   // (deleting the message CASCADE-deletes the review), so 'unverifiable' is a defensive
@@ -185,32 +193,62 @@ export function computeEvidenceReviewFreshness(
     : msg.content === row.answer_snapshot
       ? 'unchanged'
       : 'changed'
+  if (answerState === 'changed') parts.push(`answer=changed:${valueDigest(msg!.content)}`)
+  else if (answerState === 'unverifiable') parts.push('answer=unverifiable')
+
+  const currentCoverage = msg ? canonicalCoverage(parseCoverage(msg.coverage_json) ?? null) : null
   const coverageState: EvidenceFreshnessComparison = !msg
     ? 'unverifiable'
-    : canonicalCoverage(parseCoverage(msg.coverage_json) ?? null) ===
-        canonicalCoverage(parseCoverage(row.coverage_snapshot_json) ?? null)
+    : currentCoverage === canonicalCoverage(parseCoverage(row.coverage_snapshot_json) ?? null)
       ? 'unchanged'
       : 'changed'
+  if (coverageState === 'changed') parts.push(`coverage=changed:${valueDigest(currentCoverage!)}`)
+  else if (coverageState === 'unverifiable') parts.push('coverage=unverifiable')
 
   const sources: EvidenceSourceFreshness[] = parseSourceSnapshots(row.source_snapshot_json).map(
-    (s) => ({ key: s.key, state: sourceFreshnessState(db, s) })
+    (s) => {
+      const verdict = sourceVerdict(db, s)
+      if (verdict.state === 'changed') {
+        parts.push(`src:${s.key}=changed:${verdict.currentSha ?? ''}`)
+      } else if (verdict.state !== 'unchanged') {
+        parts.push(`src:${s.key}=${verdict.state}`)
+      }
+      return { key: s.key, state: verdict.state }
+    }
   )
 
   const outdated =
     answerState === 'changed' ||
     coverageState === 'changed' ||
     sources.some((s) => s.state === 'changed')
+  const fingerprint = driftFingerprint(parts)
 
-  // The acknowledge stands only while the drift it recorded IS the drift computed now.
+  // The acknowledge stands only while the drift it recorded IS the drift observed now —
+  // same facts AND same current values (a re-change of an already-changed fact lapses it).
   let acknowledgedAt: string | null = null
   if (outdated) {
     const ack = parseFreshnessAck(row.freshness_ack_json)
-    if (ack && ack.fingerprint === freshnessFingerprint({ answerState, coverageState, sources })) {
-      acknowledgedAt = ack.acknowledgedAt
-    }
+    if (ack && ack.fingerprint === fingerprint) acknowledgedAt = ack.acknowledgedAt
   }
 
-  return { reviewId: row.id, outdated, answerState, coverageState, sources, acknowledgedAt }
+  return {
+    fresh: { reviewId: row.id, outdated, answerState, coverageState, sources, acknowledgedAt },
+    fingerprint
+  }
+}
+
+/**
+ * Compute one review's freshness verdict (spec §21.2) from stored facts only. Null on an
+ * unknown review id. Cheap by construction: one review read, one message read, one indexed
+ * `documents` lookup per resolved source — no re-hashing of documents, no file reads, no
+ * model, no network (the only hashing is the tiny in-memory value digest inside the drift
+ * fingerprint — never a source file).
+ */
+export function computeEvidenceReviewFreshness(
+  db: Db,
+  reviewId: string
+): EvidenceReviewFreshness | null {
+  return computeFreshness(db, reviewId)?.fresh ?? null
 }
 
 /**
@@ -225,17 +263,14 @@ export function acknowledgeEvidenceReviewFreshness(
   db: Db,
   reviewId: string
 ): EvidenceReviewFreshness | null {
-  const fresh = computeEvidenceReviewFreshness(db, reviewId)
-  if (!fresh) return null
-  if (!fresh.outdated) return fresh
+  const result = computeFreshness(db, reviewId)
+  if (!result) return null
+  if (!result.fresh.outdated) return result.fresh
   const acknowledgedAt = new Date().toISOString()
-  const record: StoredFreshnessAck = {
-    acknowledgedAt,
-    fingerprint: freshnessFingerprint(fresh)
-  }
+  const record: StoredFreshnessAck = { acknowledgedAt, fingerprint: result.fingerprint }
   prepareCached(db, 'UPDATE evidence_reviews SET freshness_ack_json = ? WHERE id = ?').run(
     JSON.stringify(record),
     reviewId
   )
-  return { ...fresh, acknowledgedAt }
+  return { ...result.fresh, acknowledgedAt }
 }

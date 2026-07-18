@@ -28,7 +28,8 @@ import type { Citation, CoverageInfo } from '../../src/shared/types'
 
 // EP-1 plan §8 exit gate (spec §30 Phase-2 gate) — the export pipeline end to end against
 // a real SQLite workspace: DETERMINISTIC GOLDEN PACKS for the five spec §29.5 classes
-// (relevance / whole-doc / partial-coverage / missing-source / German), the §20.3/§28.9
+// (relevance / whole-doc / partial-coverage / missing-source / German) plus the P4
+// outdated-acknowledged pack (spec §28.6 — six goldens total), the §20.3/§28.9
 // ATOMICITY guarantees (failure ⇒ no destination file, no export row), encoding (UTF-8,
 // NO BOM, meta charset), recorded-hash-matches-file-bytes, options persisted, export on a
 // READY review (the write-guard covers item mutations only — verified, not assumed), and
@@ -128,7 +129,7 @@ function compareGolden(name: string, html: string): void {
   expect(normalized).toBe(readFileSync(goldenPath, 'utf8'))
 }
 
-// ---- The five golden classes (spec §29.5) ------------------------------------------
+// ---- The six golden classes (the five spec §29.5 classes + P4 outdated-acknowledged) --
 
 describe('golden packs (deterministic; spec §29.5)', () => {
   it('relevance pack — ready review, notes, links, ready-review export allowed', async () => {

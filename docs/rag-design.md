@@ -2036,8 +2036,12 @@ under the review). The overlay is derived, never stored — it cannot erase `rea
 
 Acknowledge (spec §15.5/§21.3/§28.6): the user's explicit acceptance of the CURRENT drift,
 persisted as `{acknowledgedAt, fingerprint}` where the fingerprint canonicalizes every
-non-`unchanged` fact — any later drift change (another source changes, changed→missing)
-lapses the acknowledge and the warning honestly returns. Export executes the spec-§20.1
+non-`unchanged` fact WITH its observed current value (the current stored sha of a changed
+source; a digest of the current answer/canonical coverage — hashes only, in the encrypted
+row) — any later drift change (another source changes, a changed source changes AGAIN,
+changed→missing, a new deletion) lapses the acknowledge and the warning honestly returns;
+a state-literal-only fingerprint would silently keep a stale acknowledge alive across
+re-changes of the same fact. Export executes the spec-§20.1
 refresh step: it computes the verdict, refuses an unacknowledged-outdated review before any
 dialog opens, and injects the verdict into the (pure) pack model so the pack records
 availability AT EXPORT (§16.1.7) and every mismatch (§28.6/§28.7).

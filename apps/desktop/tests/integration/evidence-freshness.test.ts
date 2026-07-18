@@ -40,7 +40,6 @@ import { createEvidenceReviewFromMessage } from '../../src/main/services/evidenc
 import {
   acknowledgeEvidenceReviewFreshness,
   computeEvidenceReviewFreshness,
-  freshnessFingerprint,
   parseFreshnessAck
 } from '../../src/main/services/evidence-pack/freshness'
 import { getEvidenceSourceContext } from '../../src/main/services/evidence-pack/source-context'
@@ -55,6 +54,7 @@ import {
   updateEvidenceReviewItem
 } from '../../src/main/services/evidence-reviews'
 import { createAuditRecorder } from '../../src/main/services/audit'
+import { t as tShared } from '../../src/shared/i18n'
 import type { AppContext } from '../../src/main/services/context'
 import type {
   Citation,
@@ -243,6 +243,27 @@ describe('freshness engine (spec §21.2) — stored-fact comparison only', () =>
     expect(fresh.outdated).toBe(false)
   })
 
+  it('FIX-4: reserialized coverage (key order + extra unknown keys) stays UNCHANGED — never a false positive', () => {
+    const { db } = freshDb()
+    const { reviewId, messageId } = seedReview(db)
+    // Same SEMANTIC coverage as seeded ({mode:'relevance', chunksCovered:2, chunksTotal:5})
+    // but re-serialized: different key order, plus unknown extras and the excluded
+    // display-plumbing field — a plumbing-only difference must not flag the review.
+    db.prepare('UPDATE messages SET coverage_json = ? WHERE id = ?').run(
+      JSON.stringify({
+        chunksTotal: 5,
+        someFutureField: 'ignored',
+        nodeIds: ['n1', 'n2', 'n3'],
+        mode: 'relevance',
+        chunksCovered: 2
+      }),
+      messageId
+    )
+    const fresh = computeEvidenceReviewFreshness(db, reviewId)!
+    expect(fresh.coverageState).toBe('unchanged')
+    expect(fresh.outdated).toBe(false)
+  })
+
   it('answer-text drift and coverage drift each flip outdated (spec §21.2)', () => {
     const { db } = freshDb()
     const first = seedReview(db)
@@ -341,17 +362,64 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
     expect(computeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeNull()
   })
 
-  it('freshnessFingerprint ignores unchanged facts and orders deterministically', () => {
-    expect(
-      freshnessFingerprint({
-        answerState: 'unchanged',
-        coverageState: 'unchanged',
-        sources: [
-          { key: 'S2', state: 'changed' },
-          { key: 'S1', state: 'missing' }
-        ]
-      })
-    ).toBe('src:S1=missing;src:S2=changed')
+  // ---- P4 review FIX-1: the fingerprint carries the OBSERVED CURRENT VALUES, so a
+  // re-change of an already-changed fact lapses the acknowledge (state literals alone
+  // would read "still changed" and keep a stale acknowledge alive forever). ----
+
+  it('FIX-1: a RE-CHANGE of an already-changed source lapses the acknowledge (aa→ff, ack, ff→ee)', () => {
+    const { db } = freshDb()
+    const { reviewId, docId } = seedReview(db)
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
+    expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
+    // The SAME source changes AGAIN (in-place re-ingest updates the stored hash): the
+    // state literal is still 'changed', but the observed value differs — the banner must
+    // re-demand and the export gate must close over the revision the reviewer never saw.
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ee'.repeat(32), docId)
+    const fresh = computeEvidenceReviewFreshness(db, reviewId)!
+    expect(fresh.outdated).toBe(true)
+    expect(fresh.sources).toContainEqual({ key: 'S1', state: 'changed' })
+    expect(fresh.acknowledgedAt).toBeNull()
+    // Acknowledging the NEW revision works and sticks.
+    expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
+    expect(computeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
+  })
+
+  it('FIX-1: a SECOND answer edit lapses an acknowledge given for the first edit', () => {
+    const { db } = freshDb()
+    const { reviewId, messageId } = seedReview(db)
+    db.prepare('UPDATE messages SET content = ? WHERE id = ?').run('First rewrite.', messageId)
+    expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
+    db.prepare('UPDATE messages SET content = ? WHERE id = ?').run('Second rewrite.', messageId)
+    const fresh = computeEvidenceReviewFreshness(db, reviewId)!
+    expect(fresh.answerState).toBe('changed')
+    expect(fresh.acknowledgedAt).toBeNull()
+  })
+
+  it('FIX-1: changed → fully recovered → changed-AGAIN never resurrects the stale acknowledge', () => {
+    const { db } = freshDb()
+    const { reviewId, docId } = seedReview(db)
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
+    expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
+    // The stored hash reverts to the snapshot value — not outdated, ack dormant.
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('aa'.repeat(32), docId)
+    expect(computeEvidenceReviewFreshness(db, reviewId)!.outdated).toBe(false)
+    // A THIRD, different revision appears: the dormant record (fingerprinted over ff)
+    // must NOT cover ee — the warning returns un-acknowledged.
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ee'.repeat(32), docId)
+    const fresh = computeEvidenceReviewFreshness(db, reviewId)!
+    expect(fresh.outdated).toBe(true)
+    expect(fresh.acknowledgedAt).toBeNull()
+  })
+
+  it('the stored fingerprint is canonical: value-bearing for changed facts, literals for missing/unverifiable, sorted', () => {
+    const { db } = freshDb()
+    const { reviewId, docId } = seedReview(db)
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
+    acknowledgeEvidenceReviewFreshness(db, reviewId)
+    const row = reviewHeadRow(db, reviewId)
+    const ack = parseFreshnessAck(row.freshness_ack_json as string | null)!
+    // S1 changed → carries the OBSERVED current sha; S2 (unresolved) → state literal.
+    expect(ack.fingerprint).toBe(`src:S1=changed:${'ff'.repeat(32)};src:S2=unverifiable`)
   })
 })
 
@@ -388,6 +456,58 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
     expect(html).toContain('The reviewer acknowledged this change on')
     expect(html).toContain('Changed since review') // §16.1.7 availability at export
     expect(html).toContain('Availability at export')
+  })
+
+  it('FIX-3: MIXED drift — one source changed AND another deleted: gate from the changed one, §15.4 + register cells for both; a NEW deletion lapses a prior acknowledge', async () => {
+    const { db, root } = freshDb()
+    const docA = seedDocument(db, { title: 'a.pdf', sha256: 'aa'.repeat(32) })
+    const docB = seedDocument(db, { title: 'b.pdf', sha256: 'bb'.repeat(32) })
+    const { messageId } = seedAnswer(db, {
+      content: 'Claim A. [S1]\n\nClaim B. [S2]',
+      citations: [
+        { label: 'S1', sourceTitle: 'a.pdf', documentId: docA, snippet: 'Excerpt from A.' },
+        { label: 'S2', sourceTitle: 'b.pdf', documentId: docB, snippet: 'Excerpt from B.' }
+      ],
+      coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 4 }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+
+    // Drift step 1: A changes; the user acknowledges.
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docA)
+    expect(acknowledgeEvidenceReviewFreshness(db, detail.id)!.acknowledgedAt).toBeTruthy()
+
+    // Drift step 2: B is DELETED. The added missing fact LAPSES the acknowledge — the
+    // warning re-demands even though the missing state itself never flips outdated.
+    db.prepare('DELETE FROM documents WHERE id = ?').run(docB)
+    const fresh = computeEvidenceReviewFreshness(db, detail.id)!
+    expect(fresh.outdated).toBe(true) // still: A is changed
+    expect(fresh.sources).toEqual([
+      { key: 'S1', state: 'changed' },
+      { key: 'S2', state: 'missing' }
+    ])
+    expect(fresh.acknowledgedAt).toBeNull()
+
+    // Un-acknowledged → export refuses (the gate fires from the CHANGED source).
+    await expect(
+      exportEvidencePackToFile(db, detail.id, {}, { chooseDestination: async () => join(root, 'x.html') })
+    ).rejects.toBeInstanceOf(EvidencePackOutdatedError)
+
+    // Re-acknowledge → export succeeds; the pack records BOTH drift kinds honestly.
+    expect(acknowledgeEvidenceReviewFreshness(db, detail.id)!.acknowledgedAt).toBeTruthy()
+    const dest = join(root, 'mixed.html')
+    expect(
+      await exportEvidencePackToFile(db, detail.id, {}, { chooseDestination: async () => dest })
+    ).not.toBeNull()
+    const html = readFileSync(dest, 'utf8')
+    expect(html).toContain('This review is outdated')
+    expect(html).toContain('1 source document has changed since this review was created.')
+    expect(html).toContain('1 source document is no longer present in the workspace.')
+    // §15.4 per-card warning + the retained excerpt of the DELETED source.
+    expect(html).toContain('no longer present in the workspace')
+    expect(html).toContain('Excerpt from B.')
+    // §16.1.7 register cells: both at-export states, side by side.
+    expect(html).toContain('Changed since review')
+    expect(html).toMatch(/<td>Missing<\/td>/)
   })
 
   it('a deleted source does NOT block export; the pack carries the missing-source warning (spec §28.7)', async () => {
@@ -463,6 +583,28 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     expect(badFresh).toBeNull()
     const { result: badAck } = await invoke(handlers, IPC.acknowledgeEvidenceReviewFreshness, '')
     expect(badAck).toBeNull()
+  })
+
+  it('FIX-6: an outdated-unacknowledged export over the WIRE rejects with the LOCALIZED copy — no file, no row, no audit event', async () => {
+    const { db, root } = freshDb()
+    registerEvidenceReviewsIpc(makeCtx(db, root))
+    const { reviewId, docId } = seedReview(db)
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
+    // The IPC catch arm maps EvidencePackOutdatedError → tMain('main.evidenceReviews.exportOutdated').
+    await expect(invoke(handlers, IPC.exportEvidencePack, reviewId, {})).rejects.toThrow(
+      tShared('en', 'main.evidenceReviews.exportOutdated')
+    )
+    expect(listEvidenceExports(db, reviewId)).toEqual([])
+    // No dialog was reached, so no file could exist; and no export audit event fired.
+    const events = db
+      .prepare("SELECT event_type FROM runtime_events WHERE event_type = 'evidence_pack_exported'")
+      .all()
+    expect(events).toEqual([])
+    // After the acknowledge the SAME wire call proceeds to the (mocked, cancelled) dialog
+    // and resolves null — the refusal is specifically the unacknowledged state.
+    acknowledgeEvidenceReviewFreshness(db, reviewId)
+    const { result } = await invoke(handlers, IPC.exportEvidencePack, reviewId, {})
+    expect(result).toBeNull()
   })
 
   it('sourceContext rejects unknown review ids, unknown keys, and unresolved sources', async () => {

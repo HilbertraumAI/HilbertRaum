@@ -25,7 +25,7 @@ import {
   resetReviewSessionForTests
 } from '../../src/renderer/lib/reviewSession'
 import { stubApi } from '../helpers/renderer'
-import { makeDetail } from '../helpers/evidenceReview'
+import { makeDetail, stubReviewApi } from '../helpers/evidenceReview'
 
 // TA-2 / H3: the renderer lock purge used to be a dead screen effect (gated on a component-state
 // `locked` flag that lock unmounts before it can fire). It now lives at the real seam,
@@ -59,7 +59,8 @@ afterEach(() => {
 
 describe('purgeSessionStores — the real lock seam (TA-2)', () => {
   it('drops resident content from all four session stores', async () => {
-    stubApi({
+    // stubReviewApi: the review open now fires the P4 freshness refresh (structural stub).
+    stubReviewApi({
       // Text translation: a still-running job re-adopted into the store (source/translation resident).
       getActiveTranslateJob: vi.fn(async () => RUNNING_TRANSLATE),
       onTranslateToken: vi.fn(() => () => {}),
