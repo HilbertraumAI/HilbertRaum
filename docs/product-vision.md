@@ -112,7 +112,9 @@ scanned-PDF OCR ("Make searchable", Phase 38).
 
 A four-tier product ladder beyond the Lite MVP (aspirational; several line-items have since
 shipped into the base app — e.g. the reranker, collection scoping, the contract-brief skill,
-audio transcription):
+audio transcription, and the Office-tier review workflow as **Evidence Pack / Review Mode**:
+verify a document-grounded answer, record decisions, export a local HTML/PDF evidence pack —
+EP-1, 2026-07-18, architecture.md design record):
 
 - **Office / Knowledge Drive** — better RAG, folder-level knowledge bases, contract review
   workflow, GDPR/DPIA assistant, audit logs, admin settings.

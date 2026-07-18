@@ -1928,8 +1928,9 @@ new context-size picker is the remedy the report asked for.
 
 ## 16. Evidence-review snapshot read-model — how EP-1 freezes §8/§14 honestly (EP-1 Phase 1)
 
-The Evidence Pack / Review Mode wave (EP-1; plan `docs/evidence-pack-implementation-plan.md`
-while open) builds human reviews ON TOP of the retrieval semantics this document defines. A
+The Evidence Pack / Review Mode wave (EP-1; design record + §-anchor legend in
+`architecture.md` "Evidence Pack / Review Mode — design record (EP-1, §1–§8)", plan retired
+2026-07-18) builds human reviews ON TOP of the retrieval semantics this document defines. A
 review is created from ONE persisted assistant message, entirely from stored rows — no model
 call, no re-retrieval, no network (enforced by runtime-tripwire + offline-guard test
 assertions). This section records how the frozen snapshot maps the as-built §8/§14 semantics

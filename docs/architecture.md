@@ -8839,6 +8839,269 @@ cosine top-k ⊕ FTS5 keyword top-k (RRF fusion) → optional rerank → build g
 | `services/retrieval-scope.ts` | 7.8 builds the SQL scope filter for retrieval (collection/document scoping) |
 | `services/settings.ts` | §8 persisted user settings access |
 
+## Evidence Pack / Review Mode — design record (EP-1, §1–§8)
+
+_Formerly `docs/evidence-pack-review-mode-feature-spec.md` (the EP-1 feature spec) and
+`docs/evidence-pack-implementation-plan.md` (the implementation plan, incl. its §14
+append-only Handoff Log P0–P5) — both retired and deleted 2026-07-18 at wave close-out per
+the CLAUDE.md doc-lifecycle rule. Full text in git history:
+`git show b77295c0:docs/evidence-pack-review-mode-feature-spec.md` and
+`git show b77295c0:docs/evidence-pack-implementation-plan.md` (the fullest plan state — all
+deviations edited in, Handoff Log through P5; P6 is recorded in §8 below, nowhere else).
+IMPLEMENTED 2026-07-18, phases P0–P6 (7 PRs #66–#72 merged + the P6 branch
+`feat/ep1-p6-pdf-closeout`), each phase independently reviewed by 2 reviewers with a fix
+round. The wave's dated BUILD_STATE entries live verbatim in `docs/build-log.md`
+(2026-07-18, newest-first). **§ numbers below are stable — code comments cite them as
+"EP-1 record §N"**; the closing §-anchor legend keeps the historical `spec §N` / `plan §N` /
+`D-N` citations resolvable._
+
+### §1 Intent + principles
+
+Evidence Pack / Review Mode lets a professional (lawyer, consultant, HR, accountant,
+researcher — spec §7's personas) **verify a document-grounded answer, record explicit
+human decisions, and export a clear local report** — question, answer, per-block review
+decisions, evidence register, source register, coverage, limitations, generation metadata.
+The review is created from ONE persisted assistant message **entirely from stored rows**:
+no model call, no re-retrieval, no network anywhere in the feature (FR-2/FR-12, enforced
+in-suite by a runtime tripwire + the real offline guard). Principles as shipped:
+**provenance is not proof** (a citation shows where information came from, never that the
+answer is correct — the pack says so on its cover and is "not a certification",
+known-limitations.md); **deterministic facts first** (snapshot, segmentation, pack model
+and renderer are pure and deterministic; golden-tested); **honest evidence semantics**
+(direct citations and whole-document provenance are never conflated — §4); **human
+decisions are explicit** (six-value decision set, conservative bulk actions only, no "mark
+all supported" pathway exists); **export is a snapshot** (localized at generation from the
+pack's language option and frozen; never re-localized, never re-invented).
+
+Three deliberate deviations from the spec's letter (plan §1, all owner-ratified): (1) PDF
+ships via Electron's built-in `printToPDF` on the golden HTML template — no PDF-writing
+dependency (D-1, §5); (2) source freshness for **legacy answers** (persisted before the
+`Citation.documentId` enrichment) is best-effort by unique title with an honest
+`identity: 'unresolved'` state — never guessed (§4); (3) **generation metadata is
+synthesized at review creation** from the conversation row + live catalog + app version —
+no per-message model id exists; every field optional, absent renders "Unavailable", never
+invented.
+
+### §2 Data model (as built — shapes live in data-contracts.md)
+
+The authoritative shape reference is `docs/data-contracts.md` "Evidence Pack / Review
+Mode" (kept current per phase; this record does not duplicate it). In one paragraph: four
+tables — `evidence_reviews` → `evidence_review_items` → `evidence_review_links` (+
+`evidence_reviews` → `evidence_exports`) — hang off `messages(id)` in one FK
+`ON DELETE CASCADE` chain (the `result_tables` template; the real `deleteConversation`
+drops the whole chain, proven by test), so review rows inherit encrypted-at-rest from the
+workspace DB with nothing extra built. Snapshot JSON columns are nullable with tolerant
+row→DTO parsers whose defaults all degrade toward the **weaker claim** (§4). Two additive
+columns beyond the spec's §18.1 letter: `evidence_review_items.block_kind` (NULL = required
+for the D-7 ready gate — corruption can only over-require, never exempt) and
+`evidence_reviews.freshness_ack_json` — the acknowledge record whose **fingerprint is
+value-bearing** (it canonicalizes the observed current value per drifted fact, so a
+re-changed source/answer lapses a stale acknowledge; §6). The wave also stamped additive
+`Citation.documentId?`/`chunkId?` at the six persisted-citation constructors that existed
+(enumerated in data-contracts — nothing enforces the stamp on a future constructor).
+
+### §3 Journeys / UI (as built, condensed)
+
+Entry points (spec §9): the message action row gains **Review evidence / Continue review**
+(+ Draft/Ready chip, joined additively by ⚠ Outdated) gated by the shared
+`isReviewEligible` predicate + a renderer streaming gate; `SourcesDisclosure` carries a
+quiet footer action. `ScreenId 'review'` has NO nav-rail entry and is reachable only
+through App's handoff slot (`openReview({reviewId}|{messageId})`, the `chatScope` idiom);
+`resolveNavTarget('review')` deliberately falls to home. The workspace is two-pane (spec
+§11): frozen answer snapshot (immutable `textSnapshot` markdown, per-block decision chips
+as a roving-tabindex radiogroup, notes, link chips with origin labels) beside an evidence
+pane (SourcesDisclosure card idiom, per-mode honesty captions, 24-card cap + stepped
+reveal + filter that matches the marker AS DISPLAYED incl. DE `Q{n}`); narrow windows swap
+the pane for a `Modal width='wide'` drawer with focus return. Edits flow through the
+repo's first **debounced auto-save store** (`renderer/lib/reviewSession.ts`: 600 ms,
+drain-before-await, failed patches re-merge under newer values, every post-await write
+`openToken`-guarded; hard flush on exit AND in `App.lockNow` before `lockWorkspace()`,
+store purged after). **Ready is read-only** — main refuses item/selection/link mutations
+while ready (head edits stay allowed), the renderer disables the affordances, Reopen
+restores. Reviewer **selections** are carved via a read-only `<textarea>` whose value IS
+`textSnapshot`, so native `selectionStart/End` ARE the persisted UTF-16 offsets (exact by
+construction; main refuses misaligned/surrogate-splitting offsets rather than clamping).
+Back navigation returns to the ORIGINATING conversation via a one-shot `chatConversation`
+handoff cleared on every chat mount. The summary modal carries counts, sources,
+generation ("Unavailable" when absent), reviewer label, export history + hashes, and the
+D-7-gated Mark ready / Reopen.
+
+### §4 Honesty semantics (the load-bearing rules)
+
+- **Citation vs whole-document provenance, never conflated.** Source `kind` maps from the
+  persisted `coverage.mode`: `relevance` AND absent-coverage → `direct_excerpt`;
+  `tree|capped` → `whole_document_provenance`; `extract` → `structured_record`; an
+  **unknown-but-PRESENT mode → `whole_document_provenance` + null machine label + zero
+  auto-links** — the weakest claim (a P1 review BLOCKER fix; the switch is
+  compile-time-exhaustive so a new `CoverageMode` member reds the build). Whole-doc
+  answers get **zero auto-links even with a literal `[S1]` in the text** (spec §13.3 hard
+  rule); only the snapshot builder can mint `origin:'answer_marker'` — renderer link
+  payloads are FORCED `origin:'reviewer'` at the IPC boundary.
+- **Identity unresolved ≠ missing.** A legacy source that cannot be pinned
+  (`identity:'unresolved'`: no `documentId`, title 0 or >1 matches) is "could not be
+  verified" — distinct from resolved-but-missing ("already missing when created"), and it
+  can NEVER flip to "changed" (it cannot be compared; adversarially pinned).
+- **Outdated = changed content only.** Positive drift (answer/coverage changed, ≥1 source
+  changed) sets the derived `outdated` overlay and gates export behind acknowledge;
+  **deletion warns but never gates** (spec §25.2/§28.7 letter). `outdated` is derived,
+  never stored — it can never erase `ready` (spec §18.4).
+- **The acknowledge fingerprint is value-bearing** (§6) — an acknowledge lapses when any
+  drifted fact changes AGAIN or a NEW fact drifts; a stale acknowledge can never stamp a
+  pack over a revision the reviewer never saw.
+- **Tolerant parse defaults point away from unearned confidence**: unknown decision →
+  `not_reviewed`, status → `draft`, link origin → `reviewer`, kind →
+  `whole_document_provenance`, identity → `unresolved`; `evidence_exports.format` reads
+  RAW (a repair-default would invent an export claim).
+- **The D-7 ready gate**: every non-heading block decided (`not_applicable` counts;
+  selections never gate; NULL `block_kind` = required).
+
+### §5 Export architecture (one template, both formats)
+
+One golden-tested HTML template is the single source of truth for BOTH formats. The pure
+pack model (`evidence-pack/pack-model.ts`) normalizes the nine spec-§16.1 sections from
+the stored review only (packId/generatedAt injected; deterministic — byte-identical
+double-render pinned); the pure renderer (`evidence-pack/render-html.ts`) emits a
+self-contained document — zero scripts/remote refs/`@font-face`, one embedded `<style>`,
+`escapeHtml` exactly once after i18n, answer/items as escaped plain text (injection +
+determinism), `@page` A4 print CSS, system fonts, and a semantic h1 + 8×h2 + h3 tree that
+IS the PDF bookmark outline. Packs are structurally path-free (no path option exists).
+The atomic tail (`export.ts`): tmp sibling → length-checked write → fsync → **sha256 of
+the read-back bytes** → rename → `evidence_exports` row → audit `{reviewId, format}` only.
+Pre-rename failure leaves no file and no row; a POST-rename record failure **unlinks the
+just-renamed destination** (`EvidencePackRecordError`; if even the unlink fails,
+`EvidencePackUnrecordedFileError` names the one residual state: file-exists-unrecorded).
+The format is **extension-driven** — the user's chosen extension has the final word
+(`packFormatForDestination`); build+render happen ONCE, post-dialog, with the effective
+format threaded into the model, so content, extension, and export row always agree (the
+pack's cover/Integrity "Format" line states what the artifact IS — exactly one rendered
+line branches, golden-neutral by construction; the P6 adjudicated fix, §8).
+
+PDF (D-1): a dedicated hidden `BrowserWindow` print harness
+(`evidence-pack/print-pdf.ts`) — `SECURE_WINDOW_WEB_PREFERENCES` + **no preload at all**,
+deny-all navigation/window-open, per-print window destroyed in `finally` + on
+`before-quit`, 60 s step timeouts — loads the Phase-3 HTML **unchanged**, waits
+`did-finish-load` AND `document.fonts.ready`, then `printToPDF({ pageSize:'A4',
+preferCSSPageSize, printBackground, displayHeaderFooter, footerTemplate: packId +
+pageNumber/totalPages, generateDocumentOutline, generateTaggedPDF })`. D-1 pitfalls
+ACTUALLY hit and designed around in P6: header/footer templates run in a bare print
+context (system fonts + inline styles only; an **empty-span `headerTemplate`** must
+suppress Chromium's default date/title header); the print source must be a real file with
+an **`.html` extension** (Chromium sniffs file:// MIME from it; a data: URL has a ~2 MB
+cap) — it is a transient `.print.tmp.html` SIBLING of the user-chosen destination (already
+sanctioned plaintext ground, never an OS temp dir), removed in the same `finally`; the
+real-Electron smoke runner needs a **`window-all-closed` no-op** (Electron's default quit
+otherwise races the print) and an **isolated `--user-data-dir`** (profile singleton); the
+pdfjs v6 verification path needs the legacy build + a DOMMatrix polyfill under Node, with
+`getOutline`/`getMarkInfo` asserting the bookmark tree and the tagged-PDF mark.
+`generateTaggedPDF` is EXPERIMENTAL per Electron 37 — accessible headings/reading order
+are best-effort, **never a PDF/UA claim** (known-limitations.md). PDF bytes are
+nondeterministic (CreationDate/ID) → the HTML input stays golden, the PDF is smoke-tested.
+The freshness verdict and the outdated refusal stay BEFORE any dialog or window work for
+both formats.
+
+### §6 Freshness (stored facts, no re-hashing)
+
+`evidence-pack/freshness.ts` compares the frozen snapshot against the CURRENT workspace
+from **stored facts only — no file I/O, nothing re-hashed** (spec §21.2; structurally
+proven: the test documents have no files on disk): snapshotted `documentId` → row
+existence; snapshotted `documentSha256` vs stored `documents.sha256`; answer text exact vs
+`answer_snapshot`; coverage on a canonical semantic projection (reserialization/unknown
+keys never drift). Per-source verdicts `unchanged|changed|missing|unverifiable`;
+review-level `outdated` per §4. The spec-§20.1 "refresh on export" step (deliberately
+skipped in P3) was resolved YES in P4: the verdict is computed ONCE pre-dialog, refusal
+(`EvidencePackOutdatedError`) fires before any dialog, and the verdict is INJECTED into
+the pure model — the pack renders **availability at export**, the §28.6 mismatch record,
+and the acknowledge stamp; deleted/unverifiable sources warn but never block. Acknowledge
+writes only its own column (single-purpose bypass of the ready guard), is not audited
+(no spec-§22 event exists for it), and lapses by fingerprint (§2, §4).
+
+### §7 Test inventory (pointer)
+
+The wave's tests are the durable acceptance record (suite 4300/49 → **4625/49** across
+P0–P6). Unit: `evidence-segment`, `evidence-review-gate`, `evidence-pack-model`,
+`evidence-pack-html`, `evidence-pack-print-pdf`, `citation-snippet-boundary` (enrichment
+leg). Integration: `evidence-reviews`, `evidence-snapshot`, `evidence-reviews-ipc`,
+`evidence-pack-export` (6 golden packs under `tests/fixtures/evidence-packs/`, regenerated
+only under `UPDATE_EVIDENCE_PACK_GOLDENS=1`), `evidence-freshness`,
+`evidence-review-open-perf` (spec §26: 30 sources through real IPC, open < 1 s asserted,
+measured ~3 ms), `evidence-pack-pdf-smoke`. Renderer: `ReviewScreen`,
+`ReviewEntryPoints`, `ReviewExport`, `ReviewSelections`, `ReviewEvidencePane`,
+`ReviewLockSeam`, `reviewSession`, `CitationMarkers`, plus legs in
+`GermanSmoke`/`InformationArchitecture`/`LazyScreens`/`lockPurge`/`audit-ipc`/
+`ipc-lock-coverage`/`window-security`. The PDF proof is a **four-layer split**: golden
+HTML input (P3 suite, byte-frozen) → fake-electron harness unit tests (D-1 option
+literals, teardown, quit-mid-print) → pipeline/IPC on a fake BrowserWindow → a
+**REAL-Electron smoke** (`printPdfSmokeRunner.ts` bundles the real harness into the
+installed binary; SKIPS where the binary/display is absent — CI installs no Electron —
+and always runs on the first-class Windows dev box). Every IPC/export flow asserts the
+model-runtime tripwire untouched AND the real `installOfflineNetworkGuard` silent; the
+review renderer files enforce the no-call rule structurally
+(`afterEach(assertNoUnexpectedApiCalls)` + `stubReviewApi`).
+
+### §8 Decision ladder + phase dispositions
+
+| # | Decision | Resolution (one line) |
+|---|---|---|
+| D-1 | PDF implementation | **Electron `webContents.printToPDF`** on a hidden window over the golden HTML template — covers every spec-§17.1 need with zero new deps; `pdf-lib` (no layout engine), `pdfkit`/`pdfmake` (a second renderer to maintain), Puppeteer (a second Chromium) all rejected; pitfall list banked and hit as predicted (§5) |
+| D-2 | Conversation deletion | Warn-and-cascade: FK CASCADE via `messages(id)`; the delete confirm names the attached-review count (`evidence:countForConversation`) |
+| D-3 | Reviewer identity | Free-text label only |
+| D-4 | Pack manifest | Review-record only (`evidence_exports` row + hash); no sidecar file |
+| D-5 | Source context | Stored extracted text around the citation (`evidence-pack/source-context.ts`, chunk ladder, never files); no page images |
+| D-6 | Review title | Conversation title default, renameable, never empty (trimmed-empty refused; localized fallback title) |
+| D-7 | Ready gate | All non-heading blocks decided; `not_applicable` counts; selections exempt; NULL kind = required |
+| D-8 | Export retention | Metadata + hash only; no duplicate file in the workspace |
+| D-9 | Build hash in pack | App version always; build hash only under Technical details (option default OFF) |
+| D-10 | Branch strategy | Per-phase PRs to master (`feat/ep1-p<N>-<slug>`), merge only on green `ci-success`; master stayed releasable between phases |
+
+Phase dispositions (each = phase commit + review fix round by 2 independent reviewers;
+full Handoff Log P0–P5 at the plan's git-show pointer; dated entries verbatim in
+`docs/build-log.md`):
+
+| Phase | Branch (PR) | Shipped / review verdict |
+|---|---|---|
+| open | `docs/ep1-plan-landing` (#66) | Plan + spec landed, docs-only; D-1…D-10 owner-resolved 2026-07-18 |
+| P0 | `feat/ep1-p0-contracts-storage` (#67) | Contracts, 4 tables, tolerant parsers, D-7 gate, 6-site `Citation` enrichment; `ef71be2`+`277b079`; 0 blockers, 6 findings fixed. Suite 4300→4342 |
+| P1 | `feat/ep1-p1-snapshot-ipc` (#68) | Segmenter, snapshot builder, 13 IPC channels; `2385bef`+`8414aa7`; **1 BLOCKER: unknown-PRESENT coverage mode fell through to `direct_excerpt` and minted answer_marker links — the honesty INVERSION; now weakest-claim + exhaustive switch**; marker extraction unified to one whole-text pass. 4342→4394 |
+| P2 | `feat/ep1-p2-review-ui` (#69) | Workspace UI, auto-save store, D-2 confirm; `bffae2b`+`d75a8a9`; 0 blockers, 5 SHOULD-FIX (ready-read-only enforced main-side; openToken race matrix; lock-seam pin). 4394→4451 |
+| P3 | `feat/ep1-p3-html-export` (#70) | Pack model, renderer, atomic pipeline, goldens; `fe8b2f8`+`6cb548e`; 0 blockers, 2 SHOULD-FIX (post-rename unlink semantics; hash surfaced in history). **+`0fca4ec`: a LATENT P0 defect surfaced by CI — same-millisecond `created_at` ties broke on random UUID; reads now order by `rowid`** (insertion order). 4451→4519 |
+| P4 | `feat/ep1-p4-freshness` (#71) | Freshness engine, Outdated lifecycle, export refresh, source-in-context; `8d22869`+`ccfab29`; 0 blockers, 2 SHOULD-FIX (**value-bearing acknowledge fingerprint** — state literals let a re-changed source revive a stale ack). 4519→4571 |
+| P5 | `feat/ep1-p5-polish` (#72) | Selections, pane filter, German native pass, a11y audit (§11.13), perf tripwire, back-to-conversation; `58754e01`+`8745d1bf`; **1 BLOCKER: the back-handoff slot survived `askSelectedDocuments` — an old conversation hijacked "Ask these documents"**; slot now cleared on every chat mount. 4571→4595 |
+| P6 | `feat/ep1-p6-pdf-closeout` | Stage A (PDF, plan §11 item 1): `30826191`+`a3b4d8b8` — print harness, extension-driven format, +30 tests incl. the real-Electron smoke. Two review rounds (2 independent reviewers); **the reviewers disagreed on the pack's format self-description line** (a `.pdf` artifact whose cover/Integrity said "Self-contained HTML" — defect vs golden-frozen surface); the orchestrator adjudicated it a SHOULD-FIX → render once post-dialog with the effective format in the model, exactly one line branches, goldens stayed green un-regenerated as the neutrality proof. 4595→4625. Stage B: this retirement (docs only) |
+
+### §-anchor legend (historical spec/plan citations)
+
+Code comments, tests, and the kept docs cite the retired EP-1 papers as `spec §N` /
+`plan §N` (also `EP-1 plan §N`), `D-N`, `FR-N`, `spec Risk 7`, `review FIX-N`, and
+`P<N> watch-out`. EP-1 `spec §N` citations live in EP-1-authored files (`evidence-*`,
+`review*`, `citation-markers`, `print-pdf`, their tests) and in the EP-1-marked regions of
+shared files (the `types.ts` EP-1 block, the chat entry-point comments, the EP-1 doc
+sections); any other `spec §N` is the ORIGINAL MVP spec — see the retirement record below.
+Anchors were never renumbered. This legend is built from the citations actually present at
+retirement; resolve them as:
+
+| Historical anchor | Meaning | Now lives in |
+|---|---|---|
+| spec §1–§5, §7 | Rationale, goals, principles, personas | §1 above + `product-vision.md` (one roadmap line) |
+| spec §6 (§6.2–§6.8) | Terminology (review, item, link, decision, status) | the typed shapes in `data-contracts.md` + §2 |
+| spec §8, §13 (§13.1/§13.3/§13.5), §14 (§14.1/§14.3/§14.4), §15 (§15.4/§15.5) | Answer classes, linking rules, decisions, coverage/limitation states | §4 above + `rag-design.md` §16 |
+| spec §9 (§9.1/§9.2/§9.4), §10, §11, §12, §23, §25 | Entry points, journey, workspace UI, item model, a11y, edge states | §3 above + `design-guidelines.md` §11.12/§11.13 + `user-guide.md` "Review an answer against its sources" |
+| spec §16 (§16.1.x/§16.2), §17 (§17.1/§17.2), §20 (§20.1–§20.3), §24.3 | Pack contents, formats, export pipeline, encryption-boundary warning | §5 above + `security-model.md` "Evidence-pack export boundary" |
+| spec §18 (§18.1–§18.4), §19 | Data model, IPC surface | `data-contracts.md` (tables + channel table) + §2; §18.4's ready/outdated semantics in §4/§6 |
+| spec §21 (§21.2/§21.3) | Freshness | §6 above + `rag-design.md` §16.5 |
+| spec §22 | Privacy/audit posture | `security-model.md` + the audit content rules (ids/counts only) |
+| spec §26, §28 (§28.6/§28.7/§28.9/§28.10), §29 (§29.4/§29.5), FR-1…FR-15 (§27) | Perf, acceptance, testing strategy, functional requirements | the test files themselves (§7 above); FR-2/FR-12 = the no-model/no-network tripwires |
+| spec §30, §33 | Rollout phases, open decisions | §8 above (phase table + D-1…D-10 ladder) |
+| spec Risk 7 (§31) | Item keys break when rendering changes | keys against the SNAPSHOT (`blockKey`, UTF-16 selection offsets) — §3/§4 above |
+| spec §34–§36 | Source alignment, DoD, product description | §1 preamble; DoD verdict in the close-out BUILD_STATE entry (2026-07-18, `docs/build-log.md`); the honesty sentence in `known-limitations.md` |
+| plan §1 (§1.2/§1.3) | Verdict + the three deviations | §1 above |
+| plan §4 | Decision table D-1…D-10 incl. the D-1 research record | §8 above (research facts condensed into §5) |
+| plan §5–§11 (+ `.N` sub-items, e.g. §7.2, §8.3, §11 item 1) | The per-phase work-item plans P0–P6 | §8's phase table + the verbatim build-log entries; full text at the git-show pointer |
+| plan §12–§13 | Transfer map, orchestration protocol | executed by this record's existence; protocol facts in §8's preamble |
+| plan §14, `P<N> watch-out` | Handoff Log P0–P5 + its inter-phase watch-outs | verbatim at `git show b77295c0:docs/evidence-pack-implementation-plan.md`; condensed in §8; the dated entries in `docs/build-log.md` |
+| `EP-1 plan` (bare) | The plan as a whole | this record + the git-show pointer |
+| D-1…D-10 | Owner decisions | §8 ladder above |
+| `review FIX-N` | Phase-scoped review-round findings (each phase numbered its own) | the phase's build-log entry (fix-round paragraph) + §8's verdict column |
+
 ## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
 
 The frozen original product/architecture spec **`CLAUDE_HilbertRaum_MVP.md` was retired and

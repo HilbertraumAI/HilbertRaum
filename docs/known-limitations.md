@@ -1926,7 +1926,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   half-installed vision model (GGUF already present, projector missing) fetches just the projector
   (`downloads.test.ts`). The `fetch-models.{sh,ps1}` scripts remain the offline/CLI two-file path.
 
-## Evidence review & evidence packs (EP-1, wave open — plan `docs/evidence-pack-implementation-plan.md`)
+## Evidence review & evidence packs (EP-1 — [`architecture.md`](architecture.md) "Evidence Pack / Review Mode — design record")
 
 - **An evidence pack supports human review — it is not a certification.** The pack records
   what a human decided against the persisted sources; it does not (and cannot) prove the

@@ -587,9 +587,11 @@ document answers always run balanced (deep-grounded = wave 2).
   placeholder-weight/user-data). **Signing + notarization + the real USB launch = manual (R5/R7).**
 
 ### Evidence Pack / Review Mode (EP-1 Phases 0–6 live — contracts, storage, snapshot engine + IPC, review UI, HTML + PDF export, freshness, selections)
-Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.md` §5–§11 (this
-section records the AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes;
-only the wave close-out remains open).
+The wave is CLOSED (2026-07-18); the durable design record is `architecture.md` "Evidence
+Pack / Review Mode — design record (EP-1, §1–§8)" — its §-anchor legend resolves the
+historical `plan §N`/`spec §N` citations below (the retired plan survives at
+`git show b77295c0:docs/evidence-pack-implementation-plan.md`). This section records the
+AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
 
 ✅ **`Citation` enrichment (ADDITIVE, `shared/types.ts`):** `documentId?: string | null`
   (`chunks.document_id`) + `chunkId?: string | null` (`chunks.id`), stamped at the **six**
