@@ -371,6 +371,12 @@ function readItemRows(db: Db, reviewId: string): ItemRow[] {
   ).all(reviewId) as unknown as ItemRow[]
 }
 
+// Link/export read ordering: `created_at` is the display key, `rowid` the tie-break —
+// two rows inserted in the SAME millisecond (fast runners, bulk auto-linking) must read
+// back in INSERTION order, and a random-UUID `id` tie-break ordered such ties arbitrarily
+// (PR #70 ubuntu CI: links read [S2, S1]). `setEvidenceLink` UPDATEs an existing row in
+// place, so a relation edit keeps the link's ORIGINAL insertion position — exactly the
+// stable chip/pack ordering we want.
 function readLinksByItem(db: Db, reviewId: string): Map<string, EvidenceLink[]> {
   const rows = prepareCached(
     db,
@@ -378,7 +384,7 @@ function readLinksByItem(db: Db, reviewId: string): Map<string, EvidenceLink[]> 
      FROM evidence_review_links l
      JOIN evidence_review_items i ON i.id = l.review_item_id
      WHERE i.review_id = ?
-     ORDER BY l.created_at, l.id`
+     ORDER BY l.created_at, l.rowid`
   ).all(reviewId) as unknown as LinkRow[]
   const byItem = new Map<string, EvidenceLink[]>()
   for (const r of rows) {
@@ -409,8 +415,9 @@ function readItemById(db: Db, itemId: string): EvidenceReviewItem | null {
   if (!row) return null
   const links = prepareCached(
     db,
+    // Same insertion-order tie-break as readLinksByItem (rowid, not the random-UUID id).
     `SELECT review_item_id, evidence_key, link_origin, reviewer_relation
-     FROM evidence_review_links WHERE review_item_id = ? ORDER BY created_at, id`
+     FROM evidence_review_links WHERE review_item_id = ? ORDER BY created_at, rowid`
   ).all(itemId) as unknown as LinkRow[]
   return rowToItem(
     row,
@@ -963,11 +970,13 @@ export function recordEvidenceExport(
   return record
 }
 
-/** A review's export history, newest first. */
+/** A review's export history, newest first — same-millisecond ties break by rowid DESC
+ *  (the LAST insert is the newest export; a random-UUID tie-break would order arbitrarily,
+ *  the readLinksByItem defect class). */
 export function listEvidenceExports(db: Db, reviewId: string): EvidenceExportRecord[] {
   const rows = prepareCached(
     db,
-    'SELECT * FROM evidence_exports WHERE review_id = ? ORDER BY created_at DESC, id'
+    'SELECT * FROM evidence_exports WHERE review_id = ? ORDER BY created_at DESC, rowid DESC'
   ).all(reviewId) as unknown as ExportRow[]
   return rows.map(rowToExport)
 }

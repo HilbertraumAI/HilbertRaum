@@ -253,6 +253,56 @@ describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile
     expect(deleteEvidenceSelection(db, para.id)).toBe(false)
   })
 
+  it('same-millisecond inserts read back in INSERTION order — rowid tie-break, never the random id (PR #70 ubuntu CI)', () => {
+    // Deterministic repro of the CI flake: two rows with IDENTICAL created_at and ids
+    // chosen ADVERSE to insertion order — an `ORDER BY … id` tie-break would flip them;
+    // the rowid tie-break must hold insertion order regardless of timing or uuid luck.
+    const db = freshDb()
+    const { messageId } = seedAnswer(db)
+    const review = createEvidenceReview(db, {
+      messageId,
+      title: 'Ordering',
+      answerSnapshot: 'A [S1] [S2]',
+      questionSnapshot: 'Q',
+      sources: SOURCES
+    })
+    const [item] = createEvidenceReviewItems(db, review.id, [
+      { kind: 'block', blockKey: 'b0:paragraph:0001', blockKind: 'paragraph', textSnapshot: 'A [S1] [S2]' }
+    ])
+    const now = '2026-07-18T12:00:00.000Z'
+    const insertLink = db.prepare(
+      `INSERT INTO evidence_review_links (id, review_item_id, evidence_key, link_origin, reviewer_relation, created_at)
+       VALUES (?, ?, ?, ?, NULL, ?)`
+    )
+    // First insert gets the LEXICALLY LATER id: an id tie-break would read [S2, S1].
+    insertLink.run('zzzz-first-insert', item.id, 'S1', 'answer_marker', now)
+    insertLink.run('aaaa-second-insert', item.id, 'S2', 'reviewer', now)
+    const detail = getEvidenceReview(db, review.id)
+    expect(detail?.items[0]?.links.map((l) => l.evidenceKey)).toEqual(['S1', 'S2'])
+    // The per-item read path (mutation readbacks) orders identically.
+    const refreshed = updateEvidenceReviewItem(db, item.id, { reviewerNote: 'note' })
+    expect(refreshed?.links.map((l) => l.evidenceKey)).toEqual(['S1', 'S2'])
+    // A relation edit UPDATEs in place — the link keeps its ORIGINAL insertion position.
+    expect(
+      setEvidenceLink(db, item.id, 'S1', { origin: 'reviewer', relation: 'supports' })?.links.map(
+        (l) => l.evidenceKey
+      )
+    ).toEqual(['S1', 'S2'])
+
+    // Exports, newest first: on a created_at tie the LAST insert is the newest — the id
+    // alphabet must not decide (adverse the other way: first insert lexically FIRST).
+    const insertExport = db.prepare(
+      `INSERT INTO evidence_exports (id, review_id, format, schema_version, file_name, file_sha256, options_json, created_at)
+       VALUES (?, ?, 'html', 1, ?, ?, NULL, ?)`
+    )
+    insertExport.run('aaaa-first-insert', review.id, 'first.html', 'aa'.repeat(32), now)
+    insertExport.run('zzzz-second-insert', review.id, 'second.html', 'bb'.repeat(32), now)
+    expect(listEvidenceExports(db, review.id).map((x) => x.fileName)).toEqual([
+      'second.html',
+      'first.html'
+    ])
+  })
+
   it('head patch: rename (D-6) + reviewer label (D-3) + note; empty title is ignored', () => {
     const db = freshDb()
     const { messageId } = seedAnswer(db)
