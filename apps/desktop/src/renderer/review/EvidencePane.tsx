@@ -21,17 +21,12 @@ import type { I18n } from '../i18n'
 // the answer" label read-only: re-writing it through `setEvidenceLink` would overwrite the
 // origin to 'reviewer' and silently destroy the citation claim — deliberately not offered.
 
-export type EvidencePaneMode = 'relevance' | 'whole_doc' | 'structured'
-
-/** Map the snapshotted coverage mode to the pane's honesty caption class (the Phase-1
- *  snapshot-builder mapping: relevance/absent → relevance; extract → structured;
- *  tree/capped/unknown → whole-document — degrade toward the weaker claim). */
-export function evidencePaneMode(coverage: CoverageInfo | null): EvidencePaneMode {
-  const mode = coverage?.mode
-  if (mode == null || mode === 'relevance') return 'relevance'
-  if (mode === 'extract') return 'structured'
-  return 'whole_doc'
-}
+// The honesty-mode mapping MOVED to shared/evidence-review.ts in Phase 3 (plan §8.1) so the
+// main-side pack model reuses the exact same function; imported + re-exported here so
+// Phase-2 imports (ReviewScreen + tests) stay valid. Semantics unchanged: relevance/absent
+// → relevance; extract → structured; tree/capped/unknown → whole-document (weaker claim).
+import { evidencePaneMode } from '@shared/evidence-review'
+export { evidencePaneMode, type EvidencePaneMode } from '@shared/evidence-review'
 
 const CAPTION_KEY = {
   relevance: 'review.evidence.captionRelevance',

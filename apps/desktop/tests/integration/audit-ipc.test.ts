@@ -99,6 +99,10 @@ const REVIEWER_SENTINEL = 'XREVIEWER_SENTINEL_dr_meyer_private'
 const REVIEW_NOTE_SENTINEL = 'XREVNOTE_SENTINEL_the_witness_recants'
 const REVIEW_ANSWER_SENTINEL = 'XREVANSWER_SENTINEL_the_patent_expires_in_may'
 const REVIEW_SOURCE_SENTINEL = 'XREVSOURCE_SENTINEL_merger-term-sheet'
+// EP-1 Phase 3: the pack export's destination FILE NAME (which lands in evidence_exports —
+// workspace data — as the bare name) must NEVER reach runtime_events; nor may the title,
+// which seeds the suggested name (audit = {reviewId, format} only).
+const REVIEW_EXPORT_PATH_SENTINEL = 'XREVPATH_SENTINEL_private-client-folder'
 const SENTINELS = [
   CHAT_SENTINEL,
   DOC_SENTINEL,
@@ -112,7 +116,8 @@ const SENTINELS = [
   REVIEWER_SENTINEL,
   REVIEW_NOTE_SENTINEL,
   REVIEW_ANSWER_SENTINEL,
-  REVIEW_SOURCE_SENTINEL
+  REVIEW_SOURCE_SENTINEL,
+  REVIEW_EXPORT_PATH_SENTINEL
 ]
 
 const BODY = 'downloaded-model-bytes'
@@ -510,6 +515,20 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       sourceCount: 1,
       autoLinkCount: 1
     })
+    // EP-1 Phase 3: export the (ready) review to a destination whose PATH is a sentinel —
+    // the pack file itself may carry review content (it is the user's chosen export), but
+    // the audit event must record {reviewId, format} and NOTHING else.
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = join(rootPath, `${REVIEW_EXPORT_PATH_SENTINEL}.html`)
+    const { result: packRecordRaw } = await invoke(handlers, IPC.exportEvidencePack, review.id, {})
+    expect(packRecordRaw).not.toBeNull()
+    ipcState.saveDialog.canceled = true
+    ipcState.saveDialog.filePath = undefined
+    const packExportEvent = listAuditEvents(db, { limit: 5000 }).find(
+      (e) => e.type === 'evidence_pack_exported'
+    )
+    expect(packExportEvent?.message).toBe('Evidence pack exported')
+    expect(packExportEvent?.metadata).toEqual({ reviewId: review.id, format: 'html' })
     await invoke(handlers, IPC.deleteEvidenceReview, review.id)
 
     // -- models + runtime: select, verify, start (mock fallback), stop.
@@ -551,10 +570,11 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       'documents_added_to_collection',
       'documents_removed_from_collection',
       'document_lifecycle_changed',
-      // EP-1 Phase 1 lifecycle events (evidence_pack_exported first fires in Phase 3).
+      // EP-1 lifecycle events (Phase 1) + the pack-export event (Phase 3).
       'evidence_review_created',
       'evidence_review_ready',
-      'evidence_review_deleted'
+      'evidence_review_deleted',
+      'evidence_pack_exported'
     ]) {
       expect(types, `missing audit event: ${expected}`).toContain(expected)
     }

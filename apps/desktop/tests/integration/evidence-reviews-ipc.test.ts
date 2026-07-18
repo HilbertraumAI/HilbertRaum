@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard'
@@ -11,13 +11,24 @@ import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard
 // fails the suite if ANY handler touches it, and the real offline connect-guard must stay
 // silent across the entire flow (spec FR-2/FR-12; plan §6 exit gate).
 
-const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
+const ipcState = vi.hoisted(() => ({
+  handlers: new Map<string, unknown>(),
+  // Phase 3 (plan §8.3): the export handler's native save dialog, test-controlled.
+  saveDialog: { canceled: true as boolean, filePath: undefined as string | undefined }
+}))
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
-  app: { getVersion: () => '0.0.0-test' }
+  app: { getVersion: () => '0.0.0-test' },
+  BrowserWindow: { getFocusedWindow: () => null },
+  dialog: {
+    showSaveDialog: async () => ({
+      canceled: ipcState.saveDialog.canceled,
+      filePath: ipcState.saveDialog.filePath
+    })
+  }
 }))
 
 import { randomUUID } from 'node:crypto'
@@ -31,6 +42,7 @@ import type { AppContext } from '../../src/main/services/context'
 import type {
   Citation,
   CoverageInfo,
+  EvidenceExportRecord,
   EvidenceReadyGate,
   EvidenceReview,
   EvidenceReviewDetail,
@@ -541,6 +553,122 @@ describe('review persistence across restart + lock (EP-1 plan §7 exit gate)', (
     expect((await invoke(handlers, IPC.countEvidenceReviewsForConversation, '')).result).toBe(0)
     expect(h.runtimeTouched).toEqual([])
     expect(offlineViolations).toEqual([])
+  })
+})
+
+describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () => {
+  beforeEach(() => {
+    ipcState.saveDialog.canceled = true
+    ipcState.saveDialog.filePath = undefined
+  })
+
+  it('exports a READY review: file written, record returned, exports on the detail, audit ids-only, no model/no network', async () => {
+    const h = makeHarness()
+    registerEvidenceReviewsIpc(h.ctx)
+    const { messageId } = seedAnswer(h.db, {
+      content: RELEVANCE.content,
+      citations: RELEVANCE.citations,
+      coverage: RELEVANCE.coverage
+    })
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
+    const created = createdRaw as EvidenceReviewDetail
+    for (const item of created.items) {
+      if (item.blockKind !== 'heading') {
+        await invoke(handlers, IPC.updateEvidenceReviewItem, item.id, { decision: 'supported' })
+      }
+    }
+    const { result: readyRaw } = await invoke(handlers, IPC.markEvidenceReviewReady, created.id)
+    expect((readyRaw as { review: EvidenceReview }).review.status).toBe('ready')
+
+    // Export the ready review — the ready-state write-guard must NOT block this (P2
+    // handoff: verify, don't assume).
+    const dest = join(h.root, 'ready-pack.html')
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = dest
+    const { result: recordRaw } = await invoke(handlers, IPC.exportEvidencePack, created.id, {
+      language: 'en'
+    })
+    const record = recordRaw as EvidenceExportRecord
+    expect(record).not.toBeNull()
+    expect(record.format).toBe('html')
+    expect(record.fileName).toBe('ready-pack.html')
+    expect(existsSync(dest)).toBe(true)
+    expect(readFileSync(dest, 'utf8')).toContain('Evidence pack')
+
+    // The detail read now carries the export row (the renderer history source).
+    const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
+    const detail = detailRaw as EvidenceReviewDetail
+    expect(detail.exports).toHaveLength(1)
+    expect(detail.exports[0]!.fileSha256).toBe(record.fileSha256)
+
+    // Audit: exactly {reviewId, format} — never the path, never the title.
+    const exported = listAuditEvents(h.db, { limit: 100 }).find(
+      (e) => e.type === 'evidence_pack_exported'
+    )
+    expect(exported?.message).toBe('Evidence pack exported')
+    expect(exported?.metadata).toEqual({ reviewId: created.id, format: 'html' })
+
+    expect(h.runtimeTouched).toEqual([])
+    expect(offlineViolations).toEqual([])
+  })
+
+  it('cancel → null, no file, no row, no audit event', async () => {
+    const h = makeHarness()
+    registerEvidenceReviewsIpc(h.ctx)
+    const { messageId } = seedAnswer(h.db, {
+      content: RELEVANCE.content,
+      citations: RELEVANCE.citations,
+      coverage: RELEVANCE.coverage
+    })
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
+    const created = createdRaw as EvidenceReviewDetail
+    ipcState.saveDialog.canceled = true
+    const { result } = await invoke(handlers, IPC.exportEvidencePack, created.id, {})
+    expect(result).toBeNull()
+    const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
+    expect((detailRaw as EvidenceReviewDetail).exports).toEqual([])
+    expect(
+      listAuditEvents(h.db, { limit: 100 }).some((e) => e.type === 'evidence_pack_exported')
+    ).toBe(false)
+    expect(h.runtimeTouched).toEqual([])
+  })
+
+  it('guards the boundary: malformed id → null without a dialog; hostile options resolve to defaults', async () => {
+    const h = makeHarness()
+    registerEvidenceReviewsIpc(h.ctx)
+    // Unknown/malformed ids never reach the dialog (canceled=true would return null
+    // anyway — assert the null comes back for both shapes).
+    expect((await invoke(handlers, IPC.exportEvidencePack, 42, {})).result).toBeNull()
+    expect((await invoke(handlers, IPC.exportEvidencePack, '', {})).result).toBeNull()
+    expect((await invoke(handlers, IPC.exportEvidencePack, 'no-such-review', {})).result).toBeNull()
+
+    const { messageId } = seedAnswer(h.db, {
+      content: RELEVANCE.content,
+      citations: RELEVANCE.citations,
+      coverage: RELEVANCE.coverage
+    })
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
+    const created = createdRaw as EvidenceReviewDetail
+    const dest = join(h.root, 'hostile-options.html')
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = dest
+    const { result: recordRaw } = await invoke(handlers, IPC.exportEvidencePack, created.id, {
+      language: 'xx',
+      includeReviewerNotes: 'yes',
+      includeSourcePaths: true,
+      nested: { deep: true }
+    })
+    const record = recordRaw as EvidenceExportRecord
+    // The persisted option set is the RESOLVED one — garbage never masquerades as a choice.
+    expect(record.options).toEqual({
+      language: 'en',
+      includeReviewerNotes: true,
+      includeSourceExcerpts: true,
+      includeDocumentHashes: true,
+      includeUnreviewedItems: true,
+      includeTechnicalDetails: false
+    })
+    expect(h.runtimeTouched).toEqual([])
   })
 })
 

@@ -309,6 +309,39 @@ class is defined by a **hard privacy rule**:
 - Retention: pruned to the **newest 5 000 rows on every insert** (`AUDIT_MAX_ROWS`, wave-1 decision
   D7 — fixed for wave 1; configurability is Office-edition admin surface).
 
+## Evidence-pack export boundary (EP-1 Phase 3)
+
+The evidence-pack export (`evidence:export`) deliberately moves review content — question,
+answer, decisions, notes, source excerpts — **across the encryption boundary** into one
+user-chosen plaintext HTML file. That is its purpose (a pack is FOR sharing/filing), so the
+boundary is made explicit and everything around it stays inside the data-class rules:
+
+- **Consent + warning:** the export happens only through the native save dialog, and the
+  spec §24.3 warning ("stored outside the encrypted HilbertRaum workspace… not protected by
+  your workspace password") is shown in the export panel BEFORE the dialog on every
+  platform (`review.export.encryptionWarning`).
+- **The pack file is inert:** self-contained HTML with zero scripts, zero remote
+  references (no external fonts/images/CSS, no `http(s)` URLs, internal `#` anchors only)
+  and one embedded stylesheet — opening it can neither phone home nor execute anything.
+  All persisted content passes through the renderer's own `escapeHtml` exactly once
+  (spec §29.4 injection suite); the answer is reproduced as escaped plain text — there is
+  deliberately NO main-side markdown-to-HTML conversion (it would be a second injection
+  surface). Original file paths are structurally absent: the review snapshot never carries
+  them, so no option can include one.
+- **What the workspace keeps** (D-8): metadata + hash only — `evidence_exports` stores the
+  bare file name, SHA-256 of the exact on-disk bytes (hashed from the read-back tmp file
+  after fsync, before the atomic rename), schema version and the RESOLVED option flags.
+  The destination path is never persisted. The file itself is never copied into the
+  workspace.
+- **Atomicity** (spec §20.3/§28.9): tmp sibling → fsync → hash → rename; a failure or
+  cancel leaves NO destination file, NO tmp remnant (best-effort) and NO export row — a
+  half-written "evidence" file can never exist.
+- **Audit:** `evidence_pack_exported` records `{reviewId, format}` and nothing else — not
+  the path, not the file name, not the title (which seeds the suggested name and is
+  content). Sentinel-swept in `audit-ipc.test.ts` with a path-sentinel destination.
+- **No model, no network:** the pipeline is pure SQLite read → pure render → local write;
+  the real offline connect-guard is asserted silent across every export test.
+
 ## Workspace modes (Phase 9)
 
 The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceController`):

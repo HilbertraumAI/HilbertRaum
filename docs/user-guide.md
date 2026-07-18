@@ -573,8 +573,21 @@ AI model anything, and nothing touches the network — it is you, the answer, an
   (**Continue review**, with a small Draft/Ready tag). Deleting a conversation deletes its
   reviews too — the delete confirmation warns you with the count first.
 
-Exporting a review as a self-contained **evidence pack** (HTML/PDF) is coming in a later
-update; the review itself is fully usable today.
+**Export an evidence pack.** From the **Review summary**, choose **Create evidence pack** to
+save the whole review — question, answer, your decisions and notes, the source excerpts,
+coverage warnings, and generation details — as **one self-contained HTML file** you can open
+in any browser, print, or hand to a colleague. Before exporting you pick what to include
+(reviewer notes, source excerpts, document hashes, unreviewed items; extra technical details
+are off unless you turn them on), and the app reminds you of the one important boundary:
+*the exported file is stored outside the encrypted workspace and is not protected by your
+workspace password* — treat the file with the same care as the documents it quotes. The pack
+is generated **entirely on this drive** (no AI model, no network), contains **no scripts and
+no links to the internet**, never contains file paths from your computer, and is written in
+the app language you are using at the time (English or German). Works for drafts and ready
+reviews alike — the pack states the review's status honestly. Each export is remembered in
+the summary's **Export history** with its SHA-256 fingerprint, so you can later verify a
+pack file hasn't been altered (the file itself stays wherever you saved it — the app keeps
+only the record). A PDF export is coming in a later update.
 
 ---
 

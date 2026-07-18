@@ -1,7 +1,8 @@
-import { app, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
+  EvidenceExportRecord,
   EvidenceLinkInput,
   EvidenceReadyGate,
   EvidenceReview,
@@ -17,6 +18,7 @@ import type {
 import { tMain } from '../services/i18n'
 import { findManifestById } from '../services/models'
 import { createEvidenceReviewFromMessage } from '../services/evidence-pack/snapshot'
+import { exportEvidencePackToFile } from '../services/evidence-pack/export'
 import {
   countEvidenceReviewsForConversation,
   createEvidenceSelection,
@@ -292,6 +294,47 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
       requireUnlocked()
       const id = safeId(conversationId)
       return id ? countEvidenceReviewsForConversation(ctx.db, id) : 0
+    }
+  )
+
+  // Evidence-pack export (plan §8.3 — the 15th channel, deliberately registered in Phase 3
+  // alongside its implementation): deterministic HTML render + ATOMIC write; null on an
+  // unknown id or user cancel, and a failure leaves NO file and NO row (spec §28.9). Works
+  // on draft AND ready reviews — the ready-state write-guard covers item/link mutations
+  // only. The dialog + fs run in MAIN (the renderer has no fs/dialog access), and the
+  // options payload is resolved through the tolerant boundary resolver — unknown keys drop.
+  // Audit is {reviewId, format} ONLY: the chosen path and the review TITLE (which seeds the
+  // suggested file name) are content and never recorded (sentinel-tested).
+  ipcMain.handle(
+    IPC.exportEvidencePack,
+    async (_e, reviewId: unknown, options: unknown): Promise<EvidenceExportRecord | null> => {
+      requireUnlocked()
+      const id = safeId(reviewId)
+      if (!id) return null
+      const record = await exportEvidencePackToFile(ctx.db, id, options, {
+        chooseDestination: async (suggestedFileName) => {
+          const win = BrowserWindow.getFocusedWindow()
+          const dialogOptions: Electron.SaveDialogOptions = {
+            title: tMain('main.dialog.exportEvidencePack'),
+            defaultPath: suggestedFileName,
+            filters: [{ name: 'HTML', extensions: ['html'] }],
+            // §24.3 encryption-boundary warning: the renderer's export panel shows it on
+            // every platform; `message` additionally surfaces it inside the macOS sheet.
+            message: tMain('review.export.encryptionWarning')
+          }
+          const result = win
+            ? await dialog.showSaveDialog(win, dialogOptions)
+            : await dialog.showSaveDialog(dialogOptions)
+          return result.canceled || !result.filePath ? null : result.filePath
+        }
+      })
+      if (record) {
+        ctx.audit?.('evidence_pack_exported', 'Evidence pack exported', {
+          reviewId: id,
+          format: record.format
+        })
+      }
+      return record
     }
   )
 }

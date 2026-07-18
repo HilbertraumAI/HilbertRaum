@@ -318,6 +318,13 @@ export const IPC = {
    *  count (spec §25.4). Added in Phase 2 (plan §7.6): the P0 service function existed
    *  without a channel; the renderer confirm needs the number. Count only — no content. */
   countEvidenceReviewsForConversation: 'evidence:countForConversation',
+  /** Export the review as a self-contained HTML evidence pack (plan §8.3, spec §16/§17.2/
+   *  §20): save dialog → deterministic render → ATOMIC write (tmp sibling → fsync →
+   *  sha256 → rename) → `evidence_exports` row. Returns the export record, or null when
+   *  the user cancelled / the id is unknown; a failure leaves NO file and NO row (spec
+   *  §28.9). Registered in Phase 3 (per §8.3 as edited): Phase 1 deliberately shipped
+   *  without it — a dead channel would have been a false promise. No model, no network. */
+  exportEvidencePack: 'evidence:export',
   // Encrypted workspace lifecycle
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',

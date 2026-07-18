@@ -2021,6 +2021,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportChat': 'Chat-Verlauf exportieren',
   'main.dialog.exportTableCsv': 'Tabelle als CSV exportieren',
   'main.dialog.exportAudit': 'Aktivitätslog exportieren',
+  'main.dialog.exportEvidencePack': 'Nachweispaket exportieren',
   'main.dialog.exportLog': 'Diagnose-Logs speichern',
   'main.dialog.filterDocuments': 'Dokumente',
   'main.dialog.filterAll': 'Alle Dateien',
@@ -2460,5 +2461,128 @@ export const de: Record<keyof typeof en, string> = {
   'review.deleteWithConversation.other':
     '{count} Nachweis-Prüfungen zu dieser Unterhaltung werden ebenfalls gelöscht.',
   'review.deleteWithConversation.unknown':
-    'Auch zu dieser Unterhaltung gehörende Nachweis-Prüfungen werden gelöscht.'
+    'Auch zu dieser Unterhaltung gehörende Nachweis-Prüfungen werden gelöscht.',
+
+  // ---- Nachweispaket-Export (EP-1 Plan §8; ENTWURFSSTAND wie oben — Phase-6-Durchsicht) ----
+  'review.status.lastExported': 'Zuletzt exportiert {date}',
+  'review.export.action': 'Nachweispaket erstellen',
+  'review.export.title': 'Nachweispaket exportieren',
+  'review.export.encryptionWarning':
+    'Diese exportierte Datei liegt außerhalb des verschlüsselten HilbertRaum-Arbeitsbereichs und ist nicht durch dein Arbeitsbereich-Passwort geschützt.',
+  'review.export.options': 'In das Paket aufnehmen',
+  'review.export.optNotes': 'Prüfnotizen',
+  'review.export.optExcerpts': 'Quellenauszüge',
+  'review.export.optHashes': 'Dokument-Hashes',
+  'review.export.optUnreviewed': 'Ungeprüfte Punkte',
+  'review.export.optTechnical': 'Technische Details',
+  'review.export.confirm': 'Paket exportieren …',
+  'review.export.cancel': 'Schließen',
+  'review.export.done': 'Nachweispaket exportiert.',
+  'review.export.error':
+    'Das Nachweispaket konnte nicht exportiert werden. Es wurde keine Datei geschrieben.',
+
+  // ---- Nachweispaket-Inhalt (Plan §8.2 — beim Export in die HTML-Datei eingefroren) ----
+  'packExport.docTitle': 'Nachweispaket',
+  'packExport.privacy': 'Lokal mit HilbertRaum erstellt. Es waren keine Cloud-Dienste beteiligt.',
+  'packExport.disclaimer':
+    'Eine Quellenangabe zeigt, woher eine Information stammt. Sie allein beweist nicht, dass die Antwort richtig ist.',
+  'packExport.support': 'Dieses Paket unterstützt die menschliche Prüfung; es ist keine Zertifizierung.',
+  'packExport.meta.packId': 'Paket-ID',
+  'packExport.meta.generatedAt': 'Erstellt',
+  'packExport.meta.status': 'Prüfstatus',
+  'packExport.meta.format': 'Format',
+  'packExport.meta.formatValue': 'Eigenständiges HTML · Paketschema v{version}',
+  'packExport.section.qa': 'Frage und Antwort',
+  'packExport.qa.question': 'Frage',
+  'packExport.qa.answer': 'Antwort',
+  'packExport.qa.noQuestion': 'Zu dieser Antwort wurde keine Frage aufgezeichnet.',
+  'packExport.qa.verbatim':
+    'Die Antwort ist wortgetreu als unformatierter Text wiedergegeben, exakt wie beim Anlegen der Prüfung eingefroren.',
+  'packExport.section.summary': 'Prüfungsübersicht',
+  'packExport.summary.reviewer': 'Prüfer',
+  'packExport.summary.created': 'Prüfung angelegt',
+  'packExport.summary.updated': 'Zuletzt geändert',
+  'packExport.summary.completed': 'Abgeschlossen',
+  'packExport.summary.lastExported': 'Vorheriger Export',
+  'packExport.summary.decisions': 'Entscheidungen',
+  'packExport.summary.progress': '{decided} von {required} erforderlichen Punkten entschieden',
+  'packExport.summary.followUps': 'Offene Nachprüfungen: {count}',
+  'packExport.summary.generalNote': 'Allgemeine Notiz',
+  'packExport.summary.noGeneralNote': 'Keine allgemeine Notiz aufgezeichnet.',
+  'packExport.excluded.notes':
+    'Prüfnotizen wurden über die Exportoptionen aus diesem Paket ausgeschlossen.',
+  'packExport.excluded.excerpts':
+    'Quellenauszüge wurden über die Exportoptionen aus diesem Paket ausgeschlossen.',
+  'packExport.section.items': 'Prüfung Punkt für Punkt',
+  'packExport.item.number': 'Punkt {n}',
+  'packExport.item.heading': 'Überschrift',
+  'packExport.item.selection': 'Textauswahl des Prüfers',
+  'packExport.item.decision': 'Entscheidung',
+  'packExport.item.note': 'Prüfnotiz',
+  'packExport.item.evidence': 'Verknüpfte Nachweise',
+  'packExport.item.noEvidence': 'Kein Nachweis mit diesem Punkt verknüpft.',
+  'packExport.items.unreviewedExcluded.one':
+    '{count} ungeprüfter Punkt wurde über die Exportoptionen aus diesem Paket ausgeschlossen.',
+  'packExport.items.unreviewedExcluded.other':
+    '{count} ungeprüfte Punkte wurden über die Exportoptionen aus diesem Paket ausgeschlossen.',
+  'packExport.section.evidence': 'Nachweisregister',
+  'packExport.evidence.none':
+    'Für diese Antwort wurden keine Quellenauszüge oder Herkunftsangaben gespeichert.',
+  'packExport.evidence.kindDirect':
+    'Direkter Auszug — dem lokalen Modell für diese Antwort vorgelegt',
+  'packExport.evidence.kindProvenance':
+    'Herkunft aus Gesamtdokument-Analyse — keine einzelne Satz-Quellenangabe',
+  'packExport.evidence.kindStructured': 'Strukturierter Extraktionsdatensatz',
+  'packExport.evidence.page': 'Seite {n}',
+  'packExport.evidence.sectionLabel': 'Abschnitt',
+  'packExport.evidence.excerpt': 'Gespeicherter Auszug',
+  'packExport.evidence.noExcerpt': 'Für diese Quelle wurde kein Auszug gespeichert.',
+  'packExport.evidence.relations': 'Prüfer-Einordnungen',
+  'packExport.evidence.identityUnresolved':
+    'Die Identität dieses Quelldokuments konnte nicht gegen den Arbeitsbereich verifiziert werden.',
+  'packExport.evidence.missingAtCreation':
+    'Dieses Quelldokument fehlte bereits im Arbeitsbereich, als die Prüfung angelegt wurde.',
+  'packExport.section.coverage': 'Abdeckung und Einschränkungen',
+  'packExport.coverage.modeRelevance':
+    'Die gezeigten Quellen sind die Auszüge, die dem lokalen KI-Modell für diese Antwort vorgelegt wurden.',
+  'packExport.coverage.modeWholeDoc':
+    'Diese Antwort wurde durch eine Gesamtdokument-Analyse erstellt. Die gezeigten Abschnitte sind Herkunftsangaben, keine einzelnen Satz-Quellenangaben.',
+  'packExport.coverage.modeStructured':
+    'Diese Antwort ist eine strukturierte Extraktion, die deterministisch aus den Quelldokumenten erzeugt wurde.',
+  'packExport.coverage.inputStatement':
+    'Abdeckung der Eingabe: {covered} von {total} indexierten Abschnitten standen dem Modell zur Verfügung.',
+  'packExport.coverage.inputUnknown':
+    'Zu dieser Antwort wurden keine Abdeckungsinformationen aufgezeichnet.',
+  'packExport.coverage.noTruncationRecord':
+    'Für diese Antwort wurde keine Kürzung der Ausgabe aufgezeichnet.',
+  'packExport.coverage.freshnessNote':
+    'Die Verfügbarkeit der Quellen entspricht dem Stand beim Anlegen der Prüfung; sie wurde für diesen Export nicht erneut überprüft.',
+  'packExport.section.sources': 'Quellenregister',
+  'packExport.sources.colTitle': 'Dokument',
+  'packExport.sources.colType': 'Dateityp',
+  'packExport.sources.colSha': 'SHA-256 zum Prüfzeitpunkt',
+  'packExport.sources.colAvailability': 'Verfügbarkeit beim Anlegen der Prüfung',
+  'packExport.sources.availabilityAvailable': 'Verfügbar',
+  'packExport.sources.availabilityMissing': 'Fehlte',
+  'packExport.sources.availabilityUnknown': 'Nicht überprüfbar',
+  'packExport.sources.hashExcluded': 'Über Exportoptionen ausgeschlossen',
+  'packExport.sources.pathNote':
+    'Ursprüngliche Dateipfade sind in einem Nachweispaket niemals enthalten.',
+  'packExport.section.generation': 'Erstellungsdetails',
+  'packExport.generation.model': 'Modell',
+  'packExport.generation.modelId': 'Modell-ID',
+  'packExport.generation.skill': 'Skill',
+  'packExport.generation.generatedAt': 'Antwort erstellt',
+  'packExport.generation.appVersion': 'App-Version',
+  'packExport.generation.exportedAt': 'Paket erstellt',
+  'packExport.generation.technical': 'Technische Details',
+  'packExport.generation.techMode': 'Aufgezeichneter Antwortmodus',
+  'packExport.generation.techCoverage': 'Abdeckungszähler',
+  'packExport.generation.techSourceKeys': 'Quellenschlüssel',
+  'packExport.section.integrity': 'Integritätsdetails',
+  'packExport.integrity.hashNote':
+    'Der SHA-256-Hash dieser Datei wird nach der Erstellung berechnet und im Exportverlauf der Prüfung im verschlüsselten Arbeitsbereich aufgezeichnet. Berechne ihn neu, um zu prüfen, dass die Datei unverändert ist.',
+  'packExport.integrity.options': 'Exportoptionen',
+  'packExport.integrity.optIncluded': 'Enthalten',
+  'packExport.integrity.optExcluded': 'Ausgeschlossen'
 }

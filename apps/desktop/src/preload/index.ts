@@ -22,7 +22,9 @@ import type {
   DriveStatus,
   EngineDownloadJob,
   EngineStatus,
+  EvidenceExportRecord,
   EvidenceLinkInput,
+  EvidencePackOptions,
   EvidenceReadyGate,
   EvidenceReview,
   EvidenceReviewDetail,
@@ -561,6 +563,15 @@ const api = {
   /** How many reviews this conversation's messages carry — the D-2 delete-confirm count. */
   countEvidenceReviewsForConversation: (conversationId: string): Promise<number> =>
     ipcRenderer.invoke(IPC.countEvidenceReviewsForConversation, conversationId),
+  /** Export the review as a self-contained HTML evidence pack (Phase 3, plan §8.3): save
+   *  dialog → deterministic render → ATOMIC write → export record. Null on cancel or an
+   *  unknown id; a failure leaves no file and no row (spec §28.9). Partial options resolve
+   *  against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side. No model call, no network. */
+  exportEvidencePack: (
+    reviewId: string,
+    options: Partial<EvidencePackOptions>
+  ): Promise<EvidenceExportRecord | null> =>
+    ipcRenderer.invoke(IPC.exportEvidencePack, reviewId, options),
 
   // Skills (instruction packages; skills plan §16).
   /** All installed skills (app first, then by title). */

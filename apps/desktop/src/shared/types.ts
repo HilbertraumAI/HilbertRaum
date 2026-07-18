@@ -2488,6 +2488,33 @@ export interface EvidenceReviewDetail extends EvidenceReview {
  *  TEXT, so a later format (spec §18.1 also names markdown) lands additively. */
 export type EvidenceExportFormat = 'html' | 'pdf'
 
+/** The pack's content language, chosen at export and FROZEN into the generated file (plan
+ *  §8.2): a persisted pack is a snapshot — it is never re-localized later. */
+export type EvidencePackLanguage = 'en' | 'de'
+
+/**
+ * Evidence-pack export option flags (spec §16.2, plan §8.1). The renderer sends a PARTIAL
+ * set from the export panel; main resolves defaults (`resolveEvidencePackOptions`) and
+ * persists the RESOLVED set into `evidence_exports.options_json` (D-4), so the export
+ * history states exactly what each pack contained. Defaults live in
+ * `EVIDENCE_PACK_OPTION_DEFAULTS` (shared/evidence-review.ts). Privacy note: original file
+ * paths have NO flag — the review snapshot carries no paths, so no pack can ever contain
+ * one (structurally stronger than the spec's "default off").
+ */
+export interface EvidencePackOptions {
+  language: EvidencePackLanguage
+  /** Item + general reviewer notes (§16.1.3/§16.1.4); off = omitted with an honest notice. */
+  includeReviewerNotes: boolean
+  /** Persisted source excerpts in the evidence register (§16.1.5). */
+  includeSourceExcerpts: boolean
+  /** Stored document SHA-256 values in the source register (§16.1.7). */
+  includeDocumentHashes: boolean
+  /** Items still 'not_reviewed' in the item-by-item section; off = counted, not listed. */
+  includeUnreviewedItems: boolean
+  /** Technical subsection (raw answer mode, coverage counters, chunk ids) — default OFF. */
+  includeTechnicalDetails: boolean
+}
+
 /**
  * One export event's metadata (D-8: metadata + content hash ONLY — no file copy kept, and the
  * destination path is deliberately NOT persisted, spec §18.1). `fileName` is the bare chosen
