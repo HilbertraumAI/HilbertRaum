@@ -2541,3 +2541,15 @@ export interface EvidenceLinkInput {
   origin: 'answer_marker' | 'reviewer'
   relation?: 'supports' | 'qualifies' | 'contradicts' | 'context' | null
 }
+
+/**
+ * Result of `refreshEvidenceReviewState` (spec §19/§21). Phase 1 STUBS the freshness
+ * engine: every known review reports `outdated: false` — the same "not known to be
+ * outdated" overlay semantics every read already carries, never a verified-fresh claim.
+ * Phase 4 replaces the stub with the real snapshot-vs-workspace comparison and widens this
+ * shape ADDITIVELY (per-source availability states, answer/coverage drift).
+ */
+export interface EvidenceReviewFreshness {
+  reviewId: string
+  outdated: boolean
+}

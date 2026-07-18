@@ -23,6 +23,7 @@ import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModel
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerCollectionsIpc } from './ipc/registerCollectionsIpc'
+import { registerEvidenceReviewsIpc } from './ipc/registerEvidenceReviewsIpc'
 import { registerSkillsIpc } from './ipc/registerSkillsIpc'
 import { registerBuiltinSkillAnalysisHandlers } from './services/skills/analysis'
 import { registerDocTasksIpc } from './ipc/registerDocTasksIpc'
@@ -397,6 +398,7 @@ function initBackend(): void {
   registerChatIpc(ctx)
   registerDocsIpc(ctx)
   registerCollectionsIpc(ctx)
+  registerEvidenceReviewsIpc(ctx)
   registerSkillsIpc(ctx)
   registerDocTasksIpc(ctx)
   registerDictationIpc(ctx)

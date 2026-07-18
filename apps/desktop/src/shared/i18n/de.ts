@@ -1784,6 +1784,8 @@ export const de: Record<keyof typeof en, string> = {
     'Eine Dokumentaufgabe läuft gerade. Du kannst sie abbrechen oder warten, bis sie fertig ' +
     'ist, bevor du chattest.',
   'main.chat.defaultTitle': 'Neuer Chat',
+  // EP-1 Phase 1 — siehe en.ts: Anzeige-Übersetzung des persist-kanonischen Standardtitels.
+  'main.evidenceReviews.defaultTitle': 'Nachweis-Prüfung',
   'main.benchmark.warnTiny':
     'Dieses Gerät eignet sich am besten für das kleinste, schnellste Modell. Größere ' +
     'Modelle laufen möglicherweise langsam.',
@@ -1995,6 +1997,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.audit.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Aktivität anzuzeigen.',
   'main.settings.locked':
     'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Einstellungen zu ändern.',
+  // Evidence Pack / Review Mode (EP-1 Phase 1) — siehe en.ts.
+  'main.evidenceReviews.locked':
+    'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um an Nachweis-Prüfungen zu arbeiten.',
+  'main.evidenceReviews.invalidRequest': 'Diese Prüfanfrage ist ungültig.',
   // BE-1 (full-audit 2026-07-10) — siehe en.ts.
   'main.settings.invalidPatch':
     'Diese Einstellungsänderung ist ungültig und wurde nicht gespeichert.',

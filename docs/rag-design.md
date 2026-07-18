@@ -1925,3 +1925,71 @@ context size."* All four observations were real seams:
 `conversationId`'s history — nothing accumulates across chats), and the 5-page-PDF limit is real on a
 4096-token model: the whole-doc budget is `(window − reserve − framing) ÷ 1.5` ≈ 2–3 pages (§15.1) — the
 new context-size picker is the remedy the report asked for.
+
+## 16. Evidence-review snapshot read-model — how EP-1 freezes §8/§14 honestly (EP-1 Phase 1)
+
+The Evidence Pack / Review Mode wave (EP-1; plan `docs/evidence-pack-implementation-plan.md`
+while open) builds human reviews ON TOP of the retrieval semantics this document defines. A
+review is created from ONE persisted assistant message, entirely from stored rows — no model
+call, no re-retrieval, no network (enforced by runtime-tripwire + offline-guard test
+assertions). This section records how the frozen snapshot maps the as-built §8/§14 semantics
+so the review can never claim more than the answer did.
+
+### 16.1 Source snapshots — the §8-vs-§14.4 split, frozen
+
+`main/services/evidence-pack/snapshot.ts` freezes one `EvidenceSourceSnapshot` per persisted
+`Citation`, with the honesty class derived from the answer's `coverage.mode` (§14.9):
+
+| `coverage.mode` | snapshot `kind` | `machineLabel` | auto-links |
+|---|---|---|---|
+| `relevance` | `direct_excerpt` | the `S{n}` label | YES — marker → citation |
+| `tree` / `capped` | `whole_document_provenance` | **null** | **ZERO** (hard rule) |
+| `extract` | `structured_record` | **null** | ZERO in v1 |
+| *(none stamped)* | `direct_excerpt` | the `S{n}` label | YES |
+
+- The `relevance` row IS the §8 grounded-citation contract: those `[S{n}]` markers were baked
+  into the model output against labeled excerpts, so an item containing a marker gets an
+  `origin: 'answer_marker'` link to that citation — a factual record, not an inference.
+- The `tree`/`capped` rows preserve the §14.4 M2 rule (node summaries/leaf provenance are
+  NEVER `[Sn]` citations): provenance sources carry **no** machine label, and the builder
+  never auto-links them — even a literal `[S1]` in a whole-doc answer's text links nothing
+  (tested). Reviewer-made links exist but are always `origin: 'reviewer'` ("Reviewer
+  linked"), and the IPC layer FORCES that origin regardless of payload.
+- The *(none stamped)* row is the pre-D48/D72 legacy population: the relevance path persisted
+  NULL coverage before `mode:'relevance'` was stamped (§14.9), and the renderer has always
+  read that NULL as the relevance badge. The snapshot follows the same fallback for source
+  CLASSIFICATION — those citations are labeled excerpts, and calling them "derived through
+  whole-document analysis" would be an invented claim — while the GENERATION snapshot still
+  records `answerMode: 'unknown'` (what was stamped stays distinct from how sources read).
+
+### 16.2 Source identity — resolved vs unresolved vs missing
+
+Identity is pinned, never guessed: a post-Phase-0 `Citation.documentId` resolves the
+`documents` row (snapshotting `sha256`/`mime_type`/title — the Phase-4 freshness anchors,
+compared not re-hashed per spec §21.2); a documentId whose row is GONE stays
+`identity:'resolved'` with `availabilityAtCreation:'missing'` (we know WHICH document; it is
+absent). A legacy citation resolves by EXACT title match only when the match is UNIQUE —
+zero or multiple matches leave `identity:'unresolved'` (availability null: it cannot be
+known). Unresolved ≠ missing is load-bearing: Phase-4 freshness may only say "cannot verify"
+for unresolved sources, never "changed"/"deleted".
+
+### 16.3 Truncation and coverage honesty (§14.10)
+
+The generation snapshot records `answerTruncated` as a positive flag only (`messages.
+truncated = 1` → `true`, else `null` — a pre-migration row never gains a "complete" claim)
+and carries the full `CoverageInfo` verbatim in `coverage_snapshot_json` (parsed by the same
+tolerant `parseCoverage`), so the §14.10 INPUT-vs-OUTPUT truncation story renders in reviews
+exactly as in chat. All other generation fields (model id/display name, skill, app version)
+are synthesized from the conversation row + live catalog + injected app version at CREATION
+time; absent facts stay null and render "Unavailable" — never invented (spec §20.2/§25.5).
+
+### 16.4 Deterministic answer blocks + the one marker-regex source
+
+`segmentAnswerBlocks` (`evidence-pack/segment.ts`, pure) splits the frozen answer into
+paragraph/list_item/heading/fence/table/blockquote blocks with keys
+`b{ordinal}-{kind}-{sha256/12}` — stable against the SNAPSHOT (spec Risk 7), so decisions
+survive renderer upgrades. Marker extraction shares its regex source with the chat display:
+`shared/citation-markers.ts` exports `CITE_CODE_SPLIT_RE`/`CITE_MARKER_RE` (moved from
+`displayMap.ts`, which now imports them) + `extractCitationMarkers` — code spans/fences are
+literals on BOTH sides by construction, and a parity suite drives the real
+`localizeServerCopy` to prove it.

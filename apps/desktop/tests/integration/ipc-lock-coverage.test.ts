@@ -42,6 +42,7 @@ import { registerAuditIpc } from '../../src/main/ipc/registerAuditIpc'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBenchmarkIpc } from '../../src/main/ipc/registerBenchmarkIpc'
 import { registerCollectionsIpc } from '../../src/main/ipc/registerCollectionsIpc'
+import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
 import { IPC } from '../../src/shared/ipc'
 import { initLogging } from '../../src/main/services/logging'
 import type { AppContext } from '../../src/main/services/context'
@@ -98,7 +99,13 @@ const MODULES: Array<{
   { name: 'registerAuditIpc', register: registerAuditIpc, exempt: new Set<string>() },
   { name: 'registerRagIpc', register: registerRagIpc, exempt: new Set<string>() },
   { name: 'registerBenchmarkIpc', register: registerBenchmarkIpc, exempt: new Set<string>() },
-  { name: 'registerCollectionsIpc', register: registerCollectionsIpc, exempt: new Set<string>() }
+  { name: 'registerCollectionsIpc', register: registerCollectionsIpc, exempt: new Set<string>() },
+  // EP-1 Phase 1: every evidence-review handler is DB-backed — none are exempt.
+  {
+    name: 'registerEvidenceReviewsIpc',
+    register: registerEvidenceReviewsIpc,
+    exempt: new Set<string>()
+  }
 ]
 
 // DX-4 (full-audit-2026-06-29 follow-up, Phase 7): the locked-vault posture of every register*Ipc

@@ -1,4 +1,5 @@
 import { en, type MessageKey, type MessageParams } from '@shared/i18n'
+import { CITE_CODE_SPLIT_RE, CITE_MARKER_RE } from '@shared/citation-markers'
 
 // The D-L4 display map (i18n record §3.3 rule 1): persisted main-process strings
 // are stored as canonical ENGLISH (documents.error_message, the fixed RAG answers in
@@ -33,6 +34,7 @@ export const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
   'main.rag.reindexNeeded',
   'main.chat.docTaskBusy',
   'main.chat.defaultTitle',
+  'main.evidenceReviews.defaultTitle',
   'main.benchmark.warnTiny',
   'main.benchmark.warnUnknown',
   'main.benchmark.warnDriveProbe',
@@ -99,8 +101,9 @@ export function unsupportedTypeExt(raw: string): string | null {
 // the rewrite runs only over the PROSE segments — mirrors `normalizeMathDelimiters` in
 // Transcript.tsx (even split indices are prose, odd are code; an unclosed trailing fence swallows
 // to end-of-text and lands on an odd index, so a mid-stream buffer inside a fence is left alone).
-const CITE_CODE_SPLIT_RE = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/
-const CITE_MARKER_RE = /\[S(\d+)\]/g
+// The regexes themselves live in `@shared/citation-markers` (EP-1 plan §6.2): the main-side
+// evidence-review marker extraction imports the SAME definitions, so "what is a citation vs
+// literal code" can never drift between the chat display and a review's answer_marker links.
 
 /** Rewrite inline `[S{n}]` body markers to the localized marker (DE `[Q{n}]`), skipping code. */
 function localizeCitationMarkers(t: BoundT, raw: string): string {

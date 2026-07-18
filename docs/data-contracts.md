@@ -586,9 +586,9 @@ document answers always run balanced (deep-grounded = wave 2).
   threading + `formatPlan`; `assertCommercialDrive` passes verified-commercial, fails network/plaintext/
   placeholder-weight/user-data). **Signing + notarization + the real USB launch = manual (R5/R7).**
 
-### Evidence Pack / Review Mode (EP-1 Phase 0 live — contracts + storage, no IPC/UI yet)
-Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.md` §5 (this
-section records the AS-BUILT Phase-0 shapes; the IPC surface arrives in Phase 1).
+### Evidence Pack / Review Mode (EP-1 Phases 0–1 live — contracts, storage, snapshot engine + IPC; no UI yet)
+Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.md` §5–§6 (this
+section records the AS-BUILT Phase-0/1 shapes; the renderer arrives in Phase 2).
 
 ✅ **`Citation` enrichment (ADDITIVE, `shared/types.ts`):** `documentId?: string | null`
   (`chunks.document_id`) + `chunkId?: string | null` (`chunks.id`), stamped at the **six**
@@ -668,6 +668,89 @@ section records the AS-BUILT Phase-0 shapes; the IPC surface arrives in Phase 1)
   through the REAL `deleteConversation`; service-level status derivation; citation enrichment
   pinned at sites 1–5 incl. byte-identical legacy parsing) + the EP-1 enrichment leg in
   `tests/unit/citation-snippet-boundary.test.ts` (site 6, `chunksToCitations`).
+
+**Phase 1 — snapshot engine + IPC surface (as built):**
+
+✅ **Shared marker source (`shared/citation-markers.ts`):** `CITE_CODE_SPLIT_RE` +
+  `CITE_MARKER_RE` MOVED here from `renderer/lib/displayMap.ts` (which now imports them —
+  same values, zero behavior change) + `extractCitationMarkers(text) → string[]` (machine
+  labels in PROSE only, code spans/fences excluded, deduplicated first-appearance order).
+  One regex source for both the display rewrite and the evidence-review marker extraction —
+  the two can never drift (plan §6.2); parity is pinned against the real `localizeServerCopy`
+  in `tests/unit/evidence-segment.test.ts`.
+✅ **Segmenter (`main/services/evidence-pack/segment.ts`, pure):** `segmentAnswerBlocks(md) →
+  AnswerBlock[] { blockKey, blockKind, ordinal, text, markers }`. Deterministic line scanner
+  (NOT a markdown parser; rules documented in the module header + pinned by the zoo tests):
+  fences (```/~~~, unclosed swallows to EOF), single-line ATX headings, `>`-run blockquotes,
+  ≥2-pipe-line tables (kept as ONE unit), top-level list items with nested children attached,
+  paragraphs; blank line ends any non-fence block; CRLF normalized. `blockKey =
+  `b{ordinal}-{kind}-{sha256/12(text)}`` — stable against the SNAPSHOT (spec Risk 7), unique
+  within an answer (ordinal keeps identical text distinct). Empty answer → zero blocks.
+✅ **Snapshot builder (`main/services/evidence-pack/snapshot.ts`):**
+  `createEvidenceReviewFromMessage(db, messageId, deps { appVersion?, modelDisplayName? }) →
+  EvidenceReviewDetail` — the complete draft from persisted rows ONLY (no model, no network,
+  no re-retrieval; deps injected so the module stays electron-free). Source resolution:
+  `Citation.documentId` pins identity (row gone ⇒ `identity:'resolved'` +
+  `availabilityAtCreation:'missing'` — a deleted source is NOT "unresolved"); legacy
+  citations resolve by EXACT title match only when UNIQUE (0 or >1 ⇒ `identity:'unresolved'`,
+  availability null — never guessed). `kind` from `coverage.mode` (`relevance`→
+  `direct_excerpt`, `tree|capped`→`whole_document_provenance`, `extract`→`structured_record`;
+  NO stamp → `direct_excerpt` — the pre-D72 relevance fallback the renderer already uses;
+  the generation snapshot still records `answerMode:'unknown'` for those). `machineLabel`
+  only on direct excerpts (provenance labels are never citation markers — M2); source `key` =
+  citation label (uniquified defensively). Items: one block item per segment, `block_kind`
+  persisted on EVERY item, headings default `decision:'not_applicable'`. Auto-links:
+  direct-excerpt answers only, marker→label, `origin:'answer_marker'`; whole-doc/extract
+  answers get ZERO (spec §13.3 hard rule, tested with a literal `[S1]` in a tree answer).
+  Build order: review+sources → items → links (`setEvidenceLink` validates keys against the
+  stored snapshot); any failure deletes the half-built review (complete or absent). Also
+  exports `sourceKindForMode`, `buildEvidenceSourceSnapshots`. `parseCitations` is now
+  exported from `chat.ts` (the `parseCoverage` precedent — same tolerant validator).
+✅ **Eligibility rule (`shared/evidence-review.ts`):** pure `isReviewEligible(message,
+  conversation?)` (spec §9.1): assistant ∧ (citations non-empty ∨ coverage present ∨
+  `conversation.mode === 'documents'`). "Persisted and not streaming" stays the caller's
+  gate (a streaming reply has no row yet) — Phase 2 wires it.
+✅ **IPC surface (13 channels, `evidence:*` in `shared/ipc.ts`; handlers in
+  `main/ipc/registerEvidenceReviewsIpc.ts`, wired in `main/index.ts`; preload methods of the
+  same names on `window.api`):**
+  | preload method | channel | shape |
+  |---|---|---|
+  | `createEvidenceReview(messageId)` | `evidence:create` | → `EvidenceReviewDetail`; IDEMPOTENT (existing review returned, audit only on real creation); throws localized `invalidRequest` on a malformed id, ids-only errors on unknown/non-assistant message |
+  | `getEvidenceReview(reviewId)` | `evidence:get` | → `EvidenceReviewDetail \| null` |
+  | `getEvidenceReviewForMessage(messageId)` | `evidence:getForMessage` | → `EvidenceReviewSummary \| null` (entry-point state) |
+  | `updateEvidenceReview(reviewId, patch)` | `evidence:update` | → `EvidenceReview \| null`; malformed patch fields DROPPED, never coerced |
+  | `updateEvidenceReviewItem(itemId, patch)` | `evidence:updateItem` | → `EvidenceReviewItem \| null`; unknown decision literals dropped (stored decision untouched) |
+  | `createEvidenceSelection(reviewId, input)` | `evidence:createSelection` | → `EvidenceReviewItem \| null` (null = refused offsets — never clamped) |
+  | `deleteEvidenceSelection(itemId)` | `evidence:deleteSelection` | → `boolean` (blocks refuse) |
+  | `setEvidenceLink(itemId, key, input)` | `evidence:setLink` | → `EvidenceReviewItem \| null`; **origin FORCED to `'reviewer'`** — only the snapshot builder mints `'answer_marker'` (a renderer payload can never fake "cited by the answer") |
+  | `removeEvidenceLink(itemId, key)` | `evidence:removeLink` | → `boolean` |
+  | `markEvidenceReviewReady(reviewId)` | `evidence:markReady` | → `{ review, gate } \| null` (refuses + gate says why while ineligible) |
+  | `reopenEvidenceReview(reviewId)` | `evidence:reopen` | → `EvidenceReview \| null` |
+  | `refreshEvidenceReviewState(reviewId)` | `evidence:refreshState` | → `EvidenceReviewFreshness \| null` — **Phase-4 STUB**: `{ reviewId, outdated: false }` for a known review (the same not-known-to-be-outdated overlay every read carries) |
+  | `deleteEvidenceReview(reviewId)` | `evidence:delete` | → `boolean` |
+  Every handler `requireUnlocked()` (`main.evidenceReviews.locked`, EN+DE; auto-enforced by
+  `ipc-lock-coverage.test.ts`). New type `EvidenceReviewFreshness { reviewId, outdated }`.
+  `exportEvidencePack` deliberately NOT yet registered — the pipeline is Phase 3 (a channel
+  with no pipeline would be a dead promise).
+✅ **Audit emitters (first ones):** `evidence_review_created` (`{reviewId, messageId,
+  conversationId, itemCount, sourceCount, autoLinkCount}`), `evidence_review_ready`
+  (`{reviewId, requiredTotal, decidedTotal}`), `evidence_review_deleted` (`{reviewId}`) —
+  ids/counts ONLY; review titles/labels/notes/answer text/source titles are sentinel-swept
+  through the REAL handlers in `audit-ipc.test.ts`. `evidence_pack_exported` still has no
+  emitter (Phase 3).
+✅ **i18n:** `main.evidenceReviews.locked` + `main.evidenceReviews.invalidRequest` (emission
+  set) and persist-canonical `main.evidenceReviews.defaultTitle` ('Evidence review' — the
+  fallback written to `evidence_reviews.title` when a conversation title trims empty; in
+  `DISPLAY_MAP_KEYS` like `main.chat.defaultTitle`). All EN+DE.
+✅ **Phase-1 tests:** `tests/unit/evidence-segment.test.ts` (markdown zoo, stable keys,
+  marker parity against the real display rewrite) + `tests/integration/evidence-snapshot.test.ts`
+  (per-answer-class builds: relevance auto-links, whole-doc/extract ZERO links, legacy
+  no-citation, unresolved-title, deleted-source, empty answer, default-title fallback,
+  determinism) + `tests/integration/evidence-reviews-ipc.test.ts` (full round trips over the
+  mocked-electron harness for all four answer classes, payload guards, reviewer-origin
+  forcing, freshness stub, idempotent create, **runtime-tripwire + real offline
+  connect-guard silent across every flow** — the plan §6 no-model/no-network assertions) +
+  new legs in `audit-ipc.test.ts` and `ipc-lock-coverage.test.ts`.
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |
