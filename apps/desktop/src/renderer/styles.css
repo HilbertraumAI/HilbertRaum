@@ -765,6 +765,8 @@ code, pre, kbd { font-family: var(--font-mono); }
   font-size: var(--text-xs);
   cursor: pointer;
   padding: 3px 8px;
+  /* WCAG 2.5.8 (§9 audit, EP-1 P5): quiet text actions still need a ≥24px target. */
+  min-height: 24px;
 }
 .msg-action:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
 .msg-action:disabled { opacity: 0.5; cursor: default; }
@@ -1959,6 +1961,58 @@ code, pre, kbd { font-family: var(--font-mono); }
   padding: 6px 8px;
   resize: vertical;
 }
+/* P5 reviewer text selections (spec §12.1): the tag/remove head, the quoted slice, and the
+   read-only source-text selection surface (the string the stored offsets index into). */
+.review-selection-head { display: flex; align-items: center; gap: 8px; }
+.review-selection-tag { font-size: var(--text-xs); font-weight: 500; color: var(--text-muted); }
+.review-selection-text {
+  margin: 6px 0 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--border-strong);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--text-base);
+}
+.review-selection-composer { margin-top: 8px; }
+.review-select-surface {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.5; /* §23: readable line height on the selectable source text */
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  resize: vertical;
+  white-space: pre-wrap;
+}
+.review-selection-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+/* Persistent live regions mount EMPTY (FIX-5a) — collapse them until they carry text. */
+.review-selection-refused { margin: 6px 0 0; }
+.review-selection-refused:empty,
+.review-evidence-filter-none:empty { margin: 0; }
+
+/* P5 evidence-pane filter + stepped reveal (spec §25.6). */
+.review-evidence-filter { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+.review-evidence-filter-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  min-height: 28px;
+}
+.review-evidence-filter-none { margin: 0 0 10px; }
+.review-evidence-shown { margin: 4px 0 0; }
+.review-linking-item { margin: 0 0 8px; }
+
 .review-evidence-title { font-size: var(--text-md); margin: 0 0 6px; }
 .review-evidence-caption { margin: 0 0 4px; }
 .review-disclaimer { margin: 0 0 10px; }
@@ -2341,6 +2395,12 @@ code, pre, kbd { font-family: var(--font-mono); }
   cursor: pointer;
   padding: 2px 4px;
   opacity: 0;
+  /* WCAG 2.5.8 (§9 audit, EP-1 P5): the ✕ needs a ≥24×24 target even though it renders small. */
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .chip:hover .chip-remove,
 .chip:focus-within .chip-remove,

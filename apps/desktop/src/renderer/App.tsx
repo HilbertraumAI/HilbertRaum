@@ -105,6 +105,10 @@ function AppShell(): JSX.Element {
   // "Ask selected documents" handoff: the Documents screen's selection,
   // applied to the next documents conversation the Chat screen creates.
   const [chatScope, setChatScope] = useState<string[] | null>(null)
+  // EP-1 P5 (plan §10): the conversation the Chat screen should open with — set ONLY by the
+  // review screen's "Back to chat" so it returns to the ORIGINATING conversation. One-shot
+  // by construction: every normal chat navigation (navigate below) clears it.
+  const [chatConversation, setChatConversation] = useState<string | null>(null)
   // Evidence-review handoff (EP-1 plan §7.1 — the chatScope idiom): which review (or
   // message, for a first review) the review screen opens. The screen is meaningless
   // without it, which is why plain navigate('review') resolves to home (navigation.ts).
@@ -182,6 +186,7 @@ function AppShell(): JSX.Element {
     if (next.chatMode) {
       setChatMode(next.chatMode)
       setChatScope(null)
+      setChatConversation(null)
     }
     if (next.settingsTab) setSettingsTab(next.settingsTab)
     setScreen(next.screen)
@@ -189,17 +194,31 @@ function AppShell(): JSX.Element {
 
   // Documents screen → "Ask these documents" (spec §10.4): open Chat in
   // documents mode with the selection as the next conversation's retrieval scope.
+  // P5 review FIX-1: this path mounts chat WITHOUT going through navigate(), so it must
+  // clear the review back-handoff itself — a surviving `chatConversation` would make the
+  // mount re-attach an OLD conversation and stomp the just-set documents mode (pinned by
+  // an App-level test). The only setScreen('chat') paths are navigate() and this one.
   function askSelectedDocuments(documentIds: string[]): void {
     setChatMode('documents')
     setChatScope(documentIds.length > 0 ? documentIds : null)
+    setChatConversation(null)
     setScreen('chat')
   }
 
   // Chat → evidence-review workspace (EP-1 plan §7.1): the ONLY way onto the review
-  // screen. Back navigation is the screen's own "Back to chat" → navigate('chat').
+  // screen. Back navigation is the screen's own "Back to chat" → backToConversation below.
   function openReview(target: ReviewHandoffTarget): void {
     setReviewHandoff(target)
     setScreen('review')
+  }
+
+  // Review → chat (EP-1 P5, plan §10): back restores the review's ORIGINATING conversation
+  // as the active chat instead of landing on chat home (the named P2 UX debt). navigate()
+  // runs FIRST (it clears the slot for plain chat navigations), then the handoff is set —
+  // both land in the same React batch, so the Chat screen mounts with the id in place.
+  function backToConversation(conversationId: string): void {
+    navigate('chat')
+    setChatConversation(conversationId)
   }
 
   async function lockNow(): Promise<void> {
@@ -385,13 +404,18 @@ function AppShell(): JSX.Element {
                 onNavigate={navigate}
                 initialMode={chatMode}
                 initialScopeDocumentIds={chatScope}
+                initialConversationId={chatConversation}
                 onOpenReview={openReview}
               />
             )}
             {/* Review renders ONLY with a handoff target (guaranteed by openReview being
                 the sole path here; the guard keeps a future misroute blank-safe). */}
             {screen === 'review' && reviewHandoff && (
-              <ReviewScreen handoff={reviewHandoff} onNavigate={navigate} />
+              <ReviewScreen
+                handoff={reviewHandoff}
+                onNavigate={navigate}
+                onBackToConversation={backToConversation}
+              />
             )}
             {screen === 'documents' && (
               <DocumentsScreen onAskSelected={askSelectedDocuments} onNavigate={navigate} />

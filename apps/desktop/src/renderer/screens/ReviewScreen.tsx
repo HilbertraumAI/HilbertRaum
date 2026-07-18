@@ -6,9 +6,11 @@ import { Button, ConfirmDialog, Modal, useToast } from '../components'
 import { formatCitationLabel, localizeServerCopy } from '../lib/displayMap'
 import {
   acknowledgeReviewFreshness,
+  addReviewSelection,
   bulkClearDecisions,
   bulkMarkHeadingsNotApplicable,
   bulkMarkUndecidedFollowUp,
+  deleteReviewSelection,
   editReviewHead,
   editReviewItem,
   flushReviewSession,
@@ -59,10 +61,17 @@ function readNarrow(): boolean {
 
 export function ReviewScreen({
   handoff,
-  onNavigate
+  onNavigate,
+  onBackToConversation
 }: {
   handoff: ReviewHandoffTarget
   onNavigate: (target: string) => void
+  /**
+   * P5 (plan §10): "Back to chat" returns to the ORIGINATING conversation — the review row
+   * carries its conversationId. Optional: absent (or no detail loaded, e.g. the not-found
+   * state) falls back to plain chat navigation.
+   */
+  onBackToConversation?: (conversationId: string) => void
 }): JSX.Element {
   const { t, tCount, lang } = useT()
   const session = useSyncExternalStore(subscribeReviewSession, getReviewSessionSnapshot)
@@ -94,6 +103,14 @@ export function ReviewScreen({
 
   const detail = session.detail
   const selectedItem = detail?.items.find((i) => i.id === selectedItemId) ?? null
+
+  // P5: back returns to the conversation this review came from (the named P2 UX debt) —
+  // the fallback (no wiring, or nothing loaded) stays the P2 letter, chat home.
+  function handleBack(): void {
+    const conversationId = detail?.conversationId
+    if (conversationId && onBackToConversation) onBackToConversation(conversationId)
+    else onNavigate('chat')
+  }
 
   async function handleMarkReady(): Promise<void> {
     setActionBusy(true)
@@ -165,6 +182,9 @@ export function ReviewScreen({
       sources={detail.sources}
       coverage={detail.coverageSnapshot}
       selectedItem={selectedItem}
+      selectedItemNumber={
+        selectedItem ? detail.items.findIndex((i) => i.id === selectedItem.id) + 1 : null
+      }
       readOnly={readOnly}
       freshness={freshness}
       onLink={(itemId, key) => void linkEvidence(itemId, key, null)}
@@ -179,7 +199,7 @@ export function ReviewScreen({
   return (
     <div className="screen review-screen">
       <div className="review-head">
-        <Button size="sm" variant="ghost" className="review-back" onClick={() => onNavigate('chat')}>
+        <Button size="sm" variant="ghost" className="review-back" onClick={handleBack}>
           ‹ {t('review.back')}
         </Button>
         {renameDraft == null ? (
@@ -530,17 +550,22 @@ function ReviewItemRow({
   onOpenDrawer: () => void
   t: I18n['t']
 }): JSX.Element {
-  const isHeading = item.blockKind === 'heading'
+  const isSelection = item.kind === 'selection'
+  const isHeading = !isSelection && item.blockKind === 'heading'
   // Honesty note (spec §10.3/§13.2/§13.3): whole-document items say DERIVED, never cited;
   // an unmarked item in a citation-bearing answer says "no direct source marker" — which
   // must never be presented as "false". Headings stay quiet (they default Not applicable).
-  const note = isHeading
-    ? null
-    : paneMode === 'whole_doc'
-      ? t('review.item.wholeDocDerived')
-      : item.links.some((l) => l.origin === 'answer_marker')
-        ? null
-        : t('review.item.noMarker')
+  // SELECTION items stay quiet too (P5): the "Reviewer text selection" tag frames them, and
+  // the marker note keys are written for whole blocks — a carved slice may contain a marker
+  // in its literal text, so "no direct source marker" could misstate it.
+  const note =
+    isHeading || isSelection
+      ? null
+      : paneMode === 'whole_doc'
+        ? t('review.item.wholeDocDerived')
+        : item.links.some((l) => l.origin === 'answer_marker')
+          ? null
+          : t('review.item.noMarker')
   return (
     <li
       className={selected ? 'review-item selected' : 'review-item'}
@@ -549,11 +574,37 @@ function ReviewItemRow({
       onClick={onSelect}
       onFocusCapture={onSelect}
     >
-      <div className="review-item-text md">
-        {/* The FROZEN snapshot slice — markers localize at render (D68), text never edits. */}
-        <AssistantMarkdown text={localizeServerCopy(t, item.textSnapshot)} />
-      </div>
+      {isSelection ? (
+        /* P5 (spec §12.1): a reviewer selection is the EXACT stored slice of its parent
+           block's snapshot — rendered as plain text (a mid-markdown cut is not valid
+           markdown; the pack renders it as plain text too), tagged, and deletable.
+           Deleting never touches the parent block (kept as its own full item). */
+        <>
+          <div className="review-selection-head">
+            <span className="review-selection-tag">{t('review.item.selectionTag')}</span>
+            <button
+              type="button"
+              className="msg-action"
+              disabled={readOnly}
+              aria-label={`${t('review.selection.remove')} — ${t('review.item.aria', { n: index + 1 })}`}
+              onClick={() => void deleteReviewSelection(item.id)}
+            >
+              {t('review.selection.remove')}
+            </button>
+          </div>
+          <blockquote className="review-selection-text">{item.textSnapshot}</blockquote>
+        </>
+      ) : (
+        <div className="review-item-text md">
+          {/* The FROZEN snapshot slice — markers localize at render (D68), text never edits. */}
+          <AssistantMarkdown text={localizeServerCopy(t, item.textSnapshot)} />
+        </div>
+      )}
       {note && <p className="hint review-item-note">{note}</p>}
+      {/* P5: carve a passage out of this block as its own review item. Hidden while READY
+          (the P4 handoff rule: the ready-guard refuses selection creation) and for
+          selection items (selections don't nest). */}
+      {!isSelection && !readOnly && <SelectionComposer item={item} index={index} t={t} />}
       {item.links.length > 0 && (
         <div className="review-item-links">
           {item.links.map((link) => {
@@ -612,5 +663,110 @@ function ReviewItemRow({
         </Button>
       )}
     </li>
+  )
+}
+
+/**
+ * P5 — carve a reviewer selection out of one block item (spec §12.1 "Review separately",
+ * plan §10). Offset-mapping strategy: the persisted offsets are UTF-16 code units into the
+ * block's `textSnapshot`, and main REFUSES misaligned boundaries rather than clamping — so
+ * the selection surface must yield offsets into the SOURCE text exactly. Mapping a DOM
+ * selection back through `AssistantMarkdown`'s rendered output cannot do that reliably:
+ * the rendered DOM drops markdown syntax, localizes `[S1]`→`[Q1]` (D68), rewrites math to
+ * KaTeX output, and reflows soft breaks — the rendered text is NOT the stored text. So the
+ * surface IS the stored text: a read-only <textarea> whose value is the snapshot verbatim.
+ * Its native `selectionStart`/`selectionEnd` ARE UTF-16 code-unit offsets into that value —
+ * exact by construction, and keyboard-selectable for free (Shift+arrows — the non-drag path,
+ * WCAG 2.5.7). The hint says honestly that this shows the ORIGINAL, unformatted text.
+ */
+function SelectionComposer({
+  item,
+  index,
+  t
+}: {
+  item: EvidenceReviewItem
+  index: number
+  t: I18n['t']
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [range, setRange] = useState<{ start: number; end: number } | null>(null)
+  const [refused, setRefused] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const hintId = useId()
+  const showToast = useToast()
+
+  function readRange(el: HTMLTextAreaElement): void {
+    const start = el.selectionStart
+    const end = el.selectionEnd
+    setRange(start != null && end != null && end > start ? { start, end } : null)
+  }
+
+  async function handleAdd(): Promise<void> {
+    if (!range || busy) return
+    setBusy(true)
+    setRefused(false)
+    try {
+      const outcome = await addReviewSelection(item.blockKey, range.start, range.end)
+      if (outcome === 'added') {
+        // The composer stays OPEN (more selections from the same block are common), so
+        // focus never lands in a removed subtree; the toast is the polite announcement.
+        setRange(null)
+        showToast(t('review.selection.added'))
+      } else if (outcome === 'refused') {
+        // The friendly hint (plan §10) — a refusal is a retry nudge, never an error state.
+        setRefused(true)
+      }
+      // 'failed' surfaces through the header SaveStateLine (store sets saveState 'error').
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="review-selection-actions">
+        <button type="button" className="msg-action" onClick={() => setOpen(true)}>
+          {t('review.selection.start')}
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="review-selection-composer">
+      <p className="hint" id={hintId}>
+        {t('review.selection.hint')}
+      </p>
+      <textarea
+        className="review-select-surface"
+        readOnly
+        value={item.textSnapshot}
+        rows={Math.min(10, Math.max(3, item.textSnapshot.split('\n').length))}
+        aria-label={t('review.selection.surfaceAria', { n: index + 1 })}
+        aria-describedby={hintId}
+        onSelect={(e) => readRange(e.currentTarget)}
+      />
+      <div className="review-selection-actions">
+        <Button size="sm" disabled={range == null || busy} onClick={() => void handleAdd()}>
+          {t('review.selection.add')}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            setOpen(false)
+            setRange(null)
+            setRefused(false)
+          }}
+        >
+          {t('review.selection.close')}
+        </Button>
+      </div>
+      {/* Persistent live region (review FIX-5a): mounted EMPTY with the composer and
+          filled on refusal — text changing inside an existing region announces reliably;
+          a region that first appears WITH content is missed by some screen readers. */}
+      <p className="hint review-selection-refused" role="status">
+        {refused ? t('review.selection.refused') : ''}
+      </p>
+    </div>
   )
 }

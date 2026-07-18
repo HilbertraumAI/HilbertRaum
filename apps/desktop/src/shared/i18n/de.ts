@@ -22,6 +22,26 @@ import type { en } from './en'
 //   password                   → Passwort
 //   settings                   → Einstellungen
 //   plaintext (developer) mode → unverschlüsselt (Entwickler)
+//
+// EP-1 review glossary (P5 native pass — MIRROR of the canonical record in
+// design-guidelines §7; change BOTH together):
+//   evidence                   → Nachweis(e) — das SUBSTANTIV „Beleg“ ist verboten; das
+//                                Verb „belegen“ ist die sanktionierte Form, wo es um
+//                                Gestütztheit geht („Geprüft — belegt“, „Er allein belegt
+//                                nicht …“)
+//   review (the artifact)      → Prüfung (evidence review → Nachweis-Prüfung)
+//   review item                → Prüfpunkt
+//   evidence pack              → Nachweispaket
+//   citation / source marker   → Quellenverweis (nie „Quellenangabe“/„Zitat“)
+//   whole-document provenance  → Herkunft aus einer Gesamtdokument-Analyse; die Negation
+//                                ist immer „keine satzgenauen Quellenverweise“
+//   direct excerpt             → direkter Auszug
+//   source (document)          → Quelle / Quelldokument
+//   reviewer                   → Prüfer (label) / die prüfende Person (prose)
+//   mark ready / reopen        → Prüfung abschließen / Prüfung wieder öffnen
+//   outdated                   → veraltet
+//   review creation            → „Anlegen der Prüfung“ (die ANTWORT ist „erstellt“ —
+//                                nie mischen)
 
 export const de: Record<keyof typeof en, string> = {
   // ---- App shell ----
@@ -2002,7 +2022,7 @@ export const de: Record<keyof typeof en, string> = {
     'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um an Nachweis-Prüfungen zu arbeiten.',
   'main.evidenceReviews.invalidRequest': 'Diese Prüfanfrage ist ungültig.',
   'main.evidenceReviews.exportNotRecorded':
-    'Das Nachweispaket konnte nicht im Exportverlauf verzeichnet werden; die exportierte Datei wurde deshalb entfernt. Es wurde nichts gespeichert — versuche den Export erneut.',
+    'Das Nachweispaket konnte nicht im Exportverlauf verzeichnet werden; die exportierte Datei wurde deshalb entfernt. Es wurde nichts gespeichert — versuch den Export erneut.',
   'main.evidenceReviews.exportFileNotRecorded':
     'Die Nachweispaket-Datei wurde gespeichert, konnte aber weder im Exportverlauf verzeichnet noch entfernt werden. Ihr Hash ist nicht verzeichnet — exportiere erneut und ersetze die Datei.',
   // EP-1 P4 (Spec §28.6) — siehe en.ts.
@@ -2360,8 +2380,8 @@ export const de: Record<keyof typeof en, string> = {
   'translate.file.err.runtimeFailed': 'Das Dokument konnte nicht übersetzt werden. Versuche es erneut.',
 
   // ---- Nachweis-Prüfung (EP-1 Plan §7 — ReviewScreen.tsx + Chat-Einstiege) ----
-  // ENTWURFSSTAND (Plan §7.7): dieser Block braucht vor dem Release noch die
-  // muttersprachliche Durchsicht (Phase 6, D-L7) — Fachbegriffe siehe Spec §24.
+  // Muttersprachliche Durchsicht ERLEDIGT (P5, 2026-07-18; D-L7): du-Form, ruhiges
+  // fachnahes Register, Terminologie nach dem EP-1-Glossar oben (design-guidelines §7).
   'review.action.start': 'Nachweise prüfen',
   'review.action.continue': 'Prüfung fortsetzen',
   'review.entry.sources': 'Antwort und Quellen prüfen',
@@ -2369,7 +2389,7 @@ export const de: Record<keyof typeof en, string> = {
   'review.status.ready': 'Abgeschlossen',
   // P4-Frische-Overlay (Spec §18.4/§9.4) — zusätzlicher Chip, ersetzt nie Entwurf/Abgeschlossen.
   'review.status.outdated': 'Veraltet',
-  'review.readonlyHint': 'Abgeschlossen — öffne die Prüfung wieder, um sie zu bearbeiten.',
+  'review.readonlyHint': 'Abgeschlossen — zum Bearbeiten öffne die Prüfung wieder.',
   // ---- P4: Veraltet-Hinweis + Bestätigung (Spec §15.5/§21.3/§28.6) ----
   'review.outdated.title': 'Diese Prüfung ist veraltet.',
   'review.outdated.answerChanged':
@@ -2383,17 +2403,17 @@ export const de: Record<keyof typeof en, string> = {
   'review.outdated.keepNote':
     'Deine erfassten Entscheidungen bleiben unverändert. Du kannst die historische Prüfung behalten, die Änderung bestätigen oder im Chat erneut fragen und eine neue Prüfung beginnen.',
   'review.outdated.acknowledge': 'Änderung bestätigen',
-  'review.outdated.acknowledgedAt': 'Änderung bestätigt {date}.',
+  'review.outdated.acknowledgedAt': 'Änderung bestätigt am {date}.',
   'review.outdated.exportHint': 'Bestätige die Änderung, bevor du ein Nachweispaket exportierst.',
   'review.back': 'Zurück zum Chat',
   'review.rename': 'Umbenennen',
   'review.rename.label': 'Titel der Prüfung',
   'review.rename.save': 'Speichern',
-  'review.loading': 'Prüfung wird geladen …',
+  'review.loading': 'Prüfung wird geladen…',
   'review.notFound': 'Diese Prüfung wurde nicht gefunden. Möglicherweise wurde sie gelöscht.',
   'review.question.toggle': 'Frage',
-  'review.answerPane.aria': 'Antwort in Prüfung',
-  'review.autosave.saving': 'Wird gespeichert …',
+  'review.answerPane.aria': 'Zu prüfende Antwort',
+  'review.autosave.saving': 'Wird gespeichert…',
   'review.autosave.saved': 'Gespeichert',
   'review.autosave.error': 'Einige Änderungen konnten noch nicht gespeichert werden.',
   'review.autosave.retry': 'Erneut versuchen',
@@ -2401,18 +2421,27 @@ export const de: Record<keyof typeof en, string> = {
   'review.evidence.captionRelevance':
     'Die angezeigten Quellen sind die Auszüge, die dem lokalen KI-Modell für diese Antwort vorlagen.',
   'review.evidence.captionWholeDoc':
-    'Diese Antwort entstand durch eine Gesamtdokument-Analyse. Die angezeigten Abschnitte sind Herkunftsangaben, keine einzelnen Satz-Zitate.',
+    'Diese Antwort entstand durch eine Gesamtdokument-Analyse. Die angezeigten Abschnitte sind Herkunftsangaben, keine satzgenauen Quellenverweise.',
   'review.evidence.captionStructured':
-    'Diese Antwort nutzt lokal extrahierte Daten. Die Quellstellen hinter der Extraktion werden unten angezeigt.',
+    'Diese Antwort beruht auf lokal extrahierten Daten. Die zugrunde liegenden Quellstellen findest du unten.',
   'review.evidence.none':
-    'Zu dieser Antwort sind keine Quellenauszüge gespeichert. Du kannst eine allgemeine Prüfung festhalten; eine Prüfung auf Quellenebene ist nicht möglich.',
+    'Zu dieser Antwort sind keine Quellenauszüge gespeichert. Du kannst eine allgemeine Prüfung festhalten — eine Prüfung auf Quellenebene ist hier nicht möglich.',
   'review.disclaimer':
     'Ein Quellenverweis zeigt, woher eine Information stammt. Er allein belegt nicht, dass die Antwort richtig ist.',
+  // P5 Navigation in großen Quellenlisten (Spec §25.6): Filter + schrittweises Nachladen.
+  'review.evidence.filterLabel': 'Quellen filtern',
+  'review.evidence.filterPlaceholder': 'Nach Titel oder Text filtern…',
+  'review.evidence.filterClear': 'Filter zurücksetzen',
+  'review.evidence.filterNone': 'Keine Quelle passt zu deinem Filter.',
+  'review.evidence.shownCount': '{shown} von {total} Quellen angezeigt',
+  // P5 (Spec §23): sichtbare Zeile, die den Nachweisbereich mit dem gewählten Prüfpunkt
+  // verbindet; zugleich die programmatische BESCHREIBUNG der Region (`aria-describedby`).
+  'review.evidence.linkingItem': 'Nachweise für Prüfpunkt {n} verknüpfen',
   'review.source.kind.direct_excerpt': 'Direkter Auszug',
   'review.source.kind.whole_document_provenance': 'Herkunft: Gesamtdokument-Analyse',
   'review.source.kind.structured_record': 'Extrahierter Datensatz',
   'review.source.unresolved': 'Quelle konnte nicht eindeutig zugeordnet werden',
-  'review.source.missingAtCreation': 'Quelle war beim Erstellen dieser Prüfung nicht verfügbar',
+  'review.source.missingAtCreation': 'Quelle war beim Anlegen dieser Prüfung nicht verfügbar',
   // P4-Frische-Hinweise pro Quelle (Spec §15.4/§15.5).
   'review.source.changed': 'Das Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert',
   'review.source.missingNow':
@@ -2424,11 +2453,11 @@ export const de: Record<keyof typeof en, string> = {
   'review.sourceContext.loading': 'Gespeicherter Text wird geladen…',
   'review.sourceContext.failed': 'Der gespeicherte Text dieser Quelle konnte nicht geladen werden.',
   'review.sourceContext.hashMatch':
-    'Der gespeicherte Dokument-Hash stimmt mit dem Prüfstand überein.',
+    'Der gespeicherte Dokument-Hash stimmt mit dem in der Prüfung festgehaltenen Stand überein.',
   'review.sourceContext.hashMismatch':
     'Das Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert.',
   'review.sourceContext.hashUnknown':
-    'Der aktuelle Stand des Dokuments kann nicht gegen den Prüfstand überprüft werden.',
+    'Der aktuelle Stand des Dokuments kann nicht mit dem in der Prüfung festgehaltenen Stand verglichen werden.',
   'review.sourceContext.missing':
     'Diese Quelle war beim Erstellen der Antwort verfügbar, ist aber nicht mehr im Arbeitsbereich vorhanden. Der gespeicherte Auszug bleibt in dieser Prüfung erhalten, soweit vorhanden.',
   'review.sourceContext.notLocated':
@@ -2440,7 +2469,8 @@ export const de: Record<keyof typeof en, string> = {
   'review.link.remove': 'Verknüpfung entfernen',
   'review.link.cited': 'Von der Antwort zitiert',
   'review.link.reviewer': 'Vom Prüfer verknüpft',
-  'review.link.selectHint': 'Wähle eine Aussage aus, um Nachweise zu verknüpfen oder zu lösen.',
+  'review.link.selectHint':
+    'Wähle einen Prüfpunkt aus, um Nachweise zu verknüpfen oder Verknüpfungen zu entfernen.',
   'review.relation.label': 'Einordnung',
   'review.relation.none': 'Keine Einordnung',
   'review.relation.supports': 'Stützt',
@@ -2449,10 +2479,22 @@ export const de: Record<keyof typeof en, string> = {
   'review.relation.context': 'Nur Kontext',
   'review.item.aria': 'Prüfpunkt {n}',
   'review.item.noMarker': 'Kein direkter Quellenverweis in diesem Text',
-  'review.item.wholeDocDerived': 'Aus Gesamtdokument-Analyse abgeleitet',
+  'review.item.wholeDocDerived': 'Aus einer Gesamtdokument-Analyse abgeleitet',
   'review.item.noteLabel': 'Notiz',
   'review.item.notePlaceholder': 'Notiz hinzufügen (optional)',
   'review.item.viewEvidence': 'Nachweise anzeigen',
+  // ---- P5 Textauswahlen des Prüfers (Spec §12.1 „Separat prüfen“; Plan §10) ----
+  'review.selection.start': 'Textstelle separat prüfen',
+  'review.selection.hint':
+    'Markiere die Textstelle unten im Originaltext (ohne Formatierung angezeigt) und wähle dann „Separat prüfen“.',
+  'review.selection.surfaceAria': 'Originaltext von Prüfpunkt {n}',
+  'review.selection.add': 'Separat prüfen',
+  'review.selection.close': 'Fertig',
+  'review.selection.added': 'Die Textstelle ist jetzt ein eigener Prüfpunkt.',
+  'review.selection.refused':
+    'Diese Auswahl konnte nicht übernommen werden. Markiere die Textstelle noch einmal und versuch es erneut.',
+  'review.item.selectionTag': 'Textauswahl des Prüfers',
+  'review.selection.remove': 'Auswahl entfernen',
   'review.decision.groupAria': 'Entscheidung',
   'review.decision.supported': 'Geprüft — belegt',
   'review.decision.partly_supported': 'Geprüft — teilweise belegt',
@@ -2481,9 +2523,9 @@ export const de: Record<keyof typeof en, string> = {
   'review.summary.sourcesUnresolved.other':
     '{count} Quellen konnten nicht eindeutig zugeordnet werden',
   'review.summary.sourcesMissing.one':
-    '{count} Quelle war beim Erstellen dieser Prüfung nicht verfügbar',
+    '{count} Quelle war beim Anlegen dieser Prüfung nicht verfügbar',
   'review.summary.sourcesMissing.other':
-    '{count} Quellen waren beim Erstellen dieser Prüfung nicht verfügbar',
+    '{count} Quellen waren beim Anlegen dieser Prüfung nicht verfügbar',
   // P4-Frische-Zeilen (Spec §10.4).
   'review.summary.sourcesChangedNow.one':
     '{count} Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert',
@@ -2519,7 +2561,7 @@ export const de: Record<keyof typeof en, string> = {
   'review.deleteWithConversation.unknown':
     'Auch zu dieser Unterhaltung gehörende Nachweis-Prüfungen werden gelöscht.',
 
-  // ---- Nachweispaket-Export (EP-1 Plan §8; ENTWURFSSTAND wie oben — Phase-6-Durchsicht) ----
+  // ---- Nachweispaket-Export (EP-1 Plan §8; muttersprachliche Durchsicht erledigt, P5) ----
   'review.status.lastExported': 'Zuletzt exportiert {date}',
   'review.export.action': 'Nachweispaket erstellen',
   'review.export.title': 'Nachweispaket exportieren',
@@ -2531,7 +2573,7 @@ export const de: Record<keyof typeof en, string> = {
   'review.export.optHashes': 'Dokument-Hashes',
   'review.export.optUnreviewed': 'Ungeprüfte Punkte',
   'review.export.optTechnical': 'Technische Details',
-  'review.export.confirm': 'Paket exportieren …',
+  'review.export.confirm': 'Paket exportieren…',
   'review.export.cancel': 'Schließen',
   'review.export.done': 'Nachweispaket exportiert.',
   'review.export.error':
@@ -2543,7 +2585,7 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.docTitle': 'Nachweispaket',
   'packExport.privacy': 'Lokal mit HilbertRaum erstellt. Es waren keine Cloud-Dienste beteiligt.',
   'packExport.disclaimer':
-    'Eine Quellenangabe zeigt, woher eine Information stammt. Sie allein beweist nicht, dass die Antwort richtig ist.',
+    'Ein Quellenverweis zeigt, woher eine Information stammt. Er allein belegt nicht, dass die Antwort richtig ist.',
   'packExport.support': 'Dieses Paket unterstützt die menschliche Prüfung; es ist keine Zertifizierung.',
   'packExport.meta.packId': 'Paket-ID',
   'packExport.meta.generatedAt': 'Erstellt',
@@ -2589,7 +2631,7 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.evidence.kindDirect':
     'Direkter Auszug — dem lokalen Modell für diese Antwort vorgelegt',
   'packExport.evidence.kindProvenance':
-    'Herkunft aus Gesamtdokument-Analyse — keine einzelne Satz-Quellenangabe',
+    'Herkunft aus einer Gesamtdokument-Analyse — kein satzgenauer Quellenverweis',
   'packExport.evidence.kindStructured': 'Strukturierter Extraktionsdatensatz',
   'packExport.evidence.page': 'Seite {n}',
   'packExport.evidence.sectionLabel': 'Abschnitt',
@@ -2609,7 +2651,7 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.coverage.modeRelevance':
     'Die gezeigten Quellen sind die Auszüge, die dem lokalen KI-Modell für diese Antwort vorgelegt wurden.',
   'packExport.coverage.modeWholeDoc':
-    'Diese Antwort wurde durch eine Gesamtdokument-Analyse erstellt. Die gezeigten Abschnitte sind Herkunftsangaben, keine einzelnen Satz-Quellenangaben.',
+    'Diese Antwort wurde durch eine Gesamtdokument-Analyse erstellt. Die gezeigten Abschnitte sind Herkunftsangaben, keine satzgenauen Quellenverweise.',
   'packExport.coverage.modeStructured':
     'Diese Antwort ist eine strukturierte Extraktion, die deterministisch aus den Quelldokumenten erzeugt wurde.',
   'packExport.coverage.inputStatement':

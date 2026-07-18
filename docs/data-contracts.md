@@ -942,7 +942,8 @@ section records the AS-BUILT shapes; selection UI (P5) and PDF (P6) are still op
 ✅ **i18n:** +9 `review.outdated.*`, +3 `review.source.*` freshness badges, +11
   `review.sourceContext.*`, +4 `review.summary.sources{Changed,Missing}Now.*`,
   `review.status.outdated`, +13 `packExport.*` freshness keys,
-  `main.evidenceReviews.exportOutdated` — EN+DE (DE draft register, P6 native pass).
+  `main.evidenceReviews.exportOutdated` — EN+DE (DE draft register at P4 close; the
+  native pass landed in P5 — design-guidelines §11.13 — and removed the draft flags).
 ✅ **Phase-4 tests:** `tests/integration/evidence-freshness.test.ts` ×28 (engine verdicts
   incl. unresolved-never-changed under mutation AND deletion of same-titled docs,
   hash-absent unverifiable, answer/coverage drift, reserialized-coverage false-positive
