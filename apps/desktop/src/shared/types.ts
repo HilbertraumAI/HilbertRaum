@@ -2570,13 +2570,83 @@ export interface EvidenceLinkInput {
 }
 
 /**
- * Result of `refreshEvidenceReviewState` (spec §19/§21). Phase 1 STUBS the freshness
- * engine: every known review reports `outdated: false` — the same "not known to be
- * outdated" overlay semantics every read already carries, never a verified-fresh claim.
- * Phase 4 replaces the stub with the real snapshot-vs-workspace comparison and widens this
- * shape ADDITIVELY (per-source availability states, answer/coverage drift).
+ * Per-source freshness state (spec §21.2, Phase 4) — a comparison of STORED facts only
+ * (snapshot hash vs the CURRENT `documents.sha256`; no re-hashing, no file I/O, ever):
+ *  - 'unchanged'    — resolved, row exists, both hashes present and equal.
+ *  - 'changed'      — resolved, row exists, both hashes present and DIFFERENT (spec §15.5).
+ *  - 'missing'      — resolved, but the document row is gone (spec §15.4/§25.2). Includes
+ *                     sources that were ALREADY missing at creation — join on the snapshot's
+ *                     `availabilityAtCreation` to tell new deletions apart.
+ *  - 'unverifiable' — the comparison is impossible: unresolved identity (NEVER reported as
+ *                     'changed' — it cannot be compared), or a hash absent on either side.
+ */
+export type EvidenceSourceFreshnessState = 'unchanged' | 'changed' | 'missing' | 'unverifiable'
+
+/** One source's freshness verdict, keyed by the snapshot's `EvidenceSourceSnapshot.key`. */
+export interface EvidenceSourceFreshness {
+  key: string
+  state: EvidenceSourceFreshnessState
+}
+
+/** Snapshot-vs-workspace comparison verdict for the answer text / coverage metadata
+ *  (spec §21.2). 'unverifiable' = the message row is gone (nothing to compare against) —
+ *  honest "cannot verify", never a drift claim. */
+export type EvidenceFreshnessComparison = 'unchanged' | 'changed' | 'unverifiable'
+
+/**
+ * Result of `refreshEvidenceReviewState` (spec §19/§21) — the Phase-4 freshness engine's
+ * verdict, computed on demand from STORED facts only (spec §21.2: the stored
+ * `documents.sha256` is the comparison basis; freshness never re-hashes, never touches
+ * source files, never calls a model). The P1 stub shipped only `{reviewId, outdated}`;
+ * Phase 4 widened the shape ADDITIVELY (every new field optional on the wire).
+ *
+ * `outdated` (spec §18.4/§15.5) is true when something POSITIVELY drifted: the answer text
+ * or coverage metadata no longer matches the snapshot, or ≥1 source hash CHANGED. A
+ * deleted source marks that source 'missing' but does NOT flip `outdated` (spec §25.2 and
+ * §28.7 treat deletion as an unavailability warning, not an outdated overlay), and
+ * 'unverifiable' never flips anything — unknown is not drift.
  */
 export interface EvidenceReviewFreshness {
   reviewId: string
   outdated: boolean
+  answerState?: EvidenceFreshnessComparison
+  coverageState?: EvidenceFreshnessComparison
+  sources?: EvidenceSourceFreshness[]
+  /**
+   * When the CURRENT drift state has been acknowledged (spec §15.5/§21.3/§28.6): the stored
+   * acknowledge stamp when its recorded drift fingerprint still matches the drift computed
+   * now; null when nothing is acknowledged, when the drift CHANGED since the acknowledge
+   * (a new change re-demands one), or when the review is not outdated at all.
+   */
+  acknowledgedAt?: string | null
+}
+
+/**
+ * Result of `getEvidenceSourceContext` (D-5, spec §10.2.4): the STORED extracted text
+ * around one snapshotted source's persisted excerpt, resolved MAIN-SIDE from the review's
+ * own snapshot (`reviewId` + source `key` — the renderer never passes document ids or
+ * paths). Text comes from the `chunks` table (the stored extraction), NEVER from re-reading
+ * or re-parsing the source file; `hashState` is the same stored-hash comparison the
+ * freshness engine uses. Null (handler) = unknown review/key, or an unresolved-identity
+ * source (there is no document to read).
+ */
+export interface EvidenceSourceContext {
+  reviewId: string
+  key: string
+  /** The CURRENT stored document title when the row exists, else the snapshot title. */
+  documentTitle: string
+  availability: 'available' | 'missing'
+  /** Stored-hash comparison: 'match' | 'mismatch' | 'unknown' (either hash absent). */
+  hashState: 'match' | 'mismatch' | 'unknown'
+  /** The persisted snapshot excerpt (the text the modal highlights); null = none persisted. */
+  snippet: string | null
+  /** True when the excerpt was located in the current stored extraction (`match` below). */
+  located: boolean
+  /** Bounded stored text before/after the located excerpt; null when not located. */
+  before: string | null
+  match: string | null
+  after: string | null
+  /** Where the located text sits (from the stored chunk row); null when unknown. */
+  pageNumber: number | null
+  sectionLabel: string | null
 }

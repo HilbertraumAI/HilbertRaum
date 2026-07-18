@@ -5,6 +5,7 @@ import type { EvidenceExportRecord } from '../../../shared/types'
 import { sha256Of } from '../assets'
 import { getEvidenceReview, recordEvidenceExport } from '../evidence-reviews'
 import type { Db } from '../db'
+import { computeEvidenceReviewFreshness } from './freshness'
 import {
   buildEvidencePackModel,
   resolveEvidencePackOptions,
@@ -13,9 +14,11 @@ import {
 import { renderEvidencePackHtml } from './render-html'
 
 // Evidence-pack export pipeline (EP-1 plan §8.3, spec §20.1):
-//   load persisted review → resolve options → build model → render fixed template →
-//   choose destination → write tmp sibling → fsync → hash the ON-DISK bytes → atomic
-//   rename → record `evidence_exports` row.
+//   load persisted review → refresh freshness (P4 — the §20.1 step; stored-fact comparison
+//   only, no re-hashing §21.2; refuses an OUTDATED review whose drift is unacknowledged,
+//   §28.6) → resolve options → build model (freshness INJECTED — the model stays pure) →
+//   render fixed template → choose destination → write tmp sibling → fsync → hash the
+//   ON-DISK bytes → atomic rename → record `evidence_exports` row.
 // No model runtime, no network, no re-retrieval anywhere on this path (spec FR-2/FR-12 —
 // pinned by the no-model/no-network test assertions). Failure semantics (spec §20.2/§20.3/
 // §28.9): any failure or cancel UP TO AND INCLUDING the rename leaves NO destination file
@@ -45,6 +48,11 @@ export class EvidencePackRecordError extends Error {}
  *  but is NOT recorded — its hash is not on record and the pack's printed integrity note
  *  does not hold for it. Distinct so the user can be told exactly that. */
 export class EvidencePackUnrecordedFileError extends Error {}
+
+/** P4 (spec §28.6): the review is OUTDATED and the drift has not been acknowledged —
+ *  export refuses BEFORE any dialog/file work. The renderer gates the button too; this is
+ *  the authoritative main-side enforcement. The IPC layer localizes. */
+export class EvidencePackOutdatedError extends Error {}
 
 /** Injected seams: the native dialog lives at the IPC layer so this module stays
  *  electron-free and the atomic pipeline is testable against plain paths. */
@@ -128,11 +136,28 @@ export async function exportEvidencePackToFile(
 ): Promise<EvidenceExportRecord | null> {
   const detail = getEvidenceReview(db, reviewId)
   if (!detail) return null
+  // P4 — the spec §20.1 "refresh source availability/freshness" step, IN the pipeline:
+  // a comparison of stored facts only (no re-hashing, spec §21.2 — trivially cheap), so
+  // every pack records availability AT EXPORT (§16.1.7) and every mismatch (§28.6/§28.7).
+  // An outdated review exports ONLY after the drift was acknowledged (§28.6) — refused
+  // here, before any dialog opens; a deleted/unverifiable source never blocks (§28.7),
+  // it is represented as a limitation in the pack.
+  const freshness = computeEvidenceReviewFreshness(db, reviewId)
+  if (freshness?.outdated && !freshness.acknowledgedAt) {
+    throw new EvidencePackOutdatedError(
+      `evidence export: review is outdated and the change is not acknowledged (${reviewId})`
+    )
+  }
   const options = resolveEvidencePackOptions(rawOptions)
-  const model = buildEvidencePackModel(detail, options, {
-    packId: deps.newPackId?.() ?? randomUUID(),
-    generatedAt: deps.now?.() ?? new Date().toISOString()
-  })
+  const model = buildEvidencePackModel(
+    detail,
+    options,
+    {
+      packId: deps.newPackId?.() ?? randomUUID(),
+      generatedAt: deps.now?.() ?? new Date().toISOString()
+    },
+    freshness
+  )
   const html = renderEvidencePackHtml(model)
   const destPath = await deps.chooseDestination(suggestedPackFileName(detail.title))
   if (!destPath) return null

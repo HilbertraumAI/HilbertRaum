@@ -203,6 +203,16 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   )
   push('</dl>')
   push(`<p class="hint">${s('packExport.privacy')}</p>`)
+  // P4 (spec §21.3): an outdated review exports with a PROMINENT snapshot warning — on the
+  // cover, before anything else, with the acknowledge stamp when one exists (§28.6).
+  if (model.outdated) {
+    warning(s('packExport.coverage.outdated'))
+    if (model.freshness?.acknowledgedAt) {
+      push(
+        `<p class="hint">${s('packExport.coverage.acknowledged', { date: formatPackTimestamp(model.freshness.acknowledgedAt) })}</p>`
+      )
+    }
+  }
   warning(`${s('packExport.disclaimer')} ${s('packExport.support')}`)
   push('</header>')
   push('<main>')
@@ -330,6 +340,13 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
     } else if (src.availabilityAtCreation === 'missing') {
       warning(s('packExport.evidence.missingAtCreation'))
     }
+    // P4 per-card at-export states (spec §15.4/§15.5): change and NEW deletion warn on the
+    // card itself; creation-time missing kept its own warning above.
+    if (src.currentState === 'changed') {
+      warning(s('packExport.evidence.changedSince'))
+    } else if (src.currentState === 'missing' && src.availabilityAtCreation !== 'missing') {
+      warning(s('packExport.evidence.missingNow'))
+    }
     if (model.options.includeSourceExcerpts) {
       if (src.snippet) {
         push(`<p class="hint">${s('packExport.evidence.excerpt')}:</p>`)
@@ -377,7 +394,29 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   if (model.honesty.missingSources > 0) {
     warning(n('review.summary.sourcesMissing', model.honesty.missingSources))
   }
-  push(`<p class="hint">${s('packExport.coverage.freshnessNote')}</p>`)
+  // P4 (spec §28.6/§28.7): with an injected at-export verdict the pack RECORDS the
+  // re-check and every mismatch; without one it keeps the honest P3 "not re-verified"
+  // note. Warnings are drift-shaped: answer/coverage drift, changed sources, NEW
+  // deletions (creation-time missing already warned above).
+  const fresh = model.freshness
+  if (fresh) {
+    if (fresh.answerChanged) warning(s('packExport.coverage.answerChangedNow'))
+    if (fresh.coverageChanged) warning(s('packExport.coverage.coverageChangedNow'))
+    if (fresh.sourcesChanged > 0) {
+      warning(n('packExport.coverage.sourcesChangedNow', fresh.sourcesChanged))
+    }
+    if (fresh.sourcesMissingNow > 0) {
+      warning(n('packExport.coverage.sourcesMissingNow', fresh.sourcesMissingNow))
+    }
+    if (fresh.outdated && fresh.acknowledgedAt) {
+      push(
+        `<p>${s('packExport.coverage.acknowledged', { date: formatPackTimestamp(fresh.acknowledgedAt) })}</p>`
+      )
+    }
+    push(`<p class="hint">${s('packExport.coverage.freshnessChecked')}</p>`)
+  } else {
+    push(`<p class="hint">${s('packExport.coverage.freshnessNote')}</p>`)
+  }
   push('</section>')
 
   // ---- 7. Source register (§16.1.7) ------------------------------------------------
@@ -386,14 +425,25 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   if (model.evidence.length === 0) {
     push(`<p class="hint">${s('packExport.evidence.none')}</p>`)
   } else {
+    // P4 (spec §16.1.7): with an injected verdict the availability column reports the AT
+    // EXPORT state (available / changed-since-review / missing / cannot-verify); without
+    // one it stays the honest at-creation record (the P3 shape + the not-re-verified note).
+    const atExport = model.freshness != null
     push('<table>')
     push(
-      `<thead><tr><th>${s('packExport.sources.colTitle')}</th><th>${s('packExport.sources.colType')}</th><th>${s('packExport.sources.colSha')}</th><th>${s('packExport.sources.colAvailability')}</th></tr></thead>`
+      `<thead><tr><th>${s('packExport.sources.colTitle')}</th><th>${s('packExport.sources.colType')}</th><th>${s('packExport.sources.colSha')}</th><th>${s(atExport ? 'packExport.sources.colAvailabilityExport' : 'packExport.sources.colAvailability')}</th></tr></thead>`
     )
     push('<tbody>')
     for (const src of model.evidence) {
-      const availability =
-        src.identity === 'unresolved'
+      const availability = atExport
+        ? src.currentState === 'unchanged'
+          ? s('packExport.sources.availabilityAvailable')
+          : src.currentState === 'changed'
+            ? s('packExport.sources.availabilityChanged')
+            : src.currentState === 'missing'
+              ? s('packExport.sources.availabilityMissing')
+              : s('packExport.sources.availabilityUnknown')
+        : src.identity === 'unresolved'
           ? s('packExport.sources.availabilityUnknown')
           : src.availabilityAtCreation === 'missing'
             ? s('packExport.sources.availabilityMissing')

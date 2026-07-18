@@ -1831,6 +1831,56 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .review-save-state { font-size: var(--text-sm); color: var(--text-muted); margin-left: auto; }
 .review-save-state.error { color: var(--error); }
+/* P4 freshness overlay (spec §15.5/§18.4): the Outdated chip joins Draft/Ready (never
+   replaces it) and the banner names the drift — border + glyph + text, never color-only. */
+.review-outdated-chip { border-color: var(--warning, var(--border)); }
+.review-outdated-banner {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--warning, var(--text-muted));
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 10px 14px;
+  margin-top: 10px;
+}
+.review-outdated-title { margin: 0 0 4px; }
+.review-outdated-facts { margin: 0 0 6px; padding-left: 1.2em; font-size: var(--text-sm); }
+.review-outdated-acked { margin: 4px 0 0; }
+.review-source-freshness { display: inline-flex; gap: 4px; }
+.review-source-context-action { margin-top: 6px; }
+.review-export-outdated-hint { margin: 0 0 6px; }
+/* Source-in-context modal (D-5): stored text with the persisted excerpt highlighted. */
+.review-source-context { max-width: 70ch; }
+.review-context-doc { margin: 0 0 4px; }
+.review-context-hash { margin: 0 0 8px; }
+.review-context-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-size: var(--text-sm);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.review-context-dim { color: var(--text-muted); }
+.review-context-match {
+  background: var(--surface-hover);
+  color: var(--text);
+  font-weight: 600;
+  outline: 1px solid var(--accent);
+  border-radius: 2px;
+}
+.review-context-excerpt-head { margin: 10px 0 4px; font-size: var(--text-md); }
+.review-context-snippet {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border);
+  background: var(--surface);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--text-sm);
+}
 .review-panes {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);

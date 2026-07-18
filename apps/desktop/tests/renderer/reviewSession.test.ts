@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type {
   EvidenceReviewDetail,
+  EvidenceReviewFreshness,
   EvidenceReviewItem,
   EvidenceReviewItemPatch
 } from '../../src/shared/types'
@@ -23,8 +24,8 @@ import {
   resetReviewSessionForTests,
   retryReviewSave
 } from '../../src/renderer/lib/reviewSession'
-import { stubApi } from '../helpers/renderer'
-import { makeDetail, makeItem } from '../helpers/evidenceReview'
+
+import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 
 // EP-1 plan §7.5 — the reviewSession module store: the repo's FIRST debounced auto-save.
 // Pins the contract the plan demands: debounce batches related writes (spec §26), the
@@ -50,7 +51,7 @@ describe('reviewSession — open', () => {
   it('opens by reviewId via getEvidenceReview; null → notFound (never a throw)', async () => {
     const detail = makeDetail()
     const getEvidenceReview = vi.fn(async (id: string) => (id === 'r1' ? detail : null))
-    stubApi({ getEvidenceReview })
+    stubReviewApi({ getEvidenceReview })
     await openWith(detail)
     expect(getEvidenceReview).toHaveBeenCalledWith('r1')
 
@@ -62,11 +63,11 @@ describe('reviewSession — open', () => {
 
   it('opens by messageId via the IDEMPOTENT create; a create rejection surfaces friendly copy', async () => {
     const detail = makeDetail()
-    stubApi({ createEvidenceReview: vi.fn(async () => detail) })
+    stubReviewApi({ createEvidenceReview: vi.fn(async () => detail) })
     await openReviewSession({ messageId: 'm1' })
     expect(getReviewSessionSnapshot().detail?.id).toBe('r1')
 
-    stubApi({
+    stubReviewApi({
       createEvidenceReview: vi.fn(async () => {
         throw new Error("Error invoking remote method 'evidence:create': Error: This review request is not valid.")
       })
@@ -85,7 +86,7 @@ describe('reviewSession — debounced auto-save', () => {
     const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
       makeItem({ id, ...patch })
     )
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem
     })
@@ -122,7 +123,7 @@ describe('reviewSession — debounced auto-save', () => {
           else finish()
         })
     )
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem
     })
@@ -149,7 +150,7 @@ describe('reviewSession — debounced auto-save', () => {
       if (fail) throw new Error('Error: Workspace is locked.')
       return makeItem({ id, ...patch })
     })
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem
     })
@@ -176,7 +177,7 @@ describe('reviewSession — debounced auto-save', () => {
   it('a NULL mutation result (stale handle) surfaces a save error, never a throw', async () => {
     vi.useFakeTimers()
     const detail = makeDetail()
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem: vi.fn(async () => null)
     })
@@ -190,7 +191,7 @@ describe('reviewSession — debounced auto-save', () => {
     vi.useFakeTimers()
     const detail = makeDetail()
     const updateEvidenceReview = vi.fn(async () => ({ ...detail }))
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReview
     })
@@ -237,7 +238,7 @@ describe('reviewSession — mark ready + gate mirror', () => {
         gate: { eligible: true, requiredTotal: 2, decidedTotal: 2 }
       }
     })
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem,
       markEvidenceReviewReady
@@ -253,7 +254,7 @@ describe('reviewSession — mark ready + gate mirror', () => {
 
   it('an ineligible markReady returns the AUTHORITATIVE gate as guidance, not a failure', async () => {
     const detail = makeDetail()
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       markEvidenceReviewReady: vi.fn(async () => ({
         review: { ...detail, status: 'draft' as const },
@@ -294,7 +295,7 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     ]
     const detail = makeDetail({ items })
     const written: string[] = []
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem: vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
         if (patch.decision) written.push(patch.decision)
@@ -344,7 +345,7 @@ describe('reviewSession — race hardening (FIX-2)', () => {
             )
         })
     )
-    stubApi({ getEvidenceReview: vi.fn(async () => detail), setEvidenceLink })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => detail), setEvidenceLink })
     await openWith(detail)
 
     const pending = linkEvidence('i1', 's1', null)
@@ -364,7 +365,7 @@ describe('reviewSession — race hardening (FIX-2)', () => {
     const first = makeDetail()
     const second = makeDetail({ id: 'r2', messageId: 'm2' })
     let releaseLink: (() => void) | null = null
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async (id: string) => (id === 'r2' ? second : first)),
       setEvidenceLink: vi.fn(
         (itemId: string) =>
@@ -402,7 +403,7 @@ describe('reviewSession — race hardening (FIX-2)', () => {
           rejectWrite = () => reject(new Error('vault sealed mid-write'))
         })
     )
-    stubApi({ getEvidenceReview: vi.fn(async () => detail), updateEvidenceReviewItem })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => detail), updateEvidenceReviewItem })
     await openWith(detail)
     editReviewItem('i1', { reviewerNote: 'secret note' })
     await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
@@ -428,7 +429,7 @@ describe('reviewSession — race hardening (FIX-2)', () => {
       order.push('reopen')
       return { ...detail, title: 'Renamed just before reopen', status: 'draft' as const, completedAt: null }
     })
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReview,
       reopenEvidenceReview
@@ -445,7 +446,7 @@ describe('reviewSession — race hardening (FIX-2)', () => {
     vi.useFakeTimers()
     const detail = makeDetail()
     // The write is refused (null = stale handle) — the optimistic value never persisted.
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem: vi.fn(async () => null)
     })
@@ -465,7 +466,7 @@ describe('reviewSession — race hardening (FIX-2)', () => {
   it('retryReviewSave on a VANISHED review lands on the friendly not-found state (2d)', async () => {
     const detail = makeDetail()
     let present = true
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => (present ? detail : null)),
       updateEvidenceReviewItem: vi.fn(async () => null)
     })
@@ -487,7 +488,7 @@ describe('reviewSession — ready-state guard (FIX-1)', () => {
     )
     const setEvidenceLink = vi.fn(async () => makeItem({ id: 'i1' }))
     const updateEvidenceReview = vi.fn(async () => ({ ...detail, reviewerLabel: 'QA' }))
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem,
       setEvidenceLink,
@@ -520,7 +521,7 @@ describe('reviewSession — lock purge', () => {
     const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
       makeItem({ id, ...patch })
     )
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem
     })
@@ -531,5 +532,79 @@ describe('reviewSession — lock purge', () => {
     await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
     await flushReviewSession()
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
+  })
+})
+
+describe('reviewSession — P4 freshness (plan §9.1: refresh on open, acknowledge)', () => {
+  it('a successful open fires refreshEvidenceReviewState and stores the verdict', async () => {
+    const detail = makeDetail()
+    const fresh = makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
+    const { refresh } = stubReviewApi({ getEvidenceReview: vi.fn(async () => detail) }, fresh)
+    await openWith(detail)
+    await vi.waitFor(() => expect(getReviewSessionSnapshot().freshness).toEqual(fresh))
+    expect(refresh).toHaveBeenCalledWith('r1')
+  })
+
+  it('a FAILED open never fires the refresh (nothing to refresh)', async () => {
+    const { refresh } = stubReviewApi({ getEvidenceReview: vi.fn(async () => null) })
+    await openReviewSession({ reviewId: 'gone' })
+    expect(getReviewSessionSnapshot().openError).toEqual({ kind: 'notFound' })
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('openToken guard: a refresh landing AFTER a purge never re-populates the store', async () => {
+    const detail = makeDetail()
+    let resolveRefresh: (v: EvidenceReviewFreshness | null) => void = () => {}
+    const refreshEvidenceReviewState = vi.fn(
+      () => new Promise<EvidenceReviewFreshness | null>((resolve) => (resolveRefresh = resolve))
+    )
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      refreshEvidenceReviewState
+    })
+    await openWith(detail)
+    // The refresh is in flight; the lock seam purges the store.
+    purgeReviewSession()
+    resolveRefresh(makeFreshness({ outdated: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(getReviewSessionSnapshot().freshness).toBeNull()
+    expect(getReviewSessionSnapshot().detail).toBeNull()
+  })
+
+  it('acknowledge merges the refreshed verdict (acknowledgedAt) into the store', async () => {
+    const detail = makeDetail()
+    const acked = makeFreshness({
+      outdated: true,
+      sources: [{ key: 's1', state: 'changed' }],
+      acknowledgedAt: '2026-07-18T12:00:00.000Z'
+    })
+    const acknowledgeEvidenceReviewFreshness = vi.fn(async () => acked)
+    stubReviewApi(
+      {
+        getEvidenceReview: vi.fn(async () => detail),
+        acknowledgeEvidenceReviewFreshness
+      },
+      makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
+    )
+    await openWith(detail)
+    const { acknowledgeReviewFreshness } = await import('../../src/renderer/lib/reviewSession')
+    expect(await acknowledgeReviewFreshness()).toBe(true)
+    expect(acknowledgeEvidenceReviewFreshness).toHaveBeenCalledWith('r1')
+    expect(getReviewSessionSnapshot().freshness?.acknowledgedAt).toBe('2026-07-18T12:00:00.000Z')
+  })
+
+  it('an acknowledge failure surfaces as a save error, never a crash', async () => {
+    const detail = makeDetail()
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      acknowledgeEvidenceReviewFreshness: vi.fn(async () => {
+        throw new Error('db gone')
+      })
+    })
+    await openWith(detail)
+    const { acknowledgeReviewFreshness } = await import('../../src/renderer/lib/reviewSession')
+    expect(await acknowledgeReviewFreshness()).toBe(false)
+    expect(getReviewSessionSnapshot().saveState).toBe('error')
   })
 })

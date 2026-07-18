@@ -586,9 +586,9 @@ document answers always run balanced (deep-grounded = wave 2).
   threading + `formatPlan`; `assertCommercialDrive` passes verified-commercial, fails network/plaintext/
   placeholder-weight/user-data). **Signing + notarization + the real USB launch = manual (R5/R7).**
 
-### Evidence Pack / Review Mode (EP-1 Phases 0–3 live — contracts, storage, snapshot engine + IPC, review UI, HTML export)
-Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.md` §5–§8 (this
-section records the AS-BUILT shapes; freshness engine (P4) and PDF (P6) are still open).
+### Evidence Pack / Review Mode (EP-1 Phases 0–4 live — contracts, storage, snapshot engine + IPC, review UI, HTML export, freshness)
+Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.md` §5–§9 (this
+section records the AS-BUILT shapes; selection UI (P5) and PDF (P6) are still open).
 
 ✅ **`Citation` enrichment (ADDITIVE, `shared/types.ts`):** `documentId?: string | null`
   (`chunks.document_id`) + `chunkId?: string | null` (`chunks.id`), stamped at the **six**
@@ -619,7 +619,10 @@ section records the AS-BUILT shapes; freshness engine (P4) and PDF (P6) are stil
   on each FK column. One ACTIVE review per message = **service-enforced** (deliberately no
   UNIQUE constraint). All tables inherit encrypted-at-rest (same workspace DB). `status`
   stores ONLY `'draft'|'ready'`; **`outdated` is derived, never stored** (spec §18.4 — it can
-  never erase ready; Phase 0/1 always report `false`, Phase 4 computes it).
+  never erase ready; the Phase-4 engine computes it on demand — see the Phase-4 block below).
+  Phase 4 added ONE additive nullable column: `evidence_reviews.freshness_ack_json` (JSON
+  `{ acknowledgedAt, fingerprint }` via `ensureColumn` — the acknowledged-drift record;
+  malformed → reads as never-acknowledged, the safe direction).
 ✅ **Types (`shared/types.ts`):** `ReviewDecision`
   ('supported'|'partly_supported'|'not_supported'|'follow_up'|'not_reviewed'|'not_applicable'),
   `EvidenceReviewStatus` ('draft'|'ready'), `AnswerBlockKind`, `EvidenceSourceSnapshot`
@@ -723,11 +726,11 @@ section records the AS-BUILT shapes; freshness engine (P4) and PDF (P6) are stil
   conversation?)` (spec §9.1): assistant ∧ (citations non-empty ∨ coverage present ∨
   `conversation.mode === 'documents'`). "Persisted and not streaming" stays the caller's
   gate (a streaming reply has no row yet) — Phase 2 wires it.
-✅ **IPC surface (15 channels, `evidence:*` in `shared/ipc.ts`; handlers in
+✅ **IPC surface (17 channels, `evidence:*` in `shared/ipc.ts`; handlers in
   `main/ipc/registerEvidenceReviewsIpc.ts`, wired in `main/index.ts`; preload methods of the
   same names on `window.api` — 13 shipped in Phase 1, `evidence:countForConversation` added
   in Phase 2 for the D-2 delete confirm, `evidence:export` added in Phase 3 with its
-  pipeline):**
+  pipeline, `evidence:acknowledgeFreshness` + `evidence:sourceContext` added in Phase 4):**
   | preload method | channel | shape |
   |---|---|---|
   | `createEvidenceReview(messageId)` | `evidence:create` | → `EvidenceReviewDetail`; IDEMPOTENT (existing review returned, audit only on real creation); throws localized `invalidRequest` on a malformed id, ids-only errors on unknown/non-assistant message |
@@ -741,7 +744,9 @@ section records the AS-BUILT shapes; freshness engine (P4) and PDF (P6) are stil
   | `removeEvidenceLink(itemId, key)` | `evidence:removeLink` | → `boolean` |
   | `markEvidenceReviewReady(reviewId)` | `evidence:markReady` | → `{ review, gate } \| null` (refuses + gate says why while ineligible; an ALREADY-ready review is a NO-OP — original `completed_at` kept, no second audit event; the service returns an additional `becameReady` flag the handler audits on and STRIPS from the wire — review FIX-5) |
   | `reopenEvidenceReview(reviewId)` | `evidence:reopen` | → `EvidenceReview \| null` |
-  | `refreshEvidenceReviewState(reviewId)` | `evidence:refreshState` | → `EvidenceReviewFreshness \| null` — **Phase-4 STUB**: `{ reviewId, outdated: false }` for a known review (the same not-known-to-be-outdated overlay every read carries) |
+  | `refreshEvidenceReviewState(reviewId)` | `evidence:refreshState` | → `EvidenceReviewFreshness \| null` — **REAL since Phase 4** (spec §21.2): snapshot vs workspace from STORED facts only — document existence by snapshotted id, stored `documents.sha256` vs snapshot hash (**never re-hashed**), `messages.content` vs `answer_snapshot` (exact), coverage semantic-fields compare. Unresolved identities report `'unverifiable'`, NEVER `'changed'`. No model, no network, no file I/O |
+  | `acknowledgeEvidenceReviewFreshness(reviewId)` | `evidence:acknowledgeFreshness` | → `EvidenceReviewFreshness \| null` — Phase 4 (spec §15.5/§28.6): persists `{acknowledgedAt, fingerprint}` into `freshness_ack_json`; the fingerprint canonicalizes the CURRENT drift so a LATER change lapses the acknowledge. NO-OP on a non-outdated review (nothing written). Writes ONLY its own column — status/completed_at/updated_at untouched (§18.4), NOT subject to the ready-state write-guard (lifecycle metadata, not a decision edit). No audit event (not a spec-§22 type) |
+  | `getEvidenceSourceContext(reviewId, sourceKey)` | `evidence:sourceContext` | → `EvidenceSourceContext \| null` — Phase 4 (D-5, spec §10.2.4): the STORED extracted text (`chunks` table — never a source-file read) around one source's persisted excerpt, resolved from the review's OWN snapshot (`documentId` never crosses the wire from the renderer). Ladder: snapshotted `sourceChunkId` (verified to belong to the snapshotted document — a foreign chunk id never leaks another document's text) → stored-text containment search (`instr`) → honest `located:false`. Context = located chunk ± one neighbor, ≤1200 chars/side, surrogate-safe boundaries. Null on unknown review/key and on unresolved-identity sources |
   | `deleteEvidenceReview(reviewId)` | `evidence:delete` | → `boolean` |
   | `countEvidenceReviewsForConversation(conversationId)` | `evidence:countForConversation` | → `number` — Phase 2 (plan §7.6, D-2): the conversation-delete confirm names how many reviews the cascade removes. Count only, never content; malformed/unknown ids read `0` |
   | `exportEvidencePack(reviewId, options)` | `evidence:export` | → `EvidenceExportRecord \| null` — Phase 3 (plan §8.3): save dialog → deterministic HTML render → ATOMIC write (tmp sibling → fsync → sha256 of the ON-DISK bytes → rename) → `evidence_exports` row. Null on unknown/malformed id (no dialog) or user cancel; any failure UP TO the rename leaves no destination file and no row (spec §28.9). A POST-rename record failure (workspace-DB error, or the review deleted in another window while the dialog was open) UNLINKS the just-written file and REJECTS with distinct localized copy (`main.evidenceReviews.exportNotRecorded`; if even the unlink fails, `…exportFileNotRecorded` states the file exists WITHOUT a history record) — null never means "exported", and a real export is never reported as a cancel (fix round FIX-1). Works on draft AND ready reviews (the ready guard covers item mutations only — tested). `options: Partial<EvidencePackOptions>` resolves against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; the RESOLVED set persists to `options_json` |
@@ -752,7 +757,8 @@ section records the AS-BUILT shapes; freshness engine (P4) and PDF (P6) are stil
   REFUSE through their normal null/false channel — `ready` + undecided is a state the D-7 gate
   can never produce, so it must be unreachable by mutation too; reopen first. HEAD edits
   (`updateEvidenceReview`: title D-6 / reviewer label D-3 / general note) stay allowed.
-  New type `EvidenceReviewFreshness { reviewId, outdated }`.
+  Type `EvidenceReviewFreshness` shipped in P1 as `{ reviewId, outdated }` and was widened
+  ADDITIVELY in P4 (all new fields optional on the wire — see the Phase-4 block).
 ✅ **Audit emitters:** `evidence_review_created` (`{reviewId, messageId,
   conversationId, itemCount, sourceCount, autoLinkCount}`), `evidence_review_ready`
   (`{reviewId, requiredTotal, decidedTotal}`), `evidence_review_deleted` (`{reviewId}`),
@@ -866,6 +872,87 @@ section records the AS-BUILT shapes; freshness engine (P4) and PDF (P6) are stil
   defaults, payload shape, history merge, cancel/failure, flush-before-export ordering,
   flush-FAILURE refusal, ready-review export, hash display + full-hash copy;
   `exportEvidencePack` in the stub sets under the structural no-call tripwire).
+
+**Phase 4 — freshness engine, Outdated lifecycle, source-in-context (as built):**
+
+✅ **Types (`shared/types.ts`, all ADDITIVE):** `EvidenceSourceFreshnessState`
+  ('unchanged'|'changed'|'missing'|'unverifiable'), `EvidenceSourceFreshness {key, state}`,
+  `EvidenceFreshnessComparison` ('unchanged'|'changed'|'unverifiable'),
+  `EvidenceReviewFreshness` widened with OPTIONAL `answerState`, `coverageState`,
+  `sources[]`, `acknowledgedAt` (the P1 `{reviewId, outdated}` shape stays valid on the
+  wire), and `EvidenceSourceContext` (the D-5 result: title, availability, `hashState`
+  'match'|'mismatch'|'unknown', persisted `snippet`, `located` + bounded
+  `before`/`match`/`after`, page/section).
+✅ **Freshness engine (`main/services/evidence-pack/freshness.ts`):**
+  `computeEvidenceReviewFreshness(db, reviewId)` — STORED-fact comparison only (spec §21.2:
+  the stored `documents.sha256` is the basis; NO re-hashing, NO file I/O — pinned
+  structurally by tests whose documents have no files at all). Verdicts: resolved+row+both
+  hashes → unchanged/changed; resolved+row-gone → missing; unresolved identity OR absent
+  hash → 'unverifiable' (**never 'changed'** — binding). `outdated` = POSITIVE drift only:
+  answer text ≠ snapshot ∨ coverage semantic fields ≠ snapshot ∨ ≥1 source 'changed'.
+  **Deletion does NOT flip outdated** (spec §25.2/§28.7 letter: unavailability warning, not
+  an overlay; §28.6's acknowledge gate is reserved for CHANGED content). Coverage compare =
+  fixed semantic projection (mode/counts/treeStatus/treeLevels/tier/truncated/
+  unparsedChunks/fullyChunked) — `nodeIds` + unknown extras excluded (plumbing, not claims).
+  `acknowledgeEvidenceReviewFreshness(db, reviewId)` writes `freshness_ack_json`
+  `{acknowledgedAt, fingerprint}`; `freshnessFingerprint` = sorted canonical string of
+  every non-'unchanged' fact, so ANY later drift change lapses the acknowledge. Also
+  exports `compareStoredHashes`, `parseFreshnessAck`.
+✅ **Read overlay (IPC boundary):** `evidence:get` + `evidence:getForMessage` responses
+  carry the REAL computed `outdated` (the chat chip + a fresh open render truthfully);
+  SERVICE-level reads and every write-path return (`update`/`markReady`/`reopen`/`create`)
+  keep the constant-false overlay — the renderer's freshness UI reads the store's refresh
+  result exclusively, never a write-return's flag.
+✅ **Export pipeline (P4 change, spec §20.1):** `exportEvidencePackToFile` now EXECUTES the
+  refresh step — computes the verdict up front, REFUSES an outdated review whose drift is
+  unacknowledged (`EvidencePackOutdatedError` → localized
+  `main.evidenceReviews.exportOutdated`, thrown BEFORE any dialog/file work), and INJECTS
+  the verdict into `buildEvidencePackModel(detail, options, meta, freshness?)` (4th
+  OPTIONAL param — the model stays pure; goldens inject fixed verdicts). Pack rendering:
+  cover outdated warning + acknowledge stamp (§21.3 "prominent snapshot warning"),
+  coverage-section mismatch records (`packExport.coverage.answerChangedNow`/
+  `coverageChangedNow`/`sourcesChangedNow`/`sourcesMissingNow` — missing counts NEW
+  deletions only) + `freshnessChecked` note (the P3 fixed `freshnessNote` renders only
+  when NO verdict was injected), per-card §15.4/§15.5 warnings, and the §16.1.7 source
+  register column becomes **Availability at export** (available / changed-since-review /
+  missing / cannot-verify from `EvidencePackSource.currentState`). A deleted source NEVER
+  blocks export (§28.7). Model additions: `EvidencePackFreshness` + `outdated` overridden
+  by the injected verdict + `EvidencePackSource.currentState` (null = no verdict, P3 shape).
+✅ **Source-in-context (`main/services/evidence-pack/source-context.ts`, D-5):**
+  `getEvidenceSourceContext(db, reviewId, sourceKey)` — see the IPC table row for the full
+  resolution ladder + security posture. `CONTEXT_WINDOW_CHARS = 1200` per side.
+✅ **Renderer:** store (`reviewSession.ts`) gains `freshness` state +
+  `refreshReviewFreshness()` (fired automatically after every successful open —
+  fire-and-forget, `openToken`-guarded; a failed check leaves the last honest state) +
+  `acknowledgeReviewFreshness()`. ReviewScreen: Outdated banner (drift facts + §21.3
+  options + acknowledge action / acknowledged stamp; role=status) + an ADDITIONAL
+  `⚠ Outdated` chip (Draft/Ready never replaced); EvidencePane cards gain freshness badges
+  (changed / NEWLY-missing / resolved-cannot-verify; unresolved keeps only its identity
+  badge) + **Open source in context** (resolved sources only) → `SourceContextModal`
+  (highlighted excerpt + hash-state line + stored-text note). ReviewSummaryView: at-open
+  changed/missing-now counts + the §28.6 export gate (button disabled + hint + inline
+  acknowledge while outdated-unacknowledged; main refuses too). MessageActions/Transcript:
+  the entry chip row gains `⚠ Outdated` when the summary's computed overlay says so.
+✅ **i18n:** +9 `review.outdated.*`, +3 `review.source.*` freshness badges, +11
+  `review.sourceContext.*`, +4 `review.summary.sources{Changed,Missing}Now.*`,
+  `review.status.outdated`, +13 `packExport.*` freshness keys,
+  `main.evidenceReviews.exportOutdated` — EN+DE (DE draft register, P6 native pass).
+✅ **Phase-4 tests:** `tests/integration/evidence-freshness.test.ts` ×22 (engine verdicts
+  incl. unresolved-never-changed under mutation AND deletion of same-titled docs,
+  hash-absent unverifiable, answer/coverage drift, ready-not-erased; acknowledge persist/
+  no-op/lapse-on-new-drift/malformed-record/lifecycle-stamps-untouched; export gate
+  refused-before-dialog + §28.6 pack recording + §28.7 deleted-source export; IPC legs for
+  the new channels + real read overlay; source-context located/mismatch/stale-chunk-id/
+  foreign-chunk-id-leak-guard/missing/not-located/truncated-snippet — all under the REAL
+  offline guard, with NO document files on disk anywhere) + the 6th GOLDEN
+  `outdated-acknowledged` (+ regenerated 5 — freshness note + at-export column) + P4
+  describe blocks in `evidence-pack-html.test.ts` ×6, `ReviewScreen.test.tsx` ×7 (refresh
+  ON OPEN, banner/chip/badges, acknowledge flow, missing-without-banner,
+  unresolved-badge-only, context modal ×2), `ReviewExport.test.tsx` ×3 (export gate),
+  `reviewSession.test.ts` ×5 (refresh-on-open, no-refresh-on-failed-open, openToken purge
+  guard, acknowledge merge/failure), `ReviewEntryPoints.test.tsx` (Outdated chip joins
+  Ready), `GermanSmoke` (outdated overlay DE). Review test files stub the refresh
+  structurally via `stubReviewApi` (`tests/helpers/evidenceReview.ts`).
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |

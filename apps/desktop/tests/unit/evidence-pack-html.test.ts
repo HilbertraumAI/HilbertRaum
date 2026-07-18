@@ -351,6 +351,114 @@ describe('honesty rendering', () => {
   })
 })
 
+describe('P4 freshness in the pack (spec §16.1.7/§28.6 — INJECTED verdict, model stays pure)', () => {
+  const outdatedFreshness = {
+    reviewId: 'r1',
+    outdated: true,
+    answerState: 'unchanged' as const,
+    coverageState: 'unchanged' as const,
+    sources: [{ key: 's1', state: 'changed' as const }],
+    acknowledgedAt: '2026-07-18T11:00:00.000Z'
+  }
+
+  it('WITHOUT a verdict: the P3 shape — not-re-verified note, creation-availability column, null currentState', () => {
+    const model = buildEvidencePackModel(makeDetail(), opts(), META)
+    expect(model.freshness).toBeNull()
+    expect(model.evidence[0]!.currentState).toBeNull()
+    const html = renderEvidencePackHtml(model)
+    expect(html).toContain(t('en', 'packExport.coverage.freshnessNote'))
+    expect(html).not.toContain(t('en', 'packExport.coverage.freshnessChecked'))
+    expect(html).toContain(t('en', 'packExport.sources.colAvailability'))
+    expect(html).not.toContain(t('en', 'packExport.sources.colAvailabilityExport'))
+  })
+
+  it('WITH a verdict: at-export column + per-card state + conditionalized note', () => {
+    const model = buildEvidencePackModel(makeDetail(), opts(), META, {
+      reviewId: 'r1',
+      outdated: false,
+      answerState: 'unchanged',
+      coverageState: 'unchanged',
+      sources: [{ key: 's1', state: 'unchanged' }],
+      acknowledgedAt: null
+    })
+    expect(model.freshness).toMatchObject({ outdated: false, sourcesChanged: 0 })
+    expect(model.evidence[0]!.currentState).toBe('unchanged')
+    const html = renderEvidencePackHtml(model)
+    expect(html).toContain(t('en', 'packExport.coverage.freshnessChecked'))
+    expect(html).not.toContain(t('en', 'packExport.coverage.freshnessNote'))
+    expect(html).toContain(t('en', 'packExport.sources.colAvailabilityExport'))
+    // Not outdated → no cover warning, no acknowledge line.
+    expect(html).not.toContain(t('en', 'packExport.coverage.outdated'))
+    expect(html).not.toContain('acknowledged this change')
+  })
+
+  it('outdated + acknowledged: cover warning, mismatch record, acknowledge stamp, changed cell (spec §28.6)', () => {
+    const model = buildEvidencePackModel(makeDetail(), opts(), META, outdatedFreshness)
+    expect(model.outdated).toBe(true) // the verdict overrides the detail's constant-false
+    const html = renderEvidencePackHtml(model)
+    expect(html).toContain(t('en', 'packExport.coverage.outdated'))
+    expect(html).toContain(t('en', 'packExport.coverage.sourcesChangedNow.one', { count: 1 }))
+    expect(html).toContain(t('en', 'packExport.evidence.changedSince'))
+    expect(html).toContain(t('en', 'packExport.sources.availabilityChanged'))
+    expect(html).toContain(
+      t('en', 'packExport.coverage.acknowledged', { date: '2026-07-18 11:00 UTC' })
+    )
+  })
+
+  it('sourcesMissingNow counts NEW deletions only — creation-missing keeps its own warning', () => {
+    const detail = makeDetail({
+      sources: [
+        { ...makeDetail().sources[0]!, key: 's1' },
+        {
+          ...makeDetail().sources[0]!,
+          key: 's2',
+          documentId: 'gone-at-creation',
+          availabilityAtCreation: 'missing'
+        }
+      ]
+    })
+    const model = buildEvidencePackModel(detail, opts(), META, {
+      reviewId: 'r1',
+      outdated: false,
+      answerState: 'unchanged',
+      coverageState: 'unchanged',
+      sources: [
+        { key: 's1', state: 'missing' }, // NEW deletion
+        { key: 's2', state: 'missing' } // was already missing at creation
+      ],
+      acknowledgedAt: null
+    })
+    expect(model.freshness).toMatchObject({ sourcesMissingNow: 1, outdated: false })
+    const html = renderEvidencePackHtml(model)
+    expect(html).toContain(t('en', 'packExport.coverage.sourcesMissingNow.one', { count: 1 }))
+    // Per-card: the NEW deletion carries §15.4 copy; the creation-missing card keeps ONLY
+    // its original warning (no duplicate).
+    expect(html.match(new RegExp(escapeForRegex(t('en', 'packExport.evidence.missingNow')), 'g'))).toHaveLength(1)
+    expect(html).toContain(t('en', 'packExport.evidence.missingAtCreation'))
+    // A deleted source never makes the pack outdated (spec §28.7) — no cover warning.
+    expect(html).not.toContain(t('en', 'packExport.coverage.outdated'))
+  })
+
+  it('a source key absent from the verdict degrades to unverifiable, never to a claim', () => {
+    const model = buildEvidencePackModel(makeDetail(), opts(), META, {
+      reviewId: 'r1',
+      outdated: false,
+      answerState: 'unchanged',
+      coverageState: 'unchanged',
+      sources: [], // verdict lists nothing for s1
+      acknowledgedAt: null
+    })
+    expect(model.evidence[0]!.currentState).toBe('unverifiable')
+    expect(renderEvidencePackHtml(model)).toContain(
+      t('en', 'packExport.sources.availabilityUnknown')
+    )
+  })
+})
+
+function escapeForRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 describe('determinism (plan §8 boundary)', () => {
   it('same detail + options + language ⇒ byte-identical output', () => {
     const detail = makeDetail()

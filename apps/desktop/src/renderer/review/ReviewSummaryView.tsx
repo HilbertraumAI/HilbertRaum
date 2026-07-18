@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { EvidenceReviewDetail, ReviewDecision } from '@shared/types'
+import type { EvidenceReviewDetail, EvidenceReviewFreshness, ReviewDecision } from '@shared/types'
 import { EVIDENCE_PACK_OPTION_DEFAULTS } from '@shared/evidence-review'
 import { CoverageMeter, Button, useToast } from '../components'
 import { localizeServerCopy } from '../lib/displayMap'
@@ -23,18 +23,24 @@ import type { I18n } from '../i18n'
 
 export function ReviewSummaryView({
   detail,
+  freshness,
   onEditHead,
   onMarkReady,
   onReopen,
+  onAcknowledge,
   busy,
   t,
   tCount,
   lang
 }: {
   detail: EvidenceReviewDetail
+  /** P4: the at-open freshness verdict from the store; null = none landed. */
+  freshness?: EvidenceReviewFreshness | null
   onEditHead: (patch: { reviewerLabel?: string | null; generalNote?: string | null }) => void
   onMarkReady: () => void
   onReopen: () => void
+  /** P4: acknowledge the current drift (spec §28.6) — offered beside the export gate hint. */
+  onAcknowledge?: () => void
   /** True while a mark-ready/reopen round trip is in flight (buttons disable). */
   busy: boolean
   t: I18n['t']
@@ -49,6 +55,18 @@ export function ReviewSummaryView({
   }
   const unresolved = detail.sources.filter((s) => s.identity === 'unresolved').length
   const missing = detail.sources.filter((s) => s.availabilityAtCreation === 'missing').length
+  // P4 (spec §10.4 "Missing or changed source documents"): at-open drift counts. New
+  // deletions only — creation-missing sources have their own line above.
+  const missingAtCreation = new Set(
+    detail.sources.filter((s) => s.availabilityAtCreation === 'missing').map((s) => s.key)
+  )
+  const changedNow = (freshness?.sources ?? []).filter((s) => s.state === 'changed').length
+  const missingNow = (freshness?.sources ?? []).filter(
+    (s) => s.state === 'missing' && !missingAtCreation.has(s.key)
+  ).length
+  // §28.6: export waits for the acknowledge while the review is outdated (main refuses
+  // too — this gate is the friendly surface, not the enforcement).
+  const exportBlocked = freshness?.outdated === true && !freshness.acknowledgedAt
   const gen = detail.generationSnapshot
   const unavailable = t('review.summary.unavailable')
   const completed =
@@ -105,6 +123,18 @@ export function ReviewSummaryView({
         {missing > 0 && (
           <p className="hint">
             <span aria-hidden="true">⚠</span> {tCount('review.summary.sourcesMissing', missing)}
+          </p>
+        )}
+        {changedNow > 0 && (
+          <p className="hint">
+            <span aria-hidden="true">⚠</span>{' '}
+            {tCount('review.summary.sourcesChangedNow', changedNow)}
+          </p>
+        )}
+        {missingNow > 0 && (
+          <p className="hint">
+            <span aria-hidden="true">⚠</span>{' '}
+            {tCount('review.summary.sourcesMissingNow', missingNow)}
           </p>
         )}
         {/* Coverage honesty (spec §15/§28.4): the persisted breadth claim, same vocabulary
@@ -192,7 +222,11 @@ export function ReviewSummaryView({
         </section>
       )}
 
-      {exportOpen && <ExportPackPanel onClose={() => setExportOpen(false)} t={t} lang={lang} />}
+      {/* P4: a panel opened before the verdict landed closes visually once the gate
+          engages — main would refuse the export anyway (§28.6). */}
+      {exportOpen && !exportBlocked && (
+        <ExportPackPanel onClose={() => setExportOpen(false)} t={t} lang={lang} />
+      )}
 
       <div className="review-summary-actions">
         {/* D-7 gate: disabled until every required item is decided; the hint says WHY in
@@ -222,10 +256,23 @@ export function ReviewSummaryView({
           </Button>
         )}
         {/* Phase 3 (plan §8.4): the export action — available for draft AND ready reviews;
-            the pack records the status honestly either way. */}
+            the pack records the status honestly either way. P4 (spec §28.6): while the
+            review is OUTDATED and unacknowledged the button disables with the honest hint
+            and the acknowledge action right there (main refuses such exports too). */}
+        {exportBlocked && (
+          <p className="hint review-export-outdated-hint">
+            <span aria-hidden="true">⚠</span> {t('review.outdated.exportHint')}{' '}
+            {onAcknowledge && (
+              <Button size="sm" onClick={onAcknowledge}>
+                {t('review.outdated.acknowledge')}
+              </Button>
+            )}
+          </p>
+        )}
         <Button
           className="review-export-toggle"
           aria-expanded={exportOpen}
+          disabled={exportBlocked}
           onClick={() => setExportOpen((v) => !v)}
         >
           {t('review.export.action')}

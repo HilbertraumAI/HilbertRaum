@@ -309,9 +309,23 @@ export const IPC = {
   markEvidenceReviewReady: 'evidence:markReady',
   /** Reopen a ready review to draft (spec §18.4). Null on unknown id. */
   reopenEvidenceReview: 'evidence:reopen',
-  /** Freshness check (spec §21) — Phase 1 STUB: reports `outdated: false` for every known
-   *  review (Phase 4 implements the real snapshot-vs-workspace comparison). */
+  /** Freshness check (spec §21.2, real since Phase 4): compare the review snapshot against
+   *  the CURRENT workspace from STORED facts only — document existence by snapshotted id,
+   *  stored `documents.sha256` vs snapshot hash (never re-hashed), answer text, coverage.
+   *  → `EvidenceReviewFreshness | null` (null on unknown id). Unresolved identities stay
+   *  'unverifiable' — never reported as changed. No model, no network, no file I/O. */
   refreshEvidenceReviewState: 'evidence:refreshState',
+  /** Acknowledge the CURRENT drift of an outdated review (spec §15.5/§28.6): persists the
+   *  drift fingerprint + stamp (additive nullable column; never touches status or
+   *  completed_at — §18.4) and unlocks export. No-op on a non-outdated review. Returns the
+   *  refreshed `EvidenceReviewFreshness | null`. */
+  acknowledgeEvidenceReviewFreshness: 'evidence:acknowledgeFreshness',
+  /** Source-in-context (D-5, spec §10.2.4): STORED extracted text around one snapshotted
+   *  source's persisted excerpt. The renderer passes the review id + source KEY only —
+   *  main resolves the snapshotted documentId (never a renderer-supplied id/path). Null on
+   *  unknown review/key and on unresolved-identity sources. Reads the `chunks` table —
+   *  never the source file. */
+  getEvidenceSourceContext: 'evidence:sourceContext',
   /** Delete a review (items/links/exports CASCADE). */
   deleteEvidenceReview: 'evidence:delete',
   /** How many reviews a conversation's messages carry — the D-2 delete-confirm warning

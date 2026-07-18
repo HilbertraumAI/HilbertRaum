@@ -1939,12 +1939,26 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   extractor missed (bad OCR, unsupported regions, capped coverage) is invisible to both the
   answer and the pack — the coverage section states the recorded breadth honestly, nothing
   more.
-- **Source availability in a pack is a creation-time fact (until the Phase-4 freshness
-  engine).** The source register shows availability as recorded when the review was
-  created, plus an explicit "was not re-verified for this export" statement. A document
-  deleted or changed AFTER review creation is not detected by Phase 3; Phase 4 adds the
-  snapshot-vs-workspace comparison and the Outdated overlay, and the pack will then record
-  mismatches (spec §28.6).
+- **Freshness compares stored hashes — it cannot see edits the workspace never learned
+  about.** The Phase-4 freshness check (review open, export) compares the review's
+  snapshotted `documents.sha256` against the CURRENT stored hash — deliberately no
+  re-hashing and no source-file reads (spec §21.2: cheap, offline, encrypted-workspace
+  safe). That means: a file edited OUTSIDE HilbertRaum shows as changed only after the
+  document is re-imported (imports mint new rows, so the old source usually reads
+  "missing" instead); a source whose stored hash is absent on either side reads "cannot be
+  verified", never a verdict. Unresolved-identity sources (legacy answers) are never
+  compared at all — the honest state is "cannot verify", not "changed".
+- **Outdated means changed, not deleted.** A source document that CHANGED under a review
+  flips the review to Outdated and export waits for an explicit acknowledge (spec §28.6);
+  a source that was DELETED marks that source "no longer present" with its persisted
+  excerpt retained, and export proceeds with the warning (spec §25.2/§28.7) — deletion is
+  an unavailability fact, not silent drift under the reviewed text. Acknowledging records
+  the CURRENT drift; if the drift changes again later, the warning honestly returns.
+- **Source-in-context shows the stored extraction, not the file.** The "Open source in
+  context" modal reads the text extracted at import (the `chunks` table) — never the
+  source file itself. If the document was re-imported or its stored text no longer
+  contains the persisted excerpt, the modal says the excerpt could not be located and
+  shows the persisted excerpt as recorded — it never approximates or re-reads.
 - **The answer appears in the pack as plain text, not rendered markdown.** Deliberate: a
   main-process markdown-to-HTML renderer would be a second injection surface and a
   determinism risk for the golden-tested template. The pack states the answer is reproduced

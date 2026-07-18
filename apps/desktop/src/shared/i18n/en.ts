@@ -1935,6 +1935,10 @@ export const en = {
     'The evidence pack could not be recorded in the export history, so the exported file was removed. Nothing was saved — try the export again.',
   'main.evidenceReviews.exportFileNotRecorded':
     'The evidence pack file was saved, but it could not be recorded in the export history and could not be removed. Its hash is not on record — export again and replace the file.',
+  // EP-1 P4 (spec §28.6): export refuses while the review is outdated and the change is
+  // not acknowledged — the renderer gates the button too; this is the main-side refusal.
+  'main.evidenceReviews.exportOutdated':
+    'This review is outdated — a source or the answer has changed since it was created. Acknowledge the change in the review before exporting.',
   // BE-1 (full-audit 2026-07-10): a null/non-object settings patch is rejected up front with
   // this friendly copy instead of the raw TypeError `Object.keys(null)` used to throw.
   'main.settings.invalidPatch': 'This settings change is not valid and was not saved.',
@@ -2322,8 +2326,26 @@ export const en = {
   'review.entry.sources': 'Review answer and sources',
   'review.status.draft': 'Draft',
   'review.status.ready': 'Ready',
+  // P4 freshness overlay (spec §18.4/§9.4): Outdated is an ADDITIONAL chip — it never
+  // replaces Draft/Ready (outdated must not erase the completion fact).
+  'review.status.outdated': 'Outdated',
   // Ready-state read-only hint (review FIX-1): item-level editing refuses while ready.
   'review.readonlyHint': 'Marked ready — reopen the review to edit.',
+  // ---- P4: Outdated banner + acknowledge (spec §15.5/§21.3/§28.6) ----
+  'review.outdated.title': 'This review is outdated.',
+  'review.outdated.answerChanged': 'The answer text no longer matches the reviewed snapshot.',
+  'review.outdated.coverageChanged':
+    'The recorded coverage metadata no longer matches the reviewed snapshot.',
+  'review.outdated.sourcesChanged.one':
+    '{count} source document has changed since this review was created.',
+  'review.outdated.sourcesChanged.other':
+    '{count} source documents have changed since this review was created.',
+  // §21.3: the user's options — keep, acknowledge, or ask again. Decisions stay intact.
+  'review.outdated.keepNote':
+    'Your recorded decisions are unchanged. You can keep the historical review, acknowledge the change, or ask again in chat and start a new review.',
+  'review.outdated.acknowledge': 'Acknowledge change',
+  'review.outdated.acknowledgedAt': 'Change acknowledged {date}.',
+  'review.outdated.exportHint': 'Acknowledge the change before exporting an evidence pack.',
   // Screen chrome
   'review.back': 'Back to chat',
   'review.rename': 'Rename',
@@ -2357,6 +2379,30 @@ export const en = {
   'review.source.kind.structured_record': 'Extracted record',
   'review.source.unresolved': 'Source identity could not be determined',
   'review.source.missingAtCreation': 'Source was not available when this review was created',
+  // P4 per-card freshness badges (spec §15.4/§15.5 copy; text + icon, never color-only).
+  // Unresolved sources keep ONLY the unresolved badge — their current state cannot be
+  // verified, and must never be presented as "changed".
+  'review.source.changed': 'The source document has changed since this review was created',
+  'review.source.missingNow':
+    'This source is no longer present in the workspace. The persisted excerpt remains in this review.',
+  'review.source.cannotVerify': 'The current state of this source cannot be verified',
+  // P4 source-in-context (D-5, spec §10.2.4): stored extracted text around the excerpt.
+  'review.sourceContext.open': 'Open source in context',
+  'review.sourceContext.title': 'Source in context',
+  'review.sourceContext.loading': 'Loading stored text…',
+  'review.sourceContext.failed': 'The stored text for this source could not be loaded.',
+  'review.sourceContext.hashMatch': 'The stored document hash matches the review snapshot.',
+  'review.sourceContext.hashMismatch':
+    'The source document has changed since this review was created.',
+  'review.sourceContext.hashUnknown':
+    'The current document state cannot be verified against the review snapshot.',
+  'review.sourceContext.missing':
+    'This source was available when the answer was created but is no longer present in the workspace. The persisted excerpt remains in this review where available.',
+  'review.sourceContext.notLocated':
+    'The persisted excerpt could not be located in the current stored text. It is shown below as recorded at review creation.',
+  'review.sourceContext.storedNote':
+    'Context comes from the stored text extracted at import — the source file itself is not opened.',
+  'review.sourceContext.excerptHeading': 'Persisted excerpt',
   'review.link.add': 'Link to item',
   'review.link.remove': 'Remove link',
   'review.link.cited': 'Cited by the answer',
@@ -2409,6 +2455,15 @@ export const en = {
     '{count} source was not available when this review was created',
   'review.summary.sourcesMissing.other':
     '{count} sources were not available when this review was created',
+  // P4 at-open freshness lines (spec §10.4 "Missing or changed source documents").
+  'review.summary.sourcesChangedNow.one':
+    '{count} source document has changed since this review was created',
+  'review.summary.sourcesChangedNow.other':
+    '{count} source documents have changed since this review was created',
+  'review.summary.sourcesMissingNow.one':
+    '{count} source document is no longer present in the workspace',
+  'review.summary.sourcesMissingNow.other':
+    '{count} source documents are no longer present in the workspace',
   'review.summary.truncated':
     'The generated answer may be incomplete — it was cut off at the model’s output limit.',
   'review.summary.generation': 'Generation details',
@@ -2519,6 +2574,11 @@ export const en = {
     'The identity of this source document could not be verified against the workspace.',
   'packExport.evidence.missingAtCreation':
     'This source document was already missing from the workspace when the review was created.',
+  // P4 at-export per-card states (spec §15.4/§15.5 wording).
+  'packExport.evidence.changedSince':
+    'The source document has changed since this review was created.',
+  'packExport.evidence.missingNow':
+    'This source was available when the answer was created but is no longer present in the workspace. The persisted excerpt remains in this pack where available.',
   'packExport.section.coverage': 'Coverage and limitations',
   // Spec §24.3 honesty copy, verbatim.
   'packExport.coverage.modeRelevance':
@@ -2533,13 +2593,34 @@ export const en = {
   'packExport.coverage.noTruncationRecord': 'No output truncation was recorded for this answer.',
   'packExport.coverage.freshnessNote':
     'Source availability reflects the workspace at review creation; it was not re-verified for this export.',
+  // P4 (spec §20.1/§28.6): the export pipeline re-checks stored availability facts at
+  // generation — these record the re-check and every mismatch in the pack itself.
+  'packExport.coverage.freshnessChecked':
+    'Source availability was re-checked against the workspace when this pack was generated, by comparing stored document hashes. Source files were not re-read.',
+  'packExport.coverage.outdated':
+    'This review is outdated: the answer or at least one source document no longer matches the reviewed snapshot.',
+  'packExport.coverage.answerChangedNow':
+    'The answer text in the conversation no longer matches the snapshot reviewed here.',
+  'packExport.coverage.coverageChangedNow':
+    'The recorded coverage metadata no longer matches the reviewed snapshot.',
+  'packExport.coverage.sourcesChangedNow.one':
+    '{count} source document has changed since this review was created.',
+  'packExport.coverage.sourcesChangedNow.other':
+    '{count} source documents have changed since this review was created.',
+  'packExport.coverage.sourcesMissingNow.one':
+    '{count} source document is no longer present in the workspace.',
+  'packExport.coverage.sourcesMissingNow.other':
+    '{count} source documents are no longer present in the workspace.',
+  'packExport.coverage.acknowledged': 'The reviewer acknowledged this change on {date}.',
   'packExport.section.sources': 'Source register',
   'packExport.sources.colTitle': 'Document',
   'packExport.sources.colType': 'File type',
   'packExport.sources.colSha': 'SHA-256 at review time',
   'packExport.sources.colAvailability': 'Availability at review creation',
+  'packExport.sources.colAvailabilityExport': 'Availability at export',
   'packExport.sources.availabilityAvailable': 'Available',
   'packExport.sources.availabilityMissing': 'Missing',
+  'packExport.sources.availabilityChanged': 'Changed since review',
   'packExport.sources.availabilityUnknown': 'Cannot be verified',
   'packExport.sources.hashExcluded': 'Excluded by export options',
   'packExport.sources.pathNote': 'Original file paths are never included in an evidence pack.',

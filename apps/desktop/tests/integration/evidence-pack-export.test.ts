@@ -13,6 +13,7 @@ import {
   writePackFileAtomic,
   EvidencePackRecordError
 } from '../../src/main/services/evidence-pack/export'
+import { acknowledgeEvidenceReviewFreshness } from '../../src/main/services/evidence-pack/freshness'
 import { EVIDENCE_PACK_SCHEMA_VERSION } from '../../src/main/services/evidence-pack/pack-model'
 import {
   deleteEvidenceReview,
@@ -235,6 +236,43 @@ describe('golden packs (deterministic; spec §29.5)', () => {
     expect(html).toContain('could not be verified')
     expect(html).toContain('already missing')
     compareGolden('missing-source', html)
+  })
+
+  it('outdated-acknowledged pack — P4 (spec §28.6): the pack records the mismatch + acknowledge', async () => {
+    const { db, root } = freshDb()
+    const docId = seedDocument(db, { title: 'contract.pdf', sha256: 'ab'.repeat(32) })
+    const messageId = seedAnswer(db, {
+      content: 'Termination requires 30 days notice. [S1]',
+      citations: [
+        {
+          label: 'S1',
+          sourceTitle: 'contract.pdf',
+          documentId: docId,
+          pageNumber: 12,
+          snippet: 'Either party may terminate with 30 days notice.'
+        }
+      ],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 10 }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId, {
+      appVersion: '0.1.52-test',
+      modelDisplayName: () => 'Test Model'
+    })
+    // The source document CHANGES after the review (stored hash updated by re-ingestion) —
+    // the review is outdated; export works only after the explicit acknowledge (§28.6).
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
+    expect(acknowledgeEvidenceReviewFreshness(db, detail.id)?.acknowledgedAt).toBeTruthy()
+
+    const dest = join(root, 'outdated-acknowledged.html')
+    const record = await exportEvidencePackToFile(db, detail.id, { language: 'en' }, EXPORT_DEPS(dest))
+    expect(record).not.toBeNull()
+    const html = readFileSync(dest, 'utf8')
+    // Cover warning + coverage-section mismatch record + acknowledge stamp + §16.1.7 cell.
+    expect(html).toContain('This review is outdated')
+    expect(html).toContain('1 source document has changed since this review was created.')
+    expect(html).toContain('The reviewer acknowledged this change on')
+    expect(html).toContain('Changed since review')
+    compareGolden('outdated-acknowledged', html)
   })
 
   it('German pack — DE copy + [Q{n}] markers, frozen at generation', async () => {

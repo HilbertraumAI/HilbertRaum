@@ -34,6 +34,7 @@ import type {
   EvidenceReviewPatch,
   EvidenceReviewSummary,
   EvidenceSelectionInput,
+  EvidenceSourceContext,
   ExtractionListing,
   ExtractionListingRequest,
   ImageAnalyzeRequest,
@@ -552,11 +553,25 @@ const api = {
   /** Reopen a ready review to draft (spec §18.4); null on unknown id. */
   reopenEvidenceReview: (reviewId: string): Promise<EvidenceReview | null> =>
     ipcRenderer.invoke(IPC.reopenEvidenceReview, reviewId),
-  /** Freshness check — Phase-1 STUB: a known review reports `outdated: false` (the same
-   *  not-known-to-be-outdated overlay every read carries); Phase 4 implements the real
-   *  snapshot-vs-workspace comparison. Null on unknown id. */
+  /** Freshness check (spec §21.2, real since Phase 4): snapshot vs workspace from STORED
+   *  facts only (stored hashes — never re-hashed; answer text; coverage). Null on unknown
+   *  id. Unresolved identities report 'unverifiable', never 'changed'. */
   refreshEvidenceReviewState: (reviewId: string): Promise<EvidenceReviewFreshness | null> =>
     ipcRenderer.invoke(IPC.refreshEvidenceReviewState, reviewId),
+  /** Acknowledge the CURRENT drift of an outdated review (spec §15.5/§28.6) — persists the
+   *  drift fingerprint + stamp (a later change re-demands one) and unlocks export. No-op
+   *  on a non-outdated review; null on unknown id. Never rewrites status/completed_at. */
+  acknowledgeEvidenceReviewFreshness: (reviewId: string): Promise<EvidenceReviewFreshness | null> =>
+    ipcRenderer.invoke(IPC.acknowledgeEvidenceReviewFreshness, reviewId),
+  /** Source-in-context (D-5): the STORED extracted text around one source's persisted
+   *  excerpt, resolved main-side from the review's own snapshot (review id + source KEY —
+   *  never a document id or path from the renderer). Null on unknown review/key and on
+   *  unresolved-identity sources. */
+  getEvidenceSourceContext: (
+    reviewId: string,
+    sourceKey: string
+  ): Promise<EvidenceSourceContext | null> =>
+    ipcRenderer.invoke(IPC.getEvidenceSourceContext, reviewId, sourceKey),
   /** Delete a review (items/links/export records CASCADE); true when a row was deleted. */
   deleteEvidenceReview: (reviewId: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.deleteEvidenceReview, reviewId),

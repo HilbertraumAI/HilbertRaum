@@ -172,6 +172,28 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
     })
     expect(screen.getByText(t('en', 'review.status.ready'))).toBeInTheDocument()
   })
+
+  it('P4 OUTDATED chip (spec §9.4/§18.4): JOINS the status chip — Ready stays visible', () => {
+    renderTranscript({
+      messages: [msg({ id: 'm1', ...CITED })],
+      onOpenReview: noop,
+      reviewSummaries: new Map([['m1', summary({ status: 'ready', outdated: true })]]),
+      reviewConversation: { mode: 'documents' }
+    })
+    // BOTH chips: the completion fact is never erased by the overlay.
+    expect(screen.getByText(t('en', 'review.status.ready'))).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'review.status.outdated'))).toBeInTheDocument()
+
+    cleanup()
+    // Not outdated → no Outdated chip.
+    renderTranscript({
+      messages: [msg({ id: 'm1', ...CITED })],
+      onOpenReview: noop,
+      reviewSummaries: new Map([['m1', summary({ status: 'draft', outdated: false })]]),
+      reviewConversation: { mode: 'documents' }
+    })
+    expect(screen.queryByText(t('en', 'review.status.outdated'))).toBeNull()
+  })
 })
 
 describe('SourcesDisclosure footer entry (spec §9.2)', () => {

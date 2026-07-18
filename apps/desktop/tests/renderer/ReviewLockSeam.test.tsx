@@ -17,8 +17,8 @@ import {
   type PreflightResult,
   type WorkspaceStateInfo
 } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
-import { makeDetail, makeItem } from '../helpers/evidenceReview'
+
+import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 
 // EP-1 Phase 2 review FIX-3 — the review store's LOCK SEAM, pinned end-to-end through the
 // real `App.lockNow`. The wiring under test (App.tsx + lockPurge.ts):
@@ -63,7 +63,7 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
     const updateEvidenceReviewItem = vi.fn(
       async (id: string, patch: EvidenceReviewItemPatch) => makeItem({ id, ...patch })
     )
-    stubApi({
+    stubReviewApi({
       getWorkspaceState: vi.fn(async () => unlockedEncrypted),
       getPolicy: vi.fn(async () => offlinePolicy),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
@@ -131,7 +131,7 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
 
   it('a failed pre-lock flush never blocks the lock (the security action wins)', async () => {
     const lockWorkspace = vi.fn(async () => lockedState)
-    stubApi({
+    stubReviewApi({
       getWorkspaceState: vi.fn(async () => unlockedEncrypted),
       getPolicy: vi.fn(async () => offlinePolicy),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),

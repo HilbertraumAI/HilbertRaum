@@ -13,13 +13,20 @@ import type {
   EvidenceReviewPatch,
   EvidenceReviewSummary,
   EvidenceSelectionInput,
+  EvidenceSourceContext,
   ReviewDecision
 } from '../../shared/types'
 import { tMain } from '../services/i18n'
 import { findManifestById } from '../services/models'
 import { createEvidenceReviewFromMessage } from '../services/evidence-pack/snapshot'
 import {
+  acknowledgeEvidenceReviewFreshness,
+  computeEvidenceReviewFreshness
+} from '../services/evidence-pack/freshness'
+import { getEvidenceSourceContext } from '../services/evidence-pack/source-context'
+import {
   exportEvidencePackToFile,
+  EvidencePackOutdatedError,
   EvidencePackRecordError,
   EvidencePackUnrecordedFileError
 } from '../services/evidence-pack/export'
@@ -169,10 +176,21 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     return detail
   })
 
+  // P4 read overlay (spec §18.4): the service reads report the honest constant-false
+  // "not known to be outdated"; the IPC boundary is where the DERIVED overlay is applied —
+  // detail + entry-point summary carry the REAL computed flag (stored-fact comparison,
+  // trivially cheap), so the chat chip and a freshly opened screen are truthful without a
+  // second round trip. Write-path returns (update/markReady/reopen/create) keep the
+  // constant-false overlay — the renderer's freshness UI reads the refresh result, never
+  // a write-return's flag.
+  const outdatedOverlay = (reviewId: string): boolean =>
+    computeEvidenceReviewFreshness(ctx.db, reviewId)?.outdated === true
+
   ipcMain.handle(IPC.getEvidenceReview, (_e, reviewId: unknown): EvidenceReviewDetail | null => {
     requireUnlocked()
     const id = safeId(reviewId)
-    return id ? getEvidenceReview(ctx.db, id) : null
+    const detail = id ? getEvidenceReview(ctx.db, id) : null
+    return detail ? { ...detail, outdated: outdatedOverlay(detail.id) } : null
   })
 
   ipcMain.handle(
@@ -180,7 +198,8 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     (_e, messageId: unknown): EvidenceReviewSummary | null => {
       requireUnlocked()
       const id = safeId(messageId)
-      return id ? getEvidenceReviewForMessage(ctx.db, id) : null
+      const summary = id ? getEvidenceReviewForMessage(ctx.db, id) : null
+      return summary ? { ...summary, outdated: outdatedOverlay(summary.id) } : null
     }
   )
 
@@ -265,16 +284,44 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     return id ? reopenEvidenceReview(ctx.db, id) : null
   })
 
-  // Phase-4 seam (spec §21), STUBBED per plan §6.4: a known review reports the same
-  // "not known to be outdated" overlay every read already carries — never a verified
-  // claim. The real snapshot-vs-workspace comparison replaces this body in Phase 4.
+  // The REAL freshness engine (Phase 4, spec §21.2): snapshot vs workspace from STORED
+  // facts only — never re-hashes, never reads source files, never touches the model
+  // runtime or network. Unresolved-identity sources stay 'unverifiable' (never 'changed').
   ipcMain.handle(
     IPC.refreshEvidenceReviewState,
     (_e, reviewId: unknown): EvidenceReviewFreshness | null => {
       requireUnlocked()
       const id = safeId(reviewId)
-      if (!id) return null
-      return getEvidenceReview(ctx.db, id) ? { reviewId: id, outdated: false } : null
+      return id ? computeEvidenceReviewFreshness(ctx.db, id) : null
+    }
+  )
+
+  // Acknowledge the CURRENT drift (spec §15.5/§21.3/§28.6): records the drift fingerprint
+  // + stamp so a LATER change re-demands acknowledgment; unlocks export while the drift is
+  // unchanged. Never rewrites status/completed_at/updated_at (§18.4) — deliberately NOT
+  // subject to the ready-state write-guard (it is lifecycle metadata, not a decision
+  // edit). No audit event: reads/acknowledge carry no spec §22 audit type.
+  ipcMain.handle(
+    IPC.acknowledgeEvidenceReviewFreshness,
+    (_e, reviewId: unknown): EvidenceReviewFreshness | null => {
+      requireUnlocked()
+      const id = safeId(reviewId)
+      return id ? acknowledgeEvidenceReviewFreshness(ctx.db, id) : null
+    }
+  )
+
+  // Source-in-context (D-5, spec §10.2.4/§22.10): the renderer names the review + source
+  // KEY; main resolves the SNAPSHOTTED documentId through the review's own snapshot and
+  // reads the STORED extraction (chunks table) around the persisted excerpt — no
+  // renderer-supplied document ids, no paths, no source-file reads. Unknown review/key and
+  // unresolved-identity sources read as null.
+  ipcMain.handle(
+    IPC.getEvidenceSourceContext,
+    (_e, reviewId: unknown, sourceKey: unknown): EvidenceSourceContext | null => {
+      requireUnlocked()
+      const id = safeId(reviewId)
+      const key = safeId(sourceKey)
+      return id && key ? getEvidenceSourceContext(ctx.db, id, key) : null
     }
   )
 
@@ -338,8 +385,11 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
           }
         })
       } catch (err) {
-        // Localize the two named post-rename outcomes (service messages are ids-only
-        // English); everything else propagates as-is.
+        // Localize the named outcomes (service messages are ids-only English);
+        // everything else propagates as-is.
+        if (err instanceof EvidencePackOutdatedError) {
+          throw new Error(tMain('main.evidenceReviews.exportOutdated'))
+        }
         if (err instanceof EvidencePackUnrecordedFileError) {
           throw new Error(tMain('main.evidenceReviews.exportFileNotRecorded'))
         }
