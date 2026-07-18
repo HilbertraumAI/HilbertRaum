@@ -33,7 +33,8 @@ leave your device.
   analysis history is encrypted at rest and deletable.
 - 🎙️ **Audio & voice** — transcribe audio files (Whisper), dictate prompts, and OCR scanned pages.
 - 🛠️ **Document tasks & skills** — summarize, translate, and compare documents; install reusable
-  **skills** for structured extraction (bank statements, invoices, meeting protocols, redaction).
+  **skills** for structured extraction (bank statements, invoices, meeting protocols, redaction) —
+  see the [skills overview](docs/skills-overview.md) for what each bundled skill can do.
 - 🧳 **Portable & encrypted** — keep models + a password-encrypted workspace on an external drive;
   move between laptops.
 - 🪟 **Cross-platform** — Windows-first, with macOS/Linux supported in the architecture.
@@ -260,6 +261,7 @@ are in **[`docs/model-benchmarks.md`](docs/model-benchmarks.md)**.
 | [`docs/rag-design.md`](docs/rag-design.md) | Retrieval pipeline: ingestion, chunking, hybrid search, rerank |
 | [`docs/security-model.md`](docs/security-model.md) | Threat model, encrypted vault, offline guard, audit log |
 | [`docs/design-guidelines.md`](docs/design-guidelines.md) | Design system: tokens, components, UI/UX design records |
+| [`docs/skills-overview.md`](docs/skills-overview.md) | The bundled skills at a glance — what each can do; reviewed on every skill change |
 | [`docs/model-policy.md`](docs/model-policy.md) | Manifest schema, roles, license policy, runtime pinning |
 | [`docs/model-benchmarks.md`](docs/model-benchmarks.md) | Measured **model** speed / RAM / quality + the offline harness (not the hardware probe) |
 | [`docs/benchmark.md`](docs/benchmark.md) | In-app **hardware** benchmark & model recommendation (the machine-capability probe) |
