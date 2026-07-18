@@ -17,7 +17,7 @@ import {
   TesseractOcrEngine,
   type OcrEngine
 } from '../../src/main/services/ocr'
-import { resolveWorkerScriptPath } from '../../src/main/services/ocr/tesseract'
+import { resolveWorkerScriptPath, type TesseractModule } from '../../src/main/services/ocr/tesseract'
 import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 import { planOcrDownloads, sha256Of } from '../../src/main/services/assets'
 import { makePdf, makeScanOnlyPdf, makeHybridPdf, TINY_PNG } from '../helpers/fixtures'
@@ -114,6 +114,28 @@ describe('photo parser (.png/.jpg OCR on import)', () => {
     const p = join(dir, 'page.png')
     writeFileSync(p, TINY_PNG)
     await expect(ImageParser.parse(p, {})).rejects.toThrow(IMAGE_NEEDS_OCR_MESSAGE)
+  })
+
+  // BE-8 (ocr-audit 2026-07-18): the parse context's abort signal must reach the engine so a
+  // cancelled import aborts recognition instead of waiting it out (bounded by the 2-min ceiling).
+  // Watched fail pre-fix: `engine.recognize(image)` forwarded no options, so `seenSignal` was
+  // undefined and the aborting engine ran to completion.
+  it('forwards the parse context abort signal to the OCR engine (BE-8)', async () => {
+    const dir = tmp()
+    const p = join(dir, 'page.png')
+    writeFileSync(p, TINY_PNG)
+    const controller = new AbortController()
+    let seenSignal: AbortSignal | undefined
+    const observing: OcrEngine = {
+      id: 'fake',
+      languages: ['eng'],
+      recognize: async (_img, opts) => {
+        seenSignal = opts?.signal
+        return { text: 'recognized', confidence: 90 }
+      }
+    }
+    await ImageParser.parse(p, { ocrEngine: observing, signal: controller.signal })
+    expect(seenSignal).toBe(controller.signal)
   })
 
   it('fails friendly when no text is found / when recognition throws', async () => {
@@ -232,6 +254,75 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     await engine.stop()
     expect(terminated.value).toBe(true)
     await expect(engine.recognize(Buffer.from('3'))).rejects.toThrow('stopped')
+  })
+
+  // BE-5(a) (ocr-audit 2026-07-18): `recognize()` checks `stopped` at CALL time, but a recognition
+  // queued before stop() runs its ensureWorker() from the serialized chain AFTER stop() latches —
+  // without the ensureWorker `stopped` guard that queued job lazily RESPAWNS a worker past the
+  // will-quit teardown. TEETH: pre-fix ensureWorker ignores `stopped`, so a SECOND worker is
+  // created (created===2) and the queued job resolves instead of rejecting.
+  it('a recognition queued before stop() rejects when it runs — no worker respawned (BE-5)', async () => {
+    let created = 0
+    let releaseFirst!: () => void
+    const firstGate = new Promise<{ data: { text: string; confidence: number } }>((resolve) => {
+      releaseFirst = () => resolve({ data: { text: 'first', confidence: 90 } })
+    })
+    let firstStarted = false
+    const mod = {
+      createWorker: async () => {
+        created++
+        return {
+          recognize: (_img: Buffer) => {
+            if (!firstStarted) {
+              firstStarted = true
+              return firstGate // the first recognition PARKS, holding the chain
+            }
+            return Promise.resolve({ data: { text: 'later', confidence: 90 } })
+          },
+          terminate: async () => {}
+        }
+      }
+    }
+    const engine = new TesseractOcrEngine({
+      langDir: '/ocr',
+      languages: ['eng'],
+      loadTesseract: async () => mod
+    })
+    // A first recognition starts and parks in the worker, holding the serialized chain.
+    const first = engine.recognize(Buffer.from('1')).then(() => 'ok', () => 'failed')
+    while (!firstStarted) await new Promise((r) => setImmediate(r))
+    // A SECOND recognition queued while `stopped` is still false — it passes the top-level check
+    // and parks in the chain, so its ensureWorker() runs AFTER stop() latches below.
+    const second = engine.recognize(Buffer.from('2')).then(() => 'ok', (e) => (e as Error).message)
+    await engine.stop() // terminates the first worker and latches `stopped`
+    releaseFirst()
+    const secondResult = await second
+    await first
+    expect(created).toBe(1) // no worker respawned after stop()
+    expect(secondResult).toMatch(/stopped/)
+  })
+
+  // BE-5(b): the non-latching lock teardown. `suspend()` terminates the warm worker (no decoded
+  // page bytes linger across the vault re-encrypt) but does NOT latch — the next recognition
+  // lazily respawns a fresh worker and succeeds (unlike after `stop()`).
+  it('suspend() terminates the warm worker without latching; next recognize respawns (BE-5)', async () => {
+    const { mod, calls, terminated } = fakeModule()
+    const engine = new TesseractOcrEngine({
+      langDir: '/ocr',
+      languages: ['eng'],
+      loadTesseract: async () => mod as TesseractModule
+    })
+    const first = await engine.recognize(Buffer.from('1'))
+    expect(first.text).toBe('text-1')
+    expect(calls.length).toBe(1)
+
+    await engine.suspend()
+    expect(terminated.value).toBe(true) // the warm worker was terminated
+
+    // Non-latching: a fresh worker respawns and the recognition succeeds.
+    const second = await engine.recognize(Buffer.from('2'))
+    expect(second.text).toBe('text-2')
+    expect(calls.length).toBe(2) // a SECOND worker was spawned (unlike after stop())
   })
 
   // REL-2 (TEST-4): a per-page recognition that exceeds the timeout terminates the worker
@@ -353,6 +444,27 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
 
     expect(created).toBe(1) // no second worker was spawned
     expect(terminated[0]).toBe(true) // the late-born worker was terminated, not leaked past the lock
+  })
+
+  // BE-9 (ocr-audit 2026-07-18): the engine id must be DERIVED from the installed tesseract.js
+  // version, not a hardcoded literal — a future bump would otherwise stamp a wrong
+  // `ocr_json.engineId` provenance. TEETH: an injected version proves the id is derived (pre-fix
+  // `this.id` was the frozen string 'tesseract.js-7.0.0' regardless).
+  it('derives the engine id from the tesseract.js version (BE-9)', async () => {
+    const injected = new TesseractOcrEngine({
+      langDir: '/ocr',
+      languages: ['eng'],
+      resolveVersion: () => '9.9.9-test'
+    })
+    expect(injected.id).toBe('tesseract.js-9.9.9-test')
+
+    // By default the real installed package version flows through (byte-identical today).
+    const { createRequire } = await import('node:module')
+    const { version } = createRequire(import.meta.url)('tesseract.js/package.json') as {
+      version: string
+    }
+    const real = new TesseractOcrEngine({ langDir: '/ocr', languages: ['eng'] })
+    expect(real.id).toBe(`tesseract.js-${version}`)
   })
 
   it('rewrites app.asar worker paths to app.asar.unpacked (packaged app)', () => {

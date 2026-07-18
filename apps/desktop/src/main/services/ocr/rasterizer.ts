@@ -7,6 +7,7 @@ import { installNavigationGuard } from '../navigation-guard'
 import { SECURE_WINDOW_WEB_PREFERENCES } from '../../window-security'
 import { assertPageWithinByteCap } from './page-cap'
 import { pipelinePages } from './pipeline'
+import { resolveIngestionLimits } from '../ingestion/limits'
 
 // ESM main bundle — `__dirname` doesn't exist; reconstruct from import.meta.url.
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -173,6 +174,17 @@ export async function rasterizePdfWithHiddenWindow(
   }
   opts.signal?.addEventListener('abort', onAbort, { once: true })
 
+  // BE-7 (ocr-audit 2026-07-18): if the hidden renderer dies mid-scan (an OOM on a huge
+  // image-heavy PDF, a GPU-process reset), fail the run immediately instead of letting the
+  // in-flight page render hang to its 60 s step timeout — and then burn another 60 s per
+  // remaining step. Failing the pending waiter rejects the current render; the OCR task maps it
+  // to the friendly `ocrFailed`. The listener is torn down with the rest in the `finally`.
+  const onRenderGone = (_event: Electron.Event, details: Electron.RenderProcessGoneDetails): void => {
+    log.warn('OCR rasterizer render process gone', { reason: details?.reason })
+    slot.fail(new Error('The renderer process ended while rendering the PDF'))
+  }
+  win.webContents.on('render-process-gone', onRenderGone)
+
   const withTimeout = async (p: Promise<Record<string, unknown>>): Promise<Record<string, unknown>> => {
     let timer: ReturnType<typeof setTimeout> | null = null
     try {
@@ -204,9 +216,21 @@ export async function rasterizePdfWithHiddenWindow(
     const openedP = slot.expect(OCR_RASTER.opened)
     win.webContents.send(OCR_RASTER.open, { pdf: new Uint8Array(pdf) })
     const opened = await withTimeout(openedP)
-    const pageCount = Number(opened.pageCount)
-    if (!Number.isInteger(pageCount) || pageCount <= 0) {
+    const declaredPageCount = Number(opened.pageCount)
+    if (!Number.isInteger(declaredPageCount) || declaredPageCount <= 0) {
       throw new Error('The PDF could not be opened for rendering')
+    }
+    // BE-6 (ocr-audit 2026-07-18): clamp the walk to the ingestion M-2 page cap — a tiny PDF can
+    // declare an enormous page count. Report the CLAMPED count via onPageCount so `stepsTotal`,
+    // progress and the persisted `ocr_json.pageCount` stay truthful; pipelinePages enforces the
+    // same cap on the walk itself.
+    const maxPages = resolveIngestionLimits().pdfMaxPages
+    const pageCount = Math.min(declaredPageCount, maxPages)
+    if (pageCount < declaredPageCount) {
+      log.warn('OCR page walk clamped to the ingestion page cap (M-2 parity)', {
+        declaredPageCount,
+        maxPages
+      })
     }
     opts.onPageCount?.(pageCount)
 
@@ -214,7 +238,7 @@ export async function rasterizePdfWithHiddenWindow(
     // stays sequential on the shared channel (one `expect`/`send` in flight); only render and
     // recognize — different engines — overlap. See `pipelinePages`.
     await pipelinePages(
-      pageCount,
+      declaredPageCount,
       async (pageNumber) => {
         const pageP = slot.expect(OCR_RASTER.page)
         win.webContents.send(OCR_RASTER.render, { pageNumber })
@@ -227,13 +251,17 @@ export async function rasterizePdfWithHiddenWindow(
         return Buffer.from(png)
       },
       opts.onPage,
-      { signal: opts.signal, abortError }
+      // BE-6: pipelinePages enforces the same cap on the walk (min(declared, maxPages)).
+      { signal: opts.signal, abortError, maxPages }
     )
     return { pageCount }
   } finally {
     inUse = false
     opts.signal?.removeEventListener('abort', onAbort)
     for (const [ch, fn] of listeners) ipcMain.removeListener(ch, fn)
-    if (!win.isDestroyed()) win.destroy()
+    if (!win.isDestroyed()) {
+      win.webContents.removeListener('render-process-gone', onRenderGone)
+      win.destroy()
+    }
   }
 }

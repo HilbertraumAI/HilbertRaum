@@ -202,6 +202,28 @@ describe('registerWorkspaceIpc', () => {
     expect(stopVision).toHaveBeenCalledTimes(1)
   })
 
+  // BE-5 (ocr-audit 2026-07-18): the idle warm tesseract WASM worker holds decoded page bytes in
+  // main-process RAM, so the lock must terminate it before the vault re-encrypts. `suspend()` (not
+  // `stop()`): the engine is held on ctx for the session, so it must come back lazily after unlock;
+  // stop() latches permanently. Watched fail pre-fix (the lock teardown omitted the OCR engine).
+  it('lockWorkspace suspends the OCR engine too (an idle worker holds decoded page bytes)', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    const suspendOcr = vi.fn(async () => {})
+    const stopOcr = vi.fn(async () => {})
+    const base = ctxWith(ctrl) as unknown as Record<string, unknown>
+    base.ocrEngine = { suspend: suspendOcr, stop: stopOcr }
+    registerWorkspaceIpc(base as unknown as AppContext)
+
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked' })
+    expect(suspendOcr).toHaveBeenCalledTimes(1)
+    expect(stopOcr).not.toHaveBeenCalled() // stop() latches permanently — lock must not
+  })
+
   it('lockWorkspace suspends the translator, FLUSHES the doc-task queue (TA-1 H2) AND aborts the Translate-view job (TG-4)', async () => {
     // A running TRANSLATION no longer dies with the chat runtime: left uncancelled, its
     // next window would lazily RESPAWN the suspended TranslateGemma sidecar with document

@@ -41,21 +41,28 @@ let doc: PDFDocumentProxy | null = null
 async function renderPage(pageNumber: number): Promise<Uint8Array> {
   if (!doc) throw new Error('No document is open')
   const page = await doc.getPage(pageNumber)
-  const base = page.getViewport({ scale: 1 })
-  const targetScale = TARGET_DPI / 72
-  const cap = MAX_RENDER_PIXELS / Math.max(base.width, base.height)
-  const viewport = page.getViewport({ scale: Math.min(targetScale, cap) })
+  try {
+    const base = page.getViewport({ scale: 1 })
+    const targetScale = TARGET_DPI / 72
+    const cap = MAX_RENDER_PIXELS / Math.max(base.width, base.height)
+    const viewport = page.getViewport({ scale: Math.min(targetScale, cap) })
 
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.ceil(viewport.width)
-  canvas.height = Math.ceil(viewport.height)
-  // pdfjs v6 takes the canvas itself (it derives the 2D context).
-  await page.render({ canvas, viewport }).promise
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.ceil(viewport.width)
+    canvas.height = Math.ceil(viewport.height)
+    // pdfjs v6 takes the canvas itself (it derives the 2D context).
+    await page.render({ canvas, viewport }).promise
 
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encoding failed'))), 'image/png')
-  })
-  return new Uint8Array(await blob.arrayBuffer())
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encoding failed'))), 'image/png')
+    })
+    return new Uint8Array(await blob.arrayBuffer())
+  } finally {
+    // BE-7 (ocr-audit 2026-07-18): release the page's pdfjs caches (fonts, operator lists,
+    // decoded image data) as soon as it is encoded. Across a long image-heavy scan the hidden
+    // renderer otherwise grows until an OOM turns each remaining step into a 60 s timeout stall.
+    page.cleanup()
+  }
 }
 
 window.ocrRaster.onOpen((req) => {

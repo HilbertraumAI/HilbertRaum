@@ -36,6 +36,12 @@ export interface OcrEngine {
   recognize(image: Buffer, opts?: OcrRecognizeOptions): Promise<OcrResult>
   /** Release the backend permanently (terminates the worker). On `will-quit`. */
   stop?(): Promise<void>
+  /**
+   * Non-latching teardown for the workspace lock (BE-5): terminate the warm worker so no decoded
+   * page bytes linger across the vault re-encrypt, but let the next recognition lazily respawn
+   * (unlike `stop()`, which latches permanently). On `lock`.
+   */
+  suspend?(): Promise<void>
 }
 
 /** A page of persisted recognition output (the `documents.ocr_json` content shape). */

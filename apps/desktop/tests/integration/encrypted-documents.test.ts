@@ -247,4 +247,27 @@ describe('shredStalePlaintext — transient sweep (H1/M9)', () => {
     expect(existsSync(join(docs, 'abc.pdf.enc.tmp'))).toBe(false)
     expect(existsSync(join(docs, 'abc.pdf.enc'))).toBe(true)
   })
+
+  // Audit test-gap #5 ride-along (OCR-R P4): the OCR handler decrypts an encrypted scan to a
+  // `${documentId}.parse-ocr.pdf` transient (handlers/ocr.ts) and relies on the startup crash
+  // sweep to shred it if a crash lands before its `finally`. Pin that exact name to the sweep so a
+  // rename that drops the `.parse` infix can't silently orphan an encrypted-page transient on disk.
+  it('sweeps the OCR `.parse-ocr.pdf` decrypt transient (audit test-gap #5)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-ocrsweep-'))
+    const configPath = join(root, 'config')
+    const workspacePath = join(root, 'workspace')
+    mkdirSync(configPath, { recursive: true })
+    mkdirSync(workspacePath, { recursive: true })
+    const vp = vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') })
+    const docs = join(workspacePath, 'documents')
+    mkdirSync(docs, { recursive: true })
+
+    const documentId = 'doc-1234'
+    const ocrTransient = join(docs, `${documentId}.parse-ocr.pdf`) // handlers/ocr.ts naming
+    writeFileSync(ocrTransient, SECRET_TEXT)
+
+    shredStalePlaintext(vp)
+
+    expect(existsSync(ocrTransient)).toBe(false)
+  })
 })

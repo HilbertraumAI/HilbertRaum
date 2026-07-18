@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
 import type { OcrEngine, OcrRecognizeOptions, OcrResult } from './index'
 
 // tesseract.js OCR backend. Node mode only: the worker script
@@ -16,7 +17,11 @@ import type { OcrEngine, OcrRecognizeOptions, OcrResult } from './index'
 //
 // One worker is created lazily on first use and reused across pages/files (init costs
 // ~0.3 s); recognitions are serialized through a promise chain — tesseract.js workers
-// are single-job. `stop()` terminates the worker (will-quit / lock).
+// are single-job. Two teardowns (BE-5): `stop()` is the PERMANENT will-quit teardown — it
+// terminates the worker and LATCHES (later recognitions reject); `suspend()` is the
+// non-latching workspace-lock teardown — it terminates the warm worker so no decoded page
+// bytes linger in a WASM worker across the re-encrypt, but the next recognition lazily
+// respawns a fresh worker.
 
 /** OEM 1 = LSTM_ONLY. The vendored traineddata is LSTM-only (the WASM core
  * cannot run legacy/float models — `tessdata_best` float crashes it). */
@@ -54,6 +59,27 @@ export interface TesseractOcrEngineOptions {
    * (env-overridable). Injected small in tests to exercise the terminate-on-timeout path.
    */
   recognizeTimeoutMs?: number
+  /**
+   * Injection seam for tests (BE-9): returns the tesseract.js version stamped into the engine id.
+   * Default derives it from the installed `tesseract.js/package.json`.
+   */
+  resolveVersion?: () => string
+}
+
+/**
+ * The installed tesseract.js version, for the engine id (BE-9). `createRequire` reads the
+ * package's own `package.json` — the packaged-safe idiom (a JSON read needs no
+ * `app.asar.unpacked` rewrite, unlike the worker_threads script). A future version bump then
+ * stamps the RIGHT `ocr_json.engineId` provenance instead of a stale hardcoded string.
+ */
+function resolveTesseractVersion(): string {
+  try {
+    const req = createRequire(import.meta.url)
+    const pkg = req('tesseract.js/package.json') as { version?: unknown }
+    return typeof pkg.version === 'string' && pkg.version.length > 0 ? pkg.version : 'unknown'
+  } catch {
+    return 'unknown'
+  }
 }
 
 /** The slice of tesseract.js this engine touches (kept narrow for the fake). */
@@ -105,10 +131,16 @@ export class TesseractOcrEngine implements OcrEngine {
     this.opts = opts
     this.recognizeTimeoutMs = resolveOcrPageTimeoutMs(opts.recognizeTimeoutMs)
     this.languages = [...opts.languages]
-    this.id = 'tesseract.js-7.0.0'
+    // BE-9: derived from the installed package version, never a hardcoded literal.
+    this.id = `tesseract.js-${(opts.resolveVersion ?? resolveTesseractVersion)()}`
   }
 
   private async ensureWorker(): Promise<TesseractWorker> {
+    // BE-5: refuse to (re)spawn a worker once stopped. `recognize()` checks `stopped` at call
+    // time, but a recognition QUEUED before stop() runs its `ensureWorker()` from the chain
+    // AFTER the latch is set — without this guard that queued job would lazily respawn a worker
+    // past the will-quit teardown. (suspend() does not set `stopped`, so it still respawns.)
+    if (this.stopped) throw new Error('OCR engine is stopped')
     if (this.worker) return this.worker
     if (!this.starting) {
       this.starting = (async () => {
@@ -235,6 +267,16 @@ export class TesseractOcrEngine implements OcrEngine {
 
   async stop(): Promise<void> {
     this.stopped = true
+    await this.terminateWorker()
+  }
+
+  /**
+   * BE-5 non-latching teardown for the workspace lock (REL-2 machinery, no latch): terminate the
+   * warm worker so no decoded page bytes linger in a WASM worker while the vault re-encrypts, but
+   * do NOT set `stopped` — the next recognition lazily respawns a fresh worker (unlike `stop()`,
+   * which permanently latches for the will-quit path). Restores the sidecar parity on lock.
+   */
+  async suspend(): Promise<void> {
     await this.terminateWorker()
   }
 }

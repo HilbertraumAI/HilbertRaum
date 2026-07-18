@@ -1896,6 +1896,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   A second, fixed 60-second ceiling separately bounds each page's **render** step
   (`RASTER_STEP_TIMEOUT_MS`, not env-tunable) — a slow-rendering page can fail the task at
   60 s even when the 2-minute recognition ceiling would have allowed more time.
+- **OCR walks at most the ingestion page cap (5 000 pages).** A tiny PDF can declare an
+  enormous page count, so — mirroring the text parser's M-2 ceiling — the OCR page walk
+  clamps to `pdfMaxPages` (5 000 by default, `HILBERTRAUM_PDF_MAX_PAGES`). Progress, the
+  step total, and the persisted `ocr_json.pageCount` all report the **clamped** count (so
+  they stay truthful), and a truncation is logged locally. A genuine ≤5 000-page scan is
+  unaffected; beyond that, the tail of pages is not recognized.
 - **Packaged-app OCR needs the asar-unpacked tesseract packages** (worker_threads
   cannot load scripts from inside `app.asar`). Wired in `electron-builder.yml`;
   verifying a real OCR run from the produced portable .exe is a release-acceptance

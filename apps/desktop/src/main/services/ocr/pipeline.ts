@@ -12,17 +12,24 @@
  * rendered ahead) — "one extra" over a strictly-serial loop. Cancellation: `signal` is
  * checked before each render and before each `onPage`; on any throw the in-flight recognition
  * is awaited (errors swallowed) so it never leaks as an unhandled rejection.
+ *
+ * BE-6 (ocr-audit 2026-07-18): `maxPages` clamps the walk to `min(pageCount, maxPages)` — a
+ * crafted PDF can declare an enormous page count, so the OCR walk honours the same M-2 cap the
+ * text parser does. Enforced here (not only at the caller) so any pipeline user is bounded;
+ * absent ⇒ walk every declared page (historical behaviour).
  */
 export async function pipelinePages(
   pageCount: number,
   renderPage: (pageNumber: number) => Promise<Buffer>,
   onPage: (pageNumber: number, png: Buffer) => void | Promise<void>,
-  opts?: { signal?: AbortSignal; abortError?: () => Error }
+  opts?: { signal?: AbortSignal; abortError?: () => Error; maxPages?: number }
 ): Promise<void> {
   const makeAbort = opts?.abortError ?? (() => new DOMException('aborted', 'AbortError'))
+  const effectivePageCount =
+    opts?.maxPages != null ? Math.min(pageCount, opts.maxPages) : pageCount
   let prevOnPage: Promise<void> | null = null
   try {
-    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+    for (let pageNumber = 1; pageNumber <= effectivePageCount; pageNumber++) {
       if (opts?.signal?.aborted) throw makeAbort()
       // Render N. On every iteration after the first this runs WHILE recognize(N-1) is in
       // flight — the look-ahead overlap.
