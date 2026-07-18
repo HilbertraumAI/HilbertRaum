@@ -73,3 +73,14 @@ first public release. Consciously-accepted gaps are tracked in
   `scripts/build-commercial-drive.*`.
 - **Standard project docs** — this `CHANGELOG.md` and a
   [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+
+### Fixed
+
+- **Scanned-PDF OCR is startable again from the Documents row** (it had become
+  unreachable after a row-actions refactor): "Make searchable (OCR)" is an inline
+  button on the scan's row, already-recognized PDFs can be re-run via
+  "Read again (OCR)", Translate now explains scanned PDFs (make searchable
+  first) instead of calling them unsupported, and progress is honest through the
+  final "Finishing" step. Packaged builds no longer carry the dev-only localhost
+  CSP relaxation in their HTML meta tags (wave OCR-R, PR #75; see the
+  `docs/architecture.md` "OCR audit (2026-07-18) — remediation ledger").
