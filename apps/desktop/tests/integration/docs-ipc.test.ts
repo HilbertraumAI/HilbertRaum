@@ -53,6 +53,13 @@ import type {
 } from '../../src/shared/types'
 import { LARGE_FILE_BYTES } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
+import {
+  DocTaskManager,
+  TASK_DOCUMENT_BUSY_INGESTING_MESSAGE
+} from '../../src/main/services/doctasks'
+import type { OcrEngine } from '../../src/main/services/ocr'
+import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
+import { makeScanOnlyPdf } from '../helpers/fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -1298,5 +1305,82 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
     // TEETH: remove the drain's `processing.delete(pending.id)` → f1 stays in `processing` →
     // the post-job sweep gate (`processing.size === 0`) never opens → f1 stays non-terminal here.
     expect(listed.find((d) => d.id === id1)!.status).toBe('failed')
+  })
+})
+
+// ---- OCR-R P1 (BE-1, ocr-audit 2026-07-18): task admission vs. a live re-index ----------
+// `registerDocsIpc` refuses re-index/delete while a task targets the doc
+// (`requireNoActiveTask`), but the REVERSE direction did not exist: `startDocTask` never
+// consulted the module-local `processing` set, so an OCR re-run admitted mid-re-index would
+// interleave two chunk DELETE/INSERT transactions + two embed phases on one document (the
+// already-OCR'd PDF keeps its `ocr` metadata through the whole re-index, so no other
+// validation catches it). The set's probe is now exposed on ctx (`docIngestionActive`, the
+// skillRunActive pattern) and threaded into the manager's admission guard. Closes audit
+// test-gap #3; watched fail pre-fix.
+describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
+  async function waitTerminal(manager: DocTaskManager, jobId: string): Promise<string> {
+    const start = Date.now()
+    for (;;) {
+      const s = manager.getDocTask(jobId)
+      if (['done', 'failed', 'cancelled'].includes(s.state)) return s.state
+      if (Date.now() - start > 10_000) throw new Error(`task never finished: ${s.state}`)
+      await new Promise((r) => setTimeout(r, 10))
+    }
+  }
+
+  it('refuses startDocTask("ocr") while a gated re-index holds the document; admits after release', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const storeDir = documentsDir(workspacePath)
+    const g = perFileGatedEmbedder()
+    const ctx = ctxWith(db, workspacePath, g.embedder, /* unlocked */ true)
+    registerDocsIpc(ctx)
+    const engine: OcrEngine = {
+      id: 'fake-tesseract',
+      languages: ['deu', 'eng'],
+      recognize: async (image: Buffer) => ({ text: `Seite ${image[0]} erkannt.`, confidence: 90 })
+    }
+    const rasterize: RasterizePdf = async (_pdf, o) => {
+      o.onPageCount?.(2)
+      for (let n = 1; n <= 2; n++) await o.onPage(n, Buffer.from([n]))
+      return { pageCount: 2 }
+    }
+    // The live wiring shape: the predicate reads ctx late-bound (registerDocsIpc assigned
+    // `ctx.docIngestionActive` above), exactly like main/index.ts.
+    const manager = new DocTaskManager({
+      getDb: () => db,
+      getRuntime: () => null,
+      getTranslator: () => null,
+      isChatStreaming: () => false,
+      getContextTokens: () => 4096,
+      getStoreDir: () => storeDir,
+      getIngestionDeps: () => ({ embedder: g.embedder }),
+      beginDocumentWork: () => () => {},
+      getOcrEngine: () => engine,
+      rasterizePdf: rasterize,
+      isDocumentProcessing: (id) => ctx.docIngestionActive?.(id) ?? false
+    })
+    ctx.docTasks = manager
+
+    // A scan-detected PDF, made searchable once — the already-OCR'd re-run target, the one
+    // kind whose admission metadata (`doc.ocr`) survives a running re-index.
+    const p = join(workspacePath, 'scan.pdf')
+    writeFileSync(p, makeScanOnlyPdf(2))
+    const info = createQueuedDocument(db, p)
+    await processDocument(db, storeDir, info.id)
+    const first = manager.startDocTask({ kind: 'ocr', documentIds: [info.id] })
+    expect(await waitTerminal(manager, first.jobId)).toBe('done')
+
+    // Gate the embedder and park a re-index mid-embed — the doc sits in `processing`.
+    g.setGating(true)
+    const reindexP = invoke(handlers, IPC.reindexDocument, info.id)
+    await g.awaitParked()
+    expect(() => manager.startDocTask({ kind: 'ocr', documentIds: [info.id] })).toThrow(
+      TASK_DOCUMENT_BUSY_INGESTING_MESSAGE
+    )
+    g.release()
+    await reindexP
+    // After the re-index settles, the redo admits and completes normally (no over-eager guard).
+    const redo = manager.startDocTask({ kind: 'ocr', documentIds: [info.id] })
+    expect(await waitTerminal(manager, redo.jobId)).toBe('done')
   })
 })

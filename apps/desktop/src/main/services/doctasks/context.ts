@@ -62,6 +62,17 @@ export interface DocTaskDeps {
    * tests. Only the 'ocr' kind uses it.
    */
   rasterizePdf?: RasterizePdf
+  /**
+   * True while the ingestion layer (import loop / re-index) is actively driving this
+   * document's row — the mirror of the docs IPC `requireNoActiveTask` guard (BE-1,
+   * ocr-audit 2026-07-18). `startDocTask` refuses EVERY kind against a mid-ingestion
+   * target: an OCR re-run admitted mid-re-index would interleave two chunk
+   * DELETE/INSERT transactions + two embed phases on one document (the other kinds are
+   * shielded only incidentally by their `status === 'indexed'` check). Late-bound off
+   * the module-local `processing` set in `registerDocsIpc` (via `ctx.docIngestionActive`);
+   * absent/unwired ⇒ never busy, so partial test deps stay valid.
+   */
+  isDocumentProcessing?: (documentId: string) => boolean
   audit?: AuditRecorder
 }
 

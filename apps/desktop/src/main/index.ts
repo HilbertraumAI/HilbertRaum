@@ -290,6 +290,11 @@ function initBackend(): void {
     // The OCR task's engine + the hidden-window PDF rasterizer.
     getOcrEngine: () => ocrEngine,
     rasterizePdf: rasterizePdfWithHiddenWindow,
+    // BE-1 (ocr-audit 2026-07-18): the ingestion `processing` probe — the mirror of the docs
+    // IPC `requireNoActiveTask` guard. Assigned by registerDocsIpc at registration time
+    // (after this constructor runs), so read LIVE off ctx like getTranslator; unwired ⇒
+    // never busy.
+    isDocumentProcessing: (documentId) => ctx?.docIngestionActive?.(documentId) ?? false,
     audit
   })
 

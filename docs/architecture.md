@@ -1567,6 +1567,29 @@ sentinel-tested), zero native deps.
   Cancel persists nothing. **Photos are the D33 asymmetry:** the `ImageParser` OCRs on
   import directly (one small image, seconds) via the engine injected through
   `ParseContext` — the transcriber-injection precedent.
+- **Initiation surface, admission guard & finishing-step display (OCR-R P1; ocr-audit
+  2026-07-18 FE-1/FE-2/BE-1/FE-4/FE-5).** A detected scan is by definition a FAILED row,
+  and failed rows have no "⋯" overflow (§11.6) — so the offer is an **inline "Make
+  searchable (OCR)" button** on the failed row itself (strictly `showOcr`-gated; ordinary
+  failed rows are unchanged), and the D33 explicit redo is a separate **"Read again
+  (OCR)"** overflow item on already-OCR'd INDEXED PDFs (`d.ocr != null && ocrAvailable`).
+  Task admission mirrors the docs-IPC `requireNoActiveTask` guard in the reverse
+  direction: `DocTaskDeps.isDocumentProcessing` — late-bound to `registerDocsIpc`'s
+  module-local `processing` set via `ctx.docIngestionActive` (the `skillRunActive`
+  pattern; predicate injection chosen over extracting the set into a shared service) —
+  refuses `startDocTask` for EVERY kind while a target document is mid-import/re-index
+  (`main.task.documentBusyIngesting`); without it an OCR re-run admitted mid-re-index
+  would interleave two chunk rebuilds + two embed phases on one document. **Finishing-step
+  display contract:** progress stays "pages + the final re-ingest step" (stepsTotal =
+  n + 1), but once the last step is reached the row's busy label switches to
+  `docs.task.ocrFinishing` ("Finishing — making the text searchable…") instead of
+  "Reading the scan… (n/n)" — Documents keeps the +1 by LABEL while Translate subtracts
+  the step for display; the two conventions are deliberate, not drift. Cancel stays
+  ENABLED through the finishing step (a legitimately cancellable pre-persist instant
+  shares that renderer-visible state); after a cancel click the button renders disabled as
+  "Stopping if possible…" (`docs.task.stopping`) — honest about the two-part cancel
+  contract above. The ~ms ambiguity (the pre-persist instant already reads "Finishing") is
+  accepted.
 - **Availability-driven (D14/D9):** `createSelectedOcrEngine` returns the engine iff
   `<root>/ocr/*.traineddata.gz` exist, else **null** (no mock — invented text would
   corrupt the corpus). `AppStatus.ocrAvailable` gates the UI; absent assets ⇒ the scan

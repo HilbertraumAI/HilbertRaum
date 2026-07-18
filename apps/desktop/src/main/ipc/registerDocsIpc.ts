@@ -153,6 +153,12 @@ export function registerDocsIpc(ctx: AppContext): void {
   // against racing an in-flight ingestion of the SAME document: interleaving used to
   // produce FK violations, duplicate chunk sets, and EBUSY on the stored copy.
   const processing = new Set<string>()
+  // BE-1 (ocr-audit 2026-07-18): expose the probe on ctx (the skillRunActive pattern) so the
+  // doc-task manager's admission guard can refuse a `startDocTask` against a document this
+  // module is mid-import/re-indexing — the mirror of `requireNoActiveTask` below. Doc-task
+  // ingestions themselves run OUTSIDE this set (DB-3), so the guard can never refuse a start
+  // because of another task (the manager's own one-at-a-time lane covers that).
+  ctx.docIngestionActive = (documentId) => processing.has(documentId)
 
   // DB-backed handlers require an unlocked workspace; surface a clean message instead of
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.

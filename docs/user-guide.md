@@ -356,24 +356,27 @@ search model than the one currently active, and takes a moment per file.
 **Scanned PDFs — "Make searchable (OCR)".** A PDF that is only pictures of pages (a
 scanner's output) has no readable text, so the app tells you honestly: *"This PDF looks
 like a scan — it has no readable text yet."* If your drive has the OCR files, the row
-offers **Make searchable (OCR)** in its **⋯** menu (if it says the OCR files are *not on
-this drive*, add them with `prepare-drive --with-assets` or `fetch-runtime --family ocr` —
+offers a **Make searchable (OCR)** button right on the row (if it says the OCR files are
+*not on this drive*, add them with `prepare-drive --with-assets` or `fetch-runtime --family ocr` —
 see the Troubleshooting guide): the pages are read **on this drive** (no cloud OCR —
-German and English are included), with per-page progress and a Cancel button. When it
-finishes, the document is a normal searchable document; answers cite it **by page**, and
-**Preview** shows the recognized text per page with a *"Text recognized on this drive
-(OCR)"* note — recognition is good on clean scans but can contain errors on blurry ones.
-Reading a scan is never automatic (it takes a couple of seconds per page); you choose
-when. **Photos of pages** (PNG/JPG) are the small exception: they are read immediately
-on import.
+German and English are included), with per-page progress and a Cancel button; the last
+step reads *"Finishing — making the text searchable…"* while the recognized text is
+indexed. When it finishes, the document is a normal searchable document; answers cite it
+**by page**, and **Preview** shows the recognized text per page with a *"Text recognized
+on this drive (OCR)"* note — recognition is good on clean scans but can contain errors on
+blurry ones. If a first reading came out poorly (or you added better OCR files later),
+**Read again (OCR)** in the document's **⋯** menu reads the pages again — unlike
+**Re-index**, which reuses the stored reading. Reading a scan is never automatic (it takes
+a couple of seconds per page); you choose when. **Photos of pages** (PNG/JPG) are the
+small exception: they are read immediately on import.
 
 **Each document is a compact row.** On the **Documents** screen every file is one row:
 its name and a muted line of details (type, size, sections), any **location/project tags**,
 a **status badge** (and small **Summary** / **Deeply indexed** badges once those exist), one
 inline **Preview** button, and a **⋯** menu. The **⋯** menu (also opened by right-clicking the
 row) holds the document's actions — **Summarize**, **Translate**, **Re-index**, **Build deep
-index**, **Make searchable (OCR)**, **Move to project…**, **Export**, and a **Delete** at the
-bottom (which always confirms first). Tick a document's checkbox and a **selection toolbar**
+index**, **Read again (OCR)** (on documents read with OCR), **Move to project…**, **Export**,
+and a **Delete** at the bottom (which always confirms first). Tick a document's checkbox and a **selection toolbar**
 appears at the top of the list with the actions that work across documents — **Ask these
 documents**, **Compare (2)**, **Move to project…**, **Mark temporary**, **Archive**, and **Delete**.
 

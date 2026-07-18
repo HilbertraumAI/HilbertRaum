@@ -10,9 +10,10 @@ import {
   VIEWS_MORE_KEY,
   __docRowRenderCounts
 } from '../../src/renderer/screens/DocumentsScreen'
-import { t as translate } from '../../src/shared/i18n'
+import { en, t as translate } from '../../src/shared/i18n'
 import { ToastProvider } from '../../src/renderer/components'
-import type { Collection, DocumentInfo } from '../../src/shared/types'
+import { startTask, resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
+import type { AppStatus, Collection, DocTaskStatus, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer test (jsdom + RTL) for the Documents screen: list rendering + status, the
@@ -1360,5 +1361,259 @@ describe('DocumentsScreen — list windowing (PERF-2)', () => {
     expect(await screen.findByText('ed-0.pdf')).toBeInTheDocument()
     // All 40 mounted — windowing stayed off without a viewport.
     expect(screen.getByText('ed-39.pdf')).toBeInTheDocument()
+  })
+})
+
+// ---- OCR-R P1 (ocr-audit 2026-07-18): OCR initiation + honest progress ------------------
+// FE-1: a scan-detected document is by definition a FAILED row, and failed rows have no "⋯"
+// overflow (§11.6) — so the only "Make searchable (OCR)" entry point (a menu item in the
+// overflow) was unreachable and the scan banner pointed at a control that never rendered.
+// The action is now an inline button on the failed row. FE-2: an already-OCR'd indexed PDF
+// offers the D33 explicit redo in its overflow. FE-4/FE-5: the OCR busy row switches to an
+// honest "Finishing…" label through the final re-ingest step, and a cancel click acknowledges
+// the GAP-7 duality ("Stopping if possible…"). The behavioral tests were watched fail on the
+// pre-fix tree (the two controls characterize behavior that must NOT change).
+describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
+  afterEach(() => resetDocTaskStoreForTests())
+
+  const scanDoc = (over: Partial<DocumentInfo> = {}): DocumentInfo =>
+    doc({
+      id: 'scan1',
+      title: 'scan.pdf',
+      status: 'failed',
+      errorMessage: en['main.ingest.pdfScanDetected'],
+      scanDetected: true,
+      chunkCount: 0,
+      ...over
+    })
+  const appStatus = (over: Record<string, unknown> = {}): AppStatus =>
+    ({ ocrAvailable: true, translationAvailable: false, ...over }) as unknown as AppStatus
+  const ocrStatus = (over: Partial<DocTaskStatus> = {}): DocTaskStatus => ({
+    jobId: 'j1',
+    kind: 'ocr',
+    documentIds: ['scan1'],
+    state: 'running',
+    progress: { stepsDone: 0, stepsTotal: 0 },
+    error: null,
+    resultRef: null,
+    ...over
+  })
+
+  it('FE-1: a scan-detected row offers an inline "Make searchable (OCR)" button that starts the task', async () => {
+    const user = userEvent.setup()
+    const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
+    stubApi({
+      listDocuments: vi.fn(async () => [scanDoc()]),
+      getAppStatus: vi.fn(async () => appStatus()),
+      startDocTask,
+      getDocTask: vi.fn(async () => ocrStatus())
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('scan.pdf')
+    // The banner's promise and the control agree: the button renders on the failed row itself.
+    const btn = await screen.findByRole('button', { name: 'Make searchable (OCR)' })
+    expect(btn).toBeEnabled()
+    await user.click(btn)
+    await waitFor(() =>
+      expect(startDocTask).toHaveBeenCalledWith({ kind: 'ocr', documentIds: ['scan1'], params: undefined })
+    )
+  })
+
+  it('FE-1 control: an ordinary failed row gains NO OCR button (strictly showOcr-gated)', async () => {
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd9', title: 'broken.pdf', status: 'failed', errorMessage: 'EIO: i/o error, read', chunkCount: 0 }),
+        scanDoc()
+      ]),
+      getAppStatus: vi.fn(async () => appStatus())
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('broken.pdf')
+    // The scan row's button appearing proves ocrAvailable has landed — and it is the ONLY one:
+    // the non-scan failed row keeps exactly Try again + Remove (and still no overflow).
+    await screen.findByRole('button', { name: 'Make searchable (OCR)' })
+    expect(screen.getAllByRole('button', { name: 'Make searchable (OCR)' })).toHaveLength(1)
+    const brokenRow = screen.getByText('broken.pdf').closest('.doc-row') as HTMLElement
+    expect(within(brokenRow).getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    expect(within(brokenRow).getByRole('button', { name: 'Remove' })).toBeInTheDocument()
+    expect(
+      within(brokenRow).queryByRole('button', { name: 'Make searchable (OCR)' })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /More actions/ })).not.toBeInTheDocument()
+  })
+
+  it('FE-1: without the OCR files the scan row explains (ocrMissing) and offers no button', async () => {
+    stubApi({
+      listDocuments: vi.fn(async () => [scanDoc()]),
+      getAppStatus: vi.fn(async () => appStatus({ ocrAvailable: false }))
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('scan.pdf')
+    expect(await screen.findByText(/needs the OCR files/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Make searchable (OCR)' })).not.toBeInTheDocument()
+  })
+
+  it('FE-1: the inline OCR button disables while another task is active', async () => {
+    stubApi({
+      listDocuments: vi.fn(async () => [scanDoc(), doc({ id: 'd2', title: 'other.pdf' })]),
+      getAppStatus: vi.fn(async () => appStatus()),
+      startDocTask: vi.fn(async () => ({ jobId: 'j-sum' })),
+      getDocTask: vi.fn(async () => ocrStatus({ jobId: 'j-sum', kind: 'summary', documentIds: ['d2'] }))
+    })
+    render(<DocumentsScreen />)
+    const btn = await screen.findByRole('button', { name: 'Make searchable (OCR)' })
+    expect(btn).toBeEnabled()
+    await act(async () => {
+      await startTask('summary', 'd2')
+    })
+    expect(screen.getByRole('button', { name: 'Make searchable (OCR)' })).toBeDisabled()
+  })
+
+  it('FE-2: an already-OCR\'d indexed PDF offers "Read again (OCR)" in its overflow, and it starts the task', async () => {
+    const user = userEvent.setup()
+    const startDocTask = vi.fn(async () => ({ jobId: 'j-redo' }))
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({
+          ocr: { pageCount: 2, languages: ['deu', 'eng'], engineId: 'tesseract.js-7.0.0', createdAt: '2026-01-01T00:00:00Z' }
+        })
+      ]),
+      getAppStatus: vi.fn(async () => appStatus()),
+      startDocTask,
+      getDocTask: vi.fn(async () => ocrStatus({ jobId: 'j-redo', documentIds: ['d1'] }))
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Read again (OCR)' }))
+    await waitFor(() =>
+      expect(startDocTask).toHaveBeenCalledWith({ kind: 'ocr', documentIds: ['d1'], params: undefined })
+    )
+  })
+
+  it('FE-2 control: a plain indexed row (no stored recognition) offers no redo item', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({
+          id: 'dOcr',
+          title: 'recognized.pdf',
+          ocr: { pageCount: 2, languages: ['deu'], engineId: 'tesseract.js-7.0.0', createdAt: '2026-01-01T00:00:00Z' }
+        }),
+        doc({ id: 'd2', title: 'plain.pdf' })
+      ]),
+      getAppStatus: vi.fn(async () => appStatus())
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('plain.pdf')
+    // Seeing the redo item on the OCR'd row first proves ocrAvailable has landed…
+    await user.click(screen.getByRole('button', { name: 'More actions for recognized.pdf' }))
+    await screen.findByRole('menuitem', { name: 'Read again (OCR)' })
+    await user.keyboard('{Escape}')
+    // …so its absence from the plain row's menu is meaningful, not a race.
+    await user.click(screen.getByRole('button', { name: 'More actions for plain.pdf' }))
+    await screen.findByRole('menuitem', { name: 'Re-index' })
+    expect(screen.queryByRole('menuitem', { name: 'Read again (OCR)' })).not.toBeInTheDocument()
+  })
+
+  it('FE-4: the OCR busy label switches to "Finishing…" on the final re-ingest step; Cancel stays enabled', async () => {
+    vi.useFakeTimers()
+    try {
+      stubApi({
+        listDocuments: vi.fn(async () => [scanDoc()]),
+        getAppStatus: vi.fn(async () => appStatus()),
+        startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
+        // stepsDone = pages (3) of stepsTotal = pages + 1 — the signal-less re-ingest step.
+        getDocTask: vi.fn(async () => ocrStatus({ progress: { stepsDone: 3, stepsTotal: 4 } }))
+      })
+      const flush = async (): Promise<void> => {
+        await act(async () => {
+          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
+        })
+      }
+      render(<DocumentsScreen />)
+      await flush() // mount refresh + ocr status
+      await act(async () => {
+        await startTask('ocr', 'scan1')
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400) // first poll → the finishing-step status
+      })
+      await flush()
+      expect(screen.getByText('Finishing — making the text searchable…')).toBeInTheDocument()
+      expect(screen.queryByText(/Reading the scan/)).not.toBeInTheDocument()
+      // A legitimately cancellable pre-persist instant shares this renderer-visible state
+      // (handlers/ocr.ts) — Cancel must stay ENABLED, never hard-disabled.
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('FE-5: a cancel click flips the button to a disabled "Stopping if possible…"', async () => {
+    vi.useFakeTimers()
+    try {
+      const cancelDocTask = vi.fn(async () => undefined)
+      stubApi({
+        listDocuments: vi.fn(async () => [scanDoc()]),
+        getAppStatus: vi.fn(async () => appStatus()),
+        startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
+        getDocTask: vi.fn(async () => ocrStatus({ progress: { stepsDone: 3, stepsTotal: 4 } })),
+        cancelDocTask
+      })
+      const flush = async (): Promise<void> => {
+        await act(async () => {
+          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
+        })
+      }
+      render(<DocumentsScreen />)
+      await flush()
+      await act(async () => {
+        await startTask('ocr', 'scan1')
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      await flush()
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      await flush()
+      // Honest about the GAP-7 duality: the cancel may or may not land (a cancel during the
+      // final re-ingest is deliberately ignored) — say so, and stop offering the dead click.
+      const stopping = screen.getByRole('button', { name: 'Stopping if possible…' })
+      expect(stopping).toBeDisabled()
+      expect(cancelDocTask).toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('FE-4 control: a mid-pages status still reads "Reading the scan… (k/n)"', async () => {
+    vi.useFakeTimers()
+    try {
+      stubApi({
+        listDocuments: vi.fn(async () => [scanDoc()]),
+        getAppStatus: vi.fn(async () => appStatus()),
+        startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
+        getDocTask: vi.fn(async () => ocrStatus({ progress: { stepsDone: 1, stepsTotal: 4 } }))
+      })
+      const flush = async (): Promise<void> => {
+        await act(async () => {
+          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
+        })
+      }
+      render(<DocumentsScreen />)
+      await flush()
+      await act(async () => {
+        await startTask('ocr', 'scan1')
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      await flush()
+      expect(screen.getByText('Reading the scan… (1/4)')).toBeInTheDocument()
+      expect(screen.queryByText(/Finishing/)).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

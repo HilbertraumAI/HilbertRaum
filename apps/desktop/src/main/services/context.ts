@@ -95,6 +95,15 @@ export interface AppContext {
    */
   skillRunActive?: (documentId: string) => boolean
   /**
+   * In-flight ingestion probe (BE-1, ocr-audit 2026-07-18): true while the docs IPC import
+   * loop or a re-index — the module-local `processing` set in registerDocsIpc, which assigns
+   * this at registration time — is actively driving the document's row. The doc-task
+   * manager's admission guard consults it (`DocTaskDeps.isDocumentProcessing`), the mirror
+   * of `requireNoActiveTask`: a task admitted mid-re-index would interleave two ingestions
+   * of the same document. Optional so partial test contexts stay valid.
+   */
+  docIngestionActive?: (documentId: string) => boolean
+  /**
    * Skill registry (skills plan §8): the uniform disk-reconcile + state cache over the plain
    * app-skills/ + user-skills/ folders. Optional so partial test contexts stay valid. `reconcile`
    * needs an unlocked DB, so the live wiring reconciles best-effort at startup (plaintext_dev) and
