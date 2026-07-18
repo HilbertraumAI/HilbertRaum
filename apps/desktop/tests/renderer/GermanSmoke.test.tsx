@@ -8,6 +8,9 @@ import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
+import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
+import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { makeDetail } from '../helpers/evidenceReview'
 import { PrivacyTab } from '../../src/renderer/screens/settings/PrivacyTab'
 import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsTab'
 import { Banner, CoverageMeter, PasswordField, type Translator } from '../../src/renderer/components'
@@ -329,5 +332,30 @@ describe('German render smokes (Phase 40)', () => {
     )
     expect(screen.getByRole('button', { name: t('de', 'common.dismiss') })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: t('de', 'password.show') })).toBeInTheDocument()
+  })
+
+  it('ReviewScreen renders German (EP-1 plan §7.7 — header, decisions, evidence caption)', async () => {
+    resetReviewSessionForTests()
+    stubApi({ getEvidenceReview: vi.fn(async () => makeDetail()) })
+    render(german(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={() => {}} />))
+
+    expect(
+      await screen.findByRole('button', { name: `‹ ${t('de', 'review.back')}` })
+    ).toBeInTheDocument()
+    // The persist-canonical default title localizes through the display map (D-L4).
+    expect(
+      screen.getByRole('heading', { name: t('de', 'main.evidenceReviews.defaultTitle') })
+    ).toBeInTheDocument()
+    // Decision chips + evidence honesty caption + disclaimer flow through t().
+    expect(
+      screen.getAllByRole('radio', { name: new RegExp(t('de', 'review.decision.supported')) })
+        .length
+    ).toBeGreaterThan(0)
+    expect(screen.getByText(t('de', 'review.evidence.captionRelevance'))).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'review.disclaimer'))).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: t('de', 'review.footer.summary') })
+    ).toBeInTheDocument()
+    resetReviewSessionForTests()
   })
 })

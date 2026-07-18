@@ -61,6 +61,13 @@ describe('resolveNavTarget — virtual targets + legacy aliases', () => {
     expect(resolveNavTarget('ask-documents')).toEqual({ screen: 'chat', chatMode: 'documents' })
     expect(resolveNavTarget('no-such-screen')).toEqual({ screen: 'home' })
   })
+
+  it("keeps 'review' OUT of plain navigation — reachable only via App's handoff slot (EP-1 §7.1)", () => {
+    // The review screen is meaningless without a review/message id in the handoff slot, so
+    // as a plain target it lands on home like any unknown target; App.openReview is the
+    // one way in (and the nav rail carries NO review item — the IA test above pins the 8).
+    expect(resolveNavTarget('review')).toEqual({ screen: 'home' })
+  })
 })
 
 // ---- App shell -------------------------------------------------------------------

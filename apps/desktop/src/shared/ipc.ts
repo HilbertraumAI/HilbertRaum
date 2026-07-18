@@ -314,6 +314,10 @@ export const IPC = {
   refreshEvidenceReviewState: 'evidence:refreshState',
   /** Delete a review (items/links/exports CASCADE). */
   deleteEvidenceReview: 'evidence:delete',
+  /** How many reviews a conversation's messages carry — the D-2 delete-confirm warning
+   *  count (spec §25.4). Added in Phase 2 (plan §7.6): the P0 service function existed
+   *  without a channel; the renderer confirm needs the number. Count only — no content. */
+  countEvidenceReviewsForConversation: 'evidence:countForConversation',
   // Encrypted workspace lifecycle
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',

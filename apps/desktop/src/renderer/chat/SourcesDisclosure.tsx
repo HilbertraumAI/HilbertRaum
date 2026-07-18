@@ -21,16 +21,26 @@ import { formatCitationLabel } from '../lib/displayMap'
 //     more sections" reveal). The CoverageMeter beside it owns the breadth claim (whole /
 //     beginning / partial), so this label stays breadth-neutral and never restates it.
 
-/** How many provenance cards to render before the "and N more sections" reveal. */
-const PROVENANCE_CARD_CAP = 24
+/** How many provenance cards to render before the "and N more sections" reveal. Exported:
+ *  the evidence-review workspace (EP-1 plan §7.3) reuses the same cap for its source cards
+ *  so the two surfaces can never disagree about "large provenance set" rendering. */
+export const PROVENANCE_CARD_CAP = 24
 
 export function SourcesDisclosure({
   citations,
-  mode
+  mode,
+  onReview,
+  reviewDisabled
 }: {
   citations: Citation[]
   /** The answer's coverage mode; any whole-document mode (≠ relevance) renders as provenance. */
   mode?: CoverageMode
+  /** EP-1 plan §7.2 (spec §9.2): the quiet "Review answer and sources" footer action at the
+   *  bottom of the expanded region. Absent ⇒ never rendered (optional-callback gating). */
+  onReview?: () => void
+  /** Same streaming gate as the action row (`actionsDisabled` — review FIX-6): the footer
+   *  entry must not open a review while a reply is streaming. */
+  reviewDisabled?: boolean
 }): JSX.Element {
   // tCount for the provenance labels (full-audit 2026-07-11 CODE-8): a one-section document
   // ("— 1 section") and a one-section reveal tail ("and 1 more section") are both reachable.
@@ -95,6 +105,18 @@ export function SourcesDisclosure({
           {overCap && (
             <button type="button" className="sources-more" onClick={() => setShowAll(true)}>
               {tCount('chat.sources.more', citations.length - PROVENANCE_CARD_CAP)}
+            </button>
+          )}
+          {/* The quiet review entry (spec §9.2) — a footer action, deliberately styled like
+              the reveal link above, never a loud button inside the disclosure. */}
+          {onReview && (
+            <button
+              type="button"
+              className="sources-review"
+              disabled={reviewDisabled}
+              onClick={onReview}
+            >
+              {t('review.entry.sources')}
             </button>
           )}
         </div>

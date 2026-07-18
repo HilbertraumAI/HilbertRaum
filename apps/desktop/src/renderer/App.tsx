@@ -31,6 +31,11 @@ const SettingsScreen = lazy(() =>
 const SkillsScreen = lazy(() =>
   import('./screens/SkillsScreen').then((m) => ({ default: m.SkillsScreen }))
 )
+// Evidence-review workspace (EP-1 plan §7.1): lazy like the other non-first-frame screens.
+// No nav-rail entry — reachable ONLY via the openReview handoff below.
+const ReviewScreen = lazy(() =>
+  import('./screens/ReviewScreen').then((m) => ({ default: m.ReviewScreen }))
+)
 import {
   Banner,
   BrandMark,
@@ -44,6 +49,7 @@ import {
 import { setThemeSetting } from './theme'
 import { runAndSurface } from './lib/errors'
 import { purgeSessionStores } from './lib/lockPurge'
+import { flushReviewSession, type ReviewHandoffTarget } from './lib/reviewSession'
 import { I18nProvider, useT, type I18n } from './i18n'
 import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
 import type { MessageKey } from '@shared/i18n'
@@ -99,6 +105,10 @@ function AppShell(): JSX.Element {
   // "Ask selected documents" handoff: the Documents screen's selection,
   // applied to the next documents conversation the Chat screen creates.
   const [chatScope, setChatScope] = useState<string[] | null>(null)
+  // Evidence-review handoff (EP-1 plan §7.1 — the chatScope idiom): which review (or
+  // message, for a first review) the review screen opens. The screen is meaningless
+  // without it, which is why plain navigate('review') resolves to home (navigation.ts).
+  const [reviewHandoff, setReviewHandoff] = useState<ReviewHandoffTarget | null>(null)
   // The workspace lifecycle gate. Null = still loading; not 'unlocked' = show
   // the create-password / unlock gate before the normal app shell.
   const [workspace, setWorkspace] = useState<WorkspaceStateInfo | null>(null)
@@ -185,8 +195,19 @@ function AppShell(): JSX.Element {
     setScreen('chat')
   }
 
+  // Chat → evidence-review workspace (EP-1 plan §7.1): the ONLY way onto the review
+  // screen. Back navigation is the screen's own "Back to chat" → navigate('chat').
+  function openReview(target: ReviewHandoffTarget): void {
+    setReviewHandoff(target)
+    setScreen('review')
+  }
+
   async function lockNow(): Promise<void> {
     setLockError(null)
+    // EP-1 plan §7.5: flush pending review auto-save edits BEFORE the vault re-encrypts —
+    // after lockWorkspace the write would be refused. Best-effort: a failed flush must
+    // never block the lock (the user's explicit security action wins).
+    await flushReviewSession().catch(() => {})
     const next = await window.api.lockWorkspace()
     // The real lock seam (TA-2 / H3): main has now aborted the jobs + re-encrypted the vault, so
     // drop the resident source/translation/image content from the module-level session stores in
@@ -364,7 +385,13 @@ function AppShell(): JSX.Element {
                 onNavigate={navigate}
                 initialMode={chatMode}
                 initialScopeDocumentIds={chatScope}
+                onOpenReview={openReview}
               />
+            )}
+            {/* Review renders ONLY with a handoff target (guaranteed by openReview being
+                the sole path here; the guard keeps a future misroute blank-safe). */}
+            {screen === 'review' && reviewHandoff && (
+              <ReviewScreen handoff={reviewHandoff} onNavigate={navigate} />
             )}
             {screen === 'documents' && (
               <DocumentsScreen onAskSelected={askSelectedDocuments} onNavigate={navigate} />

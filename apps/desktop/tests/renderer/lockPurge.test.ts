@@ -18,13 +18,22 @@ import {
   type SelectedImage
 } from '../../src/renderer/lib/visionSession'
 import type { ImageTurn } from '../../src/renderer/images'
+import {
+  getReviewSessionSnapshot,
+  openReviewSession,
+  editReviewItem,
+  resetReviewSessionForTests
+} from '../../src/renderer/lib/reviewSession'
 import { stubApi } from '../helpers/renderer'
+import { makeDetail } from '../helpers/evidenceReview'
 
 // TA-2 / H3: the renderer lock purge used to be a dead screen effect (gated on a component-state
 // `locked` flag that lock unmounts before it can fire). It now lives at the real seam,
-// `App.lockNow` → `purgeSessionStores`. This suite pins the helper: all three module-level session
-// stores (text translation, document translation, vision) return to their EMPTY snapshots, and the
-// mid-stream "stuck busy" shape is cleared (no re-adoption of a job main has already aborted).
+// `App.lockNow` → `purgeSessionStores`. This suite pins the helper: all FOUR module-level session
+// stores (text translation, document translation, vision, evidence review — EP-1 plan §7.5)
+// return to their EMPTY snapshots, and the mid-stream "stuck busy" shape is cleared (no
+// re-adoption of a job main has already aborted). The review store's FLUSH-before-lock ordering
+// is pinned separately in ReviewLockSeam.test.tsx — this file covers the purge half.
 
 const CHOICE = { sourceLang: 'de', targetLang: 'en' } as const
 
@@ -44,11 +53,12 @@ afterEach(() => {
   resetTranslateSessionForTests()
   resetFileTranslateSessionForTests()
   resetVisionSessionForTests()
+  resetReviewSessionForTests()
   vi.restoreAllMocks()
 })
 
 describe('purgeSessionStores — the real lock seam (TA-2)', () => {
-  it('drops resident content from all three session stores', async () => {
+  it('drops resident content from all four session stores', async () => {
     stubApi({
       // Text translation: a still-running job re-adopted into the store (source/translation resident).
       getActiveTranslateJob: vi.fn(async () => RUNNING_TRANSLATE),
@@ -57,7 +67,9 @@ describe('purgeSessionStores — the real lock seam (TA-2)', () => {
       onTranslateError: vi.fn(() => () => {}),
       // Document translation: import never resolves, so the store stays 'importing'/busy.
       getDroppedFilePath: vi.fn(() => 'C:\\docs\\secret.pdf'),
-      importDocuments: vi.fn(() => new Promise(() => {}))
+      importDocuments: vi.fn(() => new Promise(() => {})),
+      // Evidence review: an open review with a pending (unsaved) note edit resident.
+      getEvidenceReview: vi.fn(async () => makeDetail())
     } as never)
 
     // Seed the document store FIRST — `runImport` clears the text store as it starts, so seeding the
@@ -73,6 +85,12 @@ describe('purgeSessionStores — the real lock seam (TA-2)', () => {
     loadSession(fakeImage(), [HIST_TURN], 'sess1')
     expect(getVisionSession().selected).not.toBeNull()
     expect(getVisionSession().turns).toHaveLength(1)
+
+    // Evidence review: decrypted answer/source snapshots + an unsaved note resident.
+    await openReviewSession({ reviewId: 'r1' })
+    editReviewItem('i1', { reviewerNote: 'resident plaintext note' })
+    expect(getReviewSessionSnapshot().detail).not.toBeNull()
+    expect(getReviewSessionSnapshot().saveState).toBe('pending')
 
     purgeSessionStores()
 
@@ -99,6 +117,16 @@ describe('purgeSessionStores — the real lock seam (TA-2)', () => {
       sessionId: null,
       activeJobId: null,
       analyzing: false
+    })
+    // Review store back to EMPTY — detail AND the pending (unsaved) edit are gone. The
+    // flush of that edit happens BEFORE lockWorkspace (App.lockNow — ReviewLockSeam pins
+    // the order); by purge time nothing may remain resident.
+    expect(getReviewSessionSnapshot()).toMatchObject({
+      detail: null,
+      loading: false,
+      openError: null,
+      saveState: 'idle',
+      saveError: null
     })
   })
 

@@ -546,6 +546,36 @@ update"** note (the app never silently rewrites it; re-run the task when you wan
 Everything here is local: organizing and scoping never call a model or the
 network, and the activity log records only counts and ids — never your project or folder names.
 
+### Review an answer against its sources (evidence review)
+
+When a document-grounded answer matters — a contract clause, a figure you'll act on — you can
+**review it against the evidence** instead of just trusting it. Hover over the answer and choose
+**Review evidence** (also at the bottom of the expanded **Sources** list: *Review answer and
+sources*). A dedicated review workspace opens with the answer **frozen exactly as it was
+generated** on the left and its **saved source excerpts** on the right. Nothing here asks the
+AI model anything, and nothing touches the network — it is you, the answer, and the sources.
+
+- The answer is split into **review items** (paragraphs, list entries, headings). For each one,
+  record a decision: **Reviewed — supported / partly supported / not supported**, **Needs
+  follow-up**, **Not reviewed**, or **Not applicable** (headings start there). Add a note where
+  it helps. Everything **saves automatically** as you work.
+- Evidence cards show what the model was actually given. The workspace is honest about the
+  difference: for a whole-document analysis the cards are **provenance** (sections the answer
+  drew on), *not* sentence-by-sentence citations — and the workspace says so. You can link a
+  source to an item yourself; such links are always labeled **Reviewer linked**, never "cited
+  by the answer". Remember: *a citation shows where information came from — it does not by
+  itself prove the answer is correct.*
+- **Review summary** (bottom right) collects the counts, coverage and truncation warnings,
+  generation details, your reviewer name, and a general note. **Mark review ready** unlocks
+  once every answer block has a decision ("Not applicable" counts). A ready review can be
+  reopened any time.
+- Reviews are saved **inside your encrypted workspace** and reopen from the same answer
+  (**Continue review**, with a small Draft/Ready tag). Deleting a conversation deletes its
+  reviews too — the delete confirmation warns you with the count first.
+
+Exporting a review as a self-contained **evidence pack** (HTML/PDF) is coming in a later
+update; the review itself is fully usable today.
+
 ---
 
 ## 7a. Translate text

@@ -723,9 +723,10 @@ section records the AS-BUILT Phase-0/1 shapes; the renderer arrives in Phase 2).
   conversation?)` (spec §9.1): assistant ∧ (citations non-empty ∨ coverage present ∨
   `conversation.mode === 'documents'`). "Persisted and not streaming" stays the caller's
   gate (a streaming reply has no row yet) — Phase 2 wires it.
-✅ **IPC surface (13 channels, `evidence:*` in `shared/ipc.ts`; handlers in
+✅ **IPC surface (14 channels, `evidence:*` in `shared/ipc.ts`; handlers in
   `main/ipc/registerEvidenceReviewsIpc.ts`, wired in `main/index.ts`; preload methods of the
-  same names on `window.api`):**
+  same names on `window.api` — 13 shipped in Phase 1, `evidence:countForConversation` added
+  in Phase 2 for the D-2 delete confirm):**
   | preload method | channel | shape |
   |---|---|---|
   | `createEvidenceReview(messageId)` | `evidence:create` | → `EvidenceReviewDetail`; IDEMPOTENT (existing review returned, audit only on real creation); throws localized `invalidRequest` on a malformed id, ids-only errors on unknown/non-assistant message |
@@ -741,8 +742,15 @@ section records the AS-BUILT Phase-0/1 shapes; the renderer arrives in Phase 2).
   | `reopenEvidenceReview(reviewId)` | `evidence:reopen` | → `EvidenceReview \| null` |
   | `refreshEvidenceReviewState(reviewId)` | `evidence:refreshState` | → `EvidenceReviewFreshness \| null` — **Phase-4 STUB**: `{ reviewId, outdated: false }` for a known review (the same not-known-to-be-outdated overlay every read carries) |
   | `deleteEvidenceReview(reviewId)` | `evidence:delete` | → `boolean` |
+  | `countEvidenceReviewsForConversation(conversationId)` | `evidence:countForConversation` | → `number` — Phase 2 (plan §7.6, D-2): the conversation-delete confirm names how many reviews the cascade removes. Count only, never content; malformed/unknown ids read `0` |
   Every handler `requireUnlocked()` (`main.evidenceReviews.locked`, EN+DE; auto-enforced by
-  `ipc-lock-coverage.test.ts`). New type `EvidenceReviewFreshness { reviewId, outdated }`.
+  `ipc-lock-coverage.test.ts`). **Ready-state write guard (Phase-2 review FIX-1, spec
+  §18.4):** while a review is `ready`, the five ITEM-LEVEL mutations (`updateEvidenceReviewItem`,
+  `setEvidenceLink`, `removeEvidenceLink`, `createEvidenceSelection`, `deleteEvidenceSelection`)
+  REFUSE through their normal null/false channel — `ready` + undecided is a state the D-7 gate
+  can never produce, so it must be unreachable by mutation too; reopen first. HEAD edits
+  (`updateEvidenceReview`: title D-6 / reviewer label D-3 / general note) stay allowed.
+  New type `EvidenceReviewFreshness { reviewId, outdated }`.
   `exportEvidencePack` deliberately NOT yet registered — the pipeline is Phase 3 (a channel
   with no pipeline would be a dead promise).
 ✅ **Audit emitters (first ones):** `evidence_review_created` (`{reviewId, messageId,

@@ -2349,5 +2349,116 @@ export const de: Record<keyof typeof en, string> = {
   'translate.file.err.unsupported':
     'Dieser Dateityp kann nicht übersetzt werden. Versuche eine PDF-, Word-, Markdown- oder Textdatei.',
   'translate.file.err.importFailed': 'Das Dokument konnte nicht gelesen werden. Versuche es erneut.',
-  'translate.file.err.runtimeFailed': 'Das Dokument konnte nicht übersetzt werden. Versuche es erneut.'
+  'translate.file.err.runtimeFailed': 'Das Dokument konnte nicht übersetzt werden. Versuche es erneut.',
+
+  // ---- Nachweis-Prüfung (EP-1 Plan §7 — ReviewScreen.tsx + Chat-Einstiege) ----
+  // ENTWURFSSTAND (Plan §7.7): dieser Block braucht vor dem Release noch die
+  // muttersprachliche Durchsicht (Phase 6, D-L7) — Fachbegriffe siehe Spec §24.
+  'review.action.start': 'Nachweise prüfen',
+  'review.action.continue': 'Prüfung fortsetzen',
+  'review.entry.sources': 'Antwort und Quellen prüfen',
+  'review.status.draft': 'Entwurf',
+  'review.status.ready': 'Abgeschlossen',
+  'review.readonlyHint': 'Abgeschlossen — öffne die Prüfung wieder, um sie zu bearbeiten.',
+  'review.back': 'Zurück zum Chat',
+  'review.rename': 'Umbenennen',
+  'review.rename.label': 'Titel der Prüfung',
+  'review.rename.save': 'Speichern',
+  'review.loading': 'Prüfung wird geladen …',
+  'review.notFound': 'Diese Prüfung wurde nicht gefunden. Möglicherweise wurde sie gelöscht.',
+  'review.question.toggle': 'Frage',
+  'review.answerPane.aria': 'Antwort in Prüfung',
+  'review.autosave.saving': 'Wird gespeichert …',
+  'review.autosave.saved': 'Gespeichert',
+  'review.autosave.error': 'Einige Änderungen konnten noch nicht gespeichert werden.',
+  'review.autosave.retry': 'Erneut versuchen',
+  'review.evidence.title': 'Nachweise',
+  'review.evidence.captionRelevance':
+    'Die angezeigten Quellen sind die Auszüge, die dem lokalen KI-Modell für diese Antwort vorlagen.',
+  'review.evidence.captionWholeDoc':
+    'Diese Antwort entstand durch eine Gesamtdokument-Analyse. Die angezeigten Abschnitte sind Herkunftsangaben, keine einzelnen Satz-Zitate.',
+  'review.evidence.captionStructured':
+    'Diese Antwort nutzt lokal extrahierte Daten. Die Quellstellen hinter der Extraktion werden unten angezeigt.',
+  'review.evidence.none':
+    'Zu dieser Antwort sind keine Quellenauszüge gespeichert. Du kannst eine allgemeine Prüfung festhalten; eine Prüfung auf Quellenebene ist nicht möglich.',
+  'review.disclaimer':
+    'Ein Quellenverweis zeigt, woher eine Information stammt. Er allein belegt nicht, dass die Antwort richtig ist.',
+  'review.source.kind.direct_excerpt': 'Direkter Auszug',
+  'review.source.kind.whole_document_provenance': 'Herkunft: Gesamtdokument-Analyse',
+  'review.source.kind.structured_record': 'Extrahierter Datensatz',
+  'review.source.unresolved': 'Quelle konnte nicht eindeutig zugeordnet werden',
+  'review.source.missingAtCreation': 'Quelle war beim Erstellen dieser Prüfung nicht verfügbar',
+  'review.link.add': 'Mit Aussage verknüpfen',
+  'review.link.remove': 'Verknüpfung entfernen',
+  'review.link.cited': 'Von der Antwort zitiert',
+  'review.link.reviewer': 'Vom Prüfer verknüpft',
+  'review.link.selectHint': 'Wähle eine Aussage aus, um Nachweise zu verknüpfen oder zu lösen.',
+  'review.relation.label': 'Einordnung',
+  'review.relation.none': 'Keine Einordnung',
+  'review.relation.supports': 'Stützt',
+  'review.relation.qualifies': 'Schränkt ein',
+  'review.relation.contradicts': 'Widerspricht',
+  'review.relation.context': 'Nur Kontext',
+  'review.item.aria': 'Prüfpunkt {n}',
+  'review.item.noMarker': 'Kein direkter Quellenverweis in diesem Text',
+  'review.item.wholeDocDerived': 'Aus Gesamtdokument-Analyse abgeleitet',
+  'review.item.noteLabel': 'Notiz',
+  'review.item.notePlaceholder': 'Notiz hinzufügen (optional)',
+  'review.item.viewEvidence': 'Nachweise anzeigen',
+  'review.decision.groupAria': 'Entscheidung',
+  'review.decision.supported': 'Geprüft — belegt',
+  'review.decision.partly_supported': 'Geprüft — teilweise belegt',
+  'review.decision.not_supported': 'Geprüft — nicht belegt',
+  'review.decision.follow_up': 'Weitere Prüfung nötig',
+  'review.decision.not_reviewed': 'Nicht geprüft',
+  'review.decision.not_applicable': 'Nicht anwendbar',
+  'review.bulk.menu': 'Sammelaktionen',
+  'review.bulk.headingsNa': 'Überschriften auf „Nicht anwendbar“ setzen',
+  'review.bulk.followUp': 'Unentschiedene auf „Weitere Prüfung nötig“ setzen',
+  'review.bulk.clear': 'Alle Entscheidungen zurücksetzen',
+  'review.bulk.clearConfirmTitle': 'Alle Entscheidungen zurücksetzen?',
+  'review.bulk.clearConfirmBody':
+    'Jede Entscheidung in dieser Prüfung wird auf „Nicht geprüft“ zurückgesetzt. Notizen bleiben erhalten.',
+  'review.bulk.clearConfirm': 'Zurücksetzen',
+  'review.progress': '{decided} von {required} entschieden',
+  'review.progress.followUps.one': '{count} offene Nachprüfung',
+  'review.progress.followUps.other': '{count} offene Nachprüfungen',
+  'review.footer.summary': 'Prüfungsübersicht',
+  'review.summary.status': 'Status',
+  'review.summary.decisions': 'Entscheidungen',
+  'review.summary.sources': 'Quellen',
+  'review.summary.sourcesCount.one': '{count} Quelle',
+  'review.summary.sourcesCount.other': '{count} Quellen',
+  'review.summary.sourcesUnresolved.one': '{count} Quelle konnte nicht eindeutig zugeordnet werden',
+  'review.summary.sourcesUnresolved.other':
+    '{count} Quellen konnten nicht eindeutig zugeordnet werden',
+  'review.summary.sourcesMissing.one':
+    '{count} Quelle war beim Erstellen dieser Prüfung nicht verfügbar',
+  'review.summary.sourcesMissing.other':
+    '{count} Quellen waren beim Erstellen dieser Prüfung nicht verfügbar',
+  'review.summary.truncated':
+    'Die erzeugte Antwort ist möglicherweise unvollständig — sie wurde am Ausgabelimit des Modells abgeschnitten.',
+  'review.summary.generation': 'Erstellungsdetails',
+  'review.summary.model': 'Modell',
+  'review.summary.generatedAt': 'Erstellt',
+  'review.summary.appVersion': 'App-Version',
+  'review.summary.skill': 'Skill',
+  'review.summary.unavailable': 'Nicht verfügbar',
+  'review.summary.reviewerLabel': 'Prüfer',
+  'review.summary.reviewerPlaceholder': 'Dein Name oder Kürzel (optional)',
+  'review.summary.generalNote': 'Allgemeine Notiz',
+  'review.summary.generalNotePlaceholder': 'Gesamteindruck (optional)',
+  'review.summary.exports': 'Exportverlauf',
+  'review.summary.markReady': 'Prüfung abschließen',
+  'review.summary.reopen': 'Prüfung wieder öffnen',
+  'review.summary.gateHint':
+    'Jeder Antwortblock braucht eine Entscheidung, bevor die Prüfung abgeschlossen werden kann ({decided} von {required} entschieden). „Nicht anwendbar“ zählt als entschieden.',
+  'review.toast.ready': 'Prüfung abgeschlossen.',
+  'review.completedAt': 'Abgeschlossen am {date}',
+  'review.deleteWithConversation.one':
+    '{count} Nachweis-Prüfung zu dieser Unterhaltung wird ebenfalls gelöscht.',
+  'review.deleteWithConversation.other':
+    '{count} Nachweis-Prüfungen zu dieser Unterhaltung werden ebenfalls gelöscht.',
+  'review.deleteWithConversation.unknown':
+    'Auch zu dieser Unterhaltung gehörende Nachweis-Prüfungen werden gelöscht.'
 }
