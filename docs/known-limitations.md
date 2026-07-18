@@ -1926,7 +1926,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   half-installed vision model (GGUF already present, projector missing) fetches just the projector
   (`downloads.test.ts`). The `fetch-models.{sh,ps1}` scripts remain the offline/CLI two-file path.
 
-## Evidence review & evidence packs (EP-1, wave open — plan `docs/evidence-pack-implementation-plan.md`)
+## Evidence review & evidence packs (EP-1 — [`architecture.md`](architecture.md) "Evidence Pack / Review Mode — design record")
 
 - **An evidence pack supports human review — it is not a certification.** The pack records
   what a human decided against the persisted sources; it does not (and cannot) prove the
@@ -1969,6 +1969,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   must not) re-localize an existing file. The stored SHA-256 pins the exact bytes.
 - **No file paths, by construction.** The review snapshot never captures paths, so no
   export option can include one — the spec's "paths default off" is satisfied by absence.
+- **PDF accessibility is best-effort — not a PDF/UA claim.** The PDF export (P6) asks
+  Chromium for a tagged PDF with a document outline (`generateTaggedPDF` +
+  `generateDocumentOutline`), and the input HTML carries a strict semantic h1→h2→h3
+  heading tree — but Electron marks tagged-PDF generation **experimental** ("may not
+  adhere fully to PDF/UA and WCAG standards"), and this app cannot verify conformance.
+  What is verified (real-Electron smoke): the text is genuinely extractable/searchable,
+  the bookmark outline mirrors the heading tree, and the tagged (`/MarkInfo Marked`)
+  structure exists. If accessibility of the artifact matters, prefer the HTML pack — it
+  is the accessibility-first format (real DOM semantics, reflow, user styles). The PDF
+  states on its cover and Integrity section that it is a print of the same evidence-pack
+  template ("PDF — printed from the same evidence-pack template · pack schema v1") — one
+  template renders both formats by design; only that self-description line differs.
 
 ## Internationalization ([`architecture.md`](architecture.md) i18n record)
 

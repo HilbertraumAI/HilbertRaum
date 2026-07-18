@@ -44,6 +44,11 @@ first public release. Consciously-accepted gaps are tracked in
 - **Document tasks & skills** — summarize, translate, and compare documents;
   install reusable **skills** for structured extraction (bank statements,
   invoices, meeting minutes, contract briefs, deadlines, redaction / share-safe).
+- **Evidence packs (review mode)** — review a document-grounded answer block by
+  block against its sources, record explicit decisions and notes, and export the
+  review as a self-contained **evidence pack** in HTML or PDF — generated
+  locally and offline, with honest coverage, freshness, and limitation notes. A
+  pack supports human review; it is not a correctness certification.
 - **Translate view + dedicated translation model (TranslateGemma)** — a top-level
   **Translate** screen for live text translation and drag-and-drop document
   translation across **51 languages**, source **and** target (the model's full

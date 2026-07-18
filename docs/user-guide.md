@@ -589,7 +589,13 @@ AI model anything, and nothing touches the network — it is you, the answer, an
 **Export an evidence pack.** From the **Review summary**, choose **Create evidence pack** to
 save the whole review — question, answer, your decisions and notes, the source excerpts,
 coverage warnings, and generation details — as **one self-contained HTML file** you can open
-in any browser, print, or hand to a colleague. Before exporting you pick what to include
+in any browser, print, or hand to a colleague, **or as a print-ready PDF** (A4, with every
+page footed by the pack ID and page number, and bookmarks for each section — pick the format
+in the export panel; the save dialog offers both types too, and the file ends up in the
+format its name says). The PDF holds the same content as the HTML pack, printed by the app
+itself — its text stays searchable and selectable. If accessibility of the file matters
+(screen readers), prefer the HTML pack — the PDF's accessibility tagging is best-effort
+(see [known-limitations](known-limitations.md)). Before exporting you pick what to include
 (reviewer notes, source excerpts, document hashes, unreviewed items; extra technical details
 are off unless you turn them on), and the app reminds you of the one important boundary:
 *the exported file is stored outside the encrypted workspace and is not protected by your
@@ -598,9 +604,9 @@ is generated **entirely on this drive** (no AI model, no network), contains **no
 no links to the internet**, never contains file paths from your computer, and is written in
 the app language you are using at the time (English or German). Works for drafts and ready
 reviews alike — the pack states the review's status honestly. Each export is remembered in
-the summary's **Export history** with its SHA-256 fingerprint, so you can later verify a
-pack file hasn't been altered (the file itself stays wherever you saved it — the app keeps
-only the record). A PDF export is coming in a later update.
+the summary's **Export history** with its format and SHA-256 fingerprint, so you can later
+verify a pack file hasn't been altered (the file itself stays wherever you saved it — the
+app keeps only the record).
 
 ---
 

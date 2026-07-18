@@ -172,6 +172,13 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   const unavailable = s('review.summary.unavailable')
   const when = (iso: string | null): string => (iso ? esc(formatPackTimestamp(iso)) : unavailable)
   const statusLabel = s(model.status === 'ready' ? 'review.status.ready' : 'review.status.draft')
+  // P6 honesty: the ONE model-format-dependent line in the whole template. A PDF must
+  // never self-describe as "Self-contained HTML" on the cover/integrity sections a
+  // verifier reads next to the hash note — it states it is a print of this same template.
+  const formatLine = s(
+    model.format === 'pdf' ? 'packExport.meta.formatValuePdf' : 'packExport.meta.formatValue',
+    { version: model.schemaVersion }
+  )
   const out: string[] = []
   const push = (line: string): void => {
     out.push(line)
@@ -198,9 +205,7 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   push(`<dt>${s('packExport.meta.packId')}</dt><dd class="mono">${esc(model.packId)}</dd>`)
   push(`<dt>${s('packExport.meta.generatedAt')}</dt><dd>${when(model.generatedAt)}</dd>`)
   push(`<dt>${s('packExport.meta.status')}</dt><dd>${statusLabel}</dd>`)
-  push(
-    `<dt>${s('packExport.meta.format')}</dt><dd>${s('packExport.meta.formatValue', { version: model.schemaVersion })}</dd>`
-  )
+  push(`<dt>${s('packExport.meta.format')}</dt><dd>${formatLine}</dd>`)
   push('</dl>')
   push(`<p class="hint">${s('packExport.privacy')}</p>`)
   // P4 (spec §21.3): an outdated review exports with a PROMINENT snapshot warning — on the
@@ -513,9 +518,7 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   push(`<h2>${s('packExport.section.integrity')}</h2>`)
   push('<dl class="meta">')
   push(`<dt>${s('packExport.meta.packId')}</dt><dd class="mono">${esc(model.packId)}</dd>`)
-  push(
-    `<dt>${s('packExport.meta.format')}</dt><dd>${s('packExport.meta.formatValue', { version: model.schemaVersion })}</dd>`
-  )
+  push(`<dt>${s('packExport.meta.format')}</dt><dd>${formatLine}</dd>`)
   push('</dl>')
   push(`<p class="hint">${s('packExport.integrity.hashNote')}</p>`)
   push(`<h3>${s('packExport.integrity.options')}</h3>`)

@@ -2516,6 +2516,18 @@ export interface EvidencePackOptions {
 }
 
 /**
+ * The renderer→main export request (one wire object on `evidence:export`): partial §16.2
+ * option flags PLUS the requested format (P6). `format` is deliberately NOT an
+ * `EvidencePackOptions` member — the recorded format lives in its own
+ * `evidence_exports.format` column, never in `options_json`. Main resolves it through
+ * `resolvePackExportFormat` ('pdf' only when literally 'pdf', else 'html'), and the
+ * chosen destination's extension has the final word (`packFormatForDestination`).
+ */
+export type EvidencePackExportRequest = Partial<EvidencePackOptions> & {
+  format?: EvidenceExportFormat
+}
+
+/**
  * One export event's metadata (D-8: metadata + content hash ONLY — no file copy kept, and the
  * destination path is deliberately NOT persisted, spec §18.1). `fileName` is the bare chosen
  * file name (no directory).

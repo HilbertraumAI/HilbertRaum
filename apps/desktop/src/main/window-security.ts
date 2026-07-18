@@ -12,10 +12,14 @@
 import type { WebPreferences } from 'electron'
 
 /**
- * The hardening flags shared by BOTH windows (main + OCR rasterizer). Each call site
- * supplies its own `preload` path and spreads these AFTER it, so a drive-by inline
- * override would have to be written after the spread — which the wiring pin test
- * (no inline security literals at the call sites) catches.
+ * The hardening flags shared by ALL THREE windows (main + OCR rasterizer + the P6
+ * evidence-pack PDF print window). The main and rasterizer call sites supply their own
+ * `preload` path and spread these AFTER it; the print window deliberately supplies NO
+ * preload at all — it renders inert print content with zero IPC surface, and the wiring
+ * pin test (tests/unit/window-security.test.ts) enforces that it STAYS preload-free, so
+ * do not "restore" one there. A drive-by inline override would have to be written after
+ * the spread — which the same pin test (no inline security literals at any call site)
+ * catches.
  */
 export const SECURE_WINDOW_WEB_PREFERENCES = Object.freeze({
   contextIsolation: true,

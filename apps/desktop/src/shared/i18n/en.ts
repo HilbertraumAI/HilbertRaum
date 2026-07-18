@@ -2531,6 +2531,10 @@ export const en = {
   'review.export.optHashes': 'Document hashes',
   'review.export.optUnreviewed': 'Unreviewed items',
   'review.export.optTechnical': 'Technical details',
+  // P6 (plan §11): the export format choice — HTML default, PDF via printToPDF (D-1).
+  'review.export.format': 'File format',
+  'review.export.formatHtml': 'HTML — self-contained web page',
+  'review.export.formatPdf': 'PDF — print-ready (A4)',
   'review.export.confirm': 'Export pack…',
   'review.export.cancel': 'Close',
   'review.export.done': 'Evidence pack exported.',
@@ -2553,6 +2557,10 @@ export const en = {
   'packExport.meta.status': 'Review status',
   'packExport.meta.format': 'Format',
   'packExport.meta.formatValue': 'Self-contained HTML · pack schema v{version}',
+  // P6: the PDF artifact's honest self-description (FIX-1) — a print of the same pack
+  // template, never claiming to BE the HTML file.
+  'packExport.meta.formatValuePdf':
+    'PDF — printed from the same evidence-pack template · pack schema v{version}',
   'packExport.section.qa': 'Question and answer',
   'packExport.qa.question': 'Question',
   'packExport.qa.answer': 'Answer',

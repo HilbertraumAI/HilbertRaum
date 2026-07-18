@@ -13,23 +13,69 @@ import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard
 
 const ipcState = vi.hoisted(() => ({
   handlers: new Map<string, unknown>(),
-  // Phase 3 (plan §8.3): the export handler's native save dialog, test-controlled.
-  saveDialog: { canceled: true as boolean, filePath: undefined as string | undefined }
-}))
-vi.mock('electron', () => ({
-  ipcMain: {
-    handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
-    removeHandler: (channel: string) => ipcState.handlers.delete(channel)
+  // Phase 3 (plan §8.3): the export handler's native save dialog, test-controlled. P6
+  // records the options the handler passed (the filter-list "offers PDF and HTML" pin).
+  saveDialog: {
+    canceled: true as boolean,
+    filePath: undefined as string | undefined,
+    lastOptions: undefined as Record<string, unknown> | undefined
   },
-  app: { getVersion: () => '0.0.0-test' },
-  BrowserWindow: { getFocusedWindow: () => null },
-  dialog: {
-    showSaveDialog: async () => ({
-      canceled: ipcState.saveDialog.canceled,
-      filePath: ipcState.saveDialog.filePath
-    })
+  // P6: what the REAL print harness saw on the fake hidden window (bytes it returns,
+  // the loaded file, whether the print source existed on disk at load time).
+  pdf: {
+    bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]), // "%PDF-"
+    loadedPath: undefined as string | undefined,
+    sourceExistedAtLoad: false
   }
 }))
+vi.mock('electron', async () => {
+  const { existsSync } = await import('node:fs')
+  // P6: a constructible hidden-window fake — the REAL printEvidencePackHtmlToPdf drives
+  // it (loadFile → fonts → printToPDF → destroy); only Electron itself is faked.
+  class BrowserWindow {
+    static getFocusedWindow(): null {
+      return null
+    }
+    destroyed = false
+    webContents = {
+      setWindowOpenHandler: (): void => {},
+      on: (): void => {},
+      executeJavaScript: async (): Promise<boolean> => true,
+      printToPDF: async (): Promise<Uint8Array> => ipcState.pdf.bytes
+    }
+    async loadFile(path: string): Promise<void> {
+      ipcState.pdf.loadedPath = path
+      ipcState.pdf.sourceExistedAtLoad = existsSync(path)
+    }
+    isDestroyed(): boolean {
+      return this.destroyed
+    }
+    destroy(): void {
+      this.destroyed = true
+    }
+  }
+  return {
+    ipcMain: {
+      handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
+      removeHandler: (channel: string) => ipcState.handlers.delete(channel)
+    },
+    app: {
+      getVersion: () => '0.0.0-test',
+      once: (): void => {},
+      removeListener: (): void => {}
+    },
+    BrowserWindow,
+    dialog: {
+      showSaveDialog: async (options: Record<string, unknown>) => {
+        ipcState.saveDialog.lastOptions = options
+        return {
+          canceled: ipcState.saveDialog.canceled,
+          filePath: ipcState.saveDialog.filePath
+        }
+      }
+    }
+  }
+})
 
 import { randomUUID } from 'node:crypto'
 import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
@@ -572,6 +618,9 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
   beforeEach(() => {
     ipcState.saveDialog.canceled = true
     ipcState.saveDialog.filePath = undefined
+    ipcState.saveDialog.lastOptions = undefined
+    ipcState.pdf.loadedPath = undefined
+    ipcState.pdf.sourceExistedAtLoad = false
   })
 
   it('exports a READY review: file written, record returned, exports on the detail, audit ids-only, no model/no network', async () => {
@@ -711,6 +760,78 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
       includeTechnicalDetails: false
     })
     expect(h.runtimeTouched).toEqual([])
+  })
+
+  it('P6: PDF over the SAME channel — dialog offers BOTH formats (PDF first), the REAL harness prints, row + audit say "pdf"', async () => {
+    const h = makeHarness()
+    registerEvidenceReviewsIpc(h.ctx)
+    const { messageId } = seedAnswer(h.db, {
+      content: RELEVANCE.content,
+      citations: RELEVANCE.citations,
+      coverage: RELEVANCE.coverage
+    })
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
+    const created = createdRaw as EvidenceReviewDetail
+    const dest = join(h.root, 'pack.pdf')
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = dest
+    const { result: recordRaw } = await invoke(handlers, IPC.exportEvidencePack, created.id, {
+      language: 'en',
+      format: 'pdf'
+    })
+    const record = recordRaw as EvidenceExportRecord
+
+    // The dialog offered BOTH formats, requested one first, suggested name .pdf.
+    expect(ipcState.saveDialog.lastOptions?.filters).toEqual([
+      { name: 'PDF', extensions: ['pdf'] },
+      { name: 'HTML', extensions: ['html'] }
+    ])
+    expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.pdf$/)
+
+    // The REAL print harness ran: it loaded the transient `.print.tmp.html` SIBLING of
+    // the destination (present on disk at load time), and removed it afterwards.
+    expect(ipcState.pdf.loadedPath).toBe(`${dest}.print.tmp.html`)
+    expect(ipcState.pdf.sourceExistedAtLoad).toBe(true)
+    expect(existsSync(`${dest}.print.tmp.html`)).toBe(false)
+
+    // The destination holds the printer's bytes; the row + audit record 'pdf'.
+    expect(new Uint8Array(readFileSync(dest))).toEqual(ipcState.pdf.bytes)
+    expect(record.format).toBe('pdf')
+    expect(record.fileName).toBe('pack.pdf')
+    expect(record.options).not.toHaveProperty('format')
+    const exported = listAuditEvents(h.db, { limit: 100 }).find(
+      (e) => e.type === 'evidence_pack_exported'
+    )
+    expect(exported?.metadata).toEqual({ reviewId: created.id, format: 'pdf' })
+
+    // The history read shows the raw stored format (display passthrough).
+    const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
+    expect((detailRaw as EvidenceReviewDetail).exports[0]!.format).toBe('pdf')
+
+    expect(h.runtimeTouched).toEqual([])
+    expect(offlineViolations).toEqual([])
+  })
+
+  it('P6: absent or malformed format reads html — HTML filter first, both still offered', async () => {
+    const h = makeHarness()
+    registerEvidenceReviewsIpc(h.ctx)
+    const { messageId } = seedAnswer(h.db, {
+      content: RELEVANCE.content,
+      citations: RELEVANCE.citations,
+      coverage: RELEVANCE.coverage
+    })
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
+    const created = createdRaw as EvidenceReviewDetail
+    // 'PDF' (wrong case) is NOT normalized — the boundary reads it as the default.
+    ipcState.saveDialog.canceled = true
+    await invoke(handlers, IPC.exportEvidencePack, created.id, { format: 'PDF' })
+    expect(ipcState.saveDialog.lastOptions?.filters).toEqual([
+      { name: 'HTML', extensions: ['html'] },
+      { name: 'PDF', extensions: ['pdf'] }
+    ])
+    expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.html$/)
+    expect(h.runtimeTouched).toEqual([])
+    expect(offlineViolations).toEqual([])
   })
 })
 

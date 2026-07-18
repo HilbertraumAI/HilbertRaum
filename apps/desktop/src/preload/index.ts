@@ -24,7 +24,7 @@ import type {
   EngineStatus,
   EvidenceExportRecord,
   EvidenceLinkInput,
-  EvidencePackOptions,
+  EvidencePackExportRequest,
   EvidenceReadyGate,
   EvidenceReview,
   EvidenceReviewDetail,
@@ -578,16 +578,19 @@ const api = {
   /** How many reviews this conversation's messages carry — the D-2 delete-confirm count. */
   countEvidenceReviewsForConversation: (conversationId: string): Promise<number> =>
     ipcRenderer.invoke(IPC.countEvidenceReviewsForConversation, conversationId),
-  /** Export the review as a self-contained HTML evidence pack (Phase 3, plan §8.3): save
-   *  dialog → deterministic render → ATOMIC write → export record. Null on cancel or an
-   *  unknown id; a failure up to the rename leaves no file and no row (spec §28.9), and a
-   *  post-rename record failure removes the file and REJECTS with honest localized copy
-   *  (a distinct message when even the removal failed and the file exists unrecorded) —
-   *  null never means "exported". Partial options resolve against
-   *  `EVIDENCE_PACK_OPTION_DEFAULTS` main-side. No model call, no network. */
+  /** Export the review as an evidence pack — self-contained HTML or PDF (Phase 3 plan
+   *  §8.3; PDF Phase 6 plan §11 via a hidden-window print of the same HTML): save dialog
+   *  (both format filters, requested first; the chosen extension wins) → deterministic
+   *  render → ATOMIC write → export record. Null on cancel or an unknown id; a failure up
+   *  to the rename — including a failed PDF print — leaves no file and no row (spec
+   *  §28.9), and a post-rename record failure removes the file and REJECTS with honest
+   *  localized copy (a distinct message when even the removal failed and the file exists
+   *  unrecorded) — null never means "exported". Partial options resolve against
+   *  `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; an absent/unknown `format` reads 'html'.
+   *  No model call, no network. */
   exportEvidencePack: (
     reviewId: string,
-    options: Partial<EvidencePackOptions>
+    options: EvidencePackExportRequest
   ): Promise<EvidenceExportRecord | null> =>
     ipcRenderer.invoke(IPC.exportEvidencePack, reviewId, options),
 
