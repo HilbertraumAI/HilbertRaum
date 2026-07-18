@@ -94,6 +94,12 @@ the **OCR rasterizer's hidden window** — which renders untrusted PDF bytes and
 `ocr.html` — denies *all* navigation (`() => false`). The installer is unit-tested with a fake
 WebContents that proves both events are registered and a remote redirect is prevented.
 
+**Pinned parser libraries carry no update channel (ocr-audit 2026-07-18 BE-9).** pdfjs
+(main process and the hidden OCR window) and tesseract.js parse untrusted bytes from
+imported PDFs/images and are pinned only via the lockfile — review upstream advisories for
+both each release; the offline posture means there is no auto-update channel to catch a
+disclosed vulnerability between releases.
+
 ### Voice dictation data path (Phase 37, decision D30)
 The composer mic records **in the renderer** (`getUserMedia` → `MediaRecorder`), resamples to
 16 kHz mono and encodes a WAV **in-page**, and sends the **bytes** (never a path) over the

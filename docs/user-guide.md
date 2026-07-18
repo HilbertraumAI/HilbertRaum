@@ -398,8 +398,10 @@ A few honest notes:
 
 - A model must be **running** first (the AI Model screen), and the app runs one job at a
   time: while a summary is being written, chat asks you to wait or **cancel the task**, and
-  vice versa. You can always cancel — while a task runs, the row shows its progress and a
-  Cancel button in place of Preview and **⋯**.
+  vice versa. You can cancel most tasks at any point — while a task runs, the row shows its
+  progress and a Cancel button in place of Preview and **⋯**. The one exception is OCR's
+  final "Finishing…" step: by then the recognized text is already saved, so Cancel there
+  can't stop the document from becoming searchable (see "Scanned PDFs" above).
 - For **very long documents** *without* a deep index, the summary covers the beginning of the
   document (the app tells you when that happens). Build a deep index for whole-document coverage. The
   whole document stays searchable and answerable in *Ask my documents* regardless.

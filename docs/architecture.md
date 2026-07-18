@@ -1553,7 +1553,12 @@ sentinel-tested), zero native deps.
   the worker (cleared → recreated lazily) and reject — which frees the serialized chain so
   the next page proceeds with a fresh worker. A plain recognition error still leaves the
   worker intact (unchanged). The OCR document task surfaces a timed-out page as a friendly
-  task failure (the recognition stays unpersisted; Cancel/redo unchanged).
+  task failure (the recognition stays unpersisted; Cancel/redo unchanged). **A second,
+  independent ceiling bounds rendering, not recognition:** the hidden-window rasterizer's
+  per-page open+render round-trip is capped at a fixed `RASTER_STEP_TIMEOUT_MS` (60 s,
+  `services/ocr/rasterizer.ts`), with no env override — a page that renders slowly fails
+  the task at 60 s regardless of `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS`, which only governs the
+  main-side recognition step.
 - **D33: OCR is NEVER automatic for PDFs.** Detection marks the row; "Make searchable
   (OCR)" runs as a **Phase-33 document task** (kind `'ocr'` — queue, progress
   "pages + 1", cancel; the D26 guards hold, but it needs the OCR engine instead of the
@@ -1564,7 +1569,11 @@ sentinel-tested), zero native deps.
   `ExtractedSegment{ pageNumber }` per page ⇒ **page citations work unchanged**.
   `ocr_json` survives re-index (like `origin_json`): re-index and preview reuse the
   stored pages instead of silently re-OCRing; re-running the task is the explicit redo.
-  Cancel persists nothing. **Photos are the D33 asymmetry:** the `ImageParser` OCRs on
+  **Cancel contract (GAP-7, two-part):** a cancel landing before the persist point
+  (`setDocumentOcr`) persists nothing — the document stays a detected scan; a cancel
+  landing after it (during the signal-less, minutes-long re-ingest) is deliberately
+  IGNORED and the task completes `'done'`, because the recognition is already persisted
+  and the chunks/index are being rebuilt from it. **Photos are the D33 asymmetry:** the `ImageParser` OCRs on
   import directly (one small image, seconds) via the engine injected through
   `ParseContext` — the transcriber-injection precedent.
 - **Initiation surface, admission guard & finishing-step display (OCR-R P1; ocr-audit

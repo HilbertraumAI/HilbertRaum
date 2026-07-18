@@ -247,6 +247,8 @@ carries ONLY the language data under `ocr/`:
   notice without the OCR offer, and photo imports fail per-file with friendly copy.
   `assertCommercialDrive` + both build-commercial-drive script gates verify the files
   on a SOLD drive.
+- Availability is resolved once **at startup**, not re-probed mid-session: if you add the
+  `ocr/` files while the app is running, restart it before the OCR offer appears.
 
 ## Portability notes
 - No hardcoded absolute paths; everything derives from the resolved root (spec rule).

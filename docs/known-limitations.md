@@ -1876,7 +1876,16 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
 - **The recognized text survives re-index; re-running OCR is the explicit redo.**
   Re-index (e.g. after an embedder switch) reuses the stored recognition rather than
   silently re-OCRing for minutes; if the recognition itself was bad, run "Make
-  searchable (OCR)" again — it overwrites.
+  searchable (OCR)" again — it overwrites. **This is a PDF-only guarantee:** a photo's
+  recognition is never persisted separately from the document, so re-index re-runs it
+  from scratch (seconds) instead of reusing a stored reading, unlike a scanned PDF's
+  stored pages.
+- **A cancel that lands during the final "Finishing…" step no longer stops the task.**
+  Cancel works normally while pages are being read; once recognition is done and the
+  text is being persisted and re-indexed, a cancel click is deliberately ignored — the
+  row shows "Stopping if possible…" but the document completes and comes back
+  searchable anyway, because the recognition is already saved and the index rebuild is
+  already underway.
 - **Photos are read on import** (the D33 asymmetry — one image, seconds). A photo
   import without the OCR files on the drive fails per-file with friendly copy.
 - **A single crafted/huge page can't wedge OCR for the session** (backend audit
@@ -1884,6 +1893,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   job isn't cooperatively cancellable, so a page that exceeds a 2-minute per-page ceiling
   (env-tunable) — or a Cancel landing mid-page — terminates the worker (recreated lazily on
   the next page) and fails that OCR task friendly; the engine recovers for the next document.
+  A second, fixed 60-second ceiling separately bounds each page's **render** step
+  (`RASTER_STEP_TIMEOUT_MS`, not env-tunable) — a slow-rendering page can fail the task at
+  60 s even when the 2-minute recognition ceiling would have allowed more time.
 - **Packaged-app OCR needs the asar-unpacked tesseract packages** (worker_threads
   cannot load scripts from inside `app.asar`). Wired in `electron-builder.yml`;
   verifying a real OCR run from the produced portable .exe is a release-acceptance

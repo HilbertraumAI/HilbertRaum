@@ -54,7 +54,10 @@ export interface DocTaskDeps {
   /**
    * The local OCR engine, or null when the drive carries no language files. The
    * 'ocr' kind refuses to start without it (friendly copy) — every other kind
-   * ignores it. Read per task (the assets can appear mid-session).
+   * ignores it. Read per task, but fixed at startup: engine composition never
+   * re-runs, so OCR files installed mid-session need an app restart before this
+   * starts returning non-null (ocr-audit 2026-07-18 DOC-5/BE-4). A mid-session
+   * refresh is a deliberately deferred follow-up, not shipped here.
    */
   getOcrEngine?: () => OcrEngine | null
   /**
