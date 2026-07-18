@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseSkillManifestFromDir } from '../../src/main/services/skills/manifest'
@@ -106,6 +106,38 @@ describe('SKILL.md honesty/safety rules survive the fence-trim minimum (U1 + SKA
       expect(trimmed.text!.split('\n').filter((l) => l.startsWith('- ')).length).toBeGreaterThanOrEqual(3)
     })
   }
+})
+
+// SKILL.md ⇔ docs/skills-overview.md parity — the overview's keep-in-sync rule, with teeth.
+// docs/skills-overview.md documents every bundled skill (audience: users + coding agents) and
+// carries the rule "review this file whenever a skill is added, removed, or changed". A doc rule
+// without a gate drifts, so this pins it both ways: every directory under app-skills/ (enumerated
+// from DISK, so an added skill fails until the overview is reviewed) must appear in the overview
+// with its exact id AND current version (a version bump forces a review touch), and the overview
+// must not list a skill id that no longer ships (a removed skill fails until its row is dropped).
+describe('SKILL.md ⇔ docs/skills-overview.md parity (skills overview keep-in-sync rule)', () => {
+  const OVERVIEW = readFileSync(join(REPO_ROOT, 'docs', 'skills-overview.md'), 'utf8')
+  const shippedIds = readdirSync(join(REPO_ROOT, 'app-skills'), { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort()
+
+  it('sanity: the disk enumeration sees the bundled skill set', () => {
+    expect(shippedIds).toEqual([...ALL_APP_SKILL_IDS].sort())
+  })
+
+  for (const id of shippedIds) {
+    it(`${id}: the overview lists the skill with its current id and version`, () => {
+      const res = parseSkillManifestFromDir(join(REPO_ROOT, 'app-skills', id))
+      expect(res.ok, `parse ${id}: ${res.errors.join('; ')}`).toBe(true)
+      expect(OVERVIEW).toContain(`\`${id}\` · v${res.manifest!.version}`)
+    })
+  }
+
+  it('the overview lists no skill id that no longer ships', () => {
+    const listed = [...OVERVIEW.matchAll(/`([a-z0-9-]+)` · v/g)].map((m) => m[1]).sort()
+    expect(listed).toEqual(shippedIds)
+  })
 })
 
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
