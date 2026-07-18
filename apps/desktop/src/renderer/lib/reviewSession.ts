@@ -3,6 +3,7 @@ import type {
   EvidenceReadyGate,
   EvidenceReview,
   EvidenceReviewDetail,
+  EvidenceReviewFreshness,
   EvidenceReviewItem,
   EvidenceReviewItemPatch,
   EvidenceReviewPatch,
@@ -55,6 +56,15 @@ export interface ReviewSessionState {
   saveState: ReviewSaveState
   /** Friendly copy for a failed flush (shown beside the retry action); null otherwise. */
   saveError: string | null
+  /**
+   * P4 (spec §21.2): the freshness verdict for the OPEN review, refreshed automatically on
+   * every successful open (fire-and-forget — the workspace never waits on it) and after an
+   * acknowledge. Null while none has landed (or a refresh failed — the honest "not known
+   * to be outdated" absence; a failed check must never invent a warning OR a verification).
+   * The freshness UI (banner, badges, export gate, chips) renders from THIS object only —
+   * `detail.outdated` is not consumed (write-path returns carry a constant-false overlay).
+   */
+  freshness: EvidenceReviewFreshness | null
 }
 
 const INITIAL: ReviewSessionState = {
@@ -62,7 +72,8 @@ const INITIAL: ReviewSessionState = {
   loading: false,
   openError: null,
   saveState: 'idle',
-  saveError: null
+  saveError: null,
+  freshness: null
 }
 
 /** Debounce between an edit and its IPC flush (spec §26 — batch related writes). */
@@ -132,9 +143,58 @@ export async function openReviewSession(target: ReviewHandoffTarget): Promise<vo
       return
     }
     setState({ detail, loading: false, openError: null, saveState: 'idle', saveError: null })
+    // P4 (plan §9.1 "on review open"): kick the freshness check — fire-and-forget so the
+    // workspace renders immediately (spec §26 ≤1 s open); the banner/badges appear when
+    // the verdict lands. Guarded by the SAME token inside.
+    void refreshReviewFreshness()
   } catch (e) {
     if (token !== openToken) return
     setState({ loading: false, openError: { kind: 'failed', message: friendlyIpcError(e) } })
+  }
+}
+
+/**
+ * P4: fetch the open review's freshness verdict (spec §21.2 — a cheap stored-fact
+ * comparison main-side; no hashing, no model, no network). Runs automatically after every
+ * successful open; callable again for an explicit re-check. A failure leaves `freshness`
+ * untouched — the UI simply keeps its last honest state (absence, never an invented
+ * verdict). Every post-await write is `openToken`-guarded (the store convention).
+ */
+export async function refreshReviewFreshness(): Promise<void> {
+  const reviewId = state.detail?.id
+  if (!reviewId) return
+  const token = openToken
+  try {
+    const fresh = await window.api.refreshEvidenceReviewState(reviewId)
+    if (token !== openToken) return // purge/switch landed mid-flight — never write
+    if (!state.detail || state.detail.id !== reviewId) return
+    if (fresh) setState({ freshness: fresh })
+  } catch {
+    if (token !== openToken) return
+    // Keep the last state — a failed check is not a verdict in either direction.
+  }
+}
+
+/**
+ * P4: acknowledge the CURRENT drift of an outdated review (spec §15.5/§28.6). Merges the
+ * refreshed verdict (now carrying `acknowledgedAt`) into the store; false on refusal or
+ * failure. Not blocked by the READY state — acknowledging is lifecycle metadata, not a
+ * decision edit (main enforces the same).
+ */
+export async function acknowledgeReviewFreshness(): Promise<boolean> {
+  const reviewId = state.detail?.id
+  if (!reviewId) return false
+  const token = openToken
+  try {
+    const fresh = await window.api.acknowledgeEvidenceReviewFreshness(reviewId)
+    if (token !== openToken) return fresh != null
+    if (!fresh) return false
+    if (state.detail && state.detail.id === reviewId) setState({ freshness: fresh })
+    return true
+  } catch (e) {
+    if (token !== openToken) return false
+    setState({ saveState: 'error', saveError: friendlyIpcError(e) })
+    return false
   }
 }
 

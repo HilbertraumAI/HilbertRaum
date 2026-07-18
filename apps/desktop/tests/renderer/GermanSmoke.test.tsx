@@ -10,7 +10,7 @@ import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
-import { makeDetail } from '../helpers/evidenceReview'
+import { makeDetail, makeFreshness, stubReviewApi } from '../helpers/evidenceReview'
 import { PrivacyTab } from '../../src/renderer/screens/settings/PrivacyTab'
 import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsTab'
 import { Banner, CoverageMeter, PasswordField, type Translator } from '../../src/renderer/components'
@@ -336,7 +336,7 @@ describe('German render smokes (Phase 40)', () => {
 
   it('ReviewScreen renders German (EP-1 plan §7.7 — header, decisions, evidence caption)', async () => {
     resetReviewSessionForTests()
-    stubApi({ getEvidenceReview: vi.fn(async () => makeDetail()) })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()) })
     render(german(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={() => {}} />))
 
     expect(
@@ -355,6 +355,29 @@ describe('German render smokes (Phase 40)', () => {
     expect(screen.getByText(t('de', 'review.disclaimer'))).toBeInTheDocument()
     expect(
       screen.getByRole('button', { name: t('de', 'review.footer.summary') })
+    ).toBeInTheDocument()
+    resetReviewSessionForTests()
+  })
+
+  it('ReviewScreen outdated overlay renders German (EP-1 P4 — banner, chip, badge, context action)', async () => {
+    resetReviewSessionForTests()
+    stubReviewApi(
+      { getEvidenceReview: vi.fn(async () => makeDetail()) },
+      makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
+    )
+    render(german(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={() => {}} />))
+
+    // Banner (§15.5) + acknowledge action + the ADDITIONAL Outdated chip.
+    expect(await screen.findByText(t('de', 'review.outdated.title'))).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: t('de', 'review.outdated.acknowledge') })
+    ).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'review.status.outdated'))).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'review.status.draft'))).toBeInTheDocument()
+    // Per-card changed badge + the source-in-context action.
+    expect(screen.getByText(t('de', 'review.source.changed'))).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: t('de', 'review.sourceContext.open') })
     ).toBeInTheDocument()
     resetReviewSessionForTests()
   })

@@ -5,7 +5,9 @@ import type {
   EvidencePackOptions,
   EvidenceReadyGate,
   EvidenceReviewDetail,
+  EvidenceReviewFreshness,
   EvidenceReviewStatus,
+  EvidenceSourceFreshnessState,
   EvidenceSourceSnapshot,
   ReviewDecision
 } from '../../../shared/types'
@@ -17,10 +19,12 @@ import {
 
 // Evidence-pack model (EP-1 plan §8.1, pure): normalize ONE stored review read-model into
 // the nine mandatory §16.1 sections + the §16.2 option flags, ready for the fixed HTML
-// template. Built from STORED review data only — no workspace re-reads, no model runtime,
-// no network, no freshness engine (Phase 4): availability facts are the ones recorded at
-// review creation, and the pack SAYS so (`freshnessNote` in the renderer). Honesty rules
-// carried through from Phases 0–2:
+// template. Built from its INPUTS only — no workspace re-reads, no model runtime, no
+// network. Availability facts are the ones recorded at review creation PLUS, since P4, the
+// at-export freshness verdict the pipeline INJECTS (spec §20.1 refresh step — computed
+// outside from stored facts, passed in like packId/generatedAt so the model stays pure);
+// with no verdict injected the pack honestly says "not re-verified" (`freshnessNote`).
+// Honesty rules carried through from Phases 0–2:
 //  - malformed/absent metadata stays null and renders "Unavailable" — NEVER invented
 //    (spec §20.2/§25.5); the tolerant row→DTO parsers upstream already degraded toward the
 //    weaker claim, and this module never repairs a null into a value.
@@ -112,12 +116,21 @@ export interface EvidencePackSource {
   /** null = none persisted or excluded by options. */
   snippet: string | null
   availabilityAtCreation: 'available' | 'missing' | null
+  /**
+   * P4: the source's freshness state AT EXPORT (spec §16.1.7 "availability at export
+   * time"), carried from the INJECTED freshness verdict — null when the model was built
+   * without one (the pack then renders creation-time facts + the not-re-verified note,
+   * the P3 behavior). Never derived inside this module: freshness facts always arrive as
+   * input so the model stays pure and deterministic.
+   */
+  currentState: EvidenceSourceFreshnessState | null
   /** Deduped reviewer-assigned relations pointing at this source, in fixed order (§16.1.5
    *  "Reviewer relation where assigned"). */
   relations: PackRelation[]
 }
 
-/** Coverage-and-limitations facts (§16.1.6) — creation-time record, never re-verified here. */
+/** Coverage-and-limitations facts (§16.1.6) — creation-time record; the P4 `freshness`
+ *  block below carries the at-export re-check when one was performed. */
 export interface EvidencePackHonesty {
   paneMode: EvidencePaneMode
   /** The raw recorded coverage mode literal (or null) — technical detail, not the claim. */
@@ -128,6 +141,23 @@ export interface EvidencePackHonesty {
   answerTruncated: boolean | null
   unresolvedSources: number
   missingSources: number
+}
+
+/**
+ * P4 (spec §28.6/§21.3): the freshness verdict the export pipeline computed at generation,
+ * normalized for rendering. `null` on the model = no verdict was injected — the renderer
+ * then keeps the P3 "not re-verified for this export" note. Counts are drift-oriented:
+ * `sourcesMissingNow` counts NEWLY-missing sources only (present at creation, gone now) —
+ * creation-time missing sources already carry their own §16.1.5 warning.
+ */
+export interface EvidencePackFreshness {
+  outdated: boolean
+  answerChanged: boolean
+  coverageChanged: boolean
+  sourcesChanged: number
+  sourcesMissingNow: number
+  /** The user's explicit acknowledge of the CURRENT drift (spec §28.6); null = none. */
+  acknowledgedAt: string | null
 }
 
 /** The normalized pack (all nine §16.1 sections' data). */
@@ -167,6 +197,8 @@ export interface EvidencePackModel {
   evidence: EvidencePackSource[]
   // §16.1.6 Coverage and limitations
   honesty: EvidencePackHonesty
+  /** P4: the at-export freshness verdict (spec §28.6); null = none injected (P3 shape). */
+  freshness: EvidencePackFreshness | null
   /** Raw stored coverage (for the technical subsection only). */
   coverage: CoverageInfo | null
   // §16.1.8 Generation details (absent fields render "Unavailable")
@@ -180,13 +212,21 @@ function textOrNull(v: string | null | undefined): string | null {
 
 /**
  * Build the normalized pack model from one stored review read-model (plan §8.1). Pure:
- * `packId` and `generatedAt` are INJECTED by the pipeline so tests stay deterministic.
+ * `packId` and `generatedAt` are INJECTED by the pipeline so tests stay deterministic —
+ * and so is `freshness` (P4, spec §20.1/§28.6): the pipeline computes the verdict from
+ * stored facts and passes it IN; this module never reads ambient state, so the same
+ * (detail, options, meta, freshness) inputs always produce the same model. Omitted/null
+ * freshness = the P3 shape (creation-time facts + the not-re-verified note).
  */
 export function buildEvidencePackModel(
   detail: EvidenceReviewDetail,
   options: EvidencePackOptions,
-  meta: { packId: string; generatedAt: string }
+  meta: { packId: string; generatedAt: string },
+  freshness?: EvidenceReviewFreshness | null
 ): EvidencePackModel {
+  const stateByKey = new Map<string, EvidenceSourceFreshnessState>(
+    (freshness?.sources ?? []).map((s) => [s.key, s.state])
+  )
   // Evidence register first — items reference entries by index.
   const indexByKey = new Map<string, number>()
   const evidence: EvidencePackSource[] = detail.sources.map((s, i) => {
@@ -205,6 +245,7 @@ export function buildEvidencePackModel(
       sectionLabel: textOrNull(s.sectionLabel ?? null),
       snippet: options.includeSourceExcerpts ? textOrNull(s.snippet ?? null) : null,
       availabilityAtCreation: s.availabilityAtCreation ?? null,
+      currentState: freshness ? (stateByKey.get(s.key) ?? 'unverifiable') : null,
       relations: []
     }
   })
@@ -287,6 +328,24 @@ export function buildEvidencePackModel(
     missingSources: detail.sources.filter((s) => s.availabilityAtCreation === 'missing').length
   }
 
+  // P4: normalize the injected verdict. `sourcesMissingNow` counts NEW deletions only —
+  // a source already missing at creation keeps its own §16.1.5 warning and is not drift.
+  const missingAtCreation = new Set(
+    detail.sources.filter((s) => s.availabilityAtCreation === 'missing').map((s) => s.key)
+  )
+  const packFreshness: EvidencePackFreshness | null = freshness
+    ? {
+        outdated: freshness.outdated,
+        answerChanged: freshness.answerState === 'changed',
+        coverageChanged: freshness.coverageState === 'changed',
+        sourcesChanged: (freshness.sources ?? []).filter((s) => s.state === 'changed').length,
+        sourcesMissingNow: (freshness.sources ?? []).filter(
+          (s) => s.state === 'missing' && !missingAtCreation.has(s.key)
+        ).length,
+        acknowledgedAt: freshness.acknowledgedAt ?? null
+      }
+    : null
+
   return {
     packId: meta.packId,
     schemaVersion: EVIDENCE_PACK_SCHEMA_VERSION,
@@ -296,7 +355,9 @@ export function buildEvidencePackModel(
     options,
     title: detail.title,
     status: detail.status,
-    outdated: detail.outdated,
+    // The overlay travels with the verdict when one was computed for this export; the
+    // detail's own flag (constant-false on service reads) is the fallback.
+    outdated: freshness ? freshness.outdated : detail.outdated,
     question: textOrNull(detail.questionSnapshot),
     answer: detail.answerSnapshot,
     summary: {
@@ -314,6 +375,7 @@ export function buildEvidencePackModel(
     excludedItemCount: detail.items.length - visibleItems.length,
     evidence,
     honesty,
+    freshness: packFreshness,
     coverage: detail.coverageSnapshot,
     generation: gen
   }

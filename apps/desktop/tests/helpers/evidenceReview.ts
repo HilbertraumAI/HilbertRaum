@@ -1,5 +1,7 @@
-import type { EvidenceReviewDetail, EvidenceReviewItem } from '../../src/shared/types'
+import { vi } from 'vitest'
+import type { EvidenceReviewDetail, EvidenceReviewFreshness, EvidenceReviewItem } from '../../src/shared/types'
 import { deriveReadyGate } from '../../src/main/services/evidence-reviews'
+import { stubApi } from './renderer'
 
 // Shared renderer-test fixtures for the EP-1 review workspace (plan §7): one detail shaped
 // exactly like the Phase-1 `getEvidenceReview` read-model. Tests override per case.
@@ -7,6 +9,10 @@ import { deriveReadyGate } from '../../src/main/services/evidence-reviews'
 // carry — NOT from the renderer's `computeReadyGate` mirror, so footer/gating tests never
 // validate the mirror against itself (review FIX-4; the mirror's equivalence is pinned
 // separately in tests/unit/evidence-review-gate.test.ts).
+//
+// P4: every successful session open now fires `refreshEvidenceReviewState` (plan §9.1 "on
+// review open"), so review test files stub it structurally via `stubReviewApi` below —
+// the plain `stubApi` plus the freshness auto-stub (override per test for outdated cases).
 
 export function makeItem(over: Partial<EvidenceReviewItem> & { id: string }): EvidenceReviewItem {
   return {
@@ -25,6 +31,36 @@ export function makeItem(over: Partial<EvidenceReviewItem> & { id: string }): Ev
     updatedAt: '2026-07-18T10:00:00.000Z',
     ...over
   }
+}
+
+/** A fresh (not outdated) freshness verdict matching `makeDetail`'s single source. */
+export function makeFreshness(over: Partial<EvidenceReviewFreshness> = {}): EvidenceReviewFreshness {
+  return {
+    reviewId: 'r1',
+    outdated: false,
+    answerState: 'unchanged',
+    coverageState: 'unchanged',
+    sources: [{ key: 's1', state: 'unchanged' }],
+    acknowledgedAt: null,
+    ...over
+  }
+}
+
+/**
+ * `stubApi` + the P4 freshness stub the open-session flow always calls. Overrides win —
+ * pass your own `refreshEvidenceReviewState` (or freshness via `fresh`) for outdated
+ * cases. Returns the installed refresh spy for call assertions.
+ */
+export function stubReviewApi(
+  overrides: Parameters<typeof stubApi>[0] = {},
+  fresh?: EvidenceReviewFreshness
+): { refresh: ReturnType<typeof vi.fn> } {
+  const refresh = vi.fn(
+    async (reviewId: string): Promise<EvidenceReviewFreshness | null> =>
+      fresh ?? makeFreshness({ reviewId })
+  )
+  stubApi({ refreshEvidenceReviewState: refresh, ...overrides })
+  return { refresh }
 }
 
 export function makeDetail(over: Partial<EvidenceReviewDetail> = {}): EvidenceReviewDetail {

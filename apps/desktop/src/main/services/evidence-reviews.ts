@@ -34,9 +34,12 @@ import { parseCoverage } from './chat'
 //    NEVER an invented value. Safe defaults always point AWAY from unearned confidence:
 //    unknown decision → 'not_reviewed', unknown status → 'draft', unknown link origin →
 //    'reviewer' (never claim the answer cited something), unknown identity → 'unresolved'.
-//  - `outdated` is DERIVED (spec §18.4) — Phase 0 has no freshness engine, so every read
-//    reports `false`; Phase 4 computes it at open time. It is never stored, so it can never
-//    erase a persisted 'ready'.
+//  - `outdated` is DERIVED (spec §18.4), never stored — so it can never erase a persisted
+//    'ready'. This SERVICE layer always reports `false` ("not known to be outdated"): the
+//    Phase-4 engine (`evidence-pack/freshness.ts`) computes the real overlay, and the IPC
+//    boundary applies it to the detail/summary READ responses; write-path returns keep the
+//    constant-false overlay by design (the renderer's freshness UI reads the refresh
+//    result, never a write-return's flag).
 //  - All review text is CONTENT: titles, notes, snapshots and reviewer labels never reach
 //    logs or audit events (those stay ids/counts — enforced later at the IPC layer).
 
@@ -282,8 +285,10 @@ function rowToReview(r: ReviewRow): EvidenceReview {
     questionMessageId: r.question_message_id,
     title: r.title,
     status: normalizeStatus(r.status),
-    // Derived overlay (spec §18.4) — no freshness engine exists until Phase 4, so Phase 0/1
-    // honestly report "not known to be outdated" (false), never a guess.
+    // Derived overlay (spec §18.4): the service layer reports the honest constant-false
+    // "not known to be outdated" — the Phase-4 engine computes the real flag and the IPC
+    // boundary overlays it onto detail/summary READS; write-path returns deliberately keep
+    // this false (see the module header).
     outdated: false,
     reviewerLabel: r.reviewer_label,
     generalNote: r.general_note,

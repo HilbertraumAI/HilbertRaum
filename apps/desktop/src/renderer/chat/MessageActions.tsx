@@ -5,8 +5,11 @@
 // carrying a result table) saves the answer's structured table to a user-chosen file.
 // "Review evidence" / "Continue review" (EP-1 plan §7.2, spec §9.1/§9.4 — only on
 // review-eligible document-grounded answers) opens the review workspace; an existing
-// review shows a small Draft/Ready status chip (Outdated arrives in Phase 4).
-// Feedback ("Copied"/"Saved") goes through the toast host — the buttons never mutate their own labels.
+// review shows a small Draft/Ready status chip, JOINED (P4, spec §18.4) by an Outdated
+// chip when the summary's computed freshness overlay says so — additional, never a
+// replacement (outdated must not erase the completion fact), text + glyph, never
+// color-only. Feedback ("Copied"/"Saved") goes through the toast host — the buttons never
+// mutate their own labels.
 
 import type { EvidenceReviewStatus } from '@shared/types'
 import { useT } from '../i18n'
@@ -22,6 +25,8 @@ interface Props {
   onReview?: () => void
   /** The message's existing review status, or null/absent when none exists yet. */
   reviewStatus?: EvidenceReviewStatus | null
+  /** P4: the summary's computed outdated overlay (spec §9.4) — adds the Outdated chip. */
+  reviewOutdated?: boolean
   disabled?: boolean
 }
 
@@ -32,6 +37,7 @@ export function MessageActions({
   onExportTable,
   onReview,
   reviewStatus,
+  reviewOutdated,
   disabled
 }: Props): JSX.Element {
   const { t } = useT()
@@ -77,6 +83,11 @@ export function MessageActions({
             <span className="msg-review-chip">
               <span aria-hidden="true">{reviewStatus === 'ready' ? '✓' : '○'}</span>{' '}
               {t(reviewStatus === 'ready' ? 'review.status.ready' : 'review.status.draft')}
+            </span>
+          )}
+          {reviewStatus && reviewOutdated && (
+            <span className="msg-review-chip review-outdated-chip">
+              <span aria-hidden="true">⚠</span> {t('review.status.outdated')}
             </span>
           )}
         </>

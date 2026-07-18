@@ -6,8 +6,8 @@ import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession
 import { EVIDENCE_PACK_OPTION_DEFAULTS } from '../../src/shared/evidence-review'
 import { t } from '../../src/shared/i18n'
 import type { EvidenceExportRecord } from '../../src/shared/types'
-import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
-import { makeDetail, makeItem } from '../helpers/evidenceReview'
+import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 
 // EP-1 Phase 3 (plan §8.4) — the summary's export surface: the "Create evidence pack"
 // action beside Mark ready, the inline options panel (§16.2 checkboxes at the SHARED
@@ -61,7 +61,7 @@ async function openExportPanel(dialog: HTMLElement): Promise<void> {
 
 describe('summary export panel (plan §8.4)', () => {
   it('opens with the §24.3 warning and the shared §16.2 defaults (technical OFF)', async () => {
-    stubApi({ getEvidenceReview: vi.fn(async () => makeDetail()) })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()) })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     const dialog = await openSummary()
     await openExportPanel(dialog)
@@ -81,7 +81,7 @@ describe('summary export panel (plan §8.4)', () => {
   it('exports with the chosen flags + the CURRENT UI language, merges the record into the history, and shows Last exported', async () => {
     const record = makeExportRecord()
     const exportEvidencePack = vi.fn(async () => record)
-    stubApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     const dialog = await openSummary()
     await openExportPanel(dialog)
@@ -112,7 +112,7 @@ describe('summary export panel (plan §8.4)', () => {
 
   it('cancel (null result) keeps the panel open with NO history row and NO error', async () => {
     const exportEvidencePack = vi.fn(async () => null)
-    stubApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     const dialog = await openSummary()
     await openExportPanel(dialog)
@@ -130,7 +130,7 @@ describe('summary export panel (plan §8.4)', () => {
     const exportEvidencePack = vi.fn(async () => {
       throw new Error('disk full')
     })
-    stubApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     const dialog = await openSummary()
     await openExportPanel(dialog)
@@ -145,7 +145,7 @@ describe('summary export panel (plan §8.4)', () => {
     const detail = makeDetail()
     const updateEvidenceReviewItem = vi.fn(async (id: string) => makeItem({ id }))
     const exportEvidencePack = vi.fn(async () => makeExportRecord())
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem,
       exportEvidencePack
@@ -178,7 +178,7 @@ describe('summary export panel (plan §8.4)', () => {
       ]
     })
     const exportEvidencePack = vi.fn(async () => makeExportRecord())
-    stubApi({ getEvidenceReview: vi.fn(async () => ready), exportEvidencePack })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => ready), exportEvidencePack })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     const dialog = await openSummary()
     await openExportPanel(dialog)
@@ -191,7 +191,7 @@ describe('summary export panel (plan §8.4)', () => {
     const detail = makeDetail({
       exports: [makeExportRecord({ id: 'x-old', fileName: 'older.html', createdAt: '2026-07-17T09:00:00.000Z' })]
     })
-    stubApi({ getEvidenceReview: vi.fn(async () => detail) })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => detail) })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     const dialog = await openSummary()
     expect(within(dialog).getByText(t('en', 'review.summary.exports'))).toBeInTheDocument()
@@ -205,7 +205,7 @@ describe('summary export panel (plan §8.4)', () => {
       exports: [makeExportRecord({ id: 'x1', fileName: 'pack.html', fileSha256: hash })]
     })
     const copyToClipboard = vi.fn(async () => true)
-    stubApi({ getEvidenceReview: vi.fn(async () => detail), copyToClipboard })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => detail), copyToClipboard })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     const dialog = await openSummary()
     // Truncated display of the recorded hash…
@@ -226,7 +226,7 @@ describe('summary export panel (plan §8.4)', () => {
       throw new Error('write failed')
     })
     const exportEvidencePack = vi.fn(async () => makeExportRecord())
-    stubApi({
+    stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem,
       exportEvidencePack
@@ -245,5 +245,73 @@ describe('summary export panel (plan §8.4)', () => {
     await within(dialog).findByText(t('en', 'review.export.error'))
     expect(updateEvidenceReviewItem).toHaveBeenCalled()
     expect(exportEvidencePack).not.toHaveBeenCalled()
+  })
+})
+
+describe('P4 export gate (spec §28.6): outdated blocks export until acknowledged', () => {
+  it('un-acknowledged outdated → export button DISABLED with the hint + inline acknowledge', async () => {
+    stubReviewApi(
+      { getEvidenceReview: vi.fn(async () => makeDetail()) },
+      makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
+    )
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    const dialog = await openSummary()
+    expect(
+      within(dialog).getByRole('button', { name: t('en', 'review.export.action') })
+    ).toBeDisabled()
+    expect(within(dialog).getByText(t('en', 'review.outdated.exportHint'))).toBeInTheDocument()
+    // The summary names the drift too (spec §10.4).
+    expect(
+      within(dialog).getByText(t('en', 'review.summary.sourcesChangedNow.one', { count: 1 }))
+    ).toBeInTheDocument()
+    // The acknowledge action sits right beside the hint (its flow is pinned below).
+    expect(
+      within(dialog).getByRole('button', { name: t('en', 'review.outdated.acknowledge') })
+    ).toBeInTheDocument()
+  })
+
+  it('acknowledged outdated → export allowed again', async () => {
+    stubReviewApi(
+      { getEvidenceReview: vi.fn(async () => makeDetail()) },
+      makeFreshness({
+        outdated: true,
+        sources: [{ key: 's1', state: 'changed' }],
+        acknowledgedAt: '2026-07-18T12:00:00.000Z'
+      })
+    )
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    const dialog = await openSummary()
+    expect(
+      within(dialog).getByRole('button', { name: t('en', 'review.export.action') })
+    ).toBeEnabled()
+    expect(within(dialog).queryByText(t('en', 'review.outdated.exportHint'))).toBeNull()
+  })
+
+  it('acknowledge from the summary flows through the API and unlocks the button', async () => {
+    const acknowledgeEvidenceReviewFreshness = vi.fn(async () =>
+      makeFreshness({
+        outdated: true,
+        sources: [{ key: 's1', state: 'changed' }],
+        acknowledgedAt: '2026-07-18T12:00:00.000Z'
+      })
+    )
+    stubReviewApi(
+      {
+        getEvidenceReview: vi.fn(async () => makeDetail()),
+        acknowledgeEvidenceReviewFreshness
+      },
+      makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
+    )
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    const dialog = await openSummary()
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: t('en', 'review.outdated.acknowledge') })
+    )
+    await waitFor(() => expect(acknowledgeEvidenceReviewFreshness).toHaveBeenCalledWith('r1'))
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('button', { name: t('en', 'review.export.action') })
+      ).toBeEnabled()
+    )
   })
 })

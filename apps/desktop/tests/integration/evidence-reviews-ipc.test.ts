@@ -300,9 +300,21 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     const { result: reopenedRaw } = await invoke(handlers, IPC.reopenEvidenceReview, created.id)
     expect(reopenedRaw as EvidenceReview).toMatchObject({ status: 'draft', completedAt: null })
 
-    // -- freshness stub (Phase 4 seam): known review → outdated:false; unknown → null.
+    // -- freshness (REAL since Phase 4): the untouched workspace reads honestly — resolved
+    // source unchanged, unresolved source 'unverifiable' (never 'changed'), answer +
+    // coverage unchanged, not outdated, nothing acknowledged; unknown id → null.
     const { result: freshRaw } = await invoke(handlers, IPC.refreshEvidenceReviewState, created.id)
-    expect(freshRaw as EvidenceReviewFreshness).toEqual({ reviewId: created.id, outdated: false })
+    expect(freshRaw as EvidenceReviewFreshness).toEqual({
+      reviewId: created.id,
+      outdated: false,
+      answerState: 'unchanged',
+      coverageState: 'unchanged',
+      sources: [
+        { key: 'S1', state: 'unchanged' },
+        { key: 'S2', state: 'unverifiable' }
+      ],
+      acknowledgedAt: null
+    })
     const { result: freshMissing } = await invoke(handlers, IPC.refreshEvidenceReviewState, 'nope')
     expect(freshMissing).toBeNull()
 

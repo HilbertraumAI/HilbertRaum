@@ -2011,3 +2011,43 @@ shared pass shape each block's markers are byte-derivable from the display seman
 the chat UI renders as literal code never links, what it renders as a citation always can.
 A parity suite drives the real `localizeServerCopy` over the fixtures (incl. both
 boundary-spanning repros, two-sided) to prove it.
+
+### 16.5 Freshness — snapshot vs workspace, from stored facts only (EP-1 Phase 4)
+
+`computeEvidenceReviewFreshness` (`evidence-pack/freshness.ts`) compares the frozen review
+against the CURRENT workspace on demand (review open, export, entry-point reads) — spec
+§21.2, with one hard rule: **comparison of stored facts only**. The anchors §16.2 froze are
+matched against the live rows: snapshotted `documentId` → does the `documents` row still
+exist; snapshotted `documentSha256` → does the CURRENT stored `documents.sha256` (maintained
+by ingestion) still equal it — the check never re-hashes and never opens a source file, so
+it is cheap, offline, and works identically in an encrypted workspace. The answer text
+compares exactly (`messages.content` vs `answer_snapshot`); coverage compares on a fixed
+semantic projection (mode/counts/tree status/tier/truncated/unparsed/fullyChunked —
+`nodeIds` and unknown extras are display plumbing, not claims, and never flag drift).
+
+Per-source verdicts inherit §16.2's honesty split: resolved + row + both hashes →
+`unchanged`/`changed`; resolved + row gone → `missing`; unresolved identity or an absent
+hash on either side → `unverifiable` — which can NEVER escalate to `changed` (nothing was
+compared; "cannot verify" is the only true statement). `outdated` (spec §18.4) is POSITIVE
+drift only — answer/coverage changed or ≥1 source `changed`. A deletion marks the source
+`missing` with the §15.4 copy but does not flip the overlay (spec §25.2/§28.7: deletion is
+an unavailability warning; the §28.6 acknowledge gate is reserved for content that CHANGED
+under the review). The overlay is derived, never stored — it cannot erase `ready`.
+
+Acknowledge (spec §15.5/§21.3/§28.6): the user's explicit acceptance of the CURRENT drift,
+persisted as `{acknowledgedAt, fingerprint}` where the fingerprint canonicalizes every
+non-`unchanged` fact WITH its observed current value (the current stored sha of a changed
+source; a digest of the current answer/canonical coverage — hashes only, in the encrypted
+row) — any later drift change (another source changes, a changed source changes AGAIN,
+changed→missing, a new deletion) lapses the acknowledge and the warning honestly returns;
+a state-literal-only fingerprint would silently keep a stale acknowledge alive across
+re-changes of the same fact. Export executes the spec-§20.1
+refresh step: it computes the verdict, refuses an unacknowledged-outdated review before any
+dialog opens, and injects the verdict into the (pure) pack model so the pack records
+availability AT EXPORT (§16.1.7) and every mismatch (§28.6/§28.7).
+
+Source-in-context (D-5) rides the same stored-facts posture: the modal's text comes from
+the `chunks` table (the stored extraction), resolved main-side from the review's own
+snapshot (renderer sends review id + source key only), located via the snapshotted chunk id
+(document-verified) or a stored-text containment search — never a re-read of the source
+file, and an unlocatable excerpt is said to be unlocatable, never approximated.

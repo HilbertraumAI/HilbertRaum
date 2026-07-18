@@ -503,6 +503,9 @@ CREATE TABLE IF NOT EXISTS evidence_reviews (
   created_at                TEXT NOT NULL,
   updated_at                TEXT NOT NULL,
   completed_at              TEXT,               -- last marked ready; NULL while draft
+  freshness_ack_json        TEXT,               -- EP-1 P4: JSON { acknowledgedAt, fingerprint } — the
+                                                -- acknowledged drift state (spec §15.5/§28.6); NULL = never
+                                                -- acknowledged. Never touches status/completed_at (§18.4).
   FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_reviews_message ON evidence_reviews(message_id);
@@ -1023,6 +1026,11 @@ export function openDatabase(path: string): Db {
   // user turn, or user Stop). Additive + nullable — an older app ignores it and reads every reply as
   // complete, byte-identical to before. CONTENT-free (a single boolean).
   ensureColumn(db, 'messages', 'truncated', 'truncated INTEGER')
+  // EP-1 Phase 4 (spec §15.5/§28.6): the acknowledged-drift record — JSON
+  // { acknowledgedAt, fingerprint } written by acknowledgeEvidenceReviewFreshness; NULL =
+  // never acknowledged. Additive + nullable so P0–P3 workspaces open unchanged; the ack is
+  // lifecycle METADATA and deliberately not part of updated_at/status/completed_at (§18.4).
+  ensureColumn(db, 'evidence_reviews', 'freshness_ack_json', 'freshness_ack_json TEXT')
   // Bank-transaction derived annotations (architecture.md "Skills — design record" §10, S11c). All nullable —
   // a row has no category/reconciled/confidence until a downstream tool computes one. CONTENT-CLASS
   // (a category id / reconcile verdict is derived from user figures): never logged/audited/exported.

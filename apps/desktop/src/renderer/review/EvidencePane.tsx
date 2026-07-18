@@ -1,7 +1,9 @@
 import { useId, useState } from 'react'
 import type {
   CoverageInfo,
+  EvidenceReviewFreshness,
   EvidenceReviewItem,
+  EvidenceSourceFreshnessState,
   EvidenceSourceSnapshot
 } from '@shared/types'
 import { formatCitationLabel } from '../lib/displayMap'
@@ -42,9 +44,11 @@ export function EvidencePane({
   coverage,
   selectedItem,
   readOnly,
+  freshness,
   onLink,
   onUnlink,
   onSetRelation,
+  onOpenContext,
   t,
   tCount
 }: {
@@ -54,9 +58,13 @@ export function EvidencePane({
   selectedItem: EvidenceReviewItem | null
   /** Ready review (FIX-1): link/unlink/relation controls disable until reopened. */
   readOnly?: boolean
+  /** P4: the at-open freshness verdict; null = none landed yet (cards show creation facts only). */
+  freshness?: EvidenceReviewFreshness | null
   onLink: (itemId: string, evidenceKey: string) => void
   onUnlink: (itemId: string, evidenceKey: string) => void
   onSetRelation: (itemId: string, evidenceKey: string, relation: Relation | null) => void
+  /** P4 (D-5): open the source-in-context modal for one snapshot key. */
+  onOpenContext?: (evidenceKey: string) => void
   t: I18n['t']
   tCount: I18n['tCount']
 }): JSX.Element {
@@ -67,6 +75,9 @@ export function EvidencePane({
   const shown = overCap ? sources.slice(0, PROVENANCE_CARD_CAP) : sources
   const paneMode = evidencePaneMode(coverage)
   const headId = useId()
+  const stateByKey = new Map<string, EvidenceSourceFreshnessState>(
+    (freshness?.sources ?? []).map((s) => [s.key, s.state])
+  )
   return (
     <div className="review-evidence" role="region" aria-labelledby={headId}>
       <h2 id={headId} className="review-evidence-title">
@@ -83,11 +94,13 @@ export function EvidencePane({
         <EvidenceCard
           key={s.key}
           source={s}
+          currentState={freshness ? (stateByKey.get(s.key) ?? null) : null}
           selectedItem={selectedItem}
           readOnly={readOnly === true}
           onLink={onLink}
           onUnlink={onUnlink}
           onSetRelation={onSetRelation}
+          onOpenContext={onOpenContext}
           t={t}
         />
       ))}
@@ -102,19 +115,24 @@ export function EvidencePane({
 
 function EvidenceCard({
   source,
+  currentState,
   selectedItem,
   readOnly,
   onLink,
   onUnlink,
   onSetRelation,
+  onOpenContext,
   t
 }: {
   source: EvidenceSourceSnapshot
+  /** P4: the source's at-open freshness state; null = no verdict landed. */
+  currentState: EvidenceSourceFreshnessState | null
   selectedItem: EvidenceReviewItem | null
   readOnly: boolean
   onLink: (itemId: string, evidenceKey: string) => void
   onUnlink: (itemId: string, evidenceKey: string) => void
   onSetRelation: (itemId: string, evidenceKey: string, relation: Relation | null) => void
+  onOpenContext?: (evidenceKey: string) => void
   t: I18n['t']
 }): JSX.Element {
   const relationId = useId()
@@ -122,6 +140,24 @@ function EvidenceCard({
   // Only a DIRECT EXCERPT carries the localized [Sn] marker (EN [S1] / DE [Q1]) — a
   // provenance/structured source shows none (SourcesDisclosure precedent, spec §13.3).
   const showMarker = source.kind === 'direct_excerpt' && source.machineLabel
+  // P4 freshness badges (spec §15.4/§15.5), ADDITIONAL to the creation-time facts below:
+  //  - 'changed'  → §15.5 copy (resolved sources only by construction);
+  //  - 'missing'  → §15.4 copy, ONLY when the deletion is NEW (a creation-missing source
+  //    already carries its own badge — no duplicate);
+  //  - 'unverifiable' on a RESOLVED source (hash absent) → honest cannot-verify;
+  //    UNRESOLVED sources keep only their existing "identity" badge — their state can
+  //    never be presented as changed (binding P3 watch-out).
+  const freshnessBadge =
+    currentState === 'changed'
+      ? ({ icon: '⚠', key: 'review.source.changed' } as const)
+      : currentState === 'missing' && source.availabilityAtCreation !== 'missing'
+        ? ({ icon: '⚠', key: 'review.source.missingNow' } as const)
+        : currentState === 'unverifiable' && source.identity === 'resolved'
+          ? ({ icon: '?', key: 'review.source.cannotVerify' } as const)
+          : null
+  // D-5: context resolves through the snapshotted documentId — only resolved sources can
+  // offer it (an unresolved identity has no document to read; main refuses it too).
+  const canOpenContext = onOpenContext != null && source.identity === 'resolved' && !!source.documentId
   return (
     <div className="source-card review-source-card">
       <div className="source-card-head">
@@ -140,8 +176,8 @@ function EvidenceCard({
       {source.snippet && <div className="source-card-snippet">{source.snippet}</div>}
       <div className="review-source-meta">
         <span className="review-source-kind">{t(`review.source.kind.${source.kind}`)}</span>
-        {/* Honest identity/availability states (spec §13.5/§25.2; Phase-4 freshness adds
-            live states — these are the CREATION-TIME facts the snapshot recorded). */}
+        {/* Honest identity/availability states (spec §13.5/§25.2): the CREATION-TIME facts
+            the snapshot recorded; the P4 freshness badge below adds the CURRENT state. */}
         {source.identity === 'unresolved' && (
           <span className="review-source-state">
             <span aria-hidden="true">?</span> {t('review.source.unresolved')}
@@ -152,7 +188,19 @@ function EvidenceCard({
             <span aria-hidden="true">⚠</span> {t('review.source.missingAtCreation')}
           </span>
         )}
+        {freshnessBadge && (
+          <span className="review-source-state review-source-freshness">
+            <span aria-hidden="true">{freshnessBadge.icon}</span> {t(freshnessBadge.key)}
+          </span>
+        )}
       </div>
+      {canOpenContext && (
+        <div className="review-source-context-action">
+          <button type="button" className="msg-action" onClick={() => onOpenContext(source.key)}>
+            {t('review.sourceContext.open')}
+          </button>
+        </div>
+      )}
       {selectedItem != null && (
         <div className="review-source-actions">
           {link == null && (

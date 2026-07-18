@@ -412,6 +412,7 @@ const MessageBlock = memo(function MessageBlock({
           }
           onReview={openReview}
           reviewStatus={reviewSummary?.status ?? null}
+          reviewOutdated={reviewSummary?.outdated === true}
           disabled={actionsDisabled}
         />
       )}

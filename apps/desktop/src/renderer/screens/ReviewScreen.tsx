@@ -5,6 +5,7 @@ import { AssistantMarkdown } from '../chat/AssistantMarkdownLazy'
 import { Button, ConfirmDialog, Modal, useToast } from '../components'
 import { formatCitationLabel, localizeServerCopy } from '../lib/displayMap'
 import {
+  acknowledgeReviewFreshness,
   bulkClearDecisions,
   bulkMarkHeadingsNotApplicable,
   bulkMarkUndecidedFollowUp,
@@ -24,6 +25,7 @@ import {
 import { DecisionControl } from '../review/DecisionControl'
 import { EvidencePane, evidencePaneMode } from '../review/EvidencePane'
 import { ReviewSummaryView } from '../review/ReviewSummaryView'
+import { SourceContextModal } from '../review/SourceContextModal'
 import { useT, type I18n } from '../i18n'
 
 // The evidence-review workspace (EP-1 plan §7.3, spec §10/§11): a dedicated full-window
@@ -73,6 +75,8 @@ export function ReviewScreen({
   const [renameDraft, setRenameDraft] = useState<string | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
+  /** P4 (D-5): the snapshot key whose source-in-context modal is open; null = closed. */
+  const [contextKey, setContextKey] = useState<string | null>(null)
   const questionId = useId()
 
   useEffect(() => {
@@ -152,6 +156,9 @@ export function ReviewScreen({
   // and bulk actions disable (main refuses their writes too); head edits (rename, reviewer
   // label, general note) and the summary's Reopen stay live.
   const readOnly = detail.status === 'ready'
+  // P4: the freshness UI renders EXCLUSIVELY from the store's refresh result (write-path
+  // returns carry a constant-false overlay and must never hide a real warning).
+  const freshness = session.freshness
 
   const evidencePane = (
     <EvidencePane
@@ -159,9 +166,11 @@ export function ReviewScreen({
       coverage={detail.coverageSnapshot}
       selectedItem={selectedItem}
       readOnly={readOnly}
+      freshness={freshness}
       onLink={(itemId, key) => void linkEvidence(itemId, key, null)}
       onUnlink={(itemId, key) => void unlinkEvidence(itemId, key)}
       onSetRelation={(itemId, key, relation) => void linkEvidence(itemId, key, relation)}
+      onOpenContext={(key) => setContextKey(key)}
       t={t}
       tCount={tCount}
     />
@@ -206,10 +215,63 @@ export function ReviewScreen({
           <span aria-hidden="true">{detail.status === 'ready' ? '✓' : '○'}</span>{' '}
           {t(detail.status === 'ready' ? 'review.status.ready' : 'review.status.draft')}
         </span>
+        {/* P4 (spec §18.4): Outdated is an ADDITIONAL chip — the Draft/Ready fact stays
+            visible (outdated never erases completion). Text + glyph, never color-only. */}
+        {freshness?.outdated && (
+          <span className="review-status-chip review-outdated-chip">
+            <span aria-hidden="true">⚠</span> {t('review.status.outdated')}
+          </span>
+        )}
         {/* FIX-1: the quiet "why is everything disabled" line next to the chip. */}
         {readOnly && <span className="hint review-readonly-hint">{t('review.readonlyHint')}</span>}
         <SaveStateLine state={session.saveState} error={session.saveError} t={t} />
       </div>
+
+      {/* P4 Outdated banner (spec §15.5/§21.3): names the drift, keeps the §21.3 options
+          visible, and carries the acknowledge action. It never blocks reading or editing —
+          only export waits for the acknowledge (§28.6). role=status: it appears async
+          after the freshness check lands. The fact list includes NEWLY-missing sources
+          (fix round FIX-5): a new deletion lapses a prior acknowledge by adding a drift
+          fact, so the re-demand must NAME that fact — even though deletion alone never
+          opens this banner (it does not flip outdated). Creation-missing sources are not
+          drift and stay off the list (their badge lives on the card). */}
+      {freshness?.outdated && (
+        <div className="review-outdated-banner" role="status">
+          <p className="review-outdated-title">
+            <span aria-hidden="true">⚠</span> <strong>{t('review.outdated.title')}</strong>
+          </p>
+          <ul className="review-outdated-facts">
+            {freshness.answerState === 'changed' && <li>{t('review.outdated.answerChanged')}</li>}
+            {freshness.coverageState === 'changed' && (
+              <li>{t('review.outdated.coverageChanged')}</li>
+            )}
+            {(freshness.sources ?? []).filter((s) => s.state === 'changed').length > 0 && (
+              <li>
+                {tCount(
+                  'review.outdated.sourcesChanged',
+                  (freshness.sources ?? []).filter((s) => s.state === 'changed').length
+                )}
+              </li>
+            )}
+            {countMissingNow(freshness, detail) > 0 && (
+              <li>{tCount('review.summary.sourcesMissingNow', countMissingNow(freshness, detail))}</li>
+            )}
+          </ul>
+          <p className="hint">{t('review.outdated.keepNote')}</p>
+          {freshness.acknowledgedAt ? (
+            <p className="hint review-outdated-acked">
+              <span aria-hidden="true">✓</span>{' '}
+              {t('review.outdated.acknowledgedAt', {
+                date: formatFreshnessDate(freshness.acknowledgedAt, lang)
+              })}
+            </p>
+          ) : (
+            <Button size="sm" onClick={() => void acknowledgeReviewFreshness()}>
+              {t('review.outdated.acknowledge')}
+            </Button>
+          )}
+        </div>
+      )}
 
       <div className={narrow ? 'review-panes narrow' : 'review-panes'}>
         <div className="review-answer-pane" role="region" aria-label={t('review.answerPane.aria')}>
@@ -340,15 +402,27 @@ export function ReviewScreen({
       >
         <ReviewSummaryView
           detail={detail}
+          freshness={freshness}
           onEditHead={editReviewHead}
           onMarkReady={() => void handleMarkReady()}
           onReopen={() => void handleReopen()}
+          onAcknowledge={() => void acknowledgeReviewFreshness()}
           busy={actionBusy}
           t={t}
           tCount={tCount}
           lang={lang}
         />
       </Modal>
+
+      {/* P4 (D-5): source-in-context — main-side resolution from the review's own
+          snapshot; the modal fetches on open and highlights the persisted excerpt. */}
+      <SourceContextModal
+        open={contextKey != null}
+        reviewId={detail.id}
+        sourceKey={contextKey}
+        onClose={() => setContextKey(null)}
+        t={t}
+      />
 
       <ConfirmDialog
         open={confirmClear}
@@ -365,6 +439,36 @@ export function ReviewScreen({
       </ConfirmDialog>
     </div>
   )
+}
+
+/** NEWLY-missing sources in a freshness verdict: state 'missing' minus the ones already
+ *  missing at creation (the same rule the summary + pack use — creation-missing is a
+ *  recorded fact, not drift). */
+function countMissingNow(
+  freshness: { sources?: { key: string; state: string }[] },
+  detail: EvidenceReviewDetail
+): number {
+  const missingAtCreation = new Set(
+    detail.sources.filter((s) => s.availabilityAtCreation === 'missing').map((s) => s.key)
+  )
+  return (freshness.sources ?? []).filter(
+    (s) => s.state === 'missing' && !missingAtCreation.has(s.key)
+  ).length
+}
+
+/** Locale-aware acknowledge stamp (the ReviewSummaryView `formatWhen` idiom); raw string
+ *  when unparseable — never an invented date. */
+function formatFreshnessDate(iso: string, lang: I18n['lang']): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString(lang, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
 }
 
 /** Quiet auto-save status (guidelines §6 — labelled text, no bare spinner). */

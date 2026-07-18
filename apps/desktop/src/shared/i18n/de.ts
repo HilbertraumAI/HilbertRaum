@@ -2005,6 +2005,9 @@ export const de: Record<keyof typeof en, string> = {
     'Das Nachweispaket konnte nicht im Exportverlauf verzeichnet werden; die exportierte Datei wurde deshalb entfernt. Es wurde nichts gespeichert — versuche den Export erneut.',
   'main.evidenceReviews.exportFileNotRecorded':
     'Die Nachweispaket-Datei wurde gespeichert, konnte aber weder im Exportverlauf verzeichnet noch entfernt werden. Ihr Hash ist nicht verzeichnet — exportiere erneut und ersetze die Datei.',
+  // EP-1 P4 (Spec §28.6) — siehe en.ts.
+  'main.evidenceReviews.exportOutdated':
+    'Diese Prüfung ist veraltet — eine Quelle oder die Antwort hat sich seit dem Anlegen geändert. Bestätige die Änderung in der Prüfung, bevor du exportierst.',
   // BE-1 (full-audit 2026-07-10) — siehe en.ts.
   'main.settings.invalidPatch':
     'Diese Einstellungsänderung ist ungültig und wurde nicht gespeichert.',
@@ -2364,7 +2367,24 @@ export const de: Record<keyof typeof en, string> = {
   'review.entry.sources': 'Antwort und Quellen prüfen',
   'review.status.draft': 'Entwurf',
   'review.status.ready': 'Abgeschlossen',
+  // P4-Frische-Overlay (Spec §18.4/§9.4) — zusätzlicher Chip, ersetzt nie Entwurf/Abgeschlossen.
+  'review.status.outdated': 'Veraltet',
   'review.readonlyHint': 'Abgeschlossen — öffne die Prüfung wieder, um sie zu bearbeiten.',
+  // ---- P4: Veraltet-Hinweis + Bestätigung (Spec §15.5/§21.3/§28.6) ----
+  'review.outdated.title': 'Diese Prüfung ist veraltet.',
+  'review.outdated.answerChanged':
+    'Der Antworttext stimmt nicht mehr mit dem geprüften Stand überein.',
+  'review.outdated.coverageChanged':
+    'Die aufgezeichneten Abdeckungsdaten stimmen nicht mehr mit dem geprüften Stand überein.',
+  'review.outdated.sourcesChanged.one':
+    '{count} Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert.',
+  'review.outdated.sourcesChanged.other':
+    '{count} Quelldokumente haben sich seit dem Anlegen dieser Prüfung geändert.',
+  'review.outdated.keepNote':
+    'Deine erfassten Entscheidungen bleiben unverändert. Du kannst die historische Prüfung behalten, die Änderung bestätigen oder im Chat erneut fragen und eine neue Prüfung beginnen.',
+  'review.outdated.acknowledge': 'Änderung bestätigen',
+  'review.outdated.acknowledgedAt': 'Änderung bestätigt {date}.',
+  'review.outdated.exportHint': 'Bestätige die Änderung, bevor du ein Nachweispaket exportierst.',
   'review.back': 'Zurück zum Chat',
   'review.rename': 'Umbenennen',
   'review.rename.label': 'Titel der Prüfung',
@@ -2393,6 +2413,29 @@ export const de: Record<keyof typeof en, string> = {
   'review.source.kind.structured_record': 'Extrahierter Datensatz',
   'review.source.unresolved': 'Quelle konnte nicht eindeutig zugeordnet werden',
   'review.source.missingAtCreation': 'Quelle war beim Erstellen dieser Prüfung nicht verfügbar',
+  // P4-Frische-Hinweise pro Quelle (Spec §15.4/§15.5).
+  'review.source.changed': 'Das Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert',
+  'review.source.missingNow':
+    'Diese Quelle ist nicht mehr im Arbeitsbereich vorhanden. Der gespeicherte Auszug bleibt in dieser Prüfung erhalten.',
+  'review.source.cannotVerify': 'Der aktuelle Stand dieser Quelle kann nicht überprüft werden',
+  // P4 Quelle-im-Kontext (D-5, Spec §10.2.4).
+  'review.sourceContext.open': 'Quelle im Kontext öffnen',
+  'review.sourceContext.title': 'Quelle im Kontext',
+  'review.sourceContext.loading': 'Gespeicherter Text wird geladen…',
+  'review.sourceContext.failed': 'Der gespeicherte Text dieser Quelle konnte nicht geladen werden.',
+  'review.sourceContext.hashMatch':
+    'Der gespeicherte Dokument-Hash stimmt mit dem Prüfstand überein.',
+  'review.sourceContext.hashMismatch':
+    'Das Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert.',
+  'review.sourceContext.hashUnknown':
+    'Der aktuelle Stand des Dokuments kann nicht gegen den Prüfstand überprüft werden.',
+  'review.sourceContext.missing':
+    'Diese Quelle war beim Erstellen der Antwort verfügbar, ist aber nicht mehr im Arbeitsbereich vorhanden. Der gespeicherte Auszug bleibt in dieser Prüfung erhalten, soweit vorhanden.',
+  'review.sourceContext.notLocated':
+    'Der gespeicherte Auszug konnte im aktuellen gespeicherten Text nicht gefunden werden. Er wird unten so gezeigt, wie er beim Anlegen der Prüfung festgehalten wurde.',
+  'review.sourceContext.storedNote':
+    'Der Kontext stammt aus dem beim Import extrahierten, gespeicherten Text — die Quelldatei selbst wird nicht geöffnet.',
+  'review.sourceContext.excerptHeading': 'Gespeicherter Auszug',
   'review.link.add': 'Mit Aussage verknüpfen',
   'review.link.remove': 'Verknüpfung entfernen',
   'review.link.cited': 'Von der Antwort zitiert',
@@ -2441,6 +2484,15 @@ export const de: Record<keyof typeof en, string> = {
     '{count} Quelle war beim Erstellen dieser Prüfung nicht verfügbar',
   'review.summary.sourcesMissing.other':
     '{count} Quellen waren beim Erstellen dieser Prüfung nicht verfügbar',
+  // P4-Frische-Zeilen (Spec §10.4).
+  'review.summary.sourcesChangedNow.one':
+    '{count} Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert',
+  'review.summary.sourcesChangedNow.other':
+    '{count} Quelldokumente haben sich seit dem Anlegen dieser Prüfung geändert',
+  'review.summary.sourcesMissingNow.one':
+    '{count} Quelldokument ist nicht mehr im Arbeitsbereich vorhanden',
+  'review.summary.sourcesMissingNow.other':
+    '{count} Quelldokumente sind nicht mehr im Arbeitsbereich vorhanden',
   'review.summary.truncated':
     'Die erzeugte Antwort ist möglicherweise unvollständig — sie wurde am Ausgabelimit des Modells abgeschnitten.',
   'review.summary.generation': 'Erstellungsdetails',
@@ -2548,6 +2600,11 @@ export const de: Record<keyof typeof en, string> = {
     'Die Identität dieses Quelldokuments konnte nicht gegen den Arbeitsbereich verifiziert werden.',
   'packExport.evidence.missingAtCreation':
     'Dieses Quelldokument fehlte bereits im Arbeitsbereich, als die Prüfung angelegt wurde.',
+  // P4-Zustände zum Exportzeitpunkt (Spec §15.4/§15.5).
+  'packExport.evidence.changedSince':
+    'Das Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert.',
+  'packExport.evidence.missingNow':
+    'Diese Quelle war beim Erstellen der Antwort verfügbar, ist aber nicht mehr im Arbeitsbereich vorhanden. Der gespeicherte Auszug bleibt in diesem Paket erhalten, soweit vorhanden.',
   'packExport.section.coverage': 'Abdeckung und Einschränkungen',
   'packExport.coverage.modeRelevance':
     'Die gezeigten Quellen sind die Auszüge, die dem lokalen KI-Modell für diese Antwort vorgelegt wurden.',
@@ -2563,13 +2620,33 @@ export const de: Record<keyof typeof en, string> = {
     'Für diese Antwort wurde keine Kürzung der Ausgabe aufgezeichnet.',
   'packExport.coverage.freshnessNote':
     'Die Verfügbarkeit der Quellen entspricht dem Stand beim Anlegen der Prüfung; sie wurde für diesen Export nicht erneut überprüft.',
+  // P4 (Spec §20.1/§28.6) — siehe en.ts.
+  'packExport.coverage.freshnessChecked':
+    'Die Verfügbarkeit der Quellen wurde beim Erzeugen dieses Pakets erneut gegen den Arbeitsbereich geprüft — durch Vergleich gespeicherter Dokument-Hashes. Die Quelldateien wurden nicht erneut gelesen.',
+  'packExport.coverage.outdated':
+    'Diese Prüfung ist veraltet: Die Antwort oder mindestens ein Quelldokument stimmt nicht mehr mit dem geprüften Stand überein.',
+  'packExport.coverage.answerChangedNow':
+    'Der Antworttext in der Unterhaltung stimmt nicht mehr mit dem hier geprüften Stand überein.',
+  'packExport.coverage.coverageChangedNow':
+    'Die aufgezeichneten Abdeckungsdaten stimmen nicht mehr mit dem geprüften Stand überein.',
+  'packExport.coverage.sourcesChangedNow.one':
+    '{count} Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert.',
+  'packExport.coverage.sourcesChangedNow.other':
+    '{count} Quelldokumente haben sich seit dem Anlegen dieser Prüfung geändert.',
+  'packExport.coverage.sourcesMissingNow.one':
+    '{count} Quelldokument ist nicht mehr im Arbeitsbereich vorhanden.',
+  'packExport.coverage.sourcesMissingNow.other':
+    '{count} Quelldokumente sind nicht mehr im Arbeitsbereich vorhanden.',
+  'packExport.coverage.acknowledged': 'Die prüfende Person hat diese Änderung am {date} bestätigt.',
   'packExport.section.sources': 'Quellenregister',
   'packExport.sources.colTitle': 'Dokument',
   'packExport.sources.colType': 'Dateityp',
   'packExport.sources.colSha': 'SHA-256 zum Prüfzeitpunkt',
   'packExport.sources.colAvailability': 'Verfügbarkeit beim Anlegen der Prüfung',
+  'packExport.sources.colAvailabilityExport': 'Verfügbarkeit beim Export',
   'packExport.sources.availabilityAvailable': 'Verfügbar',
   'packExport.sources.availabilityMissing': 'Fehlte',
+  'packExport.sources.availabilityChanged': 'Seit der Prüfung geändert',
   'packExport.sources.availabilityUnknown': 'Nicht überprüfbar',
   'packExport.sources.hashExcluded': 'Über Exportoptionen ausgeschlossen',
   'packExport.sources.pathNote':
