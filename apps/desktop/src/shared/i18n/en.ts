@@ -2373,6 +2373,15 @@ export const en = {
     'This answer has no persisted source excerpts. You can record a general review, but source-level verification is unavailable.',
   'review.disclaimer':
     'A citation shows where information came from. It does not by itself prove that the answer is correct.',
+  // P5 large-set navigation (spec §25.6): filter + stepped reveal over the capped list.
+  'review.evidence.filterLabel': 'Filter sources',
+  'review.evidence.filterPlaceholder': 'Filter by title or text…',
+  'review.evidence.filterClear': 'Clear filter',
+  'review.evidence.filterNone': 'No sources match your filter.',
+  'review.evidence.shownCount': '{shown} of {total} sources shown',
+  // P5 (spec §23): the visible line tying the pane to the selected item — the programmatic
+  // region label carries the same context.
+  'review.evidence.linkingItem': 'Linking evidence for review item {n}',
   // Evidence cards
   'review.source.kind.direct_excerpt': 'Direct excerpt',
   'review.source.kind.whole_document_provenance': 'Whole-document provenance',
@@ -2421,6 +2430,22 @@ export const en = {
   'review.item.noteLabel': 'Note',
   'review.item.notePlaceholder': 'Add a note (optional)',
   'review.item.viewEvidence': 'View evidence',
+  // ---- P5 reviewer text selections (spec §12.1 "Review separately"; plan §10) ----
+  // The selection surface shows the item's ORIGINAL snapshot text (the string the stored
+  // offsets index into), not the formatted rendering — stated honestly in the hint.
+  'review.selection.start': 'Review a passage separately',
+  'review.selection.hint':
+    'Select the passage in the original text below (shown without formatting), then choose “Review separately”.',
+  'review.selection.surfaceAria': 'Original text of review item {n}',
+  'review.selection.add': 'Review separately',
+  'review.selection.close': 'Done',
+  'review.selection.added': 'Passage added as its own review item.',
+  // The friendly refusal (plan §10: refused offsets are a hint, never a crash) — the
+  // service rejects misaligned offsets rather than guessing at a repair.
+  'review.selection.refused':
+    'That selection could not be added. Select the passage again and retry.',
+  'review.item.selectionTag': 'Reviewer text selection',
+  'review.selection.remove': 'Remove selection',
   // Decisions (spec §14.1/§24.2) — the persisted machine values never change; display only.
   'review.decision.groupAria': 'Decision',
   'review.decision.supported': 'Reviewed — supported',

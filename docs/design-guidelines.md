@@ -311,6 +311,18 @@ Qualität bleibt top.").
   "Ask my documents" → „Meine Dokumente fragen“ · lock/unlock → sperren/entsperren ·
   password → Passwort · settings → Einstellungen · plaintext (developer) mode →
   unverschlüsselt (Entwickler).
+- **EP-1 review glossary** (native pass, P5 2026-07-18 — the legal-adjacent register for the
+  evidence-review surface; also pinned atop `de.ts`): evidence → **Nachweis(e)** — never
+  „Beleg“ as a noun; „belegt“ only as the participle in decision labels („Geprüft — belegt“) ·
+  review (the artifact) → **Prüfung** (evidence review → Nachweis-Prüfung) · review item →
+  **Prüfpunkt** · evidence pack → **Nachweispaket** · citation / source marker →
+  **Quellenverweis** (never „Quellenangabe“/„Zitat“ — one term carries the honesty claim) ·
+  whole-document provenance → **Herkunft aus einer Gesamtdokument-Analyse** (its negation is
+  always „keine satzgenauen Quellenverweise“) · direct excerpt → **direkter Auszug** ·
+  source (document) → **Quelle / Quelldokument** · reviewer → **Prüfer** (label) / **die
+  prüfende Person** (prose) · mark ready / reopen → **Prüfung abschließen / Prüfung wieder
+  öffnen** · outdated → **veraltet** · review creation is „**Anlegen** der Prüfung“ (the
+  ANSWER is „erstellt“ — the two are never mixed).
 - **Screen-name references** match the German nav labels: KI-Modell-Bereich,
   Dokumente-Bereich, „in den Einstellungen“. A string that names a button quotes the
   button's exact German label („Neu indexieren“, „Durchsuchbar machen (OCR)“).
@@ -839,7 +851,76 @@ keyboard walk §28.10, drawer focus-return), `ReviewEntryPoints.test.tsx` (visib
 D-2 delete-confirm count), `reviewSession.test.ts` (debounce/loss-free/purge), plus
 `GermanSmoke`/`InformationArchitecture`/`LazyScreens` legs and the restart + lock/unlock
 integration legs in `evidence-reviews-ipc.test.ts`. German copy is a DRAFT pending the
-native review pass (Phase 6, D-L7 — flagged in `de.ts`).
+native review pass (Phase 6, D-L7 — flagged in `de.ts`). **(Superseded: the native pass
+landed in P5 — §11.13; the draft flags are gone.)**
+
+### 11.13 Evidence-review polish — EP-1 Phase 5 rollout (IMPLEMENTED 2026-07-18, plan §10)
+
+Selections, source filter, back-to-conversation, the German native pass, and the recorded
+§9 accessibility audit (the EP-1 exit-gate artifact). Patterns added:
+
+- **Reviewer text selections select from the SOURCE text, not the rendering.** The stored
+  offsets are UTF-16 code units into a block's `textSnapshot`, and main REFUSES misaligned
+  boundaries (never clamps) — but `AssistantMarkdown`'s rendered DOM is NOT that string
+  (markdown syntax dropped, `[S1]`→`[Q1]` localized, math rewritten to KaTeX output, soft
+  breaks reflowed), so mapping a DOM selection back through it cannot be exact. The shipped
+  surface is the plan-§10 honest fallback: "Review a passage separately" swaps in a
+  **read-only `<textarea>` whose value IS the snapshot** — its native
+  `selectionStart/End` ARE the offsets (exact by construction), keyboard selection
+  (Shift+arrows) works natively (the WCAG 2.5.7 non-drag path), and the hint says the text
+  is shown without formatting. A refusal from main surfaces as a quiet `role="status"`
+  retry hint, never an error state; a success announces via toast and keeps the composer
+  mounted (no focus loss). Selection items render as tagged plain-text quotes ("Reviewer
+  text selection") with a Remove action — never through the markdown renderer (a
+  mid-markdown slice is not valid markdown; the pack renders them as plain text too).
+- **Large provenance sets: filter + stepped reveal, NO virtualization.** The evidence pane
+  keeps the `PROVENANCE_CARD_CAP` (24) initial render and now reveals cap-sized batches
+  ("Show 24 more" + a "{shown} of {total}" status line) plus a filter input (title /
+  snippet / section / marker / page) once the set exceeds the cap. Measured before
+  virtualizing (plan §10): with 30 sources the full IPC open path runs in ~3 ms and the
+  mounted DOM never exceeds the revealed batch (pinned in `ReviewEvidencePane.test.tsx` +
+  `evidence-review-open-perf.test.ts`), so `@tanstack/react-virtual` stays out — no new
+  dependency.
+- **Back to chat returns to the ORIGINATING conversation** (the named P2 UX debt): the
+  review's `conversationId` flows App-side (`backToConversation` → `chatConversation`
+  handoff slot, the chatScope idiom; cleared by every plain chat navigation) and ChatScreen
+  gained a mount-time re-attach effect (the stream/skill-run idiom, `activeIdRef`-guarded).
+  A deleted conversation degrades to chat home — never a phantom selection.
+- **Perf pass (spec §26), recorded:** opening a review with 30 sources through the real
+  IPC handlers — create 11.8 ms, open (detail read + freshness check) 3.0 ms, model
+  runtime NEVER touched (tripwire), offline guard silent, no fixed sleeps anywhere
+  (`evidence-review-open-perf.test.ts`; the 1 000 ms assert is the spec's own budget as an
+  order-of-magnitude regression tripwire).
+- **German native pass (D-L7) over ALL EP-1 keys** (`review.*` 152, `packExport.*` 96,
+  `main.evidenceReviews.*` 6 — EN=DE parity, incl. the 16 new P5 keys): consistent du-form, legal-adjacent
+  register, terminology per the §7 EP-1 glossary (Nachweis / Prüfung / Prüfpunkt /
+  Quellenverweis / „Anlegen der Prüfung“); the „Prüfstand“ mistranslation and the
+  Quellenangabe/Quellenverweis split are gone; ellipsis spacing unified; the ENTWURFSSTAND
+  draft flags are REMOVED. One golden regenerated (`german.html` — the unified disclaimer
+  line; single-line diff, hand-reviewed).
+
+**§9 accessibility audit — recorded results (ReviewScreen + modals + banner + new UI):**
+
+| §9 item | Result |
+|---|---|
+| Text ≥4.5:1, UI/icons ≥3:1 | PASS — all review UI on role tokens (§4.3 ratios); new tag/surface/filter inherit `--text`/`--text-muted`. |
+| Visible focus, outline-based | PASS — global `:focus-visible` baseline (Phase 23); new controls are native button/textarea/input. |
+| Sticky chrome obscuring focus (2.4.11) | PASS (trivially) — nothing on the review screen is sticky; panes scroll independently. |
+| Targets ≥24×24 (2.5.8) | **2 FIXES**: `.msg-action` gained `min-height: 24px`, `.chip-remove` gained a 24×24 min box (both app-wide). Buttons/decision chips/inputs already ≥24 (36px primary). |
+| Drag needs a non-drag path (2.5.7) | PASS — text selection via the read-only textarea works with keyboard (Shift+arrows) as well as pointer drag. |
+| Password gate paste (3.3.8) | N/A on this surface. |
+| `prefers-reduced-motion` | PASS — global kill-switch; the phase adds no motion. |
+| Async states announced | PASS — SaveStateLine `role=status/alert` (P2), Outdated banner `role=status` (P4); NEW: selection-refused hint, filter no-match, and shown-count are `role=status`; selection add announces via the polite toast region. |
+| Never color-alone (1.4.1) | PASS — chips/badges are glyph+text; decision selection = border+weight+text; new states are text. |
+| Spec §23: pane↔item association | PASS with rationale — a visible + programmatic "Linking evidence for review item N" line ties the pane to the selection; `aria-controls` is deliberately NOT stamped on the non-interactive `<li>` rows (they are not widgets; the narrow drawer gets real dialog semantics from Radix). |
+| Spec §23: progress as text · excerpts selectable/readable · 200 % zoom · drawer focus-return · localized markers | PASS — footer text gate; cards + surface are selectable text (surface line-height 1.5); the 980 px drawer reflow is the 200 % posture; focus-return pinned since P2; markers share the display regexes (P1). |
+| Spec §23: exported PDF heading order | DEFERRED to P6 (PDF phase) — the P3 HTML template already carries the semantic h1–h3 tree. |
+
+Tests: `ReviewSelections.test.tsx` (raw-source surface, exact UTF-16 offsets incl. astral
+chars, refusal hint, delete, READY hides the affordance, D-7 exemption, back-nav callback),
+`ReviewEvidencePane.test.tsx` (cap/stepped reveal/filter/empty state/context line),
+`ChatBackToConversation.test.tsx` (handoff select, deleted-id degrade, baseline),
+`evidence-review-open-perf.test.ts` (spec §26 tripwire + numbers above).
 
 ---
 

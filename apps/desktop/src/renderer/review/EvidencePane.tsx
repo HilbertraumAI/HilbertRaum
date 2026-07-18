@@ -39,10 +39,24 @@ const CAPTION_KEY = {
 const RELATIONS = ['supports', 'qualifies', 'contradicts', 'context'] as const
 type Relation = (typeof RELATIONS)[number]
 
+/** True when `source` matches the filter query (already lowercased). Matches the visible
+ *  card facts: title, snippet, section label, machine label ("S1" — the localized "Q1"
+ *  form is a fixed transform of it), and the page number. */
+function matchesSourceFilter(source: EvidenceSourceSnapshot, q: string): boolean {
+  return (
+    source.documentTitle.toLowerCase().includes(q) ||
+    (source.snippet ?? '').toLowerCase().includes(q) ||
+    (source.sectionLabel ?? '').toLowerCase().includes(q) ||
+    (source.machineLabel ?? '').toLowerCase().includes(q) ||
+    (source.pageNumber != null && String(source.pageNumber).includes(q))
+  )
+}
+
 export function EvidencePane({
   sources,
   coverage,
   selectedItem,
+  selectedItemNumber,
   readOnly,
   freshness,
   onLink,
@@ -56,6 +70,9 @@ export function EvidencePane({
   coverage: CoverageInfo | null
   /** The review item link/unlink actions operate on; null = none selected (actions hint). */
   selectedItem: EvidenceReviewItem | null
+  /** P5 (spec §23): the selected item's 1-based display number — renders the visible
+   *  "Linking evidence for review item N" line that ties the pane to the answer pane. */
+  selectedItemNumber?: number | null
   /** Ready review (FIX-1): link/unlink/relation controls disable until reopened. */
   readOnly?: boolean
   /** P4: the at-open freshness verdict; null = none landed yet (cards show creation facts only). */
@@ -68,11 +85,20 @@ export function EvidencePane({
   t: I18n['t']
   tCount: I18n['tCount']
 }): JSX.Element {
-  // Same cap + reveal as SourcesDisclosure (spec §25.6): the full persisted set stays
-  // available; the initial render is capped for large provenance sets.
-  const [showAll, setShowAll] = useState(false)
-  const overCap = !showAll && sources.length > PROVENANCE_CARD_CAP
-  const shown = overCap ? sources.slice(0, PROVENANCE_CARD_CAP) : sources
+  // Cap + STEPPED reveal (spec §25.6/§26, P5): the full persisted set stays available; the
+  // initial render is capped at PROVENANCE_CARD_CAP cards and each reveal adds one more
+  // cap-sized batch. This bounds the mounted DOM regardless of set size — measured against
+  // the spec's 24-card norm, the cap+reveal keeps the pane fast WITHOUT virtualization
+  // (no @tanstack/react-virtual; the initial DOM never exceeds the cap).
+  const [revealed, setRevealed] = useState(PROVENANCE_CARD_CAP)
+  // P5 filter (spec §25.6 "search/filter") — offered once the set exceeds the initial cap
+  // (below it every card is already on screen). Filtering narrows BEFORE the cap.
+  const [filter, setFilter] = useState('')
+  const filterId = useId()
+  const query = filter.trim().toLowerCase()
+  const filtered = query === '' ? sources : sources.filter((s) => matchesSourceFilter(s, query))
+  const shown = filtered.length > revealed ? filtered.slice(0, revealed) : filtered
+  const remaining = filtered.length - shown.length
   const paneMode = evidencePaneMode(coverage)
   const headId = useId()
   const stateByKey = new Map<string, EvidenceSourceFreshnessState>(
@@ -90,6 +116,47 @@ export function EvidencePane({
       {sources.length > 0 && selectedItem == null && (
         <p className="hint review-link-hint">{t('review.link.selectHint')}</p>
       )}
+      {sources.length > 0 && selectedItem != null && selectedItemNumber != null && (
+        <p className="hint review-linking-item">
+          {t('review.evidence.linkingItem', { n: selectedItemNumber })}
+        </p>
+      )}
+      {sources.length > PROVENANCE_CARD_CAP && (
+        <div className="review-evidence-filter">
+          <label htmlFor={filterId} className="hint">
+            {t('review.evidence.filterLabel')}
+          </label>
+          <input
+            id={filterId}
+            type="text"
+            className="review-evidence-filter-input"
+            placeholder={t('review.evidence.filterPlaceholder')}
+            value={filter}
+            onChange={(e) => {
+              setFilter(e.target.value)
+              // A new query restarts the reveal — predictable "first page of matches".
+              setRevealed(PROVENANCE_CARD_CAP)
+            }}
+          />
+          {query !== '' && (
+            <button
+              type="button"
+              className="msg-action"
+              onClick={() => {
+                setFilter('')
+                setRevealed(PROVENANCE_CARD_CAP)
+              }}
+            >
+              {t('review.evidence.filterClear')}
+            </button>
+          )}
+        </div>
+      )}
+      {query !== '' && filtered.length === 0 && (
+        <p className="hint review-evidence-filter-none" role="status">
+          {t('review.evidence.filterNone')}
+        </p>
+      )}
       {shown.map((s) => (
         <EvidenceCard
           key={s.key}
@@ -104,10 +171,19 @@ export function EvidencePane({
           t={t}
         />
       ))}
-      {overCap && (
-        <button type="button" className="sources-more" onClick={() => setShowAll(true)}>
-          {tCount('chat.sources.more', sources.length - PROVENANCE_CARD_CAP)}
-        </button>
+      {remaining > 0 && (
+        <>
+          <p className="hint review-evidence-shown" role="status">
+            {t('review.evidence.shownCount', { shown: shown.length, total: filtered.length })}
+          </p>
+          <button
+            type="button"
+            className="sources-more"
+            onClick={() => setRevealed((r) => r + PROVENANCE_CARD_CAP)}
+          >
+            {tCount('chat.sources.more', Math.min(remaining, PROVENANCE_CARD_CAP))}
+          </button>
+        </>
       )}
     </div>
   )

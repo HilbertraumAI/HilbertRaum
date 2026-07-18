@@ -173,6 +173,12 @@ interface Props {
   /** Retrieval scope for the NEXT documents conversation ("Ask these documents"). */
   initialScopeDocumentIds?: string[] | null
   /**
+   * EP-1 P5 (plan §10): the conversation to open with — the review screen's "Back to chat"
+   * passes the review's originating conversation. Verified against the loaded list on
+   * mount; a deleted/unknown id degrades to the plain chat-home landing.
+   */
+  initialConversationId?: string | null
+  /**
    * Open the evidence-review workspace via App's handoff slot (EP-1 plan §7.1 — the
    * chatScope idiom): an existing review passes its id, a first review passes the message
    * id (the idempotent main-side create resolves both). Absent ⇒ review entry points hide.
@@ -184,6 +190,7 @@ export function ChatScreen({
   onNavigate,
   initialMode,
   initialScopeDocumentIds,
+  initialConversationId,
   onOpenReview
 }: Props): JSX.Element {
   const { t, lang } = useT()
@@ -779,6 +786,35 @@ export function ChatScreen({
     return () => {
       cancelled = true
     }
+  }, [])
+
+  // EP-1 P5 (plan §10): on a mount handed an originating conversation (the review screen's
+  // "Back to chat"), select it — the same one-shot re-attach idiom as the stream/skill-run
+  // effects above, with the same `activeIdRef` guard so it never yanks a user who already
+  // picked a conversation (or whom stream recovery re-attached first). The id is verified
+  // against the loaded list: a conversation deleted while the review was open degrades to
+  // the plain chat-home landing, never a phantom selection.
+  useEffect(() => {
+    if (!initialConversationId) return
+    let cancelled = false
+    void (async () => {
+      let convs: Conversation[] = []
+      try {
+        convs = await window.api.listConversations()
+      } catch {
+        return
+      }
+      if (cancelled || activeIdRef.current != null) return
+      const conv = convs.find((c) => c.id === initialConversationId)
+      if (!conv) return
+      setConversations(convs)
+      setActiveId(conv.id)
+      setMode(conv.mode) // mirror the conversation's mode, like onSelectConversation
+    })()
+    return () => {
+      cancelled = true
+    }
+    // Mount-only by design (the handoff is consumed once; App clears it on plain navigation).
   }, [])
 
   function setListCollapsedPersistent(collapsed: boolean): void {

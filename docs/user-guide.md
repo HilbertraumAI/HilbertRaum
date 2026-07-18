@@ -559,6 +559,18 @@ AI model anything, and nothing touches the network — it is you, the answer, an
   record a decision: **Reviewed — supported / partly supported / not supported**, **Needs
   follow-up**, **Not reviewed**, or **Not applicable** (headings start there). Add a note where
   it helps. Everything **saves automatically** as you work.
+- **Review one statement separately.** When a paragraph bundles several claims, choose
+  **Review a passage separately** under it: the item's *original* text appears (plain, exactly
+  as generated — without formatting), you highlight the passage — with the mouse or with
+  Shift+arrow keys — and confirm **Review separately**. The passage becomes its own review
+  item, tagged **Reviewer text selection**, with its own decision and note; **Remove
+  selection** deletes it again (the surrounding item is untouched, and selections never block
+  marking a review ready). If a selection can't be taken over exactly, the app says so and
+  asks you to select again — it never guesses at the boundaries.
+- **Many sources?** With a large source set the evidence pane starts with the first 24 cards —
+  **Show more** reveals the next batch, and a **filter box** narrows the cards by document
+  title, excerpt text, section, page, or source marker. The full persisted set always stays
+  available; nothing is dropped.
 - Evidence cards show what the model was actually given. The workspace is honest about the
   difference: for a whole-document analysis the cards are **provenance** (sections the answer
   drew on), *not* sentence-by-sentence citations — and the workspace says so. You can link a
@@ -571,7 +583,8 @@ AI model anything, and nothing touches the network — it is you, the answer, an
   reopened any time.
 - Reviews are saved **inside your encrypted workspace** and reopen from the same answer
   (**Continue review**, with a small Draft/Ready tag). Deleting a conversation deletes its
-  reviews too — the delete confirmation warns you with the count first.
+  reviews too — the delete confirmation warns you with the count first. **Back to chat**
+  returns you to the conversation the review came from, with it open and active.
 
 **Export an evidence pack.** From the **Review summary**, choose **Create evidence pack** to
 save the whole review — question, answer, your decisions and notes, the source excerpts,

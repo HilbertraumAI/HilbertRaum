@@ -543,6 +543,67 @@ export async function unlinkEvidence(itemId: string, evidenceKey: string): Promi
   }
 }
 
+// ---- Reviewer text selections (P5, spec §12.1) -----------------------------------------
+// Structural like links: immediate IPC, never debounced. The offsets are UTF-16 code units
+// into the parent block's `textSnapshot` (exclusive end) — produced EXACTLY by the
+// selection surface (a read-only textarea whose value IS the snapshot, so its native
+// selectionStart/End are the offsets; no DOM→source mapping can drift). Main REFUSES
+// out-of-range or surrogate-splitting boundaries with a null (never clamps) — surfaced as
+// 'refused' for the friendly retry hint, never as a save error and never a crash.
+
+export type AddSelectionOutcome = 'added' | 'refused' | 'failed'
+
+/** Create a reviewer selection carved from one block item. Refused while READY (FIX-1 —
+ *  the UI hides the affordance too; main refuses the write as well). */
+export async function addReviewSelection(
+  blockKey: string,
+  startOffset: number,
+  endOffset: number
+): Promise<AddSelectionOutcome> {
+  if (!state.detail || state.detail.status === 'ready') return 'failed'
+  const token = openToken
+  try {
+    const created = await window.api.createEvidenceSelection(state.detail.id, {
+      blockKey,
+      startOffset,
+      endOffset
+    })
+    // Post-purge/switch resolutions never touch the store (FIX-2a) — but the outcome is
+    // still reported truthfully (the row exists; it surfaces on the next detail read).
+    if (token !== openToken) return created ? 'added' : 'refused'
+    const detail = state.detail
+    if (!detail) return 'failed'
+    if (created == null) return 'refused'
+    // Append — the service assigns the next ordinal, so local order matches the next read.
+    const items = [...detail.items, created]
+    setState({ detail: { ...detail, items, gate: computeReadyGate(items) } })
+    return 'added'
+  } catch (e) {
+    if (token !== openToken) return 'failed'
+    setState({ saveState: 'error', saveError: friendlyIpcError(e) })
+    return 'failed'
+  }
+}
+
+/** Delete a reviewer SELECTION (block items are structural — the UI never offers this for
+ *  them; main refuses too). A false result (already gone) still clears it locally — the
+ *  unlinkEvidence posture. */
+export async function deleteReviewSelection(itemId: string): Promise<void> {
+  if (!state.detail || state.detail.status === 'ready') return
+  const token = openToken
+  try {
+    await window.api.deleteEvidenceSelection(itemId)
+    if (token !== openToken) return
+    const detail = state.detail
+    if (!detail) return
+    const items = detail.items.filter((i) => i.id !== itemId)
+    setState({ detail: { ...detail, items, gate: computeReadyGate(items) } })
+  } catch (e) {
+    if (token !== openToken) return
+    setState({ saveState: 'error', saveError: friendlyIpcError(e) })
+  }
+}
+
 // ---- Conservative bulk actions (spec §14.4) --------------------------------------------
 // Exactly the three sanctioned actions. There is deliberately NO "mark all supported" —
 // a blanket supported-claim is the one bulk action the spec forbids (tested).
