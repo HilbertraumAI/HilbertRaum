@@ -2001,6 +2001,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.evidenceReviews.locked':
     'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um an Nachweis-Prüfungen zu arbeiten.',
   'main.evidenceReviews.invalidRequest': 'Diese Prüfanfrage ist ungültig.',
+  'main.evidenceReviews.exportNotRecorded':
+    'Das Nachweispaket konnte nicht im Exportverlauf verzeichnet werden; die exportierte Datei wurde deshalb entfernt. Es wurde nichts gespeichert — versuche den Export erneut.',
+  'main.evidenceReviews.exportFileNotRecorded':
+    'Die Nachweispaket-Datei wurde gespeichert, konnte aber weder im Exportverlauf verzeichnet noch entfernt werden. Ihr Hash ist nicht verzeichnet — exportiere erneut und ersetze die Datei.',
   // BE-1 (full-audit 2026-07-10) — siehe en.ts.
   'main.settings.invalidPatch':
     'Diese Einstellungsänderung ist ungültig und wurde nicht gespeichert.',
@@ -2480,6 +2484,8 @@ export const de: Record<keyof typeof en, string> = {
   'review.export.done': 'Nachweispaket exportiert.',
   'review.export.error':
     'Das Nachweispaket konnte nicht exportiert werden. Es wurde keine Datei geschrieben.',
+  'review.export.copyHash': 'SHA-256 kopieren',
+  'review.export.hashCopied': 'SHA-256 in die Zwischenablage kopiert.',
 
   // ---- Nachweispaket-Inhalt (Plan §8.2 — beim Export in die HTML-Datei eingefroren) ----
   'packExport.docTitle': 'Nachweispaket',

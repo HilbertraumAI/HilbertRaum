@@ -386,16 +386,23 @@ export async function exportReviewPack(
   if (state.saveState === 'error') return { outcome: 'failed', message: null }
   try {
     const record = await window.api.exportEvidencePack(reviewId, options)
-    if (token !== openToken) return { outcome: 'failed', message: null }
     if (!record) return { outcome: 'cancelled' }
+    if (token !== openToken) {
+      // The export COMPLETED (file + row exist) but the session moved on mid-dialog
+      // (lock purge / review switch). Never touch the purged/foreign store — and never
+      // report a real export as a failure: 'exported' is the truthful outcome (the
+      // history row surfaces on the next detail read).
+      return { outcome: 'exported' }
+    }
     const detail = state.detail
     if (detail && detail.id === reviewId) {
       setState({ detail: { ...detail, exports: [record, ...detail.exports] } })
     }
     return { outcome: 'exported' }
   } catch (e) {
-    if (token !== openToken) return { outcome: 'failed', message: null }
-    return { outcome: 'failed', message: friendlyIpcError(e) }
+    // Post-token-change throws stay 'failed' too: the export genuinely did not complete
+    // (main rejected), and failed-with-no-copy renders nothing if the panel is gone.
+    return { outcome: 'failed', message: token === openToken ? friendlyIpcError(e) : null }
   }
 }
 

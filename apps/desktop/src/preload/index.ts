@@ -565,8 +565,11 @@ const api = {
     ipcRenderer.invoke(IPC.countEvidenceReviewsForConversation, conversationId),
   /** Export the review as a self-contained HTML evidence pack (Phase 3, plan §8.3): save
    *  dialog → deterministic render → ATOMIC write → export record. Null on cancel or an
-   *  unknown id; a failure leaves no file and no row (spec §28.9). Partial options resolve
-   *  against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side. No model call, no network. */
+   *  unknown id; a failure up to the rename leaves no file and no row (spec §28.9), and a
+   *  post-rename record failure removes the file and REJECTS with honest localized copy
+   *  (a distinct message when even the removal failed and the file exists unrecorded) —
+   *  null never means "exported". Partial options resolve against
+   *  `EVIDENCE_PACK_OPTION_DEFAULTS` main-side. No model call, no network. */
   exportEvidencePack: (
     reviewId: string,
     options: Partial<EvidencePackOptions>

@@ -62,10 +62,14 @@ export function escapeHtml(s: string): string {
 /**
  * Deterministic, locale-independent timestamp for pack display: `YYYY-MM-DD HH:MM UTC`
  * from the ISO string's UTC parts. `toLocaleString` would vary with the ICU build/host —
- * a golden-tested export cannot depend on either. Unparseable input renders verbatim
- * (the formatWhen precedent: never invent a date).
+ * a golden-tested export cannot depend on either. Only EXPLICITLY-ZONED input is formatted
+ * (every real persisted stamp is `toISOString()` = Z-suffixed): a zone-less string
+ * (hand-edited/corrupt snapshot) would parse host-local — TZ-dependent — and stamping UTC
+ * onto it would invent a zone that was never recorded, so it renders VERBATIM instead
+ * (the formatWhen precedent: never invent a date). Unparseable input also renders verbatim.
  */
 export function formatPackTimestamp(iso: string): string {
+  if (!/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(iso)) return iso
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   const pad = (n: number): string => String(n).padStart(2, '0')
@@ -261,14 +265,18 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   push('<section id="items">')
   push(`<h2>${s('packExport.section.items')}</h2>`)
   push('<ol class="pack-items">')
-  model.items.forEach((item, i) => {
-    push(`<li class="pack-item" id="item-${i + 1}">`)
+  for (const item of model.items) {
+    // FIX-7: number by the CARRIED ordinal (creation position), not the render index —
+    // with unreviewed items excluded, "Item 3" in the pack must still be item 3 of the
+    // review workspace (the excluded-count notice below accounts for the holes).
+    const itemNo = item.ordinal + 1
+    push(`<li class="pack-item" id="item-${itemNo}">`)
     const kindTag = item.heading
       ? ` · ${s('packExport.item.heading')}`
       : item.kind === 'selection'
         ? ` · ${s('packExport.item.selection')}`
         : ''
-    push(`<p class="pack-item-no">${s('packExport.item.number', { n: i + 1 })}${kindTag}</p>`)
+    push(`<p class="pack-item-no">${s('packExport.item.number', { n: itemNo })}${kindTag}</p>`)
     push(`<div class="pack-text">${esc(localizeMarkers(lang, item.text))}</div>`)
     push(`<p><strong>${s('packExport.item.decision')}:</strong> ${s(DECISION_KEY[item.decision])}</p>`)
     if (model.options.includeReviewerNotes && item.note) {
@@ -291,7 +299,7 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
       push(`<p class="hint">${s('packExport.item.noEvidence')}</p>`)
     }
     push('</li>')
-  })
+  }
   push('</ol>')
   if (model.excludedItemCount > 0) {
     push(`<p class="hint">${n('packExport.items.unreviewedExcluded', model.excludedItemCount)}</p>`)

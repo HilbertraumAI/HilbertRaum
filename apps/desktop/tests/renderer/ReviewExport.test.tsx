@@ -198,4 +198,52 @@ describe('summary export panel (plan §8.4)', () => {
     expect(within(dialog).getByText(/older\.html/)).toBeInTheDocument()
     expect(within(dialog).getByText(/Last exported/)).toBeInTheDocument()
   })
+
+  it('FIX-2: history rows show the recorded SHA-256 and copy the FULL hash (the docs/pack promise)', async () => {
+    const hash = 'ab'.repeat(32)
+    const detail = makeDetail({
+      exports: [makeExportRecord({ id: 'x1', fileName: 'pack.html', fileSha256: hash })]
+    })
+    const copyToClipboard = vi.fn(async () => true)
+    stubApi({ getEvidenceReview: vi.fn(async () => detail), copyToClipboard })
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    const dialog = await openSummary()
+    // Truncated display of the recorded hash…
+    expect(within(dialog).getByText(`${hash.slice(0, 12)}…`)).toBeInTheDocument()
+    // …and the copy affordance carries the FULL hash to the clipboard.
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: `${t('en', 'review.export.copyHash')}: pack.html`
+      })
+    )
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(hash))
+  })
+
+  it('FIX-3: a failed auto-save flush REFUSES the export — no pack of data the screen shows but storage lacks', async () => {
+    const detail = makeDetail()
+    // The flush write fails → saveState 'error' → exportReviewPack must refuse.
+    const updateEvidenceReviewItem = vi.fn(async () => {
+      throw new Error('write failed')
+    })
+    const exportEvidencePack = vi.fn(async () => makeExportRecord())
+    stubApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem,
+      exportEvidencePack
+    })
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await screen.findByText('Beta')
+    const items = screen.getAllByRole('listitem')
+    fireEvent.change(
+      within(items[0]!).getByPlaceholderText(t('en', 'review.item.notePlaceholder')),
+      { target: { value: 'unsaveable note' } }
+    )
+    const dialog = await openSummary()
+    await openExportPanel(dialog)
+    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'review.export.confirm') }))
+    // The flush failed → the panel shows the generic error; the export IPC never fired.
+    await within(dialog).findByText(t('en', 'review.export.error'))
+    expect(updateEvidenceReviewItem).toHaveBeenCalled()
+    expect(exportEvidencePack).not.toHaveBeenCalled()
+  })
 })

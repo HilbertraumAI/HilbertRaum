@@ -744,7 +744,7 @@ section records the AS-BUILT shapes; freshness engine (P4) and PDF (P6) are stil
   | `refreshEvidenceReviewState(reviewId)` | `evidence:refreshState` | → `EvidenceReviewFreshness \| null` — **Phase-4 STUB**: `{ reviewId, outdated: false }` for a known review (the same not-known-to-be-outdated overlay every read carries) |
   | `deleteEvidenceReview(reviewId)` | `evidence:delete` | → `boolean` |
   | `countEvidenceReviewsForConversation(conversationId)` | `evidence:countForConversation` | → `number` — Phase 2 (plan §7.6, D-2): the conversation-delete confirm names how many reviews the cascade removes. Count only, never content; malformed/unknown ids read `0` |
-  | `exportEvidencePack(reviewId, options)` | `evidence:export` | → `EvidenceExportRecord \| null` — Phase 3 (plan §8.3): save dialog → deterministic HTML render → ATOMIC write (tmp sibling → fsync → sha256 of the ON-DISK bytes → rename) → `evidence_exports` row. Null on unknown/malformed id (no dialog) or user cancel; ANY failure leaves no destination file and no row (spec §28.9). Works on draft AND ready reviews (the ready guard covers item mutations only — tested). `options: Partial<EvidencePackOptions>` resolves against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; the RESOLVED set persists to `options_json` |
+  | `exportEvidencePack(reviewId, options)` | `evidence:export` | → `EvidenceExportRecord \| null` — Phase 3 (plan §8.3): save dialog → deterministic HTML render → ATOMIC write (tmp sibling → fsync → sha256 of the ON-DISK bytes → rename) → `evidence_exports` row. Null on unknown/malformed id (no dialog) or user cancel; any failure UP TO the rename leaves no destination file and no row (spec §28.9). A POST-rename record failure (workspace-DB error, or the review deleted in another window while the dialog was open) UNLINKS the just-written file and REJECTS with distinct localized copy (`main.evidenceReviews.exportNotRecorded`; if even the unlink fails, `…exportFileNotRecorded` states the file exists WITHOUT a history record) — null never means "exported", and a real export is never reported as a cancel (fix round FIX-1). Works on draft AND ready reviews (the ready guard covers item mutations only — tested). `options: Partial<EvidencePackOptions>` resolves against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; the RESOLVED set persists to `options_json` |
   Every handler `requireUnlocked()` (`main.evidenceReviews.locked`, EN+DE; auto-enforced by
   `ipc-lock-coverage.test.ts`). **Ready-state write guard (Phase-2 review FIX-1, spec
   §18.4):** while a review is `ready`, the five ITEM-LEVEL mutations (`updateEvidenceReviewItem`,
@@ -835,26 +835,37 @@ section records the AS-BUILT shapes; freshness engine (P4) and PDF (P6) are stil
   ready), opening an INLINE options panel (no nested modal): §24.3 encryption-boundary
   warning + the five §16.2 checkboxes at the shared defaults; the status line shows
   `review.status.lastExported` (display-only — the status ENUM is unchanged); the export
-  history renders real `detail.exports` rows. Store (`reviewSession.ts`):
-  `exportReviewPack(options)` FLUSHES pending edits first (the pack renders persisted
-  data; a failed flush refuses), then merges the returned record into `detail.exports`
-  newest-first under the `openToken` staleness guard. Outcomes: 'exported' | 'cancelled'
-  (native-dialog cancel — silent) | 'failed' (+friendly copy, rendered inline in the panel).
-✅ **Phase-3 tests:** `tests/unit/evidence-pack-model.test.ts` (option boundary, §16.1
+  history renders real `detail.exports` rows **including the recorded SHA-256** (truncated
+  mono display + a copy-full-hash action via `copyToClipboard` — the pack's own integrity
+  note and the user guide point the reader here, fix round FIX-2). Store
+  (`reviewSession.ts`): `exportReviewPack(options)` FLUSHES pending edits first (the pack
+  renders persisted data; a failed flush REFUSES — pinned by test), then merges the
+  returned record into `detail.exports` newest-first under the `openToken` staleness
+  guard. Outcomes: 'exported' | 'cancelled' (native-dialog cancel — silent) | 'failed'
+  (+friendly copy, rendered inline in the panel). A token change (lock/switch) landing
+  AFTER a successful export still returns 'exported' (state untouched — the export is
+  real; only a genuine rejection reports 'failed').
+✅ **Phase-3 tests:** `tests/unit/evidence-pack-model.test.ts` ×13 (option boundary, §16.1
   normalization, honesty-mapping reuse pin, option matrix) +
-  `tests/unit/evidence-pack-html.test.ts` (escapeHtml, §29.4 injection suite, §17.2
-  self-containment, D-1 print contract, EN/DE freezing, determinism) +
-  `tests/integration/evidence-pack-export.test.ts` (the five §29.5 GOLDEN packs under
+  `tests/unit/evidence-pack-html.test.ts` ×26 (escapeHtml, §29.4 injection suite incl.
+  hostile source key/machineLabel/sha256/raw coverage mode + the structural remote-ref
+  sweep over the HOSTILE render, §17.2 self-containment, D-1 print contract, EN/DE
+  freezing, ordinal-stable item numbering, zone-less-timestamp verbatim, determinism) +
+  `tests/integration/evidence-pack-export.test.ts` ×15 (the five §29.5 GOLDEN packs under
   `tests/fixtures/evidence-packs/` — relevance/whole-doc/partial-coverage/missing-source/
   German, normalized timestamps + pack ids, regenerate via `UPDATE_EVIDENCE_PACK_GOLDENS=1`;
-  atomicity: failing write AND failing rename leave no file/no tmp/no row; cancel → nothing;
-  no-BOM encoding; recorded-hash-matches-file-bytes; ready-review export; real offline
-  guard across every test) + export legs in `evidence-reviews-ipc.test.ts` (ready-review
-  export over the wire, cancel, boundary guards, hostile options → resolved defaults
-  persisted, runtime tripwire) and `audit-ipc.test.ts` (path-sentinel destination; event =
-  `{reviewId, format}` exactly) + `tests/renderer/ReviewExport.test.tsx` (panel defaults,
-  payload shape, history merge, cancel/failure, flush-before-export ordering, ready-review
-  export; `exportEvidencePack` in the stub sets under the structural no-call tripwire).
+  atomicity: failing write AND failing rename leave no file/no tmp/no row; the two
+  POST-rename record-failure paths — injected INSERT trigger, review deleted mid-dialog —
+  unlink the destination and throw `EvidencePackRecordError`; cancel → nothing; no-BOM
+  encoding; recorded-hash-matches-file-bytes; ready-review export; real offline guard
+  across every test) + export legs in `evidence-reviews-ipc.test.ts` (ready-review export
+  over the wire, cancel, post-rename failure surfaces the LOCALIZED distinct copy with no
+  file/row/audit event, boundary guards, hostile options → resolved defaults persisted,
+  runtime tripwire) and `audit-ipc.test.ts` (path-sentinel destination; event =
+  `{reviewId, format}` exactly) + `tests/renderer/ReviewExport.test.tsx` ×9 (panel
+  defaults, payload shape, history merge, cancel/failure, flush-before-export ordering,
+  flush-FAILURE refusal, ready-review export, hash display + full-hash copy;
+  `exportEvidencePack` in the stub sets under the structural no-call tripwire).
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |

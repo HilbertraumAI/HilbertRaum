@@ -1929,6 +1929,12 @@ export const en = {
   // surface (its persist-canonical defaultTitle sibling lives in the section above).
   'main.evidenceReviews.locked': 'Workspace is locked. Unlock it to work on evidence reviews.',
   'main.evidenceReviews.invalidRequest': 'This review request is not valid.',
+  // Post-rename export failures (EP-1 P3 FIX-1): the pack file was already written when
+  // recording it failed — two DISTINCT honest outcomes, never reported as a cancel.
+  'main.evidenceReviews.exportNotRecorded':
+    'The evidence pack could not be recorded in the export history, so the exported file was removed. Nothing was saved — try the export again.',
+  'main.evidenceReviews.exportFileNotRecorded':
+    'The evidence pack file was saved, but it could not be recorded in the export history and could not be removed. Its hash is not on record — export again and replace the file.',
   // BE-1 (full-audit 2026-07-10): a null/non-object settings patch is rejected up front with
   // this friendly copy instead of the raw TypeError `Object.keys(null)` used to throw.
   'main.settings.invalidPatch': 'This settings change is not valid and was not saved.',
@@ -2449,6 +2455,8 @@ export const en = {
   'review.export.cancel': 'Close',
   'review.export.done': 'Evidence pack exported.',
   'review.export.error': 'The evidence pack could not be exported. No file was written.',
+  'review.export.copyHash': 'Copy SHA-256',
+  'review.export.hashCopied': 'SHA-256 copied to the clipboard.',
 
   // ---- Evidence-pack contents (plan §8.2 — localized AT GENERATION into the exported
   // HTML from the pack's language option; a persisted pack is a frozen snapshot and is

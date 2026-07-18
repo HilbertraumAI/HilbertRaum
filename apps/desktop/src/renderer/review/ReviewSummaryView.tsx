@@ -42,6 +42,7 @@ export function ReviewSummaryView({
   lang: I18n['lang']
 }): JSX.Element {
   const [exportOpen, setExportOpen] = useState(false)
+  const showToast = useToast()
   const counts = new Map<ReviewDecision, number>()
   for (const item of detail.items) {
     counts.set(item.decision, (counts.get(item.decision) ?? 0) + 1)
@@ -163,6 +164,28 @@ export function ReviewSummaryView({
             {detail.exports.map((x) => (
               <li key={x.id}>
                 {x.fileName} · {x.format} · {formatWhen(x.createdAt, lang)}
+                {/* FIX-2: the recorded SHA-256 the docs + the pack's own integrity note
+                    point the reader at — truncated for display, FULL hash on copy (the
+                    Electron-clipboard copyToClipboard idiom). */}
+                <span className="review-export-hash">
+                  <code className="review-hash-mono" title={x.fileSha256}>
+                    {x.fileSha256.slice(0, 12)}…
+                  </code>
+                  <button
+                    type="button"
+                    className="msg-action"
+                    aria-label={`${t('review.export.copyHash')}: ${x.fileName}`}
+                    onClick={() => {
+                      void Promise.resolve(window.api?.copyToClipboard?.(x.fileSha256)).then(
+                        (ok) => {
+                          if (ok) showToast(t('review.export.hashCopied'))
+                        }
+                      )
+                    }}
+                  >
+                    {t('review.export.copyHash')}
+                  </button>
+                </span>
               </li>
             ))}
           </ul>

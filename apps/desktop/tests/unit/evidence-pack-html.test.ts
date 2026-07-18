@@ -52,6 +52,15 @@ describe('formatPackTimestamp (deterministic, locale-independent)', () => {
   it('passes unparseable input through verbatim (never invents a date)', () => {
     expect(formatPackTimestamp('not-a-date')).toBe('not-a-date')
   })
+
+  it('passes ZONE-LESS input through verbatim — host-local parsing would be TZ-dependent and stamping UTC would invent a zone (FIX-4)', () => {
+    expect(formatPackTimestamp('2026-07-18T12:00:00')).toBe('2026-07-18T12:00:00')
+    expect(formatPackTimestamp('2026-07-18T12:00:00.000')).toBe('2026-07-18T12:00:00.000')
+    expect(formatPackTimestamp('2026-07-18')).toBe('2026-07-18')
+    // Explicitly-zoned forms still format.
+    expect(formatPackTimestamp('2026-07-18T12:00:00+00:00')).toBe('2026-07-18 12:00 UTC')
+    expect(formatPackTimestamp('2026-07-18T12:00:00z')).toBe('2026-07-18 12:00 UTC')
+  })
 })
 
 describe('injection suite (spec §29.4)', () => {
@@ -70,18 +79,27 @@ describe('injection suite (spec §29.4)', () => {
           textSnapshot: `${HOSTILE} item`,
           reviewerNote: `${HOSTILE} item-note`,
           decision: 'supported',
-          links: [{ evidenceKey: 's1', origin: 'answer_marker', relation: null }]
+          links: [{ evidenceKey: `s1${HOSTILE}`, origin: 'answer_marker', relation: null }]
         })
       ],
+      // FIX-6: a hostile RAW coverage mode (reachable — parseCoverage accepts any string)
+      // flows into the technical section's answerModeRaw mono span.
+      coverageSnapshot: {
+        mode: HOSTILE,
+        chunksCovered: 1,
+        chunksTotal: 2
+      } as unknown as import('../../src/shared/types').CoverageInfo,
       sources: [
         {
-          key: 's1',
-          machineLabel: 'S1',
+          // FIX-6: hostile strings through the technical-details surfaces too — key
+          // (techSourceKeys), machineLabel, documentSha256 all render in mono spans.
+          key: `s1${HOSTILE}`,
+          machineLabel: `S1${HOSTILE}`,
           kind: 'direct_excerpt',
           identity: 'resolved',
           documentId: 'd1',
           documentTitle: `${HOSTILE} doc.pdf`,
-          documentSha256: 'ab'.repeat(32),
+          documentSha256: `${HOSTILE}${'ab'.repeat(16)}`,
           mimeType: `${HOSTILE}/pdf`,
           pageNumber: 3,
           sectionLabel: `${HOSTILE} §4`,
@@ -109,6 +127,16 @@ describe('injection suite (spec §29.4)', () => {
     // The payload IS present — escaped, not silently dropped.
     expect(html).toContain('&lt;script&gt;')
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    // FIX-6: the structural remote-ref/self-containment sweep over the HOSTILE render
+    // (not only the benign one): no real element, no attribute or CSS can reference out.
+    expect(html).not.toMatch(/<(?:script|img|link|iframe|object|embed|form)\b/i)
+    expect(html).not.toMatch(/<[a-z][^>]*\bon\w+\s*=/i)
+    expect(html).not.toMatch(/(?:href|src)\s*=\s*["']?\s*(?:https?:|javascript:|data:)/i)
+    expect(html).not.toMatch(/url\s*\(|@import|@font-face/i)
+    expect(html.match(/<style>/g)).toHaveLength(1)
+    // Every internal anchor stays index-derived even with a hostile source KEY.
+    expect(html).not.toMatch(/href="(?!#)/)
+    expect(html).toContain('id="src-1"')
   })
 
   it('keeps hostile markdown inert (rendered as escaped plain text, never as markup)', () => {
@@ -235,6 +263,22 @@ describe('option flags in the rendered pack (spec §16.2)', () => {
     const html = render(detail, { includeTechnicalDetails: true })
     expect(html).toContain(t('en', 'packExport.generation.technical'))
     expect(html).toContain('relevance')
+  })
+
+  it('item numbers come from the CARRIED ordinal — excluding unreviewed items leaves honest holes (FIX-7)', () => {
+    const three = makeDetail({
+      items: [
+        makeItem({ id: 'i1', ordinal: 0, decision: 'supported', textSnapshot: 'First' }),
+        makeItem({ id: 'i2', ordinal: 1, decision: 'not_reviewed', textSnapshot: 'Hidden' }),
+        makeItem({ id: 'i3', ordinal: 2, decision: 'follow_up', textSnapshot: 'Third' })
+      ]
+    })
+    const html = render(three, { includeUnreviewedItems: false })
+    // Pack "Item 3" is STILL workspace item 3 — never renumbered over the hole.
+    expect(html).toContain(t('en', 'packExport.item.number', { n: 1 }))
+    expect(html).not.toContain(t('en', 'packExport.item.number', { n: 2 }))
+    expect(html).toContain(t('en', 'packExport.item.number', { n: 3 }))
+    expect(html).toContain(t('en', 'packExport.items.unreviewedExcluded.one', { count: 1 }))
   })
 })
 

@@ -633,6 +633,36 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     expect(h.runtimeTouched).toEqual([])
   })
 
+  it('FIX-1: a post-rename record failure surfaces as the LOCALIZED distinct error — file removed, no row, no audit event, never null', async () => {
+    const h = makeHarness()
+    registerEvidenceReviewsIpc(h.ctx)
+    const { messageId } = seedAnswer(h.db, {
+      content: RELEVANCE.content,
+      citations: RELEVANCE.citations,
+      coverage: RELEVANCE.coverage
+    })
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
+    const created = createdRaw as EvidenceReviewDetail
+    const dest = join(h.root, 'post-rename-ipc.html')
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = dest
+    // Injected row-insert failure AFTER the pipeline's load (INSERT-only trigger).
+    h.db.exec(
+      "CREATE TRIGGER fail_export BEFORE INSERT ON evidence_exports BEGIN SELECT RAISE(ABORT, 'injected'); END"
+    )
+    await expect(invoke(handlers, IPC.exportEvidencePack, created.id, {})).rejects.toThrow(
+      'The evidence pack could not be recorded in the export history, so the exported file was removed.'
+    )
+    h.db.exec('DROP TRIGGER fail_export')
+    expect(existsSync(dest)).toBe(false)
+    const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
+    expect((detailRaw as EvidenceReviewDetail).exports).toEqual([])
+    expect(
+      listAuditEvents(h.db, { limit: 100 }).some((e) => e.type === 'evidence_pack_exported')
+    ).toBe(false)
+    expect(h.runtimeTouched).toEqual([])
+  })
+
   it('guards the boundary: malformed id → null without a dialog; hostile options resolve to defaults', async () => {
     const h = makeHarness()
     registerEvidenceReviewsIpc(h.ctx)

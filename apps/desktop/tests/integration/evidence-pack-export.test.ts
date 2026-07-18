@@ -10,10 +10,12 @@ import { createEvidenceReviewFromMessage } from '../../src/main/services/evidenc
 import {
   exportEvidencePackToFile,
   suggestedPackFileName,
-  writePackFileAtomic
+  writePackFileAtomic,
+  EvidencePackRecordError
 } from '../../src/main/services/evidence-pack/export'
 import { EVIDENCE_PACK_SCHEMA_VERSION } from '../../src/main/services/evidence-pack/pack-model'
 import {
+  deleteEvidenceReview,
   getEvidenceReview,
   listEvidenceExports,
   markEvidenceReviewReady,
@@ -321,6 +323,58 @@ describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
     expect(result).toBeNull()
     expect(listEvidenceExports(db, detail.id)).toEqual([])
     expect(readdirSync(root).filter((f) => f.endsWith('.html') || f.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('FIX-1a: a record failure AFTER the rename unlinks the file — no destination, no row, distinct error', async () => {
+    const { db, root } = freshDb()
+    const messageId = seedAnswer(db, {
+      content: 'Post-rename claim.',
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const dest = join(root, 'post-rename.html')
+    await expect(
+      exportEvidencePackToFile(db, detail.id, {}, {
+        chooseDestination: async () => {
+          // Injected row-insert failure (the P1 FIX-2 trigger idiom), armed AFTER the
+          // pipeline's initial load so only the post-rename INSERT hits it.
+          db.exec(
+            "CREATE TRIGGER fail_export BEFORE INSERT ON evidence_exports BEGIN SELECT RAISE(ABORT, 'injected record failure'); END"
+          )
+          return dest
+        }
+      })
+    ).rejects.toBeInstanceOf(EvidencePackRecordError)
+    // The invariant is RESTORED: the freshly-renamed destination was unlinked…
+    expect(existsSync(dest)).toBe(false)
+    expect(existsSync(`${dest}.tmp`)).toBe(false)
+    // …and no row exists (trigger removed so the read runs clean).
+    db.exec('DROP TRIGGER fail_export')
+    expect(listEvidenceExports(db, detail.id)).toEqual([])
+    // The review itself stays usable.
+    expect(getEvidenceReview(db, detail.id)?.status).toBe('draft')
+  })
+
+  it('FIX-1b: review deleted while the save dialog was open → file unlinked, thrown — NEVER a silent cancel-shaped null', async () => {
+    const { db, root } = freshDb()
+    const messageId = seedAnswer(db, {
+      content: 'Deleted-mid-dialog claim.',
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const dest = join(root, 'deleted-mid-dialog.html')
+    await expect(
+      exportEvidencePackToFile(db, detail.id, {}, {
+        chooseDestination: async () => {
+          // Another window deletes the review while this one's dialog is open —
+          // recordEvidenceExport will return null (its no-orphan-rows guard).
+          expect(deleteEvidenceReview(db, detail.id)).toBe(true)
+          return dest
+        }
+      })
+    ).rejects.toBeInstanceOf(EvidencePackRecordError)
+    expect(existsSync(dest)).toBe(false)
+    expect(existsSync(`${dest}.tmp`)).toBe(false)
   })
 
   it('unknown review id → null, no dialog shown', async () => {

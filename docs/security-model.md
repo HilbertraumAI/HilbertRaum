@@ -334,8 +334,14 @@ boundary is made explicit and everything around it stays inside the data-class r
   The destination path is never persisted. The file itself is never copied into the
   workspace.
 - **Atomicity** (spec §20.3/§28.9): tmp sibling → fsync → hash → rename; a failure or
-  cancel leaves NO destination file, NO tmp remnant (best-effort) and NO export row — a
-  half-written "evidence" file can never exist.
+  cancel up to the rename leaves NO destination file, NO tmp remnant (best-effort) and NO
+  export row — a half-written "evidence" file can never exist. A failure AFTER the rename
+  (the `evidence_exports` row cannot be written — workspace-DB error, or the review was
+  deleted in another window during the dialog) **unlinks the just-created file** and
+  rejects with distinct honest copy: an unrecorded pack would make its own printed
+  "hash is recorded" integrity note false, which is worse than no file. If even that
+  unlink fails, the error explicitly states the file exists without a history record —
+  the one residual state, named, never silent.
 - **Audit:** `evidence_pack_exported` records `{reviewId, format}` and nothing else — not
   the path, not the file name, not the title (which seeds the suggested name and is
   content). Sentinel-swept in `audit-ipc.test.ts` with a path-sentinel destination.
