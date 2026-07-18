@@ -1946,6 +1946,7 @@ so the review can never claim more than the answer did.
 | `tree` / `capped` | `whole_document_provenance` | **null** | **ZERO** (hard rule) |
 | `extract` | `structured_record` | **null** | ZERO in v1 |
 | *(none stamped)* | `direct_excerpt` | the `S{n}` label | YES |
+| *(present but unrecognized)* | `whole_document_provenance` | **null** | **ZERO** |
 
 - The `relevance` row IS the §8 grounded-citation contract: those `[S{n}]` markers were baked
   into the model output against labeled excerpts, so an item containing a marker gets an
@@ -1957,10 +1958,20 @@ so the review can never claim more than the answer did.
   linked"), and the IPC layer FORCES that origin regardless of payload.
 - The *(none stamped)* row is the pre-D48/D72 legacy population: the relevance path persisted
   NULL coverage before `mode:'relevance'` was stamped (§14.9), and the renderer has always
-  read that NULL as the relevance badge. The snapshot follows the same fallback for source
-  CLASSIFICATION — those citations are labeled excerpts, and calling them "derived through
-  whole-document analysis" would be an invented claim — while the GENERATION snapshot still
-  records `answerMode: 'unknown'` (what was stamped stays distinct from how sources read).
+  read that NULL as the relevance badge (`SourcesDisclosure`'s `isProvenance = mode != null &&
+  mode !== 'relevance'`). The snapshot follows the same fallback for source CLASSIFICATION —
+  those citations are labeled excerpts, and calling them "derived through whole-document
+  analysis" would be an invented claim — while the GENERATION snapshot still records
+  `answerMode: 'unknown'` (what was stamped stays distinct from how sources read).
+- The *(present but unrecognized)* row is the FORWARD-compat case (Phase-1 review FIX-1):
+  `parseCoverage` accepts any mode string, so a portable workspace written by a NEWER app
+  version can carry a mode this build has never heard of. That is NOT the legacy population —
+  the stamp says "some analysis mode we don't understand", so it maps to the WEAKEST claim:
+  provenance kind, no machine labels, zero auto-links (an unknown mode must never mint
+  "cited by the answer"). The switch is compile-time exhaustive over the known union, so a
+  future `CoverageMode` member cannot silently fall into any bucket. The stored
+  `coverage_snapshot_json` keeps the unknown mode verbatim; the generation read-model
+  degrades `answerMode` to null ("Unavailable").
 
 ### 16.2 Source identity — resolved vs unresolved vs missing
 
@@ -1983,13 +1994,20 @@ exactly as in chat. All other generation fields (model id/display name, skill, a
 are synthesized from the conversation row + live catalog + injected app version at CREATION
 time; absent facts stay null and render "Unavailable" — never invented (spec §20.2/§25.5).
 
-### 16.4 Deterministic answer blocks + the one marker-regex source
+### 16.4 Deterministic answer blocks + the one marker pass
 
 `segmentAnswerBlocks` (`evidence-pack/segment.ts`, pure) splits the frozen answer into
 paragraph/list_item/heading/fence/table/blockquote blocks with keys
 `b{ordinal}-{kind}-{sha256/12}` — stable against the SNAPSHOT (spec Risk 7), so decisions
-survive renderer upgrades. Marker extraction shares its regex source with the chat display:
-`shared/citation-markers.ts` exports `CITE_CODE_SPLIT_RE`/`CITE_MARKER_RE` (moved from
-`displayMap.ts`, which now imports them) + `extractCitationMarkers` — code spans/fences are
-literals on BOTH sides by construction, and a parity suite drives the real
-`localizeServerCopy` to prove it.
+survive renderer upgrades. Marker parity with the chat display is TWO-layered (Phase-1
+review FIX-3): (a) one regex source — `shared/citation-markers.ts` exports
+`CITE_CODE_SPLIT_RE`/`CITE_MARKER_RE` (moved from `displayMap.ts`, which now imports them);
+(b) one PASS SHAPE — markers are extracted over the WHOLE snapshot once
+(`extractCitationMarkerOffsets`) and assigned to blocks by offset range, because the
+display's prose/code split runs over the whole message and a code region can span block
+boundaries (a mid-line ``` swallows to end-of-text; a code region can close mid-line).
+Per-block extraction with the same regexes would still diverge there — with shared source +
+shared pass shape each block's markers are byte-derivable from the display semantics: what
+the chat UI renders as literal code never links, what it renders as a citation always can.
+A parity suite drives the real `localizeServerCopy` over the fixtures (incl. both
+boundary-spanning repros, two-sided) to prove it.

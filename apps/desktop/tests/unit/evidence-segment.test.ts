@@ -180,4 +180,35 @@ describe('extractCitationMarkers ≡ localizeCitationMarkers exclusion behavior'
     // Extraction: the prose copy counts once; the code copy never does.
     expect(extractCitationMarkers(raw)).toEqual(['S1'])
   })
+
+  // ---- Code regions SPANNING block boundaries (Phase-1 review FIX-3) -------------------
+  // The display's prose/code split runs over the WHOLE message; the segmenter therefore
+  // extracts markers over the whole snapshot once and assigns them to blocks by offset.
+  // Both repros are two-sided: what the display renders as literal code gets NO marker
+  // (no over-claimed answer_marker link), what it renders as a citation KEEPS its marker.
+
+  it('repro (a): a mid-line ``` swallows to end-of-text — the [S1] the UI shows as code yields NO marker', () => {
+    const raw = 'To fence, type ``` in markdown.\n\nThe clause requires notice. [S1]'
+    // Display side: the marker sits inside the code region → rendered literal, no [Q1].
+    expect(localizeServerCopy(tDe, raw)).toBe(raw)
+    expect(localizeServerCopy(tDe, raw)).not.toContain('[Q1]')
+    // Extraction side: no block carries S1 — display literal ⇒ no auto-link, ever.
+    const blocks = segmentAnswerBlocks(raw)
+    expect(kinds(blocks)).toEqual(['paragraph', 'paragraph'])
+    expect(blocks.flatMap((b) => b.markers)).toEqual([])
+  })
+
+  it('repro (b): a code region closing mid-line — the display rewrites [S2]; the block keeps S2 (and drops [S1])', () => {
+    const raw = 'start ``` code [S1]\n\nstill code ``` end [S2]'
+    // Display side: [S1] is inside the ```…``` region (literal); [S2] is prose (citation).
+    const localized = localizeServerCopy(tDe, raw)
+    expect(localized).toContain('[Q2]')
+    expect(localized).toContain('[S1]')
+    expect(localized).not.toContain('[Q1]')
+    // Extraction side: block markers mirror exactly that — S2 assigned, S1 excluded.
+    const blocks = segmentAnswerBlocks(raw)
+    expect(kinds(blocks)).toEqual(['paragraph', 'paragraph'])
+    expect(blocks[0]!.markers).toEqual([])
+    expect(blocks[1]!.markers).toEqual(['S2'])
+  })
 })

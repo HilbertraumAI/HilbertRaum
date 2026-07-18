@@ -22,6 +22,42 @@ export const CITE_CODE_SPLIT_RE = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[
 /** One inline machine marker: `[S<digits>]`. Capture group 1 = the digits. */
 export const CITE_MARKER_RE = /\[S(\d+)\]/g
 
+/** One prose citation marker with its absolute position in the scanned text. */
+export interface CitationMarkerOffset {
+  /** The machine label, e.g. `"S1"`. */
+  label: string
+  /** UTF-16 index of the marker's `[` in the WHOLE scanned string. */
+  index: number
+}
+
+/**
+ * Extract every PROSE citation marker with its absolute offset. The prose/code split runs
+ * over the WHOLE input exactly like the display rewrite does — this is load-bearing for
+ * consumers that later partition the text (the evidence-review segmenter assigns markers
+ * to blocks BY OFFSET from this one whole-text pass), because a code region can span a
+ * partition boundary (e.g. a mid-line ``` swallows to end-of-text): splitting first and
+ * scanning per part would classify such markers differently from the rendered chat.
+ * In-order, NOT deduplicated (offsets are positions, not a citation set).
+ */
+export function extractCitationMarkerOffsets(text: string): CitationMarkerOffset[] {
+  if (!text.includes('[S')) return []
+  const offsets: CitationMarkerOffset[] = []
+  const parts = text.split(CITE_CODE_SPLIT_RE)
+  let cursor = 0
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]!
+    if (i % 2 === 0) {
+      // `matchAll` iterates a species-clone of the regex, so the shared `g`-flagged
+      // CITE_MARKER_RE instance never carries `lastIndex` state between callers.
+      for (const m of part.matchAll(CITE_MARKER_RE)) {
+        offsets.push({ label: `S${m[1]}`, index: cursor + (m.index ?? 0) })
+      }
+    }
+    cursor += part.length
+  }
+  return offsets
+}
+
 /**
  * Extract the machine citation labels (`"S1"`, `"S2"`, …) referenced by `text`'s PROSE —
  * markers inside fenced blocks or inline code spans are literals, not citations, exactly as
@@ -29,19 +65,12 @@ export const CITE_MARKER_RE = /\[S(\d+)\]/g
  * cite the same source once — spec §13.1).
  */
 export function extractCitationMarkers(text: string): string[] {
-  if (!text.includes('[S')) return []
   const seen = new Set<string>()
   const labels: string[] = []
-  const parts = text.split(CITE_CODE_SPLIT_RE)
-  for (let i = 0; i < parts.length; i += 2) {
-    // `matchAll` iterates a species-clone of the regex, so the shared `g`-flagged
-    // CITE_MARKER_RE instance never carries `lastIndex` state between callers.
-    for (const m of parts[i]!.matchAll(CITE_MARKER_RE)) {
-      const label = `S${m[1]}`
-      if (!seen.has(label)) {
-        seen.add(label)
-        labels.push(label)
-      }
+  for (const { label } of extractCitationMarkerOffsets(text)) {
+    if (!seen.has(label)) {
+      seen.add(label)
+      labels.push(label)
     }
   }
   return labels

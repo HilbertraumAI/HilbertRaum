@@ -588,25 +588,31 @@ export function updateEvidenceReview(
 
 /**
  * Mark a review ready (spec §18.4) — only when the D-7 gate is met; otherwise the review is
- * returned unchanged with the gate so callers can say exactly why ("N of M decided"). Null on
- * unknown id.
+ * returned unchanged with the gate so callers can say exactly why ("N of M decided"). An
+ * ALREADY-ready review is a NO-OP (Phase-1 review FIX-5): the original `completed_at` stamp
+ * is the record of when the human finished — a repeat call must not re-stamp it (nor
+ * re-audit; callers key that off `becameReady`). Null on unknown id.
  */
 export function markEvidenceReviewReady(
   db: Db,
   reviewId: string
-): { review: EvidenceReview; gate: EvidenceReadyGate } | null {
+): { review: EvidenceReview; gate: EvidenceReadyGate; becameReady: boolean } | null {
   const row = readReviewRow(db, reviewId)
   if (!row) return null
   const gate = deriveReadyGate(readItemRows(db, reviewId).map((r) => rowToItem(r, [])))
-  if (!gate.eligible) {
-    return { review: rowToReview(row), gate }
+  if (normalizeStatus(row.status) === 'ready' || !gate.eligible) {
+    return { review: rowToReview(row), gate, becameReady: false }
   }
   const now = nowIso()
   prepareCached(
     db,
     "UPDATE evidence_reviews SET status = 'ready', completed_at = ?, updated_at = ? WHERE id = ?"
   ).run(now, now, reviewId)
-  return { review: rowToReview({ ...row, status: 'ready', completed_at: now, updated_at: now }), gate }
+  return {
+    review: rowToReview({ ...row, status: 'ready', completed_at: now, updated_at: now }),
+    gate,
+    becameReady: true
+  }
 }
 
 /** Manually reopen a ready review (spec §18.4: back to draft, completion stamp cleared). */
@@ -647,11 +653,15 @@ export interface NewEvidenceReviewItemInput {
 }
 
 /**
- * Insert a batch of items in ONE transaction (a crash mid-insert must not leave a
- * half-itemed review — the deleteConversation REL-4 wrap). Returns the created items in
- * input order. Throws on an unknown review id.
+ * NON-transactional insert core: the plain statements of a batch item insert, with NO
+ * BEGIN/COMMIT of its own — the CALLER owns the transaction boundary. Exists so the
+ * snapshot builder can compose head + items + links into ONE all-or-nothing transaction
+ * (EP-1 Phase-1 review FIX-2 — SQLite refuses nested BEGIN, so a composable span must not
+ * open its own). Everything else uses `createEvidenceReviewItems` below, which wraps this
+ * in the standard transaction. Returns the created items in input order. Throws on an
+ * unknown review id.
  */
-export function createEvidenceReviewItems(
+export function insertEvidenceReviewItems(
   db: Db,
   reviewId: string,
   inputs: NewEvidenceReviewItemInput[]
@@ -668,50 +678,66 @@ export function createEvidenceReviewItems(
   let nextOrdinal = (maxRow?.m ?? -1) + 1
   const now = nowIso()
   const created: EvidenceReviewItem[] = []
+  for (const input of inputs) {
+    const item: EvidenceReviewItem = {
+      id: randomUUID(),
+      reviewId,
+      ordinal: input.ordinal ?? nextOrdinal++,
+      kind: input.kind,
+      blockKey: input.blockKey,
+      blockKind: input.blockKind ?? null,
+      startOffset: input.startOffset ?? null,
+      endOffset: input.endOffset ?? null,
+      textSnapshot: input.textSnapshot,
+      decision: input.decision ?? 'not_reviewed',
+      reviewerNote: input.reviewerNote ?? null,
+      links: [],
+      createdAt: now,
+      updatedAt: now
+    }
+    prepareCached(
+      db,
+      `INSERT INTO evidence_review_items
+         (id, review_id, ordinal, kind, block_key, block_kind, start_offset, end_offset,
+          text_snapshot, decision, reviewer_note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      item.id,
+      item.reviewId,
+      item.ordinal,
+      item.kind,
+      item.blockKey,
+      item.blockKind ?? null,
+      item.startOffset ?? null,
+      item.endOffset ?? null,
+      item.textSnapshot,
+      item.decision,
+      item.reviewerNote ?? null,
+      item.createdAt,
+      item.updatedAt
+    )
+    created.push(item)
+  }
+  touchReview(db, reviewId, now)
+  return created
+}
+
+/**
+ * Insert a batch of items in ONE transaction (a crash mid-insert must not leave a
+ * half-itemed review — the deleteConversation REL-4 wrap, incl. the swallowed-rollback
+ * nesting that keeps the ORIGINAL failure as the thrown error). Returns the created items
+ * in input order. Throws on an unknown review id.
+ */
+export function createEvidenceReviewItems(
+  db: Db,
+  reviewId: string,
+  inputs: NewEvidenceReviewItemInput[]
+): EvidenceReviewItem[] {
   db.exec('BEGIN')
   try {
-    for (const input of inputs) {
-      const item: EvidenceReviewItem = {
-        id: randomUUID(),
-        reviewId,
-        ordinal: input.ordinal ?? nextOrdinal++,
-        kind: input.kind,
-        blockKey: input.blockKey,
-        blockKind: input.blockKind ?? null,
-        startOffset: input.startOffset ?? null,
-        endOffset: input.endOffset ?? null,
-        textSnapshot: input.textSnapshot,
-        decision: input.decision ?? 'not_reviewed',
-        reviewerNote: input.reviewerNote ?? null,
-        links: [],
-        createdAt: now,
-        updatedAt: now
-      }
-      prepareCached(
-        db,
-        `INSERT INTO evidence_review_items
-           (id, review_id, ordinal, kind, block_key, block_kind, start_offset, end_offset,
-            text_snapshot, decision, reviewer_note, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(
-        item.id,
-        item.reviewId,
-        item.ordinal,
-        item.kind,
-        item.blockKey,
-        item.blockKind ?? null,
-        item.startOffset ?? null,
-        item.endOffset ?? null,
-        item.textSnapshot,
-        item.decision,
-        item.reviewerNote ?? null,
-        item.createdAt,
-        item.updatedAt
-      )
-      created.push(item)
-    }
-    touchReview(db, reviewId, now)
+    const created = insertEvidenceReviewItems(db, reviewId, inputs)
     db.exec('COMMIT')
+    return created
   } catch (err) {
     try {
       db.exec('ROLLBACK')
@@ -720,7 +746,6 @@ export function createEvidenceReviewItems(
     }
     throw err
   }
-  return created
 }
 
 /** Patch one item's decision/note; bumps the item AND the head activity stamp. Null on unknown id. */

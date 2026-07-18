@@ -249,6 +249,100 @@ describe('whole-document and extract answers (spec §13.3 hard rule)', () => {
     // No stamp = the pre-D72 relevance path (the renderer's own fallback) — its persisted
     // citations ARE labeled excerpts; calling them whole-doc analysis would be invented.
     expect(sourceKindForMode(undefined)).toBe('direct_excerpt')
+    // A PRESENT-but-unrecognized mode (a workspace written by a NEWER app — parseCoverage
+    // accepts any string) maps to the WEAKEST claim, never to a citation class (FIX-1).
+    expect(sourceKindForMode('hybrid' as CoverageInfo['mode'])).toBe('whole_document_provenance')
+  })
+
+  it("FIX-1: an unknown PRESENT mode (e.g. 'hybrid' from a newer app) → weakest kind, no labels, ZERO auto-links", () => {
+    const db = freshDb()
+    const doc = seedDocument(db, { title: 'Future.pdf' })
+    const { messageId } = seedAnswer(db, {
+      content: 'A future-mode answer. [S1]',
+      citations: [{ label: 'S1', sourceTitle: 'Future.pdf', documentId: doc, snippet: 'kept' }],
+      coverage: { mode: 'hybrid', chunksCovered: 1, chunksTotal: 1 } as unknown as CoverageInfo
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId)
+    expect(detail.sources[0]).toMatchObject({
+      kind: 'whole_document_provenance', // the weakest claim — never 'direct_excerpt'
+      machineLabel: null,
+      identity: 'resolved' // identity resolution is orthogonal to the honesty class
+    })
+    expect(detail.items.length).toBeGreaterThan(0)
+    expect(detail.items.every((i) => i.links.length === 0)).toBe(true)
+    // The stored coverage snapshot keeps the unknown mode verbatim (tolerant passthrough);
+    // the generation read-model degrades it to null ("Unavailable"), never a known mode.
+    expect(detail.coverageSnapshot?.mode).toBe('hybrid')
+    expect(detail.generationSnapshot?.answerMode).toBeNull()
+  })
+})
+
+describe('atomic creation (Phase-1 review FIX-2)', () => {
+  it('an injected mid-build failure rolls back EVERY row across all four tables and surfaces the ORIGINAL error', () => {
+    const db = freshDb()
+    const doc = seedDocument(db, { title: 'Doc.pdf' })
+    const { messageId } = seedAnswer(db, {
+      content: 'Claim. [S1]',
+      citations: [{ label: 'S1', sourceTitle: 'Doc.pdf', documentId: doc }],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 2 }
+    })
+    // Force the LINK write (the last span of the build) to fail — a real SQLite error from
+    // inside the head+items+links transaction, no mocking.
+    db.exec(
+      "CREATE TRIGGER fail_links BEFORE INSERT ON evidence_review_links " +
+        "BEGIN SELECT RAISE(ABORT, 'injected-link-failure'); END"
+    )
+    // The ORIGINAL failure surfaces (not a masked cleanup error)…
+    expect(() => createEvidenceReviewFromMessage(db, messageId)).toThrow(/injected-link-failure/)
+    // …and NOTHING persisted: no adoptable half-built review (the idempotent IPC create
+    // would otherwise return an item-less review whose gate is vacuously eligible).
+    for (const table of [
+      'evidence_reviews',
+      'evidence_review_items',
+      'evidence_review_links',
+      'evidence_exports'
+    ]) {
+      const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
+      expect(row.n, table).toBe(0)
+    }
+    // With the fault removed, the SAME message creates cleanly (no residue blocks it).
+    db.exec('DROP TRIGGER fail_links')
+    const detail = createEvidenceReviewFromMessage(db, messageId)
+    expect(detail.items.length).toBeGreaterThan(0)
+    expect(detail.items[0]!.links).toEqual([{ evidenceKey: 'S1', origin: 'answer_marker', relation: null }])
+  })
+})
+
+describe('display-parity auto-links across block boundaries (Phase-1 review FIX-3, end-to-end)', () => {
+  it('repro (a): the [S1] the chat UI renders as literal code mints NO answer_marker link', () => {
+    const db = freshDb()
+    const doc = seedDocument(db, { title: 'A.pdf' })
+    const { messageId } = seedAnswer(db, {
+      content: 'To fence, type ``` in markdown.\n\nThe clause requires notice. [S1]',
+      citations: [{ label: 'S1', sourceTitle: 'A.pdf', documentId: doc }],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 2 }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId)
+    expect(detail.items.length).toBeGreaterThan(0)
+    expect(detail.items.every((i) => i.links.length === 0)).toBe(true) // display literal ⇒ no link
+  })
+
+  it('repro (b): the [S2] the chat UI renders as a citation keeps its link; the in-code [S1] does not', () => {
+    const db = freshDb()
+    const docA = seedDocument(db, { title: 'A.pdf' })
+    const docB = seedDocument(db, { title: 'B.pdf' })
+    const { messageId } = seedAnswer(db, {
+      content: 'start ``` code [S1]\n\nstill code ``` end [S2]',
+      citations: [
+        { label: 'S1', sourceTitle: 'A.pdf', documentId: docA },
+        { label: 'S2', sourceTitle: 'B.pdf', documentId: docB }
+      ],
+      coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 2 }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId)
+    expect(detail.items).toHaveLength(2)
+    expect(detail.items[0]!.links).toEqual([]) // display literal ⇒ no link
+    expect(detail.items[1]!.links).toEqual([{ evidenceKey: 'S2', origin: 'answer_marker', relation: null }]) // display citation ⇒ link
   })
 })
 

@@ -10,9 +10,8 @@ import { prepareCached, type Db } from '../db'
 import { parseCitations, parseCoverage } from '../chat'
 import {
   createEvidenceReview,
-  createEvidenceReviewItems,
-  deleteEvidenceReview,
   getEvidenceReview,
+  insertEvidenceReviewItems,
   setEvidenceLink,
   type NewEvidenceReviewItemInput
 } from '../evidence-reviews'
@@ -71,25 +70,41 @@ interface DocumentRow {
 }
 
 /**
- * Map an answer's coverage mode to the source honesty class (plan §6.3). No recorded mode
- * (legacy pre-D72 rows — the relevance path stamped nothing before #24) reads as the
- * relevance path, exactly like the renderer's established coverage fallback: those answers'
- * persisted citations ARE labeled excerpts that were supplied to the model, and presenting
- * them as "derived through whole-document analysis" would be the invented claim. The
- * GENERATION snapshot still records `answerMode: 'unknown'` for them — what was stamped
- * stays distinct from how the sources are classified.
+ * Map an answer's coverage mode to the source honesty class (plan §6.3).
+ *
+ * - ABSENT mode (legacy pre-D72 rows — the relevance path stamped nothing before #24) reads
+ *   as the relevance path, exactly like the renderer's established fallback
+ *   (`SourcesDisclosure`'s `isProvenance = mode != null && mode !== 'relevance'`): those
+ *   answers' persisted citations ARE labeled excerpts supplied to the model, and presenting
+ *   them as "derived through whole-document analysis" would be the invented claim. The
+ *   GENERATION snapshot still records `answerMode: 'unknown'` for them.
+ * - A PRESENT-but-unrecognized mode string (reachable: `parseCoverage` accepts any string,
+ *   so a portable workspace written by a NEWER app version can carry a mode this build has
+ *   never heard of) maps to the WEAKEST claim, `whole_document_provenance` — no machine
+ *   labels, ZERO auto-links (Phase-1 review FIX-1: the repo's tolerant-default direction;
+ *   an unknown mode must never mint "cited by the answer" claims). The `never` assignment
+ *   keeps the switch compile-time exhaustive: a NEW `CoverageMode` member reds this
+ *   function until it is mapped deliberately.
  */
 export function sourceKindForMode(
   mode: CoverageInfo['mode'] | undefined
 ): EvidenceSourceSnapshot['kind'] {
+  if (mode === undefined) return 'direct_excerpt'
   switch (mode) {
+    case 'relevance':
+      return 'direct_excerpt'
     case 'tree':
     case 'capped':
       return 'whole_document_provenance'
     case 'extract':
       return 'structured_record'
-    default:
-      return 'direct_excerpt'
+    default: {
+      // Compile-time: exhaustive over the known union — a new CoverageMode member fails
+      // this assignment. Runtime: an unknown stored string lands here → weakest claim.
+      const unknownMode: never = mode
+      void unknownMode
+      return 'whole_document_provenance'
+    }
   }
 }
 
@@ -229,23 +244,35 @@ export function createEvidenceReviewFromMessage(
   }
 
   const blocks = segmentAnswerBlocks(msg.content)
-  const review = createEvidenceReview(db, {
-    messageId,
-    // D-6: conversation title default; a title that trims empty falls back to the
-    // persist-canonical English default so a review is never unnamed.
-    title: (conv?.title ?? '').trim().length > 0 ? conv!.title : DEFAULT_REVIEW_TITLE,
-    questionMessageId: question?.id ?? null,
-    answerSnapshot: msg.content,
-    questionSnapshot: question?.content ?? '',
-    sources,
-    coverageSnapshot: coverage,
-    generationSnapshot: generation
-  })
 
+  // ONE transaction around head + items + links (Phase-1 review FIX-2): a draft is
+  // all-or-nothing — a thrown error rolls everything back (the swallowed-rollback nesting
+  // keeps the ORIGINAL failure as the thrown error, the deleteConversation REL-4 shape),
+  // and a process crash leaves an uncommitted journal SQLite discards on the next open. A
+  // half-built review must never persist: the idempotent IPC create would adopt it forever
+  // (zero items ⇒ a vacuously eligible gate ⇒ an empty review could be marked ready).
+  let reviewId: string
+  db.exec('BEGIN')
   try {
+    const review = createEvidenceReview(db, {
+      messageId,
+      // D-6: conversation title default; a title that trims empty falls back to the
+      // persist-canonical English default so a review is never unnamed.
+      title: (conv?.title ?? '').trim().length > 0 ? conv!.title : DEFAULT_REVIEW_TITLE,
+      questionMessageId: question?.id ?? null,
+      answerSnapshot: msg.content,
+      questionSnapshot: question?.content ?? '',
+      sources,
+      coverageSnapshot: coverage,
+      generationSnapshot: generation
+    })
+    reviewId = review.id
+
     // Items FIRST, links AFTER — `setEvidenceLink` validates keys against the review's
-    // already-persisted source snapshot (Phase-0 contract), so the order is load-bearing.
-    const items = createEvidenceReviewItems(
+    // already-written source snapshot (Phase-0 contract), so the order is load-bearing.
+    // `insertEvidenceReviewItems` is the NON-transactional core: this function owns the
+    // transaction (SQLite refuses nested BEGIN).
+    const items = insertEvidenceReviewItems(
       db,
       review.id,
       blocks.map(
@@ -263,8 +290,9 @@ export function createEvidenceReviewFromMessage(
     )
 
     // Auto-links (spec §13.1/§13.3): DIRECT-EXCERPT answers only — marker → source by
-    // machine label. Whole-document/structured answers get ZERO auto-links: their kinds
-    // carry no `machineLabel`, and this branch never runs for them (belt and braces).
+    // machine label. Whole-document/structured/unknown-mode answers get ZERO auto-links:
+    // their kinds carry no `machineLabel`, and this branch never runs for them (belt and
+    // braces).
     if (kind === 'direct_excerpt') {
       const keyByLabel = new Map<string, string>()
       for (const s of sources) {
@@ -281,15 +309,19 @@ export function createEvidenceReviewFromMessage(
         }
       }
     }
+    db.exec('COMMIT')
   } catch (err) {
-    // A draft must be complete or absent — never a half-itemed review (CASCADE cleans up).
-    deleteEvidenceReview(db, review.id)
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure as the thrown error */
+    }
     throw err
   }
 
-  const detail = getEvidenceReview(db, review.id)
+  const detail = getEvidenceReview(db, reviewId)
   if (!detail) {
-    throw new Error(`evidence review: draft readback failed (${review.id})`)
+    throw new Error(`evidence review: draft readback failed (${reviewId})`)
   }
   return detail
 }

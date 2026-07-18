@@ -238,14 +238,17 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
       const id = safeId(reviewId)
       if (!id) return null
       const result = markEvidenceReviewReady(ctx.db, id)
-      if (result && result.gate.eligible && result.review.status === 'ready') {
+      if (!result) return null
+      // Audit only a REAL transition (FIX-5): an already-ready review is a service-side
+      // no-op — no re-stamp, no second event.
+      if (result.becameReady) {
         ctx.audit?.('evidence_review_ready', 'Evidence review marked ready', {
           reviewId: result.review.id,
           requiredTotal: result.gate.requiredTotal,
           decidedTotal: result.gate.decidedTotal
         })
       }
-      return result
+      return { review: result.review, gate: result.gate }
     }
   )
 

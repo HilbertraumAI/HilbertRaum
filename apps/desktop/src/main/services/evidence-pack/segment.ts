@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { AnswerBlockKind } from '../../../shared/types'
-import { extractCitationMarkers } from '../../../shared/citation-markers'
+import { extractCitationMarkerOffsets } from '../../../shared/citation-markers'
 
 // Evidence Pack / Review Mode — deterministic answer-block segmenter (EP-1 plan §6.1).
 //
@@ -11,11 +11,10 @@ import { extractCitationMarkers } from '../../../shared/citation-markers'
 //
 // This is NOT a markdown parser. It is a line scanner with exactly the block classes the
 // review needs (spec §12.1: paragraph / list item / heading / fence / table / blockquote),
-// resolved by deterministic, documented rules. Where CommonMark is amBIGuous or richer, the
+// resolved by deterministic, documented rules. Where CommonMark is ambiguous or richer, the
 // scanner picks the simpler reading and the unit tests pin it:
 //  - A fence opens at /^ {0,3}(```+|~~~+)/ and closes on a matching-or-longer fence of the
-//    SAME character; an unclosed fence swallows to end-of-text (the CITE_CODE_SPLIT_RE
-//    idiom — a fence block never yields citation markers).
+//    SAME character; an unclosed fence swallows to end-of-text.
 //  - A heading is a single ATX line (`#` ×1–6). Setext headings are read as paragraphs.
 //  - A blockquote is a run of consecutive `>` lines (no lazy continuation).
 //  - A table is a run of ≥2 consecutive lines whose first non-space character is `|`;
@@ -24,6 +23,15 @@ import { extractCitationMarkers } from '../../../shared/citation-markers'
 //    deeper-indented marker lines and indented continuations attach to the current item,
 //    so a tight nested list stays with its parent point (§12.2 "coherent units").
 //  - Everything else accumulates into paragraphs. A blank line ends any non-fence block.
+//
+// MARKERS are NOT computed per block: they are extracted ONCE over the whole normalized
+// snapshot (`extractCitationMarkerOffsets` — the same regex source AND the same whole-text
+// pass shape as the renderer's display rewrite) and assigned to blocks by offset range.
+// This is load-bearing: the display's prose/code split runs over the WHOLE message, so a
+// code region can span BLOCK boundaries (a mid-line ``` swallows to end-of-text; a code
+// region can close mid-line). Per-block extraction would then disagree with what the chat
+// UI renders as literal code vs citation; offset assignment makes each block's markers
+// byte-derivable from the display semantics (two-sided repro tests pin both directions).
 //
 // Headings are the only kind the D-7 ready gate exempts — the segmenter CLASSIFIES only;
 // the snapshot builder assigns the 'not_applicable' default decision (spec §12.2) and
@@ -43,9 +51,10 @@ export interface AnswerBlock {
   /** The block's exact text (LF-normalized source lines, blank edges trimmed). */
   text: string
   /**
-   * Machine citation labels (`"S1"`, …) in this block's PROSE — code spans/fences excluded
-   * via the SHARED regex source (`shared/citation-markers.ts`), so extraction can never
-   * disagree with the chat display's marker rewrite. Deduplicated, first-appearance order.
+   * Machine citation labels (`"S1"`, …) whose PROSE markers fall inside this block's text
+   * range, per the ONE whole-snapshot extraction described in the module header (code
+   * regions resolved exactly as the chat display resolves them). Deduplicated,
+   * first-appearance order.
    */
   markers: string[]
 }
@@ -61,15 +70,22 @@ function hashOf(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 12)
 }
 
-function makeBlock(kind: AnswerBlockKind, lines: string[], ordinal: number): AnswerBlock {
-  const text = lines.join('\n')
-  return {
-    blockKey: `b${ordinal}-${kind}-${hashOf(text)}`,
-    blockKind: kind,
-    ordinal,
-    text,
-    markers: kind === 'fence' ? [] : extractCitationMarkers(text)
-  }
+function isStructuralStarter(line: string): boolean {
+  return (
+    LIST_ITEM_RE.test(line) ||
+    FENCE_OPEN_RE.test(line) ||
+    HEADING_RE.test(line) ||
+    BLOCKQUOTE_RE.test(line) ||
+    TABLE_ROW_RE.test(line)
+  )
+}
+
+interface RawBlock {
+  kind: AnswerBlockKind
+  /** First line index (into the normalized line array). */
+  startLine: number
+  /** Number of consecutive lines the block spans. */
+  lineCount: number
 }
 
 /**
@@ -77,8 +93,20 @@ function makeBlock(kind: AnswerBlockKind, lines: string[], ordinal: number): Ans
  * whitespace-only answer yields ZERO blocks (an item-less review — nothing to decide).
  */
 export function segmentAnswerBlocks(markdown: string): AnswerBlock[] {
-  const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
-  const raw: Array<{ kind: AnswerBlockKind; lines: string[] }> = []
+  const normalized = markdown.replace(/\r\n?/g, '\n')
+  const lines = normalized.split('\n')
+  // Absolute start offset of each line in `normalized` (lines are '\n'-joined).
+  const lineStart: number[] = new Array(lines.length)
+  let acc = 0
+  for (let k = 0; k < lines.length; k++) {
+    lineStart[k] = acc
+    acc += lines[k]!.length + 1
+  }
+  // ONE whole-snapshot marker pass — identical code-region semantics to the display
+  // rewrite (see module header); each block picks its markers from it by offset below.
+  const markerOffsets = extractCitationMarkerOffsets(normalized)
+
+  const raw: RawBlock[] = []
   let i = 0
   while (i < lines.length) {
     const line = lines[i]!
@@ -86,99 +114,88 @@ export function segmentAnswerBlocks(markdown: string): AnswerBlock[] {
       i += 1
       continue
     }
+    const startLine = i
 
     const fence = FENCE_OPEN_RE.exec(line)
     if (fence) {
       // Fence: swallow to the matching close (same char, ≥ length) or to end-of-text.
       const marker = fence[1]!
       const closeRe = new RegExp(`^ {0,3}${marker[0] === '`' ? '`' : '~'}{${marker.length},}\\s*$`)
-      const block = [line]
       i += 1
       while (i < lines.length) {
-        block.push(lines[i]!)
+        const consumed = lines[i]!
         i += 1
-        if (closeRe.test(block[block.length - 1]!)) break
+        if (closeRe.test(consumed)) break
       }
-      raw.push({ kind: 'fence', lines: block })
+      raw.push({ kind: 'fence', startLine, lineCount: i - startLine })
       continue
     }
 
     if (HEADING_RE.test(line)) {
-      raw.push({ kind: 'heading', lines: [line] })
+      raw.push({ kind: 'heading', startLine, lineCount: 1 })
       i += 1
       continue
     }
 
     if (BLOCKQUOTE_RE.test(line)) {
-      const block = [line]
       i += 1
-      while (i < lines.length && BLOCKQUOTE_RE.test(lines[i]!)) {
-        block.push(lines[i]!)
-        i += 1
-      }
-      raw.push({ kind: 'blockquote', lines: block })
+      while (i < lines.length && BLOCKQUOTE_RE.test(lines[i]!)) i += 1
+      raw.push({ kind: 'blockquote', startLine, lineCount: i - startLine })
       continue
     }
 
     if (TABLE_ROW_RE.test(line)) {
-      const block = [line]
       i += 1
-      while (i < lines.length && TABLE_ROW_RE.test(lines[i]!)) {
-        block.push(lines[i]!)
-        i += 1
-      }
-      if (block.length >= 2) {
-        raw.push({ kind: 'table', lines: block })
-        continue
-      }
-      // A lone pipe line is not a table — fall through as a paragraph line.
-      raw.push({ kind: 'paragraph', lines: block })
+      while (i < lines.length && TABLE_ROW_RE.test(lines[i]!)) i += 1
+      // ≥2 pipe lines form one table; a lone pipe line is not a table — a paragraph.
+      raw.push({
+        kind: i - startLine >= 2 ? 'table' : 'paragraph',
+        startLine,
+        lineCount: i - startLine
+      })
       continue
     }
 
     if (LIST_ITEM_RE.test(line)) {
       // One TOP-LEVEL item + its indented children/continuations = one coherent block.
-      const block = [line]
       i += 1
       while (i < lines.length) {
         const next = lines[i]!
-        if (next.trim().length === 0) break
-        if (
-          LIST_ITEM_RE.test(next) ||
-          FENCE_OPEN_RE.test(next) ||
-          HEADING_RE.test(next) ||
-          BLOCKQUOTE_RE.test(next) ||
-          TABLE_ROW_RE.test(next)
-        ) {
-          break
-        }
-        block.push(next)
+        if (next.trim().length === 0 || isStructuralStarter(next)) break
         i += 1
       }
-      raw.push({ kind: 'list_item', lines: block })
+      raw.push({ kind: 'list_item', startLine, lineCount: i - startLine })
       continue
     }
 
     // Paragraph: accumulate until a blank line or a structural starter.
-    const block = [line]
     i += 1
     while (i < lines.length) {
       const next = lines[i]!
-      if (next.trim().length === 0) break
-      if (
-        LIST_ITEM_RE.test(next) ||
-        FENCE_OPEN_RE.test(next) ||
-        HEADING_RE.test(next) ||
-        BLOCKQUOTE_RE.test(next) ||
-        TABLE_ROW_RE.test(next)
-      ) {
-        break
-      }
-      block.push(next)
+      if (next.trim().length === 0 || isStructuralStarter(next)) break
       i += 1
     }
-    raw.push({ kind: 'paragraph', lines: block })
+    raw.push({ kind: 'paragraph', startLine, lineCount: i - startLine })
   }
 
-  return raw.map((b, ordinal) => makeBlock(b.kind, b.lines, ordinal))
+  return raw.map((b, ordinal) => {
+    const text = lines.slice(b.startLine, b.startLine + b.lineCount).join('\n')
+    const start = lineStart[b.startLine]!
+    const end = start + text.length
+    const seen = new Set<string>()
+    const markers: string[] = []
+    for (const m of markerOffsets) {
+      if (m.index >= start && m.index < end && !seen.has(m.label)) {
+        seen.add(m.label)
+        markers.push(m.label)
+      }
+    }
+    return {
+      blockKey: `b${ordinal}-${b.kind}-${hashOf(text)}`,
+      blockKind: b.kind,
+      ordinal,
+      text,
+      markers
+    }
+  })
 }

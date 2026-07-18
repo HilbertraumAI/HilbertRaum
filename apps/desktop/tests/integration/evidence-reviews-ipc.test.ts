@@ -20,6 +20,7 @@ vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test' }
 }))
 
+import { randomUUID } from 'node:crypto'
 import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -96,6 +97,16 @@ function makeHarness(): Harness {
   return { ctx, db, runtimeTouched }
 }
 
+function seedDocument(db: Db, opts: { title: string; sha256?: string; mime?: string }): string {
+  const id = randomUUID()
+  const now = new Date().toISOString()
+  db.prepare(
+    `INSERT INTO documents (id, title, mime_type, sha256, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'indexed', ?, ?)`
+  ).run(id, opts.title, opts.mime ?? 'application/pdf', opts.sha256 ?? 'ab'.repeat(32), now, now)
+  return id
+}
+
 function seedAnswer(
   db: Db,
   opts: {
@@ -148,7 +159,17 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
   it('create→read→update→decide→select→link→ready→reopen→refresh→delete, model never touched, offline guard silent', async () => {
     const { ctx, db, runtimeTouched } = makeHarness()
     registerEvidenceReviewsIpc(ctx)
-    const { messageId } = seedAnswer(db, RELEVANCE)
+    // FIX-4c: one citation WITH a documentId (the byId resolution branch) and one without
+    // (title-unmatched → unresolved) — both resolved under the tripwire-asserted flow.
+    const docId = seedDocument(db, { title: 'A.pdf', sha256: 'aa'.repeat(32) })
+    const { messageId } = seedAnswer(db, {
+      content: RELEVANCE.content,
+      citations: [
+        { label: 'S1', sourceTitle: 'A.pdf', documentId: docId, chunkId: 'c1' },
+        { label: 'S2', sourceTitle: 'B.pdf' }
+      ],
+      coverage: RELEVANCE.coverage
+    })
 
     // The shared eligibility rule the renderer will use (plan §6.5): this answer qualifies.
     expect(isReviewEligible({ role: 'assistant', citations: RELEVANCE.citations, coverage: RELEVANCE.coverage })).toBe(true)
@@ -159,6 +180,13 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     expect(created.status).toBe('draft')
     expect(created.items.map((i) => i.blockKind)).toEqual(['heading', 'paragraph', 'paragraph'])
     expect(created.sources.map((s) => s.key)).toEqual(['S1', 'S2'])
+    expect(created.sources[0]).toMatchObject({
+      identity: 'resolved',
+      documentId: docId,
+      documentSha256: 'aa'.repeat(32),
+      availabilityAtCreation: 'available'
+    })
+    expect(created.sources[1]).toMatchObject({ identity: 'unresolved', documentId: null })
     expect(created.items[1]!.links).toEqual([{ evidenceKey: 'S1', origin: 'answer_marker', relation: null }])
     // Generation snapshot got the injected electron app version; the model id records even
     // with no manifests dir (display name honestly null, never invented).
@@ -229,6 +257,13 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     expect(badLink).toBeNull()
     const { result: removed } = await invoke(handlers, IPC.removeEvidenceLink, selection.id, 'S2')
     expect(removed).toBe(true)
+
+    // -- FIX-4a: a REAL selection deletion through the handler (success path under the
+    // tripwires); a structural BLOCK item refuses.
+    const { result: selDeleted } = await invoke(handlers, IPC.deleteEvidenceSelection, selection.id)
+    expect(selDeleted).toBe(true)
+    const { result: blockRefused } = await invoke(handlers, IPC.deleteEvidenceSelection, itemA.id)
+    expect(blockRefused).toBe(false)
 
     // -- mark ready refuses while a required block is undecided (gate says why)…
     const { result: refusedRaw } = await invoke(handlers, IPC.markEvidenceReviewReady, created.id)
@@ -316,7 +351,7 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
   })
 
   it('payload guards: malformed ids and shapes read as unknown; create refuses garbage loudly', async () => {
-    const { ctx, db } = makeHarness()
+    const { ctx, db, runtimeTouched } = makeHarness()
     registerEvidenceReviewsIpc(ctx)
     const { messageId } = seedAnswer(db, RELEVANCE)
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
@@ -358,15 +393,55 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
       (await invoke(handlers, IPC.createEvidenceSelection, created.id, { blockKey: item.blockKey, startOffset: '0', endOffset: 1 }))
         .result
     ).toBeNull()
+
+    // FIX-4b: the hard rules hold across the guard flows too.
+    expect(runtimeTouched).toEqual([])
+    expect(offlineViolations).toEqual([])
   })
 
   it('creating a review for an unknown or non-assistant message throws ids-only errors', async () => {
-    const { ctx, db } = makeHarness()
+    const { ctx, db, runtimeTouched } = makeHarness()
     registerEvidenceReviewsIpc(ctx)
     await expect(invoke(handlers, IPC.createEvidenceReview, 'missing-msg')).rejects.toThrow('missing-msg')
     const conv = createConversation(db, { title: 'T' })
     const user = appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Q' })
     await expect(invoke(handlers, IPC.createEvidenceReview, user.id)).rejects.toThrow(user.id)
+
+    // FIX-4b: the hard rules hold across the refusal flows too.
+    expect(runtimeTouched).toEqual([])
+    expect(offlineViolations).toEqual([])
+  })
+
+  it('FIX-5: markReady on an already-ready review is a NO-OP — original completed_at kept, exactly one audit event', async () => {
+    const { ctx, db, runtimeTouched } = makeHarness()
+    registerEvidenceReviewsIpc(ctx)
+    const { messageId } = seedAnswer(db, {
+      content: 'Single claim. [S1]',
+      citations: [{ label: 'S1', sourceTitle: 'A.pdf' }],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
+    })
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
+    const created = createdRaw as EvidenceReviewDetail
+    await invoke(handlers, IPC.updateEvidenceReviewItem, created.items[0]!.id, { decision: 'supported' })
+    const { result: firstRaw } = await invoke(handlers, IPC.markEvidenceReviewReady, created.id)
+    expect((firstRaw as { review: EvidenceReview }).review.status).toBe('ready')
+
+    // Pin the stamp with a sentinel value so a buggy re-UPDATE cannot hide inside the
+    // same clock millisecond, then mark again.
+    const SENTINEL_STAMP = '2020-01-01T00:00:00.000Z'
+    db.prepare('UPDATE evidence_reviews SET completed_at = ? WHERE id = ?').run(SENTINEL_STAMP, created.id)
+    const { result: againRaw } = await invoke(handlers, IPC.markEvidenceReviewReady, created.id)
+    const again = againRaw as { review: EvidenceReview; gate: EvidenceReadyGate }
+    expect(again.review.status).toBe('ready')
+    expect(again.review.completedAt).toBe(SENTINEL_STAMP) // no re-stamp
+    expect(again.gate.eligible).toBe(true)
+    // The service-internal transition flag never crosses the wire.
+    expect('becameReady' in (againRaw as Record<string, unknown>)).toBe(false)
+    // Exactly ONE ready event across the double call.
+    expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'evidence_review_ready')).toHaveLength(1)
+
+    expect(runtimeTouched).toEqual([])
+    expect(offlineViolations).toEqual([])
   })
 })
 
