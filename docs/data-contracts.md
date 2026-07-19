@@ -860,7 +860,7 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   **no preload at all** (no IPC surface; wiring-pinned in `window-security.test.ts`),
   window-open + will-navigate/will-redirect ALL denied; writes the source html sibling,
   `loadFile` (= did-finish-load) → `document.fonts.ready` → `printToPDF` with the FULL
-  D-1 option set (verified supported by the installed Electron 37 types): `pageSize:'A4'`,
+  D-1 option set (verified supported by the installed Electron 39 types): `pageSize:'A4'`,
   `preferCSSPageSize` (the template's `@page` is authoritative), `printBackground`,
   `displayHeaderFooter` + empty-span `headerTemplate` (suppresses Chromium's default
   date/title header) + `footerTemplate` = escaped pack-id + `pageNumber`/`totalPages`

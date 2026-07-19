@@ -9,7 +9,7 @@
 # (Electron binary download R2, npm install R6).
 #
 # node:sqlite REQUIREMENT: the packaged main process needs Electron >= 37 (Node 22.x);
-# `electron` is pinned to ^37 in devDependencies, so the bundled runtime has node:sqlite.
+# `electron` is pinned to ^39.8.5 in devDependencies, so the bundled runtime has node:sqlite.
 # A stripped/older runtime would lose it — do not downgrade Electron.
 #
 # Producing the actual artifact is a MANUAL step (R2/R5): see docs/packaging.md.
@@ -24,11 +24,11 @@ productName: HilbertRaum
 executableName: HilbertRaum
 
 # electron-builder 26 cannot auto-detect the Electron version in this npm workspace: `electron`
-# is pinned as a RANGE (^37 in devDependencies) and is HOISTED to the repo-root node_modules,
+# is pinned as a RANGE (^39.8.5 in devDependencies) and is HOISTED to the repo-root node_modules,
 # which eb — running from apps/desktop — does not resolve, so it errors on the range. Pin the
-# exact installed version here. Keep in sync with the `electron` devDependency (currently ^37 →
-# 37.10.3); bump when the installed Electron major/minor changes.
-electronVersion: 37.10.3
+# exact installed version here. Keep in sync with the `electron` devDependency (currently ^39.8.5 →
+# 39.8.10); bump when the installed Electron major/minor changes.
+electronVersion: 39.8.10
 
 directories:
   # buildResources holds icons etc. (optional; defaults are used if absent).

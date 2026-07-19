@@ -24,16 +24,21 @@ function cspMetaPlugin(): Plugin {
       order: 'pre',
       handler(html, ctx) {
         const page = /[\\/]ocr\.html$/.test(ctx.filename) ? 'ocr' : 'index'
-        const replaced = html.replace(
-          /(<meta\s+http-equiv="Content-Security-Policy"\s+content=")[^"]*(")/,
-          (_m, open: string, close: string) => `${open}${buildMetaCsp(isDevServe, page)}${close}`
-        )
-        if (replaced === html) {
-          // Fail the build loudly — a silently missing tag would ship whatever the
-          // checked-in HTML says (the exact drift this transform exists to prevent).
+        // Guard on tag ABSENCE, not `replaced === html`: in dev serve buildMetaCsp(true, …)
+        // regenerates the checked-in dev policy verbatim (window-security.ts keeps the meta
+        // byte-identical to the dev policy), so a CORRECT rewrite is a no-op and
+        // `replaced === html` — the old equality guard mistook that for a missing tag and
+        // threw, 500-ing the renderer under `npm run dev`. Fail loudly only when the tag is
+        // truly absent (the drift this transform exists to prevent). The regex is
+        // non-global, so .test() then .replace() reuse it safely (no lastIndex state).
+        const cspRegex = /(<meta\s+http-equiv="Content-Security-Policy"\s+content=")[^"]*(")/
+        if (!cspRegex.test(html)) {
           throw new Error(`csp-meta transform: no CSP meta tag found in ${ctx.filename}`)
         }
-        return replaced
+        return html.replace(
+          cspRegex,
+          (_m, open: string, close: string) => `${open}${buildMetaCsp(isDevServe, page)}${close}`
+        )
       }
     }
   }

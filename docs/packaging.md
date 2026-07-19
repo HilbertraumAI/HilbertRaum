@@ -147,7 +147,7 @@ Key config points:
   windows, so the header is the load-bearing prod policy and the meta is the defence-in-depth
   second layer — see `docs/security-model.md` "Content-Security-Policy".
 - **Electron ≥ 37 (Node 22.x)** is required so the packaged main process has `node:sqlite`
-  (`electron` is pinned `^37`). A downgraded/stripped runtime would lose it — do not downgrade.
+  (`electron` is pinned `^39.8.5`). A downgraded/stripped runtime would lose it — do not downgrade.
   Because `electron` is pinned as a **range** and hoisted to the repo-root `node_modules`,
   electron-builder 26 cannot auto-detect it from `apps/desktop` — so `electron-builder.yml` pins
   **`electronVersion`** explicitly (keep it in sync with the `electron` devDependency when bumping).

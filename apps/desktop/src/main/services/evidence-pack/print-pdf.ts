@@ -19,7 +19,7 @@ import { escapeHtml } from './render-html'
 //    bookmarks (render-html.ts PRINT CONTRACT: exactly 1×h1 + 8×h2 + h3 subsections, no
 //    h4+).
 //  - `generateTaggedPDF: true` asks for an accessible tagged PDF. EXPERIMENTAL per the
-//    Electron 37 docs ("may not adhere fully to PDF/UA and WCAG standards") — the docs
+//    Electron docs (still so in Electron 39; "may not adhere fully to PDF/UA and WCAG standards") — the docs
 //    state this honestly (known-limitations.md): accessible headings/reading order are
 //    best-effort, never a PDF/UA claim.
 //  - Footer = pack ID + `pageNumber`/`totalPages` (spec §17.1 repeating footer). Chromium
@@ -69,8 +69,9 @@ const FOOTER_FONT_STACK =
   "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
 
 /**
- * The full D-1 option set for one pack print (installed Electron 37 supports every option
- * — verified against the local `electron.d.ts`, not assumed). Exported so the unit suite
+ * The full D-1 option set for one pack print (installed Electron 39 supports every option
+ * — verified against the local `electron.d.ts`, not assumed; re-smoked on the 39.8.10 packaged
+ * build, DEP-1 P4). Exported so the unit suite
  * pins the literals: a dropped `preferCSSPageSize` or a template `@font-face` would
  * otherwise ship green.
  */

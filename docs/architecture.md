@@ -83,7 +83,7 @@ a future move to Tauri/Rust is a localized swap.
   sidecar — design record" below.
 
 ## Storage
-`node:sqlite` — built into the Node bundled by **Electron ^37** (Node 22.x). It is loaded via
+`node:sqlite` — built into the Node bundled by **Electron ^39.8.5** (Node 22.x). It is loaded via
 `createRequire` in `services/db.ts` because the experimental module is absent from
 `module.builtinModules`, which otherwise makes bundlers try to resolve a non-existent `sqlite`
 package. One SQLite DB per workspace (`workspace/hilbertraum.sqlite`) holds the original spec §8 tables
@@ -377,11 +377,11 @@ force-quit. The contract now:
 
 **Drag-drop intake (full-audit-2026-06-29 follow-up, Phase 2 — FE-A / FE-C).** Chat drag-and-drop
 attach was **silently dead in the shipped app**: `ChatScreen.pathsFromDrop` read `(file).path`, the
-non-standard `File.path` Electron **removed in v32** (the app pins `^37.0.0`; installed 37.10.3). At
+non-standard `File.path` Electron **removed in v32** (the app pins `^39.8.5`; installed 39.8.10). At
 runtime `.path` is `undefined`, so the loop produced `[]`, `attachFiles` was never called, and a drop
 did nothing — no import, no pending chip, no error. It went unnoticed because the only intake test
 (`ChatAttach.test.tsx`) **fabricated** `dataTransfer.files = [{ name, path }]`, injecting a property
-real Electron 37 doesn't provide → green test, broken product (the round's headline test lesson:
+real Electron doesn't provide → green test, broken product (the round's headline test lesson:
 never fabricate a platform property the renderer could read directly).
 - **FE-A — resolve the path in the PRELOAD.** The replacement, `webUtils.getPathForFile(file)`, is
   only callable from the (sandboxed) preload, never the renderer. A new preload bridge method
@@ -405,8 +405,10 @@ never fabricate a platform property the renderer could read directly).
   exposed + forwards to `webUtils.getPathForFile`). All are teeth-checked (revert the bridge wiring →
   red, verified). jsdom can't exercise `webUtils`, so the unit tests prove the **wiring**; the
   real-Electron leg (bridge exposes the resolver in the actual renderer; `webUtils.getPathForFile` is
-  callable in the sandboxed preload on 37.10.3 — a renderer-built File resolves to `''` without
-  throwing) was confirmed by launching the built preload under the app's exact `webPreferences`. A
+  callable in the sandboxed preload on 37.10.3 (API unchanged in Electron 39 — not in the 38/39
+  breaking-changes; typechecks against 39.8.10's `electron.d.ts`) — a renderer-built File resolves
+  to `''` without throwing) was confirmed by launching the built preload under the app's exact
+  `webPreferences`. A
   true native OS drag (Explorer → chat) isn't faithfully automatable (a synthetic File has no on-disk
   path), so the disk→path success leg rests on that availability proof + the wiring tests.
 
@@ -9025,7 +9027,7 @@ real-Electron smoke runner needs a **`window-all-closed` no-op** (Electron's def
 otherwise races the print) and an **isolated `--user-data-dir`** (profile singleton); the
 pdfjs v6 verification path needs the legacy build + a DOMMatrix polyfill under Node, with
 `getOutline`/`getMarkInfo` asserting the bookmark tree and the tagged-PDF mark.
-`generateTaggedPDF` is EXPERIMENTAL per Electron 37 — accessible headings/reading order
+`generateTaggedPDF` is EXPERIMENTAL per the Electron docs (still so in Electron 39) — accessible headings/reading order
 are best-effort, **never a PDF/UA claim** (known-limitations.md). PDF bytes are
 nondeterministic (CreationDate/ID) → the HTML input stays golden, the PDF is smoke-tested.
 The freshness verdict and the outdated refusal stay BEFORE any dialog or window work for
