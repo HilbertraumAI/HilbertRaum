@@ -7,8 +7,9 @@
 // pdfjs is the SAME pinned package — and the SAME LEGACY build — the main-process
 // PdfParser uses, with its bundled worker (a local asset — never a CDN; the page CSP
 // enforces same-origin anyway). The legacy build matters: the modern v6 build calls
-// Uint8Array.prototype.toHex (an ES proposal Electron 37's Chromium lacks) and fails
-// on the very first document open.
+// Uint8Array.prototype.toHex — an ES proposal Electron 37's Chromium 138 lacked (it failed on
+// the very first document open). Chromium 142 (Electron 39) ships it natively now (verified),
+// but the legacy build is retained; it needs no such polyfill on any Chromium the app has shipped.
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'
 import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url'
 import type { PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'

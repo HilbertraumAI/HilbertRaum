@@ -45,8 +45,12 @@ the intersection of both**. All four policy strings live in `main/window-securit
    ENFORCED** — a probe `fetch` that the (then dev-relaxed) meta tag allowed was blocked with
    the strict header string as the violation's `originalPolicy`. The header is therefore the
    load-bearing production policy, on `file://` as well as http(s). (Electron's security
-   tutorial recommends the meta fallback for `file://`; on the Electron 37 in use the header
-   demonstrably attaches there too.)
+   tutorial recommends the meta fallback for `file://`; on the Electron in use the header
+   demonstrably attaches there too.) **Re-confirmed on the Electron 39.8.10 packaged build
+   (2026-07-19, DEP-1 P4)** by the same method: a `base-uri` injection (both windows) and a
+   `blob:` image (ocr window) — each permitted by that page's baked meta — were blocked with
+   the `buildCsp(false)` string as the violation's `originalPolicy`, and both baked metas were
+   localhost-free.
 2. **`<meta http-equiv="Content-Security-Policy">`** in each page — `buildMetaCsp(isDev, page)`,
    **generated at build time** by the `hilbertraum:csp-meta` transform in
    `electron.vite.config.ts`. The checked-in HTML carries the dev policy (Vite HMR needs the
