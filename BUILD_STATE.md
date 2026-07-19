@@ -19,6 +19,9 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-07-20 — **STR-1 wave CLOSED (P0–P5): the 2026-07-19 skills/tools architecture review executed and retired — §5.1 IMPLEMENTED (ingest extract pass grammar-constrained), §5.2 filed as issue #80 (owner-gated, not built), §5.3–§5.5 doc notes landed; single PR #81.**_
+Outcome only — the narrative lives in the record. Branch `fix/skills-review-2026-07`, phase commits P0 `246dc028` (review committed verbatim — the git-history copy) → P2 `f4b8ca2d` (extract pass onto the D55 `responseSchema` contract: `EXTRACT_RESPONSE_SCHEMA`, top-level `{type,value}[]`, enum tracks `EXTRACT_RECORD_TYPES`, schema on BOTH attempts, prompt still describes the shape; **#50 hardening retained in full** — grammar stops neither reasoning-burn nor cap-truncation nor the mock; tests RED→GREEN, +2 pins) → P3 `103d9deb` (§5.3 revisit trigger → Skills record §6; §5.4 thinking-checkpoint criterion → model-benchmarks §9 + item 8 below; §5.5 interop note; the condensed record) → P5 (this close-out). Durable record: **`docs/architecture.md` "Skills & tools architecture review (2026-07-19) — design record (wave STR-1, 2026-07-20)"** (verdict: state of the art for the constraints, no architecture change; the deliberate no-change decisions on native tool calling/MCP/locate/suggestion/permissioning with external evidence; §5.1–§5.6 disposition table; the §5.6 `supports_tools` watch item; §-anchor legend — `STR-1 §5.N` citations resolve there). Review working paper DELETED (`git rm`; full text = the single `docs/` file added by wave-open commit `246dc028`); repo-wide filename/link sweep: **zero hits in the tree**. CHANGELOG "Changed" entry added; rag-design §14.5 + known-limitations updated as-built at P2 (docs and code agree at every commit); two pre-existing stale architecture.md claims ("GBNF not plumbed through the runtime seam") reconciled in passing. Deferral register: **§5 item 17**. Gates (this close-out): typecheck ✓, build ✓ (4.73s), full suite **4680 pass / 50 skip / 4730 total, 334 files** — baseline 4678/50 + exactly the 2 new §5.1 pins.
+
 _2026-07-19 — **DEP-1 wave CLOSED (P0–P5): all critical/high Dependabot alerts cleared — PR #77 merged as squash commit `a09d0939`; API-verified 0 open / 55 fixed (0 dismissed); `npm audit` 0 vulnerabilities.**_
 Outcome only — the full narrative lives in the record. Branch `fix/dependabot-2026-07`, six phase commits `0e496aa4`→`9f26ab8a`→`b2adef9c`→`4bf3249b`→`606796c2`→`ee9f02b8` (P0–P4 + the csp-meta interlude fix), merged once (2026-07-19T07:57Z). Durable record: **`docs/architecture.md` "Dependency remediation — design record (wave DEP-1, PR #77)"** (§1 scope/outcome, §2 decisions, §3 the Electron-39 re-verification ledger — supersedes the OCR-R BE-2 Electron-37 CSP measurement — §4 wave discoveries, §5 follow-up register + §-anchor legend; the register is also mirrored below at this file's own §5 item 16). CHANGELOG "Security" entry added. Gates (this close-out, docs-only): typecheck ✓, build ✓ (5.08s), full suite **4678 pass / 50 skip / 4728 total, 334 files** (170.87s) — exact parity, no retry needed. Plan file (`docs/dependabot-remediation-plan.md`, never committed) deleted by the orchestrator after this record landed.
 
@@ -1757,6 +1760,21 @@ tag triggers the release workflow's draft build).
     (script/CI unchanged). (d) **Recommend `.github/dependabot.yml`** with grouped weekly npm
     updates so the next wave arrives as PRs, not an audit (recommendation only — not
     implemented).
+17. **STR-1 follow-up register (owner-facing; registered at the 2026-07-20 close-out; durable
+    ledger = `docs/architecture.md` "Skills & tools architecture review (2026-07-19) — design
+    record (wave STR-1, 2026-07-20)"):** (a) **Issue #80** — the constrained
+    model-classification router fallback (review §5.2, the #54 intent class): hybrid cascade,
+    single-shot grammar-constrained enum classification at temp 0 on the low-confidence residue
+    only, suggest-never-activate; owner decisions are whether a model call on the fallback path
+    is acceptable at all, the enum's member set, and the confidence boundary — wants a short
+    design note first (couples with item 8's option-2 signal-aware-picker note). (b)
+    **Suggestion scale-up revisit trigger** (review §5.3, recorded in the Skills record §6):
+    re-evaluate embedding-based suggestion when the skill catalog approaches ~10–20 entries.
+    (c) **`supports_tools` watch item** (review §5.6): if a future wave makes 14B–27B models
+    primary, native tool calls only as single-shot grammar-constrained selection with app-side
+    argument validation — never an agent loop; the capability flag lands on the
+    currently-ignored `supports_tools` manifest key (model-policy.md). (d) The §5.4
+    thinking-checkpoint criterion is folded into item 8's ratify sequence, not a separate action.
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/

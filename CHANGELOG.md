@@ -74,6 +74,17 @@ first public release. Consciously-accepted gaps are tracked in
 - **Standard project docs** — this `CHANGELOG.md` and a
   [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
+### Changed
+
+- **Deep-index extraction is more reliable under reasoning-prone models** — the
+  "Build deep index" structured-extract pass now grammar-constrains the model's
+  reply (the same JSON-schema mechanism the bank-statement categorizer uses), so
+  sections can no longer come back unreadable because the model answered in
+  prose or code fences; "unparsed" sections in listing answers should now be
+  rare, and the existing retry/salvage safety net is unchanged (wave STR-1; see
+  the `docs/architecture.md` "Skills & tools architecture review (2026-07-19) —
+  design record").
+
 ### Fixed
 
 - **Scanned-PDF OCR is startable again from the Documents row** (it had become
