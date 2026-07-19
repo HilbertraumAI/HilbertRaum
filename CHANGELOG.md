@@ -84,3 +84,22 @@ first public release. Consciously-accepted gaps are tracked in
   final "Finishing" step. Packaged builds no longer carry the dev-only localhost
   CSP relaxation in their HTML meta tags (wave OCR-R, PR #75; see the
   `docs/architecture.md` "OCR audit (2026-07-18) — remediation ledger").
+- **`npm run dev` no longer 500s on the first page load** — a false "no CSP meta
+  tag" throw during dev serve (the guard mis-read a deliberate, byte-identical
+  no-op rewrite as a missing tag) is fixed; packaged builds were never affected
+  (wave DEP-1, PR #77).
+
+### Security
+
+- **All critical- and high-severity Dependabot alerts cleared (wave DEP-1, PR #77)**
+  — Vitest 3.2.6 (CVE-2026-47429, UI-server arbitrary file read/execute), Electron
+  39.8.10 (command-line switch injection, four use-after-free classes,
+  permission-origin confusion, header injection), Vite 6.4.3 + electron-vite 3.1.0
+  (`server.fs.deny` bypass on Windows, path traversal), form-data 4.0.6 (CRLF
+  injection, CVE-2026-12143), undici 7.28.0 + 6.27.0 (TLS-bypass and cross-origin
+  routing via a SOCKS5 proxy, header injection), and esbuild 0.25.12 (dev-server
+  CORS). `npm audit` now reports 0 vulnerabilities. Packaged-build security was
+  re-verified on the new Electron 39 runtime: the strict Content-Security-Policy
+  response header still attaches and enforces on `file://` in both windows (see
+  `docs/architecture.md` "Dependency remediation — design record (wave DEP-1,
+  PR #77)").
