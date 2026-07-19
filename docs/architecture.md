@@ -9221,6 +9221,177 @@ records in `design-guidelines.md`) describe the pre-wave overflow-item placement
 when written — they are snapshots, kept verbatim by convention; the present-tense guidance
 was updated.
 
+## Dependency remediation — design record (wave DEP-1, PR #77)
+
+_Wave DEP-1 (2026-07-19) cleared 48 open Dependabot alerts (6 dependency clusters) across
+`apps/desktop`'s dev/build tooling, headed by a CRITICAL in Vitest's UI server and a dozen
+Electron CVEs that ride to production because Electron is the shipped runtime, not just a
+devDependency. Full narrative + gate-by-gate evidence lives in the wave branch
+**`fix/dependabot-2026-07`** (six phase commits, below), squashed onto `master` as **`a09d0939`**
+(PR #77, merged 2026-07-19T07:57Z). The working plan
+(`docs/dependabot-remediation-plan.md`, including its per-phase Handoff Log) was never
+committed — per the CLAUDE.md doc-lifecycle rule it existed only for the wave's lifetime and was
+deleted at close-out with no `git show` recovery possible; this record, the six commits below,
+and the PR #77 body are the surviving sources (see the §-anchor legend, below)._
+
+**Phase commits** (suite 4675/50 → **4678 pass / 50 skip / 4728 total, 334 files** across the
+wave — the +3 tests/+1 file is the P3-interlude csp-meta fix's own tests, the wave's one
+sanctioned count change; typecheck + build green at every gate): P0 `0e496aa4` wave open · P1
+`9f26ab8a` form-data + undici · P2 `b2adef9c` vitest · *interlude* `4bf3249b` csp-meta dev-serve
+fix · P3 `606796c2` vite + electron-vite · P4 `ee9f02b8` electron.
+
+### §1 Scope + outcome
+
+| # | Cluster | Before | After | Worst severity | Alerts |
+|---|---|---|---|---|---|
+| 1 | **vitest** + `@vitest/coverage-v8` (CVE-2026-47429, UI-server arbitrary file read/execute) | 2.1.9 | **3.2.6** | CRITICAL | #41/#19 |
+| 2 | **electron** (cmd-line switch injection, 4× use-after-free, permission-origin confusion, header injection, …) + `electron-builder.yml electronVersion` synced to match | 37.10.3 | **39.8.10** (`^39.8.5` floor) | HIGH ×4 (+ 6 medium + 3 low) | #23–#40/#1–#18 |
+| 3 | **vite** (`server.fs.deny` bypass, Windows) + **electron-vite** | 5.4.21 / 2.3.0 | **6.4.3** / **3.1.0** | HIGH | #42/#20 (+ #43/#21, #38/#16 medium) |
+| 4 | **form-data** (CRLF injection, CVE-2026-12143) | 4.0.5 | **4.0.6** | HIGH | #44 |
+| 5 | **undici** — jsdom's copy (TLS-bypass + cross-origin routing via SOCKS5 `ProxyAgent`) and node-gyp's copy | 7.27.2 / 6.26.0 | **7.28.0** / **6.27.0** | HIGH | #46, #49 (+ medium/low #45, #47, #48, #52–#55) |
+| 6 | **esbuild** (dev-server CORS; transitive of vite/electron-vite) | 0.21.5 | **0.25.12** | Medium | #22 |
+
+Merge outcome: PR #77 → `master` as `a09d0939` (2026-07-19T07:57Z). Post-merge Dependabot API
+verification (`gh api repos/HilbertraumAI/HilbertRaum/dependabot/alerts`, independently re-run
+at close-out): **0 open, 55 fixed, 0 dismissed** — every targeted alert auto-resolved at the
+merge minute; nothing survived and nothing was dismissed. (The live count crept from the plan's
+48-alert snapshot to 51 at PR-push time to 55 fixed at merge, as GitHub surfaced a few more
+alerts pre-merge — all within the same six clusters; none required a new cluster or a plan
+revision.) `npm audit`: **0 vulnerabilities**. No production dependency moved; `apps/desktop/src`
+saw comment-only changes (§4).
+
+### §2 Decisions (the ones that outlive the wave)
+
+- **One branch, one commit per phase, merged once** (the OCR-R PR #75 precedent) — the older
+  stacked-branch audit convention would make every phase's lockfile conflict with the next; one
+  branch keeps the wave bisectable while staying reviewable phase-by-phase.
+- **Every lockfile-writing operation ran through pinned `npx npm@11.6.2`.** Local npm is 10.9.3,
+  but the repo's `packageManager` field and the committed lockfile are canonical under 11.6.2
+  (issue #49); the local npm must never be allowed to regenerate it. Non-lockfile-writing
+  commands (`npm ci`, `npm test`, builds) could still use the local npm.
+- **Version floors chosen deliberately smaller than "latest":** vitest **`^3.2.6`** (the exact
+  CVE-fix version, NOT the 4.x major — smallest major that clears the alert); vite **`^6.4.3`** +
+  electron-vite **`^3.1.0`** (newest conformant 3.x line; electron-vite 4.x/5.x declined as
+  larger, unnecessary majors); electron **`^39.8.5`** floor (39.8.10 installed at execution
+  time — the plan's posture is "floor at the alert-clearing version," not "chase latest";
+  electron latest overall was 43.x, deliberately not chased).
+- **Build-before-test gate order, every phase:** `csp-build-output.test.ts` asserts the on-disk
+  `out/` build carries the production CSP meta; a stale dev build fails it. CI already orders
+  build before test — every phase gate matched that order deliberately.
+- **Fork-pool flake disposition rule:** a bare Tinypool "Worker exited unexpectedly" crash with
+  **zero failed assertions** is retry-worthy, not an automatic regression — but the retry must
+  land at **exact** parity (same pass/skip/total/file counts) to be accepted. Invoked once (P1);
+  every other phase gate was clean on the first run.
+
+### §3 The Electron-39 re-verification ledger (headline)
+
+Electron is a devDependency in npm terms but is the runtime shipped inside every packaged build,
+so the 37→39 bump forced re-measuring every fact that had been proven specifically "on Electron
+37." All of the following were re-run on the real packaged Electron **39.8.10** binary (Chromium
+**142.0.7444.265**, Node **22.22.1**, SQLite **3.51.2**):
+
+- **CSP on `file://` (the headline):** the `onHeadersReceived` response header still ATTACHES
+  and ENFORCES (`disposition: "enforce"`) in BOTH windows on the packaged build — a `base-uri`
+  injection and (in the OCR window) a `blob:` image, each permitted by that page's baked
+  `<meta>`, were blocked with `buildCsp(false)` as the violation's `originalPolicy`, byte-exact;
+  both baked metas stayed localhost-free. **This measurement supersedes the OCR-R BE-2
+  Electron-37 measurement** (same header/meta mechanism, re-proven on the new Chromium); the
+  annotation lives in `security-model.md`'s CSP section, added by the P4 commit.
+- **Evidence-Pack PDF export:** a packaged export produced a valid 145 KB `%PDF…%%EOF` file; the
+  D-1 `printToPDF` option set is still accepted; `generateTaggedPDF` remains Experimental on
+  Electron 39 (unchanged from 37).
+- **Packaged chat + RAG smoke:** clean via Playwright `_electron` — mock-runtime chat roundtrip,
+  a RAG ask returning a grounded citation.
+- **`node:sqlite` / FTS5:** `bm25()`, `snippet()`, `highlight()` all still work under the
+  Electron 39 main process, Node 22.22.1, SQLite 3.51.2.
+- **`Uint8Array.prototype.toHex`:** NATIVE on Chromium 142 — the repo carries no polyfill for it
+  (the OCR path uses the legacy pdfjs build plus a same-realm copy), so the plan's premise ("the
+  renderer polyfills `toHex` because Electron 37's Chromium lacks it; verify it's
+  feature-guarded") was stale; comment-only refresh in `renderer/ocr/main.ts`.
+- **OCR raster → IPC → recognize:** proven end-to-end on the E39 binary in dev mode (3/3 pages,
+  text recognized, doc re-indexed). The equivalent PACKAGED leg is blocked by a pre-existing bug
+  — §4(c).
+- **electron-builder 26.15.2 packaging Electron 39:** empirically fine (no peer cap; a real
+  `package:win` completed after the `electron-builder.yml` pin fix, §4(b)).
+- **Suite parity throughout:** **4678 pass / 50 skip / 4728 total, 334 files** at every phase
+  gate from P3 onward, run twice per phase (implementer + an independent orchestrator re-run)
+  with no discrepancies, plus a **fresh-context adversarial verifier** for P4 specifically — it
+  re-derived every §2.1-ledger item from the diff against the plan's mechanism descriptions,
+  including its own independent packaged-exe run and its own `npm audit`. **Verdict: PASS**, no
+  wave-introduced regressions.
+
+### §4 Wave discoveries
+
+- **(a) `csp-meta` dev-serve false-throw bug**, fixed in commit `4bf3249b`: the dev-serve
+  rewrite is BY DESIGN a byte-identical no-op (the checked-in meta already equals the dev
+  policy), but the old guard read `replaced === html` as "tag missing" and threw, 500-ing every
+  `npm run dev` renderer load. Latent since OCR-R P5 (`14259f68`); this wave's P3 dev-launch gate
+  was the first live dev serve since then. Fix: guard on tag ABSENCE instead
+  (`!cspRegex.test(html)`, same regex, non-global so `.test()` then `.replace()` stays
+  lastIndex-safe). RED→GREEN: `tests/unit/csp-meta-plugin.test.ts` (+3 tests). The production
+  build path is byte-identical before and after (build-output CSP tooth re-verified).
+- **(b) `electron-builder.yml`'s `electronVersion:` field is load-bearing** — it, not the npm
+  `electron` devDependency, selects the runtime actually packaged. The first `package:win` in P4
+  silently shipped Electron 37 despite the devDep bump (electron-builder can't resolve the
+  hoisted range on its own); caught before any measurement was taken against it, fixed by
+  syncing the yml pin, and every packaged §3 measurement re-taken and confirmed on the corrected
+  E39 build. Nothing in the repo guards this sync automatically — §5 follow-up #1.
+- **(c) Packaged OCR is broken, pre-existing, and version-independent** — the tesseract.js
+  worker running under `app.asar.unpacked` cannot resolve hoisted dependencies
+  (`regenerator-runtime`, `is-url`, …) that stay packed inside `app.asar` (`asarUnpack` lists
+  only `tesseract.js`/`tesseract.js-core`, not their own deps). The uncaught exception kills the
+  whole app while `ocrAvailable` still reports true. This would fail identically on Electron 37 —
+  it is exactly the packaged recognition-leg smoke that OCR-R §5 item 15(b) deferred, now fired
+  by this wave's packaged-build gate. Fix bundle registered as §5 follow-up #2.
+- **(d) Coverage full-width starvation on 16 GB machines** — `npm run test:coverage` at full
+  worker width starves this class of machine (documented first in P2); this wave's gate evidence
+  is green at `--maxWorkers=2`, exact parity. Neither the script nor CI changed (CI never runs
+  coverage). §5 follow-up #3.
+- **(e) The `ELECTRON_RUN_AS_NODE` session-environment trap** — this wave's agent shells
+  inherited `ELECTRON_RUN_AS_NODE=1` from the tooling context, which boots `electron.exe` as
+  plain Node (no `electron` module) and masked discovery of (a), delaying the P3 dev-launch gate
+  until it was explicitly cleared. Agent-tooling context only, not a repo condition — noted here
+  so it isn't re-diagnosed as a product bug in a future wave.
+
+### §5 Follow-up register (owner-facing)
+
+1. **A parity test asserting `electron-builder.yml`'s `electronVersion:` equals the installed
+   `electron` devDependency** — without it, the next Electron bump can silently re-ship the old
+   runtime exactly as §4(b) did.
+2. **Packaged-OCR fix bundle:** `asarUnpack` the tesseract.js worker's hoisted runtime deps, add
+   graceful task-failure degradation instead of an app-killing uncaught exception, make
+   `ocrAvailable` honest about the packaged failure mode, and — once the packaged OCR window is
+   reachable again — re-check its header∩meta `blob:` intersection (the page-agnostic
+   `buildCsp(false)` header strips the OCR meta's `img-src blob:` / `worker-src blob:` grants by
+   design; measured OK on Electron 37, not yet re-verified packaged on E39).
+3. **Cap `test:coverage` parallelism, or document a RAM floor**, for full-width coverage runs
+   (§4d).
+4. **Recommend (not implemented) a `.github/dependabot.yml`** with grouped weekly npm updates,
+   so the next wave arrives as ordinary PRs instead of a 48-alert audit.
+
+### §-anchor legend
+
+The six phase commits' own messages cite `plan P0` / `plan §4 P1`…`plan §4 P4` / `plan §2.1`
+(the P4 commit body). The plan (`docs/dependabot-remediation-plan.md`) was a working paper,
+never committed, deleted at close-out per the CLAUDE.md doc-lifecycle rule — no `git show`
+recovers it. Citations of that form resolve here:
+
+| Plan citation | Resolves to |
+|---|---|
+| `plan §1` (alert inventory) | §1 table above |
+| `plan §2` / `plan §2.1` (blast-radius / re-verification ledger) | §3 above |
+| `plan §3` (guardrails) | §2 above (decisions) |
+| `plan P0` / `plan §4 P0` | commit `0e496aa4` |
+| `plan §4 P1` | commit `9f26ab8a` |
+| `plan §4 P2` | commit `b2adef9c` |
+| `plan §4 P3` | commit `606796c2` (+ interlude fix `4bf3249b`, §4(a) above) |
+| `plan §4 P4` | commit `ee9f02b8` (+ §3, §4(b)/(c) above) |
+| `plan §4 P5` / `plan §5` (close-out / definition of done) | this record + the follow-up register (§5) |
+
+Surviving sources for anything not resolved above: this record, the wave branch
+`fix/dependabot-2026-07`'s six phase commits (listed at the top of this record), and the PR #77
+body.
+
 ## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
 
 The frozen original product/architecture spec **`CLAUDE_HilbertRaum_MVP.md` was retired and
