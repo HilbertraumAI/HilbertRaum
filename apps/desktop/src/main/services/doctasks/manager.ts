@@ -10,7 +10,7 @@ import {
   type TranslationSourceLang,
   type TranslationTargetLang
 } from '../../../shared/types'
-import type { ChatMessage, ModelRuntime } from '../runtime'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { isExceedContextError } from '../runtime/llama'
 import { ContextOverflowError } from './errors'
 import { getDocument } from '../ingestion'
@@ -133,8 +133,8 @@ export class DocTaskManager {
     this.ctx = {
       deps,
       arbiter: this.arbiter,
-      generate: (runtime, systemPrompt, prompt, maxTokens, temperature, signal) =>
-        this.generate(runtime, systemPrompt, prompt, maxTokens, temperature, signal)
+      generate: (runtime, systemPrompt, prompt, maxTokens, temperature, signal, schema) =>
+        this.generate(runtime, systemPrompt, prompt, maxTokens, temperature, signal, schema)
     }
   }
 
@@ -650,7 +650,8 @@ export class DocTaskManager {
     prompt: string,
     maxTokens: number,
     temperature: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    schema?: Pick<RuntimeChatOptions, 'responseSchema' | 'responseSchemaName'>
   ): Promise<string> {
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -660,7 +661,10 @@ export class DocTaskManager {
     const stream = runtime.chatStream(messages, {
       signal,
       maxTokens,
-      temperature
+      temperature,
+      // D55 grammar constraint (STR-1 §5.1) — only the extract pass sets this today; the
+      // spread keeps every schema-less caller's options object byte-identical.
+      ...(schema ?? {})
     })
     try {
       for await (const token of stream) {

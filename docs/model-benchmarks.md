@@ -637,6 +637,18 @@ promotion may raise it deliberately, per the D69/#43 context policy). Candidates
 as local manifests elsewhere (e.g. a Qwen3.6 27B) need productizing first: a `download:` block,
 a real upstream sha256, and a license review — same bar as the wave above.
 
+**Thinking-checkpoint criterion for structured surfaces (STR-1 review §5.4, 2026-07-20):** Qwen
+dropped hybrid thinking with the 2507 refresh — Instruct and Thinking are now SEPARATE
+checkpoints, and an `enable_thinking` template kwarg is moot on a split checkpoint. The #50
+lesson ("the model reasons anyway despite the kwarg and burns the extract token budget")
+generalizes: for the app's grammar/extract/locate surfaces (D55 `responseSchema` consumers —
+categorizer, enricher, both locate passes, the ingest extract pass), the robust control is
+**which checkpoint the catalog recommends**, not a template kwarg. When ratifying this wave,
+record each manifest's observed thinking-mode behavior as a first-class criterion for
+**structured-surface suitability** (extend the two §9.1 thinking checkboxes' findings to the
+extract/locate implications), and keep structured-surface calls pinned to non-thinking behavior
+(a thinking-only checkpoint pays the #50 escalated-retry cost on every ingest chunk).
+
 ### 9.1 Manual smoke checklist — b9849 runtime + Qwen3.5 load (REQUIRED; not CI)
 
 This is a human pre-promotion gate (offline / network / real GPUs can't run in CI). Record results

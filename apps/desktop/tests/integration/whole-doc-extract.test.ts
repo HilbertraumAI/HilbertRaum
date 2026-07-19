@@ -21,7 +21,7 @@ import { buildListingAnswer } from '../../src/main/services/analysis/listing-ans
 import { ModelSlotArbiter } from '../../src/main/services/analysis/model-slot-arbiter'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
-import type { RetrievalScope } from '../../src/shared/types'
+import { EXTRACT_RECORD_TYPES, type RetrievalScope } from '../../src/shared/types'
 
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 
@@ -54,6 +54,11 @@ function importWords(words: number, name = 'doc.txt'): Promise<string> {
 
 interface ScriptedRuntime extends ModelRuntime {
   calls: number
+  /** Per-call `chatStream` options — pins the D55 responseSchema contract (STR-1 §5.1). */
+  options: Array<RuntimeChatOptions | undefined>
+  /** Per-call user prompts — the prompt must keep DESCRIBING the JSON shape (llama.cpp does
+   *  not inject the schema into the prompt; the grammar only constrains decoding). */
+  userPrompts: string[]
 }
 
 /**
@@ -74,12 +79,16 @@ function extractRuntime(opts: { tokenDelayMs?: number } = {}): ScriptedRuntime {
   const rt: ScriptedRuntime = {
     modelId: 'extract-model',
     calls: 0,
+    options: [],
+    userPrompts: [],
     start: async () => {},
     stop: async () => {},
     health: async () => ({ healthy: true, message: 'ok', port: null }),
     async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
       rt.calls += 1
+      rt.options.push(options)
       const user = messages.find((m) => m.role === 'user')?.content ?? ''
+      rt.userPrompts.push(user)
       const at = user.indexOf('Passage:\n')
       const passage = at >= 0 ? user.slice(at + 'Passage:\n'.length) : ''
       let reply: string
@@ -244,6 +253,54 @@ describe('extract pass', () => {
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
     expect(listing.unparsedChunks).toBe(0) // the chunk parsed on the escalated attempt
     expect(listing.items.map((i) => i.value)).toContain('acme')
+  })
+
+  it('sends the D55 responseSchema (grammar) on EVERY attempt, and the prompt still describes the JSON shape [STR-1 §5.1]', async () => {
+    // The wire format is grammar-constrained (top-level array of {type, value}; the type enum
+    // tracks EXTRACT_RECORD_TYPES so a type-set change cannot silently drift the schema). The
+    // schema rides on the retry too — and the prompt keeps describing the shape, because
+    // llama-server does NOT inject the schema into the prompt (llama.cpp grammars/README).
+    const id = await importText('Intro text. @@BADJSON@@ trailing text.')
+    const rt = extractRuntime()
+    const m = makeManager(rt)
+    expect((await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)).state).toBe('done')
+    expect(rt.calls).toBe(2) // unparseable → one retry (the mock ignores the schema, like MockRuntime)
+    expect(rt.options).toHaveLength(2)
+    for (const o of rt.options) {
+      expect(o?.responseSchemaName).toBe('extraction_items')
+      const schema = o?.responseSchema
+      expect(schema?.type).toBe('array')
+      expect(schema?.items?.type).toBe('object')
+      expect(schema?.items?.required).toEqual(['type', 'value'])
+      expect(schema?.items?.additionalProperties).toBe(false)
+      expect(schema?.items?.properties?.type?.enum).toEqual([...EXTRACT_RECORD_TYPES])
+      expect(schema?.items?.properties?.value?.minLength).toBe(1)
+    }
+    for (const p of rt.userPrompts) {
+      expect(p).toContain('Reply with ONLY a JSON array')
+    }
+  })
+
+  it('still salvages a cap-truncated grammatical array on the final attempt — grammar cannot prevent a token-cap cut [#50]', async () => {
+    // A grammar guarantees every EMITTED token fits the array shape; it cannot stop the token
+    // cap from cutting the array mid-object. The #50 ladder therefore stays: attempt 1 fails
+    // tolerant parse (no salvage), the escalated attempt salvages the complete leading items.
+    const id = await importText('Payment to @@acme@@ and @@globex@@.')
+    const truncated = '[{"type":"party","value":"acme"},{"type":"party","value":"glo'
+    const rt: ScriptedRuntime = {
+      ...extractRuntime(),
+      calls: 0,
+      async *chatStream() {
+        rt.calls += 1
+        yield truncated
+      }
+    }
+    const m = makeManager(rt)
+    expect((await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)).state).toBe('done')
+    expect(rt.calls).toBe(2) // truncation is NOT salvaged on attempt 1 (partial-list guard)
+    const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
+    expect(listing.unparsedChunks).toBe(0) // ok marker — the salvage recovered the leading item
+    expect(listing.items.map((i) => i.value)).toEqual(['acme'])
   })
 
   // F-01 (audit 2026-07-16): the scan cache was content-keyed ONLY — after a chat-model swap an

@@ -13,7 +13,7 @@ import type {
   TranslationSourceLang,
   TranslationTargetLang
 } from '../../../shared/types'
-import type { ModelRuntime } from '../runtime'
+import type { ModelRuntime, RuntimeChatOptions } from '../runtime'
 import type { Translator } from '../translation'
 import type { IngestionDeps } from '../ingestion'
 import type { OcrEngine } from '../ocr'
@@ -118,6 +118,9 @@ export interface DocTaskCtx {
   /**
    * One model call over the LOCKED `chatStream` contract: explicit maxTokens/temperature, NO
    * depth mode, the task's own abort signal. An abort throws (tasks never persist a partial).
+   * The optional trailing `schema` threads a D55 grammar constraint (`responseSchema`) to the
+   * runtime — the extract pass constrains its wire format with it (STR-1 §5.1); callers that
+   * omit it are byte-unchanged.
    */
   generate(
     runtime: ModelRuntime,
@@ -125,7 +128,8 @@ export interface DocTaskCtx {
     prompt: string,
     maxTokens: number,
     temperature: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    schema?: Pick<RuntimeChatOptions, 'responseSchema' | 'responseSchemaName'>
   ): Promise<string>
 }
 

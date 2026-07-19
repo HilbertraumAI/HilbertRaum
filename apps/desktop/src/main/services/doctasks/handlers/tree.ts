@@ -69,8 +69,8 @@ export async function runExtract(
       signal,
       arbiter: ctx.arbiter,
       jobId: task.status.jobId,
-      generate: (systemPrompt, prompt, maxTokens, temperature, sig) =>
-        ctx.generate(runtime, systemPrompt, prompt, maxTokens, temperature, sig),
+      generate: (systemPrompt, prompt, maxTokens, temperature, sig, schema) =>
+        ctx.generate(runtime, systemPrompt, prompt, maxTokens, temperature, sig, schema),
       onProgress: (done, total) => {
         task.status.progress.stepsDone = done
         task.status.progress.stepsTotal = total
