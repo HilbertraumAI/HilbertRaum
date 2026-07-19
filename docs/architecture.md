@@ -3619,6 +3619,13 @@ on send / conversation change) so it never re-nags; one tap selects the skill. *
 the opt-in extension of this same scorer that *does* apply a skill without a tap, behind a separate
 higher threshold + an opt-in + a per-turn undo — see **§18**.
 
+**Scale-up revisit trigger (STR-1 review §5.3, 2026-07-20):** deterministic keyword suggestion is
+right-sized at the current 9-skill catalog; the routing literature's degradation zone for keyword
+approaches starts around **10–20 candidates**. If the catalog (counting user-imported skills with
+trigger vocabularies) approaches that, the documented next step is **embedding-based suggestion**
+over the skill descriptions/trigger vocabularies — the app already ships a local embedder for RAG,
+so it stays offline. A revisit condition, deliberately not built now.
+
 ### First-selection skill info card (#46, 2026-07-10)
 
 Beta feedback: selecting a skill changed behavior in ways users only discovered afterwards (#44 the
@@ -4465,6 +4472,22 @@ and still answers in German, D-L6):
 
 Display-only by design: nothing here threads locale into `resolveTurnSkill`/the prompt, so the gate +
 ceiling are unchanged and the injected body is byte-identical regardless of UI language.
+
+### Agent Skills (agentskills.io) interop mapping (STR-1 review §5.5, 2026-07-20)
+
+`SKILL.md` became an open cross-vendor standard (agentskills.io, opened 2025-12) after our format
+was built; the shapes converged independently (YAML frontmatter + markdown body + bundled
+resources). The mapping, recorded so the door stays open without churn: our `id`/`title` ↔ the
+spec's `name`; our first-class strict-semver `version` + `minAppVersion` compatibility gate have no
+spec equivalent (a `metadata` convention at best — we are stricter); our `localized:` per-locale
+display overrides fill an i18n gap the open spec does not address (Anthropic's MCPB bundle format
+solved it the same way, BCP-47-keyed). Consequence: an agentskills.io-conformant pack's **body +
+display-metadata import is near-trivial** (map `name`, default a version); its **executable scripts
+and `allowed-tools` are and must remain unsupported** — imported skills are instruction-only here
+(`skillCanRunTools` = app-source only, permissions clamp restrict-only, §14 ceiling), and the
+standard's permissive execution model is the ecosystem's demonstrated exploit surface (working
+skill-frontmatter exploit chains, ReversecLabs 2026-05). Full format convergence is deliberately
+not pursued.
 
 ### §17 Active-skill turn-latency: measured root cause + the prefix-cache fix (2026-06-17e)
 
@@ -7903,6 +7926,95 @@ geometry, the bank categorizer, the S&T + backend audit close-outs) and the beta
 beta header carries its `beta-feedback-2026-07 Phase N` tag, which is the stable grep disambiguator (e.g.
 `§21 LLM-located redaction … Phase 7`). Code comments that mean the beta sections cite them by the descriptive
 title + phase tag, so the collision never mis-resolves.
+
+
+## Skills & tools architecture review (2026-07-19) — design record (wave STR-1, 2026-07-20)
+
+_Condensed from an owner-requested point-in-time review (2026-07-19) of one question: is the
+skills-and-tools design — app-orchestrated tools, no native LLM tool calling — state of the art
+for an offline local-LLM app, or a design flaw? The review compared the as-built architecture
+(the Skills design record above, security-model.md's tool ceiling) against 2025–2026 external
+research: llama.cpp native tool calling, constrained decoding, small-model function-calling
+benchmarks (BFCL), the Agent Skills open standard, MCP, and agent-permissioning norms. The
+working paper was retired per the doc-lifecycle rule at this wave's close; its **full text is the
+single `docs/` file added by wave-open commit `246dc028`** (`git show 246dc028 --stat`).
+Citations of the form `STR-1 §5.N` / `review §5.N` in code, tests, commits, and the issue tracker
+resolve via the §-anchor legend at the end of this record._
+
+### §1 Verdict
+
+**The architecture is state of the art for its constraints — in several places it independently
+implements what the industry converged on during 2025–2026.** The core choice — *the model never
+calls tools; the app orchestrates, the model fills narrow verified slots* (DS4) — is the
+documented best practice for this regime (4B-class default model, 4–8k context, offline,
+high-reliability document tasks), not a gap relative to "LLMs with tool support". Adopting a
+native tool-calling loop as the control-flow backbone would be a regression. The improvements the
+review found are refinements inside the architecture (§3 below), not a change of architecture.
+
+### §2 Deliberate no-change decisions (each checked against external evidence)
+
+- **Native tool calling: NO.** llama.cpp supports OpenAI-style `tools` behind `--jinja`, but
+  reliability hinges on each GGUF's embedded chat template, thinking models are a documented
+  parse-failure source (ggml-org/llama.cpp#20260, #24807), and small models are weak where it
+  matters — **Qwen3-4B ≈ 35% on BFCL multi-turn** (arXiv 2508.05118), with multiple 2026
+  evaluations converging on a ~7–9B capability cliff. Vendor guidance is unanimous (Anthropic
+  "Building Effective Agents" 2024-12; OpenAI agents guide 2025; Google agents whitepaper
+  2025-11): predefined code paths for narrow high-reliability tasks. The compounding-error
+  arithmetic (95%/step → ~60% over 10 steps) is decisive at this model scale.
+- **MCP: correctly not adopted.** MCP solves N×M interop between independently-authored clients
+  and servers; that problem does not exist in one app owning both sides of a fixed 12-tool
+  registry, and the protocol's own trajectory (OAuth re-revisions; tool-poisoning / rug-pull
+  literature; OWASP MCP Top 10) adds surface the app does not need. The hard no-network rule
+  makes remote MCP moot regardless.
+- **The locate pattern: keep.** Model proposes spans, app verifies byte-exact at the anchor and
+  splices (D58/D75/D76) — the same shape as Anthropic's `str_replace`, Aider's SEARCH/REPLACE,
+  and Agentless; the "universally cited villain" (trusting model line numbers) is already
+  sidestepped (the line is a locality hint; the string is what's verified).
+- **Deterministic keyword suggestion: keep at this scale.** Keyword-routing critiques target
+  catalogs of tens-to-thousands of tools; below ~10–20 no framework recommends anything heavier,
+  and ours is unusually disciplined (single-sourced bilingual vocabulary, CI-gated ≥95%
+  auto-fire precision). The scale-up revisit trigger is registered in the Skills record §6.
+- **Permissioning + skill packaging: already at/ahead of the norm.** Read-auto/write-confirm with
+  app-enforced gates (a model or forged IPC cannot talk past them) matches OWASP Agentic Top 10
+  HITL guidance; instruction-only imported skills (no scripts, `skillCanRunTools` = app-source
+  only, restrict-only clamps, app-assigned trust) are materially stronger than the Agent Skills
+  ecosystem norm, whose permissive execution model produced working exploit chains
+  (ReversecLabs 2026-05). The i18n (`localized:`) and strict-semver `version` are ahead of the
+  open spec (see the Skills record's interop note, review §5.5).
+
+### §3 Improvement dispositions (review §5.1–§5.6)
+
+| Review § | Item | Disposition |
+|---|---|---|
+| §5.1 | Grammar-constrain the ingest extract pass | **IMPLEMENTED** (STR-1 P2): `EXTRACT_RESPONSE_SCHEMA` rides the D55 `responseSchema` contract on both attempts; the #50 hardening retained in full (grammar stops neither reasoning-burn nor cap-truncation nor the mock). As-built record: rag-design §14.5. |
+| §5.2 | Constrained model-classification fallback for the deterministic router (#54 class) | **DEFERRED, owner-gated — filed as issue #80**: hybrid cascade (single-shot grammar-constrained enum classification at temp 0, D55 machinery, suggest-never-activate, 0-model-call happy paths preserved). Not implemented in this wave by owner decision. |
+| §5.3 | Suggestion scale-up revisit trigger | **RECORDED** in the Skills record §6 (≈10–20 candidates → embedding-based suggestion over the local RAG embedder, stays offline). |
+| §5.4 | Thinking-checkpoint criterion for structured surfaces | **RECORDED** in model-benchmarks §9 ("Thinking-checkpoint criterion") + BUILD_STATE §5 item 8: on split Instruct/Thinking checkpoints the catalog choice, not an `enable_thinking` kwarg, is the robust control for D55 grammar surfaces. |
+| §5.5 | Agent Skills interop mapping | **RECORDED** in the Skills record ("Agent Skills (agentskills.io) interop mapping", after §16): body+metadata import near-trivial; scripts/`allowed-tools` remain unsupported. |
+| §5.6 | Watch item: native tool calling at the 14B–27B tier | **RECORDED, no action.** If a future wave targets 14B–27B primaries (where BFCL reliability improves), the researched shape is still only *single-shot, low-arity selection behind grammar constraints with app-side argument validation* — a §5.2 variant, never an agent loop. The `supports_tools` manifest key (parsed-and-ignored today, model-policy.md "Optional / unknown keys") is the natural landing spot for such a capability flag. |
+
+### §4 Key external evidence (accessed 2026-07-18; single-sourced items flagged in the original)
+
+llama.cpp `docs/function-calling.md` + issues #20260/#24807 (tool-calling failure modes; KV-quant
+degradation warning) · BFCL v3/v4 + arXiv 2508.05118 (Qwen3-4B multi-turn ≈35%) · constrained
+decoding: arXiv 2408.02442 vs the dottxt rebuttal (2024-11) and JSONSchemaBench arXiv 2501.10868
+(constraints *improved* accuracy — constrain the payload, never the reasoning) · Anthropic
+"Building Effective Agents" (2024-12) + containment guidance (2026-05) · OpenAI agents guide
+(2025) · Google "Introduction to Agents" (2025-11) · Agent Skills: agentskills.io spec (opened
+2025-12-18) + ReversecLabs "Skill Issues" (2026-05) · MCP: Invariant Labs tool-poisoning
+(2025-04), OWASP MCP Top 10 · permissioning: OWASP Agentic Top 10 (2025-12) · routing: LangChain
+context-engineering (2025-07), Re-Invoke arXiv 2408.01875 · Qwen 2507 thinking-split
+announcement (2025-07-22).
+
+### §-anchor legend (STR-1)
+
+Citations `STR-1 §5.N` / `review §5.N` (in `extract.ts`, `whole-doc-extract.test.ts`, rag-design
+§14.5, known-limitations, model-benchmarks §9, BUILD_STATE §5 item 8, the Skills record's §6
+trigger + interop note, and issue #80) resolve to the §3 disposition table above; `STR-1 P<n>`
+cites this wave's phases (P0 wave-open `246dc028`, P2 implement, P3 docs, P4 issue #80, P5
+close-out). The original review's §1–§4/§6–§7 (verdict, as-built map, research scoring, sources)
+are condensed into §1/§2/§4 of this record; anything not carried here is retrievable from the
+wave-open commit.
 
 
 ## Generic result tables — design record (result-tables wave 2026-07-05, §1–§6 + D59–D67)

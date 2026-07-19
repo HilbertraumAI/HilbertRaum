@@ -1214,7 +1214,12 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    with the failed quality bar, the weak-hardware case is served by option 2 (signal-aware
    picker: feed the benchmark's measured tok/s — persisted with `measuredModelId` since #52 —
    into the recommendation; also resolves #52's remaining downgrade question), which needs its
-   own short design note before code.
+   own short design note before code. **Added criterion (STR-1 review §5.4, 2026-07-20):** during
+   step (b)/(d), record each manifest's thinking-mode behavior (split Instruct/Thinking checkpoint
+   vs `enable_thinking` kwarg honored) as a first-class criterion for **structured-surface
+   suitability** — the D55 grammar surfaces incl. the ingest extract pass need non-thinking
+   behavior or they pay the #50 escalated retry per chunk; the checkpoint choice, not a template
+   kwarg, is the robust control (model-benchmarks §9, "Thinking-checkpoint criterion").
 9. **Issue #51 residuals (owner decisions — the app-side quit close + docs shipped 2026-07-11):**
    - **Idle posture:** checkpoint + release the DB when the app is idle, so an unplug while "open
      but not in use" is harmless. New machinery (no app-level idle detector exists); the
