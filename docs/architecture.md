@@ -4947,8 +4947,10 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
   before building the expensive path. **Not yet closed** — see "Conditional future" below.
 - **D53/D55 — (Stage 2, not built).** Any future LLM row must carry a verbatim `grounding_quote`
   verified against the source then balance-reconciled (drop-on-failure, never guess); it needs
-  grammar-constrained decoding plumbed through the `llama-server` HTTP sidecar (a `json_schema`/GBNF
-  request field the runtime seam does not expose today). Recorded for when D52 triggers it.
+  grammar-constrained decoding plumbed through the `llama-server` HTTP sidecar. *(Update: that
+  plumbing has since shipped as `RuntimeChatOptions.responseSchema` — the D55 contract the bank
+  categorizer, enricher, both locate passes, and the ingest extract pass (STR-1 §5.1) now ride;
+  Stage 2 itself stays gated on D52's recall evidence.)* Recorded for when D52 triggers it.
 - **D54/D56 — Honesty + the completeness gate (the cardinal safety property).** Never present an
   invented total, nor a partial/mis-read total *dressed up as the statement total*. A confident WRONG
   total (17 of 20 rows presented AS the whole) is *worse* than today's empty result. The only true proof
@@ -5159,8 +5161,9 @@ Stage 2 exists to cover. So treat Stage 2 as a **probable future need, gated —
 lands only if D52's breadth evidence (more banks/layouts — Sparkasse/ING/DKB + invoices) shows Stage-1
 deterministic recall below ~90% on a layout the completeness gate can't honestly downgrade. The
 discipline is still measure-then-build (don't pay for the LLM path until a real layout proves Stage 1
-insufficient) and its D55 prerequisite (grammar-constrained decoding plumbed through `llama-server`)
-remains real work. Until then Stage 1 is the shipped extractor for the verified layouts; Stage 2
+insufficient); its D55 prerequisite (grammar-constrained decoding plumbed through `llama-server`)
+has since shipped (`responseSchema`, used by the categorizer/locate/extract surfaces), so the
+remaining Stage-2 work is the grounding-quote + reconciliation machinery itself. Until then Stage 1 is the shipped extractor for the verified layouts; Stage 2
 remains deferred + unapproved, but the recommendation is to expect it and re-run the gold-set harness on
 a broader corpus to trigger it.
 

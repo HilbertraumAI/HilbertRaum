@@ -6,6 +6,7 @@ import {
   type ExtractionListing,
   type ExtractionListingItem,
   type ExtractRecordType,
+  type JsonSchema,
   type RetrievalScope
 } from '../../../shared/types'
 import type { ModelSlotArbiter } from './model-slot-arbiter'
@@ -64,6 +65,34 @@ const EXTRACT_SYSTEM_PROMPT =
   'You extract structured items from a passage of a document. You reply ONLY with JSON — ' +
   'never prose, never code fences, never explanation.'
 
+/** The grammar contract for one chunk (STR-1 §5.1, review 2026-07-19): the reply is constrained
+ *  to a top-level array of `{type, value}` via the same D55 `responseSchema` → llama-server
+ *  `response_format:{type:'json_schema',strict:true}` plumbing the bank categorizer uses, so the
+ *  prose/code-fence/unparseable failure class is eliminated AT THE SOURCE on the real runtime
+ *  (the mock runtime ignores the schema — the unparsed path stays exercisable in CI). Top-level
+ *  ARRAY by design: the wire shape stays byte-compatible with the shipped prompt and with
+ *  `parseExtraction`/`salvageTruncatedArray` (the first top-level-array schema in the app — every
+ *  prior D55 consumer wraps in an object; the plumbing forwards either verbatim). The `type` enum
+ *  tracks `EXTRACT_RECORD_TYPES`, so a type-set change cannot drift the schema. NOTE the prompt
+ *  below still DESCRIBES the shape: llama-server does not inject the schema into the prompt.
+ *  Grammar guarantees syntax, not values — the tolerant parse + coercion stays as re-validation,
+ *  and the #50 ladder stays entirely: a thinking model can still burn the cap on
+ *  `reasoning_content` (empty reply), and the token cap can still cut a grammatical array
+ *  mid-object (salvage). */
+export const EXTRACT_RESPONSE_SCHEMA_NAME = 'extraction_items'
+export const EXTRACT_RESPONSE_SCHEMA: JsonSchema = {
+  type: 'array',
+  items: {
+    type: 'object',
+    required: ['type', 'value'],
+    additionalProperties: false,
+    properties: {
+      type: { type: 'string', enum: [...EXTRACT_RECORD_TYPES] },
+      value: { type: 'string', minLength: 1 }
+    }
+  }
+}
+
 /** The strict per-chunk prompt (plan §4.2 step 1). */
 function extractPrompt(chunkText: string): string {
   return (
@@ -87,13 +116,15 @@ export interface ExtractDeps {
   signal: AbortSignal
   arbiter: ModelSlotArbiter
   jobId: string
-  /** One model call (the manager's `generate` over the locked chatStream contract). */
+  /** One model call (the manager's `generate` over the locked chatStream contract). The
+   *  optional trailing `schema` carries the D55 grammar constraint (STR-1 §5.1). */
   generate: (
     systemPrompt: string,
     prompt: string,
     maxTokens: number,
     temperature: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    schema?: { responseSchema: JsonSchema; responseSchemaName?: string }
   ) => Promise<string>
   /** Reports scanned/total chunk counts for the DocTask progress display. */
   onProgress?: (stepsDone: number, stepsTotal: number) => void
@@ -325,7 +356,11 @@ export async function extractDocument(documentId: string, deps: ExtractDeps): Pr
           extractPrompt(chunk.text),
           attempt === 1 ? EXTRACT_OUTPUT_TOKENS : EXTRACT_RETRY_OUTPUT_TOKENS,
           EXTRACT_TEMPERATURE,
-          signal
+          signal,
+          // Grammar on EVERY attempt (STR-1 §5.1) — the retry exists for reasoning-burn and
+          // truncation, which the grammar does not prevent; the wire format is constrained on
+          // both attempts alike.
+          { responseSchema: EXTRACT_RESPONSE_SCHEMA, responseSchemaName: EXTRACT_RESPONSE_SCHEMA_NAME }
         )
         items = parseExtraction(reply, { salvageTruncated: attempt === 2 })
         if (signal.aborted) throw new DOMException('Extract cancelled', 'AbortError')

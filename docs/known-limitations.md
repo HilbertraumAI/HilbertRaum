@@ -768,7 +768,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   an honest coverage line ("N sections scanned (k unparsed)"). It is **not** a guaranteed-complete
   list: a small model can miss an item, very similar values are merged, an item split across the
   ~80-token section overlap can double-count, and a section whose reply was unparseable is counted
-  as "unparsed" (its items may be missing) rather than dropped. The "whole document" wording is
+  as "unparsed" (its items may be missing) rather than dropped. Since STR-1 §5.1 (2026-07-20) the
+  pass grammar-constrains the reply (D55 `responseSchema`), so unparsed sections should be RARE on
+  the real runtime — the remaining causes are a thinking model burning the token budget on
+  reasoning and a reply cut off at the cap, and an explicit "Build deep index" re-run retries them. The "whole document" wording is
   shown only when every in-scope document is fully indexed (`fully_chunked`). An **unmapped/ad-hoc
   "{X}"** (no precomputed type) is **not** answered as a complete list — it falls back to a labelled
   relevance answer ("based on the most relevant passages"). v1 has no live full-scan for unmapped

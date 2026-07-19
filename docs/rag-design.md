@@ -1321,7 +1321,15 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   `reconcileStuckExtracts` mirrors the tree reconcile.
 - **Pass** ([`extract.ts`](../apps/desktop/src/main/services/analysis/extract.ts)): the **second**
   yielding build — one `generate`/chunk over the fixed v1 type set (`generic|date|amount|party|
-  obligation`), strict JSON-array prompt at temp 0, tolerant `parseExtraction` + retry-once, then an
+  obligation`), **grammar-constrained** (STR-1 §5.1, 2026-07-20) to a top-level `{type,value}[]`
+  array via the same D55 `responseSchema` → `response_format:{type:'json_schema',strict:true}`
+  plumbing as the bank categorizer (`EXTRACT_RESPONSE_SCHEMA`; the `type` enum tracks
+  `EXTRACT_RECORD_TYPES`, the schema rides on BOTH attempts, and it is the app's first
+  top-level-ARRAY schema — chosen so the wire shape stays byte-compatible with the prompt and
+  the salvage path) at temp 0. The prompt still **describes** the JSON shape — llama-server does
+  not inject the schema into the prompt — and the tolerant `parseExtraction` + retry-once stays
+  as re-validation (grammar guarantees syntax, never values; the mock runtime ignores
+  `responseSchema`, so CI still exercises the unparsed path), then an
   `unparsed` marker (the chunk is **surfaced, never dropped** — H7); same arbiter/cancel/lock discipline
   + per-chunk `try{BEGIN…COMMIT}catch{ROLLBACK}` (H11); per-`(chunk_id, content_hash, model_id)`
   resume cache = **0** calls on re-run **for `ok` scans under the CURRENT model only** — a
@@ -1342,10 +1350,15 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   same rejection protects every `chatStream` consumer: the main chat turn and both grounded
   paths surface the friendly `main.chat.streamError` copy via `withChatStream`, and a failed
   compaction summary is never written as a checkpoint (the R4/R6 fallback absorbs it).
-  **Reasoning-model hardening (#50):** a reasoning model can spend the whole 384-token cap on
+  **Reasoning-model hardening (#50 — RETAINED under the D55 grammar, STR-1 §5.1):** a reasoning
+  model can spend the whole 384-token cap on
   `reasoning_content` (the manager's `generate` discards reasoning deltas, and `enable_thinking:false`
   is already sent but a template may ignore it), collapsing the reply to `''` — and at temp 0 an
-  identical retry is byte-identical. Three-part fix: (1) the retry escalates the cap
+  identical retry is byte-identical. The grammar eliminates the prose/code-fence/unparseable
+  failure class at the source on the real runtime, but it stops NONE of the #50 failure modes —
+  thinking still burns the cap before any constrained output token, the token cap can still cut a
+  grammatical array mid-object, and the mock runtime ignores the schema — so the whole ladder
+  stays. Three-part fix: (1) the retry escalates the cap
   (`EXTRACT_RETRY_OUTPUT_TOKENS`, 2048 — a cap, not a target; non-reasoning models never pay it);
   (2) on the **final attempt only**, `parseExtraction({salvageTruncated})` recovers the complete
   leading `{type,value}` objects of a cap-truncated array (final-only, so a salvageable attempt 1
