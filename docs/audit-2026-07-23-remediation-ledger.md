@@ -92,6 +92,25 @@ Working paper. Transient with the plan and the report; folded into the durable
   so they cannot mis-attribute. *Assigned: deferred-with-registration (reopen only if a manifest
   ever adds mmproj `size_bytes`).*
 
+- [ ] **B-12 — the TEXT-path adopt has the same weak-guard shape AUD-04 fixed.** `adoptActiveJob`
+  (`renderer/lib/translateSession.ts`) gates only on `snapshot.activeJobId`, which is null in EVERY
+  terminal state, and its post-await re-check is the identical null test. Reachable: the user hits
+  Stop, `stopActive` sets `cancelled` + `activeJobId = null` and fires
+  `translateCancel(...).catch(() => {})` — the rejection is SWALLOWED, so if that IPC fails main
+  keeps the job `translating`; the next Translate mount re-adopts it and the panel flips from the
+  user's cancelled/held result back to "Translating…" with `output` replaced by `job.text ?? ''`.
+  Narrower than AUD-04 (only the Translate screen starts a text job, so there is no foreign-starter
+  hijack). Fix shape mirrors Phase 3: gate on the store being genuinely empty, not on the id alone.
+  *Assigned: Phase 10 loop if cheap, else deferred-with-registration.*
+- [ ] **B-13 — nothing re-adopts the GLOBAL doc-task store after a renderer reload** (Medium,
+  pre-existing, unrelated to the Phase-3 change). `renderer/lib/doctasks.ts` exposes no adopt entry
+  point and `DocumentsScreen` only subscribes, so after a reload a still-running
+  summary/translation/compare/tree task loses its row busy state, its Cancel affordance and the chat
+  "task is busy" banner — **while the backend lane stays held, so new task starts are refused with a
+  busy error the UI cannot explain.** This is also the direct cause of the Phase-3 residual (the
+  file-translate adopt cannot tell a Documents-started task from its own once that store is empty).
+  *Assigned: deferred-with-registration — wants its own issue/wave, not this one.*
+
 ## Decisions log
 
 - **D-W1 (plan §3, carried in):** the verified-and-dismissed engine-download tar-child-on-quit item is
@@ -266,3 +285,56 @@ future reader does not "harmonize" them back into a bug.
   (2c) the size argument actually reaches the guard at both call sites — **this is the one that
   catches the silent fail-open regression (B-10)**.
 - **Discovered -> backlog:** B-07, B-08, B-09, B-10, B-11.
+
+### Phase 3 — AUD-04 (Translate adopt terminal-clobber / foreign-task hijack) — DONE
+
+**Decision D-3a (the gate is "this store is EMPTY", not "not busy").** `busy` is false in every
+TERMINAL state, so the busy-only guard let a later mount run over a FINISHED translation and wipe its
+held `output`/`gaps`/`truncated`/`resultDocumentId`. The recovery exists for a store that died with a
+renderer reload — and such a store is `idle`; any other state is a session the panel is still showing.
+
+**Decision D-3b (the post-await re-check gets the SAME rule) — implementer's call, ratified.** The
+plan only named the entry guard. The implementer changed the post-await re-check to `state !== 'idle'`
+too, and justified it with a REACHABLE path rather than a hypothetical: `translateDroppedFiles`
+reaches `fail('multiDrop')` / `fail('noPath')` / `fail('docTaskBusy')` **synchronously**, so a drop
+the user makes while the `getActiveDocTask` IPC is in flight lands `state:'failed'` with `busy:false`
+— a busy-only re-check sails straight past it and replaces the error banner the user just triggered
+with "Translating…". It cannot cost a legitimate adopt: entry already required `idle`, so the
+re-check now fires only when something else genuinely took the panel during the await, and that owner
+must win. Agreed — the entry guard and the re-check must enforce the same invariant or the documented
+no-op is true only at function entry and not at the moment of the destructive `set`.
+
+**Decision D-3c (foreign check placed post-await, by necessity and on the merits).** It compares
+`task.jobId`, which does not exist before the await. That placement is also strictly better:
+DocumentsScreen's `startTask` writes the global store only AFTER its own `startDocTask` round-trip
+resolves, so a pre-await read could miss a foreign task main already reports as active.
+
+- **Files:** `src/renderer/lib/fileTranslateSession.ts`,
+  `tests/renderer/fileTranslateSession.test.ts`. Plus `docs/known-limitations.md` (added by the
+  orchestrator — the implementer correctly declined to edit `docs/` while another agent held it).
+- **RED evidence** (source temporarily reverted to the pre-fix guard, then restored verbatim —
+  `grep RED-CAPTURE` over `src/` and `tests/` returns nothing):
+  `expected 'translating' to be 'done'` (terminal clobber),
+  `expected 'translating' to be 'idle'` (foreign-task hijack),
+  `expected 'translating' to be 'failed'` (terminal-during-await).
+  Each RED isolates ONE fix component — RED 1 runs with an EMPTY global store so only the entry
+  guard can block it; RED 2 from an idle store so only the foreign check can; RED 3 goes terminal
+  AFTER the entry guard passed so only the re-check can. That is a good teeth design: no single
+  change can make all three pass.
+- **GREEN (orchestrator's own run):** `fileTranslateSession` 29 ok, `TranslateScreen` 24 ok,
+  `doctasksStore` + `translateSession` ok -> **4 files / 69 tests pass**. All four pre-existing adopt
+  cases still green, including the genuine post-reload recovery — which now carries an explicit
+  `expect(getActiveDocTask()).toBe(null)` pin so a future change cannot break reload recovery while
+  keeping the new guards green.
+- **Residual (recorded in `known-limitations.md`, not left silent):** after a genuine renderer RELOAD
+  the global doc-task store is empty too, so a translation started from a Documents row and still
+  running IS adopted into the panel — main tracks document ids but not the originating surface, so
+  they are indistinguishable at that point. Benign (the user's own task, real progress, real Stop,
+  real result; the materialized document lands under Documents either way). Closing it needs a
+  main-side contract change (an `origin`/owner field on the doc-task) — out of scope. **The actual
+  AUD-04 repro — plain in-session navigation hijacking a live Documents-row task — is fully closed.**
+- **Note (deliberate, not an oversight):** the foreign check treats a `stateUnknown` global entry
+  (polling gave up after 3 consecutive IPC failures, so the status may be a stale non-terminal
+  snapshot) as LIVE and refuses to adopt. Conservative on purpose: a task whose live state the
+  renderer could not learn must not be hijacked into the panel.
+- **Discovered -> backlog:** B-12, B-13.

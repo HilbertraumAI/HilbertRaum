@@ -1736,6 +1736,13 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   after a reload** (main tracks document ids only), so an adopted document translation shows
   progress + result without the original filename label until it completes. At most one of the
   two is ever live (the D9 one-at-a-time lane), so the two adopts never both claim the panel.
+  A second tolerated edge, same root cause: the renderer's shared doc-task store dies with the
+  reload too, so a translation started from a **Documents row** and still running across a reload
+  is adopted into the Translate panel as if it had been started there — main records document ids
+  but not the originating surface, so after a reload the two are indistinguishable. Benign: the
+  task, its progress, its Stop and its result are all genuinely the user's, and the materialized
+  document lands under Documents either way. Without a reload the panel no longer adopts a
+  Documents-row task at all — the recovery only fires from a genuinely empty store.
 
 ## Document comparison
 

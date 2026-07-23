@@ -485,11 +485,18 @@ export function cancelFileTranslation(): void {
  *
  * Precedence with the TEXT-path adopt (D9 one-at-a-time lane — a text job and a doc-task can never
  * be active at once): this no-ops when a live TEXT job already owns the panel, when this store
- * already holds a live/terminal session (navigate-away kept it), or when the active task is not a
- * running translation — so the two adopts can never both claim the panel.
+ * already holds a live OR terminal session (navigate-away kept it), when the active task is not a
+ * running translation, or when the running task is one the GLOBAL doc-task store already tracks
+ * (i.e. another screen started it) — so the two adopts can never both claim the panel and a foreign
+ * task is never pulled into it.
  */
 export async function adoptActiveFileTranslation(): Promise<void> {
-  if (snapshot.busy) return // this store already holds a live session
+  // AUD-04: the gate is "this store is EMPTY", not "not busy". `busy` is false in every TERMINAL
+  // state (done/failed/cancelled), so a busy-only guard let a later mount run right over a FINISHED
+  // translation and wipe its held output/gaps/truncated/resultDocumentId with a fresh `translating`
+  // frame. This recovery exists for a store that died with a renderer reload — and such a store is
+  // `idle`; any other state is a session this panel is still showing.
+  if (snapshot.state !== 'idle') return // this store already holds a live or terminal session
   if (getTranslateSession().translating) return // the text path owns the panel (precedence)
   let task
   try {
@@ -498,7 +505,21 @@ export async function adoptActiveFileTranslation(): Promise<void> {
     return
   }
   if (!task || task.kind !== 'translation' || task.state !== 'running') return
-  if (snapshot.busy || getTranslateSession().translating) return // a session started while we awaited
+  // Same `idle` rule on the re-check, not just `busy` (AUD-04): a session can also go TERMINAL while
+  // the read above was in flight — a rejected drop (multi-file, no path, a foreign task on the lane)
+  // lands `failed` synchronously — and that just-raised banner must not be replaced either.
+  if (snapshot.state !== 'idle' || getTranslateSession().translating) return // a session started while we awaited
+  // AUD-04: is this running task OURS to adopt, or a FOREIGN one? This store deliberately never
+  // registers its doc-task in the GLOBAL `doctasks` store (see the deviation note at the top — it
+  // runs its own polling), so a live entry sitting there was started by another screen (a
+  // Documents-row "Translate"), and the one-at-a-time lane means that is the very task main just
+  // reported. Adopting it would hijack a stranger's task into this panel: Stop would cancel it and
+  // its result would load here as if it were a file translation. The global store is module-level —
+  // it survives navigation and is empty only after the renderer reload this recovery is for, so a
+  // reload never mistakes a genuinely-ours task for a foreign one. (A TERMINAL entry lingers in that
+  // store until a screen acknowledges it and must not block us — the `guardStart` rule.)
+  const foreign = getActiveDocTask()
+  if (foreign && foreign.jobId === task.jobId && !isDocTaskTerminal(foreign.status)) return
   const myGen = ++gen
   stopPolling()
   docTaskJobId = task.jobId
