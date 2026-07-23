@@ -56,6 +56,42 @@ Working paper. Transient with the plan and the report; folded into the durable
   refuse on a reviewed turn, and the second delete finds a user turn and returns null).
   *Assigned: none — close-out disposition "deferred, registered".*
 
+- [ ] **B-07 — `build-commercial-drive.ps1` still invokes children with a bare `&` and no
+  try/catch** (`Run()` and the weight gate). A child's terminating error propagates and kills the
+  parent before its own `$LASTEXITCODE` handling — at the weight gate that means the whole **NOT
+  SELLABLE problem list is never printed** and the operator sees a raw PowerShell exception instead.
+  Phase 4 removed the specific `Write-Error` trigger from every child it calls, so the exposure is
+  now narrow; the fix is the same `Invoke-FetchScript` shape `prepare-drive.ps1` now has. *Assigned:
+  deferred-with-registration (out of the audit's stated scope).*
+- [ ] **B-08 — AUD-24 class on a path the finding did not name:** the `llama_cpp`/`whisper_cpp`
+  **archive** download has no delete-before-refetch. A run interrupted AFTER the archive fully
+  downloaded but BEFORE extraction leaves a complete archive that path never deletes; every later
+  run then resumes past EOF → HTTP 416 → all five outer attempts fail → `curl failed after retries`
+  → exit 1, **permanently**, with no message telling the operator to delete the stale archive.
+  Same mechanism, proven for the sibling path against a local range-aware server. *Assigned:
+  deferred-with-registration.*
+- [ ] **B-09 — AUD-24 stays open for the 4 manifests with no `download.size_bytes`**
+  (`chat/gemma-4-26b-q4`, `chat/gemma4-coding-q8`, `chat/qwen3.5-9b-q8`,
+  `vision/qwen2.5-vl-3b-instruct-q4`). The refined guard deliberately fails OPEN there — behaviour is
+  exactly pre-fix (416 no-op, the post-download verify deletes, the next run self-heals), so it is
+  strictly no worse. Closing it is one line per manifest, but `size_bytes` must be a *true* byte
+  count, so it needs HEAD requests against the four URLs and a manifest edit outside `scripts/`.
+  The vision manifest matters most (it is in the `-WithAssets` default set and is two files).
+  *Assigned: deferred-with-registration.*
+- [ ] **B-10 — the AUD-24 size guard fails OPEN, so it is silently disable-able.** If a future
+  refactor drops the size argument at either call site, or the manifest field is renamed, the guard
+  never matches, nothing errors, and AUD-24 is quietly back for every model. Nothing in CI would
+  notice. *Assigned: **Phase 5** — Phase 4 handed over three ready-to-write `script-drift.test.ts`
+  assertions (see the Phase 4 outcome below); Phase 5 owns that file.*
+- [ ] **B-11 — latent first-match hazard:** `size_bytes` for the main GGUF is read with the flat
+  whole-file accessor, so it returns the FIRST match. Correct today (the schema puts `download:`
+  before `mmproj:`, and the one manifest with an mmproj block carries no `size_bytes` at all), but a
+  future manifest that gave `size_bytes` ONLY to its mmproj block would test the main GGUF against
+  the projector's much smaller size and could delete a legitimate large partial. The same
+  first-match design is already used for `url`/`sha256`, which are always present in the main block
+  so they cannot mis-attribute. *Assigned: deferred-with-registration (reopen only if a manifest
+  ever adds mmproj `size_bytes`).*
+
 ## Decisions log
 
 - **D-W1 (plan §3, carried in):** the verified-and-dismissed engine-download tar-child-on-quit item is
@@ -155,3 +191,78 @@ IS the right shape — see the backlog entry.)
   window as a side effect.)
 - **Discovered → backlog:** B-02 (result_tables sibling cascade — the most valuable find), B-03, B-04,
   B-05, B-06.
+
+### Phase 4 — AUD-05 + AUD-24 (provisioning-script robustness) — DONE
+
+**Decision D-4a (`Write-Host` + explicit `exit`, not `try/catch` around every site).** The scripts
+already used `Write-Host -ForegroundColor Red` + `exit` at two pre-existing failure sites, so the
+fix is the pattern the file itself established, not a new one. `try/catch` is used only where the
+problem is a *child process* terminating the parent (`prepare-drive.ps1`'s new `Invoke-FetchScript`
+wrapper around all four `&` child invocations).
+
+**Decision D-4b (AUD-24 scoped to the case that cannot self-repair) — orchestrator-directed
+correction.** The implementer's first pass deleted the destination on ANY `mismatch`. I rejected
+that: `Get-FileState`/`file_state` return `mismatch` for a **cross-run partial** too, and
+`fetch-models.sh`'s own header advertises "RESUMES partial downloads (curl -C - / aria2c)" as a
+feature — so the unconditional delete traded a Low, already-self-healing bug (416 costs one wasted
+run) for a worse one: **every interrupted multi-GB weight download restarting from zero on a DIY
+user's flaky link.** The shipped rule instead deletes only when resume provably cannot help — when
+the bytes on disk already reach the manifest's `download.size_bytes`. Shorter file = resumable
+partial = untouched. No `size_bytes` = no delete (pre-fix behaviour, strictly no worse). The
+asymmetry with `fetch-runtime.{ps1,sh}` (OCR files: delete unconditionally — few MB each, no size
+field in `runtime-sources.yaml`, no partial worth saving) is now stated in BOTH files' comments so a
+future reader does not "harmonize" them back into a bug.
+
+- **Files:** `scripts/fetch-runtime.ps1`, `scripts/fetch-models.ps1`, `scripts/prepare-drive.ps1`,
+  `scripts/verify-models.ps1`, `scripts/fetch-runtime.sh`, `scripts/fetch-models.sh`. No `docs/`
+  change (the behaviour now matches what the scripts already documented).
+- **RED evidence (real host, PS 5.1 via `powershell.exe -File`, scratch replicas + the real
+  pre-fix script from `git show HEAD:`, nothing downloaded):**
+  (a) OCR-loop shape — aborted at the FIRST `Write-Error`; `eng:` never printed, the trailing
+  summary never printed, exit 1. Against the real pre-fix `fetch-runtime.ps1` pointed at an
+  unresolvable host: `deu` failed, **`eng` was never attempted**.
+  (b) `Write-Error ...; exit 2` -> **exit 1** (the documented config-error code collapsed).
+  (c) parent `& $child` — killed at the call site; the tolerant `$LASTEXITCODE` branch and the
+  entire OCR step never ran, exit 1.
+  (d) AUD-24, against a local range-aware server with a complete-but-wrong file:
+  `GET /deu.traineddata.gz Range=bytes=4096- -> 416`, ONE request, zero bytes — the redo was a
+  guaranteed no-op.
+- **GREEN evidence (four-case verification, both engines, local server):**
+  (a) complete-but-wrong (size == expected) -> deleted, `(no range) -> 200`, VERIFIED in ONE run;
+  (b) **short partial (1000 of 4096 bytes) -> NOT deleted, `Range=bytes=1000- -> 206 (3096 bytes)`,
+  VERIFIED** — only the missing tail crossed the wire, i.e. cross-run resume is preserved;
+  (c) oversized garbage -> deleted, refetched clean;
+  (d) manifest without `size_bytes` -> not deleted, resume attempted, 416, post-download verify
+  deletes, self-heals next run (pre-fix behaviour, deliberately).
+  Dry-run safety re-verified in both engines (nothing deleted). Real fixed `-Family ocr` against the
+  unresolvable host now attempts **both** files and exits 1 from the trailing summary. Real fixed
+  whisper->OCR sequence: whisper miss prints the tolerant note and **provisioning continues to the
+  OCR step**, exit 0.
+- **Orchestrator's own gate:** zero non-comment `Write-Error` left in the four provisioning `.ps1`;
+  PowerShell AST parse OK on all five `.ps1` (incl. `build-commercial-drive.ps1`); `bash -n` OK on
+  both `.sh`; all six files NUL-free, BOM-free, `.sh` byte 0-2 = `23 21 2f` (`#!/`);
+  `script-drift` 17 ok, `repo-hygiene` 12 ok, `prepare-drive-default-set` 4 ok,
+  `commercial-drive` 34 ok -> **4 files / 67 tests pass**.
+- **AUD-05 severity nuance for the close-out record (worth keeping):** the whisper win URL is a
+  **live release asset** (HEAD: 302 -> `release-assets.githubusercontent.com` -> 200,
+  `Content-Length: 4093849`), so on a **Windows** build host the whisper step only failed
+  transiently. But on **mac/linux** `-Family whisper_cpp` selects no build at all (the yaml pins a
+  win-only whisper asset), which is the CONFIG-error path — so there the dead tolerant branch
+  aborted `-WithAssets` provisioning, and skipped the OCR fetch, **100% of the time, every run**.
+  The documented "a whisper miss is a warning, not a failure" contract was fully dead exactly where
+  it was written to matter.
+- **Bonus fixes found and made in-phase:** `verify-models.ps1` carried the same dead-`exit 2` bug at
+  an unlisted site — and `build-commercial-drive.ps1` invokes it with a bare `&` then appends to its
+  `$problems` list, so that terminating error would have killed the drive build **before it printed
+  its NOT SELLABLE verdict**. Also the OCR loop's non-curl `Invoke-WebRequest` fallback was equally
+  fatal under `Stop` (a host without `curl.exe` still aborted at the first bad file, defeating the
+  whole point); now try/catch + `$failed++; continue`.
+- **Handoff to Phase 5** (which owns `script-drift.test.ts`): three ready-to-write assertions were
+  handed over rather than written, to avoid a two-phase edit of that file —
+  (1) no non-comment `Write-Error` in the four provisioning `.ps1`;
+  (2a) the `fetch-models` delete is SIZE-GUARDED (assert the size comparison precedes the first
+  `Remove-Item`/`rm -f`, i.e. the delete is nested inside the guard);
+  (2b) the `fetch-runtime` OCR delete IS unconditional and stays so (the asymmetry is intentional);
+  (2c) the size argument actually reaches the guard at both call sites — **this is the one that
+  catches the silent fail-open regression (B-10)**.
+- **Discovered -> backlog:** B-07, B-08, B-09, B-10, B-11.

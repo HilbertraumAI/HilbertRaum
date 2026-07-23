@@ -118,9 +118,10 @@ download() {
 
 # Fetch + verify ONE file (the GGUF, or a vision model's mmproj projector), given its already-
 # computed state. Mirrors assets.ts `planOneFile` + the atomic verify-before-trust contract.
-# Args: id label dest sha url relpath state. Updates the global fetched/skipped/had_failure.
+# Args: id label dest sha url relpath state expected_size. Updates the global
+# fetched/skipped/had_failure.
 handle_file() {
-  local id="$1" label="$2" dest="$3" sha="$4" url="$5" rel="$6" state="$7"
+  local id="$1" label="$2" dest="$3" sha="$4" url="$5" rel="$6" state="$7" expected_size="${8:-}"
   case "$state" in
     verified)    printf '  skip   %s%s (present + verified)\n' "$id" "$label"; skipped=$((skipped + 1)); return 0 ;;
     placeholder) printf '  skip   %s%s (present; placeholder hash — cannot verify)\n' "$id" "$label"; skipped=$((skipped + 1)); return 0 ;;
@@ -128,6 +129,28 @@ handle_file() {
   esac
   if [[ $DRY_RUN -eq 1 ]]; then
     printf '  fetch  %s%s\n           %s\n           -> %s\n' "$id" "$label" "$url" "$rel"; return 0
+  fi
+  # A "redo" writes onto the file that is already there, and every downloader below resumes at
+  # its end (curl -C -, aria2c --continue, wget -c). That is deliberate: resuming a
+  # part-downloaded weight across runs is a documented feature of this script, and a multi-GB
+  # weight on a flaky link must not restart from zero. But the SAME state also covers a file
+  # that is complete and WRONG, and resuming that one asks the server for a byte range starting
+  # at or past the resource's length — an unsatisfiable range (HTTP 416), so the repair
+  # transfers nothing and the run is wasted (AUD-24).
+  # Rule: delete first ONLY when resume provably cannot help, i.e. when the bytes on disk
+  # already reach the manifest's expected size. A SHORTER file is a resumable partial and is
+  # left alone, exactly as before. When the manifest carries no size_bytes we cannot tell the
+  # two apart, so we do NOT delete and keep the previous behaviour (resume; a wrong file is
+  # still deleted by the post-download verification below, which self-heals on the next run).
+  # NOTE the value comes from the manifest's `download:` block, which the schema places before
+  # any `mmproj:` block, and the flat parse returns the first match.
+  if [[ "$state" == mismatch && "$expected_size" =~ ^[0-9]+$ ]]; then
+    local on_disk
+    on_disk="$(wc -c < "$dest" 2>/dev/null | tr -d '[:space:]')"
+    if [[ -n "$on_disk" ]] && (( on_disk >= expected_size )); then
+      printf '         %s bytes on disk >= the manifest'"'"'s %s — deleting before re-download (resume cannot repair it)\n' "$on_disk" "$expected_size"
+      rm -f "$dest" "$dest.aria2"
+    fi
   fi
   printf '  fetch  %s%s ...\n' "$id" "$label"
   if ! download "$url" "$dest"; then
@@ -169,6 +192,9 @@ for mf in "${MANIFEST_FILES[@]}"; do
   local_path="$(field "$mf" local_path)"
   sha="$(field "$mf" sha256 | tr '[:upper:]' '[:lower:]')"
   url="$(field "$mf" url)"
+  # Optional (24 of the committed manifests carry it) — used only to tell a complete-but-wrong
+  # file apart from a resumable partial in handle_file.
+  size_bytes="$(field "$mf" size_bytes)"
   license="$(field "$mf" license)"
   license_url="$(field "$mf" license_url)"
   review_status="$(field "$mf" status)"
@@ -185,6 +211,7 @@ for mf in "${MANIFEST_FILES[@]}"; do
   mmproj_local="$(field_in "$mmproj_block" local_path)"
   mmproj_sha="$(field_in "$mmproj_block" sha256 | tr '[:upper:]' '[:lower:]')"
   mmproj_url="$(field_in "$mmproj_block" url)"
+  mmproj_size="$(field_in "$mmproj_block" size_bytes)"
   has_mmproj=0
   [[ -n "$mmproj_url" && -n "$mmproj_local" ]] && has_mmproj=1
   mmproj_dest="$TARGET/$mmproj_local"
@@ -220,8 +247,8 @@ for mf in "${MANIFEST_FILES[@]}"; do
   # function already records the outcome in had_failure, which sets the exit code at the end, so
   # swallowing the return here keeps the batch going while still exiting 1 — matching
   # fetch-models.ps1's continue-then-summarize-then-exit-1 behavior (F-04, full audit 2026-07-16).
-  handle_file "$id" "" "$dest" "$sha" "$url" "$local_path" "$gguf_state" || true
-  [[ $has_mmproj -eq 1 ]] && { handle_file "$id" " (mmproj)" "$mmproj_dest" "$mmproj_sha" "$mmproj_url" "$mmproj_local" "$mmproj_state" || true; }
+  handle_file "$id" "" "$dest" "$sha" "$url" "$local_path" "$gguf_state" "$size_bytes" || true
+  [[ $has_mmproj -eq 1 ]] && { handle_file "$id" " (mmproj)" "$mmproj_dest" "$mmproj_sha" "$mmproj_url" "$mmproj_local" "$mmproj_state" "$mmproj_size" || true; }
 done
 
 echo

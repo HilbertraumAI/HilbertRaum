@@ -48,6 +48,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
+# FAILURE REPORTING (AUD-05): failures are announced with `Write-Host -ForegroundColor Red`
+# plus an explicit `exit`, never with `Write-Error`. Under $ErrorActionPreference = 'Stop' a
+# Write-Error becomes a SCRIPT-TERMINATING exception, so a following `exit 2` never executes
+# (the process exits 1 and the documented config-error code collapses into the
+# download-failure code) and the exception propagates OUT through the `&` call of a parent
+# script (prepare-drive) and kills it before it can inspect $LASTEXITCODE.
+
 # Normalize -Target to a full path: .NET IO and curl.exe resolve relative paths against
 # the PROCESS working directory, which does not follow Set-Location (audit M22).
 if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
@@ -56,7 +63,7 @@ $Target = [System.IO.Path]::GetFullPath($Target)
 $ManifestsDir = Join-Path $Target 'model-manifests'
 if (-not (Test-Path $ManifestsDir)) { $ManifestsDir = Join-Path $RepoRoot 'model-manifests' }
 if (-not (Test-Path $ManifestsDir)) {
-  Write-Error "No model-manifests found under '$Target' or repo root."
+  Write-Host "No model-manifests found under '$Target' or repo root." -ForegroundColor Red
   exit 2
 }
 
@@ -150,7 +157,7 @@ function Get-FileState([string]$dest, [string]$sha) {
 
 # Fetch + verify ONE file (the GGUF, or a vision model's mmproj projector), given its already-
 # computed state. Mirrors assets.ts `planOneFile` + the atomic verify-before-trust contract.
-function Invoke-HandleFile([string]$id, [string]$label, [string]$dest, [string]$sha, [string]$url, [string]$rel, [string]$state) {
+function Invoke-HandleFile([string]$id, [string]$label, [string]$dest, [string]$sha, [string]$url, [string]$rel, [string]$state, [string]$expectedSize) {
   switch ($state) {
     'verified'    { Write-Host ("  skip   {0}{1} (present + verified)" -f $id, $label) -ForegroundColor Green; $script:skipped++; return }
     'placeholder' { Write-Host ("  skip   {0}{1} (present; placeholder hash -- cannot verify)" -f $id, $label) -ForegroundColor DarkYellow; $script:skipped++; return }
@@ -161,6 +168,28 @@ function Invoke-HandleFile([string]$id, [string]$label, [string]$dest, [string]$
     Write-Host ("           {0}" -f $url)
     Write-Host ("           -> {0}" -f $rel)
     return
+  }
+  # A "redo" writes onto the file that is already there, and every downloader below resumes at
+  # its end (curl -C -, aria2c --continue). That is deliberate: resuming a part-downloaded
+  # weight across runs is a documented feature of this script, and a multi-GB weight on a flaky
+  # link must not restart from zero. But the SAME state also covers a file that is complete and
+  # WRONG, and resuming that one asks the server for a byte range starting at or past the
+  # resource's length -- an unsatisfiable range (HTTP 416), so the repair transfers nothing and
+  # the run is wasted (AUD-24).
+  # Rule: delete first ONLY when resume provably cannot help, i.e. when the bytes on disk
+  # already reach the manifest's expected size. A SHORTER file is a resumable partial and is
+  # left alone, exactly as before. When the manifest carries no size_bytes we cannot tell the
+  # two apart, so we do NOT delete and keep the previous behaviour (resume; a wrong file is
+  # still deleted by the post-download verification below, which self-heals on the next run).
+  # NOTE the value comes from the manifest's `download:` block, which the schema places before
+  # any `mmproj:` block, and the flat parse returns the first match.
+  if ($state -eq 'mismatch' -and $expectedSize -match '^\d+$') {
+    $onDisk = (Get-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue)
+    if ($onDisk -and $onDisk.Length -ge [long]$expectedSize) {
+      Write-Host ("         {0} bytes on disk >= the manifest's {1} -- deleting before re-download (resume cannot repair it)" -f $onDisk.Length, $expectedSize) -ForegroundColor DarkYellow
+      Remove-Item -Force -Path $dest -ErrorAction SilentlyContinue
+      Remove-Item -Force -Path "$dest.aria2" -ErrorAction SilentlyContinue
+    }
   }
   Write-Host ("  fetch  {0}{1} ..." -f $id, $label)
   try {
@@ -205,6 +234,9 @@ foreach ($mf in $manifestFiles) {
   $localPath = Get-ManifestField $text 'local_path'
   $sha = (Get-ManifestField $text 'sha256'); if ($sha) { $sha = $sha.ToLower() }
   $url = Get-ManifestField $text 'url'
+  # Optional (24 of the committed manifests carry it) -- used only to tell a complete-but-wrong
+  # file apart from a resumable partial in Invoke-HandleFile.
+  $sizeBytes = Get-ManifestField $text 'size_bytes'
   $license = Get-ManifestField $text 'license'
   $licenseUrl = Get-ManifestField $text 'license_url'
   $reviewStatus = Get-ManifestField $text 'status'
@@ -221,6 +253,7 @@ foreach ($mf in $manifestFiles) {
   $mmprojLocal = Get-ManifestField $mmprojBlock 'local_path'
   $mmprojSha = (Get-ManifestField $mmprojBlock 'sha256'); if ($mmprojSha) { $mmprojSha = $mmprojSha.ToLower() }
   $mmprojUrl = Get-ManifestField $mmprojBlock 'url'
+  $mmprojSize = Get-ManifestField $mmprojBlock 'size_bytes'
   $hasMmproj = [bool]($mmprojUrl -and $mmprojLocal)
   $mmprojDest = if ($hasMmproj) { Join-Path $Target ($mmprojLocal -replace '/', [IO.Path]::DirectorySeparatorChar) } else { $null }
 
@@ -248,9 +281,9 @@ foreach ($mf in $manifestFiles) {
     }
   }
 
-  Invoke-HandleFile $id '' $dest $sha $url $localPath $ggufState
+  Invoke-HandleFile $id '' $dest $sha $url $localPath $ggufState $sizeBytes
   if ($hasMmproj) {
-    Invoke-HandleFile $id ' (mmproj)' $mmprojDest $mmprojSha $mmprojUrl $mmprojLocal $mmprojState
+    Invoke-HandleFile $id ' (mmproj)' $mmprojDest $mmprojSha $mmprojUrl $mmprojLocal $mmprojState $mmprojSize
   }
 }
 
