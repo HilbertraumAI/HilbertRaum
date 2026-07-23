@@ -138,6 +138,38 @@ Working paper. Transient with the plan and the report; folded into the durable
   shipped `ipc-lock-coverage` stand-in can never detect the latch. Mitigated by the bare-`isUnlocked()`
   allowlist guard assigned to Phase 5. *Assigned: Phase 5 (mitigation) — no further action.*
 
+- [ ] **B-19 — `build-commercial-drive.ps1` still carries the `Write-Error` hazard** the provisioning
+  phase removed everywhere else. It sets `$ErrorActionPreference = 'Stop'` and then has two
+  `Write-Error "…"; exit 1` pairs, so those `exit 1` statements are DEAD CODE — the observable exit
+  code is right today only because the terminating-exception code is coincidentally 1 too, and the
+  same exception would still escape a parent's `& .\build-commercial-drive.ps1` invocation.
+  Deliberately excluded from the new Phase-5 guard (adding it would redden an untouched file); the
+  exclusion and its reasoning are recorded in the test's own comment. *Fix: convert both to
+  `Write-Host -ForegroundColor Red` + explicit `exit 1`, then add the file to the guard's list in the
+  SAME commit. Assigned: deferred-with-registration.*
+- [ ] **B-20 — nothing canonical pins the runtime BINARY names.** `runtime-sources.yaml` carries
+  (os, arch, backend, url, sha256, extract_to) but no binary-name field, while both
+  `build-commercial-drive` twins hard-code a `bin` column (`llama-server.exe`, `whisper-cli.exe`, …)
+  that the sellability gate tests for. A wrong name means the gate looks for a file that never exists
+  (drive always rejected) or one that always exists (gate blind). Phase 5 added a twins-agree
+  cross-check, which catches ONE script drifting from the other but NOT both drifting together from
+  reality. *Fix: add a `bin:` field to `runtime-sources.yaml` (making it canonical), or derive the
+  name in TS and spell-check it the way the drive-layout dirs are. Assigned:
+  deferred-with-registration.*
+- [ ] **B-21 — the two `build-commercial-drive` twins spell the runtime family differently:** `.ps1`
+  uses the canonical `llama_cpp`/`whisper_cpp`, `.sh` uses short `llama`/`whisper`. Harmless today;
+  Phase 5's `.sh` parser maps it explicitly and raises a named error if an unknown token appears, so
+  a third runtime family added to the yaml gets a clear "teach this test the new mapping" failure
+  rather than a silent miss. *Fix: normalise the `.sh` to the canonical token. Assigned:
+  opportunistic — fold into whichever phase next edits that script.*
+- [ ] **B-22 — the NUL/BOM nets have no LINE-ENDING tooth**, the third member of the same
+  shipped-artifact byte-trap family. A CRLF-terminated `launchers/start-hilbertraum.sh` or
+  `Start HilbertRaum.command` fails on macOS/Linux with the classic `bad interpreter: /bin/bash^M` —
+  the same silent-launch-failure blast radius as the BOM this wave now guards, and just as easy to
+  introduce from a Windows editor. Out of scope for AUD-06 as written. *Fix: check `.gitattributes`
+  first; if it does not pin `* text eol=lf` for these paths, add a CRLF net beside the BOM one.
+  Assigned: deferred-with-registration.*
+
 ## Decisions log
 
 - **D-W1 (plan §3, carried in):** the verified-and-dismissed engine-download tar-child-on-quit item is
@@ -472,3 +504,73 @@ Residual: a future caller added outside that seam would not inherit it — named
   further 5 batches (24 files) green.
 - **Discovered -> backlog:** B-14 (status reads still say unlocked mid-teardown), B-15 (now FIXED at
   the composition seam — residual only), B-16, B-17, B-18 (mitigation assigned to Phase 5).
+
+### Phase 5 — AUD-06 + AUD-18 + AUD-20 (hygiene-net & drift coverage) — DONE
+
+Test-only. Three files: `repo-hygiene.test.ts`, `csp-build-output.test.ts`, `script-drift.test.ts`.
+
+**Decision D-5a (widen the filter AND add the root).** Both nets' shared extension filter gained
+`sh|ps1|cmd|command`, and `launchers/` was added to both root lists. Verified independently:
+`git ls-files | grep -E '\.(sh|ps1|cmd|command|bat)$'` outside the walked roots now returns EMPTY —
+**every tracked script and launcher in the repo is inside a net.** A sub-assertion additionally pins
+that five named shebang-bearing shipped artifacts are inside the walk, so a future filter narrowing
+cannot silently shrink the world the net sees.
+
+**Decision D-5b (the bare-`isUnlocked()` allowlist latch).** The lock-latch phase converted ~15 IPC
+modules to `workspaceAdmitsWork()`, and nothing structurally prevented drift back — the
+`ipc-lock-coverage` stand-in is `{ isUnlocked: () => false }`, which a bare check satisfies just as
+well. New guard enumerates every bare `isUnlocked()` under `src/main/` and pins it against a
+12-entry allowlist keyed on **normalised source lines, deliberately not line numbers** (one site
+already moved 443 -> 456 mid-wave). It ignores `isUnlocked(): boolean` declarations and pure-comment
+lines, and **fails CLOSED on any unrecognised call shape** — teeth-proven with a receiver-less
+`const { isUnlocked } = ws` dodge. The failure message states the decision rule verbatim: add to the
+allowlist ONLY for a status/lifecycle read; if the site decides whether to DO work, use
+`workspaceAdmitsWork`.
+
+**One allowlist entry I did not predict, and it is important:**
+`registerWorkspaceIpc.ts :: if (ctx.workspace.isUnlocked()) ctx.workspace.cancelLock()` — the lock
+handler's disarm-on-failure path. `workspaceAdmitsWork` would be **WRONG** there: that predicate is
+false mid-teardown, so substituting it would skip the disarm and strand the latch armed for the rest
+of the session. The allowlist comment records exactly that, which is the single most useful line in
+the guard.
+
+- **RED evidence — 10 teeth checks, each planted then removed:**
+  - T1 BOM net: a BOM'd `launchers/*.command` + `scripts/*.sh` -> both listed as offenders; the other
+    13 repo-hygiene tests stayed green.
+  - T2 NUL nets: a NUL-bearing `scripts/*.ps1` and `launchers/*.cmd` -> 2 failed / 12 passed.
+  - T3 AUD-18 CI control: real `out/renderer/{index,ocr}.html` moved aside. **Under `CI=1`:**
+    `expected false to be true`. **With CI unset: the pre-fix degradation reproduced verbatim** —
+    `1 passed | 4 skipped`, i.e. a silent green skip of both real security assertions.
+  - T4 AUD-20: `runtime/llama.cpp/mac` drifted to `/macos` in `build-commercial-drive.sh` -> both new
+    `.sh` matrix assertions red.
+  - T5: a `Write-Error` appended to `verify-models.ps1` -> red, with the fix instruction in the
+    message.
+  - T6: an unconditional `rm -f` moved ahead of the size compare in `fetch-models.sh` ->
+    `expected 66 to be greater than 196` (the delete escaped its guard).
+  - T7: the size argument dropped from a `fetch-models.ps1` call site -> `argument count: expected 7
+    to be 8`. **This is the one that catches the silent fail-open regression (B-10).**
+  - T8: a size test inserted before the OCR delete in `fetch-runtime.sh` -> red, "do not harmonize it
+    with the size-guarded fetch-models delete" — the deliberate asymmetry is now defended.
+  - T9/T10: the `isUnlocked()` allowlist, drift-back and fail-closed shapes.
+- **GREEN over the real tree:** no widened net caught any pre-existing offender. Byte-verified
+  beforehand: all 4 launchers and all 14 `scripts/*.{sh,ps1}` start clean.
+- **Orchestrator's own gate:** typecheck green; `repo-hygiene` 14 ok, `csp-build-output` 7 ok (1
+  pre-existing skip), `script-drift` 29 ok -> **3 files / 49 pass + 1 skip**. Tree independently
+  re-verified clean: `git status --untracked-files=all` shows ONLY the three test files; no
+  teeth/probe/bak artifact anywhere; `launchers/` has exactly its original 4 files; a byte sweep of
+  `launchers/` + `scripts/` reports zero NUL/BOM offenders.
+- **Process note (honest record):** the implementer's FIRST teeth round used a relative-path cleanup
+  together with a `cd`, so the trap's `rm -f` resolved against the wrong directory and left 2 BOM'd
+  files in the tree for ~10 s. It caught this on the next run, removed them with absolute paths, and
+  switched every subsequent round to absolute-path scripts under `trap ... EXIT INT TERM`. Nothing
+  was ever staged or committed; the orchestrator re-verified the tree independently afterwards.
+- **AUD-18 was under-specified and the implementer closed the other half.** `built =
+  PAGES.every(existsSync(...))` notices pages that DISAPPEAR but not pages that are ADDED: a new
+  renderer entry point would leave `built` true, every assertion green, and that page's baked CSP
+  never inspected — an unverified packaged policy on a real window. Closed with a page-set pin
+  ("PAGES covers every HTML page the renderer build emitted"), teeth-verified with an unlisted page.
+- **Discovered -> backlog:** B-19, B-20, B-21, B-22.
+- **Handoff to Phase 10:** the allowlist keys on source lines, so if a later phase edits any of the
+  12 lines (or adds/removes a site) the guard reddens at that point — that is the intended review
+  gate, not a bug. **Phase 10 must re-run `repo-hygiene.test.ts` after every phase has landed** and
+  update the allowlist only if the tree legitimately moved.
