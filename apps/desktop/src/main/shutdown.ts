@@ -48,6 +48,27 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   const detachVaultKey = deps.detachVaultKey ?? realDetachVaultKey
   const log = deps.log ?? realLog
 
+  // AUD-02 — arm the WORKSPACE lock latch FIRST, and in its OWN best-effort try (two latches
+  // sharing one `catch` would make whichever runs second silently optional). The teardown below
+  // spends up to ~10 s in awaited windows (sidecar stops, the stream settles, the doc-task
+  // settle) during which the DB is still OPEN, so `isUnlocked()` is still true and every
+  // content-surface guard still admits. Most sidecars are safe here because QUIT uses the
+  // permanently-latching `stop()` where lock uses the non-latching `suspend()` — a translate or
+  // embed admitted now fails at `ensureStarted` instead of respawning. Two are not:
+  //   • VISION rebuilds its runtime per analyze and clears its `tearingDown` flag in `stop()`'s
+  //     own `finally`, so once `vision.stop()` resolves inside the `allSettled` below an admitted
+  //     `imageAnalyze` builds a FRESH ~4.6 GB llama-server, which then ORPHANS at `app.exit(0)`
+  //     (loopback port + GBs of RAM held, Windows especially).
+  //   • An admitted IMPORT decrypts a document to a plaintext transient; `app.exit(0)` landing
+  //     between that write and the `finally` that shreds it strands plaintext on the drive until
+  //     the next launch's crash sweep.
+  // Nothing on this path clears the latch and the process exits, so arming it is terminal by
+  // construction — exactly what quit wants.
+  try {
+    ctx?.workspace.beginLock?.()
+  } catch {
+    /* best-effort */
+  }
   // CODE-3 (full-audit 2026-07-11): arm the runtime manager's PERMANENT shutdown latch before
   // anything else runtime-related. `maybeAutoStartActiveModel` hashes a multi-GB weight before it
   // ever touches the manager; if that hash completes during this teardown's awaited windows, the

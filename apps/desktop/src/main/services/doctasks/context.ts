@@ -76,6 +76,17 @@ export interface DocTaskDeps {
    * absent/unwired ⇒ never busy, so partial test deps stay valid.
    */
   isDocumentProcessing?: (documentId: string) => boolean
+  /**
+   * True while the workspace LOCK teardown is running (AUD-02) — armed as the lock handler's
+   * first act and cleared only by a failed lock or the next unlock. It has to be its own signal
+   * because `getDb()` keeps SUCCEEDING for that whole window: the lock re-encrypts at the very
+   * end, after a multi-second awaited teardown (sidecar suspends, stream settles, this manager's
+   * own task settle). `startDocTask` refuses while it is set — an admitted task would `pump()`
+   * immediately and, since the suspends are deliberately non-latching, lazily RESPAWN the
+   * ~10 GB translation sidecar with document text in its KV cache, outliving the lock. Absent /
+   * unwired ⇒ never locking, so partial test deps stay valid.
+   */
+  isWorkspaceLocking?: () => boolean
   audit?: AuditRecorder
 }
 

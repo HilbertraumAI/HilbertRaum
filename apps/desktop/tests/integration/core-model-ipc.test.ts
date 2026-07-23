@@ -27,6 +27,26 @@ vi.mock('electron', () => ({
   }
 }))
 
+// AUD-03: a controllable gate around `computeInstallState` — the long pre-start window
+// `startModelRuntime` spends hashing a multi-GB GGUF (minutes on a cold checksum cache: the first
+// unlock of a prepared or freshly-copied drive, since a copy changes mtime and invalidates the
+// size+mtime cache). Wrapping the real implementation (default: no gate) lets a test hold a start
+// INSIDE that window and complete a workspace lock underneath it, exactly as a real user would.
+const hashGate = vi.hoisted(() => ({ hold: null as Promise<void> | null }))
+vi.mock('../../src/main/services/models', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/services/models')>()
+  return {
+    ...actual,
+    computeInstallState: async (
+      ...args: Parameters<typeof actual.computeInstallState>
+    ): ReturnType<typeof actual.computeInstallState> => {
+      const state = await actual.computeInstallState(...args)
+      if (hashGate.hold) await hashGate.hold
+      return state
+    }
+  }
+})
+
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { IPC } from '../../src/shared/ipc'
@@ -611,13 +631,15 @@ describe('maybeAutoStartActiveModel', () => {
     unlocked?: boolean
     runningModelId?: string | null
     onStart?: () => void
+    /** AUD-03: a session-aware workspace stand-in (see `sessionWorkspace`). */
+    workspace?: unknown
   }): AppContext {
     return {
       db: opts.db,
       manifestsDir: REPO_MANIFESTS,
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: bogusConfigDir() },
       isDev: true, // developer leniency → the missing-weights model may start (mock fallback)
-      workspace: { isUnlocked: () => opts.unlocked !== false },
+      workspace: opts.workspace ?? { isUnlocked: () => opts.unlocked !== false },
       runtime: {
         start: async () => {
           opts.onStart?.()
@@ -673,5 +695,158 @@ describe('maybeAutoStartActiveModel', () => {
     await sentinel
 
     expect(starts).toBe(0)
+  })
+
+  // AUD-03 — the lock counterpart of the quit latch.
+  //
+  // `startModelRuntime` spends a long pre-start window in `computeInstallState`, hashing a
+  // multi-GB GGUF. A quit landing inside that window is caught by the runtime manager's permanent
+  // shutdown latch, which the start re-checks after the hash. A LOCK had no equivalent: the lock
+  // handler's `runtime.stop()` finds no in-flight start (that is only registered once
+  // `runtime.start()` is invoked, i.e. after the hash), the shutdown latch is quit-only, and
+  // nothing downstream fails — the hash store deliberately swallows its write against a closed DB
+  // to keep the session served, the RAM gate is OS-only, and the GPU-settings reads degrade to
+  // safe defaults while locked. So the hash resolved after the lock finished and spawned a full
+  // llama-server while the app sat at the unlock gate.
+  //
+  // The stand-in mirrors the real controller's shape: a lock arms the latch first and closes the
+  // DB last; an unlock clears the latch and advances the session epoch.
+  function sessionWorkspace(): {
+    isUnlocked: () => boolean
+    isLocking: () => boolean
+    unlockEpoch: () => number
+    beginLock: () => void
+    completeLock: () => void
+    completeUnlock: () => void
+  } {
+    let unlocked = true
+    let locking = false
+    let epoch = 1
+    return {
+      isUnlocked: () => unlocked,
+      isLocking: () => locking,
+      unlockEpoch: () => epoch,
+      // The MID-TEARDOWN state, and the one the epoch cannot see: the latch is armed but the DB
+      // is still open, so `isUnlocked()` alone still says "go". This is the majority of the real
+      // lock window (seconds of awaited sidecar/stream/task teardown), not a transient.
+      beginLock: () => {
+        locking = true
+      },
+      completeLock: () => {
+        locking = true // armed as the lock handler's first act…
+        unlocked = false // …and the DB closes at the very end of its teardown
+      },
+      completeUnlock: () => {
+        locking = false
+        unlocked = true
+        epoch += 1
+      }
+    }
+  }
+
+  /** Drive one legitimate auto-start to completion. Anything a previously-released start would
+   *  have spawned was enqueued on this same path earlier, so it has landed by the time this
+   *  resolves — a deterministic replacement for "wait a bit and hope" (the TS-1 sentinel idiom). */
+  async function sentinelAutoStart(): Promise<void> {
+    hashGate.hold = null
+    const db = seededDb()
+    updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
+    let resolve!: () => void
+    const landed = new Promise<void>((r) => (resolve = r))
+    maybeAutoStartActiveModel(autoStartCtx({ db, onStart: resolve }))
+    await landed
+  }
+
+  it('abandons a start whose weight-hash window spans a workspace LOCK (AUD-03)', async () => {
+    const db = seededDb()
+    updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
+    let started = false
+    const ws = sessionWorkspace()
+    let release!: () => void
+    hashGate.hold = new Promise<void>((r) => (release = r))
+
+    maybeAutoStartActiveModel(
+      autoStartCtx({ db, workspace: ws, onStart: () => { started = true } })
+    )
+    // Park the start inside the hash, then complete a lock underneath it.
+    const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+    for (let i = 0; i < 10; i++) await tick()
+    expect(started).toBe(false) // still hashing — nothing spawned yet
+    ws.completeLock()
+    release()
+
+    await sentinelAutoStart()
+    expect(started).toBe(false) // the stale start refused instead of spawning a llama-server
+  })
+
+  it('abandons a start when a lock STARTS during the hash (DB still open, latch armed)', async () => {
+    // The mid-teardown state is what the `isLocking()` half of the guard exists for: the lock is
+    // under way but has not re-encrypted yet, so `isUnlocked()` is still true and the epoch is
+    // unchanged — neither would refuse this start on its own.
+    const db = seededDb()
+    updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
+    let started = false
+    const ws = sessionWorkspace()
+    let release!: () => void
+    hashGate.hold = new Promise<void>((r) => (release = r))
+
+    maybeAutoStartActiveModel(
+      autoStartCtx({ db, workspace: ws, onStart: () => { started = true } })
+    )
+    const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+    for (let i = 0; i < 10; i++) await tick()
+    ws.beginLock()
+    expect(ws.isUnlocked()).toBe(true) // the DB is open for the whole teardown…
+    expect(ws.unlockEpoch()).toBe(1) // …and the session has not turned over
+    release()
+
+    await sentinelAutoStart()
+    expect(started).toBe(false)
+  })
+
+  it('abandons a stale start when a lock AND a re-unlock both complete during the hash (epoch)', async () => {
+    // The residual micro-window: after the re-unlock, `isUnlocked()` is true and `isLocking()` is
+    // false again, so neither flag can tell this start apart from a fresh one — but it was
+    // admitted into a session that no longer exists, and its weights/settings snapshot belongs to
+    // that session. The monotonic unlock epoch is what catches it.
+    const db = seededDb()
+    updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
+    let started = false
+    const ws = sessionWorkspace()
+    let release!: () => void
+    hashGate.hold = new Promise<void>((r) => (release = r))
+
+    maybeAutoStartActiveModel(
+      autoStartCtx({ db, workspace: ws, onStart: () => { started = true } })
+    )
+    const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+    for (let i = 0; i < 10; i++) await tick()
+    ws.completeLock()
+    ws.completeUnlock()
+    expect(ws.isUnlocked()).toBe(true) // the flags alone now look exactly like "never locked"
+    expect(ws.isLocking()).toBe(false)
+    release()
+
+    await sentinelAutoStart()
+    expect(started).toBe(false)
+  })
+
+  it('a start whose hash window sees NO lock still starts (the guard is not a blanket refusal)', async () => {
+    const db = seededDb()
+    updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
+    let started = false
+    const ws = sessionWorkspace()
+    let release!: () => void
+    hashGate.hold = new Promise<void>((r) => (release = r))
+
+    maybeAutoStartActiveModel(
+      autoStartCtx({ db, workspace: ws, onStart: () => { started = true } })
+    )
+    const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+    for (let i = 0; i < 10; i++) await tick()
+    release()
+
+    await sentinelAutoStart()
+    expect(started).toBe(true)
   })
 })

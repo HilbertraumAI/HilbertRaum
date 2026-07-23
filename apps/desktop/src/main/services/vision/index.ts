@@ -48,6 +48,16 @@ export interface VisionServiceDeps {
   createRuntime: (status: VisionStatus) => VisionAnalyzer
   /** Max accepted image bytes (default `VISION_MAX_IMAGE_BYTES`). */
   maxImageBytes?: number
+  /**
+   * True while the workspace LOCK teardown is running (AUD-02). Distinct from the `tearingDown`
+   * latch below: that one is cleared in `stop()`'s own `finally`, so it covers only the vision
+   * teardown itself and NOT the rest of the lock handler (the stream settles, the doc-task
+   * settle, the vector purge, the re-encrypt) — several more seconds during which the workspace
+   * still reports unlocked and an `analyze()` would build a FRESH ~4.6 GB vision sidecar with
+   * image-derived prefill that outlives the lock. Absent/unwired ⇒ never locking (partial test
+   * deps stay valid).
+   */
+  isWorkspaceLocking?: () => boolean
 }
 
 export class VisionService {
@@ -85,6 +95,11 @@ export class VisionService {
    * returns a terminal `failed` job with a code and is NOT tracked / does NOT take the slot.
    */
   analyze(req: ImageAnalyzeRequest | undefined, emit: VisionStreamEmitter): ImageJob {
+    // AUD-02 — refuse for the WHOLE workspace lock teardown, not just this service's own
+    // `stop()` window (see `isWorkspaceLocking`). `cancelled` is the same terminal `run()` uses
+    // when the `tearingDown` latch bars it, so the renderer path is unchanged; the IPC handler
+    // refuses earlier with the localized locked copy, and this covers non-IPC callers.
+    if (this.deps.isWorkspaceLocking?.()) return failedJob('cancelled')
     const bytes = req?.imageBytes
     const code = validateAnalyzeRequest(bytes, req?.mimeType, req?.question, this.maxBytes)
     if (code) return failedJob(code)

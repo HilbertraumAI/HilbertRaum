@@ -4,6 +4,7 @@ import type { AppContext } from '../services/context'
 import { buildDriveStatus } from '../services/workspace'
 import { getSettings, updateSettings } from '../services/settings'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { buildPolicyStatus } from '../services/policy'
 import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
@@ -26,7 +27,10 @@ export function registerCoreIpc(ctx: AppContext): void {
   // and the pre-unlock diagnostics-log channels stay usable while locked BY DESIGN — they are
   // workspace-agnostic or read their value safely (allowNetworkSetting() guards the locked case).
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.settings.locked'))
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.settings.locked'))
   }
 
   ipcMain.handle(IPC.getAppStatus, (): AppStatus => {

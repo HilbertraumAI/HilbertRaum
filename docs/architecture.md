@@ -2545,8 +2545,19 @@ adds is the safety machinery:
   384-dim model gains little from a GPU, and the pin keeps ingestion immune to driver flakiness
   and VRAM contention with the chat model.
 - GPU settings (`gpuMode`, `gpuAutoDisabled`, `gpuLastError`, `gpuProbe`) live in `AppSettings`
-  (the possibly-encrypted DB) — fine, because sidecars only ever start post-unlock; every read in
-  `main/index.ts` is still guarded (locked → safe defaults).
+  (the possibly-encrypted DB) — fine, because sidecars only ever start while a workspace session is
+  open; every read in `main/index.ts` is still guarded (locked → safe defaults). **That claim was
+  aspirational until the lock latch (AUD-02/AUD-03, security-model.md "The lock latch"):**
+  `isUnlocked()` is just "the DB handle is non-null", and the DB stays open for the whole
+  multi-second lock *and quit* teardown, so work admitted in that window used to respawn a
+  suspended sidecar, and a model start still hashing a multi-GB weight could spawn `llama-server`
+  *after* the lock finished. What enforces it now: admission goes through `workspaceAdmitsWork()`
+  (`isUnlocked() && !isLocking()`), the latch is armed as the first act of **both** the lock
+  handler and `performShutdown`, and `startModelRuntime` re-checks it plus a session epoch after
+  the hash. Note the safe-default reads above are precisely what kept a stale start from failing
+  loudly on its own. **Residual:** `RuntimeManager.forceRestart` (the GPU-crash auto-fallback)
+  re-checks only the quit latch internally — its workspace check lives at the `main/index.ts`
+  composition seam, so a future caller added elsewhere would not inherit it.
 - CI never touches a GPU/binary: the probe + ladder are covered through the existing
   `SpawnFn`/fetch seams; a real-GPU smoke lives in `tests/manual/gpu-smoke.test.ts`, **skipped
   unless `HILBERTRAUM_GPU_SMOKE` points at a provisioned drive**.
@@ -2874,7 +2885,15 @@ once-timed-out probe cached as "no GPU"). Diagnostics hides the button while the
 toggle is off. **R5 (full-audit-2026-06-30, §39):** the cache `invalidate()` drops only SETTLED probes
 — while a probe is still in flight a re-probe COALESCES onto it rather than spawning a second short-lived
 child, so mashing the button during a slow/cold driver init can't stack one-per-click children for a binary. All GPU decisions happen post-unlock (settings live in the possibly-encrypted
-DB) — fine, since sidecars only ever start post-unlock.
+DB) — fine, since sidecars only ever start while a workspace session is open. That invariant is
+enforced by the **lock latch** (security-model.md "The lock latch — admission during the
+teardown"), not by `isUnlocked()` alone: the DB stays open for the whole lock teardown *and* the
+whole quit teardown, so every content surface admits through `workspaceAdmitsWork()`
+(`isUnlocked() && !isLocking()`), the latch is armed first by both the lock handler and
+`performShutdown`, and a model start whose multi-GB weight hash spans a lock is refused by that
+check plus a session-epoch comparison. The one gap left: `RuntimeManager.forceRestart` re-checks
+only the quit latch internally, so the GPU-crash fallback's workspace check sits at its
+`main/index.ts` composition seam rather than in the manager.
 
 ### §6 Per-OS build matrix (what ships on the drive)
 

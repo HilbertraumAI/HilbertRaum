@@ -740,6 +740,94 @@ background (the active-model auto-start); the embedder restarts lazily on the ne
   transient completes while the DB is still open — mirroring the in-flight-stream settle await.
   `cancelAllDocTasks()` holds no permanent latch: the manager is fully usable again after unlock.
 
+### The lock latch — admission during the teardown (AUD-02 / AUD-03)
+
+"Lock now" is not instantaneous. The handler runs a **multi-second awaited teardown** —
+`Promise.allSettled` of the sidecar suspends, the in-flight-stream settle (≤5 s), the doc-task
+settle (≤5 s), the resident-vector purge — and only then calls `WorkspaceController.lock()`, which
+is what finally closes the DB. Two consequences shaped the design:
+
+- `isUnlocked()` is literally *"the DB handle is non-null"*, so it stays **true for the whole
+  teardown**. An `async ipcMain.handle` yields the main thread at every one of those awaits, so an
+  invoke arriving 1–10 s after the click is dispatched normally — and the renderer stays mounted
+  and clickable until the invoke **resolves**.
+- The suspends are **deliberately non-latching** (`suspend()`, not `stop()`): the sidecars must
+  come back lazily after the next unlock. `VisionService.tearingDown` is likewise cleared in its
+  own `stop()` `finally`, so it covers only that service's teardown, not the rest of the handler.
+
+So work admitted inside that window pumped immediately and **lazily respawned the child the
+teardown had just killed** — a ~10 GB translation sidecar with document text in its KV cache, a
+~4.6 GB vision runtime with image-derived prefill, or the embedder with chunk text — still running
+after the workspace reported locked. (The `cancelAllDocTasks` flush above closed this only for
+tasks *already queued* when the lock began; a task **admitted during** the window recreated it.)
+
+**The latch.** `WorkspaceController` owns `beginLock()` / `isLocking()` / `cancelLock()`. The lock
+IPC handler arms it as its **first act, before any await**. Every content-surface admission point
+now reads the single shared predicate `workspaceAdmitsWork(workspace)` = `isUnlocked() &&
+!isLocking()` instead of a bare `isUnlocked()` — fail-closed, because during the teardown "the
+workspace is locked" is the honest answer and the renderer is about to swap to the lock gate
+anyway. Each site keeps its **own** localized copy (`main.task.workspaceLocked`,
+`main.chat.locked`, `main.docs.locked`, …); only the predicate is shared. The guards live in the
+**services** too (`DocTaskManager.startDocTask`, `TranslateJobService.start`,
+`VisionService.analyze` — via an injected `isWorkspaceLocking` seam), not only in the IPC
+handlers, so non-IPC callers inherit them.
+
+Clearing rules: **cleared** whenever the handler leaves the teardown by a throw *while the
+workspace is still open* (the failed re-encrypt — realistically ENOSPC — restores the controller
+to a consistently unlocked state, so the session must keep working), and by the next
+`unlock`/`create`; a **completed** lock deliberately leaves it armed, since `isUnlocked()` already
+reports locked by then. The disarm is **structural**, not per-boundary: the handler is a bare
+`beginLock()` → `try { runLockTeardown() } catch { if (isUnlocked()) cancelLock(); throw }` frame,
+because arming a latch ahead of multi-second work creates a failure mode the pre-latch code did
+not have — a throw between `beginLock()` and `lock()` would leave the workspace **open** with
+every guard reporting locked, and `unlock()` cannot rescue that (it early-returns on an
+already-unlocked controller, deliberately, so an `unlockWorkspace` landing mid-teardown cannot
+re-open the admission window either). Two further no-op cases are covered: `lock()` disarms itself
+whenever it returns with the DB still open (a `plaintext_dev` workspace has no vault to
+re-encrypt, so its "Lock now" is a deliberate no-op and must not brick the dev session).
+
+**The quit path arms it too.** `performShutdown` calls `beginLock()` beside the runtime manager's
+shutdown latch, in its own best-effort `try`. Quit has the same window — up to ~10 s of awaited
+sidecar stops, stream settles and doc-task settle with the DB still open — but a *narrower* real
+impact, because quit uses the permanently-latching `stop()` where lock uses the non-latching
+`suspend()`: an admitted translate/embed/OCR/chat call fails at `ensureStarted` rather than
+respawning. Two do not, and are the reason the latch is armed there:
+- **Vision** rebuilds its runtime per analyze and clears its own `tearingDown` flag in `stop()`'s
+  `finally`, so once `vision.stop()` resolves an admitted `imageAnalyze` builds a **fresh** ~4.6 GB
+  `llama-server`, which then **orphans** at `app.exit(0)`.
+- An admitted **import** decrypts a document to a plaintext transient; `app.exit(0)` landing
+  between that write and the `finally` that shreds it **strands plaintext on the drive** until the
+  next launch's crash sweep.
+Nothing on the quit path clears the latch and the process exits, so arming it is terminal by
+construction. (`WorkspaceController.shutdown()` still calls `lock()` directly; it needs no latch of
+its own.)
+
+Nothing the lock handler itself does routes through a tightened guard: the aborts/cancels are
+in-memory manager calls, the sidecar suspends are service teardowns, the settle awaits resume work
+already in flight, and the purge + audit + re-encrypt go through `ctx.db` / `requireDb()`, which is
+**intentionally not** latched — it must keep serving the teardown's own writes.
+
+**The model-start counterpart (AUD-03).** `startModelRuntime` spends a long pre-start window in
+`computeInstallState`, hashing a multi-GB GGUF — minutes on a cold checksum cache (the first-ever
+unlock of a prepared or freshly-copied drive; a copy changes mtime and invalidates the size+mtime
+cache). A **quit** landing in that window was already caught by the runtime manager's permanent
+shutdown latch, re-checked after the hash; a **lock** had no equivalent, and nothing downstream
+failed the pipeline (the hash store deliberately swallows its write against a closed DB to keep the
+session served, the RAM gate is OS-only, the GPU-settings reads degrade to safe defaults while
+locked) — so the hash resolved after the lock finished and spawned a full `llama-server` while the
+app sat at the unlock gate. The start now re-checks `workspaceAdmitsWork` next to the shutdown
+latch, **and** compares a monotonic **session epoch** captured at entry (bumped by
+`WorkspaceController` on every closed → open DB transition). The epoch closes the residual
+micro-window where a lock *and* a subsequent unlock both complete inside the hash: the two flags
+then look exactly like "never locked", but the start belongs to a session that no longer exists.
+
+**Known residual on this invariant.** `RuntimeManager` holds no workspace reference, so the
+admission check for the GPU-crash auto-fallback lives at its composition seam in `main/index.ts`
+(the `restart` lambda), not inside `forceRestart` — `forceRestart` itself still re-checks only the
+quit latch. Any *future* caller of `forceRestart`/`start` added outside that seam would not inherit
+the workspace check. This is a resource/orphan concern only, never a content leak: a crashed
+sidecar's KV cache dies with the child, and the CPU replacement starts empty.
+
 ### Threat notes / known limitations
 - **A decrypted working copy exists on disk while unlocked.** `node:sqlite` needs a real file, so the
   DB is plaintext on the drive while the app runs (re-encrypted + shredded on lock/quit). Documented

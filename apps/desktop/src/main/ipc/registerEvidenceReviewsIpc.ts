@@ -17,6 +17,7 @@ import type {
   ReviewDecision
 } from '../../shared/types'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { findManifestById } from '../services/models'
 import { createEvidenceReviewFromMessage } from '../services/evidence-pack/snapshot'
 import {
@@ -141,7 +142,10 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   // Every handler is DB-backed; refuse with the friendly localized copy while locked
   // (ipc-lock-coverage.test.ts drives every channel here against a locked ctx).
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) {
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) {
       throw new Error(tMain('main.evidenceReviews.locked'))
     }
   }

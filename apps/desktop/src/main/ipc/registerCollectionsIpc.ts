@@ -13,6 +13,7 @@ import {
 } from '../services/collections'
 import { deleteDocument } from '../services/ingestion'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 
 // IPC for document-organization collections (projects + the seeded built-ins;
 // document-organization plan §16). Pure local SQLite writes — no network, no model calls.
@@ -26,7 +27,10 @@ export function registerCollectionsIpc(ctx: AppContext): void {
   // DB-backed handlers require an unlocked workspace; surface a clean message instead of
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) {
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) {
       throw new Error(tMain('main.docs.locked'))
     }
   }

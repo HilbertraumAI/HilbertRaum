@@ -111,6 +111,33 @@ Working paper. Transient with the plan and the report; folded into the durable
   file-translate adopt cannot tell a Documents-started task from its own once that store is empty).
   *Assigned: deferred-with-registration — wants its own issue/wave, not this one.*
 
+- [ ] **B-14 — `getAppStatus.workspaceReady` and `getWorkspaceState` still report *unlocked* during
+  the lock teardown** (both keep a bare `isUnlocked()`, deliberately). These are precisely the two
+  channels the renderer uses to decide "am I at the gate", so for the whole teardown the UI keeps
+  offering content actions that now refuse. Fail-CLOSED, so not a security issue — but it sits in
+  tension with the fix's own stated principle that during the teardown "the workspace is locked" is
+  the honest answer. Left alone on purpose: safe-defaulting a status read mid-lock would flip the
+  offline ceiling for its other callers. *Assigned: deferred-with-registration.*
+- [ ] **B-15 — `RuntimeManager.forceRestart` has no workspace check.** The GPU-crash auto-fallback
+  re-checks only `this.stopped`, so a GPU crash landing during or after a lock respawns a CPU
+  `llama-server` past the lock — the one remaining "a sidecar starts while locked" path. Content-free
+  (the crashed child's KV cache died with it), so resource/orphan rather than a leak. *Assigned:
+  Phase 2 loop if it is a clean two-line check, else deferred-with-registration.*
+- [ ] **B-16 — a second concurrent `lockWorkspace` rejects with the RAW unlocalized vault string**
+  `Workspace is locked — unlock it first.` — exactly the class of string `ipc-lock-coverage.test.ts`
+  exists to keep out of the UI. Pre-existing and narrow (it takes two overlapping Lock-now invokes).
+  *Assigned: deferred-with-registration.*
+- [ ] **B-17 — `unlockWorkspace` landing mid-teardown returns `{ ok: true, state: 'unlocked' }`** and
+  writes a `workspace_unlocked` audit event while the lock proceeds to completion, so the audit log
+  gains a misleading `workspace_unlocked` immediately before `workspace_locked`. The latch correctly
+  survives (because `unlock()` early-returns before `beginSession()`), so there is no admission hole
+  — this is log fidelity only. Pre-existing. *Assigned: deferred-with-registration.*
+- [ ] **B-18 — the lock-latch stand-in tolerance fails OPEN.** `workspaceAdmitsWork` uses
+  `isLocking?.() !== true`, so any test stand-in that omits `isLocking` silently never latches. That
+  is the deliberate choice (it keeps ~40 existing partial test contexts valid) and it is why the
+  shipped `ipc-lock-coverage` stand-in can never detect the latch. Mitigated by the bare-`isUnlocked()`
+  allowlist guard assigned to Phase 5. *Assigned: Phase 5 (mitigation) — no further action.*
+
 ## Decisions log
 
 - **D-W1 (plan §3, carried in):** the verified-and-dismissed engine-download tar-child-on-quit item is
@@ -338,3 +365,110 @@ resolves, so a pre-await read could miss a foreign task main already reports as 
   snapshot) as LIVE and refuses to adopt. Conservative on purpose: a task whose live state the
   renderer could not learn must not be hijacked into the panel.
 - **Discovered -> backlog:** B-12, B-13.
+
+### Phase 2 — AUD-02 + AUD-03 (lock-in-progress latch) — DONE, verifier SIGNED OFF WITH RESIDUALS after one loop
+
+**Decision D-2a (fail-CLOSED across every admission point, not just the named surfaces).** The finding
+named doc tasks, translate, vision and the import loop; the implementation routes **all 15 IPC
+`requireUnlocked` helpers** plus 3 in-loop docs checks plus 3 service-level guards through one shared
+`workspaceAdmitsWork()` predicate (`isUnlocked() && !isLocking()`). During the teardown "the workspace
+is locked" is the honest answer, and the renderer swaps to the gate the moment the invoke resolves.
+Each module keeps its OWN localized copy — verified line-by-line, all 15 keys byte-identical.
+
+**Decision D-2b (guards in the SERVICES too, not only the IPC handlers).** `DocTaskManager.startDocTask`,
+`TranslateJobService.start` and `VisionService.analyze` consult an injected `isWorkspaceLocking` seam,
+so non-IPC callers inherit the refusal — the repo's established posture. Both service guards are
+unreachable in production today (one call site each, both behind `requireUnlocked`); this is
+defence-in-depth, and the comments now say so accurately.
+
+**Decision D-2c (`requireDb()` / `ctx.db` deliberately NOT latched) — load-bearing.** The lock teardown
+writes through it: partial-reply persistence, the doc-task unwind's materialize/shred, the
+resident-vector purge, and the `workspace_locked` audit event itself. Latching it would make the lock
+break itself. Independently confirmed by the verifier: it is not an admission point, because every
+caller that could *start* work now passes a guard first.
+
+**Decision D-2d (the disarm is STRUCTURAL) — orchestrator-directed, loop 2.** See MUST FIX 2 below.
+
+**Decision D-2e (`forceRestart` guarded at the composition seam, not in the manager).** `RuntimeManager`
+holds no workspace reference at all (its only constructor dep is the factory), so an in-manager check
+means threading a probe through `start`/`forceRestart`/`doStart` — restructuring, not a two-liner. The
+GPU-crash auto-fallback's only `forceRestart` caller is the `restart` lambda in `main/index.ts`, where
+the workspace is already in scope and the same predicate is already used, so the check landed there.
+Residual: a future caller added outside that seam would not inherit it — named in both docs.
+
+- **Files (26):** `workspace-vault.ts` (the latch, `cancelLock`, the unlock epoch,
+  `workspaceAdmitsWork`), `registerWorkspaceIpc.ts`, `shutdown.ts`, `registerModelIpc.ts`,
+  `main/index.ts`, 13 further `register*Ipc.ts`, `doctasks/{manager,context}.ts`,
+  `translation/jobs.ts`, `vision/index.ts`, new `tests/integration/lock-admission-race.test.ts`,
+  `tests/integration/core-model-ipc.test.ts`, `docs/security-model.md`, `docs/architecture.md`.
+- **RED evidence (loop 1):** with the lock handler PARKED mid-teardown (gated boundary fake, real
+  encrypted vault, real SQLite, real services), the handler's own stdout showed the finding verbatim —
+  `Document task queued {kind:"translation"}`, `Translate job started`, `Vision analyze started` /
+  `Vision analyze done`, `Import started` — i.e. all four surfaces admitted while the workspace was
+  mid-lock. AUD-03: with the post-hash re-checks neutered, `expected true to be false` on `started`,
+  twice (lock-during-hash, and lock+re-unlock-during-hash).
+- **Adversarial verifier (fresh context) — the two defects it found, both fixed in loop 2:**
+  - **MUST FIX 1 — the failed-lock disarm had ZERO coverage; its test was a tautology.** The case
+    "clears the latch when the lock itself fails" never invoked `IPC.lockWorkspace` — it called
+    `beginLock()` then `cancelLock()` directly on the controller and asserted the setter worked.
+    Proof: deleting `cancelLock()` from the failure catch left **65 tests fully green**. This is the
+    highest-consequence line in the change: without it an ENOSPC "Lock now" leaves the workspace
+    **open** and the latch **armed**, refusing every content surface with no recovery but a relaunch.
+    Replaced with a real test driving `IPC.lockWorkspace` through the real handler via the
+    `encryptFileImpl` seam, asserting the friendly localized rejection, `isLocking() === false`, and
+    that a content surface actually **admits again** (driven, not flag-read).
+  - **MUST FIX 2 — no `finally` disarm: a throw before `lock()` bricked the session.** The verifier's
+    probe (sync-throwing `embedder.suspend`) produced `isUnlocked = true, isLocking = true` — and
+    `unlock()` **cannot** clear it, because it early-returns before `beginSession()`. Workspace wide
+    open, everything refusing, relaunch the only recovery. Reachability was low (all seven boundaries
+    are `async`) but it was a **new failure mode the latch introduced**: pre-latch, the same throw
+    left a merely retryable failed lock. Fixed structurally — the handler is now
+    `beginLock()` -> `try { runLockTeardown(ctx) } catch { if (isUnlocked()) cancelLock(); throw }`,
+    with the teardown extracted verbatim and the duplicated inner disarm removed so there is exactly
+    **one** disarm point.
+- **Mutation proof (loop 2):** removing the single disarm line reddens BOTH new cases
+  (`expected true to be false` — the latch stayed armed over a still-open workspace); removing the
+  quit latch reddens both quit cases; removing the plaintext self-disarm reddens its case. All
+  restored byte-identically and re-verified green. **The old tautological test passed under the same
+  mutation** — exactly the gap the verifier flagged.
+- **Quit path — a NEW finding, fixed in-phase.** `performShutdown` had the identical admission window
+  and armed only the chat runtime's latch. The verifier confirmed the structure but **narrowed the
+  impact**, and the fix was implemented to the narrowed version: refuted for translate/embedder/OCR/
+  chat (quit uses permanently-latching `stop()`, so `ensureStarted` throws rather than respawning);
+  **CONFIRMED for vision** — `stop()` clears `tearingDown` in its own `finally`, so once it resolves
+  an admitted `imageAnalyze` builds a FRESH ~4.6 GB `llama-server` that then **orphans at
+  `app.exit(0)`**; and **confirmed for import** — an admitted import decrypts to a plaintext transient
+  that `app.exit(0)` can strand between the write and the shred. Fixed by arming the same latch first
+  in `performShutdown`, covered by two RED-first tests driving the real `performShutdown`.
+- **Self-inflicted bug caught by the phase's own new test:** the first draft put the quit latch inside
+  the SAME best-effort `try` as the pre-existing runtime latch — a throw from the first call then
+  silently skips the second, making whichever runs second optional. The test caught it immediately.
+  Now each latch has its own `try`, workspace first.
+- **Self-inflicted bug caught in loop 1:** `lock()` is a deliberate NO-OP for `plaintext_dev` (the DB
+  stays open), so an unconditional `beginLock()` would have latched a dev workspace **permanently** —
+  only `unlock()` clears it, and a plaintext workspace never unlocks again. `lock()` now disarms
+  whenever it returns with the DB still open; teeth-checked.
+- **Verifier's independent completeness pass:** all **128** `ipcMain.handle` registrations enumerated
+  with a parser — 98 latched, 30 deliberately not (status/pre-unlock reads, in-memory stream
+  reads/*cancels* which must keep working, file dialogs whose byte-reading follow-ups ARE latched,
+  gate lifecycle, downloads/engine install which are pre-unlock by design). **No missed
+  content-bearing surface.** Every remaining bare `isUnlocked()` in `src/` (7 sites) is a
+  status/settings read, not an admission point. It also proved the assertions are not vacuous: with
+  the guards neutered it observed `translator.translate()` called, `createRuntime()` called, a
+  document row queued, and a doc task admitted.
+- **Docs corrected on the verifier's finding:** `architecture.md`'s "sidecars only ever start
+  post-unlock" claim was rewritten in both places to describe what is actually enforced on BOTH the
+  lock and quit paths, and the remaining `forceRestart` seam is named **as a gap** rather than implied
+  away; `security-model.md` gained the structural-disarm clearing rules and the quit-path section with
+  the narrowed impact.
+- **Comment correction:** `TranslateJobService.start`'s `cancelled` rationale claimed the renderer
+  shows no banner. It does — `TranslateScreen`'s `ERR_KEY` has no `cancelled` entry, so it falls
+  through to the generic `translate.err.runtimeFailed`. (Vision's equivalent claim IS correct.)
+  Comment corrected rather than adding renderer copy for an unreachable path.
+- **GREEN (orchestrator's own runs):** typecheck green; `lock-admission-race` + `unit/shutdown` +
+  `core-model-ipc` (30) + `workspace-ipc` + `ipc-lock-coverage` -> **5 files / 71 tests**; independent
+  spot-check of the touched surfaces `gpu-ipc` + `runtime-manager` + `docs-ipc` (37) + `images-ipc` +
+  `translate-ipc` + `doctasks-ipc` + `vision-teardown` -> **7 files / 108 tests**. Implementer ran a
+  further 5 batches (24 files) green.
+- **Discovered -> backlog:** B-14 (status reads still say unlocked mid-teardown), B-15 (now FIXED at
+  the composition seam — residual only), B-16, B-17, B-18 (mitigation assigned to Phase 5).

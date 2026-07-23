@@ -1067,6 +1067,41 @@ export function plaintextAllowed(policy: PrivacyPolicy, opts: { isDev: boolean }
 // ---- stateful controller (used by the main process) ------------------------------
 
 /**
+ * The narrow shape {@link workspaceAdmitsWork} reads. Structural (not the class) so partial
+ * test contexts and non-main callers can supply a stand-in, and so a stand-in that predates
+ * the lock latch still type-checks — `isLocking`/`unlockEpoch` are optional.
+ */
+export interface WorkspaceAdmission {
+  isUnlocked(): boolean
+  isLocking?(): boolean
+  unlockEpoch?(): number
+}
+
+/**
+ * AUD-02 — the single admission predicate every CONTENT-bearing surface must use instead of a
+ * bare `isUnlocked()`.
+ *
+ * `isUnlocked()` is literally "the DB handle is non-null", and the DB is nulled only by the very
+ * LAST step of the lock path. "Lock now" first runs a multi-second AWAITED teardown (sidecar
+ * suspends, in-flight-stream settles, the doc-task settle, the resident-vector purge), and an
+ * async `ipcMain.handle` yields the main thread at each of those awaits — so an invoke landing
+ * seconds after the user clicked Lock now used to be DISPATCHED and ADMITTED with `isUnlocked()`
+ * still true. Because `suspend()`/`stop()` are deliberately NON-latching (the sidecars must come
+ * back lazily after the next unlock), that admitted work then lazily RESPAWNED the sidecar the
+ * teardown had just killed — a multi-GB child holding document/image-derived text in its KV cache,
+ * still running after the workspace reports locked. Adding `!isLocking()` closes exactly that
+ * window: during the teardown "the workspace is locked" is the honest answer, and the renderer
+ * swaps to the lock gate the moment the handler resolves anyway.
+ *
+ * Fail-CLOSED on a missing controller. Tolerant of a stand-in without `isLocking` (⇒ never
+ * locking), which keeps partial test contexts valid.
+ */
+export function workspaceAdmitsWork(workspace: WorkspaceAdmission | null | undefined): boolean {
+  if (!workspace) return false
+  return workspace.isUnlocked() && workspace.isLocking?.() !== true
+}
+
+/**
  * Owns the workspace DB lifecycle for the running app. In `plaintext_dev` mode the DB
  * opens immediately at startup (zero-friction dev, current behavior). In `encrypted`
  * mode the DB stays closed until `unlock`/`create`, and `requireDb` throws meanwhile —
@@ -1082,6 +1117,21 @@ export class WorkspaceController {
   private docWork = 0
   /** True while `changePassword` runs (defensive: it is synchronous today). */
   private changingPassword = false
+  /**
+   * AUD-02 — armed by {@link beginLock} as the FIRST act of the interactive lock path, before
+   * any await, and read by {@link workspaceAdmitsWork}. See that function for why `isUnlocked()`
+   * alone cannot express "a lock is under way": the DB stays open for the whole teardown.
+   */
+  private _locking = false
+  /**
+   * AUD-03 — a monotonically increasing SESSION counter, bumped every time the DB transitions
+   * closed → open (unlock / create / the plaintext open at startup). It identifies WHICH unlocked
+   * session a long-running piece of work was admitted into: a model start can spend minutes
+   * hashing a multi-GB GGUF before it spawns anything, and a lock plus a subsequent unlock can
+   * both complete inside that window — leaving `isUnlocked()` true and `isLocking()` false again,
+   * so neither flag can tell the stale start apart from a fresh one. Comparing the epoch can.
+   */
+  private _epoch = 0
 
   constructor(
     private readonly vaultPaths: VaultPaths,
@@ -1102,6 +1152,52 @@ export class WorkspaceController {
 
   isUnlocked(): boolean {
     return this._db !== null
+  }
+
+  /**
+   * AUD-02 — arm the lock latch. The interactive lock path calls this as its FIRST act, before
+   * the awaited sidecar/stream/task teardown, so every admission guard reports "locked" for the
+   * whole teardown instead of only after the final `lock()`. Latch-only and synchronous: it
+   * changes nothing about the DB, so the teardown itself (which still reads `ctx.db` to persist
+   * partial replies, purge vectors and write the audit event) is unaffected — `requireDb()`
+   * deliberately does NOT consult it.
+   *
+   * Cleared by {@link cancelLock} when the lock FAILS (the controller restores itself to a
+   * consistently unlocked state there, so the session must keep working) and by the next
+   * `unlock`/`create`. A COMPLETED lock deliberately leaves it armed: `isUnlocked()` already
+   * reports locked, and the next unlock clears it.
+   *
+   * The quit path does NOT arm it — `shutdown()` calls `lock()` directly and the process exits,
+   * so there is no later session to unlatch and no gate to keep honest.
+   */
+  beginLock(): void {
+    this._locking = true
+  }
+
+  /** True from {@link beginLock} until the lock fails or the next unlock. See {@link workspaceAdmitsWork}. */
+  isLocking(): boolean {
+    return this._locking
+  }
+
+  /**
+   * Disarm the lock latch after a FAILED lock. `lock()` restores the controller to a consistently
+   * UNLOCKED state on failure (plaintext DB re-opened, key kept for the retry), so leaving the
+   * latch armed would strand the still-open workspace behind a permanent "locked" refusal that
+   * nothing could clear short of a relaunch.
+   */
+  cancelLock(): void {
+    this._locking = false
+  }
+
+  /** The current session counter (AUD-03) — see {@link _epoch}. 0 before the first open. */
+  unlockEpoch(): number {
+    return this._epoch
+  }
+
+  /** Record a closed → open DB transition: new session id, latch cleared. */
+  private beginSession(): void {
+    this._locking = false
+    this._epoch += 1
   }
 
   private allowPlaintext(): boolean {
@@ -1128,6 +1224,7 @@ export class WorkspaceController {
     updateSettings(db, { workspaceMode: 'plaintext_dev' })
     this._db = db
     this._mode = 'plaintext_dev'
+    this.beginSession()
   }
 
   /**
@@ -1173,12 +1270,21 @@ export class WorkspaceController {
 
   /** Unlock an existing encrypted workspace. Throws `WrongPasswordError` on a bad password. */
   unlock(password: string): WorkspaceStateInfo {
+    // Deliberately BEFORE `beginSession()` (AUD-02): an `unlockWorkspace` landing while a lock
+    // teardown is in flight must NOT disarm the latch or advance the session epoch. The
+    // workspace is still open at that point, so this early return is the only thing standing
+    // between a mid-teardown unlock and a re-opened admission window; only the lock handler
+    // (via `cancelLock()`) and a genuine closed → open transition may clear the latch.
     if (this.isUnlocked()) return this.getState()
     const { db, key, descriptor } = unlockEncryptedVault(this.vaultPaths, password)
     this._db = db
     this.key = key
     this.descriptor = descriptor
     this._mode = 'encrypted'
+    // A new session: disarm any latch a completed lock left behind, and bump the epoch so a
+    // model start still hashing weights from the PREVIOUS session refuses instead of spawning
+    // into this one (AUD-02/AUD-03).
+    this.beginSession()
     return this.getState()
   }
 
@@ -1205,6 +1311,7 @@ export class WorkspaceController {
       this.key = key
       this.descriptor = descriptor
       this._mode = 'encrypted'
+      this.beginSession() // a new session, exactly like unlock()
     }
     return this.getState()
   }
@@ -1379,6 +1486,12 @@ export class WorkspaceController {
       this._db = null
       this.key = null
     }
+    // AUD-02: the branch above is skipped for a `plaintext_dev` workspace — there is no vault to
+    // re-encrypt, so `lock()` is a deliberate no-op and the DB stays OPEN. Disarm the latch in
+    // that case (and in any other path that leaves the DB open), or an interactive "Lock now" on
+    // a dev workspace would leave the session refusing every content surface for good: only an
+    // unlock clears the latch, and a plaintext workspace never unlocks again.
+    if (this._db !== null) this._locking = false
     return this.getState()
   }
 

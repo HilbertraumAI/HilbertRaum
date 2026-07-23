@@ -5,7 +5,7 @@ import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { documentsDir } from '../services/ingestion'
-import { shredFile } from '../services/workspace-vault'
+import { shredFile, workspaceAdmitsWork } from '../services/workspace-vault'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 
@@ -75,8 +75,10 @@ export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptio
 
   ipcMain.handle(IPC.transcribeDictation, async (_e, audio: unknown): Promise<string> => {
     // S3: refuse on a locked vault BEFORE any disk write — a transient plaintext WAV must
-    // never land in the workspace documents dir while it holds only `.enc` sidecars.
-    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.dictation.locked'))
+    // never land in the workspace documents dir while it holds only `.enc` sidecars. AUD-02:
+    // `workspaceAdmitsWork`, not a bare `isUnlocked()` — the DB stays open for the whole
+    // multi-second lock teardown, so a bare check would still let that WAV land mid-lock.
+    if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.dictation.locked'))
     const transcriber = ctx.transcriber
     if (!transcriber) throw new Error(DICTATION_UNAVAILABLE_MESSAGE)
     // IPC delivers the renderer's Uint8Array as a Buffer (a Uint8Array subclass).
