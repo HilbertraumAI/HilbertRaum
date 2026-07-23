@@ -62,3 +62,13 @@ npm run typecheck  # TypeScript checking
 npm run package    # portable build via electron-builder (manual, network-touching — R2)
 npm run package:win # Windows portable .exe specifically
 ```
+
+## Design system / branding
+
+HilbertRaum's canonical design system is installed as the **`hilbertraum-design`** Claude Code skill (global, user-level). Invoke **`/hilbertraum-design`** for any UI, in-app screen, marketing surface, slide, mock, or branded asset — it carries the tokens, colors, type, system-font stacks, assets, guidelines, and UI-kit components.
+
+The design system is **local files only** (system font stacks, no webfonts, zero external requests), so it aligns with the no-cloud / no-telemetry hard rules above — safe to use in the offline app.
+
+Non-negotiable brand rules: dark-only palette (`#0a0d11` page, teal `#57d0a4` the single accent), system fonts only, sentence case everywhere, no emoji (Unicode glyphs as icons), the logo dot is always teal, the hardware product is the **"Kit"** (never "Drive"), signature line **"Nothing leaves the space."**
+
+Source of truth is the claude.ai/design project "HilbertRaum Design System". Don't hand-edit the installed skill copy — re-sync from the design project instead.
