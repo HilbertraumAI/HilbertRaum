@@ -170,6 +170,55 @@ Working paper. Transient with the plan and the report; folded into the durable
   first; if it does not pin `* text eol=lf` for these paths, add a CRLF net beside the BOM one.
   Assigned: deferred-with-registration.*
 
+- [ ] **B-23 — `loadResultTable`'s newest-first read has no rowid tiebreak** (`ORDER BY created_at
+  DESC LIMIT 1`, `services/tables/store.ts`). Because `result_tables.message_id` is indexed but NOT
+  unique, two tables written to one message within the same millisecond leave it unspecified which
+  one the "Export CSV" action picks. Latent today (nothing writes two tables to one message), but the
+  schema permits the ambiguity — the Phase-1b restore test had to stamp an explicit `created_at` to
+  make ordering observable at all. *Fix: `ORDER BY created_at DESC, rowid DESC LIMIT 1`, mirroring
+  the `listMessages`/`getLatestMessage` tiebreak idiom. Assigned: deferred-with-registration
+  (one-line change, wants its own small test).*
+- [ ] **B-24 — `saveResultTable` neither replaces nor dedupes:** it always INSERTs a fresh UUID, so
+  a future caller that saved twice for one message would silently accumulate tables, with
+  `hasResultTable` staying true and the export picking one per the ambiguous ordering in B-23. The
+  schema comment says "ONE generic tabular artifact attached to an assistant message" — an invariant
+  the schema does not actually enforce. *Fix needs a DECISION first (enforce with a UNIQUE index +
+  delete-then-insert, or document the multi-row shape as intended); the Phase-1b capture/replay
+  already handles N rows correctly either way. Assigned: deferred-with-registration.*
+
+- [ ] **B-25 — the OCR engine's own header comment still presents the asar rewrite as the complete
+  packaged-app story** (`services/ocr/tesseract.ts`), never saying the rewrite is insufficient or
+  that the packaged path currently kills the app. Left untouched deliberately: the fix bundle will
+  edit this exact file. *Assigned: the packaged-OCR fix bundle (BUILD_STATE §5 item 16(b)).*
+- [ ] **B-26 — `BUILD_STATE.md` §1's "Remaining for release" callout still lists "the packaged-app
+  OCR smoke"** among remaining manual-acceptance items, as if merely unrun rather than blocked —
+  the same stale framing AUD-07 exists to kill. *Assigned: Phase 11 close-out (cheap, orchestrator).*
+- [ ] **B-27 — `BUILD_STATE.md` §5 item 1's "Phase-38 addition"** says a packaged-app OCR smoke
+  "must be exercised in the built app". It HAS been exercised, and it crashes. Same class as B-26.
+  *Assigned: Phase 11 close-out (cheap, orchestrator).*
+- [ ] **B-28 — the `BUILD_STATE.md` retention budget is nearly exhausted:** 1971 / 2000 lines and
+  274,779 / 307,200 bytes. The budget test goes red before the wave closes unless a closed wave is
+  retired to `docs/build-log.md` first (which is what the test's own failure message instructs).
+  Mitigated in-wave by keeping ONE dated entry with a single growing phase-log line instead of an
+  entry per phase. *Assigned: Phase 11 close-out — archive this wave's entry per the retention rule.*
+- [ ] **B-29 — `docs/build-log.md` carries the SAME relocation-broken link class as AUD-21**
+  (`[packaging.md](docs/packaging.md)`), but it is INERT: an unbalanced stray backtick a few lines
+  above puts it inside an inline code span under CommonMark pairing, so it never renders as a link
+  and the widened check correctly does not flag it. Deliberately NOT fixed and NOT allowlisted:
+  `build-log.md` is the frozen archive whose stated convention is prose byte-identity, and both the
+  stray backtick and the target sit inside a retired verbatim entry. *Assigned: record-only.*
+- [ ] **B-30 — `docs/user-guide.md` §7 describes "Make searchable (OCR)" end to end as a working
+  feature with no packaged-build caveat — and the build an end user actually runs IS a packaged
+  build.** Phase 8 added the honest note to `troubleshooting.md` (where a user lands after the app
+  dies) but deliberately did not rewrite user-facing guide copy: whether shipped user documentation
+  should carry a "this feature currently crashes" warning, or whether the fix simply lands first, is
+  an **owner product call**. *Assigned: OWNER DECISION, alongside the packaged-OCR fix bundle.*
+- [ ] **B-31 — trivial data disagreement:** the Qwen3.5 0.8B's on-disk size is `size_on_disk_gb: 0.7`
+  in its manifest but "~0.6 GB" in `model-policy.md`. The real weight is 639,029,504 bytes
+  (~0.64 GB decimal / 0.595 GiB), so "~0.6 GB" is the more accurate of the two and is what the new
+  README row uses — which means the README now matches `model-policy.md` and not the manifest field.
+  *Assigned: opportunistic.*
+
 ## Decisions log
 
 - **D-W1 (plan §3, carried in):** the verified-and-dismissed engine-download tar-child-on-quit item is
@@ -574,3 +623,65 @@ the guard.
   12 lines (or adds/removes a site) the guard reddens at that point — that is the intended review
   gate, not a bug. **Phase 10 must re-run `repo-hygiene.test.ts` after every phase has landed** and
   update the allowlist only if the tree legitimately moved.
+
+### Phase 8 — AUD-07 + AUD-21 + AUD-22 + AUD-23 (documentation reconciliation) — DONE
+
+**Decision D-8a (supersede, never rewrite a dated record).** Dated design records are historical
+snapshots. The R-O2 research-gate row and the OCR-R deferral each keep their original text with an
+appended **dated superseding note**; only present-tense *guidance* (`known-limitations.md`,
+`packaging.md`, `troubleshooting.md`) was rewritten. This is the OCR-R "docs truth" precedent, and
+the matching idiom already used in `security-model.md`.
+
+**Finding — the "item 15(b) vs 16(b)" ambiguity resolves to 15(b), and only 15(b).** Item 16(b) (the
+DEP-1 register's packaged-OCR *fix bundle*) was already accurate and needed no change. Item 15(b)
+(the OCR-R register's packaged-OCR *smoke*) said "run the full OCR smoke flow on an asset-carrying
+drive before the next release" — active, imperative, now-wrong advice: that deferral **fired** on
+2026-07-19 and the answer was an app-killing crash. It now carries a superseding note. The
+implementer also found the same stale instruction in the **durable ledger 15(b) points at**
+(`architecture.md`, OCR-R remediation ledger, registered deferral 2) and gave it the matching note —
+otherwise 15(b) would have been corrected while its own citation target kept the wrong instruction.
+That is the kind of second-order consistency this phase existed to get right.
+
+**Two stale surfaces beyond the four the finding named, both fixed:** `packaging.md`'s
+draft→smoke→publish release ritual still listed "plus an OCR run" in the stated minimum (removed,
+with a dated parenthetical saying why and that it is not a gate again until the fix lands); and
+`troubleshooting.md` had nothing at all for a user whose app vanishes — it now says "if the app
+closes itself the moment OCR starts, that is a known packaging defect, not your drive", which is the
+page a real user actually reaches after the crash.
+
+- **AUD-21 (the four broken links):** RED — `expected [ …(4) ] to deeply equal []`, received the four
+  `docs/rag-design.md` x3 + `docs/benchmark.md` targets resolving to non-existent `docs/docs/…`
+  paths. GREEN after: **181 relative links across 19 `docs/*.md` files, 0 broken.** The pre-existing
+  build-log pin stayed green throughout — i.e. the old net demonstrably could not see this class.
+  Link TEXT left byte-identical (the DOC-1 precedent of not touching prose). **No other broken link
+  was found, nothing was allowlisted, and the check was not weakened.**
+- **AUD-23 (README census) — re-derived independently and it matches:** 20 `download:` blocks under
+  `model-manifests/chat/` vs 18 README rows; the two missing were exactly the Qwen3.5 0.8B Q6_K and
+  2B UD-Q4_K_XL. Now 20 vs 20. Wider census for completeness: 23 chat manifests total, 3 of which
+  carry no `download:` block and are therefore correctly absent from a *downloadable* table; 25
+  `download:` blocks repo-wide = 20 chat + 5 non-chat, and all 5 non-chat already appear in the
+  README's supporting-models table. Verdict notes are honest per the `model-policy.md` precedent: the
+  0.8B is the *surviving* fast-tier candidate, the **2B FAILED** its bar and "should not be
+  recommended anywhere".
+- **A consequential catch:** the two new rows would have falsified the table's own intro prose
+  ("the Min RAM column is each model's lower hard floor"), because the two fast-tier manifests
+  deliberately carry the 4B's tier-aligned RAM line rather than a measured floor so they cannot
+  hijack the <=12 GB recommendation. The prose now says so, and the Qwen3 4B row's "smallest" became
+  "smallest *ranked* model". Adding a row correctly and leaving the surrounding sentence false would
+  have been a worse outcome than not adding it.
+- **Files:** `docs/architecture.md`, `docs/known-limitations.md`, `docs/packaging.md`,
+  `docs/troubleshooting.md`, `docs/data-contracts.md`, `README.md`, `model-manifests/README.md`,
+  `BUILD_STATE.md` (§5 item 15(b) note only), `apps/desktop/electron-builder.yml` (comment),
+  `apps/desktop/tests/integration/repo-hygiene.test.ts` (link-check extension only — the concurrent
+  phase's widened NUL/BOM nets, CSP control and `isUnlocked()` allowlist untouched).
+- **Orchestrator's own gate:** `repo-hygiene` 15 ok + `committed-catalog` 17 ok -> **2 files / 32
+  tests pass**; all nine touched non-test files verified NUL-free and BOM-free.
+- **THE DEFECT ITSELF IS UNTOUCHED AND STILL LIVE:** `electron-builder.yml`'s `asarUnpack` list still
+  contains only `tesseract.js` + `tesseract.js-core`, so packaged OCR still crashes. Every change
+  here documents a verified reality; the actual repair remains the registered fix bundle.
+- **Orchestrator error caught by this phase:** its final typecheck run surfaced 3 errors in
+  `db.ts` — the orchestrator's own schema-comment rider had used backticks INSIDE the `SCHEMA`
+  template literal, terminating it early. Fixed immediately (backticks removed, with a note in the
+  comment saying why they cannot appear there); typecheck re-verified clean. Worth recording: a
+  concurrent agent caught an orchestrator mistake that the phase's own gate would not have.
+- **Discovered -> backlog:** B-25, B-26, B-27, B-28, B-29, B-30 (**owner decision**), B-31.

@@ -1912,10 +1912,23 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   step total, and the persisted `ocr_json.pageCount` all report the **clamped** count (so
   they stay truthful), and a truncation is logged locally. A genuine ≤5 000-page scan is
   unaffected; beyond that, the tail of pages is not recognized.
-- **Packaged-app OCR needs the asar-unpacked tesseract packages** (worker_threads
-  cannot load scripts from inside `app.asar`). Wired in `electron-builder.yml`;
-  verifying a real OCR run from the produced portable .exe is a release-acceptance
-  item (the green gate never packages — the R2 posture).
+- **OCR does not work in a PACKAGED build — it crashes the whole app** (measured
+  2026-07-19 on a real packaged Windows build; pre-existing and **version-independent**,
+  it fails the same way on the previously pinned Electron). `worker_threads` cannot load
+  a script from inside `app.asar`, so `electron-builder.yml` unpacks `tesseract.js` +
+  `tesseract.js-core` and the engine rewrites the resolved workerPath to
+  `app.asar.unpacked` — but the worker's own **hoisted** dependencies
+  (`regenerator-runtime`, `is-url`, …) are not in that unpack list, stay packed inside
+  `app.asar`, and cannot be resolved from the unpacked directory. The resulting uncaught
+  exception kills the process, and `ocrAvailable` still reports `true` beforehand, so
+  nothing warns the user first. **Dev mode is unaffected** — the full raster → IPC →
+  recognize pipeline was proven end to end on Electron 39 outside packaging, and no other
+  packaged feature is touched. Until the fix bundle lands (unpack the hoisted deps,
+  degrade the task instead of dying, make `ocrAvailable` honest about the packaged mode —
+  registered as follow-up 2 in [`architecture.md`](architecture.md) "Dependency
+  remediation — design record (wave DEP-1, PR #77)" §5), do **not** run "Make searchable
+  (OCR)" from a packaged build, and do not treat a packaged OCR run as a
+  release-acceptance step: it is blocked, not merely unrun.
 
 ## Image understanding ([`architecture.md`](architecture.md) "Image understanding — design record")
 

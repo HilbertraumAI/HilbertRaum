@@ -230,7 +230,16 @@ describe('repo hygiene — no UTF-8 BOM in any covered text file (TQ-1)', () => 
 // wall of dead links. Code spans are stripped first (CommonMark pairing) because the archive
 // legitimately holds `](…)` sequences inside inline code — a regex/call-syntax fragment and a
 // stray-backtick paragraph that never rendered as links (6 such false positives at Phase 2).
-describe('repo hygiene — docs/build-log.md holds no relative markdown links (DOC-1)', () => {
+//
+// AUD-21 widened the block from that one file to EVERY docs/*.md, because the relocation class
+// was only half-closed: the same 2026-07-12 move that de-linkified build-log.md also lifted the
+// §4 data contracts verbatim out of BUILD_STATE.md into docs/data-contracts.md, and those kept
+// their root-relative `](docs/rag-design.md)` targets — which resolve to `docs/docs/rag-design.md`
+// from inside docs/ and never existed (4 dead links, unnoticed until AUD-21). A per-file pin
+// can only ever catch the file it names; resolving every relative target on disk closes the class
+// for any future verbatim move. Anchors need only their file part to exist; absolute URLs
+// (any `scheme:` prefix) and same-page `#anchor` links are out of scope.
+describe('repo hygiene — docs/ markdown links resolve (DOC-1 + AUD-21)', () => {
   /** Strip fenced blocks + inline code spans (a run of N backticks closes at the next run of
    *  exactly N; an unclosed run is literal text — the CommonMark rule, which is what makes the
    *  archive's stray-backtick paragraph a non-link). */
@@ -267,16 +276,53 @@ describe('repo hygiene — docs/build-log.md holds no relative markdown links (D
     return out
   }
 
+  /** Every `](target)` in a markdown file that is neither an absolute URL (`scheme:`) nor a
+   *  same-page `#anchor` — i.e. everything that must resolve to a real path on disk. */
+  const relativeLinkTargets = (file: string): string[] => {
+    const text = stripCode(readFileSync(file, 'utf8'))
+    const out: string[] = []
+    for (const m of text.matchAll(/\[[^\]\n]*\]\(([^()\s]+)\)/g)) {
+      const t = m[1]
+      if (/^[a-z][a-z0-9+.-]*:/i.test(t) || t.startsWith('#')) continue
+      out.push(t)
+    }
+    return out
+  }
+
+  const docsDir = join(process.cwd(), '..', '..', 'docs')
+
   it('the only relative link is the header ../BUILD_STATE.md pointer, and it resolves', () => {
-    const buildLog = join(process.cwd(), '..', '..', 'docs', 'build-log.md')
-    const text = stripCode(readFileSync(buildLog, 'utf8'))
-    const targets: string[] = []
-    for (const m of text.matchAll(/\[[^\]\n]*\]\(([^()\s]+)\)/g)) targets.push(m[1])
-    const relativeTargets = targets.filter((t) => !/^https?:\/\//.test(t) && !t.startsWith('#'))
+    const buildLog = join(docsDir, 'build-log.md')
+    const relativeTargets = relativeLinkTargets(buildLog)
     expect(relativeTargets).toEqual(['../BUILD_STATE.md'])
     for (const t of relativeTargets) {
       expect(existsSync(resolve(dirname(buildLog), t.split('#')[0])), `${t} resolves`).toBe(true)
     }
+  })
+
+  // AUD-21: the whole-directory net. A broken doc link is invisible in review (nothing renders
+  // the tree) and silently costs the next reader the citation the sentence was written for.
+  it('every relative markdown link in docs/*.md resolves on disk (AUD-21)', () => {
+    const files = readdirSync(docsDir, { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith('.md'))
+      .map((e) => join(docsDir, e.name))
+    expect(files.length).toBeGreaterThanOrEqual(15) // the walk really walked (not a moved root)
+
+    const broken: string[] = []
+    let checked = 0
+    for (const f of files) {
+      for (const t of relativeLinkTargets(f)) {
+        const filePart = t.split('#')[0]
+        if (filePart === '') continue // `](#…)` is already filtered; a bare `](  )` cannot match
+        checked++
+        if (!existsSync(resolve(dirname(f), filePart)))
+          broken.push(`${f.split(/[\\/]/).pop()} → ${t}`)
+      }
+    }
+    // Without this the net would stay green if the link regex ever stopped matching (the same
+    // silent-emptiness trap the walk-really-walked assertions above guard).
+    expect(checked).toBeGreaterThan(100)
+    expect(broken).toEqual([])
   })
 })
 

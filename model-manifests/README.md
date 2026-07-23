@@ -13,6 +13,8 @@ Each YAML file here describes one model. Manifests are committed to git; **model
   the pinned runtime; see [`../docs/model-policy.md`](../docs/model-policy.md).)
 - `reranker/` — reranker models (BGE Reranker v2 m3)
 - `transcriber/` — speech-to-text models (Whisper Small multilingual; `whisper_cpp`/`ggml`)
+- `translation/` — document-translation models (TranslateGemma 12B Instruct Q4_K_M; drives the
+  Translate screen's sidecar)
 - `vision/` — vision models (Qwen2.5-VL 3B Instruct Q4; GGUF + mmproj projector)
 - `runtime-sources.yaml` — the `llama-server` sidecar download manifest (Phase 12). **Not a model
   manifest** (it is excluded from model discovery); validated by `shared/runtime-sources.ts`.

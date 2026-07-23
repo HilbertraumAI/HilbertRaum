@@ -202,7 +202,7 @@ true (stale Deep choices coerce to Balanced at send). `askDocuments` never passe
 document answers always run balanced (deep-grounded = wave 2).
 
 ### Document ingestion (Phase 4 live)
-✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](docs/rag-design.md).
+✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
 - **`parsers/`** — `DocumentParser` interface (`{ segments: ExtractedSegment[], mimeType }`) +
   registry (`selectParser`, `supportedExtensions`). Adapters: `TxtParser` (.txt/.text/.log),
   `MarkdownParser` (.md/.markdown/.mdown; segment per ATX heading, `sectionLabel`), `PdfParser`
@@ -247,7 +247,7 @@ document answers always run balanced (deep-grounded = wave 2).
   status badge + chunk count + size, error surfacing, delete + re-index.
 
 ### Embeddings + vector search (Phase 5 live)
-✅ **`services/embeddings/`** (spec §6, §7.8, §9.2). Full detail in [`docs/rag-design.md`](docs/rag-design.md) §6.
+✅ **`services/embeddings/`** (spec §6, §7.8, §9.2). Full detail in [`docs/rag-design.md`](rag-design.md) §6.
 - **`index.ts`** — `Embedder` interface (`id`, `dimensions`, `embed(texts) =>
   Promise<Float32Array[]>` — L2-normalized, one per input); `encodeVector`/`decodeVector`
   (Float32 ↔ BLOB; decode copies to a 4-byte-aligned buffer); `cosineSimilarity`; and the
@@ -265,7 +265,7 @@ document answers always run balanced (deep-grounded = wave 2).
   `vector_blob` (raw Float32 bytes), `dimensions`, `created_at`. No new IPC (askDocuments = Phase 6).
 
 ### RAG chat with citations (Phase 6 live)
-✅ **`services/rag/index.ts`** (spec §7.6, §7.8). Full detail in [`docs/rag-design.md`](docs/rag-design.md) §8.
+✅ **`services/rag/index.ts`** (spec §7.6, §7.8). Full detail in [`docs/rag-design.md`](rag-design.md) §8.
 - **`retrieve(db, embedder, question, settings)`** → `{ chunks: RetrievedChunk[], citations:
   Citation[] }`. Embeds the question, `VectorIndex.searchText(topKInitial)`, joins hits →
   `chunks`, drops `< minSimilarity`, **dedups by `(document_id, page_number)`** (page-less
@@ -300,7 +300,7 @@ document answers always run balanced (deep-grounded = wave 2).
   stays permanent for will-quit).
 
 ### Hardware benchmark + recommendation (Phase 7 live)
-✅ **`services/benchmark.ts`** (spec §7.3, §11). Full detail in [`docs/benchmark.md`](docs/benchmark.md).
+✅ **`services/benchmark.ts`** (spec §7.3, §11). Full detail in [`docs/benchmark.md`](benchmark.md).
 - **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
   throws (failed probe → `''`/`0`); `detectSystem` itself always reports `gpu: null` — the
   REAL probe lives in `runtime/gpu.ts` and is **injected** by the IPC layer (Phase 16:

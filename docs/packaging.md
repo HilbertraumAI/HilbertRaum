@@ -177,12 +177,23 @@ Key config points:
   emit it to `out/preview/` and `electron-vite build` clears only `out/main|preload|renderer`, so a
   local package run after a screenshot run would otherwise fold the harness (incl. staged demo
   chats) into the artifact; `tests/integration/packaging.test.ts` pins the negation.
-- **`tesseract.js` + `tesseract.js-core` are `asarUnpack`ed**: the OCR engine spawns
-  its Node worker via `worker_threads`, which loads the worker script (and the WASM core it
-  requires) through real filesystem reads that cannot see inside the asar archive. The engine
-  rewrites `app.asar` → `app.asar.unpacked` in the resolved workerPath. **After packaging, also
-  smoke-test "Make searchable (OCR)" on a scanned PDF from the produced `.exe`** (same
-  runtime-only-failure class as the externalized parsers).
+- **`tesseract.js` + `tesseract.js-core` are `asarUnpack`ed — and that list is NOT yet
+  sufficient**: the OCR engine spawns its Node worker via `worker_threads`, which loads the
+  worker script (and the WASM core it requires) through real filesystem reads that cannot see
+  inside the asar archive. The engine rewrites `app.asar` → `app.asar.unpacked` in the resolved
+  workerPath. ⚠️ **Packaged OCR currently CRASHES the whole app** (measured 2026-07-19 on a real
+  packaged Windows build; pre-existing and version-independent — it fails identically on the
+  previously pinned Electron): the worker's own **hoisted** dependencies
+  (`regenerator-runtime`, `is-url`, …) are not in the `asarUnpack` list, so they stay packed
+  inside `app.asar` and cannot be resolved from `app.asar.unpacked`; the uncaught exception
+  kills the process while `ocrAvailable` still reports `true`. **Do not smoke-test "Make
+  searchable (OCR)" from the produced `.exe` as an acceptance step until the fix bundle
+  lands** — unpack the hoisted deps, degrade the task instead of dying, make `ocrAvailable`
+  honest about the packaged mode; registered as follow-up 2 in
+  [`architecture.md`](architecture.md) "Dependency remediation — design record (wave DEP-1,
+  PR #77)" §5. Dev-mode OCR is unaffected (the raster → IPC → recognize pipeline was proven end
+  to end on Electron 39), so this is a packaging defect, not an OCR-engine one; the other
+  runtime-only-failure smokes above (parsers, encrypted workspace) still apply.
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
   `HILBERTRAUM_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are
@@ -517,8 +528,10 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Four job
 
 **The ritual is draft → owner smoke → publish.** The workflow never publishes: the owner downloads
 the draft's artifacts, runs the applicable "Manual pre-ship checklist" below (at minimum item 1 —
-the post-package smoke — plus an OCR run and model start/stop with no orphaned `llama-server`),
-then clicks **Publish**. A failed smoke → delete the draft, fix, re-tag. A bad build never becomes
+the post-package smoke — plus model start/stop with no orphaned `llama-server`), then clicks
+**Publish**. (A packaged **OCR** run was part of this minimum until 2026-07-19, when it was
+measured to crash the app — see the `asarUnpack` bullet above; it is not a gate again until that
+fix bundle lands.) A failed smoke → delete the draft, fix, re-tag. A bad build never becomes
 publicly linkable.
 
 **Signing posture — staged, all via env secrets (no repo change when certs arrive):**
