@@ -15,7 +15,7 @@ recommended_ram_gb: 32
 # Default 0: NOT auto-recommended. The HEADLINE candidate of the Gemma 4 QAT wave: MoE with
 # ~3.8B ACTIVE params/token (8 of 128 experts) → ~26B-class quality at near-4B CPU decode
 # speed — the same total-vs-active trade as qwen3-30b-a3b (18.6 GB) and qwen3.5-35b-a3b
-# (20.6 GB) at 4–6 GB LESS disk/RAM. Challenges the ranked 12–14B winner (gemma4-12b, rank 2)
+# (22.2 GB) at 4–8 GB LESS disk/RAM. Challenges the ranked 12–14B winner (gemma4-12b, rank 2)
 # on ≥24 GB machines AND both opt-in MoEs. Promote with a real `recommendation_rank` only after
 # the local German/English grounded-QA eval + b9849 smoke (model-benchmarks.md §9) — public
 # scores do not count.

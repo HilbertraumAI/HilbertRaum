@@ -711,6 +711,11 @@ wave, the §9 tester evidence). Disposition of its decisions:
   above the 12–14B tier worth recommending?") with different candidates: Qwen3.6 27B sweeps the
   20–24 GB tier and the 35B-A3B challenges the MoE incumbent. The live big-slot work is the §9
   promotion pipeline (BUILD_STATE §5 item 8); fetching the old candidate list would duplicate it.
+  *(Update 2026-07-23: partially overtaken — the Gemma 4 26B-A4B has since been fetched,
+  hash-verified, and CLI-load-smoked as part of the Gemma 4 QAT wave (§9.3, issue #82), which puts
+  it IN the §9 promotion pipeline as the headline 24 GB challenger. The D38 disposition itself
+  stands: Track A as drafted was never run; the candidate re-entered through the front door — an
+  official Google QAT quant with a verified hash — not via the retired plan.)*
 - **D39 (inclusion bar: a big model must beat the incumbent at usable speed, or be a clear GPU-only
   ceiling) — CARRIED FORWARD**: restated as §9's "must beat" table.
 - **D42 (eval-set hardening) — STILL NEEDED, merged into §5 item 8 step (a)**: the tester run
@@ -738,6 +743,37 @@ wave, the §9 tester evidence). Disposition of its decisions:
      re-measure rerank-on/off on the new retriever (rag-design §11).
 - **D1 rider — UNCHANGED, now recorded solely in rag-design §10**: a prefix-using embedder with a
   measurable relevance floor re-opens D1 (unified auto-RAG chat).
+
+### 9.3 Gemma 4 QAT wave — PENDING candidates (2026-07-23, issue #82)
+
+Four `gemma4`-family chat manifests joined the catalog as **pending benchmark candidates** —
+official Google QAT Q4_0 GGUFs around the shipped Phase-29 winner `gemma4-12b-it-qat-q4`, added
+manifest-only, **rank 0**, **not bundled**, **never auto-recommended** (model-policy.md "Gemma 4
+QAT wave" carries the full research record; wave tracking: issue #82). The promotion gate is the
+same as the Qwen3.5 wave above — the local, offline German/English grounded-QA eval (§2) + the
+speed/RSS sweep (§3/§4) + the §9.1 manual smoke, per size; **public scores do not count**.
+
+| Candidate | Tier | Must beat (to earn a `recommendation_rank > 0`) |
+|---|---|---|
+| `gemma4-e2b-it-qat-q4` | 4B low-end | `qwen3-4b-instruct-q4` (bundled default) AND `qwen3.5-4b-ud-q4kxl` (rank 3) — the issue-#53 weak-hardware case is the prize. |
+| `gemma4-e4b-it-qat-q4` | 8B | `ministral3-8b-instruct-2512-q4` (Phase-29 tier winner) and `qwen3.5-9b-ud-q4kxl` (rank 3) on the §2 axes. |
+| `gemma4-26b-a4b-it-qat-q4` | MoE (headline) | `qwen3.6-27b-q4` (rank 3, the 24 GB pick) and `gemma4-12b-it-qat-q4`; also decides whether either opt-in Qwen MoE still earns its 4–8 GB more disk. |
+| `gemma4-31b-it-qat-q4` | Dense ceiling (opt-in) | the Qwen3.6 27B pair — AND `gemma4-26b-a4b-it-qat-q4`: if the MoE matches its quality, drop the 31B before it ever ranks. |
+
+The §9.1 checklist applies per size (read its items 3/4 as "the wave models"), with one
+wave-specific addition from the 2026-07-23 smokes: **E4B and 26B-A4B think BY DEFAULT** (reasoning
+arrives on the `reasoning_content` channel first — unlike the shipped 12B), so the per-size smoke
+MUST verify `enable_thinking: false` actually suppresses reasoning — Balanced mode and the #50
+extract path depend on it (see the STR-1 §5.4 thinking-checkpoint criterion recorded at the end of
+§9's main body: structured surfaces need pinned non-thinking behavior).
+
+Smoke state at wave open (2026-07-23, DIY test drive, 0.1.48 portable + b9849 win-vulkan): E2B +
+E4B **in-app smoke PASSED** (owner); 26B-A4B loads + answers via CLI but needs a ≥24 GB machine
+for in-app use + peak RSS (a 16 GB box mmap-thrashes at ~170 s/reply — the RAM gate works); 31B
+un-smoked (same dense arch string as the 12B — lowest risk). All four hashes are real HF-LFS OIDs,
+independently re-verified against the HF tree API + resolve-endpoint headers at merge review
+(PR #83); E2B/E4B/26B-A4B additionally confirmed by fetch + on-disk SHA-256. RAM lines are
+ESTIMATES pending the §4 peak-RSS measurement (each manifest carries its recalibration note).
 
 ---
 

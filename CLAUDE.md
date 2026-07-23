@@ -65,10 +65,9 @@ npm run package:win # Windows portable .exe specifically
 
 ## Design system / branding
 
-HilbertRaum's canonical design system is installed as the **`hilbertraum-design`** Claude Code skill (global, user-level). Invoke **`/hilbertraum-design`** for any UI, in-app screen, marketing surface, slide, mock, or branded asset — it carries the tokens, colors, type, system-font stacks, assets, guidelines, and UI-kit components.
+Two scopes, two sources of truth:
 
-The design system is **local files only** (system font stacks, no webfonts, zero external requests), so it aligns with the no-cloud / no-telemetry hard rules above — safe to use in the offline app.
+- **In-app UI:** the canonical reference is [`docs/design-guidelines.md`](docs/design-guidelines.md) — light-default dual theme (its §5; "dark-only" is explicitly listed under what to avoid), the §4.3 two-token accent (`#1B7F5F` on light / `#57D0A4` on dark — bright teal never on light surfaces, enforced by `token-contrast.test.ts`), system-font stacks, sentence case. Nothing in this section overrides it.
+- **Marketing/brand surfaces** (slides, mocks, website/print/branded assets — NOT in-app screens): maintainers with the **`hilbertraum-design`** Claude Code skill installed (user-level, not part of this repo; its upstream is the maintainer's claude.ai/design project "HilbertRaum Design System" — don't hand-edit the installed copy, re-sync instead) can invoke `/hilbertraum-design` for tokens, colors, assets, and UI-kit components. It is local-files-only (system font stacks, no webfonts, zero external requests). Brand-surface rules: dark-only palette (`#0a0d11` page, teal `#57d0a4` the single accent), sentence case, no emoji (Unicode glyphs as icons), the logo dot is always teal, signature line **"Nothing leaves the space."** Contributors without the skill: the shipped brand assets are recorded in `docs/design-guidelines.md` §13.
 
-Non-negotiable brand rules: dark-only palette (`#0a0d11` page, teal `#57d0a4` the single accent), system fonts only, sentence case everywhere, no emoji (Unicode glyphs as icons), the logo dot is always teal, the hardware product is the **"Kit"** (never "Drive"), signature line **"Nothing leaves the space."**
-
-Source of truth is the claude.ai/design project "HilbertRaum Design System". Don't hand-edit the installed skill copy — re-sync from the design project instead.
+Naming: the trademarked hardware product is the **"HilbertRaum AI Kit"** — "Kit" in brand copy, never "Drive" as a product *name* (see [`TRADEMARKS.md`](TRADEMARKS.md)); lower-case "drive" as the ordinary noun for the storage medium in technical docs and UI copy stays as-is.

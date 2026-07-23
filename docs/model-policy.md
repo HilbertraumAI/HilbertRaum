@@ -30,7 +30,7 @@
 | Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~22.2 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** ~35B total / ~3B active MoE (256 experts, 8+1 active); opt-in challenger to `qwen3-30b-a3b-q4`. Text-only, not bundled. Pending b9849 smoke + offline eval. |
 | Chat (Gemma E2B) | Gemma 4 E2B Instruct QAT Q4_0 | ~3.3 GB | 8 GB | — (rank 0) | **Gemma 4 QAT wave (2026-07-23, issue #82).** Official Google QAT; MatFormer effective-2B. Low-end challenger to the promoted Qwen3.5 4B (the #53 weak-hardware case). Text-only. In-app b9849 smoke PASSED 2026-07-23; pending offline eval. |
 | Chat (Gemma E4B) | Gemma 4 E4B Instruct QAT Q4_0 | ~5.2 GB | 12 GB | — (rank 0) | **Gemma 4 QAT wave.** MatFormer effective-4B; challenger to the promoted Qwen3.5 9B and Ministral 3 8B. Text-only; **thinks by default**. In-app b9849 smoke PASSED 2026-07-23; pending offline eval. |
-| Chat (Gemma 26B-A4B) | Gemma 4 26B-A4B Instruct QAT Q4_0 MoE | ~14.4 GB | 20 GB | — (rank 0) | **Gemma 4 QAT wave.** MoE, ~3.8B active (8 of 128 experts) → ~26B quality near-4B speed at 4–6 GB less disk than either Qwen MoE. Challenger to the promoted Qwen3.6 27B Q4 at the 24 GB tier. Supersedes the `gemma-4-26b-q4` local-test stub for distribution (official QAT, real hash, download block). b9849 CLI load smoke passed; in-app smoke + RSS need a ≥24 GB box. Pending offline eval. |
+| Chat (Gemma 26B-A4B) | Gemma 4 26B-A4B Instruct QAT Q4_0 MoE | ~14.4 GB | 20 GB | — (rank 0) | **Gemma 4 QAT wave.** MoE, ~3.8B active (8 of 128 experts) → ~26B quality near-4B speed at 4–8 GB less disk than either Qwen MoE (18.6 / 22.2 GB). Challenger to the promoted Qwen3.6 27B Q4 at the 24 GB tier. Supersedes the `gemma-4-26b-q4` local-test stub for distribution (official QAT, real hash, download block). b9849 CLI load smoke passed; in-app smoke + RSS need a ≥24 GB box. Pending offline eval. |
 | Chat (Gemma 31B) | Gemma 4 31B Instruct QAT Q4_0 | ~17.7 GB | 24 GB | — (rank 0) | **Gemma 4 QAT wave.** Dense quality ceiling of the Apache-2.0 Gemma line; slowest possible CPU decode — mainly for GPU offload. Opt-in challenger to the Qwen3.6 27B pair. Pending b9849 smoke + offline eval. |
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search — search works fully without it |
@@ -127,7 +127,7 @@ repos ungated), 140+ languages:
 |---|---|---|---|
 | `gemma4-e2b-it-qat-q4` | ~3.3 GB | 8 GB | the promoted Qwen3.5 4B / the 4B tier — the #53 weak-hardware case |
 | `gemma4-e4b-it-qat-q4` | ~5.2 GB | 12 GB | the promoted Qwen3.5 9B, Ministral 3 8B, Qwen3 8B |
-| `gemma4-26b-a4b-it-qat-q4` (MoE) | ~14.4 GB | 20 GB | the promoted Qwen3.6 27B Q4 at 24 GB, `gemma4-12b`, and both Qwen MoEs — ~3.8B active/token at 4–6 GB less disk |
+| `gemma4-26b-a4b-it-qat-q4` (MoE) | ~14.4 GB | 20 GB | the promoted Qwen3.6 27B Q4 at 24 GB, `gemma4-12b`, and both Qwen MoEs — ~3.8B active/token at 4–8 GB less disk |
 | `gemma4-31b-it-qat-q4` | ~17.7 GB | 24 GB | the Qwen3.6 27B pair as the dense Apache-2.0 Gemma quality ceiling (weakest case: slow CPU decode; mainly GPU offload) |
 
 - **Evaluated and NOT added:** `google/diffusiongemma-26B-A4B-it` (diffusion decoder — llama.cpp

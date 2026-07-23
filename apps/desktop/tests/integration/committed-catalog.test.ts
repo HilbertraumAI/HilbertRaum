@@ -105,7 +105,9 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
     // every OTHER wave member stays rank 0 and must never be the auto-recommendation.
     const chat = committedManifests()
     const unpromoted = new Set(QWEN35_WAVE_IDS.filter((id) => QWEN_WAVE_RANKS[id] === 0))
-    for (const ram of [8, 12, 16, 24, 32, 48, 64, 128]) {
+    // 14 and 20 joined the sample in the PR-#83 hardening: unsampled odd values are where a
+    // rank-0 manifest's RAM mis-edit hides from this guard (see the Gemma wave block).
+    for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
       const picked = recommendModelIdByRam(chat, ram, 'chat')
       expect(unpromoted.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
     }
@@ -168,6 +170,23 @@ const GEMMA4_WAVE_IDS = [
   'gemma4-31b-it-qat-q4'
 ]
 
+// The committed RAM lines (ESTIMATES pending measured peak RSS — each manifest carries the
+// recalibration note) and display names. RAM is pinned because a silent mis-edit here is
+// exactly how a rank-0 model becomes an auto-pick (the E2B rec-12 near-miss below: a UNIQUE
+// low recommended_ram_gb slips past the preferRanked guard at RAM levels the sample misses) or
+// gets locked out of machines it fits; display names are pinned per the Qwen3.5 precedent so a
+// copy-paste swap can't mislabel the picker UI.
+const GEMMA4_WAVE_FACTS: Record<string, { minRam: number; recRam: number; displayName: string }> = {
+  'gemma4-e2b-it-qat-q4': { minRam: 8, recRam: 16, displayName: 'Gemma 4 E2B Instruct QAT Q4' },
+  'gemma4-e4b-it-qat-q4': { minRam: 12, recRam: 16, displayName: 'Gemma 4 E4B Instruct QAT Q4' },
+  'gemma4-26b-a4b-it-qat-q4': {
+    minRam: 20,
+    recRam: 32,
+    displayName: 'Gemma 4 26B-A4B Instruct QAT Q4'
+  },
+  'gemma4-31b-it-qat-q4': { minRam: 24, recRam: 32, displayName: 'Gemma 4 31B Instruct QAT Q4' }
+}
+
 describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
   it('all four Gemma 4 QAT wave manifests are present and validate', () => {
     const ids = new Set(committedManifests().map((m) => m.id))
@@ -201,6 +220,14 @@ describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
       expect(m.mmproj, `${id} no mmproj`).toBeUndefined()
       // The 8192 local runtime budget (the wave convention, matching the 12B).
       expect(m.recommendedContextTokens, `${id} ctx`).toBe(8192)
+      // RAM + display-name pins (the Qwen3.6 precedent, extended per the PR-#83 merge review).
+      expect(m.recommendedMinRamGb, `${id} min RAM`).toBe(GEMMA4_WAVE_FACTS[id].minRam)
+      expect(m.recommendedRamGb, `${id} comfortable RAM`).toBe(GEMMA4_WAVE_FACTS[id].recRam)
+      expect(m.displayName, `${id} display name`).toBe(GEMMA4_WAVE_FACTS[id].displayName)
+      // Deep-mode gate: the wave ships supports_thinking_mode true (12B-verified template
+      // family; per-size suppression smoke pending, model-benchmarks.md §9.3) — a dropped
+      // flag would silently remove Deep for the model with no other CI signal.
+      expect(m.supportsThinkingMode, `${id} thinking flag`).toBe(true)
     }
   })
 
@@ -208,9 +235,12 @@ describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
     // A rank-0 model with a UNIQUE recommended_ram_gb below every ranked model's would become
     // the only "comfortable fit" at that RAM level and slip past the preferRanked guard —
     // exactly what happened when the E2B briefly declared 12 (the small-tier floor is 16).
+    // 14 and 20 are deliberately in the sample: unsampled odd values are where a RAM mis-edit
+    // hides (a rec of 13–15 would win ram=14 unseen), and 20 is the 26B-A4B's own hard-min
+    // boundary introduced by this wave.
     const chat = committedManifests()
     const waveSet = new Set(GEMMA4_WAVE_IDS)
-    for (const ram of [8, 12, 16, 24, 32, 48, 64, 128]) {
+    for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
       const picked = recommendModelIdByRam(chat, ram, 'chat')
       expect(waveSet.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
     }
