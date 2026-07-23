@@ -28,6 +28,10 @@
 | Chat (Qwen3.6 27B Q4) | Qwen3.6 27B Q4_K_M | ~16.8 GB | 20 GB | — (rank 3) | **Recommended 24 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Productized 2026-07-12 from a local-test stub: unsloth Q4_K_M (the exact quant the #48 tester eval scored), real HF-LFS hash, apache-2.0 review. Top of the §9 quality table with its Q5 sibling. Text-only, not bundled. |
 | Chat (Qwen3.6 27B Q5) | Qwen3.6 27B Q5_K_M | ~19.5 GB | 24 GB | — (rank 3) | **Recommended ≥32 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Same productization posture as the Q4; the eval's outright top scorer (F1 .3573, zero unanswerable-set hallucinations). Text-only, not bundled. |
 | Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~22.2 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** ~35B total / ~3B active MoE (256 experts, 8+1 active); opt-in challenger to `qwen3-30b-a3b-q4`. Text-only, not bundled. Pending b9849 smoke + offline eval. |
+| Chat (Gemma E2B) | Gemma 4 E2B Instruct QAT Q4_0 | ~3.3 GB | 8 GB | — (rank 0) | **Gemma 4 QAT wave (2026-07-23, issue #82).** Official Google QAT; MatFormer effective-2B. Low-end challenger to the promoted Qwen3.5 4B (the #53 weak-hardware case). Text-only. In-app b9849 smoke PASSED 2026-07-23; pending offline eval. |
+| Chat (Gemma E4B) | Gemma 4 E4B Instruct QAT Q4_0 | ~5.2 GB | 12 GB | — (rank 0) | **Gemma 4 QAT wave.** MatFormer effective-4B; challenger to the promoted Qwen3.5 9B and Ministral 3 8B. Text-only; **thinks by default**. In-app b9849 smoke PASSED 2026-07-23; pending offline eval. |
+| Chat (Gemma 26B-A4B) | Gemma 4 26B-A4B Instruct QAT Q4_0 MoE | ~14.4 GB | 20 GB | — (rank 0) | **Gemma 4 QAT wave.** MoE, ~3.8B active (8 of 128 experts) → ~26B quality near-4B speed at 4–8 GB less disk than either Qwen MoE (18.6 / 22.2 GB). Challenger to the promoted Qwen3.6 27B Q4 at the 24 GB tier. Supersedes the `gemma-4-26b-q4` local-test stub for distribution (official QAT, real hash, download block). b9849 CLI load smoke passed; in-app smoke + RSS need a ≥24 GB box. Pending offline eval. |
+| Chat (Gemma 31B) | Gemma 4 31B Instruct QAT Q4_0 | ~17.7 GB | 24 GB | — (rank 0) | **Gemma 4 QAT wave.** Dense quality ceiling of the Apache-2.0 Gemma line; slowest possible CPU decode — mainly for GPU offload. Opt-in challenger to the Qwen3.6 27B pair. Pending b9849 smoke + offline eval. |
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search — search works fully without it |
 | Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation; whisper.cpp GGML; MIT |
@@ -109,6 +113,59 @@ refresh — same established-quantizer posture as `qwen3-4b-instruct-2507-q4`):
   `recommendation_rank: 3` by owner decision — they are the ≤12 GB / 16–20 GB auto-picks now, see
   the catalog table above and `model-benchmarks.md` §6.4. `qwen3.5-27b-ud-q4kxl` and
   `qwen3.5-35b-a3b-ud-q4kxl` remain rank 0.)_
+
+## Gemma 4 QAT wave (2026-07-23, issue #82)
+
+Four **text-only** chat manifests in the `gemma4` family — the rest of the [Gemma 4
+collection](https://huggingface.co/collections/google/gemma-4) evaluated after the 12B (the
+Phase-29 12–14B winner). All four are **official Google QAT Q4_0 GGUFs** from the Google HF org
+(vendor quantization-aware trained, NOT third-party requants — the same first-party provenance as
+the approved `gemma4-12b-it-qat-q4`), all **Apache-2.0** (HF API card tags verified 2026-07-23,
+repos ungated), 140+ languages:
+
+| Manifest | Size | Min RAM | Challenges |
+|---|---|---|---|
+| `gemma4-e2b-it-qat-q4` | ~3.3 GB | 8 GB | the promoted Qwen3.5 4B / the 4B tier — the #53 weak-hardware case |
+| `gemma4-e4b-it-qat-q4` | ~5.2 GB | 12 GB | the promoted Qwen3.5 9B, Ministral 3 8B, Qwen3 8B |
+| `gemma4-26b-a4b-it-qat-q4` (MoE) | ~14.4 GB | 20 GB | the promoted Qwen3.6 27B Q4 at 24 GB, `gemma4-12b`, and both Qwen MoEs — ~3.8B active/token at 4–8 GB less disk |
+| `gemma4-31b-it-qat-q4` | ~17.7 GB | 24 GB | the Qwen3.6 27B pair as the dense Apache-2.0 Gemma quality ceiling (weakest case: slow CPU decode; mainly GPU offload) |
+
+- **Evaluated and NOT added:** `google/diffusiongemma-26B-A4B-it` (diffusion decoder — llama.cpp
+  cannot run it; do not revisit without llama.cpp support); the `gemma-4-*-it-assistant` models
+  (78M–0.5B **speculative-decoding drafts**, not standalone chat — parked until the chat sidecar
+  wires `--model-draft`); base non-`-it` variants.
+- **Relation to the local-test stubs:** `gemma-4-26b-q4` (Unsloth UD Q4_K_M of the same base
+  model, `sha256: local-unverified`, no download block) and `gemma4-coding-q8` are user-added
+  local-test manifests. The wave's `gemma4-26b-a4b-it-qat-q4` **supersedes the 26B stub for any
+  distribution purpose** (official QAT, verified hash, download block, Apache-2.0 review); the
+  stubs stay as-is for the owner's local models. NOTE: the stubs' comment "Gemma has no runtime
+  thinking-mode toggle" contradicts the 12B's verified `enable_thinking` behaviour — the wave
+  manifests follow the 12B precedent; the suppression smoke below decides.
+- **Text-only in HilbertRaum.** E2B/E4B are any-to-any upstream (image/audio in), 26B/31B
+  image-text-to-text; every repo ships an mmproj projector we deliberately do not reference (the
+  12B posture). E2B/E4B are MatFormer effective-2B/-4B slices.
+- **Thinking:** every manifest carries `supports_thinking_mode: true` (the Gemma 4 template honours
+  `enable_thinking`, verified live on the 12B). Smoke finding (2026-07-23): **E4B and 26B-A4B
+  think BY DEFAULT** (reasoning first on the `reasoning_content` channel — unlike the shipped 12B),
+  so a short output cap can return empty content (the #50 class); the per-size check that
+  `enable_thinking: false` suppresses it is part of the promotion smoke.
+- **Hashes are real**: pinned from HF LFS OIDs (the qwen3.5-27b posture) and **confirmed against
+  real downloads** — `fetch-models` fetched + SHA-256-verified E2B/E4B/26B-A4B on 2026-07-23.
+- **Runtime**: Gemma 4 needs llama.cpp ~b8680+ (MoE included); the pinned **b9849** loads all
+  three smoked sizes (E-series MatFormer + the Gemma MoE were arch firsts for the catalog). The
+  31B (same dense arch string as the 12B) is un-smoked but lowest-risk.
+- **Smoke status (2026-07-23):** E2B + E4B **in-app smoke PASSED** (0.1.48 portable, DIY test
+  drive, b9849 win-vulkan). The 26B-A4B loads + answers via CLI but needs a **≥24 GB** machine for
+  in-app use + peak-RSS measurement (on a 16 GB box it mmap-thrashes at ~170 s/reply — the RAM
+  gate is doing its job). RAM values are ESTIMATES pending measured RSS (the 26B's rests on the
+  #42 field datapoint). The E2B's `recommended_ram_gb` deliberately sits on the small-tier **16
+  floor**: a unique lower value would make a rank-0 model the only "comfortable fit" at that RAM
+  level and slip past the picker's preferRanked guard (caught by the wave-invariant tests).
+- **None are auto-recommended.** All four carry `recommendation_rank: 0` + `recommended_profiles:
+  []` + `bundled_on_preconfigured_drive: false` — selectable manually, never the RAM-best-fit
+  auto-pick, never bundled, **until the local German/English grounded-QA eval promotes them**
+  (`model-benchmarks.md` §9; public scores do not count). Wave tracking + full research record:
+  issue #82.
 
 ## Manifest format & parsing
 Manifests are **YAML**, parsed with the pure-JS [`yaml`](https://www.npmjs.com/package/yaml) package

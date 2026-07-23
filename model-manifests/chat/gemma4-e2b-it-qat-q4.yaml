@@ -1,0 +1,53 @@
+id: gemma4-e2b-it-qat-q4
+display_name: Gemma 4 E2B Instruct QAT Q4
+family: gemma4
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 3.3
+# ESTIMATED from file size + the catalog's Q4 overhead pattern (no measured RSS yet — the
+# Gemma 4 QAT wave recalibrates from peak RSS after the b9849 smoke, like Phase-29 did).
+# Hard min is the MODEL-ALONE floor (PROD-1); co-residency pressure lives in recommended_ram_gb.
+# recommended_ram_gb deliberately sits on the small-tier 16 floor (qwen3-4b/qwen3.5-4b/8B tier all
+# share 16): a UNIQUE lower value would make this the only "comfortable fit" at that RAM level and
+# the preferRanked guard (empty ranked set → all fits) would auto-recommend a rank-0 model —
+# caught by the wave-invariant test at ram=12 when this briefly said 12.
+recommended_min_ram_gb: 8
+recommended_ram_gb: 16
+# Default 0: NOT auto-recommended. Low-end challenger to the 4B tier (qwen3-4b-instruct-q4 /
+# qwen3.5-4b-ud-q4kxl) — the tier issue #53 wants a better weak-hardware pick for. E2B is a
+# MatFormer effective-2B slice (~5B raw params, ~2B-class memory/compute footprint), 140+
+# languages. Promote with a real `recommendation_rank` only after the local German/English
+# grounded-QA eval + b9849 smoke (model-benchmarks.md §9) — public scores do not count.
+recommendation_rank: 0
+recommended_context_tokens: 8192
+# Gemma 4's chat template honours `enable_thinking` — verified live on the 12B (Phase-29 run #2,
+# tests/manual/gemma-thinking.test.ts). Assumed template-family-wide; VERIFY per size by smoke
+# before relying on Deep.
+supports_thinking_mode: true
+supports_tools: false
+local_path: models/chat/gemma4-e2b-it-qat-q4.gguf
+# Real SHA-256 + exact byte size captured 2026-07-23 from HuggingFace LFS metadata — the git-LFS
+# OID IS the SHA-256 of the file content (the qwen3.5-27b / TranslateGemma hash-provenance
+# posture). Re-confirm with `verify-models --generate` after the first fetch.
+sha256: fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634
+# Official Google QAT Q4_0 (vendor quantization-aware trained — not a third-party requant; the
+# same provenance as the approved gemma4-12b entry). NOTE the upstream filename ordering trap:
+# the file is `gemma-4-E2B_q4_0-it.gguf` (quant BEFORE `-it`), unlike the 12B repo's
+# `gemma-4-12b-it-qat-q4_0.gguf`.
+download:
+  url: https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf?download=true
+  sha256: fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634
+  size_bytes: 3349516256
+  license_url: https://www.apache.org/licenses/LICENSE-2.0
+bundled_on_preconfigured_drive: false
+# TEXT-ONLY USE: upstream Gemma 4 E2B is any-to-any (image/audio input) and the repo ships an
+# mmproj projector (`gemma-4-E2B-it-mmproj.gguf`) — we deliberately do not reference it (the
+# gemma4-12b posture; chat does not use vision).
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"
+  reviewed_at: "2026-07-23"
+  notes: "APPROVED 2026-07-23: license verified as apache-2.0 via the Hugging Face API card tag on the OFFICIAL Google org GGUF repo (https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf, ungated) — Gemma 4 is Apache-2.0 (same review basis as gemma4-12b-it-qat-q4, approved 2026-06-10). Quantization published by the model vendor itself (official Google QAT GGUF — not a third-party requant). Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive (the repo publishes no LICENSE blob; the card tag is the declaration — download.license_url points at the canonical Apache-2.0 text)."

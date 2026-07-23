@@ -1,0 +1,48 @@
+id: gemma4-e4b-it-qat-q4
+display_name: Gemma 4 E4B Instruct QAT Q4
+family: gemma4
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 5.2
+# ESTIMATED from file size + the catalog's Q4 overhead pattern (no measured RSS yet — the
+# Gemma 4 QAT wave recalibrates from peak RSS after the b9849 smoke, like Phase-29 did).
+# Same tier as qwen3-8b (5.0 GB → min 12) / ministral3-8b (5.2 GB → min 12).
+recommended_min_ram_gb: 12
+recommended_ram_gb: 16
+# Default 0: NOT auto-recommended. 8B-tier challenger to Ministral 3 8B (the Phase-29 tier
+# winner), Qwen3 8B, and Qwen3.5 9B. E4B is a MatFormer effective-4B slice (~8B raw params,
+# ~4B-class memory/compute footprint), 140+ languages. Promote with a real
+# `recommendation_rank` only after the local German/English grounded-QA eval + b9849 smoke
+# (model-benchmarks.md §9) — public scores do not count.
+recommendation_rank: 0
+recommended_context_tokens: 8192
+# Gemma 4's chat template honours `enable_thinking` — verified live on the 12B (Phase-29 run #2,
+# tests/manual/gemma-thinking.test.ts). Assumed template-family-wide; VERIFY per size by smoke
+# before relying on Deep.
+supports_thinking_mode: true
+supports_tools: false
+local_path: models/chat/gemma4-e4b-it-qat-q4.gguf
+# Real SHA-256 + exact byte size captured 2026-07-23 from HuggingFace LFS metadata — the git-LFS
+# OID IS the SHA-256 of the file content (the qwen3.5-27b / TranslateGemma hash-provenance
+# posture). Re-confirm with `verify-models --generate` after the first fetch.
+sha256: 676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee
+# Official Google QAT Q4_0 (vendor quantization-aware trained — not a third-party requant; the
+# same provenance as the approved gemma4-12b entry). NOTE the upstream filename ordering trap:
+# the file is `gemma-4-E4B_q4_0-it.gguf` (quant BEFORE `-it`).
+download:
+  url: https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf?download=true
+  sha256: 676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee
+  size_bytes: 5154941280
+  license_url: https://www.apache.org/licenses/LICENSE-2.0
+bundled_on_preconfigured_drive: false
+# TEXT-ONLY USE: upstream Gemma 4 E4B is any-to-any (image/audio input) and the repo ships an
+# mmproj projector (`gemma-4-E4B-it-mmproj.gguf`) — we deliberately do not reference it (the
+# gemma4-12b posture; chat does not use vision).
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"
+  reviewed_at: "2026-07-23"
+  notes: "APPROVED 2026-07-23: license verified as apache-2.0 via the Hugging Face API card tag on the OFFICIAL Google org GGUF repo (https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf, ungated) — Gemma 4 is Apache-2.0 (same review basis as gemma4-12b-it-qat-q4, approved 2026-06-10). Quantization published by the model vendor itself (official Google QAT GGUF — not a third-party requant). Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive (the repo publishes no LICENSE blob; the card tag is the declaration — download.license_url points at the canonical Apache-2.0 text)."

@@ -4,8 +4,9 @@ Each YAML file here describes one model. Manifests are committed to git; **model
 (weights live under `models/` on the drive). The app reads these manifests to discover, verify
 (SHA-256), recommend, and select models without code changes.
 
-- `chat/` — chat/instruct models (Qwen3 4B / 8B / 14B Q4 + 30B-A3B MoE, Qwen3-4B-2507, Qwen3.5 4B,
-  Granite 4.1 8B, Ministral 8B, Gemma 4 12B)
+- `chat/` — chat/instruct models (Qwen3 4B / 8B / 14B Q4 + 30B-A3B MoE, Qwen3-4B-2507, the Qwen3.5
+  wave, the Qwen3.6 27B pair, Granite 4.1 8B, Ministral 8B, Gemma 4 12B + the Gemma 4 QAT wave
+  E2B / E4B / 26B-A4B / 31B)
 - `embeddings/` — embedding models (Multilingual E5 Small, F16; the manifest `id`/`local_path`
   keep a `-q8` suffix for historical stability — it tags stored vectors and is referenced across
   tests/docs, **not** a quant claim. Q8 is *not* the shipping quant — its q8_0 conversion crashes

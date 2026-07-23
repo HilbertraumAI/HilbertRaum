@@ -30,7 +30,11 @@ runtime-family: whisper_cpp v1.8.6
 model: bge-reranker-v2-m3-f16 apache-2.0
 model: gemma-4-26b-q4 gemma
 model: gemma4-12b-it-qat-q4 apache-2.0
+model: gemma4-26b-a4b-it-qat-q4 apache-2.0
+model: gemma4-31b-it-qat-q4 apache-2.0
 model: gemma4-coding-q8 gemma
+model: gemma4-e2b-it-qat-q4 apache-2.0
+model: gemma4-e4b-it-qat-q4 apache-2.0
 model: granite-4.1-8b-q4 apache-2.0
 model: ministral3-8b-instruct-2512-q4 apache-2.0
 model: multilingual-e5-small-q8 mit
@@ -164,13 +168,17 @@ manifest's recorded `download.license_url`. A `license_review.status` other than
 `approved` is noted on the line — such a model is never pre-loaded on a sold drive
 (the sell gate requires an approved review for every manifest).
 
-### apache-2.0 (19 models)
+### apache-2.0 (23 models)
 
 Licensed under the Apache License 2.0 — the full text is reproduced once in the
 "Apache License 2.0" section at the end of this file.
 
 - BGE Reranker v2 M3 (F16) (`bge-reranker-v2-m3-f16`) — upstream: https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF — license: apache-2.0 (https://huggingface.co/BAAI/bge-reranker-v2-m3)
 - Gemma 4 12B Instruct QAT Q4 (`gemma4-12b-it-qat-q4`) — upstream: https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf — license: apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+- Gemma 4 26B-A4B Instruct QAT Q4 (`gemma4-26b-a4b-it-qat-q4`) — upstream: https://huggingface.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf — license: apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+- Gemma 4 31B Instruct QAT Q4 (`gemma4-31b-it-qat-q4`) — upstream: https://huggingface.co/google/gemma-4-31B-it-qat-q4_0-gguf — license: apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+- Gemma 4 E2B Instruct QAT Q4 (`gemma4-e2b-it-qat-q4`) — upstream: https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf — license: apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+- Gemma 4 E4B Instruct QAT Q4 (`gemma4-e4b-it-qat-q4`) — upstream: https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf — license: apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)
 - Granite 4.1 8B Q4 (`granite-4.1-8b-q4`) — upstream: https://huggingface.co/ibm-granite/granite-4.1-8b-GGUF — license: apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)
 - Ministral 3 8B Instruct (2512) Q4 (`ministral3-8b-instruct-2512-q4`) — upstream: https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF — license: apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)
 - Qwen2.5-VL 3B Instruct Q4 (`qwen2.5-vl-3b-instruct-q4`) — upstream: https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/blob/main/LICENSE)
