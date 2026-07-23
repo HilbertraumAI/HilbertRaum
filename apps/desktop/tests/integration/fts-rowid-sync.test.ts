@@ -68,20 +68,26 @@ function eqpDetail(db: Db, sql: string): string {
 }
 
 describe('CODE-4 — FTS delete triggers are rowid-targeted (timing + plan)', () => {
-  it('deletes a 250-chunk document from a 50k-chunk corpus in ≤ 100 ms (was ~3.5 s via the chunk_id scan)', () => {
+  it('deletes a 250-chunk document from a 50k-chunk corpus in ≤ 500 ms (was ~3.5 s via the chunk_id scan)', () => {
     const db = freshDb()
     seedLargeCorpus(db)
     const t0 = performance.now()
     db.prepare('DELETE FROM chunks WHERE document_id = ?').run('doc-100')
     const elapsed = performance.now() - t0
     // Pre-fix this is ~3500 ms (250 firings × one full shadow-table scan). Post-fix the rowid
-    // path measured ~3 ms; 100 ms leaves wide CI headroom while still failing the scan by 35×.
-    expect(elapsed).toBeLessThanOrEqual(100)
+    // path measured ~3 ms. The bound was 100 ms ("wide CI headroom") but starved shared runners
+    // flaked it twice in five days in two modes (112.57 ms on ubuntu 2026-07-23; whole-test
+    // 15 s vitest timeouts during seeding on windows 2026-07-19 + 2026-07-23) — issue #84.
+    // 500 ms still fails a real scan regression by 7×, and the EXPLAIN-QUERY-PLAN test below
+    // is the noise-free structural guard against the scan path returning either way. The
+    // explicit 60 s per-test timeout covers the ~30 MB corpus seeding on a slow runner (the
+    // global 15 s budget was the second flake mode).
+    expect(elapsed).toBeLessThanOrEqual(500)
     // And the delete was complete — trigger sync holds.
     expect(
       (db.prepare("SELECT COUNT(*) AS n FROM chunks_fts WHERE chunk_id LIKE 'chunk-100-%'").get() as unknown as { n: number }).n
     ).toBe(0)
-  })
+  }, 60_000)
 
   it('the AD/AU trigger bodies target rowid (O(log N) lookup), with the legacy chunk_id predicate only in the NULL-fallback twins', () => {
     const db = freshDb()
