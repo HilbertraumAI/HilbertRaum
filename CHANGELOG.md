@@ -102,6 +102,17 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Security
 
+- **Post-DEP-1 advisory batch cleared (wave DEP-2, 2026-07-23)** — five transitive
+  dev/build-tooling packages patched lockfile-only, semver-compatible, no manifest
+  changes: node-tar 7.5.21 (decompression/parse DoS CRITICAL + infinite-loop,
+  PAX-crash and NUL-byte advisories), js-yaml 4.3.0 (merge-key quadratic CPU;
+  electron-builder's copy — the app's own manifest parser is the separate `yaml`
+  package and was never affected), fast-uri 3.1.4 (host confusion ×2),
+  brace-expansion 1.1.16 / 2.1.2 / 5.0.8 (exponential-time `{}` expansion DoS,
+  CVE-2026-13149 — Dependabot alert #56), and DOMPurify 3.4.12 (the one
+  production-scope member: streamdown → mermaid ships it in the renderer;
+  `CUSTOM_ELEMENT_HANDLING` sanitizer bypass, low severity, config not used by
+  mermaid). `npm audit`: 0 vulnerabilities again.
 - **All critical- and high-severity Dependabot alerts cleared (wave DEP-1, PR #77)**
   — Vitest 3.2.6 (CVE-2026-47429, UI-server arbitrary file read/execute), Electron
   39.8.10 (command-line switch injection, four use-after-free classes,
