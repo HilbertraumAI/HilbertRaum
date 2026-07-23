@@ -204,6 +204,11 @@ export const en = {
   'chat.skill.autoFiredTitle':
     'The app applied the skill “{title}” to this answer automatically. You can answer without it.',
   'chat.skill.answerWithout': 'Answer without it',
+  // AUD-01: the undo re-answers the turn, which deletes this reply — and the message foreign key
+  // cascades that delete through the reply's evidence review. The affordance is DISABLED rather
+  // than hidden (a vanishing button is the more confusing failure) and says why on hover/focus.
+  'chat.skill.answerWithoutBlockedByReview':
+    'This answer has an evidence review. Answering again would delete the review with its decisions and notes.',
   // SKA-38 (skills audit 2026-07-03, U6): the glyph label when a stamped turn's skill was later
   // DELETED — the provenance (and the undo) survive the deletion, honestly labelled.
   'chat.skill.removed': '(removed skill)',
@@ -1836,6 +1841,13 @@ export const en = {
   'main.chat.streamError':
     'The AI model ran into an error before finishing the answer. Try again — if it keeps happening, restart the model on the AI Model screen.',
   'main.chat.nothingToRegenerate': 'Nothing to regenerate yet.',
+  // AUD-01: re-answering a turn DELETES the previous assistant reply, and the message foreign
+  // key cascades that delete through the reply's whole evidence review — decisions, notes,
+  // links, export history — none of which the restore snapshot carries. The turn is refused
+  // instead of quietly trading a human's review for a new answer.
+  'main.chat.reviewBlocksRegenerate':
+    'This answer has an evidence review. Answering again would delete the review with its ' +
+    'decisions and notes — ask your question again as a new message instead.',
   'main.chat.emptyMessage': 'Cannot send an empty message.',
   'main.chat.emptyQuestion': 'Cannot send an empty question.',
   'main.chat.stopFirst': 'A response is still being generated for this conversation. Stop it first.',

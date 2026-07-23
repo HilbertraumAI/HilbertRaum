@@ -804,21 +804,35 @@ interface DeletedMessageRow {
 }
 
 /**
+ * The id of the message a "regenerate" would DESTROY: the conversation's last VISIBLE message
+ * when — and only when — it is an assistant turn; null otherwise. Read-only.
+ *
+ * The single owner of the "which row does regenerate target?" question. `hasRegenerableAssistantReply`
+ * (the pre-stream bail) is expressed in terms of it, and `deleteLastAssistantMessage` runs the same
+ * SELECT, so the precondition, the in-stream guards and the delete cannot drift apart into
+ * disagreeing about the target row. Callers that must inspect what hangs off that row before the
+ * delete commits (the evidence-review guard, AUD-01) need the ID, not just a boolean.
+ */
+export function getRegenerableAssistantMessageId(db: Db, conversationId: string): string | null {
+  // `kind IS NOT 'compaction'`: checkpoint rows are invisible transcript bookkeeping (they carry
+  // role 'assistant' but are never a reply) — see deleteLastAssistantMessage (CODE-19 rider).
+  const row = db
+    .prepare(
+      `SELECT id, role FROM messages WHERE conversation_id = ? AND kind IS NOT 'compaction'
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`
+    )
+    .get(conversationId) as unknown as { id: string; role: string } | undefined
+  return row?.role === 'assistant' ? row.id : null
+}
+
+/**
  * Read-only precondition for "regenerate": is the conversation's last message an assistant turn
  * (so there is a prior reply to drop and re-stream)? Mirrors `deleteLastAssistantMessage`'s
  * last-message-must-be-assistant rule so the pre-stream "nothing to regenerate" bail and the
  * in-stream delete (F2) agree. Non-destructive — safe to call before the stream slot is held.
  */
 export function hasRegenerableAssistantReply(db: Db, conversationId: string): boolean {
-  // `kind IS NOT 'compaction'`: checkpoint rows are invisible transcript bookkeeping (they carry
-  // role 'assistant' but are never a reply) — see deleteLastAssistantMessage (CODE-19 rider).
-  const row = db
-    .prepare(
-      `SELECT role FROM messages WHERE conversation_id = ? AND kind IS NOT 'compaction'
-       ORDER BY created_at DESC, rowid DESC LIMIT 1`
-    )
-    .get(conversationId) as unknown as { role: string } | undefined
-  return row?.role === 'assistant'
+  return getRegenerableAssistantMessageId(db, conversationId) != null
 }
 
 /**

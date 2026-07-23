@@ -12,10 +12,12 @@ import {
   emptyAssistantMessage,
   getConversation,
   getLatestMessage,
+  getRegenerableAssistantMessageId,
   isAbortError,
   isEmptyCompletionError,
   restoreMessage
 } from '../services/chat'
+import { hasReviewForMessage } from '../services/evidence-reviews'
 import type { Db } from '../services/db'
 import type { ModelRuntime } from '../services/runtime'
 import {
@@ -114,6 +116,11 @@ export type ChatStreamRunFn = (
  * expected to have already bailed (read-only `hasRegenerableAssistantReply`) when there is no
  * prior reply; the snapshot being null here is a benign race (nothing deleted, nothing to
  * restore).
+ *
+ * AUD-01 — it also REFUSES outright when the reply about to be dropped carries an evidence
+ * review (see the guard body). This is the choke point every regenerate passes through — plain
+ * chat and the document channel alike — and `regenerate` is caller-supplied over IPC, so the
+ * refusal belongs here rather than in either handler.
  */
 export function withRegenerateGuard(
   db: Db,
@@ -123,6 +130,21 @@ export function withRegenerateGuard(
 ): ChatStreamRunFn {
   if (!regenerate) return runFn
   return async (signal, sendToken, sendReasoning, sendCompaction, sendUsage) => {
+    // AUD-01 (data loss): `evidence_reviews.message_id` is a foreign key with ON DELETE CASCADE
+    // and the workspace runs with `PRAGMA foreign_keys = ON`, so the `DELETE FROM messages` below
+    // does not just drop an answer — it takes the reply's ENTIRE review chain with it: the review
+    // head (title, Ready status, reviewer label, general note, freshness acknowledgement), every
+    // per-block decision and reviewer note, every evidence link, and the whole export history.
+    // The `DeletedMessage` snapshot the restore legs replay covers the `messages` row ONLY, so
+    // even the F2 (non-abort failure) and CB-2 (Stop before the first token) paths — the ones
+    // designed to lose nothing — brought the answer back WITHOUT the human's work, permanently.
+    // Deleting a whole CONVERSATION counts its reviews and warns first; a message-level replace
+    // deserves at least as much care, and there is no per-turn confirm surface here, so refuse.
+    // Resolving the target id up front means we inspect the exact row the delete would destroy.
+    const targetId = getRegenerableAssistantMessageId(db, conversationId)
+    if (targetId != null && hasReviewForMessage(db, targetId)) {
+      throw new Error(tMain('main.chat.reviewBlocksRegenerate'))
+    }
     const deleted = deleteLastAssistantMessage(db, conversationId)
     try {
       const result = await runFn(signal, sendToken, sendReasoning, sendCompaction, sendUsage)

@@ -235,6 +235,11 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.autoFiredTitle':
     'Die App hat den Skill „{title}“ automatisch auf diese Antwort angewandt. Du kannst ohne ihn antworten.',
   'chat.skill.answerWithout': 'Ohne ihn antworten',
+  // AUD-01: Der Rückgängig-Weg beantwortet den Turn neu und löscht dabei diese Antwort — der
+  // Fremdschlüssel der Nachricht reißt die Nachweis-Prüfung mit. Die Schaltfläche wird deshalb
+  // DEAKTIVIERT statt versteckt und erklärt beim Darüberfahren, warum.
+  'chat.skill.answerWithoutBlockedByReview':
+    'Zu dieser Antwort gibt es eine Nachweis-Prüfung. Eine neue Antwort würde die Prüfung mit ihren Entscheidungen und Notizen löschen.',
   // SKA-38 (Skills-Audit 2026-07-03, U6): das Glyph-Label, wenn der Skill einer markierten Antwort
   // später GELÖSCHT wurde – die Herkunft (und der Rückgängig-Weg) bleiben, ehrlich beschriftet.
   'chat.skill.removed': '(entfernter Skill)',
@@ -1901,6 +1906,13 @@ export const de: Record<keyof typeof en, string> = {
   'main.chat.streamError':
     'Beim KI-Modell ist ein Fehler aufgetreten, bevor die Antwort fertig war. Versuche es erneut — wenn das öfter passiert, starte das Modell im Bildschirm „KI-Modell“ neu.',
   'main.chat.nothingToRegenerate': 'Es gibt noch keine Antwort, die neu erstellt werden könnte.',
+  // AUD-01: Eine neue Antwort LÖSCHT die bisherige Antwort, und der Fremdschlüssel der Nachricht
+  // reißt die gesamte Nachweis-Prüfung mit — Entscheidungen, Notizen, Verknüpfungen, Exportverlauf.
+  // Nichts davon steckt im Wiederherstellungs-Abbild, deshalb wird der Turn abgelehnt.
+  'main.chat.reviewBlocksRegenerate':
+    'Zu dieser Antwort gibt es eine Nachweis-Prüfung. Eine neue Antwort würde die Prüfung mit ' +
+    'ihren Entscheidungen und Notizen löschen — stelle deine Frage stattdessen noch einmal als ' +
+    'neue Nachricht.',
   'main.chat.emptyMessage': 'Eine leere Nachricht kann nicht gesendet werden.',
   'main.chat.emptyQuestion': 'Eine leere Frage kann nicht gesendet werden.',
   'main.chat.stopFirst':

@@ -9049,6 +9049,23 @@ re-changed source/answer lapses a stale acknowledge; §6). The wave also stamped
 `Citation.documentId?`/`chunkId?` at the six persisted-citation constructors that existed
 (enumerated in data-contracts — nothing enforces the stamp on a future constructor).
 
+That cascade cuts both ways, and the second edge was missed until AUD-01 (see §8): **any**
+delete of a `messages` row silently takes the whole review chain with it, and a
+**regenerate** deletes one — the chat "Try again" and the skill "Answer without it" undo both
+re-answer the last turn by dropping the previous assistant reply. Conversation deletion was
+built to warn and count first (D-2); the message-level replace had no such guard, and the
+snapshot its failure/Stop restore paths replay covers the `messages` row only, so even those
+"lose nothing" legs brought the answer back without the human's decisions, notes, links and
+export history. The fix is a hard refusal at the ONE shared regenerate choke point
+(`withRegenerateGuard`, used by the chat channel and all seven RAG call sites): it resolves
+the row the delete would target (`getRegenerableAssistantMessageId` — the single owner of
+that query, which `hasRegenerableAssistantReply` and `deleteLastAssistantMessage` also
+follow) and throws the localized `main.chat.reviewBlocksRegenerate` when
+`hasReviewForMessage` says a review hangs off it. Main-side because `regenerate` is
+caller-supplied over IPC; the renderer additionally renders the "Answer without it" undo
+DISABLED-with-a-reason on a reviewed turn (never hidden — the review chip sits in the same
+action row).
+
 ### §3 Journeys / UI (as built, condensed)
 
 Entry points (spec §9): the message action row gains **Review evidence / Continue review**
@@ -9216,6 +9233,21 @@ full Handoff Log P0–P5 at the plan's git-show pointer; dated entries verbatim 
 | P4 | `feat/ep1-p4-freshness` (#71) | Freshness engine, Outdated lifecycle, export refresh, source-in-context; `8d22869`+`ccfab29`; 0 blockers, 2 SHOULD-FIX (**value-bearing acknowledge fingerprint** — state literals let a re-changed source revive a stale ack). 4519→4571 |
 | P5 | `feat/ep1-p5-polish` (#72) | Selections, pane filter, German native pass, a11y audit (§11.13), perf tripwire, back-to-conversation; `58754e01`+`8745d1bf`; **1 BLOCKER: the back-handoff slot survived `askSelectedDocuments` — an old conversation hijacked "Ask these documents"**; slot now cleared on every chat mount. 4571→4595 |
 | P6 | `feat/ep1-p6-pdf-closeout` | Stage A (PDF, plan §11 item 1): `30826191`+`a3b4d8b8` — print harness, extension-driven format, +30 tests incl. the real-Electron smoke. Two review rounds (2 independent reviewers); **the reviewers disagreed on the pack's format self-description line** (a `.pdf` artifact whose cover/Integrity said "Self-contained HTML" — defect vs golden-frozen surface); the orchestrator adjudicated it a SHOULD-FIX → render once post-dialog with the effective format in the model, exactly one line branches, goldens stayed green un-regenerated as the neutrality proof. 4595→4625. Stage B: this retirement (docs only) |
+
+**Post-wave amendment — AUD-01 (2026-07-23): a regenerate may not destroy a review.** D-2
+resolved the CONVERSATION-delete cascade (warn + count) but nothing resolved the
+MESSAGE-level one: a regenerate deletes the last assistant reply, the `messages` FK cascades
+that delete through `evidence_reviews` → items → links and → exports, and none of it is in
+the restore snapshot — so both the failed-generation restore and the Stop-before-first-token
+restore returned the answer without the review. Resolution: **refuse, do not confirm**. There
+is no per-turn confirm surface in the transcript, and a "delete your review to re-answer"
+dialog would offer to destroy work the app has no way to give back (there is no
+review-delete affordance in the UI at all), so the destructive turn is simply refused at the
+shared choke point with copy that names the real alternative — ask the question again as a
+new message, which keeps both the reviewed answer and its review. Renderer half: the
+"Answer without it" undo renders disabled + explained rather than hidden. Extending the
+restore snapshot to carry the review chain was considered and rejected: much larger, and it
+would still leave every unguarded caller destructive.
 
 ### §-anchor legend (historical spec/plan citations)
 

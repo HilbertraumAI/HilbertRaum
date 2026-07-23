@@ -568,6 +568,21 @@ export function getEvidenceReviewForMessage(db: Db, messageId: string): Evidence
   }
 }
 
+/**
+ * Does this message carry a review? A CHEAP existence probe — an indexed `message_id` lookup
+ * with `LIMIT 1`, no row materialization. Deliberately NOT `getEvidenceReviewForMessage`, which
+ * additionally reads every item row and recomputes the ready gate: guards on destructive paths
+ * (AUD-01 — a regenerate's delete cascades the whole review chain away) only need the yes/no,
+ * and must not pay for the read-model to get it.
+ */
+export function hasReviewForMessage(db: Db, messageId: string): boolean {
+  const row = prepareCached(
+    db,
+    'SELECT 1 AS present FROM evidence_reviews WHERE message_id = ? LIMIT 1'
+  ).get(messageId) as { present: number } | undefined
+  return row !== undefined
+}
+
 /** How many reviews a conversation's messages carry (the D-2 delete-confirm count). */
 export function countEvidenceReviewsForConversation(db: Db, conversationId: string): number {
   const row = prepareCached(
