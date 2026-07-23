@@ -685,3 +685,60 @@ page a real user actually reaches after the crash.
   comment saying why they cannot appear there); typecheck re-verified clean. Worth recording: a
   concurrent agent caught an orchestrator mistake that the phase's own gate would not have.
 - **Discovered -> backlog:** B-25, B-26, B-27, B-28, B-29, B-30 (**owner decision**), B-31.
+
+### Phase 1b — B-02 (the `result_tables` sibling cascade) — DONE
+
+A mid-wave finding, not in the original audit — surfaced by the Phase-1 adversarial verifier. No
+`AUD-nn` id, so code and docs describe it in prose rather than inventing one.
+
+**Decision D-1b-a (snapshot-and-replay here, NOT the refusal used for reviews).** The two fixes look
+alike but must differ. A *successful* regenerate SHOULD drop the old result table — the answer is
+genuinely being replaced and the new one brings its own. The bug is confined to the two legs that
+put the OLD answer back (the F2 non-abort failure restore and the CB-2 Stop-before-first-token
+restore), where the table should return with it. So `DeletedMessage` now captures the message's
+`result_tables` rows before the delete and `restoreMessage` replays them. This is exactly the
+alternative that was REJECTED for evidence reviews (D-1d) — correctly, in both cases: a review is
+irreplaceable human work-product that must never be destroyed at all, whereas a result table is a
+derived artifact whose loss is only wrong on the restore legs.
+
+**Decision D-1b-b (the replay is best-effort and NOT in one transaction with the message insert) —
+recorded design choice, not an oversight.** Wrapping both would mean a failure in the table replay
+rolls back the ANSWER restore too, which is strictly worse than today. The answer is the load-bearing
+part; a table row that somehow refuses to re-insert must leave the user with the answer back rather
+than with nothing. Mirrors `saveResultTable`'s existing posture (a table that cannot persist never
+blocks its answer). Failure logs ids/counts only, never content.
+
+**Ordering is load-bearing:** the message row is inserted FIRST so `result_tables.message_id` — an FK
+under `PRAGMA foreign_keys = ON` — resolves when the table rows follow.
+
+- **Closure on the cascade class:** all 24 foreign keys in `db.ts` were enumerated. **Exactly two**
+  reference `messages(id)`, both `ON DELETE CASCADE`, and there is **no third**: `result_tables`
+  (this fix) and `evidence_reviews` (covered by Phase 1's outright refusal — its own children cascade
+  off `evidence_reviews.id` / `evidence_review_items.id`, not off `messages(id)`, so the refusal
+  covers the whole chain). Everything else hangs off documents/chunks/conversations/collections/
+  tree_nodes/bank_*/invoices/image_sessions and is unreachable from the regenerate delete.
+- **Schema shape that mattered:** `result_tables.message_id` carries only an INDEX, **not** a UNIQUE
+  constraint, so more than one row per message is schema-legal. All rows are captured and replayed in
+  `created_at ASC, rowid ASC` order — pinned by a dedicated test.
+- **Files:** `src/main/services/chat.ts` (new `DeletedResultTable`, `DeletedMessage.resultTables`,
+  capture in `deleteLastAssistantMessage`, replay in `restoreMessage`),
+  `src/main/ipc/chat-stream.ts` (comment correction — see below), `src/main/services/db.ts` (schema
+  comment rider, applied by the orchestrator), new
+  `tests/integration/regenerate-result-table-restore.test.ts`.
+- **RED evidence:** 3 failed / 2 passed pre-fix. Both restore legs showed the answer restored and the
+  table gone — `expected [] to deeply equal [ {…8 columns…} ]`, with the full row diff captured
+  (id, message_id, conversation_id, columns_json, rows_json, row_count, source, created_at). The
+  multi-row case failed the same way. **The CONTROL passed before and after**: a successful
+  regenerate still drops the old table, so the fix cannot resurrect a table onto a legitimately
+  replaced answer. The table-less round-trip also passed both ways (the common case is unchanged).
+- **GREEN (orchestrator's own run):** typecheck green; `regenerate-result-table-restore` 5 ok,
+  `chat-stream-regenerate` ok, `rag-regenerate-ipc` ok, `regenerate-evidence-review-guard` 6 ok,
+  `chat` 55 ok, `result-tables` ok -> **6 files / 76 tests pass**. No existing test needed an
+  expectation edit.
+- **Stale comment corrected in passing:** Phase 1's own comment in `chat-stream.ts` asserted the
+  snapshot "covers the `messages` row ONLY" — true when written, false after this phase. Now states
+  that it covers the messages row and the answer's `result_tables` rows, but NOT the review chain
+  (which is why the refusal is still required).
+- **Discovered -> backlog:** B-23 (`loadResultTable` ordering has no rowid tiebreak), B-24
+  (`saveResultTable` neither replaces nor dedupes, so the "one table per message" invariant is
+  comment-only and unenforced).

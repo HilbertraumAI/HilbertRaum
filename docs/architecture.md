@@ -8148,6 +8148,25 @@ produced before 2026-07-05 carry no table (no backfill — the table is the answ
 only the bank format path emits one so far (invoice port = §6); tables key off messages, so no
 document-purge hook is needed.
 
+**Post-wave amendment (2026-07-23) — the regenerate restore legs replay the table.**
+`result_tables.message_id` is a foreign key with `ON DELETE CASCADE`, so the regenerate
+`DELETE FROM messages` takes the answer's table with it. That is CORRECT when a regenerate
+succeeds — the answer is genuinely replaced and the new one brings its own table — but the two
+legs that put the OLD answer back (a non-abort generation failure, and a Stop before the first
+token) replayed only the `messages` row, so the reply returned with its table permanently gone:
+the derived `hasResultTable` EXISTS join then read false and the Export CSV affordance silently
+vanished from a turn the app had just reported as fully restored, unreproducible short of
+re-running the model. `deleteLastAssistantMessage` now captures the rows into the `DeletedMessage`
+snapshot before the delete and `restoreMessage` replays them, message row first so the foreign key
+resolves. Two shape notes that matter: `message_id` carries only an INDEX, **not** a UNIQUE
+constraint, so the "ONE tabular artifact per message" wording above is an intended invariant rather
+than an enforced one — all rows are captured and replayed in `created_at ASC, rowid ASC` order; and
+the replay is deliberately **not** in one transaction with the message insert, because a rollback
+would discard the ANSWER restore too, which is strictly worse (the `saveResultTable` posture: a
+table that cannot persist never blocks its answer). A replay failure logs ids and counts only.
+Distinct from the evidence-review cascade, which is REFUSED outright rather than replayed — a
+review is irreplaceable human work-product, a result table is a derived artifact.
+
 ### §5 Phase 3 v1 — TableRequest parse + derived-column enrichment (as built + conscious deferrals)
 
 `services/skills/enricher.ts`: **`wantsExtraColumns`** — a cheap deterministic PRE-GATE

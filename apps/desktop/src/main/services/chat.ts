@@ -765,11 +765,39 @@ export function setConversationDefaultSkill(
 }
 
 /**
+ * One `result_tables` row captured alongside a deleted message, column-for-column, so
+ * `restoreMessage` can replay it byte-exactly: same id, same serialized columns/rows payload,
+ * same row_count/source/created_at. Nothing is re-derived — the table that comes back is the
+ * table that was there. Columns/rows are CONTENT (never logged or audited).
+ */
+export interface DeletedResultTable {
+  readonly id: string
+  readonly messageId: string
+  readonly conversationId: string
+  readonly columnsJson: string
+  readonly rowsJson: string
+  readonly rowCount: number
+  readonly source: string | null
+  readonly createdAt: string
+}
+
+/**
  * A snapshot of a deleted message, sufficient to re-insert it byte-faithfully via
  * `restoreMessage`. Powers the regenerate data-loss guard (F2, post-merge audit): the
  * destructive regenerate delete runs only after the stream slot is held, and the prior reply
  * is restored from this snapshot if generation then fails for a non-abort reason — so a failed
  * regenerate never leaves the turn answer-less.
+ *
+ * It also carries the message's `result_tables` rows. `result_tables.message_id` is a foreign key
+ * with ON DELETE CASCADE and the workspace runs with `PRAGMA foreign_keys = ON`, so the
+ * regenerate `DELETE FROM messages` takes the answer's structured table (the artifact behind the
+ * message-level "Export CSV" action) with it. Dropping it is CORRECT when a regenerate succeeds —
+ * the answer is genuinely replaced and the new one brings its own table — but on the two legs
+ * that put the OLD answer back (a non-abort generation failure, and a Stop before the first
+ * token) the reply used to return with its table permanently gone: the derived `hasResultTable`
+ * EXISTS join then read false and the Export affordance silently vanished from a turn the app had
+ * just reported as fully restored, with no way to reproduce it short of re-running the model.
+ * Capturing the rows here keeps those legs' "nothing is lost" contract honest.
  */
 export interface DeletedMessage {
   readonly id: string
@@ -785,6 +813,8 @@ export interface DeletedMessage {
   readonly kind: string | null
   readonly coversThroughRowid: number | null
   readonly truncated: number | null
+  /** The message's result tables, oldest-first. Empty for the common table-less answer. */
+  readonly resultTables: readonly DeletedResultTable[]
 }
 
 interface DeletedMessageRow {
@@ -801,6 +831,17 @@ interface DeletedMessageRow {
   kind: string | null
   covers_through_rowid: number | null
   truncated: number | null
+}
+
+interface ResultTableRow {
+  id: string
+  message_id: string
+  conversation_id: string
+  columns_json: string
+  rows_json: string
+  row_count: number
+  source: string | null
+  created_at: string
 }
 
 /**
@@ -851,6 +892,12 @@ export function hasRegenerableAssistantReply(db: Db, conversationId: string): bo
  * checkpoint sat at the conversation tail and a regenerate deleted IT instead of the prior answer
  * (and `hasRegenerableAssistantReply` disagreed with what the user sees — the checkpoint is
  * invisible in the transcript). Both queries now look at the last VISIBLE message.
+ *
+ * The snapshot also captures the message's `result_tables` rows BEFORE the delete, because that
+ * delete CASCADEs into them (see `DeletedMessage`). `message_id` there carries only an index, not
+ * a UNIQUE constraint, so every row is captured — ordered `created_at ASC, rowid ASC` so the
+ * replay re-creates the same relative order, which is what `loadResultTable`'s newest-first read
+ * resolves against.
  */
 export function deleteLastAssistantMessage(db: Db, conversationId: string): DeletedMessage | null {
   const row = db
@@ -862,6 +909,13 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
     )
     .get(conversationId) as unknown as DeletedMessageRow | undefined
   if (!row || row.role !== 'assistant') return null
+  // Read the cascade-doomed rows first — after the DELETE they are unrecoverable. Indexed on
+  // message_id and empty for the vast majority of answers, so this costs a single index probe.
+  const tableRows = prepareCached(
+    db,
+    `SELECT id, message_id, conversation_id, columns_json, rows_json, row_count, source, created_at
+       FROM result_tables WHERE message_id = ? ORDER BY created_at ASC, rowid ASC`
+  ).all(row.id) as unknown as ResultTableRow[]
   db.prepare('DELETE FROM messages WHERE id = ?').run(row.id)
   return {
     id: row.id,
@@ -876,16 +930,34 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
     coverageJson: row.coverage_json,
     kind: row.kind,
     coversThroughRowid: row.covers_through_rowid,
-    truncated: row.truncated
+    truncated: row.truncated,
+    resultTables: tableRows.map((t) => ({
+      id: t.id,
+      messageId: t.message_id,
+      conversationId: t.conversation_id,
+      columnsJson: t.columns_json,
+      rowsJson: t.rows_json,
+      rowCount: t.row_count,
+      source: t.source,
+      createdAt: t.created_at
+    }))
   }
 }
 
 /**
  * Re-insert a previously-deleted message exactly (same id, timestamp, citations, coverage, skill
- * stamp). Restores a regenerate's prior reply after a non-abort generation failure (F2). The
- * row keeps its original `created_at`, so it sorts back to the tail of the transcript; the FTS
- * triggers re-index it on insert. A fresh rowid is assigned (rowid is identity-free here — no
- * checkpoint coverage points at a tail assistant reply).
+ * stamp) together with any result tables that hung off it. Restores a regenerate's prior reply
+ * after a non-abort generation failure (F2) or a Stop before the first token (CB-2). The row keeps
+ * its original `created_at`, so it sorts back to the tail of the transcript; the FTS triggers
+ * re-index it on insert. A fresh rowid is assigned (rowid is identity-free here — no checkpoint
+ * coverage points at a tail assistant reply).
+ *
+ * Ordering is load-bearing: the message row goes in FIRST so `result_tables.message_id` — a
+ * foreign key under `PRAGMA foreign_keys = ON` — resolves when the table rows follow. The table
+ * replay is best-effort and never allowed to fail the restore: the ANSWER is the load-bearing
+ * part, and a table row that somehow refuses to re-insert must leave the user with the answer
+ * back rather than with nothing (the `saveResultTable` posture, where a table that cannot persist
+ * never blocks the answer either). Only ids/counts are logged if that happens — never content.
  */
 export function restoreMessage(db: Db, m: DeletedMessage): void {
   prepareCached(
@@ -909,6 +981,29 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     m.coversThroughRowid,
     m.truncated
   )
+  if (m.resultTables.length === 0) return
+  try {
+    const insert = prepareCached(
+      db,
+      `INSERT INTO result_tables
+         (id, message_id, conversation_id, columns_json, rows_json, row_count, source, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    for (const t of m.resultTables) {
+      insert.run(
+        t.id,
+        t.messageId,
+        t.conversationId,
+        t.columnsJson,
+        t.rowsJson,
+        t.rowCount,
+        t.source,
+        t.createdAt
+      )
+    }
+  } catch {
+    log.warn('Result-table restore failed', { messageId: m.id, tables: m.resultTables.length })
+  }
 }
 
 /**

@@ -267,6 +267,14 @@ CREATE INDEX IF NOT EXISTS idx_extract_chunk ON extraction_records(chunk_id);
 -- logged/audited; source is a content-free discriminator ('bank-statement'). The message FK
 -- CASCADEs, so the regenerate delete and the conversation delete (which removes messages first,
 -- in one transaction) both drop the table automatically under PRAGMA foreign_keys = ON.
+-- Rider: the regenerate delete still cascades, but the two legs that put the OLD answer back (a
+-- non-abort generation failure, and a Stop before the first token) now capture these rows before
+-- the delete and replay them with the message -- so only a SUCCESSFUL regenerate actually drops
+-- the table, which is correct: that answer was genuinely replaced. See DeletedMessage in
+-- services/chat.ts. Note message_id carries only an INDEX, not a UNIQUE constraint, so the
+-- "ONE tabular artifact per message" wording above is an intended invariant, not an enforced one;
+-- the capture/replay handles N rows in (created_at, rowid) order accordingly.
+-- (No backticks in this comment: it lives inside the SCHEMA template literal.)
 CREATE TABLE IF NOT EXISTS result_tables (
   id TEXT PRIMARY KEY,
   message_id TEXT NOT NULL,

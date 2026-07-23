@@ -135,9 +135,10 @@ export function withRegenerateGuard(
     // does not just drop an answer — it takes the reply's ENTIRE review chain with it: the review
     // head (title, Ready status, reviewer label, general note, freshness acknowledgement), every
     // per-block decision and reviewer note, every evidence link, and the whole export history.
-    // The `DeletedMessage` snapshot the restore legs replay covers the `messages` row ONLY, so
-    // even the F2 (non-abort failure) and CB-2 (Stop before the first token) paths — the ones
-    // designed to lose nothing — brought the answer back WITHOUT the human's work, permanently.
+    // The `DeletedMessage` snapshot the restore legs replay covers the `messages` row and the
+    // answer's `result_tables` rows — NOT the review chain — so even the F2 (non-abort failure)
+    // and CB-2 (Stop before the first token) paths — the ones designed to lose nothing — would
+    // bring the answer back WITHOUT the human's work, permanently.
     // Deleting a whole CONVERSATION counts its reviews and warns first; a message-level replace
     // deserves at least as much care, and there is no per-turn confirm surface here, so refuse.
     // Resolving the target id up front means we inspect the exact row the delete would destroy.
