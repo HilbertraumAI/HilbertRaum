@@ -157,6 +157,72 @@ describe('committed catalog — Qwen3.6 27B pair (2026-07-12 promotion)', () => 
   })
 })
 
+// The Gemma 4 QAT wave (model-policy.md "Gemma 4 QAT wave", issue #82): the four official
+// Google QAT Q4_0 additions around the shipped 12B winner. Same posture as the unpromoted
+// Qwen3.5 wave members: text-only chat, rank 0, not bundled, never auto-recommended until
+// the offline benchmark promotes them.
+const GEMMA4_WAVE_IDS = [
+  'gemma4-e2b-it-qat-q4',
+  'gemma4-e4b-it-qat-q4',
+  'gemma4-26b-a4b-it-qat-q4',
+  'gemma4-31b-it-qat-q4'
+]
+
+describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
+  it('all four Gemma 4 QAT wave manifests are present and validate', () => {
+    const ids = new Set(committedManifests().map((m) => m.id))
+    for (const id of GEMMA4_WAVE_IDS) expect(ids.has(id), `${id} present`).toBe(true)
+  })
+
+  it('every Gemma 4 QAT wave manifest holds the wave invariants', () => {
+    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
+    for (const id of GEMMA4_WAVE_IDS) {
+      const m = byId[id]
+      expect(m, id).toBeDefined()
+      // role / runtime — the chat pipeline only.
+      expect(m.role, `${id} role`).toBe('chat')
+      expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
+      expect(m.format, `${id} format`).toBe('gguf')
+      expect(m.family, `${id} family`).toBe('gemma4')
+      // Not promoted: rank 0 + no legacy profiles → never auto-recommended (asserted below too).
+      expect(m.recommendationRank, `${id} rank`).toBe(0)
+      expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
+      // Apache-2.0 (Gemma 4 is the Apache generation), review approved (official Google QAT —
+      // first-party provenance, drive-shippable). Distinct from the two local-test Gemma stubs
+      // (gemma-4-26b-q4 / gemma4-coding-q8: license "gemma", no download block, unverified hash).
+      expect(m.license, `${id} license`).toBe('apache-2.0')
+      expect(m.licenseReview.status, `${id} review`).toBe('approved')
+      // Real hashes: pinned from HF LFS OIDs and confirmed against real downloads for
+      // E2B/E4B/26B-A4B by the 2026-07-23 fetch-models run (SHA-256-verified on disk).
+      expect(isRealSha256(m.sha256), `${id} real sha256`).toBe(true)
+      expect(m.download, `${id} download block`).toBeDefined()
+      expect(m.download!.sha256, `${id} download hash equals top-level`).toBe(m.sha256)
+      // Text-only: the upstream repos ship mmproj projectors we deliberately do not reference.
+      expect(m.mmproj, `${id} no mmproj`).toBeUndefined()
+      // The 8192 local runtime budget (the wave convention, matching the 12B).
+      expect(m.recommendedContextTokens, `${id} ctx`).toBe(8192)
+    }
+  })
+
+  it('NEVER auto-recommends a rank-0 Gemma 4 wave model at any realistic RAM level', () => {
+    // A rank-0 model with a UNIQUE recommended_ram_gb below every ranked model's would become
+    // the only "comfortable fit" at that RAM level and slip past the preferRanked guard —
+    // exactly what happened when the E2B briefly declared 12 (the small-tier floor is 16).
+    const chat = committedManifests()
+    const waveSet = new Set(GEMMA4_WAVE_IDS)
+    for (const ram of [8, 12, 16, 24, 32, 48, 64, 128]) {
+      const picked = recommendModelIdByRam(chat, ram, 'chat')
+      expect(waveSet.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
+    }
+  })
+
+  it('the shipped 12B winner keeps its Phase-29 rank next to the wave', () => {
+    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
+    // The wave must not disturb the ranked incumbent it challenges.
+    expect(byId['gemma4-12b-it-qat-q4'].recommendationRank, '12B rank').toBe(2)
+  })
+})
+
 // full-audit 2026-07-12 TQ-2: the 2507 refresh is the one RANKED (auto-recommendable) chat
 // manifest that carried no named CI invariant — a rank/license/hash mis-edit or an accidental
 // deletion passed the suite (issue #48 closed exactly this gap for the fast-tier pair; this

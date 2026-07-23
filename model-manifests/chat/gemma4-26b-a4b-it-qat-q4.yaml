@@ -1,0 +1,52 @@
+id: gemma4-26b-a4b-it-qat-q4
+display_name: Gemma 4 26B-A4B Instruct QAT Q4
+family: gemma4
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 14.4
+# ESTIMATED (no measured RSS yet): a field datapoint (issue #42 reopen, 2026-07-11) had this
+# model ~16 GB resident on a 24 GB machine → +~3 GiB headroom (PROD-1 model-alone floor) → 20.
+# Co-residency (embedder/reranker/app/OS) lives in recommended_ram_gb; recalibrate from peak
+# RSS after the b9849 smoke, like Phase-29 did.
+recommended_min_ram_gb: 20
+recommended_ram_gb: 32
+# Default 0: NOT auto-recommended. The HEADLINE candidate of the Gemma 4 QAT wave: MoE with
+# ~3.8B ACTIVE params/token (8 of 128 experts) → ~26B-class quality at near-4B CPU decode
+# speed — the same total-vs-active trade as qwen3-30b-a3b (18.6 GB) and qwen3.5-35b-a3b
+# (20.6 GB) at 4–6 GB LESS disk/RAM. Challenges the ranked 12–14B winner (gemma4-12b, rank 2)
+# on ≥24 GB machines AND both opt-in MoEs. Promote with a real `recommendation_rank` only after
+# the local German/English grounded-QA eval + b9849 smoke (model-benchmarks.md §9) — public
+# scores do not count.
+recommendation_rank: 0
+recommended_context_tokens: 8192
+# Gemma 4's chat template honours `enable_thinking` — verified live on the 12B (Phase-29 run #2,
+# tests/manual/gemma-thinking.test.ts). Assumed template-family-wide; VERIFY per size by smoke
+# before relying on Deep.
+supports_thinking_mode: true
+supports_tools: false
+local_path: models/chat/gemma4-26b-a4b-it-qat-q4.gguf
+# Real SHA-256 + exact byte size captured 2026-07-23 from HuggingFace LFS metadata — the git-LFS
+# OID IS the SHA-256 of the file content (the qwen3.5-27b / TranslateGemma hash-provenance
+# posture). Re-confirm with `verify-models --generate` after the first fetch.
+sha256: 3eca3b8f6d7baf218a7dd6bba5fb59a56ee25fe2d567b6f5f589b4f697eca51d
+# Official Google QAT Q4_0 (vendor quantization-aware trained — not a third-party requant; the
+# same provenance as the approved gemma4-12b entry). NOTE the upstream naming traps: the repo id
+# says `26B-A4B` but the FILE drops the A4B (`gemma-4-26B_q4_0-it.gguf`), and the quant sits
+# BEFORE `-it`.
+download:
+  url: https://huggingface.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf/resolve/main/gemma-4-26B_q4_0-it.gguf?download=true
+  sha256: 3eca3b8f6d7baf218a7dd6bba5fb59a56ee25fe2d567b6f5f589b4f697eca51d
+  size_bytes: 14439363584
+  license_url: https://www.apache.org/licenses/LICENSE-2.0
+bundled_on_preconfigured_drive: false
+# TEXT-ONLY USE: upstream Gemma 4 26B-A4B is image-text-to-text and the repo ships an mmproj
+# projector (`gemma-4-26B-it-mmproj.gguf`) — we deliberately do not reference it (the gemma4-12b
+# posture; chat does not use vision).
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"
+  reviewed_at: "2026-07-23"
+  notes: "APPROVED 2026-07-23: license verified as apache-2.0 via the Hugging Face API card tag on the OFFICIAL Google org GGUF repo (https://huggingface.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf, ungated) — Gemma 4 is Apache-2.0 (same review basis as gemma4-12b-it-qat-q4, approved 2026-06-10). Quantization published by the model vendor itself (official Google QAT GGUF — not a third-party requant). Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive (the repo publishes no LICENSE blob; the card tag is the declaration — download.license_url points at the canonical Apache-2.0 text)."
