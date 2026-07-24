@@ -9,6 +9,7 @@ import type {
   EvidenceLinkInput,
   EvidenceReadyGate,
   EvidenceReview,
+  EvidenceReviewBulkAction,
   EvidenceReviewDetail,
   EvidenceReviewItem,
   EvidenceReviewItemPatch,
@@ -583,6 +584,67 @@ export function hasReviewForMessage(db: Db, messageId: string): boolean {
   return row !== undefined
 }
 
+/**
+ * EVERY review in one conversation as light entry-point summaries — the chat transcript's
+ * whole chip state in ONE read (AUD-12).
+ *
+ * `getEvidenceReviewForMessage` above answers for a SINGLE message and costs a head read +
+ * a full item-row load + a gate derivation; the transcript needs the answer for every
+ * candidate answer it renders, so asking per message made the cost of opening a conversation
+ * grow with its history (and, over IPC, one serial round trip per candidate). This reads the
+ * conversation's head rows (one indexed query on the denormalized `conversation_id`) and the
+ * item rows behind them (one join), then derives every gate in memory — two statements
+ * regardless of how many reviews the conversation carries.
+ *
+ * Same tolerant row→DTO contract as the single read, and the same honest constant-false
+ * `outdated`: the derived overlay is applied at the IPC boundary, never here.
+ */
+export function listEvidenceReviewSummariesForConversation(
+  db: Db,
+  conversationId: string
+): EvidenceReviewSummary[] {
+  const rows = prepareCached(
+    db,
+    'SELECT * FROM evidence_reviews WHERE conversation_id = ? ORDER BY created_at, rowid'
+  ).all(conversationId) as unknown as ReviewRow[]
+  if (rows.length === 0) return []
+  const itemRows = prepareCached(
+    db,
+    `SELECT i.review_id, i.kind, i.block_kind, i.decision
+       FROM evidence_review_items i
+       JOIN evidence_reviews r ON r.id = i.review_id
+      WHERE r.conversation_id = ?`
+  ).all(conversationId) as unknown as Array<
+    Pick<ItemRow, 'review_id' | 'kind' | 'block_kind' | 'decision'>
+  >
+  const gateInputs = new Map<
+    string,
+    Array<Pick<EvidenceReviewItem, 'kind' | 'blockKind' | 'decision'>>
+  >()
+  for (const r of itemRows) {
+    const list = gateInputs.get(r.review_id) ?? []
+    list.push({
+      kind: normalizeItemKind(r.kind),
+      blockKind: normalizeBlockKind(r.block_kind),
+      decision: normalizeDecision(r.decision)
+    })
+    gateInputs.set(r.review_id, list)
+  }
+  return rows.map((row) => {
+    const head = rowToReview(row)
+    return {
+      id: head.id,
+      conversationId: head.conversationId,
+      messageId: head.messageId,
+      title: head.title,
+      status: head.status,
+      outdated: head.outdated,
+      gate: deriveReadyGate(gateInputs.get(row.id) ?? []),
+      updatedAt: head.updatedAt
+    }
+  })
+}
+
 /** How many reviews a conversation's messages carry (the D-2 delete-confirm count). */
 export function countEvidenceReviewsForConversation(db: Db, conversationId: string): number {
   const row = prepareCached(
@@ -812,6 +874,111 @@ export function updateEvidenceReviewItem(
   ).run(decision, reviewerNote, now, itemId)
   touchReview(db, row.review_id, now)
   return readItemById(db, itemId)
+}
+
+// ---------------------------------------------------------------------------
+// Conservative bulk decision actions (spec §14.4) — ONE transaction each
+// ---------------------------------------------------------------------------
+
+/**
+ * The stored `decision` literals the row→DTO normalizer reads as DECIDED. Together with
+ * everything else in the column (including a corrupted literal, which normalizes to
+ * 'not_reviewed') they partition the column exactly, so the SQL predicates below select
+ * precisely the items the per-item read-model would have selected.
+ */
+const DECIDED_DECISION_LITERALS: readonly ReviewDecision[] = [
+  'supported',
+  'partly_supported',
+  'not_supported',
+  'follow_up',
+  'not_applicable'
+]
+
+/** Fixed-arity placeholder list, rendered ONCE at module load (never per call) so the three
+ *  statements below stay stable text — safe to `prepareCached`. */
+const DECIDED_PLACEHOLDERS = DECIDED_DECISION_LITERALS.map(() => '?').join(', ')
+
+/**
+ * The one UPDATE that IS each bulk action, with its bound parameters after `updated_at` and
+ * `review_id`. Predicate notes:
+ *  - `kind <> 'selection'` (not `kind = 'block'`) mirrors the tolerant normalizer: only the
+ *    literal 'selection' reads as a selection, everything else reads as a block, so an
+ *    unknown literal must be treated as a block here too.
+ *  - `block_kind = 'heading'` is exact: 'heading' is the only value that normalizes to
+ *    heading, and only a heading may be swept to Not applicable.
+ */
+function bulkUpdateStatement(action: EvidenceReviewBulkAction): {
+  sql: string
+  extra: readonly ReviewDecision[]
+} {
+  switch (action) {
+    case 'headings_not_applicable':
+      return {
+        sql: `UPDATE evidence_review_items SET decision = 'not_applicable', updated_at = ?
+               WHERE review_id = ? AND kind <> 'selection' AND block_kind = 'heading'
+                 AND decision <> 'not_applicable'`,
+        extra: []
+      }
+    case 'clear_decisions':
+      return {
+        sql: `UPDATE evidence_review_items SET decision = 'not_reviewed', updated_at = ?
+               WHERE review_id = ? AND decision IN (${DECIDED_PLACEHOLDERS})`,
+        extra: DECIDED_DECISION_LITERALS
+      }
+    default:
+      return {
+        sql: `UPDATE evidence_review_items SET decision = 'follow_up', updated_at = ?
+               WHERE review_id = ? AND decision NOT IN (${DECIDED_PLACEHOLDERS})`,
+        extra: DECIDED_DECISION_LITERALS
+      }
+  }
+}
+
+/**
+ * Apply one conservative bulk decision action (spec §14.4) to a whole review in a SINGLE
+ * transaction (AUD-13). Returns the review's refreshed items, or null on an unknown id and
+ * on a READY review (reopen first — the same write-guard the per-item patch enforces).
+ *
+ * Why one transaction: the previous shape issued one item write per affected item, each
+ * re-reading the review head to check the ready guard, re-stamping the head, and re-reading
+ * the item back. Besides the redundant work, a crash (or a lock teardown, or a failing
+ * write) part-way through left the review HALF-swept — a state no user action can produce
+ * and none can explain. Here the sweep is one UPDATE plus one head stamp inside one
+ * BEGIN/COMMIT, so it either lands whole or not at all; the rollback deliberately swallows
+ * its own failure so the ORIGINAL error is what the caller sees.
+ *
+ * The head stamp is skipped when the sweep matched nothing — a no-op bulk action is not
+ * review activity and must not move `updated_at`.
+ *
+ * 'supported' / 'partly_supported' / 'not_supported' are unreachable from here by
+ * construction: no branch writes them, so the forbidden blanket supported-claim cannot be
+ * requested through this entry point at all.
+ */
+export function applyEvidenceReviewBulkAction(
+  db: Db,
+  reviewId: string,
+  action: EvidenceReviewBulkAction
+): EvidenceReviewItem[] | null {
+  // The ONE ready-guard read for the whole sweep (it used to run once per item).
+  const review = readReviewRow(db, reviewId)
+  if (!review) return null
+  if (normalizeStatus(review.status) === 'ready') return null
+  const { sql, extra } = bulkUpdateStatement(action)
+  const now = nowIso()
+  db.exec('BEGIN')
+  try {
+    const result = prepareCached(db, sql).run(now, reviewId, ...extra)
+    if (Number(result.changes) > 0) touchReview(db, reviewId, now)
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure as the thrown error */
+    }
+    throw err
+  }
+  return readItems(db, reviewId)
 }
 
 /**

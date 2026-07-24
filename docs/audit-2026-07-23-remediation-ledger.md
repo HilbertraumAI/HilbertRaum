@@ -219,6 +219,31 @@ Working paper. Transient with the plan and the report; folded into the durable
   README row uses — which means the README now matches `model-policy.md` and not the manifest field.
   *Assigned: opportunistic.*
 
+- [ ] **B-32 — `evidence:getForMessage` is now renderer-DEAD.** After AUD-12 no renderer code calls
+  `window.api.getEvidenceReviewForMessage`; the channel and preload method remain (the main-side
+  service function is still used by the idempotent create). The EP-1 record explicitly treats a dead
+  channel as "a false promise". Kept rather than churn four test files, but retiring
+  channel+preload (keeping the service function) is a clean follow-up. *Assigned:
+  deferred-with-registration.*
+- [ ] **B-33 — the new batch channel is one round trip but still recomputes freshness per review** at
+  the IPC boundary: one `messages` read plus one indexed `documents` lookup per resolved source, per
+  review. So a conversation open is now O(1) IPC but still O(reviews x sources) SQLite point lookups
+  main-side. All indexed and cheap; a batched freshness pass (one `documents` read over the union of
+  snapshotted ids) would make it constant-statement like the head/item reads. *Assigned: future perf
+  phase — not worth a wave on its own.*
+- [ ] **B-34 — ChatScreen's chip-state effect re-fires the WHOLE-conversation batch** whenever a new
+  eligible answer appears (the `unknown` gate opens for the new id), re-reading every review in the
+  conversation to learn about one message. One round trip each time, so far better than before, but
+  passing the unknown ids and filtering main-side would narrow it. *Assigned: future perf phase.*
+- [ ] **B-35 — the SAME fan-out shape AUD-13 fixed still exists for ORDINARY editing.** `doFlush`
+  writes one `evidence:updateItem` per edited item per debounce window, each paying its own
+  ready-guard head re-read, head stamp and item re-read — **and the flush as a whole is NOT atomic**
+  (a mid-flush failure leaves some items written and re-queues the rest). Impact is lower than the
+  bulk case (each write is one explicit user edit, and failures re-merge rather than being lost), but
+  a reviewer working fast across many items pays N of everything. A batched
+  `updateEvidenceReviewItems(patches[])` channel would close it with the same transaction shape
+  AUD-13 just established. *Assigned: Phase 10 loop if cheap, else deferred-with-registration.*
+
 ## Decisions log
 
 - **D-W1 (plan §3, carried in):** the verified-and-dismissed engine-download tar-child-on-quit item is
@@ -742,3 +767,83 @@ under `PRAGMA foreign_keys = ON` — resolves when the table rows follow.
 - **Discovered -> backlog:** B-23 (`loadResultTable` ordering has no rowid tiebreak), B-24
   (`saveResultTable` neither replaces nor dedupes, so the "one table per message" invariant is
   comment-only and unenforced).
+
+### Phase 6 — AUD-12 + AUD-13 + AUD-14 + AUD-15 (evidence-review performance) — DONE
+
+**Handoff — the batch channel shape (Phase 7 and the close-out record need this).** TWO new channels,
+both behind the shared `requireUnlocked()` -> `workspaceAdmitsWork()` predicate this wave introduced,
+and both auto-covered by `ipc-lock-coverage` (which enumerates handlers dynamically — verified green):
+
+1. **`evidence:summariesForConversation`** — preload
+   `getEvidenceReviewSummariesForConversation(conversationId): Promise<EvidenceReviewSummary[]>`;
+   service `listEvidenceReviewSummariesForConversation(db, conversationId)`. Returns every review in
+   the conversation as the **same `EvidenceReviewSummary` shape** the per-message channel returned,
+   element-for-element identical (pinned by test), with the derived `outdated` overlay applied per
+   review at the IPC boundary. `[]` for an unknown/malformed id. **Two SQL statements at any
+   conversation length.** The renderer keys by `messageId`.
+2. **`evidence:bulkAction`** — preload
+   `applyEvidenceReviewBulkAction(reviewId, action): Promise<EvidenceReviewItem[] | null>`, where
+   `EvidenceReviewBulkAction = 'headings_not_applicable' | 'clear_decisions' | 'undecided_follow_up'`
+   (new shared type). Returns the refreshed items; `null` on unknown id, unrecognized action, or a
+   READY review.
+
+**Decision D-6a (AUD-15 async port keeps the durability contract byte-for-byte).** The atomic tail is
+now `fs.promises`, mirroring the earlier image-history sync-fs port. Verified in the diff by the
+orchestrator: `open -> write -> fd.sync() -> fd.close() (in finally) -> readFile -> rename`, the hash
+still computed from the bytes **read back off disk** (never the in-memory buffer), the short-write
+refusal retained, and the close deliberately NOT swallowed (`never .catch(() => {})` — an unclosed
+handle keeps the tmp sibling locked on Windows and would defeat the cleanup).
+`writePackFileAtomic` changed from `string` to `Promise<string>`; every caller is in-repo and updated.
+
+**Decision D-6b (AUD-13 atomicity is the user-visible half, and is proven, not asserted).** The sweep
+is one `UPDATE evidence_review_items …` plus one head activity stamp inside one `BEGIN`/`COMMIT`.
+Proof: an injected SQLite trigger
+`CREATE TRIGGER … BEFORE UPDATE OF updated_at ON evidence_reviews BEGIN SELECT RAISE(ABORT,…); END`
+fires on the sweep's LAST statement — i.e. AFTER the item UPDATE has already applied inside the
+transaction, the genuine "part-way through" case. From a MIXED decision state the test asserts the
+call throws, then that the full item->decision map is **byte-identical to the pre-call snapshot** and
+`updatedAt` did not move, then re-runs the sweep successfully. Teeth: with the service reverted to
+the per-item fan-out the same trigger leaves the heading flipped `not_applicable` -> `not_reviewed`
+while the rest is unswept — exactly the half-applied state the finding names.
+
+**Decision D-6c (AUD-15 is proven by real instrumentation, not a source grep).** Both `node:fs` and
+`node:fs/promises` are wrapped in pass-through recording `vi.fn`s (the existing download-fsync
+idiom — everything still hits the real filesystem, the mock only records), and the `FileHandle` is
+proxied so `write`/`sync`/`close` are observable in ORDER. Driven for real over a ~700 KB HTML pack
+and a ~700 KB PDF. Assertions: zero synchronous fs calls targeting the export directory; the exact
+async sequence `open -> write -> sync -> close -> readFile -> rename`; `record.fileSha256` equals the
+sha256 of the destination read back off disk; and on BOTH failure paths `close` is recorded **before**
+`rm` (the Windows locked-handle hazard) with no destination/tmp residue and no export row.
+
+- **RED evidence (each finding reverted in isolation, then restored byte-for-byte):**
+  - **AUD-12:** `expected { batch: +0, perMessage: 40 } to deeply equal { batch: 1, perMessage: +0 }`
+    — 40 serial round trips for a 40-answer conversation open, batch channel never called.
+  - **AUD-13:** `expected 4 to be 1` (four ready-guard head re-reads for a four-item sweep, likewise
+    four head stamps), and the atomicity diff `- "…": "not_applicable" / + "…": "not_reviewed"` —
+    the review left HALF-swept after an injected failure. Five renderer cases red alongside.
+  - **AUD-14:** `expected 'SCAN evidence_reviews' to contain 'idx_evidence_reviews_conversation'` for
+    BOTH the delete-confirm COUNT and the new batch head read, plus `no such index` on the teeth drop.
+  - **AUD-15:** `expected [ { fn: 'openSync' }, … ] to deeply equal []` listing `openSync` /
+    `readFileSync` / `renameSync` on the tmp sibling, and the fsync-before-rename ORDER test red with
+    `expected -1 to be greater than or equal to 0` (no async close recorded).
+- **GREEN (orchestrator's own runs):** typecheck green; batch 1 (the four new/most-affected suites +
+  `evidence-reviews-ipc`, `evidence-pack-export`, `evidence-review-open-perf`) **7 files / 94 tests**;
+  batch 2 (`evidence-freshness`, `evidence-snapshot`, the five Review* renderer suites,
+  `repo-hygiene`, `ipc-lock-coverage`, `evidence-pack-print-pdf`, `audit-ipc`) **12 files / 153
+  tests**. Implementer additionally ran 27 files / 311 tests across four batches.
+- **Byte-hygiene note:** the new `db.ts` index comment correctly avoids backticks — it lives inside
+  the `SCHEMA` template literal, the exact trap that broke typecheck earlier in this wave.
+- **Side effect, deliberate and good:** the AUD-12 batch shrinks the async window recorded as a
+  Phase-1 residual (the transcript undo rendering enabled on an already-reviewed turn for one tick).
+  Still safe either way — main refuses the destructive action outright — but smaller.
+- **Scope note:** the AUD-12 assertion did NOT land in `evidence-review-open-perf.test.ts` as the
+  brief speculated. That file is about opening a **review** (its <=1 s budget, runtime tripwire,
+  offline guard); AUD-12 is about opening a **conversation**. Left untouched and green; the new
+  files' headers explain the split. Correct call.
+- **Recorded for future authors (not a defect):** making the print-source write async means the
+  load-step timeout timer is armed only after an event-loop turn, so `vi.useFakeTimers()` +
+  `advanceTimersByTimeAsync(TIMEOUT+1)` advanced past a deadline that did not exist yet and the test
+  hung to its 15 s limit. Fixed with a bounded `advanceTimersByTimeAsync(0)` yield loop gated on the
+  hidden window existing (observable state, no fixed sleep). **Any future async step added before the
+  first `withStepTimeout` will re-break this test the same way.**
+- **Discovered -> backlog:** B-32, B-33, B-34, B-35.

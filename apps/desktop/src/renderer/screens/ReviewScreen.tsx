@@ -335,13 +335,13 @@ export function ReviewScreen({
                 <DropdownMenu.Content className="menu" align="start" sideOffset={4}>
                   <DropdownMenu.Item
                     className="menu-item"
-                    onSelect={() => bulkMarkHeadingsNotApplicable()}
+                    onSelect={() => void bulkMarkHeadingsNotApplicable()}
                   >
                     {t('review.bulk.headingsNa')}
                   </DropdownMenu.Item>
                   <DropdownMenu.Item
                     className="menu-item"
-                    onSelect={() => bulkMarkUndecidedFollowUp()}
+                    onSelect={() => void bulkMarkUndecidedFollowUp()}
                   >
                     {t('review.bulk.followUp')}
                   </DropdownMenu.Item>
@@ -450,7 +450,7 @@ export function ReviewScreen({
         confirmLabel={t('review.bulk.clearConfirm')}
         t={t}
         onConfirm={() => {
-          bulkClearDecisions()
+          void bulkClearDecisions()
           setConfirmClear(false)
         }}
         onCancel={() => setConfirmClear(false)}

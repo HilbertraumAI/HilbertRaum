@@ -6,6 +6,7 @@ import type {
   EvidenceLinkInput,
   EvidenceReadyGate,
   EvidenceReview,
+  EvidenceReviewBulkAction,
   EvidenceReviewDetail,
   EvidenceReviewFreshness,
   EvidenceReviewItem,
@@ -33,12 +34,14 @@ import {
 } from '../services/evidence-pack/export'
 import { printEvidencePackHtmlToPdf } from '../services/evidence-pack/print-pdf'
 import {
+  applyEvidenceReviewBulkAction,
   countEvidenceReviewsForConversation,
   createEvidenceSelection,
   deleteEvidenceReview,
   deleteEvidenceSelection,
   getEvidenceReview,
   getEvidenceReviewForMessage,
+  listEvidenceReviewSummariesForConversation,
   markEvidenceReviewReady,
   removeEvidenceLink,
   reopenEvidenceReview,
@@ -114,6 +117,23 @@ function sanitizeItemPatch(value: unknown): EvidenceReviewItemPatch {
     }
   }
   return patch
+}
+
+const BULK_ACTION_VALUES: ReadonlySet<string> = new Set([
+  'headings_not_applicable',
+  'clear_decisions',
+  'undecided_follow_up'
+])
+
+/** Untrusted-boundary guard for the bulk-action name: one of the three sanctioned literals,
+ *  else null (the handler then refuses with the established null). Nothing here maps an
+ *  unknown name onto a nearby one — a malformed request sweeps NOTHING rather than sweeping
+ *  something the user did not ask for, and the forbidden blanket supported-claim has no
+ *  literal in the set at all. */
+function safeBulkAction(value: unknown): EvidenceReviewBulkAction | null {
+  return typeof value === 'string' && BULK_ACTION_VALUES.has(value)
+    ? (value as EvidenceReviewBulkAction)
+    : null
 }
 
 /** A structurally valid selection input, else null (the service re-validates offsets). */
@@ -208,6 +228,25 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
   )
 
+  // AUD-12: the WHOLE transcript's chip state in one round trip. The per-message channel
+  // above stays (a single freshly-created review still reads through it), but a conversation
+  // open asks ONCE: the renderer used to await one invoke per candidate answer, each of them
+  // a full item-row load plus a freshness recompute, so opening a long documents-mode
+  // conversation paid a serial cost proportional to its history. The derived overlay is
+  // applied per review here, exactly as the single-message read does.
+  ipcMain.handle(
+    IPC.getEvidenceReviewSummariesForConversation,
+    (_e, conversationId: unknown): EvidenceReviewSummary[] => {
+      requireUnlocked()
+      const id = safeId(conversationId)
+      if (!id) return []
+      return listEvidenceReviewSummariesForConversation(ctx.db, id).map((summary) => ({
+        ...summary,
+        outdated: outdatedOverlay(summary.id)
+      }))
+    }
+  )
+
   ipcMain.handle(
     IPC.updateEvidenceReview,
     (_e, reviewId: unknown, patch: unknown): EvidenceReview | null => {
@@ -223,6 +262,21 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
       requireUnlocked()
       const id = safeId(itemId)
       return id ? updateEvidenceReviewItem(ctx.db, id, sanitizeItemPatch(patch)) : null
+    }
+  )
+
+  // AUD-13: one conservative bulk action, one transaction. The renderer used to fan the
+  // sweep out into an individual write per item, so a crash (or a lock teardown, or one
+  // failing write) part-way through left the review HALF-swept — a state no user action can
+  // produce and none can explain. Refuses (null) on an unknown id, an unrecognized action,
+  // and on a READY review, matching the per-item write guard.
+  ipcMain.handle(
+    IPC.applyEvidenceReviewBulkAction,
+    (_e, reviewId: unknown, action: unknown): EvidenceReviewItem[] | null => {
+      requireUnlocked()
+      const id = safeId(reviewId)
+      const bulk = safeBulkAction(action)
+      return id && bulk ? applyEvidenceReviewBulkAction(ctx.db, id, bulk) : null
     }
   )
 

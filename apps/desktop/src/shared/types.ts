@@ -2469,6 +2469,21 @@ export interface EvidenceReviewSummary {
   updatedAt: string
 }
 
+/**
+ * The three sanctioned conservative bulk decision actions (spec §14.4), as ONE named
+ * command applied in a single transaction (AUD-13 — the previous fan-out issued one write
+ * per item, so a crash mid-run left the review half-changed):
+ *  - `headings_not_applicable` — every heading block that is not already Not applicable;
+ *  - `clear_decisions`         — every decided item back to Not reviewed (notes are kept);
+ *  - `undecided_follow_up`     — every still-undecided item to Needs follow-up.
+ * There is deliberately NO "mark all supported": a blanket supported-claim is the one bulk
+ * action the spec forbids, and it has no name on this union, so it cannot be requested.
+ */
+export type EvidenceReviewBulkAction =
+  | 'headings_not_applicable'
+  | 'clear_decisions'
+  | 'undecided_follow_up'
+
 /** The full review read-model (`getEvidenceReview`): head + frozen snapshots + items + exports. */
 export interface EvidenceReviewDetail extends EvidenceReview {
   /** The reviewed answer's frozen markdown — the review renders THIS, never the live message. */

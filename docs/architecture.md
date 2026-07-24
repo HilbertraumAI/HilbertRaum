@@ -9287,6 +9287,56 @@ new message, which keeps both the reviewed answer and its review. Renderer half:
 restore snapshot to carry the review chain was considered and rejected: much larger, and it
 would still leave every unguarded caller destructive.
 
+**Post-wave amendment — AUD-12…AUD-15 (2026-07-23): the surface got batched, indexed and
+taken off the main thread.** Four low-severity findings, all on this surface, all shipped in
+v0.1.53–v0.1.55, all of the same family: work that is naturally ONE operation was issued as
+N.
+
+- **AUD-12 — chip state per message → per conversation.** Opening a documents-mode
+  conversation read the transcript's review chip state one candidate answer at a time, each
+  read a separate IPC round trip AWAITED in sequence, and each one main-side a full item-row
+  load plus a freshness recompute. Latency therefore grew with the conversation's history,
+  and because the renderer committed the whole batch only after the LAST round trip resolved,
+  the chips appeared at the speed of the slowest one. The batch channel
+  (`evidence:summariesForConversation` → `listEvidenceReviewSummariesForConversation`) answers
+  for the whole conversation in TWO statements at any length: one indexed head read, one join
+  for the item rows the gates derive from. The per-message channel stays — a freshly created
+  review still reads through it, and the two are pinned element-for-element identical by
+  test. Beyond latency the single commit shrinks a real window: while a reviewed turn's chip
+  state is unknown the transcript renders the "Answer without it" undo as enabled, so the
+  fewer render passes spent in that state the better (main refuses the destructive action
+  outright regardless — the AUD-01 amendment above).
+- **AUD-13 — bulk sweeps are one transaction.** The three sanctioned conservative bulk
+  actions (§3) walked the item list renderer-side and queued a per-item patch, which flushed
+  as N individual writes — N redundant ready-guard head re-reads, N head activity stamps, N
+  item re-reads. The user-visible half was worse than the waste: a crash or a failing write
+  part-way through left the review HALF-swept, a state no user action can produce and none
+  can explain. Now one named command (`EvidenceReviewBulkAction`) crosses
+  `evidence:bulkAction` and main applies it as ONE `UPDATE` plus one head stamp inside one
+  transaction, returning the refreshed items. The SQL predicates mirror the tolerant row→DTO
+  normalizers exactly (`kind <> 'selection'` rather than `kind = 'block'`, because only the
+  literal `'selection'` reads as a selection; the decided/undecided split is spelled as the
+  five decided literals, because everything else normalizes to `not_reviewed`), so the sweep
+  selects precisely what the per-item path selected. The store flushes pending per-item edits
+  BEFORE the sweep, so a still-debounced decision can never land afterwards and silently undo
+  part of it. Atomicity is proven by injecting a failure at the sweep's LAST statement — the
+  head stamp — and asserting not one decision and not the activity stamp moved.
+- **AUD-14 — `idx_evidence_reviews_conversation`.** `evidence_reviews.conversation_id` is
+  denormalized onto the head row purely so conversation-scoped reads need no join, but it had
+  no index: the D-2 delete-confirm COUNT scanned every review row in the workspace, and the
+  AUD-12 batch would have too. The additive index (same ensure-on-open idiom as the rest of
+  the schema, so existing workspaces get it) makes both index SEARCHes.
+- **AUD-15 — the export tail runs off the synchronous fs API.** The atomic-write contract
+  (tmp sibling → fsync → hash the bytes read BACK off disk → rename) was correct but
+  synchronous, and it runs on the Electron main thread, so a multi-megabyte pack froze the
+  whole process — every window, every pending IPC reply — for the duration of the tail, worst
+  on the slow USB drives this app targets. Ported to `fs.promises` with the fsync taken
+  through the FileHandle, mirroring the image-history store/open path. The durability
+  contract is unchanged: same tmp sibling, same fsync BEFORE the rename, same hash of the
+  on-disk bytes. The handle is closed on every path including failure — on Windows an open
+  handle keeps the tmp file locked and would defeat the cleanup that restores the "no file,
+  no row" invariant. The transient print-source write in the PDF harness moved with it.
+
 ### §-anchor legend (historical spec/plan citations)
 
 Code comments, tests, and the kept docs cite the retired EP-1 papers as `spec §N` /

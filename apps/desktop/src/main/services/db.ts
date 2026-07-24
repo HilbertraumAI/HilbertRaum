@@ -517,6 +517,12 @@ CREATE TABLE IF NOT EXISTS evidence_reviews (
   FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_reviews_message ON evidence_reviews(message_id);
+-- AUD-14: conversation_id is denormalized onto the head row purely so two conversation-scoped
+-- reads never have to join through messages -- the delete-confirm COUNT (D-2) and the chat
+-- transcript's chip-state batch. Both filtered on an UNINDEXED column, so each one scanned
+-- every review row in the workspace; this additive index turns them into index SEARCHes.
+-- (No backticks in this comment: it lives inside the SCHEMA template literal.)
+CREATE INDEX IF NOT EXISTS idx_evidence_reviews_conversation ON evidence_reviews(conversation_id);
 
 CREATE TABLE IF NOT EXISTS evidence_review_items (
   id             TEXT PRIMARY KEY,

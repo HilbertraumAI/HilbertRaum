@@ -443,11 +443,25 @@ describe('ReviewScreen — conservative bulk actions (spec §14.4)', () => {
         makeItem({ id: 'p2', blockKey: 'b2-paragraph-x', textSnapshot: 'Beta' })
       ]
     })
+    // AUD-13: a bulk action is ONE main-side transaction over the whole review, so the
+    // stand-in applies the named sweep to its own copy in one step and returns the whole
+    // refreshed item set — the screen never sees a per-item drip.
+    let rows = detail.items.map((i) => ({ ...i }))
     stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem: vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
         makeItem({ id, ...patch })
-      )
+      ),
+      applyEvidenceReviewBulkAction: vi.fn(async (_reviewId: string, action: string) => {
+        rows = rows.map((i) => {
+          if (action === 'headings_not_applicable') {
+            return i.blockKind === 'heading' ? { ...i, decision: 'not_applicable' as const } : i
+          }
+          if (action === 'clear_decisions') return { ...i, decision: 'not_reviewed' as const }
+          return i.decision === 'not_reviewed' ? { ...i, decision: 'follow_up' as const } : i
+        })
+        return rows.map((i) => ({ ...i }))
+      })
     })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     await screen.findByText('Beta')
@@ -468,17 +482,19 @@ describe('ReviewScreen — conservative bulk actions (spec §14.4)', () => {
 
     // headings→N/A acts on the heading only.
     fireEvent.click(within(menu).getByText(t('en', 'review.bulk.headingsNa')))
-    const items = screen.getAllByRole('listitem')
-    expect(
-      within(items[0]).getByRole('radio', {
-        name: new RegExp(t('en', 'review.decision.not_applicable'))
-      })
-    ).toHaveAttribute('aria-checked', 'true')
-    expect(
-      within(items[1]).getByRole('radio', {
-        name: new RegExp(t('en', 'review.decision.not_reviewed'))
-      })
-    ).toHaveAttribute('aria-checked', 'true')
+    await waitFor(() => {
+      const items = screen.getAllByRole('listitem')
+      expect(
+        within(items[0]).getByRole('radio', {
+          name: new RegExp(t('en', 'review.decision.not_applicable'))
+        })
+      ).toHaveAttribute('aria-checked', 'true')
+      expect(
+        within(items[1]).getByRole('radio', {
+          name: new RegExp(t('en', 'review.decision.not_reviewed'))
+        })
+      ).toHaveAttribute('aria-checked', 'true')
+    })
 
     // Clear-all asks for confirmation first (destructive breadth), then resets.
     openBulkMenu()

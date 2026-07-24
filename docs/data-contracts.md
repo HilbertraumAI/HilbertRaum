@@ -729,18 +729,23 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   conversation?)` (spec §9.1): assistant ∧ (citations non-empty ∨ coverage present ∨
   `conversation.mode === 'documents'`). "Persisted and not streaming" stays the caller's
   gate (a streaming reply has no row yet) — Phase 2 wires it.
-✅ **IPC surface (17 channels, `evidence:*` in `shared/ipc.ts`; handlers in
+✅ **IPC surface (19 channels, `evidence:*` in `shared/ipc.ts`; handlers in
   `main/ipc/registerEvidenceReviewsIpc.ts`, wired in `main/index.ts`; preload methods of the
   same names on `window.api` — 13 shipped in Phase 1, `evidence:countForConversation` added
   in Phase 2 for the D-2 delete confirm, `evidence:export` added in Phase 3 with its
-  pipeline, `evidence:acknowledgeFreshness` + `evidence:sourceContext` added in Phase 4):**
+  pipeline, `evidence:acknowledgeFreshness` + `evidence:sourceContext` added in Phase 4,
+  `evidence:summariesForConversation` + `evidence:bulkAction` added by the AUD-12/AUD-13
+  remediation as the BATCH forms of two surfaces that previously fanned out per message /
+  per item):**
   | preload method | channel | shape |
   |---|---|---|
   | `createEvidenceReview(messageId)` | `evidence:create` | → `EvidenceReviewDetail`; IDEMPOTENT (existing review returned, audit only on real creation); throws localized `invalidRequest` on a malformed id, ids-only errors on unknown/non-assistant message |
   | `getEvidenceReview(reviewId)` | `evidence:get` | → `EvidenceReviewDetail \| null` |
-  | `getEvidenceReviewForMessage(messageId)` | `evidence:getForMessage` | → `EvidenceReviewSummary \| null` (entry-point state) |
+  | `getEvidenceReviewForMessage(messageId)` | `evidence:getForMessage` | → `EvidenceReviewSummary \| null` (entry-point state for ONE message; the transcript uses the conversation-scoped batch below) |
+  | `getEvidenceReviewSummariesForConversation(conversationId)` | `evidence:summariesForConversation` | → `EvidenceReviewSummary[]` — **AUD-12**: the chat transcript's whole chip state in ONE round trip, keyed by `messageId` renderer-side. Same per-summary shape (gate + derived `outdated` overlay) as `evidence:getForMessage`, element-for-element. Service side it is TWO statements for any conversation length — one indexed head read on `conversation_id`, one join for the item rows the gates derive from. `[]` for an unknown/malformed id |
   | `updateEvidenceReview(reviewId, patch)` | `evidence:update` | → `EvidenceReview \| null`; malformed patch fields DROPPED, never coerced |
   | `updateEvidenceReviewItem(itemId, patch)` | `evidence:updateItem` | → `EvidenceReviewItem \| null`; unknown decision literals dropped (stored decision untouched) |
+  | `applyEvidenceReviewBulkAction(reviewId, action)` | `evidence:bulkAction` | → `EvidenceReviewItem[] \| null` — **AUD-13**: one of the three sanctioned conservative sweeps (`EvidenceReviewBulkAction` = `'headings_not_applicable' \| 'clear_decisions' \| 'undecided_follow_up'`) applied to the whole review in ONE transaction, returning the refreshed items. Null on an unknown id, an UNRECOGNIZED action name (never mapped onto a nearby one), and on a READY review (the same write guard the per-item patch enforces). The head activity stamp moves only when the sweep matched something. The forbidden blanket "mark all supported" has no literal in the union, so it cannot be requested |
   | `createEvidenceSelection(reviewId, input)` | `evidence:createSelection` | → `EvidenceReviewItem \| null` (null = refused offsets — never clamped) |
   | `deleteEvidenceSelection(itemId)` | `evidence:deleteSelection` | → `boolean` (blocks refuse) |
   | `setEvidenceLink(itemId, key, input)` | `evidence:setLink` | → `EvidenceReviewItem \| null`; **origin FORCED to `'reviewer'`** — only the snapshot builder mints `'answer_marker'` (a renderer payload can never fake "cited by the answer") |
@@ -755,8 +760,9 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   | `exportEvidencePack(reviewId, options)` | `evidence:export` | → `EvidenceExportRecord \| null` — Phase 3 (plan §8.3): save dialog → deterministic HTML render → ATOMIC write (tmp sibling → fsync → sha256 of the ON-DISK bytes → rename) → `evidence_exports` row. Null on unknown/malformed id (no dialog) or user cancel; any failure UP TO the rename leaves no destination file and no row (spec §28.9). A POST-rename record failure (workspace-DB error, or the review deleted in another window while the dialog was open) UNLINKS the just-written file and REJECTS with distinct localized copy (`main.evidenceReviews.exportNotRecorded`; if even the unlink fails, `…exportFileNotRecorded` states the file exists WITHOUT a history record) — null never means "exported", and a real export is never reported as a cancel (fix round FIX-1). Works on draft AND ready reviews (the ready guard covers item mutations only — tested). `options: EvidencePackExportRequest` (= `Partial<EvidencePackOptions> & {format?}`) resolves against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; the RESOLVED option set persists to `options_json` (the format NEVER does — `evidence_exports.format` is its column). **P6 (plan §11): PDF over the SAME channel** — `format: 'pdf'` (literal only; anything else reads 'html') prints the SAME rendered HTML through the hidden-window harness AFTER the dialog; the save dialog OFFERS both filters (requested first) and the chosen extension has the final word (`packFormatForDestination`: `.pdf`⇒pdf, `.html`/`.htm`⇒html, else the request — file content, extension and recorded format always agree). A failed/killed print = a pre-rename failure: no file, no row |
   Every handler `requireUnlocked()` (`main.evidenceReviews.locked`, EN+DE; auto-enforced by
   `ipc-lock-coverage.test.ts`). **Ready-state write guard (Phase-2 review FIX-1, spec
-  §18.4):** while a review is `ready`, the five ITEM-LEVEL mutations (`updateEvidenceReviewItem`,
-  `setEvidenceLink`, `removeEvidenceLink`, `createEvidenceSelection`, `deleteEvidenceSelection`)
+  §18.4):** while a review is `ready`, the six ITEM-LEVEL mutations (`updateEvidenceReviewItem`,
+  `applyEvidenceReviewBulkAction`, `setEvidenceLink`, `removeEvidenceLink`,
+  `createEvidenceSelection`, `deleteEvidenceSelection`)
   REFUSE through their normal null/false channel — `ready` + undecided is a state the D-7 gate
   can never produce, so it must be unreachable by mutation too; reopen first. HEAD edits
   (`updateEvidenceReview`: title D-6 / reviewer label D-3 / general note) stay allowed.

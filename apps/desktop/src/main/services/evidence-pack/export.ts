@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
+import {
+  open as openFileAsync,
+  readFile as readFileAsync,
+  rename as renameAsync,
+  rm as rmAsync
+} from 'node:fs/promises'
 import { basename, extname } from 'node:path'
 import type { EvidenceExportFormat, EvidenceExportRecord } from '../../../shared/types'
 import { sha256Of } from '../assets'
@@ -141,34 +146,49 @@ export function suggestedPackFileName(title: string, format: EvidenceExportForma
  * (best-effort) and rethrows; the destination is never left half-written. P6: a `Buffer`
  * (the printToPDF bytes) is written verbatim — the SAME tail serves both formats.
  *
+ * AUD-15 — ASYNC, on `fs.promises` (the same port the image-history store/open path took):
+ * the contract is byte-for-byte the one above, but a multi-megabyte pack used to run its
+ * write + fsync + full read-back on the SYNCHRONOUS fs API, and this runs on the Electron
+ * MAIN thread — the whole process (every window, every IPC reply, the tray) stalled for the
+ * duration of the tail, worst on the slow USB drives this app targets. Nothing about the
+ * durability changed: the tmp sibling is still fsynced through its own handle BEFORE the
+ * rename, and the recorded hash is still computed from the bytes read back OFF DISK, never
+ * from the in-memory buffer. The handle is closed on EVERY path including failure (Windows
+ * keeps a deleted-but-open file locked, which would defeat the cleanup below).
+ *
  * Encoding note (string content): UTF-8 WITHOUT a BOM — deliberately unlike the
  * md/txt/csv exports (`bomFor`): the pack declares `<meta charset="utf-8">` in its first
  * bytes, every browser honors it, and a BOM would be one more byte class for hash
  * consumers to trip over.
  */
-export function writePackFileAtomic(destPath: string, content: string | Buffer): string {
+export async function writePackFileAtomic(
+  destPath: string,
+  content: string | Buffer
+): Promise<string> {
   const tmpPath = `${destPath}.tmp`
   try {
-    const fd = openSync(tmpPath, 'w')
+    const fd = await openFileAsync(tmpPath, 'w')
     try {
       const bytes = typeof content === 'string' ? Buffer.from(content, 'utf8') : content
-      const written = writeSync(fd, bytes)
+      const { bytesWritten } = await fd.write(bytes, 0, bytes.length, null)
       // POSIX permits short writes; hashing a truncated file would produce a
       // self-consistent hash of the WRONG bytes — refuse instead.
-      if (written !== bytes.length) {
-        throw new Error(`evidence export: short write (${written}/${bytes.length} bytes)`)
+      if (bytesWritten !== bytes.length) {
+        throw new Error(`evidence export: short write (${bytesWritten}/${bytes.length} bytes)`)
       }
-      fsyncSync(fd)
+      await fd.sync()
     } finally {
-      closeSync(fd)
+      // Never `.catch(() => {})` here: an unclosed handle would keep the tmp sibling locked
+      // on Windows and defeat the cleanup below. A close failure is a real failure.
+      await fd.close()
     }
-    const onDisk = readFileSync(tmpPath)
+    const onDisk = await readFileAsync(tmpPath)
     const hash = sha256Of(onDisk)
-    renameSync(tmpPath, destPath)
+    await renameAsync(tmpPath, destPath)
     return hash
   } catch (err) {
     try {
-      rmSync(tmpPath, { force: true })
+      await rmAsync(tmpPath, { force: true })
     } catch {
       /* best-effort cleanup — the original failure is the error that matters */
     }
@@ -244,7 +264,7 @@ export async function exportEvidencePackToFile(
           sourceHtmlPath: `${destPath}.print.tmp.html`
         })
       : html
-  const fileSha256 = writePackFileAtomic(destPath, content)
+  const fileSha256 = await writePackFileAtomic(destPath, content)
   // Row only AFTER the final file exists and is hashed (spec §20.3). Bare name only —
   // the directory may reveal private workstation structure (spec §18.1).
   let record: EvidenceExportRecord | null = null
@@ -271,7 +291,7 @@ export async function exportEvidencePackToFile(
   // user cancel.
   const causeSuffix = recordFailure instanceof Error ? `: ${recordFailure.message}` : ''
   try {
-    rmSync(destPath, { force: true })
+    await rmAsync(destPath, { force: true })
   } catch {
     throw new EvidencePackUnrecordedFileError(
       `evidence export: pack written but not recorded, and cleanup failed — the destination file exists without an export-history record (${reviewId})${causeSuffix}`

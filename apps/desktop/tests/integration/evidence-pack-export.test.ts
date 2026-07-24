@@ -701,20 +701,23 @@ describe('helpers', () => {
     expect(suggestedPackFileName('   ', 'pdf')).toBe('evidence-pack.pdf')
   })
 
-  it('writePackFileAtomic writes-through and returns the on-disk hash', () => {
+  // AUD-15: the writer is ASYNC (fs.promises + a FileHandle fsync) so a multi-MB pack no
+  // longer stalls the Electron main thread. The CONTRACT below is unchanged — write-through
+  // to disk, the hash taken from the bytes read back, no tmp sibling left behind.
+  it('writePackFileAtomic writes-through and returns the on-disk hash', async () => {
     const { root } = freshDb()
     const dest = join(root, 'atomic.html')
-    const hash = writePackFileAtomic(dest, 'content-ä')
+    const hash = await writePackFileAtomic(dest, 'content-ä')
     expect(readFileSync(dest, 'utf8')).toBe('content-ä')
     expect(hash).toBe(sha256Of(readFileSync(dest)))
     expect(existsSync(`${dest}.tmp`)).toBe(false)
   })
 
-  it('writePackFileAtomic writes Buffer content VERBATIM (P6: the printToPDF bytes)', () => {
+  it('writePackFileAtomic writes Buffer content VERBATIM (P6: the printToPDF bytes)', async () => {
     const { root } = freshDb()
     const dest = join(root, 'atomic.pdf')
     const bytes = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0x80])
-    const hash = writePackFileAtomic(dest, bytes)
+    const hash = await writePackFileAtomic(dest, bytes)
     expect(readFileSync(dest)).toEqual(bytes)
     expect(hash).toBe(sha256Of(bytes))
     expect(existsSync(`${dest}.tmp`)).toBe(false)

@@ -1,4 +1,4 @@
-import { rmSync, writeFileSync } from 'node:fs'
+import { rm as rmAsync, writeFile as writeFileAsync } from 'node:fs/promises'
 import { app, BrowserWindow } from 'electron'
 import { SECURE_WINDOW_WEB_PREFERENCES } from '../../window-security'
 import { installNavigationGuard } from '../navigation-guard'
@@ -147,7 +147,10 @@ export async function printEvidencePackHtmlToPdf(
   try {
     // Inside the try (FIX-2): a partial write (ENOSPC mid-stream) is decrypted pack
     // content on disk — the finally's force-remove must cover it, not just later steps.
-    writeFileSync(opts.sourceHtmlPath, html, 'utf8')
+    // AUD-15: ASYNC like the atomic writer's tail — a multi-megabyte pack's print source
+    // used to be written synchronously on the Electron MAIN thread, stalling the whole
+    // process (every window, every IPC reply) for the duration.
+    await writeFileAsync(opts.sourceHtmlPath, html, 'utf8')
     win = new BrowserWindow({
       show: false,
       // A worker, not a UI: never in the taskbar or any window list (rasterizer posture).
@@ -179,7 +182,7 @@ export async function printEvidencePackHtmlToPdf(
     app.removeListener('before-quit', onBeforeQuit)
     if (win && !win.isDestroyed()) win.destroy()
     try {
-      rmSync(opts.sourceHtmlPath, { force: true })
+      await rmAsync(opts.sourceHtmlPath, { force: true })
     } catch {
       /* best-effort cleanup — the print outcome is what matters */
     }
