@@ -279,6 +279,35 @@ Working paper. Transient with the plan and the report; folded into the durable
   open question is only whether the **`architecture.md` TEST-N1 row** should get a superseding note.
   *Assigned: Phase 11 close-out — ORCHESTRATOR DECISION.*
 
+- [ ] **B-41 — `.review-relation select` is now the only select outside the shared treatment.** It
+  uses the hairline `--border` where the guidelines' Inputs section calls for `--border-strong`, sets
+  no explicit font-family (it inherits the body stack, so that part is fine) and no min-height, so it
+  may sit under the 24px target minimum the shared rule now clears. Orchestrator DECLINED to fold it
+  in-wave: restyling an evidence-review control needs its own eyeball. The DV-1 guard carries a
+  comment saying so. *Assigned: follow-up with a review-screen eyeball.*
+- [ ] **B-42 — the repo's documented eyeball-walk pattern is unrunnable.** `design-guidelines.md`
+  §11.4/§13.5 and all seven `apps/desktop/scripts/walk-*.mjs` import **`playwright`, which is in
+  neither `package.json` nor `node_modules`**; `npm run screenshot` is additionally POSIX-only
+  (`xvfb-run`). So the documented way to do a design eyeball cannot be executed on this Windows box —
+  which is why Phase 9b wrote a zero-dependency CDP harness instead (now recorded in
+  design-guidelines §11.14). *Fix: either name `playwright` as an ad-hoc `npx playwright install`
+  step, or port the walk scripts to CDP. Assigned: docs/tooling follow-up.*
+- [ ] **B-43 — the `.select` treatment is opt-in, so the ROOT cause of DV-1 is only closed for four
+  files.** A new `<select>` on any other screen still silently gets the UA skin; the guard is
+  file-scoped and cannot see a new screen. A bare-element `select { … }` rule would close it app-wide
+  and permanently, but would restyle surfaces nobody has eyeballed — which is why it was declined.
+  *Cheapest hardening: a case that greps the whole renderer tree for `<select` and requires either
+  `className="select"` or membership in a short reviewed exemption list (today: EvidencePane).
+  Assigned: deferred-with-registration.*
+- [ ] **B-44 — the un-runnable cards now form one contiguous 8-card tail block with no heading.**
+  `groupedCards` labels the installed/needs-download split, but there is no equivalent "won't run on
+  this computer" subheading, so the new boundary is carried only by the per-card warning badge.
+  Honest but implicit; a third subheading would make the order self-explaining. Needs new copy in
+  both locales. *Assigned: future design pass.*
+- [ ] **B-45 — `de.ts`'s own header/glossary comments use ASCII closers** (~14 comment lines), so the
+  file's style guide is typeset in the style it forbids. Not shipped copy, and deliberately outside
+  the new guard's scope (which reads catalog VALUES). *Assigned: fix-when-touched.*
+
 ## Decisions log
 
 - **D-W1 (plan §3, carried in):** the verified-and-dismissed engine-download tar-child-on-quit item is
@@ -1029,3 +1058,88 @@ FTS/SQLite assertion is the plausible failure site). Rollback is a single-file r
   a future local `npm install`, as opposed to `npm ci`, on this box could still write a lockfile a
   different npm produced.)
 - **Discovered -> backlog:** B-38, B-39, B-40.
+
+### Phase 9b — DV-1 + DV-2 + DV-3 (design) — DONE, after one orchestrator eyeball FAILURE and loop
+
+**EYEBALL SIGN-OFF (orchestrator, opened every PNG, both themes):**
+**Loop 1 — DV-1 PASS, DV-3 PASS, DV-2 FAIL.** **Loop 2 — ALL PASS.**
+
+**Decision D-9b-a (the DV-2 rule was widened, overriding the orchestrator's own brief).** The plan
+and the finding both said "order runnable-first **when no recommendation exists**", and the
+orchestrator's brief demanded a control test pinning the order UNCHANGED when one does exist. The
+implementer built exactly that, then proved with a live probe that it is **nearly inert in
+production**: `recommendModelIdByRam` keys off **machine RAM**, not off a benchmark result, and
+`insufficientRam` is derived from the *same* comparison — so "no recommendation exists" and "nothing
+is runnable" are the same condition whenever machine RAM is known, which is always. Live on this box:
+23 chat manifests, `activeModelId` null, 16 GB, `recommended: true` on qwen3.5-9b at picker position
+21 of 23 — **the ★ IS in the picker on a fresh workspace**, so the audited symptom survived the fix
+untouched (loop-1 State A after was byte-identical to before). The audit had conflated "no benchmark
+result" with "no recommendation".
+Orchestrator decision: **drop the condition, make runnable-first unconditional**, and RETIRE the
+"unchanged when a recommendation exists" control as a test of a false premise. This still honours
+the finding's binding constraints — display order only, `recommendModelIdByRam` untouched — and it
+delivers the finding's actual stated goal, which the literal reading did not.
+
+**Decision D-9b-b (installed-first stays PRIMARY).** Runnability may only reorder WITHIN a group,
+because `groupedCards` renders the installed/needs-download split as two labelled subheadings.
+Pinned both ways: an installed un-runnable model still outranks a runnable un-installed one, AND
+runnable-first still applies inside each group.
+
+**Decision D-9b-c (the ★ can only be lifted, never demoted).** The recommender never picks a
+RAM-gated model, so the recommended card is runnable by construction and the new key can only move
+it up. Pinned by test AND observed live: 21 -> 15.
+
+**Decision D-9b-d (opt-in `.select` class, not a bare-element rule).** A global `select { … }` rule
+would have closed the root cause app-wide, but it would restyle surfaces nobody has eyeballed. The
+class plus a file-scoped guard was chosen instead; the residual (a new select on an unguarded file
+still gets the UA skin) is recorded as B-43.
+
+**EYEBALL EVIDENCE — DV-1 (both screens, both themes).** Light: the squared UA Arial box becomes a
+6px-radius system-font control matching its card. **Dark is the convincing pair** — the UA control
+rendered as a light-grey box (`rgb(59,59,59)` bg) glaring against a near-black card; it now sits on
+the dark surface token. Computed styles equal the tokens EXACTLY in both themes for all selects:
+font-family Arial -> the system stack, `border-radius` 0px -> 6px (`--radius-sm`), border ->
+`rgb(107,115,131)` (`--border-strong`), background -> `--surface` (`#fff` light / `rgb(23,26,33)`
+dark), colour -> `--text`. The one non-token delta is height **19px -> 30px**, which is the point:
+the control had been failing the 24x24 target minimum and now clears it. `--text-sm` 13px was chosen
+so the type SIZE does not change (UA default was 13.33px) — only the family does.
+
+**EYEBALL EVIDENCE — DV-2 (State A = fresh workspace, the exact audited scenario).**
+Before: first screenful is `Gemma 4 26B A4B [≥20 GB]` · `Gemma 4 12B` · `Gemma 4 26B-A4B [≥20 GB]` ·
+`Gemma 4 31B [≥24 GB]` — three of four un-runnable, each with a full amber banner.
+After: `Gemma 4 12B` · `Gemma 4 Coding` · `Gemma 4 E2B` · `Gemma 4 E4B` · `Granite 4.1 8B` — **no RAM
+warning anywhere in view**, in BOTH themes. First RAM-warned card: position **1 -> 16 of 23**; the
+eight warned cards are now one contiguous tail block (16-23) where they had been scattered at
+1,3,4,11,16,18,22,23. Side benefit visible in the captures: without the banner blocks, ~5 choices fit
+where 3 did.
+
+**Theme control — the real one, asserted.** Settings -> Appearance `SegmentedControl`
+(`role=radiogroup`), clicked over CDP `Runtime.evaluate` with `userGesture:true`, then **asserting
+`document.documentElement.dataset.theme` actually flipped**, aborting the run otherwise. No attribute
+stamping, no `Emulation.setEmulatedMedia`. Navigation clicked the real nav-rail buttons. The
+workspace DB was wiped and the app relaunched between the before and after passes, so State A is a
+fair pair. Two disclosed fixtures, identical across both passes: a scratch drive root with a dummy
+TranslateGemma weight + dummy `llama` binary so the Translate language bar renders at all (the
+sidecar is lazy — nothing was spawned, no translation run), and `window.api.selectModel` to reach
+State B.
+
+**Regression this phase created, and closed in the same wave.** DV-1 restyled the Translate language
+bar but left `DocumentsScreen`'s translate modal — which renders the **identical** control — bare, so
+the two screens diverged. Fixed in loop 2 along with the Diagnostics activity filter, and the
+file-scoped guard widened from 2 files to 4 so a new bare select in any of them reddens.
+
+**DV-3:** 9 ASCII closers fixed across 9 German catalog values (the reported Images live sighting
+plus 8 more; the register had said "~7"). Zero unbalanced German values remain. English untouched
+and asserted. Deliberately excluded and stated: two correct multi-line pairs that already close with
+a proper closer across a concatenation, 17 `skills.import.note.*` values quoting MACHINE field names
+with matched ASCII pairs (a defensible convention for untranslated identifiers), and the file's own
+header/glossary COMMENTS — the new guard is scoped to catalog values by construction.
+
+- **RED evidence:** pristine HEAD copies of all six source files dropped in via read-only
+  `git show HEAD:<path>`, tests run, then restored from a scratch backup — **18 failed / 19 passed**,
+  including the two new per-file select failures. Plus the live computed-style probe (Arial / 0px /
+  UA colours, both themes) as DV-1's RED.
+- **GREEN:** typecheck clean; **16 files / 221 tests** in the main affected-suite run, plus
+  **6 files / 100 tests** for the Documents + Diagnostics suites (including `DocumentTranslate`,
+  which exercises the very modal whose selects changed) — **321 tests** across the two batches.
+- **Discovered -> backlog:** B-41, B-42, B-43, B-44, B-45.
