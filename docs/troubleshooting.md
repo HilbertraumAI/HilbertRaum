@@ -194,6 +194,12 @@ family with `fetch-runtime --family ocr` (`.ps1 -Family ocr` on Windows) — see
 app after adding the files** — OCR availability is resolved once at startup, so a fetch done
 while the app is running won't be offered until the next launch.
 
+**If the app closes itself the moment OCR starts, that is a known packaging defect, not your
+drive.** In a packaged build the OCR worker cannot load part of itself out of the app archive
+and the whole app exits — see [`known-limitations.md`](known-limitations.md) ("OCR does not work
+in a PACKAGED build"). Nothing you can add to the drive fixes it; the workaround until the fix
+ships is to leave scanned PDFs unconverted (their text pages, if any, still index).
+
 ---
 
 ## A document failed to import

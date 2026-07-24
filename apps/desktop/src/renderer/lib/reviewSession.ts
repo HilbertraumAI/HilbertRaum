@@ -2,6 +2,7 @@ import type {
   EvidencePackExportRequest,
   EvidenceReadyGate,
   EvidenceReview,
+  EvidenceReviewBulkAction,
   EvidenceReviewDetail,
   EvidenceReviewFreshness,
   EvidenceReviewItem,
@@ -607,38 +608,115 @@ export async function deleteReviewSelection(itemId: string): Promise<void> {
 // ---- Conservative bulk actions (spec §14.4) --------------------------------------------
 // Exactly the three sanctioned actions. There is deliberately NO "mark all supported" —
 // a blanket supported-claim is the one bulk action the spec forbids (tested).
+//
+// AUD-13: each action is ONE named command over ONE IPC call that main applies in ONE
+// transaction. It used to walk the item list and queue a per-item patch, which flushed as N
+// individual writes — N redundant ready-guard re-reads, N head stamps, N item re-reads, and
+// (the user-visible half) a crash or failure part-way through leaving the review HALF-swept:
+// a state no user action can produce and none can explain. Pending per-item edits are
+// flushed FIRST (the markReviewReady idiom) so the sweep is unambiguously the LAST write —
+// a queued decision can never land after it and silently undo part of it.
+
+/** Which items a bulk action targets locally — the mirror of main's SQL predicates, used
+ *  for the optimistic apply only (main re-derives from persisted rows and its returned
+ *  items are what the store finally trusts). */
+function bulkTargets(
+  items: readonly EvidenceReviewItem[],
+  action: EvidenceReviewBulkAction
+): { ids: Set<string>; decision: ReviewDecision } {
+  switch (action) {
+    case 'headings_not_applicable':
+      return {
+        decision: 'not_applicable',
+        ids: new Set(
+          items
+            .filter(
+              (i) => i.kind === 'block' && i.blockKind === 'heading' && i.decision !== 'not_applicable'
+            )
+            .map((i) => i.id)
+        )
+      }
+    case 'clear_decisions':
+      return {
+        decision: 'not_reviewed',
+        ids: new Set(items.filter((i) => i.decision !== 'not_reviewed').map((i) => i.id))
+      }
+    default:
+      return {
+        decision: 'follow_up',
+        ids: new Set(items.filter((i) => i.decision === 'not_reviewed').map((i) => i.id))
+      }
+  }
+}
+
+/**
+ * Run one bulk action end to end. Refused while the review is READY (FIX-1 — reopen first;
+ * main refuses it too) and when nothing matches (a no-op sweep issues no write at all).
+ * Every post-await write is `openToken`-guarded, the store convention.
+ */
+async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> {
+  const opened = state.detail
+  if (!opened || opened.status === 'ready') return
+  const reviewId = opened.id
+  const token = openToken
+  // Land any debounced per-item edits BEFORE the sweep, so the sweep is the last word.
+  await flushReviewSession()
+  if (token !== openToken) return
+  const detail = state.detail
+  if (!detail || detail.id !== reviewId || detail.status === 'ready') return
+  const { ids, decision } = bulkTargets(detail.items, action)
+  if (ids.size === 0) return
+  // Optimistic apply — ONE state commit for the whole sweep, never one per item.
+  const optimistic = detail.items.map((i) => (ids.has(i.id) ? { ...i, decision } : i))
+  setState({
+    detail: { ...detail, items: optimistic, gate: computeReadyGate(optimistic) },
+    saveState: 'pending',
+    saveError: null
+  })
+  try {
+    const updated = await window.api.applyEvidenceReviewBulkAction(reviewId, action)
+    if (token !== openToken) return // purge/switch landed mid-flight — never write
+    const current = state.detail
+    if (!current || current.id !== reviewId) return
+    if (updated == null) {
+      // Stale handle or a refusal (deleted / reopened-to-ready underneath us) — surfaced,
+      // never retried in a loop.
+      setState({ saveState: 'error', saveError: null })
+      return
+    }
+    // Merge the persisted DECISIONS only: a note typed while the sweep was in flight is
+    // still pending locally and must not be reverted by the returned rows.
+    const byId = new Map(updated.map((i) => [i.id, i]))
+    const items = current.items.map((i) => {
+      const fresh = byId.get(i.id)
+      return fresh ? { ...i, decision: fresh.decision } : i
+    })
+    setState({
+      detail: { ...current, items, gate: computeReadyGate(items) },
+      // Only claim "saved" when nothing else is queued: an edit made WHILE the sweep was in
+      // flight is still debounced, and its own flush reports that outcome.
+      saveState: pendingItems.size > 0 || pendingHead != null ? 'pending' : 'saved',
+      saveError: null
+    })
+  } catch (e) {
+    if (token !== openToken) return
+    setState({ saveState: 'error', saveError: friendlyIpcError(e) })
+  }
+}
 
 /** Set every heading block whose decision differs to Not applicable. */
-export function bulkMarkHeadingsNotApplicable(): void {
-  const detail = state.detail
-  if (!detail) return
-  for (const item of detail.items) {
-    if (item.kind === 'block' && item.blockKind === 'heading' && item.decision !== 'not_applicable') {
-      editReviewItem(item.id, { decision: 'not_applicable' })
-    }
-  }
+export function bulkMarkHeadingsNotApplicable(): Promise<void> {
+  return applyBulkAction('headings_not_applicable')
 }
 
 /** Reset EVERY decision to Not reviewed (notes are kept). */
-export function bulkClearDecisions(): void {
-  const detail = state.detail
-  if (!detail) return
-  for (const item of detail.items) {
-    if (item.decision !== 'not_reviewed') {
-      editReviewItem(item.id, { decision: 'not_reviewed' })
-    }
-  }
+export function bulkClearDecisions(): Promise<void> {
+  return applyBulkAction('clear_decisions')
 }
 
 /** Move every still-undecided item to Needs follow-up. */
-export function bulkMarkUndecidedFollowUp(): void {
-  const detail = state.detail
-  if (!detail) return
-  for (const item of detail.items) {
-    if (item.decision === 'not_reviewed') {
-      editReviewItem(item.id, { decision: 'follow_up' })
-    }
-  }
+export function bulkMarkUndecidedFollowUp(): Promise<void> {
+  return applyBulkAction('undecided_follow_up')
 }
 
 /** The decisions a bulk action may WRITE (guard rail mirrored by tests): never 'supported'. */

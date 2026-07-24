@@ -160,6 +160,56 @@ describe('resolveUiLanguage (D-L2)', () => {
   })
 })
 
+describe('German typography — quotation marks (design-guidelines §7 "Typography")', () => {
+  // German quotes are „…“ — an opening „ closed with an ASCII " is a visible typo in shipped
+  // copy (it rendered as `Durchsuchbar machen (OCR)"` on the Images empty state). The guard is
+  // over the CATALOG VALUES only: the file's own comments are not shipped copy, and technical
+  // field names inside notes ("{field}", "language") legitimately keep straight ASCII pairs.
+  const opens = (s: string): number => (s.match(/„/g) ?? []).length
+  const closes = (s: string): number => (s.match(/“/g) ?? []).length
+
+  it('closes every opening „ with “, never with an ASCII quote', () => {
+    const offenders = (Object.entries(de) as [MessageKey, string][])
+      .filter(([, value]) => opens(value) !== closes(value))
+      .map(([key, value]) => `${key}: ${value}`)
+    expect(
+      offenders,
+      'German values with an unbalanced „…“ pair — close them with “ (U+201C), not "'
+    ).toEqual([])
+  })
+
+  it('never uses “ as an OPENING quote (the pair is „…“, not “…”)', () => {
+    // Walk the pairs per value: a closer may never appear before its opener.
+    const offenders = (Object.entries(de) as [MessageKey, string][])
+      .filter(([, value]) => {
+        let depth = 0
+        for (const ch of value) {
+          if (ch === '„') depth++
+          else if (ch === '“' && --depth < 0) return true
+        }
+        return false
+      })
+      .map(([key]) => key)
+    expect(offenders, '“ used before its „ — German opens low, closes high').toEqual([])
+  })
+
+  it('the strings the sweep corrected read with German closers', () => {
+    expect(de['images.avail.ocrPointer']).toContain('„Durchsuchbar machen (OCR)“')
+    expect(de['docs.task.extractBusyTitle']).toContain('„Liste alle…“')
+    expect(de['docs.deepIndex.buildTitle']).toContain('„Liste alle …“')
+    expect(de['docs.deepIndex.buildTitle']).toContain('„Summe pro Kategorie“')
+    expect(de['skills.analysis.refusePartial']).toContain('„Neu indexieren“')
+    expect(de['models.vision.installed']).toContain('„Bilder“')
+    expect(de['models.vision.notInstalled']).toContain('„Bilder“')
+    expect(de['images.chip.readForm.prompt']).toContain('„unklar“')
+    expect(de['translate.file.err.noPath']).toContain('„ein Dokument auswählen“')
+  })
+
+  it('does not touch the English catalog (straight quotes stay straight there)', () => {
+    expect(en['images.avail.ocrPointer']).not.toMatch(/„|“/)
+  })
+})
+
 describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
   it('both catalogs carry the same keys with no empty values', () => {
     expect(Object.keys(de).sort()).toEqual(Object.keys(en).sort())

@@ -46,6 +46,16 @@ export interface TranslateJobServiceDeps {
   getTranslator: () => Translator | null
   /** True while a document task holds the one-at-a-time lane (D9). */
   hasActiveDocTask: () => boolean
+  /**
+   * True while the workspace LOCK teardown is running (AUD-02). `stop()` below aborts the
+   * IN-FLIGHT job, but it takes no permanent latch (a lock must leave the view usable after the
+   * next unlock), so a start landing later in that same teardown gets a FRESH, un-aborted
+   * controller and its first window would call `translate()` — lazily respawning the ~10 GB
+   * sidecar the teardown just suspended, with the pasted source text in its KV cache. The
+   * workspace is still "unlocked" throughout (the DB closes only at the very end), so this is
+   * the signal that expresses it. Absent/unwired ⇒ never locking (partial test deps stay valid).
+   */
+  isWorkspaceLocking?: () => boolean
 }
 
 /** Cap on retained terminal jobs — the interactive view is one-at-a-time, so a tiny history
@@ -83,6 +93,16 @@ export class TranslateJobService {
    * refusal returns a terminal `failed` job with a code and is NOT tracked / takes no slot.
    */
   start(req: TranslateRequest | undefined, emit: TranslateStreamEmitter): TranslateJob {
+    // AUD-02 — a workspace lock teardown is under way: refuse before anything can reach the
+    // sidecar (see `isWorkspaceLocking`). `cancelled` is the honest existing code: the lock IS
+    // what cancelled it, and it is the same terminal `stop()` produces for the in-flight job.
+    // NOTE on what the user would see: the Translate screen's error map has no `cancelled`
+    // entry, so this would fall through to its generic "something went wrong" banner rather
+    // than locked-specific copy. That is accepted, not overlooked — this guard is unreachable
+    // in production today (the one call site is the IPC handler, which refuses first with the
+    // module's localized locked copy), so it exists for non-IPC callers, and adding a renderer
+    // code + en/de copy for a path no user can reach would be dead weight.
+    if (this.deps.isWorkspaceLocking?.()) return failedJob('cancelled')
     const translator = this.deps.getTranslator()
     if (!translator) return failedJob('noModel')
     const source = req?.sourceLang
@@ -119,7 +139,10 @@ export class TranslateJobService {
       // The real defense against a start that interleaves a lock/quit teardown is `signal.aborted`:
       // `stop()` aborts every controller BEFORE the vault re-encrypts, so a run() scheduled just
       // before then sees its signal already aborted and bails without touching the suspended sidecar.
-      // (The IPC `requireUnlocked` guard bars a fresh start during lock; this covers the in-flight race.)
+      // (A FRESH start during the lock is barred by the AUD-02 admission gate — the IPC
+      // `requireUnlocked` and `start()`'s own `isWorkspaceLocking` check, both of which now hold
+      // for the WHOLE teardown rather than only after the final re-encrypt; this covers the
+      // already-in-flight race, whose controller `stop()` aborted.)
       if (signal.aborted) {
         this.cancel(jobId)
         return

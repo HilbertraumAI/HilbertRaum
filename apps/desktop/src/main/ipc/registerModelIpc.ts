@@ -18,6 +18,7 @@ import {
 import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 
 // IPC for model discovery/selection + runtime start/stop (spec §9.1).
@@ -41,6 +42,15 @@ function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
  * the `startRuntime` IPC handler and the startup auto-start). Throws on any refusal.
  */
 export async function startModelRuntime(ctx: AppContext, modelId: string): Promise<RuntimeStatus> {
+  // AUD-03 — snapshot WHICH unlocked session this start belongs to, before the long pre-start
+  // window below. `computeInstallState` hashes a multi-GB GGUF, which takes minutes on a cold
+  // checksum cache (the first unlock of a prepared or freshly-copied drive — a copy changes mtime
+  // and invalidates the size+mtime cache). A lock, or a lock AND a re-unlock, can complete inside
+  // that window; the epoch is the only thing that can tell the resulting stale start apart from a
+  // legitimate one, because after a re-unlock `isUnlocked()` is true and `isLocking()` false
+  // again. Undefined for a stand-in workspace without the counter ⇒ the epoch check is skipped
+  // and the unlocked/locking re-check below still applies.
+  const startEpoch = ctx.workspace.unlockEpoch?.()
   if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
   const { manifests } = discoverManifests(ctx.manifestsDir)
   const found = manifests.find((m) => m.manifest.id === modelId)
@@ -93,6 +103,22 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
   if (ctx.runtime.isShutdown?.()) {
     throw new Error('The app is quitting — the model start was abandoned')
   }
+  // AUD-03: the same re-check for the LOCK path, which had no equivalent of the quit latch. The
+  // lock handler's `runtime.stop()` finds `startingRuntime === null` (that is only set once
+  // `runtime.start()` is invoked, i.e. after this hash), the shutdown latch above is quit-only,
+  // and nothing else fails the pipeline: the hash store deliberately swallows its write against a
+  // closed DB to keep the session served, the RAM gate is OS-only, and the GPU-settings reads
+  // degrade to safe defaults while locked. So without this the hash would resolve after the lock
+  // completed and spawn a full llama-server while the app sits at the unlock gate.
+  if (!workspaceAdmitsWork(ctx.workspace)) {
+    throw new Error('The workspace is locked — the model start was abandoned')
+  }
+  // …and the residual micro-window: a lock AND a subsequent unlock both completing inside the
+  // hash leave the two flags above looking exactly like "still unlocked". The session epoch does
+  // not — this start was admitted into a session that no longer exists.
+  if (startEpoch !== undefined && ctx.workspace.unlockEpoch?.() !== startEpoch) {
+    throw new Error('The workspace was locked and re-opened — the stale model start was abandoned')
+  }
 
   log.info('Start runtime', { modelId, state })
   const status = await ctx.runtime.start({
@@ -122,7 +148,9 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
 export function maybeAutoStartActiveModel(ctx: AppContext): void {
   let modelId: string | null = null
   try {
-    if (!ctx.workspace.isUnlocked()) return
+    // AUD-02/AUD-03: `workspaceAdmitsWork` — never begin an auto-start while a lock teardown is
+    // running; `startModelRuntime` re-checks after its multi-GB weight hash as well.
+    if (!workspaceAdmitsWork(ctx.workspace)) return
     const s = getSettings(ctx.db)
     if (!s.autoStartActiveModel) return
     modelId = s.activeModelId
@@ -148,7 +176,10 @@ export function registerModelIpc(ctx: AppContext): void {
   // read-only runtime channels (status/install) touch the in-memory runtime / disk marker, never
   // ctx.db, and must stay usable at the gate, so they are intentionally NOT gated.
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.models.locked'))
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.models.locked'))
   }
 
   ipcMain.handle(IPC.listModels, async (event, lazyVerify?: boolean): Promise<ModelInfo[]> => {

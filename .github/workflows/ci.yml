@@ -44,21 +44,41 @@ jobs:
     name: build-and-test
     runs-on: ${{ matrix.os }}
     strategy:
-      # Report both OSes even if one fails — the ci-success gate below aggregates the legs.
+      # Report every leg even if one fails — the ci-success gate below aggregates them
+      # (a matrix job's `result` is success only when ALL legs succeeded).
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        # BOTH ends of the supported range, because both were previously untested claims
+        # (AUD-26): 22.x is the `engines.node >=22.5` floor the app promises to run on
+        # (node:sqlite is a built-in that needs it), 24.x is what every release leg builds
+        # AND runs the full suite under. CI gating only one of them leaves the other a
+        # declaration nothing exercises.
+        node: ['22.x', '24.x']
 
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Set up Node.js 22.x
+      - name: Set up Node.js ${{ matrix.node }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # engines require >=22.5 (node:sqlite is a built-in that needs it).
-          node-version: '22.x'
+          node-version: ${{ matrix.node }}
           cache: npm
+
+      # `engines.npm >= 11` + the `packageManager: npm@11.6.2` pin are only real policy if
+      # the pinned npm is what actually installs. Node 22 bundles npm 10.9 and Node 24 bundles
+      # a different 11.x — neither is the pinned version, and the 22 one is BELOW the repo's own
+      # floor — so without this the pin was never exercised on any leg. `corepack enable` was
+      # tried and does NOT override npm here (its npm shim did not take precedence — the bundled
+      # npm ran on every leg: 10.9.8 on Node 22, 11.16.0 on Node 24), so install the pin
+      # explicitly instead. Node 22's bundled npm 10 can install npm 11 globally; the printed
+      # version is the run-log evidence that 11.6.2 is what the install/test steps below run.
+      - name: Install the pinned npm (engines.npm >= 11; the bundled npm is not the pin)
+        run: |
+          npm install -g npm@11.6.2
+          node -v
+          npm -v
 
       - name: Install (lockfile-pinned, offline-capable)
         run: npm ci
@@ -72,9 +92,10 @@ jobs:
       - name: Test
         run: npm test
 
-  # Single stable gate to mark as the branch-protection required status check. The per-OS matrix
-  # legs publish as "build-and-test (ubuntu-latest)" / "(windows-latest)" — names that shift if
-  # the OS labels ever change; "ci-success" does not, so it stays matched in branch protection.
+  # Single stable gate to mark as the branch-protection required status check. The matrix legs
+  # publish as "build-and-test (ubuntu-latest, 22.x)" / "(windows-latest, 24.x)" / … — names that
+  # shift whenever the OS labels or the Node list change; "ci-success" does not, so it stays
+  # matched in branch protection. Never add a leg's own name as a required check.
   ci-success:
     name: ci-success
     runs-on: ubuntu-latest

@@ -27,6 +27,7 @@ import type {
   EvidencePackExportRequest,
   EvidenceReadyGate,
   EvidenceReview,
+  EvidenceReviewBulkAction,
   EvidenceReviewDetail,
   EvidenceReviewFreshness,
   EvidenceReviewItem,
@@ -509,6 +510,13 @@ const api = {
   /** The message's review as a light summary (the entry-point/action-row state), or null. */
   getEvidenceReviewForMessage: (messageId: string): Promise<EvidenceReviewSummary | null> =>
     ipcRenderer.invoke(IPC.getEvidenceReviewForMessage, messageId),
+  /** EVERY review in one conversation as light summaries — the transcript's whole chip state
+   *  in ONE round trip (AUD-12), keyed by `messageId` on the renderer side. Empty array for
+   *  an unknown conversation. */
+  getEvidenceReviewSummariesForConversation: (
+    conversationId: string
+  ): Promise<EvidenceReviewSummary[]> =>
+    ipcRenderer.invoke(IPC.getEvidenceReviewSummariesForConversation, conversationId),
   /** Patch head fields (title D-6, reviewer label D-3, general note); null on unknown id. */
   updateEvidenceReview: (
     reviewId: string,
@@ -521,6 +529,14 @@ const api = {
     patch: EvidenceReviewItemPatch
   ): Promise<EvidenceReviewItem | null> =>
     ipcRenderer.invoke(IPC.updateEvidenceReviewItem, itemId, patch),
+  /** Apply one conservative bulk decision action to the whole review in a SINGLE main-side
+   *  transaction (AUD-13) — all of it lands or none of it does. Returns the refreshed items,
+   *  or null on an unknown id, an unrecognized action, or a READY review (reopen first). */
+  applyEvidenceReviewBulkAction: (
+    reviewId: string,
+    action: EvidenceReviewBulkAction
+  ): Promise<EvidenceReviewItem[] | null> =>
+    ipcRenderer.invoke(IPC.applyEvidenceReviewBulkAction, reviewId, action),
   /** Carve a reviewer selection from one block (UTF-16 offsets into its `textSnapshot`,
    *  exclusive end). Null = refused (unknown block, out-of-range or surrogate-splitting
    *  offsets — never clamped). */

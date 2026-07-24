@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type {
+  EvidenceReviewBulkAction,
   EvidenceReviewDetail,
   EvidenceReviewFreshness,
   EvidenceReviewItem,
   EvidenceReviewItemPatch
 } from '../../src/shared/types'
 import {
+  BULK_WRITABLE_DECISIONS,
   REVIEW_SAVE_DEBOUNCE_MS,
   addReviewSelection,
   bulkClearDecisions,
@@ -288,29 +290,57 @@ describe('reviewSession — mark ready + gate mirror', () => {
 })
 
 describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
-  it('headings→N/A, undecided→follow-up, clear-all — and NOTHING can bulk-write "supported"', async () => {
-    vi.useFakeTimers()
-    const items = [
+  /** The three-item fixture every bulk case runs against: a heading, an undecided claim and
+   *  an already-decided claim (so "conservative" has something to spare). */
+  function bulkItems(): EvidenceReviewItem[] {
+    return [
       makeItem({ id: 'h1', blockKind: 'heading', decision: 'not_reviewed' }),
       makeItem({ id: 'p1', blockKind: 'paragraph', decision: 'not_reviewed' }),
       makeItem({ id: 'p2', blockKind: 'paragraph', decision: 'supported' })
     ]
+  }
+
+  /** A main-side stand-in with the real contract's teeth: it applies the named sweep to its
+   *  OWN copy of the items in one step and returns the whole refreshed set — so the store is
+   *  tested against a batch that either lands whole or not at all, never a per-item drip. */
+  function bulkBackend(items: EvidenceReviewItem[]) {
+    let rows = items.map((i) => ({ ...i }))
+    return {
+      spy: vi.fn(async (_reviewId: string, action: EvidenceReviewBulkAction) => {
+        rows = rows.map((i) => {
+          if (action === 'headings_not_applicable') {
+            return i.kind === 'block' && i.blockKind === 'heading'
+              ? { ...i, decision: 'not_applicable' as const }
+              : i
+          }
+          if (action === 'clear_decisions') return { ...i, decision: 'not_reviewed' as const }
+          return i.decision === 'not_reviewed' ? { ...i, decision: 'follow_up' as const } : i
+        })
+        return rows.map((i) => ({ ...i }))
+      }),
+      current: () => rows
+    }
+  }
+
+  it('headings→N/A, undecided→follow-up, clear-all — one IPC call each, and NOTHING can bulk-write "supported"', async () => {
+    const items = bulkItems()
     const detail = makeDetail({ items })
-    const written: string[] = []
+    const backend = bulkBackend(items)
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
+      makeItem({ id, ...patch })
+    )
     stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
-      updateEvidenceReviewItem: vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
-        if (patch.decision) written.push(patch.decision)
-        return makeItem({ id, ...patch })
-      })
+      updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: backend.spy
     })
     await openWith(detail)
 
-    bulkMarkHeadingsNotApplicable()
+    await bulkMarkHeadingsNotApplicable()
     expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'h1')!.decision).toBe(
       'not_applicable'
     )
-    bulkMarkUndecidedFollowUp()
+    await bulkMarkUndecidedFollowUp()
     expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p1')!.decision).toBe(
       'follow_up'
     )
@@ -318,16 +348,114 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p2')!.decision).toBe(
       'supported'
     )
-    bulkClearDecisions()
+    await bulkClearDecisions()
     for (const i of getReviewSessionSnapshot().detail!.items) {
       expect(i.decision).toBe('not_reviewed')
     }
     await flushReviewSession()
-    // No bulk pathway ever WRITES 'supported' (or partly/not supported): the spec's one
+
+    // AUD-13: THREE sweeps over a 3-item review = THREE IPC calls, one per user command —
+    // never one per item, and never a per-item write behind the sweep's back.
+    expect(backend.spy).toHaveBeenCalledTimes(3)
+    expect(backend.spy.mock.calls.map((c) => c[1])).toEqual([
+      'headings_not_applicable',
+      'undecided_follow_up',
+      'clear_decisions'
+    ])
+    expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
+    // No bulk pathway ever names 'supported' (or partly/not supported): the spec's one
     // forbidden bulk action can not exist by construction.
-    expect(written).not.toContain('supported')
-    expect(written).not.toContain('partly_supported')
-    expect(written).not.toContain('not_supported')
+    for (const [, action] of backend.spy.mock.calls) {
+      expect(BULK_WRITABLE_DECISIONS).not.toContain('supported')
+      expect(action).not.toMatch(/supported/)
+    }
+  })
+
+  it('a sweep is ONE call for a long review — the fan-out cost does not scale with item count', async () => {
+    const many = Array.from({ length: 60 }, (_, n) =>
+      makeItem({ id: `i${n}`, blockKind: 'paragraph', decision: 'not_reviewed' })
+    )
+    const detail = makeDetail({ items: many })
+    const backend = bulkBackend(many)
+    const updateEvidenceReviewItem = vi.fn(async (id: string) => makeItem({ id }))
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: backend.spy
+    })
+    await openWith(detail)
+
+    await bulkMarkUndecidedFollowUp()
+    expect(backend.spy).toHaveBeenCalledTimes(1)
+    expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
+    expect(
+      getReviewSessionSnapshot().detail!.items.every((i) => i.decision === 'follow_up')
+    ).toBe(true)
+    expect(getReviewSessionSnapshot().saveState).toBe('saved')
+  })
+
+  it('flushes pending per-item edits BEFORE the sweep, so a queued decision cannot undo it', async () => {
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    const backend = bulkBackend(items)
+    const order: string[] = []
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      order.push(`item:${id}`)
+      return makeItem({ id, ...patch })
+    })
+    const bulkSpy = vi.fn(async (reviewId: string, action: EvidenceReviewBulkAction) => {
+      order.push(`bulk:${action}`)
+      return backend.spy(reviewId, action)
+    })
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: bulkSpy
+    })
+    await openWith(detail)
+
+    // A still-debounced per-item decision, then the sweep: the queued write must land FIRST
+    // (otherwise it would flush later and silently revert part of the sweep).
+    editReviewItem('p1', { decision: 'supported' })
+    await bulkClearDecisions()
+    expect(order).toEqual(['item:p1', 'bulk:clear_decisions'])
+    for (const i of getReviewSessionSnapshot().detail!.items) {
+      expect(i.decision).toBe('not_reviewed')
+    }
+  })
+
+  it('a REFUSED sweep (null) surfaces a save error and never claims "saved"', async () => {
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      applyEvidenceReviewBulkAction: vi.fn(async () => null)
+    })
+    await openWith(detail)
+    await bulkClearDecisions()
+    expect(getReviewSessionSnapshot().saveState).toBe('error')
+  })
+
+  it('a sweep resolving AFTER a purge never re-inserts review content into the store', async () => {
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    let release: (() => void) | null = null
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      applyEvidenceReviewBulkAction: vi.fn(
+        () =>
+          new Promise<EvidenceReviewItem[]>((resolve) => {
+            release = () => resolve(items.map((i) => ({ ...i, decision: 'not_reviewed' as const })))
+          })
+      )
+    })
+    await openWith(detail)
+    const pending = bulkClearDecisions()
+    await Promise.resolve()
+    purgeReviewSession()
+    release!()
+    await pending
+    expect(getReviewSessionSnapshot().detail).toBeNull()
   })
 })
 
@@ -590,22 +718,25 @@ describe('reviewSession — ready-state guard (FIX-1)', () => {
     )
     const setEvidenceLink = vi.fn(async () => makeItem({ id: 'i1' }))
     const updateEvidenceReview = vi.fn(async () => ({ ...detail, reviewerLabel: 'QA' }))
+    const applyEvidenceReviewBulkAction = vi.fn(async () => detail.items)
     stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
       updateEvidenceReviewItem,
       setEvidenceLink,
-      updateEvidenceReview
+      updateEvidenceReview,
+      applyEvidenceReviewBulkAction
     })
     await openWith(detail)
 
     editReviewItem('i1', { decision: 'not_reviewed' })
     await linkEvidence('i1', 's1', null)
-    bulkClearDecisions()
-    bulkMarkHeadingsNotApplicable()
-    bulkMarkUndecidedFollowUp()
+    await bulkClearDecisions()
+    await bulkMarkHeadingsNotApplicable()
+    await bulkMarkUndecidedFollowUp()
     await flushReviewSession()
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
     expect(setEvidenceLink).not.toHaveBeenCalled()
+    expect(applyEvidenceReviewBulkAction).not.toHaveBeenCalled()
     // The optimistic detail never moved either.
     expect(getReviewSessionSnapshot().detail?.items[0]?.decision).toBe('not_reviewed')
 

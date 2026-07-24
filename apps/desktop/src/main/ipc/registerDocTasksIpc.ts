@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import {
   EXTRACT_RECORD_TYPES,
   type DocTaskStatus,
@@ -33,7 +34,10 @@ export function registerDocTasksIpc(ctx: AppContext): void {
   }
 
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) {
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) {
       throw new Error(tMain('main.task.workspaceLocked'))
     }
   }

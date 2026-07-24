@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type {
   EvidenceExportFormat,
   EvidenceReviewDetail,
@@ -72,6 +72,15 @@ export function ReviewSummaryView({
   // §28.6: export waits for the acknowledge while the review is outdated (main refuses
   // too — this gate is the friendly surface, not the enforcement).
   const exportBlocked = freshness?.outdated === true && !freshness.acknowledgedAt
+  // AUD-09: collapse the disclosure when the gate engages. The freshness verdict arrives
+  // AFTER mount, so the panel can legitimately be open when the gate closes over it — and
+  // hiding the panel alone leaves the toggle's own `aria-expanded` saying "expanded" on a
+  // now-DISABLED control (a screen reader then describes a panel that is not there), while
+  // a later acknowledge would re-enable the toggle and pop the panel open unasked. Resetting
+  // the state keeps the control's announcement and the screen in agreement.
+  useEffect(() => {
+    if (exportBlocked) setExportOpen(false)
+  }, [exportBlocked])
   const gen = detail.generationSnapshot
   const unavailable = t('review.summary.unavailable')
   const completed =
@@ -227,8 +236,10 @@ export function ReviewSummaryView({
         </section>
       )}
 
-      {/* P4: a panel opened before the verdict landed closes visually once the gate
-          engages — main would refuse the export anyway (§28.6). */}
+      {/* P4: a panel opened before the verdict landed closes the moment the gate engages —
+          main would refuse the export anyway (§28.6). The `!exportBlocked` guard makes that
+          happen in the SAME render; the effect above then clears the toggle's own
+          disclosure state, so the control never announces a panel that is not there. */}
       {exportOpen && !exportBlocked && (
         <ExportPackPanel onClose={() => setExportOpen(false)} t={t} lang={lang} />
       )}

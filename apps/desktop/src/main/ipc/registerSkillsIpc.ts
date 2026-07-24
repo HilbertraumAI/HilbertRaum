@@ -16,6 +16,7 @@ import { bomFor } from './save-export'
 import { getLatestUserMessage } from '../services/chat'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { skillNeedsNewerApp } from '../../shared/skill-manifest'
 import { getSkill, getSkillsByDeclaredId, setSkillEnabled } from '../services/skills/registry'
@@ -55,7 +56,10 @@ import {
 
 export function registerSkillsIpc(ctx: AppContext): void {
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.skills.locked'))
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.skills.locked'))
   }
 
   // The app-orchestrated tool-run lifecycle controller (skills plan §12.2, S11b). Held in this closure

@@ -13,6 +13,7 @@ import {
   resolvePackExportFormat,
   suggestedPackFileName,
   writePackFileAtomic,
+  packTmpPath,
   EvidencePackOutdatedError,
   EvidencePackRecordError
 } from '../../src/main/services/evidence-pack/export'
@@ -399,7 +400,9 @@ describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
     ).rejects.toBeInstanceOf(EvidencePackRecordError)
     // The invariant is RESTORED: the freshly-renamed destination was unlinked…
     expect(existsSync(dest)).toBe(false)
-    expect(existsSync(`${dest}.tmp`)).toBe(false)
+    // …and no scratch sibling survives under ANY name (the tmp file is named per export,
+    // AUD-17, so asserting one fixed path would no longer prove anything).
+    expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
     // …and no row exists (trigger removed so the read runs clean).
     db.exec('DROP TRIGGER fail_export')
     expect(listEvidenceExports(db, detail.id)).toEqual([])
@@ -427,7 +430,7 @@ describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
       })
     ).rejects.toBeInstanceOf(EvidencePackRecordError)
     expect(existsSync(dest)).toBe(false)
-    expect(existsSync(`${dest}.tmp`)).toBe(false)
+    expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
   })
 
   it('unknown review id → null, no dialog shown', async () => {
@@ -487,12 +490,16 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
     expect(printed!.html).toContain(t('en', 'packExport.meta.formatValuePdf', { version: 1 }))
     expect(printed!.html).not.toContain(t('en', 'packExport.meta.formatValue', { version: 1 }))
     // …the pipeline's pack id for the footer, and a `.html` print-source SIBLING of the
-    // destination (file:// MIME is sniffed from the extension).
+    // destination (file:// MIME is sniffed from the extension) whose name carries THIS
+    // export's pack id — two exports to the same destination must not share the file they
+    // load and print (AUD-17).
     expect(printed!.packId).toBe(FIXED_PACK_ID)
-    expect(printed!.sourceHtmlPath).toBe(`${dest}.print.tmp.html`)
+    expect(printed!.sourceHtmlPath).toBe(
+      `${dest}.${FIXED_PACK_ID.replace(/-/g, '')}.print.tmp.html`
+    )
     // The destination holds the PRINTER's bytes, atomically, hash-of-file recorded.
     expect(readFileSync(dest)).toEqual(PDF_BYTES)
-    expect(existsSync(`${dest}.tmp`)).toBe(false)
+    expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
     expect(record).not.toBeNull()
     expect(record!.format).toBe('pdf')
     expect(record!.fileName).toBe('pack.pdf')
@@ -620,7 +627,7 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
       })
     ).rejects.toBeInstanceOf(EvidencePackRecordError)
     expect(existsSync(dest)).toBe(false)
-    expect(existsSync(`${dest}.tmp`)).toBe(false)
+    expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
   })
 })
 
@@ -701,23 +708,30 @@ describe('helpers', () => {
     expect(suggestedPackFileName('   ', 'pdf')).toBe('evidence-pack.pdf')
   })
 
-  it('writePackFileAtomic writes-through and returns the on-disk hash', () => {
+  // AUD-15: the writer is ASYNC (fs.promises + a FileHandle fsync) so a multi-MB pack no
+  // longer stalls the Electron main thread. The CONTRACT below is unchanged — write-through
+  // to disk, the hash taken from the bytes read back, no tmp sibling left behind.
+  // AUD-17: the tmp sibling is named from the EXPORT's pack id, so two exports to one
+  // destination never write the same scratch file (`packTmpPath`).
+  it('writePackFileAtomic writes-through and returns the on-disk hash', async () => {
     const { root } = freshDb()
     const dest = join(root, 'atomic.html')
-    const hash = writePackFileAtomic(dest, 'content-ä')
+    const hash = await writePackFileAtomic(dest, 'content-ä', FIXED_PACK_ID)
     expect(readFileSync(dest, 'utf8')).toBe('content-ä')
     expect(hash).toBe(sha256Of(readFileSync(dest)))
-    expect(existsSync(`${dest}.tmp`)).toBe(false)
+    expect(existsSync(packTmpPath(dest, FIXED_PACK_ID))).toBe(false)
+    // Nothing scratch-like survives under ANY name.
+    expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
   })
 
-  it('writePackFileAtomic writes Buffer content VERBATIM (P6: the printToPDF bytes)', () => {
+  it('writePackFileAtomic writes Buffer content VERBATIM (P6: the printToPDF bytes)', async () => {
     const { root } = freshDb()
     const dest = join(root, 'atomic.pdf')
     const bytes = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0x80])
-    const hash = writePackFileAtomic(dest, bytes)
+    const hash = await writePackFileAtomic(dest, bytes, FIXED_PACK_ID)
     expect(readFileSync(dest)).toEqual(bytes)
     expect(hash).toBe(sha256Of(bytes))
-    expect(existsSync(`${dest}.tmp`)).toBe(false)
+    expect(existsSync(packTmpPath(dest, FIXED_PACK_ID))).toBe(false)
   })
 
   it('resolvePackExportFormat: literal "pdf" only; everything else reads html (P6)', () => {

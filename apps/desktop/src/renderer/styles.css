@@ -2182,6 +2182,26 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 /* ---- Shared component layer (guidelines §6) ---------------------------- */
 
+/* Native <select> — the shared token treatment (guidelines §6 "Inputs", §4.4 typography).
+   DV-1: a bare <select> renders in the UA's own skin (Arial, square corners, UA border and
+   fill) and so reads as foreign on both themes. This is the ONE place that maps a dropdown
+   onto the role tokens; every picker-style <select> in the app should carry `.select`.
+   Deliberately NOT a bare-element `select { … }` rule: the app also renders selects on
+   surfaces this treatment has not been eyeballed on, so the opt-in class keeps the blast
+   radius where it was reviewed. Sizing is kept at the UA's compact footprint on purpose —
+   only the tokens change — with a 28px floor so the control clears the 24px target
+   minimum (§9 / WCAG 2.5.8). The native control is kept as-is: no custom dropdown. */
+.select {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  min-height: 28px;
+}
+
 /* Badge — status pill: icon + word, never color-only (WCAG 1.4.1). */
 .pill {
   display: inline-flex;

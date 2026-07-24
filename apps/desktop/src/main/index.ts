@@ -14,7 +14,7 @@ import {
 import { getSettings, updateSettings } from './services/settings'
 import { effectiveContextWindow } from './services/chat'
 import { loadPolicy, buildPolicyStatus } from './services/policy'
-import { vaultPathsFrom, WorkspaceController } from './services/workspace-vault'
+import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog, detachVaultKey } from './services/logging'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
@@ -199,7 +199,20 @@ function initBackend(): void {
     // the restart is silently swallowed and `status()` keeps reporting the dead server healthy.
     // `forceRestart` bypasses that guard atomically; `persistGpuFailure` (below) runs first, so
     // the rebuilt ladder lands on CPU and the fallback can fire at most once (no restart loop).
-    restart: (opts) => runtimeRef?.forceRestart(opts) ?? Promise.resolve(),
+    restart: (opts) => {
+      // AUD-02: `forceRestart` re-checks only the QUIT latch, so a GPU crash landing during or
+      // after a workspace lock would respawn a CPU llama-server past the lock — an unwanted
+      // multi-GB child while the app sits at the unlock gate (resource/orphan, not a content
+      // leak: the crashed child's KV cache died with it, and the CPU replacement starts empty).
+      // The manager holds no workspace reference, so the admission check goes here, at the
+      // composition seam that does. Nothing is lost: the unlock auto-start brings the model
+      // back up, and `persistGpuFailure` above already recorded the fallback intent.
+      if (!workspaceAdmitsWork(workspace)) {
+        log.info('GPU crash restart skipped — the workspace is locked or locking')
+        return Promise.resolve()
+      }
+      return runtimeRef?.forceRestart(opts) ?? Promise.resolve()
+    },
     persistFailure: (reason) => {
       // A mid-session crash is its own audit event; persistGpuFailure then records the
       // compatibility-mode fallback it triggers.
@@ -295,6 +308,10 @@ function initBackend(): void {
     // (after this constructor runs), so read LIVE off ctx like getTranslator; unwired ⇒
     // never busy.
     isDocumentProcessing: (documentId) => ctx?.docIngestionActive?.(documentId) ?? false,
+    // AUD-02: the workspace-lock admission signal. The lock arms this as its FIRST act and only
+    // closes the DB at the very end of its multi-second teardown, so without it a task admitted
+    // mid-teardown would pump immediately and lazily respawn the just-suspended sidecar.
+    isWorkspaceLocking: () => workspace.isLocking(),
     audit
   })
 
@@ -339,7 +356,10 @@ function initBackend(): void {
   // Lazy: it spawns nothing until the first analyze of an available model.
   ctx.vision = new VisionService({
     getStatus: () => getVisionStatus(ctx as AppContext),
-    createRuntime: (status) => createVisionRuntimeFromContext(ctx as AppContext, status)
+    createRuntime: (status) => createVisionRuntimeFromContext(ctx as AppContext, status),
+    // AUD-02: refuse for the whole lock teardown, not just this service's own stop() window —
+    // an analyze admitted after that window would build a fresh vision sidecar that outlives it.
+    isWorkspaceLocking: () => workspace.isLocking()
   })
   // The Translate-view job orchestrator (TG-4). Built here — not inside registerTranslateIpc — so
   // the lock/quit teardown paths can reach it via `ctx.translateJobs` and abort an in-flight text
@@ -347,7 +367,10 @@ function initBackend(): void {
   // `translator` (null ⇒ friendly no-model refusal) and the doc-task lane state (D9) live.
   ctx.translateJobs = new TranslateJobService({
     getTranslator: () => (ctx as AppContext).translator ?? null,
-    hasActiveDocTask: () => (ctx as AppContext).docTasks?.hasActiveTask() ?? false
+    hasActiveDocTask: () => (ctx as AppContext).docTasks?.hasActiveTask() ?? false,
+    // AUD-02: `stop()` aborts the in-flight job but takes no latch, so a start landing later in
+    // the same lock teardown would get a fresh controller and respawn the suspended sidecar.
+    isWorkspaceLocking: () => workspace.isLocking()
   })
   // Issue #40: a completed in-app model download re-runs the translation selector, so the
   // Translate screen stops claiming the model is missing the moment the GGUF lands — no restart.

@@ -54,7 +54,12 @@ $Target = [System.IO.Path]::GetFullPath($Target)
 $ManifestsDir = Join-Path $Target 'model-manifests'
 if (-not (Test-Path $ManifestsDir)) { $ManifestsDir = Join-Path $RepoRoot 'model-manifests' }
 if (-not (Test-Path $ManifestsDir)) {
-  Write-Error "No model-manifests found under '$Target' or repo root."
+  # Reported with Write-Host, not Write-Error (AUD-05): under $ErrorActionPreference = 'Stop'
+  # a Write-Error is a SCRIPT-TERMINATING exception, so the `exit 2` below would never run
+  # (the process would exit 1, collapsing the config-error code into the verification-failure
+  # code) and the exception would propagate out of the `&` call of a parent script and kill it
+  # before it could inspect $LASTEXITCODE and report its own verdict.
+  Write-Host "No model-manifests found under '$Target' or repo root." -ForegroundColor Red
   exit 2
 }
 

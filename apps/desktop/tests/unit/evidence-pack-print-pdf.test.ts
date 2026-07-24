@@ -287,9 +287,21 @@ describe('print flow (hidden window lifecycle)', () => {
     fake.state.loadFile = () => new Promise<void>(() => {}) // never finishes loading
     const printing = printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID, sourceHtmlPath })
     const failed = expect(printing).rejects.toThrow(/load step took too long/)
+    // The print SOURCE is written asynchronously (a multi-MB synchronous write on the main
+    // thread used to stall the whole process), so the window — and with it the load step's
+    // timeout timer — only exists once that write has landed. Yield real event-loop turns
+    // until it does; advancing the fake clock before the timer is armed would leave the
+    // step waiting on a deadline that is already in the past. `advanceTimersByTimeAsync(0)`
+    // is the yield: it hands one real turn back before flushing the (empty) fake queue.
+    for (let turns = 0; fake.state.windows.length === 0 && turns < 1000; turns++) {
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(fake.state.windows.length).toBe(1)
     await vi.advanceTimersByTimeAsync(PRINT_STEP_TIMEOUT_MS + 1)
     await failed
     expect(lastWin().destroyed).toBe(true)
+    // The removal is async too — let it settle before asserting the source file is gone.
+    await vi.advanceTimersByTimeAsync(0)
     expect(existsSync(sourceHtmlPath)).toBe(false)
   })
 })

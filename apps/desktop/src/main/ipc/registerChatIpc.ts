@@ -35,6 +35,7 @@ import { conversationAttachmentIds } from '../services/collections'
 import { listDocumentsByIds } from '../services/ingestion'
 import type { DocumentInfo } from '../../shared/types'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers } from './inflight'
 import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
@@ -69,7 +70,10 @@ export function registerChatIpc(ctx: AppContext): void {
   // IPC emissions — localized via tMain (i18n record §3.3). The in-memory-only handlers
   // (stopGeneration, getActiveStream) are workspace-agnostic and intentionally skip this.
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) {
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) {
       throw new Error(tMain('main.chat.locked'))
     }
   }

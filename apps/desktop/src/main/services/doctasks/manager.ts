@@ -234,6 +234,16 @@ export class DocTaskManager {
    * via `getDocTask` polling from then on.
    */
   startDocTask(req: StartDocTaskRequest): { jobId: string } {
+    // AUD-02 — refuse while a workspace LOCK teardown is under way. This lives HERE, not only in
+    // the IPC handler, so every non-IPC caller inherits it (the guard posture of this manager).
+    // `getDb()` cannot express this: the lock closes the DB only at the very END of a
+    // multi-second awaited teardown, so a task admitted mid-teardown queues, pumps immediately,
+    // and lazily respawns the translation sidecar the teardown just suspended — the sidecar
+    // suspends are non-latching on purpose (they must come back after the next unlock). Same
+    // localized copy the doc-task IPC guard uses.
+    if (this.deps.isWorkspaceLocking?.()) {
+      throw new Error(tMain('main.task.workspaceLocked'))
+    }
     const kind = req?.kind as DocTaskKind
     if (
       kind !== 'summary' &&

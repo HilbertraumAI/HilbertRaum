@@ -569,10 +569,17 @@ export function ChatScreen({
   // ---- Evidence review entry-point state (EP-1 plan §7.2) --------------------------------
   // Which persisted answers already carry a review (drives "Review evidence" vs "Continue
   // review" + the Draft/Ready chip, spec §9.4). Keyed by message id; `null` = checked, none
-  // exists. Fetched once per eligible assistant message per conversation view — a pure local
-  // SQLite read per id, no model, no network. A fetch failure reads as "none" (the create
-  // path surfaces real errors with friendly copy). Reset on conversation switch; returning
-  // from the review screen remounts ChatScreen, so the chip state is re-read fresh.
+  // exists. Filled from ONE conversation-scoped read — a pure local SQLite query, no model,
+  // no network. A fetch failure reads as "none" for every candidate (the create path
+  // surfaces real errors with friendly copy). Reset on conversation switch; returning from
+  // the review screen remounts ChatScreen, so the chip state is re-read fresh.
+  //
+  // AUD-12: this used to ask per message, awaiting one IPC round trip per candidate answer
+  // in sequence — each one a full item-row load plus a freshness recompute main-side — so
+  // the cost of opening a documents-mode conversation grew with its history and the chips
+  // only appeared once the SLOWEST round trip had landed. One batch call answers for the
+  // whole conversation, and the single commit below is also what keeps the chip state from
+  // trickling in message by message.
   const [reviewSummaries, setReviewSummaries] = useState<
     ReadonlyMap<string, EvidenceReviewSummary | null>
   >(new Map())
@@ -582,7 +589,7 @@ export function ChatScreen({
   useEffect(() => {
     if (!activeId || messages.length === 0) return
     // Older preload bridges (mixed-version dev drives) may lack the method — hide quietly.
-    if (typeof window.api.getEvidenceReviewForMessage !== 'function') return
+    if (typeof window.api.getEvidenceReviewSummariesForConversation !== 'function') return
     const conv = conversations.find((c) => c.id === activeId)
     const scope = conv ? { mode: conv.mode } : null
     const unknown = messages.filter(
@@ -591,18 +598,21 @@ export function ChatScreen({
     if (unknown.length === 0) return
     let cancelled = false
     void (async () => {
-      const entries: Array<[string, EvidenceReviewSummary | null]> = []
-      for (const m of unknown) {
-        try {
-          entries.push([m.id, await window.api.getEvidenceReviewForMessage(m.id)])
-        } catch {
-          entries.push([m.id, null])
-        }
+      let byMessage = new Map<string, EvidenceReviewSummary>()
+      try {
+        const summaries =
+          (await window.api.getEvidenceReviewSummariesForConversation(activeId)) ?? []
+        byMessage = new Map(summaries.map((s) => [s.messageId, s]))
+      } catch {
+        // Read failure ⇒ every candidate reads as "no review" — the chip hides rather than
+        // claiming a state we could not verify.
       }
       if (cancelled) return
       setReviewSummaries((prev) => {
         const next = new Map(prev)
-        for (const [id, summary] of entries) next.set(id, summary)
+        // Every candidate we asked about is now ANSWERED (summary or an explicit null), so
+        // the effect's own `unknown` gate closes and it cannot re-run for these ids.
+        for (const m of unknown) next.set(m.id, byMessage.get(m.id) ?? null)
         return next
       })
     })()

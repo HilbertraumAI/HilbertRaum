@@ -1438,6 +1438,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
             <label>
               {t('docs.translateModal.from')}{' '}
               <select
+                className="select"
                 aria-label={t('docs.translateModal.from')}
                 value={translateChoice.sourceLang}
                 onChange={(e) =>
@@ -1457,6 +1458,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
             <label>
               {t('docs.translateModal.to')}{' '}
               <select
+                className="select"
                 aria-label={t('docs.translateModal.to')}
                 value={translateChoice.targetLang}
                 onChange={(e) =>

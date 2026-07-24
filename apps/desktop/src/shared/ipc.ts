@@ -291,10 +291,22 @@ export const IPC = {
   getEvidenceReview: 'evidence:get',
   /** The message's review as a light `EvidenceReviewSummary` (entry-point state), or null. */
   getEvidenceReviewForMessage: 'evidence:getForMessage',
+  /** EVERY review in one conversation as light `EvidenceReviewSummary[]` — the transcript's
+   *  whole chip state in ONE round trip (AUD-12). Asking per message made opening a
+   *  conversation cost one serial invoke (plus a full item load and a freshness recompute)
+   *  per candidate answer, so the latency grew with the history length. Empty array for an
+   *  unknown/malformed id, matching the other unknown-id results. */
+  getEvidenceReviewSummariesForConversation: 'evidence:summariesForConversation',
   /** Patch head fields (title D-6 / reviewer label D-3 / general note); null on unknown id. */
   updateEvidenceReview: 'evidence:update',
   /** Patch one item's decision/note; null on unknown id. */
   updateEvidenceReviewItem: 'evidence:updateItem',
+  /** Apply ONE conservative bulk decision action (`EvidenceReviewBulkAction`) to a whole
+   *  review in a single transaction (AUD-13) → the refreshed `EvidenceReviewItem[]`, or
+   *  null on an unknown id, an unrecognized action, and on a READY review (reopen first).
+   *  A fan-out of per-item writes could crash half-applied; this cannot. The forbidden
+   *  blanket "mark all supported" has no name in the union, so it cannot be requested. */
+  applyEvidenceReviewBulkAction: 'evidence:bulkAction',
   /** Carve a reviewer selection from one block (UTF-16 offsets into its `textSnapshot`);
    *  null = refused (unknown block, out-of-range or surrogate-splitting offsets). */
   createEvidenceSelection: 'evidence:createSelection',

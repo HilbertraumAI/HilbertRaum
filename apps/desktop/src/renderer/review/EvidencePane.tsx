@@ -196,12 +196,16 @@ export function EvidencePane({
           <p className="hint review-evidence-shown">
             {t('review.evidence.shownCount', { shown: shown.length, total: filtered.length })}
           </p>
+          {/* AUD-11: the cards this uncovers are SOURCE cards, and the line right above
+              says "{shown} of {total} sources shown" — so the control has its own copy
+              instead of borrowing the chat's whole-document "…more sections" wording, which
+              contradicted its own neighbour in EN and DE alike. */}
           <button
             type="button"
             className="sources-more"
             onClick={() => setRevealed((r) => r + PROVENANCE_CARD_CAP)}
           >
-            {tCount('chat.sources.more', Math.min(remaining, PROVENANCE_CARD_CAP))}
+            {tCount('review.evidence.more', Math.min(remaining, PROVENANCE_CARD_CAP))}
           </button>
         </>
       )}

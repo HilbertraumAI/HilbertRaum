@@ -8,6 +8,7 @@ import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { discoverManifests } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 
 // IPC for the hardware benchmark + model recommendation (spec §9.1, §11).
@@ -74,7 +75,9 @@ export async function runAndPersistBenchmark(ctx: AppContext): Promise<Benchmark
  */
 export function maybeRunFirstBenchmark(ctx: AppContext): void {
   try {
-    if (!ctx.workspace.isUnlocked()) return
+    // AUD-02: also skipped while a lock teardown runs — the benchmark spawns a sidecar and
+    // persists settings, and the DB stays open for that whole window.
+    if (!workspaceAdmitsWork(ctx.workspace)) return
     if (getSettings(ctx.db).lastBenchmark !== null) {
       // Already benchmarked — still refresh the persisted GPU probe for THIS
       // machine/session in the background: a drive moved between machines would
@@ -111,7 +114,10 @@ export function registerBenchmarkIpc(ctx: AppContext): void {
   // DB-touching handler with an explicit requireUnlocked() so a locked call surfaces the localized
   // main.benchmark.locked instead (parity, and the parametrized lock test now covers these too).
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.benchmark.locked'))
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.benchmark.locked'))
   }
   ipcMain.handle(IPC.runBenchmark, (): Promise<BenchmarkResult> => {
     requireUnlocked()

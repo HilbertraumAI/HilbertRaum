@@ -49,6 +49,7 @@ import {
 import { supportedExtensions } from '../services/ingestion/parsers'
 import { reconcileStuckSkillRuns } from '../services/skills/run'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { saveTextExport } from './save-export'
 
@@ -164,7 +165,10 @@ export function registerDocsIpc(ctx: AppContext): void {
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.
   // Guard throws are ephemeral IPC emissions — localized via tMain (i18n record §3.3).
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) {
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) {
       throw new Error(tMain('main.docs.locked'))
     }
   }
@@ -411,7 +415,9 @@ export function registerDocsIpc(ctx: AppContext): void {
       // end or once the workspace is locked. Adds the id to `processing` so reconciliation and
       // the busy gate see it from the moment its parse begins; the consumer removes it.
       const startPrepare = (idx: number): Pending | null => {
-        if (idx >= documentIds.length || !ctx.workspace.isUnlocked()) return null
+        // AUD-02: `workspaceAdmitsWork` — a lock teardown is already under way here even though
+        // the DB is still open, so no further file may start parsing/decrypting into it.
+        if (idx >= documentIds.length || !workspaceAdmitsWork(ctx.workspace)) return null
         const id = documentIds[idx]
         processing.add(id)
         return { id, promise: prepareDocument(ctx.db, storeDir, id, ingestionDeps(jobAbort.signal)) }
@@ -421,8 +427,10 @@ export function registerDocsIpc(ctx: AppContext): void {
         for (let i = 0; i < documentIds.length; i++) {
           // Lock-while-importing: the vault can close mid-job ("Lock now"). Stop the loop
           // cleanly — the remaining rows stay non-terminal inside the encrypted snapshot and
-          // are reconciled to `failed` (re-indexable) after the next unlock.
-          if (!ctx.workspace.isUnlocked()) {
+          // are reconciled to `failed` (re-indexable) after the next unlock. AUD-02: this now
+          // breaks as soon as the lock STARTS, not only once the DB is finally closed, so the
+          // loop stops feeding the embedder the teardown is about to suspend.
+          if (!workspaceAdmitsWork(ctx.workspace)) {
             log.warn('Import stopped: workspace locked mid-job', { jobId })
             // Kill any in-flight audio transcription (the look-ahead prepare) at once.
             jobAbort.abort()
@@ -800,8 +808,10 @@ export function registerDocsIpc(ctx: AppContext): void {
         for (const id of ids) {
           if (signal.aborted) break // user pressed Cancel
           // Workspace can lock mid-batch ("Lock now"): stop cleanly — the remaining docs keep
-          // their current status and the user can retry after unlock.
-          if (!ctx.workspace.isUnlocked()) {
+          // their current status and the user can retry after unlock. AUD-02: breaks as soon as
+          // the lock STARTS (the DB stays open for its whole multi-second teardown), so no
+          // further document is re-parsed/re-embedded into the closing session.
+          if (!workspaceAdmitsWork(ctx.workspace)) {
             log.warn('Re-index all stopped: workspace locked mid-batch', { jobId })
             break
           }

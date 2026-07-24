@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import { VaultBusyError, WrongPasswordError } from '../services/workspace-vault'
+import { VaultBusyError, WrongPasswordError, workspaceAdmitsWork } from '../services/workspace-vault'
 import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { inFlightStreams, awaitInFlightStreamsSettled } from './inflight'
@@ -199,7 +199,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           message: tMain('main.workspace.newPasswordTooShort', { min: MIN_PASSWORD_LENGTH })
         }
       }
-      if (!ctx.workspace.isUnlocked()) {
+      // Also refused once a LOCK is under way (AUD-02): a change re-wraps the descriptor and (on
+      // a v1 vault) re-encrypts every `.enc` sidecar, which must never interleave with the lock's
+      // own re-encrypt of the working DB. The bare `isUnlocked()` did not express that — the DB
+      // stays open for the whole lock teardown.
+      if (!workspaceAdmitsWork(ctx.workspace)) {
         return {
           ok: false,
           reason: 'refused',
@@ -244,111 +248,159 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
   )
 
   ipcMain.handle(IPC.lockWorkspace, async (): Promise<WorkspaceStateInfo> => {
-    // "Lock now" must leave nothing user-derived running: a llama-server sidecar keeps
-    // recent prompts in its in-memory KV cache (the reranker additionally saw recent
-    // questions + chunk text), so ALL sidecars are stopped BEFORE the vault re-encrypts.
-    // In-flight generations are aborted first (their partial replies persist while the
-    // DB is still open); the E5 embedder + reranker restart lazily on next use, and the
-    // chat runtime comes back via the unlock auto-start.
-    for (const controller of inFlightStreams.values()) controller.abort()
-    // A multi-minute deep-index (tree) build is NOT in inFlightStreams (doc tasks never
-    // are), so it must be aborted explicitly or it would keep calling chatStream/getDb()
-    // while the vault re-encrypts (plan §4.1 M9). Aborts the build's controller AND rejects
-    // any parked arbiter reacquire; the tree is left `building` for reconcileStuckTrees.
-    ctx.docTasks?.abortActiveBuild()
-    // And ALL doc tasks (TG-3 → TA-1 H2): a running TRANSLATION no longer dies with the chat
-    // runtime below — left running, its next window would lazily RESPAWN the suspended
-    // TranslateGemma sidecar with document plaintext while the vault re-encrypts. Cancel the
-    // running task (cancel persists nothing; a running summary/compare gets a clean `cancelled`
-    // too instead of failing against the stopped chat runtime) AND flush the QUEUE. The old
-    // `cancelDocTask()` cancelled only the ACTIVE task, and the safety claim that "still-queued
-    // tasks fail friendly at dequeue (`getDb()` throws while locked)" was FALSE during THIS
-    // handler: the DB stays OPEN while we await the sidecar suspends below, so when the cancelled
-    // task settled `pump()` would dequeue the next queued translation INTO the lock window —
-    // decrypting document text to a `.parse` transient and cold-starting a fresh ~10 GB sidecar
-    // that outlives the lock. `cancelAllDocTasks()` closes that window; no permanent latch (the
-    // manager is usable again after unlock).
-    ctx.docTasks?.cancelAllDocTasks()
-    // And the active TRANSLATE-VIEW job (TG-4): abort it BEFORE the translator suspend below —
-    // left running, its next window would call translate() and lazily RESPAWN the just-suspended
-    // ~10 GB sidecar with the source text while the vault re-encrypts. stop() also purges the job
-    // map so the transient source/translation text does not linger past the lock (vision parity).
-    void ctx.translateJobs?.stop()
-    // `suspend()` (not `stop()`): the sidecars must come back lazily
-    // after unlock — `stop()` latches permanently for the will-quit path and used to
-    // leave every post-lock/unlock embed failing with "Embedder is stopped".
-    await Promise.allSettled([
-      ctx.runtime.stop(),
-      ctx.embedder.suspend?.() ?? ctx.embedder.stop?.() ?? Promise.resolve(),
-      ctx.reranker?.suspend?.() ?? Promise.resolve(),
-      // Kill any in-flight whisper-cli child (it is reading decrypted audio;
-      // the failing parse marks that document `failed`, and processDocument's finally
-      // shreds the decrypted transient). Per-file CLI — next use just respawns.
-      ctx.transcriber?.suspend?.() ?? Promise.resolve(),
-      // BE-5 (ocr-audit 2026-07-18): terminate the warm tesseract WASM worker — an idle worker
-      // holds decoded page bytes in main-process RAM, so it too must die before the vault
-      // re-encrypts. `suspend()` (not `stop()`): the engine is held on ctx for the session, so it
-      // must come back lazily on the next recognition after unlock — stop() latches permanently.
-      ctx.ocrEngine?.suspend?.() ?? Promise.resolve(),
-      // The vision sidecar keeps the decoded image + its prompt in the llama-server KV cache,
-      // so it too must die before the vault re-encrypts. `stop()` aborts any in-flight analyze
-      // and kills the child; the orchestrator rebuilds a fresh runtime (cold start) on the next
-      // analyze, so this needs no `suspend()`/latch distinction (the runtime instance is discarded).
-      ctx.vision?.stop() ?? Promise.resolve(),
-      // The TranslateGemma sidecar (TG wave) keeps recent source/translation text in its KV cache,
-      // so it too must die before the vault re-encrypts. `suspend()` (not `stop()`): the runtime
-      // instance is held on ctx for the session (unlike vision's rebuilt-per-analyze runtime), so
-      // it must come back lazily on the next translate() after unlock — stop() latches permanently.
-      ctx.translator?.suspend?.() ?? ctx.translator?.stop?.() ?? Promise.resolve()
-    ])
-    // R1 (full-audit-2026-06-30, Phase C) — deterministically await each aborted stream's
-    // SETTLE (its partial-reply persistence) before the DB closes. The aborts above unwind each
-    // generation as an ABORT, so `generateAssistantMessage` persists the partial via
-    // `appendMessage` while `ctx.db` is open — but that runs in the stream's OWN promise, which
-    // this handler never awaited; previously it relied on `runtime.stop()` outrunning the
-    // abort-unwind (for an already-exited/mock sidecar `stop()` can resolve first → the partial
-    // is dropped, or `appendMessage` throws against the now-closed DB → an unhandled rejection).
-    // Awaiting the settle here makes persist-before-close the ORDERING, not a race. Placed after
-    // the sidecar stop so a generation that ignores its abort signal is still unwound by the
-    // dead sidecar (no teardown stall). Best-effort (`allSettled`) and BOUNDED (full-audit
-    // 2026-07-12 REL-4: 5 s ceiling inside `awaitInFlightStreamsSettled`, mirroring the
-    // doc-task settle below) so a wedged settle can never hang "Lock now".
-    await awaitInFlightStreamsSettled()
-    // TA-1 H2: also await the cancelled doc-task's abort-unwind (its materialize/shred runs
-    // synchronously while ctx.db is open) before purge/lock close the DB — bounded so a wedged
-    // handler can't hang the lock. Mirrors the in-flight-stream settle await above.
-    await awaitActiveDocTaskSettled(ctx)
-    // RAG-6 (Wave P4) — SECURITY purge: drop the resident decoded-vector cache from main-process
-    // RAM. The vectors are derived from chunk text, so like the sidecars' in-memory recent text
-    // they must not linger after the vault re-encrypts. The staleness signature does NOT cover
-    // this (the table is unchanged on lock), so this explicit purge is a hard requirement. Done
-    // while `ctx.db` is still open (before `lock()` makes it unreachable). The next search after
-    // unlock rebuilds the cache from the re-opened DB.
-    purgeResidentVectors(ctx.db)
-    // Recorded BEFORE the vault closes — afterwards the DB is unreachable. (If the lock
-    // below FAILS, the follow-up `workspace_lock_failed` event corrects the record.)
-    ctx.audit?.('workspace_locked', 'Workspace locked')
-    // Flush the encrypted diagnostics log while the key is still live, then drop it —
-    // lock() zeroes the key, after which the log can no longer be persisted. The next
-    // unlock re-attaches and continues the same `app.log.enc`.
-    detachVaultKey()
-    let state: WorkspaceStateInfo
+    // AUD-02 — arm the lock latch FIRST, before any await. Everything below this line is an
+    // awaited teardown that can take seconds (sidecar suspends, stream settles, the doc-task
+    // settle), and an async ipcMain handler yields the main thread at every one of those awaits,
+    // so a `startDocTask`/`translateStart`/`imageAnalyze`/`importDocuments` arriving in that
+    // window is dispatched normally. Until this latch existed, every admission guard was a bare
+    // `isUnlocked()` — true until the very last statement of this handler — so such a call was
+    // ADMITTED and immediately pumped, and because the suspends below are deliberately
+    // NON-latching (the sidecars must come back lazily after the next unlock) it lazily
+    // RESPAWNED the multi-GB child this teardown had just killed, with document/image-derived
+    // text in its KV cache, outliving the lock. The renderer likewise stays mounted until this
+    // invoke RESOLVES, so the refusal is what the user's next click gets either way.
+    ctx.workspace.beginLock()
     try {
-      state = ctx.workspace.lock()
+      return await runLockTeardown(ctx)
     } catch (err) {
-      // full-audit 2026-07-11 CODE-1a — the re-encrypt failed (realistically ENOSPC:
-      // during lock the plaintext DB + old `.enc` + new `.enc.tmp` coexist, so each lock
-      // needs ~DB-size free space). The controller has restored itself to a consistently
-      // UNLOCKED state (plaintext DB re-opened, key kept for the retry), so re-adopt the
-      // vault key for the diagnostics log and surface friendly copy — §7 voice, localized
-      // at emission (D-L5), never the raw error. The renderer keeps the workspace open;
-      // the user frees space and taps "Lock now" again.
-      attachLogKey(ctx)
-      log.error('Workspace lock failed — workspace stays unlocked', String(err))
-      ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
-      throw new Error(tMain('main.workspace.lockFailed'))
+      // AUD-02 — the SINGLE disarm point for every failure path out of the teardown, including
+      // the CODE-1a failed re-encrypt below and any throw from a teardown boundary. Arming a
+      // latch before multi-second work introduces a failure mode the pre-latch code did not
+      // have: a throw between `beginLock()` and `lock()` would leave the workspace UNLOCKED
+      // (DB open, key live) with the latch armed, and `unlock()` cannot clear it — it early-
+      // returns on an already-unlocked controller before it can start a new session. Every
+      // content surface would then refuse for the rest of the session with no user-visible
+      // explanation and no recovery short of a relaunch. Reachability is low today (all seven
+      // teardown boundaries are async, so their failures arrive as rejections `allSettled`
+      // swallows), but one non-async boundary added later would reintroduce it, so the
+      // structure — not the current call list — is what guarantees the disarm.
+      // The condition is deliberate: disarm only while the workspace is genuinely still open.
+      // A lock that already closed the DB must KEEP the latch (`isUnlocked()` reports locked by
+      // then, and the next unlock clears it).
+      if (ctx.workspace.isUnlocked()) ctx.workspace.cancelLock()
+      throw err
     }
-    log.info('Workspace locked (sidecars stopped)')
-    return state
   })
+}
+
+/**
+ * The "Lock now" teardown, extracted so the lock handler is a bare
+ * `beginLock()` → `try { … } catch { disarm }` frame: the latch's disarm-on-any-failure
+ * guarantee is then structural rather than a property of which boundaries happen to be async.
+ * Runs with the latch ARMED and the DB still OPEN — every step below deliberately depends on
+ * that (partial replies persist, transients shred, vectors purge, the audit event writes),
+ * which is why `requireDb()`/`ctx.db` is NOT latched.
+ */
+async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
+  // "Lock now" must leave nothing user-derived running: a llama-server sidecar keeps
+  // recent prompts in its in-memory KV cache (the reranker additionally saw recent
+  // questions + chunk text), so ALL sidecars are stopped BEFORE the vault re-encrypts.
+  // In-flight generations are aborted first (their partial replies persist while the
+  // DB is still open); the E5 embedder + reranker restart lazily on next use, and the
+  // chat runtime comes back via the unlock auto-start.
+  for (const controller of inFlightStreams.values()) controller.abort()
+  // A multi-minute deep-index (tree) build is NOT in inFlightStreams (doc tasks never
+  // are), so it must be aborted explicitly or it would keep calling chatStream/getDb()
+  // while the vault re-encrypts (plan §4.1 M9). Aborts the build's controller AND rejects
+  // any parked arbiter reacquire; the tree is left `building` for reconcileStuckTrees.
+  ctx.docTasks?.abortActiveBuild()
+  // And ALL doc tasks (TG-3 → TA-1 H2): a running TRANSLATION no longer dies with the chat
+  // runtime below — left running, its next window would lazily RESPAWN the suspended
+  // TranslateGemma sidecar with document plaintext while the vault re-encrypts. Cancel the
+  // running task (cancel persists nothing; a running summary/compare gets a clean `cancelled`
+  // too instead of failing against the stopped chat runtime) AND flush the QUEUE. The old
+  // `cancelDocTask()` cancelled only the ACTIVE task, and the safety claim that "still-queued
+  // tasks fail friendly at dequeue (`getDb()` throws while locked)" was FALSE during THIS
+  // handler: the DB stays OPEN while we await the sidecar suspends below, so when the cancelled
+  // task settled `pump()` would dequeue the next queued translation INTO the lock window —
+  // decrypting document text to a `.parse` transient and cold-starting a fresh ~10 GB sidecar
+  // that outlives the lock. `cancelAllDocTasks()` closes that window; no permanent latch (the
+  // manager is usable again after unlock).
+  ctx.docTasks?.cancelAllDocTasks()
+  // And the active TRANSLATE-VIEW job (TG-4): abort it BEFORE the translator suspend below —
+  // left running, its next window would call translate() and lazily RESPAWN the just-suspended
+  // ~10 GB sidecar with the source text while the vault re-encrypts. stop() also purges the job
+  // map so the transient source/translation text does not linger past the lock (vision parity).
+  void ctx.translateJobs?.stop()
+  // `suspend()` (not `stop()`): the sidecars must come back lazily
+  // after unlock — `stop()` latches permanently for the will-quit path and used to
+  // leave every post-lock/unlock embed failing with "Embedder is stopped".
+  await Promise.allSettled([
+    ctx.runtime.stop(),
+    ctx.embedder.suspend?.() ?? ctx.embedder.stop?.() ?? Promise.resolve(),
+    ctx.reranker?.suspend?.() ?? Promise.resolve(),
+    // Kill any in-flight whisper-cli child (it is reading decrypted audio;
+    // the failing parse marks that document `failed`, and processDocument's finally
+    // shreds the decrypted transient). Per-file CLI — next use just respawns.
+    ctx.transcriber?.suspend?.() ?? Promise.resolve(),
+    // BE-5 (ocr-audit 2026-07-18): terminate the warm tesseract WASM worker — an idle worker
+    // holds decoded page bytes in main-process RAM, so it too must die before the vault
+    // re-encrypts. `suspend()` (not `stop()`): the engine is held on ctx for the session, so it
+    // must come back lazily on the next recognition after unlock — stop() latches permanently.
+    ctx.ocrEngine?.suspend?.() ?? Promise.resolve(),
+    // The vision sidecar keeps the decoded image + its prompt in the llama-server KV cache,
+    // so it too must die before the vault re-encrypts. `stop()` aborts any in-flight analyze
+    // and kills the child; the orchestrator rebuilds a fresh runtime (cold start) on the next
+    // analyze, so this needs no `suspend()`/latch distinction (the runtime instance is discarded).
+    ctx.vision?.stop() ?? Promise.resolve(),
+    // The TranslateGemma sidecar (TG wave) keeps recent source/translation text in its KV cache,
+    // so it too must die before the vault re-encrypts. `suspend()` (not `stop()`): the runtime
+    // instance is held on ctx for the session (unlike vision's rebuilt-per-analyze runtime), so
+    // it must come back lazily on the next translate() after unlock — stop() latches permanently.
+    ctx.translator?.suspend?.() ?? ctx.translator?.stop?.() ?? Promise.resolve()
+  ])
+  // R1 (full-audit-2026-06-30, Phase C) — deterministically await each aborted stream's
+  // SETTLE (its partial-reply persistence) before the DB closes. The aborts above unwind each
+  // generation as an ABORT, so `generateAssistantMessage` persists the partial via
+  // `appendMessage` while `ctx.db` is open — but that runs in the stream's OWN promise, which
+  // this handler never awaited; previously it relied on `runtime.stop()` outrunning the
+  // abort-unwind (for an already-exited/mock sidecar `stop()` can resolve first → the partial
+  // is dropped, or `appendMessage` throws against the now-closed DB → an unhandled rejection).
+  // Awaiting the settle here makes persist-before-close the ORDERING, not a race. Placed after
+  // the sidecar stop so a generation that ignores its abort signal is still unwound by the
+  // dead sidecar (no teardown stall). Best-effort (`allSettled`) and BOUNDED (full-audit
+  // 2026-07-12 REL-4: 5 s ceiling inside `awaitInFlightStreamsSettled`, mirroring the
+  // doc-task settle below) so a wedged settle can never hang "Lock now".
+  await awaitInFlightStreamsSettled()
+  // TA-1 H2: also await the cancelled doc-task's abort-unwind (its materialize/shred runs
+  // synchronously while ctx.db is open) before purge/lock close the DB — bounded so a wedged
+  // handler can't hang the lock. Mirrors the in-flight-stream settle await above.
+  await awaitActiveDocTaskSettled(ctx)
+  // RAG-6 (Wave P4) — SECURITY purge: drop the resident decoded-vector cache from main-process
+  // RAM. The vectors are derived from chunk text, so like the sidecars' in-memory recent text
+  // they must not linger after the vault re-encrypts. The staleness signature does NOT cover
+  // this (the table is unchanged on lock), so this explicit purge is a hard requirement. Done
+  // while `ctx.db` is still open (before `lock()` makes it unreachable). The next search after
+  // unlock rebuilds the cache from the re-opened DB.
+  purgeResidentVectors(ctx.db)
+  // Recorded BEFORE the vault closes — afterwards the DB is unreachable. (If the lock
+  // below FAILS, the follow-up `workspace_lock_failed` event corrects the record.)
+  ctx.audit?.('workspace_locked', 'Workspace locked')
+  // Flush the encrypted diagnostics log while the key is still live, then drop it —
+  // lock() zeroes the key, after which the log can no longer be persisted. The next
+  // unlock re-attaches and continues the same `app.log.enc`.
+  detachVaultKey()
+  let state: WorkspaceStateInfo
+  try {
+    state = ctx.workspace.lock()
+  } catch (err) {
+    // full-audit 2026-07-11 CODE-1a — the re-encrypt failed (realistically ENOSPC:
+    // during lock the plaintext DB + old `.enc` + new `.enc.tmp` coexist, so each lock
+    // needs ~DB-size free space). The controller has restored itself to a consistently
+    // UNLOCKED state (plaintext DB re-opened, key kept for the retry), so re-adopt the
+    // vault key for the diagnostics log and surface friendly copy — §7 voice, localized
+    // at emission (D-L5), never the raw error. The renderer keeps the workspace open;
+    // the user frees space and taps "Lock now" again.
+    //
+    // AUD-02: the lock latch is disarmed by the handler's outer catch, not here — the workspace
+    // is genuinely open again after this recovery, so leaving it armed would refuse every content
+    // surface for the rest of the session with nothing to explain it. One disarm point covers
+    // this path and any other throw out of the teardown.
+    attachLogKey(ctx)
+    log.error('Workspace lock failed — workspace stays unlocked', String(err))
+    ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
+    throw new Error(tMain('main.workspace.lockFailed'))
+  }
+  log.info('Workspace locked (sidecars stopped)')
+  return state
 }
