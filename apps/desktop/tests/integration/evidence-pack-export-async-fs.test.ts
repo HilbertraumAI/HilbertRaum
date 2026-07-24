@@ -92,7 +92,24 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 const { exportEvidencePackToFile, writePackFileAtomic } = await import(
   '../../src/main/services/evidence-pack/export'
 )
+const { packTmpPath } = await import('../../src/main/services/evidence-pack/export')
 const { openDatabase } = await import('../../src/main/services/db')
+
+/**
+ * The tmp sibling THIS export actually used, read off the recorded calls.
+ *
+ * AUD-17: the scratch file is named from the export's own pack id, not from the destination
+ * — two concurrent exports to one destination must not write the same file — and the id is
+ * a randomUUID here, so the path cannot be guessed. Reading it back also keeps these
+ * assertions honest: a writer that silently stopped using a sibling would fail here instead
+ * of passing a `${dest}.tmp` existence check vacuously.
+ */
+function tmpSiblingUsed(dest: string): string {
+  const paths = calls.order.map((step) => step.slice(step.indexOf(':') + 1))
+  const tmp = paths.find((p) => p.startsWith(`${dest}.`) && p.endsWith('.tmp'))
+  if (!tmp) throw new Error(`no tmp sibling of ${dest} in ${JSON.stringify(calls.order)}`)
+  return tmp
+}
 const { appendMessage, createConversation } = await import('../../src/main/services/chat')
 const { createEvidenceReviewFromMessage } = await import(
   '../../src/main/services/evidence-pack/snapshot'
@@ -170,7 +187,9 @@ describe('AUD-15 — the evidence-pack export tail is async fs, not sync fs on t
     // (2) …and the async path really ran the durability contract, in order: write the tmp
     // sibling, fsync it through its OWN handle, close it, read the bytes BACK off disk,
     // and only then rename. The recorded hash is the hash of those on-disk bytes.
-    const tmp = `${dest}.tmp`
+    const tmp = tmpSiblingUsed(dest)
+    // Per-export name (AUD-17), still a SIBLING so the rename stays same-volume/atomic.
+    expect(tmp.slice(dest.length)).toMatch(/^\.[0-9a-f]{32}\.tmp$/)
     const relevant = calls.order.filter((step) => step.endsWith(tmp) || step.endsWith(dest))
     expect(relevant).toEqual([
       `open:${tmp}`,
@@ -223,7 +242,7 @@ describe('AUD-15 — the evidence-pack export tail is async fs, not sync fs on t
     ).rejects.toThrow()
     expect(syncCallsUnder(root)).toEqual([])
     // The cleanup ran on the async API, and nothing was recorded (spec §28.9 intact).
-    expect(calls.order).toContain(`rm:${dest}.tmp`)
+    expect(calls.order).toContain(`rm:${tmpSiblingUsed(dest)}`)
     expect(listEvidenceExports(db, reviewId)).toEqual([])
   })
 
@@ -245,24 +264,31 @@ describe('AUD-15 — the evidence-pack export tail is async fs, not sync fs on t
     ).rejects.toThrow()
     // The handle was closed BEFORE the cleanup, which is what lets the removal succeed on
     // Windows (an open handle keeps the file locked).
-    const closeAt = calls.order.indexOf(`close:${dest}.tmp`)
-    const rmAt = calls.order.indexOf(`rm:${dest}.tmp`)
+    const tmp = tmpSiblingUsed(dest)
+    const closeAt = calls.order.indexOf(`close:${tmp}`)
+    const rmAt = calls.order.indexOf(`rm:${tmp}`)
     expect(closeAt).toBeGreaterThanOrEqual(0)
     expect(rmAt).toBeGreaterThan(closeAt)
-    expect(existsSync(`${dest}.tmp`)).toBe(false)
+    expect(existsSync(tmp)).toBe(false)
     expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
     expect(listEvidenceExports(db, reviewId)).toEqual([])
   })
 
   it('writePackFileAtomic still hashes the ON-DISK bytes, string and Buffer alike', async () => {
     const { root } = freshWorkspace()
+    const packId = '33333333-3333-4333-8333-333333333333'
     const asText = join(root, 'atomic.html')
-    expect(await writePackFileAtomic(asText, 'content-ä')).toBe(sha256Of(readFileSync(asText)))
+    expect(await writePackFileAtomic(asText, 'content-ä', packId)).toBe(
+      sha256Of(readFileSync(asText))
+    )
     expect(readFileSync(asText, 'utf8')).toBe('content-ä')
 
     const asBytes = join(root, 'atomic.pdf')
     const raw = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0x80])
-    expect(await writePackFileAtomic(asBytes, raw)).toBe(sha256Of(raw))
+    expect(await writePackFileAtomic(asBytes, raw, packId)).toBe(sha256Of(raw))
     expect(readFileSync(asBytes)).toEqual(raw)
+    // AUD-17: the scratch file the hash was taken from is named per export, and it is gone.
+    expect(packTmpPath(asBytes, packId)).toBe(`${asBytes}.${packId.replace(/-/g, '')}.tmp`)
+    expect(calls.order).toContain(`rename:${packTmpPath(asBytes, packId)}`)
   })
 })

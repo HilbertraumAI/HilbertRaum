@@ -848,14 +848,28 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   `formatValue` on HTML; exactly ONE line branches — pinned by a byte-level swap test —
   and cancel renders nothing) → [PDF only, P6: `renderPdf(html, {packId,
   sourceHtmlPath})` — the injected hidden-window print, fed the render output VERBATIM]
-  → `writePackFileAtomic` (tmp
+  → `writePackFileAtomic(dest, content, packId)` (tmp
   sibling → fsync → hash the READ-BACK on-disk bytes → rename; accepts string OR Buffer —
   the SAME tail serves both formats; failure removes the tmp and rethrows — no half-written
   destination ever) → `recordEvidenceExport` (row only AFTER the final file exists + is
   hashed, spec §20.3; bare `file_name`, the EFFECTIVE format, resolved options into
   `options_json`). `renderPdf` is REQUIRED (a missing printer can never silently degrade a
-  PDF request); the transient print source is `${dest}.print.tmp.html` — a SIBLING in the
-  user-sanctioned directory (never an OS temp dir), removed by the harness in `finally`.
+  PDF request).
+  **Every transient sibling is named PER EXPORT, never from the destination alone
+  (AUD-17):** `printSourcePath(dest, packId)` → `${dest}.<packId token>.print.tmp.html` and
+  `packTmpPath(dest, packId)` → `${dest}.<packId token>.tmp`, both minted by one private
+  `exportToken` helper (the pack id's alphanumerics, capped at a UUID's 32 hex characters;
+  an id that sanitises away falls back to a random token — no content can reach a file
+  name). Two exports saving to the SAME path must share no transient at all: they used to
+  share both, and the collision — documented at the time as "the loser fails cleanly" — in
+  fact let one export read back, hash, and rename the OTHER review's bytes under its own
+  `evidence_exports` row, while the PDF seam let a print pick up the other pack entirely.
+  `writePackFileAtomic` therefore takes `packId` as a REQUIRED third argument: the
+  read-back hash is only trustworthy if nothing else can write that file between the fsync
+  and the read. What two same-destination exports still share is the DESTINATION itself
+  (later rename wins — the user's own instruction). The print source stays a SIBLING in the
+  user-sanctioned directory (never an OS temp dir), removed by the harness in `finally`
+  with one retry and an ids-only `log.warn` on failure (AUD-16).
   Encoding (string content): UTF-8 **without** BOM (unlike md/txt/csv `bomFor` — the
   `<meta charset>` is the contract; recorded hash = on-disk bytes).
   `suggestedPackFileName(title, format)` slugs the review title (content — which is why
@@ -937,6 +951,16 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   an overlay; §28.6's acknowledge gate is reserved for CHANGED content). Coverage compare =
   fixed semantic projection (mode/counts/treeStatus/treeLevels/tier/truncated/
   unparsedChunks/fullyChunked) — `nodeIds` + unknown extras excluded (plumbing, not claims).
+  **That projection is a stored-data contract, and it is exhaustiveness-constrained (AUD-19).**
+  Its canonical string is digested into the persisted fingerprint below, so changing *which*
+  `CoverageInfo` fields it covers — or their order — lapses EVERY acknowledgement already
+  stored in every workspace (signed-off reviews silently re-close the export gate). The
+  projection literal therefore `satisfies Record<keyof CoverageInfo, unknown>`: a coverage
+  field added to `shared/types.ts` and not listed is a COMPILE error, never a field silently
+  dropped from drift detection (which would let an export proceed with no outdated banner and
+  no acknowledge gate). Deliberately-excluded plumbing is listed with `undefined` — present
+  for the constraint, omitted by `JSON.stringify`, so the emitted bytes are unchanged. An
+  integration test pins both the exact fingerprint bytes and the field-set parity.
   `acknowledgeEvidenceReviewFreshness(db, reviewId)` writes `freshness_ack_json`
   `{acknowledgedAt, fingerprint}`; the fingerprint is the sorted canonical string of every
   non-'unchanged' fact **including the observed current value** (fix round FIX-1:
@@ -1012,7 +1036,8 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   electron: the D-1 option literals + footer no-@font-face/escaping pins, preload-free
   sandboxed posture + deny-all navigation, teardown on success/print-failure/load-failure/
   app-quit-mid-print/step-timeout — runs everywhere incl. CI) + `evidence-pack-export.
-  test.ts` P6 describe ×6 (seam contract: verbatim html + `${dest}.print.tmp.html` + the
+  test.ts` P6 describe ×6 (seam contract: verbatim html + the per-export
+  `${dest}.<packId token>.print.tmp.html` + the
   PDF self-description line; extension-override both directions incl. the format line
   following the EFFECTIVE format; cancel-under-PDF ⇒ no render/no print/no file/no row;
   killed-print ⇒ no file/no siblings/no row; outdated-refusal BEFORE dialog AND print;

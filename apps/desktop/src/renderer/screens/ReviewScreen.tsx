@@ -92,6 +92,14 @@ export function ReviewScreen({
     void openReviewSession(handoff)
   }, [handoff])
 
+  // AUD-10: leaving narrow mode closes the drawer for good. The drawer only RENDERS while
+  // `narrow && drawerOpen`, so widening the window merely hides it — `drawerOpen` stays
+  // true, and the next narrowing (a Windows snap is enough) re-opens a modal the user never
+  // asked for, trapping focus inside it. Reset the flag when the layout leaves narrow mode.
+  useEffect(() => {
+    if (!narrow) setDrawerOpen(false)
+  }, [narrow])
+
   // Flush on screen exit (plan §7.5): unmount here = in-app navigation while the vault is
   // still unlocked. The LOCK path flushes earlier — App.lockNow awaits the flush BEFORE
   // `lockWorkspace()` and then purges the store (lockPurge.ts).

@@ -375,13 +375,45 @@ boundary is made explicit and everything around it stays inside the data-class r
   workspace.
 - **Atomicity** (spec §20.3/§28.9): tmp sibling → fsync → hash → rename; a failure or
   cancel up to the rename leaves NO destination file, NO tmp remnant (best-effort) and NO
-  export row — a half-written "evidence" file can never exist. A failure AFTER the rename
+  export row — a half-written "evidence" file can never exist. The tmp sibling is named
+  from the EXPORT's own pack id, not from the destination (`packTmpPath`): the recorded
+  hash is taken from the bytes read back off that file, so it only describes what this
+  export wrote if nothing else can write the file in between. A destination-derived name
+  did not give that — two exports saving to one path shared the scratch file, and the
+  second `open(…, 'w')` truncated the first's bytes, so the first hashed and committed the
+  other review's pack under its own `evidence_exports` row with no error (AUD-17; the same
+  defect on the PDF seam is described below). A failure AFTER the rename
   (the `evidence_exports` row cannot be written — workspace-DB error, or the review was
   deleted in another window during the dialog) **unlinks the just-created file** and
   rejects with distinct honest copy: an unrecorded pack would make its own printed
   "hash is recorded" integrity note false, which is worse than no file. If even that
   unlink fails, the error explicitly states the file exists without a history record —
-  the one residual state, named, never silent.
+  a residual state, named, never silent (the PDF print source below is the other one).
+- **PDF print source — an acknowledged residue window:** a PDF export first writes the
+  rendered pack to a transient `.print.tmp.html` SIBLING of the destination, because the
+  hidden print window must load a real file with an `.html` extension (Chromium sniffs
+  `file://` MIME from the extension) and a `data:` URL would cap out on a large pack. The
+  file is deliberately placed in the directory the user already sanctioned for this content
+  (never an OS temp dir), it is **plaintext for as long as it exists**, and it is removed in
+  the print harness's `finally` on every path — success, failure, timeout, quit. Two things
+  are true and are stated rather than glossed:
+  - The name is unique **per export** (it carries the export's freshly minted pack id, by
+    the same rule as the tmp sibling above), so two exports to the same destination never
+    load, print, or delete the same file. A name derived from the destination alone let a
+    concurrent export's overwrite be printed — both exports then succeeded, one of them
+    writing another review's pack under its own `evidence_exports` row. Two same-destination
+    exports now share no transient at all; what they do still share is the **destination**,
+    where the later rename replaces the earlier file — that is any second save to one path,
+    and each row still records the hash of the bytes its own export wrote.
+  - Removal can genuinely fail. On Windows an antivirus scanner or the search indexer may
+    hold a handle without `FILE_SHARE_DELETE` and the unlink throws; the harness waits
+    briefly and **retries once**, which clears the usual case. If it still fails — or the
+    app is killed mid-print — a plaintext copy of that pack remains next to the exported
+    file until the user or the OS removes it. This is the same residue class as the atomic
+    writer's tmp sibling, and it is now **logged** (`log.warn`, ids only: the pack id and
+    the OS error code — never the path, whose file name is seeded from the review title,
+    and never a byte of content). It used to be swallowed by an empty `catch` in a module
+    that imported no logger, so the copy could linger with no trace at all.
 - **Audit:** `evidence_pack_exported` records `{reviewId, format}` and nothing else — not
   the path, not the file name, not the title (which seeds the suggested name and is
   content). Sentinel-swept in `audit-ipc.test.ts` with a path-sentinel destination.

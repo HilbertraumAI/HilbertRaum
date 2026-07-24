@@ -9192,7 +9192,18 @@ context (system fonts + inline styles only; an **empty-span `headerTemplate`** m
 suppress Chromium's default date/title header); the print source must be a real file with
 an **`.html` extension** (Chromium sniffs file:// MIME from it; a data: URL has a ~2 MB
 cap) — it is a transient `.print.tmp.html` SIBLING of the user-chosen destination (already
-sanctioned plaintext ground, never an OS temp dir), removed in the same `finally`; the
+sanctioned plaintext ground, never an OS temp dir), removed in the same `finally`. **Its
+name carries the export's own pack id** (`${dest}.<packId token>.print.tmp.html`, minted by
+`export.ts`'s `printSourcePath`; the atomic writer's `packTmpPath` mints the `.tmp` sibling
+by the same rule) — AUD-17: a name derived from the DESTINATION alone was shared by two
+concurrent exports saving to one path, and `loadFile` resolving is not the moment Chromium
+is done with the document, so an overwrite landing in a later main-process turn was printed
+successfully. Both exports then "succeeded" while one wrote the OTHER review's pack under
+its own `evidence_exports` row. Two same-destination exports must therefore share no
+transient at all; only the destination itself is shared (later rename wins, as any second
+save to one path does). Removal is retried once and a still-present source is logged, ids
+only (AUD-16) — a failed cleanup used to leave a plaintext copy of the pack with no trace.
+The
 real-Electron smoke runner needs a **`window-all-closed` no-op** (Electron's default quit
 otherwise races the print) and an **isolated `--user-data-dir`** (profile singleton); the
 pdfjs v6 verification path needs the legacy build + a DOMMatrix polyfill under Node, with

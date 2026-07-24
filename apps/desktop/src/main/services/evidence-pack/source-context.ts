@@ -1,6 +1,7 @@
 import type { EvidenceSourceContext } from '../../../shared/types'
 import { prepareCached, type Db } from '../db'
 import { parseSourceSnapshots } from '../evidence-reviews'
+import { CHUNK_DEFAULTS } from '../ingestion/chunker'
 import { compareStoredHashes } from './freshness'
 
 // Source-in-context (EP-1 plan §9.3, D-5, spec §10.2.4): resolve one snapshotted source to
@@ -28,7 +29,9 @@ import { compareStoredHashes } from './freshness'
 //      "could not locate" copy instead of guessed context.
 // The context window is the located chunk ± one neighbor, capped to CONTEXT_WINDOW_CHARS
 // per side with surrogate-safe boundaries (the F-15 rule: a slice must never cut an astral
-// pair in half).
+// pair in half). Consecutive chunks of the SAME segment share a deliberately duplicated run
+// (the chunker re-includes the previous window's tail), which is stripped once per boundary
+// before the join — see `sharedRunLength` (AUD-08).
 
 /** Max stored-text characters returned on each side of the located excerpt. */
 export const CONTEXT_WINDOW_CHARS = 1200
@@ -54,6 +57,67 @@ function snippetNeedle(snippet: string | null): string | null {
   if (!snippet) return null
   const needle = snippet.endsWith('…') ? snippet.slice(0, -1) : snippet
   return needle.length > 0 ? needle : null
+}
+
+/** Generous upper bound on the chunk-overlap size in CHARACTERS: the chunker re-includes at
+ *  most `chunkOverlapTokens` tokens, and one approx-token is at most 16 characters of a
+ *  whitespace word — 20 leaves slack for the joining spaces. Bounds the shared-run scan so it
+ *  stays linear AND a coincidental long match cannot reach far past the real overlap. (The
+ *  same bound the whole-document read uses for the identical measurement.) */
+const MAX_OVERLAP_CHARS_PER_TOKEN = 20
+
+/** Length of the longest suffix of `tail` that is also a PREFIX of `head` (byte-exact). KMP:
+ *  build the prefix function of `head`, then run `tail` through that automaton and read off
+ *  the match length at `tail`'s end. O(head+tail), no separator sentinel, so it makes no
+ *  assumption about which characters extracted text may contain. */
+function overlapLength(head: string, tail: string): number {
+  const pi = new Array<number>(head.length).fill(0)
+  for (let i = 1; i < head.length; i += 1) {
+    let j = pi[i - 1]
+    while (j > 0 && head[i] !== head[j]) j = pi[j - 1]
+    if (head[i] === head[j]) j += 1
+    pi[i] = j
+  }
+  let k = 0 // length of the `head`-prefix matched at the current position of `tail`
+  for (let i = 0; i < tail.length; i += 1) {
+    while (k > 0 && tail[i] !== head[k]) k = pi[k - 1]
+    if (tail[i] === head[k]) k += 1
+    if (k === head.length) k = pi[k - 1] // full head matched mid-tail — keep looking for longer
+  }
+  return k
+}
+
+/**
+ * AUD-08 — the size of the run the chunker duplicated across ONE same-segment boundary.
+ *
+ * Consecutive windows of a segment overlap by ~`chunkOverlapTokens` (80) tokens of byte-exact
+ * DUPLICATED text: the chunker re-includes the previous window's tail so retrieval never
+ * splits a fact across a boundary. Joining stored chunks to build a reading context therefore
+ * prints that run twice — several hundred characters on the shipped 500/80 configuration — in
+ * the one modal whose job is to show what the document really says. Matching is on CHARACTERS
+ * (not whitespace words) so it is correct for space-less scripts and glued PDF runs, and the
+ * scan is bounded to the known overlap size so a coincidental long match cannot eat real text.
+ */
+function sharedRunLength(prev: string, next: string): number {
+  const cap = CHUNK_DEFAULTS.chunkOverlapTokens * MAX_OVERLAP_CHARS_PER_TOKEN
+  const tail = prev.length > cap ? prev.slice(prev.length - cap) : prev
+  const head = next.length > cap ? next.slice(0, cap) : next
+  return overlapLength(head, tail)
+}
+
+/** True when two consecutive chunks belong to the same coalesced segment (same page +
+ *  section) — the only case where the chunker introduces overlap. Adjacent segments sharing
+ *  labels are merged before chunking, so equal labels on order-adjacent chunks mean one
+ *  segment, hence a real overlap; different labels mean genuinely repeated document text,
+ *  which must survive verbatim. */
+function sameSegment(
+  a: { page_number: number | null; section_label: string | null },
+  b: { page_number: number | null; section_label: string | null }
+): boolean {
+  return (
+    (a.page_number ?? null) === (b.page_number ?? null) &&
+    (a.section_label ?? null) === (b.section_label ?? null)
+  )
 }
 
 /** Move a slice boundary off a surrogate-pair split (shrink inward — never widen past the
@@ -142,8 +206,27 @@ export function getEvidenceSourceContext(
   )
   const prev = neighbor.get(source.documentId, chunk.chunk_index - 1) as ChunkRow | undefined
   const next = neighbor.get(source.documentId, chunk.chunk_index + 1) as ChunkRow | undefined
-  const prefix = prev ? `${prev.text}\n\n` : ''
-  const full = `${prefix}${chunk.text}${next ? `\n\n${next.text}` : ''}`
+  // AUD-08: strip the duplicated run once per same-segment boundary, ALWAYS off the
+  // NEIGHBOUR and never off the located chunk. The persisted excerpt is a PREFIX of the
+  // located chunk's text (it is that text, trimmed and capped), so it sits exactly inside
+  // the run shared with the previous chunk — trimming the located chunk's head would delete
+  // the very text this modal highlights and shift every offset computed below. Removing the
+  // shared run from the PREVIOUS chunk's tail deletes the same characters instead, and
+  // removing it from the NEXT chunk's head is the mirror case. Either neighbour may end up
+  // empty (it contributed nothing but the duplicate); that simply means no context on that
+  // side, which is the honest result.
+  const prevText = prev
+    ? sameSegment(prev, chunk)
+      ? prev.text.slice(0, prev.text.length - sharedRunLength(prev.text, chunk.text)).trimEnd()
+      : prev.text
+    : ''
+  const nextText = next
+    ? sameSegment(chunk, next)
+      ? next.text.slice(sharedRunLength(chunk.text, next.text)).trimStart()
+      : next.text
+    : ''
+  const prefix = prevText ? `${prevText}\n\n` : ''
+  const full = `${prefix}${chunk.text}${nextText ? `\n\n${nextText}` : ''}`
   const matchStart = prefix.length + chunk.text.indexOf(needle)
   const matchEnd = matchStart + needle.length
   const beforeStart = alignBoundary(full, Math.max(0, matchStart - CONTEXT_WINDOW_CHARS), 1)

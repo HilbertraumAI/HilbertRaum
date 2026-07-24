@@ -1,6 +1,7 @@
 import { rm as rmAsync, writeFile as writeFileAsync } from 'node:fs/promises'
 import { app, BrowserWindow } from 'electron'
 import { SECURE_WINDOW_WEB_PREFERENCES } from '../../window-security'
+import { log } from '../logging'
 import { installNavigationGuard } from '../navigation-guard'
 import { escapeHtml } from './render-html'
 
@@ -39,11 +40,11 @@ import { escapeHtml } from './render-html'
 // can never leave a hidden window pinning the process; `window-all-closed` counts hidden
 // windows too). Each print gets its OWN window and shares no channels, so concurrent
 // prints are independent — no busy latch needed (unlike the rasterizer's fixed IPC
-// channel pair). The one shared thing two concurrent exports COULD collide on is the
-// `.print.tmp.html` sibling when both target the SAME destination path: the loser's
-// load/remove races the winner's, and it fails cleanly like any other print failure —
-// no destination file, no row (the same posture as the atomic writer's shared
-// `${dest}.tmp`). A wedged renderer fails the step timeout rather than hanging the export.
+// channel pair). Concurrent prints also share no FILE: the caller hands in a print-source
+// path made unique per export (AUD-17 — a name derived only from the destination let two
+// same-destination exports print each other's bytes; the atomic pipeline owns that naming
+// rule and documents the incident). A wedged renderer fails the step timeout rather than
+// hanging the export.
 //
 // The print SOURCE is a transient `.print.tmp.html` SIBLING of the user-chosen
 // destination (the atomic pipeline hands the path in): `loadFile` needs a real file with
@@ -51,7 +52,8 @@ import { escapeHtml } from './render-html'
 // renders the markup as plain text and would print garbage), a data: URL has a ~2 MB
 // navigation cap a large pack could exceed, and the user-chosen directory is exactly the
 // place this content is ALREADY sanctioned to exist in plaintext (§24.3 warning) — never
-// an OS temp dir. It is removed in the same `finally`; crash residue matches the
+// an OS temp dir. It is removed in the same `finally`, with one retry and an honest log
+// line when the removal fails (AUD-16, see `removePrintSource`); crash residue matches the
 // `${dest}.tmp` class the atomic writer already accepts.
 //
 // No network anywhere: the pack HTML is self-contained (golden-pinned: zero remote refs),
@@ -61,6 +63,12 @@ import { escapeHtml } from './render-html'
 /** Per-step (load / fonts / print) timeout — a wedged hidden renderer must fail the
  *  export, not hang it (the rasterizer's RASTER_STEP_TIMEOUT_MS discipline). */
 export const PRINT_STEP_TIMEOUT_MS = 60_000
+
+/** Pause before the single print-source cleanup retry. A scanner's handle is released
+ *  within a moment of the file going quiet, so one short wait converts almost every
+ *  transient lock into a clean removal; it costs nothing on the normal path (the first
+ *  removal succeeds and never reaches the retry). */
+const PRINT_SOURCE_RETRY_DELAY_MS = 250
 
 /** System-font stack for the footer template — mirrors the pack body stack
  *  (render-html.ts); no `@font-face`, ever (D-1: custom fonts in header/footer templates
@@ -99,9 +107,54 @@ export interface PrintEvidencePackPdfOptions {
   /** The pack ID minted by the export pipeline — repeated in every page footer. */
   packId: string
   /** Absolute path for the transient print-source HTML. MUST end in `.html` (file:// MIME
-   *  is sniffed from the extension) and live next to the chosen destination (see the
-   *  module header). Written, loaded, and ALWAYS removed here. */
+   *  is sniffed from the extension), live next to the chosen destination (see the module
+   *  header) and be UNIQUE to this export — two prints sharing one path print each other's
+   *  documents (AUD-17). Written, loaded, and always removed here. */
   sourceHtmlPath: string
+}
+
+/** The OS error code of a failed fs call, or 'unknown'. Deliberately NOT the message: an
+ *  fs error message embeds the PATH, and the print source sits next to a user-chosen
+ *  destination whose file name is seeded from the review title — content, never logged. */
+function errorCode(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code
+  return typeof code === 'string' && code.length > 0 ? code : 'unknown'
+}
+
+/**
+ * Remove the transient print source, with ONE retry and an honest log line (AUD-16).
+ *
+ * The file is a plaintext copy of already-rendered pack content sitting beside the user's
+ * destination. On Windows an antivirus scanner or the search indexer routinely opens a
+ * freshly written HTML file, and a handle held without FILE_SHARE_DELETE makes the unlink
+ * throw (EBUSY/EPERM) — the handle is released a moment later, which is exactly what the
+ * single delayed retry is for. This used to be a bare `catch {}` in a module that imported
+ * no logger, so a failed cleanup left that copy on disk with no trace at all; now every
+ * outcome is recorded. Cleanup never fails the print: an exported pack that is already on
+ * disk must not be reported as a failure because a temporary file lingered.
+ *
+ * The log stays IDS ONLY — the pack id (a freshly minted random UUID) and the OS error
+ * code. Never the path, never a byte of the pack.
+ */
+async function removePrintSource(sourceHtmlPath: string, packId: string): Promise<void> {
+  try {
+    await rmAsync(sourceHtmlPath, { force: true })
+    return
+  } catch (err) {
+    log.warn('evidence pdf: print source could not be removed — retrying once', {
+      packId,
+      code: errorCode(err)
+    })
+  }
+  await new Promise((resolve) => setTimeout(resolve, PRINT_SOURCE_RETRY_DELAY_MS))
+  try {
+    await rmAsync(sourceHtmlPath, { force: true })
+  } catch (err) {
+    log.warn(
+      'evidence pdf: print source still present after the retry — a plaintext copy of this pack remains beside the exported file',
+      { packId, code: errorCode(err) }
+    )
+  }
 }
 
 /** Reject `promise` after {@link PRINT_STEP_TIMEOUT_MS}; the caller's `finally` destroys
@@ -131,8 +184,10 @@ async function withStepTimeout<T>(promise: Promise<T>, step: string): Promise<T>
  * Print `html` (the UNCHANGED `renderEvidencePackHtml` output) to PDF bytes through a
  * dedicated hidden sandboxed window. Throws on any failure — load error, wedged step,
  * print failure, app quit mid-print — after tearing the window and the transient source
- * file down; it never leaves either behind. The caller (the atomic export pipeline) owns
- * what happens to the bytes: nothing is written to the destination here.
+ * file down. The window is never left behind; the source file removal is attempted twice
+ * and, in the rare case the OS still refuses (see `removePrintSource`), the leftover is
+ * LOGGED rather than hidden. The caller (the atomic export pipeline) owns what happens to
+ * the bytes: nothing is written to the destination here.
  */
 export async function printEvidencePackHtmlToPdf(
   html: string,
@@ -181,10 +236,6 @@ export async function printEvidencePackHtmlToPdf(
   } finally {
     app.removeListener('before-quit', onBeforeQuit)
     if (win && !win.isDestroyed()) win.destroy()
-    try {
-      await rmAsync(opts.sourceHtmlPath, { force: true })
-    } catch {
-      /* best-effort cleanup — the print outcome is what matters */
-    }
+    await removePrintSource(opts.sourceHtmlPath, opts.packId)
   }
 }

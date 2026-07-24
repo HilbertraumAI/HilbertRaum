@@ -2407,6 +2407,11 @@ export const en = {
   'review.evidence.filterClear': 'Clear filter',
   'review.evidence.filterNone': 'No sources match your filter.',
   'review.evidence.shownCount': '{shown} of {total} sources shown',
+  // The reveal control counts SOURCES — the cards it uncovers are source cards, and the
+  // line right above it already says "{shown} of {total} sources shown". (It used to reuse
+  // the chat's "…more sections" copy, which contradicted its own neighbour.)
+  'review.evidence.more.one': 'and {count} more source',
+  'review.evidence.more.other': 'and {count} more sources',
   // P5 (spec §23): the visible line tying the pane to the selected item; it is also the
   // pane region's programmatic DESCRIPTION (`aria-describedby` on the region element).
   'review.evidence.linkingItem': 'Linking evidence for review item {n}',

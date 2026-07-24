@@ -2466,6 +2466,10 @@ export const de: Record<keyof typeof en, string> = {
   'review.evidence.filterClear': 'Filter zurücksetzen',
   'review.evidence.filterNone': 'Keine Quelle passt zu deinem Filter.',
   'review.evidence.shownCount': '{shown} von {total} Quellen angezeigt',
+  // Der Aufdeck-Schalter zählt QUELLEN — er blendet Quellenkarten ein, und die Zeile
+  // direkt darüber sagt bereits „{shown} von {total} Quellen angezeigt“.
+  'review.evidence.more.one': 'und {count} weitere Quelle',
+  'review.evidence.more.other': 'und {count} weitere Quellen',
   // P5 (Spec §23): sichtbare Zeile, die den Nachweisbereich mit dem gewählten Prüfpunkt
   // verbindet; zugleich die programmatische BESCHREIBUNG der Region (`aria-describedby`).
   'review.evidence.linkingItem': 'Nachweise für Prüfpunkt {n} verknüpfen',
