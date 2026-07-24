@@ -169,26 +169,39 @@ function Invoke-HandleFile([string]$id, [string]$label, [string]$dest, [string]$
     Write-Host ("           -> {0}" -f $rel)
     return
   }
-  # A "redo" writes onto the file that is already there, and every downloader below resumes at
-  # its end (curl -C -, aria2c --continue). That is deliberate: resuming a part-downloaded
+  # A "redo" writes onto the file that is already there, and every downloader below resumes:
+  # curl (-C -) resumes AT THE FILE'S END; aria2c (--continue) resumes from its own `.aria2`
+  # CONTROL FILE, never from the file length. That is deliberate: resuming a part-downloaded
   # weight across runs is a documented feature of this script, and a multi-GB weight on a flaky
   # link must not restart from zero. But the SAME state also covers a file that is complete and
-  # WRONG, and resuming that one asks the server for a byte range starting at or past the
-  # resource's length -- an unsatisfiable range (HTTP 416), so the repair transfers nothing and
-  # the run is wasted (AUD-24).
+  # WRONG, and an at-EOF resume of that one asks the server for a byte range starting at or
+  # past the resource's length -- an unsatisfiable range (HTTP 416), so the repair transfers
+  # nothing and the run is wasted (AUD-24).
   # Rule: delete first ONLY when resume provably cannot help, i.e. when the bytes on disk
-  # already reach the manifest's expected size. A SHORTER file is a resumable partial and is
-  # left alone, exactly as before. When the manifest carries no size_bytes we cannot tell the
-  # two apart, so we do NOT delete and keep the previous behaviour (resume; a wrong file is
-  # still deleted by the post-download verification below, which self-heals on the next run).
+  # already reach the manifest's expected size AND the file is not an aria2 partial the next
+  # run will resume. A SHORTER file is a resumable partial and is left alone, exactly as
+  # before. A full-length file WITH an `.aria2` control file beside it is aria2's
+  # PREALLOCATION (aria2's default file-allocation sizes the destination at download start),
+  # i.e. a resumable partial too: aria2 removes the control file itself on completion, so its
+  # presence proves the transfer never finished, and aria2's control-file resume cannot hit
+  # the 416 trap. Keep it ONLY while aria2c is the downloader that will actually run -- to
+  # curl the control file is useless and the preallocated file is the 416 case again
+  # (full-audit 2026-07-23 review fix F1). When the manifest carries no size_bytes we cannot
+  # tell the two apart, so we do NOT delete and keep the previous behaviour (resume; a wrong
+  # file is still deleted by the post-download verification below, which self-heals on the
+  # next run).
   # NOTE the value comes from the manifest's `download:` block, which the schema places before
   # any `mmproj:` block, and the flat parse returns the first match.
   if ($state -eq 'mismatch' -and $expectedSize -match '^\d+$') {
     $onDisk = (Get-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue)
     if ($onDisk -and $onDisk.Length -ge [long]$expectedSize) {
-      Write-Host ("         {0} bytes on disk >= the manifest's {1} -- deleting before re-download (resume cannot repair it)" -f $onDisk.Length, $expectedSize) -ForegroundColor DarkYellow
-      Remove-Item -Force -Path $dest -ErrorAction SilentlyContinue
-      Remove-Item -Force -Path "$dest.aria2" -ErrorAction SilentlyContinue
+      if ($Aria -and (Test-Path -LiteralPath "$dest.aria2")) {
+        Write-Host ("         {0} bytes on disk >= the manifest's {1}, but an .aria2 control file is present -- keeping the resumable aria2 partial" -f $onDisk.Length, $expectedSize) -ForegroundColor DarkYellow
+      } else {
+        Write-Host ("         {0} bytes on disk >= the manifest's {1} -- deleting before re-download (resume cannot repair it)" -f $onDisk.Length, $expectedSize) -ForegroundColor DarkYellow
+        Remove-Item -Force -LiteralPath $dest -ErrorAction SilentlyContinue
+        Remove-Item -Force -LiteralPath "$dest.aria2" -ErrorAction SilentlyContinue
+      }
     }
   }
   Write-Host ("  fetch  {0}{1} ..." -f $id, $label)

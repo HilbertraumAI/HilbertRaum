@@ -1167,8 +1167,12 @@ export class WorkspaceController {
    * `unlock`/`create`. A COMPLETED lock deliberately leaves it armed: `isUnlocked()` already
    * reports locked, and the next unlock clears it.
    *
-   * The quit path does NOT arm it — `shutdown()` calls `lock()` directly and the process exits,
-   * so there is no later session to unlatch and no gate to keep honest.
+   * The quit path arms it too — `performShutdown` (main/shutdown.ts) calls this as ITS first
+   * act, before the quit teardown's own awaited windows (see the rationale there: vision
+   * rebuilds its runtime per analyze, an admitted import strands a plaintext transient at
+   * `app.exit(0)`). Nothing on that path clears it and the process exits, so on quit the latch
+   * is terminal by construction; only the controller's own `shutdown()` METHOD skips arming,
+   * because its callers have already armed.
    */
   beginLock(): void {
     this._locking = true

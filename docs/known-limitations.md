@@ -2029,6 +2029,16 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   states on its cover and Integrity section that it is a print of the same evidence-pack
   template ("PDF — printed from the same evidence-pack template · pack schema v1") — one
   template renders both formats by design; only that self-description line differs.
+- **A destination very close to Windows' 260-character path limit can refuse an export
+  (post-AUD-17).** Every export writes its transients as SIBLINGS of the chosen destination,
+  named with a per-export token so two same-destination exports can never share a file
+  (AUD-17 closed a silent provenance swap). The token makes the longest transient name up to
+  ~48 characters longer than the destination itself (~37 for HTML's tmp sibling; ~15/~4
+  pre-fix), so on a default Windows setup (`LongPathsEnabled` off) a destination within that
+  margin of the 260-character limit now fails at the transient's creation where it previously
+  succeeded. The failure is clean and honest — no destination file, no export row, a real
+  error — and the trade (an edge-case refusal vs. a silently mislabelled signed-off pack) is
+  deliberate. Recovery: save under a shorter path.
 
 ## Internationalization ([`architecture.md`](architecture.md) i18n record)
 

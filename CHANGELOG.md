@@ -128,7 +128,9 @@ first public release. Consciously-accepted gaps are tracked in
   warning and continuing (on macOS/Linux the whisper step, which has no prebuilt
   binary, aborted before OCR on every run); the tolerant paths now warn and
   continue as documented, and a checksum-mismatch redownload deletes a complete-
-  but-corrupt file first instead of resuming past its end.
+  but-corrupt file first instead of resuming past its end (an aria2c-preallocated
+  partial — full-length on disk but still mid-download, with its `.aria2` control
+  file beside it — is recognized and kept for aria2's own control-file resume).
 - **Evidence-pack exports** no longer show a source excerpt twice, can no longer
   swap two concurrent same-destination exports' content or provenance, no longer
   stall the whole app on a synchronous multi-megabyte write, and log (rather than

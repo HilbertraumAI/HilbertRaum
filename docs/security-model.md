@@ -414,6 +414,14 @@ boundary is made explicit and everything around it stays inside the data-class r
     the OS error code — never the path, whose file name is seeded from the review title,
     and never a byte of content). It used to be swallowed by an empty `catch` in a module
     that imported no logger, so the copy could linger with no trace at all.
+    One consequence of the per-export naming is stated rather than glossed: residue no
+    longer self-heals. The old destination-derived names meant the NEXT export to the same
+    destination truncated and renamed the stale sibling away; a per-export name is never
+    written again, so each app-kill mid-export strands its own copy — residue can
+    accumulate across crashes, one file per killed export, and nothing but the user (or the
+    OS) ever removes it. The app cannot sweep here: the files sit in a user-chosen
+    directory outside the workspace, which the startup `shredStalePlaintext` sweep must
+    never touch.
 - **Audit:** `evidence_pack_exported` records `{reviewId, format}` and nothing else — not
   the path, not the file name, not the title (which seeds the suggested name and is
   content). Sentinel-swept in `audit-ipc.test.ts` with a path-sentinel destination.
