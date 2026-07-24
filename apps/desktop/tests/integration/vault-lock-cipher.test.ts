@@ -31,6 +31,16 @@ import type { KdfParams } from '../../src/main/services/security/crypto'
 // (vault, crypto, DB, ingestion); the gate only controls WHEN the hash resolves, so the lock
 // deterministically lands inside the window. Kept in its own file because the module mock
 // must not leak into the behavioral ingestion/vault suites.
+//
+// Explicit 60 s per-test timeouts (the issue-#84 / PR-#86 pattern): this file is ~1.5 s end to
+// end on a healthy runner (FAST_KDF — real scrypt at N=1024, real AES-GCM, real SQLite, real
+// fs), but a STARVED shared CI runner can stall any of these real-vault fixtures past vitest's
+// global 15 s budget — the master push run of 2026-07-24 (run 30080155163, windows/22.x) timed
+// out the two describe-openers at 15 s while the SAME tree had passed that exact leg on the PR
+// minutes earlier and the same run's windows/24.x leg ran this file in 1.5 s. Every assertion
+// here is SEMANTIC (typed throws, no sidecar bytes), none is a timing bound, so the wider
+// budget loosens nothing about what the tests prove; all four tests carry it because they
+// share the same fixture weight (the relock test does strictly more crypto than the opener).
 
 const gate = vi.hoisted(() => {
   const state = {
@@ -131,7 +141,7 @@ describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
     expect(() => cipher!.decryptFile(encBefore, join(dir, 'out.txt'))).toThrow(/locked/i)
     expect(() => cipher!.decryptFileAsync(encBefore, join(dir, 'out.txt'))).toThrow(/locked/i)
     expect(existsSync(join(dir, 'out.txt'))).toBe(false)
-  })
+  }, 60_000)
 
   it('a cipher captured across lock → unlock reads the LIVE key again (per-invocation read)', () => {
     const vp = freshVault()
@@ -153,7 +163,7 @@ describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
     ctl.documentCipher()!.decryptFile(enc, back) // decrypts under a FRESH capture too
     expect(readFileSync(back, 'utf8')).toBe(SECRET_TEXT)
     ctl.lock()
-  })
+  }, 60_000)
 })
 
 describe('lock landing mid-import (full-audit 2026-07-12 SEC-1, drained prepare)', () => {
@@ -190,7 +200,7 @@ describe('lock landing mid-import (full-audit 2026-07-12 SEC-1, drained prepare)
       expect(existsSync(out)).toBe(false)
     }
     expect(leftovers).toEqual([]) // the guard threw BEFORE anything was written
-  })
+  }, 60_000)
 
   it('an ordinary unlocked import still writes a real-key sidecar (happy path unchanged)', async () => {
     const vp = freshVault()
@@ -216,5 +226,5 @@ describe('lock landing mid-import (full-audit 2026-07-12 SEC-1, drained prepare)
     expect(readFileSync(back, 'utf8')).toBe(SECRET_TEXT)
     expect(() => decryptFile(join(store, stored[0]), join(srcDir, 'zk.txt'), ZERO_KEY)).toThrow()
     ctl.lock()
-  })
+  }, 60_000)
 })
