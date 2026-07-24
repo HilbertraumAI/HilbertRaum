@@ -28,6 +28,7 @@ import {
 } from '../services/vision/history'
 import { imageExtensionOf, isSupportedImagePath, VISION_MAX_IMAGE_BYTES } from '../services/vision/limits'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 
 // Image-understanding IPC (image-understanding plan §9/§10). A separate lazy vision sidecar
@@ -59,7 +60,10 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
   // File/runtime handlers require an unlocked workspace; surface a clean message instead of
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.docs.locked'))
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.docs.locked'))
   }
 
   // D2 (vuln-scan-2026-06-21): a one-time capability map for the picker path. chooseImage

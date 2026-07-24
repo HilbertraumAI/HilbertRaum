@@ -38,6 +38,7 @@ import { isAggregationShaped, routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
 import type { Db } from '../services/db'
 
@@ -129,7 +130,10 @@ export function registerRagIpc(ctx: AppContext): void {
       // sendChatMessage and touches ctx.db throughout; gate it FIRST with the same localized chat
       // lock copy so a locked call refuses friendly instead of throwing the raw vault-getter string
       // deep inside assertChatStreamReady. (Generalized lock test covers this — subsumes T3.)
-      if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.chat.locked'))
+      // AUD-02: `workspaceAdmitsWork`, not a bare `isUnlocked()` — the DB stays OPEN for the
+      // whole multi-second lock teardown, so a bare check admits an answer that would keep
+      // driving the embedder/reranker/chat sidecars the teardown just suspended.
+      if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.chat.locked'))
       // Shared guard preamble (M-A2): conv exists, runtime active, no blocking doc task /
       // stream already in flight (a yielding deep-index build is paused, not refused).
       const { runtime } = await assertChatStreamReady(ctx, conversationId)

@@ -427,6 +427,55 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
     // S1 changed → carries the OBSERVED current sha; S2 (unresolved) → state literal.
     expect(ack.fingerprint).toBe(`src:S1=changed:${'ff'.repeat(32)};src:S2=unverifiable`)
   })
+
+  // AUD-19: the coverage half of the fingerprint is a digest of the CANONICAL coverage
+  // string. Its exact bytes are a compatibility surface — every acknowledgement already
+  // stored in a user's workspace was fingerprinted with the current canonical form, so a
+  // change to which fields are canonicalized (or their order) silently lapses all of them:
+  // reviews the user explicitly signed off re-close the export gate with a warning they
+  // cannot make go away except by acknowledging again. The pin below is therefore
+  // deliberate, not incidental — if you change `canonicalCoverage`, you are changing a
+  // stored-data contract and must say so.
+  it('AUD-19: the coverage fingerprint is byte-stable over the canonical coverage form', () => {
+    const { db } = freshDb()
+    const { reviewId, messageId } = seedReview(db)
+    // Every CoverageInfo field set, INCLUDING the deliberately excluded display-plumbing
+    // (`nodeIds`) — so the pinned digest also proves the plumbing contributes nothing.
+    const drifted: Required<CoverageInfo> = {
+      mode: 'tree',
+      treeStatus: 'ready',
+      chunksCovered: 7,
+      chunksTotal: 9,
+      treeLevels: 3,
+      tier: 2,
+      nodeIds: ['n1', 'n2'],
+      truncated: true,
+      unparsedChunks: 1,
+      fullyChunked: false
+    }
+    db.prepare('UPDATE messages SET coverage_json = ? WHERE id = ?').run(
+      JSON.stringify(drifted),
+      messageId
+    )
+    acknowledgeEvidenceReviewFreshness(db, reviewId)
+    const ack = parseFreshnessAck(
+      reviewHeadRow(db, reviewId).freshness_ack_json as string | null
+    )!
+    expect(ack.fingerprint).toBe('coverage=changed:dfc1357dca536b8e;src:S2=unverifiable')
+
+    // The excluded plumbing really is excluded: a different `nodeIds` must produce the
+    // SAME fingerprint (otherwise a re-render of the same answer would lapse the ack).
+    const other = seedReview(db)
+    db.prepare('UPDATE messages SET coverage_json = ? WHERE id = ?').run(
+      JSON.stringify({ ...drifted, nodeIds: ['zzz'] }),
+      other.messageId
+    )
+    acknowledgeEvidenceReviewFreshness(db, other.reviewId)
+    expect(
+      parseFreshnessAck(reviewHeadRow(db, other.reviewId).freshness_ack_json as string | null)!
+        .fingerprint
+    ).toBe(ack.fingerprint)
+  })
 })
 
 describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => {
@@ -779,5 +828,69 @@ describe('source-in-context (D-5) — stored extraction only', () => {
     const ctx = getEvidenceSourceContext(db, detail.id, 'S1')!
     expect(ctx.located).toBe(true)
     expect(ctx.match).toBe(longText.slice(0, 200))
+  })
+})
+
+// ---- AUD-19: exhaustiveness tooth on the canonical coverage form -----------------------
+//
+// `canonicalCoverage` hand-enumerates the coverage fields the drift fingerprint compares.
+// A field added to `CoverageInfo` and NOT listed there is silently excluded from drift
+// detection — and the consequence is not cosmetic: a review whose only drift is in that
+// field reads "unchanged", so an export proceeds without the outdated banner and without
+// the acknowledge gate ever firing.
+//
+// The primary tooth is a COMPILE-time one (`satisfies Record<keyof CoverageInfo, …>` on the
+// literal). This test is the second tooth, for two reasons the compiler cannot cover:
+// `npm test` runs without `tsc`, and the compiler cannot tell a field that is *listed but
+// deliberately excluded* (value `undefined`, which JSON.stringify drops) from one that is
+// *listed and compared*. So it re-derives both sets from source and pins the exclusions to
+// the documented list.
+const FRESHNESS_SRC = join(__dirname, '../../src/main/services/evidence-pack/freshness.ts')
+const TYPES_SRC = join(__dirname, '../../src/shared/types.ts')
+
+/** Field names declared by an interface block in a .ts source (comments stripped). */
+function interfaceFieldNames(source: string, name: string): string[] {
+  const start = source.indexOf(`export interface ${name} {`)
+  if (start < 0) throw new Error(`interface ${name} not found`)
+  const end = source.indexOf('\n}', start)
+  if (end < 0) throw new Error(`interface ${name} has no terminator`)
+  const body = source
+    .slice(start, end)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+  return [...body.matchAll(/^\s{2}(\w+)\??:/gm)].map((m) => m[1])
+}
+
+/** The keys of the object literal `canonicalCoverage` canonicalizes, and how each is used. */
+function canonicalCoverageEntries(source: string): { key: string; excluded: boolean }[] {
+  const start = source.indexOf('const canonical = {')
+  if (start < 0) throw new Error('canonicalCoverage literal not found')
+  const end = source.indexOf('\n  } satisfies', start)
+  if (end < 0) throw new Error('canonicalCoverage literal is no longer `satisfies`-constrained')
+  const body = source
+    .slice(start, end)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+  return [...body.matchAll(/^\s{4}(\w+):\s*(.+?),?\s*$/gm)].map((m) => ({
+    key: m[1],
+    excluded: m[2].trim() === 'undefined'
+  }))
+}
+
+describe('AUD-19: canonical coverage enumerates every CoverageInfo field', () => {
+  it('lists every declared field — a new coverage field cannot slip past drift detection', () => {
+    const declared = interfaceFieldNames(readFileSync(TYPES_SRC, 'utf8'), 'CoverageInfo')
+    const listed = canonicalCoverageEntries(readFileSync(FRESHNESS_SRC, 'utf8')).map((e) => e.key)
+    expect(declared.length).toBeGreaterThan(0)
+    expect([...listed].sort()).toEqual([...declared].sort())
+  })
+
+  it('excludes exactly the documented display-plumbing field — everything else is compared', () => {
+    // `nodeIds` is provenance plumbing the review never presents (module doc on
+    // `canonicalCoverage`); it is listed with `undefined` so the compile-time constraint
+    // still sees it while JSON.stringify drops it from the emitted string. Any OTHER field
+    // parked as `undefined` is a semantic claim quietly dropped from the drift fingerprint.
+    const entries = canonicalCoverageEntries(readFileSync(FRESHNESS_SRC, 'utf8'))
+    expect(entries.filter((e) => e.excluded).map((e) => e.key)).toEqual(['nodeIds'])
   })
 })

@@ -590,6 +590,13 @@ AI model anything, and nothing touches the network — it is you, the answer, an
   (**Continue review**, with a small Draft/Ready tag). Deleting a conversation deletes its
   reviews too — the delete confirmation warns you with the count first. **Back to chat**
   returns you to the conversation the review came from, with it open and active.
+- **A reviewed answer is protected from being replaced.** Re-answering a turn — **Answer
+  without it** on a skill-marked answer, or **Try again** wherever it is offered — writes a new
+  answer over the old one, and a review belongs to the answer it was made on, so it would go with
+  it. Once an answer has a review, re-answering it is refused: **Answer without it** greys out and
+  says why on hover, and any other route to replace that answer reports the review instead of
+  overwriting it. Ask your question again as a new message to get a fresh answer — your review and
+  the answer it examined both stay.
 
 **Export an evidence pack.** From the **Review summary**, choose **Create evidence pack** to
 save the whole review — question, answer, your decisions and notes, the source excerpts,

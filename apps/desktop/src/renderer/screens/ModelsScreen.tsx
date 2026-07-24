@@ -80,6 +80,48 @@ const CONTEXT_SIZE_PRESETS = [4096, 8192, 16384, 32768, 65536, 131072] as const
 /** Picks at or above this show the "large windows cost memory" hint (issue #43). */
 const CONTEXT_SIZE_WARNING_MIN = 65_536
 
+/** Usable right now — no download needed. The boundary `groupedCards` makes visible (#35). */
+export function isModelInstalled(m: ModelInfo): boolean {
+  return m.state === 'installed' || m.state === 'running' || m.state === 'ready'
+}
+
+/**
+ * Runnable on THIS machine, by exactly the flag the card's RAM warning renders from
+ * (`insufficientRam`, computed in the main process against the machine's whole-GB RAM).
+ * Sharing the flag is the point: the order can never disagree with the "Needs at least N GB"
+ * badge and banner printed on the card it moved.
+ */
+export function isModelRunnableHere(m: ModelInfo): boolean {
+  return m.insufficientRam !== true
+}
+
+/**
+ * DV-2 — display order for the chat picker (the cards below the active model).
+ *
+ * Two keys, in order:
+ *  1. **Installed first** — a model already on the drive is usable now, while the rest cost a
+ *     multi-GB download. Unchanged, and it stays PRIMARY: `groupedCards` renders that boundary
+ *     as a labelled subheading, so runnability may only reorder cards WITHIN a group.
+ *  2. **Runnable on this machine first** — unconditionally. Catalog order is alphabetical, so
+ *     without this key the picker opened on models the machine cannot run at all (on a 16 GB
+ *     box: three of the first four cards carried a "Needs at least 20/24 GB RAM" warning) while
+ *     the usable ones sat below the fold. Runnability is not a tiebreak of last resort here —
+ *     "can this computer run it" outranks alphabetical, always.
+ *
+ * The "Recommended" flag deliberately plays NO part: the recommender only ever picks a model
+ * that fits this machine's RAM, so the ★ card is runnable by construction and this key can
+ * never push it down. Display order ONLY — the RAM-best-fit recommender in the main process is
+ * untouched. `Array.prototype.sort` is stable, so models that tie on both keys keep their
+ * catalog order.
+ */
+export function orderPickerModels(list: ModelInfo[]): ModelInfo[] {
+  return [...list].sort(
+    (a, b) =>
+      Number(isModelInstalled(b)) - Number(isModelInstalled(a)) ||
+      Number(isModelRunnableHere(b)) - Number(isModelRunnableHere(a))
+  )
+}
+
 // The in-flight download survives leaving + re-entering the screen (the job itself
 // lives in the main process; this only remembers which one to keep polling).
 let rememberedJob: DownloadJob | null = null
@@ -331,16 +373,11 @@ export function ModelsScreen(): JSX.Element {
   const embeddings = models.filter((m) => m.role === 'embeddings')
   const others = models.filter((m) => m.role !== 'chat' && m.role !== 'embeddings')
 
-  // The active chat model leads the screen (guidelines §2); the rest are the picker.
-  // Within the picker, already-installed models come first — they're usable right now,
-  // whereas not-yet-downloaded ones need a download. Stable sort keeps manifest order
-  // within each group; `groupedCards` below makes the boundary VISIBLE (#35).
-  const isInstalled = (m: ModelInfo): boolean =>
-    m.state === 'installed' || m.state === 'running' || m.state === 'ready'
+  // The active chat model leads the screen (guidelines §2); the rest are the picker, whose
+  // display order is `orderPickerModels` above (installed first, then runnable-on-this-machine
+  // first). `groupedCards` below makes the installed/needs-download boundary VISIBLE (#35).
   const activeChat = chat.find(isActive) ?? null
-  const otherChat = chat
-    .filter((m) => m !== activeChat)
-    .sort((a, b) => Number(isInstalled(b)) - Number(isInstalled(a)))
+  const otherChat = orderPickerModels(chat.filter((m) => m !== activeChat))
 
   // Download gates: the drive policy is the ceiling, the Settings toggle the
   // switch. The copy distinguishes the two — "disabled by policy" vs. "turn it on in
@@ -634,8 +671,8 @@ export function ModelsScreen(): JSX.Element {
    * so the sorted chat picker renders the same cards in the same order.
    */
   function groupedCards(list: ModelInfo[]): JSX.Element {
-    const onDrive = list.filter(isInstalled)
-    const toDownload = list.filter((m) => !isInstalled(m))
+    const onDrive = list.filter(isModelInstalled)
+    const toDownload = list.filter((m) => !isModelInstalled(m))
     if (onDrive.length === 0 || toDownload.length === 0) return <>{list.map(card)}</>
     return (
       <>
@@ -824,6 +861,7 @@ export function ModelsScreen(): JSX.Element {
           <label className="hint" style={{ display: 'block' }}>
             {t('models.context.label')}{' '}
             <select
+              className="select"
               value={settings.contextTokensOverride != null ? String(settings.contextTokensOverride) : 'auto'}
               onChange={(e) => void onContextSizeChange(e.target.value)}
             >

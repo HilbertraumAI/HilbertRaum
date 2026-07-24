@@ -485,20 +485,65 @@ export function cancelFileTranslation(): void {
  *
  * Precedence with the TEXT-path adopt (D9 one-at-a-time lane — a text job and a doc-task can never
  * be active at once): this no-ops when a live TEXT job already owns the panel, when this store
- * already holds a live/terminal session (navigate-away kept it), or when the active task is not a
- * running translation — so the two adopts can never both claim the panel.
+ * already holds a live OR terminal session (navigate-away kept it), when the active task is not a
+ * running translation, or when the running task is one the GLOBAL doc-task store already tracks
+ * (i.e. another screen started it) — so the two adopts can never both claim the panel and a foreign
+ * task is never pulled into it.
+ *
+ * The `idle` rule alone is NOT enough across the `getActiveDocTask` await, so a generation token is
+ * captured at entry and re-checked after it — see the note at that capture below.
  */
 export async function adoptActiveFileTranslation(): Promise<void> {
-  if (snapshot.busy) return // this store already holds a live session
+  // AUD-04: the gate is "this store is EMPTY", not "not busy". `busy` is false in every TERMINAL
+  // state (done/failed/cancelled), so a busy-only guard let a later mount run right over a FINISHED
+  // translation and wipe its held output/gaps/truncated/resultDocumentId with a fresh `translating`
+  // frame. This recovery exists for a store that died with a renderer reload — and such a store is
+  // `idle`; any other state is a session this panel is still showing.
+  if (snapshot.state !== 'idle') return // this store already holds a live or terminal session
   if (getTranslateSession().translating) return // the text path owns the panel (precedence)
+  // Take the generation BEFORE the await, not after it (the `++gen` for the poll comes later, once
+  // this adopt has actually won): `state === 'idle'` answers "is anything on screen right now?", and
+  // the two actions that INVALIDATE this store mid-read both answer that with "no" for the wrong
+  // reason. The workspace-lock purge (`clearFileTranslate`) resets the store to EMPTY — i.e. `idle`
+  // — and so does the dismiss that follows a Stop (`resetFileTranslation`); both are exactly the
+  // shape the idle rule admits. Adopting there re-seeds `translating` and resumes polling a task
+  // main has already aborted, ending in a materialized preview loaded into renderer memory behind
+  // the lock screen. The generation tells a genuinely-reloaded store apart from an invalidated one:
+  // every invalidating action (lock purge, Stop, dismiss, a fresh start) bumps it.
+  const entryGen = gen
   let task
   try {
     task = await window.api?.getActiveDocTask?.()
   } catch {
     return
   }
+  // Re-check the token FIRST, before any other post-await work: if it moved, this read's result
+  // belongs to a session that no longer exists.
+  if (entryGen !== gen) return
   if (!task || task.kind !== 'translation' || task.state !== 'running') return
-  if (snapshot.busy || getTranslateSession().translating) return // a session started while we awaited
+  // Same `idle` rule on the re-check, not just `busy` (AUD-04): a session can also go TERMINAL while
+  // the read above was in flight — a rejected drop (multi-file, no path, a foreign task on the lane)
+  // lands `failed` synchronously — and that just-raised banner must not be replaced either. Kept
+  // ALONGSIDE the generation re-check above, not replaced by it: those synchronous reject paths
+  // (`fail`/`failWith`) deliberately do NOT bump the generation, so this is the check that catches
+  // them, while the token catches the invalidations that leave the store idle.
+  if (snapshot.state !== 'idle' || getTranslateSession().translating) return // a session started while we awaited
+  // AUD-04: is this running task OURS to adopt, or a FOREIGN one? This store deliberately never
+  // registers its doc-task in the GLOBAL `doctasks` store (see the deviation note at the top — it
+  // runs its own polling), so a live entry sitting there was started by another screen (a
+  // Documents-row "Translate"), and the one-at-a-time lane means that is the very task main just
+  // reported. Adopting it would hijack a stranger's task into this panel: Stop would cancel it and
+  // its result would load here as if it were a file translation. The global store is module-level —
+  // it survives navigation and is empty only after the renderer reload this recovery is for, so a
+  // reload never mistakes a genuinely-ours task for a foreign one. (A TERMINAL entry lingers in that
+  // store until a screen acknowledges it and must not block us — the `guardStart` rule.)
+  const foreign = getActiveDocTask()
+  if (foreign && foreign.jobId === task.jobId && !isDocTaskTerminal(foreign.status)) return
+  // Only NOW take a new generation — this adopt has won, and this is the token the poll loop runs
+  // under, so a later Stop/dismiss/lock/fresh start invalidates it exactly as it would a fresh
+  // start's. It is a DIFFERENT token from `entryGen` above (which only guards the read window):
+  // this line used to be the function's ONLY look at `gen`, and because it lands after the await
+  // there was nothing to compare the read's result against.
   const myGen = ++gen
   stopPolling()
   docTaskJobId = task.jobId

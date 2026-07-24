@@ -172,6 +172,18 @@ if [[ "$FAMILY" == "ocr" ]]; then
     if [[ -f "$DEST" ]] && is_real_sha "$SHA"; then
       if [[ "$(sha256_of "$DEST")" == "$SHA" ]]; then echo "    skip (present + verified)"; continue; fi
       echo "    present but hash differs — re-fetching"
+      # DELETE the bad file first (AUD-24). The download below resumes at the end of whatever
+      # is already on disk (curl -C -), so re-fetching ONTO a complete-but-wrong file asks the
+      # server for a byte range that starts at or past the resource's length — an
+      # unsatisfiable range (HTTP 416), which fails every retry instead of replacing the file.
+      # Starting from an empty destination makes the repair attempt an actual repair.
+      # UNCONDITIONAL here, unlike fetch-models, and deliberately so — do not "harmonize" the
+      # two: fetch-models guards the same delete behind a size test because it must preserve
+      # cross-run resume of multi-GB weights, and its manifests carry a size_bytes to test
+      # against. These OCR language files are a few MB, runtime-sources.yaml records no size
+      # for them, and re-fetching one costs nothing — so there is no partial worth saving and
+      # no field to distinguish one with.
+      rm -f "$DEST"
     fi
     mkdir -p "$(dirname "$DEST")"
     if command -v curl >/dev/null 2>&1; then

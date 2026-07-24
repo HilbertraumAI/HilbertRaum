@@ -4,6 +4,7 @@ import type { AppContext } from '../services/context'
 import type { TranslateJob, TranslateRequest } from '../../shared/types'
 import { TranslateJobService, type TranslateStreamEmitter } from '../services/translation/jobs'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 
 // Translate-view IPC (TG wave, plan §2 D6). The Translate screen's live TEXT translation runs on
 // the SAME TranslateGemma sidecar (`ctx.translator`) the document-translation doc-task uses — a
@@ -27,7 +28,10 @@ export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobServ
   // localized "locked" copy rather than let a start slip through. cancel/getActive are safe
   // reads either way. Mirrors registerImagesIpc's requireUnlocked on analyze.
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.docs.locked'))
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.docs.locked'))
   }
 
   // FA-1 F-4: the `destroyed` listener wired at start is detached on the job's terminal state so a

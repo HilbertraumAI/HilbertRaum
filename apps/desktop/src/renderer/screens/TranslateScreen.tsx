@@ -415,6 +415,7 @@ export function TranslateScreen({
           <label>
             {t('translate.from')}{' '}
             <select
+              className="select"
               aria-label={t('translate.from')}
               value={choice.sourceLang}
               onChange={(e) =>
@@ -441,6 +442,7 @@ export function TranslateScreen({
           <label>
             {t('translate.to')}{' '}
             <select
+              className="select"
               aria-label={t('translate.to')}
               value={choice.targetLang}
               onChange={(e) =>

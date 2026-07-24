@@ -205,7 +205,9 @@ policy in **[`docs/model-policy.md`](docs/model-policy.md)**.
 (document Q&A) + **reranker** (retrieval quality) + **Whisper** (audio). The benchmark
 auto-recommends the newest-generation Qwen chat model that fits your RAM: **≤12 GB → Qwen3.5 4B,
 16–20 GB → Qwen3.5 9B, 24 GB → Qwen3.6 27B (Q4), ≥32 GB → Qwen3.6 27B (Q5)** (best-*fit* tiers;
-the table's **Min RAM** column is each model's lower hard floor). The **MoEs** (Qwen3 30B-A3B,
+the table's **Min RAM** column is each model's lower hard floor — except the two fast-tier entries,
+which deliberately carry the 4B's tier-aligned line rather than a measured floor so they cannot
+hijack the ≤12 GB recommendation). The **MoEs** (Qwen3 30B-A3B,
 Qwen3.5 35B-A3B) are opt-in (≈30B quality at ≈3B *active* params/token → near-small-model CPU
 speed **if** the ~18-22 GB weight fits in RAM).
 
@@ -213,10 +215,12 @@ speed **if** the ~18-22 GB weight fits in RAM).
 
 | Model | Note | Size | Min RAM | License |
 |---|---|---|---|---|
-| Qwen3 4B Instruct Q4 | Preconfigured-drive bundled default & weak-laptop fallback (smallest; keeps **Deep** answer mode). The DIY `--with-assets` default-set chat model is Ministral 3 8B (below) | ~2.7 GB | 8 GB | Apache-2.0 |
+| Qwen3 4B Instruct Q4 | Preconfigured-drive bundled default & weak-laptop fallback (smallest *ranked* model; keeps **Deep** answer mode). The DIY `--with-assets` default-set chat model is Ministral 3 8B (below) | ~2.7 GB | 8 GB | Apache-2.0 |
 | Qwen3 4B Instruct 2507 Q4 | Better 4B quality (no Deep) | ~2.5 GB | 8 GB | Apache-2.0 |
 | Qwen3.5 4B (UD-Q4_K_XL) | **Recommended ≤12 GB**: newest-generation 4B | ~2.9 GB | 8 GB | Apache-2.0 |
 | Gemma 4 E2B Instruct QAT Q4_0 | Gemma 4 QAT wave low-end challenger (selectable; not auto-recommended) | ~3.3 GB | 8 GB | Apache-2.0 |
+| Qwen3.5 0.8B Q6_K | **Fast tier — selectable, never auto-recommended.** Smallest runnable chat model and the fastest CPU decode in the catalog. The 2026-07 grounded-QA eval ([`docs/model-benchmarks.md`](docs/model-benchmarks.md) §9) leaves it the *surviving* fast-tier candidate — the honest floor (better F1 and unanswerable-question discipline than the 2B below); owner ratification + the in-app runtime smoke are still pending | ~0.6 GB | 8 GB | Apache-2.0 |
+| Qwen3.5 2B (UD-Q4_K_XL) | **Fast tier — FAILED its evaluation bar.** The same eval scored it below the 0.8B on F1 with the worst unanswerable-question discipline of the 13 models tested, so it should not be recommended anywhere; downloadable for completeness only | ~1.3 GB | 8 GB | Apache-2.0 |
 | Qwen3 8B Instruct Q4 | 12 GB+ laptops | ~5.0 GB | 12 GB | Apache-2.0 |
 | Ministral 3 8B Instruct (2512) Q4 | Phase-29 8B benchmark winner (selectable; the 16–20 GB pick is now Qwen3.5 9B) | ~5.2 GB | 12 GB | Apache-2.0 |
 | Qwen3.5 9B (UD-Q4_K_XL) | **Recommended 16–20 GB**: newest-generation 9B | ~6.0 GB | 12 GB | Apache-2.0 |

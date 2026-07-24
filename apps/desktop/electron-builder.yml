@@ -139,8 +139,18 @@ asar: true
 # tesseract.js spawns its Node OCR worker via worker_threads, which loads the worker
 # SCRIPT (and the WASM core it requires) through real filesystem reads — those cannot
 # see inside the asar archive (Phase 38, R-O2). Unpack both packages; the engine
-# rewrites app.asar → app.asar.unpacked in the resolved workerPath. Verify a real OCR
-# run from the produced .exe at release acceptance (the green gate never packages).
+# rewrites app.asar → app.asar.unpacked in the resolved workerPath.
+#
+# ⚠️ KNOWN BROKEN — this list is INSUFFICIENT (measured 2026-07-19 on a real packaged
+# Windows build, DEP-1 P4; pre-existing and version-independent). The unpacked worker
+# still `require`s HOISTED deps (regenerator-runtime, is-url, …) that are NOT listed
+# here, so they stay inside app.asar and cannot be resolved from app.asar.unpacked —
+# the uncaught exception KILLS the whole app while ocrAvailable still reports true.
+# Dev-mode OCR is unaffected. Do NOT treat a packaged OCR run as a release-acceptance
+# step until the fix bundle lands: unpack the hoisted deps, degrade the doc task
+# instead of dying, and make ocrAvailable honest about the packaged mode (registered
+# as follow-up 2 in docs/architecture.md "Dependency remediation — design record
+# (wave DEP-1, PR #77)" §5; user-facing text in docs/known-limitations.md).
 asarUnpack:
   - 'node_modules/tesseract.js/**'
   - 'node_modules/tesseract.js-core/**'

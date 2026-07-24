@@ -789,10 +789,13 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.pdf$/)
 
     // The REAL print harness ran: it loaded the transient `.print.tmp.html` SIBLING of
-    // the destination (present on disk at load time), and removed it afterwards.
-    expect(ipcState.pdf.loadedPath).toBe(`${dest}.print.tmp.html`)
+    // the destination (present on disk at load time), and removed it afterwards. The name
+    // carries this export's pack id — a random UUID's 32 hex characters — so two exports
+    // to the same destination never load and print the same file (AUD-17).
+    const loaded = String(ipcState.pdf.loadedPath)
+    expect(loaded.slice(dest.length)).toMatch(/^\.[0-9a-f]{32}\.print\.tmp\.html$/)
     expect(ipcState.pdf.sourceExistedAtLoad).toBe(true)
-    expect(existsSync(`${dest}.print.tmp.html`)).toBe(false)
+    expect(existsSync(loaded)).toBe(false)
 
     // The destination holds the printer's bytes; the row + audit record 'pdf'.
     expect(new Uint8Array(readFileSync(dest))).toEqual(ipcState.pdf.bytes)

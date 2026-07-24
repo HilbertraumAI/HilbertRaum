@@ -229,6 +229,11 @@ export function stopActive(): void {
     }
     return
   }
+  // A failed cancel stays SILENT on purpose (the renderer has no write-side diagnostics sink, and
+  // breaking the UI because a cancel IPC rejected would be worse than the divergence): main can then
+  // keep the job in `translating` while this store shows `cancelled` with the partial output. That
+  // divergence is exactly why `adoptActiveJob` gates on the store being EMPTY — otherwise the next
+  // mount re-adopts the still-"running" job over the result the user stopped to keep.
   void window.api?.translateCancel?.(snapshot.activeJobId)?.catch?.(() => {})
   startGen += 1 // invalidate any translate still inside its start round-trip
   teardownStream()
@@ -247,20 +252,79 @@ export function clearTranslateSession(): void {
 }
 
 /**
+ * "This store holds NOTHING" — the precondition for the reload adopt below, and the one rule both
+ * of its checks enforce. Deliberately NOT "no active job id": `activeJobId` is null in every
+ * TERMINAL state (the done/error stream handlers and `stopActive` all clear it), and `output` can
+ * outlive `state === 'idle'` because `acknowledgeError` parks there while KEEPING the partial text
+ * the panel still renders. Only a store that died with a renderer reload is empty by this test —
+ * which is exactly the situation the adopt exists for.
+ */
+function isEmptySession(): boolean {
+  return (
+    snapshot.state === 'idle' && snapshot.output === '' && !snapshot.activeJobId && !snapshot.translating
+  )
+}
+
+/**
  * Remount recovery after a full renderer RELOAD (the module store died with it): if main still has
  * a running job, re-adopt it — seed its accumulated text and re-subscribe. A no-op when this store
- * already holds a job (navigate-away kept it + its listeners alive) or nothing is running.
+ * already holds anything (navigate-away kept a live job + its listeners alive, or a terminal result
+ * is still on screen) or nothing is running.
+ *
+ * The gate is EMPTINESS, not the job id. The old id-only guard misread every TERMINAL state as
+ * "nothing here" — `activeJobId` is null in `done`, `failed` and `cancelled` alike — so this mount
+ * effect, which runs on EVERY entry to the Translate screen and not only after a reload, could run
+ * straight over a settled translation: the held text was replaced with `job.text ?? ''` and the
+ * panel flipped back to "translating". The reachable path is Stop: `stopActive` parks the store at
+ * `cancelled` (id cleared) and fires `translateCancel(...)` whose rejection is deliberately
+ * swallowed, so a failed cancel leaves main's job in `translating` while the user reads the partial
+ * output they chose to keep — and the next mount adopted it back. The DOCUMENT-path sibling
+ * `adoptActiveFileTranslation` had the same weak-guard shape (it gated on `busy`, likewise false in
+ * every terminal state) and gates on emptiness for the same reason.
+ *
+ * No FOREIGN-job check is needed here — its absence is deliberate, not an oversight. The document
+ * path needs one because a Documents-row "Translate" can start a doc-task this panel would hijack;
+ * the Translate screen is the ONLY place a TEXT job is ever started, so a running job main reports
+ * can only ever be this store's own.
+ *
+ * The emptiness rule alone is NOT enough across the `getActiveTranslateJob` await, so a generation
+ * token is captured at entry and re-checked after it — see the note at that re-check below.
  */
 export async function adoptActiveJob(): Promise<void> {
-  if (snapshot.activeJobId) return
+  if (!isEmptySession()) return // a live or terminal session is already on screen
+  // Take the generation BEFORE the await, not after it: emptiness answers "is anything on screen
+  // right now?", and a workspace LOCK answers that with "no" for the wrong reason. The lock purge
+  // (`clearTranslateSession`) resets this store to EMPTY, so a store that a lock legitimately
+  // invalidated mid-read is indistinguishable — by emptiness — from the post-reload store this
+  // adopt exists for. The generation tells them apart: every action that invalidates an in-flight
+  // adopt (the lock purge, Stop, a fresh translate) bumps it.
+  const myGen = startGen
   let job
   try {
     job = await window.api?.getActiveTranslateJob?.()
   } catch {
     return
   }
+  // Re-check the token FIRST, before any other post-await work: if it moved, this read's result
+  // belongs to a session that no longer exists. Bailing here is what keeps a job's accumulated
+  // plaintext — and a live stream subscription for it — out of renderer memory after main aborted
+  // the job and re-encrypted the vault.
+  if (myGen !== startGen) return
   if (!job || (job.state !== 'queued' && job.state !== 'translating')) return
-  if (snapshot.activeJobId) return // a translate started while we awaited
+  // The SAME emptiness rule on the re-check, not just on entry: the two must enforce one invariant,
+  // or the no-op is true at function entry and no longer true at the moment of the destructive `set`
+  // below. Reachable: `translate()` flips the store to `translating` SYNCHRONOUSLY, before its own
+  // round-trip resolves and sets `activeJobId`, so an id-only re-check sailed past a translation the
+  // user had just started — seeding the older job's text over it AND bumping `startGen`, which made
+  // that in-flight start treat itself as superseded and cancel the user's brand-new job as an
+  // orphan. A `stopActive()` in the same window (terminal `cancelled`, id null) slipped through
+  // identically.
+  //
+  // Kept ALONGSIDE the generation re-check above, not replaced by it: the two answer different
+  // questions and neither subsumes the other. The token catches an invalidation that leaves the
+  // store empty (the lock purge); this catches a store that holds something at the moment of the
+  // destructive `set` without depending on whoever put it there having bumped the generation.
+  if (!isEmptySession()) return // a session started (or settled) while we awaited
   startGen += 1
   set({ activeJobId: job.jobId, output: job.text ?? '', state: 'translating', error: null, translating: true })
   // Residual (accepted): a trDone/trError emitted in the ~1ms window between the getActiveTranslateJob

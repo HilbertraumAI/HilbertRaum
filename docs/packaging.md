@@ -177,12 +177,23 @@ Key config points:
   emit it to `out/preview/` and `electron-vite build` clears only `out/main|preload|renderer`, so a
   local package run after a screenshot run would otherwise fold the harness (incl. staged demo
   chats) into the artifact; `tests/integration/packaging.test.ts` pins the negation.
-- **`tesseract.js` + `tesseract.js-core` are `asarUnpack`ed**: the OCR engine spawns
-  its Node worker via `worker_threads`, which loads the worker script (and the WASM core it
-  requires) through real filesystem reads that cannot see inside the asar archive. The engine
-  rewrites `app.asar` → `app.asar.unpacked` in the resolved workerPath. **After packaging, also
-  smoke-test "Make searchable (OCR)" on a scanned PDF from the produced `.exe`** (same
-  runtime-only-failure class as the externalized parsers).
+- **`tesseract.js` + `tesseract.js-core` are `asarUnpack`ed — and that list is NOT yet
+  sufficient**: the OCR engine spawns its Node worker via `worker_threads`, which loads the
+  worker script (and the WASM core it requires) through real filesystem reads that cannot see
+  inside the asar archive. The engine rewrites `app.asar` → `app.asar.unpacked` in the resolved
+  workerPath. ⚠️ **Packaged OCR currently CRASHES the whole app** (measured 2026-07-19 on a real
+  packaged Windows build; pre-existing and version-independent — it fails identically on the
+  previously pinned Electron): the worker's own **hoisted** dependencies
+  (`regenerator-runtime`, `is-url`, …) are not in the `asarUnpack` list, so they stay packed
+  inside `app.asar` and cannot be resolved from `app.asar.unpacked`; the uncaught exception
+  kills the process while `ocrAvailable` still reports `true`. **Do not smoke-test "Make
+  searchable (OCR)" from the produced `.exe` as an acceptance step until the fix bundle
+  lands** — unpack the hoisted deps, degrade the task instead of dying, make `ocrAvailable`
+  honest about the packaged mode; registered as follow-up 2 in
+  [`architecture.md`](architecture.md) "Dependency remediation — design record (wave DEP-1,
+  PR #77)" §5. Dev-mode OCR is unaffected (the raster → IPC → recognize pipeline was proven end
+  to end on Electron 39), so this is a packaging defect, not an OCR-engine one; the other
+  runtime-only-failure smokes above (parsers, encrypted workspace) still apply.
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
   `HILBERTRAUM_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are
@@ -457,13 +468,26 @@ second-laptop continuity check.
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the **exact pre-release command
 chain** — `npm ci` → `npm run typecheck` → `npm run build` → `npm test` — on every pull request
 and on pushes to `master`, across a matrix of **`ubuntu-latest` and `windows-latest`** (Windows is
-first-class for this project) on **Node 22.x** (engines require `>=22.5`). It is the machine
+first-class for this project) × **Node `22.x` and `24.x`**. It is the machine
 backstop the audit asked for (TEST-N1): before CI, the suite was green only by author discipline,
 and the repo's own anti-false-green check ([`tests/full-suite-guard.ts`](../apps/desktop/tests/full-suite-guard.ts))
-only mattered if something ran it. CI runs the two per-OS matrix legs (`build-and-test
-(ubuntu-latest)` / `(windows-latest)`) plus a tiny **`ci-success`** aggregate job that passes only
-when both legs pass — mark **`ci-success`** the **required status check** on `master`. Its name is
-stable even if the OS matrix labels change later, so branch protection never silently stops matching.
+only mattered if something ran it. CI runs the four matrix legs (`build-and-test
+(ubuntu-latest, 22.x)` / `(windows-latest, 24.x)` / …) plus a tiny **`ci-success`** aggregate job
+that passes only when **every** leg passes — mark **`ci-success`** the **required status check** on
+`master`. Its name is stable even if the matrix labels change later, so branch protection never
+silently stops matching; never mark an individual leg required.
+
+**Why both Node majors, and why `corepack enable` (AUD-26).** The two versions are the two ends of
+what the repo *claims*, and each was previously an unexercised claim: `22.x` is the `engines.node
+>= 22.5` floor the app promises to run on (`node:sqlite` is a built-in that needs it), and `24.x` is
+what **every** `release.yml` leg builds under — including the Windows leg that re-runs the full
+suite on the tagged commit. Gating only one leaves the other a declaration nothing tests. The
+`corepack enable` step (right after `actions/setup-node`, before `npm ci`) makes the pinned
+`packageManager: npm@11.6.2` the npm that actually installs on every leg: Node 22 bundles npm 10.9,
+which is *below* the root `engines.npm >= 11` floor, so before this the floor was dead policy —
+declared and never exercised anywhere. The step prints `node -v` / `npm -v` so the run log carries
+the evidence. `COREPACK_ENABLE_DOWNLOAD_PROMPT=0` is set workflow-wide (not per step) because
+corepack fetches the pinned npm on the first `npm` invocation, not at `corepack enable`.
 
 **Why it can run with zero weights / zero network / zero binaries:** the unit + integration suite
 is offline by construction — mock runtime, mock embedder, `electron` mocked — and nothing in
@@ -517,8 +541,10 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Four job
 
 **The ritual is draft → owner smoke → publish.** The workflow never publishes: the owner downloads
 the draft's artifacts, runs the applicable "Manual pre-ship checklist" below (at minimum item 1 —
-the post-package smoke — plus an OCR run and model start/stop with no orphaned `llama-server`),
-then clicks **Publish**. A failed smoke → delete the draft, fix, re-tag. A bad build never becomes
+the post-package smoke — plus model start/stop with no orphaned `llama-server`), then clicks
+**Publish**. (A packaged **OCR** run was part of this minimum until 2026-07-19, when it was
+measured to crash the app — see the `asarUnpack` bullet above; it is not a gate again until that
+fix bundle lands.) A failed smoke → delete the draft, fix, re-tag. A bad build never becomes
 publicly linkable.
 
 **Signing posture — staged, all via env secrets (no repo change when certs arrive):**
@@ -530,9 +556,13 @@ publicly linkable.
 | 2 — Windows | `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` (OV/EV `.pfx` or Azure Trusted Signing via signtool env) | signed `.exe`; SmartScreen reputation builds |
 
 Non-clash with `ci.yml`: `release.yml` never fires on `pull_request`/`push: master` — only tags and
-manual dispatch. It runs on **Node 24** (electron-builder ships its own pinned Electron runtime)
-vs `ci.yml`'s Node 22.x, does **not** set the `ELECTRON_SKIP_BINARY_DOWNLOAD` knobs (packaging
-needs the binary), and installs with `npm ci` (lockfile-pinned — the CI half of hardening L-8).
+manual dispatch. It runs on **Node 24** (electron-builder ships its own pinned Electron runtime),
+which `ci.yml`'s matrix now also covers, does **not** set the `ELECTRON_SKIP_BINARY_DOWNLOAD` knobs
+(packaging needs the binary), and installs with `npm ci` (lockfile-pinned — the CI half of hardening
+L-8). It does **not** `corepack enable`: Node 24 already bundles npm 11.x, so the `engines.npm >= 11`
+floor holds there on the bundled npm; only CI pins the exact `npm@11.6.2`. Adding corepack here too
+would make the two installs byte-identical, at the cost of exercising a new step for the first time
+on a tag (a release leg has no PR gate ahead of it) — a deliberate, registered residual.
 
 ## Manual pre-ship checklist (real hardware — not covered by CI)
 

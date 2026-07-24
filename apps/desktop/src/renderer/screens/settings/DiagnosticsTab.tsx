@@ -560,7 +560,11 @@ export function DiagnosticsTab(): JSX.Element {
             {events != null && events.length > 0 && (
               <label className="hint" style={{ display: 'block', marginTop: 8 }}>
                 {t('diag.activity.filterShow')}{' '}
-                <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+                <select
+                  className="select"
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                >
                   <option value="all">{t('diag.activity.filterAll')}</option>
                   {[...new Set(events.map((ev) => ev.type))].map((type) => (
                     <option key={type} value={type}>

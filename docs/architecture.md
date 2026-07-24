@@ -14,7 +14,7 @@ remediation waves; the full original working papers live in git history._
    **§ numbers restart inside every record** (standing decision — `§N` collisions across
    records are deliberate; resolve a citation via the record named alongside it), and
    several records end with their own "§-anchor legend" for retired-plan citations.
-3. **Audit remediation ledgers §24–§50** — one continuous series interleaved among the
+3. **Audit remediation ledgers §24–§51** — one continuous series interleaved among the
    records (find one with `### §N <audit name>`); each holds a round's finding dispositions.
 4. **Data flow (RAG)** and the **Module ↔ spec map** — near the end of the file.
 5. **"Original MVP spec — retirement record & §-anchor legend"** — at the very END: the
@@ -2423,7 +2423,7 @@ project-wide sequence (D1–D7 wave 1 · D8–D15 retrieval · D16–D22 catalog
 | R-W3 | Whisper model size for DE+EN on the reference laptop (RTF, RAM) | **RESOLVED** (dev box, 4 threads; TTS German with known ground truth + real LibriVox German speech). **base** (142 MB): RTF ≈ 0.17–0.21 but meaning-destroying word errors on real speech ("Leichenwagen"→"gleichen Wagen", "Töchter"→"Teuchter", "Särge"→"sehrge", "Magd"→"Markt"). **small** (466 MB): RTF ≈ 0.43–0.46 (~2.4×), fixes nearly all; clean-speech German near-perfect, numbers/names/dates exact. **Shipped default: `small`** (German quality is the product promise); real hashes captured for both (base banked for a possible future low-end manifest: `60ed5bc3…2efe`). All profiles recommended (peak RSS ≈ 1.2 GB, batch job). Manifest = `whisper-small-multilingual` (Phase 36) |
 | R-W4 | 60-min file: time/memory/progress signal | **RESOLVED**: a real 52-min German mp3 (128 kbps LibriVox) through the small model on the dev CPU (4 threads): **2123 s wall (≈35 min, RTF ≈ 0.68), peak working set 1155 MB**, 616 segments, **`-pp` progress lines every ~5% (20 ticks) + segments streamed progressively to stdout** ⇒ the import job shows real per-file "Transcribing… N%" (CLI `-pp` → ParseContext.onProgress → in-memory map → `DocumentInfo.transcriptionProgress` on the existing polling path — no new channel). Memory is a non-issue; wall time is the honest cost in `known-limitations.md` + the size-aware import confirm (D35). Job UX = per-file percent (Phase 36) |
 | R-O1 | pdfjs render-to-OffscreenCanvas in utilityProcess/worker; tesseract.js on Node Buffers w/o canvas | **RESOLVED** in pinned Electron 37.10.3 AND system Node 24.13.0 (two-runtime discipline), tesseract.js pinned 7.0.0. **(1)** `utilityProcess` has NO OffscreenCanvas — nor `document`, `createImageBitmap`, `ImageData`, `DOMMatrix`, `Path2D` (all `undefined`); D31 option (b) impossible in the Electron we pin. **(2)** A hidden BrowserWindow renders fine: the pinned pdfjs LEGACY build rasterized page 1 of a real image-only PDF at 300 DPI (2550×3301) in ~350 ms with an explicit LOCAL `workerSrc`. **(3)** tesseract.js Node mode consumes image-file Buffers WITHOUT canvas in BOTH runtimes (PNG + JPEG decoded inside the WASM core): confidence 95, near-perfect German incl. umlauts/ß. **(4)** Full split-pipeline e2e proved in the pinned Electron: hidden-renderer render → PNG bytes over IPC → main-side recognize, confidence 94, all six probe words (`Auftragsbestätigung`, `Großmann`, `Bürostühle`, `Schloßallee`, `Özdemir`, `Grüßen`) exact. → D31 (split design). (Phase 38) |
-| R-O2 | Full vendored-asset inventory for offline tesseract.js + licenses + sizes | **RESOLVED** (source inspection + live probes with a `net.Socket.connect` watch installed). **Node-mode inventory:** workerPath defaults to the LOCAL `tesseract.js/src/worker-script/node/index.js`; the WASM core is `require`d from the LOCAL `tesseract.js-core` package (SIMD variant picked at runtime) — both ship INSIDE the app as npm deps, NOT on the drive. **The two runtime-fetch traps:** `langPath` defaults to `https://cdn.jsdelivr.net/npm/@tesseract.js-data/...` (MUST be set to the drive's `ocr/` dir) and the traineddata cache writes into CWD by default (MUST set `cacheMethod: 'none'`). **No-network proof: zero remote connect attempts across every probe.** **Licenses (reviewed per model-policy.md):** tesseract.js 7.0.0 Apache-2.0 · tesseract.js-core 7.0.0 Apache-2.0 · traineddata Apache-2.0. **Shipped sizes:** `deu.traineddata.gz` 1.27 MB + `eng.traineddata.gz` 2.82 MB ≈ 4.1 MB. **Packaged-app caveat:** `worker_threads` cannot load a script from inside `app.asar` → `asarUnpack` tesseract.js + tesseract.js-core, resolve workerPath through `.unpacked` (release-acceptance item; the green gate never packages). → D32. (Phase 38) |
+| R-O2 | Full vendored-asset inventory for offline tesseract.js + licenses + sizes | **RESOLVED** (source inspection + live probes with a `net.Socket.connect` watch installed). **Node-mode inventory:** workerPath defaults to the LOCAL `tesseract.js/src/worker-script/node/index.js`; the WASM core is `require`d from the LOCAL `tesseract.js-core` package (SIMD variant picked at runtime) — both ship INSIDE the app as npm deps, NOT on the drive. **The two runtime-fetch traps:** `langPath` defaults to `https://cdn.jsdelivr.net/npm/@tesseract.js-data/...` (MUST be set to the drive's `ocr/` dir) and the traineddata cache writes into CWD by default (MUST set `cacheMethod: 'none'`). **No-network proof: zero remote connect attempts across every probe.** **Licenses (reviewed per model-policy.md):** tesseract.js 7.0.0 Apache-2.0 · tesseract.js-core 7.0.0 Apache-2.0 · traineddata Apache-2.0. **Shipped sizes:** `deu.traineddata.gz` 1.27 MB + `eng.traineddata.gz` 2.82 MB ≈ 4.1 MB. **Packaged-app caveat:** `worker_threads` cannot load a script from inside `app.asar` → `asarUnpack` tesseract.js + tesseract.js-core, resolve workerPath through `.unpacked` (release-acceptance item; the green gate never packages). → D32. (Phase 38) **⟶ SUPERSEDED IN ITS PACKAGED-APP CAVEAT (measured 2026-07-19 on a real packaged Windows build, DEP-1 P4):** unpacking those two packages is **not sufficient** — the worker's own hoisted deps (`regenerator-runtime`, `is-url`, …) stay inside `app.asar` and cannot be resolved from `app.asar.unpacked`; the uncaught exception **kills the whole app** while `ocrAvailable` still reports true. Pre-existing and version-independent (fails identically on Electron 37); **dev-mode OCR is unaffected** (raster → IPC → recognize proven end to end on Electron 39). Fix bundle = the DEP-1 record's §5 follow-up 2; the rest of this row (inventory, fetch traps, licenses, sizes) stands. |
 | R-O3 | `fast` vs `best` traineddata on real German scans | **RESOLVED** on generated German office-scan pages (150-DPI clean + ~82-DPI/JPEG-q0.45 degraded). **Load-bearing finding: true `tessdata_best` (float) CRASHES the tesseract.js WASM core** (`missing function: DotProductSSE`) — only INTEGER models run, so the real choice is `fast` vs `best_int` (what tesseract.js's own CDN default uses). Clean scan: a dead tie (103/104 words exact for both). Degraded scan: **best_int 3 misses vs fast 7 of 104** — fast garbles the reference number `4711-Ä/2026` and `Jürgen`, best_int keeps both. Cost: ~1.3 s vs ~0.8 s per page, +1.6 MB. **Shipped: `best_int`** (`@tesseract.js-data/{deu,eng}@1.0.0`, `4.0.0_best_int`, sha256 pinned in `runtime-sources.yaml`). The `.gz`-on-drive layout (`langPath` + `gzip: true`) verified end-to-end. (Phase 38) |
 
 ### §-anchor legend (historical plan citations)
@@ -2545,8 +2545,19 @@ adds is the safety machinery:
   384-dim model gains little from a GPU, and the pin keeps ingestion immune to driver flakiness
   and VRAM contention with the chat model.
 - GPU settings (`gpuMode`, `gpuAutoDisabled`, `gpuLastError`, `gpuProbe`) live in `AppSettings`
-  (the possibly-encrypted DB) — fine, because sidecars only ever start post-unlock; every read in
-  `main/index.ts` is still guarded (locked → safe defaults).
+  (the possibly-encrypted DB) — fine, because sidecars only ever start while a workspace session is
+  open; every read in `main/index.ts` is still guarded (locked → safe defaults). **That claim was
+  aspirational until the lock latch (AUD-02/AUD-03, security-model.md "The lock latch"):**
+  `isUnlocked()` is just "the DB handle is non-null", and the DB stays open for the whole
+  multi-second lock *and quit* teardown, so work admitted in that window used to respawn a
+  suspended sidecar, and a model start still hashing a multi-GB weight could spawn `llama-server`
+  *after* the lock finished. What enforces it now: admission goes through `workspaceAdmitsWork()`
+  (`isUnlocked() && !isLocking()`), the latch is armed as the first act of **both** the lock
+  handler and `performShutdown`, and `startModelRuntime` re-checks it plus a session epoch after
+  the hash. Note the safe-default reads above are precisely what kept a stale start from failing
+  loudly on its own. **Residual:** `RuntimeManager.forceRestart` (the GPU-crash auto-fallback)
+  re-checks only the quit latch internally — its workspace check lives at the `main/index.ts`
+  composition seam, so a future caller added elsewhere would not inherit it.
 - CI never touches a GPU/binary: the probe + ladder are covered through the existing
   `SpawnFn`/fetch seams; a real-GPU smoke lives in `tests/manual/gpu-smoke.test.ts`, **skipped
   unless `HILBERTRAUM_GPU_SMOKE` points at a provisioned drive**.
@@ -2874,7 +2885,15 @@ once-timed-out probe cached as "no GPU"). Diagnostics hides the button while the
 toggle is off. **R5 (full-audit-2026-06-30, §39):** the cache `invalidate()` drops only SETTLED probes
 — while a probe is still in flight a re-probe COALESCES onto it rather than spawning a second short-lived
 child, so mashing the button during a slow/cold driver init can't stack one-per-click children for a binary. All GPU decisions happen post-unlock (settings live in the possibly-encrypted
-DB) — fine, since sidecars only ever start post-unlock.
+DB) — fine, since sidecars only ever start while a workspace session is open. That invariant is
+enforced by the **lock latch** (security-model.md "The lock latch — admission during the
+teardown"), not by `isUnlocked()` alone: the DB stays open for the whole lock teardown *and* the
+whole quit teardown, so every content surface admits through `workspaceAdmitsWork()`
+(`isUnlocked() && !isLocking()`), the latch is armed first by both the lock handler and
+`performShutdown`, and a model start whose multi-GB weight hash spans a lock is refused by that
+check plus a session-epoch comparison. The one gap left: `RuntimeManager.forceRestart` re-checks
+only the quit latch internally, so the GPU-crash fallback's workspace check sits at its
+`main/index.ts` composition seam rather than in the manager.
 
 ### §6 Per-OS build matrix (what ships on the drive)
 
@@ -7610,6 +7629,141 @@ benchmark.md + data-contracts (F-35), the coherence invariants in `committed-cat
 consolidated smoke checklist (F-40/Q-2), the user-guide/troubleshooting OCR remedy cross-refs
 (F-05/Q-1), and the swept model docs themselves (F-07/F-08/F-09/F-17/F-20/F-21/F-27/F-37).
 
+### §51 Full audit (2026-07-23) — remediation ledger + close-out
+
+A whole-repo eight-persona audit at baseline `bbf26add` (v0.1.55; suite 4,680/50 across 334 files),
+built on a **complete dedupe index** of every prior ledger row (§46–§50 + the OCR-R record),
+`known-limitations.md`, `BUILD_STATE.md` §5/§6/§8, and the open-issue list, so a known item was
+marked rather than re-reported. Eight finders (product · backend · security · performance · renderer ·
+tests · docs · DX) swept in parallel, prioritising the surfaces newest since 2026-07-17 (the EP-1
+evidence-pack wave, OCR-R, STR-1, the DEP-1/DEP-2 dependency batches, the Gemma 4 QAT manifests);
+**every candidate was handed to an independent adversarial verifier** that had to reproduce the
+misbehaviour or trace the exact failing path before it could be marked confirmed, and — for code
+bugs — determine the blast radius and shipped-tag attribution. The design pass drove the real dev app
+over the Chrome DevTools Protocol, captured all eight screens in both themes via the real in-app theme
+control, and probed computed styles. **Verdict: 0 Critical, 0 High** — 26 confirmed findings
+**AUD-01…AUD-07 (Medium) · AUD-08…AUD-26 (Low)** plus four design observations **DV-1…DV-4**, and one
+refuted candidate + one duplicate-of-known dropped.
+
+Remediated across a **single-branch wave** `fix/audit-2026-07-23-remediation` (the OCR-R/DEP-1
+audit-wave convention: one commit per phase, one PR at close with green `ci-success` — not the
+§46–§49 direct-to-`master` model, which the public-repo rule retired). Phases ran as fresh-context
+sub-agents of this orchestrator session; **the two highest-risk phases (the evidence-review data-loss
+guard and the lock-in-progress latch) each passed an independent adversarial verifier before
+acceptance**, and the design phase passed an **orchestrator visual sign-off in both themes** (it
+failed once and looped). Gate: baseline **4,680/50 → 4,812/50 across 347 files** (+132 tests, +13
+files, skip count unchanged) — typecheck + build green throughout, the single full-suite run at the
+verification phase (weak-box discipline: 8-core / 16 GB box, `--maxWorkers=2` under load). The env-gated
+real-model e2e leg was **skipped — the prepared drive carries a 9 KB stub `llama-server.exe`, not the
+real binary** (a recorded skip, never the gate; e2e is a confidence leg).
+
+**Headline negative results worth recording:** the hard product guarantees re-verified clean — **no
+new `fetch`/net/WebSocket call sites** in main or preload since v0.1.51, the offline guard, vault
+crypto, CSP/permission handlers and the ids-only audit-log discipline all intact, and the EP-1
+HTML/PDF export surface escapes every content string exactly once and parameterises all SQL. The
+confirmed findings clustered, as expected, on the two newest and least-audited surfaces (EP-1 and the
+"Lock now" contract).
+
+**Three findings were understated by the audit and corrected during remediation** (recorded here so
+the disposition is not read as gold-plating): AUD-17's provenance swap also *destroyed* the losing
+export with an ENOENT rename, not merely mislabelled it; the AUD-17 fix as first written left the
+identical defect on the atomic writer's `${dest}.tmp` sibling, which HTML exports use (closed on both
+seams); and **DV-2 as specified was nearly inert** — the recommender keys off machine RAM, not a
+benchmark result, so "no recommendation exists" is unreachable in production and the literal
+"runnable-first only when no recommendation exists" rule left the audited symptom untouched (widened
+to unconditional runnable-first). Two mid-wave findings surfaced by the sub-agents themselves — the
+`result_tables` restore-leg cascade (sibling of AUD-01) and the renderer adopt lock-contract hole
+(renderer-side analogue of AUD-02/03) — were fixed in-wave as sub-phases 1b and 10a/10b rather than
+deferred.
+
+**Working papers survive in git history.** The audit report and the remediation plan were committed
+verbatim at the wave-open commit `13f18f0a` precisely so this close-out loses nothing: the frozen
+report is recoverable via `git show 13f18f0a:docs/audit-report-2026-07-23.md` and the orchestrated
+plan via `git show 13f18f0a:docs/audit-2026-07-23-remediation-plan.md`; the companion handoff ledger's
+fullest state (all per-phase decisions, RED→GREEN evidence, verifier reports and the 47-item
+carry-forward backlog) is at `git show 7dd10e1d:docs/audit-2026-07-23-remediation-ledger.md`, the last
+commit before this close-out deleted it. Finding detail also survives as: this table, the deferral
+register below, the dated 2026-07-23 `BUILD_STATE.md` phase-log entry, and the per-phase commits.
+
+Per-finding disposition (fixed → phase@commit; self-contained — each row restates the finding):
+
+| # | Sev | Phase | Disposition (mechanism / decision) |
+|---|---|---|---|
+| **AUD-01** | MED | P1 `cdd0ee0a` | **fixed** — the documents "Answer without it" undo (a regenerate) ran `DELETE FROM messages`, and `evidence_reviews.message_id` carries `ON DELETE CASCADE`, so it silently destroyed the answer's entire review chain (head, per-block decisions + notes, links, export history); neither restore leg carried it back. Now REFUSED at the one shared `withRegenerateGuard` choke point both channels pass through (caller-supplied `regenerate` over IPC), with the transcript undo disabled-and-explained. Copy names the alternative that exists (ask again as a new message) — reopening does not unblock and there is no in-app review-delete affordance (B-03). RED→GREEN on four legs; adversarial verifier signed off (only two `DELETE FROM messages` in `src/`, the other being the warn-and-count conversation delete; 400-transcript fuzz found no target-row divergence). |
+| **AUD-02** | MED | P2 `aed17ea5` | **fixed** — the interactive "Lock now" runs a multi-second AWAITED teardown before `lock()` nulls the DB, and every admission guard was a bare `isUnlocked()` (= "DB handle non-null"), so a doc-task / translate / image-analyze / import landing in that window was admitted and — the suspends being non-latching — lazily RESPAWNED the multi-GB sidecar the teardown had just killed, outliving the lock. Closed with a `beginLock()`/`isLocking()` latch armed as the handler's first act and a shared `workspaceAdmitsWork()` predicate behind all 15 IPC guards + 3 service-level guards. Verifier enumerated all 128 `ipcMain.handle` registrations — no missed content surface. |
+| **AUD-03** | MED | P2 `aed17ea5` | **fixed** — the model auto-start parked minutes in `computeInstallState` hashing a multi-GB weight, then spawned `llama-server` after the lock completed (the closed-DB cache write is swallowed by design, so nothing failed the pipeline). One shared latch with AUD-02, plus a post-hash re-check of unlocked/not-locking **and an unlock epoch**, so a lock-then-re-unlock spanning the hash refuses too. The teardown's own `requireDb()` is deliberately NOT latched (it writes partial replies, shreds transients, purges vectors, records the `workspace_locked` event). |
+| **AUD-04** | MED | P3 `7245fe75` | **fixed** — `adoptActiveFileTranslation` guarded on `busy`, which is false in every terminal state, so a Translate mount wiped a COMPLETED translation's held output; and never consulting the global doc-task store, plain navigation pulled a Documents-row translation into the panel (Stop then cancelled the foreign task). Guard is now "this store is idle" on BOTH the entry and post-await checks (a rejected drop fails synchronously) plus a foreign-task check. Residual (Documents-row task still adopted after a genuine reload — main tracks no originating surface, benign) recorded in `known-limitations.md`. |
+| **AUD-05** | MED | P4 `af2df369` | **fixed** — under `$ErrorActionPreference = 'Stop'` a `Write-Error` is script-terminating, which made the PowerShell provisioning scripts' tolerant paths dead code: the OCR loop aborted at the first failed file, `Write-Error … ; exit 2` exited 1, and a child's error escaped `prepare-drive.ps1`'s `&` call and killed it before its "a whisper miss is a warning" branch — so on mac/linux, where the whisper family has no prebuilt build, `-WithAssets` aborted before the OCR step on EVERY run. Tolerant/config paths now use `Write-Host -ForegroundColor Red` + explicit `exit`, children are try/catch-wrapped, and `exit 2` fires again; `verify-models.ps1` carried the same bug at an unlisted site. |
+| **AUD-06** | MED | P5 `30ddb88f` | **fixed** — the NUL/BOM hygiene nets' shared extension filter excluded `.sh`/`.ps1`/`.cmd`/`.command` and neither net walked `launchers/`, so the byte-0-sensitive artifacts copied onto every commercial drive were unguarded (a BOM before `#!` silently stops the mac/linux launchers). Filter widened + `launchers/` added to both roots; verified by exclusion that every tracked script/launcher is now inside a net. Test-only; ten teeth checks each planted and removed. |
+| **AUD-07** | MED | P8 `dfeaa442` | **fixed (docs)** — three surfaces framed packaged-app OCR as "wired, verify at release" although the DEP-1 record dated 2026-07-19 measured it **broken and app-killing** (the tesseract.js worker's hoisted deps stay inside `app.asar` and cannot resolve from `app.asar.unpacked`; `ocrAvailable` reports true up to the uncaught exception). Corrected by dated **superseding notes** on the dated records and rewritten present-tense guidance in `known-limitations.md`/`packaging.md`/`troubleshooting.md`, plus two stale surfaces the finding had not named and the durable OCR-R deferral the register points at. The DEFECT is untouched — the fix bundle stays registered (BUILD_STATE §5 item 16(b)); **dev-mode OCR is unaffected**, proven end-to-end. |
+| **AUD-08** | LOW | P7 `064c35b5` | **fixed** — the source-context modal joined consecutive same-segment chunks without stripping the chunker's ~80-token overlap, so a byte-exact ~450-char run appeared twice. De-overlapped on join, mirroring the summarization path; a test counts occurrences of the actual duplicated substring, computed independently of the implementation. |
+| **AUD-09** | LOW | P7 `064c35b5` | **fixed** — the review-summary export disclosure kept `aria-expanded="true"` after the async freshness verdict gated (disabled) the panel, so screen-reader users heard "expanded" on a dead control and a re-enable re-opened it. Disclosure state resets when `exportBlocked` flips true. |
+| **AUD-10** | LOW | P7 `064c35b5` | **fixed** — `drawerOpen` was never reset on leaving narrow mode, so the evidence drawer re-opened with a focus trap the next time the window was narrowed (Windows snap triggers it trivially). Reset in the media-query "leave narrow" branch. |
+| **AUD-11** | LOW | P7 `064c35b5` | **fixed** — the evidence-pane reveal control said "and N more sections" for SOURCE cards, contradicting the adjacent "{shown} of {total} sources shown". Dedicated `review.evidence.more.one/.other` key pair, EN + DE. |
+| **AUD-12** | LOW | P6 `1f793bad` | **fixed** — opening a documents conversation loaded review-chip state with one IPC round-trip per candidate message, serially (40 measured on a 40-answer conversation), each doing a full item load + freshness recompute. New batch channel `evidence:summariesForConversation` returns every review in two SQL statements at any length, same summary shape. |
+| **AUD-13** | LOW | P6 `1f793bad` | **fixed** — the three bulk review actions fanned out into N writes each paying a redundant head re-read + stamp + item re-read, and **a failure part-way left the review half-swept**. New `evidence:bulkAction` applies the change in one transaction; atomicity proven by an injected SQLite trigger firing on the sweep's last statement (the genuine part-way case). |
+| **AUD-14** | LOW | P6 `1f793bad` | **fixed** — `evidence_reviews.conversation_id` (denormalized to serve the delete-confirm COUNT and the chip batch) had no index, so both reads SCANned every review. Additive `idx_evidence_reviews_conversation`; EXPLAIN-QUERY-PLAN assertions name the index. |
+| **AUD-15** | LOW | P6 `1f793bad` | **fixed** — the pack-export atomic tail ran multi-MB write + fsync + full read-back synchronously on the Electron main thread. Ported to `fs.promises` with the tmp→fsync→hash-off-disk→rename contract byte-for-byte unchanged; proven by instrumented `node:fs`/`node:fs/promises` recording zero sync calls and the exact `open→write→sync→close→readFile→rename` order, `close` before `rm` on both failure paths. |
+| **AUD-16** | LOW | P7 `064c35b5` | **fixed** — the PDF print-source cleanup ran in a catch whose body was only a comment, in a file importing no logger, so on Windows an AV/indexer handle left an unlogged plaintext residue. Now retries once and logs ids-only if it still fails; the honest residue window is documented in `security-model.md`. |
+| **AUD-17** | LOW | P7 `064c35b5` | **fixed** — two concurrent same-destination exports could produce a pack whose bytes were review A's but whose provenance row was review B's; the pre-fix behaviour also failed the loser outright with an ENOENT rename. Closed on BOTH seams (the PDF print source AND the atomic writer's `${dest}.tmp`, which HTML exports use) with one per-export token helper so they cannot drift apart. The destination itself stays last-writer-wins by design, stated explicitly in the code and three docs. |
+| **AUD-18** | LOW | P5 `30ddb88f` | **fixed** — the packaged-CSP build guard computed `built` from a hardcoded output path and gated BOTH real security assertions behind `skipIf(!built)`, so any output-layout drift degraded it to a silent green skip. CI positive control added, plus a page-set pin closing the half the finding missed (an ADDED renderer page left `built` true and its baked CSP never inspected). |
+| **AUD-19** | LOW | P9a `15eae58f` | **fixed** — the freshness drift fingerprint hand-enumerated `CoverageInfo`'s fields, so a future field would be silently excluded from drift detection and an export could proceed without the outdated/acknowledge gate firing for it. Both a `satisfies Record<keyof CoverageInfo, unknown>` constraint and a keys-parity test; the persisted fingerprint proven byte-identical (captured pre-edit, hard-coded, then changed — a different canonical string would lapse every acknowledgement already stored in a workspace). |
+| **AUD-20** | LOW | P5 `30ddb88f` | **fixed** — `script-drift` validated the `.ps1` drive-builder's runtime matrix only, leaving the `.sh` twin unguarded (a mac/linux-built drive could be gated against a stale matrix and wrongly judged sellable). The `.sh` matrix is now parsed and compared, plus the guards handed over from P4 (no `Write-Error` in the provisioning `.ps1`; the mismatch delete stays nested in its size guard; both call sites still pass the size argument — that guard fails open). |
+| **AUD-21** | LOW | P8 `dfeaa442` | **fixed** — `data-contracts.md` carried four `docs/rag-design.md`-style links left by the 2026-07-12 move that resolved to non-existent `docs/docs/…`. Fixed to sibling-relative, and the hygiene link-check extended to `docs/*.md` (181 links across 19 files, zero broken) to close the relocation class. |
+| **AUD-22** | LOW | P8 `dfeaa442` | **fixed** — `model-manifests/README.md` omitted the `translation/` role directory (TranslateGemma), which exists and ships. One bullet added. |
+| **AUD-23** | LOW | P8 `dfeaa442` | **fixed** — the README chat-model table listed 18 of 20 downloadable manifests, omitting Qwen3.5 0.8B Q6_K and 2B UD-Q4_K_XL. Both rows added with honest §9 verdicts (0.8B a surviving fast-tier candidate; 2B FAILED its bar) — which forced correcting the table's own "Min RAM is each model's hard floor" prose, since the two fast-tier manifests carry the 4B's tier-aligned line. |
+| **AUD-24** | LOW | P4 `af2df369` | **fixed** — a checksum-mismatch redo resumed onto the corrupt file (`curl -C -`), producing an unsatisfiable range (HTTP 416) and a no-op repair. Now deletes first, but ONLY when the on-disk bytes already reach the manifest's `size_bytes` — a shorter file is a resumable cross-run partial and is left alone, because resuming a part-downloaded multi-GB weight is a documented feature; with no `size_bytes` recorded, pre-fix behaviour is kept. Verified against a local range-aware server (complete-but-wrong → full refetch; 1000-of-4096 partial → `Range: bytes=1000-` → 206). |
+| **AUD-25** | LOW | P9a `15eae58f` | **fixed (conservative)** — 3 genuinely-dead exports pruned of 39 value-export candidates (a runtime-path helper duplicating a live pair, a scope-popover leftover, a bypassed skill-loader alias), each reference-grepped repo-wide first. `nodeVectorSearch` KEPT (the documented rag-design fallback, per the audit's own verifier correction), the OCR preload bridge type KEPT (dead only because its consumer hand-duplicates the shape — deleting it removes the only thing that can close that drift), and ~34 live-but-over-exported values left as reachable API. |
+| **AUD-26** | LOW | P9a `15eae58f` | **fixed (validate on next CI run)** — CI tested on Node 22.x / npm 10.9, below the repo's own `engines.npm >= 11` floor, while the release legs build and full-suite-test on Node 24 — so the npm floor was dead policy and the release Node major was never gated. CI now runs a matrix of both majors on both OSes with `corepack enable` (so `npm@11.6.2` installs). `ci-success` aggregation is unchanged and still correct. **Cannot be validated locally** — the wave-close PR run is the proof; rollback is a single-file revert. |
+| **DV-1** | design | P9b `251936f7` | **fixed** — the Models context-size and Translate language-bar `<select>`s carried no class, rendering UA defaults (Arial, `radius 0`, UA border/background — worst in dark, a light-grey box on a near-black card). A shared `.select` treatment puts all four picker-style selects on `--font-sans`/`--radius-sm`/`--border-strong`/`--surface`/`--text`; computed styles equal the tokens exactly in both themes (orchestrator eyeball, both themes), and height 19→30px clears the 24px target minimum. |
+| **DV-2** | design | P9b `251936f7` | **fixed (rule widened)** — the model picker led with un-runnable models: a fresh 16 GB workspace opened on three RAM-warned cards of the first four. The plan's rule proved nearly inert (the recommender keys off machine RAM, so a fresh workspace has a recommendation), so runnable-first is unconditional; installed-first stays primary, `recommendModelIdByRam` untouched, display order only. The ★ card is runnable by construction so it can only rise (observed 21→15); first RAM-warned card moved 1→16 of 23 (orchestrator eyeball, both themes). |
+| **DV-3** | design | P9b `251936f7` | **fixed** — nine ASCII quote closers in the German catalog (the Images empty-state hint plus eight more) closed with `„…“`; a guard keeps German catalog values balanced. English untouched and asserted. |
+| **DV-4** | info | — | **no action** — the Skills auto-fire card's `h2` duplicates its switch label; arguably intentional (the switch needs its own a11y label). Recorded, not scheduled. |
+| **result_tables cascade** | mid-wave | P1b `d8ff7f71` | **fixed** — `result_tables.message_id` carries the same `ON DELETE CASCADE` as the review chain, and `restoreMessage` replayed only the `messages` row, so on the two restore legs an answer's structured "Export CSV" table came back permanently gone and the derived `hasResultTable` silently read false. The snapshot now captures and replays those rows; a SUCCESSFUL regenerate still drops the table, which is correct. All 24 FKs enumerated: exactly two reference `messages(id)`, no third. Found by the Phase-1 verifier. |
+| **renderer adopt lock-contract** | mid-wave | P10a+b `7dd10e1d` | **fixed** — the text-path adopt (`adoptActiveJob`) had AUD-04's shape (keyed off a job id that is null in every terminal state), and NEITHER translate store captured a generation token around its adopt `await`, so a lock purge landing in that window re-seeded purged plaintext into the store after the vault re-encrypted (not rendered — the screen unmounts — but resident until the next purge). The renderer-side analogue of AUD-02/03. Both stores fixed as a pair (entry-token capture + post-await re-check, emptiness re-check kept alongside for the synchronous reject paths); the **renderer adopt contract** is recorded in `security-model.md`. |
+
+**Deferral register (registered before the working papers were deleted).** The wave closed a 47-item
+carry-forward backlog: 5 items were fixed in-wave (the two mid-wave findings above; the AUD-24
+fail-open guard hardened into a `script-drift` teeth check; the `forceRestart` GPU-crash re-spawn
+closed at the composition seam during the P2 loop). The remainder are **deferred-with-registration**,
+by area:
+- **EP-1 review/pack follow-ups:** no in-app review-delete affordance (the AUD-01 copy names the
+  alternative because of it); "Try again" has no renderer review gate (unreachable today); a dead
+  `evidence:getForMessage` channel + preload method after AUD-12; the batch channel still recomputes
+  freshness per review; ordinary review edits still fan out non-atomically (the AUD-13 shape one level
+  down); the AUD-01 refusal logs at ERROR (content-free).
+- **Provisioning / packaging:** `build-commercial-drive.ps1` still carries the `Write-Error` hazard
+  and bare-`&` child calls (out of the audit's stated scope); the archive-download path has AUD-24's
+  416 trap; four manifests carry no `download.size_bytes` so AUD-24 stays open there; runtime binary
+  names are not pinned canonically; no CRLF hygiene tooth beside the BOM one.
+- **Renderer lifecycle:** `lib/skillruns.ts` has the same unguarded adopt-across-await shape and is
+  **not lock-purged at all** (content-free by design — a lifecycle gap, not resident plaintext); no
+  reconciliation of the main↔renderer divergence a failed cancel creates; the global doc-task store
+  is not re-adopted after a reload (its Cancel affordance is lost while the lane stays held).
+- **Maintainability / lock hardening:** the `.select` treatment is opt-in (guarded four files);
+  `.review-relation select` is now the odd one out; `getAppStatus`/`getWorkspaceState` still report
+  unlocked mid-teardown (fail-closed); a second concurrent `lockWorkspace` rejects with a raw vault
+  string; `loadResultTable`/`saveResultTable` have no rowid tiebreak / dedupe; the two `engines`
+  manifests disagree on the npm floor.
+- **Owner decisions (open):** whether `user-guide.md` §7 should carry a "packaged OCR currently
+  crashes" caveat or wait for the fix bundle to land first (**B-30**), and whether the
+  `architecture.md` TEST-N1 ledger row should get a superseding note for the CI Node change (**B-40**).
+
+**§-anchor legend.** Commits, code comments, tests, and BUILD_STATE cite this audit as
+`AUD-nn` / `DV-n` (or the bare id beside a qualified cite); all 26 finding ids, the four design
+observations, and the two mid-wave findings resolve to the table above. This doc's § numbers collide
+across records (deliberate, never renumbered) — "§51" means THIS section, the 2026-07-23 ledger
+directly following §50. **Working papers:** the frozen report and plan are recoverable via
+`git show 13f18f0a:docs/audit-report-2026-07-23.md` / `…-remediation-plan.md` (committed unchanged at
+wave-open), and the handoff ledger's fullest state via
+`git show 7dd10e1d:docs/audit-2026-07-23-remediation-ledger.md`. The design "as built" lives where
+each phase folded it: the EP-1 record's AUD-01 and AUD-12…AUD-15 amendments and the result-tables
+record's regenerate-restore amendment (this doc), the lock-latch and quit-path clearing rules +
+`forceRestart` gap + the renderer adopt contract in `security-model.md`, the async-export durability
+note and the two batch-channel shapes in `data-contracts.md`, the shared `.select` treatment +
+picker-order rule + CDP eyeball-harness note in `design-guidelines.md` §6/§11.14, the widened hygiene
+nets + bare-`isUnlocked()` allowlist in `repo-hygiene.test.ts`, the CI matrix record in `packaging.md`,
+and the swept docs themselves (AUD-07/21/22/23).
 ### §20 Span-transform engine (beta-feedback-2026-07 Phase 6, decision D74)
 
 The C-wave of the beta-feedback wave (#22 LLM-located redaction, #23 targeted edits) asks for one
@@ -8128,6 +8282,25 @@ action in `MessageActions`, rendered only on answers with `hasResultTable`. Note
 produced before 2026-07-05 carry no table (no backfill — the table is the answer's artifact);
 only the bank format path emits one so far (invoice port = §6); tables key off messages, so no
 document-purge hook is needed.
+
+**Post-wave amendment (2026-07-23) — the regenerate restore legs replay the table.**
+`result_tables.message_id` is a foreign key with `ON DELETE CASCADE`, so the regenerate
+`DELETE FROM messages` takes the answer's table with it. That is CORRECT when a regenerate
+succeeds — the answer is genuinely replaced and the new one brings its own table — but the two
+legs that put the OLD answer back (a non-abort generation failure, and a Stop before the first
+token) replayed only the `messages` row, so the reply returned with its table permanently gone:
+the derived `hasResultTable` EXISTS join then read false and the Export CSV affordance silently
+vanished from a turn the app had just reported as fully restored, unreproducible short of
+re-running the model. `deleteLastAssistantMessage` now captures the rows into the `DeletedMessage`
+snapshot before the delete and `restoreMessage` replays them, message row first so the foreign key
+resolves. Two shape notes that matter: `message_id` carries only an INDEX, **not** a UNIQUE
+constraint, so the "ONE tabular artifact per message" wording above is an intended invariant rather
+than an enforced one — all rows are captured and replayed in `created_at ASC, rowid ASC` order; and
+the replay is deliberately **not** in one transaction with the message insert, because a rollback
+would discard the ANSWER restore too, which is strictly worse (the `saveResultTable` posture: a
+table that cannot persist never blocks its answer). A replay failure logs ids and counts only.
+Distinct from the evidence-review cascade, which is REFUSED outright rather than replayed — a
+review is irreplaceable human work-product, a result table is a derived artifact.
 
 ### §5 Phase 3 v1 — TableRequest parse + derived-column enrichment (as built + conscious deferrals)
 
@@ -9049,6 +9222,23 @@ re-changed source/answer lapses a stale acknowledge; §6). The wave also stamped
 `Citation.documentId?`/`chunkId?` at the six persisted-citation constructors that existed
 (enumerated in data-contracts — nothing enforces the stamp on a future constructor).
 
+That cascade cuts both ways, and the second edge was missed until AUD-01 (see §8): **any**
+delete of a `messages` row silently takes the whole review chain with it, and a
+**regenerate** deletes one — the chat "Try again" and the skill "Answer without it" undo both
+re-answer the last turn by dropping the previous assistant reply. Conversation deletion was
+built to warn and count first (D-2); the message-level replace had no such guard, and the
+snapshot its failure/Stop restore paths replay covers the `messages` row only, so even those
+"lose nothing" legs brought the answer back without the human's decisions, notes, links and
+export history. The fix is a hard refusal at the ONE shared regenerate choke point
+(`withRegenerateGuard`, used by the chat channel and all seven RAG call sites): it resolves
+the row the delete would target (`getRegenerableAssistantMessageId` — the single owner of
+that query, which `hasRegenerableAssistantReply` and `deleteLastAssistantMessage` also
+follow) and throws the localized `main.chat.reviewBlocksRegenerate` when
+`hasReviewForMessage` says a review hangs off it. Main-side because `regenerate` is
+caller-supplied over IPC; the renderer additionally renders the "Answer without it" undo
+DISABLED-with-a-reason on a reviewed turn (never hidden — the review chip sits in the same
+action row).
+
 ### §3 Journeys / UI (as built, condensed)
 
 Entry points (spec §9): the message action row gains **Review evidence / Continue review**
@@ -9137,7 +9327,18 @@ context (system fonts + inline styles only; an **empty-span `headerTemplate`** m
 suppress Chromium's default date/title header); the print source must be a real file with
 an **`.html` extension** (Chromium sniffs file:// MIME from it; a data: URL has a ~2 MB
 cap) — it is a transient `.print.tmp.html` SIBLING of the user-chosen destination (already
-sanctioned plaintext ground, never an OS temp dir), removed in the same `finally`; the
+sanctioned plaintext ground, never an OS temp dir), removed in the same `finally`. **Its
+name carries the export's own pack id** (`${dest}.<packId token>.print.tmp.html`, minted by
+`export.ts`'s `printSourcePath`; the atomic writer's `packTmpPath` mints the `.tmp` sibling
+by the same rule) — AUD-17: a name derived from the DESTINATION alone was shared by two
+concurrent exports saving to one path, and `loadFile` resolving is not the moment Chromium
+is done with the document, so an overwrite landing in a later main-process turn was printed
+successfully. Both exports then "succeeded" while one wrote the OTHER review's pack under
+its own `evidence_exports` row. Two same-destination exports must therefore share no
+transient at all; only the destination itself is shared (later rename wins, as any second
+save to one path does). Removal is retried once and a still-present source is logged, ids
+only (AUD-16) — a failed cleanup used to leave a plaintext copy of the pack with no trace.
+The
 real-Electron smoke runner needs a **`window-all-closed` no-op** (Electron's default quit
 otherwise races the print) and an **isolated `--user-data-dir`** (profile singleton); the
 pdfjs v6 verification path needs the legacy build + a DOMMatrix polyfill under Node, with
@@ -9216,6 +9417,71 @@ full Handoff Log P0–P5 at the plan's git-show pointer; dated entries verbatim 
 | P4 | `feat/ep1-p4-freshness` (#71) | Freshness engine, Outdated lifecycle, export refresh, source-in-context; `8d22869`+`ccfab29`; 0 blockers, 2 SHOULD-FIX (**value-bearing acknowledge fingerprint** — state literals let a re-changed source revive a stale ack). 4519→4571 |
 | P5 | `feat/ep1-p5-polish` (#72) | Selections, pane filter, German native pass, a11y audit (§11.13), perf tripwire, back-to-conversation; `58754e01`+`8745d1bf`; **1 BLOCKER: the back-handoff slot survived `askSelectedDocuments` — an old conversation hijacked "Ask these documents"**; slot now cleared on every chat mount. 4571→4595 |
 | P6 | `feat/ep1-p6-pdf-closeout` | Stage A (PDF, plan §11 item 1): `30826191`+`a3b4d8b8` — print harness, extension-driven format, +30 tests incl. the real-Electron smoke. Two review rounds (2 independent reviewers); **the reviewers disagreed on the pack's format self-description line** (a `.pdf` artifact whose cover/Integrity said "Self-contained HTML" — defect vs golden-frozen surface); the orchestrator adjudicated it a SHOULD-FIX → render once post-dialog with the effective format in the model, exactly one line branches, goldens stayed green un-regenerated as the neutrality proof. 4595→4625. Stage B: this retirement (docs only) |
+
+**Post-wave amendment — AUD-01 (2026-07-23): a regenerate may not destroy a review.** D-2
+resolved the CONVERSATION-delete cascade (warn + count) but nothing resolved the
+MESSAGE-level one: a regenerate deletes the last assistant reply, the `messages` FK cascades
+that delete through `evidence_reviews` → items → links and → exports, and none of it is in
+the restore snapshot — so both the failed-generation restore and the Stop-before-first-token
+restore returned the answer without the review. Resolution: **refuse, do not confirm**. There
+is no per-turn confirm surface in the transcript, and a "delete your review to re-answer"
+dialog would offer to destroy work the app has no way to give back (there is no
+review-delete affordance in the UI at all), so the destructive turn is simply refused at the
+shared choke point with copy that names the real alternative — ask the question again as a
+new message, which keeps both the reviewed answer and its review. Renderer half: the
+"Answer without it" undo renders disabled + explained rather than hidden. Extending the
+restore snapshot to carry the review chain was considered and rejected: much larger, and it
+would still leave every unguarded caller destructive.
+
+**Post-wave amendment — AUD-12…AUD-15 (2026-07-23): the surface got batched, indexed and
+taken off the main thread.** Four low-severity findings, all on this surface, all shipped in
+v0.1.53–v0.1.55, all of the same family: work that is naturally ONE operation was issued as
+N.
+
+- **AUD-12 — chip state per message → per conversation.** Opening a documents-mode
+  conversation read the transcript's review chip state one candidate answer at a time, each
+  read a separate IPC round trip AWAITED in sequence, and each one main-side a full item-row
+  load plus a freshness recompute. Latency therefore grew with the conversation's history,
+  and because the renderer committed the whole batch only after the LAST round trip resolved,
+  the chips appeared at the speed of the slowest one. The batch channel
+  (`evidence:summariesForConversation` → `listEvidenceReviewSummariesForConversation`) answers
+  for the whole conversation in TWO statements at any length: one indexed head read, one join
+  for the item rows the gates derive from. The per-message channel stays — a freshly created
+  review still reads through it, and the two are pinned element-for-element identical by
+  test. Beyond latency the single commit shrinks a real window: while a reviewed turn's chip
+  state is unknown the transcript renders the "Answer without it" undo as enabled, so the
+  fewer render passes spent in that state the better (main refuses the destructive action
+  outright regardless — the AUD-01 amendment above).
+- **AUD-13 — bulk sweeps are one transaction.** The three sanctioned conservative bulk
+  actions (§3) walked the item list renderer-side and queued a per-item patch, which flushed
+  as N individual writes — N redundant ready-guard head re-reads, N head activity stamps, N
+  item re-reads. The user-visible half was worse than the waste: a crash or a failing write
+  part-way through left the review HALF-swept, a state no user action can produce and none
+  can explain. Now one named command (`EvidenceReviewBulkAction`) crosses
+  `evidence:bulkAction` and main applies it as ONE `UPDATE` plus one head stamp inside one
+  transaction, returning the refreshed items. The SQL predicates mirror the tolerant row→DTO
+  normalizers exactly (`kind <> 'selection'` rather than `kind = 'block'`, because only the
+  literal `'selection'` reads as a selection; the decided/undecided split is spelled as the
+  five decided literals, because everything else normalizes to `not_reviewed`), so the sweep
+  selects precisely what the per-item path selected. The store flushes pending per-item edits
+  BEFORE the sweep, so a still-debounced decision can never land afterwards and silently undo
+  part of it. Atomicity is proven by injecting a failure at the sweep's LAST statement — the
+  head stamp — and asserting not one decision and not the activity stamp moved.
+- **AUD-14 — `idx_evidence_reviews_conversation`.** `evidence_reviews.conversation_id` is
+  denormalized onto the head row purely so conversation-scoped reads need no join, but it had
+  no index: the D-2 delete-confirm COUNT scanned every review row in the workspace, and the
+  AUD-12 batch would have too. The additive index (same ensure-on-open idiom as the rest of
+  the schema, so existing workspaces get it) makes both index SEARCHes.
+- **AUD-15 — the export tail runs off the synchronous fs API.** The atomic-write contract
+  (tmp sibling → fsync → hash the bytes read BACK off disk → rename) was correct but
+  synchronous, and it runs on the Electron main thread, so a multi-megabyte pack froze the
+  whole process — every window, every pending IPC reply — for the duration of the tail, worst
+  on the slow USB drives this app targets. Ported to `fs.promises` with the fsync taken
+  through the FileHandle, mirroring the image-history store/open path. The durability
+  contract is unchanged: same tmp sibling, same fsync BEFORE the rename, same hash of the
+  on-disk bytes. The handle is closed on every path including failure — on Windows an open
+  handle keeps the tmp file locked and would defeat the cleanup that restores the "no file,
+  no row" invariant. The transient print-source write in the PDF harness moved with it.
 
 ### §-anchor legend (historical spec/plan citations)
 
@@ -9325,7 +9591,7 @@ Translate handoff · P3 `0687a437` docs truth · P4 `f8f3dc29` backend hardening
 ### Registered deferrals (owner follow-ups)
 
 1. **Mid-session OCR-asset refresh** (translator-#40 analogue or a "Check again" affordance on the `ocrMissing` banner) — needs an owner UX call; until then: restart after installing assets (documented).
-2. **Packaged OCR smoke, recognition leg** — the wave's build machine carries no `*.traineddata.gz`; the CSP-exposed rasterizer leg WAS verified inside a packaged build (P5). Run the full `tests/manual/ocr-smoke.test.ts` flow on an asset-carrying drive before the next release.
+2. **Packaged OCR smoke, recognition leg** — the wave's build machine carries no `*.traineddata.gz`; the CSP-exposed rasterizer leg WAS verified inside a packaged build (P5). Run the full `tests/manual/ocr-smoke.test.ts` flow on an asset-carrying drive before the next release. **⟶ SUPERSEDED (2026-07-19, DEP-1 P4): this deferral FIRED and the answer is a crash.** The packaged smoke was run and packaged OCR **kills the whole app** — the `asarUnpack` list omits the tesseract.js worker's hoisted deps (`regenerator-runtime`, `is-url`, …), which stay inside `app.asar` and cannot be resolved from `app.asar.unpacked`, while `ocrAvailable` still reports true. Pre-existing and version-independent; dev-mode OCR unaffected. **Do not re-run this as a release-acceptance step** — it is blocked behind the fix bundle registered as follow-up 2 of the DEP-1 record ("Dependency remediation — design record (wave DEP-1, PR #77)" §5), below.
 3. **macOS/Linux packaged CSP + OCR smoke** (P5 measured Windows).
 4. **BE-7 memory profile** of a real 300+-page scan (manual, real assets) — confirms `page.cleanup()` keeps the hidden renderer flat.
 5. **`renderer/ocr/main.ts` pdfjs-side automated tests** (audit test-gap #4; the P5 harness covers the protocol level).

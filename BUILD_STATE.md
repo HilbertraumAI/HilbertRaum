@@ -19,6 +19,9 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-07-23 — **Full-audit 2026-07-23 remediation wave CLOSED (branch `fix/audit-2026-07-23-remediation`, PR at close): all 26 confirmed findings (0 Critical / 0 High / 7 Medium / 19 Low) + 3 actionable design observations Fixed, plus two mid-wave findings the sub-agents surfaced; the whole 47-item carry-forward backlog dispositioned.**_
+Outcome only — the durable per-finding record is **`docs/architecture.md` §51 "Full audit (2026-07-23) — remediation ledger + close-out"** (self-contained: each row restates its finding; `AUD-nn`/`DV-n` citations resolve there; the §-anchor legend points at the working papers in the wave-open commit). ONE branch, one commit per phase (P0 `13f18f0a` wave-open → P10a/P10b `7dd10e1d`; P11 = this close-out), single PR. Gate: baseline **4,680/50 → 4,812/50 across 347 files** (+132 tests, +13 files, skip count unchanged), typecheck + build green throughout; the full suite ran once at the verification phase (`--maxWorkers=2`, weak-box). The two highest-risk phases (AUD-01 data-loss guard, AUD-02/03 lock latch) each passed a fresh-context adversarial verifier; the design phase passed an orchestrator eyeball in both themes (it failed once and looped). e2e **skipped — the prepared drive carries a 9 KB stub `llama-server.exe`** (recorded, not a failure). Working papers DELETED (`git rm` after a zero-reference sweep; full text recoverable via `git show 13f18f0a:` for the report + plan and `git show 7dd10e1d:` for the handoff ledger). The wave's dated OPENED entry + full phase log moved verbatim to the top of [`docs/build-log.md`](docs/build-log.md); CHANGELOG "Fixed"/"Changed"/"Security" entries added. **Two owner decisions left open** (registered in §51's deferral register): whether `user-guide.md` §7 should carry a "packaged OCR currently crashes" caveat now or wait for the fix bundle (B-30), and whether the `architecture.md` TEST-N1 row needs a superseding note for the CI Node change (B-40). **AUD-26 CI change (Node 22.x+24.x matrix + `corepack enable`) cannot be validated locally — the PR run is its proof; rollback is a single-file revert.**
+
 _2026-07-23 — **Issue #84 FIXED (branch `fix/issue-84-fts-timing-budget`): the CODE-4 FTS-delete timing test no longer flakes on starved CI runners — bound 100 → 500 ms + an explicit 60 s per-test timeout for the 50k-corpus seeding.**_
 The 100 ms budget ("wide CI headroom" over the ~3 ms post-fix measurement) flaked 4× in 5 days across both OS legs in two modes: the timing assertion itself (112.57 ms, ubuntu, PR #83's first run) and the whole-test 15 s vitest timeout during `seedLargeCorpus` (windows 2026-07-19 DEP-1-merge run; windows again in PR #85's second run). Fix per the #84 proposal, test-only: the bound rises to **500 ms** (still fails the ~3 500 ms scan-regression signature by 7×; the sibling EXPLAIN-QUERY-PLAN assertions remain the noise-free structural guard that the AD/AU triggers stay rowid-targeted), and the timing `it()` gets an explicit **60 s** timeout so seeding can't hit the global 15 s budget on a slow runner. No src change; the regression the test guards is unchanged in detectability.
 
@@ -1749,8 +1752,13 @@ tag triggers the release workflow's draft build).
     on the `ocrMissing` banner — owner UX call. (b) **packaged OCR smoke, recognition leg** —
     the wave's machine carries no `*.traineddata.gz`; the CSP-exposed rasterizer leg WAS
     verified inside a packaged build (P5 probe). Run the full `tests/manual/ocr-smoke.test.ts`
-    flow on an asset-carrying drive before the next release. (c) **macOS/Linux packaged CSP +
-    OCR smoke** (P5 measured Windows only). (d) **BE-7 memory profile** of a real 300+-page
+    flow on an asset-carrying drive before the next release. **SUPERSEDED 2026-07-19 (DEP-1 P4):
+    this deferral fired and the answer is a CRASH** — packaged OCR kills the whole app (the
+    `asarUnpack` list omits the worker's hoisted deps, which stay inside `app.asar`) while
+    `ocrAvailable` still reports true; pre-existing, version-independent, dev mode unaffected.
+    **Do NOT run this smoke as a release step**; it is blocked behind item 16(b)'s fix bundle.
+    (c) **macOS/Linux packaged CSP + OCR smoke** (P5 measured Windows
+    only). (d) **BE-7 memory profile** of a real 300+-page
     scan (confirms `page.cleanup()` keeps the hidden renderer flat). (e) **pdfjs-side
     `renderer/ocr/main.ts` automated tests** (audit test-gap #4; the P5 harness covers the
     protocol level). (f) **PreviewModal `ocrInfo` line renderer test** and a

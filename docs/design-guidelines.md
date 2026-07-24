@@ -236,6 +236,14 @@ The current dark palette survives as the dark theme (lightly tuned per §4.3).
 - **Inputs / composer.** Surface fill, 1px `--border-strong`, `--radius-sm`, 36–40px min
   height. Composer auto-grows; Enter = send, Shift+Enter = newline. Never remove the focus
   outline.
+  - **Native `<select>` carries the same treatment — via the shared `.select` class.** A
+    classless `<select>` renders in the user agent's own skin (Arial, square corners, UA
+    border and fill), which reads as foreign on both themes and ignores §4.4 typography. The
+    one `.select` rule in `styles.css` maps it onto `--font-sans` / `--text-sm` / `--text` /
+    `--surface` / 1px `--border-strong` / `--radius-sm`, at the UA's compact footprint with a
+    28px floor so the control still clears the 24×24 target minimum (§9). Keep the native
+    element — a dropdown is not worth a custom widget — and give every new picker `<select>`
+    the class. See §11.14.
 - **Cards.** `--surface`, `--shadow-1`, `--radius-md`, `--space-5` padding. No nested cards.
 - **Badges / status pills.** `--radius-full`, `--text-xs` 500, icon + word, three tones
   (neutral / success / warning-error). Never color-only dots.
@@ -937,6 +945,75 @@ App-LEVEL one-shot-slot test: review → back → Documents → "Ask these docum
 the FIX-1 blocker repro, mutation-verified), `reviewSession.test.ts` selection token-race
 legs (post-purge create/delete + post-switch create), `evidence-review-open-perf.test.ts`
 (spec §26 tripwire + numbers above).
+
+### 11.14 Token-aligned `<select>`, runnable-first picker order, German closers (IMPLEMENTED 2026-07-24)
+
+_A small **renderer + DE-catalog only** polish batch closing three findings from a design
+review of the shipped UI (DV-1, DV-2, DV-3). No IPC, schema, persistence, or main-process
+change; nothing here touches the model recommender. Code comments cite this section as **§11.14**._
+
+1. **DV-1 — a `<select>` with no class is a `<select>` outside the design system.** The AI-Model
+   context-size picker and the Translate language bar rendered in Chromium's own control skin.
+   Measured over CDP on the running app, both themes: `font-family: Arial` (not `--font-sans`),
+   `border-radius: 0px` (not the 6px `--radius-sm`), border `#767676` light / `#858585` dark
+   (not `--border-strong` `#6b7383`), background `#ffffff` / `#3b3b3b` (dark: not the `#171a21`
+   `--surface`), colour `#000000` / `#ffffff` (not `--text`). After: every one of those five
+   properties equals its token in both themes, and the control grew 19px → 30px, which is what
+   put it over the 24×24 target minimum (§9 / WCAG 2.5.8) it had been failing.
+   **Rule this records:** a control that ships as a bare HTML element is not "unstyled", it is
+   styled *by the browser* — give it the role tokens or it will read as a foreign object on
+   both themes. The treatment is the **opt-in `.select` class** (§6 Inputs), deliberately not a
+   bare-element `select { … }` rule: the class keeps the blast radius on surfaces that were
+   actually eyeballed. The cost of that choice is that a select without the class still bypasses
+   the system, so `tests/unit/select-token-treatment.test.ts` guards it per FILE — the rule's
+   token set, plus "every `<select>` in these four screens carries the class". **All four
+   picker-style selects moved together on purpose:** the Documents translate modal renders the
+   *identical* from/to language pair as the Translate screen, so styling only one of them would
+   make the same control look different on two routes to the same task. `.review-relation select`
+   (evidence review) keeps its own older, lighter treatment — folding it in is a real restyle of
+   a review-screen control and wants its own visual pass.
+2. **DV-2 — "can this computer run it" outranks alphabetical.** The chat picker fell back to
+   catalog (alphabetical) order once the installed/not-installed key tied, so on a 16 GB machine
+   three of the first four cards carried a "Needs at least 20/24 GB RAM" warning while the usable
+   models sat below the fold. `orderPickerModels` (`ModelsScreen.tsx`) adds **runnable-first as
+   an unconditional second key**, with installed-first still PRIMARY (the installed/needs-download
+   boundary is a labelled subheading, so runnability may only reorder cards *within* a group).
+   Runnability reads `insufficientRam`, the SAME flag the card's warning badge and banner render
+   from, so the order can never contradict the warning printed on a card it moved. **Display
+   order only** — the RAM-best-fit recommender in the main process is untouched.
+   **The "Recommended" flag deliberately plays no part in the order.** An earlier draft applied
+   runnability only when the picker held no ★ card; that was wrong twice over. It is unreachable
+   in practice — the recommender keys off machine RAM, not a benchmark result, so it returns a
+   model whenever *anything* is runnable, which means "no recommendation" and "nothing runnable"
+   are the same state — and it was the wrong instinct anyway: the ★ sits on ONE card, while the
+   first screenful is what a user actually scans. The ★ card is runnable **by construction**
+   (the recommender never picks a RAM-gated model), so this key can only move it up, never down —
+   pinned by a test. Measured live on a 16 GB box, fresh workspace with the ★ in the picker: the
+   first RAM-warned card moved from position 1 to position 15 of 23.
+3. **DV-3 — German closers.** Nine catalog values closed a German opening `„` with an ASCII `"`
+   (the Images empty state shipped `Durchsuchbar machen (OCR)"`). All nine now close with `“`
+   per §7 "Typography", and `tests/unit/i18n.test.ts` gained a guard over the **values** of the
+   German catalog: every `„` balanced by a `“`, and `“` never used as an opener. The guard is
+   scoped to values on purpose — the file's own comments are not shipped copy, and technical
+   field names inside import notes (`"{field}"`, `"language"`) keep straight ASCII pairs.
+
+**As built:** `renderer/styles.css` (`.select`), `renderer/screens/ModelsScreen.tsx`
+(`.select`; exported `isModelInstalled` / `isModelRunnableHere` / `orderPickerModels`),
+`renderer/screens/TranslateScreen.tsx` (`.select` ×2), `renderer/screens/DocumentsScreen.tsx`
+(`.select` ×2, the translate modal), `renderer/screens/settings/DiagnosticsTab.tsx` (`.select`,
+the activity filter), `shared/i18n/de.ts` (9 closers). Tests:
+`tests/unit/select-token-treatment.test.ts`, `tests/renderer/ModelsPickerOrder.test.tsx`, the
+German-typography block in `tests/unit/i18n.test.ts`. **Verification:** typecheck clean; the
+Models / Translate / Documents / Images / Diagnostics renderer suites, the i18n / copy-tone /
+token-contrast / rail-labels guards and `repo-hygiene` green; before/after CDP capture of all
+three named surfaces in BOTH themes on the running dev app, with the computed-style numbers
+above. **Eyeball-harness note (supersedes the §11.4 / §13.5 Playwright recipe on Windows):**
+`playwright` is not a dependency of this repo and the `walk-*.mjs` scripts cannot run as
+written; this pass drove the app over **CDP** instead — `npx electron-vite dev` with
+`ELECTRON_RUN_AS_NODE` cleared and `REMOTE_DEBUGGING_PORT` set, real clicks on the nav rail and
+on the Settings → Appearance segmented control (asserting `data-theme` actually flipped, never
+stamping the attribute), and `Page.captureScreenshot`. No new dependency. `scripts/screenshot.mjs`
+is unusable here — it renders a mock preview harness with no theme support behind `xvfb-run`.
 
 ---
 

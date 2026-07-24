@@ -76,6 +76,23 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Changed
 
+- **The model picker leads with models that run on your machine** — on a fresh
+  workspace it used to list alphabetically, so a 16 GB laptop opened on several
+  models flagged "needs more RAM"; runnable models now come first (full audit
+  2026-07-23; see the `docs/architecture.md` §51 remediation ledger). The
+  drop-down selects on the AI Model and Translate screens now use the app's own
+  typography and colours in both light and dark themes instead of the raw
+  operating-system control, and a handful of German quotation marks were
+  corrected.
+- **Evidence-review chips and bulk actions are faster** — opening a documents
+  conversation now loads all its review chips in a single database round-trip
+  instead of one per message, and the "mark headings N/A / clear decisions /
+  mark undecided" bulk actions apply in one atomic transaction (so an
+  interrupted bulk action can no longer leave a half-changed review).
+- **Continuous integration now exercises the versions the release is built on** —
+  the test matrix runs on both supported Node majors on Windows and Linux with
+  the pinned npm, closing a gap where the declared toolchain floor was never
+  actually run in CI.
 - **Deep-index extraction is more reliable under reasoning-prone models** — the
   "Build deep index" structured-extract pass now grammar-constrains the model's
   reply (the same JSON-schema mechanism the bank-statement categorizer uses), so
@@ -87,6 +104,42 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Fixed
 
+- **A reviewed answer can no longer be silently destroyed by re-answering it**
+  (full audit 2026-07-23, wave `fix/audit-2026-07-23-remediation`; see the
+  `docs/architecture.md` §51 remediation ledger). The documents "Answer without
+  it" undo regenerated the turn, which deleted the answer and — via a foreign-key
+  cascade — its entire evidence review (decisions, notes, links, export history),
+  even on the paths designed to lose nothing; it is now refused with the affected
+  affordance disabled and explained. The same class was closed one table over for
+  an answer's structured "Export CSV" table, which is now replayed when a failed
+  or stopped regenerate restores the answer.
+- **"Lock now" (and quit) no longer leave a content-bearing model running** — a
+  document task, translation, image analysis, or model auto-start that landed
+  during the seconds-long lock teardown used to respawn the multi-gigabyte
+  sidecar the teardown had just stopped, so it outlived the lock; a lock-in-progress
+  latch now refuses such starts across every content surface, and the quit path
+  arms it too (closing a vision-sidecar orphan and a plaintext-transient window).
+- **The Translate screen no longer discards a finished translation or adopts a
+  document-list translation** when you navigate back to it, and neither translate
+  panel re-seeds content that a workspace lock had just purged.
+- **Provisioning scripts degrade gracefully again on Windows** — under
+  PowerShell's stop-on-error mode a `Write-Error` aborted the whole script, so a
+  single transient download failure killed `-WithAssets` provisioning instead of
+  warning and continuing (on macOS/Linux the whisper step, which has no prebuilt
+  binary, aborted before OCR on every run); the tolerant paths now warn and
+  continue as documented, and a checksum-mismatch redownload deletes a complete-
+  but-corrupt file first instead of resuming past its end.
+- **Evidence-pack exports** no longer show a source excerpt twice, can no longer
+  swap two concurrent same-destination exports' content or provenance, no longer
+  stall the whole app on a synchronous multi-megabyte write, and log (rather than
+  silently swallow) a failed cleanup of a temporary decrypted file. Review-screen
+  fixes: an export toggle no longer reports "expanded" on a disabled control, the
+  narrow-mode evidence drawer no longer re-opens with a focus trap, and the
+  reveal control names sources rather than "sections".
+- **Documentation now states that packaged-app OCR crashes** (a verified,
+  version-independent packaging defect — dev-mode OCR is unaffected) instead of
+  presenting it as an unverified release-acceptance item; broken relative links
+  in the data-contracts doc and two model-catalog omissions are corrected.
 - **Scanned-PDF OCR is startable again from the Documents row** (it had become
   unreachable after a row-actions refactor): "Make searchable (OCR)" is an inline
   button on the scan's row, already-recognized PDFs can be re-run via
@@ -102,6 +155,15 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Security
 
+- **Hardened the workspace-lock confidentiality contract (full audit 2026-07-23)**
+  — closed the "Lock now"/quit races above (a content-bearing sidecar could keep
+  user-derived text in memory after the workspace reported locked), and stopped a
+  workspace lock from re-seeding just-purged plaintext translation content back
+  into the renderer. Widened the repository's byte-hygiene checks to the shipped
+  launcher and shell scripts (a stray byte-order mark before a `#!` line silently
+  stops the macOS/Linux launchers), and restored the packaged Content-Security-
+  Policy build check that had been degrading to a silent skip. See the
+  `docs/architecture.md` §51 remediation ledger.
 - **Post-DEP-1 advisory batch cleared (wave DEP-2, 2026-07-23)** — five transitive
   dev/build-tooling packages patched lockfile-only, semver-compatible, no manifest
   changes: node-tar 7.5.21 (decompression/parse DoS CRITICAL + infinite-loop,

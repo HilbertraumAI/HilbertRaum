@@ -78,11 +78,11 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
       )
     ).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: tCountEn('chat.sources.more', 24) }))
+    fireEvent.click(screen.getByRole('button', { name: tCountEn('review.evidence.more', 24) }))
     expect(cardTitles()).toHaveLength(48)
 
     // Final batch is the remainder (12) — then the button disappears.
-    fireEvent.click(screen.getByRole('button', { name: tCountEn('chat.sources.more', 12) }))
+    fireEvent.click(screen.getByRole('button', { name: tCountEn('review.evidence.more', 12) }))
     expect(cardTitles()).toHaveLength(60)
     expect(document.querySelector('.sources-more')).not.toBeInTheDocument()
   })
@@ -184,7 +184,7 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
     )
     renderPane(sources)
     // Reveal out to 48 first…
-    fireEvent.click(screen.getByRole('button', { name: tCountEn('chat.sources.more', 24) }))
+    fireEvent.click(screen.getByRole('button', { name: tCountEn('review.evidence.more', 24) }))
     expect(cardTitles()).toHaveLength(48)
 
     const input = screen.getByLabelText(tEn('review.evidence.filterLabel'))

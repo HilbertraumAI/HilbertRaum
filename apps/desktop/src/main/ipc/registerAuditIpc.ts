@@ -5,6 +5,7 @@ import type { AuditEvent } from '../../shared/types'
 import { AUDIT_MAX_ROWS, listAuditEvents } from '../services/audit'
 import { log } from '../services/logging'
 import { tMain } from '../services/i18n'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { saveTextExport } from './save-export'
 
 // IPC for the Diagnostics "Activity" panel over the audit log (spec §7.11).
@@ -18,7 +19,10 @@ export function registerAuditIpc(ctx: AppContext): void {
   // mirror every other DB-touching handler with an explicit requireUnlocked() so a locked call
   // surfaces the localized main.audit.locked instead (the generalized lock test now covers these).
   const requireUnlocked = (): void => {
-    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.audit.locked'))
+    // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
+    // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
+    // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
+    if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.audit.locked'))
   }
 
   // Newest-first page; `beforeId` is the pagination cursor ("Load more"). The type

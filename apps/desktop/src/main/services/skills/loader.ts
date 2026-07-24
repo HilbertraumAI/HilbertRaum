@@ -83,8 +83,3 @@ export function loadSkillPackage(record: SkillRecord, opts: SkillLoadOptions): S
   parseCache.set(dir, { mtimeMs: st.mtimeMs, size: st.size, maxBodyChars, result })
   return result
 }
-
-/** Load a skill directly from a folder (the same one mode), for callers that already hold a dir. */
-export function loadSkillFromDir(dir: string, opts: { limits?: SkillLimits } = {}): SkillParseResult {
-  return parseSkillManifestFromDir(dir, opts)
-}

@@ -202,7 +202,7 @@ true (stale Deep choices coerce to Balanced at send). `askDocuments` never passe
 document answers always run balanced (deep-grounded = wave 2).
 
 ### Document ingestion (Phase 4 live)
-✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](docs/rag-design.md).
+✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
 - **`parsers/`** — `DocumentParser` interface (`{ segments: ExtractedSegment[], mimeType }`) +
   registry (`selectParser`, `supportedExtensions`). Adapters: `TxtParser` (.txt/.text/.log),
   `MarkdownParser` (.md/.markdown/.mdown; segment per ATX heading, `sectionLabel`), `PdfParser`
@@ -247,7 +247,7 @@ document answers always run balanced (deep-grounded = wave 2).
   status badge + chunk count + size, error surfacing, delete + re-index.
 
 ### Embeddings + vector search (Phase 5 live)
-✅ **`services/embeddings/`** (spec §6, §7.8, §9.2). Full detail in [`docs/rag-design.md`](docs/rag-design.md) §6.
+✅ **`services/embeddings/`** (spec §6, §7.8, §9.2). Full detail in [`docs/rag-design.md`](rag-design.md) §6.
 - **`index.ts`** — `Embedder` interface (`id`, `dimensions`, `embed(texts) =>
   Promise<Float32Array[]>` — L2-normalized, one per input); `encodeVector`/`decodeVector`
   (Float32 ↔ BLOB; decode copies to a 4-byte-aligned buffer); `cosineSimilarity`; and the
@@ -265,7 +265,7 @@ document answers always run balanced (deep-grounded = wave 2).
   `vector_blob` (raw Float32 bytes), `dimensions`, `created_at`. No new IPC (askDocuments = Phase 6).
 
 ### RAG chat with citations (Phase 6 live)
-✅ **`services/rag/index.ts`** (spec §7.6, §7.8). Full detail in [`docs/rag-design.md`](docs/rag-design.md) §8.
+✅ **`services/rag/index.ts`** (spec §7.6, §7.8). Full detail in [`docs/rag-design.md`](rag-design.md) §8.
 - **`retrieve(db, embedder, question, settings)`** → `{ chunks: RetrievedChunk[], citations:
   Citation[] }`. Embeds the question, `VectorIndex.searchText(topKInitial)`, joins hits →
   `chunks`, drops `< minSimilarity`, **dedups by `(document_id, page_number)`** (page-less
@@ -300,7 +300,7 @@ document answers always run balanced (deep-grounded = wave 2).
   stays permanent for will-quit).
 
 ### Hardware benchmark + recommendation (Phase 7 live)
-✅ **`services/benchmark.ts`** (spec §7.3, §11). Full detail in [`docs/benchmark.md`](docs/benchmark.md).
+✅ **`services/benchmark.ts`** (spec §7.3, §11). Full detail in [`docs/benchmark.md`](benchmark.md).
 - **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
   throws (failed probe → `''`/`0`); `detectSystem` itself always reports `gpu: null` — the
   REAL probe lives in `runtime/gpu.ts` and is **injected** by the IPC layer (Phase 16:
@@ -729,18 +729,23 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   conversation?)` (spec §9.1): assistant ∧ (citations non-empty ∨ coverage present ∨
   `conversation.mode === 'documents'`). "Persisted and not streaming" stays the caller's
   gate (a streaming reply has no row yet) — Phase 2 wires it.
-✅ **IPC surface (17 channels, `evidence:*` in `shared/ipc.ts`; handlers in
+✅ **IPC surface (19 channels, `evidence:*` in `shared/ipc.ts`; handlers in
   `main/ipc/registerEvidenceReviewsIpc.ts`, wired in `main/index.ts`; preload methods of the
   same names on `window.api` — 13 shipped in Phase 1, `evidence:countForConversation` added
   in Phase 2 for the D-2 delete confirm, `evidence:export` added in Phase 3 with its
-  pipeline, `evidence:acknowledgeFreshness` + `evidence:sourceContext` added in Phase 4):**
+  pipeline, `evidence:acknowledgeFreshness` + `evidence:sourceContext` added in Phase 4,
+  `evidence:summariesForConversation` + `evidence:bulkAction` added by the AUD-12/AUD-13
+  remediation as the BATCH forms of two surfaces that previously fanned out per message /
+  per item):**
   | preload method | channel | shape |
   |---|---|---|
   | `createEvidenceReview(messageId)` | `evidence:create` | → `EvidenceReviewDetail`; IDEMPOTENT (existing review returned, audit only on real creation); throws localized `invalidRequest` on a malformed id, ids-only errors on unknown/non-assistant message |
   | `getEvidenceReview(reviewId)` | `evidence:get` | → `EvidenceReviewDetail \| null` |
-  | `getEvidenceReviewForMessage(messageId)` | `evidence:getForMessage` | → `EvidenceReviewSummary \| null` (entry-point state) |
+  | `getEvidenceReviewForMessage(messageId)` | `evidence:getForMessage` | → `EvidenceReviewSummary \| null` (entry-point state for ONE message; the transcript uses the conversation-scoped batch below) |
+  | `getEvidenceReviewSummariesForConversation(conversationId)` | `evidence:summariesForConversation` | → `EvidenceReviewSummary[]` — **AUD-12**: the chat transcript's whole chip state in ONE round trip, keyed by `messageId` renderer-side. Same per-summary shape (gate + derived `outdated` overlay) as `evidence:getForMessage`, element-for-element. Service side it is TWO statements for any conversation length — one indexed head read on `conversation_id`, one join for the item rows the gates derive from. `[]` for an unknown/malformed id |
   | `updateEvidenceReview(reviewId, patch)` | `evidence:update` | → `EvidenceReview \| null`; malformed patch fields DROPPED, never coerced |
   | `updateEvidenceReviewItem(itemId, patch)` | `evidence:updateItem` | → `EvidenceReviewItem \| null`; unknown decision literals dropped (stored decision untouched) |
+  | `applyEvidenceReviewBulkAction(reviewId, action)` | `evidence:bulkAction` | → `EvidenceReviewItem[] \| null` — **AUD-13**: one of the three sanctioned conservative sweeps (`EvidenceReviewBulkAction` = `'headings_not_applicable' \| 'clear_decisions' \| 'undecided_follow_up'`) applied to the whole review in ONE transaction, returning the refreshed items. Null on an unknown id, an UNRECOGNIZED action name (never mapped onto a nearby one), and on a READY review (the same write guard the per-item patch enforces). The head activity stamp moves only when the sweep matched something. The forbidden blanket "mark all supported" has no literal in the union, so it cannot be requested |
   | `createEvidenceSelection(reviewId, input)` | `evidence:createSelection` | → `EvidenceReviewItem \| null` (null = refused offsets — never clamped) |
   | `deleteEvidenceSelection(itemId)` | `evidence:deleteSelection` | → `boolean` (blocks refuse) |
   | `setEvidenceLink(itemId, key, input)` | `evidence:setLink` | → `EvidenceReviewItem \| null`; **origin FORCED to `'reviewer'`** — only the snapshot builder mints `'answer_marker'` (a renderer payload can never fake "cited by the answer") |
@@ -755,8 +760,9 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   | `exportEvidencePack(reviewId, options)` | `evidence:export` | → `EvidenceExportRecord \| null` — Phase 3 (plan §8.3): save dialog → deterministic HTML render → ATOMIC write (tmp sibling → fsync → sha256 of the ON-DISK bytes → rename) → `evidence_exports` row. Null on unknown/malformed id (no dialog) or user cancel; any failure UP TO the rename leaves no destination file and no row (spec §28.9). A POST-rename record failure (workspace-DB error, or the review deleted in another window while the dialog was open) UNLINKS the just-written file and REJECTS with distinct localized copy (`main.evidenceReviews.exportNotRecorded`; if even the unlink fails, `…exportFileNotRecorded` states the file exists WITHOUT a history record) — null never means "exported", and a real export is never reported as a cancel (fix round FIX-1). Works on draft AND ready reviews (the ready guard covers item mutations only — tested). `options: EvidencePackExportRequest` (= `Partial<EvidencePackOptions> & {format?}`) resolves against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; the RESOLVED option set persists to `options_json` (the format NEVER does — `evidence_exports.format` is its column). **P6 (plan §11): PDF over the SAME channel** — `format: 'pdf'` (literal only; anything else reads 'html') prints the SAME rendered HTML through the hidden-window harness AFTER the dialog; the save dialog OFFERS both filters (requested first) and the chosen extension has the final word (`packFormatForDestination`: `.pdf`⇒pdf, `.html`/`.htm`⇒html, else the request — file content, extension and recorded format always agree). A failed/killed print = a pre-rename failure: no file, no row |
   Every handler `requireUnlocked()` (`main.evidenceReviews.locked`, EN+DE; auto-enforced by
   `ipc-lock-coverage.test.ts`). **Ready-state write guard (Phase-2 review FIX-1, spec
-  §18.4):** while a review is `ready`, the five ITEM-LEVEL mutations (`updateEvidenceReviewItem`,
-  `setEvidenceLink`, `removeEvidenceLink`, `createEvidenceSelection`, `deleteEvidenceSelection`)
+  §18.4):** while a review is `ready`, the six ITEM-LEVEL mutations (`updateEvidenceReviewItem`,
+  `applyEvidenceReviewBulkAction`, `setEvidenceLink`, `removeEvidenceLink`,
+  `createEvidenceSelection`, `deleteEvidenceSelection`)
   REFUSE through their normal null/false channel — `ready` + undecided is a state the D-7 gate
   can never produce, so it must be unreachable by mutation too; reopen first. HEAD edits
   (`updateEvidenceReview`: title D-6 / reviewer label D-3 / general note) stay allowed.
@@ -842,14 +848,28 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   `formatValue` on HTML; exactly ONE line branches — pinned by a byte-level swap test —
   and cancel renders nothing) → [PDF only, P6: `renderPdf(html, {packId,
   sourceHtmlPath})` — the injected hidden-window print, fed the render output VERBATIM]
-  → `writePackFileAtomic` (tmp
+  → `writePackFileAtomic(dest, content, packId)` (tmp
   sibling → fsync → hash the READ-BACK on-disk bytes → rename; accepts string OR Buffer —
   the SAME tail serves both formats; failure removes the tmp and rethrows — no half-written
   destination ever) → `recordEvidenceExport` (row only AFTER the final file exists + is
   hashed, spec §20.3; bare `file_name`, the EFFECTIVE format, resolved options into
   `options_json`). `renderPdf` is REQUIRED (a missing printer can never silently degrade a
-  PDF request); the transient print source is `${dest}.print.tmp.html` — a SIBLING in the
-  user-sanctioned directory (never an OS temp dir), removed by the harness in `finally`.
+  PDF request).
+  **Every transient sibling is named PER EXPORT, never from the destination alone
+  (AUD-17):** `printSourcePath(dest, packId)` → `${dest}.<packId token>.print.tmp.html` and
+  `packTmpPath(dest, packId)` → `${dest}.<packId token>.tmp`, both minted by one private
+  `exportToken` helper (the pack id's alphanumerics, capped at a UUID's 32 hex characters;
+  an id that sanitises away falls back to a random token — no content can reach a file
+  name). Two exports saving to the SAME path must share no transient at all: they used to
+  share both, and the collision — documented at the time as "the loser fails cleanly" — in
+  fact let one export read back, hash, and rename the OTHER review's bytes under its own
+  `evidence_exports` row, while the PDF seam let a print pick up the other pack entirely.
+  `writePackFileAtomic` therefore takes `packId` as a REQUIRED third argument: the
+  read-back hash is only trustworthy if nothing else can write that file between the fsync
+  and the read. What two same-destination exports still share is the DESTINATION itself
+  (later rename wins — the user's own instruction). The print source stays a SIBLING in the
+  user-sanctioned directory (never an OS temp dir), removed by the harness in `finally`
+  with one retry and an ids-only `log.warn` on failure (AUD-16).
   Encoding (string content): UTF-8 **without** BOM (unlike md/txt/csv `bomFor` — the
   `<meta charset>` is the contract; recorded hash = on-disk bytes).
   `suggestedPackFileName(title, format)` slugs the review title (content — which is why
@@ -931,6 +951,16 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   an overlay; §28.6's acknowledge gate is reserved for CHANGED content). Coverage compare =
   fixed semantic projection (mode/counts/treeStatus/treeLevels/tier/truncated/
   unparsedChunks/fullyChunked) — `nodeIds` + unknown extras excluded (plumbing, not claims).
+  **That projection is a stored-data contract, and it is exhaustiveness-constrained (AUD-19).**
+  Its canonical string is digested into the persisted fingerprint below, so changing *which*
+  `CoverageInfo` fields it covers — or their order — lapses EVERY acknowledgement already
+  stored in every workspace (signed-off reviews silently re-close the export gate). The
+  projection literal therefore `satisfies Record<keyof CoverageInfo, unknown>`: a coverage
+  field added to `shared/types.ts` and not listed is a COMPILE error, never a field silently
+  dropped from drift detection (which would let an export proceed with no outdated banner and
+  no acknowledge gate). Deliberately-excluded plumbing is listed with `undefined` — present
+  for the constraint, omitted by `JSON.stringify`, so the emitted bytes are unchanged. An
+  integration test pins both the exact fingerprint bytes and the field-set parity.
   `acknowledgeEvidenceReviewFreshness(db, reviewId)` writes `freshness_ack_json`
   `{acknowledgedAt, fingerprint}`; the fingerprint is the sorted canonical string of every
   non-'unchanged' fact **including the observed current value** (fix round FIX-1:
@@ -1006,7 +1036,8 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   electron: the D-1 option literals + footer no-@font-face/escaping pins, preload-free
   sandboxed posture + deny-all navigation, teardown on success/print-failure/load-failure/
   app-quit-mid-print/step-timeout — runs everywhere incl. CI) + `evidence-pack-export.
-  test.ts` P6 describe ×6 (seam contract: verbatim html + `${dest}.print.tmp.html` + the
+  test.ts` P6 describe ×6 (seam contract: verbatim html + the per-export
+  `${dest}.<packId token>.print.tmp.html` + the
   PDF self-description line; extension-override both directions incl. the format line
   following the EFFECTIVE format; cancel-under-PDF ⇒ no render/no print/no file/no row;
   killed-print ⇒ no file/no siblings/no row; outdated-refusal BEFORE dialog AND print;

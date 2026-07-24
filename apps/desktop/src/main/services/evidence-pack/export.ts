@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
+import {
+  open as openFileAsync,
+  readFile as readFileAsync,
+  rename as renameAsync,
+  rm as rmAsync
+} from 'node:fs/promises'
 import { basename, extname } from 'node:path'
 import type { EvidenceExportFormat, EvidenceExportRecord } from '../../../shared/types'
 import { sha256Of } from '../assets'
@@ -23,7 +28,21 @@ import { renderEvidencePackHtml } from './render-html'
 //   injected hidden-window harness, P6/D-1] → write tmp sibling → fsync → hash the
 //   ON-DISK bytes → atomic rename → record `evidence_exports` row. Cancel renders nothing.
 // No model runtime, no network, no re-retrieval anywhere on this path (spec FR-2/FR-12 —
-// pinned by the no-model/no-network test assertions). Failure semantics (spec §20.2/§20.3/
+// pinned by the no-model/no-network test assertions).
+//
+// CONCURRENCY (AUD-17): every transient file an export creates beside the destination — the
+// PDF print source and the atomic writer's tmp sibling — is named from the export's own
+// pack id (`printSourcePath` / `packTmpPath`), never from the destination alone. Two exports
+// saving to the SAME path therefore share no file at all. They used to share both, and the
+// collision was documented here as failing cleanly; it did not. The loser did not lose — both
+// exports succeeded, and one wrote a file whose bytes belonged to the OTHER review while its
+// `evidence_exports` row named its own, silently. That is provenance corruption of a
+// signed-off artifact, so the shared resources were removed rather than contended on. What
+// two same-destination exports still share is the DESTINATION itself: the later rename
+// replaces the earlier file, exactly as any second save to one path does. That is the user's
+// own instruction, and each row still records the hash of the bytes its own export wrote.
+//
+// Failure semantics (spec §20.2/§20.3/
 // §28.9): any failure or cancel UP TO AND INCLUDING the rename leaves NO destination file
 // and NO export row — the tmp sibling is removed best-effort, the rename is the single
 // commit point for the file, and the row is written only AFTER the final file exists with
@@ -73,8 +92,9 @@ export interface EvidencePackExportDeps {
    * harness (`printEvidencePackHtmlToPdf`). REQUIRED, not optional: the pipeline cannot
    * be wired without deciding PDF, so a missing printer can never silently degrade a
    * requested PDF into something else. Only called when the effective format is 'pdf'.
-   * `sourceHtmlPath` is the transient print-source sibling this pipeline chose; the
-   * printer owns its write→load→remove lifecycle.
+   * `sourceHtmlPath` is the transient print-source sibling this pipeline chose — unique per
+   * export (`printSourcePath`), so concurrent prints share no file; the printer owns its
+   * write→load→remove lifecycle.
    */
   renderPdf: (html: string, opts: { packId: string; sourceHtmlPath: string }) => Promise<Buffer>
   /** Pack-id mint (defaults to randomUUID) — injectable for deterministic goldens. */
@@ -134,6 +154,61 @@ export function suggestedPackFileName(title: string, format: EvidenceExportForma
 }
 
 /**
+ * The per-export uniqueness token every transient sibling of the destination carries
+ * (AUD-17). One helper, so the print source and the atomic writer's tmp file cannot drift
+ * apart in how they are named or sanitised.
+ *
+ * It can never leak content: only the pack id's ALPHANUMERICS are used (a random UUID
+ * reduces to its 32 hex characters), capped to that length so no id can grow the path
+ * without bound, and an id that sanitises away entirely — only reachable through an injected
+ * mint — falls back to a fresh random token instead of reaching the file system verbatim.
+ */
+function exportToken(packId: string): string {
+  const token = packId.replace(/[^A-Za-z0-9]/g, '').slice(0, 32)
+  return token.length > 0 ? token : randomUUID().replace(/-/g, '')
+}
+
+/**
+ * The transient print-source sibling for ONE export (AUD-17).
+ *
+ * This used to be a fixed `${destPath}.print.tmp.html`, derived from the DESTINATION alone —
+ * so two exports running at the same time against the same destination wrote, loaded and
+ * printed the SAME file. `loadFile` resolving is not the moment Chromium is finished with
+ * the document: an overwrite that lands in a later main-process turn is picked up and
+ * printed successfully. The loser therefore did not "fail cleanly": BOTH exports succeeded,
+ * and one produced a file whose bytes were the other review's pack while the
+ * `evidence_exports` row it recorded named its own review — silent provenance corruption of
+ * a signed-off artifact. Removing the shared resource is preferable to contending on it, so
+ * the name now carries the per-export token.
+ *
+ * The `.print.tmp.html` tail is unchanged: the `.html` extension is load-bearing for
+ * file:// MIME sniffing, and crash residue stays recognisable as the same class the atomic
+ * writer's tmp sibling belongs to.
+ */
+export function printSourcePath(destPath: string, packId: string): string {
+  return `${destPath}.${exportToken(packId)}.print.tmp.html`
+}
+
+/**
+ * The atomic writer's tmp sibling for ONE export (AUD-17, second seam).
+ *
+ * Same defect, same shape, one seam later: while the print source was shared, `${destPath}.tmp`
+ * was too — and unlike the print source this one is on the path of EVERY export, HTML
+ * included (an HTML export renders no print source at all, so the fix above cannot reach
+ * it). Two concurrent exports to one destination raced inside `writePackFileAtomic`: the
+ * second `open(tmp, 'w')` truncates the first's bytes, so the first can read back — and
+ * hash, and rename onto the destination — content it never wrote. Its `evidence_exports`
+ * row then names its own review while the recorded SHA-256 describes the other review's
+ * pack, with no error on either side. Making the name unique per export removes the shared
+ * resource instead of contending on it; nothing else about the write→fsync→hash→rename
+ * sequence changes, and the sibling still lives in the destination's directory so the
+ * rename stays same-volume and therefore atomic.
+ */
+export function packTmpPath(destPath: string, packId: string): string {
+  return `${destPath}.${exportToken(packId)}.tmp`
+}
+
+/**
  * Write `content` to `destPath` ATOMICALLY (the workspace-vault descriptor idiom): tmp
  * sibling (same directory ⇒ same volume ⇒ atomic rename) → fsync → rename. Returns the
  * SHA-256 of the bytes READ BACK from disk after the fsync — the hash provably describes
@@ -141,34 +216,54 @@ export function suggestedPackFileName(title: string, format: EvidenceExportForma
  * (best-effort) and rethrows; the destination is never left half-written. P6: a `Buffer`
  * (the printToPDF bytes) is written verbatim — the SAME tail serves both formats.
  *
+ * `packId` names the tmp sibling (`packTmpPath`) and is REQUIRED for that reason — the
+ * read-back hash is only trustworthy if nothing else can write the file between the fsync
+ * and the read, and a destination-derived name did not give that (AUD-17).
+ *
+ * AUD-15 — ASYNC, on `fs.promises` (the same port the image-history store/open path took):
+ * the contract is byte-for-byte the one above, but a multi-megabyte pack used to run its
+ * write + fsync + full read-back on the SYNCHRONOUS fs API, and this runs on the Electron
+ * MAIN thread — the whole process (every window, every IPC reply, the tray) stalled for the
+ * duration of the tail, worst on the slow USB drives this app targets. Nothing about the
+ * durability changed: the tmp sibling is still fsynced through its own handle BEFORE the
+ * rename, and the recorded hash is still computed from the bytes read back OFF DISK, never
+ * from the in-memory buffer. The handle is closed on EVERY path including failure (Windows
+ * keeps a deleted-but-open file locked, which would defeat the cleanup below).
+ *
  * Encoding note (string content): UTF-8 WITHOUT a BOM — deliberately unlike the
  * md/txt/csv exports (`bomFor`): the pack declares `<meta charset="utf-8">` in its first
  * bytes, every browser honors it, and a BOM would be one more byte class for hash
  * consumers to trip over.
  */
-export function writePackFileAtomic(destPath: string, content: string | Buffer): string {
-  const tmpPath = `${destPath}.tmp`
+export async function writePackFileAtomic(
+  destPath: string,
+  content: string | Buffer,
+  packId: string
+): Promise<string> {
+  const tmpPath = packTmpPath(destPath, packId)
   try {
-    const fd = openSync(tmpPath, 'w')
+    const fd = await openFileAsync(tmpPath, 'w')
     try {
       const bytes = typeof content === 'string' ? Buffer.from(content, 'utf8') : content
-      const written = writeSync(fd, bytes)
+      const { bytesWritten } = await fd.write(bytes, 0, bytes.length, null)
       // POSIX permits short writes; hashing a truncated file would produce a
       // self-consistent hash of the WRONG bytes — refuse instead.
-      if (written !== bytes.length) {
-        throw new Error(`evidence export: short write (${written}/${bytes.length} bytes)`)
+      if (bytesWritten !== bytes.length) {
+        throw new Error(`evidence export: short write (${bytesWritten}/${bytes.length} bytes)`)
       }
-      fsyncSync(fd)
+      await fd.sync()
     } finally {
-      closeSync(fd)
+      // Never `.catch(() => {})` here: an unclosed handle would keep the tmp sibling locked
+      // on Windows and defeat the cleanup below. A close failure is a real failure.
+      await fd.close()
     }
-    const onDisk = readFileSync(tmpPath)
+    const onDisk = await readFileAsync(tmpPath)
     const hash = sha256Of(onDisk)
-    renameSync(tmpPath, destPath)
+    await renameAsync(tmpPath, destPath)
     return hash
   } catch (err) {
     try {
-      rmSync(tmpPath, { force: true })
+      await rmAsync(tmpPath, { force: true })
     } catch {
       /* best-effort cleanup — the original failure is the error that matters */
     }
@@ -239,12 +334,12 @@ export async function exportEvidencePackToFile(
       ? await deps.renderPdf(html, {
           packId: model.packId,
           // A SIBLING of the destination: the transient print source lives in the one
-          // directory the user already sanctioned for this content (never an OS temp
-          // dir); the `.html` extension is load-bearing for file:// MIME sniffing.
-          sourceHtmlPath: `${destPath}.print.tmp.html`
+          // directory the user already sanctioned for this content (never an OS temp dir).
+          // Named per EXPORT, not per destination — see `printSourcePath` (AUD-17).
+          sourceHtmlPath: printSourcePath(destPath, model.packId)
         })
       : html
-  const fileSha256 = writePackFileAtomic(destPath, content)
+  const fileSha256 = await writePackFileAtomic(destPath, content, model.packId)
   // Row only AFTER the final file exists and is hashed (spec §20.3). Bare name only —
   // the directory may reveal private workstation structure (spec §18.1).
   let record: EvidenceExportRecord | null = null
@@ -271,7 +366,7 @@ export async function exportEvidencePackToFile(
   // user cancel.
   const causeSuffix = recordFailure instanceof Error ? `: ${recordFailure.message}` : ''
   try {
-    rmSync(destPath, { force: true })
+    await rmAsync(destPath, { force: true })
   } catch {
     throw new EvidencePackUnrecordedFileError(
       `evidence export: pack written but not recorded, and cleanup failed — the destination file exists without an export-history record (${reviewId})${causeSuffix}`

@@ -359,12 +359,20 @@ const MessageBlock = memo(function MessageBlock({
           // dead end. The glyph copy still distinguishes the two: an auto-fired turn reads "Answered
           // with <skill>" (the app chose it), an explicit pick keeps "Skill: <title>".
           const canUndo = isLast && onAnswerWithoutSkill != null
+          // AUD-01: the undo re-answers the turn (regenerate), which DELETES this reply — and the
+          // message foreign key cascades that delete through the reply's whole evidence review
+          // (decisions, notes, links, export history), which no restore path can bring back. Main
+          // refuses such a turn; the affordance must not invite the click either. DISABLED, never
+          // hidden: the review chip renders in this same action row, so a vanishing button would
+          // read as a bug — a dead button with a title that says why is the honest state.
+          const blockedByReview = reviewSummary != null
           const undoButton = canUndo && (
             <button
               type="button"
               className="msg-skill-undo"
               onClick={onAnswerWithoutSkill}
-              disabled={actionsDisabled}
+              disabled={actionsDisabled || blockedByReview}
+              title={blockedByReview ? t('chat.skill.answerWithoutBlockedByReview') : undefined}
             >
               {t('chat.skill.answerWithout')}
             </button>

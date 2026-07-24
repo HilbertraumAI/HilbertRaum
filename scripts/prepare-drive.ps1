@@ -271,6 +271,28 @@ if ($WithAssets) {
   Write-Host 'Fetching assets (build-time network; the app itself stays offline):' -ForegroundColor Cyan
   $fetchModels = Join-Path $PSScriptRoot 'fetch-models.ps1'
   $fetchRuntime = Join-Path $PSScriptRoot 'fetch-runtime.ps1'
+
+  # Run a sibling provisioning script and leave its outcome in $LASTEXITCODE for the caller
+  # to judge -- WITHOUT letting a failure inside it end this script (AUD-05).
+  # Two things can finish a child script: an `exit <n>` (which sets $LASTEXITCODE and returns
+  # here normally) and a TERMINATING ERROR. Because the children run with
+  # $ErrorActionPreference = 'Stop', the second category is wide -- it used to include every
+  # Write-Error they emitted -- and such an exception propagates out of the `&` call and kills
+  # THIS script at the call site. That silently defeated the per-step handling below: the
+  # whisper step could not be best-effort (its tolerant branch was never reached), and the OCR
+  # step after it never ran at all, leaving the drive's ocr/ dir empty. The try/catch converts
+  # any such error back into a plain non-zero exit code. $LASTEXITCODE is reset first so a
+  # stale code from an earlier command cannot be misread as this child's result.
+  function Invoke-FetchScript([string]$path, [hashtable]$params) {
+    $global:LASTEXITCODE = 0
+    try {
+      & $path @params
+    } catch {
+      Write-Host ("  {0}: {1}" -f (Split-Path -Leaf $path), $_.Exception.Message) -ForegroundColor Red
+      if ($global:LASTEXITCODE -eq 0) { $global:LASTEXITCODE = 1 }
+    }
+  }
+
   # Use HASHTABLE splatting (named params), not array splatting: array elements are bound
   # positionally and '-AcceptLicense'/'-DryRun' strings are NOT recognised as switch names,
   # which fails param binding (PositionalParameterNotFound), especially with a rooted
@@ -288,15 +310,15 @@ if ($WithAssets) {
     if ($only) { $modelArgs.Only = $only }
     if ($AcceptLicense) { $modelArgs.AcceptLicense = $true }
     if ($DryRun) { $modelArgs.DryRun = $true }
-    & $fetchModels @modelArgs
-    if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-models failed.'; exit 1 }
+    Invoke-FetchScript $fetchModels $modelArgs
+    if ($LASTEXITCODE -ne 0) { Write-Host 'fetch-models failed.' -ForegroundColor Red; exit 1 }
   }
 
   # llama.cpp sidecar (the chat + embeddings engine) -- always.
   $runtimeArgs = @{ Target = $Target }
   if ($DryRun) { $runtimeArgs.DryRun = $true }
-  & $fetchRuntime @runtimeArgs
-  if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-runtime (llama.cpp) failed.'; exit 1 }
+  Invoke-FetchScript $fetchRuntime $runtimeArgs
+  if ($LASTEXITCODE -ne 0) { Write-Host 'fetch-runtime (llama.cpp) failed.' -ForegroundColor Red; exit 1 }
 
   # whisper.cpp sidecar (the transcriber engine) -- always, to match the bundled Whisper
   # model. Best-effort: prebuilt whisper.cpp binaries exist for Windows only, so on a
@@ -304,7 +326,7 @@ if ($WithAssets) {
   # (those drives build whisper.cpp from source; see docs/packaging.md).
   $whisperArgs = @{ Target = $Target; Family = 'whisper_cpp' }
   if ($DryRun) { $whisperArgs.DryRun = $true }
-  & $fetchRuntime @whisperArgs
+  Invoke-FetchScript $fetchRuntime $whisperArgs
   if ($LASTEXITCODE -ne 0) {
     Write-Host '  note: whisper.cpp runtime not provisioned (no prebuilt build for this host -- build from source on mac/linux).' -ForegroundColor Yellow
   }
@@ -317,8 +339,8 @@ if ($WithAssets) {
   # of issue #59 (F-05, full audit 2026-07-16). build-commercial-drive already fetches it.
   $ocrArgs = @{ Target = $Target; Family = 'ocr' }
   if ($DryRun) { $ocrArgs.DryRun = $true }
-  & $fetchRuntime @ocrArgs
-  if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-runtime (ocr) failed.'; exit 1 }
+  Invoke-FetchScript $fetchRuntime $ocrArgs
+  if ($LASTEXITCODE -ne 0) { Write-Host 'fetch-runtime (ocr) failed.' -ForegroundColor Red; exit 1 }
 
   Write-Host ''
   Write-Host "Now capture real hashes: scripts\verify-models.ps1 -Target '$Target' -Generate" -ForegroundColor Cyan

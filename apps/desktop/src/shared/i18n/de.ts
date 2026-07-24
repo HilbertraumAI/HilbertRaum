@@ -235,6 +235,11 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.autoFiredTitle':
     'Die App hat den Skill „{title}“ automatisch auf diese Antwort angewandt. Du kannst ohne ihn antworten.',
   'chat.skill.answerWithout': 'Ohne ihn antworten',
+  // AUD-01: Der Rückgängig-Weg beantwortet den Turn neu und löscht dabei diese Antwort — der
+  // Fremdschlüssel der Nachricht reißt die Nachweis-Prüfung mit. Die Schaltfläche wird deshalb
+  // DEAKTIVIERT statt versteckt und erklärt beim Darüberfahren, warum.
+  'chat.skill.answerWithoutBlockedByReview':
+    'Zu dieser Antwort gibt es eine Nachweis-Prüfung. Eine neue Antwort würde die Prüfung mit ihren Entscheidungen und Notizen löschen.',
   // SKA-38 (Skills-Audit 2026-07-03, U6): das Glyph-Label, wenn der Skill einer markierten Antwort
   // später GELÖSCHT wurde – die Herkunft (und der Rückgängig-Weg) bleiben, ehrlich beschriftet.
   'chat.skill.removed': '(entfernter Skill)',
@@ -449,7 +454,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.task.ocrBusyTitle': 'Die gescannten Seiten werden gelesen',
   'docs.task.treeBusyTitle': 'Für das ganze Dokument wird ein Tiefenindex erstellt',
   'docs.task.extractBusyTitle':
-    'Das ganze Dokument wird durchsucht, damit es „Liste alle…"-Fragen beantworten kann',
+    'Das ganze Dokument wird durchsucht, damit es „Liste alle…“-Fragen beantworten kann',
   'docs.task.categorizeBusy': 'Kategorisiert Umsätze…',
   'docs.task.categorizeBusyTitle': 'Die Umsätze des Kontoauszugs werden kategorisiert',
   // OCR-R P1 (FE-4/FE-5): der letzte Schritt der OCR-Aufgabe ist die minutenlange
@@ -629,8 +634,8 @@ export const de: Record<keyof typeof en, string> = {
   // ---- Tiefenindex + Abdeckung (whole-document-analysis plan §5.2) — D-L7-Review ausstehend ----
   'docs.deepIndex.build': 'Tiefenindex erstellen',
   'docs.deepIndex.buildTitle':
-    'Liest das ganze Dokument in einen Tiefenindex ein — Zusammenfassungen, „Liste alle …"- ' +
-    'und „Summe pro Kategorie"-Antworten können dann alles abdecken — läuft auf diesem ' +
+    'Liest das ganze Dokument in einen Tiefenindex ein — Zusammenfassungen, „Liste alle …“- ' +
+    'und „Summe pro Kategorie“-Antworten können dann alles abdecken — läuft auf diesem ' +
     'Laufwerk, nichts verlässt es',
   'docs.deepIndex.reindexFirst': 'Für Tiefenindex neu indexieren',
   'docs.deepIndex.reindexFirstTitle':
@@ -953,7 +958,7 @@ export const de: Record<keyof typeof en, string> = {
   // Full-doc-skills Phase 3 (§3.2/D45): Hinweis bei Verweigerung einer Teilantwort.
   'skills.analysis.refusePartial':
     'Das kann ich nur genau über das ganze Dokument beantworten, und dieses ist noch nicht ' +
-    'vollständig indexiert. Öffne den Dokumente-Bildschirm, wähle „Neu indexieren" und frage dann erneut.',
+    'vollständig indexiert. Öffne den Dokumente-Bildschirm, wähle „Neu indexieren“ und frage dann erneut.',
 
   // W2 Weiterleitung bei falscher Dokumentanzahl (Audit §2.1). Eine Werkzeug-/Ganzdokument-Skill liest
   // jeweils EIN Dokument, daher lässt sich ein Bereich mit mehreren Dokumenten nicht vollständig
@@ -1105,9 +1110,9 @@ export const de: Record<keyof typeof en, string> = {
   'models.automatic.notInstalled':
     'Wird nach der Installation automatisch verwendet — keine Einrichtung nötig.',
   'models.vision.installed':
-    'Installiert — bereit im Tab „Bilder". Hier gibt es nichts zu starten.',
+    'Installiert — bereit im Tab „Bilder“. Hier gibt es nichts zu starten.',
   'models.vision.notInstalled':
-    'Nach der Installation im Tab „Bilder" verfügbar — keine Einrichtung nötig.',
+    'Nach der Installation im Tab „Bilder“ verfügbar — keine Einrichtung nötig.',
   'models.translation.installed':
     'Installiert — wird automatisch zum Übersetzen verwendet. Hier gibt es nichts zu starten.',
   'models.translation.notInstalled':
@@ -1901,6 +1906,13 @@ export const de: Record<keyof typeof en, string> = {
   'main.chat.streamError':
     'Beim KI-Modell ist ein Fehler aufgetreten, bevor die Antwort fertig war. Versuche es erneut — wenn das öfter passiert, starte das Modell im Bildschirm „KI-Modell“ neu.',
   'main.chat.nothingToRegenerate': 'Es gibt noch keine Antwort, die neu erstellt werden könnte.',
+  // AUD-01: Eine neue Antwort LÖSCHT die bisherige Antwort, und der Fremdschlüssel der Nachricht
+  // reißt die gesamte Nachweis-Prüfung mit — Entscheidungen, Notizen, Verknüpfungen, Exportverlauf.
+  // Nichts davon steckt im Wiederherstellungs-Abbild, deshalb wird der Turn abgelehnt.
+  'main.chat.reviewBlocksRegenerate':
+    'Zu dieser Antwort gibt es eine Nachweis-Prüfung. Eine neue Antwort würde die Prüfung mit ' +
+    'ihren Entscheidungen und Notizen löschen — stelle deine Frage stattdessen noch einmal als ' +
+    'neue Nachricht.',
   'main.chat.emptyMessage': 'Eine leere Nachricht kann nicht gesendet werden.',
   'main.chat.emptyQuestion': 'Eine leere Frage kann nicht gesendet werden.',
   'main.chat.stopFirst':
@@ -2238,7 +2250,7 @@ export const de: Record<keyof typeof en, string> = {
   'images.avail.noRuntime': 'Bildverständnis braucht zuerst die installierte KI-Engine.',
   'images.avail.incompatible': 'Das KI-Bildmodell dieses Laufwerks braucht eine neuere KI-Engine.',
   'images.avail.cta': 'Zum KI-Modell',
-  'images.avail.ocrPointer': 'Gescannte Dokumente? Nutze „Durchsuchbar machen (OCR)" unter Dokumente.',
+  'images.avail.ocrPointer': 'Gescannte Dokumente? Nutze „Durchsuchbar machen (OCR)“ unter Dokumente.',
   'images.locked': 'Entsperre deinen Arbeitsbereich, um ein Bild zu verstehen.',
   'images.drop.title': 'Bild hier ablegen',
   'images.drop.choose': 'oder ein Bild auswählen',
@@ -2259,7 +2271,7 @@ export const de: Record<keyof typeof en, string> = {
     'Erkläre, was dieses Diagramm zu zeigen scheint. Nenne Achsen, Beschriftungen, Trends und jede Unsicherheit.',
   'images.chip.readForm': 'Dieses Formular lesen',
   'images.chip.readForm.prompt':
-    'Nenne die wichtigsten sichtbaren Felder und Werte in diesem Formular. Schreibe „unklar", wo du etwas nicht lesen kannst.',
+    'Nenne die wichtigsten sichtbaren Felder und Werte in diesem Formular. Schreibe „unklar“, wo du etwas nicht lesen kannst.',
   'images.chip.importantDetails': 'Wichtige Details finden',
   'images.chip.importantDetails.prompt':
     'Liste die wichtigsten sichtbaren Details auf. Leite nichts ab, was nicht sichtbar ist.',
@@ -2390,7 +2402,7 @@ export const de: Record<keyof typeof en, string> = {
     '⚠ {count} Teile konnten nicht übersetzt werden — an den markierten Stellen bleibt der Originaltext erhalten.',
   'translate.file.err.multiDrop': 'Lege jeweils nur ein Dokument ab.',
   'translate.file.err.noPath':
-    'Dieses Element hat keine Datei auf dem Datenträger. Ziehe ein Dokument aus einem Ordner oder nutze „ein Dokument auswählen".',
+    'Dieses Element hat keine Datei auf dem Datenträger. Ziehe ein Dokument aus einem Ordner oder nutze „ein Dokument auswählen“.',
   'translate.file.err.unsupported':
     'Dieser Dateityp kann nicht übersetzt werden. Versuche eine PDF-, Word-, Markdown- oder Textdatei.',
   'translate.file.err.scanned':
@@ -2454,6 +2466,10 @@ export const de: Record<keyof typeof en, string> = {
   'review.evidence.filterClear': 'Filter zurücksetzen',
   'review.evidence.filterNone': 'Keine Quelle passt zu deinem Filter.',
   'review.evidence.shownCount': '{shown} von {total} Quellen angezeigt',
+  // Der Aufdeck-Schalter zählt QUELLEN — er blendet Quellenkarten ein, und die Zeile
+  // direkt darüber sagt bereits „{shown} von {total} Quellen angezeigt“.
+  'review.evidence.more.one': 'und {count} weitere Quelle',
+  'review.evidence.more.other': 'und {count} weitere Quellen',
   // P5 (Spec §23): sichtbare Zeile, die den Nachweisbereich mit dem gewählten Prüfpunkt
   // verbindet; zugleich die programmatische BESCHREIBUNG der Region (`aria-describedby`).
   'review.evidence.linkingItem': 'Nachweise für Prüfpunkt {n} verknüpfen',

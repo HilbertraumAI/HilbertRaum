@@ -67,6 +67,20 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
+# FAILURE REPORTING (AUD-05): every failure below is announced with
+# `Write-Host -ForegroundColor Red` plus an explicit `exit`, never with `Write-Error`.
+# Under $ErrorActionPreference = 'Stop' a Write-Error is promoted to a SCRIPT-TERMINATING
+# exception, which has three consequences that silently break this script's control flow:
+#   1. nothing after it on the same line runs -- `Write-Error ...; $failed++; continue`
+#      does not continue, it aborts the whole loop at the FIRST failure;
+#   2. a following `exit 2` never executes, so the process exits 1 and the documented
+#      config-error code collapses into the download-failure code;
+#   3. the exception propagates OUT through the `&` call of a parent script (prepare-drive)
+#      and kills it before it can inspect $LASTEXITCODE, so a step the parent treats as
+#      best-effort becomes fatal and the steps after it never run.
+# Write-Host has none of those effects: the message is printed and control flow, exit codes
+# and the parent's error handling stay exactly as written.
+
 # Resilient download: a flaky link (beta-tester report — the connection dropped mid-curl)
 # can fail repeatedly. curl's own --retry does NOT cover a mid-transfer DROP (exit 18/56/28)
 # on older curl, so we wrap it in an OUTER loop that RESUMES the partial file (-C -) on each
@@ -99,7 +113,7 @@ $Target = [System.IO.Path]::GetFullPath($Target)
 $SourcesFile = Join-Path $Target 'model-manifests/runtime-sources.yaml'
 if (-not (Test-Path $SourcesFile)) { $SourcesFile = Join-Path $RepoRoot 'model-manifests/runtime-sources.yaml' }
 if (-not (Test-Path $SourcesFile)) {
-  Write-Error "No runtime-sources.yaml found under '$Target' or repo root."
+  Write-Host "No runtime-sources.yaml found under '$Target' or repo root." -ForegroundColor Red
   exit 2
 }
 
@@ -154,7 +168,7 @@ if ($Family -eq 'ocr') {
   }
   if ($cur) { $files += $cur }
   if (-not $ocrVersion -or $files.Count -eq 0) {
-    Write-Error 'runtime-sources.yaml: no ocr block (version + files) found.'
+    Write-Host 'runtime-sources.yaml: no ocr block (version + files) found.' -ForegroundColor Red
     exit 2
   }
   Write-Host "Fetch OCR language files -> $Target (data $ocrVersion)" -ForegroundColor Cyan
@@ -162,10 +176,10 @@ if ($Family -eq 'ocr') {
   $failed = 0
   foreach ($f in $files) {
     foreach ($required in @('url', 'sha256', 'dest')) {
-      if (-not $f[$required]) { Write-Error "ocr.files ($($f.lang)): missing '$required'."; exit 2 }
+      if (-not $f[$required]) { Write-Host "ocr.files ($($f.lang)): missing '$required'." -ForegroundColor Red; exit 2 }
     }
     if ($f.dest -match '\.\.' -or $f.dest -match '^[/\\]' -or $f.dest -match '^[A-Za-z]:') {
-      Write-Error "runtime-sources.yaml: ocr dest escapes the drive root: $($f.dest)"
+      Write-Host "runtime-sources.yaml: ocr dest escapes the drive root: $($f.dest)" -ForegroundColor Red
       exit 2
     }
     $dest = Join-Path $Target ($f.dest -replace '/', [IO.Path]::DirectorySeparatorChar)
@@ -176,15 +190,36 @@ if ($Family -eq 'ocr') {
       $actual = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
       if ($actual -eq $sha) { Write-Host '    skip (present + verified)' -ForegroundColor Green; continue }
       Write-Host '    present but hash differs -- re-fetching' -ForegroundColor Yellow
+      # DELETE the bad file first (AUD-24). The download below resumes at the end of whatever
+      # is already on disk (curl -C -), so re-fetching ONTO a complete-but-wrong file asks the
+      # server for a byte range that starts at or past the resource's length -- an
+      # unsatisfiable range (HTTP 416), which fails every retry instead of replacing the file.
+      # Starting from an empty destination makes the repair attempt an actual repair.
+      # UNCONDITIONAL here, unlike fetch-models, and deliberately so -- do not "harmonize" the
+      # two: fetch-models guards the same delete behind a size test because it must preserve
+      # cross-run resume of multi-GB weights, and its manifests carry a size_bytes to test
+      # against. These OCR language files are a few MB, runtime-sources.yaml records no size
+      # for them, and re-fetching one costs nothing -- so there is no partial worth saving and
+      # no field to distinguish one with.
+      Remove-Item -Force -Path $dest -ErrorAction SilentlyContinue
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
     $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
     if ($Curl) {
       if (-not (Invoke-CurlResilient -Url $f.url -Dest $dest)) {
-        Write-Error 'download failed after retries'; $failed++; continue
+        Write-Host '    download failed after retries' -ForegroundColor Red; $failed++; continue
       }
     } else {
-      Invoke-WebRequest -Uri $f.url -OutFile $dest -UseBasicParsing
+      # Same warn-and-continue contract as the curl branch: a failing Invoke-WebRequest is a
+      # terminating error under $ErrorActionPreference = 'Stop', which would abort the whole
+      # batch at the first bad file instead of attempting the rest (AUD-05).
+      try {
+        Invoke-WebRequest -Uri $f.url -OutFile $dest -UseBasicParsing
+      } catch {
+        Write-Host ("    download failed: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        $failed++
+        continue
+      }
     }
     if (& $IsRealShaOcr $sha) {
       $actual = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
@@ -238,7 +273,7 @@ foreach ($raw in $lines) {
 }
 if ($current) { $builds += $current }
 
-if (-not $version) { Write-Error "runtime-sources.yaml: missing $Family.version (is the $Family block present?)"; exit 2 }
+if (-not $version) { Write-Host "runtime-sources.yaml: missing $Family.version (is the $Family block present?)" -ForegroundColor Red; exit 2 }
 
 # --- Select the build (os + arch [+ backend]); default = first os/arch match
 # (vulkan on win/linux, metal on mac since Phase 14).
@@ -252,7 +287,7 @@ if ($Backend) { $candidates = $candidates | Where-Object { $_.backend -eq $Backe
 $build = $candidates | Select-Object -First 1
 
 if (-not $build) {
-  Write-Error "No runtime build for os=$Os arch=$Arch$(if ($Backend) { " backend=$Backend" }). Try -Os/-Arch/-Backend overrides."
+  Write-Host "No runtime build for os=$Os arch=$Arch$(if ($Backend) { " backend=$Backend" }). Try -Os/-Arch/-Backend overrides." -ForegroundColor Red
   exit 2
 }
 
@@ -260,7 +295,7 @@ if (-not $build) {
 # disable verification forever (the audited C1 bug), so fail loudly instead.
 foreach ($required in @('url', 'sha256', 'extract_to')) {
   if (-not $build[$required]) {
-    Write-Error "runtime-sources.yaml: selected build ($Os/$Arch) is missing '$required'."
+    Write-Host "runtime-sources.yaml: selected build ($Os/$Arch) is missing '$required'." -ForegroundColor Red
     exit 2
   }
 }
@@ -269,7 +304,7 @@ foreach ($required in @('url', 'sha256', 'extract_to')) {
 # extract_to must not be able to write outside the drive root (TS planRuntimeDownload
 # already rejects this -- mirror it).
 if ($build.extract_to -match '\.\.' -or $build.extract_to -match '^[/\\]' -or $build.extract_to -match '^[A-Za-z]:') {
-  Write-Error "runtime-sources.yaml: extract_to escapes the drive root: $($build.extract_to)"
+  Write-Host "runtime-sources.yaml: extract_to escapes the drive root: $($build.extract_to)" -ForegroundColor Red
   exit 2
 }
 
@@ -320,7 +355,7 @@ if ($Curl) {
   # flaky connection doesn't lose the whole archive. Integrity is enforced by the SHA-256
   # pin below, so resume can never weaken verification.
   if (-not (Invoke-CurlResilient -Url $build.url -Dest $archive)) {
-    Write-Error 'curl failed after retries'; exit 1
+    Write-Host 'curl failed after retries' -ForegroundColor Red; exit 1
   }
 } else {
   Invoke-WebRequest -Uri $build.url -OutFile $archive -UseBasicParsing
@@ -382,7 +417,7 @@ if ($archiveName -match '\.(tar\.gz|tgz)$') {
     if ($unresolved -eq 0) { break }
   }
   if ($tarExit -ne 0 -and $unresolved -gt 0) {
-    Write-Error "tar extraction failed (exit $tarExit; $unresolved unresolved entries)"
+    Write-Host "tar extraction failed (exit $tarExit; $unresolved unresolved entries)" -ForegroundColor Red
     exit 1
   }
 } else {
