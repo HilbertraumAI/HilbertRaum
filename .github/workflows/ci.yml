@@ -35,14 +35,9 @@ permissions:
 # Keep CI fast and free of network flakiness: skip the ~100 MB Electron platform-binary
 # download (nothing here launches Electron) and short-circuit the repo's verify-electron
 # postinstall (scripts/verify-electron.mjs early-exits on either of these). See packaging.md.
-#
-# COREPACK_ENABLE_DOWNLOAD_PROMPT: corepack fetches the pinned npm on first use; the prompt
-# it would otherwise raise has no answer on a runner. Set workflow-wide, not per step,
-# because the fetch happens on the first `npm` invocation, not at `corepack enable`.
 env:
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
   HILBERTRAUM_SKIP_ELECTRON_CHECK: '1'
-  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
 
 jobs:
   build-and-test:
@@ -72,14 +67,16 @@ jobs:
           cache: npm
 
       # `engines.npm >= 11` + the `packageManager: npm@11.6.2` pin are only real policy if
-      # the pinned npm is what actually installs. Node 22 bundles npm 10.9 (BELOW the repo's
-      # own floor), so without this the floor was never exercised anywhere. Corepack ships
-      # with Node and shims `npm` to the pinned version on every leg. Must run AFTER
-      # setup-node (it shims the Node install this step just provisioned). The printed
-      # versions are the evidence in the run log that the pin took effect.
-      - name: Enable corepack (run the pinned npm, not the Node-bundled one)
+      # the pinned npm is what actually installs. Node 22 bundles npm 10.9 and Node 24 bundles
+      # a different 11.x — neither is the pinned version, and the 22 one is BELOW the repo's own
+      # floor — so without this the pin was never exercised on any leg. `corepack enable` was
+      # tried and does NOT override npm here (its npm shim did not take precedence — the bundled
+      # npm ran on every leg: 10.9.8 on Node 22, 11.16.0 on Node 24), so install the pin
+      # explicitly instead. Node 22's bundled npm 10 can install npm 11 globally; the printed
+      # version is the run-log evidence that 11.6.2 is what the install/test steps below run.
+      - name: Install the pinned npm (engines.npm >= 11; the bundled npm is not the pin)
         run: |
-          corepack enable
+          npm install -g npm@11.6.2
           node -v
           npm -v
 

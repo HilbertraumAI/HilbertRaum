@@ -477,17 +477,18 @@ that passes only when **every** leg passes — mark **`ci-success`** the **requi
 `master`. Its name is stable even if the matrix labels change later, so branch protection never
 silently stops matching; never mark an individual leg required.
 
-**Why both Node majors, and why `corepack enable` (AUD-26).** The two versions are the two ends of
-what the repo *claims*, and each was previously an unexercised claim: `22.x` is the `engines.node
->= 22.5` floor the app promises to run on (`node:sqlite` is a built-in that needs it), and `24.x` is
-what **every** `release.yml` leg builds under — including the Windows leg that re-runs the full
-suite on the tagged commit. Gating only one leaves the other a declaration nothing tests. The
-`corepack enable` step (right after `actions/setup-node`, before `npm ci`) makes the pinned
-`packageManager: npm@11.6.2` the npm that actually installs on every leg: Node 22 bundles npm 10.9,
-which is *below* the root `engines.npm >= 11` floor, so before this the floor was dead policy —
-declared and never exercised anywhere. The step prints `node -v` / `npm -v` so the run log carries
-the evidence. `COREPACK_ENABLE_DOWNLOAD_PROMPT=0` is set workflow-wide (not per step) because
-corepack fetches the pinned npm on the first `npm` invocation, not at `corepack enable`.
+**Why both Node majors, and why the explicit pinned-npm install (AUD-26).** The two versions are the
+two ends of what the repo *claims*, and each was previously an unexercised claim: `22.x` is the
+`engines.node >= 22.5` floor the app promises to run on (`node:sqlite` is a built-in that needs it),
+and `24.x` is what **every** `release.yml` leg builds under — including the Windows leg that re-runs
+the full suite on the tagged commit. Gating only one leaves the other a declaration nothing tests.
+A `npm install -g npm@11.6.2` step (right after `actions/setup-node`, before `npm ci`) makes the
+pinned `packageManager: npm@11.6.2` the npm that actually installs on every leg: Node 22 bundles
+npm 10.9, which is *below* the root `engines.npm >= 11` floor, and Node 24 bundles a different
+11.x — neither is the pin. The step prints `node -v` / `npm -v` so the run log carries the evidence.
+**`corepack enable` was tried first and does NOT work here** — the PR run log proved its npm shim did
+not take precedence, so the bundled npm ran on every leg (10.9.8 on Node 22, 11.16.0 on Node 24);
+the explicit global install is the reliable mechanism and replaced it.
 
 **Why it can run with zero weights / zero network / zero binaries:** the unit + integration suite
 is offline by construction — mock runtime, mock embedder, `electron` mocked — and nothing in
@@ -559,8 +560,8 @@ Non-clash with `ci.yml`: `release.yml` never fires on `pull_request`/`push: mast
 manual dispatch. It runs on **Node 24** (electron-builder ships its own pinned Electron runtime),
 which `ci.yml`'s matrix now also covers, does **not** set the `ELECTRON_SKIP_BINARY_DOWNLOAD` knobs
 (packaging needs the binary), and installs with `npm ci` (lockfile-pinned — the CI half of hardening
-L-8). It does **not** `corepack enable`: Node 24 already bundles npm 11.x, so the `engines.npm >= 11`
-floor holds there on the bundled npm; only CI pins the exact `npm@11.6.2`. Adding corepack here too
+L-8). It does **not** pin the exact npm: Node 24 already bundles npm 11.x, so the `engines.npm >= 11`
+floor holds there on the bundled npm; only CI installs the exact `npm@11.6.2`. Pinning here too
 would make the two installs byte-identical, at the cost of exercising a new step for the first time
 on a tag (a release leg has no PR gate ahead of it) — a deliberate, registered residual.
 
