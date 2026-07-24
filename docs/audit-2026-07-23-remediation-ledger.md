@@ -13,7 +13,7 @@ Working paper. Transient with the plan and the report; folded into the durable
 
 ## Carry-forward backlog (issues found mid-wave; each assigned to a phase)
 
-- [ ] **B-01** — the shell PATH node is **v22.18.0 / npm 10.9.3**; `package.json` `engines` declares
+- [x] **B-01 (CLOSED — workstation fact, not a repo defect; AUD-26 makes CI the enforcement point)** — the shell PATH node is **v22.18.0 / npm 10.9.3**; `package.json` `engines` declares
   `node >=22.5` (satisfied) but `npm >=11` (**not** satisfied locally), the same dead-policy floor
   AUD-26 says CI must exercise. Only affects local gate runs
   (vitest is unaffected); relevant context for Phase 9a's CI Node bump. *Assigned: Phase 9a
@@ -243,6 +243,41 @@ Working paper. Transient with the plan and the report; folded into the durable
   a reviewer working fast across many items pays N of everything. A batched
   `updateEvidenceReviewItems(patches[])` channel would close it with the same transaction shape
   AUD-13 just established. *Assigned: Phase 10 loop if cheap, else deferred-with-registration.*
+
+- [ ] **B-36 — the chunk de-overlap algorithm now exists in two copies.** `overlapLength` (KMP) plus
+  the `chunkOverlapTokens x 20`-bounded shared-run measurement live module-private in `rag/index.ts`
+  and, as of Phase 7, in `evidence-pack/source-context.ts`. Mirrored rather than imported because
+  the rag helpers are private and `rag/index.ts` is a very heavy module (runtime, chat, skills, diff)
+  for an evidence-pack reader to pull in. *Fix: extract `overlapLength` + a
+  `sharedChunkOverlapLength(prev, next)` into `services/text.ts`, which already hosts
+  `codePointSlice` for exactly this reason. Orchestrator DECLINED to do it in-wave — it touches
+  `rag/index.ts`, outside this wave's blast radius. Assigned: deferred-with-registration.*
+- [ ] **B-37 — the per-export transient names add 33 characters to the destination path** (a 32-char
+  token plus a dot), on BOTH the print source and the tmp sibling. On Windows without long-path
+  support a destination beyond roughly 212 characters now fails where the old 4/15-character
+  suffixes might have fitted. Judged an acceptable trade (correctness over a rare deep path, and
+  such a destination is already near the limit), but Windows is first-class here. *Fix if a real
+  long-path report appears: a 12-16 character slice keeps collision safety with a shorter path, at
+  the cost of churning the test pins. Assigned: deferred-with-registration.*
+- [ ] **B-38 — the hidden OCR rasterizer window hand-duplicates its preload bridge shape.**
+  `renderer/ocr/main.ts` declares `Window['ocrRaster']` as a literal 5-method object in a
+  `declare global` block, while `preload/ocr.ts` exports `OcrRasterBridge = typeof ocrRaster` that
+  nothing imports — so there is **no compile-time link between the bridge and its only consumer**.
+  A signature change in the preload (e.g. `Uint8Array` -> `ArrayBuffer`) compiles clean on both
+  sides and fails only at runtime, in a window that has no UI to report it. This is why
+  `OcrRasterBridge` shows up as a dead export; Phase 9a correctly KEPT it, because pruning it would
+  delete the only thing that can ever close the drift gap. *Fix: `import type { OcrRasterBridge }` +
+  `interface Window { ocrRaster: OcrRasterBridge }` — wiring, not deletion. Assigned:
+  deferred-with-registration (a refactor of a sandbox-sensitive area).*
+- [ ] **B-39 — engines floor inconsistency between the two manifests:** the workspace root declares
+  `{ node: '>=22.5', npm: '>=11' }`, `apps/desktop/package.json` declares only `{ node: '>=22.5' }`
+  with no npm floor. Harmless today (npm reads the root manifest for the install), but the two
+  manifests state different policies for the same repo. *Assigned: deferred-with-registration.*
+- [ ] **B-40 — two dated ledger entries still describe CI as "Node 22.x"** (`architecture.md`'s
+  TEST-N1 fix-ledger row, and a `build-log.md` archive entry). Deliberately not edited: `build-log.md`
+  is a verbatim frozen archive and the repo's convention is that dated ledgers stay historical. The
+  open question is only whether the **`architecture.md` TEST-N1 row** should get a superseding note.
+  *Assigned: Phase 11 close-out — ORCHESTRATOR DECISION.*
 
 ## Decisions log
 
@@ -847,3 +882,150 @@ sha256 of the destination read back off disk; and on BOTH failure paths `close` 
   hidden window existing (observable state, no fixed sleep). **Any future async step added before the
   first `withStepTimeout` will re-break this test the same way.**
 - **Discovered -> backlog:** B-32, B-33, B-34, B-35.
+
+### Phase 7 — AUD-08 + AUD-16 + AUD-17 + AUD-09 + AUD-10 + AUD-11 (pack & review-UI polish) — DONE, after one orchestrator-directed loop
+
+**The loop: AUD-17 was only half-closed, and the implementer found it itself.** Round 1 gave the PDF
+print source a per-export unique name — correct, but `writePackFileAtomic`'s scratch file was still
+`${destPath}.tmp`, **derived from the destination alone: exactly the defect shape AUD-17 had just
+disproved.** That seam hits **HTML exports too**, which have no print source and are therefore
+untouched by the print-source fix. Worse, the module header still documented the collision as
+accepted ("the same posture as the atomic writer's shared `${dest}.tmp`") — the very reasoning the
+finding refuted. The orchestrator sent it back rather than ship a half-closed finding when the other
+half was one line and the helper already existed.
+
+**Round 2 result — and the pre-fix behaviour was WORSE than the finding described.** Verified with a
+temporary probe against the reverted build: on the shared tmp name, export A **succeeded** and
+committed a destination containing review B's bytes under review A's row
+(`destHasAlpha:false, destHasBravo:true`), **and** export B failed outright with
+`ENOENT … rename 'pack.html.tmp' -> 'pack.html'` because A had already renamed the one shared
+scratch file away. So the old code could **destroy a legitimate concurrent export**, not merely
+mislabel one. The audit entry describes only the provenance swap; both are now closed.
+
+**Decision D-7a (remove the shared resource, do not contend on it).** One private `exportToken(packId)`
+helper (pack-id alphanumerics, capped at a UUID's 32 hex chars, random fallback for an id that
+sanitises away) now backs BOTH `printSourcePath` and a new `packTmpPath(destPath, packId)` — one
+sanitiser, so the two seams cannot drift apart. `writePackFileAtomic` takes `packId` as a REQUIRED
+third argument. Nothing about write -> fsync -> hash -> rename moved, and the sibling still lives in
+the destination's directory so the rename stays same-volume and atomic.
+
+**What remains shared, stated explicitly rather than left implied:** the destination file itself —
+the later rename replaces the earlier one. That is intended (any second save to one path does it),
+each row still records the hash of the bytes its own export wrote, and it is now said plainly in the
+module header, `security-model.md`, `data-contracts.md` and `architecture.md`.
+
+**Honest scope of the concurrency proof (the standard I want held):** the interleaving is driven by
+injected gates on the fs boundary, which is what makes it deterministic. It proves the code's own
+sequence has the window and that unique naming removes the shared resource the window depends on. It
+is ONE ordering, not an enumeration — other orderings plausibly let both exports succeed with
+swapped hashes, and that was not constructed or asserted. Likewise for the print seam: Chromium's own
+timing (that an overwrite landing after `loadFile` resolves is genuinely picked up) is the audit's
+measured 12/12 claim and stays the env-gated real-Electron smoke's territory; the harness models it
+rather than proving it. Said plainly instead of over-claiming.
+
+- **A vacuous-assertion class caught and fixed in passing:** four existing assertions of the form
+  `expect(existsSync(`${dest}.tmp`)).toBe(false)` became **meaningless** the moment the tmp file
+  stopped being named from the destination — they would pass even with a scratch file left behind
+  under its real name. Replaced with `readdirSync(root).filter(f => f.endsWith('.tmp'))` directory
+  scans, which have teeth under any name, and the async-fs suite now reads the real tmp path off the
+  recorded fs call order via a helper that THROWS if no sibling was used at all (so a writer that
+  stopped using one fails instead of passing silently). This class can recur anywhere a test pins a
+  derived path that later becomes non-deterministic.
+- **RED evidence, per finding:** AUD-08 `expected 2 to be 1` on the occurrence count of the actual
+  duplicated substring, computed brute-force in the test rather than with the implementation's own
+  algorithm (so the test cannot agree with a wrong implementation). AUD-16 `expected true to be
+  false` on `existsSync(sourceHtmlPath)` — plaintext residue survived — plus `expected "warn" to be
+  called 2 times, but got 0 times`. AUD-17 print seam: `expected { alpha: false, bravo: true } to
+  deeply equal { alpha: true, bravo: false }` — export A printed review B's pack. AUD-17 tmp seam
+  (HTML path): `- "describes": "ALPHA bytes" / + "describes": "BRAVO bytes"` — A's row names review A
+  while its recorded SHA-256 hashes B's pack. AUD-09 `aria-expanded="true"` on a simultaneously
+  disabled control. AUD-10 the drawer re-mounted with no user action after narrow -> wide -> narrow.
+  AUD-11 `'and 24 more sections'` vs `'and 24 more sources'`, EN and DE.
+- **GREEN (orchestrator's own runs):** typecheck green; export/concurrency/print batch **7 files /
+  50 tests**; renderer + review + i18n batch **11 files / 172 tests**. The implementer additionally
+  ran the env-gated REAL-Electron `evidence-pack-pdf-smoke` (6 passed) to confirm the new `log`
+  import still bundles and prints inside the installed Electron 39. `as never` count under `tests/`
+  recounted at exactly **110** — the one-way ratchet's baseline, not raised.
+- **Cross-agent catch, relayed mid-run:** Phase 9a noticed this phase had pushed the one-way
+  `as never` ratchet to 111. Rather than raise the documented one-way baseline, the fs fake was
+  retyped (`const rm: typeof actual.rm`) so **no cast is needed at all**. Two symbols flagged in the
+  same message were resolved too: `printSourcePath` is now imported and directly contract-tested,
+  `PRINT_SOURCE_RETRY_DELAY_MS` was demoted to module-private.
+- **Line-ending note:** a scripted edit briefly rewrote the new concurrency test to CRLF; it was
+  converted back to LF and the orchestrator independently verified all four new test files are
+  LF-only, NUL-free and BOM-free (the repo pins `* text=auto eol=lf`).
+- **Residual (AUD-16, honest):** if BOTH removal attempts fail or the app is killed mid-print, a
+  plaintext copy of the pack still remains beside the exported file. Now logged **ids-only**
+  (packId + OS error code) and documented in `security-model.md` instead of being invisible. The
+  250 ms retry pause is production-only and module-private; no test sleeps.
+- **Residual (AUD-08):** the de-overlap scan is bounded to `chunkOverlapTokens x 20` = 1600
+  characters (the same bound the whole-document read uses); a genuine duplicate run longer than that
+  would keep the excess. The located chunk's own text is never trimmed by construction.
+- **Discovered -> backlog:** B-36, B-37.
+
+### Phase 9a — AUD-19 + AUD-25 + AUD-26 (maintainability) — DONE
+
+**Decision D-9a-a (AUD-19: BOTH forms, because they catch different things).** The literal now
+carries `satisfies Record<keyof CoverageInfo, unknown>` — the compile-time tooth — AND a keys-parity
+test, because the compiler cannot cover two real cases: `npm test` runs without `tsc`, and the
+compiler cannot distinguish "listed and compared" from "listed but parked as `undefined`". The
+deliberately-excluded display-plumbing field is listed as `nodeIds: undefined` for the constraint,
+and `JSON.stringify` omits undefined-valued keys, so the emitted string is unchanged.
+
+**The fingerprint-unchanged proof, which is the part that mattered.** This canonical string is
+digested into the **persisted** acknowledgement fingerprint, so changing it would silently lapse
+**every acknowledgement already stored in a user's workspace**. The implementer first ran the new pin
+test with a placeholder expectation against the UNMODIFIED code to capture the real value —
+`coverage=changed:dfc1357dca536b8e;src:S2=unverifiable`, taken through the real
+acknowledge -> `freshness_ack_json` path over a fully-populated 10-field `CoverageInfo` — hard-coded
+that pre-edit value, THEN applied the change. Green after ⇒ byte-identical. The pin also asserts two
+coverages differing ONLY in `nodeIds` fingerprint identically.
+
+**Tooth proofs (both directions):** adding a field to `CoverageInfo` and not listing it produced
+`TS1360: Property 'aud19TemporaryProbeField' is missing` AND a red parity test; parking a listed
+field as `undefined` produced a red exclusion test AND a red fingerprint pin
+(`'coverage=changed:2a590b6d…' to be 'coverage=changed:dfc1357d…'`). Both reverted, `git diff` clean.
+
+**Decision D-9a-b (AUD-25: conservative, and the numbers say why).** 1940 exported symbols; 252 have
+zero references outside their defining file; 39 of those are value exports; **5 are declaration-only**
+(never used even inside their own file) — the genuinely dead set. Of those 5: **3 pruned**
+(`hostLlamaBinaryPath` — an exact duplicate of a live pair, its own comment claiming a "tests/diag"
+use that no test has; `collectionLabel` — a refactor leftover, unused even in its own file;
+`loadSkillFromDir` — a one-line alias the module's own header says callers bypass), **2 KEPT**
+(`TASK_SOURCE_UNREADABLE_MESSAGE`, `TASK_OCR_FAILED_MESSAGE` — members of a 15-constant block whose
+header explicitly says the canonical-English constants stay exported for exact-string tests; the
+other 13 ARE referenced, and pruning two members would break a coherent family).
+**`nodeVectorSearch` untouched**, exactly as the audit's own verifier corrected. `OcrRasterBridge`
+KEPT despite being dead — see B-38; deleting it would remove the only thing that can ever close a
+real drift gap. The ~34 remaining value exports and ~213 type exports are **live code with an
+over-broad `export` modifier**, or the parameter/return types of exported functions — not dead code;
+a ~35-file churn with zero behavioural benefit was declined. Orchestrator independently re-grepped
+all three pruned symbols: zero code references.
+
+**Decision D-9a-c (AUD-26: a matrix, not a bare bump).** A bare 22 -> 24 bump would fix the npm dead
+policy while **creating the symmetric one** — `engines.node >=22.5` would become a declaration
+nothing exercises. So `ci.yml` now runs `os x node: ['22.x','24.x']` = 4 legs: 22.x gates the
+declared floor, 24.x gates the Node major every release leg builds and full-suite-tests under. Plus
+`corepack enable` after setup-node (Node 22 bundles npm 10.9, **below the repo's own
+`engines.npm >= 11`**, so the pinned `npm@11.6.2` never actually ran anywhere) and
+`COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'` set workflow-wide, because the fetch happens on the first
+`npm` invocation rather than at `corepack enable`.
+**`ci-success` aggregation is unchanged and still correct** — it already aggregated a matrix, and a
+matrix job's `result` is `success` only when ALL legs succeeded. Leg NAMES change, which is why the
+comment now says never to mark a leg required. `release.yml` read in full and deliberately left
+alone: all three legs already pin Node 24 (npm 11.x), so it was never the dead-policy site.
+**Cannot be validated locally** — watch on the next CI run: `npm -v` printing 11.6.2 on all four legs
+(Windows especially, corepack writes shims into the setup-node tool-cache), no corepack prompt stall,
+and the two NEW legs green (`node:sqlite` is a built-in whose behaviour moved between majors, so an
+FTS/SQLite assertion is the plausible failure site). Rollback is a single-file revert;
+`ci-success` needs no edit either way.
+- **GREEN (orchestrator's own run):** `evidence-freshness` 31 ok, `ScopePopover` 10 ok,
+  `skills-loader-cache` ok, `engine-download` ok, `skills-installer` 33 ok -> **5 files / 109 tests**.
+- **Staging note:** both phases edited `docs/data-contracts.md` concurrently, so Phase 9a's
+  freshness-contract paragraph rides in the Phase-7 commit. Recorded so the split is not mistaken for
+  a lost edit.
+- **B-01 CLOSED:** the local box being node v22.18.0 / npm 10.9.3 is a workstation fact, not a repo
+  defect — and AUD-26 now makes CI the place the floor is actually enforced. (Residual worth knowing:
+  a future local `npm install`, as opposed to `npm ci`, on this box could still write a lockfile a
+  different npm produced.)
+- **Discovered -> backlog:** B-38, B-39, B-40.

@@ -13,7 +13,6 @@ import {
   type RuntimeSources,
   type RuntimeSourcesResult
 } from '../../shared/runtime-sources'
-import { llamaOsDir } from './runtime/sidecar'
 import {
   downloadToFile,
   markerBinaryKey,
@@ -777,13 +776,4 @@ function friendlyEngineError(err: unknown): string {
     return tMain('main.engine.extractFailed')
   }
   return tMain('main.engine.interrupted', { reason: raw })
-}
-
-/** Absolute path of the host's on-drive `llama-server` binary (chat engine; tests/diag). */
-export function hostLlamaBinaryPath(
-  rootPath: string,
-  platform: NodeJS.Platform = process.platform
-): string {
-  const name = platform === 'win32' ? 'llama-server.exe' : 'llama-server'
-  return join(rootPath, 'runtime', 'llama.cpp', llamaOsDir(platform), name)
 }

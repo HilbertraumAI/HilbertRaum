@@ -38,13 +38,6 @@ interface ScopePopoverProps {
 /** Stable empty-id list for a null scope (PF-7d) — a fresh `[]` per render would bust the memos. */
 const EMPTY_IDS: string[] = []
 
-/** Localize a built-in collection's display name by type; projects keep their stored name. */
-export function collectionLabel(c: Collection, t: I18n['t']): string {
-  if (c.type === 'library') return t('docs.section.library')
-  if (c.type === 'temporary') return t('docs.section.temporary')
-  return c.name
-}
-
 /**
  * The composed sources phrase for a resolved scope — e.g. "Library + 2 documents" — or null
  * when the scope is empty (= the whole corpus). The single source of truth for both the footer

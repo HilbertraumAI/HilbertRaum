@@ -35,30 +35,53 @@ permissions:
 # Keep CI fast and free of network flakiness: skip the ~100 MB Electron platform-binary
 # download (nothing here launches Electron) and short-circuit the repo's verify-electron
 # postinstall (scripts/verify-electron.mjs early-exits on either of these). See packaging.md.
+#
+# COREPACK_ENABLE_DOWNLOAD_PROMPT: corepack fetches the pinned npm on first use; the prompt
+# it would otherwise raise has no answer on a runner. Set workflow-wide, not per step,
+# because the fetch happens on the first `npm` invocation, not at `corepack enable`.
 env:
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
   HILBERTRAUM_SKIP_ELECTRON_CHECK: '1'
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
 
 jobs:
   build-and-test:
     name: build-and-test
     runs-on: ${{ matrix.os }}
     strategy:
-      # Report both OSes even if one fails — the ci-success gate below aggregates the legs.
+      # Report every leg even if one fails — the ci-success gate below aggregates them
+      # (a matrix job's `result` is success only when ALL legs succeeded).
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        # BOTH ends of the supported range, because both were previously untested claims
+        # (AUD-26): 22.x is the `engines.node >=22.5` floor the app promises to run on
+        # (node:sqlite is a built-in that needs it), 24.x is what every release leg builds
+        # AND runs the full suite under. CI gating only one of them leaves the other a
+        # declaration nothing exercises.
+        node: ['22.x', '24.x']
 
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Set up Node.js 22.x
+      - name: Set up Node.js ${{ matrix.node }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # engines require >=22.5 (node:sqlite is a built-in that needs it).
-          node-version: '22.x'
+          node-version: ${{ matrix.node }}
           cache: npm
+
+      # `engines.npm >= 11` + the `packageManager: npm@11.6.2` pin are only real policy if
+      # the pinned npm is what actually installs. Node 22 bundles npm 10.9 (BELOW the repo's
+      # own floor), so without this the floor was never exercised anywhere. Corepack ships
+      # with Node and shims `npm` to the pinned version on every leg. Must run AFTER
+      # setup-node (it shims the Node install this step just provisioned). The printed
+      # versions are the evidence in the run log that the pin took effect.
+      - name: Enable corepack (run the pinned npm, not the Node-bundled one)
+        run: |
+          corepack enable
+          node -v
+          npm -v
 
       - name: Install (lockfile-pinned, offline-capable)
         run: npm ci
@@ -72,9 +95,10 @@ jobs:
       - name: Test
         run: npm test
 
-  # Single stable gate to mark as the branch-protection required status check. The per-OS matrix
-  # legs publish as "build-and-test (ubuntu-latest)" / "(windows-latest)" — names that shift if
-  # the OS labels ever change; "ci-success" does not, so it stays matched in branch protection.
+  # Single stable gate to mark as the branch-protection required status check. The matrix legs
+  # publish as "build-and-test (ubuntu-latest, 22.x)" / "(windows-latest, 24.x)" / … — names that
+  # shift whenever the OS labels or the Node list change; "ci-success" does not, so it stays
+  # matched in branch protection. Never add a leg's own name as a required check.
   ci-success:
     name: ci-success
     runs-on: ubuntu-latest

@@ -76,20 +76,36 @@ interface DocumentHashRow {
  * and unknown extra keys are excluded — they carry no claim the review presents, and a
  * plumbing-only difference must not flag a review outdated. Key order is fixed, so the
  * comparison is stable regardless of stored JSON shape.
+ *
+ * AUD-19 — exhaustiveness tooth. Every `CoverageInfo` field MUST appear in the literal
+ * below: `satisfies Record<keyof CoverageInfo, unknown>` makes a newly-added coverage field
+ * a COMPILE error here, so it can never be silently excluded from drift detection. (Silent
+ * exclusion is not cosmetic: a review whose only drift is in the unlisted field would read
+ * 'unchanged', and the export would proceed without the outdated banner or the acknowledge
+ * gate ever firing.) A field that is deliberately NOT compared is listed with `undefined`,
+ * which `JSON.stringify` omits — so the constraint costs nothing in the emitted string.
+ *
+ * That emitted string is a stored-data contract: its digest is half the drift fingerprint
+ * persisted in `freshness_ack_json`. Changing which fields are canonicalized, or their
+ * order, lapses EVERY acknowledgement already given in a user's workspace (signed-off
+ * reviews re-close the export gate). An integration test pins the exact fingerprint bytes
+ * and the field-set parity for that reason — do not "just add a field" here.
  */
 function canonicalCoverage(c: CoverageInfo | null): string {
   if (!c) return 'none'
-  return JSON.stringify({
+  const canonical = {
     mode: c.mode ?? null,
     chunksCovered: c.chunksCovered ?? null,
     chunksTotal: c.chunksTotal ?? null,
     treeStatus: c.treeStatus ?? null,
     treeLevels: c.treeLevels ?? null,
     tier: c.tier ?? null,
+    nodeIds: undefined,
     truncated: c.truncated ?? null,
     unparsedChunks: c.unparsedChunks ?? null,
     fullyChunked: c.fullyChunked ?? null
-  })
+  } satisfies Record<keyof CoverageInfo, unknown>
+  return JSON.stringify(canonical)
 }
 
 /** Stored-hash comparison shared with the source-context handler: both present → equal?,
