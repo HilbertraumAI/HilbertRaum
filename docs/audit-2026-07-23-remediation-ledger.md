@@ -18,7 +18,7 @@ Working paper. Transient with the plan and the report; folded into the durable
   AUD-26 says CI must exercise. Only affects local gate runs
   (vitest is unaffected); relevant context for Phase 9a's CI Node bump. *Assigned: Phase 9a
   (informational — do not "fix" the local box).*
-- [ ] **B-02 — `result_tables` is the SAME cascade hole, one table over.** (Found by the Phase-1
+- [x] **B-02 (FIXED in Phase 1b) — `result_tables` is the SAME cascade hole, one table over.** (Found by the Phase-1
   verifier.) `db.ts:270-280` gives `result_tables.message_id` an identical `ON DELETE CASCADE`, and
   `restoreMessage` re-inserts the `messages` row ONLY. So on the two legs designed to lose nothing —
   the F2 non-abort-failure restore and the CB-2 Stop-before-first-token restore — an **un-reviewed**
@@ -41,7 +41,7 @@ Working paper. Transient with the plan and the report; folded into the durable
   local log and emits on `chat:error`. Content-free (no review title, no answer text), so no privacy
   issue — a severity misclassification / log-noise nit, and the price of centralizing at the choke
   point. Contrast `main.chat.nothingToRegenerate`, thrown in the handler and never logged.
-  *Assigned: Phase 10 loop if cheap, else deferred-with-registration.*
+  *RE-DISPOSITIONED at Phase 10: deferred-with-registration — a log-level nit; a deliberate policy refusal logged at ERROR is noise, not a defect, and is the price of centralizing at the choke point.*
 - [ ] **B-05 — "Try again" has no renderer review gate** (only "Answer without it" does). Unreachable
   today: `canTryAgain` requires screen `mode === 'chat'`, `onTryAgain` bails on documents mode, and
   plain-chat answers persist neither citations nor coverage so they are never `isReviewEligible`. The
@@ -78,7 +78,7 @@ Working paper. Transient with the plan and the report; folded into the durable
   count, so it needs HEAD requests against the four URLs and a manifest edit outside `scripts/`.
   The vision manifest matters most (it is in the `-WithAssets` default set and is two files).
   *Assigned: deferred-with-registration.*
-- [ ] **B-10 — the AUD-24 size guard fails OPEN, so it is silently disable-able.** If a future
+- [x] **B-10 (FIXED in Phase 5) — the AUD-24 size guard fails OPEN, so it is silently disable-able.** If a future
   refactor drops the size argument at either call site, or the manifest field is renamed, the guard
   never matches, nothing errors, and AUD-24 is quietly back for every model. Nothing in CI would
   notice. *Assigned: **Phase 5** — Phase 4 handed over three ready-to-write `script-drift.test.ts`
@@ -92,7 +92,7 @@ Working paper. Transient with the plan and the report; folded into the durable
   so they cannot mis-attribute. *Assigned: deferred-with-registration (reopen only if a manifest
   ever adds mmproj `size_bytes`).*
 
-- [ ] **B-12 — the TEXT-path adopt has the same weak-guard shape AUD-04 fixed.** `adoptActiveJob`
+- [x] **B-12 (FIXED in Phase 10a) — the TEXT-path adopt has the same weak-guard shape AUD-04 fixed.** `adoptActiveJob`
   (`renderer/lib/translateSession.ts`) gates only on `snapshot.activeJobId`, which is null in EVERY
   terminal state, and its post-await re-check is the identical null test. Reachable: the user hits
   Stop, `stopActive` sets `cancelled` + `activeJobId = null` and fires
@@ -100,8 +100,8 @@ Working paper. Transient with the plan and the report; folded into the durable
   keeps the job `translating`; the next Translate mount re-adopts it and the panel flips from the
   user's cancelled/held result back to "Translating…" with `output` replaced by `job.text ?? ''`.
   Narrower than AUD-04 (only the Translate screen starts a text job, so there is no foreign-starter
-  hijack). Fix shape mirrors Phase 3: gate on the store being genuinely empty, not on the id alone.
-  *Assigned: Phase 10 loop if cheap, else deferred-with-registration.*
+  *FIXED in sub-phase 10a: both the entry guard and the post-await re-check now use one shared isEmptySession() predicate. The post-await gap was SHARPER here than on the document path — see the Phase 10 outcome.*
+  *RE-DISPOSITIONED at Phase 10: deferred-with-registration — closing it needs a per-action disabled+title prop on MessageActions, and the route in is unreachable today; not worth a component change at wave end.*
 - [ ] **B-13 — nothing re-adopts the GLOBAL doc-task store after a renderer reload** (Medium,
   pre-existing, unrelated to the Phase-3 change). `renderer/lib/doctasks.ts` exposes no adopt entry
   point and `DocumentsScreen` only subscribes, so after a reload a still-running
@@ -118,7 +118,7 @@ Working paper. Transient with the plan and the report; folded into the durable
   tension with the fix's own stated principle that during the teardown "the workspace is locked" is
   the honest answer. Left alone on purpose: safe-defaulting a status read mid-lock would flip the
   offline ceiling for its other callers. *Assigned: deferred-with-registration.*
-- [ ] **B-15 — `RuntimeManager.forceRestart` has no workspace check.** The GPU-crash auto-fallback
+- [x] **B-15 (FIXED in the Phase 2 loop, at the composition seam) — `RuntimeManager.forceRestart` has no workspace check.** The GPU-crash auto-fallback
   re-checks only `this.stopped`, so a GPU crash landing during or after a lock respawns a CPU
   `llama-server` past the lock — the one remaining "a sidecar starts while locked" path. Content-free
   (the crashed child's KV cache died with it), so resource/orphan rather than a leak. *Assigned:
@@ -242,7 +242,7 @@ Working paper. Transient with the plan and the report; folded into the durable
   bulk case (each write is one explicit user edit, and failures re-merge rather than being lost), but
   a reviewer working fast across many items pays N of everything. A batched
   `updateEvidenceReviewItems(patches[])` channel would close it with the same transaction shape
-  AUD-13 just established. *Assigned: Phase 10 loop if cheap, else deferred-with-registration.*
+  AUD-13 just established. *RE-DISPOSITIONED at Phase 10: deferred-with-registration — this is a NEW batched IPC channel plus its transaction, far too large to bolt on after the full-suite gate has passed.*
 
 - [ ] **B-36 — the chunk de-overlap algorithm now exists in two copies.** `overlapLength` (KMP) plus
   the `chunkOverlapTokens x 20`-bounded shared-run measurement live module-private in `rag/index.ts`
@@ -307,6 +307,26 @@ Working paper. Transient with the plan and the report; folded into the durable
 - [ ] **B-45 — `de.ts`'s own header/glossary comments use ASCII closers** (~14 comment lines), so the
   file's style guide is typeset in the style it forbids. Not shipped copy, and deliberately outside
   the new guard's scope (which reads catalog VALUES). *Assigned: fix-when-touched.*
+
+- [ ] **B-46 — `lib/skillruns.ts` has the same unguarded adopt-across-await shape AND is not
+  lock-purged at all.** `adoptSkillRuns()` awaits `listSkillRuns()` and `adoptHandle()` awaits
+  `getSkillRun(handle)`, then write into the module store with **no generation/invalidation token —
+  that store has no generation counter at all**. Separately, `purgeSessionStores()` purges
+  translate / file-translate / vision / review **only**, so on lock the skill-run entries AND their
+  per-run polling timers survive and keep polling main against a locked workspace. **Bounded because
+  `SkillRunState` is deliberately content-free** (opaque handle, ids, counts, progress) — a
+  lifecycle/contract gap, not resident plaintext, which is why the orchestrator registered it rather
+  than extending the wave into a third subsystem at close. Main-side `getSkillRun`-while-locked
+  behaviour was not verified. *Assigned: deferred-with-registration — a later renderer-lifecycle
+  sub-phase, ideally adding both the token and the purge together.*
+- [ ] **B-47 — nothing reconciles the main-renderer divergence a FAILED cancel creates.** When
+  `translateCancel` rejects (silently, by design), main keeps the job `translating` while the panel
+  shows `cancelled`. With the adopt now correctly refusing to touch the held session, the user's next
+  Translate is busy-refused by the backend with **no UI affordance to force-cancel the stuck job** —
+  they must wait it out. Deliberately not addressed in the loop: it changes behaviour, and the
+  sub-phase was scoped to the guard. *Option for later: on mount, when main reports a running text
+  job while this store is terminal, issue a jobId-TARGETED cancel instead of adopting — the
+  targeted-cancel pattern the doc-task path already uses. Assigned: deferred-with-registration.*
 
 ## Decisions log
 
@@ -1143,3 +1163,112 @@ header/glossary COMMENTS — the new guard is scoped to catalog values by constr
   **6 files / 100 tests** for the Documents + Diagnostics suites (including `DocumentTranslate`,
   which exercises the very modal whose selects changed) — **321 tests** across the two batches.
 - **Discovered -> backlog:** B-41, B-42, B-43, B-44, B-45.
+
+### Phase 10 — full verification, and two loop sub-phases — DONE
+
+**Full gate on the integrated tree (orchestrator's own runs):**
+- RAM freed first: `electron` procs 0, `node` procs 0; 1.6 GB free of 15.8 GB, so the suite ran at
+  **`--maxWorkers=2`** (the weak-box rule's loaded-box setting), not 4.
+- `npm run typecheck` (root) **green**.
+- `npm run build` (root) **green**, 4.87 s.
+- **Full suite: 4800 passed / 50 skipped / 4850 total, across 347 files (326 passed + 21 skipped).
+  ZERO failures.** Against the last recorded full-suite baseline (4680 / 50 / 4730 across 334 files):
+  **+120 tests, +13 files, and the skip count is UNCHANGED at 50** — exactly this wave's additions,
+  no regressions and no new skips. The +13 files reconcile exactly against the wave's new test files.
+
+**Design re-eyeball:** the Phase-9b sign-off holds against the integrated tree by construction — 9b
+was the last commit touching the renderer, its captures were taken from the working tree that was
+then committed unchanged, and the only later commits are this phase's two renderer sub-phases (which
+touch the translate STORES, not the two screens signed off) plus docs/ledger text. No re-capture was
+needed; had a later phase touched `ModelsScreen`/`TranslateScreen` markup or `styles.css`, it would
+have been.
+
+**e2e: SKIPPED — stub binary.** `D:\config\drive.json` present, real weights present
+(gemma4-12b 6.50 GB, granite-4.1-8b 4.98 GB, ministral3-8b 4.84 GB, qwen3-14b 8.38 GB), but
+`D:\runtime\llama.cpp\win\llama-server.exe` is **9,216 bytes** — the 9 KB stub, three orders of
+magnitude under the >1 MB real-binary threshold. `F:` and `E:` carry no `drive.json`. Per the plan
+this is a recorded skip, not a failure: e2e is a confidence leg, never the gate.
+
+**Backlog disposition.** Every item carries an explicit disposition. Four had been provisionally
+marked "Phase 10 loop if cheap"; each was resolved rather than left ambiguous — **B-12 fixed (10a)**,
+and **B-04 / B-35 / B-38 explicitly re-dispositioned to deferred-with-registration** (a log-level
+nit; a new batched IPC channel, too large to bolt on at wave end; a sandbox-sensitive preload/consumer
+rewiring). Nothing is silently dropped.
+
+#### Sub-phase 10a — the TEXT-path adopt guard (backlog B-12)
+
+Same defect class this wave closed on the document store, in its sibling: `adoptActiveJob` gated on
+`snapshot.activeJobId`, which is **null in every terminal state**, so a mount ran over a held
+`cancelled`/`done` session. Reachable because `stopActive` fires `translateCancel(...).catch(() => {})`
+— a **swallowed** rejection — so a failed cancel leaves main in `translating` while the panel shows
+`cancelled`, and the next mount re-adopts. Shipping the document fix without this one was incoherent.
+
+**The post-await gap turned out to be SHARPER here than on the document path.** `translate()` sets
+`{state:'translating', translating:true}` **synchronously**, before its own round-trip resolves, so
+during the adopt's awaited read the store is non-empty while `activeJobId` is still null — invisible
+to the old id-only re-check. Missing it did **double** damage: the adopt seeded the OLDER job's text
+over the user's brand-new run **and** bumped `startGen`, so the in-flight `translate()` saw itself
+superseded and cancelled the user's just-started job as an orphan. Both checks now call one private
+`isEmptySession()` predicate — one invariant, enforced at entry and again immediately before the
+destructive `set()`.
+
+**Deliberate adaptation, reported not hidden:** the predicate also requires `output === ''`, because
+in THIS store `idle` does not mean empty — `acknowledgeError()` parks at idle while KEEPING the
+partial text, which the screen still renders (its text pane keys off `output !== ''`, not on state)
+with a Copy button. So "genuinely empty" had to include output.
+
+**The swallowed cancel was deliberately left as-is.** A content-free log is NOT the established
+idiom: there is zero `console.*`/logging across all 16 files of `renderer/lib`, and the preload bridge
+exposes only READ-side log access — there is no write-side sink a store could push to. All five
+sibling cancel sites use the identical silent shape. A comment now records that the silence is
+deliberate and that the resulting main-renderer divergence is exactly why the adopt gates on
+emptiness; a test pins that the cancel IS issued, so the reachability premise is pinned even though
+its outcome is unobservable.
+
+- RED: `expected 'translating' to be 'cancelled'`, `to be 'done'`, `expected '' to be 'Half a
+  translation'`, and the post-await case. Both CONTROLs (reload recovery) green before AND after.
+- GREEN (orchestrator's own run): 5 files / 71 tests.
+
+#### Sub-phase 10b — the adopt generation guard, BOTH stores (a lock-contract hole)
+
+10a's own report surfaced it: **neither** translate store captured a generation token around its
+adopt `await`, so a **workspace lock** landing inside that read re-seeded purged content.
+`purgeSessionStores()` resets these stores to EMPTY — which an emptiness-based guard reads as "safe
+to adopt" — so if the read resolved with a still-running job just before the lock landed, the
+continuation wrote `job.text` back and wired a stream **after main aborted the job and re-encrypted
+the vault**. Plaintext translation content resident in renderer memory after the workspace reports
+locked (not rendered — the screen is unmounted behind the gate — but resident until the next purge).
+
+This is the **renderer-side analogue of AUD-02/AUD-03**, which is why it was worth closing in-wave
+rather than registering: the wave had just closed two main-side races where content-bearing work
+could outlive a lock, and this was the same contract broken on the other side of the IPC boundary.
+
+Fixed as a **pair**, since both stores had the shape. Generation captured at entry, re-checked
+immediately after the await before any destructive write. The document path's `const myGen = ++gen`
+stays exactly where it was — after all guards, immediately before `stopPolling()`/`set()`/
+`pollDocTask(task.jobId, myGen)` — so the poll loop still receives a freshly-minted generation a
+later clear/stop can invalidate; the entry token is a separate read-only `const entryGen = gen` that
+never mutates it. Two controls pin the polling semantics, one driving a poll tick under the adopted
+generation and then proving a later Stop still kills the loop.
+
+**Generation-bump audit (both stores) — complete for lock-purge / user-stop / fresh-start**, with the
+deliberate non-bumpers reported and NOT changed: text-store `acknowledgeError()` (safe — `failed` is
+only reachable via a `translate()` that already bumped) and the no-op `stopActive()` early return;
+document-store `fail()`/`failWith()` (every synchronous reject lands a non-`idle` TERMINAL state,
+which is exactly what the emptiness re-check catches — **which is why both checks were kept rather
+than one replacing the other**; adding a bump there would change existing cancellation semantics).
+No bump was added anywhere.
+
+**A cross-store manifestation closed as a side effect:** `fileTranslateSession.runImport` calls
+`clearTranslateSession()` when a DOCUMENT translation starts, so pre-fix a document translation
+started while the TEXT adopt was parked would purge the text store and then have the adopt re-seed a
+text job over it — two claimants on the one-at-a-time lane, **no lock required**.
+
+- RED: `expected 'vertraulicher Text' to be ''` (text store, plaintext re-seeded behind the lock
+  gate); `expected 'translating' to be 'idle'` and a full snapshot diff (document store, lock purge
+  and stop-then-dismiss). Pre-fix run: 2 files failed, 3 tests failed / 47 passed — **both CONTROLs
+  already green pre-fix, so the fix is not paid for by breaking reload recovery.**
+- GREEN (orchestrator's own run): typecheck green; 7 files / 94 tests.
+- Docs: the **renderer adopt contract** folded into `security-model.md`'s lock-purge paragraph
+  (orchestrator applied it — the sub-phase was scoped out of `docs/`).
+- **Discovered -> backlog:** B-46, B-47.

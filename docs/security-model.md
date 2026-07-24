@@ -636,6 +636,16 @@ per-process job map for the life of the job and in renderer memory (`lib/transla
   the one seam where the lock actually happens (a single helper every lock initiator calls; today
   `App.lockNow` is the only initiator — no auto-lock timer or main-pushed lock event exists in the
   renderer). The main-side job map is bounded (`TRANSLATE_MAX_JOB_HISTORY`).
+  **Renderer adopt contract (2026-07-23):** a mount-time adopt that reads main across an `await`
+  must capture its store's **generation token BEFORE the await** and re-check it immediately after,
+  before any write. Store emptiness/`idle` is **not** an invalidation signal — the purge above resets
+  these stores to exactly that shape, so an emptiness-only guard reads a locked workspace as a fresh
+  reload and re-seeds the very content the purge just dropped: if the active-job read resolved with a
+  still-running job just before the lock landed, the continuation wrote the job text back into the
+  store and wired a stream *after* the vault re-encrypted. Not rendered (the screen is unmounted
+  behind the gate) but resident until the next purge. Both translate stores now carry the token; the
+  emptiness/`idle` re-check stays **alongside** it, because it covers the synchronous reject paths
+  that deliberately do not bump the generation.
 - **No respawn past a lock (common case):** `translate:start` is `requireUnlocked`-gated — a start
   attempted once the vault is locked is refused, so it cannot lazily respawn the just-suspended
   ~10 GB TranslateGemma sidecar with the source text. Aborting the in-flight job before

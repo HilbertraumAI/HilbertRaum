@@ -670,3 +670,173 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
     expect(api.getDocTask).not.toHaveBeenCalled()
   }, 8000)
 })
+
+// ---- The adopt's await window must be guarded by the GENERATION, not by the `idle` state alone ----
+//
+// `state === 'idle'` answers "is anything on screen right now?", which is the wrong question for
+// work that happened DURING the active-task read. Both paths that INVALIDATE this store while
+// leaving it idle — the workspace-lock purge, and a Stop the user then dismissed — land exactly the
+// shape the idle rule admits, so an idle-only re-check re-seeds `translating` and resumes polling a
+// task main has already aborted. Only a generation token captured BEFORE the await, and re-checked
+// after it, tells a genuinely-reloaded store apart from one that was just invalidated.
+
+describe('fileTranslateSession — the adopt must not re-seed a session that was invalidated mid-read', () => {
+  it('bails when a workspace LOCK purged the store while the active-task read was in flight', async () => {
+    // `App.lockNow` purges every session store AFTER main aborted the doc-task and re-encrypted the
+    // vault. `clearFileTranslate()` resets this store to EMPTY — i.e. `idle` — so an idle-only guard
+    // reads the freshly-purged store as "safe to adopt" and puts the panel back into `translating`
+    // with a poll running against a dead task, ending in a materialized preview loaded into renderer
+    // memory behind the lock screen.
+    let resolveActive: (v: DocTaskStatus) => void = () => {}
+    const activeP = new Promise<DocTaskStatus>((r) => (resolveActive = r))
+    const api = {
+      getActiveDocTask: vi.fn(() => activeP),
+      getDocTask: vi.fn(async () => docTask({ jobId: 'task1' })),
+      previewDocument: vi.fn(async () => ({
+        id: 'gen1',
+        title: 'a (English)',
+        mimeType: 'text/markdown',
+        segments: [{ text: 'Vertraulich.', pageNumber: null, sectionLabel: null }],
+        nextOffset: null
+      }))
+    }
+    stubApi(api)
+
+    // The mount adopt is parked on the active-task read.
+    const adoptPromise = adoptActiveFileTranslation()
+    await vi.waitFor(() => expect(api.getActiveDocTask).toHaveBeenCalled(), { timeout: 3000 })
+
+    clearFileTranslate() // the workspace locks in that window (the renderer lock seam)
+    const purged = getFileTranslate()
+
+    resolveActive(docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } }))
+    await adoptPromise
+
+    const snap = getFileTranslate()
+    expect(snap.state).toBe('idle') // not flipped back to 'translating' behind the lock
+    expect(snap.busy).toBe(false)
+    expect(snap.windowsDone).toBe(0)
+    expect(snap.windowsTotal).toBe(0)
+    // Nothing was written at all (same snapshot object) — and since the poll is only installed after
+    // that write, no poll can be running against the aborted task either.
+    expect(snap).toBe(purged)
+    expect(api.getDocTask).not.toHaveBeenCalled()
+  }, 8000)
+
+  it('bails when the user STOPPED the document translation and dismissed it while the read was in flight', async () => {
+    // Stop alone leaves `cancelled` (which the idle rule already refuses), but the "Translate another
+    // document" dismiss right after it returns the panel to `idle` — the same shape as the lock
+    // purge. Both bump the generation, which is what makes the parked adopt detectable as stale.
+    let resolveActive: (v: DocTaskStatus) => void = () => {}
+    const activeP = new Promise<DocTaskStatus>((r) => (resolveActive = r))
+    const api = {
+      ...happyApi(),
+      getActiveDocTask: vi.fn(() => activeP),
+      getDocTask: vi.fn(async () => docTask({ jobId: 'task1' })),
+      cancelDocTask: vi.fn(async () => {})
+    }
+    stubApi(api)
+
+    const adoptPromise = adoptActiveFileTranslation()
+    await vi.waitFor(() => expect(api.getActiveDocTask).toHaveBeenCalled(), { timeout: 3000 })
+
+    // The user drops a document, stops it, then dismisses the cancelled panel — all while the
+    // active-task read is still parked.
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    cancelFileTranslation()
+    expect(getFileTranslate().state).toBe('cancelled')
+    resetFileTranslation()
+    const dismissed = getFileTranslate()
+    expect(dismissed.state).toBe('idle')
+
+    resolveActive(docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } }))
+    await adoptPromise
+
+    expect(getFileTranslate()).toBe(dismissed) // the dismissed panel stayed dismissed
+    expect(getFileTranslate().state).toBe('idle')
+    expect(getFileTranslate().busy).toBe(false)
+  }, 8000)
+
+  it('CONTROL: still adopts through a slow active-task read and polls to done', async () => {
+    // The guard must not cost the case the adopt exists for. The earlier lock is deliberate: the
+    // generation is a running counter, so the entry token has to be READ, never assumed to be zero —
+    // and the poll must still run under a generation of its own afterwards.
+    clearFileTranslate() // a previous lock already moved the generation on
+    let resolveActive: (v: DocTaskStatus) => void = () => {}
+    const activeP = new Promise<DocTaskStatus>((r) => (resolveActive = r))
+    let polls = 0
+    const api = {
+      getActiveDocTask: vi.fn(() => activeP),
+      getDocTask: vi.fn(async () => {
+        polls += 1
+        return polls === 1
+          ? docTask({ jobId: 'task1', progress: { stepsDone: 3, stepsTotal: 5 } })
+          : docTask({
+              jobId: 'task1',
+              state: 'done',
+              progress: { stepsDone: 5, stepsTotal: 5 },
+              resultRef: { documentId: 'gen1' }
+            })
+      }),
+      previewDocument: vi.fn(async () => ({
+        id: 'gen1',
+        title: 'a (English)',
+        mimeType: 'text/markdown',
+        segments: [{ text: 'Adopted translation.', pageNumber: null, sectionLabel: null }],
+        nextOffset: null
+      }))
+    }
+    stubApi(api)
+
+    const adoptPromise = adoptActiveFileTranslation()
+    await vi.waitFor(() => expect(api.getActiveDocTask).toHaveBeenCalled(), { timeout: 3000 })
+    resolveActive(docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 2, stepsTotal: 5 } }))
+    await adoptPromise
+
+    const seeded = getFileTranslate()
+    expect(seeded.state).toBe('translating')
+    expect(seeded.busy).toBe(true)
+    expect(seeded.windowsDone).toBe(2)
+    expect(seeded.windowsTotal).toBe(4) // the materialize step is not a window
+
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: 5000 })
+    expect(getFileTranslate().output).toBe('Adopted translation.')
+    expect(getFileTranslate().resultDocumentId).toBe('gen1')
+  }, 8000)
+
+  it('CONTROL: the adopted poll runs under its OWN generation — a later Stop still kills it', async () => {
+    // The entry token must not REPLACE the polling generation: `pollDocTask` still has to run under a
+    // generation a later Stop/clear moves past, or Stop would leave the loop writing progress over a
+    // cancelled panel. Fake timers drive the poll so this needs no sleeps.
+    vi.useFakeTimers()
+    try {
+      const api = {
+        getActiveDocTask: vi.fn(async () =>
+          docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } })
+        ),
+        getDocTask: vi.fn(async () => docTask({ jobId: 'task1', progress: { stepsDone: 2, stepsTotal: 4 } })),
+        cancelDocTask: vi.fn(async () => {})
+      }
+      stubApi(api)
+
+      await adoptActiveFileTranslation()
+      expect(getFileTranslate().state).toBe('translating')
+      expect(getFileTranslate().windowsDone).toBe(1) // seeded from the active-task read
+
+      await vi.advanceTimersByTimeAsync(400)
+      expect(api.getDocTask).toHaveBeenCalledTimes(1) // the adopted poll is live
+      expect(getFileTranslate().windowsDone).toBe(2) // and writing progress under its generation
+
+      cancelFileTranslation()
+      expect(getFileTranslate().state).toBe('cancelled')
+      expect(api.cancelDocTask).toHaveBeenCalledWith('task1') // the adopted task id was held for Stop
+      const stopped = getFileTranslate()
+
+      await vi.advanceTimersByTimeAsync(1200) // three more poll intervals
+      expect(api.getDocTask).toHaveBeenCalledTimes(1) // the loop really stopped
+      expect(getFileTranslate()).toBe(stopped) // nothing written over the cancelled panel
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 8000)
+})
