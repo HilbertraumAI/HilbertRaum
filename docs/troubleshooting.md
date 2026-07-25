@@ -20,7 +20,7 @@ plugged in, so the same drive works on any computer.
 
 ## "Windows protected your PC" / "macOS cannot open the app"
 
-The first time you run an app from a USB drive, your computer shows a security warning. **This is
+The first time you run an app from a USB drive, your computer might show a security warning. **This is
 normal for any new app** and does not mean anything is wrong — it appears because the app is new to
 *this* computer, not because it is unsafe.
 
