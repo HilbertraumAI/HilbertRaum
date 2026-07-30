@@ -1,0 +1,82 @@
+{
+  "model": "gemma4-31b-it-qat-q4.gguf",
+  "balOk": 8,
+  "deepOk": 8,
+  "n": 8,
+  "deepEmitsReasoning": true,
+  "flipRecommended": true,
+  "rows": [
+    {
+      "id": "train-arrival",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 222,
+      "balAnswer": "16:15",
+      "deepAnswer": "16:15"
+    },
+    {
+      "id": "discount",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 752,
+      "balAnswer": "Der neue Preis beträgt **60 Euro**.\n\n**Hier ist die Rechnung:**\n\n1. **Rabatt berechnen:** 25 % von 80 Euro\n   $80\\text{ Euro} \\times 0,25 = 20\\text{ Euro}$\n\n2. **Rabatt abziehen:**\n   $80\\text{ Euro} - 20\\text{ Euro} = 60\\text{ Euro}$\n\n**Alternativer schneller Weg:**\nWenn ein Artikel um 25 % reduzie",
+      "deepAnswer": "Der neue Preis ist **60 Euro**.\n\n**Hier ist die Rechnung:**\n\n1. **Rabatt berechnen:** 25 % von 80 € = $80 \\times 0,25 = 20 \\text{ €}$\n2. **Rabatt abziehen:** $80 \\text{ €} - 20 \\text{ €} = 60 \\text{ €}$\n\n**Alternativer schneller Weg:**\nWenn ein Artikel um 25 % reduziert wird, bezahlst du noch 75 % d"
+    },
+    {
+      "id": "multiply",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 143,
+      "balAnswer": "391",
+      "deepAnswer": "391"
+    },
+    {
+      "id": "syllogism",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 829,
+      "balAnswer": "**No.**\n\nThe fact that *some* flowers fade quickly does not mean that *all* flowers do, nor does it specify that roses are among the specific group of flowers that fade quickly. Roses could be part of the group of flowers that do not fade quickly.",
+      "deepAnswer": "No.\n\n**Explanation:** While all roses are flowers, only *some* flowers fade quickly. The flowers that fade quickly could be lilies or tulips, while roses might not be among them. There is no information provided to prove that roses specifically are the flowers that fade quickly."
+    },
+    {
+      "id": "snail",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 1448,
+      "balAnswer": "Die Schnecke braucht **8 Tage**.\n\n**Hier ist die Erklärung:**\n\nViele rechnen intuitiv: 3m hoch - 2m runter = 1m Fortschritt pro Tag. Bei 10 Metern wären das 10 Tage. **Das ist jedoch falsch**, weil die Schnecke am letzten Tag das Ziel erreicht, *bevor* sie nachts wieder zurückrutscht.\n\n**Der detaill",
+      "deepAnswer": "Die Schnecke braucht **8 Tage**.\n\n**Hier ist die Erklärung:**\n\nViele rechnen intuitiv: 3m hoch - 2m runter = 1m Fortschritt pro Tag. Bei 10 Metern wären das 10 Tage. Aber das ist falsch, weil die Schnecke am letzten Tag das Ziel erreicht, **bevor** sie nachts wieder zurückrutscht.\n\n**Der detailliert"
+    },
+    {
+      "id": "bat-ball",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 633,
+      "balAnswer": "The ball costs **5 cents** (0.05).\n\n**Here is the breakdown:**\nIf the ball costs 0.05 and the bat costs 1.00 more than the ball, the bat costs 1.05.\n1.05 (bat) + 0.05 (ball) = 1.10 total.",
+      "deepAnswer": "The ball costs **0.05** (5 cents).\n\n**Here is the breakdown:**\nIf the ball costs 0.05 and the bat costs 1.00 more than the ball, the bat costs 1.05. \n1.05 (bat) + 0.05 (ball) = 1.10 total."
+    },
+    {
+      "id": "minutes",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 303,
+      "balAnswer": "150",
+      "deepAnswer": "150"
+    },
+    {
+      "id": "sort",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 297,
+      "balAnswer": "Die aufsteigend sortierten Zahlen sind: 3, 5, 8, 11.",
+      "deepAnswer": "3, 5, 8, 11"
+    }
+  ]
+}

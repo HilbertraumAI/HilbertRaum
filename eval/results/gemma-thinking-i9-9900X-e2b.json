@@ -1,0 +1,82 @@
+{
+  "model": "gemma4-e2b-it-qat-q4.gguf",
+  "balOk": 8,
+  "deepOk": 7,
+  "n": 8,
+  "deepEmitsReasoning": true,
+  "flipRecommended": false,
+  "rows": [
+    {
+      "id": "train-arrival",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": false,
+      "deepReasoningChars": 462,
+      "balAnswer": "16:15",
+      "deepAnswer": "16:45"
+    },
+    {
+      "id": "discount",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 1138,
+      "balAnswer": "Hier ist die Berechnung:\n\n**1. Berechne den Rabattbetrag:**\n\n* Der Rabatt beträgt 25 % von 80 Euro.\n* Rabatt = $80 \\times 0,25 = 20$ Euro\n\n**2. Berechne den neuen Preis:**\n\n* Subtrahiere den Rabatt vom ursprünglichen Preis.\n* Neuer Preis = $80 - 20 = 60$ Euro\n\n**Der neue Preis des Hemdes beträgt 60 ",
+      "deepAnswer": "Der neue Preis beträgt **60 Euro**.\n\n**Rechnung:**\n\n1. **Berechne den Rabattbetrag:**\n   $25\\%$ von 80 Euro sind: $80 \\times 0,25 = 20$ Euro.\n\n2. **Ziehe den Rabatt vom Originalpreis ab:**\n   $80 \\text{ Euro} - 20 \\text{ Euro} = 60 \\text{ Euro}$.\n\n***\n\n*(Alternativ: Wenn 25 % abgezogen werden, zahlt"
+    },
+    {
+      "id": "multiply",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 536,
+      "balAnswer": "391",
+      "deepAnswer": "391"
+    },
+    {
+      "id": "syllogism",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 1315,
+      "balAnswer": "No.\n\n**Explanation:**\n\nThe premises state that all roses are flowers, and some flowers fade quickly. This means that the group of \"flowers that fade quickly\" overlaps with the group of \"roses,\" but it doesn't mean *all* roses are in that overlapping group. There could be roses that do not fade quick",
+      "deepAnswer": "No.\n\n**Explanation:** The premises state that all roses belong to the category of flowers, and that some flowers have the property of fading quickly. However, the fact that *some* flowers fade quickly does not mean that *all* flowers (and therefore all roses) fade quickly. The roses could be the flo"
+    },
+    {
+      "id": "snail",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 1944,
+      "balAnswer": "Das ist ein klassisches Rätsel! Hier ist die Lösung:\n\nDie Schnecke bewegt sich **netto 1 Meter pro Tag** (3 Meter hoch - 2 Meter runter).\n\nMan muss jedoch beachten, dass sie am letzten Tag die volle Höhe erreichen muss, ohne dass sie wieder rutscht.\n\n**Rechnung:**\n\n* **Ziel:** 10 Meter\n* **Nettofort",
+      "deepAnswer": "Das ist ein klassisches Rätsel! Man muss beachten, dass die Schnecke nicht mehr rutscht, wenn sie die Spitze erreicht hat.\n\nHier ist die Berechnung:\n\n* **Ziel:** 10 Meter\n* **Tagesfortschritt:** +3 Meter\n* **Nachtrückgang:** -2 Meter\n* **Nettofortschritt pro Tag (Tag + Nacht):** 1 Meter\n\n**Die Berec"
+    },
+    {
+      "id": "bat-ball",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 1402,
+      "balAnswer": "Here's how to solve the problem using a system of equations:\n\n**1. Define variables:**\n* Let $B$ be the cost of the bat.\n* Let $L$ be the cost of the ball.\n\n**2. Set up the equations based on the given information:**\n* **Equation 1 (Total cost):** The bat and the ball cost 1.10 in total.\n   $$B + L ",
+      "deepAnswer": "This is a classic algebra problem. Here is how to solve it:\n\n**1. Define the variables:**\n* Let $B$ be the cost of the bat.\n* Let $L$ be the cost of the ball.\n\n**2. Set up the equations:**\n* **Equation 1 (Total cost):** $B + L = 1.10$\n* **Equation 2 (Difference in cost):** $B = L + 1.00$ (The bat co"
+    },
+    {
+      "id": "minutes",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 526,
+      "balAnswer": "150",
+      "deepAnswer": "150"
+    },
+    {
+      "id": "sort",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 502,
+      "balAnswer": "Die Zahlen sortiert aufsteigend sind: **3, 5, 8, 11**.",
+      "deepAnswer": "Die Zahlen sortiert aufsteigend sind:\n\n**3, 5, 8, 11**"
+    }
+  ]
+}
