@@ -1317,13 +1317,23 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
 // validation catches it). The set's probe is now exposed on ctx (`docIngestionActive`, the
 // skillRunActive pattern) and threaded into the manager's admission guard. Closes audit
 // test-gap #3; watched fail pre-fix.
+//
+// Issue #97 (starved-runner flake, the issue-#84 / vault-lock-cipher class): on PR #96's
+// run 30809685972 the windows/24.x leg alone hit the global 15 s vitest timeout at
+// 28 110 ms — the identical tree was green on the other three legs, on the failed leg's
+// re-run, and locally. The test does two full OCR passes + a document ingest + a gated
+// re-index (real embed work) before its assertions, so a starved runner can stretch the
+// setup past the global budget. Per the established pattern the test carries an explicit
+// 60 s timeout, and waitTerminal's liveness bound is 30 s so a genuinely hung task still
+// fails first with the informative per-task error. Every assertion is semantic — none is
+// a timing bound — so the wider budget loosens nothing the test proves.
 describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
   async function waitTerminal(manager: DocTaskManager, jobId: string): Promise<string> {
     const start = Date.now()
     for (;;) {
       const s = manager.getDocTask(jobId)
       if (['done', 'failed', 'cancelled'].includes(s.state)) return s.state
-      if (Date.now() - start > 10_000) throw new Error(`task never finished: ${s.state}`)
+      if (Date.now() - start > 30_000) throw new Error(`task never finished: ${s.state}`)
       await new Promise((r) => setTimeout(r, 10))
     }
   }
@@ -1382,5 +1392,5 @@ describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
     // After the re-index settles, the redo admits and completes normally (no over-eager guard).
     const redo = manager.startDocTask({ kind: 'ocr', documentIds: [info.id] })
     expect(await waitTerminal(manager, redo.jobId)).toBe('done')
-  })
+  }, 60_000)
 })
