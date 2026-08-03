@@ -1,0 +1,82 @@
+{
+  "model": "gemma4-e4b-it-qat-q4.gguf",
+  "balOk": 8,
+  "deepOk": 8,
+  "n": 8,
+  "deepEmitsReasoning": true,
+  "flipRecommended": true,
+  "rows": [
+    {
+      "id": "train-arrival",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 187,
+      "balAnswer": "16:15",
+      "deepAnswer": "16:15"
+    },
+    {
+      "id": "discount",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 880,
+      "balAnswer": "Hier ist die Berechnung:\n\n**1. Berechne den Rabattbetrag:**\n\n* Rabatt = Ursprünglicher Preis $\\times$ Rabattprozentsatz\n* Rabatt = $80 \\text{ Euro} \\times 0,25$\n* Rabatt = $20 \\text{ Euro}$\n\n**2. Berechne den neuen Preis:**\n\n* Neuer Preis = Ursprünglicher Preis - Rabattbetrag\n* Neuer Preis = $80 \\te",
+      "deepAnswer": "Der neue Preis des Hemdes beträgt **60 Euro**.\n\nHier ist die Berechnung:\n\n1. **Berechnung des Rabatts:**\n   25 % von 80 Euro = $0,25 \\times 80 = 20$ Euro.\n\n2. **Berechnung des Endpreises:**\n   Ursprünglicher Preis - Rabatt = $80 - 20 = 60$ Euro."
+    },
+    {
+      "id": "multiply",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 0,
+      "balAnswer": "391",
+      "deepAnswer": "391"
+    },
+    {
+      "id": "syllogism",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 804,
+      "balAnswer": "No.\n\n**Explanation:** The premises establish that roses are a type of flower, and that *some* flowers fade quickly. This does not mean that *all* flowers fade quickly, and therefore it does not mean that all roses (which are a subset of flowers) must fade quickly.",
+      "deepAnswer": "No.\n\n**Explanation:** While all roses are flowers, the statement that \"some flowers fade quickly\" only tells us that there is an overlap between the category of flowers and the category of things that fade quickly. It does not specify *which* flowers fade quickly. It is possible that the flowers tha"
+    },
+    {
+      "id": "snail",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 1689,
+      "balAnswer": "Die Schnecke braucht **8 Tage**, um aus dem Brunnen zu klettern.\n\nHier ist die Schritt-für-Schritt-Rechnung:\n\n1. **Netto-Fortschritt pro Tag:** $3 \\text{ m (hoch)} - 2 \\text{ m (zurück)} = 1 \\text{ Meter pro Tag}$.\n2. **Der entscheidende Tag:** Man muss beachten, dass an dem Tag, an dem die Schnecke",
+      "deepAnswer": "Die Schnecke braucht **8 Tage**, um aus dem Brunnen zu klettern.\n\nHier ist die Erklärung, warum es nicht einfach 10 / 1 = 10 Tage sind:\n\nDie entscheidende Sache ist, dass die Schnecke, sobald sie einmal die Oberkante erreicht, nicht mehr zurückrutscht.\n\n**Tagesverlauf:**\n\n* **Netto-Fortschritt pro T"
+    },
+    {
+      "id": "bat-ball",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 1061,
+      "balAnswer": "Here's how to solve the riddle:\n\n**Let's use variables:**\n\n* Let $B$ be the cost of the bat.\n* Let $L$ be the cost of the ball.\n\n**We have two equations based on the problem:**\n\n1. **Total cost:** $B + L = 1.10$\n2. **Price difference:** $B = L + 1.00$\n\n**Substitute the second equation into the first",
+      "deepAnswer": "The ball costs **$0.05** (5 cents).\n\nHere is the breakdown:\n\n*   **Ball:** $0.05\n*   **Bat:** $1.05 (which is $1.00 more than the ball)\n*   **Total:** $0.05 + $1.05 = $1.10"
+    },
+    {
+      "id": "minutes",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 0,
+      "balAnswer": "150",
+      "deepAnswer": "150"
+    },
+    {
+      "id": "sort",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 432,
+      "balAnswer": "Die sortierte Liste der Zahlen aufsteigend ist: **3, 5, 8, 11**.",
+      "deepAnswer": "Die sortierte Liste ist: **3, 5, 8, 11**."
+    }
+  ]
+}
