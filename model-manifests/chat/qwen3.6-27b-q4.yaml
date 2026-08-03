@@ -6,6 +6,12 @@ format: gguf
 runtime: llama_cpp
 license: apache-2.0
 size_on_disk_gb: 16.8
+# MEASURED 2026-07-30 (i9-9900X, b9849 linux-vulkan; model-benchmarks.md §9.3): vulkan/in-app
+# peak RSS 16.87 GiB at ctx 8192 → formula min exactly 20 — the committed line is CONFIRMED on
+# the GPU basis. The Linux pure-CPU probe read 26.9 GiB (mmap-resident basis, not
+# Windows-PeakWorkingSet-comparable; reproduced to 0.01 GiB) — a cpu-only 24 GB box is tight;
+# Windows-basis re-measure tracked in the wave follow-up issue. §9.1 through-the-app smoke
+# PASSED all legs 2026-07-30 (the §6.4 residual for this model).
 recommended_min_ram_gb: 20
 # recommended_ram_gb recalibrated 32→24 at productization (2026-07-12): same physical tier as
 # the 12-14B pair (gemma4-12b / qwen3-14b, both 24), so the §6.2 rank decides the tier winner

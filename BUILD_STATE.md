@@ -19,6 +19,9 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-03 — **Gemma 4 QAT wave + Qwen3.5/3.6 promotion pipeline CLOSED (branch `wave/gemma4-close-out-2026-08`): the 2026-07-09 + 2026-07-30 i9 runs RATIFIED as the §9 record on detector-v3 rescored numbers; 26B-A4B → rank 2, 35B-A3B → rank 1, 31B never-promote, E2B/E4B stay 0; issues #48/#53/#82 closed.**_
+Outcome only — the durable record is **`model-benchmarks.md` §9.3 "Wave outcome — RATIFIED"** (decisions vs the must-beat table, thinking-per-size incl. the 12B default-thinking correction, the §4 RSS basis decision, §9.1 smoke states, scorer v3); evidence = the 2026-07-30 contributor run merged as PR #92 (`ab755563`, `eval/results/i9-9900X-gemma4wave-vulkan-*` + speed CSVs + thinking JSONs; anchors reproduce the 2026-07-09 rows). Step (a) scorer fix landed: `ABSTAIN_PHRASES` v3 + split-negation `ABSTAIN_PATTERNS` (`tests/eval/text.mjs`, verbatim-run regression pins in `score.test.ts`), all four dumps rescored — the i9 runs flip exactly the 9 audited items, zero answerable flips, i7 changes one over-abstain cell, devbox byte-identical; rescored CSVs committed (canonical per §9.3). Ranks: `gemma4-26b-a4b` **2** (EM parity + 0 halluc at ~4× the 24 GB pick's speed; F1 under it — runner-up, never auto-pick), `qwen3.5-35b-a3b` **1** (0 real vs incumbent MoE's 2 + confirmed 140.9/12.1 t/s; §9.1 smoke still owed — no exposure at rank 1), `gemma4-31b` **0 forever** (drop condition met; kept selectable, not removed — shipped in v0.1.55), `gemma4-e2b` **0** pending the #53 weak-16 GB-box leg (F1 edges the bundled 4B, fastest cpu decode measured; 2507 keeps the quality lead; Deep 7/8 flip-rule NO), `gemma4-e4b` **0** (missed the 8B bar). RAM lines KEPT — vulkan/in-app peaks confirm every committed line (27B-Q4 formula-exact 20); the Linux-cpu values are a non-comparable mmap basis (Q5 measured below Q4). Picker mapping UNCHANGED at every asserted RAM point (`benchmark.test.ts`; wave pins updated in `committed-catalog.test.ts` — both never-auto-pick guards now cover the ranked non-3s). Manifests carry measured RSS + honest eval standing per §6.4 precedent; docs: model-policy (wave outcome + table rows), README rows, §6.4/§9 status notes. Residuals → follow-up issue (option-2 signal-aware picker + the owed 16 GB-box tok/s leg for E2B/4B + Windows-basis RSS re-measure + 35B §9.1 smoke). Issue disposition: #82 closed (wave complete), #48 closed (tier gap was fixed §6.3; promotion pipeline now ratified + complete; residuals tracked), #53 closed (the 4B IS the ≤12 GB pick since §6.4; the quality-bar path is dead per the ratified eval; the remaining compute-axis case = option 2, tracked in the follow-up).
+
 _2026-07-24 — **Master push-run flake FIXED (branch `fix/vault-lock-cipher-ci-timeout`): the SEC-1 `vault-lock-cipher` tests get explicit 60 s timeouts — the issue-#84/PR-#86 starved-runner pattern.**_
 The `5d41c01a` push run (30080155163) failed ONLY windows/22.x, ONLY `vault-lock-cipher.test.ts` (2 × "Test timed out in 15000ms"), on a tree **byte-identical** to the PR-green head `9e3a92cb` — the same leg was green on that tree 20 minutes earlier, the same failed run's windows/24.x leg ran the whole file in 1.5 s, and the failing leg took 10m34s overall vs the PR's 7m40s: a starved runner, not a code break (the failed jobs were re-run to correct master's commit status). Fix is test-only: 60 s third-arg timeouts on all four tests in the file (same real-vault fixture weight; the relock test does strictly more crypto than the opener that flaked) plus a header comment recording the evidence. Every assertion there is semantic — none is a timing bound — so the wider budget loosens nothing the file proves.
 
@@ -1198,46 +1201,21 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    - Watch-items **PF-5** (listDocuments load-all at ~10k docs — known-limitations, with DB-8) and
      **PF-8** (resident-cache RAM at the 1M-chunk bound — the architecture P4b deferral record)
      are recorded at those sites.
-8. **Qwen3.5/3.6 wave promotion (owner — issue #48's open half + issue #53; model-benchmarks
-   §9/§9.1): the QUALITY half now EXISTS as tester evidence — remaining work is ratify + the
-   missing axes, not "run the eval from scratch".** *(Update 2026-07-12: steps (e) and the
-   coupled rank/RAM/test/README edits LANDED EARLY by owner decision, see the 2026-07-12
-   newest-Qwen entry + model-benchmarks §6.4; the promotion deliberately did not wait for
-   (a)-(d), which stay open exactly as written. The raw tester CSVs are now committed under
-   `eval/results/i9-9900X-vulkan-*`. Note the eval-vs-decision divergence recorded in §6.4:
-   the promoted 4B/9B ranks contradict the tester verdicts below; revisit §6.4 first if
-   (a)-(d) produce contradicting evidence.)* A tester ran the §2 grounded-QA harness over
-   13 chat GGUFs incl. all six wave candidates (2026-07-09, i9-9900X + RTX 3090, b9849 binary;
-   full tables in issue #48's comments; recorded in model-benchmarks §9 "Tester eval runs",
-   2026-07-11). Verdicts as reported: **Qwen3.6 27B Q5/Q4 sweep the 20–24 GB tier** (rank 2/1
-   proposal — blocked on productizing: no manifests in the repo, need `download:` block + real
-   sha256 + license review); **the 4B FAILS its bar** vs `qwen3-4b-instruct-q4` (F1 .2728 vs
-   .3277; 2507 dominates both) — so issue #53's case reduces to the compute axis = option 2;
-   **the 2B should never be recommended** (worst unanswerable-discipline of all 13); the 9B
-   proposed rank 1 under Ministral; **the 35B-A3B is hallucination-clean after audit, rank
-   deferred to the speed rows**. Owner steps, in order: (a) fix the scorer first — refusal
-   detector missed 4 abstentions (incl. the German "kein/keine … erwähnt" family) → extend the
-   phrase list + `rescore.mjs` re-score (no model re-runs), and treat EM + audited hallucinations
-   as primary over the length-confounded F1 (Qwen3.5's verbose house style); (b) RATIFY the
-   tester run as the §9 record (or re-run locally); (c) the §3/§4 speed/RSS sweep (decides the
-   35B-A3B; supplies the measured peak RSS for RAM-line retunes); (d) the §9.1 through-the-app
-   smoke (abort/teardown/thinking toggles — the tester runs are strong informal b9849
-   load+stream evidence but exercise the RAG path, not the app UI); (e) productize Qwen3.6 27B;
-   then the coupled edits land together: `recommendation_rank`s, honest RAM lines for the
-   2B/0.8B (safe now — the §6.3 ranked-only guard), `committed-catalog.test.ts` wave invariants,
-   `benchmark.test.ts` RAM mapping. The 20–24 GB tier gap half of #48 is already FIXED (§6.3,
-   2026-07-11). **Issue #53 mechanics (verified against `recommendModelIdByRam`, recorded in the
-   manifest + §9):** rank 1–2 wins the 4B nothing (qwen3-4b takes ≤12 GB on the rank/disk-size
-   tiebreaks); rank ≥ 3 also steals 16/20 GB from Ministral (shared `recommended_ram_gb: 16`) —
-   with the failed quality bar, the weak-hardware case is served by option 2 (signal-aware
-   picker: feed the benchmark's measured tok/s — persisted with `measuredModelId` since #52 —
-   into the recommendation; also resolves #52's remaining downgrade question), which needs its
-   own short design note before code. **Added criterion (STR-1 review §5.4, 2026-07-20):** during
-   step (b)/(d), record each manifest's thinking-mode behavior (split Instruct/Thinking checkpoint
-   vs `enable_thinking` kwarg honored) as a first-class criterion for **structured-surface
-   suitability** — the D55 grammar surfaces incl. the ingest extract pass need non-thinking
-   behavior or they pay the #50 escalated retry per chunk; the checkpoint choice, not a template
-   kwarg, is the robust control (model-benchmarks §9, "Thinking-checkpoint criterion").
+8. **Qwen3.5/3.6 + Gemma 4 QAT wave promotion — CLOSED 2026-08-03 (issues #48/#53/#82 closed;
+   record: model-benchmarks §9.3 "Wave outcome — RATIFIED" + the 2026-08-03 entry above).**
+   Steps (a)–(e) are done: (a) scorer v3 + all-dump rescore (canonical numbers), (b) both i9
+   runs ratified as the §9 record, (c) §3/§4 speed/RSS rows for the promoted set + wave
+   (RAM lines confirmed on the vulkan basis, kept), (d) §9.1 smokes for the 9B + both 27Bs +
+   26B-A4B + 31B, (e) Qwen3.6 productized 2026-07-12. Coupled edits landed together (ranks
+   26B-A4B 2 / 35B-A3B 1, wave test pins, manifest eval-standing notes; picker mapping
+   unchanged). The rescored table did NOT contradict the §6.4 promoted ranks. The STR-1 §5.4
+   thinking-checkpoint criterion is discharged for these families: every Gemma 4 size + the
+   promoted Qwen set honor `enable_thinking` with clean suppression (structured surfaces safe;
+   §9.3 "Thinking per size"). **Remaining work moved to the wave follow-up issue** (filed at
+   close): the option-2 signal-aware picker (issue #53's residue — needs its short design note
+   before code; also resolves #52's downgrade question), the owed weak-16 GB-box measured-tok/s
+   leg (decides E2B's rank and the #53 machine class), the Windows-basis peak-RSS re-measure
+   (any RAM-line retune), and the 35B-A3B §9.1 in-app smoke.
 9. **Issue #51 residuals (owner decisions — the app-side quit close + docs shipped 2026-07-11):**
    - **Idle posture:** checkpoint + release the DB when the app is idle, so an unplug while "open
      but not in use" is harmless. New machinery (no app-level idle detector exists); the

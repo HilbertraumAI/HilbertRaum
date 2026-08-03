@@ -127,6 +127,84 @@ describe('isAbstention — audited real-run patterns (2026-06-11)', () => {
   })
 })
 
+describe('isAbstention — audited real-run patterns v3 (2026-08-03, the two i9 runs)', () => {
+  // The 9 refusal phrasings the v2 list missed across the 2026-07-09 (13 models) and
+  // 2026-07-30 (Gemma-4 wave) i9 runs — each string below is VERBATIM from the committed
+  // eval/results/*-items.jsonl dumps (model-benchmarks.md §9.3 wave outcome record).
+  it('catches the split-negation and new phrase families the audits found', () => {
+    // qwen3.6-27b-q4 · en-invoice-discount (both runs): "there is no … mentioned"
+    expect(
+      isAbstention(
+        'Based on the provided document excerpts, there is no early-payment discount mentioned for the Globex invoice. The terms specify that the amount is payable within 30 days and that a late fee of 2 percent applies after the due date [S3].'
+      )
+    ).toBe(true)
+    // qwen3-8b · de-contract-penalty: "keine explizit genannte …" + "nicht direkt erwähnt"
+    expect(
+      isAbstention(
+        'Laut Rahmenvertrag gibt es keine explizit genannte Vertragsstrafe für verspätete Lieferungen [S2]. Die Vertragsstrafe wird nicht direkt erwähnt.'
+      )
+    ).toBe(true)
+    // qwen3.5-35b-a3b · de-invoice-discount: "kein Skonto … erwähnt" + "keine Information"
+    expect(
+      isAbstention(
+        'Basierend auf den bereitgestellten Dokumentauszügen wird für die Globex-Rechnung (RE-2024-001) kein Skonto für eine frühere Zahlung erwähnt.'
+      )
+    ).toBe(true)
+    expect(isAbstention('Es findet sich keine Information über einen Skontoabzug bei früherer Begleichung.')).toBe(true)
+    // gemma4-e2b · de-coffee-grind: "kann … keine … finden"
+    expect(
+      isAbstention(
+        'Ich kann aus den bereitgestellten Dokumentenauszügen keine Empfehlung zur Mahlstärke für Espresso finden.'
+      )
+    ).toBe(true)
+    // gemma4-e2b · en-coffee-grind: "do not have information"
+    expect(
+      isAbstention(
+        'I do not have information in the provided documents regarding the recommended grind size for espresso.'
+      )
+    ).toBe(true)
+    // gemma4-e2b · de-invoice-discount: "keine spezifische Information"
+    expect(
+      isAbstention(
+        'Es wird jedoch keine spezifische Information darüber gegeben, welcher Skonto bei früher Zahlung der Globex-Rechnung gilt.'
+      )
+    ).toBe(true)
+    // gemma4-e4b · en-waste-extracost: "do not state"
+    expect(
+      isAbstention('The provided documents do not state the cost per month for an extra residual-waste bin.')
+    ).toBe(true)
+    // qwen3.5-2b · de-hausordnung-miete (the 2026-07-09 audit's "4–5 real" uncertainty item):
+    // "keine spezifische monatliche Miete … genannt" reads as a refusal, not an invention.
+    expect(
+      isAbstention('Es wird jedoch keine spezifische monatliche Miete in diesem Dokument genannt.')
+    ).toBe(true)
+  })
+  // Audited REAL hallucinations from the same runs must stay non-matches — including the
+  // borderline qwen3-30b Lehrbuch item (hand-audited REAL 2026-07-09: hedges with "nicht
+  // direkt genannt" but carries no kein/keine refusal and asserts distractor content).
+  it('does NOT flag the audited real hallucinations from the i9 runs', () => {
+    expect(
+      isAbstention(
+        'Das Lehrbuch wird im Italienischkurs nicht direkt genannt. Allerdings wird in [S1] erwähnt: "Bitte bringen Sie das Lehrbuch zur ersten Stunde mit." Es fehlen jedoch weitere Details zum spezifischen Lehrbuch.'
+      )
+    ).toBe(false)
+    // The en-contract-penalty invoice-distractor trap (six models, both runs).
+    expect(
+      isAbstention('Under the agreement, a late fee of 2 percent applies after the due date for late delivery [S1].')
+    ).toBe(false)
+    // gemma4-e2b's sick-days/vacation-days conflation (incl. the language-bleed EN variant).
+    expect(isAbstention('Vollzeitbeschäftigte erwerben zwanzig bezahlte Urlaubstage pro Jahr [S1, S2].')).toBe(false)
+    // qwen3.5-0.8b's liability aside: "does not relate" must not read as a refusal.
+    expect(
+      isAbstention(
+        'While the agreement mentions a maximum aggregate liability of one million US dollars, this figure does not relate to the specific penalty for late delivery under the Globex Invoice.'
+      )
+    ).toBe(false)
+    // An affirmative kein-negation in a CORRECT answer must not match the kein…erwähnt family.
+    expect(isAbstention('Es fallen keine weiteren Kosten für die erste Restmülltonne an [S2].')).toBe(false)
+  })
+})
+
 describe('scoreItem — hedged-but-correct vs over-abstention (post-audit semantics)', () => {
   const answerableItem: EvalItem = {
     id: 'en-hr-vacation', lang: 'en', question: 'How many vacation days?',

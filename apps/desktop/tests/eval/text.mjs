@@ -113,11 +113,39 @@ export const ABSTAIN_PHRASES = [
   'wird keine',
   'gibt keinen',
   'gibt keine',
-  'keinen spezifischen'
+  'keinen spezifischen',
+  // v3 additions (2026-08-03) — the 9 detector misses audited across the 2026-07-09 and
+  // 2026-07-30 i9 runs (model-benchmarks.md §9 "Scorer confound" + §9.3 wave outcome; raw
+  // items in eval/results/*-items.jsonl). Same rule as above: refusal-only phrasings.
+  'do not have information',
+  'does not have information',
+  "don't have information",
+  'do not state',
+  'does not state',
+  "doesn't state",
+  'keine spezifische',
+  'keine information',
+  'nicht direkt erwähnt'
+]
+
+// v3 (2026-08-03): split-negation refusal families a contiguous phrase cannot express,
+// observed verbatim in the audited runs — "there is no <X> mentioned", "kein/keine <X>
+// erwähnt/genannt/angegeben", "kann … keine <X> finden". Applied to the SAME normalized flat
+// text as the phrases. Keep the gap bounds tight: a wide gap is how a confident answer with an
+// incidental negation would start matching (the regression suite pins audited REAL
+// hallucinations as non-matches — e.g. the qwen3-30b "nicht direkt genannt …" item stays a
+// hallucination per the 2026-07-09 hand audit because it carries no kein/keine token).
+export const ABSTAIN_PATTERNS = [
+  / there (?:is|are) no (?:\S+ ){0,8}?(?:mentioned|specified|stated) /,
+  / kein(?:e|en)? (?:\S+ ){0,8}?(?:erwähnt|genannt|angegeben)\S* /,
+  / kann (?:\S+ ){0,10}?keine (?:\S+ ){0,8}?(?:finden|entnehmen|ableiten) /
 ]
 
 /** True when the answer reads as a refusal to answer (heuristic — audit raw dumps too). */
 export function isAbstention(answer) {
   const flat = ' ' + normalizeText(answer) + ' '
-  return ABSTAIN_PHRASES.some((p) => flat.includes(' ' + normalizeText(p) + ' '))
+  return (
+    ABSTAIN_PHRASES.some((p) => flat.includes(' ' + normalizeText(p) + ' ')) ||
+    ABSTAIN_PATTERNS.some((re) => re.test(flat))
+  )
 }

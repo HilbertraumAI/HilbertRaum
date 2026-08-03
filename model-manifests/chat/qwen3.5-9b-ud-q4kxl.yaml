@@ -8,6 +8,10 @@ license: apache-2.0
 size_on_disk_gb: 6.0
 # 12 GB minimum is intentionally conservative: the file is ~5.97 decimal GB but Electron +
 # SQLite + the embedding/reranker sidecars + KV cache all need headroom alongside it.
+# MEASURED 2026-07-30 (i9-9900X, b9849 linux; model-benchmarks.md §9.3): vulkan/in-app peak RSS
+# 6.57 GiB / cpu 7.93 GiB at ctx 8192 (formula 10–11 ≤ committed 12 — confirmed conservative).
+# §9.1 through-the-app smoke PASSED all legs 2026-07-30 (closing the §6.4/license-note
+# "§9.1 remains open" residual for this model).
 recommended_min_ram_gb: 12
 recommended_ram_gb: 16
 # Rank 3 (owner decision 2026-07-12, newest-generation preference; model-benchmarks.md §6.4):

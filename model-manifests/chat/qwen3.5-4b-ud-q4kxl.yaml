@@ -6,6 +6,8 @@ format: gguf
 runtime: llama_cpp
 license: apache-2.0
 size_on_disk_gb: 2.9
+# MEASURED 2026-07-30 (i9-9900X, b9849 linux; model-benchmarks.md §9.3): vulkan peak RSS
+# 3.44 GiB / cpu 4.22 GiB at ctx 8192 → min 8 confirmed (formula 7–8).
 recommended_min_ram_gb: 8
 recommended_ram_gb: 16
 # Rank 3 (owner decision 2026-07-12, newest-generation preference; model-benchmarks.md §6.4):

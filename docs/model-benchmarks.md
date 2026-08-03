@@ -362,7 +362,12 @@ rows for every promoted model** (the tester runs were QUALITY-ONLY; the promoted
 rows yet, so their `recommended_min_ram_gb` values rest on file size + headroom convention, not
 measured RSS), and the §9.1 through-the-app smoke for the 9B and both 27Bs. If the speed/RSS
 rows or the rescored quality table later contradict a promoted rank, this decision is the one
-to revisit, not silently override.
+to revisit, not silently override. *(All four CLOSED 2026-08-03 — scorer v3 + rescore landed,
+both i9 runs ratified as the §9 record, the 2026-07-30 run supplied §3/§4 rows for the whole
+promoted set (RAM lines confirmed on the vulkan basis; the Linux-cpu numbers are a
+non-comparable mmap basis — §9.3 "§4 RSS"), and the 9B + both 27B §9.1 smokes PASSED. The
+rescored table did NOT contradict the promoted ranks. Residuals live in the wave follow-up
+issue: the Windows-basis RSS re-measure and the 35B-A3B §9.1 smoke.)*
 
 ---
 
@@ -576,7 +581,10 @@ are now committed under `eval/results/i9-9900X-vulkan-*` (§6.4; originally kept
 drive). Cross-run calibration held (three overlap models
 within ≤.022 F1 / ≤1 hallucination item of the committed Phase-29 i7 run), and the tester audited
 all flagged hallucinations by hand. **Status: quality evidence, pending owner ratification —
-NOT yet the §9 record and no rank has moved.** Headline verdicts as reported:
+NOT yet the §9 record and no rank has moved.** *(Ratified 2026-08-03 together with the
+2026-07-30 evidence run — both i9 runs are now the §9 record and the detector-v3 rescored CSVs
+are canonical; see the §9.3 wave outcome. The 35B-A3B's deferred rank resolved to rank 1 there.)*
+Headline verdicts as reported:
 
 - **Qwen3.6 27B (local-only manifests) sweeps the 20–24 GB tier** — Q5: best F1 ever measured on
   the harness (.3573), zero hallucinations, best DE F1; Q4 clean after audit. Proposal: Q5 →
@@ -600,7 +608,10 @@ NOT yet the §9 record and no rank has moved.** Headline verdicts as reported:
   measures style, not knowledge — read EM + audited hallucinations as primary for cross-family
   calls, or add a length-normalized column; and the refusal detector missed four abstentions
   across the runs (incl. a German "kein/keine … erwähnt" negation family) — extend the phrase
-  list + rescore via the §2 `rescore.mjs` flow (no model re-runs needed).
+  list + rescore via the §2 `rescore.mjs` flow (no model re-runs needed). *(Detector fix DONE
+  2026-08-03 — v3 phrase list + split-negation patterns, all four dumps rescored and the flips
+  audited item-by-item; see §9.3 "Scorer v3". The length-normalized column remains a
+  nice-to-have; EM + audited hallucinations stay the primary cross-family read.)*
 
 **What the runs do NOT cover (why ranks are still unmoved):** owner ratification of a
 tester-machine run as the §9 record; the §3/§4 speed/RSS sweep (decides the 35B-A3B and supplies
@@ -765,7 +776,11 @@ wave-specific addition from the 2026-07-23 smokes: **E4B and 26B-A4B think BY DE
 arrives on the `reasoning_content` channel first — unlike the shipped 12B), so the per-size smoke
 MUST verify `enable_thinking: false` actually suppresses reasoning — Balanced mode and the #50
 extract path depend on it (see the STR-1 §5.4 thinking-checkpoint criterion recorded at the end of
-§9's main body: structured surfaces need pinned non-thinking behavior).
+§9's main body: structured surfaces need pinned non-thinking behavior). *(Correction from the
+2026-07-30 run: the shipped 12B ALSO thinks by default on b9849 linux-vulkan (`--jinja
+--reasoning-format deepseek`) — the "unlike the shipped 12B" contrast did not reproduce and was
+likely win-vulkan/0.1.48-specific or stale; the suppression requirement itself is what matters,
+and it holds for every size. See the wave outcome below.)*
 
 Smoke state at wave open (2026-07-23, DIY test drive, 0.1.48 portable + b9849 win-vulkan): E2B +
 E4B **in-app smoke PASSED** (owner); 26B-A4B loads + answers via CLI but needs a ≥24 GB machine
@@ -774,6 +789,71 @@ un-smoked (same dense arch string as the 12B — lowest risk). All four hashes a
 independently re-verified against the HF tree API + resolve-endpoint headers at merge review
 (PR #83); E2B/E4B/26B-A4B additionally confirmed by fetch + on-disk SHA-256. RAM lines are
 ESTIMATES pending the §4 peak-RSS measurement (each manifest carries its recalibration note).
+
+**Wave outcome — RATIFIED (owner, 2026-08-03).** The full §2 + §3/§4 + thinking + §9.1 evidence
+for all four sizes landed 2026-07-30 (contributor run: i9-9900X, 128 GB, RTX 3090, Ubuntu
+22.04.5, pinned b9849 linux-vulkan, repo base `7b0203c5`; raw files committed via PR #92 —
+`eval/results/i9-9900X-gemma4wave-vulkan-*`, `i9-9900X-{vulkan,cpu}-speed.csv`,
+`gemma-thinking-i9-9900X-*.json`; full tables in the issue-#82 comment). Anchor calibration
+against the committed 2026-07-09 run held (gemma4-12b F1 delta .0007; qwen3.6-27b-q4
+byte-identical), so the two i9 runs are comparable, and **both are hereby ratified as the §9
+record** (BUILD_STATE item 8 step (b)), with the **detector-v3 rescored CSVs as the canonical
+numbers** (step (a) — see "Scorer v3" below). Decisions against the must-beat table above, each
+recorded next to the rank in its manifest:
+
+| Candidate | Decision | Basis (rescored numbers) |
+|---|---|---|
+| `gemma4-26b-a4b-it-qat-q4` | **rank 2** — ranked runner-up / MoE speed alternative | EM parity with the 24 GB pick `qwen3.6-27b-q4` (.9765 both), ZERO audited hallucinations (both), ~4× its decode (tg 155.8 vs 40.1 t/s vulkan; 15.6 vs 2.8 cpu) at 2.5 GB less disk — but F1 .3307 vs .3523 keeps the Qwen the tier pick (both families share the terse house style, so the §9 length confound does not explain the gap). Never the auto-pick while a rank-3 model fits (pinned in `committed-catalog.test.ts`). |
+| `gemma4-31b-it-qat-q4` | **rank 0 forever — DO NOT PROMOTE** | Issue #82's drop condition is met: ties the 26B-A4B within .003 F1 (.3334 vs .3307; both 0 hallucinations, both the same two cautious DE over-abstentions) while decoding 4.2× (vulkan) / 6× (cpu) slower at +3.3 GB disk. Stays selectable as the Apache-2.0 GPU-box quality ceiling; catalog removal deliberately not taken (shipped in v0.1.55). |
+| `gemma4-e4b-it-qat-q4` | **rank 0** — missed the 8B bar | F1 .2999 vs Ministral .3111 / `qwen3.5-9b` .3152 / `qwen3-8b` .3262; hallucination-honest after audit (1 real). |
+| `gemma4-e2b-it-qat-q4` | **rank 0** — gated on the owed weak-hardware datapoint | F1 .3373 edges the bundled `qwen3-4b` (.3277) with equal audited hallucinations (3) and the fastest cpu decode measured (24.3 t/s tg) — but `qwen3-4b-2507` keeps the tier quality lead (.3613, 1 real), Deep failed the flip rule at this size (7/8 vs Balanced 8/8), and the issue-#53 weak-16 GB-box measured-tok/s leg is still owed. That datapoint decides (wave follow-up issue). |
+| `qwen3.5-35b-a3b-ud-q4kxl` *(§9's deferred-to-speed rank)* | **rank 1** — ranked MoE alternative | The §9 bar ("beat `qwen3-30b-a3b-q4` on speed OR quality by enough") is met on both axes: 0 real hallucinations vs the incumbent MoE's 2 at EM parity (quality), and the 3B-active speed case confirmed (tg 140.9 t/s vulkan / 12.1 cpu vs the dense 27B-Q4's 40.1 / 2.8). Residual: its §9.1 in-app smoke is still owed — rank 1 exposes no auto-pick. |
+
+Nothing in the run contradicts the §6.4 promoted ranks — where the eval is clear it agrees at the
+top end (the Qwen3.6 pair still leads the quality table on the rescored numbers).
+
+**Thinking per size (2026-07-30):** all four wave sizes (and the 12B control) think by default on
+the raw b9849 linux-vulkan server and **suppress cleanly with `enable_thinking: false`** (0
+reasoning chars, content intact) — the #50 short-cap empty-content class reproduces only in
+raw-default mode, which the app never sends, and the #50 extract path is safe on every size.
+Deep-vs-Balanced (8-item set, committed JSONs): E4B / 26B-A4B / 31B all 8/8 vs 8/8 (flip rule
+satisfied); E2B Deep 7/8 (train-arrival arithmetic slip) — flip rule says NO for E2B.
+`supports_thinking_mode` stays true on all four (the mechanism verifiably works; E2B's Deep
+*value* is recorded here and in its manifest). The 12B-contrast correction is noted at the
+checklist paragraph above.
+
+**§4 RSS / RAM lines (2026-08-03 decision): lines KEPT, measured values recorded per manifest.**
+The in-app/vulkan peaks confirm the committed lines (26B-A4B 14.28 GiB → min 20 ✓; 31B 17.78 →
+24 ✓; E2B 4.40 cpu → 8 ✓; E4B 7.32 cpu → 12 ✓; `qwen3.6-27b-q4` 16.87 → formula-exact 20 ✓; Q5
+19.38 → 23 ≤ 24 ✓; 9B 6.57/7.93 → ≤ 12 ✓; 4B 3.44/4.22 → 8 ✓; 35B 21.46 → 25 vs 24, within the
+basis question). The Linux **pure-CPU** max-RSS values (26B 27.5 GiB, 31B 36.2, 27B-Q4 26.9, 35B
+32.4) count mmap-resident weight pages and are NOT comparable to the Windows-PeakWorkingSet basis
+the catalog lines were calibrated on — the same sweep read the 27B-Q5 (19.6) BELOW the Q4 (26.9),
+a page-cache artifact, so no line is retuned from that basis. A Windows-basis re-measure is the
+recorded follow-up; a cpu-only 24 GB box running the 27B-Q4 is acknowledged tight.
+
+**§9.1 smokes (2026-07-30, through the real UI via CDP, b9849 linux-vulkan):** 26B-A4B and 31B
+PASS every leg (start / stream / grounded+cited / mid-stream abort / stop+quit teardown / Deep
+on + Balanced suppressed; in-app peaks 14.28 / 17.78 GiB) — closing the two open per-size smokes;
+E2B/E4B were owner-PASSED 2026-07-23 (win-vulkan) and this run adds the missing linux legs via
+harness+eval. The still-owed §6.4 smokes for the promoted set also PASSED: `qwen3.5-9b`,
+`qwen3.6-27b-q4`, `qwen3.6-27b-q5` — all legs, in-app peaks 6.57 / 16.87 / 19.38 GiB. No
+`llama-server` survived a stop or quit in any smoke. Open smokes after this wave: the 35B-A3B
+(rank 1, no auto-pick exposure) — tracked in the follow-up issue.
+
+**Scorer v3 (step (a), 2026-08-03):** the refusal detector missed 9 genuine abstentions across
+the two i9 runs (4 in 2026-07-09 incl. the "kein/keine … erwähnt" family; 5 in 2026-07-30:
+"keine spezifische Information", "kann … keine … finden", "I do not have information", "do not
+state", "there is no … mentioned"). `ABSTAIN_PHRASES` was extended and split-negation
+`ABSTAIN_PATTERNS` added (`tests/eval/text.mjs`, regression-pinned with the verbatim run answers
+in `score.test.ts` — including the audited REAL hallucinations that must stay non-matches), and
+`eval/rescore.mjs` re-ran over all four dumps. Effect audited item-by-item: the two i9 runs flip
+EXACTLY the nine audited items (no answerable-item flips); the committed i7 rescore changes one
+cell (`qwen3-8b` over-abstain .0118→.0235 — an answerable refusal previously read as plain
+wrong); devbox is byte-identical. Canonical rescored deltas vs the raw CSVs: `qwen3.6-27b-q4`
+hallucinations .0667→0 (both runs), `qwen3-8b` .2→.1333, `qwen3.5-35b-a3b` .0667→0,
+`qwen3.5-2b` .3333→.2667 (its audit's "4–5 real" resolves to 4), E2B .40→.20 (3 real), E4B
+.1333→.0667 (1 real). EM/F1/citation columns are abstention-independent and unchanged.
 
 ---
 
