@@ -6,24 +6,31 @@ format: gguf
 runtime: llama_cpp
 license: apache-2.0
 size_on_disk_gb: 14.4
-# ESTIMATED (no measured RSS yet): a field datapoint (issue #42 reopen, 2026-07-11) had this
-# model ~16 GB resident on a 24 GB machine → +~3 GiB headroom (PROD-1 model-alone floor) → 20.
-# Co-residency (embedder/reranker/app/OS) lives in recommended_ram_gb; recalibrate from peak
-# RSS after the b9849 smoke, like Phase-29 did.
+# MEASURED 2026-07-30 (i9-9900X, b9849 linux-vulkan; model-benchmarks.md §9.3 wave outcome):
+# in-app/vulkan peak RSS 14.28 GiB at ctx 8192 — consistent with min 20 (the original estimate
+# rested on the issue-#42 field datapoint of ~16 GB resident). The pure-CPU Linux probe read
+# 27.5 GiB, but Linux max-RSS counts mmap-resident weight pages and is NOT comparable to the
+# Windows PeakWorkingSet basis the catalog RAM lines are calibrated on (the same sweep read the
+# 27B-Q5 below the Q4); lines KEPT — Windows-basis re-measure tracked in the wave follow-up.
 recommended_min_ram_gb: 20
 recommended_ram_gb: 32
-# Default 0: NOT auto-recommended. The HEADLINE candidate of the Gemma 4 QAT wave: MoE with
-# ~3.8B ACTIVE params/token (8 of 128 experts) → ~26B-class quality at near-4B CPU decode
-# speed — the same total-vs-active trade as qwen3-30b-a3b (18.6 GB) and qwen3.5-35b-a3b
-# (22.2 GB) at 4–8 GB LESS disk/RAM. Challenges the ranked 12–14B winner (gemma4-12b, rank 2)
-# on ≥24 GB machines AND both opt-in MoEs. Promote with a real `recommendation_rank` only after
-# the local German/English grounded-QA eval + b9849 smoke (model-benchmarks.md §9) — public
-# scores do not count.
-recommendation_rank: 0
+# Rank 2 since the wave ratification (owner decision 2026-08-03, model-benchmarks.md §9.3 wave
+# outcome): the §2 eval has it at EM parity with the 24 GB pick qwen3.6-27b-q4 (.9765), ZERO
+# unanswerable-set hallucinations after audit, ~4x its decode speed (155.8 vs 40.1 t/s vulkan
+# tg; 15.6 vs 2.8 cpu) at 2.5 GB less disk — but F1 .3307 vs .3523 keeps the Qwen the tier pick
+# (rank 3; both families share the terse house style, so the gap is not the §9 length
+# confound). Ranked runner-up / MoE speed alternative — never the auto-pick while a rank-3
+# model fits the tier (asserted in committed-catalog.test.ts). Was the wave's HEADLINE
+# candidate: MoE with ~3.8B ACTIVE params/token (8 of 128 experts) — the qwen3-30b-a3b /
+# qwen3.5-35b-a3b total-vs-active trade at 4–8 GB less disk/RAM.
+recommendation_rank: 2
 recommended_context_tokens: 8192
-# Gemma 4's chat template honours `enable_thinking` — verified live on the 12B (Phase-29 run #2,
-# tests/manual/gemma-thinking.test.ts). Assumed template-family-wide; VERIFY per size by smoke
-# before relying on Deep.
+# Thinking VERIFIED PER SIZE 2026-07-30 (§9.3): thinks by default on the raw server (as the
+# 2026-07-23 smoke found); `enable_thinking: false` suppresses cleanly (0 reasoning chars,
+# content intact) — the #50 extract path is safe. Deep vs Balanced on the 8-item set: 8/8 vs
+# 8/8 (eval/results/gemma-thinking-i9-9900X-26b-a4b.json). All §9.1 legs PASSED 2026-07-30
+# on a 128 GB box (start/stream/abort/grounded+cited/stop+quit teardown), closing the
+# issue-#82 "needs a ≥24 GB machine" gap.
 supports_thinking_mode: true
 supports_tools: false
 local_path: models/chat/gemma4-26b-a4b-it-qat-q4.gguf

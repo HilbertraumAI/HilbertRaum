@@ -23,9 +23,10 @@ function committedManifests(): ModelManifest[] {
 // 9B / 27B / 35B-A3B additions, and the later fast-tier 2B / 0.8B (issue #48 closed the test
 // gap — the fast-tier pair shipped without joining these invariants). All are text-only chat
 // models, not bundled. Ranks: the 4B and 9B carry rank 3 since the newest-Qwen promotion
-// (owner decision 2026-07-12, model-benchmarks.md §6.4); the rest stay rank 0 (selectable,
-// never auto-recommended). Pin BOTH so neither an accidental demotion nor a silent promotion
-// slips through.
+// (owner decision 2026-07-12, model-benchmarks.md §6.4); the 35B-A3B carries rank 1 since the
+// wave ratification (owner decision 2026-08-03, §9.3 — hallucination-clean §2 eval + the
+// confirmed 3B-active speed case); the rest stay rank 0 (selectable, never auto-recommended).
+// Pin ALL so neither an accidental demotion nor a silent promotion slips through.
 const QWEN35_WAVE_IDS = [
   'qwen3.5-0.8b-q6',
   'qwen3.5-2b-ud-q4kxl',
@@ -35,14 +36,14 @@ const QWEN35_WAVE_IDS = [
   'qwen3.5-35b-a3b-ud-q4kxl'
 ]
 
-// The committed promotion facts of the 2026-07-12 newest-Qwen decision.
+// The committed promotion facts: 2026-07-12 newest-Qwen decision + 2026-08-03 ratification.
 const QWEN_WAVE_RANKS: Record<string, number> = {
   'qwen3.5-0.8b-q6': 0,
   'qwen3.5-2b-ud-q4kxl': 0,
   'qwen3.5-4b-ud-q4kxl': 3,
   'qwen3.5-9b-ud-q4kxl': 3,
   'qwen3.5-27b-ud-q4kxl': 0,
-  'qwen3.5-35b-a3b-ud-q4kxl': 0
+  'qwen3.5-35b-a3b-ud-q4kxl': 1
 }
 
 describe('committed catalog — Qwen3.5 Unsloth wave', () => {
@@ -99,12 +100,13 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
     expect(byId['qwen3.5-9b-ud-q4kxl'].role).toBe('chat')
   })
 
-  it('NEVER auto-recommends a rank-0 (unpromoted) wave model at any realistic RAM level', () => {
+  it('NEVER auto-recommends a wave model below the rank-3 promoted pair at any realistic RAM level', () => {
     // recommendModelIdByRam is the production picker (RAM-best-fit + rank tiebreak). The
     // 2026-07-12 promotion covers exactly the 4B and 9B (plus the Qwen3.6 27B pair below);
-    // every OTHER wave member stays rank 0 and must never be the auto-recommendation.
+    // every OTHER wave member — rank 0 AND the ratified rank-1 35B-A3B (a ranked alternative,
+    // not a tier pick) — must never be the auto-recommendation.
     const chat = committedManifests()
-    const unpromoted = new Set(QWEN35_WAVE_IDS.filter((id) => QWEN_WAVE_RANKS[id] === 0))
+    const unpromoted = new Set(QWEN35_WAVE_IDS.filter((id) => QWEN_WAVE_RANKS[id] < 3))
     // 14 and 20 joined the sample in the PR-#83 hardening: unsampled odd values are where a
     // rank-0 manifest's RAM mis-edit hides from this guard (see the Gemma wave block).
     for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
@@ -160,15 +162,26 @@ describe('committed catalog — Qwen3.6 27B pair (2026-07-12 promotion)', () => 
 })
 
 // The Gemma 4 QAT wave (model-policy.md "Gemma 4 QAT wave", issue #82): the four official
-// Google QAT Q4_0 additions around the shipped 12B winner. Same posture as the unpromoted
-// Qwen3.5 wave members: text-only chat, rank 0, not bundled, never auto-recommended until
-// the offline benchmark promotes them.
+// Google QAT Q4_0 additions around the shipped 12B winner. Text-only chat, not bundled.
+// Ranks per the 2026-08-03 wave ratification (model-benchmarks.md §9.3 wave outcome): the
+// 26B-A4B carries rank 2 (ranked runner-up to the rank-3 qwen3.6-27b-q4 — EM parity + zero
+// hallucinations at ~4x the speed, F1 under it); E2B stays 0 (rank gated on the owed weak-16
+// GB-box datapoint), E4B stays 0 (missed the 8B bar), 31B stays 0 (issue-#82 drop condition
+// met — never promote). NONE may ever be the auto-pick (asserted below).
 const GEMMA4_WAVE_IDS = [
   'gemma4-e2b-it-qat-q4',
   'gemma4-e4b-it-qat-q4',
   'gemma4-26b-a4b-it-qat-q4',
   'gemma4-31b-it-qat-q4'
 ]
+
+// The committed rank facts of the 2026-08-03 ratification.
+const GEMMA4_WAVE_RANKS: Record<string, number> = {
+  'gemma4-e2b-it-qat-q4': 0,
+  'gemma4-e4b-it-qat-q4': 0,
+  'gemma4-26b-a4b-it-qat-q4': 2,
+  'gemma4-31b-it-qat-q4': 0
+}
 
 // The committed RAM lines (ESTIMATES pending measured peak RSS — each manifest carries the
 // recalibration note) and display names. RAM is pinned because a silent mis-edit here is
@@ -203,8 +216,9 @@ describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
       expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
       expect(m.format, `${id} format`).toBe('gguf')
       expect(m.family, `${id} family`).toBe('gemma4')
-      // Not promoted: rank 0 + no legacy profiles → never auto-recommended (asserted below too).
-      expect(m.recommendationRank, `${id} rank`).toBe(0)
+      // Ranks per the 2026-08-03 ratification (26B-A4B rank 2, rest 0); legacy profiles stay
+      // empty — none of the wave is ever auto-recommended (asserted below too).
+      expect(m.recommendationRank, `${id} rank`).toBe(GEMMA4_WAVE_RANKS[id])
       expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
       // Apache-2.0 (Gemma 4 is the Apache generation), review approved (official Google QAT —
       // first-party provenance, drive-shippable). Distinct from the two local-test Gemma stubs
@@ -231,13 +245,15 @@ describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
     }
   })
 
-  it('NEVER auto-recommends a rank-0 Gemma 4 wave model at any realistic RAM level', () => {
+  it('NEVER auto-recommends any Gemma 4 wave model at any realistic RAM level', () => {
     // A rank-0 model with a UNIQUE recommended_ram_gb below every ranked model's would become
     // the only "comfortable fit" at that RAM level and slip past the preferRanked guard —
     // exactly what happened when the E2B briefly declared 12 (the small-tier floor is 16).
     // 14 and 20 are deliberately in the sample: unsampled odd values are where a RAM mis-edit
     // hides (a rec of 13–15 would win ram=14 unseen), and 20 is the 26B-A4B's own hard-min
-    // boundary introduced by this wave.
+    // boundary introduced by this wave. Since the 2026-08-03 ratification this deliberately
+    // includes the rank-2 26B-A4B: a ranked runner-up must still lose every tier to the
+    // rank-3 holders (qwen3.6-27b-q4 at 24 GB, qwen3.6-27b-q5 at ≥32 GB).
     const chat = committedManifests()
     const waveSet = new Set(GEMMA4_WAVE_IDS)
     for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {

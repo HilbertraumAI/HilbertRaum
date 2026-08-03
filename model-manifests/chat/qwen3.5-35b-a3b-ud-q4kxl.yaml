@@ -6,13 +6,23 @@ format: gguf
 runtime: llama_cpp
 license: apache-2.0
 size_on_disk_gb: 22.2
+# MEASURED 2026-07-30 (i9-9900X, b9849 linux-vulkan; model-benchmarks.md §9.3): vulkan peak RSS
+# 21.46 GiB at ctx 8192 (formula floor 25 vs the committed 24 — inside the basis question);
+# Linux-cpu 32.4 GiB, on the mmap-resident basis that is NOT Windows-PeakWorkingSet-comparable.
+# Lines KEPT pending the Windows-basis re-measure (wave follow-up issue).
 recommended_min_ram_gb: 24
 recommended_ram_gb: 32
-# Default 0 — and keep it 0 FOREVER until the local benchmark proves this is better than the
-# current opt-in MoE (qwen3-30b-a3b-q4) on speed or quality. MoE candidate: the Qwen model card
-# reports 35B total params and ~3B activated (256 experts, 8 routed + 1 shared active). Intended
-# to challenge qwen3-30b-a3b-q4 as an opt-in big model.
-recommendation_rank: 0
+# Rank 1 since the wave ratification (owner decision 2026-08-03, model-benchmarks.md §9.3): the
+# §9 bar ("beat qwen3-30b-a3b-q4 on speed OR quality by enough") is met on both axes — the §2
+# eval is hallucination-clean after audit (0 real vs the incumbent MoE's 2, EM parity .9647, F1
+# gap inside the §9 verbosity confound) and the §3 sweep confirms the 3B-active speed case
+# (140.9 t/s vulkan / 12.1 t/s cpu tg vs the dense 27B-Q4's 40.1 / 2.8). Ranked MoE alternative
+# for ≥32 GB machines; never the auto-pick (qwen3.6-27b-q5, rank 3, holds ≥32 GB). MoE: 35B
+# total / ~3B active (256 experts, 8 routed + 1 shared active). RESIDUAL: the §9.1
+# through-the-app smoke for this model is still owed (the §2 eval + §3/§4 sweeps ran it via
+# the RAG path and raw runtime only) — no user-facing exposure at rank 1; tracked in the wave
+# follow-up issue.
+recommendation_rank: 1
 # Native context is 262,144 tokens (extensible to ~1,010,000 via YaRN). Manifest runtime context
 # is 8192 for now — the safe local runtime budget for normal laptops, not the model maximum.
 recommended_context_tokens: 8192

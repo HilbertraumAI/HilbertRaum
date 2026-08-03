@@ -4,4 +4,5 @@
 
 export function normalizeText(s: string): string
 export const ABSTAIN_PHRASES: string[]
+export const ABSTAIN_PATTERNS: RegExp[]
 export function isAbstention(answer: string): boolean

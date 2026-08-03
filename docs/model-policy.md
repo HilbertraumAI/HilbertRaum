@@ -20,18 +20,18 @@
 | Chat challenger | Granite 4.1 8B Q4 | ~5.3 GB | 12 GB | — (not promoted) | Phase-29: lost its tier (most 8B hallucinations 3/15, lowest F1); kept selectable for its IBM provenance story |
 | Chat (winner, 12–14B) | Gemma 4 12B Instruct QAT Q4_0 | ~7.0 GB | 14 GB | — (rank‡) | **Phase-29 winner at 12–14B**: beats Qwen3 14B on every axis (fewer hallucinations, faster). `supports_thinking_mode` **flipped on** — only thinking-capable challenger |
 | Chat (better 4B) | Qwen3 4B Instruct 2507 Q4 | ~2.5 GB | 8 GB | — (deferred‡) | **Phase-29 (D18)**: beats the original 4B on every axis; the quality alternative at the 4B tier (orig 4B stays the bundled default for Deep). Instruct-only — no thinking |
-| Chat (fast-tier 0.8B) | Qwen3.5 0.8B Q6_K | ~0.6 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** Smallest runnable; Q6_K (not UD-Q4_K_XL — quant error bites hardest at 0.8B). Text-only, not bundled. **§9 eval: the surviving fast-tier candidate — the honest floor (better F1 + abstention than the 2B).** Pending b9849 smoke + owner ratification. |
-| Chat (fast-tier 2B) | Qwen3.5 2B (UD-Q4_K_XL) | ~1.3 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** CPU-only speed tier. Text-only, not bundled. **§9 eval: FAILED — worst unanswerable-discipline of all models scored (should not be recommended anywhere); the 0.8B dominates it.** Pending b9849 smoke + owner ratification. |
+| Chat (fast-tier 0.8B) | Qwen3.5 0.8B Q6_K | ~0.6 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** Smallest runnable; Q6_K (not UD-Q4_K_XL — quant error bites hardest at 0.8B). Text-only, not bundled. **§9 eval (ratified 2026-08-03, §9.3): the surviving fast-tier candidate — the honest floor (better F1 + abstention than the 2B); stays unranked.** b9849 load evidence via the tester eval; §9.1 in-app smoke still informal. |
+| Chat (fast-tier 2B) | Qwen3.5 2B (UD-Q4_K_XL) | ~1.3 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** CPU-only speed tier. Text-only, not bundled. **§9 eval (ratified 2026-08-03, §9.3): FAILED — worst unanswerable-discipline of all models scored (should not be recommended anywhere, rank stays 0); the 0.8B dominates it.** |
 | Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 3) | **Recommended ≤12 GB since the newest-Qwen promotion (owner decision 2026-07-12, `model-benchmarks.md` §6.4).** unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). §9 eval standing recorded honestly in the manifest (F1 under the Qwen3-4B incumbent, EM comparable); b9849 load observed through the app 2026-07-12. Vision model run text-only. |
-| Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 3) | **Recommended 16–20 GB since the newest-Qwen promotion (2026-07-12, §6.4).** unsloth Dynamic-2.0 quant. §9 eval standing recorded in the manifest (edges Ministral on F1/EM within cross-run tolerance, ranked under it only on the hallucination-trap axis); ran on the b9849 binary in the #48 tester eval. Text-only, not bundled. |
+| Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 3) | **Recommended 16–20 GB since the newest-Qwen promotion (2026-07-12, §6.4).** unsloth Dynamic-2.0 quant. §9 eval standing recorded in the manifest (edges Ministral on F1/EM within cross-run tolerance, ranked under it only on the hallucination-trap axis); ran on the b9849 binary in the #48 tester eval; **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 6.57 GiB vulkan). Text-only, not bundled. |
 | Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~17.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger; superseded at its tier by the Qwen3.6 27B pair (below) before ever being promoted. Text-only, opt-in (not bundled). |
-| Chat (Qwen3.6 27B Q4) | Qwen3.6 27B Q4_K_M | ~16.8 GB | 20 GB | — (rank 3) | **Recommended 24 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Productized 2026-07-12 from a local-test stub: unsloth Q4_K_M (the exact quant the #48 tester eval scored), real HF-LFS hash, apache-2.0 review. Top of the §9 quality table with its Q5 sibling. Text-only, not bundled. |
-| Chat (Qwen3.6 27B Q5) | Qwen3.6 27B Q5_K_M | ~19.5 GB | 24 GB | — (rank 3) | **Recommended ≥32 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Same productization posture as the Q4; the eval's outright top scorer (F1 .3573, zero unanswerable-set hallucinations). Text-only, not bundled. |
-| Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~22.2 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** ~35B total / ~3B active MoE (256 experts, 8+1 active); opt-in challenger to `qwen3-30b-a3b-q4`. Text-only, not bundled. Pending b9849 smoke + offline eval. |
-| Chat (Gemma E2B) | Gemma 4 E2B Instruct QAT Q4_0 | ~3.3 GB | 8 GB | — (rank 0) | **Gemma 4 QAT wave (2026-07-23, issue #82).** Official Google QAT; MatFormer effective-2B. Low-end challenger to the promoted Qwen3.5 4B (the #53 weak-hardware case). Text-only. In-app b9849 smoke PASSED 2026-07-23; pending offline eval. |
-| Chat (Gemma E4B) | Gemma 4 E4B Instruct QAT Q4_0 | ~5.2 GB | 12 GB | — (rank 0) | **Gemma 4 QAT wave.** MatFormer effective-4B; challenger to the promoted Qwen3.5 9B and Ministral 3 8B. Text-only; **thinks by default**. In-app b9849 smoke PASSED 2026-07-23; pending offline eval. |
-| Chat (Gemma 26B-A4B) | Gemma 4 26B-A4B Instruct QAT Q4_0 MoE | ~14.4 GB | 20 GB | — (rank 0) | **Gemma 4 QAT wave.** MoE, ~3.8B active (8 of 128 experts) → ~26B quality near-4B speed at 4–8 GB less disk than either Qwen MoE (18.6 / 22.2 GB). Challenger to the promoted Qwen3.6 27B Q4 at the 24 GB tier. Supersedes the `gemma-4-26b-q4` local-test stub for distribution (official QAT, real hash, download block). b9849 CLI load smoke passed; in-app smoke + RSS need a ≥24 GB box. Pending offline eval. |
-| Chat (Gemma 31B) | Gemma 4 31B Instruct QAT Q4_0 | ~17.7 GB | 24 GB | — (rank 0) | **Gemma 4 QAT wave.** Dense quality ceiling of the Apache-2.0 Gemma line; slowest possible CPU decode — mainly for GPU offload. Opt-in challenger to the Qwen3.6 27B pair. Pending b9849 smoke + offline eval. |
+| Chat (Qwen3.6 27B Q4) | Qwen3.6 27B Q4_K_M | ~16.8 GB | 20 GB | — (rank 3) | **Recommended 24 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Productized 2026-07-12 from a local-test stub: unsloth Q4_K_M (the exact quant the #48 tester eval scored), real HF-LFS hash, apache-2.0 review. Top of the §9 quality table with its Q5 sibling (hallucinations 0 on the v3 rescore); **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 16.87 GiB vulkan — the formula-exact min-20 confirmation). Text-only, not bundled. |
+| Chat (Qwen3.6 27B Q5) | Qwen3.6 27B Q5_K_M | ~19.5 GB | 24 GB | — (rank 3) | **Recommended ≥32 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Same productization posture as the Q4; the eval's outright top scorer (F1 .3573, zero unanswerable-set hallucinations); **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 19.38 GiB vulkan). Text-only, not bundled. |
+| Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~22.2 GB | 24 GB | — (rank 1) | **Qwen3.5 wave (2026-07-01); rank 1 since the 2026-08-03 ratification (`model-benchmarks.md` §9.3).** ~35B total / ~3B active MoE (256 experts, 8+1 active); beat the incumbent MoE `qwen3-30b-a3b-q4` on hallucinations (0 real vs 2, EM parity) with the speed case confirmed (140.9 t/s vulkan / 12.1 cpu tg). Ranked alternative for ≥32 GB — never the auto-pick (the Qwen3.6 Q5 holds ≥32). Text-only, not bundled; §9.1 in-app smoke still owed (follow-up issue). |
+| Chat (Gemma E2B) | Gemma 4 E2B Instruct QAT Q4_0 | ~3.3 GB | 8 GB | — (rank 0) | **Gemma 4 QAT wave (2026-07-23, issue #82); eval ratified 2026-08-03 (§9.3).** Official Google QAT; MatFormer effective-2B. Eval: F1 .3373 edges the bundled Qwen3 4B with equal hallucinations (3) and the fastest cpu decode measured (24.3 t/s) — rank stays 0 until the #53 weak-16 GB-box datapoint lands (follow-up issue). Text-only. In-app b9849 smoke PASSED 2026-07-23. |
+| Chat (Gemma E4B) | Gemma 4 E4B Instruct QAT Q4_0 | ~5.2 GB | 12 GB | — (rank 0) | **Gemma 4 QAT wave; eval ratified 2026-08-03 (§9.3): F1 .2999 misses the 8B bar — no promotion.** MatFormer effective-4B. Text-only; thinks by default, `enable_thinking: false` suppression verified per size. In-app b9849 smoke PASSED 2026-07-23. |
+| Chat (Gemma 26B-A4B) | Gemma 4 26B-A4B Instruct QAT Q4_0 MoE | ~14.4 GB | 20 GB | — (rank 2) | **Gemma 4 QAT wave; rank 2 since the 2026-08-03 ratification (§9.3).** MoE, ~3.8B active (8 of 128 experts): EM parity with the 24 GB pick Qwen3.6 27B Q4, ZERO audited hallucinations, ~4× its decode speed at 2.5 GB less disk — F1 .3307 vs .3523 keeps the Qwen the pick, so this is the ranked runner-up / MoE speed alternative (never the auto-pick). Supersedes the `gemma-4-26b-q4` local-test stub for distribution. All §9.1 legs PASSED 2026-07-30 (in-app peak RSS 14.28 GiB, vulkan). |
+| Chat (Gemma 31B) | Gemma 4 31B Instruct QAT Q4_0 | ~17.7 GB | 24 GB | — (rank 0) | **Gemma 4 QAT wave; eval ratified 2026-08-03 (§9.3): DO NOT PROMOTE — the issue-#82 drop condition met** (ties the 26B-A4B within .003 F1 at 4.2–6× slower decode, +3.3 GB disk). Stays a selectable opt-in — the Apache-2.0 dense quality ceiling for 32 GB GPU boxes. All §9.1 legs PASSED 2026-07-30 incl. the first load smoke. |
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search — search works fully without it |
 | Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation; whisper.cpp GGML; MIT |
@@ -114,6 +114,15 @@ refresh — same established-quantizer posture as `qwen3-4b-instruct-2507-q4`):
   the catalog table above and `model-benchmarks.md` §6.4. `qwen3.5-27b-ud-q4kxl` and
   `qwen3.5-35b-a3b-ud-q4kxl` remain rank 0.)_
 
+  _(Update 2026-08-03, wave ratification — `model-benchmarks.md` §9.3 "Wave outcome": the
+  **35B-A3B's deferred rank resolved to rank 1** (ranked MoE alternative for ≥32 GB — §2 eval
+  hallucination-clean vs the incumbent MoE's 2 real, EM parity, and the 3B-active speed case
+  confirmed at 140.9 t/s vulkan / 12.1 cpu; never the auto-pick, `qwen3.6-27b-q5` holds ≥32 GB;
+  its §9.1 in-app smoke is the recorded residual). The 27B stays rank 0 (superseded at its tier
+  by the Qwen3.6 pair); the fast-tier pair stays rank 0 per the ratified eval — the 0.8B remains
+  the honest floor, the 2B should not be recommended anywhere. The 9B + both Qwen3.6 27Bs also
+  cleared their owed §9.1 through-the-app smokes 2026-07-30.)_
+
 ## Gemma 4 QAT wave (2026-07-23, issue #82)
 
 Four **text-only** chat manifests in the `gemma4` family — the rest of the [Gemma 4
@@ -166,6 +175,20 @@ repos ungated), 140+ languages:
   auto-pick, never bundled, **until the local German/English grounded-QA eval promotes them**
   (`model-benchmarks.md` §9; public scores do not count). Wave tracking + full research record:
   issue #82.
+
+  _(Wave outcome, ratified 2026-08-03 — full record: `model-benchmarks.md` §9.3 "Wave outcome";
+  evidence: the 2026-07-30 i9 run, PR #92. **26B-A4B → rank 2** (ranked runner-up to the rank-3
+  `qwen3.6-27b-q4`: EM parity + zero audited hallucinations at ~4× the speed and 2.5 GB less
+  disk; F1 .3307 vs .3523 keeps the Qwen the 24 GB pick — still never the auto-pick).
+  **31B → never promote** (the issue-#82 drop condition met: quality ties the 26B-A4B at 4.2–6×
+  slower decode; stays a selectable opt-in GPU-box ceiling). **E4B → stays 0** (F1 .2999 misses
+  the 8B bar). **E2B → stays 0 for now** (edges the bundled `qwen3-4b` on F1 with equal
+  hallucinations and the fastest cpu decode measured, but `qwen3-4b-2507` keeps the tier quality
+  lead and the issue-#53 weak-16 GB-box datapoint is still owed — that leg decides, wave
+  follow-up issue). Thinking verified per size (all suppress cleanly; E2B Deep 7/8 — flip rule
+  NO); §9.1 smokes complete for 26B-A4B + 31B; RAM lines confirmed on the vulkan basis and kept
+  (the Linux-cpu values are a non-comparable mmap basis). Smoke-status and RAM-estimate bullets
+  above describe the wave-open state.)_
 
 ## Manifest format & parsing
 Manifests are **YAML**, parsed with the pure-JS [`yaml`](https://www.npmjs.com/package/yaml) package
