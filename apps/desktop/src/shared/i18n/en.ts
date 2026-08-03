@@ -1061,7 +1061,7 @@ export const en = {
   'models.ram.machine': ' — this computer has about {ram} GB',
   'models.ram.advice': '. Pick a smaller model — quality stays great.',
   'models.badge.active': 'Active',
-  'models.badge.recommended': 'Recommended',
+  'models.badge.recommended': 'Recommended for this computer',
   'models.badge.ramNeeded': 'Needs ≥{min} GB RAM',
   'models.automatic.installed': 'Installed — used automatically. There is nothing to start.',
   'models.automatic.notInstalled': 'Used automatically once installed — no setup needed.',

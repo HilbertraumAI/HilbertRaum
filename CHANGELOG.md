@@ -76,6 +76,15 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Changed
 
+- **The recommended model now leads the picker** (issue #93 item 3). The AI Model
+  screen's RAM-best-fit recommendation always ran unprompted, but the ★ card sat
+  wherever catalog order placed it inside the runnable block — on a fresh install
+  with nothing downloaded, the one actionable answer to "which model should I
+  get?" could be below other cards. The picker now orders installed → recommended
+  → runnable-on-this-machine → catalog, and the badge says "Recommended for this
+  computer" so it reads as machine-specific advice, not marketing. Models that
+  exceed this machine's RAM keep sinking with their "needs X GB — this computer
+  has about Y GB" flag, unchanged.
 - **Release notes and README now name the engine step** (issue #93 item 2). The
   quickstart and the generated release-note preamble said only "the AI models are
   fetched separately"; a release-exe user who downloaded a model had no written

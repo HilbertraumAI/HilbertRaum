@@ -98,26 +98,32 @@ export function isModelRunnableHere(m: ModelInfo): boolean {
 /**
  * DV-2 — display order for the chat picker (the cards below the active model).
  *
- * Two keys, in order:
+ * Three keys, in order:
  *  1. **Installed first** — a model already on the drive is usable now, while the rest cost a
  *     multi-GB download. Unchanged, and it stays PRIMARY: `groupedCards` renders that boundary
- *     as a labelled subheading, so runnability may only reorder cards WITHIN a group.
- *  2. **Runnable on this machine first** — unconditionally. Catalog order is alphabetical, so
+ *     as a labelled subheading, so the lower keys may only reorder cards WITHIN a group.
+ *  2. **Recommended first** (issue #93 item 3) — the ★ card leads its group. On a fresh
+ *     install with nothing on the drive, the recommendation is the ONE actionable answer the
+ *     screen has for "which of these should I download?" — it must be the first card scanned,
+ *     not sit wherever catalog order put it inside the runnable block. This supersedes the
+ *     DV-2 "plays no part" stance for the UPWARD direction only (design-guidelines §11's DV-2
+ *     note): the ★ still never crosses the installed/needs-download boundary.
+ *  3. **Runnable on this machine first** — unconditionally. Catalog order is alphabetical, so
  *     without this key the picker opened on models the machine cannot run at all (on a 16 GB
  *     box: three of the first four cards carried a "Needs at least 20/24 GB RAM" warning) while
  *     the usable ones sat below the fold. Runnability is not a tiebreak of last resort here —
  *     "can this computer run it" outranks alphabetical, always.
  *
- * The "Recommended" flag deliberately plays NO part: the recommender only ever picks a model
- * that fits this machine's RAM, so the ★ card is runnable by construction and this key can
- * never push it down. Display order ONLY — the RAM-best-fit recommender in the main process is
- * untouched. `Array.prototype.sort` is stable, so models that tie on both keys keep their
- * catalog order.
+ * Keys 2 and 3 can never fight: the RAM-best-fit recommender only ever picks a model that fits
+ * this machine's RAM, so the ★ card is runnable by construction. Display order ONLY — the
+ * recommender in the main process is untouched. `Array.prototype.sort` is stable, so models
+ * that tie on all keys keep their catalog order.
  */
 export function orderPickerModels(list: ModelInfo[]): ModelInfo[] {
   return [...list].sort(
     (a, b) =>
       Number(isModelInstalled(b)) - Number(isModelInstalled(a)) ||
+      Number(b.recommended === true) - Number(a.recommended === true) ||
       Number(isModelRunnableHere(b)) - Number(isModelRunnableHere(a))
   )
 }

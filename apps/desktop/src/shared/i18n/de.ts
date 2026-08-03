@@ -1103,7 +1103,7 @@ export const de: Record<keyof typeof en, string> = {
   'models.ram.machine': ' — dieser Computer hat etwa {ram} GB',
   'models.ram.advice': '. Wähle ein kleineres Modell — die Qualität bleibt top.',
   'models.badge.active': 'Aktiv',
-  'models.badge.recommended': 'Empfohlen',
+  'models.badge.recommended': 'Empfohlen für diesen Computer',
   'models.badge.ramNeeded': 'Braucht ≥{min} GB RAM',
   'models.automatic.installed':
     'Installiert — wird automatisch verwendet. Es gibt nichts zu starten.',

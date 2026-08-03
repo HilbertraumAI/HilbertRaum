@@ -7,14 +7,16 @@ import {
 } from '../../src/renderer/screens/ModelsScreen'
 import type { ModelInfo } from '../../src/shared/types'
 
-// DV-2 — display order of the chat model picker.
+// DV-2 + issue #93 item 3 — display order of the chat model picker.
 //
 // The picker rendered in catalog (alphabetical) order once the installed/not-installed key
 // tied, so a machine with modest RAM opened on a run of cards it cannot run at all ("Needs at
-// least 20 GB RAM") while the models it CAN run sat far below the fold. Runnability is now the
-// second sort key, applied unconditionally: "can this computer run it" outranks alphabetical,
-// always. Installed-first stays PRIMARY because the installed/needs-download boundary is
-// rendered as a labelled subheading, so runnability may only reorder cards within a group.
+// least 20 GB RAM") while the models it CAN run sat far below the fold (DV-2). Since issue #93
+// item 3 the ★ recommended card additionally LEADS its group: on a fresh install the
+// recommendation is the one actionable answer to "which of these should I download?", so it
+// must be the first card scanned. Keys, in order: installed first (PRIMARY — the
+// installed/needs-download boundary is a labelled subheading, lower keys only reorder within a
+// group), then recommended, then runnable-on-this-machine, then stable catalog order.
 //
 // Runnability is read from `insufficientRam`, the SAME flag the card's RAM warning badge and
 // banner render from, so the order can never contradict the warning printed on a moved card.
@@ -49,21 +51,28 @@ describe('orderPickerModels — runnable-first is unconditional', () => {
     expect(names(orderPickerModels([tooBig, runnable]))).toEqual(['small', 'big'])
   })
 
-  it('applies WITH a recommendation present, exactly as it does without one', () => {
-    // The recommendation is not a reason to leave un-runnable cards at the top: the ★ badge
-    // sits on ONE card, while the first screenful is what a user actually scans.
+  it('pins the ★ card first in its group; without a recommendation runnable-first alone orders (#93 item 3)', () => {
+    // The un-runnable cards still sink regardless (that DV-2 property is unchanged); the ★
+    // card now additionally leads the runnable block instead of sitting in catalog order.
     const catalog = [
       model({ id: 'gemma-26b', insufficientRam: true }),
       model({ id: 'gemma-12b' }),
       model({ id: 'qwen-27b', insufficientRam: true }),
       model({ id: 'qwen-9b', recommended: true })
     ]
-    const withRec = names(orderPickerModels(catalog))
-    const withoutRec = names(
-      orderPickerModels(catalog.map((m) => ({ ...m, recommended: false })))
-    )
-    expect(withRec).toEqual(['gemma-12b', 'qwen-9b', 'gemma-26b', 'qwen-27b'])
-    expect(withRec).toEqual(withoutRec)
+    expect(names(orderPickerModels(catalog))).toEqual([
+      'qwen-9b',
+      'gemma-12b',
+      'gemma-26b',
+      'qwen-27b'
+    ])
+    // Control: with no ★ anywhere, runnable-first + stable catalog order alone decide.
+    expect(names(orderPickerModels(catalog.map((m) => ({ ...m, recommended: false }))))).toEqual([
+      'gemma-12b',
+      'qwen-9b',
+      'gemma-26b',
+      'qwen-27b'
+    ])
   })
 
   it('lifts every runnable card above every un-runnable one, catalog order kept inside each group', () => {
@@ -129,23 +138,42 @@ describe('orderPickerModels — installed-first stays the primary key', () => {
   })
 })
 
-describe('orderPickerModels — the recommended card is never demoted', () => {
-  it('keeps the ★ card in the leading (runnable) block', () => {
+describe('orderPickerModels — the recommended card leads its group (#93 item 3)', () => {
+  it('puts the ★ card first in the runnable block', () => {
     // The recommender only ever picks a model that fits this machine's RAM, so the ★ card is
-    // runnable by construction and the runnability key can only move it UP, never down.
+    // runnable by construction — pinning it first can never surface an un-runnable card.
     const catalog = [
       model({ id: 'gemma-26b', insufficientRam: true }),
       model({ id: 'gemma-31b', insufficientRam: true }),
       model({ id: 'qwen-9b', recommended: true }),
       model({ id: 'qwen-4b' })
     ]
-    const ordered = orderPickerModels(catalog)
-    const recIndex = ordered.findIndex((m) => m.recommended)
-    const firstUnrunnable = ordered.findIndex((m) => !isModelRunnableHere(m))
-    expect(recIndex).toBeLessThan(firstUnrunnable)
-    // It also cannot end up further down than where it started.
-    expect(recIndex).toBeLessThanOrEqual(catalog.findIndex((m) => m.recommended))
-    expect(names(ordered)).toEqual(['qwen-9b', 'qwen-4b', 'gemma-26b', 'gemma-31b'])
+    expect(names(orderPickerModels(catalog))).toEqual([
+      'qwen-9b',
+      'qwen-4b',
+      'gemma-26b',
+      'gemma-31b'
+    ])
+  })
+
+  it('never lifts a ★ needs-download card across the installed boundary', () => {
+    // Installed-first stays PRIMARY: the boundary is a labelled subheading, and a
+    // recommendation is not a reason to reorder across it.
+    const installed = model({ id: 'on-drive', state: 'installed' })
+    const recMissing = model({ id: 'star-to-download', recommended: true })
+    expect(names(orderPickerModels([recMissing, installed]))).toEqual([
+      'on-drive',
+      'star-to-download'
+    ])
+  })
+
+  it('an installed ★ card leads the installed group', () => {
+    const catalog = [
+      model({ id: 'drive-a', state: 'ready' }),
+      model({ id: 'drive-star', state: 'installed', recommended: true }),
+      model({ id: 'dl-a' })
+    ]
+    expect(names(orderPickerModels(catalog))).toEqual(['drive-star', 'drive-a', 'dl-a'])
   })
 })
 
