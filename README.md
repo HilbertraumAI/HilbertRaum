@@ -101,8 +101,12 @@ Prebuilt packages are published on the **[Releases page](../../releases/latest)*
 Windows `.exe`, a macOS (Apple Silicon) `.app.zip`, and a Linux AppImage, each with SHA-256
 checksums. If no release is listed yet, build from source below — the result is the same app.
 
-- **The download is the app only** — the AI models are fetched separately (step 2 below, or the
-  in-app downloader on the AI Model screen).
+- **The download is the app only** — a working chat needs **two more downloads**, both offered
+  on the **AI Model** screen inside the app: the **AI engine** (the `llama.cpp` runtime — the
+  screen shows an install banner until it is present; without it, started models run in **demo
+  mode** with simulated answers) and an **AI model** of your choice. Every download asks first
+  and is SHA-256-verified. Repo users can instead provision everything up front with step 2
+  below.
 - **Windows:** the build is unsigned for now — SmartScreen shows "Windows protected your PC";
   click **More info → Run anyway**.
 - **macOS:** the `.app` is unsigned too — if Gatekeeper blocks the first launch, allow it under
@@ -110,7 +114,8 @@ checksums. If no release is listed yet, build from source below — the result i
   copying it onto an exFAT drive (the launcher extracts it).
 
 Details for both flows live in [`docs/troubleshooting.md`](docs/troubleshooting.md). With a
-prebuilt app you can skip step 1 and continue at step 2.
+prebuilt app and no repo, the in-app installs above are all you need; with the repo, skip
+step 1 and continue at step 2 to provision a drive up front.
 
 ### 1. Run the app — no models needed yet
 
