@@ -990,6 +990,14 @@ change; nothing here touches the model recommender. Code comments cite this sect
    (the recommender never picks a RAM-gated model), so this key can only move it up, never down —
    pinned by a test. Measured live on a 16 GB box, fresh workspace with the ★ in the picker: the
    first RAM-warned card moved from position 1 to position 15 of 23.
+   **Superseded in the upward direction (2026-08-03, issue #93 item 3):** the ★ card now LEADS
+   its group — `orderPickerModels` inserts **recommended-first** between installed-first and
+   runnable-first. The original decision's two arguments are untouched (un-runnable cards still
+   sink; installed-first still primary, the ★ never crosses the boundary); what changed is that
+   on a fresh install the recommendation is the one actionable answer to "which of these should
+   I download?", so it may not sit wherever catalog order put it inside the runnable block. The
+   badge copy now names the machine ("Recommended for this computer" / "Empfohlen für diesen
+   Computer"). Keys 2 and 3 can never fight — the ★ is runnable by construction, as above.
 3. **DV-3 — German closers.** Nine catalog values closed a German opening `„` with an ASCII `"`
    (the Images empty state shipped `Durchsuchbar machen (OCR)"`). All nine now close with `“`
    per §7 "Typography", and `tests/unit/i18n.test.ts` gained a guard over the **values** of the
