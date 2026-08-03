@@ -3171,8 +3171,11 @@ licensing: `model-policy.md` §"The in-app downloader"; user-facing posture: `PR
 **`settings.allowNetwork` now defaults ON (2026-06-13).** The spec §3.6 checkbox was flipped
 `false → true` in `DEFAULT_SETTINGS` so a fresh install can download models out of the box
 (onboarding feedback). Gate 1 (the policy ceiling) is unchanged and still authoritative: a
-`policy.json` with `allow_model_downloads: false` — or the packaged-build `STRICT_POLICY` fallback —
-keeps the app offline regardless of the toggle. A prepared/commercial drive now writes
+`policy.json` with `allow_model_downloads: false` — or the packaged-build `STRICT_POLICY` fallback
+for a provisioned config dir — keeps the app offline regardless of the toggle. (Since issue #93,
+2026-08-03, an UNPROVISIONED config dir — neither `policy.json` nor `drive.json`, the standalone
+portable install's app-data fallback — gets `STANDALONE_POLICY` instead: downloads policy-permitted,
+everything else strict; see `security-model.md` "Fail-closed on a packaged build".) A prepared/commercial drive now writes
 `allow_model_downloads: true` (2026-07-01), so the setting + the per-download confirmation are the
 effective gate there; update-checks + telemetry stay hardcoded/denied so the drive never phones home.
 A locked workspace still reads the setting as off.

@@ -80,6 +80,30 @@ export const STRICT_POLICY: PrivacyPolicy = {
   }
 }
 
+/**
+ * Standalone-install posture (issue #93). A packaged build whose config dir carries
+ * NEITHER `policy.json` NOR the prepared-drive marker `drive.json` is not a drive that
+ * lost its policy — it is the app-data fallback root of a portable/GitHub-release install
+ * that `prepare-drive` never touched, so there was never a policy to fail closed TO.
+ * Failing closed there (`STRICT_POLICY`) permanently disabled the in-app downloader the
+ * release notes point users to: the policy is the ceiling, so the Settings toggle could
+ * never re-enable it. This posture relaxes ONLY the downloads ceiling — model downloads
+ * are policy-permitted (still behind the `allowNetwork` setting + the per-download
+ * confirmation, and every download is SHA-256-verified against its manifest); update
+ * checks + telemetry stay off, and the workspace/models blocks stay at the STRICT value
+ * (encryption required, no plaintext, no unverified weights) so M-4/M-6 model-integrity
+ * enforcement is untouched.
+ */
+export const STANDALONE_POLICY: PrivacyPolicy = {
+  network: {
+    allowModelDownloads: true,
+    allowUpdateChecks: false,
+    allowTelemetry: false
+  },
+  workspace: STRICT_POLICY.workspace,
+  models: STRICT_POLICY.models
+}
+
 /** Coerce an unknown JSON value to a boolean only when it is genuinely a boolean. */
 function bool(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
@@ -141,10 +165,12 @@ export function parsePolicy(
 export interface PolicyLoadOptions {
   /**
    * Whether this is a developer build (`!app.isPackaged`). A packaged build (`isDev:
-   * false`) fails CLOSED to `STRICT_POLICY` when `policy.json` is missing/malformed (M-4);
-   * a dev build keeps the permissive `DEFAULT_POLICY`. Defaults to `true` (dev) so the
-   * canonical reference + unit callers that do not pass it keep the historical behaviour;
-   * the production call sites pass the real value.
+   * false`) fails CLOSED to `STRICT_POLICY` when a PROVISIONED config dir's `policy.json`
+   * is missing/malformed (M-4); an unprovisioned dir (neither `policy.json` nor
+   * `drive.json` — the standalone app-data fallback) gets `STANDALONE_POLICY` instead
+   * (issue #93). A dev build keeps the permissive `DEFAULT_POLICY`. Defaults to `true`
+   * (dev) so the canonical reference + unit callers that do not pass it keep the
+   * historical behaviour; the production call sites pass the real value.
    */
   isDev?: boolean
 }
@@ -210,21 +236,26 @@ export function loadPolicy(
   onWarn?: (msg: string) => void,
   opts: PolicyLoadOptions = {}
 ): LoadedPolicy {
-  const policyPathForSig = join(configDir, 'policy.json')
-  const drivePathForSig = join(configDir, 'drive.json')
-  const sig = `${opts.isDev === false ? 0 : 1}|${fileSignature(policyPathForSig)}|${fileSignature(drivePathForSig)}`
+  const policyPath = join(configDir, 'policy.json')
+  const drivePath = join(configDir, 'drive.json')
+  const sig = `${opts.isDev === false ? 0 : 1}|${fileSignature(policyPath)}|${fileSignature(drivePath)}`
   const cached = policyCache.get(configDir)
   if (cached && cached.sig === sig) return cached.loaded
 
   // Fail-closed base for a packaged build (M-4): a missing/malformed/unreadable
   // policy.json degrades to STRICT_POLICY, not the dev-friendly DEFAULT_POLICY.
-  const base = basePolicyFor(opts)
+  // M-4's scope is a PROVISIONED config dir — one carrying policy.json (even malformed;
+  // the file is provisioning intent) or the prepared-drive marker drive.json (the same
+  // file `findPreparedDriveRoot` keys off). A packaged build whose config dir has
+  // NEITHER is the app-data fallback root of a standalone install and gets
+  // STANDALONE_POLICY instead (issue #93) — downloads permitted, everything else strict.
+  const provisioned = existsSync(policyPath) || existsSync(drivePath)
+  const base = opts.isDev === false && !provisioned ? STANDALONE_POLICY : basePolicyFor(opts)
   let policy = base
   let policyFilePresent = false
   let driveFilePresent = false
   let allowNetworkByDefault = false
 
-  const policyPath = join(configDir, 'policy.json')
   if (existsSync(policyPath)) {
     try {
       policy = parsePolicy(readFileSync(policyPath, 'utf8'), onWarn, base)
@@ -236,7 +267,6 @@ export function loadPolicy(
     }
   }
 
-  const drivePath = join(configDir, 'drive.json')
   if (existsSync(drivePath)) {
     try {
       const drive = asObject(JSON.parse(readFileSync(drivePath, 'utf8')))
