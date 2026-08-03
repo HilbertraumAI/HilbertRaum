@@ -104,6 +104,19 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Fixed
 
+- **Standalone portable installs can download models again** (issue #93). A
+  packaged build run without a prepared drive (the GitHub-release `.exe`
+  double-clicked standalone) lands on an app-data fallback root that never had a
+  `config/policy.json`; the M-4 fail-closed rule treated that like a drive whose
+  policy went missing and locked model downloads to OFF permanently — the
+  Settings toggle can only enable what the policy ceiling allows, so every
+  release user was blocked. The fail-closed scope is now a *provisioned* config
+  dir (a `policy.json` — even malformed — or the prepared-drive marker
+  `drive.json`); an unprovisioned dir gets a standalone posture that permits
+  model downloads (still behind the Settings toggle + per-download confirmation,
+  SHA-256-verified) while keeping workspace encryption and model-integrity
+  enforcement at the strict value. A prepared drive missing its `policy.json`
+  still fails closed via its `drive.json` marker.
 - **A reviewed answer can no longer be silently destroyed by re-answering it**
   (full audit 2026-07-23, wave `fix/audit-2026-07-23-remediation`; see the
   `docs/architecture.md` §51 remediation ledger). The documents "Answer without

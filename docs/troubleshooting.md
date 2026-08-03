@@ -59,6 +59,29 @@ on the computer you run it from — exFAT cannot hold the symlinks inside a `.ap
 
 ---
 
+## "Downloads are disabled by this drive's policy" on a GitHub-release install
+
+On releases **up to 0.1.55**, running the portable app standalone (no prepared drive) blocked the
+in-app model downloader with this message no matter what the Settings toggle said — the packaged
+build treated its fresh app-data folder like a prepared drive whose `config/policy.json` had gone
+missing and failed closed (issue #93). **Fixed since:** a standalone install (no `policy.json`, no
+`drive.json`) now permits model downloads out of the box; the Settings toggle and the per-download
+confirmation remain the gates, and downloads stay SHA-256-verified.
+
+If you are still on an affected release and cannot update, create the file
+`config/policy.json` under the app-data folder — on Windows that folder is
+`%APPDATA%\@hilbertraum\desktop` (the `@`-name comes from the app's package name; it is the
+expected location, not an installation error) — with:
+
+```json
+{ "network": { "allow_model_downloads": true, "allow_update_checks": false, "allow_telemetry": false } }
+```
+
+and restart the app. On a **prepared drive** this message is genuine drive policy: the drive's
+`config/policy.json` sets `allow_model_downloads: false`, and the app honors it.
+
+---
+
 ## "Offline Mode is ON — is something wrong?"
 
 **No. That is the intended state.** HilbertRaum runs the AI model on your laptop and

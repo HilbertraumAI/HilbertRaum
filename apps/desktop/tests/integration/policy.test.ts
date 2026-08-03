@@ -135,17 +135,69 @@ describe('loadPolicy', () => {
   })
 
   // M-4: a packaged build must FAIL CLOSED to the strict commercial posture, not the
-  // dev-friendly default, when policy.json is missing/malformed/partial.
+  // dev-friendly default, when policy.json is missing/malformed/partial. Since issue #93
+  // the fail-closed scope is a PROVISIONED config dir — one carrying policy.json (even
+  // malformed) or the prepared-drive marker drive.json; a dir with neither (the app-data
+  // fallback root of a standalone portable install) never had a policy to lose.
   describe('fail-closed on a packaged build (M-4)', () => {
-    it('adopts STRICT_POLICY when no policy.json exists', () => {
-      const loaded = loadPolicy(configDir(), undefined, { isDev: false })
+    it('adopts STRICT_POLICY when a prepared drive (drive.json present) has no policy.json', () => {
+      const loaded = loadPolicy(
+        configDir({ drive: JSON.stringify({ allow_network_by_default: false }) }),
+        undefined,
+        { isDev: false }
+      )
       expect(loaded.policy).toEqual(STRICT_POLICY)
       expect(loaded.policyFilePresent).toBe(false)
+      expect(loaded.driveFilePresent).toBe(true)
       // The dev fallback would have loosened these — the strict fallback locks them down.
       expect(loaded.policy.models.allowUnverifiedModels).toBe(false)
       expect(loaded.policy.models.requireSha256Match).toBe(true)
       expect(loaded.policy.workspace.encryptionRequired).toBe(true)
       expect(loaded.policy.network.allowModelDownloads).toBe(false)
+    })
+
+    // Issue #93: the portable GitHub-release exe run standalone lands on the app-data
+    // fallback root — no drive.json, no policy.json, and no way for prepare-drive to have
+    // ever written one. Failing closed there permanently disabled the in-app downloader
+    // the release notes point users to (the Settings toggle can only enable what the
+    // policy ceiling already allows). Such an UNPROVISIONED dir gets the standalone
+    // fallback: model downloads policy-permitted, everything else still strict.
+    describe('standalone fallback for an unprovisioned config dir (issue #93)', () => {
+      it('permits model downloads when NEITHER policy.json nor drive.json exists (packaged)', () => {
+        const loaded = loadPolicy(configDir(), undefined, { isDev: false })
+        expect(loaded.policyFilePresent).toBe(false)
+        expect(loaded.driveFilePresent).toBe(false)
+        expect(loaded.policy.network.allowModelDownloads).toBe(true)
+        // Update checks + telemetry stay off in every posture — no exceptions.
+        expect(loaded.policy.network.allowUpdateChecks).toBe(false)
+        expect(loaded.policy.network.allowTelemetry).toBe(false)
+        // Workspace + model enforcement stays at the STRICT value: the standalone fallback
+        // relaxes ONLY the downloads ceiling, so M-4/M-6 model-integrity is untouched.
+        expect(loaded.policy.workspace.encryptionRequired).toBe(true)
+        expect(loaded.policy.workspace.allowPlaintextDevMode).toBe(false)
+        expect(loaded.policy.models.allowUnverifiedModels).toBe(false)
+        expect(loaded.policy.models.requireSha256Match).toBe(true)
+      })
+
+      it('end-to-end: downloads are effectively allowed with the default-ON setting (#93 repro)', () => {
+        // The exact #93 state: portable exe, empty app-data config dir, allowNetwork ON.
+        const status = buildPolicyStatus(configDir(), true, undefined, { isDev: false })
+        expect(status.networkAllowedByPolicy).toBe(true)
+        expect(status.networkAllowed).toBe(true)
+        expect(status.policy.network.allowModelDownloads).toBe(true)
+        expect(status.telemetryAllowed).toBe(false)
+        // The user can still switch downloads off — the setting remains the gate.
+        expect(buildPolicyStatus(configDir(), false, undefined, { isDev: false }).networkAllowed).toBe(
+          false
+        )
+      })
+
+      it('a malformed policy.json still fails closed even without drive.json (provisioned intent)', () => {
+        const warn = vi.fn()
+        const loaded = loadPolicy(configDir({ policy: '{ nope' }), warn, { isDev: false })
+        expect(loaded.policy).toEqual(STRICT_POLICY)
+        expect(warn).toHaveBeenCalled()
+      })
     })
 
     it('keeps the dev-friendly default when isDev', () => {

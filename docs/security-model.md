@@ -166,12 +166,24 @@ and the fallback for a **missing / malformed / partial** `policy.json` — depen
 
 - **Dev build** (`!app.isPackaged`): base = `DEFAULT_POLICY` (developer-friendly — plaintext + unverified
   models allowed, downloads permitted). Unchanged.
-- **Packaged build**: base = `STRICT_POLICY` (`encryption_required: true`, `allow_plaintext_dev_mode:
-  false`, `allow_unverified_models: false`, `require_sha256_match: true`, all network denied). A
-  corrupted or deleted `policy.json` on a removable drive therefore **tightens** toward the commercial
-  posture instead of loosening toward dev — it can no longer silently disable model-integrity
-  enforcement. A partial/junk file leaves every unspecified field at the strict value. This also
-  neutralizes M-6: an unverified/placeholder-hash weight cannot be loaded when the fallback forbids it.
+- **Packaged build, provisioned config dir** (a `policy.json` exists — even malformed — or the
+  prepared-drive marker `drive.json` does): base = `STRICT_POLICY` (`encryption_required: true`,
+  `allow_plaintext_dev_mode: false`, `allow_unverified_models: false`, `require_sha256_match: true`,
+  all network denied). A corrupted or deleted `policy.json` on a removable drive therefore
+  **tightens** toward the commercial posture instead of loosening toward dev — it can no longer
+  silently disable model-integrity enforcement. A partial/junk file leaves every unspecified field at
+  the strict value. This also neutralizes M-6: an unverified/placeholder-hash weight cannot be loaded
+  when the fallback forbids it.
+- **Packaged build, unprovisioned config dir** (neither `policy.json` nor `drive.json` — the app-data
+  fallback root of a standalone portable/GitHub-release install, issue #93, 2026-08-03): base =
+  `STANDALONE_POLICY`. This root was never touched by `prepare-drive`, so there was never a policy to
+  fail closed *to* — failing closed there permanently disabled the in-app model downloader the
+  release notes point users to (the policy is the ceiling, so the Settings toggle could not
+  re-enable it). The standalone posture relaxes **only** `allow_model_downloads` (still gated by the
+  `allowNetwork` setting + a per-download confirmation, downloads SHA-256-verified against their
+  manifests); update checks + telemetry stay denied, and the `workspace`/`models` blocks stay at the
+  **strict** value — M-4/M-6 enforcement is untouched. A prepared drive whose `policy.json` went
+  missing still fails closed: its `drive.json` marker keeps it in the provisioned branch above.
 
 `isDev` is threaded from `initBackend()` into every policy read (the model/download/core IPC handlers).
 The commercial **sell gate** (`assertCommercialDrive`) deliberately keeps the DEFAULT base: a drive
