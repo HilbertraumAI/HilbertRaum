@@ -76,6 +76,14 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Changed
 
+- **Release notes and README now name the engine step** (issue #93 item 2). The
+  quickstart and the generated release-note preamble said only "the AI models are
+  fetched separately"; a release-exe user who downloaded a model had no written
+  hint that chat also needs the in-app **AI engine** (`llama.cpp`) install and
+  would stay in demo mode without it. Both surfaces (plus the troubleshooting
+  "where are the models?" entry) now spell out the two-download path — engine
+  first, then a model — matching the install banner the AI Model screen already
+  shows.
 - **The model picker leads with models that run on your machine** — on a fresh
   workspace it used to list alphabetically, so a 16 GB laptop opened on several
   models flagged "needs more RAM"; runnable models now come first (full audit

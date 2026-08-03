@@ -47,10 +47,12 @@ should not appear at all.
 ## I downloaded the app from GitHub — where are the models?
 
 A release download is **the app only**. It starts in **demo mode** (simulated placeholder answers)
-until the AI models are on your drive. Two ways to get them:
+until **both** the AI engine and a model are on your drive. Two ways to get them:
 
-- **In the app:** open **AI Model** and download a chat model there (each download asks first and
-  is SHA-256-verified). The embeddings model for document Q&A downloads the same way.
+- **In the app:** open **AI Model**. First install the **AI engine** (the `llama.cpp` runtime)
+  from the banner at the top of the screen — until it is installed, started models keep running
+  in demo mode. Then download a chat model (each download asks first and is SHA-256-verified).
+  The embeddings model for document Q&A downloads the same way.
 - **Scripted:** run `prepare-drive --with-assets` from the repo (README step 2) to lay out a drive
   with the default model set + the `llama.cpp` engine in one command.
 

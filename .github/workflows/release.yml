@@ -131,8 +131,12 @@ jobs:
             const m = md.match(/## \[Unreleased\]([\s\S]*?)(\n## |$)/);
             const body = (m ? m[1].trim() : '');
             fs.writeFileSync('dist/NOTES.md',
-              '> **This download is the app only** — the AI models are fetched separately' +
-              ' (README step 2 / the in-app downloader). Unsigned build: see the' +
+              '> **This download is the app only** — a working chat needs **two more downloads**,' +
+              ' both offered on the **AI Model** screen inside the app: the **AI engine**' +
+              ' (llama.cpp — the screen shows an install banner until it is present; without it,' +
+              ' models run in demo mode with simulated answers) and an **AI model** of your' +
+              ' choice. Every download asks first and is SHA-256-verified. Repo users can' +
+              ' provision a drive up front instead (README step 2). Unsigned build: see the' +
               ' SmartScreen/Gatekeeper notes in docs/troubleshooting.md.\n\n' + body + '\n');
           "
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
