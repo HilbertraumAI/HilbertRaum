@@ -48,6 +48,16 @@ export default defineConfig({
     // and each surviving fixed sleep carries a comment justifying it (timestamp
     // ordering, timeout simulation, single-macrotask hops). The timeout stays as
     // cheap headroom for genuinely CPU-starved forks, not as a flake mitigation.
-    testTimeout: 15_000
+    //
+    // Issue #101: the same starvation is ENDEMIC on the CI *windows* runners (~2×
+    // ubuntu wall-clock; 11 min observed on a re-run leg). Three distinct
+    // integration tests hit the 15 s budget in ten days — vault-lock-cipher
+    // (2026-07-24 push run), docs-ipc BE-1 (PR #96 / #97), dictation REL-3
+    // (PR #100) — each green on the same tree's other legs and its own re-run.
+    // On CI the budget therefore rises to 60 s (GitHub Actions sets CI=true).
+    // This loosens no evidence: timing PROOFS in this suite live in explicit
+    // assertions (e.g. the FTS 500 ms bound, #84), never in the vitest budget.
+    // Locally the tight 15 s stays, catching real hangs fast at the desk.
+    testTimeout: process.env.CI ? 60_000 : 15_000
   }
 })
