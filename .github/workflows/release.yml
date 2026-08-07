@@ -41,6 +41,12 @@ jobs:
         with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
+      # Build BEFORE the tests, mirroring ci.yml: the AUD-18 positive control in
+      # csp-build-output.test.ts asserts that on CI the packaged-CSP assertions really
+      # ran against out/renderer, so a test run without a prior build fails on any CI.
+      # (Latent since AUD-18 landed after the v0.1.55 tag; first surfaced by a
+      # workflow_dispatch run of this workflow.)
+      - run: npm run build
       # Full suite once, on the first-class OS only — master already passed ci-success;
       # this is the cheap belt-and-braces on the exact tagged commit.
       - run: npm test

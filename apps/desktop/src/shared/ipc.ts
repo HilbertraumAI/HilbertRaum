@@ -1,6 +1,12 @@
 // Central registry of IPC channel names so main + preload never drift.
 export const IPC = {
   getAppStatus: 'app:getAppStatus',
+  /**
+   * One-way renderer timing mark for opt-in measurement runs (services/perf.ts). The
+   * main-side listener enforces a hard event allowlist and is a no-op unless
+   * HILBERTRAUM_PERF_LOG=1 is set in the environment.
+   */
+  perfMark: 'perf:mark',
   getDriveStatus: 'app:getDriveStatus',
   getSettings: 'settings:get',
   updateSettings: 'settings:update',
