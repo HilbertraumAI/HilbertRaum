@@ -155,6 +155,14 @@ function AppShell(): JSX.Element {
 
   const unlocked = workspace?.state === 'unlocked'
 
+  // Timing mark for opt-in measurement runs (main enforces the allowlist and no-ops
+  // unless HILBERTRAUM_PERF_LOG=1): the workspace gate — the password prompt — became
+  // visible. This is the end of the user-felt "launch to password prompt" span.
+  const gateVisible = workspace !== null && !unlocked
+  useEffect(() => {
+    if (gateVisible) window.api?.perfMark?.('gate_visible')
+  }, [gateVisible])
+
   useEffect(() => {
     if (!unlocked) return
     let active = true

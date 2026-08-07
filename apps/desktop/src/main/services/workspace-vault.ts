@@ -16,6 +16,7 @@ import { open as openFileAsync, rename as renameAsync, rm as rmAsync, stat as st
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { tMain } from './i18n'
+import { perfMark, perfMs } from './perf'
 import type { Db } from './db'
 import { openDatabase } from './db'
 import { seedSettings, updateSettings } from './settings'
@@ -956,7 +957,9 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
   // decides whether staged `.new` files roll forward (committed) or are discarded.
   recoverPendingRekey(vaultPaths, descriptor)
   const salt = Buffer.from(descriptor.saltB64, 'base64')
+  const kdfT0 = performance.now()
   const key = deriveKey(password, salt, descriptor.kdf)
+  const kdfMs = perfMs(kdfT0)
   if (!verifyKey(key, blobFromJson(descriptor.verifier))) {
     // L-6: zero the KDF-derived key before throwing, for symmetry with the data-key paths
     // (which zero the KEK/old data keys after use). A wrong-password attempt should not
@@ -1015,7 +1018,13 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
   // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
   // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
   cleanSidecars(vaultPaths.dbPath)
+  const decryptT0 = performance.now()
   decryptFile(vaultPaths.encPath, vaultPaths.dbPath, fileKey)
+  perfMark('vault_unlocked', {
+    kdfMs,
+    decryptMs: perfMs(decryptT0),
+    dbBytes: fileSizeOrNull(vaultPaths.dbPath)
+  })
   const db = openDatabase(vaultPaths.dbPath)
   seedSettings(db)
   return { db, key: fileKey, descriptor }
@@ -1036,15 +1045,38 @@ export function lockEncryptedVault(
   encryptFileImpl: typeof encryptFile = encryptFile
 ): void {
   // Flush WAL into the main file so the encrypted snapshot is complete, then close.
+  const checkpointT0 = performance.now()
   try {
     db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
   } catch {
     /* checkpoint is best-effort; close still flushes */
   }
   db.close()
+  const checkpointMs = perfMs(checkpointT0)
+  const dbBytes = fileSizeOrNull(vaultPaths.dbPath)
+  const encryptT0 = performance.now()
   encryptFileImpl(vaultPaths.dbPath, vaultPaths.encPath, key)
+  const encryptMs = perfMs(encryptT0)
+  const shredT0 = performance.now()
   shredFile(vaultPaths.dbPath)
   cleanSidecars(vaultPaths.dbPath)
+  // Covers BOTH lock paths (the explicit lock IPC and the quit teardown); the mark is an
+  // appendFileSync, so it lands before app.exit(). checkpointMs includes db.close().
+  perfMark('vault_lock_done', {
+    checkpointMs,
+    encryptMs,
+    shredMs: perfMs(shredT0),
+    dbBytes
+  })
+}
+
+/** Size of a file for a perf mark, or null; a stat failure must never break lock/unlock. */
+function fileSizeOrNull(path: string): number | null {
+  try {
+    return statSync(path).size
+  } catch {
+    return null
+  }
 }
 
 // ---- plaintext gating ------------------------------------------------------------

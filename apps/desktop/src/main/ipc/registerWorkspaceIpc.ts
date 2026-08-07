@@ -9,6 +9,7 @@ import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { getSettings } from '../services/settings'
 import { purgeResidentVectors } from '../services/embeddings'
 import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
+import { perfMark, perfMs } from '../services/perf'
 import type {
   WorkspaceActionResult,
   WorkspaceMode,
@@ -90,7 +91,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       return { ok: false, reason: 'wrong_password', message: tMain('main.workspace.wrongPassword') }
     }
     try {
+      const unlockT0 = performance.now()
       const state = ctx.workspace.unlock(password)
+      perfMark('unlock_done', { totalMs: perfMs(unlockT0) })
       // The vault key is live now — adopt it for the diagnostics log so it is encrypted at
       // rest like the DB, and fold in this session's pre-unlock buffer + any prior history.
       attachLogKey(ctx)

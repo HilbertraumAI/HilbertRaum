@@ -27,6 +27,7 @@ import type {
   TreeBuildStatus
 } from '../../../shared/types'
 import { sha256File } from '../models'
+import { perfMark, perfMs } from '../perf'
 import { docLifecycle, fileFromPendingDestination } from '../collections'
 import { type Embedder, encodeVector, invalidateResidentVectors } from '../embeddings'
 import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
@@ -670,6 +671,8 @@ export async function prepareDocument(
 
   try {
     setStatus(db, documentId, 'extracting')
+    // Perf marks identify a document only by its random UUID (perf.ts content rules).
+    perfMark('ingest_start', { docId: documentId, bytes: row.size_bytes ?? null })
 
     // Pre-parse byte ceiling (M-1, narrowed by PERF-4): reject an oversized file BEFORE any
     // copy/decrypt/parse work, using the size recorded at queue time. Text/Markdown/CSV use the
@@ -697,6 +700,7 @@ export async function prepareDocument(
         // this into documents.error_message; the display map translates it (D-L4).
         throw new Error(t('en', 'main.ingest.sourceMissing'))
       }
+      const copyT0 = performance.now()
       const sha = await sha256File(origin)
       const size = statSync(origin).size
       if (cipher) {
@@ -718,6 +722,8 @@ export async function prepareDocument(
         size,
         documentId
       )
+      // Covers the source hash + the copy (encrypted or plain) into the workspace.
+      perfMark('ingest_copy_done', { docId: documentId, bytes: size, ms: perfMs(copyT0) })
     } else if (cipher && !storedPath.endsWith(ENCRYPTED_DOC_SUFFIX)) {
       // Legacy migration: this document was imported before the encrypted document cache
       // existed (or in plaintext mode). Re-indexing in an encrypted workspace upgrades
@@ -780,7 +786,9 @@ export async function prepareDocument(
       // Per-parser caps (M-2/M-3) and the audio-exempt wall-clock timeout are applied by
       // parseWithLimits — the ONE cap-enforcement point shared with the preview path (MAINT-4).
     }
+    const parseT0 = performance.now()
     const parsed = await parseWithLimits(parser, parseSource, parseCtx, limits)
+    perfMark('ingest_parse_done', { docId: documentId, ms: perfMs(parseT0) })
 
     setStatus(db, documentId, 'chunking')
     // Over-cap gate (whole-document-analysis plan C1/C2/M13). Chunk with cap + 1 so an
@@ -815,6 +823,7 @@ export async function prepareDocument(
     // writes = ~2000 individually fsync'd commits per document on USB. One BEGIN…COMMIT
     // collapses that to a single commit. Pattern: tree-build.ts:148-164 / node-vectors.ts:156
     // (synchronous inserts only inside; the async embed await stays outside, below).
+    const chunkTxnT0 = performance.now()
     db.exec('BEGIN')
     try {
       db.prepare(
@@ -874,6 +883,13 @@ export async function prepareDocument(
         )
       }
       db.exec('COMMIT')
+      // The one write transaction of the chunk phase: deletes + up to 1000 chunk INSERTs,
+      // each also firing its FTS trigger writes inside the same commit (DB-1 above).
+      perfMark('ingest_chunks_committed', {
+        docId: documentId,
+        chunkCount: chunks.length,
+        ms: perfMs(chunkTxnT0)
+      })
     } catch (err) {
       try {
         db.exec('ROLLBACK')
@@ -926,7 +942,9 @@ export async function finalizeDocument(
     // Embedding step: vectorize each chunk and persist to `embeddings`. prepareDocument's
     // DELETE already cleared stale vectors, so re-index re-embeds cleanly.
     if (deps.embedder) {
+      const embedT0 = performance.now()
       await embedChunks(db, documentId, deps.embedder, deps.embeddingModelId ?? deps.embedder.id)
+      perfMark('ingest_embed_done', { docId: documentId, ms: perfMs(embedT0) })
     }
 
     setStatus(db, documentId, 'indexed')
@@ -942,6 +960,7 @@ export async function finalizeDocument(
       indexedAt,
       documentId
     )
+    perfMark('ingest_indexed', { docId: documentId })
     return infoOrDeleted(db, documentId)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

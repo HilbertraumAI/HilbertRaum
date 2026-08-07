@@ -27,6 +27,7 @@ import {
 } from '../services/runtime/llama'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
+import { perfMark, perfMs } from '../services/perf'
 import { inFlightStreams, streamBuffers, streamSettled } from './inflight'
 
 // M-A2 (audit-2026-06-13): the plain-chat (`sendChatMessage`) and RAG (`askDocuments`)
@@ -210,7 +211,14 @@ export async function withChatStream(
     })
   )
   let releaseSlot: () => void = () => {}
+  // Perf marks: TTFT is measured from stream registration (includes retrieval, context
+  // fitting, and any compaction pre-pass inside runFn — the user-felt wait). A streamed
+  // chunk approximates a token for llama-server; the mock streams words.
+  const streamT0 = performance.now()
+  let chunkCount = 0
   const sendToken: SendToken = (token) => {
+    if (chunkCount === 0) perfMark('first_token', { ttftMs: perfMs(streamT0) })
+    chunkCount += 1
     const buf = streamBuffers.get(conversationId)
     if (buf) buf.content += token
     if (!event.sender.isDestroyed()) {
@@ -247,6 +255,11 @@ export async function withChatStream(
     // handoff rejects this acquire instead of blocking for up to one tree-node summarization.
     if (acquireSlot) releaseSlot = await acquireSlot(controller.signal)
     const assistant = await runFn(controller.signal, sendToken, sendReasoning, sendCompaction, sendUsage)
+    perfMark('stream_done', {
+      chunks: chunkCount,
+      chars: streamBuffers.get(conversationId)?.content.length ?? 0,
+      elapsedMs: perfMs(streamT0)
+    })
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.done(conversationId), assistant)
     }
