@@ -56,6 +56,27 @@ jobs:
           name: win-portable
           path: apps/desktop/release/HilbertRaum-*-portable.exe
           if-no-files-found: error
+      - name: Fetch win llama.cpp runtime (Vulkan), zip for offline install
+        # #102 item 1 — the mac Metal zip's Windows twin: a convenience re-host of the
+        # SAME pinned upstream build the in-app engine installer fetches
+        # (runtime-sources.yaml first win/x64 match = Vulkan; SHA-256-verified inside
+        # fetch-runtime before extraction), repackaged as the extracted install tree
+        # (root entry `win/`, incl. the .hilbertraum-runtime.json marker) so it drops
+        # straight into `runtime/llama.cpp/` for offline/air-gapped installs. The
+        # fetch script runs under git-bash; the zip via Compress-Archive (no `zip`
+        # binary on windows-latest; the win build carries no symlinks, so the mac
+        # step's dereference concern does not apply).
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/drive"
+          mkdir -p "$STAGE"
+          bash scripts/fetch-runtime.sh --target "$STAGE"
+      - name: Zip the win runtime tree
+        shell: pwsh
+        run: Compress-Archive -Path "$env:RUNNER_TEMP\drive\runtime\llama.cpp\win" -DestinationPath "$env:GITHUB_WORKSPACE\llama-runtime-win-x64.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: win-runtime, path: llama-runtime-win-x64.zip, if-no-files-found: error }
 
   build-mac:
     runs-on: macos-14 # arm64 (Apple Silicon)
@@ -141,7 +162,9 @@ jobs:
               ' both offered on the **AI Model** screen inside the app: the **AI engine**' +
               ' (llama.cpp — the screen shows an install banner until it is present; without it,' +
               ' models run in demo mode with simulated answers) and an **AI model** of your' +
-              ' choice. Every download asks first and is SHA-256-verified. Repo users can' +
+              ' choice. Every download asks first and is SHA-256-verified. Offline installs:' +
+              ' the llama-runtime-*.zip assets below hold the same verified engine build —' +
+              ' unzip into the runtime/llama.cpp/ folder on the drive. Repo users can' +
               ' provision a drive up front instead (README step 2). Unsigned build: see the' +
               ' SmartScreen/Gatekeeper notes in docs/troubleshooting.md.\n\n' + body + '\n');
           "
@@ -153,4 +176,5 @@ jobs:
           files: |
             dist/HilbertRaum-*
             dist/llama-runtime-mac-arm64.zip
+            dist/llama-runtime-win-x64.zip
             dist/SHA256SUMS.txt
