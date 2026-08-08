@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { randomFillSync } from 'node:crypto'
 import { t } from '../../shared/i18n'
+import { perfMark } from './perf'
 import type { ModelManifest } from '../../shared/manifest'
 import type { BenchmarkResult, HardwareProfile } from '../../shared/types'
 import type { ModelRuntime } from './runtime'
@@ -163,10 +164,13 @@ export async function measureDriveSpeed(workspacePath: string): Promise<DriveSpe
       closeSync(rfd)
     }
 
-    return {
+    const speed = {
       writeMbps: throughputMbps(DRIVE_PROBE_BYTES, writeMs),
       readMbps: throughputMbps(DRIVE_PROBE_BYTES, readMs)
     }
+    // readMbps is the page-cache figure (F-35 above): reference only, never a drive claim.
+    perfMark('drive_benchmark', speed)
+    return speed
   } catch (err) {
     return { readMbps: null, writeMbps: null, error: err instanceof Error ? err.message : String(err) }
   } finally {

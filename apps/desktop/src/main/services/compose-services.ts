@@ -6,6 +6,7 @@ import { createSelectedTranslator } from './translation'
 import { resolveModelByRole } from './resolve-model'
 import { discoverManifests, type DiscoveredManifest } from './models'
 import { log } from './logging'
+import { perfMark } from './perf'
 import type { Embedder } from './embeddings'
 import type { Reranker } from './reranker'
 import type { Transcriber } from './transcriber'
@@ -131,7 +132,12 @@ export function composeServices({
     rootPath,
     isDev,
     model: resolveModelByRole(manifestsDir, rootPath, 'embeddings', { discovered }),
-    onSelect: (kind, reason) => log.info('Embedder backend selected', { kind, reason })
+    onSelect: (kind, reason) => {
+      log.info('Embedder backend selected', { kind, reason })
+      // Measurement-run validity check: an ingestion timed against the mock embedder is
+      // meaningless, and the fallback is otherwise silent (perf.ts content rules).
+      perfMark('embedder_selected', { kind })
+    }
   })
   // The retrieval reranker — selected only when binary + reranker GGUF exist (null
   // otherwise; retrieval then keeps today's ordering byte-identical).

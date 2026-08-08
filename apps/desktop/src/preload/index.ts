@@ -78,6 +78,8 @@ import type {
 // direct Node or network access — it can only call what is exposed here.
 const api = {
   getAppStatus: (): Promise<AppStatus> => ipcRenderer.invoke(IPC.getAppStatus),
+  /** One-way timing mark for opt-in measurement runs; main enforces an event allowlist. */
+  perfMark: (event: string): void => ipcRenderer.send(IPC.perfMark, event),
   getDriveStatus: (): Promise<DriveStatus> => ipcRenderer.invoke(IPC.getDriveStatus),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
   updateSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>

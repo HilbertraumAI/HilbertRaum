@@ -73,6 +73,12 @@ first public release. Consciously-accepted gaps are tracked in
   `scripts/build-commercial-drive.*`.
 - **Standard project docs** — this `CHANGELOG.md` and a
   [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+- **Opt-in perf mark log** for measurement runs: with `HILBERTRAUM_PERF_LOG=1` set in
+  the environment, the app appends timestamped timing marks (startup phases, vault
+  unlock/lock split, model checksum vs. load split, time to first token, document
+  ingestion phases) to `logs/perf.log`. Off by default; no file is created without the
+  variable. Records the cold-load figures `docs/model-benchmarks.md` §11.4 lists as
+  still missing. See `docs/benchmark.md` "Perf marks".
 
 ### Changed
 

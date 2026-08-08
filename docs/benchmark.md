@@ -149,3 +149,36 @@ falling back to **`UNKNOWN`** until the user runs the benchmark for the first ti
 The Diagnostics screen surfaces a **Run benchmark** button and renders RAM / CPU / OS-arch /
 drive read-write / tokens-sec / assigned profile / recommended model + the warnings, and
 re-loads the last result from settings on mount.
+
+## Perf marks (opt-in, `HILBERTRAUM_PERF_LOG=1`)
+
+`src/main/services/perf.ts` writes an opt-in timing log for measurement runs: set the
+environment variable `HILBERTRAUM_PERF_LOG=1` before launch (a launcher or terminal
+decision, never a setting) and the app appends one line per mark to `logs/perf.log`,
+beside `app.log`. With the variable unset (the default for every normal user) each mark
+is a no-op and no `perf.log` is ever created.
+
+This exists because the felt costs of a slow drive are otherwise invisible: the
+model-checksum hash (`computeInstallState`, minutes on a cold cache from USB), the
+llama-server spawn-to-healthy span, and time to first token appear nowhere in `app.log`,
+and on an encrypted workspace the diagnostics log buffers in memory, which makes it
+unusable for timing a packaged Windows launch. `docs/model-benchmarks.md` §11.4 lists
+cold-load time as a still-unrecorded datum; these marks are how it gets recorded.
+
+Line format: `<ISO-8601 wall clock> <monotonic ms since process start> <event> <json>`.
+The wall-clock column correlates with timestamps written outside the process (for
+example a launcher stamp file); the monotonic column gives clean intra-process deltas.
+
+Events: `app_ready`, `backend_init_done`, `window_ready_to_show`, `gate_visible` (the
+one renderer mark, allowlisted at the IPC boundary), `vault_unlocked` (kdf / decrypt
+split + DB bytes), `unlock_done`, `vault_lock_done` (checkpoint / encrypt / shred
+split), `install_state_done` (with `cacheHit`, separating a real multi-GB hash from a
+size+mtime cache hit), `sidecar_healthy`, `runtime_selected`, `runtime_ready`,
+`first_token`, `stream_done`, `embedder_selected`, `drive_benchmark`, and the
+`ingest_*` phase marks (`start`, `copy_done`, `parse_done`, `chunks_committed`,
+`embed_done`, `indexed`).
+
+Content rule, stricter than `app.log`: a mark carries only phase names, model and
+backend ids, byte counts, and millisecond durations. Never file names, paths of user
+files, document titles, or chat text; documents appear only as their random UUID. That
+is why the file may rest in plaintext even on an encrypted workspace.

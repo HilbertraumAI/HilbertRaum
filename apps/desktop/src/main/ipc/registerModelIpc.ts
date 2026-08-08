@@ -6,6 +6,7 @@ import { readRuntimeMarker } from '../services/assets'
 import { llamaServerDir } from '../services/runtime/sidecar'
 import {
   buildModelList,
+  checksumCacheStats,
   computeInstallState,
   createSettingsHashStore,
   discoverManifests,
@@ -20,6 +21,7 @@ import { loadPolicy } from '../services/policy'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
+import { perfMark, perfMs } from '../services/perf'
 
 // IPC for model discovery/selection + runtime start/stop (spec §9.1).
 // The hardware profile comes from the persisted benchmark (`lastBenchmark`),
@@ -68,9 +70,20 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
   // policy permits unverified models) a MISSING model may start, because the selecting
   // runtime factory then falls back to the built-in mock runtime.
   const lenient = developerLeniency(ctx, s)
+  // The multi-GB weight hash below is the dominant cold-start cost on slow media and is
+  // otherwise invisible in the logs; `computed` moving distinguishes a real hash from a
+  // (size+mtime) cache hit.
+  const installT0 = performance.now()
+  const computedBefore = checksumCacheStats.computed
   const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
     developerMode: lenient,
     hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
+  })
+  perfMark('install_state_done', {
+    modelId,
+    state,
+    ms: perfMs(installT0),
+    cacheHit: checksumCacheStats.computed === computedBefore
   })
   const mockFallback = state === 'missing' && lenient
   if (state !== 'installed' && !mockFallback) {
@@ -121,6 +134,7 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
   }
 
   log.info('Start runtime', { modelId, state })
+  const runtimeT0 = performance.now()
   const status = await ctx.runtime.start({
     modelId,
     modelPath: weightPath(ctx.paths.rootPath, found.manifest),
@@ -130,6 +144,11 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     // budget fallback — full-audit 2026-07-10 BE-5). Every downstream budget follows the
     // LAUNCHED window via ModelRuntime.contextWindow() (§L0).
     contextTokens: launchContextTokens(s, found.manifest)
+  })
+  perfMark('runtime_ready', {
+    modelId,
+    backend: status.backend ?? null,
+    ms: perfMs(runtimeT0)
   })
   ctx.audit?.('runtime_started', `Model runtime started: ${modelId}`, {
     modelId,

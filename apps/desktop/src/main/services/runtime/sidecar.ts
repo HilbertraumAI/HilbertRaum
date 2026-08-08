@@ -4,6 +4,7 @@ import { cpus } from 'node:os'
 import { join } from 'node:path'
 import net from 'node:net'
 import { log } from '../logging'
+import { perfMark, perfMs } from '../perf'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
 import type { HealthStatus } from './index'
 
@@ -478,6 +479,7 @@ export class LlamaServer {
   }
 
   private async doStart(): Promise<void> {
+    const startT0 = performance.now()
     // Re-hash the binary against its install marker BEFORE we spawn it (vuln-scan B). A
     // packaged-build tamper (`mismatch`) throws here, before any port/child is allocated,
     // so the ladder cleanly falls to the next rung / MockRuntime. Dev + legacy drives
@@ -563,6 +565,13 @@ export class LlamaServer {
 
     await this.waitForHealthy()
     this.ready = true
+    // Wall-clock model load for THIS rung attempt: binary verify + spawn + first healthy
+    // /health. The embedding flag separates the chat runtime from the E5 sidecar.
+    perfMark('sidecar_healthy', {
+      port: this.port,
+      embedding: this.opts.extraArgs?.includes('--embedding') ?? false,
+      ms: perfMs(startT0)
+    })
   }
 
   /** A ` — last output: …` suffix from the captured stderr tail, or '' if none. */
