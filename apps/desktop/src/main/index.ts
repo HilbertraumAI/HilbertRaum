@@ -243,6 +243,17 @@ function initBackend(): void {
       isDev,
       onSelect: (kind, opts, reason) =>
         log.info('Runtime backend selected', { kind, modelId: opts.modelId, reason }),
+      // #109: the hidden warm-up generation inside the "Starting…" window. A non-done
+      // outcome never fails the start (the server is healthy) — it just means the first
+      // prompt may still be cold, which the #39 warm-up hint then covers.
+      onWarmup: (opts, event, detail) =>
+        event === 'done'
+          ? log.info('Model warm-up generation done', { modelId: opts.modelId })
+          : log.warn('Model warm-up generation did not complete — proceeding to ready', {
+              modelId: opts.modelId,
+              event,
+              detail
+            }),
       gpu: {
         ...gpuSignals,
         onGpuFailure: persistGpuFailure,

@@ -1096,6 +1096,31 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   and stream instantly, so they neither mark the runtime warm nor show the hint; an absent field
   fails safe. Design record: design-guidelines §11.11. Tests: `ChatWarmupHint.test.tsx` + the
   `warm-up tracking (#39)` block in `runtime-ladder.test.ts`.
+- **Hidden warm-up generation (#109, 2026-08-08) — "ready means ready".** The #39 hint explained
+  the first-prompt stall; #109 removes most of it: `/health` resolving says nothing about the
+  one-time prefill/graph warm-up, which measured **6–8× the settled TTFT** (10–30 s CPU-only,
+  medium-independent — compute, not IO). `LadderRuntime.start()` now runs one tiny hidden
+  generation after the winning rung turns healthy and BEFORE start() resolves, so the extra
+  seconds live inside the existing "Starting…" state (`startingModelId`; the Chat screen already
+  shows its friendly `chat.noModel.starting` panel throughout — no new status value, no new i18n).
+  Placement decisions, each test-pinned in the `hidden warm-up generation (#109)` block of
+  `runtime-ladder.test.ts` + the `#109 warm-up window` block of `runtime-manager.test.ts`:
+  (1) in `LadderRuntime` only — never `LlamaServer` (shared with the embedder/reranker/vision/
+  translation sidecars, which must never get a chat warm-up), never the rung-4 mock (zero-assets
+  starts stay instant); (2) AFTER the probe-derived backend label, so a GPU crash mid-warm-up
+  routes through the §5.3 `onGpuCrash` auto-fallback (gated on `backend === 'gpu'`);
+  (3) the CODE-2 cancel + CODE-3 latch reach the window — `stop()` kills the inner server, the
+  warm-up stream errors, and the ladder settles as `cancelledStartError()` (never a rung walk or
+  mock commit); (4) a non-cancel warm-up failure never fails the start (the server IS healthy —
+  warn via `onWarmup`, proceed to ready; a crash still reports via `onUnexpectedExit`); (5) an
+  overall `WARMUP_TIMEOUT_MS` (90 s ≈ 3× the worst #109 measurement) aborts a pathological
+  warm-up and proceeds — the CB-5 idle watchdog rides along inside it; (6) the request is
+  content-free (`"Hi"`), thinking off (omitted mode → `enable_thinking: false`), `max_tokens` 8,
+  loopback-only, discarded — never persisted, never audited as a chat; (7) it calls
+  `inner.chatStream` directly so the #39 `served` flag does NOT flip: the real first prompt still
+  pays the full system-prompt prefill (no shared `cache_prompt` prefix), and the #39 hint stays
+  armed as the safety net. Observability: the `onWarmup` hook (`done`/`timeout`/`failed`) logs
+  through main/index.ts.
 - **Surfaced runtime errors (fix 2026-06-14, hardened 2026-06-16).** `LlamaRuntime.chatStream`
   throws a typed `ChatRequestError` carrying the server's `{error:{message,type}}` body
   (previously the body was discarded and only "HTTP <status>" survived). `isExceedContextError`
