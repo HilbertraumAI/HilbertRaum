@@ -490,6 +490,112 @@ describe('GPU mid-session crash auto-fallback through the real manager (REL-1)',
   })
 })
 
+// ---- #109: the hidden warm-up generation, through the REAL manager + LlamaRuntime ----
+//
+// The unit coverage (runtime-ladder.test.ts, "hidden warm-up generation (#109)") drives a fake
+// chatStream. These two tests pin the same guarantees through the real SSE path: a healthy
+// server whose /v1/chat/completions has not finished streaming holds `RuntimeManager.status()`
+// at "Starting" (ready means warmed), and a stop() landing inside that window still settles
+// promptly as a cancelled start (the killed child's socket teardown errors the warm-up stream).
+
+/** Real LlamaRuntime over a fake child; the warm-up SSE stream stays open until release(). */
+function warmupWindowHarness() {
+  const child = new RecordingChild('SIGTERM')
+  let completionRequests = 0
+  let release: () => void = () => {}
+  const gate = new Promise<void>((r) => (release = r))
+  const fetchImpl = (async (url: string | URL) => {
+    if (String(url).endsWith('/health')) return { ok: true, status: 200 } as Response
+    if (String(url).endsWith('/v1/chat/completions')) {
+      completionRequests++
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          // The socket dies with the server — a stop() mid-warm-up must error the read,
+          // exactly as a killed llama-server tears down its connections in prod.
+          child.once('exit', () => {
+            try {
+              c.error(new Error('socket closed (llama-server is gone)'))
+            } catch {
+              /* already closed */
+            }
+          })
+          void gate.then(() => {
+            try {
+              c.enqueue(
+                new TextEncoder().encode('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n')
+              )
+              c.close()
+            } catch {
+              /* errored first (stop-path test) */
+            }
+          })
+        }
+      })
+      return { ok: true, status: 200, body } as unknown as Response
+    }
+    throw new Error(`unexpected url ${String(url)}`)
+  }) as typeof fetch
+
+  const factory = createSelectingRuntimeFactory({
+    rootPath: '/root',
+    resolveBin: () => '/bin/llama-server',
+    modelExists: () => true,
+    makeLlama: (o, binPath, rung?: LlamaRungOptions) =>
+      createLlamaRuntime(o, {
+        binPath,
+        extraArgs: rung?.extraArgs,
+        onUnexpectedExit: rung?.onUnexpectedExit,
+        spawn: () => child,
+        fetchImpl,
+        findPort: async () => 52200,
+        healthIntervalMs: 1
+      }),
+    gpu: { probeDevices: async () => [], resolveCpuBin: () => null }
+  })
+  return {
+    mgr: new RuntimeManager(factory),
+    child,
+    release,
+    completionRequests: () => completionRequests
+  }
+}
+
+describe('#109 warm-up window through the real manager', () => {
+  it('a healthy server mid-warm-up still reports "Starting"; ready lands only after the stream ends', async () => {
+    const h = warmupWindowHarness()
+    const startP = h.mgr.start(QUIT_OPTS)
+    while (h.completionRequests() === 0) await tick()
+
+    // /health said yes long ago — but the warm-up generation is still streaming.
+    expect(h.mgr.status().running).toBe(false)
+    expect(h.mgr.status().message).toBe('Starting')
+    expect(h.mgr.status().startingModelId).toBe('m')
+
+    h.release()
+    const status = await startP
+    expect(status.running).toBe(true)
+    expect(status.healthy).toBe(true)
+    expect(status.warmedUp).toBe(false) // the #39 hint stays armed (served did not flip)
+    expect(h.completionRequests()).toBe(1)
+    await h.mgr.stop()
+  })
+
+  it('stop() during the warm-up settles promptly as a cancelled start — no orphan, no commit', async () => {
+    const h = warmupWindowHarness()
+    const startP = h.mgr.start(QUIT_OPTS)
+    startP.catch(() => undefined)
+    while (h.completionRequests() === 0) await tick()
+
+    const t0 = Date.now()
+    await h.mgr.stop() // pre-#109 semantics preserved: the CODE-2 cancel reaches the new window
+    expect(Date.now() - t0).toBeLessThan(5_000)
+    expect(h.child.killed).toBe(true)
+    await expect(startP).rejects.toThrow(/cancelled/i)
+    expect(h.mgr.active()).toBeNull()
+    expect(h.mgr.status().running).toBe(false)
+  })
+})
+
 // ---- Phase C (full-audit 2026-07-11): CODE-2 cancellable start + CODE-3 shutdown latch ----
 //
 // CODE-2: `stop()` used to QUEUE behind an uncancellable in-flight start — a 20 GB GGUF load

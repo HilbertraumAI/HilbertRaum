@@ -58,9 +58,20 @@ function fakeSpawn() {
   return { spawn, children }
 }
 
-/** /health → ok; nothing else is reached before the crash. */
+/** /health → ok; /v1/chat/completions serves the #109 warm-up generation the ladder now runs
+ *  inside start() (one tiny SSE reply, instantly done); nothing else is reached before the crash. */
 const healthOkFetch = (async (url: string | URL) => {
   if (String(url).endsWith('/health')) return { ok: true, status: 200 } as Response
+  if (String(url).endsWith('/v1/chat/completions')) {
+    const sse = 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(sse))
+        c.close()
+      }
+    })
+    return { ok: true, status: 200, body } as unknown as Response
+  }
   throw new Error(`unexpected url ${String(url)}`)
 }) as typeof fetch
 

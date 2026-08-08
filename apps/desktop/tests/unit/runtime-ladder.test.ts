@@ -3,6 +3,8 @@ import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
   COMPATIBILITY_MODE_NOTICE,
+  WARMUP_MAX_TOKENS,
+  WARMUP_PROMPT,
   type LlamaRungOptions
 } from '../../src/main/services/runtime/factory'
 import { RuntimeManager } from '../../src/main/services/runtime'
@@ -37,11 +39,23 @@ function ladderHarness(config: {
   tokens?: string[]
   /** Reasoning delta the fake fires via options.onReasoning before any token (#39 deep mode). */
   reasoningDelta?: string
+  /** #109: fired at the top of every chatStream call (observe ordering, e.g. vs labeling). */
+  onChat?: () => void
+  /** #109: chatStream awaits this before streaming — holds the warm-up window open. */
+  chatGate?: Promise<void>
+  /** #109: chatStream throws this after the gate — warm-up failure/cancel paths. */
+  chatError?: Error
+  /** #109: chatStream never streams and rejects only when options.signal aborts (cap expiry). */
+  chatHangsUntilAbort?: boolean
+  /** #109 cap override forwarded to the factory (avoid real 90 s waits in tests). */
+  warmupTimeoutMs?: number
 }) {
   const calls: LadderCall[] = []
   const failures: string[] = []
   const selected: Array<{ kind: string; reason: string }> = []
   const crashes: Array<{ opts: RuntimeStartOptions; info: UnexpectedExitInfo }> = []
+  const warmups: Array<{ event: string; detail?: string }> = []
+  const chatCalls: Array<{ content: string; maxTokens?: number; mode?: string; hasSignal: boolean }> = []
   let mockMade = false
 
   const makeLlama = (o: RuntimeStartOptions, binPath: string, rung?: LlamaRungOptions): ModelRuntime => {
@@ -56,7 +70,23 @@ function ladderHarness(config: {
       },
       stop: async () => {},
       health: async () => ({ healthy: true, message: 'ok', port: 5000 + index }),
-      chatStream: async function* (_messages, options) {
+      chatStream: async function* (messages, options) {
+        chatCalls.push({
+          content: messages[messages.length - 1]?.content ?? '',
+          maxTokens: options?.maxTokens,
+          mode: options?.mode,
+          hasSignal: options?.signal != null
+        })
+        config.onChat?.()
+        if (config.chatHangsUntilAbort) {
+          await new Promise<never>((_resolve, reject) => {
+            const abort = (): void => reject(abortError())
+            if (options?.signal?.aborted) abort()
+            else options?.signal?.addEventListener('abort', abort, { once: true })
+          })
+        }
+        if (config.chatGate) await config.chatGate
+        if (config.chatError) throw config.chatError
         if (config.reasoningDelta) options?.onReasoning?.(config.reasoningDelta)
         for (const tok of config.tokens ?? []) yield tok
       }
@@ -82,6 +112,8 @@ function ladderHarness(config: {
     makeLlama,
     makeMock,
     onSelect: (kind, _o, reason) => selected.push({ kind, reason }),
+    onWarmup: (_o, event, detail) => warmups.push({ event, detail }),
+    warmupTimeoutMs: config.warmupTimeoutMs,
     gpu: {
       getGpuMode: () => config.gpuMode ?? 'auto',
       getGpuAutoDisabled: () => config.gpuAutoDisabled ?? false,
@@ -92,7 +124,23 @@ function ladderHarness(config: {
     }
   })
 
-  return { factory, calls, failures, selected, crashes, wasMock: () => mockMade }
+  return { factory, calls, failures, selected, crashes, warmups, chatCalls, wasMock: () => mockMade }
+}
+
+/** An `AbortError`-named rejection — what a signal-aborted fetch/stream read raises in prod. */
+function abortError(): Error {
+  const err = new Error('The operation was aborted.')
+  err.name = 'AbortError'
+  return err
+}
+
+/** Resolve once `cond` holds (micro/macro-task polling; injected budgets keep this fast). */
+async function until(cond: () => boolean): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (cond()) return
+    await new Promise((r) => setTimeout(r, 1))
+  }
+  throw new Error('condition not reached')
 }
 
 describe('the GPU start ladder', () => {
@@ -454,5 +502,177 @@ describe('warm-up tracking (#39)', () => {
       /* zero chunks */
     }
     expect(runtime.warmedUp?.()).toBe(false)
+  })
+})
+
+// #109: the hidden warm-up generation. After a real rung turns healthy (and its backend
+// label is set), start() runs one tiny content-free generation against the INNER runtime
+// and discards the output, so "ready" only reports once the one-time prefill/graph
+// warm-up cost is paid. The #39 `served` flag deliberately does NOT flip — the real first
+// prompt still pays the full system-prompt prefill (no shared cache_prompt prefix), so
+// the warm-up hint stays armed as a safety net.
+describe('hidden warm-up generation (#109)', () => {
+  it('runs AFTER backend labeling on the winning rung and completes BEFORE start() resolves', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const backendsAtWarmup: string[] = []
+    let ladder: ModelRuntime
+    const h = ladderHarness({
+      probe: [RTX],
+      chatGate: gate,
+      onChat: () => backendsAtWarmup.push(ladder.backend ?? 'unset')
+    })
+    ladder = h.factory(opts)
+    let started = false
+    const startP = ladder.start().then(() => {
+      started = true
+    })
+
+    await until(() => h.chatCalls.length === 1)
+    // The label was already set when the warm-up fired — a GPU crash inside this window
+    // routes through the §5.3 onGpuCrash auto-fallback (gated on backend === 'gpu').
+    expect(backendsAtWarmup).toEqual(['gpu'])
+    // …and the "started via rung" selection was logged before the warm-up window.
+    expect(h.selected.at(-1)?.reason).toContain('rung 1')
+    expect(started).toBe(false) // ready is NOT reported while the warm-up is still running
+
+    release()
+    await startP
+    expect(started).toBe(true)
+    expect(h.warmups).toEqual([{ event: 'done', detail: undefined }])
+  })
+
+  it('the request is content-free, thinking-off (no mode), tiny-capped, abortable — and leaves #39 cold', async () => {
+    const h = ladderHarness({ probe: [RTX], tokens: ['warm', 'up'] })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(h.chatCalls).toHaveLength(1)
+    expect(h.chatCalls[0]).toEqual({
+      content: WARMUP_PROMPT,
+      maxTokens: WARMUP_MAX_TOKENS,
+      mode: undefined, // omitted = 'balanced' → enable_thinking: false (requestParamsForMode)
+      hasSignal: true // the cap can abort it
+    })
+    expect(WARMUP_MAX_TOKENS).toBeLessThanOrEqual(8)
+    // The warm-up called inner.chatStream directly: the #39 served flag did NOT flip, so
+    // the warm-up hint stays armed for the real first prompt (its full-prefill safety net).
+    expect(runtime.warmedUp?.()).toBe(false)
+  })
+
+  it('the rung-4 mock never warms up (zero-assets starts stay instant)', async () => {
+    // All real rungs fail → mock commit: no chatStream call is ever made.
+    const allFail = ladderHarness({ failFirst: 3 })
+    const mockRuntime = allFail.factory(opts)
+    await mockRuntime.start()
+    expect(mockRuntime.backend).toBe('mock')
+    expect(allFail.chatCalls).toHaveLength(0)
+    expect(allFail.warmups).toEqual([])
+
+    // No binary on the drive → the mock is returned at creation: same guarantee.
+    const noBin = ladderHarness({ resolveBin: null })
+    const direct = noBin.factory(opts)
+    await direct.start()
+    expect(noBin.chatCalls).toHaveLength(0)
+  })
+
+  it('a warm-up failure that is NOT a cancel never fails the start (the server IS healthy)', async () => {
+    const h = ladderHarness({ probe: [RTX], chatError: new Error('slot busy') })
+    const runtime = h.factory(opts)
+    await runtime.start() // resolves despite the failed warm-up
+    expect(runtime.backend).toBe('gpu')
+    expect(h.warmups).toEqual([{ event: 'failed', detail: 'slot busy' }])
+    // Not a rung failure: nothing persisted gpuAutoDisabled, no fallback walk, no mock.
+    expect(h.failures).toEqual([])
+    expect(h.calls).toHaveLength(1)
+    expect(h.wasMock()).toBe(false)
+  })
+
+  it('cap expiry aborts the warm-up request and proceeds to ready (never doubles the start)', async () => {
+    const h = ladderHarness({ probe: [RTX], chatHangsUntilAbort: true, warmupTimeoutMs: 25 })
+    const runtime = h.factory(opts)
+    await runtime.start() // a pathological warm-up cannot hold the start hostage
+    expect(runtime.backend).toBe('gpu')
+    expect(h.warmups).toHaveLength(1)
+    expect(h.warmups[0].event).toBe('timeout')
+    expect(h.chatCalls[0].hasSignal).toBe(true)
+  })
+
+  it('stop() during the warm-up window settles as CANCELLED: no rung walk, no mock, no GPU fault', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    // The killed server makes the warm-up stream error — model the same shape here.
+    const h = ladderHarness({ probe: [RTX], chatGate: gate, chatError: new Error('socket closed') })
+    const runtime = h.factory(opts)
+    const startP = runtime.start()
+    startP.catch(() => undefined)
+    await until(() => h.chatCalls.length === 1)
+
+    await runtime.stop() // quit / "Lock now" / manual stop lands mid-warm-up
+    release()
+    await expect(startP).rejects.toThrow(/cancelled/i)
+
+    expect(h.calls).toHaveLength(1) // the walk aborted — rung 2/3 never attempted
+    expect(h.wasMock()).toBe(false) // no mock commit for a cancelled start
+    expect(h.failures).toEqual([]) // a cancel is not a GPU fault
+    expect(h.warmups).toEqual([]) // …and is not logged as a warm-up fault either
+  })
+
+  it('a warm-up that completes cleanly despite a racing stop() still settles as CANCELLED', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const h = ladderHarness({ probe: [RTX], chatGate: gate, tokens: ['x'] })
+    const runtime = h.factory(opts)
+    const startP = runtime.start()
+    startP.catch(() => undefined)
+    await until(() => h.chatCalls.length === 1)
+
+    await runtime.stop()
+    release() // the stream finishes normally — the cancel must STILL win over ready
+    await expect(startP).rejects.toThrow(/cancelled/i)
+    expect(h.wasMock()).toBe(false)
+  })
+
+  it('RuntimeManager.status() stays "Starting" through the warm-up window; ready reports warmedUp=false', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const h = ladderHarness({ probe: [RTX], chatGate: gate })
+    const mgr = new RuntimeManager(h.factory)
+    const startP = mgr.start(opts)
+    await until(() => h.chatCalls.length === 1)
+
+    // The server is already healthy, but the user-facing state is still "Starting" — that
+    // is the whole point: ready means warmed.
+    expect(mgr.status().running).toBe(false)
+    expect(mgr.status().message).toBe('Starting')
+    expect(mgr.status().startingModelId).toBe('m')
+
+    release()
+    const status = await startP
+    expect(status.running).toBe(true)
+    expect(status.healthy).toBe(true)
+    expect(status.backend).toBe('gpu')
+    expect(status.warmedUp).toBe(false) // the #39 hint stays armed as the safety net
+  })
+
+  it('manager stop() during the warm-up settles promptly; the CODE-3 shutdown latch is respected', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const h = ladderHarness({ probe: [RTX], chatGate: gate, chatError: new Error('socket closed') })
+    const mgr = new RuntimeManager(h.factory)
+    const startP = mgr.start(opts)
+    startP.catch(() => undefined)
+    await until(() => h.chatCalls.length === 1)
+
+    mgr.shutdown() // quit teardown arms the latch first…
+    const stopP = mgr.stop() // …then stops; the cancel reaches the warm-up window
+    release()
+    await stopP
+    await expect(startP).rejects.toThrow(/cancelled/i)
+
+    expect(mgr.active()).toBeNull() // never committed
+    expect(mgr.status().running).toBe(false)
+    // The latch holds: a late auto-start cannot spawn a fresh warm-up/runtime.
+    await expect(mgr.start(opts)).rejects.toThrow(/shut down/i)
+    expect(h.calls).toHaveLength(1)
   })
 })

@@ -233,9 +233,11 @@ with sources (see §7).
 6. Need more room? The **«** button hides the conversation list; **»** brings it back. The
    app remembers your choice.
 
-The very first answer after a model starts takes a little longer — a one-time *"the model is
-warming up"* note appears under the pending answer while it does. Later answers reuse the
-warmed-up model and come faster.
+Starting a model includes a short warm-up, so the *"Starting…"* state can take a little
+longer — in return, the model is genuinely ready when it says so, and your first question
+answers at normal speed. If a first answer is ever still slow (for example on a very busy
+machine), a calm one-time *"the model is warming up"* note appears under the pending answer
+to say why. Later answers in the same session come fastest.
 
 Starting fresh? The empty chat suggests a few example questions — click one to put it in
 the message box — and, if you haven't imported anything yet, offers **Add documents to ask
