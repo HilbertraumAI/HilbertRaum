@@ -17,6 +17,8 @@ import type {
   ModelVerifyProgress
 } from '../../shared/types'
 import { tMain } from './i18n'
+import { log } from './logging'
+import { perfMark, perfMs } from './perf'
 import type { Db } from './db'
 import { getSettings, updateSettings } from './settings'
 
@@ -246,6 +248,64 @@ const hashCache = new Map<string, CachedHash>()
 /** Test visibility: how many full-file hashes were actually computed. */
 export const checksumCacheStats = { computed: 0 }
 
+// ---- checksum instrumentation (#106) -------------------------------------------------
+// A real multi-GB hash is the dominant pre-start cost on slow media, and whichever path
+// hashes FIRST (the unlock auto-start, a Models-screen visit, the runtime start, or the
+// download verify) was invisible: `install_state_done` only covers the start path, and
+// app.log had no line at all. One mark pair + one plain log line per PHYSICAL hash, fired
+// at the single choke point where hashing actually happens — never at the (many) cache
+// traversals above it.
+
+/** Identity for a checksum instrumentation record. The perf-log content rule
+ *  (services/perf.ts) allows model/backend ids but never file names or paths, so the
+ *  file is named by its manifest slot, not its basename. */
+export interface ChecksumLabel {
+  modelId: string | null
+  file: 'weight' | 'mmproj' | 'download' | null
+}
+
+/** Monotonic id pairing `checksum_start`/`checksum_done` marks: concurrent hashes of
+ *  DIFFERENT files interleave in the log, so the pair carries a shared seq. */
+let hashSeq = 0
+
+/**
+ * Begin one `checksum_start`/`checksum_done` mark + log pair around a real full-file
+ * hash. Shared by `sha256FileCached` (the cached model-weight path) and the download
+ * manager's verify-after-download (the one model-weight hash that bypasses the cache).
+ * `end` never throws (perfMark and log both swallow their own failures).
+ */
+export function beginChecksumInstrumentation(
+  label: ChecksumLabel,
+  bytes: number | null
+): { end: (ok: boolean) => void } {
+  const seq = ++hashSeq
+  const t0 = performance.now()
+  perfMark('checksum_start', { seq, modelId: label.modelId, file: label.file, bytes })
+  return {
+    end: (ok: boolean): void => {
+      const ms = perfMs(t0)
+      perfMark('checksum_done', { seq, modelId: label.modelId, file: label.file, bytes, ms, ok })
+      // The issue asks for visibility WITHOUT the opt-in perf log: one app.log line per
+      // real hash. app.log may carry model ids and byte counts (never chat/doc content).
+      log.info('Model checksum hashed', { modelId: label.modelId, file: label.file, bytes, ms, ok })
+    }
+  }
+}
+
+/**
+ * In-flight full-file hashes keyed by absolute path (#106). Concurrent callers — the
+ * unlock auto-start racing a Models-screen mount, or the Models screen's status poll
+ * kicking off a full `listModels` every 2.5 s while a cold start is mid-hash — used to
+ * EACH start their own multi-GB read of the SAME file (`hashCache.set` only lands after
+ * the await, so every overlapping caller missed). Joiners now share the one physical
+ * hash: progress sinks are multicast, each joiner still writes its own L2 store, and
+ * `checksumCacheStats.computed` counts physical hashes only.
+ */
+const inFlightHashes = new Map<
+  string,
+  { promise: Promise<string>; sinks: Set<(bytesHashed: number) => void> }
+>()
+
 /** Drop all in-memory cached hashes (tests / an explicit re-verify). */
 export function clearChecksumCache(): void {
   hashCache.clear()
@@ -388,12 +448,16 @@ export function createSettingsHashStore(getDb: () => Db, rootPath?: string): Has
 /**
  * SHA-256 of a file, cached by (path, size, mtimeMs) — memory first, then `store`.
  * `onProgress` fires only on a real cache MISS (a cache hit does no I/O), so callers can
- * weight the verification bar by the bytes actually hashed.
+ * weight the verification bar by the bytes actually hashed. Concurrent calls for the
+ * same path share ONE physical hash (single-flight, #106); a real hash emits one
+ * `checksum_start`/`checksum_done` mark pair + one app.log line via
+ * `beginChecksumInstrumentation`.
  */
 async function sha256FileCached(
   filePath: string,
   store?: HashStore,
-  onProgress?: (bytesHashed: number) => void
+  onProgress?: (bytesHashed: number) => void,
+  label?: ChecksumLabel
 ): Promise<string> {
   const st = statSync(filePath)
   const hit = hashCache.get(filePath)
@@ -403,12 +467,47 @@ async function sha256FileCached(
     hashCache.set(filePath, persisted)
     return persisted.actual
   }
-  const actual = await sha256File(filePath, onProgress)
-  checksumCacheStats.computed += 1
-  const entry: CachedHash = { size: st.size, mtimeMs: st.mtimeMs, actual }
-  hashCache.set(filePath, entry)
-  store?.set(filePath, entry)
-  return actual
+  // Join an in-flight hash of the same file instead of starting a second concurrent
+  // multi-GB read. The joiner still persists to ITS store (the leader may have been
+  // created with a different/no store); the entry is re-derived from the joiner's own
+  // stat, so a file replaced mid-hash yields a stale-keyed (harmless) entry, same as
+  // the leader's own race window today.
+  const inFlight = inFlightHashes.get(filePath)
+  if (inFlight) {
+    if (onProgress) inFlight.sinks.add(onProgress)
+    const actual = await inFlight.promise
+    store?.set(filePath, { size: st.size, mtimeMs: st.mtimeMs, actual })
+    return actual
+  }
+  const sinks = new Set<(bytesHashed: number) => void>()
+  if (onProgress) sinks.add(onProgress)
+  const instrumentation = beginChecksumInstrumentation(
+    label ?? { modelId: null, file: null },
+    st.size
+  )
+  const run = (async (): Promise<string> => {
+    const actual = await sha256File(filePath, (b) => {
+      for (const sink of sinks) sink(b)
+    })
+    // Count + cache only a COMPLETED physical hash (a throwing hash increments nothing,
+    // matching the pre-#106 behaviour `install_state_done.cacheHit` depends on).
+    checksumCacheStats.computed += 1
+    const entry: CachedHash = { size: st.size, mtimeMs: st.mtimeMs, actual }
+    hashCache.set(filePath, entry)
+    store?.set(filePath, entry)
+    return actual
+  })()
+  inFlightHashes.set(filePath, { promise: run, sinks })
+  try {
+    const actual = await run
+    instrumentation.end(true)
+    return actual
+  } catch (err) {
+    instrumentation.end(false)
+    throw err
+  } finally {
+    inFlightHashes.delete(filePath)
+  }
 }
 
 /**
@@ -429,15 +528,17 @@ function cachedHashFor(filePath: string, store?: HashStore): boolean {
   return !!persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs
 }
 
-/** Verify a weight file against its expected SHA-256 (cached by size+mtime). */
+/** Verify a weight file against its expected SHA-256 (cached by size+mtime). `label`
+ *  identifies a real hash in the #106 instrumentation (marks + app.log). */
 export async function verifyChecksum(
   filePath: string,
   expected: string,
   store?: HashStore,
-  onProgress?: (bytesHashed: number) => void
+  onProgress?: (bytesHashed: number) => void,
+  label?: ChecksumLabel
 ): Promise<ChecksumResult> {
   if (!existsSync(filePath)) return { exists: false, matched: null, actual: null }
-  const actual = await sha256FileCached(filePath, store, onProgress)
+  const actual = await sha256FileCached(filePath, store, onProgress, label)
   if (!isRealSha256(expected)) return { exists: true, matched: null, actual }
   return { exists: true, matched: actual === expected, actual }
 }
@@ -489,6 +590,8 @@ export interface ManifestFile {
   sha: string
   /** Drive-relative path (forward slashes) for honest reporting (which file failed). */
   localPath: string
+  /** Which manifest slot this file fills — labels the #106 checksum instrumentation. */
+  kind: 'weight' | 'mmproj'
 }
 
 /**
@@ -501,13 +604,19 @@ export interface ManifestFile {
  */
 export function manifestFiles(rootPath: string, manifest: ModelManifest): ManifestFile[] {
   const files: ManifestFile[] = [
-    { path: weightPath(rootPath, manifest), sha: manifest.sha256, localPath: manifest.localPath }
+    {
+      path: weightPath(rootPath, manifest),
+      sha: manifest.sha256,
+      localPath: manifest.localPath,
+      kind: 'weight'
+    }
   ]
   if (manifest.mmproj) {
     files.push({
       path: mmprojPath(rootPath, manifest),
       sha: manifest.mmproj.sha256,
-      localPath: manifest.mmproj.localPath
+      localPath: manifest.mmproj.localPath,
+      kind: 'mmproj'
     })
   }
   return files
@@ -579,7 +688,8 @@ export async function computeInstallState(
       f.path,
       f.sha,
       opts.hashStore,
-      willHash && opts.onProgress ? (b) => opts.onProgress!(hashedBase + b) : undefined
+      willHash && opts.onProgress ? (b) => opts.onProgress!(hashedBase + b) : undefined,
+      { modelId: manifest.id, file: f.kind }
     )
     if (check.matched === false) return 'checksum_failed'
     if (willHash) {

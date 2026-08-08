@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
 import { stringify } from 'yaml'
 import { openDatabase } from '../../src/main/services/db'
+import { initPerf } from '../../src/main/services/perf'
 import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   sha256File,
@@ -123,6 +124,130 @@ describe('checksum cache (H5)', () => {
     const res = await verifyChecksum(file, originalHash)
     expect(res.matched).toBe(false)
     expect(checksumCacheStats.computed).toBe(before + 1)
+  })
+})
+
+// #106: every REAL multi-GB hash — wherever it runs — emits one `checksum_start`/
+// `checksum_done` perf-mark pair + one app.log line, fired at the single choke point
+// (`sha256FileCached`'s miss branch), never at the many cache traversals above it. And
+// concurrent callers for the same path share ONE physical hash (single-flight): the
+// unlock auto-start racing a Models-screen mount used to run two full media reads of
+// the same weight.
+describe('checksum instrumentation + single-flight (#106)', () => {
+  const savedEnv = process.env.HILBERTRAUM_PERF_LOG
+
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.HILBERTRAUM_PERF_LOG
+    else process.env.HILBERTRAUM_PERF_LOG = savedEnv
+  })
+
+  /** Route the shared perf module at a fresh dir and return a reader for its log. */
+  function armPerfLog(): () => string[] {
+    const dir = tempDir('hilbertraum-perf-')
+    process.env.HILBERTRAUM_PERF_LOG = '1'
+    initPerf(dir)
+    const file = join(dir, 'perf.log')
+    return () => {
+      if (!existsSync(file)) return []
+      return readFileSync(file, 'utf8').trimEnd().split('\n').filter(Boolean)
+    }
+  }
+
+  it('emits one mark pair (+ bytes, model label) on a real hash — and none on a cache hit', async () => {
+    clearChecksumCache()
+    const readLog = armPerfLog()
+    const dir = tempDir('hilbertraum-hash-')
+    const file = join(dir, 'weight.bin')
+    writeFileSync(file, 'instrumented weights')
+    const expected = createHash('sha256').update('instrumented weights').digest('hex')
+
+    expect(
+      (
+        await verifyChecksum(file, expected, undefined, undefined, {
+          modelId: 'qwen3-4b-instruct-q4',
+          file: 'weight'
+        })
+      ).matched
+    ).toBe(true)
+
+    const lines = readLog()
+    const starts = lines.filter((l) => l.includes(' checksum_start '))
+    const dones = lines.filter((l) => l.includes(' checksum_done '))
+    expect(starts).toHaveLength(1)
+    expect(dones).toHaveLength(1)
+    const startFields = JSON.parse(starts[0].slice(starts[0].indexOf('{')))
+    const doneFields = JSON.parse(dones[0].slice(dones[0].indexOf('{')))
+    expect(startFields.modelId).toBe('qwen3-4b-instruct-q4')
+    expect(startFields.file).toBe('weight')
+    expect(startFields.bytes).toBe('instrumented weights'.length)
+    expect(doneFields.seq).toBe(startFields.seq)
+    expect(doneFields.ok).toBe(true)
+    expect(typeof doneFields.ms).toBe('number')
+
+    // A cache hit is NOT a hash: a second verification adds no marks.
+    const fresh = armPerfLog()
+    expect((await verifyChecksum(file, expected)).matched).toBe(true)
+    expect(fresh().filter((l) => l.includes('checksum_'))).toHaveLength(0)
+  })
+
+  it('a forced re-hash (invalidateChecksum, the "Verify checksum" button) fires the marks again', async () => {
+    clearChecksumCache()
+    const dir = tempDir('hilbertraum-hash-')
+    const file = join(dir, 'weight.bin')
+    writeFileSync(file, 'reverify me')
+    const expected = createHash('sha256').update('reverify me').digest('hex')
+    expect((await verifyChecksum(file, expected)).matched).toBe(true)
+
+    const readLog = armPerfLog()
+    invalidateChecksum(file)
+    expect((await verifyChecksum(file, expected)).matched).toBe(true)
+    expect(readLog().filter((l) => l.includes(' checksum_start '))).toHaveLength(1)
+  })
+
+  it('a failing hash still closes its pair (checksum_done ok:false) and caches nothing', async () => {
+    clearChecksumCache()
+    const readLog = armPerfLog()
+    // A directory passes the existsSync guard and stats fine, but the read stream
+    // rejects (EISDIR) — a deterministic mid-hash failure on every platform.
+    const dir = tempDir('hilbertraum-hash-')
+    const before = checksumCacheStats.computed
+
+    await expect(verifyChecksum(dir, 'f'.repeat(64))).rejects.toThrow()
+
+    expect(checksumCacheStats.computed).toBe(before) // a throwing hash increments nothing
+    const dones = readLog().filter((l) => l.includes(' checksum_done '))
+    expect(dones).toHaveLength(1)
+    expect(JSON.parse(dones[0].slice(dones[0].indexOf('{'))).ok).toBe(false)
+  })
+
+  it('concurrent verifications of the same file share ONE physical hash (single-flight)', async () => {
+    clearChecksumCache()
+    const readLog = armPerfLog()
+    const dir = tempDir('hilbertraum-hash-')
+    const file = join(dir, 'weight.bin')
+    writeFileSync(file, 'shared single-flight weights')
+    const expected = createHash('sha256').update('shared single-flight weights').digest('hex')
+
+    const db = openDatabase(join(tempDir('hilbertraum-db-'), 'sf.sqlite'))
+    seedSettings(db)
+    const joinerStore = createSettingsHashStore(() => db)
+    const joinerProgress: number[] = []
+
+    const before = checksumCacheStats.computed
+    const [a, b] = await Promise.all([
+      verifyChecksum(file, expected),
+      verifyChecksum(file, expected, joinerStore, (n) => joinerProgress.push(n))
+    ])
+
+    expect(a.matched).toBe(true)
+    expect(b.matched).toBe(true)
+    expect(checksumCacheStats.computed).toBe(before + 1)
+    // One physical hash → exactly one mark pair.
+    expect(readLog().filter((l) => l.includes(' checksum_start '))).toHaveLength(1)
+    // The joiner's progress sink was multicast the final exact-total call…
+    expect(joinerProgress.at(-1)).toBe('shared single-flight weights'.length)
+    // …and the joiner's own L2 store was still populated.
+    expect(joinerStore.get(file)?.actual).toBe(expected)
   })
 })
 

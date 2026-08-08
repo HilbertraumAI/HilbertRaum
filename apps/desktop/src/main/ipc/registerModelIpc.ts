@@ -13,6 +13,7 @@ import {
   invalidateChecksum,
   launchContextTokens,
   machineRamGb,
+  manifestFiles,
   selectModel,
   weightPath
 } from '../services/models'
@@ -253,7 +254,12 @@ export function registerModelIpc(ctx: AppContext): void {
     const found = manifests.find((m) => m.manifest.id === modelId)
     if (!found) throw new Error(`Unknown model id: ${modelId}`)
     const store = createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
-    invalidateChecksum(weightPath(ctx.paths.rootPath, found.manifest), store)
+    // Invalidate EVERY file the manifest carries (#106 adjacent fix): this used to drop
+    // only the GGUF's cache entry, so "Verify checksum" on a vision model re-hashed the
+    // weight but silently served the mmproj projector from cache.
+    for (const f of manifestFiles(ctx.paths.rootPath, found.manifest)) {
+      invalidateChecksum(f.path, store)
+    }
     const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
       developerMode: developerLeniency(ctx, getSettings(ctx.db)),
       hashStore: store

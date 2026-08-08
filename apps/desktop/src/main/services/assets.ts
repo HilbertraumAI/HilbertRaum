@@ -130,8 +130,12 @@ async function planOneFile(
   const placeholderHash = !isRealSha256(expectedSha256)
   const licenseApproved = manifest.licenseReview.status === 'approved'
 
-  // Is the file already present + verifiable?
-  const check = await verifyChecksum(dest, expectedSha256, opts.hashStore)
+  // Is the file already present + verifiable? (A stale present file is a real multi-GB
+  // hash — labelled for the #106 instrumentation like every other real hash.)
+  const check = await verifyChecksum(dest, expectedSha256, opts.hashStore, undefined, {
+    modelId: manifest.id,
+    file: relPath === manifest.mmproj?.localPath ? 'mmproj' : 'weight'
+  })
   let status: ModelTaskStatus
   if (check.exists && check.matched === true) {
     status = 'present-verified'
