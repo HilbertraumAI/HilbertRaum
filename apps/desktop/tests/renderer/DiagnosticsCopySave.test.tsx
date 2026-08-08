@@ -52,7 +52,10 @@ const benchmark: BenchmarkResult = {
 // (window.api.copyToClipboard) — we no longer use navigator.clipboard.
 let lastCopied: string | null = null
 
-function stubDiagnostics(overrides: Record<string, ReturnType<typeof vi.fn>> = {}): void {
+function stubDiagnostics(
+  overrides: Record<string, ReturnType<typeof vi.fn>> = {},
+  bench: BenchmarkResult = benchmark
+): void {
   lastCopied = null
   stubApi({
     getAppStatus: vi.fn(async () => ({
@@ -64,7 +67,7 @@ function stubDiagnostics(overrides: Record<string, ReturnType<typeof vi.fn>> = {
     getDriveStatus: vi.fn(async () => ({}) as never),
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getRuntimeInstall: vi.fn(async () => null),
-    getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: benchmark })),
+    getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: bench })),
     copyToClipboard: vi.fn(async (text: string) => {
       lastCopied = text
       return true
@@ -125,9 +128,7 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     const user = userEvent.setup()
     const legacy = { ...benchmark }
     delete (legacy as Partial<BenchmarkResult>).effectiveRead
-    stubDiagnostics({
-      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: legacy })) as never
-    })
+    stubDiagnostics({}, legacy)
     renderDiagnostics()
 
     await screen.findByText('Test CPU', { exact: false })
@@ -140,9 +141,7 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
   it('renders the tok/s row without a model name for a result persisted before issue #52', async () => {
     const legacy = { ...benchmark }
     delete (legacy as Partial<BenchmarkResult>).measuredModelId
-    stubDiagnostics({
-      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: legacy })) as never
-    })
+    stubDiagnostics({}, legacy)
     renderDiagnostics()
 
     // The card row shows the bare number, exactly as before the field existed.
