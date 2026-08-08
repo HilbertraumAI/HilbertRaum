@@ -19,6 +19,7 @@ import type {
 import { tMain } from './i18n'
 import { log } from './logging'
 import { perfMark, perfMs } from './perf'
+import { recordChecksumRead } from './read-speed'
 import type { Db } from './db'
 import { getSettings, updateSettings } from './settings'
 
@@ -288,6 +289,8 @@ export function beginChecksumInstrumentation(
       // The issue asks for visibility WITHOUT the opt-in perf log: one app.log line per
       // real hash. app.log may carry model ids and byte counts (never chat/doc content).
       log.info('Model checksum hashed', { modelId: label.modelId, file: label.file, bytes, ms, ok })
+      // #108: a completed full-file hash is also an honest sequential-read sample.
+      if (ok && bytes != null) recordChecksumRead(bytes, ms, label.modelId)
     }
   }
 }

@@ -359,6 +359,29 @@ describe('runBenchmark', () => {
     expect(result.measuredModelId).toBeNull()
   })
 
+  // #108: the honest read figure is INJECTED (a byproduct of real loads/hashes,
+  // read-speed.ts) — the benchmark itself never measures it, and a fresh install
+  // without a sample carries an explicit null.
+  it('embeds the injected effective-read sample; null when none exists yet', async () => {
+    const sample = {
+      mbps: 70.4,
+      bytes: 6_000_000_000,
+      ms: 85_200,
+      source: 'model_load' as const,
+      modelId: 'qwen3-9b',
+      at: '2026-08-08T10:00:00.000Z'
+    }
+    const withSample = await runBenchmark({
+      workspacePath: workspace(),
+      manifests: [],
+      effectiveRead: sample
+    })
+    expect(withSample.effectiveRead).toEqual(sample)
+
+    const without = await runBenchmark({ workspacePath: workspace(), manifests: [] })
+    expect(without.effectiveRead).toBeNull()
+  })
+
   // End-to-end wiring of the issue-#52 downgrade warning. The profile downgrade itself
   // depends on this machine's real RAM (a ≤8 GB box is already TINY and can't step down),
   // so the assertion pins CONSISTENCY: the named warning appears exactly when the tok/s

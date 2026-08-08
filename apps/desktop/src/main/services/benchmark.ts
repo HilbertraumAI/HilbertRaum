@@ -13,7 +13,7 @@ import { randomFillSync } from 'node:crypto'
 import { t } from '../../shared/i18n'
 import { perfMark } from './perf'
 import type { ModelManifest } from '../../shared/manifest'
-import type { BenchmarkResult, HardwareProfile } from '../../shared/types'
+import type { BenchmarkResult, EffectiveReadSample, HardwareProfile } from '../../shared/types'
 import type { ModelRuntime } from './runtime'
 import { recommendModelId, recommendModelIdByRam } from './models'
 
@@ -301,6 +301,14 @@ export interface RunBenchmarkDeps {
    * `child_process` purity (and with it the strictly-local guarantee).
    */
   gpu?: GpuBenchmarkInput | null
+  /**
+   * Latest honest effective-read sample (issue #108), injected by the caller
+   * (registerBenchmarkIpc reads the session latch in services/read-speed.ts, falling
+   * back to the previously persisted sample so a re-run never loses it). NEVER measured
+   * in here — the sample is a byproduct of real model loads / checksum passes, and this
+   * module keeps its zero-`child_process`, probe-only I/O posture.
+   */
+  effectiveRead?: EffectiveReadSample | null
   /** Injectable clock for deterministic `ranAt` in tests. */
   now?: () => Date
 }
@@ -352,6 +360,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     driveWriteMbps: drive.writeMbps,
     tokensPerSecond,
     measuredModelId,
+    effectiveRead: deps.effectiveRead ?? null,
     profile,
     recommendedModelId,
     warnings,

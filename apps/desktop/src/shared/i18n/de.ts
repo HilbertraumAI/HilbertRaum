@@ -1637,9 +1637,13 @@ export const de: Record<keyof typeof en, string> = {
   'diag.bench.osArch': 'OS / Architektur',
   'diag.bench.gpu': 'GPU',
   'diag.bench.notDetected': 'nicht erkannt',
-  // F-35 (audit 2026-07-16): der Lesewert kommt aus dem OS-Seitencache (RAM, nicht Laufwerk) —
-  // als „(zwischengespeichert)" gekennzeichnet; die ehrliche Kennzahl ist „Laufwerk schreiben".
-  'diag.bench.driveRead': 'Laufwerk lesen (zwischengespeichert)',
+  // #108 (F-35-Auflösung): die Seitencache-Lesezahl der Sonde wird nicht mehr angezeigt —
+  // diese Zeile zeigt die ehrliche effektive Lesegeschwindigkeit, gemessen an echten
+  // Multi-GB-Lesevorgängen (Modellstart oder vollständige Dateiprüfung).
+  'diag.bench.effectiveRead': 'Gemessene Lesegeschwindigkeit',
+  'diag.bench.effectiveReadNone': 'noch nicht gemessen — der Start eines Modells misst sie',
+  'diag.bench.effectiveReadLoad': 'aus dem letzten Modellstart, {gb} GB gelesen',
+  'diag.bench.effectiveReadHash': 'aus einer Dateiprüfung, {gb} GB gelesen',
   'diag.bench.driveWrite': 'Laufwerk schreiben',
   'diag.bench.notMeasured': 'nicht gemessen',
   // RD-3-Glossar: „Token", nicht „Tokens" — steht auf Diagnose direkt neben

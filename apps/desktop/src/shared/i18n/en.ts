@@ -1586,10 +1586,13 @@ export const en = {
   'diag.bench.osArch': 'OS / arch',
   'diag.bench.gpu': 'GPU',
   'diag.bench.notDetected': 'not detected',
-  // F-35 (audit 2026-07-16): the read probe reads the 8 MB file back from the OS page cache, so the
-  // figure reflects RAM, not the drive — labelled "(cached)" so it is not read as a real drive speed.
-  // The honest headline is Drive write (fsync-bound); the slow-drive warning is driven by write.
-  'diag.bench.driveRead': 'Drive read (cached)',
+  // #108 (F-35 resolution): the probe's page-cache read figure is retired from display — this
+  // row shows the honest effective read speed instead, measured from real multi-GB reads the
+  // app performs anyway (a model load, or a full file check). Absent until the first such read.
+  'diag.bench.effectiveRead': 'Measured read speed',
+  'diag.bench.effectiveReadNone': 'not measured yet — starting a model measures it',
+  'diag.bench.effectiveReadLoad': 'from the last model load, {gb} GB read',
+  'diag.bench.effectiveReadHash': 'from a file check, {gb} GB read',
   'diag.bench.driveWrite': 'Drive write',
   'diag.bench.notMeasured': 'not measured',
   'diag.bench.tokens': 'Tokens / sec',

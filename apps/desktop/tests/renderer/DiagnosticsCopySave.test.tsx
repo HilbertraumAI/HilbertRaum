@@ -34,6 +34,16 @@ const benchmark: BenchmarkResult = {
   // Issue #52: the loaded model at measure time — deliberately DIFFERENT from
   // recommendedModelId above, since disambiguating the two is the point of the label.
   measuredModelId: 'mock-chat-8b',
+  // #108: the honest read figure from a real load window (6.0 GB in 85.2 s ≈ 70.4 MB/s
+  // — the USB-stick class the field exists to expose).
+  effectiveRead: {
+    mbps: 70.4,
+    bytes: 6_000_000_000,
+    ms: 85_200,
+    source: 'model_load',
+    modelId: 'mock-chat-8b',
+    at: '2026-06-15T11:58:00Z'
+  },
   ranAt: '2026-06-15T12:00:00Z',
   warnings: []
 }
@@ -100,12 +110,31 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
 
     expect(lastCopied).toContain('Hardware benchmark')
     expect(lastCopied).toContain('Test CPU')
-    // F-35 (audit 2026-07-16): the read figure is a page-cached readback, so it is labelled "(cached)"
-    // (and driveWriteMbps is the honest headline). The value still renders; the label carries the caveat.
-    expect(lastCopied).toContain('Drive read (cached): 120 MB/s')
+    // #108 (F-35 resolution): the page-cache-inflated "Drive read (cached)" figure is retired
+    // from display — the report carries the honest measured read speed instead, and the raw
+    // driveReadMbps value (120 in this fixture) must appear NOWHERE in the copied text.
+    expect(lastCopied).toContain('Measured read speed: 70.4 MB/s (from the last model load, 6.0 GB read)')
+    expect(lastCopied).not.toContain('Drive read (cached)')
+    expect(lastCopied).not.toContain('120 MB/s')
     // Issue #52: the tok/s line names the model that produced the number (the loaded one,
     // not the recommended one) in the card AND the copied report.
     expect(lastCopied).toContain('Tokens / sec: 30 (measured with the loaded model mock-chat-8b)')
+  })
+
+  it('renders "not measured yet" for a result persisted before the effective-read field existed', async () => {
+    const user = userEvent.setup()
+    const legacy = { ...benchmark }
+    delete (legacy as Partial<BenchmarkResult>).effectiveRead
+    stubDiagnostics({
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: legacy })) as never
+    })
+    renderDiagnostics()
+
+    await screen.findByText('Test CPU', { exact: false })
+    await user.click(screen.getAllByRole('button', { name: 'Copy' })[1])
+    expect(lastCopied).toContain(
+      'Measured read speed: not measured yet — starting a model measures it'
+    )
   })
 
   it('renders the tok/s row without a model name for a result persisted before issue #52', async () => {

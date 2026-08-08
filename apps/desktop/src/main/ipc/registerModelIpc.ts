@@ -17,7 +17,8 @@ import {
   selectModel,
   weightPath
 } from '../services/models'
-import { getSettings } from '../services/settings'
+import { getSettings, updateSettings } from '../services/settings'
+import { latestEffectiveRead } from '../services/read-speed'
 import { loadPolicy } from '../services/policy'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -155,7 +156,30 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     modelId,
     backend: status.backend ?? null
   })
+  // #108: the load window (and/or the hash above) may have produced a fresh honest
+  // read sample — fold it into the persisted benchmark result.
+  persistEffectiveRead(ctx)
   return status
+}
+
+/**
+ * Fold the session's latest honest effective-read sample (services/read-speed.ts) into
+ * the persisted `settings.lastBenchmark` (#108), so Diagnostics + the slow-read warning
+ * survive an app restart. No-ops when there is no sample, no persisted benchmark yet
+ * (the first-run benchmark will embed it via injection instead), or the sample is
+ * already persisted. Never throws (persistGpuFailure precedent): the sample is an
+ * optional byproduct and must not fail a start/list call.
+ */
+function persistEffectiveRead(ctx: AppContext): void {
+  try {
+    const sample = latestEffectiveRead()
+    if (!sample) return
+    const lastBenchmark = getSettings(ctx.db).lastBenchmark
+    if (!lastBenchmark || lastBenchmark.effectiveRead?.at === sample.at) return
+    updateSettings(ctx.db, { lastBenchmark: { ...lastBenchmark, effectiveRead: sample } })
+  } catch (err) {
+    log.warn('Could not persist the effective-read sample', { error: String(err) })
+  }
 }
 
 /**
@@ -232,6 +256,8 @@ export function registerModelIpc(ctx: AppContext): void {
     if (manifestErrors.length > 0) {
       log.warn('Invalid model manifests skipped', manifestErrors)
     }
+    // #108: a cold-cache visit just hashed real multi-GB files — persist any fresh sample.
+    persistEffectiveRead(ctx)
     return models
   })
 
@@ -266,6 +292,8 @@ export function registerModelIpc(ctx: AppContext): void {
     })
     log.info('Model re-verified', { modelId, state })
     ctx.audit?.('model_verified', `Model checksum re-verified: ${modelId}`, { modelId, state })
+    // #108: the forced re-hash is a real full-file read — persist any fresh sample.
+    persistEffectiveRead(ctx)
     return state
   })
 

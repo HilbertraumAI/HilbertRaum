@@ -1702,6 +1702,27 @@ export interface PickDocumentsResult {
 }
 
 // ---- Benchmark ----
+/**
+ * An honest effective read-throughput sample measured from a REAL multi-GB sequential
+ * read during normal use (issue #108): the model-load window (file size over the first
+ * ladder rung's spawn-to-healthy) or a completed checksum pass (bytes hashed over
+ * elapsed). Unlike the page-cache-served `driveReadMbps` probe leg (F-35, retired from
+ * display), this is the throughput the user actually felt. `checksum` samples can
+ * under-report on fast media (the hash is CPU-bound there), so a `model_load` sample
+ * always replaces a `checksum` one, never vice versa (services/read-speed.ts).
+ */
+export interface EffectiveReadSample {
+  /** MB/s (MB = 1e6 bytes), one decimal. */
+  mbps: number
+  bytes: number
+  ms: number
+  source: 'model_load' | 'checksum'
+  /** Id of the model whose file produced the sample, or null when unknown. */
+  modelId: string | null
+  /** ISO-8601 timestamp of the observation. */
+  at: string
+}
+
 export interface BenchmarkResult {
   os: string
   arch: string
@@ -1709,6 +1730,12 @@ export interface BenchmarkResult {
   cpuCores: number
   ramGb: number
   gpu: string | null
+  /**
+   * The 8 MB probe's read-back leg — page-cache-served (F-35), ~100× inflated on slow
+   * media, so it is NOT displayed and never gates a warning; kept for continuity with
+   * old persisted results and the probe's own diagnostics. `effectiveRead` is the
+   * honest read figure.
+   */
   driveReadMbps: number | null
   driveWriteMbps: number | null
   tokensPerSecond: number | null
@@ -1719,6 +1746,14 @@ export interface BenchmarkResult {
    * missing as null.
    */
   measuredModelId?: string | null
+  /**
+   * Latest honest effective-read sample as of benchmark time (issue #108), carried
+   * forward from the previous result when this session has none yet, and updated in
+   * place by the IPC layer as new loads/hashes are observed. Optional: absent on
+   * results persisted before this field existed; null when nothing has been measured
+   * yet (a fresh install has no load window) — readers treat both as "not measured".
+   */
+  effectiveRead?: EffectiveReadSample | null
   profile: HardwareProfile
   recommendedModelId: string | null
   warnings: string[]

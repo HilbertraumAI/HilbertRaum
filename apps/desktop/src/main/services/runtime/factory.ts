@@ -14,6 +14,7 @@ import type {
 import { createMockRuntime } from './mock'
 import { createLlamaRuntime } from './llama'
 import { probeGpuDevices } from './gpu'
+import { recordModelLoadRead } from '../read-speed'
 import {
   isBindRaceError,
   resolveCpuFallbackServerPath,
@@ -184,7 +185,9 @@ class LadderRuntime implements ModelRuntime {
 
   async start(): Promise<void> {
     let lastError: unknown = null
+    let attempt = 0
     for (const rung of this.rungs) {
+      attempt += 1
       // CODE-2: cancelled between rungs — abort the walk instead of paying the next
       // rung's health timeout.
       if (this.cancelled) throw cancelledStartError()
@@ -207,6 +210,7 @@ class LadderRuntime implements ModelRuntime {
       })
       // Visible to stop() so a cancel can reach the in-flight LlamaServer (CODE-2).
       this.startingInner = runtime
+      const loadT0 = performance.now()
       try {
         await runtime.start()
       } catch (err) {
@@ -233,6 +237,15 @@ class LadderRuntime implements ModelRuntime {
         continue
       }
       this.startingInner = null
+      // #108: the load window just read the full GGUF start-to-finish — file size over
+      // elapsed is an honest effective media read speed, as a byproduct. FIRST ladder
+      // attempt only: a later rung re-reads a file the failed attempt already pulled
+      // through the page cache, so its number would be inflated. Excludes the #109
+      // warm-up (which runs below) and never throws (read-speed.ts swallows stat
+      // failures; a mock rung never reaches here).
+      if (attempt === 1) {
+        recordModelLoadRead(this.opts.modelPath, performance.now() - loadT0, this.opts.modelId)
+      }
 
       // CODE-2: cancelled while THIS rung came up but the kill missed it (the pre-spawn
       // window: verify/findPort run before `this.child` exists, and `doStart` resets the
