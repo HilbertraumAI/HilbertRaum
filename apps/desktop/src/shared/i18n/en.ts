@@ -105,6 +105,12 @@ export const en = {
   'chat.noModel.starting':
     'Your model is starting — large models take a little while to load. This screen ' +
     'continues automatically once it is ready.',
+  // #107: shown instead of the indeterminate line when the load has an honest estimate
+  // (file size over the measured read speed). "About" is deliberate — it is an estimate,
+  // not a byte counter.
+  'chat.noModel.startingProgress':
+    'Your model is starting — reading the model file ({gb} GB), about {pct}% so far. This ' +
+    'screen continues automatically once it is ready.',
   'chat.noModel.open': 'Open AI Model',
   'chat.noModel.recheck': 'Re-check',
   'chat.empty.title': 'Ask a question, or ask about your documents.',

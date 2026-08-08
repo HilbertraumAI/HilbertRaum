@@ -2292,6 +2292,18 @@ export interface RuntimeStatus {
    * or for a runtime that can't report one (the hint then never shows).
    */
   warmedUp?: boolean
+  /**
+   * #107: honest load progress for the in-flight "Starting…" window. `elapsedMs` comes
+   * from the runtime manager (present whenever `startingModelId` is); the
+   * `getRuntimeStatus` IPC handler enriches `bytesTotal` (the starting model's on-disk
+   * file size) and `expectedMs` (bytesTotal over the honest effective-read sample,
+   * #108) when both are known. A fresh install with no read sample gets `elapsedMs`
+   * only — the renderer then keeps its indeterminate line. `expectedMs` is an ESTIMATE
+   * derived from a measured media speed, not a byte counter (the app has no in-process
+   * bytes-read source for llama-server's mmap reads): the renderer must present it as
+   * approximate and cap displayed progress below 100%.
+   */
+  starting?: { elapsedMs: number; bytesTotal?: number | null; expectedMs?: number | null }
 }
 
 /**

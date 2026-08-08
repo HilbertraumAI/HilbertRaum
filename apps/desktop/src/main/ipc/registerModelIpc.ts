@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { statSync } from 'node:fs'
 import { EVENTS, IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { AppSettings, ModelInfo, ModelState, RuntimeInstallInfo, RuntimeStatus } from '../../shared/types'
@@ -377,6 +378,35 @@ export function registerModelIpc(ctx: AppContext): void {
         status.gpuAutoDisabled = getSettings(ctx.db).gpuAutoDisabled
       } catch {
         /* settings unreadable (e.g. just locked) — the plain status still serves */
+      }
+    }
+    // #107: enrich the "Starting…" window with the model file size + an expected load
+    // duration from the honest effective-read sample (#108), so the renderer can show
+    // determinate progress. Best-effort like the enrichments above: a fresh install has
+    // no sample (expectedMs stays absent → the indeterminate line), and a stat/settings
+    // failure just leaves the fields off. The one statSync per poll tick runs only while
+    // a start is actually in flight (the not-running poll stays I/O-free otherwise).
+    if (status.startingModelId && status.starting && ctx.manifestsDir) {
+      try {
+        const { manifests } = discoverManifests(ctx.manifestsDir)
+        const found = manifests.find((m) => m.manifest.id === status.startingModelId)
+        if (found) {
+          const bytesTotal = statSync(weightPath(ctx.paths.rootPath, found.manifest)).size
+          status.starting.bytesTotal = bytesTotal
+          let sample = latestEffectiveRead()
+          if (!sample) {
+            try {
+              sample = getSettings(ctx.db).lastBenchmark?.effectiveRead ?? null
+            } catch {
+              sample = null
+            }
+          }
+          if (sample && sample.mbps > 0) {
+            status.starting.expectedMs = Math.round((bytesTotal / 1e6 / sample.mbps) * 1000)
+          }
+        }
+      } catch {
+        /* progress enrichment is optional — the plain "Starting…" line still serves */
       }
     }
     return status

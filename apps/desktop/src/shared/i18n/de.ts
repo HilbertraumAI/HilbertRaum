@@ -136,6 +136,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.noModel.starting':
     'Dein Modell wird gestartet — große Modelle brauchen einen Moment zum Laden. Es geht ' +
     'hier automatisch weiter, sobald es bereit ist.',
+  'chat.noModel.startingProgress':
+    'Dein Modell wird gestartet — die Modelldatei ({gb} GB) wird gelesen, bisher etwa ' +
+    '{pct} %. Es geht hier automatisch weiter, sobald es bereit ist.',
   'chat.noModel.open': 'KI-Modell öffnen',
   'chat.noModel.recheck': 'Erneut prüfen',
   'chat.empty.title': 'Stell eine Frage — oder frag deine Dokumente.',

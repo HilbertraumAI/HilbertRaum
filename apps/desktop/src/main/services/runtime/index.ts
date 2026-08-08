@@ -138,6 +138,8 @@ export class RuntimeManager {
    * while the first is still loading) must not stop-and-restart the runtime.
    */
   private startingModelId: string | null = null
+  /** #107: Date.now() when the in-flight start began; null outside a start window. */
+  private startingSince: number | null = null
   /**
    * The runtime instance a start is currently bringing up INSIDE the queue (full-audit
    * 2026-07-11 CODE-2) — set by `doStart` before `next.start()`, cleared when that await
@@ -200,11 +202,17 @@ export class RuntimeManager {
     }
     // Set synchronously so a concurrent caller sees the in-flight model immediately.
     this.startingModelId = opts.modelId
+    // #107: when the start actually began — status() derives the elapsed time of the
+    // "Starting…" window from it, so the renderer can show honest load progress.
+    this.startingSince = Date.now()
     try {
       return await this.enqueue(() => this.doStart(opts))
     } finally {
       // Only clear if no newer start (a switch) has since claimed the slot.
-      if (this.startingModelId === opts.modelId) this.startingModelId = null
+      if (this.startingModelId === opts.modelId) {
+        this.startingModelId = null
+        this.startingSince = null
+      }
     }
   }
 
@@ -321,6 +329,14 @@ export class RuntimeManager {
 
   status(): RuntimeStatus {
     const startingModelId = this.startingModelId
+    // #107: elapsed time of the in-flight "Starting…" window. The IPC layer enriches it
+    // with the model file size + an expected duration (from the honest effective-read
+    // sample) so the renderer can show determinate load progress instead of an
+    // indeterminate spinner.
+    const starting =
+      startingModelId && this.startingSince != null
+        ? { elapsedMs: Math.max(0, Date.now() - this.startingSince) }
+        : undefined
     if (!this.current) {
       return {
         running: false,
@@ -328,7 +344,8 @@ export class RuntimeManager {
         port: null,
         healthy: false,
         message: startingModelId ? 'Starting' : 'Stopped',
-        startingModelId
+        startingModelId,
+        ...(starting ? { starting } : {})
       }
     }
     return {
@@ -347,7 +364,8 @@ export class RuntimeManager {
       // for a runtime that can't report one — the Chat warm-up hint then never shows.
       warmedUp: this.current.warmedUp?.(),
       // A start in flight for a DIFFERENT model than the running one = a switch underway.
-      startingModelId: startingModelId !== this.current.modelId ? startingModelId : null
+      startingModelId: startingModelId !== this.current.modelId ? startingModelId : null,
+      ...(starting && startingModelId !== this.current.modelId ? { starting } : {})
     }
   }
 }

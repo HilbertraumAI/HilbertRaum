@@ -36,7 +36,7 @@ import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useEventCallback } from '../lib/useEventCallback'
 import { useT, type I18n } from '../i18n'
-import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
+import { Button, Chip, EmptyState, ErrorBanner, Progress, SegmentedControl, Spinner, useToast } from '../components'
 import { Composer, ContextMeter, ConversationList, DepthMenu, ScopeNarrowDialog, ScopePopover, SkillInfoCard, SkillPicker, SkillRunBar, Transcript, type SkillRunTarget } from '../chat'
 import { requestSkillDetail } from '../lib/skillDetailRequest'
 import type { MessageKey } from '@shared/i18n'
@@ -1999,6 +1999,27 @@ export function ChatScreen({
   // (M-U3) instead of a hand-rolled .card. The "still loading" spinner line + the two
   // buttons ride in the `action` slot.
   if (runtimeRunning === false) {
+    // #107: honest load progress while a model start is in flight. `expectedMs` is an
+    // ESTIMATE (file size over the measured effective read speed — the app has no real
+    // bytes-read counter for llama-server's mmap reads), so the copy says "about" and
+    // the bar caps at 97% instead of ever claiming completion. Without a measured read
+    // speed yet (fresh install), the plain indeterminate line stays.
+    const starting = runtimeInfo?.starting
+    const loadPct =
+      modelStarting && starting != null && starting.expectedMs != null && starting.expectedMs > 0
+        ? Math.min(97, Math.max(1, Math.round((starting.elapsedMs / starting.expectedMs) * 100)))
+        : null
+    const loadLabel =
+      loadPct != null && starting?.bytesTotal != null
+        ? t('chat.noModel.startingProgress', {
+            gb: (starting.bytesTotal / 1e9).toLocaleString(lang, {
+              minimumFractionDigits: 1,
+              maximumFractionDigits: 1,
+              useGrouping: false
+            }),
+            pct: loadPct
+          })
+        : null
     return (
       <div className="screen">
         <h1>{t('chat.title')}</h1>
@@ -2013,10 +2034,14 @@ export function ChatScreen({
           }
           action={
             <>
-              <p className="hint">
-                <Spinner />{' '}
-                {modelStarting ? t('chat.noModel.starting') : t('chat.noModel.stillLoading')}
-              </p>
+              {loadLabel != null && loadPct != null ? (
+                <Progress label={loadLabel} value={loadPct} max={100} />
+              ) : (
+                <p className="hint">
+                  <Spinner />{' '}
+                  {modelStarting ? t('chat.noModel.starting') : t('chat.noModel.stillLoading')}
+                </p>
+              )}
               <div className="actions" style={{ marginTop: 12 }}>
                 <Button variant="primary" onClick={() => onNavigate('models')}>
                   {t('chat.noModel.open')}
