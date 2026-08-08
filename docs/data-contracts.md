@@ -311,21 +311,41 @@ document answers always run balanced (deep-grounded = wave 2).
   RAM → `UNKNOWN`.
 - **`measureDriveSpeed(workspacePath)`** → `{ readMbps, writeMbps, error? }`; 8 MB temp file
   written **inside the workspace**, timed write(`fsync`)+read, **always cleaned up**, failure
-  → `null` + `error`. `writeMbps` is the honest headline; `readMbps` is **page-cached** (RAM speed,
-  not the drive — audit 2026-07-16 F-35), shown labelled "(cached)" and NOT used for the slow-drive
-  gate. See `docs/benchmark.md`.
+  → `null` + `error`. `writeMbps` is the honest probe figure; `readMbps` is **page-cached** (RAM
+  speed, not the drive — audit 2026-07-16 F-35), since #108 **retired from display** and never a
+  gate input; still computed + persisted for continuity. See `docs/benchmark.md`.
+- **`EffectiveReadSample`** (`shared/types.ts`, issues #108/#110/#107) —
+  `{ mbps, bytes, ms, source: 'model_load' | 'checksum', modelId, at }`: an honest read sample
+  measured as a byproduct of real multi-GB reads (`services/read-speed.ts` session latch; sample
+  floors ≥ 64 MB / ≥ 250 ms; `model_load` always replaces `checksum`, never vice versa).
+  Persisted as **`BenchmarkResult.effectiveRead?: EffectiveReadSample | null`** — optional (absent
+  on results persisted before the field existed; `null` = nothing measured yet) — updated in
+  place by `persistEffectiveRead` (registerModelIpc) after starts/visits/re-verifies, and
+  injected into `runBenchmark` via `RunBenchmarkDeps.effectiveRead` (carry-forward from the
+  previous result). Feeds the Diagnostics "Measured read speed" row, the #110 slow-read warning
+  gate, and the #107 `RuntimeStatus.starting.expectedMs` estimate.
 - **`measureTokensPerSecond(runtime)`** → number | `null` (only when a runtime is active;
   prompt + ≤64 tokens). Mock now, real in Phase 10.
-- **`buildWarnings(...)`** — spec §11.4 friendly copy (weak hardware / slow drive /
-  un-measurable drive); slow drive warns, never blocks.
+- **`buildWarnings(...)`** — spec §11.4 friendly copy. Since #110 the PRIMARY drive warning is
+  the interpolated slow-read note (`effectiveReadMbps < SLOW_EFFECTIVE_READ_MBPS = 100`; no
+  sample → no warning); the write-keyed slow-drive note (`< SLOW_DRIVE_MBPS = 30`) stays as the
+  secondary broken-media check with unchanged copy. Warnings warn, never block. Preflight feeds
+  probe figures only and binds its note by exact canonical-English match.
 - **`runBenchmark(deps)`** → `BenchmarkResult` (the existing `shared/types.ts` shape):
-  detection + drive + optional tokens/sec + `classifyProfile` + `recommendModelId` + warnings.
+  detection + drive + optional tokens/sec + `classifyProfile` + `recommendModelId` + warnings +
+  the injected `effectiveRead`.
 - **`ipc/registerBenchmarkIpc.ts`** — `runBenchmark()` (`benchmark:run`); runs it, persists to
   `settings.lastBenchmark`, returns the result. Registered in `initBackend()`; exposed on
   preload `api.runBenchmark` + `PreloadApi`.
-- **Renderer:** `DiagnosticsScreen` Run-benchmark button → RAM / CPU / OS-arch / drive
-  read-write / tokens-sec / profile / recommended model + warnings; re-loads `lastBenchmark`
-  on mount. `HomeScreen` profile reflects the persisted value via `getAppStatus`.
+- **Renderer:** `DiagnosticsScreen` Run-benchmark button → RAM / CPU / OS-arch / measured read
+  speed (`effectiveRead` or "not measured yet") / drive write / tokens-sec / profile /
+  recommended model + warnings; re-loads `lastBenchmark` on mount. `HomeScreen` profile reflects
+  the persisted value via `getAppStatus`.
+- **`RuntimeStatus.starting?`** (issue #107) — `{ elapsedMs, bytesTotal?, expectedMs? }`:
+  present while `startingModelId` is; `elapsedMs` from the runtime manager, `bytesTotal` +
+  `expectedMs` enriched by the `getRuntimeStatus` handler (weight statSync + the effective-read
+  sample). `expectedMs` is an ESTIMATE — renderers present it as approximate and cap displayed
+  progress below 100% (ChatScreen caps at 97%). Absent fields → the indeterminate line.
 
 ### Privacy & offline policy (Phase 8 live)
 ✅ **`services/policy.ts`** (spec §3.5/§3.6/§6). Pure + resilient; never throws.
