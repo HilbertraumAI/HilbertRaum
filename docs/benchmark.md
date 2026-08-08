@@ -34,15 +34,30 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    write (with `fsync`) then a read, and reports MB/s. The temp file is **always removed**
    (`try/finally`), the probe is **bounded** (8 MB) so it never hangs the UI, and any failure
    returns `null` Mbps + an `error` string instead of throwing.
-   **`driveWriteMbps` is the honest headline** (the write is `fsync`-bound, so it times real device
-   I/O). **`driveReadMbps` is CACHED, not a drive speed** (audit 2026-07-16 F-35): the read reads back
-   the 8 MB file the write just flushed, which is still resident in the OS page cache (`fsync` flushes
-   dirty pages to the device but does not evict them), so on any OS the read is served from RAM — it
-   runs ~100× inflated on slow media. `node:fs` exposes no cache-bypassing/unbuffered read, so a
-   genuine cold read is not measurable here; rather than build a synthetic cold read, the figure is
-   kept as a rough diagnostic and **labelled "(cached)"** in Diagnostics (`diag.bench.driveRead` →
-   "Drive read (cached)"). Old persisted `lastBenchmark` values (inflated) render sanely under the new
-   label — no migration.
+   **`driveWriteMbps` is the honest probe figure** (the write is `fsync`-bound, so it times real
+   device I/O). **`driveReadMbps` is CACHED, not a drive speed** (audit 2026-07-16 F-35): the read
+   reads back the 8 MB file the write just flushed, which is still resident in the OS page cache
+   (`fsync` flushes dirty pages to the device but does not evict them), so on any OS the read is
+   served from RAM — it runs ~100× inflated on slow media. `node:fs` exposes no
+   cache-bypassing/unbuffered read, so a genuine cold read is not measurable *by this probe*.
+   **F-35 resolution (issues #108/#110, 2026-08-08):** #108's measurements showed the cached figure
+   carries **zero** information (1672–2846 MB/s on both a 70 MB/s USB stick and internal NVMe), so it
+   is **retired from display entirely** — Diagnostics now shows **`BenchmarkResult.effectiveRead`**,
+   an honest read sample measured as a **byproduct of real multi-GB reads** the app performs anyway
+   (`services/read-speed.ts`): the model-load window (file size over the first ladder rung's
+   spawn-to-healthy elapsed) or a completed checksum pass (bytes hashed over elapsed; hash-CPU-bound
+   on fast media, so a `model_load` sample always replaces a `checksum` one, never vice versa).
+   Measured separation: ~70 MB/s on the stick vs 430+ on SSDs. Honesty guards (adversarial-review
+   round 2026-08-09): a `model_load` sample needs ≥ 2 GiB (parse/KV-alloc/graph-init fixed costs
+   must not dominate the window), a start whose install-state pass just HASHED the file records
+   no load sample (the hash warmed the page cache — the window would read RAM), and the download
+   verify never samples (it reads bytes the app just wrote). A fresh install has no sample yet —
+   Diagnostics shows *"not measured yet — starting a model measures it"*; once present the row
+   carries the sample's own date (the card's "Last run" describes the benchmark, not this row).
+   `driveReadMbps` itself is still computed and persisted (continuity for old blobs + the probe's
+   own `drive_benchmark` perf mark) but never displayed and never gates anything. Old persisted
+   `lastBenchmark` values (no `effectiveRead` field) render the "not measured" state — no
+   migration.
 4. **Tokens/sec** (`measureTokensPerSecond`): **optional**. Only runs when a runtime is
    active — it streams the prompt *"Write one sentence about privacy."* and times up to 64
    tokens. It is `null` when no runtime is running. Because `measureTokensPerSecond`
@@ -123,18 +138,41 @@ bad":
 
 - **TINY** → *"This device is best suited for the smallest, quickest model. Larger models may run slowly."*
 - **UNKNOWN** → a friendly "we picked a safe, lightweight model" note.
-- **Slow drive** (write `< SLOW_DRIVE_MBPS = 30` MB/s) → a non-blocking "models will
-  still work, but loading may take longer" note. Slow drives **warn, never block**. Gated on the
-  `fsync`-bound **write** figure only (audit 2026-07-16 F-35): the read probe is page-cached (see the
-  Drive-speed step above), so a `min(read, write)` gate never fired on the read leg — the write is the
-  honest signal.
+- **Slow read** (issue #110, the PRIMARY drive warning) → fires when the honest
+  `effectiveReadMbps` (see the Drive-speed step: a real model-load/checksum read, never the
+  page-cached probe leg) is `< SLOW_EFFECTIVE_READ_MBPS = 100` MB/s. The felt cost of a slow drive
+  is read-bound — every model start reads the whole GGUF at media speed (on RAM-constrained
+  machines even warm starts do, issue #107; measured 88–99 s per 9B start at ~70 MB/s vs 12–14 s
+  from an SSD) — so the copy names the consequence: *"Reading from this drive measured about
+  \<mbps\> MB/s. Starting a model reads its whole file at that speed, so model starts will be slow
+  on this drive."* Interpolated persist-canonical (the `{mbps}` value is baked in;
+  `INTERPOLATED_MAP_KEYS`). **No sample → no warning**: a fresh install never warns on missing
+  data. The 100 MB/s threshold separates the measured USB-stick class (~70) from SSDs (430+) and
+  stays above worst-case hash-CPU-bound checksum samples (136 measured).
+- **Slow drive** (write `< SLOW_DRIVE_MBPS = 30` MB/s) → the SECONDARY check for genuinely broken
+  media, unchanged copy: a non-blocking "models will still work, but loading may take longer"
+  note. Gated on the `fsync`-bound **write** figure only (audit 2026-07-16 F-35): the probe's read
+  leg is page-cached and never gates anything. Slow drives **warn, never block**.
 - **Drive un-measurable** → "drive speed could not be measured; recommendation uses RAM + CPU
-  only."
+  only." The slow-read warning is independent of this branch — a failed probe can ride alongside a
+  real read sample.
 - **Very low tok/s downgrade** (issue #52) → *"Text generation was very slow with the loaded
-  model (\<id\>), so the assigned profile was stepped down one level. …"* This is the one
-  **interpolated** persist-canonical warning: it is stored with the model id baked in, so the
-  renderer's display map reverse-matches it via a template regex (`INTERPOLATED_MAP_KEYS`)
-  instead of the exact-match set.
+  model (\<id\>), so the assigned profile was stepped down one level. …"* Interpolated
+  persist-canonical like the slow-read warning: stored with the model id baked in, reverse-matched
+  via a template regex (`INTERPOLATED_MAP_KEYS`) instead of the exact-match set.
+
+**Between benchmark runs** the slow-read warning is re-keyed IN PLACE by
+`persistEffectiveRead` (`upsertSlowReadWarning`): the only automatic benchmark runs on a fresh
+workspace — before any model (and thus any sample) exists — so without this the primary #110
+warning could never appear on the default journey, and a stale one could contradict the freshly
+updated "Measured read speed" row beside it. A fast sample removes it again; every other warning
+is a benchmark-time fact and is never touched.
+
+**Preflight reuse:** `runPreflight` feeds `buildWarnings` its 8 MB probe figures only — never an
+effective-read sample — so the Home-screen preflight note can only ever be one of the two
+probe-based drive notes. It selects that note by **exact canonical-English match** (a `/drive/i`
+word-regex would silently mis-bind once two drive-worded warnings can co-fire, and
+`PreflightResult.slowDriveWarning` holds a single string).
 
 ## Persistence
 
@@ -147,8 +185,14 @@ falling back to **`UNKNOWN`** until the user runs the benchmark for the first ti
 - `buildModelList({ profile, … })` (AI Model screen `recommended` flag).
 
 The Diagnostics screen surfaces a **Run benchmark** button and renders RAM / CPU / OS-arch /
-drive read-write / tokens-sec / assigned profile / recommended model + the warnings, and
-re-loads the last result from settings on mount.
+measured read speed (`effectiveRead`, with its source + GB context, or "not measured yet") /
+drive write / tokens-sec / assigned profile / recommended model + the warnings, and re-loads the
+last result from settings on mount. The `effectiveRead` field is additionally **updated in
+place** on the persisted result outside benchmark runs (`persistEffectiveRead` in
+`registerModelIpc`) as model starts / Models-screen visits / forced re-verifies observe fresh
+samples, and `runBenchmark` receives the latest sample **injected**
+(`RunBenchmarkDeps.effectiveRead`, the GPU-probe injection pattern — this module measures
+nothing itself), carried forward from the previous result so a re-run never loses it.
 
 ## Perf marks (opt-in, `HILBERTRAUM_PERF_LOG=1`)
 
@@ -173,9 +217,13 @@ Events: `app_ready`, `backend_init_done`, `window_ready_to_show`, `gate_visible`
 one renderer mark, allowlisted at the IPC boundary), `vault_unlocked` (kdf / decrypt
 split + DB bytes), `unlock_done`, `vault_lock_done` (checkpoint / encrypt / shred
 split), `install_state_done` (with `cacheHit`, separating a real multi-GB hash from a
-size+mtime cache hit), `sidecar_healthy`, `runtime_selected`, `runtime_ready`,
-`first_token`, `stream_done`, `embedder_selected`, `drive_benchmark`, and the
-`ingest_*` phase marks (`start`, `copy_done`, `parse_done`, `chunks_committed`,
+size+mtime cache hit), `checksum_start` / `checksum_done` (issue #106: one pair per
+REAL full-file hash wherever it runs — the cached model-weight path and the download
+verify alike — with a shared `seq` to pair interleaved hashes, `{modelId, file:
+weight|mmproj|download}`, bytes, ms, ok; each real hash also writes one plain `app.log`
+line, visible without the perf log), `sidecar_healthy`, `runtime_selected`,
+`runtime_ready`, `first_token`, `stream_done`, `embedder_selected`, `drive_benchmark`,
+and the `ingest_*` phase marks (`start`, `copy_done`, `parse_done`, `chunks_committed`,
 `embed_done`, `indexed`).
 
 Content rule, stricter than `app.log`: a mark carries only phase names, model and

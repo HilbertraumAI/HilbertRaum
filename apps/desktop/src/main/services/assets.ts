@@ -5,7 +5,15 @@ import { dirname, join, posix, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest, type ModelRole } from '../../shared/manifest'
 import type { OcrSources, RuntimeBuild, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
-import { mmprojPath, sha256File, verifyChecksum, weightPath, type HashStore } from './models'
+import {
+  beginChecksumInstrumentation,
+  mmprojPath,
+  sha256File,
+  verifyChecksum,
+  weightPath,
+  type ChecksumLabel,
+  type HashStore
+} from './models'
 
 // Asset loader — the CANONICAL, unit-tested reference for the DIY `fetch-*` scripts
 // (see docs/packaging.md).
@@ -86,6 +94,7 @@ export async function planModelDownloads(
           manifest.localPath,
           manifest.sha256,
           manifest.download,
+          'weight',
           opts
         )
       )
@@ -104,6 +113,7 @@ export async function planModelDownloads(
           manifest.mmproj.localPath,
           manifest.mmproj.sha256,
           manifest.mmproj.download,
+          'mmproj',
           opts
         )
       )
@@ -125,13 +135,20 @@ async function planOneFile(
   relPath: string,
   expectedSha256: string,
   download: DownloadSpec,
+  kind: 'weight' | 'mmproj',
   opts: PlanModelOptions
 ): Promise<ModelDownloadTask> {
   const placeholderHash = !isRealSha256(expectedSha256)
   const licenseApproved = manifest.licenseReview.status === 'approved'
 
-  // Is the file already present + verifiable?
-  const check = await verifyChecksum(dest, expectedSha256, opts.hashStore)
+  // Is the file already present + verifiable? (A stale present file is a real multi-GB
+  // hash — labelled for the #106 instrumentation like every other real hash. The kind
+  // comes from the call site, which knows which manifest slot it is planning — inferring
+  // it here by path comparison would silently mislabel any future third slot.)
+  const check = await verifyChecksum(dest, expectedSha256, opts.hashStore, undefined, {
+    modelId: manifest.id,
+    file: kind
+  })
   let status: ModelTaskStatus
   if (check.exists && check.matched === true) {
     status = 'present-verified'
@@ -343,13 +360,36 @@ export interface VerifyResult {
  * Verify a downloaded file against an expected SHA-256. A placeholder expected hash is
  * NOT a pass (returns `ok:false, reason:'placeholder'`) so an unverified artifact is
  * never silently trusted — capture the real hash with `verify-models --generate`.
+ *
+ * #106: the hash is instrumented HERE (one `checksum_start`/`checksum_done` pair + one
+ * app.log line per real hash), so every caller — the model download verify AND the
+ * engine-archive verify — is covered without each one remembering to wrap it. The
+ * `checksum_done.ok` field means "the hash ran to completion" (a mismatch still
+ * completed); the match outcome is the returned `VerifyResult`. Verify-after-download
+ * reads bytes the app just wrote (page-cache-resident), so the 'download' label is
+ * excluded from the #108 effective-read sampling at the recording site.
  */
 export async function verifyDownloadedFile(
   filePath: string,
-  expectedSha256: string
+  expectedSha256: string,
+  label: ChecksumLabel = { modelId: null, file: 'download' }
 ): Promise<VerifyResult> {
   if (!existsSync(filePath)) return { ok: false, actual: null, reason: 'missing' }
-  const actual = await sha256File(filePath)
+  let bytes: number | null = null
+  try {
+    bytes = statSync(filePath).size
+  } catch {
+    /* vanished between existsSync and stat — the stream error below reports it */
+  }
+  const instrumentation = beginChecksumInstrumentation(label, bytes)
+  let actual: string
+  try {
+    actual = await sha256File(filePath)
+    instrumentation.end(true)
+  } catch (err) {
+    instrumentation.end(false)
+    throw err
+  }
   if (!isRealSha256(expectedSha256)) return { ok: false, actual, reason: 'placeholder' }
   if (actual === expectedSha256) return { ok: true, actual }
   return { ok: false, actual, reason: 'mismatch' }

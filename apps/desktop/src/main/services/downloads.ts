@@ -415,7 +415,7 @@ export class DownloadManager {
         if (controller.signal.aborted) return false // keep the .part for resume
 
         job.status = 'verifying'
-        const verify = await (this.deps.verifyImpl ?? verifyDownloadedFile)(part, task.expectedSha256)
+        const verify = await this.verifyPart(part, task, job)
         // BE-4 (full-audit 2026-07-10): honour a cancel that landed DURING the hash — before
         // acting on the verify result. Same contract as a mid-download cancel: the `.part` is
         // kept for resume, nothing is renamed into place, and a two-file job stops here. The
@@ -522,6 +522,25 @@ export class DownloadManager {
   }
 
   /**
+   * The verify-after-download hash (#106): a real multi-GB model-weight hash that
+   * bypasses `sha256FileCached` (it hashes the staged `.part`, then `finishVerifiedFile`
+   * primes the cache). `verifyDownloadedFile` carries the instrumentation itself; this
+   * wrapper only supplies the model label. An injected `verifyImpl` (tests) is NOT
+   * instrumented — it does no real I/O.
+   */
+  private async verifyPart(
+    part: string,
+    task: ModelDownloadTask,
+    job: DownloadJob
+  ): Promise<VerifyResult> {
+    if (this.deps.verifyImpl) return this.deps.verifyImpl(part, task.expectedSha256)
+    return verifyDownloadedFile(part, task.expectedSha256, {
+      modelId: job.modelId,
+      file: 'download'
+    })
+  }
+
+  /**
    * Settle a `.part` that already holds the COMPLETE file (F-13): reached from the pre-download
    * size short-circuit or from a caught 416. Verify the staged bytes in place rather than
    * re-requesting an unsatisfiable `Range`. A matching (or placeholder) hash renames into
@@ -542,7 +561,7 @@ export class DownloadManager {
     this.deps.log?.('Completed .part found — verifying in place instead of resuming (F-13)', {
       modelId: job.modelId
     })
-    const verify = await (this.deps.verifyImpl ?? verifyDownloadedFile)(part, task.expectedSha256)
+    const verify = await this.verifyPart(part, task, job)
     // Honour a cancel that landed DURING the hash — keep the `.part` (BE-4 resume contract).
     if (controller.signal.aborted) {
       job.status = 'cancelled'

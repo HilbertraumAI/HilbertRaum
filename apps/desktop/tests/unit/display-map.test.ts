@@ -178,7 +178,9 @@ describe('localizeServerCopy (D-L4)', () => {
     // A new interpolated constant must land here with its params — or this fails loudly.
     const params: Partial<Record<MessageKey, MessageParams>> = {
       'main.ingest.unsupportedType': { ext: '.xyz' },
-      'main.benchmark.warnVeryLowTokens': { model: 'qwen3-30b-a3b-q4' }
+      'main.benchmark.warnVeryLowTokens': { model: 'qwen3-30b-a3b-q4' },
+      // #110: the slow-read warning carries the measured effective MB/s.
+      'main.benchmark.warnSlowRead': { mbps: 70 }
     }
     expect([...INTERPOLATED_MAP_KEYS].sort()).toEqual(Object.keys(params).sort())
     for (const key of INTERPOLATED_MAP_KEYS) {

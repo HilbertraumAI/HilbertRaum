@@ -184,6 +184,8 @@ describe('RuntimeManager.start() — B2 reset on failed start', () => {
     const p1 = mgr.start(opts) // opts.modelId === 'm'
     // The in-flight model is visible immediately (server truth for the disabled button).
     expect(mgr.status().startingModelId).toBe('m')
+    // #107: the "Starting…" window carries its elapsed time for honest load progress.
+    expect(mgr.status().starting?.elapsedMs).toBeGreaterThanOrEqual(0)
     const p2 = mgr.start(opts) // a double-click while m is still loading
     await new Promise((r) => setTimeout(r, 0)) // let m's start() run and arm the gate
     gate.release?.()
@@ -194,6 +196,7 @@ describe('RuntimeManager.start() — B2 reset on failed start', () => {
     expect(s1.running).toBe(true)
     expect(s2.running).toBe(true)
     expect(mgr.status().startingModelId).toBeNull() // cleared once settled
+    expect(mgr.status().starting).toBeUndefined() // #107: the window closed with it
   })
 
   // Starting the model that is ALREADY running is a no-op too (the AI Model screen shows

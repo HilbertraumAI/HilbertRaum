@@ -175,7 +175,9 @@ kept safely on the drive and secured at the next unlock — you don't lose the s
 
 - **Slow drive:** running from a slow USB stick makes model loading and indexing sluggish. Use
   a fast USB 3 / SSD drive, or copy the drive's contents to your computer. **Settings →
-  Diagnostics (advanced)** reports your drive's read/write speed and warns if it's slow.
+  Diagnostics (advanced)** shows the drive's **measured read speed** (taken from real model
+  loads — the number that decides how long model starts take) and its write speed, and warns
+  when the measured read speed means model starts will be slow.
 - **Heavy model for your laptop:** pick the **Recommended** model on the AI Model screen. The
   benchmark suggests a model that suits your RAM/CPU. Larger models are more capable but slower.
 - **First start of a model** is always slower (it loads into memory); later prompts are faster.

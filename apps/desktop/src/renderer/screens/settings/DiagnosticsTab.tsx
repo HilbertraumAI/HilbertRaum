@@ -3,6 +3,7 @@ import { Banner, Button, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
 import { localizeServerCopy } from '../../lib/displayMap'
 import { friendlyIpcError, runAndSurface } from '../../lib/errors'
+import { fmt1 } from '../../lib/format'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
   AppSettings,
@@ -102,15 +103,7 @@ function accelerationLabel(
   return t('diag.accel.cpu')
 }
 
-/** Locale-aware one-decimal number (file sizes / RAM) — grouping off so EN output
- *  stays byte-identical to the previous toFixed(1). */
-function fmt1(n: number, lang: UiLanguage): string {
-  return n.toLocaleString(lang, {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-    useGrouping: false
-  })
-}
+// fmt1 (one-decimal locale number) is shared with the Chat starting panel — lib/format.
 
 /** Locale-aware plain number (throughput: MB/s, tokens/s) — keeps the measured value
  *  as-is but routes the decimal separator + grouping through the UI language (M-U5,
@@ -168,6 +161,27 @@ function tokensPerSecondValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLang
     : value
 }
 
+/**
+ * The honest "Measured read speed" value (issue #108): the latest real multi-GB
+ * sequential read observed during normal use — a model load, or a full file check.
+ * Replaces the retired page-cache "(cached)" read figure (F-35), which was ~100×
+ * inflated on slow media and carried no information. Shared by the card row and the
+ * Copy text so the two can never disagree. Results persisted before the field existed
+ * (and fresh installs with no load window yet) render the "not measured" state.
+ */
+function effectiveReadValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
+  const sample = bench.effectiveRead
+  if (!sample) return t('diag.bench.effectiveReadNone')
+  const value = `${fmtNum(sample.mbps, lang)} MB/s`
+  const gb = fmt1(sample.bytes / 1e9, lang)
+  // The sample's own date, not the card's "Last run": `effectiveRead` is updated in
+  // place between benchmark runs, so the row must carry its own freshness.
+  const when = new Date(sample.at).toLocaleDateString(lang)
+  return sample.source === 'model_load'
+    ? `${value} (${t('diag.bench.effectiveReadLoad', { gb, when })})`
+    : `${value} (${t('diag.bench.effectiveReadHash', { gb, when })})`
+}
+
 /** Plain-text rendering of the "Hardware benchmark" card for the Copy button. */
 function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
   const lines = [
@@ -178,7 +192,7 @@ function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLang
     `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('diag.app.unknown')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')}`,
     `${t('diag.bench.osArch')}: ${bench.os || t('diag.app.unknown')} (${bench.arch || t('diag.app.unknown')})`,
     `${t('diag.bench.gpu')}: ${bench.gpu ?? t('diag.bench.notDetected')}`,
-    `${t('diag.bench.driveRead')}: ${bench.driveReadMbps != null ? `${fmtNum(bench.driveReadMbps, lang)} MB/s` : t('diag.bench.notMeasured')}`,
+    `${t('diag.bench.effectiveRead')}: ${effectiveReadValue(bench, t, lang)}`,
     `${t('diag.bench.driveWrite')}: ${bench.driveWriteMbps != null ? `${fmtNum(bench.driveWriteMbps, lang)} MB/s` : t('diag.bench.notMeasured')}`,
     `${t('diag.bench.tokens')}: ${tokensPerSecondValue(bench, t, lang)}`,
     `${t('diag.bench.lastRun')}: ${new Date(bench.ranAt).toLocaleString(lang)}`
@@ -458,12 +472,8 @@ export function DiagnosticsTab(): JSX.Element {
               </dd>
               <dt>{t('diag.bench.gpu')}</dt>
               <dd>{bench.gpu ?? t('diag.bench.notDetected')}</dd>
-              <dt>{t('diag.bench.driveRead')}</dt>
-              <dd>
-                {bench.driveReadMbps != null
-                  ? `${fmtNum(bench.driveReadMbps, lang)} MB/s`
-                  : t('diag.bench.notMeasured')}
-              </dd>
+              <dt>{t('diag.bench.effectiveRead')}</dt>
+              <dd>{effectiveReadValue(bench, t, lang)}</dd>
               <dt>{t('diag.bench.driveWrite')}</dt>
               <dd>
                 {bench.driveWriteMbps != null

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveDriveRootFromLauncher } from '../../src/main/services/launcher'
 import { runPreflight } from '../../src/main/services/preflight'
+import { t } from '../../src/shared/i18n'
 import type { DriveSpeed } from '../../src/main/services/benchmark'
 
 function tempDir(prefix: string): string {
@@ -86,10 +87,16 @@ describe('runPreflight', () => {
 
     const res = await runPreflight({ rootPath: root, measureSpeed: async () => slow })
 
-    expect(res.slowDriveWarning).toMatch(/slower/i)
+    // #110 hardened the binding from a /drive/i word-regex to an EXACT canonical-English
+    // match — pin byte equality so a copy or selection drift fails loudly here.
+    expect(res.slowDriveWarning).toBe(t('en', 'main.benchmark.warnSlowDrive'))
     expect(res.slowDriveWarning).not.toMatch(/bad/i)
     // Slow is not a blocker.
     expect(res.problems).toEqual([])
+    // The #110 read-keyed warning (interpolated MB/s) keys on an effective-read sample
+    // preflight deliberately never supplies — the preflight note can only ever be one of
+    // the two probe-based drive notes.
+    expect(res.slowDriveWarning).not.toContain('model starts will be slow')
   })
 
   it('flags a read-only drive as a problem (workspace cannot be created)', async () => {

@@ -34,7 +34,11 @@ const SIZES = {
   // #44/#46: short composer-strip components — no full-screen canvas needed.
   'skill-info-card': [820, 320],
   'skill-info-card-de': [820, 320],
-  'skill-run-result-offer': [820, 220]
+  'skill-run-result-offer': [820, 220],
+  // #108/#110/#107: Diagnostics benchmark card (tall) + the Chat starting-progress panel.
+  'diagnostics-read': [900, 1400],
+  'diagnostics-read-empty': [900, 1400],
+  'chat-starting-progress': [1100, 700]
 }
 // Per-case readiness selector: an element that only exists once the case's async chain
 // (mock window.api fetch → React state → re-render) has completed, so the poll below can
@@ -50,7 +54,11 @@ const READY = {
   'chat-warmup': '.chat-warmup-hint',
   'skill-info-card': '.skill-info-card',
   'skill-info-card-de': '.skill-info-card',
-  'skill-run-result-offer': '.skill-run-bar'
+  'skill-run-result-offer': '.skill-run-bar',
+  // The benchmark card's dl renders once lastBenchmark loaded; the progress bar once status did.
+  'diagnostics-read': '.benchmark-warnings',
+  'diagnostics-read-empty': '.kv',
+  'chat-starting-progress': '.progress'
 }
 
 // Marketing captures (preview.tsx marketing block): every shot renders as

@@ -79,8 +79,34 @@ first public release. Consciously-accepted gaps are tracked in
   ingestion phases) to `logs/perf.log`. Off by default; no file is created without the
   variable. Records the cold-load figures `docs/model-benchmarks.md` §11.4 lists as
   still missing. See `docs/benchmark.md` "Perf marks".
+- **Model checksum passes are visible now** (issue #106). Verifying a model's
+  multi-GB file — which can take minutes from a slow USB stick and used to run
+  with no trace anywhere — now writes one diagnostics-log line per real
+  verification (which model, how many bytes, how long), plus `checksum_start` /
+  `checksum_done` marks in the opt-in perf log. Overlapping verifications of the
+  same file (for example a start racing an AI Model screen visit) also no longer
+  each read the whole file — they share one pass.
+- **Honest progress while a model starts** (issue #107). Once the app has
+  measured your drive's real read speed, the Chat screen's "your model is
+  starting" panel shows the model file size and an approximate percentage read
+  instead of an indefinite spinner. Fresh installs (no measurement yet) keep the
+  plain message rather than showing a made-up number.
 
 ### Changed
+
+- **Diagnostics now shows a real read speed** (issue #108). The old "Drive read
+  (cached)" figure came from the operating system's memory cache and showed
+  four-digit MB/s numbers even on a slow USB stick — it is gone. In its place,
+  "Measured read speed" reports the throughput of the last real multi-GB read
+  the app performed (a model load or a full file check), the number that
+  actually decides how long model starts take. Shown as "not measured yet" until
+  the first model start.
+- **The slow-drive warning now keys on read speed** (issue #110). The warning
+  used to fire on slow *writes*, but what makes a slow drive painful is
+  *reading* — every model start reads the whole model file. It now fires when
+  the measured read speed is below 100 MB/s and says what that means ("model
+  starts will be slow on this drive"), naming the measured speed. The old
+  write-based warning remains as a secondary check for genuinely broken media.
 
 - **The recommended model now leads the picker** (issue #93 item 3). The AI Model
   screen's RAM-best-fit recommendation always ran unprompted, but the ★ card sat

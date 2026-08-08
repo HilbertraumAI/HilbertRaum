@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
@@ -7,6 +7,11 @@ import {
   WARMUP_PROMPT,
   type LlamaRungOptions
 } from '../../src/main/services/runtime/factory'
+import {
+  latestEffectiveRead,
+  MIN_READ_SAMPLE_MS,
+  resetEffectiveReadForTests
+} from '../../src/main/services/read-speed'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { UnexpectedExitInfo } from '../../src/main/services/runtime/sidecar'
@@ -49,6 +54,8 @@ function ladderHarness(config: {
   chatHangsUntilAbort?: boolean
   /** #109 cap override forwarded to the factory (avoid real 90 s waits in tests). */
   warmupTimeoutMs?: number
+  /** #108: successful starts await this long, so the load window passes the sample floor. */
+  startDelayMs?: number
 }) {
   const calls: LadderCall[] = []
   const failures: string[] = []
@@ -67,6 +74,7 @@ function ladderHarness(config: {
         if (index < (config.failFirst ?? 0)) {
           throw new Error(config.failMessage ?? `rung ${index + 1} failed to start`)
         }
+        if (config.startDelayMs) await new Promise((r) => setTimeout(r, config.startDelayMs))
       },
       stop: async () => {},
       health: async () => ({ healthy: true, message: 'ok', port: 5000 + index }),
@@ -674,5 +682,59 @@ describe('hidden warm-up generation (#109)', () => {
     // The latch holds: a late auto-start cannot spawn a fresh warm-up/runtime.
     await expect(mgr.start(opts)).rejects.toThrow(/shut down/i)
     expect(h.calls).toHaveLength(1)
+  })
+})
+
+// #108: the ladder records an honest effective-read sample (window bytes / elapsed) from
+// the FIRST rung of a walk only — a later rung re-reads a file the failed attempt
+// already pulled through the page cache, so its number would be inflated. `weightBytes`
+// (from the caller's manifest — covers a vision model's mmproj too) stands in for a
+// floor-sized on-disk fixture.
+describe('effective-read sample capture (#108)', () => {
+  const WEIGHT_BYTES = 6_000_000_000
+
+  beforeEach(() => resetEffectiveReadForTests())
+
+  it('a successful first-rung start records a model_load sample', async () => {
+    const h = ladderHarness({ probe: [RTX], startDelayMs: MIN_READ_SAMPLE_MS + 60 })
+    const runtime = h.factory({
+      modelId: 'm',
+      modelPath: '/w.gguf',
+      contextTokens: 2048,
+      weightBytes: WEIGHT_BYTES
+    })
+    await runtime.start()
+
+    const sample = latestEffectiveRead()
+    expect(sample).not.toBeNull()
+    expect(sample?.source).toBe('model_load')
+    expect(sample?.modelId).toBe('m')
+    expect(sample?.bytes).toBe(WEIGHT_BYTES)
+    expect(sample?.ms).toBeGreaterThanOrEqual(MIN_READ_SAMPLE_MS)
+  })
+
+  it('a start that succeeds on a LATER rung records nothing (page-cache-warm re-read)', async () => {
+    const h = ladderHarness({
+      probe: [RTX],
+      failFirst: 1,
+      startDelayMs: MIN_READ_SAMPLE_MS + 60
+    })
+    const runtime = h.factory({
+      modelId: 'm',
+      modelPath: '/w.gguf',
+      contextTokens: 2048,
+      weightBytes: WEIGHT_BYTES
+    })
+    await runtime.start()
+
+    expect(h.calls).toHaveLength(2) // rung 1 failed, rung 2 carried the start
+    expect(latestEffectiveRead()).toBeNull()
+  })
+
+  it('a missing weight path with no byte total records nothing and never disturbs the start', async () => {
+    const h = ladderHarness({ probe: [RTX], startDelayMs: MIN_READ_SAMPLE_MS + 60 })
+    const runtime = h.factory({ modelId: 'm', modelPath: '/no/such/w.gguf', contextTokens: 2048 })
+    await runtime.start()
+    expect(latestEffectiveRead()).toBeNull()
   })
 })

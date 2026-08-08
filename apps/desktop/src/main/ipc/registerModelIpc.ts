@@ -1,7 +1,16 @@
 import { ipcMain } from 'electron'
+import { statSync } from 'node:fs'
 import { EVENTS, IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { AppSettings, ModelInfo, ModelState, RuntimeInstallInfo, RuntimeStatus } from '../../shared/types'
+import type {
+  AppSettings,
+  EffectiveReadSample,
+  ModelInfo,
+  ModelState,
+  RuntimeInstallInfo,
+  RuntimeStatus
+} from '../../shared/types'
+import type { ModelManifest } from '../../shared/manifest'
 import { readRuntimeMarker } from '../services/assets'
 import { llamaServerDir } from '../services/runtime/sidecar'
 import {
@@ -13,10 +22,18 @@ import {
   invalidateChecksum,
   launchContextTokens,
   machineRamGb,
+  manifestFiles,
   selectModel,
   weightPath
 } from '../services/models'
-import { getSettings } from '../services/settings'
+import { getSettings, updateSettings } from '../services/settings'
+import {
+  latestEffectiveRead,
+  preferCandidate,
+  setEffectiveReadObserver,
+  suppressNextModelLoadSample
+} from '../services/read-speed'
+import { upsertSlowReadWarning } from '../services/benchmark'
 import { loadPolicy } from '../services/policy'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -79,12 +96,18 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     developerMode: lenient,
     hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
   })
+  const cacheHit = checksumCacheStats.computed === computedBefore
   perfMark('install_state_done', {
     modelId,
     state,
     ms: perfMs(installT0),
-    cacheHit: checksumCacheStats.computed === computedBefore
+    cacheHit
   })
+  // #108/F-35: a real hash just pulled the weight through the page cache, so the load
+  // window below would read RAM on a big-RAM machine — its sample would be the exact
+  // inflated-figure class this wave retires. Suppress it; the next un-hashed start
+  // samples honestly.
+  if (!cacheHit) suppressNextModelLoadSample()
   const mockFallback = state === 'missing' && lenient
   if (state !== 'installed' && !mockFallback) {
     // §7 voice: the problem and the next step; the raw state code stays in Diagnostics/logs.
@@ -143,7 +166,10 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     // The precedence lives in launchContextTokens (shared with the no-runtime doc-task
     // budget fallback — full-audit 2026-07-10 BE-5). Every downstream budget follows the
     // LAUNCHED window via ModelRuntime.contextWindow() (§L0).
-    contextTokens: launchContextTokens(s, found.manifest)
+    contextTokens: launchContextTokens(s, found.manifest),
+    // #107/#108: everything the load window reads (a vision model reads its mmproj
+    // projector too) — the progress denominator and the read-sample byte count.
+    weightBytes: manifestReadBytes(ctx.paths.rootPath, found.manifest)
   })
   perfMark('runtime_ready', {
     modelId,
@@ -154,7 +180,98 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     modelId,
     backend: status.backend ?? null
   })
+  // #108: the load window (and/or the hash above) may have produced a fresh honest
+  // read sample — fold it into the persisted benchmark result.
+  persistEffectiveRead(ctx)
   return status
+}
+
+/**
+ * Total bytes a start of this manifest will read (GGUF + a vision model's mmproj), or
+ * null when any file is un-stattable — the #107 progress denominator and the #108
+ * read-sample byte count. Never throws (an escaping mmproj path or vanished file just
+ * degrades to the manager's bare modelPath stat).
+ */
+function manifestReadBytes(rootPath: string, manifest: ModelManifest): number | null {
+  try {
+    let total = 0
+    for (const f of manifestFiles(rootPath, manifest)) total += statSync(f.path).size
+    return total
+  } catch {
+    return null
+  }
+}
+
+/** The `at` of the sample most recently written to settings — lets the persist helper
+ *  no-op without a settings read on every poll/list call once a sample is stored. */
+let lastPersistedAt: string | null = null
+
+/** #107: the effective-read sample resolved once per "Starting…" window (keyed on the
+ *  starting model), so the 2.5 s status poll never re-reads settings mid-window. A
+ *  sample landing MID-window (rare: a concurrent cold hash) is picked up next window. */
+let startingSampleMemo: { forModelId: string; sample: EffectiveReadSample | null } | null = null
+
+/**
+ * Fold the session's latest honest effective-read sample (services/read-speed.ts) into
+ * the persisted `settings.lastBenchmark` (#108) — AND re-key the one warning that
+ * tracks it (#110, `upsertSlowReadWarning`): the only automatic benchmark runs before
+ * any model exists, so without this the primary slow-read warning would never appear on
+ * the default journey, and a stale one could contradict the freshly updated Diagnostics
+ * row beside it. Registered as the read-speed OBSERVER (fires on every recorded sample,
+ * including a background download path with no model IPC afterwards) and also invoked
+ * after start/list/verify as cheap retries for samples whose observer-time persist hit
+ * a locked workspace. The cross-session source ranking is enforced here too
+ * (`preferCandidate`): a fresh session's checksum sample never overwrites last
+ * session's persisted model-load sample. Never throws (persistGpuFailure precedent).
+ */
+function persistEffectiveRead(ctx: AppContext): void {
+  try {
+    const sample = latestEffectiveRead()
+    if (!sample || sample.at === lastPersistedAt) return
+    const lastBenchmark = getSettings(ctx.db).lastBenchmark
+    if (!lastBenchmark) return
+    if (lastBenchmark.effectiveRead?.at === sample.at) {
+      lastPersistedAt = sample.at
+      return
+    }
+    if (!preferCandidate(sample, lastBenchmark.effectiveRead)) {
+      // The persisted sample outranks this one — mark it handled so the next call
+      // doesn't re-read settings just to lose the same comparison.
+      lastPersistedAt = sample.at
+      return
+    }
+    updateSettings(ctx.db, {
+      lastBenchmark: {
+        ...lastBenchmark,
+        effectiveRead: sample,
+        warnings: upsertSlowReadWarning(lastBenchmark.warnings ?? [], sample.mbps)
+      }
+    })
+    lastPersistedAt = sample.at
+  } catch (err) {
+    log.warn('Could not persist the effective-read sample', { error: String(err) })
+  }
+}
+
+/**
+ * The current effective-read sample for consumers OUTSIDE the recording path (#108):
+ * this session's latch vs the persisted one under the SAME source ranking the latch
+ * itself uses (`preferCandidate`) — so a session checksum sample never shadows last
+ * session's persisted model-load sample here either (it would bake the worse figure
+ * into a fresh benchmark's warnings, or a wrong #107 estimate). The single definition
+ * of this fallback, shared by the benchmark injection and the progress estimate; a
+ * settings error (locked workspace) reads as latch-only.
+ */
+export function effectiveReadOrPersisted(ctx: AppContext): EffectiveReadSample | null {
+  const latched = latestEffectiveRead()
+  let persisted: EffectiveReadSample | null = null
+  try {
+    persisted = getSettings(ctx.db).lastBenchmark?.effectiveRead ?? null
+  } catch {
+    persisted = null
+  }
+  if (!latched) return persisted
+  return preferCandidate(latched, persisted) ? latched : persisted
 }
 
 /**
@@ -189,6 +306,12 @@ export function maybeAutoStartActiveModel(ctx: AppContext): void {
 }
 
 export function registerModelIpc(ctx: AppContext): void {
+  // #108: persistence is a property of RECORDING — the observer fires on every sample
+  // (including one from a background download's cold-file hash, which has no model IPC
+  // afterwards to piggyback on). The explicit persistEffectiveRead calls after
+  // start/list/verify remain as cheap retries for observer-time persists that hit a
+  // locked workspace.
+  setEffectiveReadObserver(() => persistEffectiveRead(ctx))
   // F16 (audit-postmerge-2026-06-29): the DB-touching model handlers (list/select/verify/start all
   // read ctx.db via getSettings/selectModel/computeInstallState) fail-close when locked but throw
   // the raw English vault string; gate them with the localized copy (parity). stopRuntime + the two
@@ -231,6 +354,8 @@ export function registerModelIpc(ctx: AppContext): void {
     if (manifestErrors.length > 0) {
       log.warn('Invalid model manifests skipped', manifestErrors)
     }
+    // #108: a cold-cache visit just hashed real multi-GB files — persist any fresh sample.
+    persistEffectiveRead(ctx)
     return models
   })
 
@@ -253,13 +378,20 @@ export function registerModelIpc(ctx: AppContext): void {
     const found = manifests.find((m) => m.manifest.id === modelId)
     if (!found) throw new Error(`Unknown model id: ${modelId}`)
     const store = createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
-    invalidateChecksum(weightPath(ctx.paths.rootPath, found.manifest), store)
+    // Invalidate EVERY file the manifest carries (#106 adjacent fix): this used to drop
+    // only the GGUF's cache entry, so "Verify checksum" on a vision model re-hashed the
+    // weight but silently served the mmproj projector from cache.
+    for (const f of manifestFiles(ctx.paths.rootPath, found.manifest)) {
+      invalidateChecksum(f.path, store)
+    }
     const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
       developerMode: developerLeniency(ctx, getSettings(ctx.db)),
       hashStore: store
     })
     log.info('Model re-verified', { modelId, state })
     ctx.audit?.('model_verified', `Model checksum re-verified: ${modelId}`, { modelId, state })
+    // #108: the forced re-hash is a real full-file read — persist any fresh sample.
+    persistEffectiveRead(ctx)
     return state
   })
 
@@ -344,6 +476,28 @@ export function registerModelIpc(ctx: AppContext): void {
       } catch {
         /* settings unreadable (e.g. just locked) — the plain status still serves */
       }
+    }
+    // #107: enrich the "Starting…" window with an expected load duration from the
+    // honest effective-read sample (#108). `bytesTotal` already rides the status (the
+    // manager resolves it once per window); the sample is memoized per window too, so a
+    // poll tick costs no settings read and no I/O — the pre-review shape re-scanned the
+    // manifests dir + statted the weight on every 2.5 s tick, against the same drive
+    // the load was saturating. Best-effort: no sample (fresh install) → expectedMs stays
+    // absent → the indeterminate line.
+    if (status.startingModelId && status.starting) {
+      if (startingSampleMemo?.forModelId !== status.startingModelId) {
+        startingSampleMemo = {
+          forModelId: status.startingModelId,
+          sample: effectiveReadOrPersisted(ctx)
+        }
+      }
+      const sample = startingSampleMemo.sample
+      const bytesTotal = status.starting.bytesTotal
+      if (sample && sample.mbps > 0 && bytesTotal != null) {
+        status.starting.expectedMs = Math.round((bytesTotal / 1e6 / sample.mbps) * 1000)
+      }
+    } else {
+      startingSampleMemo = null
     }
     return status
   })

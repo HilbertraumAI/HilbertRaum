@@ -105,6 +105,12 @@ export const en = {
   'chat.noModel.starting':
     'Your model is starting — large models take a little while to load. This screen ' +
     'continues automatically once it is ready.',
+  // #107: shown instead of the indeterminate line when the load has an honest estimate
+  // (file size over the measured read speed). "About" is deliberate — it is an estimate,
+  // not a byte counter.
+  'chat.noModel.startingProgress':
+    'Your model is starting — reading the model file ({gb} GB), about {pct}% so far. This ' +
+    'screen continues automatically once it is ready.',
   'chat.noModel.open': 'Open AI Model',
   'chat.noModel.recheck': 'Re-check',
   'chat.empty.title': 'Ask a question, or ask about your documents.',
@@ -1586,10 +1592,13 @@ export const en = {
   'diag.bench.osArch': 'OS / arch',
   'diag.bench.gpu': 'GPU',
   'diag.bench.notDetected': 'not detected',
-  // F-35 (audit 2026-07-16): the read probe reads the 8 MB file back from the OS page cache, so the
-  // figure reflects RAM, not the drive — labelled "(cached)" so it is not read as a real drive speed.
-  // The honest headline is Drive write (fsync-bound); the slow-drive warning is driven by write.
-  'diag.bench.driveRead': 'Drive read (cached)',
+  // #108 (F-35 resolution): the probe's page-cache read figure is retired from display — this
+  // row shows the honest effective read speed instead, measured from real multi-GB reads the
+  // app performs anyway (a model load, or a full file check). Absent until the first such read.
+  'diag.bench.effectiveRead': 'Measured read speed',
+  'diag.bench.effectiveReadNone': 'not measured yet — starting a model measures it',
+  'diag.bench.effectiveReadLoad': 'from a model load on {when}, {gb} GB read',
+  'diag.bench.effectiveReadHash': 'from a file check on {when}, {gb} GB read',
   'diag.bench.driveWrite': 'Drive write',
   'diag.bench.notMeasured': 'not measured',
   'diag.bench.tokens': 'Tokens / sec',
@@ -1773,6 +1782,12 @@ export const en = {
     'Drive speed could not be measured, so the recommendation uses RAM and CPU only.',
   'main.benchmark.warnSlowDrive':
     'This drive is on the slower side. Models will still work, but loading them may take longer.',
+  // Interpolated persist-canonical (#110): carries the measured effective read speed, so the
+  // display map reverse-matches it via a template regex (INTERPOLATED_MAP_KEYS), not exact match.
+  // Names the consequence (model starts) rather than a generic slow-drive line.
+  'main.benchmark.warnSlowRead':
+    'Reading from this drive measured about {mbps} MB/s. Starting a model reads its whole ' +
+    'file at that speed, so model starts will be slow on this drive.',
   // Interpolated persist-canonical (issue #52): carries the measured model's id, so the display
   // map reverse-matches it via a template regex (INTERPOLATED_MAP_KEYS), not exact match.
   'main.benchmark.warnVeryLowTokens':
