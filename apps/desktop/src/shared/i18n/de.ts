@@ -1841,6 +1841,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.benchmark.warnSlowDrive':
     'Dieses Laufwerk ist eher langsam. Modelle funktionieren trotzdem, das Laden kann aber ' +
     'länger dauern.',
+  'main.benchmark.warnSlowRead':
+    'Das Lesen von diesem Laufwerk lag bei etwa {mbps} MB/s. Beim Modellstart wird die ganze ' +
+    'Modelldatei mit dieser Geschwindigkeit gelesen, Modellstarts dauern auf diesem Laufwerk ' +
+    'daher lange.',
   'main.benchmark.warnVeryLowTokens':
     'Die Textgenerierung war mit dem geladenen Modell ({model}) sehr langsam, daher wurde ' +
     'das zugewiesene Profil eine Stufe herabgesetzt. Wenn dieses Modell größer ist als das ' +

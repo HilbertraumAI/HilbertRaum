@@ -1776,6 +1776,12 @@ export const en = {
     'Drive speed could not be measured, so the recommendation uses RAM and CPU only.',
   'main.benchmark.warnSlowDrive':
     'This drive is on the slower side. Models will still work, but loading them may take longer.',
+  // Interpolated persist-canonical (#110): carries the measured effective read speed, so the
+  // display map reverse-matches it via a template regex (INTERPOLATED_MAP_KEYS), not exact match.
+  // Names the consequence (model starts) rather than a generic slow-drive line.
+  'main.benchmark.warnSlowRead':
+    'Reading from this drive measured about {mbps} MB/s. Starting a model reads its whole ' +
+    'file at that speed, so model starts will be slow on this drive.',
   // Interpolated persist-canonical (issue #52): carries the measured model's id, so the display
   // map reverse-matches it via a template regex (INTERPOLATED_MAP_KEYS), not exact match.
   'main.benchmark.warnVeryLowTokens':

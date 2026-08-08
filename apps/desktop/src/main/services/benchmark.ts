@@ -26,8 +26,21 @@ import { recommendModelId, recommendModelIdByRam } from './models'
 
 /** Tokens/sec at or below this count as "very low" and downgrade the profile one step (spec §11.3). */
 export const VERY_LOW_TOKENS_PER_SECOND = 3
-/** Drive throughput below this (MB/s) earns a non-blocking "slow drive" warning (spec §11.3). */
+/** Drive WRITE throughput below this (MB/s) earns a non-blocking "slow drive" warning
+ *  (spec §11.3). Calibrated against the fsync-bound write leg of the 8 MB probe; kept as
+ *  the secondary check for genuinely broken media after #110 re-keyed the primary
+ *  warning to the honest effective READ figure below. */
 export const SLOW_DRIVE_MBPS = 30
+/**
+ * Effective READ throughput below this (MB/s) earns the slow-read warning (#110). The
+ * felt cost of a slow drive is read-bound: every model start reads the whole GGUF at
+ * media speed (on RAM-constrained machines even warm starts do — issue #107), measured
+ * 88–99 s per 9B start at ~70 MB/s effective read vs 12–14 s from an SSD. 100 MB/s
+ * separates the USB-stick class (~70) from SSDs (430+ measured) with margin on both
+ * sides; checksum-pass samples are hash-CPU-bound at a few hundred MB/s and stay above
+ * it on any healthy SSD (#108 measured 136 MB/s worst-case).
+ */
+export const SLOW_EFFECTIVE_READ_MBPS = 100
 /** Size of the temp file written to probe drive speed. Small + bounded so the UI never hangs. */
 export const DRIVE_PROBE_BYTES = 8 * 1024 * 1024 // 8 MB
 /** Bytes per gigabyte (GiB) used to convert total memory for classification + display. */
@@ -239,6 +252,14 @@ export interface WarningInputs {
   tokensDowngraded?: boolean
   /** Model the tokens/sec probe streamed through — named in the downgrade warning (issue #52). */
   measuredModelId?: string | null
+  /**
+   * Honest effective read MB/s (#108/#110) — from a REAL model-load/checksum read, never
+   * the probe's page-cached read leg. Gates the slow-read warning; null/absent (no
+   * qualifying read yet — a fresh install) never warns. Preflight deliberately does not
+   * supply it (its 8 MB probe has no honest read), so the slow-read warning can never
+   * appear in the preflight note.
+   */
+  effectiveReadMbps?: number | null
 }
 
 /**
@@ -267,13 +288,23 @@ export function buildWarnings(input: WarningInputs): string[] {
     warnings.push(t('en', 'main.benchmark.warnVeryLowTokens', { model: input.measuredModelId }))
   }
 
+  // #110: the PRIMARY drive warning — keyed on the honest effective READ figure, which is
+  // what the user actually feels (model starts read the whole file at this speed). Fires
+  // independently of the probe branches below: the probe can fail while real loads still
+  // produced a read sample. No sample (fresh install) → no warning, never a guess.
+  if (input.effectiveReadMbps != null && input.effectiveReadMbps < SLOW_EFFECTIVE_READ_MBPS) {
+    warnings.push(
+      t('en', 'main.benchmark.warnSlowRead', { mbps: Math.round(input.effectiveReadMbps) })
+    )
+  }
+
   if (input.driveError) {
     warnings.push(t('en', 'main.benchmark.warnDriveProbe'))
   } else if (input.driveWriteMbps != null && input.driveWriteMbps < SLOW_DRIVE_MBPS) {
-    // F-35 (audit 2026-07-16): gate on the fsync-bound WRITE figure only. The read probe reads back a
-    // page-cached file (RAM speed, ~100× inflated on slow media), so a `min(read, write)` gate never
-    // fired on the read leg anyway — using write alone makes the code match the honest "(cached)" read
-    // label and the documented "write < SLOW_DRIVE_MBPS" condition (benchmark.md).
+    // F-35 (audit 2026-07-16): gate on the fsync-bound WRITE figure only — the probe's read
+    // leg is page-cache-served (RAM speed) and never gates anything. Since #110 this write
+    // gate is the SECONDARY check (genuinely broken media: fsync writes below 30 MB/s);
+    // the primary felt-cost warning is the effective-read gate above.
     warnings.push(t('en', 'main.benchmark.warnSlowDrive'))
   }
 
@@ -346,7 +377,8 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     driveWriteMbps: drive.writeMbps,
     driveError: drive.error,
     tokensDowngraded,
-    measuredModelId
+    measuredModelId,
+    effectiveReadMbps: deps.effectiveRead?.mbps ?? null
   })
 
   return {

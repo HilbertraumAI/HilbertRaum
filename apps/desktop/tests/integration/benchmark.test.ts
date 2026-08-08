@@ -23,8 +23,10 @@ import {
   buildWarnings,
   runBenchmark,
   VERY_LOW_TOKENS_PER_SECOND,
-  SLOW_DRIVE_MBPS
+  SLOW_DRIVE_MBPS,
+  SLOW_EFFECTIVE_READ_MBPS
 } from '../../src/main/services/benchmark'
+import { t } from '../../src/shared/i18n'
 import { gpuUsefulForProfile } from '../../src/main/services/runtime/gpu'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { GpuDevice } from '../../src/shared/types'
@@ -330,6 +332,49 @@ describe('buildWarnings', () => {
     const base = { profile: 'BALANCED' as const, driveReadMbps: 500, driveWriteMbps: 500 }
     expect(buildWarnings({ ...base, tokensDowngraded: false, measuredModelId: 'mock-chat' })).toEqual([])
     expect(buildWarnings({ ...base, tokensDowngraded: true, measuredModelId: null })).toEqual([])
+  })
+
+  // #110: the PRIMARY drive warning keys on the honest effective READ figure (what model
+  // starts actually feel); the write gate stays as the secondary broken-media check. The
+  // full {slow read, fast read, no data} × {slow write, fast write} matrix, so the gate
+  // can never silently rot into a vacuous fixture (the pre-#110 tests set only the two
+  // probe fields and would stay green with the read gate broken).
+  it('warns on slow effective read × write matrix — read is primary, write secondary, no data never warns', () => {
+    const slowRead = t('en', 'main.benchmark.warnSlowRead', { mbps: 70 })
+    const slowWrite = t('en', 'main.benchmark.warnSlowDrive')
+    const cell = (effectiveReadMbps: number | null, driveWriteMbps: number): string[] =>
+      buildWarnings({
+        profile: 'BALANCED',
+        driveReadMbps: 2000, // the page-cached probe leg — must never gate anything
+        driveWriteMbps,
+        effectiveReadMbps
+      })
+
+    expect(cell(70.4, 7)).toEqual([slowRead, slowWrite]) // both slow → both warn
+    expect(cell(70.4, 400)).toEqual([slowRead]) // the stick case: fine write, painful read
+    expect(cell(500, 7)).toEqual([slowWrite]) // broken-media write check still fires alone
+    expect(cell(500, 400)).toEqual([]) // healthy on both axes
+    expect(cell(null, 7)).toEqual([slowWrite]) // no read data → never a read warning
+    expect(cell(null, 400)).toEqual([]) // fresh install, healthy write → silent
+    // Boundary: exactly the threshold is NOT slow.
+    expect(cell(SLOW_EFFECTIVE_READ_MBPS, 400)).toEqual([])
+    expect(cell(SLOW_EFFECTIVE_READ_MBPS - 0.1, 400)).toHaveLength(1)
+  })
+
+  it('the read warning rides an errored probe (independent branches) and names the consequence', () => {
+    const w = buildWarnings({
+      profile: 'BALANCED',
+      driveReadMbps: null,
+      driveWriteMbps: null,
+      driveError: 'EACCES',
+      effectiveReadMbps: 42
+    })
+    expect(w).toEqual([
+      t('en', 'main.benchmark.warnSlowRead', { mbps: 42 }),
+      t('en', 'main.benchmark.warnDriveProbe')
+    ])
+    expect(w[0]).toContain('model starts will be slow')
+    expect(w[0]).toContain('42 MB/s')
   })
 })
 

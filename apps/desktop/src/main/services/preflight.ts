@@ -1,5 +1,6 @@
 import { resolvePaths, buildDriveStatus } from './workspace'
 import { measureDriveSpeed, buildWarnings, type DriveSpeed } from './benchmark'
+import { t } from '../../shared/i18n'
 import { tMain } from './i18n'
 import type { PreflightResult } from '../../shared/types'
 
@@ -45,9 +46,11 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
   const status = await buildDriveStatus(paths)
 
   // Reuse the benchmark drive-speed probe + warning copy. Passing the neutral 'BALANCED'
-  // profile skips `buildWarnings`' TINY/UNKNOWN (hardware) branches, so today it can only
-  // emit a drive note — but select it by content rather than by index, so a future
-  // BALANCED-profile warning cannot be misreported as the slow-drive note.
+  // profile skips `buildWarnings`' TINY/UNKNOWN (hardware) branches, and the effective-read
+  // gate (#110) is deliberately NOT fed (the 8 MB probe has no honest read figure — F-35),
+  // so only the two probe-based drive notes can appear here. Select by EXACT canonical
+  // English match — a word-regex (/drive/i) would silently mis-bind the moment a second
+  // drive-worded warning co-fires, and `PreflightResult.slowDriveWarning` holds one string.
   const speed = await measure(paths.workspacePath)
   const driveWarnings = buildWarnings({
     profile: 'BALANCED',
@@ -55,7 +58,11 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
     driveWriteMbps: speed.writeMbps,
     driveError: speed.error
   })
-  const slowDriveWarning = driveWarnings.find((w) => /drive/i.test(w)) ?? null
+  const reusedDriveNotes = new Set([
+    t('en', 'main.benchmark.warnDriveProbe'),
+    t('en', 'main.benchmark.warnSlowDrive')
+  ])
+  const slowDriveWarning = driveWarnings.find((w) => reusedDriveNotes.has(w)) ?? null
 
   // Problems are ephemeral (IPC response only) — localized at emission via tMain
   // (i18n record §3.3 rule 2). slowDriveWarning above stays canonical English: it comes
