@@ -47,11 +47,17 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    (`services/read-speed.ts`): the model-load window (file size over the first ladder rung's
    spawn-to-healthy elapsed) or a completed checksum pass (bytes hashed over elapsed; hash-CPU-bound
    on fast media, so a `model_load` sample always replaces a `checksum` one, never vice versa).
-   Measured separation: ~70 MB/s on the stick vs 430+ on SSDs. A fresh install has no sample yet —
-   Diagnostics shows *"not measured yet — starting a model measures it"*. `driveReadMbps` itself is
-   still computed and persisted (continuity for old blobs + the probe's own `drive_benchmark` perf
-   mark) but never displayed and never gates anything. Old persisted `lastBenchmark` values (no
-   `effectiveRead` field) render the "not measured" state — no migration.
+   Measured separation: ~70 MB/s on the stick vs 430+ on SSDs. Honesty guards (adversarial-review
+   round 2026-08-09): a `model_load` sample needs ≥ 2 GiB (parse/KV-alloc/graph-init fixed costs
+   must not dominate the window), a start whose install-state pass just HASHED the file records
+   no load sample (the hash warmed the page cache — the window would read RAM), and the download
+   verify never samples (it reads bytes the app just wrote). A fresh install has no sample yet —
+   Diagnostics shows *"not measured yet — starting a model measures it"*; once present the row
+   carries the sample's own date (the card's "Last run" describes the benchmark, not this row).
+   `driveReadMbps` itself is still computed and persisted (continuity for old blobs + the probe's
+   own `drive_benchmark` perf mark) but never displayed and never gates anything. Old persisted
+   `lastBenchmark` values (no `effectiveRead` field) render the "not measured" state — no
+   migration.
 4. **Tokens/sec** (`measureTokensPerSecond`): **optional**. Only runs when a runtime is
    active — it streams the prompt *"Write one sentence about privacy."* and times up to 64
    tokens. It is `null` when no runtime is running. Because `measureTokensPerSecond`
@@ -154,6 +160,13 @@ bad":
   model (\<id\>), so the assigned profile was stepped down one level. …"* Interpolated
   persist-canonical like the slow-read warning: stored with the model id baked in, reverse-matched
   via a template regex (`INTERPOLATED_MAP_KEYS`) instead of the exact-match set.
+
+**Between benchmark runs** the slow-read warning is re-keyed IN PLACE by
+`persistEffectiveRead` (`upsertSlowReadWarning`): the only automatic benchmark runs on a fresh
+workspace — before any model (and thus any sample) exists — so without this the primary #110
+warning could never appear on the default journey, and a stale one could contradict the freshly
+updated "Measured read speed" row beside it. A fast sample removes it again; every other warning
+is a benchmark-time fact and is never touched.
 
 **Preflight reuse:** `runPreflight` feeds `buildWarnings` its 8 MB probe figures only — never an
 effective-read sample — so the Home-screen preflight note can only ever be one of the two

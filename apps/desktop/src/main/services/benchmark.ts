@@ -12,6 +12,7 @@ import { performance } from 'node:perf_hooks'
 import { randomFillSync } from 'node:crypto'
 import { t } from '../../shared/i18n'
 import { perfMark } from './perf'
+import { throughputMbps } from './read-speed'
 import type { ModelManifest } from '../../shared/manifest'
 import type { BenchmarkResult, EffectiveReadSample, HardwareProfile } from '../../shared/types'
 import type { ModelRuntime } from './runtime'
@@ -195,11 +196,10 @@ export async function measureDriveSpeed(workspacePath: string): Promise<DriveSpe
   }
 }
 
-/** MB/s from a byte count + elapsed ms (MB = 1e6 bytes). null when the timing is unusable. */
-function throughputMbps(bytes: number, ms: number): number | null {
-  if (!Number.isFinite(ms) || ms <= 0) return null
-  return Math.round(((bytes / 1e6 / (ms / 1000)) + Number.EPSILON) * 10) / 10
-}
+// `throughputMbps` (the single MB/s definition) lives in read-speed.ts — imported above
+// so the probe figures and the effective-read samples can never disagree on what "MB/s"
+// means. (The import direction matters: read-speed.ts is a leaf; importing this module
+// from there would cycle through models.ts.)
 
 /** Prompt used for the short tokens/sec probe (spec §11.2 step 7). */
 export const BENCHMARK_PROMPT = 'Write one sentence about privacy.'
@@ -293,9 +293,7 @@ export function buildWarnings(input: WarningInputs): string[] {
   // independently of the probe branches below: the probe can fail while real loads still
   // produced a read sample. No sample (fresh install) → no warning, never a guess.
   if (input.effectiveReadMbps != null && input.effectiveReadMbps < SLOW_EFFECTIVE_READ_MBPS) {
-    warnings.push(
-      t('en', 'main.benchmark.warnSlowRead', { mbps: Math.round(input.effectiveReadMbps) })
-    )
+    warnings.push(slowReadWarning(input.effectiveReadMbps))
   }
 
   if (input.driveError) {
@@ -309,6 +307,37 @@ export function buildWarnings(input: WarningInputs): string[] {
   }
 
   return warnings
+}
+
+/** The canonical slow-read warning string for a measured MB/s (#110). Math.floor, not
+ *  round: a 99.6 sample must not warn "about 100 MB/s" while the gate documents
+ *  "< 100" — the named figure always satisfies the condition the copy claims. */
+function slowReadWarning(effectiveReadMbps: number): string {
+  return t('en', 'main.benchmark.warnSlowRead', { mbps: Math.floor(effectiveReadMbps) })
+}
+
+/** Matches any persisted slow-read warning (whatever `{mbps}` it named) — the main-side
+ *  twin of the renderer display map's template regex. */
+const SLOW_READ_WARNING_RE = new RegExp(
+  `^${t('en', 'main.benchmark.warnSlowRead', { mbps: '@@MBPS@@' })
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace('@@MBPS@@', '\\d+')}$`
+)
+
+/**
+ * Re-key the ONE warning that tracks `effectiveRead` against a fresh sample (#110):
+ * drop any previously persisted slow-read warning and append the current one when the
+ * sample is below the gate. `buildWarnings` computes the full set only at benchmark
+ * time, but the sample is updated in place between runs (`persistEffectiveRead`) — on
+ * the default journey the ONLY automatic benchmark runs before any model exists, so
+ * without this the primary #110 warning would never appear (and a stale one could
+ * contradict the freshly updated Diagnostics row above it). All other warnings are
+ * benchmark-time facts and pass through untouched.
+ */
+export function upsertSlowReadWarning(warnings: string[], effectiveReadMbps: number): string[] {
+  const kept = warnings.filter((w) => !SLOW_READ_WARNING_RE.test(w))
+  if (effectiveReadMbps < SLOW_EFFECTIVE_READ_MBPS) kept.push(slowReadWarning(effectiveReadMbps))
+  return kept
 }
 
 /** The GPU probe summary INJECTED into the benchmark (architecture.md GPU record §5.1/§8). */

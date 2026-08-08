@@ -15,12 +15,7 @@ import {
   type ModelDownloadTask,
   type VerifyResult
 } from './assets'
-import {
-  beginChecksumInstrumentation,
-  invalidateChecksum,
-  primeChecksum,
-  type HashStore
-} from './models'
+import { invalidateChecksum, primeChecksum, type HashStore } from './models'
 
 // In-app model downloader (architecture.md "In-app model downloader"). A thin job
 // state machine over the `assets.ts` seams: `planModelDownloads` (license gate +
@@ -527,10 +522,10 @@ export class DownloadManager {
   }
 
   /**
-   * The verify-after-download hash, instrumented (#106): this is the one real multi-GB
-   * model-weight hash that bypasses `sha256FileCached` (it hashes the staged `.part`, then
-   * `finishVerifiedFile` primes the cache), so it carries its own `checksum_start`/
-   * `checksum_done` mark pair + app.log line. An injected `verifyImpl` (tests) is NOT
+   * The verify-after-download hash (#106): a real multi-GB model-weight hash that
+   * bypasses `sha256FileCached` (it hashes the staged `.part`, then `finishVerifiedFile`
+   * primes the cache). `verifyDownloadedFile` carries the instrumentation itself; this
+   * wrapper only supplies the model label. An injected `verifyImpl` (tests) is NOT
    * instrumented — it does no real I/O.
    */
   private async verifyPart(
@@ -539,24 +534,10 @@ export class DownloadManager {
     job: DownloadJob
   ): Promise<VerifyResult> {
     if (this.deps.verifyImpl) return this.deps.verifyImpl(part, task.expectedSha256)
-    let bytes: number | null = null
-    try {
-      bytes = statSync(part).size
-    } catch {
-      /* vanished — verifyDownloadedFile reports 'missing' */
-    }
-    const instrumentation = beginChecksumInstrumentation(
-      { modelId: job.modelId, file: 'download' },
-      bytes
-    )
-    try {
-      const verify = await verifyDownloadedFile(part, task.expectedSha256)
-      instrumentation.end(verify.actual !== null)
-      return verify
-    } catch (err) {
-      instrumentation.end(false)
-      throw err
-    }
+    return verifyDownloadedFile(part, task.expectedSha256, {
+      modelId: job.modelId,
+      file: 'download'
+    })
   }
 
   /**

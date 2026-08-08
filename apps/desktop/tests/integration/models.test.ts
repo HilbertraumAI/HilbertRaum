@@ -6,8 +6,10 @@ import { join, parse } from 'node:path'
 import { stringify } from 'yaml'
 import { openDatabase } from '../../src/main/services/db'
 import { initPerf } from '../../src/main/services/perf'
+import { latestEffectiveRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
 import {
+  beginChecksumInstrumentation,
   sha256File,
   verifyChecksum,
   computeInstallState,
@@ -246,8 +248,33 @@ describe('checksum instrumentation + single-flight (#106)', () => {
     expect(readLog().filter((l) => l.includes(' checksum_start '))).toHaveLength(1)
     // The joiner's progress sink was multicast the final exact-total call…
     expect(joinerProgress.at(-1)).toBe('shared single-flight weights'.length)
-    // …and the joiner's own L2 store was still populated.
+    // …and the joiner's own L2 store was still populated — with the LEADER's entry
+    // (leader-stat key + leader digest), so a file replaced mid-hash can never mint a
+    // live-keyed entry whose hash was computed for different content.
     expect(joinerStore.get(file)?.actual).toBe(expected)
+    expect(joinerStore.get(file)?.size).toBe('shared single-flight weights'.length)
+  })
+
+  it("a 'download' hash keeps its marks but never feeds the effective-read latch (page-cache-warm)", async () => {
+    resetEffectiveReadForTests()
+    const readLog = armPerfLog()
+    const bytes = 6_000_000_000
+    // Real elapsed above the 250 ms sample floor, so the LABEL — not the floor — is
+    // what the download assertion proves.
+    const overFloor = async (file: 'download' | 'weight'): Promise<void> => {
+      const instrumentation = beginChecksumInstrumentation({ modelId: 'm', file }, bytes)
+      await new Promise((r) => setTimeout(r, 300))
+      instrumentation.end(true)
+    }
+
+    await overFloor('download')
+    expect(latestEffectiveRead()).toBeNull() // the app just WROTE those bytes (F-35 class)
+
+    await overFloor('weight')
+    expect(latestEffectiveRead()?.source).toBe('checksum') // a cold-file hash samples
+
+    // Both hashes were fully instrumented regardless.
+    expect(readLog().filter((l) => l.includes(' checksum_done '))).toHaveLength(2)
   })
 })
 

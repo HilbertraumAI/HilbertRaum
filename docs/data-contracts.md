@@ -316,14 +316,25 @@ document answers always run balanced (deep-grounded = wave 2).
   gate input; still computed + persisted for continuity. See `docs/benchmark.md`.
 - **`EffectiveReadSample`** (`shared/types.ts`, issues #108/#110/#107) —
   `{ mbps, bytes, ms, source: 'model_load' | 'checksum', modelId, at }`: an honest read sample
-  measured as a byproduct of real multi-GB reads (`services/read-speed.ts` session latch; sample
-  floors ≥ 64 MB / ≥ 250 ms; `model_load` always replaces `checksum`, never vice versa).
-  Persisted as **`BenchmarkResult.effectiveRead?: EffectiveReadSample | null`** — optional (absent
-  on results persisted before the field existed; `null` = nothing measured yet) — updated in
-  place by `persistEffectiveRead` (registerModelIpc) after starts/visits/re-verifies, and
-  injected into `runBenchmark` via `RunBenchmarkDeps.effectiveRead` (carry-forward from the
-  previous result). Feeds the Diagnostics "Measured read speed" row, the #110 slow-read warning
-  gate, and the #107 `RuntimeStatus.starting.expectedMs` estimate.
+  measured as a byproduct of real multi-GB reads (`services/read-speed.ts` session latch).
+  Honesty guards (adversarial-review round 2026-08-09): sample floors ≥ 64 MB / ≥ 250 ms, plus
+  ≥ 2 GiB for `model_load` (parse/KV-alloc/graph-init fixed costs must not dominate the window);
+  the source ranking (`preferCandidate` — `model_load` beats `checksum`, else newest wins) is ONE
+  exported rule applied by the latch, by persistence, and by the latch-vs-persisted resolution
+  (`effectiveReadOrPersisted`), so a fresh session's checksum sample never overwrites last
+  session's model-load sample; `'download'`-labelled hashes never sample (they read bytes the app
+  just wrote — page-cache-resident, the F-35 class); a start whose install-state pass really
+  hashed suppresses its own load-window sample (`suppressNextModelLoadSample` — the hash warmed
+  the cache). Persisted as **`BenchmarkResult.effectiveRead?: EffectiveReadSample | null`** —
+  optional (absent on results persisted before the field existed; `null` = nothing measured
+  yet) — written by `persistEffectiveRead` (registerModelIpc), which is registered as the
+  read-speed OBSERVER (fires on every accepted sample, so a background download path persists
+  too) and **also re-keys the slow-read warning in place** (`upsertSlowReadWarning`): the only
+  automatic benchmark runs before any model exists, so the #110 warning must track the sample
+  between benchmark runs — and is removed again when a fast sample lands. Injected into
+  `runBenchmark` via `RunBenchmarkDeps.effectiveRead` (ranking-aware carry-forward). Feeds the
+  Diagnostics "Measured read speed" row (which carries the sample's own date — the card's "Last
+  run" describes the benchmark, not this row), the #110 gate, and the #107 estimate.
 - **`measureTokensPerSecond(runtime)`** → number | `null` (only when a runtime is active;
   prompt + ≤64 tokens). Mock now, real in Phase 10.
 - **`buildWarnings(...)`** — spec §11.4 friendly copy. Since #110 the PRIMARY drive warning is
@@ -342,10 +353,15 @@ document answers always run balanced (deep-grounded = wave 2).
   recommended model + warnings; re-loads `lastBenchmark` on mount. `HomeScreen` profile reflects
   the persisted value via `getAppStatus`.
 - **`RuntimeStatus.starting?`** (issue #107) — `{ elapsedMs, bytesTotal?, expectedMs? }`:
-  present while `startingModelId` is; `elapsedMs` from the runtime manager, `bytesTotal` +
-  `expectedMs` enriched by the `getRuntimeStatus` handler (weight statSync + the effective-read
-  sample). `expectedMs` is an ESTIMATE — renderers present it as approximate and cap displayed
-  progress below 100% (ChatScreen caps at 97%). Absent fields → the indeterminate line.
+  present while `startingModelId` is (incl. the GPU-crash `forceRestart` window). The manager
+  resolves `elapsedMs` (stamped with `startingModelId`, RE-stamped at queue-drain in `doStart`
+  so a switch's elapsed measures THIS load, not the old model's stop) and `bytesTotal`
+  (`RuntimeStartOptions.weightBytes` — the manifest's full file set, covering a vision model's
+  mmproj — else one `statSync(modelPath)`), both once per window, never per poll tick. The
+  `getRuntimeStatus` handler adds only `expectedMs` (bytesTotal over the effective-read sample,
+  memoized per window). `expectedMs` is an ESTIMATE — renderers present it as approximate and
+  cap displayed progress below 100% (ChatScreen caps at 97%; the window also spans the #109
+  warm-up tail, which the cap absorbs). Absent fields → the indeterminate line.
 
 ### Privacy & offline policy (Phase 8 live)
 ✅ **`services/policy.ts`** (spec §3.5/§3.6/§6). Pure + resilient; never throws.

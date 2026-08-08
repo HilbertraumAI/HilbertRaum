@@ -3,7 +3,7 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { AppSettings, BenchmarkResult, GpuDevice } from '../../shared/types'
 import { runBenchmark, type GpuBenchmarkInput } from '../services/benchmark'
-import { latestEffectiveRead } from '../services/read-speed'
+import { effectiveReadOrPersisted } from './registerModelIpc'
 import { gpuUsefulForProfile } from '../services/runtime/gpu'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { discoverManifests } from '../services/models'
@@ -51,16 +51,10 @@ export async function runAndPersistBenchmark(ctx: AppContext): Promise<Benchmark
   const gpu = await probeAndPersistGpu(ctx)
 
   // #108: the honest read figure is a byproduct of real loads/hashes (read-speed.ts),
-  // injected here — carried forward from the previous result when this session has no
-  // sample yet, so a re-run never loses an observation.
-  let effectiveRead = latestEffectiveRead()
-  if (!effectiveRead) {
-    try {
-      effectiveRead = getSettings(ctx.db).lastBenchmark?.effectiveRead ?? null
-    } catch {
-      effectiveRead = null
-    }
-  }
+  // injected here via the shared latch-vs-persisted resolution (ranking-aware, so a
+  // session checksum sample never shadows a persisted model-load one) — a re-run never
+  // loses an observation.
+  const effectiveRead = effectiveReadOrPersisted(ctx)
 
   const result = await runBenchmark({
     workspacePath: ctx.paths.workspacePath,

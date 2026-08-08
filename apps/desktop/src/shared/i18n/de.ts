@@ -1645,8 +1645,8 @@ export const de: Record<keyof typeof en, string> = {
   // Multi-GB-Lesevorgängen (Modellstart oder vollständige Dateiprüfung).
   'diag.bench.effectiveRead': 'Gemessene Lesegeschwindigkeit',
   'diag.bench.effectiveReadNone': 'noch nicht gemessen — der Start eines Modells misst sie',
-  'diag.bench.effectiveReadLoad': 'aus dem letzten Modellstart, {gb} GB gelesen',
-  'diag.bench.effectiveReadHash': 'aus einer Dateiprüfung, {gb} GB gelesen',
+  'diag.bench.effectiveReadLoad': 'aus einem Modellstart am {when}, {gb} GB gelesen',
+  'diag.bench.effectiveReadHash': 'aus einer Dateiprüfung am {when}, {gb} GB gelesen',
   'diag.bench.driveWrite': 'Laufwerk schreiben',
   'diag.bench.notMeasured': 'nicht gemessen',
   // RD-3-Glossar: „Token", nicht „Tokens" — steht auf Diagnose direkt neben

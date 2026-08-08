@@ -3,6 +3,7 @@ import { Banner, Button, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
 import { localizeServerCopy } from '../../lib/displayMap'
 import { friendlyIpcError, runAndSurface } from '../../lib/errors'
+import { fmt1 } from '../../lib/format'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
   AppSettings,
@@ -102,15 +103,7 @@ function accelerationLabel(
   return t('diag.accel.cpu')
 }
 
-/** Locale-aware one-decimal number (file sizes / RAM) — grouping off so EN output
- *  stays byte-identical to the previous toFixed(1). */
-function fmt1(n: number, lang: UiLanguage): string {
-  return n.toLocaleString(lang, {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-    useGrouping: false
-  })
-}
+// fmt1 (one-decimal locale number) is shared with the Chat starting panel — lib/format.
 
 /** Locale-aware plain number (throughput: MB/s, tokens/s) — keeps the measured value
  *  as-is but routes the decimal separator + grouping through the UI language (M-U5,
@@ -181,9 +174,12 @@ function effectiveReadValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLangua
   if (!sample) return t('diag.bench.effectiveReadNone')
   const value = `${fmtNum(sample.mbps, lang)} MB/s`
   const gb = fmt1(sample.bytes / 1e9, lang)
+  // The sample's own date, not the card's "Last run": `effectiveRead` is updated in
+  // place between benchmark runs, so the row must carry its own freshness.
+  const when = new Date(sample.at).toLocaleDateString(lang)
   return sample.source === 'model_load'
-    ? `${value} (${t('diag.bench.effectiveReadLoad', { gb })})`
-    : `${value} (${t('diag.bench.effectiveReadHash', { gb })})`
+    ? `${value} (${t('diag.bench.effectiveReadLoad', { gb, when })})`
+    : `${value} (${t('diag.bench.effectiveReadHash', { gb, when })})`
 }
 
 /** Plain-text rendering of the "Hardware benchmark" card for the Copy button. */

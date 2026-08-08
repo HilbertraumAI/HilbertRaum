@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs'
 import type { ChatDepthMode, JsonSchema, RuntimeStatus } from '../../../shared/types'
 
 // Runtime manager (spec §7.5). Defines the swappable ModelRuntime interface so the
@@ -54,6 +55,13 @@ export interface RuntimeStartOptions {
   /** Absolute path to the weight file. */
   modelPath: string
   contextTokens: number
+  /**
+   * Total on-disk bytes the load window will read (#107): the GGUF plus, for a vision
+   * model, its mmproj projector. Optional — supplied by `startModelRuntime` (which has
+   * the manifest); when absent the manager stats `modelPath` alone, which under-counts
+   * vision loads by the projector's size.
+   */
+  weightBytes?: number | null
 }
 
 export interface HealthStatus {
@@ -138,8 +146,12 @@ export class RuntimeManager {
    * while the first is still loading) must not stop-and-restart the runtime.
    */
   private startingModelId: string | null = null
-  /** #107: Date.now() when the in-flight start began; null outside a start window. */
+  /** #107: Date.now() when the in-flight start began; null outside a start window.
+   *  Stamped synchronously with `startingModelId` and RE-stamped at queue-drain inside
+   *  `doStart` so a switch's elapsed measures THIS load, not the old model's stop. */
   private startingSince: number | null = null
+  /** #107: on-disk bytes the in-flight load reads; resolved once per window in doStart. */
+  private startingBytesTotal: number | null = null
   /**
    * The runtime instance a start is currently bringing up INSIDE the queue (full-audit
    * 2026-07-11 CODE-2) — set by `doStart` before `next.start()`, cleared when that await
@@ -212,6 +224,7 @@ export class RuntimeManager {
       if (this.startingModelId === opts.modelId) {
         this.startingModelId = null
         this.startingSince = null
+        this.startingBytesTotal = null
       }
     }
   }
@@ -262,10 +275,19 @@ export class RuntimeManager {
     // CODE-3: a crash restart racing the quit teardown must not respawn either.
     if (this.stopped) throw shutdownError()
     this.startingModelId = opts.modelId
+    // #107: the crash-restart window carries load progress too (it is the slowest start
+    // the app performs — a full cold ladder re-walk); doStart re-stamps at queue-drain.
+    this.startingSince = Date.now()
     try {
       return await this.enqueue(() => this.doStart(opts))
     } finally {
-      if (this.startingModelId === opts.modelId) this.startingModelId = null
+      // Clear ALL THREE (paired with startingModelId, here and in start()) — a stale
+      // startingSince would attribute an old window's elapsed to the next start.
+      if (this.startingModelId === opts.modelId) {
+        this.startingModelId = null
+        this.startingSince = null
+        this.startingBytesTotal = null
+      }
     }
   }
 
@@ -276,6 +298,17 @@ export class RuntimeManager {
     if (this.stopped) throw shutdownError()
     // Restart cleanly on a model switch (spec §7.5).
     if (this.current) await this.doStop()
+    // #107: re-stamp the progress clock now that the queue drained (a switch waits out
+    // the old model's stop first — elapsed must measure THIS load, not that wait) and
+    // resolve the weight's size once per window, here rather than per status() poll
+    // (the IPC layer used to re-scan manifests + stat the file on every 2.5 s tick,
+    // against the same drive the load is saturating). `weightBytes` (when the caller
+    // passed it) covers ALL files the window reads — a vision model also loads its
+    // mmproj projector, which the bare GGUF stat under-counts.
+    if (this.startingModelId === opts.modelId) {
+      this.startingSince = Date.now()
+      this.startingBytesTotal = opts.weightBytes ?? statSizeOrNull(opts.modelPath)
+    }
     // CODE-3 review follow-up: the internal doStop above can take seconds (SIGTERM →
     // grace → SIGKILL on the old runtime), and in that window the TOP check has already
     // passed while `startingRuntime` is not yet set — a quit arming the latch there is
@@ -329,13 +362,16 @@ export class RuntimeManager {
 
   status(): RuntimeStatus {
     const startingModelId = this.startingModelId
-    // #107: elapsed time of the in-flight "Starting…" window. The IPC layer enriches it
-    // with the model file size + an expected duration (from the honest effective-read
-    // sample) so the renderer can show determinate load progress instead of an
-    // indeterminate spinner.
+    // #107: elapsed time + byte total of the in-flight "Starting…" window (both resolved
+    // here, once per window — never per poll tick). The IPC layer adds only `expectedMs`
+    // (from the honest effective-read sample) so the renderer can show determinate load
+    // progress instead of an indeterminate spinner.
     const starting =
       startingModelId && this.startingSince != null
-        ? { elapsedMs: Math.max(0, Date.now() - this.startingSince) }
+        ? {
+            elapsedMs: Math.max(0, Date.now() - this.startingSince),
+            bytesTotal: this.startingBytesTotal
+          }
         : undefined
     if (!this.current) {
       return {
@@ -345,9 +381,11 @@ export class RuntimeManager {
         healthy: false,
         message: startingModelId ? 'Starting' : 'Stopped',
         startingModelId,
-        ...(starting ? { starting } : {})
+        starting
       }
     }
+    // A start in flight for a DIFFERENT model than the running one = a switch underway.
+    const switchingId = startingModelId !== this.current.modelId ? startingModelId : null
     return {
       running: true,
       modelId: this.current.modelId,
@@ -363,9 +401,18 @@ export class RuntimeManager {
       // switch/restart builds a fresh runtime instance, so it resets naturally). Absent
       // for a runtime that can't report one — the Chat warm-up hint then never shows.
       warmedUp: this.current.warmedUp?.(),
-      // A start in flight for a DIFFERENT model than the running one = a switch underway.
-      startingModelId: startingModelId !== this.current.modelId ? startingModelId : null,
-      ...(starting && startingModelId !== this.current.modelId ? { starting } : {})
+      startingModelId: switchingId,
+      starting: switchingId ? starting : undefined
     }
+  }
+}
+
+/** File size for the #107 progress denominator, or null — a stat failure (mock rung
+ *  paths, vanished weight) must never break a start. */
+function statSizeOrNull(path: string): number | null {
+  try {
+    return statSync(path).size
+  } catch {
+    return null
   }
 }

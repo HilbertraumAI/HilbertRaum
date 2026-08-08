@@ -1597,8 +1597,8 @@ export const en = {
   // app performs anyway (a model load, or a full file check). Absent until the first such read.
   'diag.bench.effectiveRead': 'Measured read speed',
   'diag.bench.effectiveReadNone': 'not measured yet — starting a model measures it',
-  'diag.bench.effectiveReadLoad': 'from the last model load, {gb} GB read',
-  'diag.bench.effectiveReadHash': 'from a file check, {gb} GB read',
+  'diag.bench.effectiveReadLoad': 'from a model load on {when}, {gb} GB read',
+  'diag.bench.effectiveReadHash': 'from a file check on {when}, {gb} GB read',
   'diag.bench.driveWrite': 'Drive write',
   'diag.bench.notMeasured': 'not measured',
   'diag.bench.tokens': 'Tokens / sec',

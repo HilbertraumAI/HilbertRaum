@@ -116,7 +116,9 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     // #108 (F-35 resolution): the page-cache-inflated "Drive read (cached)" figure is retired
     // from display — the report carries the honest measured read speed instead, and the raw
     // driveReadMbps value (120 in this fixture) must appear NOWHERE in the copied text.
-    expect(lastCopied).toContain('Measured read speed: 70.4 MB/s (from the last model load, 6.0 GB read)')
+    expect(lastCopied).toContain(
+      'Measured read speed: 70.4 MB/s (from a model load on 6/15/2026, 6.0 GB read)'
+    )
     expect(lastCopied).not.toContain('Drive read (cached)')
     expect(lastCopied).not.toContain('120 MB/s')
     // Issue #52: the tok/s line names the model that produced the number (the loaded one,

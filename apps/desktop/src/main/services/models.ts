@@ -289,8 +289,15 @@ export function beginChecksumInstrumentation(
       // The issue asks for visibility WITHOUT the opt-in perf log: one app.log line per
       // real hash. app.log may carry model ids and byte counts (never chat/doc content).
       log.info('Model checksum hashed', { modelId: label.modelId, file: label.file, bytes, ms, ok })
-      // #108: a completed full-file hash is also an honest sequential-read sample.
-      if (ok && bytes != null) recordChecksumRead(bytes, ms, label.modelId)
+      // #108: a completed full-file hash of a COLD file is also an honest
+      // sequential-read sample. The 'download' verify is excluded: it hashes the .part
+      // the app just WROTE, whose pages are still cache-resident (fsync flushes but
+      // does not evict — the F-35 mechanism), so it would record hash-CPU speed as a
+      // media figure and suppress the #110 warning on the exact slow-stick fresh
+      // install the feature targets.
+      if (ok && bytes != null && label.file !== 'download') {
+        recordChecksumRead(bytes, ms, label.modelId)
+      }
     }
   }
 }
@@ -306,7 +313,13 @@ export function beginChecksumInstrumentation(
  */
 const inFlightHashes = new Map<
   string,
-  { promise: Promise<string>; sinks: Set<(bytesHashed: number) => void> }
+  {
+    promise: Promise<string>
+    sinks: Set<(bytesHashed: number) => void>
+    /** The LEADER's stat identity — joiners persist exactly this entry (see below). */
+    size: number
+    mtimeMs: number
+  }
 >()
 
 /** Drop all in-memory cached hashes (tests / an explicit re-verify). */
@@ -472,14 +485,16 @@ async function sha256FileCached(
   }
   // Join an in-flight hash of the same file instead of starting a second concurrent
   // multi-GB read. The joiner still persists to ITS store (the leader may have been
-  // created with a different/no store); the entry is re-derived from the joiner's own
-  // stat, so a file replaced mid-hash yields a stale-keyed (harmless) entry, same as
-  // the leader's own race window today.
+  // created with a different/no store) — but the entry it writes is the LEADER's
+  // (leader-stat key + leader digest): keying the leader's digest under the joiner's
+  // own, later stat would mint a live-keyed entry whose hash was never computed for
+  // that content if the file is replaced mid-hash. The leader's entry stays honestly
+  // stale-keyed in that race, exactly like a pre-single-flight hash.
   const inFlight = inFlightHashes.get(filePath)
   if (inFlight) {
     if (onProgress) inFlight.sinks.add(onProgress)
     const actual = await inFlight.promise
-    store?.set(filePath, { size: st.size, mtimeMs: st.mtimeMs, actual })
+    store?.set(filePath, { size: inFlight.size, mtimeMs: inFlight.mtimeMs, actual })
     return actual
   }
   const sinks = new Set<(bytesHashed: number) => void>()
@@ -500,7 +515,7 @@ async function sha256FileCached(
     store?.set(filePath, entry)
     return actual
   })()
-  inFlightHashes.set(filePath, { promise: run, sinks })
+  inFlightHashes.set(filePath, { promise: run, sinks, size: st.size, mtimeMs: st.mtimeMs })
   try {
     const actual = await run
     instrumentation.end(true)

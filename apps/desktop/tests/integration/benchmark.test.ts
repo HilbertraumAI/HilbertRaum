@@ -22,6 +22,7 @@ import {
   measureTokensPerSecond,
   buildWarnings,
   runBenchmark,
+  upsertSlowReadWarning,
   VERY_LOW_TOKENS_PER_SECOND,
   SLOW_DRIVE_MBPS,
   SLOW_EFFECTIVE_READ_MBPS
@@ -375,6 +376,44 @@ describe('buildWarnings', () => {
     ])
     expect(w[0]).toContain('model starts will be slow')
     expect(w[0]).toContain('42 MB/s')
+  })
+
+  it('names a FLOORED speed, so the copy can never claim the threshold it warns under', () => {
+    const w = buildWarnings({
+      profile: 'BALANCED',
+      driveReadMbps: null,
+      driveWriteMbps: 400,
+      effectiveReadMbps: 99.6 // < 100 gates, but Math.round would name "about 100 MB/s"
+    })
+    expect(w).toEqual([t('en', 'main.benchmark.warnSlowRead', { mbps: 99 })])
+  })
+
+  // #110 + adversarial review: the sample is updated in place between benchmark runs
+  // (`persistEffectiveRead`), and the ONLY automatic benchmark runs before any model
+  // exists — so the slow-read warning must be re-keyable against a fresh sample without
+  // recomputing the whole set.
+  it('upsertSlowReadWarning adds, replaces, and removes the one warning it owns — nothing else', () => {
+    const others = [
+      t('en', 'main.benchmark.warnTiny'),
+      t('en', 'main.benchmark.warnSlowDrive'),
+      t('en', 'main.benchmark.warnVeryLowTokens', { model: 'qwen3-9b' })
+    ]
+
+    // Absent + slow sample → appended; every other warning untouched.
+    const added = upsertSlowReadWarning(others, 70.4)
+    expect(added).toEqual([...others, t('en', 'main.benchmark.warnSlowRead', { mbps: 70 })])
+
+    // A newer slow sample REPLACES the stale one (never two slow-read lines, and the
+    // named mbps always matches the current sample).
+    const replaced = upsertSlowReadWarning(added, 42)
+    expect(replaced.filter((w) => w.includes('model starts will be slow'))).toHaveLength(1)
+    expect(replaced.at(-1)).toBe(t('en', 'main.benchmark.warnSlowRead', { mbps: 42 }))
+
+    // A fast sample REMOVES it (the drive moved to an SSD must not keep warning).
+    expect(upsertSlowReadWarning(replaced, 480)).toEqual(others)
+
+    // Threshold boundary: exactly 100 is not slow.
+    expect(upsertSlowReadWarning(others, 100)).toEqual(others)
   })
 })
 

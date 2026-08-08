@@ -185,9 +185,7 @@ class LadderRuntime implements ModelRuntime {
 
   async start(): Promise<void> {
     let lastError: unknown = null
-    let attempt = 0
-    for (const rung of this.rungs) {
-      attempt += 1
+    for (const [rungIndex, rung] of this.rungs.entries()) {
       // CODE-2: cancelled between rungs — abort the walk instead of paying the next
       // rung's health timeout.
       if (this.cancelled) throw cancelledStartError()
@@ -237,14 +235,21 @@ class LadderRuntime implements ModelRuntime {
         continue
       }
       this.startingInner = null
-      // #108: the load window just read the full GGUF start-to-finish — file size over
-      // elapsed is an honest effective media read speed, as a byproduct. FIRST ladder
-      // attempt only: a later rung re-reads a file the failed attempt already pulled
-      // through the page cache, so its number would be inflated. Excludes the #109
-      // warm-up (which runs below) and never throws (read-speed.ts swallows stat
-      // failures; a mock rung never reaches here).
-      if (attempt === 1) {
-        recordModelLoadRead(this.opts.modelPath, performance.now() - loadT0, this.opts.modelId)
+      // #108: the load window just read the model's files start-to-finish — bytes over
+      // elapsed is an honest effective media read speed, as a byproduct. FIRST rung of
+      // the walk only: a later rung re-reads a file the failed attempt already pulled
+      // through the page cache, so its number would be inflated. (A start whose
+      // install-state pass just hashed the file is suppressed inside read-speed.ts for
+      // the same page-cache reason.) Excludes the #109 warm-up (which runs below) and
+      // never throws; a mock rung never reaches here. `weightBytes` covers a vision
+      // model's mmproj too — the bare modelPath stat under-counts it.
+      if (rungIndex === 0) {
+        recordModelLoadRead(
+          this.opts.modelPath,
+          performance.now() - loadT0,
+          this.opts.modelId,
+          this.opts.weightBytes
+        )
       }
 
       // CODE-2: cancelled while THIS rung came up but the kill missed it (the pre-spawn
