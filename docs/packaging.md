@@ -522,9 +522,16 @@ draft-publishes the prebuilt packages (it supersedes the earlier `mac-build`/`wi
 ad-hoc builds = its `workflow_dispatch` trigger, which runs the build legs but skips the tag-gated
 release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Four jobs:**
 
-- **`build-win`** — `windows-latest`: `npm ci` → typecheck → **the full test suite** (once, on the
-  first-class OS — belt-and-braces on the exact tagged commit) → `npm run package:win` →
-  `HilbertRaum-<version>-portable.exe`.
+- **`build-win`** — `windows-latest`: `npm ci` → typecheck → build → **the full test suite** (once,
+  on the first-class OS — belt-and-braces on the exact tagged commit) → `npm run package:win` →
+  `HilbertRaum-<version>-portable.exe`. Also fetches the win Vulkan runtime via
+  `scripts/fetch-runtime.sh` (git-bash; the SAME pinned, SHA-256-verified upstream build the
+  in-app engine installer fetches — `runtime-sources.yaml` first win/x64 match) and zips the
+  extracted install tree (`Compress-Archive`; root entry `win/` incl. the
+  `.hilbertraum-runtime.json` marker) as `llama-runtime-win-x64.zip` — the mac Metal zip's twin
+  (issue #102 item 1): parity for the win release + an offline/air-gapped engine install path
+  without the repo scripts (unzip into `runtime/llama.cpp/`). No symlink-dereference concern on
+  win (the Vulkan build carries none).
 - **`build-mac`** — `macos-14` (Apple Silicon): `npm ci` → typecheck → `npm run package` (`dir`
   target) → **ad-hoc sign** (`codesign --force --deep --sign -`, required to launch on Apple
   Silicon) → **ditto-zip** (`HilbertRaum-<version>-mac-arm64.app.zip` — it must STAY zipped on
@@ -537,8 +544,9 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Four job
 - **`release`** (tag-gated, needs all three) — asserts **tag == `apps/desktop/package.json`
   version** (fail fast on mismatch), aggregates `SHA256SUMS.txt`, builds the release notes from the
   CHANGELOG `[Unreleased]` block (prefixed with the "this download is the app only — models are
-  fetched separately" line), and creates a **DRAFT** GitHub release (`prerelease: true` while 0.x)
-  with everything attached.
+  fetched separately" line, which now also points offline installers at the `llama-runtime-*.zip`
+  assets), and creates a **DRAFT** GitHub release (`prerelease: true` while 0.x) with everything
+  attached (both runtime zips included).
 
 **The ritual is draft → owner smoke → publish.** The workflow never publishes: the owner downloads
 the draft's artifacts, runs the applicable "Manual pre-ship checklist" below (at minimum item 1 —

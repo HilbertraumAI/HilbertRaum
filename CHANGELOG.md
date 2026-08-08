@@ -73,6 +73,11 @@ first public release. Consciously-accepted gaps are tracked in
   `scripts/build-commercial-drive.*`.
 - **Standard project docs** — this `CHANGELOG.md` and a
   [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+- **Windows engine build attached to releases** (issue #102 item 1). Each release
+  now carries `llama-runtime-win-x64.zip` beside the existing mac Metal zip: the
+  same SHA-256-verified llama.cpp build the in-app installer fetches, packaged so
+  it unzips straight into the drive's `runtime/llama.cpp/` folder — an offline /
+  air-gapped install path that needs no repo scripts.
 - **Opt-in perf mark log** for measurement runs: with `HILBERTRAUM_PERF_LOG=1` set in
   the environment, the app appends timestamped timing marks (startup phases, vault
   unlock/lock split, model checksum vs. load split, time to first token, document
