@@ -42,6 +42,35 @@ import {
 // GPU state is INJECTED (read-callbacks), never read from the DB here — keeps the
 // ladder pure and unit-testable with the existing fake seams.
 
+/**
+ * The #109 hidden warm-up generation. `waitForHealthy` resolves as soon as llama-server
+ * answers `/health`, but the FIRST generation still pays a one-time prefill/graph warm-up
+ * that measured 6–8× the settled TTFT (10–30 s on CPU-only machines) — so "ready" wasn't
+ * ready. After a real rung comes up (and its backend label is set), the ladder runs one
+ * tiny content-free generation against the inner runtime and discards the output, so the
+ * user's real first prompt lands on a warmed path. The extra seconds live inside the
+ * existing "Starting…" state, where the user already expects to wait.
+ *
+ * Deliberate decisions (design record: architecture.md "First-answer warm-up hint (#39)"):
+ *  - `inner.chatStream` is called DIRECTLY, so the #39 `served` flag does NOT flip: the
+ *    real first prompt still pays the full system-prompt prefill (the warm-up shares no
+ *    `cache_prompt` prefix with it), so the #39 warm-up hint stays armed as a safety net.
+ *  - Thinking off (omitted mode = 'balanced' → `enable_thinking: false`), tiny cap,
+ *    loopback-only, output discarded — never persisted, never audited as a chat.
+ *  - A warm-up failure that is NOT a cancel never fails the start: the server IS healthy.
+ *    A mid-warm-up crash still reports via `onUnexpectedExit` (§5.3 GPU auto-fallback).
+ */
+export const WARMUP_PROMPT = 'Hi'
+export const WARMUP_MAX_TOKENS = 8
+/**
+ * Overall cap on the warm-up window. The worst #109 measurement was ~28 s (9B, 16 GB
+ * CPU-only laptop), so 90 s is ~3× headroom for bigger models/slower machines while
+ * guaranteeing a pathological warm-up cannot dominate the start (the health wait itself
+ * budgets 180 s). On expiry the request is aborted, a warning is logged, and the start
+ * proceeds to ready — the cap trades a possibly-cold first prompt for a bounded start.
+ */
+export const WARMUP_TIMEOUT_MS = 90_000
+
 /** GPU-ladder hooks; all optional — omitting them yields plain rung-1-only behavior. */
 export interface GpuLadderDeps {
   /** User intent from Settings ('auto' default). */
@@ -83,6 +112,15 @@ export interface RuntimeSelectionDeps {
   makeMock?: (opts: RuntimeStartOptions) => ModelRuntime
   /** Hook fired with the chosen backend (used for logging). */
   onSelect?: (kind: 'llama' | 'mock', opts: RuntimeStartOptions, reason: string) => void
+  /**
+   * Observability for the #109 warm-up generation; never affects control flow.
+   * 'done' = the warm-up completed, 'timeout' = the {@link WARMUP_TIMEOUT_MS} cap
+   * aborted it, 'failed' = it errored for a non-cancel reason — in every case the
+   * start proceeds to ready.
+   */
+  onWarmup?: (opts: RuntimeStartOptions, event: 'done' | 'timeout' | 'failed', detail?: string) => void
+  /** Test seam: override the {@link WARMUP_TIMEOUT_MS} cap. */
+  warmupTimeoutMs?: number
   /** GPU ladder hooks. Omitted → defaults (gpuMode 'auto', no persistence). */
   gpu?: GpuLadderDeps
 }
@@ -136,6 +174,8 @@ class LadderRuntime implements ModelRuntime {
       makeLlama: NonNullable<RuntimeSelectionDeps['makeLlama']>
       makeMock: NonNullable<RuntimeSelectionDeps['makeMock']>
       onSelect?: RuntimeSelectionDeps['onSelect']
+      onWarmup?: RuntimeSelectionDeps['onWarmup']
+      warmupTimeoutMs: number
       gpu: GpuLadderDeps
     }
   ) {
@@ -218,6 +258,25 @@ class LadderRuntime implements ModelRuntime {
         this.gpuName = null
       }
       this.deps.onSelect?.('llama', this.opts, `started via ${rung.label} (backend: ${this.backend})`)
+
+      // #109: pay the one-time prefill/graph warm-up NOW, inside the "Starting…" window,
+      // so start() only resolves once the user's real first prompt lands on a warmed path.
+      // Ordering matters: the backend label above is already set, so a GPU crash during
+      // the warm-up routes through the §5.3 onGpuCrash auto-fallback (gated on
+      // backend === 'gpu'). Real llama rungs only — the rung-4 mock below streams
+      // instantly and must keep starting instantly (zero-assets suites rely on it).
+      await this.warmUp(runtime)
+      // CODE-2: a stop()/quit during the warm-up window stopped the inner server (the
+      // warm-up stream then erred and was swallowed above) — the ladder must settle as
+      // CANCELLED, never proceed to ready or fall through to another rung.
+      if (this.cancelled) {
+        try {
+          await runtime.stop()
+        } catch {
+          /* best-effort — stop() already stopped it; the queued manager stop re-stops */
+        }
+        throw cancelledStartError()
+      }
       return
     }
 
@@ -235,6 +294,41 @@ class LadderRuntime implements ModelRuntime {
     this.gpuName = null
     const reason = lastError instanceof Error ? lastError.message : String(lastError)
     this.deps.onSelect?.('mock', this.opts, `all llama-server start attempts failed: ${reason}`)
+  }
+
+  /**
+   * The #109 hidden warm-up generation (see the constants above for the design record
+   * pointer). Runs against the INNER runtime so the #39 `served` flag stays false —
+   * the warm-up is not a real generation and must not disarm the warm-up hint. Never
+   * throws: a cancel is detected by the caller via `this.cancelled`; any other failure
+   * (including the cap abort) is logged through `onWarmup` and the start proceeds —
+   * the server is healthy, a cold first prompt is strictly better than a failed start.
+   */
+  private async warmUp(runtime: ModelRuntime): Promise<void> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this.deps.warmupTimeoutMs)
+    try {
+      // No `mode` = 'balanced' → `enable_thinking: false` (requestParamsForMode) — the
+      // warm-up must never burn seconds on reasoning tokens. Content-free, tiny cap,
+      // loopback-only; the output is discarded, never persisted, never audited as a chat.
+      const stream = runtime.chatStream([{ role: 'user', content: WARMUP_PROMPT }], {
+        maxTokens: WARMUP_MAX_TOKENS,
+        signal: controller.signal
+      })
+      for await (const _token of stream) {
+        /* discard — the request exists only to pay the one-time warm-up cost */
+      }
+      this.deps.onWarmup?.(this.opts, 'done')
+    } catch (err) {
+      // A cancel (stop()/quit killed the server mid-warm-up) is handled by the caller's
+      // re-check of `this.cancelled` — don't log it as a warm-up fault.
+      if (!this.cancelled) {
+        const detail = err instanceof Error ? err.message : String(err)
+        this.deps.onWarmup?.(this.opts, controller.signal.aborted ? 'timeout' : 'failed', detail)
+      }
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   async stop(): Promise<void> {
@@ -359,7 +453,14 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
       rungs.push({ label: 'rung 3 (pure-CPU safety-net build)', binPath: cpuBin, extraArgs: [], gpuAttempt: false })
     }
 
-    return new LadderRuntime(opts, rungs, { makeLlama, makeMock, onSelect: deps.onSelect, gpu })
+    return new LadderRuntime(opts, rungs, {
+      makeLlama,
+      makeMock,
+      onSelect: deps.onSelect,
+      onWarmup: deps.onWarmup,
+      warmupTimeoutMs: deps.warmupTimeoutMs ?? WARMUP_TIMEOUT_MS,
+      gpu
+    })
   }
 }
 

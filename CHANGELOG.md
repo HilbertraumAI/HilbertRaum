@@ -127,6 +127,17 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Fixed
 
+- **"Ready" now means ready — the first prompt after a model start no longer
+  stalls** (issue #109). The first generation after a start paid a one-time
+  warm-up that measured 6–8× the settled response time (10–30 s on CPU-only
+  machines) while the UI already showed the model as ready, which read as a
+  hang. The model start now runs a small hidden warm-up generation (content-free,
+  thinking off, output discarded, never stored) before reporting ready, so the
+  wait moves into the existing "Starting…" state and the first real answer
+  arrives at normal speed. The warm-up is bounded (a slow one is abandoned after
+  90 s and the model still becomes ready), never runs in demo mode, and a stop
+  or quit during it still cancels the start promptly; the one-time "the model is
+  warming up" note stays as a fallback for a first answer that is still slow.
 - **Standalone portable installs can download models again** (issue #93). A
   packaged build run without a prepared drive (the GitHub-release `.exe`
   double-clicked standalone) lands on an app-data fallback root that never had a
