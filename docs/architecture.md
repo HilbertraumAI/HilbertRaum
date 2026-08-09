@@ -1838,7 +1838,9 @@ sentinel-tested), zero native deps.
   notice when capped) — is written
   to a `<jobId>.parse.md` transient (the startup crash sweep covers it) and run through
   the NORMAL import path (`createQueuedDocument` with the display title
-  `"<original> (Deutsch|English).md"` / `"Comparison: <A> vs <B>.md"` + `processDocument`
+  `"<original> (<native target name>).md"` — since issue #31 the label spans all 51
+  `TRANSLATION_NATIVE_NAMES`, e.g. `(Українська)`, not just `(Deutsch|English)` (#164 D-5) —
+  / `"Comparison: <A> vs <B>.md"` + `processDocument`
   with the real ingestion deps) ⇒
   chunked, embedded, searchable, citable, `.enc`-encrypted automatically; the transient is
   shredded. Provenance lands in the additive `documents.origin_json` column — a
@@ -2116,6 +2118,10 @@ Per-finding disposition (F-1…F-8):
   on Translate-screen mount it reads main's active doc-task over the new `getActiveDocTask` IPC and, for a
   running `translation` task, re-seeds `translating` + window progress (null-tolerant `fileName`) and
   resumes the poll under a fresh generation (`pollDocTask` extracted + shared with the fresh start).
+  _(Superseded in mechanism 2026-08-09, #157 DT-5 / #164 D-7c: the adopt now reads the NEW
+  `listActiveDocTasks` IPC — running + queued in lane order — and accepts a QUEUED translation
+  too (the #150/DOC-8 acceptance, previously unreachable because a task becomes `running` in the
+  same tick it becomes `runningId`); `getActiveDocTask` stays running-only for the #38 chain-adopt.)_
 - **F-4 (LOW, leak) — FIXED (FA-1).** `registerTranslateIpc` keeps a `jobId → detach` map; the
   `destroyed` listener is now detached on the cancel terminals (which emit neither done nor error) too.
   _(Addendum, audit 2026-07-16 F-25: FA-1 missed a THIRD terminal — the lock/quit purge `jobs.stop()`
@@ -2295,7 +2301,10 @@ Per-finding disposition (F-1…F-8):
   co-residency measured ≈13.2 GiB (translation ≈9.2 + a 4B chat + embedder); a 12B chat pushes the
   pair past a 16 GB machine, so two large models decoding at once is infeasible. **min-RAM (D10):**
   `recommended_min_ram_gb` reset to 17 (the §4 peak+3-headroom rule applied to the measured 13.24 GiB
-  co-residency floor, which excludes the Electron shell). **Pre-ship gap — CPU safety-net binary:**
+  co-residency floor, which excludes the Electron shell) — **superseded by PR #30 (2026-07-07,
+  issue #164 D-1 marker):** the shipped manifest carries **13**; the 17 had erroneously baked the
+  CO-RESIDENCY floor into the hard minimum, locking translation out of 16 GB machines it runs on
+  (model-benchmarks §11.2 records the correction). **Pre-ship gap — CPU safety-net binary:**
   the pinned pure-CPU b9849 build was fetched + **SHA-256-confirmed** against the runtime-sources pin
   (`fa7d9d93…4352`, exact) at TG-6, but the RUN is still pending: on the dev box Windows Defender
   quarantines the freshly-downloaded, unsigned `llama-server.exe` on execution (only that exe was
@@ -2402,6 +2411,26 @@ Per-finding disposition (F-1…F-8):
     ("cold-start device observability" — chunk-split parse, once-per-start, honest-null CPU form,
     fallback lands as 'cpu', throwing hook harmless), `core-model-ipc.test.ts` (status feed),
     `TranslateScreen.test.tsx` (hint forms + absent-before-first-start).
+- **Translation-audit wave #156–#165 (2026-08-09) — the read-only pipeline audit's fixes, one
+  branch.** Behavioral deltas to this record (details in the issues + the wave PR): **(#156)**
+  `extractTranslationSource` forwards the OCR engine, so image-source documents translate/compare
+  instead of failing "sourceUnreadable". **(#157)** targeted cancel is EXACT-ID (running or
+  queued; stale-safe by construction) and the reload adopt reads the new `listActiveDocTasks`
+  lane list (queued translations adoptable — see the F-3 supersede note above). **(#158)** the
+  import/re-index deep-index offer runs after the `processing` release, so the Q1/Q4 auto-build
+  fires with a runtime up. **(#159)** `LlamaServer` gained an opt-in `startAbortSignal`; the
+  translation teardown aborts an in-flight cold start (child killed inside the health wait,
+  start rejects `AbortError`, never latches `startFailed`, never walks the CPU rung
+  mid-teardown) — lock/quit no longer block up to the 180 s health timeout. **(#160)** the F-2
+  retry classification splits the per-request timeout by tokens-flowed (live-decode timeout =
+  deterministic, no retry; wedged = one retry) in BOTH consumers; the view paste is bounded by
+  `TRANSLATE_MAX_TEXT_CHARS` (`'tooLong'`); `run()` defers a microtask so no terminal can emit
+  before `start()` returns. **(#165)** the translation planners pack in the budget's own WORD
+  unit (`approxBudgetWordCount` — the token estimator's defenses in word currency; summary
+  packing byte-identical), ending the 1.5–2.5× window under-fill on compound-heavy prose;
+  the Translate screen adds the "Reading…"/"Saving…" phase labels and the file store skips
+  no-op poll writes. Frontend deltas (#161/#162) live in the screens (always-mounted
+  ErrorBanner, single-control drop zones, visible device remedy, doc-path sameLang guard).
 
 ### §-anchor legend (historical plan citations)
 
@@ -2439,7 +2468,7 @@ anchor as:
 | D7 | Dropped/picked documents ride the doc-task | `TranslateDropZone` → import `{kind:'temporary'}` → `startDocTask('translation')` → materialized Markdown |
 | D8 | GPU posture | CPU-pinned shipped at TG-2; TG-6 kept it (GPU deferred, not rejected). **Superseded by issue #42 (2026-07-09):** a two-rung device ladder honours `gpuMode`/`gpuAutoDisabled` per cold start — GPU auto-offload by default, forced-CPU fallback + session latch on a GPU fault (see the issue-#40/#42 bullet above); the GPU-drive re-smoke (§11.4) is the open owner action |
 | D9 | Concurrency guards stay | doc-task FIFO + chat↔task exclusion + view-job `docTaskBusy`; TG-6 KEEPS them (co-residency ≈13.2 GiB rules out two large models decoding at once) |
-| D10 | Manifest discipline | rank 0, profiles `[]`, not bundled, `license_review: pending`; `recommended_min_ram_gb` set to 17 (§4 rule on the TG-6 co-residency floor 13.24 GiB) |
+| D10 | Manifest discipline | rank 0, profiles `[]`, not bundled, `license_review: pending`; `recommended_min_ram_gb` set to 17 (§4 rule on the TG-6 co-residency floor 13.24 GiB). **Superseded by PR #30 (2026-07-07):** shipped value **13** — the 17 baked the co-residency floor into the hard min (model-benchmarks §11.2) |
 
 ## Functionality wave 3 — design record (Phases 31–38, decisions D23–D37 + research gates)
 
@@ -2465,7 +2494,7 @@ project-wide sequence (D1–D7 wave 1 · D8–D15 retrieval · D16–D22 catalog
 | D24 | Password-change mechanism | **RESOLVED (round 1): (b) envelope descriptor v2, migrate-on-first-change** — a random data key wrapped by the password-derived KEK; first change pays the one-time v1→v2 bulk re-encrypt (journaled swap), every later change is an atomic single-file re-wrap. O(1) recurring change, atomic commit point, unlocks future key features (recovery codes, rotation); v1 vaults untouched until they opt in. Direct re-encrypt and migrate-on-unlock rejected |
 | D25 | Summary persistence + long-doc strategy | **RESOLVED (round 1):** `documents.summary_json` + budgeted map-reduce with hard ceiling + honest `truncated` flag. Alternatives (summary-as-conversation, unbounded map-reduce) rejected: surface sprawl / CPU latency |
 | D26 | Doc-task concurrency vs chat | **RESOLVED (round 1): strict one-at-a-time** — tasks serialize among themselves (one queue), a task refuses to start while a chat answer is streaming, and a chat message sent while a task runs gets friendly copy ("A document task is running — you can cancel it"). Tasks are cancellable so the user is never stuck. R-T1 demoted to informational (see §14); revisit parallelism only with evidence |
-| D27 | Translation output form | **RESOLVED (round 1): materialized corpus document** ("<original> (Deutsch)") + `origin_json` provenance — searchable/citable/exportable, encrypted for free. Export-only and a dedicated results panel rejected (results leave the workspace / a whole new surface). **Implemented in Phase 34** |
+| D27 | Translation output form | **RESOLVED (round 1): materialized corpus document** ("<original> (Deutsch)" — since issue #31 the title label spans all 51 native names, #164 D-5) + `origin_json` provenance — searchable/citable/exportable, encrypted for free. Export-only and a dedicated results panel rejected (results leave the workspace / a whole new surface). **Implemented in Phase 34** |
 | D36 | Translation input: chunks vs re-parse | **RESOLVED (Phase 34, 2026-06-11): re-extract the parser's SEGMENTS from the stored copy** (the `extractDocumentPreview` path) and window them with the D25 budget math. Stored chunks overlap by ~80 tokens — in-order concatenation duplicates text at every boundary, which a summary tolerated (D25) but a faithful translation cannot; trimming the overlap out of adjacent chunks was rejected as heuristic (chunk text is whitespace-normalized) where the re-parse is exact. Cost = one re-parse, same as the in-app preview. Regression-tested (every source word exactly once in the output) |
 | D28 | Compare result form + big-doc strategy | **RESOLVED (round 1): materialized "Comparison: A vs B" document** (same principle as D27, `origin_json` records both source ids); auto mode-switch full-stuff vs section-matched (vector-paired) by token math. No new result tables. **Implemented in Phase 35** |
 | D37 | Compare mode-(a) input + mode decision: chunks vs re-parse | **RESOLVED (Phase 35, 2026-06-11): re-extract the parser's SEGMENTS** (the D36 path) for mode (a)'s input AND for the mode decision itself. Two reasons beyond D36's: chunk overlap would present duplicated text as phantom "shared" content to a comparison, and the ~80-token overlap inflates a chunk-based length estimate by ~16% — enough to mis-route a fitting pair into the heavier mode (b). Mode (b)'s map step deliberately uses the stored CHUNKS instead (the pairing needs their vectors; per-pair notes tolerate overlap like summary partials, D25 precedent). Regression-tested (every source word exactly once in the mode-(a) prompt) |

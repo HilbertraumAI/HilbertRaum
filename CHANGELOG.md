@@ -128,6 +128,19 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Changed
 
+- **Document translations pack fuller windows on compound-heavy languages**
+  (issue #165). The window planner now budgets and fills in the same unit
+  (words), so German/Czech-style prose no longer splits into 1.5–2.5× more
+  windows than needed — fewer model calls and materially less wall-clock on
+  exactly the languages whose windows decode slowest; English and other
+  short-word languages plan identically to before. The Translate screen also
+  shows honest phase labels ("Reading the document…", "Saving the translated
+  document…") for the stretches before and after the window counter, and no
+  longer re-renders the whole screen on every unchanged progress poll.
+- **A pasted text has a generous size limit on the Translate screen** (issue
+  #160). Pastes over 200,000 characters are declined up front with a note
+  pointing at the document path, instead of freezing the app while an unbounded
+  job is planned.
 - **Gemma 4 E2B is now the recommended model for 12–15 GB machines** (issue #153,
   owner-ratified 2026-08-09). The weak-hardware measurement the rank was gated on
   landed: on the designated 16 GB weak-iGPU class, E2B generates ~1.9× faster than
@@ -213,6 +226,24 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Fixed
 
+- **Translation-audit wave (issues #156–#165, 2026-08-09).** Translating (or
+  comparing) an indexed photo no longer fails "source unreadable" (#156); Stop
+  really cancels a document translation that is waiting behind another document
+  task — it no longer runs on invisibly and saves an unwanted document (#157),
+  a single failed progress check no longer abandons a running translation
+  behind a "failed" panel, and a reload while the translation waits its turn
+  re-attaches progress and Stop; the automatic deep-index build after an import
+  works again while a chat model is running (#158); locking or quitting during
+  a translation model cold start no longer hangs for up to three minutes —
+  the load is aborted and the workspace locks promptly (#159); a timeout during
+  a live-but-slow decode is no longer retried into a second identical timeout
+  (#160); translation errors on the Translate and Images screens are reliably
+  announced to screen readers, the GPU-contention remedy is visible text rather
+  than a tooltip, a finished document translation is announced, and the drop
+  zones are single-control and flicker-free (#161, #162); a same-language
+  document drop is declined before the import instead of after it, and Copy no
+  longer silently copies only the first page of a long result (#162). Plus the
+  named test-teeth (#163) and documentation-drift (#164) closures.
 - **Frontend-audit wave (issues #137–#151, 2026-08-09).** Rapid edits in the
   chat scope picker no longer overwrite each other (#139), the skill run button
   appears as soon as an attached file finishes processing (#140), the Documents

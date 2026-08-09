@@ -17,7 +17,10 @@ function dataTransfer(types: string[], files: File[] = []): { types: string[]; f
 }
 
 function zoneEl(): HTMLElement {
-  return screen.getByRole('button', { name: t('en', 'images.drop.title') })
+  // #161 (FE-6): the zone is a plain drag surface (no button role) — locate it via its title.
+  const el = screen.getByText(t('en', 'images.drop.title')).closest('.image-dropzone')
+  if (!(el instanceof HTMLElement)) throw new Error('drop zone not rendered')
+  return el
 }
 
 describe('ImageDropZone — drag affordance parity with TranslateDropZone (DOC-3)', () => {

@@ -141,13 +141,15 @@ export const IPC = {
   startDocTask: 'doctasks:start',
   /** Poll one task's state/progress. */
   getDocTask: 'doctasks:get',
-  /** The currently RUNNING task's status (a copy), or null when idle — reload adoption for the
-   *  file/document translation path (the `translateGetActive` precedent for the text path). */
+  /** The currently RUNNING task's status (a copy), or null when idle — the #38 chain-adopt read. */
   getActiveDocTask: 'doctasks:getActive',
+  /** Running + queued tasks in lane order (copies) — the file-translation reload-adoption read
+   *  (#157 DT-5: a translation queued behind a foreign task must be adoptable too). */
+  listActiveDocTasks: 'doctasks:listActive',
   /**
    * Cancel a task. With NO jobId, cancels the currently active one (the chat busy banner). With a
-   * PRESENT jobId it is a TARGETED cancel (FA-3 / F-6): it cancels ONLY when that id is the active
-   * task, so a stale Stop carrying a since-superseded jobId never kills the task that took the lane.
+   * PRESENT jobId it is a TARGETED exact-id cancel, running OR queued (#157 DT-2). Stale-Stop-safe
+   * (FA-3 / F-6): a settled task is terminal (no-op) and a newer task has a different id.
    */
   cancelDocTask: 'doctasks:cancel',
   /**

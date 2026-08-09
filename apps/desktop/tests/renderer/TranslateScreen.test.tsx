@@ -143,6 +143,34 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('#163 (T-7): GPU posture with NO parseable offload line shows the gpuUnknown form', async () => {
+    // The fallback branch — the one that renders exactly on machines where the offload parse
+    // failed — was the only device-hint branch without a test.
+    stubApi({
+      getAppStatus: vi.fn(async () =>
+        appStatus({ translationDevice: { device: 'auto', gpuLayers: null, totalLayers: null, live: true } })
+      ),
+      getActiveTranslateJob: vi.fn(async () => null)
+    })
+    render(<TranslateScreen onNavigate={vi.fn()} />)
+    const hint = await screen.findByText(t('en', 'translate.device.gpuUnknown'))
+    expect(hint).toHaveAttribute('title', t('en', 'translate.device.title'))
+  })
+
+  it('#161 (FE-4): the partial-offload cause/remedy is VISIBLE text, not tooltip-only', async () => {
+    stubApi({
+      getAppStatus: vi.fn(async () =>
+        appStatus({ translationDevice: { device: 'auto', gpuLayers: 12, totalLayers: 49, live: false } })
+      ),
+      getActiveTranslateJob: vi.fn(async () => null)
+    })
+    render(<TranslateScreen onNavigate={vi.fn()} />)
+    await screen.findByText(t('en', 'translate.device.gpuPartial', { done: 12, total: 49 }))
+    // The remedy ("a smaller chat model frees memory…") is reachable WITHOUT a pointer hover —
+    // a title attribute on a non-focusable <p> is invisible to keyboard/touch/screen readers.
+    expect(screen.getByText(t('en', 'translate.device.partialTitle'))).toBeInTheDocument()
+  })
+
   it('a forced-CPU start shows the CPU form; no outcome yet shows NO hint', async () => {
     stubApi({
       getAppStatus: vi.fn(async () =>
@@ -350,7 +378,9 @@ function fileStubs(opts: {
 }
 
 function dropOnZone(files: File[], zoneName: string = t('en', 'translate.drop.title')): void {
-  const zone = screen.getByRole('button', { name: zoneName })
+  // #161 (FE-6): the zone is a plain drag surface (no button role) — locate it via its title.
+  const zone = screen.getByText(zoneName).closest('.translate-dropzone')
+  if (!(zone instanceof HTMLElement)) throw new Error('drop zone not rendered')
   // A real file drag reports the 'Files' type — the zone gates on it (L8).
   fireEvent.drop(zone, { dataTransfer: { files, types: ['Files'] } })
 }
@@ -671,4 +701,61 @@ describe('TranslateScreen — document translation (TG-5)', () => {
       screen.queryByText(t('en', 'translate.file.failedParts.one', { count: 1 }))
     ).not.toBeInTheDocument()
   }, 10000)
+})
+
+// ---- #163 (T-2): the mount-adopt effect must have TEETH ----
+//
+// TranslateScreen's mount effect calls adoptActiveJob() + adoptActiveFileTranslation(). Every
+// screen test used to stub getActiveTranslateJob → null and omit the doc-task read, so BOTH
+// adopts no-opped in every screen test — deleting the entire effect passed the full suite,
+// and the FA-3/F-3 reload recovery could regress silently (panel back idle while the job runs
+// invisibly in main; new starts refused docTaskBusy). These two drive each adopt through the
+// SCREEN's own mount effect against a main that reports a running job.
+
+describe('TranslateScreen — mount adoption teeth (#163 / T-2)', () => {
+  it('re-adopts a running TEXT job on mount: seeds the accumulated output, shows Stop, re-subscribes', async () => {
+    const s = streamStubs()
+    stubApi({
+      ...s.api,
+      getActiveTranslateJob: vi.fn(async () => ({
+        jobId: 'j9',
+        state: 'translating',
+        text: 'Halb übersetzt',
+        windowsTotal: 2,
+        windowsDone: 1
+      } as TranslateJob))
+    })
+    render(<TranslateScreen onNavigate={vi.fn()} />)
+
+    // The adopt seeded the accumulated text into the live output panel…
+    expect(await screen.findByText('Halb übersetzt')).toBeInTheDocument()
+    // …the busy affordances are live (Stop present, the working hint shows)…
+    expect(screen.getByRole('button', { name: t('en', 'translate.stop') })).toBeInTheDocument()
+    // …and the stream channels were re-subscribed under the ADOPTED job id.
+    expect(s.api.onTranslateToken).toHaveBeenCalledWith('j9', expect.any(Function))
+    expect(s.api.onTranslateDone).toHaveBeenCalledWith('j9', expect.any(Function))
+  })
+
+  it('re-adopts a running DOCUMENT translation doc-task on mount (FA-3 / F-3): progress + Stop come back', async () => {
+    const running = docTask({ jobId: 'task9', state: 'running', progress: { stepsDone: 2, stepsTotal: 5 } })
+    const cancelDocTask = vi.fn(async () => {})
+    stubApi({
+      getAppStatus: vi.fn(async () => appStatus()),
+      getActiveTranslateJob: vi.fn(async () => null),
+      listActiveDocTasks: vi.fn(async () => [running]),
+      getDocTask: vi.fn(async () => running),
+      cancelDocTask
+    })
+    const user = userEvent.setup()
+    render(<TranslateScreen onNavigate={vi.fn()} />)
+
+    // The panel re-attached: window progress (stepsTotal minus the materialize step) + Stop.
+    expect(
+      await screen.findByText(t('en', 'translate.file.progress', { done: 2, total: 4 }))
+    ).toBeInTheDocument()
+    const stop = screen.getByRole('button', { name: t('en', 'translate.stop') })
+    // Stop targets the ADOPTED task's id (the exact-id cancel, #157 DT-2).
+    await user.click(stop)
+    await waitFor(() => expect(cancelDocTask).toHaveBeenCalledWith('task9'))
+  })
 })

@@ -2337,8 +2337,6 @@ export const en = {
     'Type or paste text, pick the languages, and translate it locally. Nothing leaves this drive.',
   // Brief placeholder while the first availability read resolves.
   'translate.starting': 'Getting the translation model ready…',
-  // Locked posture: the app shell normally gates the whole app behind unlock, so this is a calm fallback.
-  'translate.locked': 'Unlock your workspace to translate text.',
   // Availability EmptyState (the O2 install path) — a friendly refusal + a deep link to AI Model.
   'translate.avail.noModel': 'Translation needs the translation model on this drive.',
   'translate.avail.hint': 'Download it once on the AI Model screen — then translation works fully offline.',
@@ -2395,6 +2393,10 @@ export const en = {
     "The translation model couldn't start — the device may be low on memory. Close other apps or restart HilbertRaum, then try again.",
   'translate.err.empty': 'No translation came back. Try again, or rephrase the text.',
   'translate.err.sameLang': 'Pick two different languages.',
+  // #160 (BE-3): the finite paste bound (TRANSLATE_MAX_TEXT_CHARS — keep the number in sync).
+  'translate.err.tooLong':
+    'The text is too long to translate here (over 200,000 characters). Split it into smaller ' +
+    'parts, or save it as a file and translate it as a document.',
 
   // ---- Document drag-and-drop translation (TG-5, plan §2 D7) ----
   // A dropped/picked document is imported as a Temporary doc, translated on the existing
@@ -2405,13 +2407,18 @@ export const en = {
   // Progress + result.
   'translate.file.importing': 'Reading the document…',
   'translate.file.progress': 'Translating… ({done}/{total})',
-  'translate.file.working': 'Translating the document…',
+  // #165 (P-3): honest phase labels for the two count-less stretches of a document translation.
+  'translate.file.preparing': 'Preparing the translation — reading the document…',
+  'translate.file.saving': 'Saving the translated document…',
   'translate.file.truncated':
     'Showing the start of the translation — export it or open it in Documents for the whole document.',
   'translate.file.export': 'Export…',
   'translate.file.exported': 'Document exported',
   'translate.file.show': 'Show in Documents',
   'translate.file.reset': 'Translate another document',
+  // #161 (FE-5): the polite live-region ping when a document translation finishes — the panel
+  // swap after minutes of silence was never announced to assistive tech.
+  'translate.file.doneAnnounce': 'Document translation finished. The result is shown.',
   // Issue #58 — the at-a-glance completeness warnings next to a finished translation. The
   // {pages} value is preformatted ("3" / "3–4, 7"); count = total missing pages / failed parts.
   'translate.file.gapPages.one':

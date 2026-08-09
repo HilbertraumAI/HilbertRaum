@@ -1411,6 +1411,66 @@ describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
   }, 60_000)
 })
 
+// ---- #158 (DT-3): the auto deep-index offer vs the import loop's `processing` window ------
+// `offerDeepIndex(id)` used to run INSIDE the per-document try — while the id was still in the
+// module-local `processing` set — so with a chat runtime up, `maybeEnqueueTreeBuild`'s
+// `startDocTask({kind:'tree'})` always hit the BE-1 `isDocumentProcessing` guard and the
+// best-effort catch swallowed it: no tree task, and (runtime present) no `pending` marker
+// either. The Q1/Q4 auto-build silently never fired in the wired app; unit tests passed
+// because partial deps left the guard unwired. The offer now runs after the `finally`
+// releases the id. Watched fail pre-fix (the spy result was a documentBusyIngesting throw).
+describe('auto deep-index enqueue at import with a runtime up (#158 / DT-3)', () => {
+  it('the import-loop offer survives the wired BE-1 guard and enqueues the tree task', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const storeDir = documentsDir(workspacePath)
+    const ctx = ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true)
+    registerDocsIpc(ctx)
+    // A chat runtime IS up — the branch that enqueues a real tree task (the no-runtime
+    // branch writes `tree_status='pending'` before any guard and never had the bug).
+    const runtime = {
+      modelId: 'chat-model',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream(): AsyncGenerator<string> {
+        yield 'ok'
+      }
+    }
+    // The live wiring shape (main/index.ts): the guard reads ctx late-bound.
+    const manager = new DocTaskManager({
+      getDb: () => db,
+      getRuntime: () => runtime,
+      getTranslator: () => null,
+      isChatStreaming: () => false,
+      // Small context ⇒ ~200-word summary windows ⇒ a ~3,000-word doc exceeds the 12-window
+      // ceiling (`planSummaryWindows().truncated`) and qualifies for the auto tree build.
+      getContextTokens: () => 1024,
+      getStoreDir: () => storeDir,
+      getIngestionDeps: () => ({}),
+      beginDocumentWork: () => () => {},
+      isDocumentProcessing: (id) => ctx.docIngestionActive?.(id) ?? false
+    })
+    ctx.docTasks = manager
+    const startSpy = vi.spyOn(manager, 'startDocTask')
+
+    const words = Array.from({ length: 3000 }, (_, i) => `wort${i}`).join(' ')
+    const p = join(workspacePath, 'grossesdokument.txt')
+    writeFileSync(p, words, 'utf8')
+    const job = await runImport([p])
+    expect(job.documentIds.length).toBe(1)
+
+    // The offer reached startDocTask AND was admitted (pre-fix: the same call THREW
+    // documentBusyIngesting into the swallowed best-effort catch).
+    const treeIdx = startSpy.mock.calls.findIndex((c) => c[0]?.kind === 'tree')
+    expect(treeIdx).toBeGreaterThanOrEqual(0)
+    expect(startSpy.mock.results[treeIdx].type).toBe('return')
+
+    // Hygiene: don't leak the enqueued build past the test.
+    manager.cancelAllDocTasks()
+    await manager.awaitActiveTaskSettled()
+  }, 60_000)
+})
+
 // ---- Issue #90: export the stored ORIGINAL bytes (docs:exportOriginal) --------------------
 // The text export (`docs:export`) refuses every non-text format, and the DocRow gate hid even
 // that from imported documents — so an imported PDF/DOCX/recording could never leave the

@@ -1,6 +1,7 @@
 import { extname } from 'node:path'
 import { TRANSLATION_NATIVE_NAMES, type TranslationTargetLang } from '../../../shared/types'
 import { tMain } from '../i18n'
+import { approxBudgetWordCount } from '../ingestion/chunker'
 import { packIntoWindows } from './summary'
 
 // Translation window math + output framing (split out of the former monolithic doctasks.ts —
@@ -157,7 +158,14 @@ export function planTranslationWindows(
 ): TranslationPlan {
   const usable = translationUsableTokens(contextTokens)
   const budgetWords = translationBudgetWords(contextTokens)
-  const windows = packIntoWindows(segmentTexts, budgetWords)
+  // #165 (P-1): pack in the budget's OWN unit — WORDS (`approxBudgetWordCount`, the word-count
+  // estimate with the token estimator's anti-collapse defenses). The old `approxTokenCount`
+  // fill charged a >16-char word ceil(len/4) against a per-WORD budget, under-filling windows
+  // 1.5–2.5× on compound-heavy prose (de/cs) — extra windows + extra prompt-scaffold prefills
+  // on exactly the languages whose windows already decode ~30 min each on CPU. Both the input
+  // (2.5 tok/word) and output (3.0 tok/word) ceilings are per SOURCE WORD, so words is the
+  // correct budget unit for both constraints; ordinary short-word prose packs byte-identically.
+  const windows = packIntoWindows(segmentTexts, budgetWords, approxBudgetWordCount)
   // Output headroom = the usable tokens the input share cannot consume — ≥ the output
   // weight × input words by construction (TRANSLATION_OUTPUT_TOKENS_PER_WORD; more when
   // the D4 clamp shrinks the input share of a larger context).
@@ -271,7 +279,8 @@ export function planTranslationBlocks(
   let run: string[] = []
   const flushRun = (): void => {
     if (run.length === 0) return
-    for (const w of packIntoWindows(run, budgetWords)) {
+    // #165 (P-1): the word-unit measure — see the planTranslationWindows note.
+    for (const w of packIntoWindows(run, budgetWords, approxBudgetWordCount)) {
       blocks.push({ kind: 'window', text: w })
       allWindows.push(w)
     }
@@ -340,8 +349,8 @@ export function translationAttributionLine(modelId: string): string {
 
 /**
  * "report.pdf" + de → "report (Deutsch).md" (the materialized doc is Markdown). The
- * label is the target's NATIVE name (shared/types `TRANSLATION_NATIVE_NAMES` — the
- * curated 10, untranslated by design).
+ * label is the target's NATIVE name (shared/types `TRANSLATION_NATIVE_NAMES` — all 51
+ * production-tier codes since issue #31, untranslated by design).
  */
 export function translatedDocumentTitle(
   sourceTitle: string,

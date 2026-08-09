@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { Banner, Button, useToast } from '../components'
+import { Button, ErrorBanner, useToast } from '../components'
 import {
   AnswerThread,
   ImageDropZone,
@@ -485,11 +485,14 @@ export function ImagesScreen({
     <div className="screen images-screen">
       <h1>{t('images.title')}</h1>
       <p className="lead">{t('images.empty.body')}</p>
-      {screenError && (
-        <Banner tone="error" onDismiss={() => setScreenError(null)} t={t}>
-          {t(CLIENT_ERR_KEY[screenError] ?? 'images.err.decodeFailed')}
-        </Banner>
-      )}
+      {/* #161 (FE-1): the always-mounted ErrorBanner region (M-U1 / the #145 SH-2 idiom) —
+          inserting a fresh role="alert" that already contains text is missed by many screen
+          readers; the region stays mounted and the message swaps inside it. */}
+      <ErrorBanner
+        message={screenError ? t(CLIENT_ERR_KEY[screenError] ?? 'images.err.decodeFailed') : null}
+        onDismiss={screenError ? () => setScreenError(null) : undefined}
+        t={t}
+      />
       {renderBody()}
     </div>
   )

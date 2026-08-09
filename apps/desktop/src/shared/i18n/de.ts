@@ -2406,7 +2406,6 @@ export const de: Record<keyof typeof en, string> = {
   'translate.lead':
     'Tippe oder füge Text ein, wähle die Sprachen und übersetze lokal. Nichts verlässt dieses Laufwerk.',
   'translate.starting': 'Übersetzungsmodell wird vorbereitet…',
-  'translate.locked': 'Entsperre deinen Arbeitsbereich, um Text zu übersetzen.',
   'translate.avail.noModel': 'Zum Übersetzen wird das Übersetzungsmodell auf diesem Laufwerk benötigt.',
   'translate.avail.hint': 'Lade es einmalig im KI-Modell-Bildschirm — dann funktioniert das Übersetzen vollständig offline.',
   'translate.avail.cta': 'Zum KI-Modell',
@@ -2455,6 +2454,10 @@ export const de: Record<keyof typeof en, string> = {
     'Das Übersetzungsmodell konnte nicht starten — möglicherweise ist zu wenig Arbeitsspeicher frei. Schließe andere Programme oder starte HilbertRaum neu und versuche es dann erneut.',
   'translate.err.empty': 'Es kam keine Übersetzung zurück. Versuche es erneut oder formuliere den Text um.',
   'translate.err.sameLang': 'Wähle zwei verschiedene Sprachen.',
+  // #160 (BE-3): die endliche Eingabegrenze (TRANSLATE_MAX_TEXT_CHARS — Zahl synchron halten).
+  'translate.err.tooLong':
+    'Der Text ist zu lang, um ihn hier zu übersetzen (über 200.000 Zeichen). Teile ihn in ' +
+    'kleinere Abschnitte, oder speichere ihn als Datei und übersetze ihn als Dokument.',
 
   // ---- Dokument per Drag-and-drop übersetzen (TG-5, Plan §2 D7) ----
   'translate.drop.title': 'Oder ein Dokument zum Übersetzen ablegen',
@@ -2462,13 +2465,17 @@ export const de: Record<keyof typeof en, string> = {
   'translate.drop.types': 'PDF, Word, Markdown oder Text — übersetzt in die gewählte Sprache.',
   'translate.file.importing': 'Dokument wird gelesen…',
   'translate.file.progress': 'Übersetzen… ({done}/{total})',
-  'translate.file.working': 'Dokument wird übersetzt…',
+  // #165 (P-3): ehrliche Phasenbeschriftung für die beiden Abschnitte ohne Fensterzähler.
+  'translate.file.preparing': 'Übersetzung wird vorbereitet — Dokument wird gelesen…',
+  'translate.file.saving': 'Übersetztes Dokument wird gespeichert…',
   'translate.file.truncated':
     'Es wird der Anfang der Übersetzung angezeigt — exportiere es oder öffne es unter Dokumente für das ganze Dokument.',
   'translate.file.export': 'Exportieren…',
   'translate.file.exported': 'Dokument exportiert',
   'translate.file.show': 'Unter Dokumente anzeigen',
   'translate.file.reset': 'Weiteres Dokument übersetzen',
+  // #161 (FE-5): die höfliche Live-Region-Meldung nach einer fertigen Dokumentübersetzung.
+  'translate.file.doneAnnounce': 'Dokumentübersetzung abgeschlossen. Das Ergebnis wird angezeigt.',
   // Issue #58 — die Vollständigkeits-Hinweise neben einer fertigen Übersetzung. {pages} kommt
   // vorformatiert ("3" / "3–4, 7"); count = fehlende Seiten insgesamt / fehlgeschlagene Teile.
   'translate.file.gapPages.one':

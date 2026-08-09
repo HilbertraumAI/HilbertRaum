@@ -471,13 +471,18 @@ const api = {
   /** Poll one task's state/progress (async-with-polling, like imports/downloads). */
   getDocTask: (jobId: string): Promise<DocTaskStatus> =>
     ipcRenderer.invoke(IPC.getDocTask, jobId),
-  /** The currently running document task's status (a copy), or null when idle — reload adoption
-   *  for the file/document translation path (the `getActiveTranslateJob` precedent for text). */
+  /** The currently running document task's status (a copy), or null when idle — the #38
+   *  chain-adopt read. */
   getActiveDocTask: (): Promise<DocTaskStatus | null> =>
     ipcRenderer.invoke(IPC.getActiveDocTask),
-  /** Cancel a task. With no jobId, cancels the currently active one; with a jobId it is a TARGETED
-   *  cancel — it cancels ONLY when that id is the active task (FA-3 / F-6), so a stale Stop can
-   *  never kill a task that took the lane after the caller's own task settled. */
+  /** Running + queued document tasks in lane order (copies) — the file-translation
+   *  reload-adoption read (#157 DT-5: a translation queued behind a foreign task is
+   *  adoptable too, giving the #150/DOC-8 queued-accept branch real teeth). */
+  listActiveDocTasks: (): Promise<DocTaskStatus[]> =>
+    ipcRenderer.invoke(IPC.listActiveDocTasks),
+  /** Cancel a task. With no jobId, cancels the currently active one; with a jobId it is a
+   *  TARGETED exact-id cancel, running OR queued (#157 DT-2). Stale-Stop-safe (FA-3 / F-6):
+   *  a settled task is terminal (no-op) and a newer task on the lane has a different id. */
   cancelDocTask: (jobId?: string): Promise<void> =>
     ipcRenderer.invoke(IPC.cancelDocTask, jobId),
   /** Read-only coverage + source provenance of a document's current summary (whole-document

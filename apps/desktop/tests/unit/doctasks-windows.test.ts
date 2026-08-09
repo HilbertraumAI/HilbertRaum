@@ -7,7 +7,8 @@ import {
   SUMMARY_PROMPT_RESERVE_TOKENS,
   SUMMARY_TOKENS_PER_WORD
 } from '../../src/main/services/doctasks'
-import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
+import { approxBudgetWordCount, approxTokenCount } from '../../src/main/services/ingestion/chunker'
+import { packIntoWindows } from '../../src/main/services/doctasks/summary'
 
 // Phase 33 window math (decision D25) at the boundaries: single-pass vs map-reduce
 // cutover, the hard map-call ceiling + truncated flag, and the no-overflow guarantees
@@ -270,6 +271,59 @@ describe('planTranslationWindows', () => {
     expect(plan.windows.length).toBeGreaterThanOrEqual(3)
     for (const w of plan.windows) {
       expect(approxTokenCount(w)).toBeLessThanOrEqual(clampWords)
+    }
+  })
+})
+
+describe('#165 (P-1) — translation packs in the budget\'s own unit (WORDS)', () => {
+  /** A parser-segment of `n` compound-style 24-char words (de/cs-shaped prose). Charged
+   *  ceil(24/7)=4 word-equivalents each by the word measure vs ceil(24/4)=6 by the token
+   *  estimate — the exact mismatch that under-filled every window 1.5–2.5×. */
+  function compoundSegment(n: number, tag: string): string {
+    return Array.from({ length: n }, (_, i) => `${tag}${i}`.padEnd(24, 'x')).join(' ')
+  }
+
+  it('the word-count estimate: 1 per ordinary word; long words charged ceil(len/7); defenses keep biting', () => {
+    expect(approxBudgetWordCount('ein kurzer satz')).toBe(3) // ordinary prose: 1 per word
+    expect(approxBudgetWordCount('a'.repeat(16))).toBe(1) // at the one-token threshold
+    expect(approxBudgetWordCount('a'.repeat(24))).toBe(4) // a legit compound: ceil(24/7)
+    expect(approxBudgetWordCount('x'.repeat(700))).toBe(100) // a glued run can never be "1 word"
+    expect(approxBudgetWordCount('日本語です'.repeat(6))).toBe(30) // space-less scripts per char
+  })
+
+  it('fits MORE real compound words per window than the token estimate allowed (fewer windows)', () => {
+    // 30 parser segments of 10 compounds each. Word measure: 40/segment → 17 segments per
+    // 690-word window → 2 windows. The old token fill charged 60/segment → 11 per window →
+    // 3 windows (the under-fill this fixes). Same real model-token load per window either
+    // way — the input ceiling 2.5 tok/word-equivalent covers the heaviest measured language.
+    const segs = Array.from({ length: 30 }, (_, i) => compoundSegment(10, `k${i}y`))
+    const plan = planTranslationWindows(segs, CTX)
+    expect(plan.windows).toHaveLength(2) // pre-fix: 3
+    // The packer invariant holds in the budget's own unit…
+    for (const w of plan.windows) {
+      expect(approxBudgetWordCount(w)).toBeLessThanOrEqual(T_BUDGET)
+      // …and the window's REAL input-token estimate still fits the launched context share
+      // (2.5 tokens per charged word-equivalent is the conservative ceiling).
+      expect(approxBudgetWordCount(w) * TRANSLATION_INPUT_TOKENS_PER_WORD).toBeLessThanOrEqual(
+        TRANSLATION_MAX_INPUT_TOKENS
+      )
+    }
+    // Nothing dropped by the re-packing.
+    expect(plan.windows.join(' ').split(/\s+/)).toHaveLength(300)
+  })
+
+  it('ordinary short-word prose packs BYTE-IDENTICALLY under the word measure', () => {
+    const texts = [chunkOf(T_BUDGET - 10, 'a'), chunkOf(T_BUDGET + 50, 'b'), chunkOf(30, 'c')]
+    expect(packIntoWindows(texts, T_BUDGET, approxBudgetWordCount)).toEqual(
+      packIntoWindows(texts, T_BUDGET)
+    )
+  })
+
+  it('a single over-budget glued run is still split (the anti-collapse defense in word units)', () => {
+    const plan = planTranslationWindows(['y'.repeat(20_000)], CTX)
+    expect(plan.windows.length).toBeGreaterThan(1)
+    for (const w of plan.windows) {
+      expect(approxBudgetWordCount(w)).toBeLessThanOrEqual(T_BUDGET)
     }
   })
 })

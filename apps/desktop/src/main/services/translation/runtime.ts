@@ -1,4 +1,10 @@
-import { LlamaServer, combineSignals, isBindRaceError, type LlamaServerOptions } from '../runtime/sidecar'
+import {
+  LlamaServer,
+  combineSignals,
+  isBindRaceError,
+  isStartAbortError,
+  type LlamaServerOptions
+} from '../runtime/sidecar'
 import { readCompletionSSE, type CompletionFinal } from './completion'
 import { buildTranslationPrompt, TRANSLATION_STOP_TOKEN, type TranslationLangCode } from './prompt'
 import type { TranslationDeviceStatus } from '../../../shared/types'
@@ -270,6 +276,18 @@ export function isTranslationStartError(err: unknown): err is TranslationStartEr
   return err instanceof TranslationStartError
 }
 
+/**
+ * #160 (BE-2): the per-request timeout `combineSignals` aborts with (`TimeoutError`
+ * DOMException — the fetch/SSE read rejects with the abort reason). Both retry loops use it,
+ * together with a tokens-flowed flag, to tell "decode too slow" (tokens flowed steadily until
+ * the bound — deterministic at temperature 0, retrying reproduces it and burns another full
+ * timeout) from "server wedged" (no tokens flowed — a fresh request is a reasonable transient
+ * bet, the class the retry exists for).
+ */
+export function isRequestTimeoutError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'TimeoutError'
+}
+
 /** Owns one lazily-started TranslateGemma `llama-server` and translates one window over loopback. */
 export class TranslationRuntime {
   readonly modelId: string
@@ -329,6 +347,13 @@ export class TranslationRuntime {
    * clears — together with this promise — only when the shared pass has fully settled.
    */
   private teardownPromise: Promise<void> | null = null
+  /**
+   * Aborts the IN-FLIGHT start ladder (#159 / BE-1). Armed per `startLadder()` run; fired by
+   * `doTeardown()` so a lock/quit no longer awaits the whole ~10 GB spawn + health window
+   * (up to the 180 s default health timeout) while the plaintext DB stays open — the child
+   * is killed inside the health wait and the start rejects with an AbortError instead.
+   */
+  private startAbort: AbortController | null = null
   private readonly idleTimeoutMs: number
   private readonly idleClock: IdleClock
 
@@ -422,7 +447,7 @@ export class TranslationRuntime {
   }
 
   /** One launch attempt at one device posture; installs `this.server` on success. */
-  private async startAttempt(device: TranslationDevice): Promise<void> {
+  private async startAttempt(device: TranslationDevice, startSignal?: AbortSignal): Promise<void> {
     // Parse the server's own load log for the offload outcome (issue #42 reopen): under the
     // 'auto' posture llama.cpp `--fit` can silently land a PARTIAL offload (a resident chat
     // model took the VRAM) that decodes at ~CPU speed, and the offload line is the only place
@@ -459,6 +484,9 @@ export class TranslationRuntime {
       healthTimeoutMs: this.opts.healthTimeoutMs,
       healthIntervalMs: this.opts.healthIntervalMs,
       host: this.opts.host,
+      // #159 (BE-1): let a lock/quit teardown abort this start mid-health-wait (the child is
+      // killed via the normal stop path; start() rejects AbortError — never latched below).
+      startAbortSignal: startSignal,
       // M1: a mid-session sidecar crash (the child dies on its own AFTER becoming healthy — driver
       // crash, VRAM/RAM exhaustion) otherwise leaves `this.server` pointing at a dead handle: every
       // subsequent `translate()` fails with a connection error, and each failed attempt re-arms the
@@ -499,11 +527,19 @@ export class TranslationRuntime {
    */
   private async startLadder(): Promise<void> {
     const device = this.resolveDevice()
+    // #159 (BE-1): arm the per-ladder abort so `doTeardown()` can cut a cold start short.
+    const abort = new AbortController()
+    this.startAbort = abort
     try {
-      await this.startAttempt(device)
+      await this.startAttempt(device, abort.signal)
       return
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
+      // #159 (BE-1): a teardown-ABORTED start is not a device or model fault — never latch
+      // `startFailed` (translation must lazily restart after the next unlock) and never fall
+      // to the CPU rung (the lock/quit is tearing the child down right now). It propagates
+      // raw; the in-flight job was already aborted by the teardown's own cancel pass.
+      if (isStartAbortError(err) || abort.signal.aborted) throw error
       // A TRANSIENT port-bind race must NOT arm either latch (the reranker F7 fix / chat REL-1):
       // it is not a device fault — LlamaServer already retried once on a fresh port. It propagates
       // RAW (not a TranslationStartError), so the consumers' transient-retry paths still treat it
@@ -515,10 +551,12 @@ export class TranslationRuntime {
         // the CPU rung just to tear it straight down.
         if (!this.stopped && !this.tearingDown) {
           try {
-            await this.startAttempt('cpu')
+            await this.startAttempt('cpu', abort.signal)
             return
           } catch (cpuErr) {
             const cpuError = cpuErr instanceof Error ? cpuErr : new Error(String(cpuErr))
+            // #159 (BE-1): same rule on the CPU rung — an aborted start must not latch.
+            if (isStartAbortError(cpuErr) || abort.signal.aborted) throw cpuError
             if (isBindRaceError(cpuError.message)) throw cpuError
             const startError = new TranslationStartError(cpuError)
             this.startFailed = startError
@@ -535,6 +573,8 @@ export class TranslationRuntime {
       const startError = new TranslationStartError(error)
       this.startFailed = startError
       throw startError
+    } finally {
+      if (this.startAbort === abort) this.startAbort = null
     }
   }
 
@@ -652,8 +692,13 @@ export class TranslationRuntime {
   }
 
   private async doTeardown(): Promise<void> {
-    // A lazy start may be in flight (first translate() racing quit/lock) — wait it out so the
-    // spawned child can't outlive the app as an orphan. Likewise an in-flight soft idle teardown.
+    // A lazy start may be in flight (first translate() racing quit/lock). #159 (BE-1): ABORT it
+    // rather than wait it out — awaiting the whole spawn + health wait (up to the 180 s default
+    // health timeout for a wedged ~10 GB load) kept lock/quit hung with the plaintext DB open.
+    // The abort kills the child inside the health wait (the normal stop path — no orphan), the
+    // start rejects AbortError (never latches `startFailed`), and the await below then settles
+    // in roughly one health-poll interval instead of the full load.
+    this.startAbort?.abort()
     if (this.starting) await this.starting.catch(() => undefined)
     if (this.idleTeardownPromise) await this.idleTeardownPromise.catch(() => undefined)
     const server = this.server

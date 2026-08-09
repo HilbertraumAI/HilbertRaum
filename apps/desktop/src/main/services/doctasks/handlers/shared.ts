@@ -39,11 +39,15 @@ export async function extractTranslationSource(
 ): Promise<TranslationSource> {
   let source: TranslationSource
   try {
+    // #156 (DT-1): pass the OCR engine alongside the cipher — an image-source document
+    // re-parses through the image parser here, which throws without an engine even though
+    // ingest already OCR'd and indexed the file. Every sibling caller already passes it.
+    const ingestionDeps = ctx.deps.getIngestionDeps()
     const preview = await extractDocumentPreview(
       ctx.deps.getDb(),
       ctx.deps.getStoreDir(),
       documentId,
-      { cipher: ctx.deps.getIngestionDeps().cipher ?? null }
+      { cipher: ingestionDeps.cipher ?? null, ocrEngine: ingestionDeps.ocrEngine }
     )
     source = {
       segments: preview.segments

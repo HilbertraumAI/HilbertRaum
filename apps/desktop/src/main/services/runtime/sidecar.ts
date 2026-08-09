@@ -323,12 +323,26 @@ export interface LlamaServerOptions {
    * next rung / MockRuntime. Injected by tests to assert the refusal without a real binary.
    */
   verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
+  /**
+   * Abort an IN-FLIGHT `start()` (#159 / BE-1): when this signal fires, the health wait
+   * stops at its next poll iteration, the spawned child is killed via the normal `stop()`
+   * path (no orphan), and `start()` rejects with an `AbortError` DOMException. Wired by the
+   * translation sidecar so a lock/quit teardown no longer awaits the full spawn + health
+   * window (up to `healthTimeoutMs` — 180 s by default) of a ~10 GB cold start it is about
+   * to kill anyway. Optional: absent ⇒ behavior byte-identical for every other consumer.
+   */
+  startAbortSignal?: AbortSignal
   // Test seams:
   spawn?: SpawnFn
   fetchImpl?: FetchFn
   findPort?: (host: string) => Promise<number>
   /** Grace period after SIGTERM before escalating to SIGKILL on stop() (default 2000ms). */
   killGraceMs?: number
+}
+
+/** The `AbortError` a signal-aborted `start()` rejects with (#159 / BE-1). */
+export function isStartAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError'
 }
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 180_000
@@ -480,6 +494,8 @@ export class LlamaServer {
 
   private async doStart(): Promise<void> {
     const startT0 = performance.now()
+    // #159 (BE-1): a teardown may have begun before this start ran at all — don't even spawn.
+    this.throwIfStartAborted()
     // Re-hash the binary against its install marker BEFORE we spawn it (vuln-scan B). A
     // packaged-build tamper (`mismatch`) throws here, before any port/child is allocated,
     // so the ladder cleanly falls to the next rung / MockRuntime. Dev + legacy drives
@@ -580,6 +596,14 @@ export class LlamaServer {
     return tail ? ` — last output: ${tail}` : ''
   }
 
+  /** #159 (BE-1): abort an in-flight start — kill the child (normal stop path, no orphan)
+   *  and reject with an AbortError. No-op when no signal is wired or it hasn't fired. */
+  private throwIfStartAborted(): void {
+    if (this.opts.startAbortSignal?.aborted) {
+      throw new DOMException('llama-server start aborted', 'AbortError')
+    }
+  }
+
   private async waitForHealthy(): Promise<void> {
     const deadline = Date.now() + this.healthTimeoutMs
     // RT-5: start small and back off (×2) up to the configured cap, so a fast-ready
@@ -587,6 +611,14 @@ export class LlamaServer {
     // pass a tiny `healthIntervalMs` (e.g. 1) cap the initial too, keeping them fast.
     let interval = Math.min(INITIAL_HEALTH_INTERVAL_MS, this.healthIntervalMs)
     for (;;) {
+      // #159 (BE-1): a lock/quit teardown fired the start-abort signal — stop waiting for
+      // health, kill the child now, and reject the start. Checked per iteration, so the
+      // worst-case abort latency is one poll interval + one bounded probe, not the
+      // remaining health-timeout budget.
+      if (this.opts.startAbortSignal?.aborted) {
+        await this.stop()
+        this.throwIfStartAborted()
+      }
       if (this.spawnError) {
         const message = this.spawnError.message
         await this.stop()

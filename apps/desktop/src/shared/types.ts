@@ -1010,7 +1010,8 @@ export type TranslateJobState = 'queued' | 'translating' | 'done' | 'failed' | '
  * lane (D9). `empty`: the model returned nothing. `cancelled`: the user pressed Stop / a lock.
  * `startFailed`: the translation sidecar could not start (a latched start fault — most likely
  * transient memory pressure from the co-resident chat model; the UI asks the user to restart the
- * app or free memory — F-7 / FA-4 option c).
+ * app or free memory — F-7 / FA-4 option c). `tooLong`: the pasted text exceeds
+ * `TRANSLATE_MAX_TEXT_CHARS` (#160 BE-3 — the document path handles big inputs).
  */
 export type TranslateErrorCode =
   | 'noModel'
@@ -1021,6 +1022,18 @@ export type TranslateErrorCode =
   | 'startFailed'
   | 'empty'
   | 'cancelled'
+  | 'tooLong'
+
+/**
+ * #160 (BE-3): upper bound on the view-translate paste, in characters. Planning (regex split +
+ * the token-estimate walk) runs synchronously on the main process over the whole paste and the
+ * window count is unbounded, so a multi-MB paste stalled the main thread and started an
+ * effectively unbounded job (retained in the job history until lock/quit). 200 000 chars is
+ * generous for interactive use (~30 000 words ≈ dozens of windows ≈ hours of sidecar decode
+ * already); anything bigger belongs on the DOCUMENT path, which imports + plans off the
+ * interactive loop. Keep the `translate.err.tooLong` copy (en+de) in sync with this value.
+ */
+export const TRANSLATE_MAX_TEXT_CHARS = 200_000
 
 /** What the renderer sends to start a view translation (validated server-side). */
 export interface TranslateRequest {

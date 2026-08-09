@@ -51,17 +51,23 @@ export function registerDocTasksIpc(ctx: AppContext): void {
     requireTasks().getDocTask(typeof jobId === 'string' ? jobId : '')
   )
 
-  // Reload adoption for the file/document translation path (FA-3 / F-3): the running task's
-  // status (a copy) or null. A safe read — never starts anything.
+  // Reload adoption: the RUNNING task's status (a copy) or null — the #38 chain-adopt read.
+  // A safe read — never starts anything.
   ipcMain.handle(IPC.getActiveDocTask, (): DocTaskStatus | null => requireTasks().getActiveDocTask())
+
+  // #157 (DT-5): the file-translation reload-adoption read (FA-3 / F-3) — running + queued
+  // tasks in lane order, so a translation QUEUED behind a foreign task is adoptable too.
+  ipcMain.handle(IPC.listActiveDocTasks, (): DocTaskStatus[] => requireTasks().listActiveDocTasks())
 
   ipcMain.handle(IPC.cancelDocTask, (_e, jobId?: string | null): void => {
     const manager = requireTasks()
     const id = typeof jobId === 'string' && jobId.length > 0 ? jobId : null
-    // A PRESENT id is a TARGETED cancel (FA-3 / F-6): cancel ONLY when it is the active task, so a
-    // stale Stop carrying a since-superseded jobId can never kill the task that took the lane after
-    // it. An ABSENT id keeps the active-task fallback (the chat busy banner) — old callers unchanged.
-    if (id) manager.cancelActiveDocTask(id)
+    // A PRESENT id is a TARGETED cancel: exact-id, running OR queued (#157 DT-2 — the old
+    // active-task match made Stop a silent no-op for a translation queued behind a foreign
+    // running task, which then ran to completion). The FA-3 / F-6 stale-Stop property holds:
+    // a settled task is terminal (no-op), and a newer task on the lane has a different id.
+    // An ABSENT id keeps the active-task fallback (the chat busy banner) — old callers unchanged.
+    if (id) manager.cancelDocTask(id)
     else manager.cancelDocTask(null)
   })
 

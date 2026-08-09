@@ -49,6 +49,7 @@ import {
 import type { AuditEventType, GeneratedProvenance } from '../../src/shared/types'
 import type { Embedder } from '../../src/main/services/embeddings'
 import type { ModelRuntime } from '../../src/main/services/runtime'
+import type { OcrEngine } from '../../src/main/services/ocr'
 import { applyUiLanguageSetting } from '../../src/main/services/i18n'
 import { t } from '../../src/shared/i18n'
 
@@ -629,6 +630,57 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     expect(text).toContain(`word${budget}`)
   })
 
+  it('#160 (BE-2): a mid-decode TIMEOUT (tokens flowed) is marked WITHOUT a retry', async () => {
+    const docId = await importDoc(40) // one window
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'timing-out-translator',
+      contextWindow: () => 4096,
+      async translate(o) {
+        calls += 1
+        o.onToken?.('slow ') // the decode was LIVE — tokens flowed until the bound
+        throw new DOMException('The operation timed out.', 'TimeoutError')
+      },
+      async stop() {}
+    }
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    // Single window, marked failed → all windows failed → the task fails friendly.
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(TASK_GENERIC_FAILURE_MESSAGE)
+    // Deterministic (temperature-0, same hardware): the retry would hold the one-at-a-time
+    // lane another full per-request timeout for the identical outcome — exactly ONE attempt.
+    expect(calls).toBe(1)
+  })
+
+  it('#160 (BE-2) control: a timeout with NO tokens (wedged server) keeps its one transient retry', async () => {
+    const docId = await importDoc(40)
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'wedged-translator',
+      contextWindow: () => 4096,
+      async translate() {
+        calls += 1
+        throw new DOMException('The operation timed out.', 'TimeoutError')
+      },
+      async stop() {}
+    }
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('failed')
+    expect(calls).toBe(2) // a fresh request against a wedged server IS a reasonable bet
+  })
+
   // L12: the attribution line + failed-window notice are PERSISTED into the generated document,
   // so they localize to the app language at materialization time (via tMain), not the
   // canonical-English DB strings. With German selected, the materialized Markdown is German.
@@ -892,7 +944,7 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
     }
   }
 
-  it('cancelActiveDocTask with a STALE jobId never kills the newer active task (the F-6 race pin)', async () => {
+  it('a targeted cancel with a STALE jobId never kills the newer active task (the F-6 race pin)', async () => {
     const a = await importDoc(600, 'a.txt')
     const b = await importDoc(40, 'b.txt')
     const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
@@ -908,19 +960,58 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
     manager.cancelDocTask(first.jobId)
     expect((await waitTerminal(manager, first.jobId)).state).toBe('cancelled')
 
-    // A NEW task B takes the lane. A stale Stop still carrying A's OLD jobId must NOT kill B.
+    // A NEW task B takes the lane. A stale Stop still carrying A's OLD jobId must NOT kill B —
+    // exact-id (#157 DT-2): A is TERMINAL, so the targeted cancel no-ops; B has a different id.
     const second = manager.startDocTask({
       kind: 'translation',
       documentIds: [b],
       params: { sourceLang: 'en', targetLang: 'de' }
     })
     await waitRunning(manager, second.jobId, translator)
-    manager.cancelActiveDocTask(first.jobId) // stale/foreign id → no-op
+    manager.cancelDocTask(first.jobId) // stale (terminal) id → no-op
     // B is untouched and reaches its OWN terminal state (done), not cancelled by the stale id.
     expect((await waitTerminal(manager, second.jobId)).state).toBe('done')
   })
 
-  it('cancelActiveDocTask cancels when the id IS the active task; the no-arg fallback still hits it (old-caller parity)', async () => {
+  it('#157 (DT-2): a targeted cancel dequeues a translation QUEUED behind a foreign running task', async () => {
+    const a = await importDoc(600, 'a.txt')
+    const b = await importDoc(40, 'b.txt')
+    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
+    const manager = makeManager({ translator })
+
+    // A foreign task holds the lane (any kind serializes on the one FIFO); OUR translation queues.
+    const foreign = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [a],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    await waitRunning(manager, foreign.jobId, translator)
+    const ours = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [b],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    expect(manager.getDocTask(ours.jobId).state).toBe('queued')
+
+    // Stop on OUR queued task: the old cancelActiveDocTask matched only runningId ?? queue[0]
+    // with runningId winning, so this was a silent no-op and the "cancelled" job later ran to
+    // completion + materialized a document. Exact-id dequeues it NOW.
+    manager.cancelDocTask(ours.jobId)
+    expect(manager.getDocTask(ours.jobId).state).toBe('cancelled')
+
+    // The foreign running task is untouched and finishes.
+    expect((await waitTerminal(manager, foreign.jobId)).state).toBe('done')
+    await manager.awaitActiveTaskSettled()
+    // The cancelled task NEVER runs when the pump drains the queue (pre-fix it ran to
+    // completion here): no sidecar call is made after the foreign task settled.
+    const callsAtForeignDone = translator.calls.length
+    await new Promise((r) => setTimeout(r, 60)) // give a wrongly-pumped task time to start
+    expect(translator.calls.length).toBe(callsAtForeignDone)
+    expect(manager.getDocTask(ours.jobId).state).toBe('cancelled')
+    expect(manager.hasActiveTask()).toBe(false)
+  })
+
+  it('a targeted exact-id cancel hits the running task; the no-arg fallback still works (old-caller parity)', async () => {
     const a = await importDoc(600, 'a.txt')
     const b = await importDoc(600, 'b.txt')
     const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
@@ -933,7 +1024,7 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
       params: { sourceLang: 'en', targetLang: 'de' }
     })
     await waitRunning(manager, first.jobId, translator)
-    manager.cancelActiveDocTask(first.jobId)
+    manager.cancelDocTask(first.jobId)
     expect((await waitTerminal(manager, first.jobId)).state).toBe('cancelled')
 
     // Absent-id parity: the no-arg cancelDocTask() still cancels whatever is active.
@@ -969,6 +1060,40 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
     manager.cancelDocTask(jobId)
     await waitTerminal(manager, jobId)
     expect(manager.getActiveDocTask()).toBeNull() // back to idle once terminal
+  })
+
+  it('#157 (DT-5): listActiveDocTasks surfaces a translation QUEUED behind a foreign running task', async () => {
+    const a = await importDoc(600, 'a.txt')
+    const b = await importDoc(40, 'b.txt')
+    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
+    const manager = makeManager({ translator })
+
+    expect(manager.listActiveDocTasks()).toEqual([]) // idle
+
+    const foreign = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [a],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    await waitRunning(manager, foreign.jobId, translator)
+    const ours = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [b],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+
+    // getActiveDocTask keeps its running-only contract (the #38 chain-adopt caller)…
+    expect(manager.getActiveDocTask()?.jobId).toBe(foreign.jobId)
+    // …while the list carries the QUEUED translation too, in lane order — the state the
+    // reload adopt needs (a task becomes `running` in the same tick it becomes runningId,
+    // so `queued` was structurally unreachable through getActiveDocTask).
+    const active = manager.listActiveDocTasks()
+    expect(active.map((t) => t.jobId)).toEqual([foreign.jobId, ours.jobId])
+    expect(active[1].state).toBe('queued')
+
+    manager.cancelAllDocTasks()
+    await manager.awaitActiveTaskSettled()
+    expect(manager.listActiveDocTasks()).toEqual([])
   })
 })
 
@@ -1242,5 +1367,48 @@ describe('issue #58 — a source page with no extractable text must never vanish
     } finally {
       applyUiLanguageSetting('en')
     }
+  })
+})
+
+describe('#156 (DT-1) — image-source documents: re-extraction gets the OCR engine', () => {
+  /** The docs-ipc fake-engine shape: recognition is deterministic, no real decode. */
+  const fakeOcrEngine: OcrEngine = {
+    id: 'fake-tesseract',
+    languages: ['deu', 'eng'],
+    recognize: async () => ({ text: 'Hallo Welt aus dem Foto.', confidence: 92 })
+  }
+
+  async function importPhoto(): Promise<string> {
+    // The image parser hands the raw bytes to the injected engine (no in-process decode),
+    // so arbitrary bytes under a .jpg name exercise the REAL photo ingest path.
+    const p = join(tmp, 'letter.jpg')
+    writeFileSync(p, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]))
+    const info = createQueuedDocument(db, p)
+    const done = await processDocument(db, storeDir, info.id, { ocrEngine: fakeOcrEngine })
+    expect(done.status).toBe('indexed')
+    return info.id
+  }
+
+  it('translates a photographed page end to end (was: fails "sourceUnreadable")', async () => {
+    const docId = await importPhoto()
+    const translator = scriptedTranslator()
+    // The REAL ingestion deps carry the engine (main/index.ts getIngestionDeps) — the doc-task
+    // re-extraction must forward it, or parsers/image.ts throws and the task fails
+    // "sourceUnreadable" for a file the app just OCR'd and indexed. (The compare handler's
+    // extractSegmentTexts rides the same extractTranslationSource, so this covers both.)
+    const manager = makeManager({ translator, ingestionDeps: () => ({ ocrEngine: fakeOcrEngine }) })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'de', targetLang: 'en' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('done')
+    // The window text is the re-recognized photo text — the engine reached the re-parse.
+    expect(translator.calls.length).toBe(1)
+    expect(translator.calls[0].text).toContain('Hallo Welt aus dem Foto.')
+    const newId = status.resultRef?.documentId as string
+    const { text } = await readStoredDocumentText(db, storeDir, newId)
+    expect(text).toContain('Hallo Welt aus dem Foto.')
   })
 })

@@ -29,9 +29,11 @@ import { getFileTranslate } from './fileTranslateSession'
 /**
  * Result of a `translate()` call: `started` once a job is created (the output streams into it, or
  * a code surfaces as an error), `busy` when one is already in flight (the caller may surface it),
- * `noop` when there is nothing to translate (empty text — no feedback owed).
+ * `docTaskBusy` when a FOREIGN document task holds the one-at-a-time lane (#162 FE-3 — collapsing
+ * it into `busy` made the banner claim "a translation is already running" when none was), `noop`
+ * when there is nothing to translate (empty text — no feedback owed).
  */
-export type TranslateOutcome = 'started' | 'busy' | 'noop'
+export type TranslateOutcome = 'started' | 'busy' | 'docTaskBusy' | 'noop'
 
 /** The store snapshot the Translate screen renders. A fresh object per change, stable between. */
 export interface TranslateSessionSnapshot {
@@ -162,8 +164,10 @@ export async function translate(req: TranslateRequest): Promise<TranslateOutcome
   // invariant at the store level too.
   if (snapshot.activeJobId || snapshot.translating) return 'busy'
   if (getFileTranslate().busy) return 'busy'
+  // #162 (FE-3): a foreign doc task on the lane is ITS OWN outcome — the honest copy exists
+  // one key over (`translate.err.docTaskBusy`, the file path's own guard already uses it).
   const foreign = getActiveDocTask()
-  if (foreign && !isDocTaskTerminal(foreign.status)) return 'busy'
+  if (foreign && !isDocTaskTerminal(foreign.status)) return 'docTaskBusy'
 
   const myGen = ++startGen
   // Fresh output panel for this run; remember the language choice for the next session mount.
