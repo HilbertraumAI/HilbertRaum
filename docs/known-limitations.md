@@ -624,12 +624,23 @@ password recovery — are documented in
   the in-app **section / smart-view filters** (which narrow over the full library, not just the visible rows)
   are the intended way to locate a document by name/attribute. Windowing engages only when a real scroll
   viewport is laid out — with none (e.g. a unit test rendering the screen standalone) the list renders every
-  row. The trade-off is **deliberately not** applied to the chat transcript (its scroll-to-bottom /
-  find-in-page / StreamAnnouncer behavior keeps it un-windowed for now). Windowing bounds the DOM
+  row. The trade-off is **deliberately not** applied to the chat transcript (see the next bullet).
+  Windowing bounds the DOM
   only, not the payload: the backend `listDocuments` still loads and ships the whole library per
   refresh (no LIMIT, unindexed `created_at` sort) — fine at ≤~1k documents, a multi-MB IPC payload
   at ~10k; revisit together with the `ocr_json` projection migration (the recorded DB-8 residual)
   if a library approaches that scale (full-audit 2026-07-10 PF-5, watch-item).
+- **The chat transcript is not virtualized: switching to a very long conversation re-parses its
+  whole history, a visible stall at several hundred messages (accepted — frontend audit
+  2026-08-09 CH-11, decision recorded per #148).** The transcript deliberately remounts per
+  conversation (`key={activeId}`, the CR-2 fix — stale-scroll/announcer state must not leak across
+  chats), so every switch re-renders and re-parses (Streamdown/KaTeX) every message; persisted
+  turns are memoized within a mounted conversation, so only the SWITCH pays. Windowing is declined
+  for now because the transcript's scroll-to-bottom contract, browser find-in-page over the whole
+  history, and the StreamAnnouncer's live-region behavior all assume an un-windowed DOM — the same
+  reasons the documents-list windowing was not extended here. Typical conversations (tens of
+  turns) switch instantly; revisit (window or cap old messages) if compaction-era conversations
+  routinely reach hundreds of turns.
 - **Chat "Try again" optimistically drops the last answer before regenerating; it self-heals, never
   data loss (accepted).** `ChatScreen.onTryAgain` slices the last
   assistant turn from the view before calling `stream(...)`, so the regenerate looks immediate. If the

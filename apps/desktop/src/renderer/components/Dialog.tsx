@@ -88,8 +88,14 @@ export interface ConfirmDialogProps {
   /** Disables the confirm button (e.g. a required acknowledgement not yet given). */
   confirmDisabled?: boolean
   onConfirm: () => void
-  /** Called on Cancel, Esc, and clicking the overlay. */
+  /** Called on the explicit Cancel button (and, unless `onDismiss` is set, Esc/overlay too). */
   onCancel: () => void
+  /**
+   * CH-13 (#148): called on Esc / overlay dismissal INSTEAD of `onCancel` when provided —
+   * for dialogs whose cancel button carries decision semantics (a dismissal is not a
+   * decision). Defaults to `onCancel`, so existing consumers are unchanged.
+   */
+  onDismiss?: () => void
   /** Bound translate fn for the built-in Cancel label (i18n record §5 ⑤); English default. */
   t?: Translator
 }
@@ -107,6 +113,7 @@ export function ConfirmDialog({
   confirmDisabled,
   onConfirm,
   onCancel,
+  onDismiss,
   t = englishTranslator
 }: ConfirmDialogProps): JSX.Element {
   const onCloseAutoFocus = useReturnFocus(open)
@@ -116,7 +123,7 @@ export function ConfirmDialog({
   const bodyId = useId()
   const hasBody = children != null
   return (
-    <RadixDialog.Root open={open} onOpenChange={(next) => !next && onCancel()}>
+    <RadixDialog.Root open={open} onOpenChange={(next) => !next && (onDismiss ?? onCancel)()}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="dialog-overlay" />
         <RadixDialog.Content

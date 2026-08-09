@@ -333,6 +333,9 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .stat-value.good { color: var(--success); }
 
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+/* CH-10 (#148): the token-spaced variant — replaces the chat area's one magic-number inline
+   style (marginTop: 12 on the no-model actions row). */
+.actions-spaced { margin-top: var(--space-3); }
 /* Buttons (guidelines §6): three levels — .btn = Secondary (default), .btn.primary,
    .btn.ghost. Screens use the Button component (components/Button.tsx). */
 .btn {

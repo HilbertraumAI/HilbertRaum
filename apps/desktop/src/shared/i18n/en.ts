@@ -147,6 +147,10 @@ export const en = {
   'chat.saveConversation': 'Save this conversation',
   'chat.savedTo': 'Saved to {path}',
   'chat.copied': 'Copied',
+  // CH-5 (#148): a refused/failed clipboard write gets feedback too — never silence.
+  'chat.copyFailed': 'Could not copy to the clipboard',
+  // CH-12 (#148): accessible name of the keyboard-scrollable transcript region.
+  'chat.transcript.label': 'Conversation transcript',
   'chat.stopped': 'Stopped — the reply may be incomplete',
   // #39: the calm one-time warm-up line under the pending first answer. Reassurance, not an
   // alert: the model IS working (one-time prompt prefill + load); later answers reuse it.
@@ -2190,6 +2194,9 @@ export const en = {
   // FE-C: a Files-bearing drop that resolved to no on-disk file (a browser-origin drag) — surfaced
   // instead of failing silently. Pairs with the FE-A drop-path fix (full-audit-2026-06-29 follow-up).
   'chat.attach.dropUnsupported': "Couldn't add that — drag in a file saved on your computer.",
+  // CH-6 (#148): the attach-import PROGRESS poll died (IPC failure) — the import itself may
+  // still finish; the per-file failure banner would have been lost, so say so honestly.
+  'chat.attach.trackFailed': "Couldn't follow the file import — check Documents for the result.",
 
   // ---- Images — "Ask about an image" (image-understanding §5/§11, Phase V3) ----
   // Visual understanding of ONE local PNG/JPEG via a local vision model — distinct from OCR

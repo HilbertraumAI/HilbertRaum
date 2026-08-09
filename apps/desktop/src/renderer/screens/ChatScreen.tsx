@@ -34,7 +34,7 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
 import { fmt1 } from '../lib/format'
-import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
+import { RUNTIME_POLL_MS, STREAM_RECOVER_FAILURE_BUDGET, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useEventCallback } from '../lib/useEventCallback'
 import { useT, type I18n } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, Progress, SegmentedControl, Spinner, useToast } from '../components'
@@ -243,6 +243,9 @@ export function ChatScreen({
   // streaming UI (live bubble, locked composer, Stop) as a locally-owned stream, but is
   // fed by polling `getActiveStream` rather than the live token events it missed.
   const [recovering, setRecovering] = useState(false)
+  // CH-7 (#148): ref mirror of `recovering` so the poll's completion side effects run at
+  // tick level (pure setState) instead of inside the updater. Written wherever recovering is.
+  const recoveringRef = useRef(false)
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
   // The full runtime status behind `runtimeRunning` — feeds the muted header hint (#36:
   // which model is answering, GPU or CPU) without changing the boolean-driven gates below.
@@ -384,6 +387,17 @@ export function ChatScreen({
   useEffect(() => {
     activeIdRef.current = activeId
   }, [activeId])
+  // CH-3 (frontend audit 2026-08-09, #148): select a conversation with the ref claimed
+  // SYNCHRONOUSLY. The three one-shot mount reattach effects (stream / skill-run /
+  // initialConversationId) all guard on `activeIdRef.current == null`, but the mirror effect
+  // above syncs one render LATE — two effects resolving before that commit both passed the
+  // guard and the last writer won nondeterministically (the screen could land on the wrong
+  // conversation while a live stream continued invisibly in the other one). Every selection
+  // site claims through here so the first claimant wins and later ones see it.
+  const selectConversationId = (id: string | null): void => {
+    activeIdRef.current = id
+    setActiveId(id)
+  }
   // RD-1 (full-audit 2026-07-10): the conversation id THIS instance just created via
   // ensureConversation. On the FIRST send the history-load effect flushes DURING
   // ensureConversation's `await refreshConversations()` — its listMessages reaches main BEFORE the
@@ -409,6 +423,10 @@ export function ChatScreen({
   // M-U2: set when the user presses Stop during a stream, so the stream's finally can
   // confirm the interruption (a stopped partial reply otherwise looks like a normal turn).
   const stopped = useRef(false)
+  // CH-14 (#148): synchronous re-entry guards for the two conversation-creating entry points
+  // — `busyStreaming` flips too late to stop a second Enter / a "+ New" double-click.
+  const sendInFlightRef = useRef(false)
+  const newChatInFlightRef = useRef(false)
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // FE-1 (mirrors DocumentsScreen/DiagnosticsTab FE-4): the attach-import poll's late
   // getImportJob tick and the streamed-token flush both resolve AFTER the user can navigate
@@ -686,6 +704,11 @@ export function ChatScreen({
     if (!window.api.getActiveStream) return // older preload / test stub
     let cancelled = false
     let timer: ReturnType<typeof setInterval> | null = null
+    // CH-4 (#148): a getActiveStream REJECTION is not "stream finished" — mapping it to null
+    // cleared the live bubble, unlocked the composer, refreshed to a stale transcript, and
+    // permanently detached on ONE transient IPC failure. Tolerate a bounded burst (the SKA-40
+    // pattern); only a sustained failure falls through to the finished handling.
+    let pollFailures = 0
     const stopPolling = (): void => {
       if (timer != null) {
         clearInterval(timer)
@@ -696,41 +719,48 @@ export function ChatScreen({
       let snap: Awaited<ReturnType<NonNullable<typeof window.api.getActiveStream>>> = null
       try {
         snap = await window.api.getActiveStream!(activeId)
+        pollFailures = 0
       } catch {
-        snap = null
+        pollFailures += 1
+        if (pollFailures < STREAM_RECOVER_FAILURE_BUDGET) return // transient — keep the bubble, retry
+        snap = null // sustained failure: best-effort finish below rather than a wedged composer
       }
       if (cancelled || activeIdRef.current !== activeId) return
       if (snap) {
+        recoveringRef.current = true
         setRecovering(true)
         setStreamConvId(activeId)
         setStreamText(snap.content)
         setStreamThinking(snap.reasoning)
       } else {
         // Nothing in flight — either it never was, or it just finished while we watched.
-        setRecovering((was) => {
-          if (was) {
-            // Completed: pull the persisted final reply and clear the live bubble.
-            void window.api
-              .listMessages(activeId)
-              .then((m) => {
-                if (!cancelled && activeIdRef.current === activeId) setMessages(m)
-              })
-              .catch(() => undefined)
-            // A recovered turn may have cut a fresh checkpoint / changed fullness — refresh both.
-            void refreshContextInfo(activeId)
-            setStreamConvId(null)
-            setStreamText('')
-            setStreamThinking('')
-            // CR-4 (M-U2 parity): a RECOVERED stream has no local stream() `finally` to consume the
-            // stop flag, so confirm a user-requested stop here — same predicate shape as that finally,
-            // and the two paths are mutually exclusive (a stream is either locally owned or recovered),
-            // so no double toast. Resetting the ref makes a StrictMode double-invocation of this
-            // updater a no-op (the second pass sees `stopped.current` already false).
-            if (stopped.current && activeIdRef.current === activeId) showToast(t('chat.stopped'))
-            stopped.current = false
-          }
-          return false
-        })
+        // CH-7 (#148): React requires state updaters to be pure — the completion side effects
+        // (message fetch, toast, ref mutation, sibling setState) used to run INSIDE the
+        // setRecovering updater, where a StrictMode double-invocation can replay them. The
+        // live flag is mirrored in a ref so the side effects run at tick level, exactly once.
+        const was = recoveringRef.current
+        recoveringRef.current = false
+        setRecovering(false)
+        if (was) {
+          // Completed: pull the persisted final reply and clear the live bubble.
+          void window.api
+            .listMessages(activeId)
+            .then((m) => {
+              if (!cancelled && activeIdRef.current === activeId) setMessages(m)
+            })
+            .catch(() => undefined)
+          // A recovered turn may have cut a fresh checkpoint / changed fullness — refresh both.
+          void refreshContextInfo(activeId)
+          setStreamConvId(null)
+          setStreamText('')
+          setStreamThinking('')
+          // CR-4 (M-U2 parity): a RECOVERED stream has no local stream() `finally` to consume
+          // the stop flag, so confirm a user-requested stop here — same predicate shape as that
+          // finally, and the two paths are mutually exclusive (a stream is either locally owned
+          // or recovered), so no double toast.
+          if (stopped.current && activeIdRef.current === activeId) showToast(t('chat.stopped'))
+          stopped.current = false
+        }
         stopPolling() // idle — stop until activeId/streaming changes again
       }
     }
@@ -773,7 +803,7 @@ export function ChatScreen({
       }
       if (cancelled || activeIdRef.current != null) return
       if (convs.length > 0) setConversations(convs)
-      setActiveId(streamingId)
+      selectConversationId(streamingId)
       const conv = convs.find((c) => c.id === streamingId)
       if (conv) setMode(conv.mode) // mirror the conversation's mode (chat vs documents), like onSelectConversation
     })()
@@ -809,7 +839,7 @@ export function ChatScreen({
       }
       if (cancelled || activeIdRef.current != null) return
       if (convs.length > 0) setConversations(convs)
-      setActiveId(runConvId)
+      selectConversationId(runConvId)
       const conv = convs.find((c) => c.id === runConvId)
       if (conv) setMode(conv.mode) // mirror the conversation's mode, like onSelectConversation
     })()
@@ -838,7 +868,7 @@ export function ChatScreen({
       const conv = convs.find((c) => c.id === initialConversationId)
       if (!conv) return
       setConversations(convs)
-      setActiveId(conv.id)
+      selectConversationId(conv.id)
       setMode(conv.mode) // mirror the conversation's mode, like onSelectConversation
     })()
     return () => {
@@ -953,7 +983,7 @@ export function ChatScreen({
     // RD-1: mark the id BEFORE setActiveId so the history-load effect (which can flush during the
     // refreshConversations await below) skips its no-op-but-racy listMessages for this send.
     selfCreatedIdRef.current = conv.id
-    setActiveId(conv.id)
+    selectConversationId(conv.id)
     await refreshConversations()
     return conv.id
   }
@@ -1214,7 +1244,11 @@ export function ChatScreen({
     // are still mounted AND still on the conversation it was computed for — otherwise a late reply
     // setStates a dead component or stamps a stale-conversation suggestion. (`activeIdRef` tracks
     // the live id; `convId` is '' for a still-"new" draft, matching `activeId ?? ''` at call time.)
-    const applies = (): boolean => mountedRef.current && (activeIdRef.current ?? '') === convId
+    // CH-8 (#148): also sequence-guard — only the LATEST request may apply, so an out-of-order
+    // suggestSkills reply computed for a superseded draft can't overwrite the newer draft's offer.
+    const seq = ++suggestSeqRef.current
+    const applies = (): boolean =>
+      mountedRef.current && (activeIdRef.current ?? '') === convId && suggestSeqRef.current === seq
     void Promise.resolve(window.api.suggestSkills?.(convId, draft))
       .then((s) => {
         if (applies()) setSkillSuggestion(s?.[0] ?? null)
@@ -1238,6 +1272,9 @@ export function ChatScreen({
   // `suggestSkills` IPC (no model, no network); the draft is CONTENT — scored main-side, never
   // logged. Only when no skill is already picked (an explicit pick owns the turn); cleared otherwise.
   const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // CH-8 (#148): monotonically increasing id of the latest suggestSkills request (see
+  // refreshSuggestion above — declared here beside its debounce timer).
+  const suggestSeqRef = useRef(0)
   useEffect(() => {
     if (currentSkillId) {
       setSkillSuggestion(null)
@@ -1480,51 +1517,15 @@ export function ChatScreen({
         }
       })()
     }, WARMUP_HINT_DELAY_MS)
-    const unsubscribe = window.api.onToken(convId, (token) => {
-      // The first answer token auto-collapses an expanded Thinking… line and clears any live
-      // "working on it" notice (§5.2/U5 — the summary or extraction is done once tokens flow).
-      if (!answerStarted.current) {
-        answerStarted.current = true
-        setThinkingOpen(false)
-        setProgressNotice(null)
-      }
-      // #39: the first streamed chunk retires the warm-up hint for good — tokens flowing IS
-      // the "warm-up over" signal (the hint must never linger next to a streaming answer).
-      if (!generationStarted.current) {
-        generationStarted.current = true
-        setWarmupHint(false)
-      }
-      pendingTokens.current += token
-      scheduleFlush()
-    })
-    // One-shot ephemeral "working on it" notice (§5.2). Its `kind` picks the copy: 'compaction'
-    // (summarizing earlier messages) or 'analysis' (U5 — reading the whole document for a skill's
-    // exhaustive answer). The optional-chained CALL tolerates an older bridge (no unsubscribe there).
-    // Cleared on the first token (above) and in finally. Never recovered on remount (R14).
-    const unsubscribeCompaction = window.api.onCompaction?.(convId, (notice) =>
-      setProgressNotice(notice.kind ?? 'compaction')
-    )
-    // The REAL assembled-prompt usage for this turn (fired once, post-assembly): the live meter's
-    // base while streaming — the only way a document turn's injected excerpt block reaches the
-    // meter. Optional-chained like onCompaction (tolerates an older bridge); ephemeral (R14).
-    const unsubscribeUsage = window.api.onContextUsage?.(convId, (usage) => setStreamUsage(usage))
-    // Deep-mode reasoning deltas feed the live "Thinking…" line. They are
-    // a separate channel from answer tokens and are never part of the persisted reply.
-    const unsubscribeReasoning = window.api.onReasoning(convId, (delta) => {
-      // #39: a reasoning delta arrives BEFORE any answer token in Deep mode and equally proves
-      // the prefill is done — the warm-up hint must not sit next to a visibly thinking model.
-      if (!generationStarted.current) {
-        generationStarted.current = true
-        setWarmupHint(false)
-      }
-      pendingThinking.current += delta
-      scheduleFlush()
-    })
-    // Filename auto-scope notice: a one-shot hint that this document answer was
-    // restricted to the file(s) the question named (ephemeral — never persisted).
-    const unsubscribeScope = window.api.onScopeNotice(convId, ({ titles }) => {
-      if (titles.length > 0) showToast(t('chat.scopeNotice', { titles: titles.join(', ') }))
-    })
+    // CH-15 (#148): the five channel subscriptions are made INSIDE the try below with no-op-
+    // initialized unsubscribers — a synchronous throw while subscribing (a mixed-version
+    // preload missing `onReasoning`/`onScopeNotice`) used to happen BEFORE the try, wedging
+    // `streaming` true forever and leaking the already-made listeners on every send attempt.
+    let unsubscribe: () => void = () => {}
+    let unsubscribeCompaction: (() => void) | undefined
+    let unsubscribeUsage: (() => void) | undefined
+    let unsubscribeReasoning: () => void = () => {}
+    let unsubscribeScope: () => void = () => {}
     // Only update the visible transcript if the user is still looking at THIS
     // conversation — replacing another conversation's view with this one's messages
     // corrupts the visible transcript. Returns the persisted list it applied (CR-1: onSend reads it
@@ -1551,6 +1552,51 @@ export function ChatScreen({
     // A resolved send has persisted the turn by definition, so the compare is skipped entirely.
     let sendSucceeded = false
     try {
+      unsubscribe = window.api.onToken(convId, (token) => {
+        // The first answer token auto-collapses an expanded Thinking… line and clears any live
+        // "working on it" notice (§5.2/U5 — the summary or extraction is done once tokens flow).
+        if (!answerStarted.current) {
+          answerStarted.current = true
+          setThinkingOpen(false)
+          setProgressNotice(null)
+        }
+        // #39: the first streamed chunk retires the warm-up hint for good — tokens flowing IS
+        // the "warm-up over" signal (the hint must never linger next to a streaming answer).
+        if (!generationStarted.current) {
+          generationStarted.current = true
+          setWarmupHint(false)
+        }
+        pendingTokens.current += token
+        scheduleFlush()
+      })
+      // One-shot ephemeral "working on it" notice (§5.2). Its `kind` picks the copy: 'compaction'
+      // (summarizing earlier messages) or 'analysis' (U5 — reading the whole document for a skill's
+      // exhaustive answer). The optional-chained CALL tolerates an older bridge (no unsubscribe there).
+      // Cleared on the first token (above) and in finally. Never recovered on remount (R14).
+      unsubscribeCompaction = window.api.onCompaction?.(convId, (notice) =>
+        setProgressNotice(notice.kind ?? 'compaction')
+      )
+      // The REAL assembled-prompt usage for this turn (fired once, post-assembly): the live meter's
+      // base while streaming — the only way a document turn's injected excerpt block reaches the
+      // meter. Optional-chained like onCompaction (tolerates an older bridge); ephemeral (R14).
+      unsubscribeUsage = window.api.onContextUsage?.(convId, (usage) => setStreamUsage(usage))
+      // Deep-mode reasoning deltas feed the live "Thinking…" line. They are
+      // a separate channel from answer tokens and are never part of the persisted reply.
+      unsubscribeReasoning = window.api.onReasoning(convId, (delta) => {
+        // #39: a reasoning delta arrives BEFORE any answer token in Deep mode and equally proves
+        // the prefill is done — the warm-up hint must not sit next to a visibly thinking model.
+        if (!generationStarted.current) {
+          generationStarted.current = true
+          setWarmupHint(false)
+        }
+        pendingThinking.current += delta
+        scheduleFlush()
+      })
+      // Filename auto-scope notice: a one-shot hint that this document answer was
+      // restricted to the file(s) the question named (ephemeral — never persisted).
+      unsubscribeScope = window.api.onScopeNotice(convId, ({ titles }) => {
+        if (titles.length > 0) showToast(t('chat.scopeNotice', { titles: titles.join(', ') }))
+      })
       // Send the resolved skill choice VERBATIM (audit §4.3 per-turn semantics): `undefined` lets main
       // resolve the saved default (and may auto-fire), an explicit `null` forces a skill-free turn (no
       // auto-fire — the per-turn "None" pick and the S13c "answer without it" undo), an id forces that
@@ -1639,7 +1685,11 @@ export function ChatScreen({
 
   async function onSend(): Promise<void> {
     const text = input.trim()
-    if (!text || busyStreaming) return
+    // CH-14 (#148): `busyStreaming` flips only after ensureConversation's round trips resolve —
+    // a second Enter in that millisecond window used to create a DUPLICATE conversation. The
+    // ref is set synchronously, so the re-entry is refused before any async work.
+    if (!text || busyStreaming || sendInFlightRef.current) return
+    sendInFlightRef.current = true
     setInput('')
     // U-3: a fresh turn deserves a fresh suggestion — a decline was scoped to the just-sent draft.
     setSuggestionDismissed(false)
@@ -1664,6 +1714,8 @@ export function ChatScreen({
       // error and restore the draft too.
       setError(friendlyIpcError(e))
       restoreDraft(text)
+    } finally {
+      sendInFlightRef.current = false
     }
   }
 
@@ -1718,7 +1770,13 @@ export function ChatScreen({
     const target = streamConvId ?? activeId
     if (target) {
       stopped.current = true
-      void window.api.stopGeneration(target)
+      // CH-5 (#148): a FAILED stop must reset the flag (the stream later finishing normally
+      // would otherwise toast a false "stopped") and say why instead of spinning silently.
+      // Promise.resolve tolerates a partial bridge/test stub returning undefined.
+      void Promise.resolve(window.api.stopGeneration(target)).catch((e) => {
+        stopped.current = false
+        if (mountedRef.current) setError(friendlyIpcError(e))
+      })
     }
   }
 
@@ -1738,9 +1796,11 @@ export function ChatScreen({
   function onCopyMessage(content: string): void {
     // Copy via MAIN (preload → clipboard:write), not navigator.clipboard — the latter needs
     // a secure context + focused document and is unreliable in the file://-loaded renderer.
-    void window.api?.copyToClipboard(content).then((ok) => {
-      if (ok) showToast(t('chat.copied'))
-    })
+    // CH-5 (#148): a refused write (`ok === false`) or a rejection gets feedback too — the
+    // failure used to be an unhandled rejection / pure silence (the images CODE-36 class).
+    void Promise.resolve(window.api?.copyToClipboard(content))
+      .then((ok) => showToast(ok ? t('chat.copied') : t('chat.copyFailed')))
+      .catch(() => showToast(t('chat.copyFailed')))
   }
 
   // Save one answer's attached RESULT TABLE as CSV (result-tables §4, Phase 2). MAIN re-serializes
@@ -1760,20 +1820,26 @@ export function ChatScreen({
     // composer pick vanished, then resurrected on the next empty composer) AND discarded its
     // promise (ConversationList's `onClick={onNew}`) — a failed createConversation was an
     // unhandled rejection with zero feedback. The catch keeps the discarded promise fire-safe.
+    // CH-14 (#148): synchronous re-entry guard — a double-click on "+ New" landed twice before
+    // the first createConversation resolved, minting two conversations.
+    if (newChatInFlightRef.current) return
+    newChatInFlightRef.current = true
     try {
       const conv = await createConversationInMode()
       carryNewComposerPicks(conv.id)
       await refreshConversations()
-      setActiveId(conv.id)
+      selectConversationId(conv.id)
       setMessages([])
     } catch (e) {
       setError(friendlyIpcError(e))
+    } finally {
+      newChatInFlightRef.current = false
     }
   }
 
   // Selecting a conversation also syncs the composer mode to that conversation's mode.
   function onSelectConversation(c: Conversation): void {
-    setActiveId(c.id)
+    selectConversationId(c.id)
     setMode(c.mode)
   }
 
@@ -1784,7 +1850,7 @@ export function ChatScreen({
     try {
       await window.api.deleteConversation(c.id)
       if (activeId === c.id) {
-        setActiveId(null)
+        selectConversationId(null)
         setMessages([])
       }
       await refreshConversations()
@@ -1800,7 +1866,7 @@ export function ChatScreen({
     setMode(next)
     const active = conversations.find((c) => c.id === activeId)
     if (active && active.mode !== next) {
-      setActiveId(null)
+      selectConversationId(null)
       setMessages([])
     }
   }
@@ -1876,7 +1942,13 @@ export function ChatScreen({
     // job's completed/failed count changes, which is exactly when the FK-guarded link row that
     // reveals it as a "Files in this chat" entry is written — instead of re-fetching it every tick.
     let lastSettled = -1
+    // CH-6 (#148): reentrancy latch — the 400 ms interval wraps an async body; a slow tick
+    // (refreshAttachments / listDocuments awaiting) must not overlap the next one (the
+    // DOC-6/TA-3 pattern).
+    let ticking = false
     attachPollRef.current = setInterval(async () => {
+      if (ticking) return
+      ticking = true
       try {
         const job = await window.api.getImportJob(jobId)
         // The interval is cleared on unmount, but a tick already parked on this await resolves
@@ -1916,7 +1988,14 @@ export function ChatScreen({
       } catch {
         if (attachPollRef.current) clearInterval(attachPollRef.current)
         attachPollRef.current = null
-        if (mountedRef.current) setPendingImport(null) // FE-1: not after unmount
+        if (mountedRef.current) {
+          setPendingImport(null) // FE-1: not after unmount
+          // CH-6 (#148): the poll died, taking the per-file failure banner with it — say so
+          // instead of silently dropping the pending chip (the import itself may still finish).
+          if (activeIdRef.current === convId) setError(t('chat.attach.trackFailed'))
+        }
+      } finally {
+        ticking = false
       }
     }, 400)
   }
@@ -1956,7 +2035,7 @@ export function ChatScreen({
         convId = conv.id
         carrySkillToConversation(conv.id, carrySkill, carrySkillKept)
         setMode('documents')
-        setActiveId(conv.id)
+        selectConversationId(conv.id)
         setMessages([])
         await refreshConversations()
         showToast(t('chat.attach.newDocChat', { name: fileNames[0] }))
@@ -1966,7 +2045,7 @@ export function ChatScreen({
         convId = conv.id
         carrySkillToConversation(conv.id, carrySkill, carrySkillKept)
         setMode('documents')
-        setActiveId(conv.id)
+        selectConversationId(conv.id)
         setMessages([])
         await refreshConversations()
       }
@@ -2105,7 +2184,7 @@ export function ChatScreen({
                   {modelStarting ? t('chat.noModel.starting') : t('chat.noModel.stillLoading')}
                 </p>
               )}
-              <div className="actions" style={{ marginTop: 12 }}>
+              <div className="actions actions-spaced">
                 <Button variant="primary" onClick={() => onNavigate('models')}>
                   {t('chat.noModel.open')}
                 </Button>
@@ -2320,7 +2399,14 @@ export function ChatScreen({
           categorizeTargetInScope={categorizeTargetInScope}
           stateUnknown={activeRunEntry?.stateUnknown ?? false}
           onRun={onRunTool}
-          onCancel={() => activeSkillRun && void cancelSkillRun(activeSkillRun.runHandle)}
+          // CH-5 (#148): a failed cancel used to reject unhandled while the spinner kept
+          // spinning — surface it like every other IPC failure on this screen.
+          onCancel={() =>
+            activeSkillRun &&
+            void cancelSkillRun(activeSkillRun.runHandle).catch((e) => {
+              if (mountedRef.current) setError(friendlyIpcError(e))
+            })
+          }
           onDismiss={() => activeSkillRun && acknowledgeSkillRun(activeSkillRun.runHandle)}
           disabled={busyStreaming}
           offerRoutedFollowups={routedRunsReachable}
@@ -2405,6 +2491,9 @@ export function ChatScreen({
           fileName={scopeChoice?.fileName ?? ''}
           onNarrow={() => void onScopeChoiceNarrow()}
           onWhole={onScopeChoiceWhole}
+          // CH-13 (#148): Esc/overlay just closes — NOT recorded sticky, so the next attach
+          // to this conversation may ask again (a dismissal is not a decision).
+          onDismiss={() => setScopeChoice(null)}
         />
       </section>
     </div>

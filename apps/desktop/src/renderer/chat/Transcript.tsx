@@ -160,7 +160,17 @@ export const Transcript = memo(function Transcript({
   const localizedStream = useMemo(() => localizeServerCopy(t, streamText), [t, streamText])
 
   return (
-    <div className="chat-transcript" ref={scrollRef} onScroll={onScroll}>
+    // CH-12 (#148): the scroller is keyboard-reachable — user bubbles carry no focusable
+    // elements, so without tabIndex a keyboard-only user could not scroll a long history
+    // freely (only jump between the assistant turns' action buttons).
+    <div
+      className="chat-transcript"
+      ref={scrollRef}
+      onScroll={onScroll}
+      tabIndex={0}
+      role="region"
+      aria-label={t('chat.transcript.label')}
+    >
       <div className="chat-transcript-inner">
         {messages.length === 0 && !streamingHere && emptyState}
         {/* Each persisted message is a memoized MessageBlock keyed by id (its content is stamped

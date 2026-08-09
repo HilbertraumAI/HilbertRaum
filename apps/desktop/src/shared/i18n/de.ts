@@ -177,6 +177,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.saveConversation': 'Diese Unterhaltung speichern',
   'chat.savedTo': 'Gespeichert unter {path}',
   'chat.copied': 'Kopiert',
+  // CH-5 (#148): auch ein fehlgeschlagenes Kopieren bekommt eine Rückmeldung.
+  'chat.copyFailed': 'Konnte nicht in die Zwischenablage kopieren',
+  // CH-12 (#148): zugänglicher Name des per Tastatur scrollbaren Verlaufsbereichs.
+  'chat.transcript.label': 'Gesprächsverlauf',
   'chat.stopped': 'Gestoppt – die Antwort ist möglicherweise unvollständig',
   // #39: die ruhige einmalige Aufwärm-Zeile unter der ersten ausstehenden Antwort.
   'chat.warmup.hint':
@@ -2274,6 +2278,10 @@ export const de: Record<keyof typeof en, string> = {
   // gezogen) – wird angezeigt statt still zu scheitern (Begleitung zur FE-A-Korrektur).
   'chat.attach.dropUnsupported':
     'Konnte das nicht hinzufügen – bitte eine auf dem Computer gespeicherte Datei hierher ziehen.',
+  // CH-6 (#148): der Fortschritts-Poll des Datei-Imports ist abgerissen – der Import selbst
+  // kann trotzdem fertig werden; ehrlich sagen, wo das Ergebnis zu finden ist.
+  'chat.attach.trackFailed':
+    'Der Datei-Import konnte nicht weiter verfolgt werden – das Ergebnis steht unter Dokumente.',
 
   // ---- Bilder — „Frag ein Bild" (image-understanding §5/§11, Phase V3) ----
   // Visuelles Verstehen EINES lokalen PNG/JPEG über ein lokales KI-Modell — getrennt von
