@@ -245,9 +245,10 @@ first public release. Consciously-accepted gaps are tracked in
   app; production-scope in the dependency graph only, a correction to the DEP-2
   entry's "ships in the renderer" framing — plus a new test pinning that a
   mermaid code fence stays a plain code block), and dev/build-tooling hygiene:
-  undici 7.29.0 + 6.28.0, fast-uri 3.1.5, postcss 8.5.26, js-yaml 4.3.1, and
-  all seven brace-expansion copies (npm-audit-ahead-of-Dependabot, the DEP-2
-  advisory-lag precedent). `npm audit`: 0 vulnerabilities. Triage ledger:
+  undici 7.29.0 + 6.28.0, fast-uri 3.1.5, postcss 8.5.26, js-yaml 4.3.1, plus
+  all seven brace-expansion copies and nanoid 3.3.18 — clearing seven further
+  high alerts Dependabot's auto-triage had auto-dismissed as dev-scope.
+  `npm audit`: 0 vulnerabilities. Triage ledger:
   `docs/architecture.md` "Dependabot triage — design record (wave DEP-3)".
 - **Hardened the workspace-lock confidentiality contract (full audit 2026-07-23)**
   — closed the "Lock now"/quit races above (a content-bearing sidecar could keep
@@ -266,7 +267,8 @@ first public release. Consciously-accepted gaps are tracked in
   package and was never affected), fast-uri 3.1.4 (host confusion ×2),
   brace-expansion 1.1.16 / 2.1.2 / 5.0.8 (exponential-time `{}` expansion DoS,
   CVE-2026-13149 — Dependabot alert #56), and DOMPurify 3.4.12 (the one
-  production-scope member: streamdown → mermaid ships it in the renderer;
+  production-scope member — in the dependency graph; DEP-3 later verified it
+  ships in neither the renderer bundle nor the packaged app;
   `CUSTOM_ELEMENT_HANDLING` sanitizer bypass, low severity, config not used by
   mermaid). `npm audit`: 0 vulnerabilities again.
 - **All critical- and high-severity Dependabot alerts cleared (wave DEP-1, PR #77)**

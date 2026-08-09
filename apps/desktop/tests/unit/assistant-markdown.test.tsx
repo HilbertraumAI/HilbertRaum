@@ -52,18 +52,17 @@ describe('AssistantMarkdown security posture', () => {
   })
 
   it('renders a ```mermaid fence as a plain code block — the mermaid plugin stays absent', () => {
-    // The DEP-3 (2026-08-09) triage judged all mermaid/DOMPurify Dependabot alerts unreachable
-    // BECAUSE Streamdown only renders diagrams when a mermaid plugin is passed, and mdPlugins is
-    // { math } only (the library is also tree-shaken from the bundle and negated from app.asar —
-    // electron-builder.yml). If someone wires the plugin in, this pin fails and the mermaid
-    // dependency chain becomes a live attack surface that must be re-triaged.
+    // DEP-3 (2026-08-09) judged the mermaid/DOMPurify Dependabot alerts unreachable because no
+    // mermaid plugin is passed (mdPlugins = { math }); wiring one in makes that chain a live
+    // attack surface — this pin fails and forces a re-triage. Ledger: architecture.md
+    // "Dependabot triage — design record (wave DEP-3)".
     const { container } = render(
       <AssistantMarkdown text={'```mermaid\ngraph TD; A-->B\n```'} />
     )
-    expect(container.querySelector('svg')).toBeNull()
-    const code = container.querySelector('code')
-    expect(code, 'expected the fence to fall back to a plain code block').not.toBeNull()
-    expect(container.textContent).toContain('graph TD; A-->B')
+    // Streamdown stamps plugin-rendered diagrams with this attribute (the chart itself mounts
+    // async behind Suspense, so asserting on <svg> would never fire).
+    expect(container.querySelector('[data-streamdown="mermaid-block"]')).toBeNull()
+    expect(container.querySelector('code')?.textContent).toContain('graph TD; A-->B')
   })
 })
 
