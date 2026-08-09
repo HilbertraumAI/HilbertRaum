@@ -11,12 +11,14 @@ export { decodedPixelCount } from '../../../shared/image-headers'
 // main-process backstop against a crafted huge image OOMing the sidecar — net-new enforcement
 // (SEC-3): `imageReadBytes`/`imageAnalyze` re-check the extension + cap themselves.
 //
-// D4 (vuln-scan-2026-06-21): the byte cap alone does NOT stop a decompression bomb — a small
-// (<20 MiB) PNG/JPEG can decode to enormous dimensions, and runtime.ts inlines the ORIGINAL
-// bytes to the sidecar, where clip/llama.cpp allocates width*height*channels and OOMs. The
-// renderer's MAX_DIMENSION downscale is for DISPLAY and does not bound what the sidecar decodes,
-// so the authoritative main-side guard now parses the image header and rejects above a pixel
-// budget too (no full decode — just the dimensions in the header).
+// D4 (vuln-scan-2026-06-21; wording corrected 2026-08-09, #120 item 5): the byte cap alone
+// does NOT stop a decompression bomb — a small (<20 MiB) PNG/JPEG can decode to enormous
+// dimensions, and runtime.ts inlines the REQUEST bytes to the sidecar (normally the renderer's
+// downscaled re-encode, but renderer output is attacker-controllable — threat #1 — so nothing
+// upstream can be trusted), where clip/llama.cpp allocates width*height*channels and OOMs.
+// The renderer's 1536 px downscale is client hygiene and does not bound what the sidecar
+// decodes, so the authoritative main-side guard parses the image header and rejects above a
+// pixel budget too (no full decode — just the dimensions in the header).
 
 /** Max accepted image bytes. ~20 MiB default; env-overridable (`HILBERTRAUM_MAX_IMAGE_BYTES`). */
 export const VISION_MAX_IMAGE_BYTES = readByteCap()

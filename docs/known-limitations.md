@@ -1980,7 +1980,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   2026-06-20 change, an analyzed image and its Q&A turns are **persisted automatically** — the image
   rows live in `image_sessions`/`image_turns` and the bytes rest **encrypted at rest** under the SAME
   `DocumentCipher` as the document cache (`workspace/images/<id><ext>.enc`), browsable in an Images
-  history list and **user-deletable** (delete shreds the image + cascade-removes its turns). What is
+  history list and **user-deletable** (delete shreds the image + cascade-removes its turns). Since
+  2026-08-09 (#122) the list shows each entry's stored size and a total, a confirmed **"Clear
+  history"** removes everything in one action, and the `images/` footprint appears in Settings →
+  Diagnostics beside free space — but there is **no automatic retention/eviction cap**: history
+  grows until the user deletes (a deliberate deferral, recorded on issue #122; each entry can be up
+  to ~20 MiB, and drive space is the scarce resource on this product). What is
   still NOT true: this history is **not added to the RAG/document corpus** — it is a separate
   browsable history, never indexed for retrieval/search — and there is no auto-OCR.
 - **Image understanding is NOT OCR and NOT image generation.** It reads/interprets one image with a

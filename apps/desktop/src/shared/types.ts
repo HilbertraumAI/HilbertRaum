@@ -536,8 +536,12 @@ export interface EngineStatus {
 // ---- Image understanding (vision) — image-understanding plan §9.3 ----
 //
 // A separate, lazily-started `llama-server --mmproj` sidecar answers a question about ONE
-// image (PNG/JPEG). The bytes are base64-inlined into the loopback request (no disk write,
-// V1-resolved). Nothing is persisted; the screen state and these DTOs are the whole surface.
+// image (PNG/JPEG). The bytes are base64-inlined into the loopback request (no disk write on
+// the ANALYZE path, V1-resolved). Since the §10 history (2026-06-20), a COMPLETED analysis IS
+// persisted — the image encrypted-at-rest under workspace/images/ + its Q&A turns in
+// image_sessions/image_turns (the sessionId fields below ride that contract); the live screen
+// state remains renderer-only. (#120 item 5: this comment previously still claimed "nothing
+// is persisted".)
 
 /** Why image understanding is unavailable. NO `'locked'` reason (PROD-2): `getVisionStatus`
  *  is WORKSPACE-AGNOSTIC — vision weights aren't encrypted, so status doesn't fail on lock;
