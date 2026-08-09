@@ -290,12 +290,22 @@ export function TranslateScreen({
     if (fileTx.state === 'importing') {
       return <p className="hint">{t('translate.file.importing')}</p>
     }
-    // Translating: show the coarse window count once the doc-task reports a plan, else a plain hint.
+    // #165 (P-3): distinct phase labels for the two blind spots around the window count.
+    // Before planning completes (stepsTotal 0 — the source re-extraction: decrypt + full parse,
+    // minutes for a big encrypted PDF) the label used to sit on a generic "Translating…";
+    // after the last window (done === total) the final materialize re-embeds the whole
+    // translated document, also minutes, while the count froze at (N/N). Both phases are
+    // bounded but cancel is not observed inside them — an honest label is what keeps a
+    // pending Stop from reading as a hang.
+    if (fileTx.windowsTotal === 0) {
+      return <p className="hint">{t('translate.file.preparing')}</p>
+    }
+    if (fileTx.windowsDone >= fileTx.windowsTotal) {
+      return <p className="hint">{t('translate.file.saving')}</p>
+    }
     return (
       <p className="hint">
-        {fileTx.windowsTotal > 0
-          ? t('translate.file.progress', { done: fileTx.windowsDone, total: fileTx.windowsTotal })
-          : t('translate.file.working')}
+        {t('translate.file.progress', { done: fileTx.windowsDone, total: fileTx.windowsTotal })}
       </p>
     )
   }

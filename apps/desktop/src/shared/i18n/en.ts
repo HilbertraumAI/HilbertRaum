@@ -2409,7 +2409,9 @@ export const en = {
   // Progress + result.
   'translate.file.importing': 'Reading the document…',
   'translate.file.progress': 'Translating… ({done}/{total})',
-  'translate.file.working': 'Translating the document…',
+  // #165 (P-3): honest phase labels for the two count-less stretches of a document translation.
+  'translate.file.preparing': 'Preparing the translation — reading the document…',
+  'translate.file.saving': 'Saving the translated document…',
   'translate.file.truncated':
     'Showing the start of the translation — export it or open it in Documents for the whole document.',
   'translate.file.export': 'Export…',

@@ -136,6 +136,19 @@ function notify(): void {
 }
 
 function set(next: Partial<FileTranslateSnapshot>): void {
+  // #165 (P-2): skip the write when nothing changed (the doctasks-store PF-7b rule). The 400 ms
+  // doc-task poll calls set(windowProgress(...)) every tick even when the counts didn't move,
+  // re-rendering the whole Translate screen (incl. two 51-option selects) ~2.5×/s for the
+  // duration of a document translation. Object.is per patched key; unchanged ticks keep the
+  // same snapshot object, so useSyncExternalStore subscribers see no churn at all.
+  let changed = false
+  for (const key of Object.keys(next) as Array<keyof FileTranslateSnapshot>) {
+    if (!Object.is(next[key], snapshot[key])) {
+      changed = true
+      break
+    }
+  }
+  if (!changed) return
   snapshot = { ...snapshot, ...next }
   notify()
 }

@@ -2466,7 +2466,9 @@ export const de: Record<keyof typeof en, string> = {
   'translate.drop.types': 'PDF, Word, Markdown oder Text — übersetzt in die gewählte Sprache.',
   'translate.file.importing': 'Dokument wird gelesen…',
   'translate.file.progress': 'Übersetzen… ({done}/{total})',
-  'translate.file.working': 'Dokument wird übersetzt…',
+  // #165 (P-3): ehrliche Phasenbeschriftung für die beiden Abschnitte ohne Fensterzähler.
+  'translate.file.preparing': 'Übersetzung wird vorbereitet — Dokument wird gelesen…',
+  'translate.file.saving': 'Übersetztes Dokument wird gespeichert…',
   'translate.file.truncated':
     'Es wird der Anfang der Übersetzung angezeigt — exportiere es oder öffne es unter Dokumente für das ganze Dokument.',
   'translate.file.export': 'Exportieren…',

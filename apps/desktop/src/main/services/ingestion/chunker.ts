@@ -104,6 +104,42 @@ export function approxTokenCount(text: string): number {
 }
 
 /**
+ * #165 (P-1): chars per word-equivalent when charging an over-long word BY LENGTH in the
+ * WORD-count estimate below. Derived from the heaviest measured Gemma density (Czech ≈ 2.9
+ * chars per real model token; TG-6): at the translation planner's 2.5-model-tokens-per-word
+ * input allowance, one word-equivalent covers ~7.25 chars of the heaviest language — 7 is the
+ * conservative floor, so a long word can only ever be OVER-charged relative to its real cost.
+ */
+const LONG_WORD_CHARS_PER_WORD = 7
+
+/**
+ * #165 (P-1): WORD-count estimate with the same anti-collapse defenses as `approxTokenCount` —
+ * the budget measure for the TRANSLATION window packer, whose per-window budget is derived per
+ * WORD (`TRANSLATION_INPUT/OUTPUT_TOKENS_PER_WORD` — both input AND output scale with source
+ * words). `approxTokenCount` charges a >16-char word at `ceil(len/4)` — the right currency for
+ * a per-TOKEN budget, but ~2.5× too expensive against a per-WORD budget: German/Czech
+ * compound-heavy prose filled a "~690-word" window with only ~300–500 real words (windows
+ * under-filled 1.5–2.5×, multiplying the window count on exactly the languages whose windows
+ * already decode ~30 min each on CPU). Here an ordinary word counts 1, and the defenses stay:
+ * a space-less-script char still counts 1, and an over-long no-space run (glued PDF text,
+ * base64, a giant URL — or a genuinely long compound) is charged `ceil(len/7)`
+ * word-equivalents (see `LONG_WORD_CHARS_PER_WORD`), preserving the never-under-count bias in
+ * word units. Unchanged for ordinary space-separated prose (1 per word — same as the token
+ * estimator there), so English/short-word plans are byte-identical.
+ */
+export function approxBudgetWordCount(text: string): number {
+  const spaceless = text.match(SPACELESS_SCRIPT_RE)?.length ?? 0
+  let words = spaceless
+  const rest = text.replace(SPACELESS_SCRIPT_RE, ' ')
+  for (const word of rest.split(/\s+/)) {
+    if (word.length === 0) continue
+    words +=
+      word.length <= ONE_TOKEN_WORD_CHARS ? 1 : Math.ceil(word.length / LONG_WORD_CHARS_PER_WORD)
+  }
+  return words
+}
+
+/**
  * Approx token cost of a single whitespace-free WORD (ING-10, perf audit 2026-06-18).
  * A word has no internal whitespace, so when it contains no space-less-script char it is
  * exactly ONE token group: `len <= ONE_TOKEN_WORD_CHARS ? 1 : ceil(len / CHARS_PER_TOKEN)` —

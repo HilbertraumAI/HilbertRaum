@@ -50,26 +50,37 @@ export interface SummaryPlan {
 }
 
 /**
- * Pack texts greedily, in order, into windows of at most `budgetWords` words. A single
- * over-budget text is SPLIT into budget-sized pieces rather than truncated — no text is
- * silently dropped by packing. Shared by the summary (chunks in) and translation
- * (segments in) planners.
+ * Pack texts greedily, in order, into windows of at most `budgetWords` units under `measure`.
+ * A single over-budget text is SPLIT into budget-sized pieces rather than truncated — no text
+ * is silently dropped by packing. Shared by the summary (chunks in, the default
+ * `approxTokenCount` measure) and translation (segments in — since #165 P-1 it passes the
+ * WORD-count measure `approxBudgetWordCount`, matching the unit its per-word budget is
+ * derived in; the token measure over-charged compound-heavy prose ~2.5× and under-filled
+ * every window). The default keeps every summary call site byte-identical.
  */
-export function packIntoWindows(texts: string[], budgetWords: number): string[] {
+export function packIntoWindows(
+  texts: string[],
+  budgetWords: number,
+  measure: (text: string) => number = approxTokenCount
+): string[] {
   const budget = Math.max(1, Math.floor(budgetWords))
   // Split any over-budget text into budget-sized pieces (document order kept). Measuring
-  // and splitting by `approxTokenCount` (not a raw word count) is what keeps space-less
+  // and splitting by the estimate (not a raw word count) is what keeps space-less
   // text — CJK, or glued PDF runs — from packing far past the budget and overflowing the
   // model context: `windowByTokens` charges such runs by length and slices them.
   const pieces: Array<{ text: string; tokens: number }> = []
   for (const text of texts) {
-    const tokens = approxTokenCount(text)
+    const tokens = measure(text)
     if (tokens === 0) continue
     if (tokens <= budget) {
       pieces.push({ text, tokens })
     } else {
+      // The split path slices by APPROX TOKENS regardless of the measure: the token estimate
+      // is ≥ the word estimate for every text (long words cost len/4 vs len/7; everything
+      // else is identical), so a ≤-budget token slice is ≤ budget in word units too —
+      // conservative (a giant single paragraph may over-split slightly), never overflowing.
       for (const sub of windowByTokens(text, budget, 0)) {
-        pieces.push({ text: sub, tokens: approxTokenCount(sub) })
+        pieces.push({ text: sub, tokens: measure(sub) })
       }
     }
   }

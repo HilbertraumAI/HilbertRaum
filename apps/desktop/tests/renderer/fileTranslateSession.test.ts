@@ -962,3 +962,35 @@ describe('fileTranslateSession — poll-failure tolerance (#157 / DT-4)', () => 
     }
   })
 })
+
+// ---- #165 (P-2): unchanged poll ticks must not re-render the screen ----
+
+describe('fileTranslateSession — poll-tick render churn (#165 / P-2)', () => {
+  it('identical 400 ms doc-task polls keep the SAME snapshot object', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = {
+        ...happyApi(),
+        // The counts never move — the long-window steady state (a CPU window decodes ~30 min,
+        // so ~4500 consecutive identical ticks per window in production).
+        getDocTask: vi.fn(async () => docTask({ progress: { stepsDone: 1, stepsTotal: 3 } }))
+      }
+      stubApi(api)
+      await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+      await vi.advanceTimersByTimeAsync(400) // import done → doc-task poll installed
+      expect(getFileTranslate().state).toBe('translating')
+
+      await vi.advanceTimersByTimeAsync(400) // first poll writes the progress
+      const settled = getFileTranslate()
+      expect(settled.windowsDone).toBe(1)
+      await vi.advanceTimersByTimeAsync(400)
+      await vi.advanceTimersByTimeAsync(400)
+      // useSyncExternalStore subscribers re-render on snapshot identity — unchanged ticks
+      // must return the very same object (pre-fix: a fresh spread + notify per tick).
+      expect(getFileTranslate()).toBe(settled)
+      expect(api.getDocTask.mock.calls.length).toBeGreaterThanOrEqual(3) // polling continued
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
