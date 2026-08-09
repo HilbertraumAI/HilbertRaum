@@ -12,7 +12,8 @@ import {
   effectiveContextWindow,
   hasRegenerableAssistantReply,
   listMessages,
-  maybeSetTitleFromFirstMessage
+  maybeSetTitleFromFirstMessage,
+  setMessageSkillOffer
 } from '../services/chat'
 import { resolveScope } from '../services/collections'
 import { buildScopeFilter } from '../services/retrieval-scope'
@@ -40,6 +41,11 @@ import { saveResultTable } from '../services/tables/store'
 import { log } from '../services/logging'
 import { buildDocumentSegmentReader } from './documentSegments'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
+import {
+  classifySkillPointer,
+  isClassificationTrigger,
+  type ClassifyCandidate
+} from '../services/analysis/classify'
 import { isAggregationShaped, routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
@@ -585,6 +591,25 @@ export function registerRagIpc(ctx: AppContext): void {
         treeAvailable: readyTreeCountInScope(ctx.db, scope) > 0,
         extractAvailable: extractionsExistInScope(ctx.db, scope)
       })
+
+      // #80 P3 (STR-1 §5.2): the ONE bounded skill-pointer classification, run ONLY on the two
+      // trigger classes `isClassificationTrigger` pins — (a) aggregation-shaped coverage-extract
+      // turns, (b) low-confidence fallbacks — INSIDE the already-held chat slot, BEFORE the answer
+      // is emitted. It never changes the engine, never activates a skill, and its output never
+      // reaches answer content: it only fills the per-answer OFFER surface (provenance
+      // 'classifier'; a user click is the consent, S13b/D4). Candidates are the ONE shared offer
+      // gate minus the skill that already shaped this turn; every fault degrades to null (no
+      // offer) inside a hard few-second bound — the mock runtime always degrades, so mock/dev
+      // behaviour is byte-identical to today. Ordinary high-confidence questions never get here
+      // (0 model calls preserved by construction).
+      const classifierOffer = async (signal: AbortSignal): Promise<SkillOffer | null> => {
+        if (!isClassificationTrigger(decision, text)) return null
+        const candidates: ClassifyCandidate[] = offerableSkillCandidates(ctx.db, ctx.skills?.appVersion ?? '')
+          .filter((c) => c.installId !== skill?.installId)
+          .map((c) => ({ installId: c.installId, title: c.title }))
+        const picked = await classifySkillPointer(text, candidates, { runtime, signal })
+        return picked ? { installId: picked.installId, title: picked.title, source: 'classifier' } : null
+      }
       if (decision.engine === 'coverage-extract' && decision.recordType) {
         const recordType: ExtractRecordType = decision.recordType
         const listing = aggregateExtractions(ctx.db, scope, recordType)
@@ -625,8 +650,13 @@ export function registerRagIpc(ctx: AppContext): void {
           event,
           conversationId,
           'Document listing failed',
-          withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (_signal, sendToken): Promise<Message> => {
-            // 0 model calls: emit the deterministic listing as one chunk, then persist it.
+          withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken): Promise<Message> => {
+            // #80 dedupe (owner decision 4): the deterministic offer WINS — the classifier runs
+            // only when the rule produced nothing (non-amount aggregation asks / bank gated out),
+            // so the two sources can never double-offer. The listing itself stays deterministic;
+            // only aggregation-shaped turns pay the one bounded classification call (plain
+            // list/count turns keep 0 model calls). Classified BEFORE the answer is emitted.
+            const offer = deterministicOffer ?? (aggregationAsk ? await classifierOffer(signal) : null)
             sendToken(answer)
             return appendMessage(ctx.db, {
               conversationId,
@@ -634,7 +664,7 @@ export function registerRagIpc(ctx: AppContext): void {
               content: answer,
               skillId: skill?.installId,
               autoFired: skill?.autoFired === true,
-              skillOffer: deterministicOffer
+              skillOffer: offer
             })
           }),
           // Acquire the slot so a yielding deep-index build is paused/resumed cleanly even
@@ -663,8 +693,16 @@ export function registerRagIpc(ctx: AppContext): void {
         conversationId,
         'Document answer failed',
         // F2: defer the regenerate delete into the runFn (slot held) + restore on a non-abort failure.
-        withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction, sendUsage) =>
-          generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+        withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction, sendUsage) => {
+          // #80 P3 trigger (b): a LOW-CONFIDENCE fallback (the router detected an intent it
+          // provably cannot serve — a coverage ask with no extract data, a compare without two
+          // docs) runs the one bounded classification BEFORE the grounded answer streams; a
+          // high-confidence relevance turn returns null here WITHOUT a model call (the step-5
+          // fallthrough never classifies). The offer is attached to the persisted answer
+          // afterwards (update-in-place of the offer column only) — it never touches the
+          // answer content or the stream.
+          const offer = await classifierOffer(signal)
+          const msg = await generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
             signal,
             // One-shot ephemeral "summarizing…" notice when the compaction pre-pass starts (§5.2);
             // isDestroyed-guarded inside withChatStream, never buffered (R14).
@@ -687,7 +725,13 @@ export function registerRagIpc(ctx: AppContext): void {
             // prefix. Both are null/absent on every ordinary route into this path (byte-unchanged).
             answerPrefix: relevancePrefix,
             onToken: sendToken
-          })),
+          })
+          if (offer) {
+            setMessageSkillOffer(ctx.db, msg.id, offer)
+            msg.skillOffer = offer
+          }
+          return msg
+        }),
         (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
       )
     }
