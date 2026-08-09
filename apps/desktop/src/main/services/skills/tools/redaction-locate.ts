@@ -46,6 +46,12 @@ export const DEFAULT_LOCATE_DIRECTIVE =
 export const LOCATE_WINDOW_LINES = 40
 export const LOCATE_WINDOW_OVERLAP_LINES = 8
 
+/** Global cap on UNIQUE collected proposals (#134) — equals the `redact_document` schema's `entities`
+ *  maxItems (the tool gate's hard input bound), so the seam can never hand the gate an overflowing
+ *  list ("This tool was given input it cannot accept." AFTER the full multi-minute locate pass). The
+ *  schema cites this constant; keep the two in lockstep. */
+export const MAX_LOCATED_ENTITIES = 4096
+
 /** Per-window generation ceiling (tokens) — enough for a JSON list of the entities a 40-line window
  *  can plausibly hold. The char cap (below) is the runaway backstop the categorizer/enricher use. */
 const LOCATE_MAX_TOKENS = 768
@@ -181,6 +187,14 @@ export function parseLocateReply(text: string): LocatedEntity[] {
   return out
 }
 
+/** The locate pass result (#134): the UNIQUE proposals (capped at MAX_LOCATED_ENTITIES) plus an honest
+ *  truncation flag — true when the cap dropped proposals or cut the window walk short, so the seam can
+ *  say so instead of silently under-masking. */
+export interface LocateEntitiesResult {
+  entities: LocatedEntity[]
+  truncated: boolean
+}
+
 /**
  * Run the locate pass over the whole document: build overlapping line-numbered windows, ask the model
  * (grammar-constrained, temp 0) for the spans to mask in each, and collect the proposals. This is
@@ -189,6 +203,12 @@ export function parseLocateReply(text: string): LocatedEntity[] {
  * the default directive when empty) rides into the system prompt; the schema's category set is fixed,
  * so the instruction only widens/narrows what is proposed — the app never interprets prose.
  *
+ * Collection discipline (#134): proposals de-duplicate on their exact STRING (the sweep is text-keyed
+ * and document-wide, so a re-proposal from the 8-line window overlap — or from a repeated entity —
+ * adds nothing), and the unique list is capped at MAX_LOCATED_ENTITIES (== the tool schema's
+ * `entities` maxItems, so the gate can never refuse the seam's input). A full cap stops the window
+ * walk early — further model calls could only produce droppable proposals — and reports `truncated`.
+ *
  * A single window's malformed reply is skipped (that window contributes no entity, the floor still
  * covers it); an ABORT throws (the seam maps it to a calm cancel). `onProgress` ticks per window.
  */
@@ -196,11 +216,13 @@ export async function locateEntities(
   text: string,
   instruction: string,
   deps: { runtime: ModelRuntime; signal: AbortSignal; onProgress?: (done: number, total: number) => void }
-): Promise<LocatedEntity[]> {
+): Promise<LocateEntitiesResult> {
   const directive = instruction.trim().length > 0 ? instruction.trim() : DEFAULT_LOCATE_DIRECTIVE
   const system = buildLocateSystemPrompt(directive)
   const windows = buildLocateWindows(text)
   const found: LocatedEntity[] = []
+  const seen = new Set<string>()
+  let truncated = false
   for (let i = 0; i < windows.length; i++) {
     if (deps.signal.aborted) throw new DOMException('Redaction locate cancelled', 'AbortError')
     const messages: ChatMessage[] = [
@@ -208,8 +230,24 @@ export async function locateEntities(
       { role: 'user', content: windows[i].numbered }
     ]
     const reply = await streamLocateJson(messages, deps)
-    if (reply !== null) found.push(...parseLocateReply(reply))
+    if (reply !== null) {
+      for (const e of parseLocateReply(reply)) {
+        if (seen.has(e.text)) continue // already collected — the sweep masks every occurrence anyway
+        if (found.length >= MAX_LOCATED_ENTITIES) {
+          truncated = true
+          break
+        }
+        seen.add(e.text)
+        found.push(e)
+      }
+    }
     deps.onProgress?.(i + 1, windows.length)
+    if (found.length >= MAX_LOCATED_ENTITIES && i + 1 < windows.length) {
+      // The cap is full and windows remain: stop paying for locate calls whose proposals could only be
+      // dropped, and report the walk as truncated.
+      truncated = true
+      break
+    }
   }
-  return found
+  return { entities: found, truncated }
 }

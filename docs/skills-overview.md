@@ -31,8 +31,13 @@ Sources of truth, in order of authority:
 - Every bundled skill leads with **honesty/safety rules** that survive prompt trimming: quote
   printed figures exactly, cite sources, never invent what the document doesn't state, no legal or
   compliance advice, answer in the user's language (all titles/descriptions are localized EN/DE).
-- The app can **suggest** a fitting skill from the question and documents in scope; suggestions are
-  offers only, and auto-activation is a separate user opt-in (default off).
+- The app can **suggest** a fitting skill — in the composer picker (from the question and documents
+  in scope) and, since #80, as a one-click **offer on an answer** whose shape probably missed the ask
+  ("Run "…" for this question"; clicking re-answers with the skill). Some per-answer offers are
+  picked by **one bounded local-model classification** and say so ("Suggested by the local model");
+  the rest are rule-based. Suggestions are offers only — nothing runs unclicked — and
+  auto-activation is a separate user opt-in (default off) that also requires a matching document
+  deliberately in scope (#130).
 - Users can **import their own skills** (`.skill.zip` or a `SKILL.md` folder); built-in skills can
   be toggled on/off but not deleted.
 
@@ -42,7 +47,7 @@ Sources of truth, in order of authority:
 |---|---|---|
 | **Bank Statement Analysis** / Kontoauszug-Analyse | `bank-statement` · v1.0.1 | Extract the transaction table from a statement (PDF/CSV/pasted), check that the printed opening/closing balances reconcile with the transactions, categorize transactions, summarize cashflow (in / out / net, per-category totals), and export the transactions to CSV. Flags unreconciled rows before any total and never invents a figure the statement doesn't print. |
 | **Invoice Analysis** / Rechnungsanalyse | `invoice` · v1.1.0 | Extract an invoice's header, line items, and totals; check that the printed totals add up (line items → net, net + tax → gross, stated tax rate); export the line items to CSV or the whole invoice to JSON/XML. Unparsed fields stay blank on purpose — nothing is computed into existence. |
-| **Document Redaction** / Dokument schwärzen | `document-redaction` · v1.1.0 | Create a redacted **copy** of a chosen document: a deterministic rule floor always masks clearly-shaped data (e-mails, phone numbers, IBANs, payment-card numbers, dates, links); with a model running it also masks the names, addresses, and organisation names the model locates (the model only points at spans — it never rewrites text). `.docx` in → `.docx` out with formatting preserved; other formats save as `.txt`. User-started, always confirms before saving. **Best-effort, not a compliance guarantee.** |
+| **Document Redaction** / Dokument schwärzen | `document-redaction` · v1.1.0 | Create a redacted **copy** of a chosen document: a deterministic rule floor always masks clearly-shaped data (e-mails, phone numbers, IBANs, payment-card numbers, dates, links); with a model running it also masks the names, addresses, and organisation names the model locates (the model only points at spans — it never rewrites text). `.docx` in → `.docx` out with formatting preserved — and since #129 the masking covers the whole file's text (headers/footers, footnotes, comments, tracked-changes deleted text) and scrubs author metadata and link targets; pictures/scanned pages/embedded objects are not checked (the confirm says so). Other formats save as `.txt`. User-started, always confirms before saving. **Best-effort, not a compliance guarantee.** |
 | **Document Edit** / Dokument bearbeiten | `document-edit` · v1.1.0 | Apply targeted **find-and-replace** edits to a chosen document without rewriting it: a running model locates the exact substrings, the app verifies and splices them — everything else stays byte-identical, and text not found verbatim is reported as skipped. `.docx` formatting preserved; always confirms before saving. Requires a running model; never auto-activated. |
 
 ## Instruction skills (the "Professional Documents" set)

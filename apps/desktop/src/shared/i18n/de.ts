@@ -259,6 +259,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.offer.lead': 'Das sieht nach einer Aufgabe für einen Skill aus.',
   'chat.skill.offer.run': '„{title}“ für diese Frage ausführen',
   'chat.skill.offer.model': 'Vom lokalen Modell vorgeschlagen',
+  // #132: der angebotene Skill wurde nach dem Angebot deaktiviert/entfernt – der Knopf wird mit
+  // diesem ehrlichen Hinweis deaktiviert, statt stillschweigend ohne den Skill neu zu antworten.
+  'chat.skill.offer.unavailable':
+    'Dieser Skill ist deaktiviert oder wurde entfernt – aktiviere ihn unter Skills, um ihn auszuführen.',
   // U3 (audit §4.3): ein Skill gilt jetzt standardmäßig PRO TURN – das × am Chip verwirft die Wahl und
   // eine gespeicherte Vorgabe, die Checkbox im Menü ist die ausdrückliche Zustimmung, die Wahl als
   // Vorgabe des Gesprächs zu behalten. Nichts bleibt still über Turns hinweg gesetzt.
@@ -337,6 +341,11 @@ export const de: Record<keyof typeof en, string> = {
     'Geschwärzte Kopie gespeichert – {count} Einträge verborgen (nur regelbasierte Offline-Erkennung, kein Modell aktiv). Prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.done.redactedCleanFloor':
     'Keine personenbezogenen Daten erkannt (nur regelbasierte Offline-Erkennung, kein Modell aktiv); Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
+  // #134: der Suchlauf hat seine Vorschlagsgrenze erreicht – ein sehr großes Dokument.
+  'chat.skill.run.done.redactedCapped.one':
+    'Geschwärzte Kopie gespeichert – {count} Eintrag verborgen. Dieses Dokument ist sehr groß, die automatische Erkennung hat an ihrer Grenze gestoppt – spätere Einträge können sichtbar sein. Prüfe die ganze Kopie, bevor du sie weitergibst.',
+  'chat.skill.run.done.redactedCapped.other':
+    'Geschwärzte Kopie gespeichert – {count} Einträge verborgen. Dieses Dokument ist sehr groß, die automatische Erkennung hat an ihrer Grenze gestoppt – spätere Einträge können sichtbar sein. Prüfe die ganze Kopie, bevor du sie weitergibst.',
   // Phase 8 (D76/D78): gezielte Änderungen – N Änderungen angewendet (alle gefunden), eine Teil-Variante,
   // wenn ein Teil des gesuchten Textes nicht gefunden und übersprungen wurde, und der Kein-Treffer-Fall.
   'chat.skill.run.done.edited.one': '{count} Änderung angewendet und eine bearbeitete Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
@@ -344,6 +353,11 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.done.editedPartial.one': '{count} Änderung angewendet; ein Teil des gesuchten Textes wurde nicht gefunden und übersprungen. Bearbeitete Kopie gespeichert – prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.done.editedPartial.other': '{count} Änderungen angewendet; ein Teil des gesuchten Textes wurde nicht gefunden und übersprungen. Bearbeitete Kopie gespeichert – prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.done.editedNone': 'Kein gesuchter Text wurde gefunden – es wurde nichts geändert und keine Kopie gespeichert.',
+  // #134: der Suchlauf hat seine Vorschlagsgrenze erreicht – spätere Stellen wurden womöglich nie gesehen.
+  'chat.skill.run.done.editedCapped.one':
+    '{count} Änderung angewendet. Dieses Dokument ist sehr groß, die Suche nach zu ändernden Stellen hat an ihrer Grenze gestoppt – prüfe die Kopie; spätere Stellen können unverändert sein.',
+  'chat.skill.run.done.editedCapped.other':
+    '{count} Änderungen angewendet. Dieses Dokument ist sehr groß, die Suche nach zu ändernden Stellen hat an ihrer Grenze gestoppt – prüfe die Kopie; spätere Stellen können unverändert sein.',
   'chat.skill.run.failedGeneric': 'Das hat nicht geklappt. Es wurde nichts geändert.',
   'chat.skill.run.error.unavailable': 'Dieses Werkzeug ist nicht verfügbar.',
   'chat.skill.run.error.needsExtraction': 'Lies das Dokument zuerst mit der Schaltfläche „{button}“ ein, dann führe dieses Werkzeug aus.',
@@ -371,6 +385,9 @@ export const de: Record<keyof typeof en, string> = {
   // VOR dem Lauf — vorher war die .docx-behält-Format / alles-andere-wird-.txt-Klippe erst im
   // Speichern-Dialog sichtbar.
   'chat.skill.confirm.outputDocx': 'Die gespeicherte Kopie behält das Word-Format (.docx) dieses Dokuments.',
+  // #129: die Schwärzungs-Reichweite – benennt, was die automatische Maskierung nicht erreichen kann.
+  'chat.skill.confirm.redactionScope':
+    'Die Maskierung erfasst den Text des Dokuments (einschließlich Kopf- und Fußzeilen, Fußnoten, Kommentaren und nachverfolgten Änderungen) und entfernt Autoren-Metadaten und Linkziele. Bilder, gescannte Seiten und eingebettete Objekte werden nicht geprüft – prüfe die gespeicherte Kopie, bevor du sie weitergibst.',
   'chat.skill.confirm.outputText':
     'Die gespeicherte Kopie wird reiner Text (.txt) – Layout und Formatierung des Originals bleiben nicht erhalten.',
   'chat.skill.confirm.outputMatrix':
@@ -1863,6 +1880,10 @@ export const de: Record<keyof typeof en, string> = {
     'Die Textgenerierung war mit dem geladenen Modell ({model}) sehr langsam, daher wurde ' +
     'das zugewiesene Profil eine Stufe herabgesetzt. Wenn dieses Modell größer ist als das ' +
     'empfohlene, starte das empfohlene Modell und führe den Benchmark erneut aus.',
+  'main.benchmark.warnRecommendationLowered':
+    'Die Textgenerierung lag mit dem geladenen Modell ({model}) bei etwa {tps} Tokens pro ' +
+    'Sekunde, daher wurde die Modell-Empfehlung eine Größenstufe herabgesetzt, damit ' +
+    'Antworten auf diesem Computer schnell bleiben.',
   'main.benchmark.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um den Benchmark auszuführen.',
 
   // Emission set (D-L5): localized at the emission site via tMain().
@@ -1928,6 +1949,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.chat.streamError':
     'Beim KI-Modell ist ein Fehler aufgetreten, bevor die Antwort fertig war. Versuche es erneut — wenn das öfter passiert, starte das Modell im Bildschirm „KI-Modell“ neu.',
   'main.chat.nothingToRegenerate': 'Es gibt noch keine Antwort, die neu erstellt werden könnte.',
+  // #132: eine EXPLIZITE Skill-Wahl (Angebots-Klick / Auswahl), die sich nicht mehr auflösen lässt,
+  // lehnt ab, statt stillschweigend ohne den Skill neu zu antworten.
+  'main.chat.skillUnavailable':
+    'Dieser Skill ist nicht mehr verfügbar – er wurde deaktiviert oder entfernt. Aktiviere ihn unter Skills oder frage erneut ohne ihn.',
   // AUD-01: Eine neue Antwort LÖSCHT die bisherige Antwort, und der Fremdschlüssel der Nachricht
   // reißt die gesamte Nachweis-Prüfung mit — Entscheidungen, Notizen, Verknüpfungen, Exportverlauf.
   // Nichts davon steckt im Wiederherstellungs-Abbild, deshalb wird der Turn abgelehnt.

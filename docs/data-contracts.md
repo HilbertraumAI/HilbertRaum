@@ -318,7 +318,8 @@ document answers always run balanced (deep-grounded = wave 2).
   a required **`source: 'deterministic' | 'classifier'`** provenance marker (`shared/types.ts`).
   Persisted as the additive nullable **`messages.skill_offer_json`** (STRUCTURAL only — id +
   title + provenance, never question/document text; tolerant parse — a malformed payload reads
-  as "no offer"). Written by `askDocuments` on exactly two decision classes: the deterministic
+  as "no offer"; since the #132/#135 fix it is part of the regenerate delete/restore snapshot —
+  `DeletedMessage.skillOfferJson` — so the F2/CB-2 restore legs keep the offer). Written by `askDocuments` on exactly two decision classes: the deterministic
   #54 amount-aggregation offer, and the bounded single-shot D55 grammar classification
   (`services/analysis/classify.ts` — enum of gated skill ids + mandatory `none`; every fault
   degrades to NULL). Undefined on user turns, ordinary answers, and pre-migration rows — an

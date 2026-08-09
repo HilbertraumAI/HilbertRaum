@@ -3606,10 +3606,13 @@ provisioning…", "Skill tool ceiling (Tier-2)"), the **drive layout** in
   per-conversation default (`conversations.active_skill_id`); the per-message glyph marks the answer it
   shaped. Auto-fire is deferred to **S13**, gated on an evaluation harness.
 - **DS17** — app skills are committed to the repo (`app-skills/`, text only) and copied by
-  `prepare-drive` — never network-fetched. **Eight** bundled app skills now ship. Three are **Tier-2**
-  tool references — **`bank-statement`** (the first, `kind: tool`, app-orchestrated tools through the
-  §7 gate), **`invoice`** (the second Tier-2, proving the gate generalizes to a second content class),
-  and **`document-redaction`** (read-transform-export). The rest are **Tier-1 instruction** skills
+  `prepare-drive` — never network-fetched. **Nine** bundled app skills now ship (count corrected
+  2026-08-09, #136/DOC-2 — the prior DOC-106 fix updated drive-layout + README but missed this
+  bullet). Four are **Tier-2** tool references — **`bank-statement`** (the first, `kind: tool`,
+  app-orchestrated tools through the §7 gate), **`invoice`** (the second Tier-2, proving the gate
+  generalizes to a second content class), **`document-redaction`** (read-transform-export), and
+  **`document-edit`** (`kind: tool`, tool `apply_document_edits` — split out so redaction's privacy
+  posture stays untangled; its own record below). The rest are **Tier-1 instruction** skills
   (`kind: instruction`, `allowedTools` empty / `reservesTools` false — they only inject fenced
   guidance): **`meeting-protocol`** (titled *Meeting Minutes*, the Tier-1 reference) plus the
   **Professional Documents** wave — **`contract-brief`**, **`deadline-obligation-finder`**,
@@ -4665,8 +4668,10 @@ question is content: scored, never logged (a privacy guard extends the S12 senti
 
 **The ratified contract (owner, 2026-06-17 — D1–D6).** D1 **≥ 95% precision**. D2 **`threshold-3`** —
 fire only when a keyword hit is corroborated by ≥ 1 doc signal (a separate `AUTOFIRE_SCORE_THRESHOLD = 3`,
-distinct from `SUGGEST_SCORE_THRESHOLD = 2`; a lone keyword = 2, a lone doc signal ≤ 2, so the gate
-structurally means "the user asked **and** a relevant doc is present"). D3 **silent apply + the
+distinct from `SUGGEST_SCORE_THRESHOLD = 2`, **plus — since #130 (2026-08-09) — an explicit
+doc-signal-required gate in `selectAutoFire`**: the threshold alone never enforced the doc half — a
+lone keyword = 2 and a lone doc signal ≤ 2, but TWO capped keyword hits = 4 fired with zero docs in
+scope — so the gate now structurally means "the user asked **and** a relevant doc is present"). D3 **silent apply + the
 existing glyph + a one-click undo** (never a confirm-before-firing dialog). D4 **opt-in, app-skills
 only in v1**. D5 **fire only when the turn has no skill set** (never override a sticky default or a
 per-turn pick/clear). D6 additive **`triggers.autoFire?: boolean`** (only `true` opts a skill in). On
@@ -8057,6 +8062,21 @@ tool-registry list). Suite 3773/47 (was 3739; +34).
 
 ### §23 Same-format DOCX export — `<w:t>` node rewrite (beta-feedback-2026-07 Phase 9, #22/#23, D77)
 
+> **Superseded in scope for REDACTION (2026-08-09, issue #129 — skills-pipeline audit RUN-2).** The
+> body-only walk this record describes was a PRIVACY hole when read as a redaction guarantee: a
+> "redacted" copy carried unmasked PII in headers/footers (letterhead), footnotes/endnotes, comment
+> text, tracked-changes DELETED text (`<w:delText>` inside `document.xml` itself), field instructions,
+> hyperlink/mailto rel targets, and docProps/author metadata. The **redaction** walk now covers every
+> WordprocessingML text part (`readDocxRedactionLayers` — extended node regex incl. `delText`/
+> `instrText`; one chunk per part through the tool, so counts + the locate pass see header text too)
+> and the write (`applySpansToDocxParts` + metadata scrub) empties `dc:creator`/`cp:lastModifiedBy`,
+> `Company`/`Manager`, `w:author`/`w:initials`/`w15:author` attributes, and re-points external rel
+> targets at `about:blank`. The **edit** path deliberately keeps the body-only `<w:t>` walk described
+> below (an edit is a user-directed change to visible text, not an anonymization sweep — pinned in the
+> edit integration suite). Byte-identity now reads: parts without located content and all non-listed
+> parts stay byte-identical; formatting markup is never touched. Residuals (pictures/scanned pages,
+> embedded objects, custom XML) are named in the pre-run confirm scope line + known-limitations.
+
 The export half of the C wave: **DOCX in → DOCX out with formatting intact.** A Word `.docx` source is
 redacted / edited IN PLACE — styles, numbering, tables, headers and every other zip part survive because
 the ONLY thing that changes is the text CONTENT inside `<w:t>` nodes of `word/document.xml`. This extends the
@@ -8232,6 +8252,29 @@ review found are refinements inside the architecture (§3 below), not a change o
 | §5.6 | Watch item: native tool calling at the 14B–27B tier | **RECORDED, no action.** If a future wave targets 14B–27B primaries (where BFCL reliability improves), the researched shape is still only *single-shot, low-arity selection behind grammar constraints with app-side argument validation* — a §5.2 variant, never an agent loop. The `supports_tools` manifest key (parsed-and-ignored today, model-policy.md "Optional / unknown keys") is the natural landing spot for such a capability flag. |
 
 ### §5.2 as built — the suggestion-only cascade (wave R80, 2026-08-09, issue #80)
+
+> **Wave delta (2026-08-09, skills-pipeline audit — issues #132/#133/#135).** Three lifecycle gaps in
+> the surface below are closed: **(1) click-time re-validation (#132)** — the persisted offer's gate
+> ran only at mint; a click on an offer for a since-disabled/removed skill silently regenerated the
+> answer with NO skill (the resolver's graceful-null is the sticky-DEFAULT contract, §10.3, not a
+> consent contract). Now the renderer disables the stale offer row with an honest tooltip
+> (`isSkillOfferAvailable`, the AUD-01 disabled-never-hidden posture; ChatScreen also passes the
+> accept handler during streaming so `actionsDisabled` — not an unmount — carries that state), and
+> BOTH chat channels refuse an explicit per-turn id that no longer resolves
+> (`main.chat.skillUnavailable`, thrown before the F2-deferred delete — the prior answer survives).
+> **(2) mint-time engagement (#133)** — the classifier enum and the deterministic bank offer now
+> exclude a candidate whose engine would not ENGAGE the question+scope (`wouldSkillEngage` mirrors
+> the dispatch gate: handler-less instruction skills always engage via the fence; a tool/analysis
+> candidate needs `intends()` — the W2 pre-pass handles doc-count misses honestly — or `applies()`
+> or the A4 inversion), ending the silent identical re-run with a mis-stamped provenance glyph and
+> the offer ping-pong. **(3) restore fidelity (#132/#135)** — `deleteLastAssistantMessage`/
+> `restoreMessage` now carry `skill_offer_json`, so the F2/CB-2 restore legs keep the offer (the
+> result-tables class). The accept flow itself is now end-to-end pinned on both sides (#135):
+> main (`rag-classify-offer.test.ts` accept/refusal/self-exclusion/engagement blocks, the restore
+> leg in `rag-regenerate-ipc.test.ts`) and renderer (`SkillOfferAccept.test.tsx` — the wire tuple
+> `askDocuments(convId, '', installId, true, …)` + optimistic drop; `SkillOffer.test.tsx` #132
+> states). Residual (recorded): a Stop landing inside the in-slot classification window still has
+> no dedicated IPC test.
 
 Owner-ratified shape, implemented exactly (branch `wave/r80-router-cascade`, phases P1–P5, one
 PR): the deterministic router (`analysis/router.ts`) stays pure and byte-unchanged — its purity is

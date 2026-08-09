@@ -276,6 +276,16 @@ export function registerChatIpc(ctx: AppContext): void {
         options?.skillInstallId,
         content
       )
+      // #132: an EXPLICIT per-turn skill id that no longer resolves refuses instead of silently
+      // answering skill-free (mirror of the rag channel — the resolver's graceful-null is the
+      // sticky-DEFAULT contract, §10.3, not a consent-click contract). Before any stream/slot work.
+      if (
+        typeof options?.skillInstallId === 'string' &&
+        options.skillInstallId.length > 0 &&
+        skill == null
+      ) {
+        throw new Error(tMain('main.chat.skillUnavailable'))
+      }
 
       return withChatStream(
         event,

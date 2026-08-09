@@ -180,7 +180,9 @@ describe('localizeServerCopy (D-L4)', () => {
       'main.ingest.unsupportedType': { ext: '.xyz' },
       'main.benchmark.warnVeryLowTokens': { model: 'qwen3-30b-a3b-q4' },
       // #110: the slow-read warning carries the measured effective MB/s.
-      'main.benchmark.warnSlowRead': { mbps: 70 }
+      'main.benchmark.warnSlowRead': { mbps: 70 },
+      // §6.5 (issue #95): the recommendation-lowered warning carries TWO values.
+      'main.benchmark.warnRecommendationLowered': { tps: 2.2, model: 'qwen3.6-27b-q4' }
     }
     expect([...INTERPOLATED_MAP_KEYS].sort()).toEqual(Object.keys(params).sort())
     for (const key of INTERPOLATED_MAP_KEYS) {
@@ -197,6 +199,22 @@ describe('localizeServerCopy (D-L4)', () => {
     const localized = localizeServerCopy(tDe, persisted)
     expect(localized).toBe(tDe('main.benchmark.warnVeryLowTokens', { model: 'qwen3.5-4b-ud-q4kxl' }))
     expect(localized).toContain('qwen3.5-4b-ud-q4kxl')
+    expect(localized).not.toBe(persisted)
+  })
+
+  it('carries BOTH values of the recommendation-lowered warning across the round-trip (§6.5)', () => {
+    // The two-parameter template: capture groups follow the ENGLISH template order (tps,
+    // then model); German re-interpolates by name, so its different order is fine.
+    const persisted = tEn('main.benchmark.warnRecommendationLowered', {
+      tps: 2.2,
+      model: 'qwen3.6-27b-q4'
+    })
+    const localized = localizeServerCopy(tDe, persisted)
+    expect(localized).toBe(
+      tDe('main.benchmark.warnRecommendationLowered', { tps: '2.2', model: 'qwen3.6-27b-q4' })
+    )
+    expect(localized).toContain('2.2') // String(value) interpolation — no locale reformat
+    expect(localized).toContain('qwen3.6-27b-q4')
     expect(localized).not.toBe(persisted)
   })
 })

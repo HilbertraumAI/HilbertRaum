@@ -253,6 +253,15 @@ export interface WarningInputs {
   /** Model the tokens/sec probe streamed through — named in the downgrade warning (issue #52). */
   measuredModelId?: string | null
   /**
+   * True when the §6.5 speed signal stepped the RECOMMENDATION down one size tier
+   * (model-benchmarks.md §6.5, issue #95) — computed by the caller as "RAM pick with the
+   * signal ≠ RAM pick without it", so a keep (oversized crawl, no lower ranked tier) never
+   * claims a step that didn't happen. Named warning needs `measuredModelId` + the figure.
+   */
+  recommendationLowered?: boolean
+  /** The measured figure named in the recommendation-lowered warning. */
+  tokensPerSecond?: number | null
+  /**
    * Honest effective read MB/s (#108/#110) — from a REAL model-load/checksum read, never
    * the probe's page-cached read leg. Gates the slow-read warning; null/absent (no
    * qualifying read yet — a fresh install) never warns. Preflight deliberately does not
@@ -286,6 +295,18 @@ export function buildWarnings(input: WarningInputs): string[] {
   // card ever naming the model that produced the number. The warning names it.
   if (input.tokensDowngraded && input.measuredModelId) {
     warnings.push(t('en', 'main.benchmark.warnVeryLowTokens', { model: input.measuredModelId }))
+  }
+
+  // Issue #95 (§6.5): the sibling warning fires when the measured crawl stepped the
+  // RECOMMENDATION down one size tier — it names the measured model AND the figure, so
+  // the lowered ★ pick is never a silent surprise.
+  if (input.recommendationLowered && input.measuredModelId && input.tokensPerSecond != null) {
+    warnings.push(
+      t('en', 'main.benchmark.warnRecommendationLowered', {
+        tps: input.tokensPerSecond,
+        model: input.measuredModelId
+      })
+    )
   }
 
   // #110: the PRIMARY drive warning — keyed on the honest effective READ figure, which is
@@ -396,10 +417,16 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   // RAM-best-fit first — rounded to whole GB, the SAME rounding the Models screen's
   // gate uses (`machineRamGb`), so the two surfaces can never disagree at boundary
   // values like 15.7 GiB. The profile-table lookup remains the fallback when RAM
-  // could not be detected.
-  const recommendedModelId =
-    recommendModelIdByRam(deps.manifests, Math.round(sys.ramGb), 'chat') ??
-    recommendModelId(deps.manifests, profile, 'chat')
+  // could not be detected. The §6.5 speed signal (issue #95) applies with the
+  // just-measured values — the SAME rule listModels applies with the persisted ones,
+  // so the Diagnostics card and the Models screen ★ agree within one run.
+  const ramRounded = Math.round(sys.ramGb)
+  const speedSignal = { tokensPerSecond, measuredModelId }
+  const ramPick = recommendModelIdByRam(deps.manifests, ramRounded, 'chat', speedSignal)
+  // Did the signal actually move the pick? Feeds the named §6.5 warning below.
+  const recommendationLowered =
+    ramPick !== recommendModelIdByRam(deps.manifests, ramRounded, 'chat')
+  const recommendedModelId = ramPick ?? recommendModelId(deps.manifests, profile, 'chat')
   const warnings = buildWarnings({
     profile,
     driveReadMbps: drive.readMbps,
@@ -407,6 +434,8 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     driveError: drive.error,
     tokensDowngraded,
     measuredModelId,
+    recommendationLowered,
+    tokensPerSecond,
     effectiveReadMbps: deps.effectiveRead?.mbps ?? null
   })
 

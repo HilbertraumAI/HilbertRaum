@@ -39,6 +39,11 @@ export interface LocatedEdit {
 export const EDIT_WINDOW_LINES = 40
 export const EDIT_WINDOW_OVERLAP_LINES = 8
 
+/** Global cap on UNIQUE collected proposals (#134) — equals the `apply_document_edits` schema's `edits`
+ *  maxItems (the tool gate's hard input bound), so the seam can never hand the gate an overflowing list
+ *  after the full locate pass. The schema cites this constant; keep the two in lockstep. */
+export const MAX_LOCATED_EDITS = 4096
+
 /** Per-window generation ceiling (tokens) — enough for a JSON list of the edits a 40-line window can
  *  plausibly hold. The char cap (below) is the runaway backstop. */
 const EDIT_MAX_TOKENS = 768
@@ -180,6 +185,13 @@ export function parseEditReply(text: string): LocatedEdit[] {
   return out
 }
 
+/** The locate pass result (#134): the UNIQUE proposals (capped at MAX_LOCATED_EDITS) plus an honest
+ *  truncation flag — true when the cap dropped proposals or cut the window walk short. */
+export interface LocateEditsResult {
+  edits: LocatedEdit[]
+  truncated: boolean
+}
+
 /**
  * Run the locate pass over the whole document: build overlapping line-numbered windows, ask the model
  * (grammar-constrained, temp 0) for the find→replace edits the instruction asks for in each, and collect
@@ -188,6 +200,13 @@ export function parseEditReply(text: string): LocatedEdit[] {
  * The `instruction` (the user's edit request) rides into the system prompt; there is no default directive
  * (an edit with no instruction is meaningless — the seam refuses that before calling here).
  *
+ * Collection discipline (#134): proposals de-duplicate on their `{line, find, occurrence}` ANCHOR (the
+ * 8-line window overlap re-proposes boundary edits; a same-anchor duplicate would be dropped by the
+ * splice's overlap rule anyway — `replace` is deliberately NOT part of the key, so a same-anchor
+ * conflict resolves to the FIRST proposal, matching the splice's first-wins discipline), and the unique
+ * list is capped at MAX_LOCATED_EDITS (== the tool schema's `edits` maxItems, so the gate can never
+ * refuse the seam's input). A full cap stops the window walk early and reports `truncated`.
+ *
  * A single window's malformed reply is skipped (that window contributes no edit); an ABORT throws (the
  * seam maps it to a calm cancel). `onProgress` ticks per window.
  */
@@ -195,10 +214,12 @@ export async function locateDocumentEdits(
   text: string,
   instruction: string,
   deps: { runtime: ModelRuntime; signal: AbortSignal; onProgress?: (done: number, total: number) => void }
-): Promise<LocatedEdit[]> {
+): Promise<LocateEditsResult> {
   const system = buildEditSystemPrompt(instruction.trim())
   const windows = buildEditWindows(text)
   const found: LocatedEdit[] = []
+  const seen = new Set<string>()
+  let truncated = false
   for (let i = 0; i < windows.length; i++) {
     if (deps.signal.aborted) throw new DOMException('Document edit locate cancelled', 'AbortError')
     const messages: ChatMessage[] = [
@@ -206,8 +227,25 @@ export async function locateDocumentEdits(
       { role: 'user', content: windows[i].numbered }
     ]
     const reply = await streamEditJson(messages, deps)
-    if (reply !== null) found.push(...parseEditReply(reply))
+    if (reply !== null) {
+      for (const e of parseEditReply(reply)) {
+        const key = `${e.line}\u0000${e.find}\u0000${e.occurrence}`
+        if (seen.has(key)) continue // the same anchor again — the splice would drop it as an overlap
+        if (found.length >= MAX_LOCATED_EDITS) {
+          truncated = true
+          break
+        }
+        seen.add(key)
+        found.push(e)
+      }
+    }
     deps.onProgress?.(i + 1, windows.length)
+    if (found.length >= MAX_LOCATED_EDITS && i + 1 < windows.length) {
+      // The cap is full and windows remain: stop paying for locate calls whose proposals could only be
+      // dropped, and report the walk as truncated.
+      truncated = true
+      break
+    }
   }
-  return found
+  return { edits: found, truncated }
 }

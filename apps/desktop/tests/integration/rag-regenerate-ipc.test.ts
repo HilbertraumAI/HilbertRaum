@@ -127,4 +127,41 @@ describe('askDocuments regenerate — F2 data-loss guard', () => {
     expect(history.at(-1)?.id).toBe(prior.id)
     expect(inFlightStreams.has(conv.id)).toBe(false)
   })
+
+  // #132/#135 (skills-pipeline audit): the F2 restore must carry the persisted #80 skill OFFER too.
+  // The snapshot's explicit column list omitted `skill_offer_json`, so on BOTH restore legs (a
+  // non-abort failure here; a Stop before the first token) the reply came back with its offer
+  // permanently stripped and the offer row silently vanished — structurally the same bug the
+  // result_tables capture fixed.
+  it('a failed regenerate restores the prior reply WITH its skill offer intact', async () => {
+    const { db, workspacePath } = freshDb()
+    const embedder = new MockEmbedder()
+    const question = 'kategorisiere alle transaktionen'
+    const docId = await seedDocument(db, embedder, 'statement.pdf', question)
+    const conv = createConversation(db, {
+      mode: 'documents',
+      scope: { collectionIds: [], documentIds: [docId] }
+    })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
+    const prior = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: 'the listing answer',
+      skillOffer: { installId: 'app:bank-statement', title: 'Bank Statement Analysis', source: 'deterministic' }
+    })
+    expect(prior.skillOffer).toBeTruthy()
+
+    registerRagIpc(makeCtx(db, workspacePath, throwingRuntime()))
+    await expect(
+      invoke(handlers, IPC.askDocuments, conv.id, question, null, /* regenerate */ true)
+    ).rejects.toThrow(/HTTP 400|too large/i)
+
+    const restored = listMessages(db, conv.id).at(-1)
+    expect(restored?.id).toBe(prior.id)
+    expect(restored?.skillOffer).toEqual({
+      installId: 'app:bank-statement',
+      title: 'Bank Statement Analysis',
+      source: 'deterministic'
+    })
+  })
 })

@@ -766,6 +766,26 @@ Now and then the picker shows a **one-tap suggestion** ("Use *Bank statement*?")
 or the documents in scope look like a fit. It is only ever an offer — nothing is applied until you
 tap it.
 
+### A suggestion on an answer
+
+Sometimes an answer itself carries a quiet suggestion line: *"This looks like a job for a skill."*
+followed by a **Run "…" for this question** action. The app adds it when the answer it just gave
+probably wasn't the shape you asked for — for example, you asked for categorized sums and got a plain
+list — and a skill exists that can do it properly. Clicking the action **re-answers the same
+question with that skill** (your question is not sent anywhere; the previous answer is replaced).
+Nothing ever runs from a suggestion until you click it.
+
+Some of these suggestions say **"Suggested by the local model"**. That means the app asked the model
+running **on your computer** one short, tightly constrained question — "which installed skill, if
+any, fits this request?" — to pick the suggestion. This happens only in two narrow cases (an
+aggregation-style question the plain answer can't serve, and answers the app already knows are on
+shaky ground), it can only name one of your enabled skills or "none", and its output never changes
+the answer text itself. Nothing leaves the space — no network is involved, ever. Suggestions without
+that label come from a fixed built-in rule, with no model call at all.
+
+If you disable or remove a skill after it was suggested, the suggestion button greys out and says
+so — clicking an old suggestion never silently answers without the skill.
+
 ### Skills that run tools
 
 Some skills — like **Bank statement**, **Invoice**, **Document redaction**, and **Document edit** — can
@@ -781,8 +801,12 @@ without dismissing anything first.
 > Redaction is **AI-assisted best-effort**, not a guarantee. It always hides the clearly-shaped data
 > (e-mails, phone numbers, IBANs, card numbers, dates, links); when a model is running it also hides the
 > **names, addresses, and organisation names** it finds — the model only points at what to hide, it never
-> rewrites your document. It can still miss things, and if no model is running only the rule-based part
-> applies (the run tells you so). Always review the redacted copy before you share it.
+> rewrites your document. For a Word document it covers the **whole file's text** — headers and footers,
+> footnotes, comments, and tracked-changes deleted text — and also clears the **author metadata** and
+> **link targets** a file quietly carries. What it can't check: **pictures, scanned pages, and embedded
+> objects** (the confirmation dialog says so before the run). It can still miss things, and if no model
+> is running only the rule-based part applies (the run tells you so). Always review the redacted copy
+> before you share it.
 
 > **Document edit** makes **targeted find-and-replace changes** — for example "replace *Vollmachtgeber*
 > with *Vollmachtgeberin* everywhere it refers to the principal". Ask for the change in the chat, then

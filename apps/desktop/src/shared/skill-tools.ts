@@ -65,6 +65,9 @@ export interface RedactionDoneKeys {
   /** DEGRADED variants (no runtime / locate failed): the copy says "rule-based detection only". */
   cleanFloor: MessageKey
   redactedFloor: CountMessageKey
+  /** #134: the locate pass hit its proposal cap (a very large document) — detection stopped at the
+   *  limit, so the copy asks for an extra-careful review. */
+  redactedCapped: CountMessageKey
 }
 
 /** The edit-shape done copy (Phase 8, D76/D78): no-match vs N-changes-applied, with a partial variant
@@ -76,6 +79,9 @@ export interface EditDoneKeys {
   edited: CountMessageKey
   /** N changes applied, but some requested text wasn't found and was skipped (dropped > 0). */
   editedPartial: CountMessageKey
+  /** #134: N changes applied, but the locate pass hit its proposal cap — later places to change may
+   *  never have been seen; the copy asks for a review. */
+  editedCapped: CountMessageKey
 }
 
 /** The self-describing wiring of one Tier-2 tool — the single source the other layers derive from. */
@@ -260,7 +266,8 @@ export const SKILL_TOOL_DESCRIPTORS: readonly SkillToolDescriptor[] = [
       clean: 'chat.skill.run.done.redactedClean',
       redacted: 'chat.skill.run.done.redacted',
       cleanFloor: 'chat.skill.run.done.redactedCleanFloor',
-      redactedFloor: 'chat.skill.run.done.redactedFloor'
+      redactedFloor: 'chat.skill.run.done.redactedFloor',
+      redactedCapped: 'chat.skill.run.done.redactedCapped'
     },
     dialog: DIALOG_REDACTED,
     docxDialog: DIALOG_REDACTED_DOCX
@@ -274,7 +281,8 @@ export const SKILL_TOOL_DESCRIPTORS: readonly SkillToolDescriptor[] = [
     editKeys: {
       none: 'chat.skill.run.done.editedNone',
       edited: 'chat.skill.run.done.edited',
-      editedPartial: 'chat.skill.run.done.editedPartial'
+      editedPartial: 'chat.skill.run.done.editedPartial',
+      editedCapped: 'chat.skill.run.done.editedCapped'
     },
     dialog: DIALOG_EDITED,
     docxDialog: DIALOG_EDITED_DOCX

@@ -2320,9 +2320,16 @@ export function ChatScreen({
           // lives in Transcript; here we only withhold it while a reply is streaming (it would re-run
           // mid-answer).
           onAnswerWithoutSkill={busyStreaming ? undefined : handleAnswerWithoutSkill}
-          // #80: the per-answer skill-offer accept — same streaming gate as the undo (it re-runs
-          // via regenerate and must not fire mid-answer); per-message placement lives in Transcript.
-          onRunWithSkill={busyStreaming ? undefined : handleRunWithSkill}
+          // #80: the per-answer skill-offer accept — per-message placement lives in Transcript.
+          // #135 (audit TEST-2 rider): the handler is ALWAYS passed; streaming disables via
+          // `actionsDisabled` below (the handler's own busyStreaming guard backstops it), so the
+          // offer row keeps the disabled-never-hidden posture instead of unmounting mid-stream —
+          // withholding the handler made Transcript's tested visible-but-disabled state unreachable.
+          onRunWithSkill={handleRunWithSkill}
+          // #132: click-time re-validation for the persisted offer — a skill disabled/removed since
+          // the offer was minted renders the row disabled with an honest tooltip (enabledSkills is
+          // refreshed on every mount; main refuses the stale id as defense in depth).
+          isSkillOfferAvailable={(id) => enabledSkills.some((s) => s.installId === id)}
           onCopy={handleCopyMessage}
           onSave={handleSaveConversation}
           onExportTable={handleExportMessageTable}

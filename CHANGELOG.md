@@ -128,6 +128,14 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Changed
 
+- **The model recommendation now listens to measured speed** (issue #95, resolving
+  issue #52's deferred question). When the Diagnostics benchmark measures text
+  generation under 5 tokens per second on a model that is right-sized for this
+  machine (or smaller), the recommendation steps down one size tier to a quicker
+  model, and a warning names the measured model and figure. A crawl measured on
+  an oversized, manually started model never moves the pick, machines without a
+  benchmark or with a healthy reading are byte-identical to before, and the step
+  can never land on a model the benchmark record has not ranked.
 - **The Images screen now takes WEBP pictures and big phone photos** (issues
   #124, #118). WEBP files are converted on the fly (nothing new touches the
   security-sensitive parsers), and the old hidden 4096-pixel rejection is gone
@@ -211,6 +219,46 @@ first public release. Consciously-accepted gaps are tracked in
   High Contrast (#146), plus the chat/shell/area low-priority sweeps (#148–#150:
   stream-recovery resilience, lock-seam watcher purge, dialog dismissal no
   longer counts as a decision, sub-12px text bumped to the floor, and more).
+- **A redacted Word copy can no longer leak masked text when a link contains an
+  e-mail address** (issue #128). A URL with an embedded e-mail (an unsubscribe
+  link, a `mailto:` address in a link) produced nested mask regions; the `.docx`
+  writer re-emitted part of the masked link **in cleartext** in the saved copy
+  (the plain-text copy was never affected). The saved file now masks the whole
+  region exactly once, and the "N items hidden" count counts masked regions
+  instead of double-counting the nested item.
+- **Skill auto-fire (the opt-in) now really requires a matching document in
+  scope** (issue #130). The documented rule — "the user asked *and* a relevant
+  document is deliberately in scope" — could be bypassed when a question hit two
+  of a skill's keywords: the skill then silently shaped a document-less turn.
+  The document requirement is now enforced structurally; the inert picker
+  suggestion is unchanged.
+- **Skill packages zipped with macOS Finder now import** (issue #131). Finder's
+  "Compress" adds hidden `__MACOSX`/`.DS_Store` entries that defeated the
+  package-folder detection, so a perfectly valid skill failed with the
+  misleading "The package does not contain a SKILL.md file."
+- **Clicking a skill suggestion for a skill you have since disabled or removed
+  no longer silently re-answers without it** (issue #132). The suggestion button
+  now disables with an explanation, and the app refuses (rather than quietly
+  ignores) a stale run request — your existing answer stays untouched. The
+  suggestion also survives a failed or stopped re-answer instead of vanishing.
+- **Skill suggestions are only made when the skill could actually help** (issue
+  #133). A suggested skill whose engine would not engage your question used to
+  regenerate an essentially identical answer mis-labeled as skill-assisted, then
+  suggest a different skill — suggestion ping-pong. Such candidates are no
+  longer offered.
+- **A redacted Word copy no longer carries personal data outside the visible
+  body text** (issue #129). Redaction used to rewrite only the document body:
+  headers and footers (letterhead), footnotes, comment text, tracked-changes
+  deleted text, hyperlink/`mailto:` targets, and the author metadata all
+  traveled into the "redacted" copy unchanged and recoverable. All of these
+  are now masked or scrubbed; the pre-run confirmation states what automatic
+  masking still cannot reach (pictures, scanned pages, embedded objects).
+- **Redacting or editing a very large document no longer fails at the end of
+  the run** (issue #134). On documents long enough that the model proposed more
+  than 4,096 places, the run used to fail with a generic error *after* the full
+  multi-minute detection pass. Proposals are now de-duplicated and capped; the
+  run completes, and when the cap was hit the result says so and asks for a
+  careful review of the saved copy.
 - **One failed vision start no longer disables image understanding until
   restart** (issue #117). If the vision model failed to start once (for
   example under memory pressure), every later attempt failed instantly for

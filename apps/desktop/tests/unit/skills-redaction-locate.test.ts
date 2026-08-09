@@ -6,6 +6,7 @@ import {
   locateEntities,
   parseLocateReply,
   LOCATE_CATEGORIES,
+  MAX_LOCATED_ENTITIES,
   type LocatedEntity
 } from '../../src/main/services/skills/tools/redaction-locate'
 import {
@@ -13,6 +14,7 @@ import {
   redactWithEntities,
   MIN_ENTITY_CHARS
 } from '../../src/main/services/skills/tools/redaction'
+import { applySpans } from '../../src/main/services/skills/tools/span-transform'
 
 // Phase 7 (beta-feedback-2026-07, #22 part 2, D73/D75/D78; architecture.md "Skills — design record"
 // §21). The locate half (runtime-touching) + the verify/sweep half (deterministic, runtime-free) of
@@ -128,8 +130,54 @@ describe('redaction-locate — locateEntities over the runtime', () => {
     expect(calls[0].options?.temperature).toBe(0)
     expect(calls[0].options?.responseSchema).toBeTruthy()
     // The entity on line 45 (in the second window) is collected; the instruction rode into the prompt.
-    expect(found.some((e) => e.text === 'Jane Doe')).toBe(true)
+    expect(found.entities.some((e) => e.text === 'Jane Doe')).toBe(true)
+    expect(found.truncated).toBe(false)
     expect(calls[0].messages[0].content).toContain('names')
+  })
+
+  // #134 (skills-pipeline audit 2026-08-09, RUN-3): the accumulator used to concatenate every window's
+  // proposals with NO dedupe and NO global cap — on a large PII-dense document the list overflowed the
+  // tool schema's `maxItems: 4096` and the run failed AFTER the full multi-minute locate pass. Now:
+  // duplicate proposal strings collapse (the 8-line window overlap re-proposes them; the sweep is
+  // text-keyed anyway), the unique list is capped at MAX_LOCATED_ENTITIES (== the tool schema cap, so
+  // the seam can never overflow the gate), a hit cap stops paying for further windows, and `truncated`
+  // reports the cap honestly so the seam can say so instead of silently under-masking.
+  it('#134: de-duplicates identical proposal strings across windows (the overlap re-proposes them)', async () => {
+    const text = Array.from({ length: 50 }, (_, i) => (i === 35 ? 'Signed, Jane Doe' : `line ${i + 1}`)).join('\n')
+    // Line 36 sits in BOTH windows (33..40 overlap) — each window proposes the same string.
+    const runtime = scriptedRuntime(({ messages }) =>
+      messages[1].content.includes('Jane Doe')
+        ? JSON.stringify({ entities: [{ text: 'Jane Doe', category: 'name', line: 36 }] })
+        : JSON.stringify({ entities: [] })
+    )
+    const { entities, truncated } = await locateEntities(text, '', { runtime, signal: new AbortController().signal })
+    expect(entities.filter((e) => e.text === 'Jane Doe')).toHaveLength(1)
+    expect(truncated).toBe(false)
+  })
+
+  it('#134: caps unique proposals at MAX_LOCATED_ENTITIES, reports truncated, and stops early', async () => {
+    expect(MAX_LOCATED_ENTITIES).toBe(4096) // == the redact_document schema's entities maxItems
+    const text = Array.from({ length: 1300 }, (_, i) => `line ${i + 1}`).join('\n')
+    const windows = buildLocateWindows(text)
+    expect(windows.length).toBeGreaterThan(34) // enough saturated windows to overflow the cap
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    // Every window returns 128 UNIQUE proposals (keyed off its own first global line number). The
+    // texts are SHORT so the whole reply stays under the locate stream's runaway char cap — a real
+    // grammar-constrained reply is similarly dense.
+    const runtime = scriptedRuntime(({ messages }) => {
+      const firstLine = messages[1].content.split('\t')[0]
+      return JSON.stringify({
+        entities: Array.from({ length: 128 }, (_, i) => ({
+          text: `w${firstLine}x${i}`,
+          category: 'name',
+          line: 1
+        }))
+      })
+    }, calls)
+    const { entities, truncated } = await locateEntities(text, '', { runtime, signal: new AbortController().signal })
+    expect(entities).toHaveLength(MAX_LOCATED_ENTITIES) // never more than the tool gate accepts
+    expect(truncated).toBe(true) // the cap is reported honestly
+    expect(calls.length).toBeLessThan(windows.length) // a full cap stops paying for further windows
   })
 
   it('propagates an abort as an AbortError (the seam maps it to a calm cancel)', async () => {
@@ -211,5 +259,45 @@ describe('redactWithEntities — entities + the deterministic floor', () => {
     const r = redactWithEntities('Jane Doe only.', [entity('Jane Doe'), entity('Ghost Name')], 'perChar')
     expect(r.entityCounts.name).toBe(1)
     expect(r.droppedEntities).toBe(1) // 'Ghost Name' was not present verbatim
+  })
+
+  // #128 (skills-pipeline audit 2026-08-09, RUN-1): URL_RE matches the █ mask character, so the floor's
+  // URL pass can produce a span CONTAINING an earlier-pass email mask (or a swept entity mask) — the
+  // union handed to the DOCX writer was NOT "mutually disjoint" as its comment claimed. Under perChar
+  // the union is now resolved through the same `applySpans` overlap rule the .txt path applies: the
+  // outer mask wins, contained spans drop, and `totalRedactions` counts masked REGIONS (not the
+  // detector-hit sum that double-counted the nested item).
+  it('#128: a URL with an embedded e-mail resolves to ONE disjoint masked region', () => {
+    const input = 'See https://x.co/?e=a@b.co&l=de ok'
+    const url = 'https://x.co/?e=a@b.co&l=de'
+    const r = redactWithEntities(input, [], 'perChar')
+    // The flat text masks the whole URL (email pass first, URL pass over the mask).
+    expect(r.text).toBe(`See ${'█'.repeat(url.length)} ok`)
+    // The writer span set is genuinely disjoint: ascending, non-overlapping…
+    let end = 0
+    for (const s of [...r.spans].sort((a, b) => a.start - b.start)) {
+      expect(s.start).toBeGreaterThanOrEqual(end)
+      end = s.start + s.length
+    }
+    // …and reproduces the flat text exactly (the invariant the old comment only claimed).
+    expect(applySpans(input, r.spans).text).toBe(r.text)
+    // One masked region — not the detector-hit sum of 2 (email + url).
+    expect(r.totalRedactions).toBe(1)
+  })
+
+  it('#128: an entity mask swallowed by a URL span stays one region (entity ∪ floor union)', () => {
+    const input = 'Link https://x.co/JaneDoe/profile end'
+    const url = 'https://x.co/JaneDoe/profile'
+    const r = redactWithEntities(input, [entity('JaneDoe')], 'perChar')
+    expect(r.text).toBe(`Link ${'█'.repeat(url.length)} end`)
+    expect(applySpans(input, r.spans).text).toBe(r.text)
+    expect(r.totalRedactions).toBe(1)
+  })
+
+  it('#128: disjoint spans keep the additive count (the non-nested behaviour is unchanged)', () => {
+    const input = 'Jane Doe: jane.doe@example.com and https://example.com/x'
+    const r = redactWithEntities(input, [entity('Jane Doe')], 'perChar')
+    expect(r.totalRedactions).toBe(3) // entity + email + url, all disjoint
+    expect(applySpans(input, r.spans).text).toBe(r.text)
   })
 })
