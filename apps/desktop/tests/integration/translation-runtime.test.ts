@@ -910,3 +910,107 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
     await rt.stop()
   })
 })
+
+// ---- #159 (BE-1): abortable cold start — lock/quit must not await the health window ----
+//
+// `doTeardown` used to await an in-flight lazy start to completion: for a hung/slow ~10 GB
+// cold start that is up to the FULL health timeout (180 s default — the factory passes no
+// override) during which lock/quit appear hung and the plaintext DB stays open. The teardown
+// now fires a per-ladder AbortController: the health wait stops at its next poll, the child
+// is killed via the normal stop path (no orphan), the start rejects AbortError — and an
+// aborted start NEVER arms the `startFailed` latch (translation lazily restarts after the
+// next unlock) and never falls to the CPU rung. Also closes #163 T-4 (teardown racing a
+// lazy start — the exact races the post-await re-checks exist for).
+describe('#159 (BE-1) — teardown aborts an in-flight cold start', () => {
+  /** A fetch whose /health NEVER turns ready while `hang` is true — a wedged cold start. */
+  function switchableFetch() {
+    const ok = translationFetch()
+    const state = { hang: true }
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (state.hang && String(url).endsWith('/health')) {
+        return { ok: false, status: 503 } as Response
+      }
+      return ok.fetchImpl(url, init)
+    }) as typeof fetch
+    return { fetchImpl, state }
+  }
+
+  it('suspend() during a hung lazy start resolves promptly, kills the child, does NOT latch, and lazily restarts', async () => {
+    const { spawn, children } = fakeSpawn()
+    const { fetchImpl, state } = switchableFetch()
+    // A REAL 60 s health budget: pre-fix, suspend() awaited it out (this test then times out).
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      healthTimeoutMs: 60_000
+    })
+    const inflight = rt.translate(translateOpts)
+    inflight.catch(() => {}) // observed below; never unhandled
+    while (children.length === 0) await tick() // the cold start has spawned its child
+
+    const t0 = Date.now()
+    await rt.suspend()
+    expect(Date.now() - t0).toBeLessThan(5_000) // promptly — never the 60 s health budget
+    expect(children[0].killed).toBe(true) // the mid-start child was killed, not orphaned
+    await expect(inflight).rejects.toThrow() // the in-flight translate rejects
+
+    // An aborted start is NOT a load fault: no startFailed latch — the post-unlock lazy
+    // restart must work (the latch would silently disable translation for the session).
+    expect(rt.isStartFailed()).toBe(false)
+
+    state.hang = false // "after unlock": the next cold start becomes healthy
+    await expect(rt.translate(translateOpts)).resolves.toBe(COMPLETION_TEXT)
+    expect(children.length).toBe(2) // a FRESH child (lazy restart), not the killed one
+    await rt.stop()
+  }, 15_000)
+
+  it('stop() (quit) during a hung lazy start resolves promptly and stays permanently stopped', async () => {
+    const { spawn, children } = fakeSpawn()
+    const { fetchImpl, state } = switchableFetch()
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      healthTimeoutMs: 60_000
+    })
+    const inflight = rt.translate(translateOpts)
+    inflight.catch(() => {})
+    while (children.length === 0) await tick()
+
+    const t0 = Date.now()
+    await rt.stop()
+    expect(Date.now() - t0).toBeLessThan(5_000)
+    expect(children[0].killed).toBe(true)
+    await expect(inflight).rejects.toThrow()
+
+    // The permanent quit latch holds: no lazy resurrection even with a healthy server.
+    state.hang = false
+    await expect(rt.translate(translateOpts)).rejects.toThrow(/stopped/)
+    expect(children.length).toBe(1)
+  }, 15_000)
+
+  it('an aborted GPU-attempt start never falls to the CPU rung mid-teardown (no ~10 GB cold load to tear straight down)', async () => {
+    const { spawn, calls, children } = fakeSpawn()
+    const { fetchImpl } = switchableFetch()
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      healthTimeoutMs: 60_000
+    })
+    const inflight = rt.translate(translateOpts)
+    inflight.catch(() => {})
+    while (children.length === 0) await tick()
+    await rt.suspend()
+    await expect(inflight).rejects.toThrow()
+    // Exactly ONE spawn: the aborted 'auto' attempt. The device ladder must not have
+    // launched a second (forced-CPU) child under the teardown.
+    expect(calls.length).toBe(1)
+    expect(calls[0].args.join(' ')).not.toContain('--device')
+    await rt.stop()
+  }, 15_000)
+})
