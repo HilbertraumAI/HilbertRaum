@@ -267,6 +267,16 @@ The current dark palette survives as the dark theme (lightly tuned per §4.3).
 - **Toggles.** Switch for binary settings (track `--brand-teal-dark` when on — the white thumb
   needs ≥3:1, which bright teal fails; §13), checkbox for multi-select; 24×24 min target;
   clickable label; focus ring.
+- **Per-answer skill offer (issue #80, wave R80).** When an answer's engine could not serve the
+  asked *shape* (the #54 categories/sums class, or a low-confidence router fallback), the answer
+  may carry a one-click offer — the `.msg-skill` vocabulary (icon + words, muted, never
+  color-only §9) with a link-style action ("Run "Bank Statement Analysis" for this question")
+  reusing the `.msg-skill-undo` treatment; **no new color tokens**. The click is the consent
+  (nothing auto-fires); it renders on the *last* assistant turn only (accepting re-answers via
+  regenerate) and is disabled — never hidden — when the reply carries an evidence review (the
+  AUD-01 posture). Provenance is text, not color: an offer from the local-model classification
+  adds the italic "Suggested by the local model" marker; the deterministic offer carries none
+  (the answer's prose hint already explains it).
 
 ---
 

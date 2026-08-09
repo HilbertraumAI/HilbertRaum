@@ -8204,11 +8204,43 @@ review found are refinements inside the architecture (§3 below), not a change o
 | Review § | Item | Disposition |
 |---|---|---|
 | §5.1 | Grammar-constrain the ingest extract pass | **IMPLEMENTED** (STR-1 P2): `EXTRACT_RESPONSE_SCHEMA` rides the D55 `responseSchema` contract on both attempts; the #50 hardening retained in full (grammar stops neither reasoning-burn nor cap-truncation nor the mock). As-built record: rag-design §14.5. |
-| §5.2 | Constrained model-classification fallback for the deterministic router (#54 class) | **DEFERRED, owner-gated — filed as issue #80**: hybrid cascade (single-shot grammar-constrained enum classification at temp 0, D55 machinery, suggest-never-activate, 0-model-call happy paths preserved). Not implemented in this wave by owner decision. |
+| §5.2 | Constrained model-classification fallback for the deterministic router (#54 class) | **IMPLEMENTED (wave R80, 2026-08-09 — issue #80)** as a suggestion-only cascade; the as-built record is the "§5.2 as built" subsection below this table. |
 | §5.3 | Suggestion scale-up revisit trigger | **RECORDED** in the Skills record §6 (≈10–20 candidates → embedding-based suggestion over the local RAG embedder, stays offline). |
 | §5.4 | Thinking-checkpoint criterion for structured surfaces | **RECORDED** in model-benchmarks §9 ("Thinking-checkpoint criterion") + BUILD_STATE §5 item 8: on split Instruct/Thinking checkpoints the catalog choice, not an `enable_thinking` kwarg, is the robust control for D55 grammar surfaces. |
 | §5.5 | Agent Skills interop mapping | **RECORDED** in the Skills record ("Agent Skills (agentskills.io) interop mapping", after §16): body+metadata import near-trivial; scripts/`allowed-tools` remain unsupported. |
 | §5.6 | Watch item: native tool calling at the 14B–27B tier | **RECORDED, no action.** If a future wave targets 14B–27B primaries (where BFCL reliability improves), the researched shape is still only *single-shot, low-arity selection behind grammar constraints with app-side argument validation* — a §5.2 variant, never an agent loop. The `supports_tools` manifest key (parsed-and-ignored today, model-policy.md "Optional / unknown keys") is the natural landing spot for such a capability flag. |
+
+### §5.2 as built — the suggestion-only cascade (wave R80, 2026-08-09, issue #80)
+
+Owner-ratified shape, implemented exactly (branch `wave/r80-router-cascade`, phases P1–P5, one
+PR): the deterministic router (`analysis/router.ts`) stays pure and byte-unchanged — its purity is
+load-bearing and every currently-confident route still answers at **0 model calls**
+(full-decision pins in `extract-router.test.ts`). On exactly **two trigger classes** —
+(a) `isAggregationShaped()` coverage-extract turns (the #54 wrong-shape class) and
+(b) `confidence:'low'` fallback decisions — the `rag:ask` handler additionally runs **one
+single-shot, grammar-constrained skill-pointer classification**
+(`analysis/classify.ts`, the bank-categorizer D55 template): enum = the gated offer candidates
+(`offerableSkillCandidates` — enabled + available + app-compatible, minus the turn's own skill)
+plus a mandatory `none`; temp 0; `CLASSIFY_TIMEOUT_MS` (4 s) hard bound inside the held chat slot;
+abort-honoured; **every fault returns `none`** (silent degrade — under the MockRuntime, which
+ignores `responseSchema`, the degrade path always runs, so mock/dev behaviour is byte-identical to
+a build without the classifier; a tested invariant). NEVER on the step-5 fallthrough — the
+0-model-call guarantee on ordinary questions is what protects suggestion-surface trust
+(`isClassificationTrigger`, golden-set-pinned). The classification **never changes the engine,
+never activates a skill, and never reaches answer content**: it only fills the per-answer OFFER
+surface — `Message.skillOffer` (`SkillOffer` = `SkillSuggestion` + provenance
+`'deterministic' | 'classifier'`; `messages.skill_offer_json`, structural only) — rendered as a
+one-click "Run «skill» for this question" action on the last assistant turn, which re-runs the
+turn via the EXISTING regenerate path with the skill explicitly set (click = consent; S13b/D4
+auto-fire posture untouched; AUD-01 review-block and SKA-37 last-turn gates shared with the
+"answer without it" undo). The #54 `amount` class is served first by a **deterministic** offer
+(bank-statement skill, 0 model calls — P1); when it fires, the classifier is skipped (owner
+decision 4: deterministic provenance wins the dedupe). Degradation path: the #54/#50/#38 prose
+hints stay byte-unchanged beneath the offer. The classifier's real-model precision on the promoted
+catalog is an **owner-run follow-up eval** (model-benchmarks §9); the in-repo gate is the
+deterministic trigger boundary + the prefer-`none` prompt. The candidate inventory is an injected
+plain list, kept cleanly separable so the #53/#52 signal-aware-picker note can later extend HOW
+candidates are chosen without touching the classifier.
 
 ### §4 Key external evidence (accessed 2026-07-18; single-sourced items flagged in the original)
 
