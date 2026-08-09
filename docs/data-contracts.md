@@ -298,6 +298,18 @@ document answers always run balanced (deep-grounded = wave 2).
   (`AppContext.reranker`, availability-selected, null default). `Embedder`/`Reranker` gained
   optional **`suspend()`** — the workspace-lock teardown that allows a lazy restart (`stop()`
   stays permanent for will-quit).
+- **Issue #80 (wave R80) — the per-answer actionable skill offer:** `Message` gained optional
+  **`skillOffer?: SkillOffer`**, where `SkillOffer` = `SkillSuggestion` (installId + title) +
+  a required **`source: 'deterministic' | 'classifier'`** provenance marker (`shared/types.ts`).
+  Persisted as the additive nullable **`messages.skill_offer_json`** (STRUCTURAL only — id +
+  title + provenance, never question/document text; tolerant parse — a malformed payload reads
+  as "no offer"). Written by `askDocuments` on exactly two decision classes: the deterministic
+  #54 amount-aggregation offer, and the bounded single-shot D55 grammar classification
+  (`services/analysis/classify.ts` — enum of gated skill ids + mandatory `none`; every fault
+  degrades to NULL). Undefined on user turns, ordinary answers, and pre-migration rows — an
+  older app ignores the column. The renderer's accept action re-runs the turn through the
+  EXISTING regenerate path (`askDocuments(conversationId, '', installId, true)`) — no new IPC
+  channel. The composer-picker `SkillSuggestion` contract itself is byte-unchanged.
 
 ### Hardware benchmark + recommendation (Phase 7 live)
 ✅ **`services/benchmark.ts`** (spec §7.3, §11). Full detail in [`docs/benchmark.md`](benchmark.md).

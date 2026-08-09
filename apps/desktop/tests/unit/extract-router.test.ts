@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   isAggregationShaped,
   routeQuestion,
-  mapQuestionToRecordType
+  mapQuestionToRecordType,
+  type RouteInput
 } from '../../src/main/services/analysis/router'
+import { isClassificationTrigger } from '../../src/main/services/analysis/classify'
 import { parseExtraction } from '../../src/main/services/analysis/extract'
 
 // Whole-document-analysis Phase 3 (plan §4.2/§4.4, §7): the PURE task router (classification +
@@ -286,6 +288,117 @@ describe('parseExtraction — tolerant JSON-array parse (H7)', () => {
       expect(parseExtraction('', { salvageTruncated: true })).toBeNull()
       expect(parseExtraction('thinking… no array here', { salvageTruncated: true })).toBeNull()
     })
+  })
+})
+
+// Issue #80 (wave R80) — the CLASSIFICATION TRIGGER BOUNDARY golden set. The router itself is
+// byte-unchanged (every pin above still passes); this pins WHICH decisions may additionally run
+// the one bounded skill-pointer classification: (a) aggregation-shaped coverage-extract turns,
+// (b) low-confidence fallbacks. The step-5 fallthrough (ordinary high-confidence relevance) and
+// every other confident route must NEVER trigger — that 0-model-call guarantee is what protects
+// trust in the suggestion surface, so the distractor rows are the teeth of this suite.
+describe('isClassificationTrigger (#80) — golden set', () => {
+  const route = (question: string, over: Partial<RouteInput> = {}): ReturnType<typeof routeQuestion> =>
+    routeQuestion({ question, documentCount: 1, treeAvailable: false, extractAvailable: true, ...over })
+
+  it('every currently-confident route is byte-unchanged — full-decision pins', () => {
+    // Deep-equal against the WHOLE decision object (not just engine), so any drift in
+    // confidence/recordType/fallback on the happy paths fails loudly here.
+    expect(route('list every deadline')).toEqual({
+      engine: 'coverage-extract',
+      recordType: 'date',
+      confidence: 'high'
+    })
+    expect(route('kategorisiere die Ausgaben')).toEqual({
+      engine: 'coverage-extract',
+      recordType: 'amount',
+      confidence: 'high'
+    })
+    expect(route('what does the contract say about termination?')).toEqual({
+      engine: 'relevance',
+      confidence: 'high'
+    })
+    expect(route('Fasse das Dokument zusammen', { treeAvailable: true })).toEqual({
+      engine: 'tree-summary',
+      confidence: 'high'
+    })
+    expect(route('Compare the two contracts', { documentCount: 2 })).toEqual({
+      engine: 'compare',
+      confidence: 'high'
+    })
+  })
+
+  it('trigger (a): aggregation-shaped coverage-extract turns — EN + DE, incl. the #54/#37 repros', () => {
+    for (const q of [
+      'kategorisiere alle transaktionen und erstelle eine summe pro kategorie', // #54 verbatim
+      'kategorisiere die ausgaben und erstelle eine summe pro kategorie auf', // #37 verbatim
+      'gruppiere die Parteien nach Vertrag',
+      'categorize the expenses',
+      'group by vendor and total per month',
+      'sum per category please'
+    ]) {
+      const d = route(q)
+      expect(d.engine, q).toBe('coverage-extract')
+      expect(isClassificationTrigger(d, q), q).toBe(true)
+    }
+  })
+
+  it('trigger (b): low-confidence fallbacks — coverage without extract data, compare without two docs', () => {
+    const noExtract = route('kategorisiere alle transaktionen und erstelle eine summe pro kategorie', {
+      extractAvailable: false
+    })
+    expect(noExtract).toEqual({ engine: 'relevance', confidence: 'low', fallback: 'coverage' })
+    expect(isClassificationTrigger(noExtract, 'kategorisiere alle transaktionen und erstelle eine summe pro kategorie')).toBe(true)
+
+    // A PLAIN list ask that fell back also triggers — the router provably could not serve it.
+    const plainNoExtract = route('list every deadline', { extractAvailable: false })
+    expect(plainNoExtract).toEqual({ engine: 'relevance', confidence: 'low', fallback: 'coverage' })
+    expect(isClassificationTrigger(plainNoExtract, 'list every deadline')).toBe(true)
+
+    const compareOneDoc = route('what is the difference here', { extractAvailable: false })
+    expect(compareOneDoc).toEqual({ engine: 'relevance', confidence: 'low', fallback: 'compare' })
+    expect(isClassificationTrigger(compareOneDoc, 'what is the difference here')).toBe(true)
+  })
+
+  it('NEVER on the step-5 fallthrough — ordinary questions keep 0 model calls', () => {
+    for (const q of [
+      'what does the contract say about termination?',
+      'who wrote this letter?',
+      'Erzähle mir etwas über die Verträge',
+      'Wann wurde der Vertrag unterschrieben?'
+    ]) {
+      const d = route(q)
+      expect(d, q).toEqual({ engine: 'relevance', confidence: 'high' })
+      expect(isClassificationTrigger(d, q), q).toBe(false)
+    }
+  })
+
+  it('NEVER on confident non-aggregation routes — plain listings, summaries, compares', () => {
+    // Plain list/count over extract data: coverage-extract, but NOT aggregation-shaped.
+    for (const q of ['list every deadline', 'liste alle Beträge auf', 'wie viele Parteien', 'Zähle die Ausgaben']) {
+      const d = route(q)
+      expect(d.engine, q).toBe('coverage-extract')
+      expect(isClassificationTrigger(d, q), q).toBe(false)
+    }
+    const summary = route('Summarize the whole document', { treeAvailable: true })
+    expect(summary.engine).toBe('tree-summary')
+    expect(isClassificationTrigger(summary, 'Summarize the whole document')).toBe(false)
+    const compare = route('Compare the two contracts', { documentCount: 2 })
+    expect(compare.engine).toBe('compare')
+    expect(isClassificationTrigger(compare, 'Compare the two contracts')).toBe(false)
+  })
+
+  it('near-miss lexical distractors stay outside the boundary', () => {
+    // Words NEAR the aggregation lexicon that must not fire it (and so must not trigger):
+    for (const q of [
+      'Welche Kategorie passt zu diesem Dokument?', // bare "Kategorie" — not the pro/nach phrase
+      'Die Gruppe trifft sich morgen im Büro', // "Gruppe" ≠ the gruppier stem
+      'is the total correct on page 2?', // "total" alone — no "total per"
+      'give me the summary of the sums section' // summary-shaped, no tree → step-5 relevance
+    ]) {
+      const d = route(q, { extractAvailable: true })
+      expect(isClassificationTrigger(d, q), q).toBe(false)
+    }
   })
 })
 
