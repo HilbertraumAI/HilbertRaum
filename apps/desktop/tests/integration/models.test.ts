@@ -20,6 +20,7 @@ import {
   invalidateChecksum,
   recommendModelId,
   recommendModelIdByRam,
+  SLOW_PICK_TOKENS_PER_SECOND,
   discoverManifests,
   findManifestById,
   launchContextTokens,
@@ -774,6 +775,78 @@ describe('recommendModelIdByRam', () => {
     expect(recommendModelIdByRam([unevaled, rankedTooBig], 16)).toBe('unevaled') // comfortable stage
     expect(recommendModelIdByRam([unevaled, rankedTooBig], 8)).toBe('unevaled') // runnable fallback
   })
+
+  // §6.5 speed-signal step-down (issue #95): a measured crawl on a right-sized model steps
+  // the comfortable pick down ONE capacity tier; every other shape of signal changes nothing.
+  describe('speed-signal step-down (model-benchmarks §6.5, issue #95)', () => {
+    // Three ranked tiers (mirrors the committed 16/24/32 structure) + a rank-0 floor below.
+    const top = asManifest({ id: 'top', size_on_disk_gb: 19.5, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 3 })
+    const mid = asManifest({ id: 'mid', size_on_disk_gb: 16.8, recommended_min_ram_gb: 20, recommended_ram_gb: 24, recommendation_rank: 3 })
+    const low = asManifest({ id: 'low', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3 })
+    const floor0 = asManifest({ id: 'floor0', size_on_disk_gb: 1.3, recommended_min_ram_gb: 6, recommended_ram_gb: 8, recommendation_rank: 0 })
+    const all = [top, mid, low, floor0]
+    const slow = (measuredModelId: string | null, tokensPerSecond: number | null = 2.1) => ({
+      tokensPerSecond,
+      measuredModelId
+    })
+
+    it('steps one tier down on a crawl measured on a right-sized model', () => {
+      expect(recommendModelIdByRam(all, 32, 'chat', slow('top'))).toBe('mid')
+      // A crawl on a SMALLER right-sized model is also a valid signal (it bounds the pick).
+      expect(recommendModelIdByRam(all, 32, 'chat', slow('mid'))).toBe('mid')
+      expect(recommendModelIdByRam(all, 24, 'chat', slow('mid'))).toBe('low')
+    })
+
+    it('never downgrades on a crawl measured on an OVERSIZED loaded model (the #52 lesson)', () => {
+      // 24 GB machine, crawl measured on the 32 GB-tier model the user started manually:
+      // expected to crawl — the pick stays.
+      expect(recommendModelIdByRam(all, 24, 'chat', slow('top'))).toBe('mid')
+    })
+
+    it('the step never lands on a rank-0 model (§6.3 guard unchanged)', () => {
+      // 16 GB: the only tier below 'low' is the rank-0 floor — keep the pick.
+      expect(recommendModelIdByRam(all, 16, 'chat', slow('low'))).toBe('low')
+    })
+
+    it('keeps the pick when no lower tier exists at all', () => {
+      expect(recommendModelIdByRam([top, mid, low], 16, 'chat', slow('low'))).toBe('low')
+    })
+
+    it('a runnable-stage (fallback) pick never steps', () => {
+      // 12 GB: nothing fits comfortably; 'low' is the lightest runnable — already minimal.
+      expect(recommendModelIdByRam([top, mid, low], 12, 'chat', slow('low'))).toBe('low')
+    })
+
+    it('an unresolvable or absent measuredModelId is no signal', () => {
+      expect(recommendModelIdByRam(all, 32, 'chat', slow('uninstalled-ghost'))).toBe('top')
+      expect(recommendModelIdByRam(all, 32, 'chat', slow(null))).toBe('top')
+    })
+
+    it('applies strictly below the threshold (boundary at SLOW_PICK_TOKENS_PER_SECOND)', () => {
+      expect(SLOW_PICK_TOKENS_PER_SECOND).toBe(5)
+      expect(recommendModelIdByRam(all, 32, 'chat', slow('top', 5))).toBe('top')
+      expect(recommendModelIdByRam(all, 32, 'chat', slow('top', 4.9))).toBe('mid')
+      // No probe (null) and nonsense (0/negative) are no signal.
+      expect(recommendModelIdByRam(all, 32, 'chat', slow('top', null))).toBe('top')
+      expect(recommendModelIdByRam(all, 32, 'chat', slow('top', 0))).toBe('top')
+    })
+
+    it('no signal is byte-identical to the pure RAM path', () => {
+      for (const ram of [8, 12, 16, 24, 32, 64]) {
+        expect(recommendModelIdByRam(all, ram, 'chat', null)).toBe(
+          recommendModelIdByRam(all, ram, 'chat')
+        )
+        expect(recommendModelIdByRam(all, ram, 'chat', undefined)).toBe(
+          recommendModelIdByRam(all, ram, 'chat')
+        )
+      }
+    })
+
+    it('scopes to the requested role: a chat crawl never moves an embeddings pick', () => {
+      const embed = asManifest({ id: 'embed', role: 'embeddings', recommended_min_ram_gb: 4, recommended_ram_gb: 8 })
+      expect(recommendModelIdByRam([...all, embed], 32, 'embeddings', slow('top'))).toBe('embed')
+    })
+  })
 })
 
 describe('buildModelList — RAM gate', () => {
@@ -812,6 +885,35 @@ describe('buildModelList — RAM gate', () => {
     })
     expect(models[0].recommended).toBe(true)
     expect(models[0].insufficientRam).toBe(false)
+  })
+
+  // §6.5 (issue #95): the speedSignal option threads the persisted Diagnostics pairing into
+  // the CHAT recommendation — the ★ flag moves one tier down on a right-sized crawl and is
+  // byte-identical without a signal.
+  it('moves the recommended flag one tier down on a slow speed signal (§6.5)', async () => {
+    const dir = manifestsDirWith(
+      manifestObj({ id: 'big', recommended_min_ram_gb: 20, recommended_ram_gb: 24, recommendation_rank: 3, size_on_disk_gb: 16.8 }),
+      manifestObj({ id: 'small', recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3, size_on_disk_gb: 6.0 })
+    )
+    const base = {
+      manifestsDir: dir,
+      rootPath: tempDir('hilbertraum-root-'),
+      profile: 'UNKNOWN' as const,
+      developerMode: true,
+      machineRamGb: 24
+    }
+    const noSignal = await buildModelList(base)
+    expect(noSignal.models.find((m) => m.recommended)?.id).toBe('big')
+
+    const withSignal = await buildModelList({
+      ...base,
+      speedSignal: { tokensPerSecond: 2.2, measuredModelId: 'big' }
+    })
+    expect(withSignal.models.find((m) => m.recommended)?.id).toBe('small')
+
+    // A null signal (no benchmark yet) is the no-signal path, exactly.
+    const nullSignal = await buildModelList({ ...base, speedSignal: null })
+    expect(nullSignal.models.find((m) => m.recommended)?.id).toBe('big')
   })
 })
 

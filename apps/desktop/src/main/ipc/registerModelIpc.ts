@@ -342,6 +342,15 @@ export function registerModelIpc(ctx: AppContext): void {
       runningModelId: ctx.runtime.activeModelId(),
       hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),
       machineRamGb: machineRamGb(),
+      // §6.5 signal-aware step-down (issue #95): feed the persisted Diagnostics pairing
+      // (tok/s + the model that produced it, issue #52) into the chat recommendation.
+      // Derived fresh from lastBenchmark on every call — stateless, never compounds.
+      speedSignal: s.lastBenchmark
+        ? {
+            tokensPerSecond: s.lastBenchmark.tokensPerSecond,
+            measuredModelId: s.lastBenchmark.measuredModelId ?? null
+          }
+        : null,
       // RT-3: the chat path (the workspace gate into Chat) passes lazyVerify so only the
       // active model is hashed on a cold cache — the full corpus of multi-GB GGUFs is
       // hashed only on an explicit Models-screen visit. Display-only; the start gate

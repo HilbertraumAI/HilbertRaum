@@ -95,15 +95,16 @@ Adjustments, in order:
   actually moved the profile (computed as "profile with the tps hint ≠ profile without it", so
   an already-TINY machine never over-claims), the result carries a warning that **names the
   measured model** — a crawl measured on an oversized loaded model is evidence about that
-  pairing, and the user can re-run with the recommended model loaded. Whether the downgrade
-  should be *suppressed* when the measured model is much larger than the recommendation is the
-  registered follow-up (issue #53's "signal-aware recommendation" option).
+  pairing, and the user can re-run with the recommended model loaded. *(Resolved 2026-08-09,
+  issue #95: the profile downgrade stays as-is, and the RECOMMENDATION now applies the §6.5
+  predicate instead — an oversized crawl never moves the pick, a right-sized crawl steps it
+  one tier down. See "Recommendation" below and `model-benchmarks.md` §6.5.)*
 
 ## Recommendation
 
 **The primary picker is RAM-best-fit, not profile lookup.** `runBenchmark` calls
-`recommendModelIdByRam(manifests, round(ramGb), 'chat')`, which chooses the largest model that fits the
-measured RAM, breaking ties on each manifest's `recommendation_rank`. The profile-based
+`recommendModelIdByRam(manifests, round(ramGb), 'chat', speedSignal)`, which chooses the largest model
+that fits the measured RAM, breaking ties on each manifest's `recommendation_rank`. The profile-based
 `recommendModelId(manifests, profile, 'chat')` is only the **fallback** when RAM can't be detected
 (`ramGb = 0`). With the committed manifests the live, real-hardware recommendations are:
 
@@ -130,6 +131,16 @@ the smallest bundled chat model, now also covers TINY + UNKNOWN. See BUILD_STATE
 The larger `qwen3-30b-a3b-q4` (MoE) carries an **empty** `recommended_profiles` and is never
 auto-recommended — it stays selectable on the AI Model screen as a deliberate opt-in (it needs ~20 GB
 RAM but runs near-3B speed).
+
+**Speed-signal step-down (issue #95, since 2026-08-09).** The picker optionally consumes the
+persisted probe pairing (`tokensPerSecond` + `measuredModelId`): a probe strictly under
+`SLOW_PICK_TOKENS_PER_SECOND = 5` tok/s, measured on a model whose `recommended_ram_gb` is at or
+below the would-be pick's, steps the recommendation down ONE capacity tier (ranked models only,
+never onto rank 0; with no lower ranked tier the pick keeps). An oversized loaded model crawling
+is expected and never moves the pick. `runBenchmark` applies it with the just-measured values and
+`listModels` with the persisted ones, so Diagnostics and the Models screen ★ always agree; when
+the step fires, the persisted warnings gain `main.benchmark.warnRecommendationLowered` (canonical
+English) naming the measured model and figure. Full design record: `model-benchmarks.md` §6.5.
 
 ## Warnings (spec §11.3 + §11.4)
 

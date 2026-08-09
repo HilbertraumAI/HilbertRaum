@@ -11,7 +11,8 @@ import {
   buildModelList,
   discoverManifests,
   resolveManifestsDir,
-  recommendModelIdByRam
+  recommendModelIdByRam,
+  SLOW_PICK_TOKENS_PER_SECOND
 } from '../../src/main/services/models'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import type { ModelManifest } from '../../src/shared/manifest'
@@ -335,6 +336,37 @@ describe('buildWarnings', () => {
     expect(buildWarnings({ ...base, tokensDowngraded: true, measuredModelId: null })).toEqual([])
   })
 
+  // §6.5 (issue #95): the recommendation-lowered sibling warning — persisted canonical
+  // ENGLISH (the exact catalog string), naming the measured model AND the figure.
+  it('emits the exact §6.5 recommendation-lowered warning with model + figure (issue #95)', () => {
+    const base = { profile: 'BALANCED' as const, driveReadMbps: 500, driveWriteMbps: 500 }
+    const w = buildWarnings({
+      ...base,
+      recommendationLowered: true,
+      measuredModelId: 'qwen3.6-27b-q4',
+      tokensPerSecond: 2.2
+    })
+    expect(w).toEqual([
+      t('en', 'main.benchmark.warnRecommendationLowered', { tps: 2.2, model: 'qwen3.6-27b-q4' })
+    ])
+    expect(w[0]).toContain('2.2 tokens per second')
+    expect(w[0]).toContain('(qwen3.6-27b-q4)')
+    expect(w[0]).toContain('moved down one size tier')
+  })
+
+  it('stays silent when the pick did not move, or the pairing is incomplete (§6.5)', () => {
+    const base = { profile: 'BALANCED' as const, driveReadMbps: 500, driveWriteMbps: 500 }
+    expect(
+      buildWarnings({ ...base, recommendationLowered: false, measuredModelId: 'x', tokensPerSecond: 2 })
+    ).toEqual([])
+    expect(
+      buildWarnings({ ...base, recommendationLowered: true, measuredModelId: null, tokensPerSecond: 2 })
+    ).toEqual([])
+    expect(
+      buildWarnings({ ...base, recommendationLowered: true, measuredModelId: 'x', tokensPerSecond: null })
+    ).toEqual([])
+  })
+
   // #110: the PRIMARY drive warning keys on the honest effective READ figure (what model
   // starts actually feel); the write gate stays as the secondary broken-media check. The
   // full {slow read, fast read, no data} × {slow write, fast write} matrix, so the gate
@@ -481,6 +513,51 @@ describe('runBenchmark', () => {
     expect(result.measuredModelId).toBe('oversized-27b')
     const downgraded = result.profile !== classifyProfile(result.ramGb, { gpuUseful: false })
     expect(result.warnings.some((w) => w.includes('(oversized-27b)'))).toBe(downgraded)
+  })
+
+  // §6.5 (issue #95): runBenchmark applies the SAME signal-aware picker rule as listModels,
+  // with the just-measured values — so the Diagnostics card and the Models screen ★ can
+  // never disagree. Whether the step actually fires depends on this machine's real RAM
+  // (the measured model must be right-sized for the tier), so the pin is CONSISTENCY, plus
+  // "warning present exactly when the pick moved" — the #52 test's pattern.
+  it('applies the §6.5 speed signal to its own recommendation, consistently with the picker (issue #95)', async () => {
+    const manifests = realManifests()
+    // A crawl "measured on" the machine's own no-signal pick: the predicate applies at
+    // every RAM level, so on any CI box the recommendation follows the stepped rule.
+    const ownPick = recommendModelIdByRam(manifests, Math.round(detectSystem().ramGb), 'chat')
+    const result = await runBenchmark({
+      workspacePath: workspace(),
+      manifests,
+      runtime: slowRuntime(ownPick ?? 'none-installed')
+    })
+    expect(result.tokensPerSecond).not.toBeNull()
+    expect(result.tokensPerSecond!).toBeLessThan(SLOW_PICK_TOKENS_PER_SECOND)
+    const ram = Math.round(result.ramGb)
+    const expected = recommendModelIdByRam(manifests, ram, 'chat', {
+      tokensPerSecond: result.tokensPerSecond,
+      measuredModelId: result.measuredModelId
+    })
+    expect(result.recommendedModelId).toBe(expected)
+    // The named §6.5 warning appears exactly when the signal moved the pick.
+    const moved = expected !== recommendModelIdByRam(manifests, ram, 'chat')
+    const warning = t('en', 'main.benchmark.warnRecommendationLowered', {
+      tps: result.tokensPerSecond!,
+      model: result.measuredModelId!
+    })
+    expect(result.warnings.includes(warning)).toBe(moved)
+  })
+
+  it('an unresolvable measured model never moves the recommendation (§6.5 predicate)', async () => {
+    const manifests = realManifests()
+    const result = await runBenchmark({
+      workspacePath: workspace(),
+      manifests,
+      runtime: slowRuntime('mock-not-in-catalog')
+    })
+    expect(result.recommendedModelId).toBe(
+      recommendModelIdByRam(manifests, Math.round(result.ramGb), 'chat')
+    )
+    expect(result.warnings.some((w) => w.includes('moved down one size tier'))).toBe(false)
   })
 
   it('persists to settings; getAppStatus + buildModelList then read the real profile', async () => {

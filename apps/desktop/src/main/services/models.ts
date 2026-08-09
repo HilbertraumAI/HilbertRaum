@@ -781,6 +781,65 @@ export function machineRamGb(): number {
 }
 
 /**
+ * Measured-speed signal fed into the picker (model-benchmarks.md §6.5, issue #95): the
+ * Diagnostics probe's honest pairing (issue #52) — the chunk-rate tok/s AND the model that
+ * produced it. Absent/null anywhere → the pure RAM-best-fit path, byte-identical.
+ */
+export interface PickerSpeedSignal {
+  /** Measured tok/s from the loaded-model probe; null when the probe did not run. */
+  tokensPerSecond: number | null
+  /** Id of the model the probe streamed through; null/unresolvable → no signal. */
+  measuredModelId?: string | null
+}
+
+/** A loaded-model probe STRICTLY below this steps the recommendation down one size tier
+ *  (model-benchmarks.md §6.5). Distinct from `VERY_LOW_TOKENS_PER_SECOND` (3), which steps
+ *  the legacy PROFILE down — the two thresholds serve different surfaces on purpose. */
+export const SLOW_PICK_TOKENS_PER_SECOND = 5
+
+/** The comfortable-stage ordering (§6.2): capacity first, then rank, then disk size. */
+function comfortableOrder(a: ModelManifest, b: ModelManifest): number {
+  return (
+    b.recommendedRamGb - a.recommendedRamGb ||
+    b.recommendationRank - a.recommendationRank ||
+    b.sizeOnDiskGb - a.sizeOnDiskGb
+  )
+}
+
+/** The stage pool (§6.3 ranked-only guard): ranked fits only, unless nothing ranked fits. */
+function preferRanked(fits: ModelManifest[]): ModelManifest[] {
+  const ranked = fits.filter((m) => m.recommendationRank > 0)
+  return ranked.length > 0 ? ranked : fits
+}
+
+/**
+ * §6.5 step-down: apply the measured-speed signal to a COMFORTABLE-stage pick. The crawl is
+ * a valid signal only when the measured model resolves among the role's candidates with a
+ * `recommendedRamGb` at or below the pick's (an oversized loaded model is expected to crawl
+ * — the #52 lesson — and must never move the pick). The step re-runs the comfortable stage
+ * below the pick's whole capacity band over RANKED models only, so it can never land on a
+ * rank-0 model; with no lower ranked tier, the original pick stays.
+ */
+function applySpeedSignal(
+  candidates: ModelManifest[],
+  pick: ModelManifest,
+  signal: PickerSpeedSignal | null | undefined
+): ModelManifest {
+  if (!signal) return pick
+  const tps = signal.tokensPerSecond
+  if (tps == null || tps <= 0 || tps >= SLOW_PICK_TOKENS_PER_SECOND) return pick
+  const measured = signal.measuredModelId
+    ? candidates.find((m) => m.id === signal.measuredModelId)
+    : undefined
+  if (!measured) return pick
+  if (measured.recommendedRamGb > pick.recommendedRamGb) return pick
+  const lower = candidates
+    .filter((m) => m.recommendationRank > 0 && m.recommendedRamGb < pick.recommendedRamGb)
+    .sort(comfortableOrder)
+  return lower[0] ?? pick
+}
+
+/**
  * RAM-best-fit recommendation: the LARGEST model whose comfortable RAM
  * (`recommended_ram_gb`) fits this machine; if nothing fits comfortably, the lightest
  * model that at least meets its minimum (`recommended_min_ram_gb`); else null. Replaces
@@ -801,29 +860,30 @@ export function machineRamGb(): number {
  * but a bigger-on-disk, never-evaled model can no longer hijack the recommendation from
  * a benchmarked winner by capacity alone. A role whose catalog carries no ranks at all
  * (e.g. embeddings) is unchanged.
+ *
+ * SPEED-SIGNAL STEP-DOWN (model-benchmarks.md §6.5, issue #95): an optional measured-speed
+ * signal steps a comfortable-stage pick down ONE capacity tier when the probe crawled
+ * (strictly under `SLOW_PICK_TOKENS_PER_SECOND`) on a right-sized model (predicate in
+ * `applySpeedSignal`). Stateless and single-step: the base pick is recomputed from RAM
+ * alone on every call, so downgrades never compound. A runnable-stage (fallback) pick
+ * never steps — it is already the lightest honest answer. Omitted signal → prior behavior,
+ * byte-identical.
  */
 export function recommendModelIdByRam(
   manifests: ModelManifest[],
   ramGb: number,
-  role: ModelRole = 'chat'
+  role: ModelRole = 'chat',
+  speedSignal?: PickerSpeedSignal | null
 ): string | null {
   if (!Number.isFinite(ramGb) || ramGb <= 0) return null
   const candidates = manifests.filter((m) => m.role === role)
-  /** The stage pool: ranked fits only, unless nothing ranked fits this stage. */
-  const preferRanked = (fits: ModelManifest[]): ModelManifest[] => {
-    const ranked = fits.filter((m) => m.recommendationRank > 0)
-    return ranked.length > 0 ? ranked : fits
-  }
 
   const comfortable = preferRanked(
     candidates.filter((m) => m.recommendedRamGb <= ramGb)
-  ).sort(
-    (a, b) =>
-      b.recommendedRamGb - a.recommendedRamGb ||
-      b.recommendationRank - a.recommendationRank ||
-      b.sizeOnDiskGb - a.sizeOnDiskGb
-  )
-  if (comfortable.length > 0) return comfortable[0].id
+  ).sort(comfortableOrder)
+  if (comfortable.length > 0) {
+    return applySpeedSignal(candidates, comfortable[0], speedSignal).id
+  }
 
   const runnable = preferRanked(
     candidates.filter((m) => m.recommendedMinRamGb <= ramGb)
@@ -892,6 +952,13 @@ export interface BuildModelListOptions {
    */
   machineRamGb?: number
   /**
+   * Measured-speed signal from the persisted Diagnostics benchmark (model-benchmarks.md
+   * §6.5, issue #95), fed into the CHAT recommendation only (the probe streams through a
+   * chat model; the embeddings pick never moves on it). Absent/null → pure RAM-best-fit,
+   * byte-identical to the pre-#95 behavior.
+   */
+  speedSignal?: PickerSpeedSignal | null
+  /**
    * Optional verification-progress sink. Called once per model that will be hashed (with
    * a 1-based step index + the byte-weighted overall totals), throttled within a file by
    * `sha256File`, plus a terminal `done` event. `overallBytesTotal === 0` ⇒ nothing to
@@ -920,10 +987,11 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   const all = manifests.map((m) => m.manifest)
   const ram = opts.machineRamGb
   // RAM-best-fit recommendation when the machine RAM is known (it can never point at a
-  // RAM-gated model); the profile-table lookup remains the legacy/no-RAM path.
+  // RAM-gated model); the profile-table lookup remains the legacy/no-RAM path. The §6.5
+  // speed signal applies to the chat pick only.
   const recommendedChat =
     ram != null
-      ? recommendModelIdByRam(all, ram, 'chat')
+      ? recommendModelIdByRam(all, ram, 'chat', opts.speedSignal)
       : recommendModelId(all, opts.profile, 'chat')
   const recommendedEmbed =
     ram != null
