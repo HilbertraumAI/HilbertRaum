@@ -104,6 +104,16 @@ first public release. Consciously-accepted gaps are tracked in
   10 s instead of 15 s (−36%). Starts that are already fast stay as they are —
   the helper is skipped when the file was just verified (its content is already
   in the cache) and stops the moment the load finishes or is cancelled.
+- **One-click skill offers on document answers** (issue #80). When a document
+  answer cannot serve the *shape* you asked for — "categorize the transactions
+  and sum per category" answered by an engine that can only list values — the
+  answer now carries a one-click "Run "Bank Statement Analysis" for this
+  question" action instead of only a prose pointer; clicking re-answers the
+  same question with the skill (nothing ever runs without the click). On the
+  residue the deterministic router provably cannot classify, a bounded,
+  grammar-constrained on-device model pick (marked "Suggested by the local
+  model") may fill the same offer; ordinary questions keep their zero-model-call
+  routing, and every failure quietly falls back to today's answer.
 
 ### Changed
 

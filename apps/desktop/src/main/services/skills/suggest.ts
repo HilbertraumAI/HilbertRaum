@@ -18,13 +18,14 @@ import type { SkillSuggestion } from '../../../shared/types'
  * even if its `enabled` flag is stale (§6.5/M1 gate at the use-site — keeps the gate airtight).
  * Returns an array (v1: 0 or 1) so the contract stays future-proof.
  */
-export function suggestSkillsForTurn(
-  db: Db,
-  conversationId: string,
-  question = '',
-  appVersion = ''
-): SkillSuggestion[] {
-  const candidates: SkillCandidate[] = listSkills(db)
+/**
+ * The ONE candidate gate every offer surface shares (§10.2/§6.5/M1): ENABLED, available (folder
+ * present), and compatible with the running app. Exported so the #80 classification fallback and
+ * the deterministic per-answer offer (registerRagIpc) reuse EXACTLY this gate — a skill outside it
+ * can never be offered anywhere, by construction (a crafted document can never *introduce* one).
+ */
+export function offerableSkillCandidates(db: Db, appVersion = ''): SkillCandidate[] {
+  return listSkills(db)
     .filter(
       (s) =>
         s.enabled &&
@@ -32,6 +33,15 @@ export function suggestSkillsForTurn(
         !skillNeedsNewerApp(s.manifest.compatibility.minAppVersion, appVersion)
     )
     .map((s) => ({ installId: s.installId, title: s.title, triggers: s.manifest.triggers }))
+}
+
+export function suggestSkillsForTurn(
+  db: Db,
+  conversationId: string,
+  question = '',
+  appVersion = ''
+): SkillSuggestion[] {
+  const candidates: SkillCandidate[] = offerableSkillCandidates(db, appVersion)
   if (candidates.length === 0) return []
   const { titles, mimeTypes } = inScopeDocSignals(db, conversationId)
   const best = selectSuggestion(candidates, { question, docTitles: titles, docMimeTypes: mimeTypes })

@@ -659,6 +659,16 @@ record each manifest's observed thinking-mode behavior as a first-class criterio
 **structured-surface suitability** (extend the two §9.1 thinking checkboxes' findings to the
 extract/locate implications), and keep structured-surface calls pinned to non-thinking behavior
 (a thinking-only checkpoint pays the #50 escalated-retry cost on every ingest chunk).
+**Since wave R80 (issue #80, 2026-08-09) the router's skill-pointer classification
+(`analysis/classify.ts`) is a further D55 `responseSchema` consumer** on this list — single-shot,
+temp 0, tiny enum, run only on the #54-class/low-confidence trigger turns; a thinking checkpoint
+that burns the 48-token budget on reasoning simply degrades it to `none` (no offer — the honest
+fallback), so it fails soft, but the criterion above still applies. **Owner-run follow-up eval:**
+the classifier's real-model precision on the promoted catalog is deliberately NOT gated in-repo
+(the in-repo gate is the deterministic trigger boundary + the prefer-`none` prompt); the
+`extract-router.test.ts` #80 golden set (bilingual trigger asks + near-miss distractors) doubles
+as the eval input — run it against each promoted checkpoint and record per-model
+offer-precision/none-rate here when ratifying a wave.
 
 ### 9.1 Manual smoke checklist — b9849 runtime + Qwen3.5 load (REQUIRED; not CI)
 

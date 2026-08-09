@@ -1420,6 +1420,26 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   persisted with the content; both compose when present) and names the fix: build the deep index, ask
   again. The compare fallback keeps its existing selectTwo routing; ordinary high-confidence relevance
   turns are byte-unchanged.
+- **Suggestion-only cascade — AS BUILT (issue #80, wave R80; STR-1 §5.2). Truth maintenance on the
+  0-model-call claim:** the router itself stays pure and byte-unchanged, and every HAPPY path above
+  still answers at 0 query-time model calls — but exactly two decision classes now additionally run
+  **one bounded, single-shot, grammar-constrained skill-pointer classification**
+  ([`classify.ts`](../apps/desktop/src/main/services/analysis/classify.ts), the bank-categorizer
+  D55 template: enum of gated skill install ids + a mandatory `none`, temp 0, 4 s hard bound,
+  abort-honoured, every fault → `none`): **(a)** coverage-extract turns whose question matched
+  `AGGREGATION_RE` (`isAggregationShaped` — the wrong-shaped #54 class), and **(b)** low-confidence
+  fallback decisions (`confidence:'low'` — the router provably could not serve the detected
+  intent). The step-5 fallthrough NEVER classifies (`isClassificationTrigger`, golden-set-pinned in
+  `extract-router.test.ts`) — an ordinary question keeps 0 model calls by construction. The
+  classification never changes the engine, never activates a skill, and never reaches answer
+  content: it only fills the per-answer OFFER surface (`Message.skillOffer`, provenance
+  `'classifier'`), where a user CLICK re-runs the turn with the skill via the existing regenerate
+  path (click = consent; the S13b/D4 auto-fire posture untouched). The #54 `amount` case is served
+  FIRST by a deterministic offer (provenance `'deterministic'`, 0 model calls — the actionable
+  sibling of the aggregation hint; dedupe: deterministic wins, the classifier is skipped). Under
+  the mock runtime the classification always degrades (the mock ignores `responseSchema`) — a
+  tested invariant, so dev/mock behaviour is byte-identical to the pre-#80 build. The prose hints
+  above remain as the degradation path.
 - **"Whole document" wording gate (RAG-1, backend audit 2026-06-27):** `buildListingAnswer` says
   *"across the whole document"* only when **`fullyChunked && scannedChunks >= totalChunks`** — i.e. the
   chunking invariant holds AND every in-scope chunk actually carries a `__scan__` marker. `fullyChunked`

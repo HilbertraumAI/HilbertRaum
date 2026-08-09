@@ -246,6 +246,15 @@ export const de: Record<keyof typeof en, string> = {
   // SKA-38 (Skills-Audit 2026-07-03, U6): das Glyph-Label, wenn der Skill einer markierten Antwort
   // später GELÖSCHT wurde – die Herkunft (und der Rückgängig-Weg) bleiben, ehrlich beschriftet.
   'chat.skill.removed': '(entfernter Skill)',
+  // #80 (Welle R80) — das anklickbare Skill-Angebot an einer Antwort: die antwortende Engine
+  // konnte die gefragte FORM nicht liefern; ein Klick beantwortet dieselbe Frage mit dem
+  // genannten Skill neu. Der Klick IST die Zustimmung — nichts startet automatisch (S13b/D4).
+  // `offer.model` ist die Herkunftsmarkierung NUR für ein Angebot aus der begrenzten lokalen
+  // Modell-Klassifikation (die deterministische Regel braucht keine — der Hinweistext der
+  // Antwort erklärt sie bereits).
+  'chat.skill.offer.lead': 'Das sieht nach einer Aufgabe für einen Skill aus.',
+  'chat.skill.offer.run': '„{title}“ für diese Frage ausführen',
+  'chat.skill.offer.model': 'Vom lokalen Modell vorgeschlagen',
   // U3 (audit §4.3): ein Skill gilt jetzt standardmäßig PRO TURN – das × am Chip verwirft die Wahl und
   // eine gespeicherte Vorgabe, die Checkbox im Menü ist die ausdrückliche Zustimmung, die Wahl als
   // Vorgabe des Gesprächs zu behalten. Nichts bleibt still über Turns hinweg gesetzt.

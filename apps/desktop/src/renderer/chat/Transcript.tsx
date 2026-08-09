@@ -43,6 +43,14 @@ interface TranscriptProps {
    * as reversible as an auto-fire). Absent ⇒ the affordance never renders.
    */
   onAnswerWithoutSkill?: () => void
+  /**
+   * Re-run the turn WITH the offered skill (#80, wave R80) — the one-click accept on a per-answer
+   * `skillOffer`. Rendered only on the LAST assistant turn (it re-answers via the regenerate path,
+   * which acts on the conversation's last turn — the SKA-37 gate the undo shares). The click IS
+   * the consent (S13b/D4): main re-runs the same question with the skill explicitly set; nothing
+   * auto-fires. Absent ⇒ the affordance never renders (the answer's prose hint remains).
+   */
+  onRunWithSkill?: (installId: string) => void
   onCopy: (content: string) => void
   onSave: () => void
   /**
@@ -102,6 +110,7 @@ export const Transcript = memo(function Transcript({
   emptyState,
   onTryAgain,
   onAnswerWithoutSkill,
+  onRunWithSkill,
   onCopy,
   onSave,
   onExportTable,
@@ -170,6 +179,7 @@ export const Transcript = memo(function Transcript({
               isLast={m.id === lastAssistantId}
               onTryAgain={onTryAgain}
               onAnswerWithoutSkill={onAnswerWithoutSkill}
+              onRunWithSkill={onRunWithSkill}
               onCopy={onCopy}
               onSave={onSave}
               onExportTable={onExportTable}
@@ -276,6 +286,7 @@ const MessageBlock = memo(function MessageBlock({
   isLast,
   onTryAgain,
   onAnswerWithoutSkill,
+  onRunWithSkill,
   onCopy,
   onSave,
   onExportTable,
@@ -291,6 +302,7 @@ const MessageBlock = memo(function MessageBlock({
   isLast: boolean
   onTryAgain?: () => void
   onAnswerWithoutSkill?: () => void
+  onRunWithSkill?: (installId: string) => void
   onCopy: (content: string) => void
   onSave: () => void
   onExportTable?: (messageId: string) => void
@@ -305,6 +317,11 @@ const MessageBlock = memo(function MessageBlock({
   // streaming bubble never reaches MessageBlock (the caller's streaming gate, P1 handoff).
   const reviewable = onOpenReview != null && isReviewEligible(m, reviewConversation)
   const openReview = reviewable ? () => onOpenReview(m.id) : undefined
+  // #80: the per-answer skill offer renders only on the LAST assistant turn (SKA-37 — accepting it
+  // re-answers via regenerate, which acts on the conversation's last turn). A const so the JSX
+  // narrowing holds inside the handler closures below.
+  const skillOffer =
+    m.role === 'assistant' && isLast && onRunWithSkill != null ? m.skillOffer : undefined
   return (
     <div className={`msg-block ${m.role}`}>
       <div className={`msg ${m.role}`}>
@@ -397,6 +414,38 @@ const MessageBlock = memo(function MessageBlock({
             </div>
           )
         })()}
+        {/* #80 (wave R80): the per-answer actionable skill OFFER — the answer's engine could not
+            serve the asked shape, and one click re-runs the question WITH the offered skill (the
+            click is the consent, S13b/D4 — nothing auto-fires). Rendered ONLY on the last
+            assistant turn (SKA-37: it re-answers via regenerate, which acts on the last turn) —
+            on older turns the answer's prose hint remains the pointer. DISABLED (never hidden,
+            the AUD-01 posture the undo shares) when the reply carries an evidence review, because
+            re-answering deletes the reply + cascades the review away. The classifier-sourced
+            variant carries the "suggested by the local model" provenance label; the deterministic
+            variant needs none (the answer's own hint explains it). Quiet vocabulary: the
+            .msg-skill row + link-style action, never a loud button. */}
+        {skillOffer && onRunWithSkill && (
+          <div className="msg-skill msg-skill-offer">
+            <Icon name="brain" className="msg-skill-icon" />
+            <span>{t('chat.skill.offer.lead')}</span>
+            {skillOffer.source === 'classifier' && (
+              <span className="msg-skill-offer-provenance">{t('chat.skill.offer.model')}</span>
+            )}
+            <button
+              type="button"
+              className="msg-skill-undo msg-skill-offer-run"
+              onClick={() => onRunWithSkill(skillOffer.installId)}
+              disabled={actionsDisabled || reviewSummary != null}
+              title={reviewSummary != null ? t('chat.skill.answerWithoutBlockedByReview') : undefined}
+            >
+              {t('chat.skill.offer.run', {
+                title: resolveSkillTitle
+                  ? resolveSkillTitle(skillOffer.installId, skillOffer.title)
+                  : skillOffer.title
+              })}
+            </button>
+          </div>
+        )}
         {/* Honest-signal truncation notice (§L0): a quiet, labelled line on an assistant reply the
             model cut off at the token/context ceiling (finish_reason 'length'). Never colour-only —
             a labelled marker with an explanatory tooltip (guidelines §9); role="note" so AT reads it

@@ -1008,6 +1008,7 @@ export function ChatScreen({
   })
   const handleTryAgain = useEventCallback(onTryAgain)
   const handleAnswerWithoutSkill = useEventCallback(onAnswerWithoutSkill)
+  const handleRunWithSkill = useEventCallback(onRunWithSkill)
   const handleSelectConversation = useEventCallback(onSelectConversation)
   const handleNewChat = useEventCallback(onNewChat)
   const handleDeleteConversation = useEventCallback(onDeleteConversation)
@@ -1672,6 +1673,20 @@ export function ChatScreen({
     await stream(activeId, '', true, depthFor(activeId), null)
   }
 
+  // #80 (wave R80): accept a per-answer skill OFFER — re-run the SAME user question WITH the
+  // offered skill explicitly set for this turn. The click is the consent (S13b/D4): the skill is
+  // never auto-applied, and the explicit per-turn id neither touches the conversation default nor
+  // lets auto-fire pick something else. The mirror image of onAnswerWithoutSkill (same regenerate
+  // path — drop the last assistant turn from view; main deletes + re-answers it).
+  async function onRunWithSkill(installId: string): Promise<void> {
+    if (!activeId || busyStreaming) return
+    setMessages((prev) => {
+      const last = prev[prev.length - 1]
+      return last && last.role === 'assistant' ? prev.slice(0, -1) : prev
+    })
+    await stream(activeId, '', true, depthFor(activeId), installId)
+  }
+
   function onStop(): void {
     // CR-9 (latent hardening — byte-equivalent today): target the STREAMING conversation, not merely
     // the viewed one. These are always the same wherever the Composer's Stop renders because
@@ -2185,6 +2200,9 @@ export function ChatScreen({
           // lives in Transcript; here we only withhold it while a reply is streaming (it would re-run
           // mid-answer).
           onAnswerWithoutSkill={busyStreaming ? undefined : handleAnswerWithoutSkill}
+          // #80: the per-answer skill-offer accept — same streaming gate as the undo (it re-runs
+          // via regenerate and must not fire mid-answer); per-message placement lives in Transcript.
+          onRunWithSkill={busyStreaming ? undefined : handleRunWithSkill}
           onCopy={handleCopyMessage}
           onSave={handleSaveConversation}
           onExportTable={handleExportMessageTable}

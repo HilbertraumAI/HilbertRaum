@@ -864,6 +864,12 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .msg-skill-undo:hover:not(:disabled) { color: var(--text); }
 .msg-skill-undo:disabled { cursor: default; opacity: 0.6; }
+/* #80 (wave R80): the per-answer skill offer — same quiet .msg-skill vocabulary (icon + words,
+   muted, never colour-only §9); the action reuses the .msg-skill-undo link style, so no new
+   colour tokens. The provenance marker ("suggested by the local model") is a plain muted word
+   pair — text IS the marker, per §9. */
+.msg-skill-offer { flex-wrap: wrap; }
+.msg-skill-offer-provenance { font-style: italic; }
 
 /* Tier-2 tool-run bar (skills plan §12.2/§15, S11b): a calm row above the composer carrying the
    offer / busy / result. Quiet by default — muted text, a hairline top border, no alarm colour. */
