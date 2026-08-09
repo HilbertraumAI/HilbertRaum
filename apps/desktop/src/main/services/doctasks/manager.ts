@@ -416,6 +416,14 @@ export class DocTaskManager {
    * Cancel a task: a running one is aborted mid-stream, a queued one is dequeued.
    * With no jobId, cancels the currently active (running, else next queued) task —
    * the chat screen's "cancel the busy task" affordance.
+   *
+   * #157 (DT-2): an EXPLICIT jobId cancels that exact task, running OR QUEUED — this is now
+   * also the IPC's targeted-cancel routing. The former `cancelActiveDocTask` matched only
+   * `runningId ?? queue[0]`, so a Stop on a translation QUEUED BEHIND a foreign running task
+   * was a silent no-op and the "cancelled" job later ran to completion (hours of surprise
+   * compute + an unwanted document). Exact-id keeps the FA-3 / F-6 stale-Stop property for
+   * free: a settled task is TERMINAL (no-op below), and a newer task on the lane has a
+   * DIFFERENT id — a stale Stop can never touch it.
    */
   cancelDocTask(jobId?: string | null): void {
     const id = jobId ?? this.runningId ?? this.queue[0] ?? null
@@ -432,23 +440,6 @@ export class DocTaskManager {
     // A running yielding build (tree/extract) may be PARKED on the arbiter (yielded to chat);
     // aborting its controller alone won't unstick that await, so reject the parked reacquire too.
     if (isYieldingKind(task.status.kind)) this.arbiter.abort()
-  }
-
-  /**
-   * TARGETED cancel for a caller that holds a specific jobId (FA-3 / F-6): cancel ONLY when the
-   * given id is currently the ACTIVE task (running, else next-queued — the same "active" the
-   * no-arg `cancelDocTask()` fallback uses). A stale/foreign id — one whose task already went
-   * terminal and whose lane a NEWER task then took — is a NO-OP, so a Stop landing after the
-   * caller's own task settled can never kill the task that took the lane after it. This differs
-   * from `cancelDocTask(id)` (which cancels that exact task, running OR queued — the internal
-   * `cancelAllDocTasks`/skill-tool-run callers rely on that): here the id must MATCH the active
-   * task or nothing happens. The no-arg active-task fallback stays on `cancelDocTask(null)`.
-   */
-  cancelActiveDocTask(jobId: string): void {
-    if (typeof jobId !== 'string' || jobId.length === 0) return
-    const activeId = this.runningId ?? this.queue[0] ?? null
-    if (activeId === null || activeId !== jobId) return
-    this.cancelDocTask(activeId)
   }
 
   /**
@@ -500,6 +491,27 @@ export class DocTaskManager {
     const task = this.tasks.get(this.runningId)
     if (!task) return null
     return { ...task.status, progress: { ...task.status.progress } }
+  }
+
+  /**
+   * Every non-terminal task on the lane — the running task first, then the queue in order
+   * (copies). #157 (DT-5): the reload-adoption read for the file/document translation path.
+   * `getActiveDocTask()` above returns only the RUNNING task — and a task becomes `running`
+   * synchronously in the same tick it becomes `runningId`, so `queued` could never be returned
+   * through it: a translation QUEUED behind a foreign task (a Documents-row Summarize took the
+   * lane during the import phase) was invisible to a remounting Translate screen — it ran later
+   * with no progress UI, no Stop, no result load, and the #150/DOC-8 "accept queued" branch was
+   * dead code. The caller filters by kind.
+   */
+  listActiveDocTasks(): DocTaskStatus[] {
+    const ids = [...(this.runningId ? [this.runningId] : []), ...this.queue]
+    const out: DocTaskStatus[] = []
+    for (const id of ids) {
+      const task = this.tasks.get(id)
+      if (!task || TERMINAL.has(task.status.state)) continue
+      out.push({ ...task.status, progress: { ...task.status.progress } })
+    }
+    return out
   }
 
   /** True when an active (running/queued) task targets `documentId` — guards re-index/delete. */

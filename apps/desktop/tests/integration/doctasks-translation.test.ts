@@ -893,7 +893,7 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
     }
   }
 
-  it('cancelActiveDocTask with a STALE jobId never kills the newer active task (the F-6 race pin)', async () => {
+  it('a targeted cancel with a STALE jobId never kills the newer active task (the F-6 race pin)', async () => {
     const a = await importDoc(600, 'a.txt')
     const b = await importDoc(40, 'b.txt')
     const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
@@ -909,19 +909,58 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
     manager.cancelDocTask(first.jobId)
     expect((await waitTerminal(manager, first.jobId)).state).toBe('cancelled')
 
-    // A NEW task B takes the lane. A stale Stop still carrying A's OLD jobId must NOT kill B.
+    // A NEW task B takes the lane. A stale Stop still carrying A's OLD jobId must NOT kill B —
+    // exact-id (#157 DT-2): A is TERMINAL, so the targeted cancel no-ops; B has a different id.
     const second = manager.startDocTask({
       kind: 'translation',
       documentIds: [b],
       params: { sourceLang: 'en', targetLang: 'de' }
     })
     await waitRunning(manager, second.jobId, translator)
-    manager.cancelActiveDocTask(first.jobId) // stale/foreign id → no-op
+    manager.cancelDocTask(first.jobId) // stale (terminal) id → no-op
     // B is untouched and reaches its OWN terminal state (done), not cancelled by the stale id.
     expect((await waitTerminal(manager, second.jobId)).state).toBe('done')
   })
 
-  it('cancelActiveDocTask cancels when the id IS the active task; the no-arg fallback still hits it (old-caller parity)', async () => {
+  it('#157 (DT-2): a targeted cancel dequeues a translation QUEUED behind a foreign running task', async () => {
+    const a = await importDoc(600, 'a.txt')
+    const b = await importDoc(40, 'b.txt')
+    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
+    const manager = makeManager({ translator })
+
+    // A foreign task holds the lane (any kind serializes on the one FIFO); OUR translation queues.
+    const foreign = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [a],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    await waitRunning(manager, foreign.jobId, translator)
+    const ours = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [b],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    expect(manager.getDocTask(ours.jobId).state).toBe('queued')
+
+    // Stop on OUR queued task: the old cancelActiveDocTask matched only runningId ?? queue[0]
+    // with runningId winning, so this was a silent no-op and the "cancelled" job later ran to
+    // completion + materialized a document. Exact-id dequeues it NOW.
+    manager.cancelDocTask(ours.jobId)
+    expect(manager.getDocTask(ours.jobId).state).toBe('cancelled')
+
+    // The foreign running task is untouched and finishes.
+    expect((await waitTerminal(manager, foreign.jobId)).state).toBe('done')
+    await manager.awaitActiveTaskSettled()
+    // The cancelled task NEVER runs when the pump drains the queue (pre-fix it ran to
+    // completion here): no sidecar call is made after the foreign task settled.
+    const callsAtForeignDone = translator.calls.length
+    await new Promise((r) => setTimeout(r, 60)) // give a wrongly-pumped task time to start
+    expect(translator.calls.length).toBe(callsAtForeignDone)
+    expect(manager.getDocTask(ours.jobId).state).toBe('cancelled')
+    expect(manager.hasActiveTask()).toBe(false)
+  })
+
+  it('a targeted exact-id cancel hits the running task; the no-arg fallback still works (old-caller parity)', async () => {
     const a = await importDoc(600, 'a.txt')
     const b = await importDoc(600, 'b.txt')
     const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
@@ -934,7 +973,7 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
       params: { sourceLang: 'en', targetLang: 'de' }
     })
     await waitRunning(manager, first.jobId, translator)
-    manager.cancelActiveDocTask(first.jobId)
+    manager.cancelDocTask(first.jobId)
     expect((await waitTerminal(manager, first.jobId)).state).toBe('cancelled')
 
     // Absent-id parity: the no-arg cancelDocTask() still cancels whatever is active.
@@ -970,6 +1009,40 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
     manager.cancelDocTask(jobId)
     await waitTerminal(manager, jobId)
     expect(manager.getActiveDocTask()).toBeNull() // back to idle once terminal
+  })
+
+  it('#157 (DT-5): listActiveDocTasks surfaces a translation QUEUED behind a foreign running task', async () => {
+    const a = await importDoc(600, 'a.txt')
+    const b = await importDoc(40, 'b.txt')
+    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
+    const manager = makeManager({ translator })
+
+    expect(manager.listActiveDocTasks()).toEqual([]) // idle
+
+    const foreign = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [a],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    await waitRunning(manager, foreign.jobId, translator)
+    const ours = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [b],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+
+    // getActiveDocTask keeps its running-only contract (the #38 chain-adopt caller)…
+    expect(manager.getActiveDocTask()?.jobId).toBe(foreign.jobId)
+    // …while the list carries the QUEUED translation too, in lane order — the state the
+    // reload adopt needs (a task becomes `running` in the same tick it becomes runningId,
+    // so `queued` was structurally unreachable through getActiveDocTask).
+    const active = manager.listActiveDocTasks()
+    expect(active.map((t) => t.jobId)).toEqual([foreign.jobId, ours.jobId])
+    expect(active[1].state).toBe('queued')
+
+    manager.cancelAllDocTasks()
+    await manager.awaitActiveTaskSettled()
+    expect(manager.listActiveDocTasks()).toEqual([])
   })
 })
 

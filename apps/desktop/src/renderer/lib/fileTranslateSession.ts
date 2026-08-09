@@ -87,6 +87,16 @@ const EMPTY: FileTranslateSnapshot = {
 
 const POLL_MS = 400
 
+/**
+ * #157 (DT-4): how many CONSECUTIVE poll failures either poll loop tolerates before declaring
+ * the session failed — the doctasks-store CODE-6 / skillruns SKA-40 rule, ported. One rejected
+ * round-trip used to fail the panel outright while the main-side task kept decoding (and later
+ * materialized a document behind a "failed" panel; a retry then queued behind it). A successful
+ * poll resets the counter; on give-up the doc-task poll also cancels the backend task so the
+ * renderer's terminal state and the backend agree.
+ */
+const MAX_POLL_FAILURES = 3
+
 let snapshot: FileTranslateSnapshot = EMPTY
 const listeners = new Set<() => void>()
 /** The single active poll timer (import THEN doc-task — never both at once). */
@@ -112,10 +122,12 @@ let timer: ReturnType<typeof setInterval> | null = null
 let gen = 0
 /**
  * The active translation doc-task's jobId, held so the two cancel paths (supersede + Stop) can
- * issue a jobId-TARGETED cancel (FA-3 / F-6): the backend cancels only when this id IS the active
- * task, so a Stop landing after our task went terminal — with another screen's task now on the
- * lane — can never kill that foreign task. Set when the doc-task starts (or is adopted after a
- * reload); the reset/clear paths drop it. Only ever consulted while `state === 'translating'`.
+ * issue a jobId-TARGETED cancel. #157 (DT-2): the backend cancel is exact-id, running OR QUEUED
+ * — a Stop on a translation queued behind a foreign running task really dequeues it now (the
+ * old active-task match silently no-opped and the "cancelled" job later ran to completion).
+ * Still stale-safe (FA-3 / F-6): a settled task is terminal (no-op) and a newer task on the
+ * lane has a different id. Set when the doc-task starts (or is adopted after a reload); the
+ * reset/clear paths drop it. Only ever consulted while `state === 'translating'`.
  */
 let docTaskJobId: string | null = null
 
@@ -290,6 +302,7 @@ async function runImport(paths: string[], token: string | undefined, choice: Cho
   const importJobId = job.jobId
   // Poll ingestion; only once the file is fully indexed can the doc-task run over it.
   let inFlight = false // per-timer reentrancy latch (TA-3 / H4) — see the note by `timer` above.
+  let pollFailures = 0 // #157 (DT-4): consecutive-failure tolerance — see MAX_POLL_FAILURES.
   timer = setInterval(() => {
     if (inFlight) return // a slower-than-POLL_MS round-trip is still resolving; skip this tick
     inFlight = true
@@ -301,6 +314,7 @@ async function runImport(paths: string[], token: string | undefined, choice: Cho
         }
         const status = await window.api.getImportJob(importJobId)
         if (myGen !== gen) return
+        pollFailures = 0 // only CONSECUTIVE failures count — any success resets (DT-4)
         if (status.done) {
           stopPolling()
           if (status.completed === 0) {
@@ -315,7 +329,10 @@ async function runImport(paths: string[], token: string | undefined, choice: Cho
         }
       } catch (e) {
         if (myGen !== gen) return
-        failWith(friendlyIpcError(e))
+        // #157 (DT-4): tolerate a transient IPC failure; keep polling below the threshold
+        // (the snapshot stays untouched, so subscribers see no churn at all).
+        pollFailures += 1
+        if (pollFailures >= MAX_POLL_FAILURES) failWith(friendlyIpcError(e))
       } finally {
         inFlight = false
       }
@@ -375,9 +392,10 @@ async function startTranslationTask(docId: string, choice: Choice, myGen: number
   // Cancel it so it does not linger as a zombie holding the one-at-a-time lane and materialize an
   // unexpected document (the translateSession supersede-cancel, applied to the doc-task lane).
   if (myGen !== gen) {
-    // TARGETED supersede-cancel (FA-3 / F-6): pass OUR just-started task's id so that if the lane
-    // was already taken by a newer task (Stop + an immediate new start), the backend no-ops instead
-    // of killing that foreign task.
+    // TARGETED supersede-cancel: pass OUR just-started task's id. Exact-id (#157 DT-2), so the
+    // orphan is cancelled whether it is running or QUEUED behind a newer task — and a newer
+    // task on the lane (Stop + an immediate new start) has a different id, so it is untouched
+    // (the FA-3 / F-6 property).
     void window.api?.cancelDocTask?.(started.jobId)?.catch?.(() => {})
     return
   }
@@ -394,6 +412,7 @@ async function startTranslationTask(docId: string, choice: Choice, myGen: number
  */
 function pollDocTask(taskJobId: string, myGen: number): void {
   let inFlight = false // per-timer reentrancy latch (TA-3 / H4) — see the import poll above.
+  let pollFailures = 0 // #157 (DT-4): consecutive-failure tolerance — see MAX_POLL_FAILURES.
   timer = setInterval(() => {
     if (inFlight) return // reentrancy latch — see the import poll above
     inFlight = true
@@ -405,6 +424,7 @@ function pollDocTask(taskJobId: string, myGen: number): void {
         }
         const status = await window.api.getDocTask(taskJobId)
         if (myGen !== gen) return
+        pollFailures = 0 // only CONSECUTIVE failures count — any success resets (DT-4)
         set(windowProgress(status.progress)) // F-8: subtract the materialize step for display
         if (status.state === 'done') {
           stopPolling()
@@ -421,7 +441,15 @@ function pollDocTask(taskJobId: string, myGen: number): void {
         }
       } catch (e) {
         if (myGen !== gen) return
-        failWith(friendlyIpcError(e))
+        // #157 (DT-4): tolerate transient IPC failures below the threshold. On give-up, also
+        // CANCEL the backend task (exact-id, stale-safe) — declaring the session failed while
+        // the task kept decoding used to materialize a document behind a "failed" panel, and a
+        // user retry then queued behind the invisible task (re-entering the DT-2 shape).
+        pollFailures += 1
+        if (pollFailures >= MAX_POLL_FAILURES) {
+          void window.api?.cancelDocTask?.(taskJobId)?.catch?.(() => {})
+          failWith(friendlyIpcError(e))
+        }
       } finally {
         inFlight = false
       }
@@ -462,9 +490,10 @@ async function loadResult(documentId: string | null, myGen: number): Promise<voi
  *  no-op if we are still importing — there is no task yet — but we still supersede + reset). */
 export function cancelFileTranslation(): void {
   if (snapshot.state === 'translating' && docTaskJobId) {
-    // TARGETED cancel (FA-3 / F-6): pass the held jobId so a Stop landing after our task already
-    // went terminal — with another screen's task now on the lane — no-ops instead of killing that
-    // foreign task. (Still importing → no task yet → no cancel; we just supersede + reset below.)
+    // TARGETED cancel: exact-id, running OR queued (#157 DT-2) — Stop now really dequeues a
+    // translation queued behind a foreign running task. Stale-safe (FA-3 / F-6): a Stop landing
+    // after our task already went terminal no-ops, and another screen's task on the lane has a
+    // different id. (Still importing → no task yet → no cancel; we supersede + reset below.)
     void window.api?.cancelDocTask?.(docTaskJobId)?.catch?.(() => {})
   }
   gen += 1 // supersede any import/start round-trip still in flight
@@ -513,7 +542,13 @@ export async function adoptActiveFileTranslation(): Promise<void> {
   const entryGen = gen
   let task
   try {
-    task = await window.api?.getActiveDocTask?.()
+    // #157 (DT-5): read running + QUEUED tasks. `getActiveDocTask` returns only the RUNNING
+    // task — and a task becomes `running` in the same tick it becomes `runningId` — so a
+    // translation queued behind a foreign task was invisible here and the DOC-8 queued-accept
+    // below was dead code against the manager: a reload in that window adopted nothing and the
+    // translation later ran with no progress UI, no Stop, no result load.
+    const active = await window.api?.listActiveDocTasks?.()
+    task = active?.find((t) => t.kind === 'translation') ?? null
   } catch {
     return
   }
@@ -521,10 +556,8 @@ export async function adoptActiveFileTranslation(): Promise<void> {
   // belongs to a session that no longer exists.
   if (entryGen !== gen) return
   // DOC-8 (#150, the FA-3/F-3 symptom): accept `queued` alongside `running` — the text-path
-  // adopt (translateSession.ts) already does. A renderer reload in the queued window used to
-  // leave the task running invisibly, with new starts refused `docTaskBusy`.
-  if (!task || task.kind !== 'translation' || (task.state !== 'running' && task.state !== 'queued'))
-    return
+  // adopt (translateSession.ts) already does. Reachable for real since #157 (DT-5).
+  if (!task || (task.state !== 'running' && task.state !== 'queued')) return
   // Same `idle` rule on the re-check, not just `busy` (AUD-04): a session can also go TERMINAL while
   // the read above was in flight — a rejected drop (multi-file, no path, a foreign task on the lane)
   // lands `failed` synchronously — and that just-raised banner must not be replaced either. Kept

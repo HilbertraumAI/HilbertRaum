@@ -461,9 +461,9 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
     let polls = 0
     const api = {
       // A full reload lost the module store; main still has a running translation doc-task.
-      getActiveDocTask: vi.fn(async () =>
+      listActiveDocTasks: vi.fn(async () => [
         docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 2, stepsTotal: 5 } })
-      ),
+      ]),
       getDocTask: vi.fn(async () => {
         polls += 1
         return polls === 1
@@ -508,7 +508,7 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
   }, 8000)
 
   it('is a no-op when NO doc-task is active', async () => {
-    const api = { getActiveDocTask: vi.fn(async () => null), getDocTask: vi.fn(async () => docTask()) }
+    const api = { listActiveDocTasks: vi.fn(async () => []), getDocTask: vi.fn(async () => docTask()) }
     stubApi(api)
     await adoptActiveFileTranslation()
     expect(getFileTranslate().state).toBe('idle')
@@ -517,13 +517,36 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
 
   it('is a no-op when the active doc-task is NOT a translation (e.g. a summary)', async () => {
     const api = {
-      getActiveDocTask: vi.fn(async () => docTask({ kind: 'summary', state: 'running' })),
+      listActiveDocTasks: vi.fn(async () => [docTask({ kind: 'summary', state: 'running' })]),
       getDocTask: vi.fn(async () => docTask())
     }
     stubApi(api)
     await adoptActiveFileTranslation()
     expect(getFileTranslate().state).toBe('idle')
     expect(api.getDocTask).not.toHaveBeenCalled()
+  })
+
+  it('#157 (DT-5): adopts a translation QUEUED behind a foreign running task (DOC-8 teeth)', async () => {
+    // The exact DT-5 shape: a foreign summary RUNS, our translation sits QUEUED behind it.
+    // getActiveDocTask could only ever report the running task, so this adopt was dead code;
+    // the lane list carries both and the adopt picks the translation.
+    const api = {
+      listActiveDocTasks: vi.fn(async () => [
+        docTask({ jobId: 'foreignSum', kind: 'summary', state: 'running', progress: { stepsDone: 1, stepsTotal: 3 } }),
+        docTask({ jobId: 'ourTr', state: 'queued', progress: { stepsDone: 0, stepsTotal: 0 } })
+      ]),
+      getDocTask: vi.fn(async () => docTask({ jobId: 'ourTr', state: 'queued', progress: { stepsDone: 0, stepsTotal: 0 } })),
+      cancelDocTask: vi.fn(async () => {})
+    }
+    stubApi(api)
+    await adoptActiveFileTranslation()
+    const seeded = getFileTranslate()
+    expect(seeded.state).toBe('translating')
+    expect(seeded.busy).toBe(true)
+    // Stop targets OUR queued task's id (exact-id since DT-2), never the foreign running one.
+    cancelFileTranslation()
+    expect(api.cancelDocTask).toHaveBeenCalledWith('ourTr')
+    expect(getFileTranslate().state).toBe('cancelled')
   })
 
   it('yields to a live TEXT job (precedence — the two adopts never both claim the panel)', async () => {
@@ -540,13 +563,13 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
     expect(getTranslateSession().translating).toBe(true)
 
     const fileApi = {
-      getActiveDocTask: vi.fn(async () => docTask({ jobId: 'task1', state: 'running' })),
+      listActiveDocTasks: vi.fn(async () => [docTask({ jobId: 'task1', state: 'running' })]),
       getDocTask: vi.fn(async () => docTask())
     }
     stubApi(fileApi)
     await adoptActiveFileTranslation()
     expect(getFileTranslate().state).toBe('idle')
-    expect(fileApi.getActiveDocTask).not.toHaveBeenCalled()
+    expect(fileApi.listActiveDocTasks).not.toHaveBeenCalled()
   })
 
   // ---- AUD-04: the adopt runs on EVERY Translate mount, not only after a reload ----
@@ -583,9 +606,9 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
     // The user goes elsewhere, a translation doc-task is running again, and they come back: the
     // mount effect re-runs the adopt while this store still shows the finished result.
     const adoptApi = {
-      getActiveDocTask: vi.fn(async () =>
+      listActiveDocTasks: vi.fn(async () => [
         docTask({ jobId: 'other', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } })
-      ),
+      ]),
       getDocTask: vi.fn(async () => docTask({ jobId: 'other' }))
     }
     stubApi(adoptApi)
@@ -622,9 +645,9 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
 
     const idle = getFileTranslate()
     const api = {
-      getActiveDocTask: vi.fn(async () =>
+      listActiveDocTasks: vi.fn(async () => [
         docTask({ jobId: 'foreign', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } })
-      ),
+      ]),
       getDocTask: vi.fn(async () => docTask({ jobId: 'foreign' }))
     }
     stubApi(api)
@@ -642,18 +665,18 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
     // SYNCHRONOUSLY (multi-file here; a browser-origin drag with no path and a busy lane behave the
     // same) lands `failed` with a banner the user just triggered, and `busy` is false there too — a
     // busy-only re-check would replace that banner with "Translating…".
-    let resolveActive: (v: DocTaskStatus) => void = () => {}
-    const activeP = new Promise<DocTaskStatus>((r) => (resolveActive = r))
+    let resolveActive: (v: DocTaskStatus[]) => void = () => {}
+    const activeP = new Promise<DocTaskStatus[]>((r) => (resolveActive = r))
     const api = {
       ...happyApi(),
-      getActiveDocTask: vi.fn(() => activeP),
+      listActiveDocTasks: vi.fn(() => activeP),
       getDocTask: vi.fn(async () => docTask({ jobId: 'task1' }))
     }
     stubApi(api)
 
     // Mount adopt starts; it is parked on the active-task read.
     const adoptPromise = adoptActiveFileTranslation()
-    await vi.waitFor(() => expect(api.getActiveDocTask).toHaveBeenCalled(), { timeout: 3000 })
+    await vi.waitFor(() => expect(api.listActiveDocTasks).toHaveBeenCalled(), { timeout: 3000 })
 
     // The user drops two files in that window — rejected on the spot, panel goes terminal.
     await translateDroppedFiles([new File(['a'], 'a.pdf'), new File(['b'], 'b.pdf')], CHOICE)
@@ -661,7 +684,7 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
     expect(getFileTranslate().error).toBe('multiDrop')
     const rejected = getFileTranslate()
 
-    resolveActive(docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } }))
+    resolveActive([docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } })])
     await adoptPromise
 
     expect(getFileTranslate().state).toBe('failed')
@@ -687,10 +710,10 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
     // reads the freshly-purged store as "safe to adopt" and puts the panel back into `translating`
     // with a poll running against a dead task, ending in a materialized preview loaded into renderer
     // memory behind the lock screen.
-    let resolveActive: (v: DocTaskStatus) => void = () => {}
-    const activeP = new Promise<DocTaskStatus>((r) => (resolveActive = r))
+    let resolveActive: (v: DocTaskStatus[]) => void = () => {}
+    const activeP = new Promise<DocTaskStatus[]>((r) => (resolveActive = r))
     const api = {
-      getActiveDocTask: vi.fn(() => activeP),
+      listActiveDocTasks: vi.fn(() => activeP),
       getDocTask: vi.fn(async () => docTask({ jobId: 'task1' })),
       previewDocument: vi.fn(async () => ({
         id: 'gen1',
@@ -704,12 +727,12 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
 
     // The mount adopt is parked on the active-task read.
     const adoptPromise = adoptActiveFileTranslation()
-    await vi.waitFor(() => expect(api.getActiveDocTask).toHaveBeenCalled(), { timeout: 3000 })
+    await vi.waitFor(() => expect(api.listActiveDocTasks).toHaveBeenCalled(), { timeout: 3000 })
 
     clearFileTranslate() // the workspace locks in that window (the renderer lock seam)
     const purged = getFileTranslate()
 
-    resolveActive(docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } }))
+    resolveActive([docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } })])
     await adoptPromise
 
     const snap = getFileTranslate()
@@ -727,18 +750,18 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
     // Stop alone leaves `cancelled` (which the idle rule already refuses), but the "Translate another
     // document" dismiss right after it returns the panel to `idle` — the same shape as the lock
     // purge. Both bump the generation, which is what makes the parked adopt detectable as stale.
-    let resolveActive: (v: DocTaskStatus) => void = () => {}
-    const activeP = new Promise<DocTaskStatus>((r) => (resolveActive = r))
+    let resolveActive: (v: DocTaskStatus[]) => void = () => {}
+    const activeP = new Promise<DocTaskStatus[]>((r) => (resolveActive = r))
     const api = {
       ...happyApi(),
-      getActiveDocTask: vi.fn(() => activeP),
+      listActiveDocTasks: vi.fn(() => activeP),
       getDocTask: vi.fn(async () => docTask({ jobId: 'task1' })),
       cancelDocTask: vi.fn(async () => {})
     }
     stubApi(api)
 
     const adoptPromise = adoptActiveFileTranslation()
-    await vi.waitFor(() => expect(api.getActiveDocTask).toHaveBeenCalled(), { timeout: 3000 })
+    await vi.waitFor(() => expect(api.listActiveDocTasks).toHaveBeenCalled(), { timeout: 3000 })
 
     // The user drops a document, stops it, then dismisses the cancelled panel — all while the
     // active-task read is still parked.
@@ -749,7 +772,7 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
     const dismissed = getFileTranslate()
     expect(dismissed.state).toBe('idle')
 
-    resolveActive(docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } }))
+    resolveActive([docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } })])
     await adoptPromise
 
     expect(getFileTranslate()).toBe(dismissed) // the dismissed panel stayed dismissed
@@ -762,11 +785,11 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
     // generation is a running counter, so the entry token has to be READ, never assumed to be zero —
     // and the poll must still run under a generation of its own afterwards.
     clearFileTranslate() // a previous lock already moved the generation on
-    let resolveActive: (v: DocTaskStatus) => void = () => {}
-    const activeP = new Promise<DocTaskStatus>((r) => (resolveActive = r))
+    let resolveActive: (v: DocTaskStatus[]) => void = () => {}
+    const activeP = new Promise<DocTaskStatus[]>((r) => (resolveActive = r))
     let polls = 0
     const api = {
-      getActiveDocTask: vi.fn(() => activeP),
+      listActiveDocTasks: vi.fn(() => activeP),
       getDocTask: vi.fn(async () => {
         polls += 1
         return polls === 1
@@ -789,8 +812,8 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
     stubApi(api)
 
     const adoptPromise = adoptActiveFileTranslation()
-    await vi.waitFor(() => expect(api.getActiveDocTask).toHaveBeenCalled(), { timeout: 3000 })
-    resolveActive(docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 2, stepsTotal: 5 } }))
+    await vi.waitFor(() => expect(api.listActiveDocTasks).toHaveBeenCalled(), { timeout: 3000 })
+    resolveActive([docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 2, stepsTotal: 5 } })])
     await adoptPromise
 
     const seeded = getFileTranslate()
@@ -811,9 +834,9 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
     vi.useFakeTimers()
     try {
       const api = {
-        getActiveDocTask: vi.fn(async () =>
+        listActiveDocTasks: vi.fn(async () => [
           docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } })
-        ),
+        ]),
         getDocTask: vi.fn(async () => docTask({ jobId: 'task1', progress: { stepsDone: 2, stepsTotal: 4 } })),
         cancelDocTask: vi.fn(async () => {})
       }
@@ -839,4 +862,103 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
       vi.useRealTimers()
     }
   }, 8000)
+})
+
+// ---- #157 (DT-4): consecutive-poll-failure tolerance (the doctasks-store CODE-6 rule, ported) ----
+//
+// One rejected round-trip used to fail the panel outright while the main-side task kept decoding
+// (and later materialized a document behind a "failed" panel; a retry then queued behind it —
+// re-entering the DT-2 shape). The store now tolerates MAX_POLL_FAILURES-1 consecutive failures,
+// resets the counter on any success, and on give-up ALSO cancels the backend task (exact-id).
+
+describe('fileTranslateSession — poll-failure tolerance (#157 / DT-4)', () => {
+  /** Drive a drop through import → startDocTask so the doc-task poll is installed. */
+  async function driveToTranslating(api: Partial<PreloadApi>): Promise<void> {
+    stubApi(api)
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    await vi.advanceTimersByTimeAsync(400) // import poll tick → done → startDocTask resolves
+    expect(getFileTranslate().state).toBe('translating')
+  }
+
+  it('tolerates two consecutive failed doc-task polls; the third fails the session AND cancels the task', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = {
+        ...happyApi(),
+        getDocTask: vi.fn(async () => {
+          throw new Error('ipc broke')
+        }),
+        cancelDocTask: vi.fn(async () => {})
+      }
+      await driveToTranslating(api)
+
+      await vi.advanceTimersByTimeAsync(400) // failure 1 — tolerated
+      expect(getFileTranslate().state).toBe('translating')
+      await vi.advanceTimersByTimeAsync(400) // failure 2 — tolerated
+      expect(getFileTranslate().state).toBe('translating')
+      await vi.advanceTimersByTimeAsync(400) // failure 3 — give up honestly
+      expect(getFileTranslate().state).toBe('failed')
+      // Give-up also cancels the backend task (exact-id): the renderer's terminal state and the
+      // backend agree — no invisible decode materializing a document behind a "failed" panel.
+      expect(api.cancelDocTask).toHaveBeenCalledWith('task1')
+
+      await vi.advanceTimersByTimeAsync(1200)
+      expect(api.getDocTask).toHaveBeenCalledTimes(3) // polling really stopped
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('any successful poll RESETS the counter: interleaved transients never fail a healthy run', async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      const api = {
+        ...happyApi(),
+        // throw, throw, success(reset), throw, throw, done — with the reset this never reaches
+        // three CONSECUTIVE failures; without it the fifth call would wrongly fail the session.
+        getDocTask: vi.fn(async () => {
+          calls += 1
+          if (calls === 3) return docTask({ progress: { stepsDone: 1, stepsTotal: 3 } })
+          if (calls <= 5) throw new Error('flaky')
+          return docTask({ state: 'done', progress: { stepsDone: 3, stepsTotal: 3 }, resultRef: { documentId: 'gen1' } })
+        }),
+        cancelDocTask: vi.fn(async () => {})
+      }
+      await driveToTranslating(api)
+
+      for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(400)
+      await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'))
+      expect(getFileTranslate().output).toBe('Hello world.')
+      expect(api.cancelDocTask).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the IMPORT poll tolerates transients too, and gives up without a doc-task cancel (none exists yet)', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = {
+        ...happyApi(),
+        getImportJob: vi.fn(async () => {
+          throw new Error('ipc broke')
+        }),
+        cancelDocTask: vi.fn(async () => {})
+      }
+      stubApi(api)
+      await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+
+      await vi.advanceTimersByTimeAsync(400)
+      expect(getFileTranslate().state).toBe('importing') // failure 1 tolerated
+      await vi.advanceTimersByTimeAsync(400)
+      expect(getFileTranslate().state).toBe('importing') // failure 2 tolerated
+      await vi.advanceTimersByTimeAsync(400)
+      expect(getFileTranslate().state).toBe('failed') // failure 3 — honest give-up
+      expect(api.startDocTask).not.toHaveBeenCalled()
+      expect(api.cancelDocTask).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
