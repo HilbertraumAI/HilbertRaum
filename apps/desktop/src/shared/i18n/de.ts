@@ -1674,6 +1674,8 @@ export const de: Record<keyof typeof en, string> = {
   'diag.system.title': 'System',
   'diag.system.osPlatform': 'OS / Plattform',
   'diag.system.freeSpace': 'Freier Speicher',
+  // #122: der Platzbedarf von workspace/images/ — sichtbar dort, wo Speicher berichtet wird.
+  'diag.system.imagesSize': 'Größe des Bildverlaufs',
   'diag.system.loadFailed':
     'Systemdetails konnten noch nicht geladen werden. Öffne den Tab noch einmal.',
   'diag.paths.title': 'Pfade',
@@ -2348,6 +2350,9 @@ export const de: Record<keyof typeof en, string> = {
   // Löschen — beides war vorher stumm bzw. falsch beschriftet.
   'images.err.openFailed': 'Diese Analyse konnte nicht geöffnet werden. Versuch es erneut.',
   'images.err.deleteFailed': 'Diese Analyse konnte nicht gelöscht werden. Versuch es erneut.',
+  // #122: das Leeren des Verlaufs folgt demselben Ehrlichkeitsvertrag (CODE-34) wie das
+  // Löschen einzelner Einträge.
+  'images.err.clearFailed': 'Der Verlauf konnte nicht geleert werden. Versuch es erneut.',
   // Verlauf (Bildverständnis-Verlauf): gespeicherte Analysen, verschlüsselt, löschbar.
   'images.history.title': 'Verlauf',
   'images.history.empty': 'Analysierte Bilder erscheinen hier.',
@@ -2362,6 +2367,15 @@ export const de: Record<keyof typeof en, string> = {
   'images.history.delete.confirm': 'Löschen',
   'images.history.delete.body':
     '„{title}“ und die zugehörigen Antworten werden dauerhaft von diesem Laufwerk entfernt.',
+  // #122: Größe pro Eintrag + gesamt, und das Leeren des Verlaufs (Speicherplatz ist auf einem
+  // mobilen Laufwerk DIE knappe Ressource — die Liste sagt, was sie kostet).
+  'images.history.total': 'Gesamt: {size}',
+  'images.history.clear': 'Verlauf leeren',
+  'images.history.clear.title': 'Bildverlauf leeren?',
+  'images.history.clear.confirm': 'Verlauf leeren',
+  'images.history.clear.body':
+    'Alle gespeicherten Analysen ({size}) und die zugehörigen Bilder werden dauerhaft von diesem Laufwerk entfernt.',
+  'images.history.cleared': 'Bildverlauf geleert',
 
   // ---- Übersetzen-Bildschirm (TranslateGemma-Welle, Plan §2 D6, TG-4) ----
   'translate.title': 'Text übersetzen',

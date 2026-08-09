@@ -582,6 +582,161 @@ describe('ImagesScreen — history (image-understanding history)', () => {
       await screen.findByText("That analysis couldn't be opened. Try again.")
     ).toBeInTheDocument()
   })
+
+  // #121: the stored bytes are ALREADY the pipeline's output (≤1536 px, re-encoded) — reopening
+  // must not run them through decodeImage again (a no-op scale + a fresh JPEG q0.9 re-encode,
+  // compounding generation loss into every reopened follow-up and defeating cache_prompt reuse).
+  it('#121: reopening a stored entry bypasses the decode pipeline (stored bytes verbatim)', async () => {
+    const decodeSpy = vi.fn(fakeDecode)
+    const getImageSession = vi.fn(async (): Promise<ImageSessionDetail> => ({
+      id: 's1',
+      title: 'receipt.png',
+      mimeType: 'image/jpeg',
+      sizeBytes: 4,
+      width: 800, // persisted dims ≤ the 1536 downscale target ⇒ no scaling needed
+      height: 600,
+      imageBytes: new Uint8Array([1, 2, 3, 4]),
+      turns: [{ id: 't1', question: 'What is this?', answer: 'A receipt.', createdAt: '2026-06-20T00:00:00Z' }],
+      createdAt: '2026-06-20T00:00:00Z',
+      updatedAt: '2026-06-20T00:00:00Z'
+    }))
+    const user = userEvent.setup()
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions: vi.fn(async () => [summary()]),
+      getImageSession
+    })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={decodeSpy} />)
+
+    await user.click(await screen.findByText('receipt.png'))
+    // TEETH: pre-fix the reopen ALWAYS re-decoded (decodeSpy called once per open).
+    expect(await screen.findByText('A receipt.')).toBeInTheDocument()
+    expect(screen.getByAltText('Selected image')).toBeInTheDocument()
+    expect(decodeSpy).not.toHaveBeenCalled()
+  })
+
+  it('#121: a legacy entry without persisted dimensions still takes the full pipeline', async () => {
+    const decodeSpy = vi.fn(fakeDecode)
+    const getImageSession = vi.fn(async (): Promise<ImageSessionDetail> => ({
+      id: 's1',
+      title: 'receipt.png',
+      mimeType: 'image/png',
+      sizeBytes: 4,
+      width: null, // legacy row: dims never persisted ⇒ can't prove no-scale ⇒ full pipeline
+      height: null,
+      imageBytes: new Uint8Array([1, 2, 3, 4]),
+      turns: [],
+      createdAt: '2026-06-20T00:00:00Z',
+      updatedAt: '2026-06-20T00:00:00Z'
+    }))
+    const user = userEvent.setup()
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions: vi.fn(async () => [summary()]),
+      getImageSession
+    })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={decodeSpy} />)
+
+    await user.click(await screen.findByText('receipt.png'))
+    await waitFor(() => expect(decodeSpy).toHaveBeenCalledTimes(1))
+  })
+
+  it('#121: an oversized stored entry (dims above the downscale target) still re-decodes', async () => {
+    const decodeSpy = vi.fn(fakeDecode)
+    const getImageSession = vi.fn(async (): Promise<ImageSessionDetail> => ({
+      id: 's1',
+      title: 'big.png',
+      mimeType: 'image/png',
+      sizeBytes: 4,
+      width: 4000, // > 1536 ⇒ scaling IS needed ⇒ the fast path must not engage
+      height: 3000,
+      imageBytes: new Uint8Array([1, 2, 3, 4]),
+      turns: [],
+      createdAt: '2026-06-20T00:00:00Z',
+      updatedAt: '2026-06-20T00:00:00Z'
+    }))
+    const user = userEvent.setup()
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions: vi.fn(async () => [summary({ title: 'big.png' })]),
+      getImageSession
+    })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={decodeSpy} />)
+
+    await user.click(await screen.findByText('big.png'))
+    await waitFor(() => expect(decodeSpy).toHaveBeenCalledTimes(1))
+  })
+
+  // #122: the list says what it costs — per-entry stored size + the total in the header.
+  it('#122: shows per-entry sizes and the total in the history header', async () => {
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions: vi.fn(async () => [
+        summary({ id: 's1', title: 'a.png', sizeBytes: 2 * 1024 * 1024 }),
+        summary({ id: 's2', title: 'b.png', sizeBytes: 1024 * 1024 })
+      ])
+    })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+
+    expect(await screen.findByText('Total: 3.0 MB')).toBeInTheDocument()
+    expect(screen.getByText('2.0 MB')).toBeInTheDocument()
+    expect(screen.getByText('1.0 MB')).toBeInTheDocument()
+  })
+
+  it('#122: Clear history confirms, calls clearImageSessions, refreshes the list, and toasts', async () => {
+    const clearImageSessions = vi.fn(async () => 1)
+    let calls = 0
+    const listImageSessions = vi.fn(async () => (calls++ === 0 ? [summary()] : []))
+    const user = userEvent.setup()
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions,
+      clearImageSessions
+    })
+    render(
+      <ToastProvider>
+        <ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />
+      </ToastProvider>
+    )
+
+    await screen.findByText('receipt.png')
+    // The header action opens a ConfirmDialog (never browser confirm()); confirm inside it.
+    await user.click(screen.getByRole('button', { name: 'Clear history' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Clear history' }))
+
+    await waitFor(() => expect(clearImageSessions).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.queryByText('receipt.png')).not.toBeInTheDocument())
+    expect(await screen.findByText('Image history cleared')).toBeInTheDocument()
+  })
+
+  it('#122: a failed clear shows the failure banner and never the success toast (CODE-34 mirror)', async () => {
+    const clearImageSessions = vi.fn(async () => {
+      throw new Error('The workspace is locked. Unlock it to continue.')
+    })
+    const listImageSessions = vi.fn(async () => [summary()])
+    const user = userEvent.setup()
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions,
+      clearImageSessions
+    })
+    render(
+      <ToastProvider>
+        <ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />
+      </ToastProvider>
+    )
+
+    await screen.findByText('receipt.png')
+    await user.click(screen.getByRole('button', { name: 'Clear history' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Clear history' }))
+
+    expect(await screen.findByText("The history couldn't be cleared. Try again.")).toBeInTheDocument()
+    expect(screen.queryByText('Image history cleared')).not.toBeInTheDocument()
+    // The entry is still listed — the list refresh reflects the true state.
+    expect(screen.getByText('receipt.png')).toBeInTheDocument()
+  })
 })
 
 describe('ImagesScreen — copy feedback (full-audit 2026-07-11 CODE-36)', () => {

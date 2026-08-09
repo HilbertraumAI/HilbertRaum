@@ -435,6 +435,8 @@ describe('vision security sentinel', () => {
     await expect(invoke(handlers, IPC.imageGetJob, 'any-job-id')).rejects.toThrow()
     await expect(invoke(handlers, IPC.imageCancel, 'any-job-id')).rejects.toThrow()
     await expect(invoke(handlers, IPC.imageChooseImage)).rejects.toThrow()
+    // #122: the bulk clear is gated like its history siblings (it deletes + shreds user data).
+    await expect(invoke(handlers, IPC.imageClearSessions)).rejects.toThrow()
   })
 
   // #120 item 2: the history-persistence fields were the module's one UNCLAMPED renderer input.

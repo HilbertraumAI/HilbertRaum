@@ -204,6 +204,8 @@ export const IPC = {
   imageGetSession: 'images:getSession',
   /** Delete one history entry: shred the stored image + cascade-remove its turns. */
   imageDeleteSession: 'images:deleteSession',
+  /** Clear the WHOLE image history (#122): one transactional row sweep + post-commit shreds. */
+  imageClearSessions: 'images:clearSessions',
   // Translate view (TG-4) — the Translate screen's live TEXT translation on the TranslateGemma
   // sidecar. Async-with-streaming (the STREAM.tr* channels below), keyed by jobId, mirroring the
   // image job contract. No source/translation CONTENT is logged or audited (ids/kinds only).

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Button, ConfirmDialog, Spinner } from '../components'
 import { useT } from '../i18n'
+import { formatSize } from './ImagePreview'
 import type { UiLanguage } from '@shared/i18n'
 import type { ImageSessionSummary } from '@shared/types'
 
@@ -38,20 +39,44 @@ export function ImageHistory({
   sessions,
   running,
   onOpen,
-  onDelete
+  onDelete,
+  onClearAll
 }: {
   sessions: ImageSessionSummary[]
   /** The live in-flight analysis (the loaded image's name + a re-open handler), or null. */
   running?: { title: string; onOpen: () => void } | null
   onOpen: (id: string) => void
   onDelete: (id: string) => void
+  /** The bulk "Clear history" action (#122) — confirmed here, mirroring the per-entry delete. */
+  onClearAll: () => void
 }): JSX.Element {
   const { t, tCount, lang } = useT()
   const [pendingDelete, setPendingDelete] = useState<ImageSessionSummary | null>(null)
+  const [pendingClear, setPendingClear] = useState(false)
+  // #122: the stored images' total footprint, from the summary DTO the list already carries —
+  // disk is THE scarce resource on a portable drive, so the list says what it costs.
+  const totalBytes = sessions.reduce((sum, s) => sum + s.sizeBytes, 0)
 
   return (
     <section className="image-history" aria-label={t('images.history.title')}>
-      <h2 className="image-history-title">{t('images.history.title')}</h2>
+      <div className="image-history-head">
+        <h2 className="image-history-title">{t('images.history.title')}</h2>
+        {sessions.length > 0 && (
+          <>
+            <span className="image-history-total">
+              {t('images.history.total', { size: formatSize(totalBytes, lang) })}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="image-history-clear"
+              onClick={() => setPendingClear(true)}
+            >
+              {t('images.history.clear')}
+            </Button>
+          </>
+        )}
+      </div>
       {sessions.length === 0 && !running ? (
         <p className="hint image-history-empty">{t('images.history.empty')}</p>
       ) : (
@@ -91,6 +116,9 @@ export function ImageHistory({
                   <span className="image-history-name">{s.title}</span>
                   <span className="image-history-meta">
                     <span>{tCount('images.history.turns', s.turnCount)}</span>
+                    {/* #122: per-entry stored size — what deleting this row gives back. */}
+                    <span className="image-history-dot" aria-hidden="true">·</span>
+                    <span>{formatSize(s.sizeBytes, lang)}</span>
                     {formatDate(s.updatedAt, lang) && (
                       <>
                         <span className="image-history-dot" aria-hidden="true">·</span>
@@ -125,6 +153,21 @@ export function ImageHistory({
         onCancel={() => setPendingDelete(null)}
       >
         <p>{t('images.history.delete.body', { title: pendingDelete?.title ?? '' })}</p>
+      </ConfirmDialog>
+      {/* #122: clear-all confirms through ConfirmDialog like the per-entry delete (never
+          browser confirm()); the body names the count + total so the decision is informed. */}
+      <ConfirmDialog
+        open={pendingClear}
+        title={t('images.history.clear.title')}
+        confirmLabel={t('images.history.clear.confirm')}
+        t={t}
+        onConfirm={() => {
+          onClearAll()
+          setPendingClear(false)
+        }}
+        onCancel={() => setPendingClear(false)}
+      >
+        <p>{t('images.history.clear.body', { size: formatSize(totalBytes, lang) })}</p>
       </ConfirmDialog>
     </section>
   )

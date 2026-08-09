@@ -155,6 +155,9 @@ export interface DriveStatus {
   isPreparedDrive: boolean
   writable: boolean
   freeBytes: number | null
+  /** On-disk footprint of `workspace/images/` — the saved image-analysis history (#122).
+   *  `0` when empty/absent; `null` when the directory could not be read. */
+  imagesBytes: number | null
   platform: string
   arch: string
 }

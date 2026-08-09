@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   addImageTurn,
+  clearImageSessions,
   createImageSession,
   deleteImageSession,
   getImageSession,
@@ -189,6 +190,70 @@ describe('image history — delete', () => {
     await expect(deleteImageSession(wrapped, dir, id)).rejects.toThrow(/injected/)
 
     // File never shredded (delete ran first and failed) → the session is still whole + openable.
+    expect(existsSync(storedPath)).toBe(true)
+    expect(listImageSessions(db)).toHaveLength(1)
+    expect(await getImageSession(db, dir, id, null)).not.toBeNull()
+  })
+})
+
+describe('image history — clear all (#122)', () => {
+  it('removes every session + turn in one sweep, shreds every stored image, returns the count', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const dir = imagesDir(workspacePath)
+    const cipher = testCipher()
+
+    const a = await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'a.png' }, cipher)
+    addImageTurn(db, a, 'q1', 'a1')
+    const b = await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/jpeg', name: 'b.jpg' }, cipher)
+    addImageTurn(db, b, 'q2', 'a2')
+    addImageTurn(db, b, 'q3', 'a3')
+    expect(readdirSync(dir)).toHaveLength(2)
+
+    const removed = await clearImageSessions(db, dir)
+
+    expect(removed).toBe(2)
+    expect(listImageSessions(db)).toHaveLength(0)
+    const turns = db.prepare('SELECT COUNT(*) AS n FROM image_turns').get() as { n: number }
+    expect(turns.n).toBe(0) // cascade, both sessions
+    expect(readdirSync(dir)).toHaveLength(0) // every stored image shredded + unlinked
+  })
+
+  it('an empty history is a clean no-op returning 0', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const dir = imagesDir(workspacePath)
+    expect(await clearImageSessions(db, dir)).toBe(0)
+    expect(readdirSync(dir)).toHaveLength(0)
+  })
+
+  it('REL-5: a failed row sweep destroys nothing — every session stays whole + openable', async () => {
+    // Same ordering contract as the per-entry delete: rows first (one transaction), shreds only
+    // after the commit. Inject a failure on the DELETE and assert no file was touched.
+    const { db, workspacePath } = freshWorkspace()
+    const dir = imagesDir(workspacePath)
+    const id = await createImageSession(
+      db,
+      dir,
+      { imageBytes: SENTINEL, mimeType: 'image/png', name: 'keep.png' },
+      null
+    )
+    const storedPath = join(dir, readdirSync(dir)[0])
+
+    const wrapped = {
+      exec: (sql: string) => db.exec(sql),
+      prepare(sql: string) {
+        if (sql.startsWith('DELETE FROM image_sessions')) {
+          return {
+            run: () => {
+              throw new Error('injected: image_sessions sweep failed')
+            }
+          }
+        }
+        return db.prepare(sql)
+      }
+    } as unknown as Db
+
+    await expect(clearImageSessions(wrapped, dir)).rejects.toThrow(/injected/)
+
     expect(existsSync(storedPath)).toBe(true)
     expect(listImageSessions(db)).toHaveLength(1)
     expect(await getImageSession(db, dir, id, null)).not.toBeNull()

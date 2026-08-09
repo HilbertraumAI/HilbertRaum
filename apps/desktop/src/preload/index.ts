@@ -206,6 +206,8 @@ const api = {
   /** Delete one history entry: shred the stored image + cascade-remove its turns. */
   deleteImageSession: (id: string): Promise<void> =>
     ipcRenderer.invoke(IPC.imageDeleteSession, id),
+  /** Clear the WHOLE image history (#122). Resolves with the number of sessions removed. */
+  clearImageSessions: (): Promise<number> => ipcRenderer.invoke(IPC.imageClearSessions),
 
   // ---- Translate view (TG-4) ----
   /** Start a one-at-a-time text translation on the TranslateGemma sidecar; resolves with the

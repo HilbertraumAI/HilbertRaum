@@ -1126,8 +1126,13 @@ images wave (issues #117–#124):
 - **New IPC `images:clearSessions`** (#122): bulk "clear image history" — transactional row
   deletes (turns cascade), best-effort post-commit shreds of every stored image, preserving
   the REL-5 row-first/shred-after ordering. `requireUnlocked`-gated like its siblings.
-  `ImageSessionSummary.sizeBytes` (already shipped) now backs the per-entry size + total the
-  history UI shows.
+  Resolves with the number of sessions removed. `ImageSessionSummary.sizeBytes` (already
+  shipped) now backs the per-entry size + total the history UI shows.
+- **`DriveStatus` WIDENED (additive)** with `imagesBytes: number | null` (#122): the on-disk
+  footprint of `workspace/images/` (sum of stored file sizes, `.enc` overhead included), `0`
+  when empty/absent, `null` when unreadable. Surfaced in the Diagnostics "System" card beside
+  free space — runaway image-history growth threatens the lock path's re-encrypt free-space
+  need, so it must be visible where storage is reported.
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |

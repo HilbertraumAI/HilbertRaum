@@ -7,13 +7,16 @@ import {
   ImagePreview,
   QuestionComposer,
   VisionUnavailable,
+  blobToDataUrl,
   decodeImage,
+  DOWNSCALE_TARGET,
   imageMimeFromName,
   imageMimeOfFile,
   isHeicName,
   ImageDecodeError,
   MAX_IMAGE_BYTES,
   type ComposerChip,
+  type DecodedImage,
   type DecodeImage,
   type ImageInputMime,
   type ImageMime
@@ -64,6 +67,7 @@ type ClientImageError =
   | 'multiDrop'
   | 'openFailed'
   | 'deleteFailed'
+  | 'clearFailed'
   | 'heicUnsupported'
 
 // Client-guard error codes → friendly banner copy (the runtime codes map inside AnswerThread).
@@ -75,6 +79,7 @@ const CLIENT_ERR_KEY: Partial<Record<ClientImageError, MessageKey>> = {
   busy: 'images.err.busy',
   openFailed: 'images.err.openFailed',
   deleteFailed: 'images.err.deleteFailed',
+  clearFailed: 'images.err.clearFailed',
   heicUnsupported: 'images.err.heic'
 }
 
@@ -193,7 +198,28 @@ export function ImagesScreen({
     const mime: ImageMime = detail.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png'
     try {
       const blob = new Blob([detail.imageBytes as unknown as BlobPart], { type: mime })
-      const decoded = await decodeImpl(blob, mime)
+      // #121: the stored bytes ARE the pipeline's output from the original analyze (≤1536 px,
+      // re-encoded) — running them through decodeImage again was a no-op scale plus a fresh
+      // JPEG q0.9 re-encode, compounding generation loss into every reopened follow-up (and
+      // byte-shifting the image out of any warm `cache_prompt` prefill). When the persisted
+      // dimensions prove no scaling is needed, ship/show the stored bytes VERBATIM; the full
+      // pipeline remains only for legacy/oversized entries (dims missing or > target).
+      let decoded: DecodedImage
+      if (
+        detail.width != null &&
+        detail.height != null &&
+        Math.max(detail.width, detail.height) <= DOWNSCALE_TARGET
+      ) {
+        decoded = {
+          bytes: detail.imageBytes,
+          mimeType: mime,
+          dataUrl: await blobToDataUrl(blob),
+          width: detail.width,
+          height: detail.height
+        }
+      } else {
+        decoded = await decodeImpl(blob, mime)
+      }
       setComposer('')
       loadVisionSession(
         { decoded, name: detail.title, sizeBytes: detail.sizeBytes },
@@ -232,6 +258,27 @@ export function ImagesScreen({
     }
     await loadSessions()
     showToast(t('images.history.deleted'))
+  }
+
+  // #122: the bulk "Clear image history" action. Same honesty contract as deleteSession
+  // (CODE-34): a FAILED clear resyncs the list and says so — never the success toast.
+  async function clearHistory(): Promise<void> {
+    try {
+      await window.api?.clearImageSessions?.()
+    } catch {
+      await loadSessions()
+      setScreenError('clearFailed')
+      return
+    }
+    // Every persisted session is gone — if the on-screen analysis was one of them, reset it
+    // (mirrors the per-entry delete of the open session; a not-yet-persisted run is untouched).
+    if (getVisionSession().sessionId != null) {
+      removeVisionImage()
+      setComposer('')
+      setViewingDetail(false)
+    }
+    await loadSessions()
+    showToast(t('images.history.cleared'))
   }
 
   async function handleFile(file: File): Promise<void> {
@@ -377,6 +424,7 @@ export function ImagesScreen({
             running={analyzing && selected ? { title: selected.name, onOpen: () => setViewingDetail(true) } : null}
             onOpen={(id) => void openSession(id)}
             onDelete={(id) => void deleteSession(id)}
+            onClearAll={() => void clearHistory()}
           />
         </>
       )

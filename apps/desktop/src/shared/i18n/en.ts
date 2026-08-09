@@ -1627,6 +1627,9 @@ export const en = {
   'diag.system.title': 'System',
   'diag.system.osPlatform': 'OS / platform',
   'diag.system.freeSpace': 'Free space',
+  // #122: the workspace/images/ footprint — visible where storage is reported, because runaway
+  // growth there threatens the lock path's re-encrypt free-space need on a portable drive.
+  'diag.system.imagesSize': 'Image history size',
   'diag.system.loadFailed': 'System details could not be loaded yet. Try reopening this tab.',
   'diag.paths.title': 'Paths',
   'diag.paths.prepared': 'Prepared drive',
@@ -2270,6 +2273,8 @@ export const en = {
   // which just resyncs the list) and a delete that failed — both used to be silent/mislabelled.
   'images.err.openFailed': "That analysis couldn't be opened. Try again.",
   'images.err.deleteFailed': "That analysis couldn't be deleted. Try again.",
+  // #122: the bulk clear shares the CODE-34 honesty contract with the per-entry delete.
+  'images.err.clearFailed': "The history couldn't be cleared. Try again.",
   // History (image-understanding history): saved analyses, encrypted at rest, deletable.
   'images.history.title': 'History',
   'images.history.empty': 'Images you analyze will appear here.',
@@ -2285,6 +2290,15 @@ export const en = {
   'images.history.delete.confirm': 'Delete',
   'images.history.delete.body':
     '“{title}” and its answers will be permanently removed from this drive.',
+  // #122: per-entry + total stored size, and the bulk clear (disk is the scarce resource on a
+  // portable drive — the list says what it costs, and one action gives it all back).
+  'images.history.total': 'Total: {size}',
+  'images.history.clear': 'Clear history',
+  'images.history.clear.title': 'Clear image history?',
+  'images.history.clear.confirm': 'Clear history',
+  'images.history.clear.body':
+    'All saved analyses ({size}) and their stored images will be permanently removed from this drive.',
+  'images.history.cleared': 'Image history cleared',
 
   // ---- Translate screen (TranslateGemma wave, plan §2 D6, TG-4) ----
   // Live TEXT translation on the local TranslateGemma sidecar. Everything stays local; nothing is

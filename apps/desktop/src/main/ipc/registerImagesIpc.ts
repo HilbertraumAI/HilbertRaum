@@ -20,6 +20,7 @@ import {
 } from '../services/vision'
 import {
   addImageTurn,
+  clearImageSessions,
   createImageSession,
   deleteImageSession,
   getImageSession,
@@ -319,5 +320,13 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     requireUnlocked()
     // ASYNC (audit 2026-07-16 F-12): the post-commit shred runs off the main thread.
     if (typeof id === 'string') await deleteImageSession(ctx.db, imagesDir(ctx.paths.workspacePath), id)
+  })
+
+  // #122: the bulk "Clear image history" action — one transactional row sweep, post-commit
+  // best-effort shreds (REL-5 ordering preserved; see clearImageSessions). Gated like its
+  // history siblings.
+  ipcMain.handle(IPC.imageClearSessions, async (): Promise<number> => {
+    requireUnlocked()
+    return clearImageSessions(ctx.db, imagesDir(ctx.paths.workspacePath))
   })
 }

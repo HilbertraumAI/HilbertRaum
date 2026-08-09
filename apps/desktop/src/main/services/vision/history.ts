@@ -264,3 +264,37 @@ export async function deleteImageSession(db: Db, dir: string, id: string): Promi
   const stored = join(dir, row.stored_name)
   if (existsSync(stored)) await shredFileAsync(stored)
 }
+
+/**
+ * Clear the WHOLE image history (#122): delete every session row in ONE transaction (turns
+ * cascade), then best-effort shred each stored image. Returns the number of sessions removed.
+ *
+ * Same REL-5 ordering as {@link deleteImageSession} — rows first, shreds only after the commit —
+ * so a failed transaction destroys nothing (no ghost sessions whose image is already gone), and
+ * a file that fails to shred can never resurrect its already-deleted row. The shreds run on
+ * `shredFileAsync` (off the main thread, the F-12 posture) sequentially — dozens of ~MB files,
+ * not a latency-critical path.
+ */
+export async function clearImageSessions(db: Db, dir: string): Promise<number> {
+  const rows = db.prepare('SELECT id, stored_name FROM image_sessions').all() as Array<
+    Pick<SessionRow, 'id' | 'stored_name'>
+  >
+  if (rows.length === 0) return 0
+  db.exec('BEGIN')
+  try {
+    db.prepare('DELETE FROM image_sessions').run()
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure as the thrown error */
+    }
+    throw err
+  }
+  for (const row of rows) {
+    const stored = join(dir, row.stored_name)
+    if (existsSync(stored)) await shredFileAsync(stored)
+  }
+  return rows.length
+}
