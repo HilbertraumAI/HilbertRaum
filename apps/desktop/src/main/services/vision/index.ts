@@ -39,6 +39,9 @@ export interface VisionAnalyzer {
   }): Promise<string>
   /** Optional teardown (the real `VisionRuntime` has one; test fakes may omit it). */
   stop?(): Promise<void>
+  /** Optional (#117): true once this runtime latched a FAILED start. The service discards such
+   *  an instance after the failing job settles, so the next analyze rebuilds fresh. */
+  isStartFailed?(): boolean
 }
 
 export interface VisionServiceDeps {
@@ -58,6 +61,14 @@ export interface VisionServiceDeps {
    * deps stay valid).
    */
   isWorkspaceLocking?: () => boolean
+  /**
+   * Fast-fail window after a FAILED runtime start (#117), default
+   * `VISION_START_FAILURE_COOLDOWN_MS`. Within it an analyze fails immediately without
+   * re-spawning (the corrupt-GGUF protection the old sticky latch provided); after it the next
+   * analyze rebuilds a fresh runtime, so a TRANSIENT start failure (OOM under RAM pressure, the
+   * startup port race) recovers on the user's next try instead of bricking the session.
+   */
+  startFailureCooldownMs?: number
 }
 
 export class VisionService {
@@ -81,8 +92,14 @@ export class VisionService {
    * spawning nothing. (REL-2, full-audit-2026-06-29 follow-up.)
    */
   private tearingDown = false
+  /** When the last FAILED runtime start settled (#117), or null. Gates the cooldown fast-fail. */
+  private startFailedAt: number | null = null
 
   constructor(private readonly deps: VisionServiceDeps) {}
+
+  private get startFailureCooldownMs(): number {
+    return this.deps.startFailureCooldownMs ?? VISION_START_FAILURE_COOLDOWN_MS
+  }
 
   private get maxBytes(): number {
     return this.deps.maxImageBytes ?? VISION_MAX_IMAGE_BYTES
@@ -154,6 +171,17 @@ export class VisionService {
         return
       }
 
+      // #117: within the cooldown after a failed start, fail fast WITHOUT re-spawning — the
+      // corrupt-GGUF protection the sticky latch used to provide, now time-bounded. Past the
+      // window the failure record clears and the analyze below rebuilds a fresh runtime.
+      if (this.startFailedAt !== null) {
+        if (Date.now() - this.startFailedAt < this.startFailureCooldownMs) {
+          this.fail(jobId, 'runtimeFailed', emit)
+          return
+        }
+        this.startFailedAt = null
+      }
+
       this.set(jobId, { jobId, state: 'starting' })
       const runtime = (this.runtime ??= this.deps.createRuntime(status))
 
@@ -185,6 +213,16 @@ export class VisionService {
       log.info('Vision analyze done', { jobId })
       emit.done(jobId, done)
     } catch (err) {
+      // #117: a failed START latches the runtime instance permanently, and nothing else ever
+      // discards it — so one transient cold-start failure (OOM under RAM pressure, the startup
+      // port race) used to fail every later analyze instantly for the rest of the session.
+      // Discard the latched instance (checked even on the abort path, so a cancelled job can't
+      // strand it) and start the cooldown clock; the next analyze past the window cold-starts
+      // a fresh runtime, so "Try again" can actually succeed.
+      if (this.runtime?.isStartFailed?.()) {
+        this.runtime = null
+        this.startFailedAt = Date.now()
+      }
       if (signal.aborted) {
         this.cancel(jobId)
         return
@@ -194,6 +232,9 @@ export class VisionService {
       log.warn('Vision analyze failed', { jobId, error: String(err) })
       this.fail(jobId, 'runtimeFailed', emit)
     } finally {
+      // #120 item 3: the busy slot is released HERE — after the (possibly aborted) runtime call
+      // fully unwound — never in cancel(), so a new analyze can't run concurrently against the
+      // `--parallel 1` sidecar while the aborted request is still draining server-side.
       this.controllers.delete(jobId)
       if (this.activeJobId === jobId) this.activeJobId = null
     }
@@ -217,7 +258,11 @@ export class VisionService {
     if (existing.state !== 'done' && existing.state !== 'failed') {
       const cancelled: ImageJob = { jobId, state: 'cancelled', error: 'cancelled' }
       this.jobs.set(jobId, cancelled)
-      if (this.activeJobId === jobId) this.activeJobId = null
+      // #120 item 3: deliberately does NOT free `activeJobId` — the aborted runtime call is
+      // still unwinding, and a new analyze admitted now would run concurrently against the
+      // `--parallel 1` sidecar (it queues server-side behind the draining request — the
+      // RUNTIME-5 single-slot-server edge class). run()'s `finally` frees the slot once the
+      // abort has fully unwound; until then a new analyze busy-rejects.
       this.evictOldJobs()
       return cancelled
     }
@@ -294,6 +339,14 @@ export class VisionService {
  * times — a small history is plenty; older terminal entries are evicted.
  */
 const VISION_MAX_JOB_HISTORY = 16
+
+/**
+ * Fast-fail window after a FAILED runtime start (#117). Long enough to absorb a rapid retry
+ * burst against a genuinely broken model (corrupt GGUF) without paying a re-spawn + full
+ * health-timeout wait per attempt; short enough that a deliberate user retry ("Try again"
+ * after freeing RAM) lands past it and gets a fresh cold start.
+ */
+export const VISION_START_FAILURE_COOLDOWN_MS = 5_000
 
 /** A terminal failed job with a code, NOT tracked (validation reject / busy reject). */
 function failedJob(error: VisionErrorCode): ImageJob {

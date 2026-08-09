@@ -75,6 +75,57 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
     expect(emit.done).not.toHaveBeenCalled()
   })
 
+  // #120 item 3 (cancel slot-release window): cancel() used to null `activeJobId` synchronously
+  // while the aborted runtime call was still unwinding, so a new analyze admitted in that window
+  // ran CONCURRENTLY against the `--parallel 1` sidecar (queueing server-side behind the draining
+  // request — the RUNTIME-5 single-slot-server regression class). The slot is now held until
+  // run()'s `finally`, i.e. until the aborted request fully unwound.
+  it('holds the busy slot until the aborted request unwinds — an immediate analyze busy-rejects', async () => {
+    let releaseUnwind!: () => void
+    const unwindGate = new Promise<void>((r) => (releaseUnwind = r))
+    const service = new VisionService({
+      getStatus: async () => AVAILABLE,
+      // A runtime whose in-flight request does NOT unwind at the abort instant: on abort it
+      // waits for the test's gate, then rejects — modelling the sidecar draining the request.
+      createRuntime: () => ({
+        analyze: (o: { signal?: AbortSignal; onToken?: (d: string) => void }) =>
+          new Promise<string>((_res, rej) => {
+            o.onToken?.('partial ')
+            o.signal?.addEventListener('abort', () => {
+              void unwindGate.then(() => rej(new DOMException('Aborted', 'AbortError')))
+            })
+          })
+      })
+    })
+
+    const emit: VisionStreamEmitter = { token: vi.fn(), done: vi.fn(), error: vi.fn() }
+    const job = service.analyze(req(), emit)
+    const tokenSpy = emit.token as ReturnType<typeof vi.fn>
+    while (tokenSpy.mock.calls.length === 0) await tick()
+
+    // Cancel — the abort fired, but the runtime call has NOT unwound yet (the gate holds it).
+    expect(service.cancel(job.jobId).state).toBe('cancelled')
+
+    // An analyze in the drain window must be busy-REJECTED, never run concurrently.
+    const during = service.analyze(req(), emit)
+    expect(during.state).toBe('failed')
+    expect(during.error).toBe('busy')
+
+    // Once the aborted request fully unwinds, the slot frees and a new analyze is admitted.
+    releaseUnwind()
+    let accepted = false
+    for (let i = 0; i < 400 && !accepted; i++) {
+      await tick()
+      const attempt = service.analyze(req(), emit)
+      if (attempt.error !== 'busy') {
+        expect(attempt.state).toBe('queued')
+        accepted = true
+      }
+    }
+    expect(accepted).toBe(true)
+    await service.stop() // aborts the (hanging) accepted job so nothing dangles past the test
+  })
+
   it('still completes normally when no cancel intervenes (happy-path regression)', async () => {
     const service = new VisionService({
       getStatus: async () => AVAILABLE,

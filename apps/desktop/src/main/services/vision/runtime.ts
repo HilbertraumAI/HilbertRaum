@@ -306,6 +306,18 @@ export class VisionRuntime {
     }
   }
 
+  /**
+   * True once a start attempt failed (the sticky latch is armed). The latch stays per-instance
+   * sticky — but the ORCHESTRATOR (`VisionService.run()`'s catch) reads this to DISCARD the
+   * instance so the next analyze rebuilds a fresh runtime (#117): a transient cold-start failure
+   * (OOM under RAM pressure, the known-limitations startup port race) must not brick image
+   * understanding for the rest of the session. The corrupt-GGUF fast-fail intent survives via
+   * the service's short cooldown window (see `VISION_START_FAILURE_COOLDOWN_MS`).
+   */
+  isStartFailed(): boolean {
+    return this.startFailed !== null
+  }
+
   /** Kill the sidecar (no-op if never started). Permanent for this instance; the orchestrator
    *  builds a fresh runtime on the next analyze if it cleared its reference. Used by the
    *  workspace-lock / quit / cancel teardown wiring (VisionService.stop). */
