@@ -1121,6 +1121,28 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   pays the full system-prompt prefill (no shared `cache_prompt` prefix), and the #39 hint stays
   armed as the safety net. Observability: the `onWarmup` hook (`done`/`timeout`/`failed`) logs
   through main/index.ts.
+- **Concurrent weight prefetch (#114, 2026-08-09).** llama-server's mmap load faults pages in a
+  non-sequential order that slow media punishes (#107: ~2/3 of a stick's sequential throughput;
+  2.4× the pure-sequential time under memory pressure). `LadderRuntime.start()` now launches a
+  plain sequential read of the weight file set (`startModelPrefetch`, `runtime/prefetch.ts`)
+  ALONGSIDE the first rung's load — the bytes are discarded; priming the OS page cache at full
+  media speed is the whole effect. Shipped on the #114 on-hardware matrix (16 GB box, all four
+  variants × cold/warm × stick/SSD, evidence in the issue): **−49% cold start** on a 23.5 MB/s
+  stick (6.65 GB model: 680 s → 346 s), **−36%** on an 868 MB/s USB SSD (15.0 → 9.6 s), ~neutral
+  in every other cell; concurrent beat prefetch-then-spawn, and `--no-mmap` was REJECTED (fastest
+  cold on the stick but forfeits the page cache: 292 s warm restarts vs 5 s, worst in every SSD
+  cell). Contract, pinned in the `concurrent weight prefetch (#114)` block of
+  `runtime-ladder.test.ts` + `runtime-prefetch.test.ts`: (1) FIRST rung only — a later rung
+  re-reads a file the failed attempt already pulled through the cache (the #108 sample rule's
+  reasoning); (2) skipped when the install-state pass just hashed the weights — the same one-shot
+  #108 suppression signal, peeked without consuming (`isNextModelLoadSuppressed`); (3) aborted the
+  moment the load window ends either way, and by the CODE-2 stop/lock cancel (the reader must not
+  keep the drive busy past a stop; abort lands within one 4 MiB chunk); (4) any prefetch outcome
+  is control-flow-inert — 'failed' means the load proceeds unassisted; (5) the file set is
+  `weightPaths` (GGUF + a vision model's mmproj, from `startModelRuntime`'s manifest), falling
+  back to `modelPath`. The #108 `model_load` sample now measures the prefetch-assisted window —
+  still the honest rate the user felt, closer to what the medium can deliver. Observability: the
+  `onPrefetch` hook logs through main/index.ts + a `model_prefetch` perf mark pair.
 - **Surfaced runtime errors (fix 2026-06-14, hardened 2026-06-16).** `LlamaRuntime.chatStream`
   throws a typed `ChatRequestError` carrying the server's `{error:{message,type}}` body
   (previously the body was discarded and only "HTTP <status>" survived). `isExceedContextError`
@@ -7687,7 +7709,12 @@ failed once and looped). Gate: baseline **4,680/50 → 4,812/50 across 347 files
 files, skip count unchanged) — typecheck + build green throughout, the single full-suite run at the
 verification phase (weak-box discipline: 8-core / 16 GB box, `--maxWorkers=2` under load). The env-gated
 real-model e2e leg was **skipped — the prepared drive carries a 9 KB stub `llama-server.exe`, not the
-real binary** (a recorded skip, never the gate; e2e is a confidence leg).
+real binary** (a recorded skip, never the gate; e2e is a confidence leg). *(Corrected 2026-08-09,
+#114 investigation: that "stub" was a misdiagnosis — the upstream llama.cpp Windows layout ships
+EVERY tool exe as a ~9 KB shim backed by an `-impl.dll` (`llama-server-impl.dll` carries the real
+~9–14 MB payload next to it), and the prepared drive's runtime was verified real and runnable
+(`--version` answers; build b9849). The skip itself remains recorded fact — only its stated reason
+was wrong, and the e2e leg owes a re-run on real hardware.)*
 
 **Headline negative results worth recording:** the hard product guarantees re-verified clean — **no
 new `fetch`/net/WebSocket call sites** in main or preload since v0.1.51, the offline guard, vault

@@ -8,10 +8,13 @@ import {
   type LlamaRungOptions
 } from '../../src/main/services/runtime/factory'
 import {
+  isNextModelLoadSuppressed,
   latestEffectiveRead,
   MIN_READ_SAMPLE_MS,
-  resetEffectiveReadForTests
+  resetEffectiveReadForTests,
+  suppressNextModelLoadSample
 } from '../../src/main/services/read-speed'
+import type { ModelPrefetch, PrefetchOutcome } from '../../src/main/services/runtime/prefetch'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { UnexpectedExitInfo } from '../../src/main/services/runtime/sidecar'
@@ -56,6 +59,8 @@ function ladderHarness(config: {
   warmupTimeoutMs?: number
   /** #108: successful starts await this long, so the load window passes the sample floor. */
   startDelayMs?: number
+  /** #114: the fake prefetch settles 'failed' immediately (a read error). */
+  prefetchFails?: boolean
 }) {
   const calls: LadderCall[] = []
   const failures: string[] = []
@@ -63,7 +68,25 @@ function ladderHarness(config: {
   const crashes: Array<{ opts: RuntimeStartOptions; info: UnexpectedExitInfo }> = []
   const warmups: Array<{ event: string; detail?: string }> = []
   const chatCalls: Array<{ content: string; maxTokens?: number; mode?: string; hasSignal: boolean }> = []
+  // #114: every prefetch the ladder created (recorded fake — no real file IO in this suite).
+  const prefetches: Array<{ paths: string[]; aborted: boolean }> = []
+  const prefetchEvents: Array<{ event: string; detail?: string }> = []
   let mockMade = false
+
+  const makePrefetch = (paths: string[]): ModelPrefetch => {
+    const entry = { paths, aborted: false }
+    prefetches.push(entry)
+    let settle!: (o: PrefetchOutcome) => void
+    const done = new Promise<PrefetchOutcome>((r) => (settle = r))
+    if (config.prefetchFails) settle('failed')
+    return {
+      done,
+      abort: () => {
+        entry.aborted = true
+        settle('aborted')
+      }
+    }
+  }
 
   const makeLlama = (o: RuntimeStartOptions, binPath: string, rung?: LlamaRungOptions): ModelRuntime => {
     const index = calls.length
@@ -122,6 +145,8 @@ function ladderHarness(config: {
     onSelect: (kind, _o, reason) => selected.push({ kind, reason }),
     onWarmup: (_o, event, detail) => warmups.push({ event, detail }),
     warmupTimeoutMs: config.warmupTimeoutMs,
+    onPrefetch: (_o, event, detail) => prefetchEvents.push({ event, detail }),
+    makePrefetch,
     gpu: {
       getGpuMode: () => config.gpuMode ?? 'auto',
       getGpuAutoDisabled: () => config.gpuAutoDisabled ?? false,
@@ -132,7 +157,18 @@ function ladderHarness(config: {
     }
   })
 
-  return { factory, calls, failures, selected, crashes, warmups, chatCalls, wasMock: () => mockMade }
+  return {
+    factory,
+    calls,
+    failures,
+    selected,
+    crashes,
+    warmups,
+    chatCalls,
+    prefetches,
+    prefetchEvents,
+    wasMock: () => mockMade
+  }
 }
 
 /** An `AbortError`-named rejection — what a signal-aborted fetch/stream read raises in prod. */
@@ -297,6 +333,8 @@ describe('ladder start cancellation (full-audit 2026-07-11 CODE-2)', () => {
   function cancellableHarness() {
     const failures: string[] = []
     const rungStops: number[] = []
+    // #114: the prefetch must join the CODE-2 cancel contract (recorded fake).
+    const prefetches: Array<{ paths: string[]; aborted: boolean }> = []
     let mockMade = false
     let rungStarts = 0
     let failInFlight: (err: Error) => void = () => {
@@ -334,6 +372,16 @@ describe('ladder start cancellation (full-audit 2026-07-11 CODE-2)', () => {
           chatStream: async function* () {}
         }
       },
+      makePrefetch: (paths) => {
+        const entry = { paths, aborted: false }
+        prefetches.push(entry)
+        return {
+          done: new Promise<PrefetchOutcome>(() => {}),
+          abort: () => {
+            entry.aborted = true
+          }
+        }
+      },
       gpu: {
         probeDevices: async () => [],
         onGpuFailure: (reason) => failures.push(reason),
@@ -344,6 +392,7 @@ describe('ladder start cancellation (full-audit 2026-07-11 CODE-2)', () => {
       runtime: factory(opts),
       failures,
       rungStops,
+      prefetches,
       wasMock: () => mockMade,
       rungStartCount: () => rungStarts,
       failInFlight: (err: Error) => failInFlight(err)
@@ -359,6 +408,9 @@ describe('ladder start cancellation (full-audit 2026-07-11 CODE-2)', () => {
     const stopP = h.runtime.stop() // sets the cancel flag + forwards stop to the in-flight rung
     await stopP
     expect(h.rungStops).toContain(0) // the loading rung's runtime WAS stopped (kill reached it)
+    // #114: the prefetch reader joined the cancel — it must not keep the drive busy.
+    expect(h.prefetches).toHaveLength(1)
+    expect(h.prefetches[0].aborted).toBe(true)
 
     // The killed child's start() rejects (in prod: waitForHealthy's exit-check throw)…
     h.failInFlight(new Error('llama-server exited before becoming healthy (code 0)'))
@@ -736,5 +788,68 @@ describe('effective-read sample capture (#108)', () => {
     const runtime = h.factory({ modelId: 'm', modelPath: '/no/such/w.gguf', contextTokens: 2048 })
     await runtime.start()
     expect(latestEffectiveRead()).toBeNull()
+  })
+})
+
+// #114: the concurrent sequential weight prefetch that rides the first rung's load
+// window. Evidence for the design (measured cold-start wins, the skip rules, the
+// rejection of --no-mmap) lives in prefetch.ts's header + issue #114; these tests pin
+// the CONTRACT: first rung only, skip-when-just-hashed, abort at window end + on a
+// CODE-2 stop, and total isolation of the start from any prefetch outcome.
+describe('concurrent weight prefetch (#114)', () => {
+  beforeEach(() => resetEffectiveReadForTests())
+
+  it('rides the first rung: started with the load, aborted when the window ends', async () => {
+    const h = ladderHarness({})
+    await h.factory(opts).start()
+    expect(h.prefetches).toHaveLength(1)
+    // No weightPaths supplied → the bare modelPath is the file set.
+    expect(h.prefetches[0].paths).toEqual([opts.modelPath])
+    // The load finished → the window closed and the reader was told to stop.
+    expect(h.prefetches[0].aborted).toBe(true)
+    await until(() => h.prefetchEvents.length >= 2)
+    expect(h.prefetchEvents.map((e) => e.event)).toEqual(['started', 'aborted'])
+  })
+
+  it('prefetches the full weightPaths file set (vision: GGUF + mmproj)', async () => {
+    const h = ladderHarness({})
+    await h.factory({ ...opts, weightPaths: ['/w.gguf', '/mm.proj'] }).start()
+    expect(h.prefetches).toHaveLength(1)
+    expect(h.prefetches[0].paths).toEqual(['/w.gguf', '/mm.proj'])
+  })
+
+  it('skipped when the install-state pass just hashed the weights (page-cache-warm)', async () => {
+    suppressNextModelLoadSample()
+    const h = ladderHarness({})
+    await h.factory(opts).start()
+    expect(h.prefetches).toHaveLength(0)
+    expect(h.prefetchEvents.map((e) => e.event)).toEqual(['skipped'])
+    // The peek did NOT consume the #108 suppression — recordModelLoadRead did, as before.
+    expect(isNextModelLoadSuppressed()).toBe(false)
+    expect(latestEffectiveRead()).toBeNull()
+  })
+
+  it('first rung only: a failed rung 1 does not re-prefetch on rung 2', async () => {
+    const h = ladderHarness({ failFirst: 1 })
+    await h.factory(opts).start()
+    expect(h.calls).toHaveLength(2) // rung 1 failed, rung 2 carried the start
+    expect(h.prefetches).toHaveLength(1) // …but only rung 1 got a prefetch
+    expect(h.prefetches[0].aborted).toBe(true) // ended on the rung-1 failure path
+  })
+
+  it('a prefetch read failure never affects the start', async () => {
+    const h = ladderHarness({ prefetchFails: true })
+    await h.factory(opts).start() // resolves ready — nothing to catch
+    await until(() => h.prefetchEvents.some((e) => e.event === 'failed'))
+    expect(h.prefetchEvents[0]?.event).toBe('started')
+    expect(h.wasMock()).toBe(false)
+  })
+
+  it('the mock fallback (no binary) never prefetches', async () => {
+    const h = ladderHarness({ resolveBin: null })
+    await h.factory(opts).start()
+    expect(h.wasMock()).toBe(true)
+    expect(h.prefetches).toHaveLength(0)
+    expect(h.prefetchEvents).toHaveLength(0)
   })
 })

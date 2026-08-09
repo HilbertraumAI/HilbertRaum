@@ -593,10 +593,13 @@ password recovery — are documented in
   5.97 GB file: paging rework). On a 128 GB machine the same warm start takes ~3 s — a
   memory-pressure effect, not a media effect. Consequences the app now surfaces honestly instead of
   hiding: the measured effective read speed drives Diagnostics + the slow-read warning (#108/#110),
-  and the "Starting…" panel shows approximate progress from that measured speed (#107). A
-  sequential-prefetch mitigation (priming the page cache at full media speed before the mmap load)
-  is deliberately NOT built — it needs on-hardware validation against memory-pressure risk on
-  exactly the 16 GB boxes it would help; tracked as its own issue (spun out of #107).
+  and the "Starting…" panel shows approximate progress from that measured speed (#107). Since #114
+  a concurrent sequential prefetch primes the page cache at full media speed alongside the mmap
+  load (validated on-hardware first: −49% cold start on a slow stick, −36% on a USB SSD, measured
+  on exactly the 16 GB box class the memory-pressure risk targeted — the feared self-eviction did
+  not defeat it; architecture.md "Concurrent weight prefetch (#114)"). The warm-start full re-read
+  on RAM-constrained machines remains a fact of mmap + memory pressure — the prefetch makes it
+  cheaper, not free.
 - **Text / Markdown / CSV imports are capped at 64 MiB, separately from the 1 GiB document ceiling
   ([`architecture.md`](architecture.md) §35).** Those parsers
   read the whole file into one UTF-16 JS string (CSV then derives the papaparse row array + the rebuilt
