@@ -397,14 +397,18 @@ consume it. The rules:
 3. **"One tier down" defined.** Re-run the §6.2 comfortable stage excluding the top band (every
    model sharing the winner's `recommended_ram_gb`), over RANKED models only: the §6.3
    ranked-only guard applies unchanged, and the step therefore can never land on a rank-0 model
-   (`gemma4-e2b` stays unreachable until its own #95-item-2 gate resolves). If no lower ranked
+   (`gemma4-e2b` stays unreachable until its own #95-item-2 gate resolves — *resolved
+   2026-08-09, see the #153 amendment below*). If no lower ranked
    tier exists, KEEP the original pick: the step never lands on nothing. A pick that came from
    the runnable fallback stage (machine below every comfortable line) also keeps: it is already
    the lightest honest answer. Against the committed catalog today the step moves 24 GB boxes
    `qwen3.6-27b-q4` → `qwen3.5-9b-ud-q4kxl` and ≥32 GB boxes `qwen3.6-27b-q5` →
-   `qwen3.6-27b-q4`; the 16 GB tier keeps its pick (no ranked band below 16 exists yet). The
+   `qwen3.6-27b-q4`; the 16 GB tier keeps its pick (no ranked band below 16 exists yet —
+   *superseded 2026-08-09: the #153 E2B promotion created the sub-16 band; 16–20 GB crawls now
+   step to `gemma4-e2b-it-qat-q4`*). The
    step's reach grows as RAM lines are retuned from measured RSS (#95 item 3) or lower tiers
-   earn ranks (#95 item 2): the rule is structural, not a hardcoded mapping.
+   earn ranks (#95 item 2): the rule is structural, not a hardcoded mapping — the #153
+   promotion exercised exactly this property (rank edit only, zero picker-code change).
 4. **Stateless, single-step.** The stepped pick is derived fresh on every `listModels` call
    from the persisted `settings.lastBenchmark`; a re-benchmark replaces the sample. The base
    pick is always recomputed from RAM alone, so downgrades never compound across runs.
@@ -412,7 +416,9 @@ consume it. The rules:
    running), tok/s at/above threshold, or predicate fails: the result is today's pure
    RAM-best-fit answer, exactly. The no-signal mapping (≤12 → Qwen3.5 4B, 16–20 → Qwen3.5 9B,
    24 → Qwen3.6 27B Q4, ≥32 → Qwen3.6 27B Q5) stays pinned untouched in
-   `committed-catalog.test.ts` and `benchmark.test.ts`.
+   `committed-catalog.test.ts` and `benchmark.test.ts`. *(Amended 2026-08-09 by the #153 E2B
+   promotion — a catalog change, not a picker change: 12–15 GB → Gemma 4 E2B, the new sub-16
+   comfortable band; 8 GB keeps Qwen3.5 4B via the runnable stage. Pins updated in both files.)*
 6. **Consistency across surfaces.** `runBenchmark` (the Diagnostics card's
    `recommendedModelId`) applies the same rule with the just-measured values, and
    `listModels` applies it with the persisted ones, so the two surfaces cannot disagree:
@@ -430,6 +436,23 @@ downgrade stays as-is (it feeds the profile table, a fallback surface), and the
 RECOMMENDATION applies the predicate above instead: an oversized crawl never moves the pick,
 a right-sized crawl moves it exactly one tier. The #52 warning keeps naming the measured
 model; the new sibling warning names the consequence for the pick.
+
+**#153 amendment (2026-08-09, owner-ratified): the E2B promotion gives the step-down its
+sub-16 landing tier.** The weak-16 GB-box in-app Diagnostics leg (issue #153, successor to
+#95 item 2) ran on the designated class (15.8 GB, i7-1185G7, Iris Xe iGPU, Vulkan b9849, AC +
+idle, dev build of master `2d1d9db9`): settled tok/s `gemma4-e2b` **17.0** vs `qwen3.5-4b`
+**9.0** vs bundled `qwen3-4b` **14.6** — the big-rig cpu ratio (~2× the promoted 4B) reproduces
+on the iGPU basis (all three legs GPU/Vulkan per the chat header; basis + full runs in the #153
+comment). With the §9.3 quality standing (E2B F1 .3373 > qwen3.5-4b .2728, equal-class audited
+hallucinations) E2B wins the sub-16 band on both axes, so: `recommendation_rank` 0 → **3** and
+`recommended_ram_gb` 16 → **12** (the honest retuned value; the old 16-floor existed only to
+keep the then-rank-0 manifest from hijacking the comfortable stage — the §9.3 field-signal
+note's "retune recommended_ram_gb" branch, executed). Consequences, all pinned: base mapping
+12–15 GB → E2B (was the runnable-stage `qwen3.5-4b` fallback); stepped mapping 16–20 GB crawl
+→ E2B (was rule-3 keep); 8 GB and ≥16 GB base picks unchanged. The §6.5 step-down was also
+exercised on real hardware for the first time during the #153 measurement: it correctly did
+NOT fire (all settled values ≥ 5 tok/s; recommendation stayed the 9B throughout). Deep 7/8
+flip-rule guidance for E2B stands (§9.3 thinking table).
 
 ---
 
@@ -879,7 +902,7 @@ recorded next to the rank in its manifest:
 | `gemma4-26b-a4b-it-qat-q4` | **rank 2** — ranked runner-up / MoE speed alternative | EM parity with the 24 GB pick `qwen3.6-27b-q4` (.9765 both), ZERO audited hallucinations (both), ~4× its decode (tg 155.8 vs 40.1 t/s vulkan; 15.6 vs 2.8 cpu) at 2.5 GB less disk — but F1 .3307 vs .3523 keeps the Qwen the tier pick (both families share the terse house style, so the §9 length confound does not explain the gap). Never the auto-pick while a rank-3 model fits (pinned in `committed-catalog.test.ts`). |
 | `gemma4-31b-it-qat-q4` | **rank 0 forever — DO NOT PROMOTE** | Issue #82's drop condition is met: ties the 26B-A4B within .003 F1 (.3334 vs .3307; both 0 hallucinations, both the same two cautious DE over-abstentions) while decoding 4.2× (vulkan) / 6× (cpu) slower at +3.3 GB disk. Stays selectable as the Apache-2.0 GPU-box quality ceiling; catalog removal deliberately not taken (shipped in v0.1.55). |
 | `gemma4-e4b-it-qat-q4` | **rank 0** — missed the 8B bar | F1 .2999 vs Ministral .3111 / `qwen3.5-9b` .3152 / `qwen3-8b` .3262; hallucination-honest after audit (1 real). |
-| `gemma4-e2b-it-qat-q4` | **rank 0** — gated on the owed weak-hardware datapoint | F1 .3373 edges the bundled `qwen3-4b` (.3277) with equal audited hallucinations (3) and the fastest cpu decode measured (24.3 t/s tg) — but `qwen3-4b-2507` keeps the tier quality lead (.3613, 1 real), Deep failed the flip rule at this size (7/8 vs Balanced 8/8), and the issue-#53 weak-16 GB-box measured-tok/s leg is still owed. That datapoint decides (wave follow-up issue). |
+| `gemma4-e2b-it-qat-q4` | **rank 0** — gated on the owed weak-hardware datapoint *(resolved 2026-08-09: the #153 leg landed and promoted it to **rank 3** — see §6.5 "#153 amendment")* | F1 .3373 edges the bundled `qwen3-4b` (.3277) with equal audited hallucinations (3) and the fastest cpu decode measured (24.3 t/s tg) — but `qwen3-4b-2507` keeps the tier quality lead (.3613, 1 real), Deep failed the flip rule at this size (7/8 vs Balanced 8/8), and the issue-#53 weak-16 GB-box measured-tok/s leg is still owed. That datapoint decides (wave follow-up issue). |
 | `qwen3.5-35b-a3b-ud-q4kxl` *(§9's deferred-to-speed rank)* | **rank 1** — ranked MoE alternative | The §9 bar ("beat `qwen3-30b-a3b-q4` on speed OR quality by enough") is met on both axes: 0 real hallucinations vs the incumbent MoE's 2 at EM parity (quality), and the 3B-active speed case confirmed (tg 140.9 t/s vulkan / 12.1 cpu vs the dense 27B-Q4's 40.1 / 2.8). *(Residual settled: its §9.1 in-app smoke PASSED 2026-08-09 — see the smokes record below.)* |
 
 Nothing in the run contradicts the §6.4 promoted ranks — where the eval is clear it agrees at the

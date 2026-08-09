@@ -221,10 +221,14 @@ describe('recommendation per profile', () => {
   // Gemma 4 12B) keep their ranks and stay selectable but lose the tiebreaks to the rank-3
   // promoted set. Issue #48's honest-RAM recalibration (12-14B tier at 24) is unchanged; the
   // Qwen3.6 27B Q4 joins that 24 GB capacity group and wins it on rank.
+  // E2B promotion (owner decision 2026-08-09, issue #153, model-benchmarks.md §6.5): the
+  // 12 GB point moves from the runnable-stage qwen3.5-4b fallback to gemma4-e2b (rank 3,
+  // rec-RAM retuned to 12 — the first ranked capacity band below 16); 8 GB stays the
+  // runnable-stage 4B (disk-asc tiebreak among the min-8 rank-3s).
   it('recommends the newest-Qwen promoted model per machine RAM (real manifests)', () => {
     const m = realManifests()
     expect(recommendModelIdByRam(m, 8, 'chat')).toBe('qwen3.5-4b-ud-q4kxl') // low-end pick
-    expect(recommendModelIdByRam(m, 12, 'chat')).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(recommendModelIdByRam(m, 12, 'chat')).toBe('gemma4-e2b-it-qat-q4') // #153 sub-16 band
     expect(recommendModelIdByRam(m, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl') // 8B-class tier
     expect(recommendModelIdByRam(m, 20, 'chat')).toBe('qwen3.5-9b-ud-q4kxl') // 24 GB tier starts at 24
     expect(recommendModelIdByRam(m, 24, 'chat')).toBe('qwen3.6-27b-q4') // eval top scorer (Q4)

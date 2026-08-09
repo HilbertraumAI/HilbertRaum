@@ -9,20 +9,27 @@ size_on_disk_gb: 3.3
 # MEASURED 2026-07-30 (i9-9900X, b9849 linux; model-benchmarks.md §9.3): cpu peak RSS 4.40 GiB
 # / vulkan 3.69 GiB at ctx 8192 → min 8 CONFIRMED (formula ceil(4.40+3) = 8).
 # Hard min is the MODEL-ALONE floor (PROD-1); co-residency pressure lives in recommended_ram_gb.
-# recommended_ram_gb deliberately sits on the small-tier 16 floor (qwen3-4b/qwen3.5-4b/8B tier all
-# share 16): a UNIQUE lower value would make this the only "comfortable fit" at that RAM level and
-# the preferRanked guard (empty ranked set → all fits) would auto-recommend a rank-0 model —
-# caught by the wave-invariant test at ram=12 when this briefly said 12.
+# recommended_ram_gb RETUNED 16 → 12 at the #153 promotion (2026-08-09): the honest measured
+# value (min 8 + the catalog's co-residency headroom pattern — 9B/Ministral min 12/rec 16,
+# 27B-Q4 min 20/rec 24). The previous deliberate 16-floor existed ONLY to keep a rank-0 model
+# from hijacking the comfortable stage at ram=12 (the wave-invariant test's lesson); with the
+# rank granted below, that pick IS the ratified outcome — E2B is the sub-16 capacity band and
+# the §6.5 step-down's landing tier for the 16–20 GB band (model-benchmarks.md §6.5).
 recommended_min_ram_gb: 8
-recommended_ram_gb: 16
-# Rank 0 AFTER the wave eval (§9.3 wave outcome, ratified 2026-08-03): F1 .3373 edges the
-# bundled qwen3-4b (.3277) with equal audited hallucinations (3) and the fastest CPU decode
-# measured in the catalog (24.3 t/s tg) — but qwen3-4b-2507 keeps the tier quality lead (.3613,
-# 1 real) and the issue-#53 weak-16 GB-box measured-tok/s leg is STILL OWED, so the rank stays
-# 0 until that datapoint lands (wave follow-up issue). E2B is a MatFormer effective-2B slice
-# (~5B raw params, ~2B-class memory/compute footprint), 140+ languages — on a machine where
-# tok/s is the binding constraint it is the current speed/quality frontier candidate.
-recommendation_rank: 0
+recommended_ram_gb: 12
+# Rank 3 (PROMOTED 2026-08-09, issue #153 — owner-ratified): the weak-16 GB-box in-app
+# Diagnostics leg landed on the designated class (15.8 GB, i7-1185G7, Iris Xe iGPU, Vulkan
+# b9849): E2B 17.0 tok/s settled vs qwen3.5-4b 9.0 and bundled qwen3-4b 14.6 — the big-rig cpu
+# ratio (~2× the promoted 4B: 24.3 vs 12.2 t/s) reproduces on the iGPU basis (basis stated in
+# the #153 comment; all three legs ran GPU/Vulkan, not cpu decode). Quality standing (§9.3,
+# ratified 2026-08-03): F1 .3373 edges the bundled qwen3-4b (.3277), equal audited
+# hallucinations (3), and BEATS the previous 12 GB pick qwen3.5-4b (F1 .2728) on both axes.
+# qwen3-4b-2507 keeps the tier quality lead (.3613, 1 real) but stays rank 1 (no thinking).
+# Deep 7/8 flip-rule miss stands (see thinking note below) — a ranked model has exposure, so
+# Deep adds nothing at this size remains the recorded guidance. E2B is a MatFormer
+# effective-2B slice (~5B raw params, ~2B-class memory/compute footprint), 140+ languages —
+# on a machine where tok/s is the binding constraint it is the ratified speed/quality pick.
+recommendation_rank: 3
 recommended_context_tokens: 8192
 # Thinking VERIFIED PER SIZE 2026-07-30 (§9.3): thinks by default on the raw server;
 # `enable_thinking: false` suppresses cleanly (0 reasoning chars, content intact). Deep vs
