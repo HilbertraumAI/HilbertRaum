@@ -49,6 +49,7 @@ import {
 import type { AuditEventType, GeneratedProvenance } from '../../src/shared/types'
 import type { Embedder } from '../../src/main/services/embeddings'
 import type { ModelRuntime } from '../../src/main/services/runtime'
+import type { OcrEngine } from '../../src/main/services/ocr'
 import { applyUiLanguageSetting } from '../../src/main/services/i18n'
 import { t } from '../../src/shared/i18n'
 
@@ -1242,5 +1243,48 @@ describe('issue #58 — a source page with no extractable text must never vanish
     } finally {
       applyUiLanguageSetting('en')
     }
+  })
+})
+
+describe('#156 (DT-1) — image-source documents: re-extraction gets the OCR engine', () => {
+  /** The docs-ipc fake-engine shape: recognition is deterministic, no real decode. */
+  const fakeOcrEngine: OcrEngine = {
+    id: 'fake-tesseract',
+    languages: ['deu', 'eng'],
+    recognize: async () => ({ text: 'Hallo Welt aus dem Foto.', confidence: 92 })
+  }
+
+  async function importPhoto(): Promise<string> {
+    // The image parser hands the raw bytes to the injected engine (no in-process decode),
+    // so arbitrary bytes under a .jpg name exercise the REAL photo ingest path.
+    const p = join(tmp, 'letter.jpg')
+    writeFileSync(p, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]))
+    const info = createQueuedDocument(db, p)
+    const done = await processDocument(db, storeDir, info.id, { ocrEngine: fakeOcrEngine })
+    expect(done.status).toBe('indexed')
+    return info.id
+  }
+
+  it('translates a photographed page end to end (was: fails "sourceUnreadable")', async () => {
+    const docId = await importPhoto()
+    const translator = scriptedTranslator()
+    // The REAL ingestion deps carry the engine (main/index.ts getIngestionDeps) — the doc-task
+    // re-extraction must forward it, or parsers/image.ts throws and the task fails
+    // "sourceUnreadable" for a file the app just OCR'd and indexed. (The compare handler's
+    // extractSegmentTexts rides the same extractTranslationSource, so this covers both.)
+    const manager = makeManager({ translator, ingestionDeps: () => ({ ocrEngine: fakeOcrEngine }) })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'de', targetLang: 'en' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('done')
+    // The window text is the re-recognized photo text — the engine reached the re-parse.
+    expect(translator.calls.length).toBe(1)
+    expect(translator.calls[0].text).toContain('Hallo Welt aus dem Foto.')
+    const newId = status.resultRef?.documentId as string
+    const { text } = await readStoredDocumentText(db, storeDir, newId)
+    expect(text).toContain('Hallo Welt aus dem Foto.')
   })
 })
