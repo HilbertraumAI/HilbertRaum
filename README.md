@@ -28,10 +28,16 @@ leave your device.
 - 🧠 **Local models** — `llama.cpp` runtime with GGUF models (a curated open-weight catalog:
   Qwen3, Ministral, Gemma, Granite). The app benchmarks your machine and recommends one.
 - 📄 **Document Q&A with citations** — import PDFs/Word/text, ask questions, get answers grounded
-  in your files; hybrid (vector + keyword) retrieval with a reranker, scoped by **collections**.
+  in your files; hybrid (vector + keyword) retrieval with a reranker, scoped to your
+  **Library, projects, and sections** (or specific documents / the files attached to a chat).
 - 🖼️ **Image understanding** — ask questions about a picture with a local vision model; the
   analysis history is encrypted at rest and deletable.
 - 🎙️ **Audio & voice** — transcribe audio files (Whisper), dictate prompts, and OCR scanned pages.
+- 🌐 **Translate** — its own screen for text and whole documents (local TranslateGemma
+  sidecar, 51 languages); translated documents land back in your library.
+- ✅ **Evidence review** — turn a document answer into a reviewable record: every statement
+  checked against its frozen source snippets, decisions + notes saved, exportable as an
+  HTML/PDF **evidence pack**.
 - 🛠️ **Document tasks & skills** — summarize, translate, and compare documents; install reusable
   **skills** for structured extraction (bank statements, invoices, meeting protocols, redaction) —
   see the [skills overview](docs/skills-overview.md) for what each bundled skill can do.
@@ -299,7 +305,7 @@ HilbertRaum/
 │  └─ src/main/services # chat, rag, embeddings, reranker, vision, ocr, skills, …
 ├─ docs/                # architecture, rag, security, packaging, … (see above)
 ├─ model-manifests/     # per-model YAML (chat, embeddings, reranker, transcriber, translation, vision)
-├─ app-skills/          # bundled skills (bank-statement, invoice, redaction, document-edit + Professional Documents: meeting-minutes, contract-brief, deadlines, what-changed, share-safe)
+├─ app-skills/          # bundled skills: bank-statement, invoice, document-edit, document-redaction, contract-brief, meeting-protocol, deadline-obligation-finder, what-changed, share-safe-review
 ├─ scripts/             # prepare-drive / fetch-models / fetch-runtime / verify-models / …
 ├─ launchers/           # double-click launcher templates for a prepared drive
 └─ eval/                # retrieval/quality evaluation fixtures

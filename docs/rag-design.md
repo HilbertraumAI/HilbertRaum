@@ -574,8 +574,10 @@ This paragraph is the rider's record (the retired plan file used to carry a copy
   conversation's persisted scope — callers pass nothing per-request.
 - **Renderer:** Documents screen gets per-row checkboxes (indexed docs only) + **Ask these
   documents (N)** → Chat opens in documents mode with the selection as the next
-  conversation's scope; removable **scope chips** above the composer show the active scope
-  (existing conversations persist chip removal via `updateConversationScope`).
+  conversation's scope. **(Superseded affordance — #151 RD-1:** the Phase-17 "removable scope
+  chips above the composer" were replaced by the composer-footer **"Answering from: …" chip →
+  ScopePopover** (D71/§13); the removable per-doc chips now live INSIDE the popover, and
+  scope edits persist via `setConversationScope`.**)**
 
 ### Filename auto-scope (post-MVP UX fix)
 
@@ -1021,7 +1023,12 @@ from `docs/document-organization-plan.md` at the Phase-F closeout (2026-06-14); 
 A documents-chat's scope is a **UNION** the user composes from any mix of the whole **Library**, one or
 more **project** folders, and **specific documents** — not one anchor. It is persisted per conversation
 in `conversations.scope_v2_json` as a `DocumentScope` (`{ collectionIds, documentIds, includeArchived? }`);
-an **empty** scope (both arrays empty) is the explicit **"All documents"** choice (whole corpus). This
+an **empty** scope (both arrays empty) is the explicit **"All documents"** choice — **in a chat
+with NO attachments**. #151 RD-2: in a chat **with** attachments, `resolveScope` unions the
+attachments in, so the empty-explicit scope resolves to **just the attached files** — the
+OPPOSITE of the whole corpus (D71; the CODE-31 owner-decided relabel "Use only the attached
+files" in the popover records exactly this; architecture.md and user-guide.md carry the same
+correction). This
 supersedes the original single-`collection_id` anchor (kept only as the creation anchor + a legacy
 fallback). Tolerant parse → NULL falls back to the legacy interpretation, never throws.
 
@@ -1257,7 +1264,8 @@ from the `summary` task `params.tier` in `startDocTask`, no-arg = Tier 1, unchan
 with `truncated:false`); **Tier 2** = one reduce over the root's children; **Tier 3** = all level-1
 nodes reduced in batches bounded by **node count**, not document size. All tiers cover the whole document.
 The renderer surface (`CoverageMeter`/`TierMenu`, the PreviewModal meter+selector+provenance, the chat
-"most relevant passages" relevance label, the "Build deep index"/"Re-index first" row action) honours the
+"most relevant passages" relevance label, the "Build deep index"/"Re-index for deep index" actions — overflow-menu items on the row's "⋯"
+menu since §11.6, not inline row buttons (#151 RD-3)) honours the
 forbidden-UI-words policy: "deeply indexed"/"sections"/"passages", never chunk/node/tree/vector jargon.
 
 **Tree-answer citations are whole-document LEAF PROVENANCE, not inline-grounded `[Sn]` excerpts (F11,
@@ -1627,7 +1635,7 @@ ACTUAL assembled prompt, stopping (`CONTINUATION_MIN_OUTPUT_TOKENS = 256` floor)
 the runtime rejects. All INSIDE the existing try/catch: a Stop mid-continuation is caught and the accumulated
 partial persisted (the aborted pass's partial folded in via a `finally` seam-flush) — never a fresh pass past
 the abort. **Stamp decision (data contract):** `Message.truncated = true` is set ONLY when continuation is
-EXHAUSTED and the last pass is still 'length' — an honest **OUTPUT**-truncation badge ("Answer truncated…"),
+EXHAUSTED and the last pass is still 'length' — an honest **OUTPUT**-truncation badge (shipped copy: "Reply cut off — reached the model's context limit", #151 RD-4),
 **parity with the single-turn grounded path's `messages.truncated`**, kept STRICTLY separate from
 `coverage.truncated` (**INPUT** coverage). The whole document can be covered (`coverage.truncated:false`) while
 the deliverable is output-cut (`Message.truncated:true`); a user Stop leaves it false. **Scope:** the shared

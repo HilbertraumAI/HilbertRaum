@@ -408,14 +408,8 @@ export const de: Record<keyof typeof en, string> = {
   // ---- Chat: document scope ----
   'chat.scope.usingAll': 'Nutzt alle Dokumente',
   'chat.scope.none': 'Noch keine Dokumente · Dokumente hinzufügen',
-  'chat.scope.popoverAria': 'Zu befragende Dokumente',
-  'chat.scope.allLine':
-    'Antworten kommen aus all deinen Dokumenten. Wähle Dokumente aus, um nur diese zu fragen:',
-  'chat.scope.someLine': 'Antworten kommen nur aus diesen Dokumenten:',
-  'chat.scope.addLine': 'Dokument hinzufügen:',
   'chat.scope.stopAsking': '{title} nicht mehr fragen',
   'chat.scope.askToo': '{title} auch fragen',
-  'chat.scope.useAll': 'Alle Dokumente verwenden',
   'chat.scope.removedDoc': 'Entferntes Dokument',
 
   // ---- Chat: sources ----
@@ -656,14 +650,7 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Tiefenindex + Abdeckung (whole-document-analysis plan §5.2) — D-L7-Review ausstehend ----
   'docs.deepIndex.build': 'Tiefenindex erstellen',
-  'docs.deepIndex.buildTitle':
-    'Liest das ganze Dokument in einen Tiefenindex ein — Zusammenfassungen, „Liste alle …“- ' +
-    'und „Summe pro Kategorie“-Antworten können dann alles abdecken — läuft auf diesem ' +
-    'Laufwerk, nichts verlässt es',
   'docs.deepIndex.reindexFirst': 'Für Tiefenindex neu indexieren',
-  'docs.deepIndex.reindexFirstTitle':
-    'Dieses Dokument wurde hinzugefügt, bevor es Tiefenindexe gab — indexiere es zuerst neu, ' +
-    'damit ein Tiefenindex das ganze Dokument abdecken kann',
   'docs.deepIndex.ready': 'Tief indexiert',
   'docs.deepIndex.readyTitle':
     'Ein Tiefenindex für das ganze Dokument ist fertig — Zusammenfassungen und ' +

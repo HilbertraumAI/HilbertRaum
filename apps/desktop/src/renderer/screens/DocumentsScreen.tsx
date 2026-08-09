@@ -1,9 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Badge, Banner, Button, Chip, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, Icon, Modal, Progress, Spinner, TierMenu, useToast, type BadgeTone } from '../components'
-import { SourcesDisclosure } from '../chat/SourcesDisclosure'
-import { AssistantMarkdown } from '../chat'
+import { Badge, Banner, Button, Chip, ConfirmDialog, EmptyState, ErrorBanner, Icon, Modal, Progress, Spinner, useToast, type BadgeTone } from '../components'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type {
   Collection,

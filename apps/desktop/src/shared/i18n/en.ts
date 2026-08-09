@@ -383,13 +383,8 @@ export const en = {
   // a "No documents yet · Add documents" affordance; "all" never shows a count.
   'chat.scope.usingAll': 'Using all documents',
   'chat.scope.none': 'No documents yet · Add documents',
-  'chat.scope.popoverAria': 'Documents to ask',
-  'chat.scope.allLine': 'Answers come from all your documents. Pick documents to ask only those:',
-  'chat.scope.someLine': 'Answers come from these documents only:',
-  'chat.scope.addLine': 'Add a document:',
   'chat.scope.stopAsking': 'Stop asking {title}',
   'chat.scope.askToo': 'Ask {title} too',
-  'chat.scope.useAll': 'Use all documents',
   'chat.scope.removedDoc': 'Removed document',
 
   // ---- Chat: sources (SourcesDisclosure.tsx) ----
@@ -629,13 +624,7 @@ export const en = {
   // User words only: "deeply indexed" (a ready summary tree), "sections" (chunks),
   // "passages" (retrieved excerpts). No tree/node/chunk/vector/embedding jargon.
   'docs.deepIndex.build': 'Build deep index',
-  'docs.deepIndex.buildTitle':
-    'Read the whole document into a deep index — summaries, "list every …" and "sum per ' +
-    'category" answers can then cover all of it — runs on this drive, nothing leaves it',
   'docs.deepIndex.reindexFirst': 'Re-index for deep index',
-  'docs.deepIndex.reindexFirstTitle':
-    'This document was added before deep indexing was available — re-index it first so a ' +
-    'deep index can cover the whole document',
   'docs.deepIndex.ready': 'Deeply indexed',
   'docs.deepIndex.readyTitle':
     'A whole-document deep index is ready — summaries and listing answers can cover everything',

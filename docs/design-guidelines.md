@@ -76,6 +76,10 @@ Collapse the nav destinations into 7 primary + 1 utility:
 The canvas is the *conversation*. Everything else is (a) a quiet persistent affordance,
 (b) an inline element attached to a message, or (c) progressively disclosed.
 
+> **Superseded detail (#151 D-4):** the diagram's header "🔒 Local" indicator no longer
+> exists — the single app-wide privacy signal lives at the **foot of the nav rail** on every
+> screen (§11.7/§12.1 record the move). The rest of the layout is current.
+
 ```
 ┌──────┬────────────────┬───────────────────────────────────────────────┐
 │ NAV  │ CONVERSATIONS  │  [ Chat | Ask my documents ]      🔒 Local    │
@@ -142,7 +146,7 @@ Two themes, same scales. All text/UI pairs contrast-checked (ratios noted).
 | Token | Hex | Use |
 |---|---|---|
 | `--brand-teal` | `#57D0A4` | the dot; primary-button fill (with dark-ink text); accent/link/focus on **dark** |
-| `--brand-teal-dark` | `#1B7F5F` | accent/link/focus on **light** (4.9:1 on bg); solid-control fill w/ a white marker |
+| `--brand-teal-dark` | `#1B7F5F` | accent/link/focus on **light** (4.65:1 on bg); solid-control fill w/ a white marker |
 | `--brand-ink-dark` | `#11171F` | square ink on light; **text on teal fills** |
 | `--brand-ink-light` | `#E8EDF2` | square ink on dark |
 | _(retired)_ `--accent-700/600/500/300` | _blue_ | pre-refresh accent ramp (`#2257c9`/`#2f6fed`/`#4f8cff`/`#8fb4ff`) |
@@ -168,14 +172,26 @@ constant.
 | `--bg` | `#f7f8fa` | `#0E1319` (§13: brand-exact, was `#0f1115`) |
 | `--surface` | `#ffffff` | `#171a21` |
 | `--surface-2` | `#ffffff` + shadow | `#1d212a` |
+| `--surface-hover` (rows/nav hover) | `#eef0f4` (`--n-100`) | `#1d212a` (`--surface-2`) |
 | `--border` (hairline) | `#e2e5ea` | `#2a2f3a` |
-| `--border-strong` (inputs) | `#9aa3b2` | `#4a515f` |
-| `--text` | `#1b1f27` (16.5:1) | `#e6e8ec` (15.4:1) |
+| `--border-strong` (inputs) | `#6b7383` (`--n-500`, 4.5:1) | `#6b7383` (`--n-500`, 3.7:1) |
+| `--text` | `#1b1f27` (16.5:1) | `#e6e8ec` (15.2:1) |
 | `--text-muted` | `#5c6675` (5.8:1) | `#9aa3b2` (7.4:1) |
-| `--link` | `#1B7F5F` (4.9:1) | `#57D0A4` (10.4:1) |
+| `--link` | `#1B7F5F` (4.65:1) | `#57D0A4` (9.7:1) |
 | `--focus` | `#1B7F5F` | `#57D0A4` |
 | `--accent` | `#1B7F5F` | `#57D0A4` |
+| `--success` | `#1a7f4b` | `#3fbf7f` |
+| `--error` | `#c0362c` | `#ff6b6b` |
+| `--warning` | `#8a5a00` | `#e0b341` |
 | `--row-selected-bar` | `#1B7F5F` | `#57D0A4` |
+| `--row-selected-bg` | `#eef0f4` (`--n-100`) | `#1d212a` (`--surface-2`) |
+| `--code-bg` | `#eef0f4` (`--n-100`) | `rgba(0,0,0,0.3)` |
+| `--overlay` (modal scrim) | `rgba(15,17,21,0.55)` | same (one ink veil, both themes) |
+
+(#151 D-1/D-2: `--border-strong` was corrected to `--n-500` in the AA sweep — the old
+`#9aa3b2`/`#4a515f` values printed here were sub-3:1 and survived only in this table; the
+semantic + hover/selection/code tokens above were previously undocumented here. `--overlay`
+landed with #149's SH-14.)
 
 ### 4.4 Typography
 
@@ -259,7 +275,18 @@ The current dark palette survives as the dark theme (lightly tuned per §4.3).
   (in popover). Never permanent chip rows on the canvas.
 - **Progress / streaming.** Determinate bars with plain labels ("Preparing 12 of 30…").
   Streaming = calm caret/pulse + "Thinking…" line; never a full-screen spinner; no
-  unlabeled spinners on long operations.
+  unlabeled spinners on long operations. The shared `Progress` component associates its label
+  with the `<progress>` element (`aria-labelledby`, #149 SH-10) so AT never hears an
+  anonymous progressbar; the shared `Spinner` is an inline decorative glyph and MUST sit next
+  to visible text that names the operation (the "no unlabeled spinners" rule made concrete).
+- **Error announcements (#151 D-5).** Error slots use the shared always-mounted `ErrorBanner`
+  (`components/ErrorBanner.tsx`), never the raw `{error && <Banner tone="error">…}` idiom —
+  a freshly inserted pre-filled alert is missed by many screen readers (M-U1); the mounted
+  region announces the FIRST failure too. Render-error containment is the shared
+  `ErrorBoundary` (per-screen, keyed by destination; the nav rail lives outside it).
+- **Password entry.** The shared `PasswordField` (+ `PasswordStrengthMeter`) — show/hide
+  toggle, paste and password managers allowed (WCAG 3.3.8), advisory-only strength. Used by
+  the gate and the Settings change-password card; never a bare `<input type="password">`.
 - **Empty states.** Friendly headline + one line + one primary action (+ example chips in
   Chat). Used on Chat, Documents, AI Model.
 - **Lists / tables.** Rows ≥40px, hover highlight, hover "⋯" + right-click for actions.
@@ -302,12 +329,12 @@ the everyday path.
 | "Regenerate response" | "Try again" |
 | "Telemetry disabled." | "Nothing leaves this drive. There's no tracking to turn off." |
 
-**Ambient privacy signal:** small persistent status in the chat header / status bar —
-subtle lock/shield glyph + "Local · Offline", neutral color. Hover/click popover:
-"Everything stays on this drive. No internet connection is used."
-**[adapted]** This evolves the existing sidebar offline badge; when the user has enabled
-network for model downloads it must say so honestly (e.g. "Downloads allowed — chats and
-documents stay local").
+**Ambient privacy signal:** subtle lock/shield glyph + "Local · Offline", neutral color.
+Hover/click popover: "Everything stays on this drive. No internet connection is used."
+**[adapted — placement superseded, #151 D-4]** The signal lives at the **foot of the nav
+rail** on every screen (§11.7/§12.1), NOT in the chat header as originally written here;
+when the user has enabled network for model downloads it says so honestly (e.g. "Downloads
+allowed — chats and documents stay local").
 
 ### German microcopy (D-L7, Phases 39–42 — `architecture.md` i18n record)
 
@@ -1175,10 +1202,11 @@ stuff staying put", so it stays **rare** — a role accent, never a surface.
   the checkmark; light dark-teal on a light track / dark bright-teal on a dark track, both ≥3:1).
   The custom **switch-on track** uses `--brand-teal-dark` in BOTH themes because the thumb is
   white `--n-0` — white on dark teal is **5.2:1** (white on bright teal would be 1.98:1).
-- **Dark `--bg` nudged `#0f1115 → #0E1319`** (brand-exact; `--text` on it ≈16.9:1). Light surfaces
+- **Dark `--bg` nudged `#0f1115 → #0E1319`** (brand-exact; `--text` on it ≈15.2:1). Light surfaces
   unchanged. **Semantic success/error/warning are untouched** — teal never replaces a status colour.
-- **Measured ratios (light bg `#f7f8fa` / dark bg `#0E1319`):** link/focus/accent 4.9:1 (light) /
-  10.4:1 (dark); selected-bar ≥3:1 both; primary fill+ink 9.98:1; switch-on+thumb 5.2:1.
+- **Measured ratios (light bg `#f7f8fa` / dark bg `#0E1319`):** link/focus/accent 4.65:1 (light) /
+  9.7:1 (dark); selected-bar ≥3:1 both; primary fill+ink 9.98:1; switch-on+thumb 5.2:1. (#151 D-3:
+  corrected with the exact WCAG formula — the earlier figures rode the pre-#137 coefficient.)
 - **Pinned by a test:** `tests/unit/token-contrast.test.ts` parses `tokens.css`, resolves every
   `var()` chain per theme, and asserts each role pairing AA in both themes — INCLUDING the
   forbidden bright-teal-on-white < 3:1, so the value can't silently drift off the bright hex.

@@ -196,8 +196,7 @@ describe('German typography — quotation marks (design-guidelines §7 "Typograp
   it('the strings the sweep corrected read with German closers', () => {
     expect(de['images.avail.ocrPointer']).toContain('„Durchsuchbar machen (OCR)“')
     expect(de['docs.task.extractBusyTitle']).toContain('„Liste alle…“')
-    expect(de['docs.deepIndex.buildTitle']).toContain('„Liste alle …“')
-    expect(de['docs.deepIndex.buildTitle']).toContain('„Summe pro Kategorie“')
+    // (docs.deepIndex.buildTitle was removed as a dead key — RD-5, #151.)
     expect(de['skills.analysis.refusePartial']).toContain('„Neu indexieren“')
     expect(de['models.vision.installed']).toContain('„Bilder“')
     expect(de['models.vision.notInstalled']).toContain('„Bilder“')
