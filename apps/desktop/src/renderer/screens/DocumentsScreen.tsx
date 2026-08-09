@@ -36,6 +36,7 @@ import {
   type ActiveDocTask
 } from '../lib/doctasks'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
+import { getLastTranslateChoice, setLastTranslateChoice } from '../lib/translateSession'
 import { localizeServerCopy, unsupportedTypeExt } from '../lib/displayMap'
 import { useEventCallback } from '../lib/useEventCallback'
 import { useT, type I18n } from '../i18n'
@@ -116,11 +117,10 @@ interface Props {
   onNavigate?: (target: string) => void
 }
 
-/** The translate modal's language pair, remembered session-local (deliberately not persisted). */
-let lastTranslateChoice: {
-  sourceLang: TranslationSourceLang
-  targetLang: TranslationTargetLang
-} | null = null
+// DOC-7 (#150): the row-translate modal's remembered language pair now lives in the SHARED
+// session store (get/setLastTranslateChoice) — this module kept its own disconnected copy
+// while the Translate screen + file path shared the store, each comment citing the other as
+// precedent. One memory: translating a document here seeds the Translate screen and vice versa.
 
 /**
  * Whether a document belongs in the current (non-project) section (plan §12.1). Pure (off the
@@ -183,7 +183,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     targetLang: TranslationTargetLang
   }>(
     () =>
-      lastTranslateChoice ??
+      getLastTranslateChoice() ??
       (lang === 'de'
         ? { sourceLang: 'en', targetLang: 'de' }
         : { sourceLang: 'de', targetLang: 'en' })
@@ -670,7 +670,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     setTranslateDoc(null)
     setError(null)
     setPreview(null)
-    lastTranslateChoice = { sourceLang, targetLang }
+    setLastTranslateChoice(sourceLang, targetLang) // DOC-7: the shared session-store memory
     try {
       await startTask('translation', d.id, { sourceLang, targetLang })
     } catch (e) {

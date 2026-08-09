@@ -206,3 +206,39 @@ describe('visionSession — PF-7c batched token flush', () => {
     expect(getVisionSession().turns[0].state).toBe('cancelled')
   })
 })
+
+// DOC-4 (frontend audit 2026-08-09, #150 — the translateSession L5 mirror): the Stop button
+// renders as soon as the turn is 'starting', BEFORE the imageAnalyze round-trip resolves and
+// sets activeJobId. A Stop click in that window used to be a silent no-op (the analyze ran on
+// to completion). Now it supersedes the in-flight start so its post-await branch cancels the
+// just-started orphan job, and the turn lands 'cancelled'.
+describe('visionSession — Stop during the start round-trip (DOC-4)', () => {
+  it('supersedes the in-flight start: the orphan job is cancelled and the turn marked cancelled', async () => {
+    const resolvers: Array<(j: unknown) => void> = []
+    const imageAnalyze = vi.fn(() => new Promise((res) => resolvers.push(res)))
+    const imageCancel = vi.fn(async () => ({ jobId: 'x', state: 'cancelled' }))
+    stubApi({
+      imageAnalyze,
+      imageCancel,
+      onImageToken: vi.fn(() => () => {}),
+      onImageDone: vi.fn(() => () => {}),
+      onImageError: vi.fn(() => () => {})
+    } as never)
+
+    selectImage(img('a.png'))
+    const p = analyze('what is this?')
+    expect(getVisionSession().analyzing).toBe(true)
+    expect(getVisionSession().activeJobId).toBeNull() // still inside the start round-trip
+
+    // The pre-fix path: `!snapshot.activeJobId` → return — the click vanished (teeth).
+    stopActive()
+    expect(getVisionSession().analyzing).toBe(false)
+    expect(getVisionSession().turns[0]?.state).toBe('cancelled')
+
+    // The start resolves late — its supersede branch cancels the orphan and wires nothing.
+    resolvers[0]({ jobId: 'orphan', state: 'starting' })
+    await p
+    expect(imageCancel).toHaveBeenCalledWith('orphan')
+    expect(getVisionSession().activeJobId).toBeNull()
+  })
+})

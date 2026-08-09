@@ -2294,6 +2294,8 @@ export const en = {
   'images.history.turns.other': '{count} questions',
   'images.history.open': 'Open',
   'images.history.delete': 'Delete',
+  // DOC-11 (#150): per-row accessible name — names the object so rows are distinct to AT.
+  'images.history.deleteAria': 'Delete {title}',
   'images.history.deleted': 'Removed from history',
   'images.history.delete.title': 'Delete this image?',
   'images.history.delete.confirm': 'Delete',

@@ -133,7 +133,10 @@ export function ImageHistory({
                 size="sm"
                 className="image-history-delete"
                 onClick={() => setPendingDelete(s)}
-                aria-label={t('images.history.delete')}
+                // DOC-11 (#150): name the OBJECT — every row read the identical bare
+                // "Delete" to AT ("Delete, Delete, Delete"); the session title makes each
+                // one distinct (the DocRow house pattern).
+                aria-label={t('images.history.deleteAria', { title: s.title })}
               >
                 {t('images.history.delete')}
               </Button>

@@ -145,8 +145,11 @@ export function PreviewModal({
         </p>
       )}
       {/* Single scroll region (audit: a long summary sat above the scroll box and overflowed
-          with no scrollbar). Summary + extracted text now scroll together. */}
-      <div className="modal-body">
+          with no scrollbar). Summary + extracted text now scroll together.
+          DOC-10 (#150): named preview-scroll, NOT .modal-body — Modal already wraps all
+          children in its own .modal-body, so the old nested copy doubled padding-right and
+          made any future .modal-body change hit this dialog twice. */}
+      <div className="preview-scroll">
         {summary && (
           <details className="doc-summary" open>
             <summary>{t('docs.previewModal.summary')}</summary>

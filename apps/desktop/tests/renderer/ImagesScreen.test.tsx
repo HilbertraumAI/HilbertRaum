@@ -529,7 +529,7 @@ describe('ImagesScreen — history (image-understanding history)', () => {
 
     await screen.findByText('receipt.png')
     // The row's Delete opens a ConfirmDialog; confirm inside the dialog (avoids the row button).
-    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(screen.getByRole('button', { name: 'Delete receipt.png' }))
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
 
@@ -557,7 +557,7 @@ describe('ImagesScreen — history (image-understanding history)', () => {
     )
 
     await screen.findByText('receipt.png')
-    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(screen.getByRole('button', { name: 'Delete receipt.png' }))
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
 

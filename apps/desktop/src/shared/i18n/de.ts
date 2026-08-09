@@ -2372,6 +2372,8 @@ export const de: Record<keyof typeof en, string> = {
   'images.history.turns.other': '{count} Fragen',
   'images.history.open': 'Öffnen',
   'images.history.delete': 'Löschen',
+  // DOC-11 (#150): zugänglicher Name pro Zeile – benennt das Objekt.
+  'images.history.deleteAria': '{title} löschen',
   'images.history.deleted': 'Aus dem Verlauf entfernt',
   'images.history.delete.title': 'Dieses Bild löschen?',
   'images.history.delete.confirm': 'Löschen',

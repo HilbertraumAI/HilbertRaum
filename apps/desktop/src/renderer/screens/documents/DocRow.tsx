@@ -3,12 +3,12 @@
 // conditionals and the PERF-5 memo discipline are byte-identical; only the per-row formatters
 // and constants now come from `./format` rather than module scope. Behavior unchanged.
 
-import { memo, useState } from 'react'
+import { memo } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Badge, Banner, Button, Chip, Icon, Spinner } from '../../components'
 import type { DocumentInfo, DocumentLifecycle } from '@shared/types'
 import { generatedStaleness } from '@shared/types'
-import type { ActiveDocTask } from '../../lib/doctasks'
+import { markDocTaskCancelRequested, type ActiveDocTask } from '../../lib/doctasks'
 import { localizeServerCopy } from '../../lib/displayMap'
 import type { I18n } from '../../i18n'
 import type { UiLanguage } from '@shared/i18n'
@@ -172,10 +172,12 @@ export const DocRow = memo(function DocRow({
     : ''
   // OCR-R P1 FE-5: after a cancel click on an OCR row the button renders disabled as
   // "Stopping if possible…" — honest about the GAP-7 duality (a cancel landing during the
-  // final re-ingest is deliberately ignored and the task completes 'done'). Keyed by jobId
-  // so a later task on this row gets a fresh button; other kinds keep today's rendering.
-  const [cancelRequestedJob, setCancelRequestedJob] = useState<string | null>(null)
-  const ocrStopping = rowTask?.kind === 'ocr' && cancelRequestedJob === rowTask.jobId
+  // final re-ingest is deliberately ignored and the task completes 'done').
+  // DOC-5 (#150): the latch lives on the doctasks STORE entry (`cancelRequested`), not row
+  // state — PERF-2 windowing unmounts scrolled-away rows, so a local useState re-enabled
+  // Cancel and dropped the honest label when the user scrolled back mid-cancel. A later
+  // task is a fresh entry without the flag; other kinds keep today's rendering.
+  const ocrStopping = rowTask?.kind === 'ocr' && rowTask.cancelRequested === true
   return (
     <div
       className={`doc-row ${selected ? 'selected' : ''}`}
@@ -299,7 +301,7 @@ export const DocRow = memo(function DocRow({
               // "Stopping if possible…" — the backend may legally ignore it (GAP-7).
               disabled={ocrStopping}
               onClick={() => {
-                if (rowTask.kind === 'ocr') setCancelRequestedJob(rowTask.jobId)
+                if (rowTask.kind === 'ocr') markDocTaskCancelRequested() // DOC-5: store latch
                 onCancelTask()
               }}
               title={t(rowTask.kind === 'ocr' ? 'docs.cancelOcrTitle' : 'docs.cancelTaskTitle')}

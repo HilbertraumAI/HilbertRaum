@@ -1057,6 +1057,9 @@ code, pre, kbd { font-family: var(--font-mono); }
    space the header/hints leave and scroll its own overflow — without flex:1 a long
    summary grew past the dialog's max-height with no scrollbar (the reported bug). */
 .modal-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 6px; }
+/* DOC-10 (#150): PreviewModal's inner scroll region — its own name, no longer a nested copy
+   of .modal-body (Modal wraps all children in one already; the copy doubled padding-right). */
+.preview-scroll { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 .preview-segment { margin-bottom: 12px; }
 .preview-label {
   font-size: var(--text-xs); /* SH-13 (#149): 12px floor */
