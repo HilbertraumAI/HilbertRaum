@@ -431,12 +431,18 @@ export function ModelsScreen(): JSX.Element {
             size="sm"
             disabled={mine.status === 'verifying'}
             // Surface a cancel rejection as a friendly error instead of an unhandled
-            // promise rejection (audit FE-2).
+            // promise rejection (audit FE-2). SH-6 (#149): the resolved state writes the
+            // module-scoped rememberedJob DIRECTLY (the state effect can't run after an
+            // unmount, so a remount used to briefly resume polling a cancelled job) and
+            // both setters take the FE-4 mounted guard.
             onClick={() =>
               window.api
                 .cancelDownload(mine.jobId)
-                .then(setJob)
-                .catch((e) => setError(friendlyIpcError(e)))
+                .then((next) => {
+                  rememberedJob = next
+                  if (mountedRef.current) setJob(next)
+                })
+                .catch((e) => mountedRef.current && setError(friendlyIpcError(e)))
             }
           >
             {t('models.download.cancel')}
@@ -768,19 +774,39 @@ export function ModelsScreen(): JSX.Element {
             {t(opts.explainKey)}
           </p>
           {live && j ? (
-            <Progress
-              label={
-                j.status === 'extracting'
-                  ? t('models.engine.extracting')
-                  : j.status === 'verifying'
-                    ? t('models.engine.verifying')
-                    : pct != null
-                      ? t('models.engine.progress', { pct })
-                      : t('models.engine.downloadingNoTotal')
-              }
-              value={pct != null && j.status === 'downloading' ? j.receivedBytes : undefined}
-              max={pct != null && j.status === 'downloading' ? (j.totalBytes ?? undefined) : undefined}
-            />
+            <>
+              <Progress
+                label={
+                  j.status === 'extracting'
+                    ? t('models.engine.extracting')
+                    : j.status === 'verifying'
+                      ? t('models.engine.verifying')
+                      : pct != null
+                        ? t('models.engine.progress', { pct })
+                        : t('models.engine.downloadingNoTotal')
+                }
+                value={pct != null && j.status === 'downloading' ? j.receivedBytes : undefined}
+                max={pct != null && j.status === 'downloading' ? (j.totalBytes ?? undefined) : undefined}
+              />
+              {/* SH-1 (#144): the multi-hundred-MB engine fetch was the one long-running
+                  network action with no Cancel (cancelEngineDownload had zero callers).
+                  Mirrors the model-download cancel incl. its error surfacing; main treats
+                  verifying/extracting as cancellable states (F-33), so no disable here. */}
+              <Button
+                size="sm"
+                onClick={() =>
+                  window.api
+                    .cancelEngineDownload(j.jobId)
+                    .then((next) => {
+                      rememberedEngineJob = next
+                      if (mountedRef.current) setEngineJob(next)
+                    })
+                    .catch((e) => mountedRef.current && setError(friendlyIpcError(e)))
+                }
+              >
+                {t('models.download.cancel')}
+              </Button>
+            </>
           ) : (
             <>
               {j?.status === 'failed' && j.error && (
