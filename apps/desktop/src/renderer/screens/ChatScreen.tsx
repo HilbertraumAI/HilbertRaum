@@ -299,6 +299,25 @@ export function ChatScreen({
       ? { collectionIds: [], documentIds: initialScopeDocumentIds }
       : null
   )
+  // CH-1 (frontend audit 2026-08-09): optimistic scope for an EXISTING conversation while its
+  // `setConversationScope` + `refreshConversations` round trips are in flight. The popover
+  // computes every toggle from the scope it renders, so it must see a change immediately —
+  // otherwise a second toggle before the refresh lands computes from the pre-first-click
+  // scope and silently reverts the first one. Conversation-keyed so a switch mid-write never
+  // leaks the optimistic value onto another chat; cleared only by the LAST in-flight writer.
+  const [optimisticScope, setOptimisticScope] = useState<{
+    convId: string
+    scope: DocumentScope
+  } | null>(null)
+  const scopeWriteSeqRef = useRef(0)
+  // CH-1: renderer-side write serialization — two rapid persists must land main-side in issue
+  // order (an async IPC handler can interleave), so each write chains on the previous one.
+  // A failure rejects the awaiting caller but never breaks the chain itself.
+  const scopeWriteChainRef = useRef<Promise<unknown>>(Promise.resolve())
+  // CH-2: bumped after any successful scope write and whenever an attach-job tick settles a
+  // file — the two events that change the in-scope document set mid-conversation — so the
+  // `listRunnableTools` effect re-resolves the run-bar offer (the #44 invisible-button class).
+  const [toolsRefreshSeq, setToolsRefreshSeq] = useState(0)
   // Temporary chat attachments for the active conversation (plan C3): the docs dropped /
   // attached into THIS chat, shown read-only as "Files in this chat" and always unioned
   // into retrieval. Loaded from `listAttachments` whenever the active documents chat changes.
@@ -1285,12 +1304,13 @@ export function ChatScreen({
     return () => {
       live = false
     }
-    // FE-10 (perf audit 2026-06-18): key only on (skill, conversation). `listRunnableTools` derives
-    // the tool set from the skill + the conversation's in-scope documents — NOT the message count —
+    // FE-10 (perf audit 2026-06-18): key only on (skill, conversation) — NOT the message count —
     // so a new turn never changes the result (the prior `messages.length` dep just re-fired the IPC
     // after every turn for an identical answer). The new-conversation transition is covered by
-    // `activeId` (null → created id).
-  }, [currentSkillId, activeId])
+    // `activeId` (null → created id). CH-2 (frontend audit 2026-08-09): `toolsRefreshSeq` re-fires
+    // it when the in-scope document set itself changes mid-conversation — a scope write or an
+    // attach-job settle — which the two id deps can't see (the #44 invisible-run-button class).
+  }, [currentSkillId, activeId, toolsRefreshSeq])
 
   // U-1: resolve an in-scope target id to its DISPLAY NAME from the renderer's own loaded documents
   // (Library docs + this chat's attachments). The title is read here, renderer-side — it never comes
@@ -1809,17 +1829,32 @@ export function ChatScreen({
   const pickerScope: DocumentScope =
     mode !== 'documents'
       ? { collectionIds: [], documentIds: [] }
-      : deriveScope(activeConv, pendingScope, library, danglingProject)
+      : optimisticScope != null && optimisticScope.convId === activeId
+        ? optimisticScope.scope
+        : deriveScope(activeConv, pendingScope, library, danglingProject)
 
   // Scope changes from the picker. An existing conversation persists the change; with no
-  // conversation yet, the pending handoff updates. An empty scope = the whole corpus.
+  // conversation yet, the pending handoff updates. CH-1: the picker sees `next` immediately
+  // via `optimisticScope` (so rapid toggles compound instead of racing), the persist trails
+  // serialized behind any in-flight write, and only the last writer clears the optimism —
+  // on failure that clear reverts the picker to the persisted truth alongside the banner.
   async function onChangeScope(next: DocumentScope): Promise<void> {
     if (activeId) {
+      const convId = activeId
+      const seq = ++scopeWriteSeqRef.current
+      setOptimisticScope({ convId, scope: next })
+      const write = scopeWriteChainRef.current.then(() =>
+        window.api.setConversationScope(convId, next)
+      )
+      scopeWriteChainRef.current = write.catch(() => undefined)
       try {
-        await window.api.setConversationScope(activeId, next)
+        await write
         await refreshConversations()
+        setToolsRefreshSeq((v) => v + 1) // CH-2: the in-scope doc set changed — re-offer tools
       } catch (e) {
         setError(friendlyIpcError(e))
+      } finally {
+        if (scopeWriteSeqRef.current === seq) setOptimisticScope(null)
       }
     } else {
       setPendingScope(next)
@@ -1850,7 +1885,12 @@ export function ChatScreen({
         const settled = job.completed + job.failed
         const transitioned = settled !== lastSettled
         lastSettled = settled
-        if ((transitioned || job.done) && activeIdRef.current === convId) await refreshAttachments(convId)
+        if ((transitioned || job.done) && activeIdRef.current === convId) {
+          await refreshAttachments(convId)
+          // CH-2: a settled file just gained (or failed to gain) its in-scope link row —
+          // re-resolve the run-bar offer so the tool button appears without a re-pick (#44).
+          setToolsRefreshSeq((v) => v + 1)
+        }
         if (!job.done) return
         if (attachPollRef.current) clearInterval(attachPollRef.current)
         attachPollRef.current = null
@@ -1957,6 +1997,7 @@ export function ChatScreen({
     try {
       await window.api.setConversationScope(choice.convId, { collectionIds: [], documentIds: [] })
       await refreshConversations()
+      setToolsRefreshSeq((v) => v + 1) // CH-2: the narrow changed the in-scope doc set
     } catch (e) {
       setError(friendlyIpcError(e))
     }
