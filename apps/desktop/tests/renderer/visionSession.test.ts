@@ -10,6 +10,7 @@ import {
   type SelectedImage
 } from '../../src/renderer/lib/visionSession'
 import type { DecodedImage } from '../../src/renderer/images'
+import type { ImageJob } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // F8 (full audit 2026-06-30): the vision store's busy guard rejects a second analyze only once
@@ -38,9 +39,9 @@ function img(name: string): SelectedImage {
 describe('visionSession — F8 superseded-analyze teardown', () => {
   it('a slow create round-trip that resolves after an image switch does not wire a zombie stream', async () => {
     // Two imageAnalyze calls, each parked until we resolve it, returning DISTINCT job ids.
-    const resolvers: Array<(j: unknown) => void> = []
-    const imageAnalyze = vi.fn(() => new Promise((res) => resolvers.push(res)))
-    const imageCancel = vi.fn(async () => ({ jobId: 'x', state: 'cancelled' }))
+    const resolvers: Array<(j: ImageJob) => void> = []
+    const imageAnalyze = vi.fn(() => new Promise<ImageJob>((res) => resolvers.push(res)))
+    const imageCancel = vi.fn(async (): Promise<ImageJob> => ({ jobId: 'x', state: 'cancelled' }))
     // Capture the per-job token subscriber so we can drive (only) the live job's stream.
     const tokenCbs: Record<string, (t: string) => void> = {}
     const onImageToken = vi.fn((id: string, cb: (t: string) => void) => {
@@ -53,7 +54,7 @@ describe('visionSession — F8 superseded-analyze teardown', () => {
       onImageToken,
       onImageDone: vi.fn(() => () => {}),
       onImageError: vi.fn(() => () => {})
-    } as never)
+    })
 
     // Job A starts on image A (create round-trip parked).
     selectImage(img('a.png'))
@@ -92,22 +93,22 @@ describe('visionSession — L6a busy guard (F-26)', () => {
     // through; main busy-rejected it, and call 2's busy branch ran set({ analyzing:false }),
     // clobbering the still-live first job's flag (re-enabling the composer/drop-zone mid-stream — a
     // dropped image then cancels the live analyze). Port translateSession's L6a `|| analyzing` guard.
-    const resolvers: Array<(j: unknown) => void> = []
+    const resolvers: Array<(j: ImageJob) => void> = []
     let calls = 0
     const imageAnalyze = vi.fn(() => {
       calls += 1
       // Call 1 parks (create in flight, activeJobId not set yet); any later call resolves as the
       // deterministic main-side busy-reject (services/vision/index.ts one-at-a-time).
-      if (calls === 1) return new Promise((res) => resolvers.push(res))
-      return Promise.resolve({ jobId: 'jobB', state: 'failed', error: 'busy' })
+      if (calls === 1) return new Promise<ImageJob>((res) => resolvers.push(res))
+      return Promise.resolve<ImageJob>({ jobId: 'jobB', state: 'failed', error: 'busy' })
     })
     stubApi({
       imageAnalyze,
-      imageCancel: vi.fn(async () => ({ jobId: 'x', state: 'cancelled' })),
+      imageCancel: vi.fn(async (): Promise<ImageJob> => ({ jobId: 'x', state: 'cancelled' })),
       onImageToken: vi.fn(() => () => {}),
       onImageDone: vi.fn(() => () => {}),
       onImageError: vi.fn(() => () => {})
-    } as never)
+    })
 
     selectImage(img('a.png'))
     const first = analyze('question A') // flips analyzing:true, parked on imageAnalyze
@@ -137,21 +138,21 @@ async function until(pred: () => boolean, ms = 5000): Promise<void> {
 // window produces ONE snapshot rebuild + ONE notify, and the settle paths flush FIRST so no
 // token is ever lost.
 describe('visionSession — PF-7c batched token flush', () => {
-  function wireStubs(): { tokenCbs: Record<string, (t: string) => void>; doneCbs: Record<string, (j: unknown) => void> } {
+  function wireStubs(): { tokenCbs: Record<string, (t: string) => void>; doneCbs: Record<string, (j: ImageJob) => void> } {
     const tokenCbs: Record<string, (t: string) => void> = {}
-    const doneCbs: Record<string, (j: unknown) => void> = {}
+    const doneCbs: Record<string, (j: ImageJob) => void> = {}
     stubApi({
-      imageAnalyze: vi.fn(async () => ({ jobId: 'j1', state: 'starting' })),
+      imageAnalyze: vi.fn(async (): Promise<ImageJob> => ({ jobId: 'j1', state: 'starting' })),
       onImageToken: vi.fn((id: string, cb: (t: string) => void) => {
         tokenCbs[id] = cb
         return () => delete tokenCbs[id]
       }),
-      onImageDone: vi.fn((id: string, cb: (j: unknown) => void) => {
+      onImageDone: vi.fn((id: string, cb: (j: ImageJob) => void) => {
         doneCbs[id] = cb
         return () => delete doneCbs[id]
       }),
       onImageError: vi.fn(() => () => {})
-    } as never)
+    })
     return { tokenCbs, doneCbs }
   }
 
@@ -204,5 +205,41 @@ describe('visionSession — PF-7c batched token flush', () => {
     stopActive() // inside the flush window
     expect(getVisionSession().turns[0].answer).toBe('kept text')
     expect(getVisionSession().turns[0].state).toBe('cancelled')
+  })
+})
+
+// DOC-4 (frontend audit 2026-08-09, #150 — the translateSession L5 mirror): the Stop button
+// renders as soon as the turn is 'starting', BEFORE the imageAnalyze round-trip resolves and
+// sets activeJobId. A Stop click in that window used to be a silent no-op (the analyze ran on
+// to completion). Now it supersedes the in-flight start so its post-await branch cancels the
+// just-started orphan job, and the turn lands 'cancelled'.
+describe('visionSession — Stop during the start round-trip (DOC-4)', () => {
+  it('supersedes the in-flight start: the orphan job is cancelled and the turn marked cancelled', async () => {
+    const resolvers: Array<(j: ImageJob) => void> = []
+    const imageAnalyze = vi.fn(() => new Promise<ImageJob>((res) => resolvers.push(res)))
+    const imageCancel = vi.fn(async (): Promise<ImageJob> => ({ jobId: 'x', state: 'cancelled' }))
+    stubApi({
+      imageAnalyze,
+      imageCancel,
+      onImageToken: vi.fn(() => () => {}),
+      onImageDone: vi.fn(() => () => {}),
+      onImageError: vi.fn(() => () => {})
+    })
+
+    selectImage(img('a.png'))
+    const p = analyze('what is this?')
+    expect(getVisionSession().analyzing).toBe(true)
+    expect(getVisionSession().activeJobId).toBeNull() // still inside the start round-trip
+
+    // The pre-fix path: `!snapshot.activeJobId` → return — the click vanished (teeth).
+    stopActive()
+    expect(getVisionSession().analyzing).toBe(false)
+    expect(getVisionSession().turns[0]?.state).toBe('cancelled')
+
+    // The start resolves late — its supersede branch cancels the orphan and wires nothing.
+    resolvers[0]({ jobId: 'orphan', state: 'starting' })
+    await p
+    expect(imageCancel).toHaveBeenCalledWith('orphan')
+    expect(getVisionSession().activeJobId).toBeNull()
   })
 })

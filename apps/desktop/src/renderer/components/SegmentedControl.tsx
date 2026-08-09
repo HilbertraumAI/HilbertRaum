@@ -28,11 +28,11 @@ export function SegmentedControl<T extends string>({
   disabled
 }: SegmentedControlProps<T>): JSX.Element {
   const refs = useRef<Array<HTMLButtonElement | null>>([])
-  // Fall back to the first segment as the tab stop if value matches no option.
-  const selectedIndex = Math.max(
-    0,
-    options.findIndex((o) => o.value === value)
-  )
+  // SH-11 (#149): with a stale/unknown `value`, fall back to the first ENABLED segment as
+  // the tab stop — a disabled index 0 would carry tabIndex={0} on an unfocusable button and
+  // drop the whole radiogroup out of the tab order.
+  const matched = options.findIndex((o) => o.value === value)
+  const selectedIndex = matched >= 0 ? matched : Math.max(0, options.findIndex((o) => !o.disabled))
 
   function select(i: number): void {
     refs.current[i]?.focus()

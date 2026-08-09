@@ -26,6 +26,13 @@ export interface ActiveDocTask {
   status: DocTaskStatus | null
   /** CODE-6: true after MAX_POLL_FAILURES consecutive poll errors — live state unknown, task kept. */
   stateUnknown: boolean
+  /**
+   * DOC-5 (#150): the user clicked Cancel on this task (OCR's honest "Stopping if
+   * possible…" latch). On the STORE entry — not row state — so PERF-2 windowing can
+   * unmount/remount the row without re-enabling Cancel while the cancel is pending.
+   * Survives poll ticks (they spread the current entry); a new task starts without it.
+   */
+  cancelRequested?: boolean
 }
 
 const POLL_MS = 400
@@ -166,6 +173,11 @@ export async function cancelActiveDocTask(): Promise<void> {
   await window.api.cancelDocTask()
 }
 
+/** DOC-5 (#150): latch a requested cancel onto the active entry (see `cancelRequested`). */
+export function markDocTaskCancelRequested(): void {
+  if (active && !active.cancelRequested) setActive({ ...active, cancelRequested: true })
+}
+
 /**
  * Clear a finished (terminal) task after a screen has handled its outcome. A state-unknown
  * task (CODE-6 give-up) is dismissible the same way — mirroring skillruns' acknowledge —
@@ -175,6 +187,18 @@ export function acknowledgeDocTask(): void {
   if (active && (isDocTaskTerminal(active.status) || active.stateUnknown)) {
     setActive(null)
   }
+}
+
+/**
+ * Workspace-lock purge (SH-4, #149 — the lockPurge.ts seam; subsumes DOC-9): stop the 400 ms
+ * watcher (it would keep firing IPC against the locked workspace until the CODE-6 give-up
+ * parked a `stateUnknown` row that then SURVIVED into the next unlock for a task main already
+ * aborted) and drop the entry. Listeners are kept and notified — unlike the test reset.
+ */
+export function clearDocTaskSession(): void {
+  stopPolling()
+  pollFailures = 0
+  if (active) setActive(null)
 }
 
 /** Test-only: drop the module-level state between renderer tests. */

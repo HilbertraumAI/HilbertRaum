@@ -513,6 +513,13 @@ export function registerDocsIpc(ctx: AppContext): void {
     return { jobId, total: 0, completed: 0, failed: 0, done: true }
   })
 
+  // DOC-1 (#141): the in-flight import (or null), parameterless — the Documents screen's mount
+  // effect re-attaches its progress poll with this, mirroring getReindexAllJob. At most one
+  // import runs at a time (beginDocumentWork serialises them), so "first not-done" is THE job.
+  ipcMain.handle(IPC.getActiveImportJob, (): ImportJobStatus | null => {
+    return [...jobs.values()].find((j) => !j.done) ?? null
+  })
+
   ipcMain.handle(IPC.listDocuments, (_e, filter?: DocumentListFilter): DocumentInfo[] => {
     requireUnlocked()
     // Reconcile stuck rows whenever NOTHING is actually running: a row left in an

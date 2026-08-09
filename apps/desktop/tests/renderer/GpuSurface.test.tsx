@@ -62,9 +62,9 @@ function stubDiagnostics(opts: {
     getRuntimeInstall: vi.fn(async () => opts.install ?? null),
     getSettings: vi.fn(async () => opts.settings ?? settings()),
     updateSettings: (opts.updateSettings ??
-      vi.fn(async (p: Partial<AppSettings>) => settings(p))) as never,
+      vi.fn(async (p: Partial<AppSettings>) => settings(p))),
     tryGpuAgain: (opts.tryGpuAgain ??
-      vi.fn(async () => settings({ gpuAutoDisabled: false, gpuLastError: null }))) as never,
+      vi.fn(async () => settings({ gpuAutoDisabled: false, gpuLastError: null }))),
     getLogTail: vi.fn(async () => []),
     runBenchmark: vi.fn()
   })
@@ -161,7 +161,7 @@ describe('Settings → General — Use GPU acceleration (Phase 16)', () => {
     const update = vi.fn(async (p: Partial<AppSettings>) => settings(p))
     stubApi({
       getSettings: vi.fn(async () => settings()),
-      updateSettings: update as never
+      updateSettings: update
     })
     render(<SettingsScreen />)
     const toggle = (await screen.findByLabelText(/use gpu acceleration/i)) as HTMLInputElement
@@ -175,7 +175,7 @@ describe('Settings → General — Use GPU acceleration (Phase 16)', () => {
     const update = vi.fn(async (p: Partial<AppSettings>) => settings({ ...p }))
     stubApi({
       getSettings: vi.fn(async () => settings({ gpuMode: 'off' })),
-      updateSettings: update as never
+      updateSettings: update
     })
     render(<SettingsScreen />)
     const toggle = (await screen.findByLabelText(/use gpu acceleration/i)) as HTMLInputElement
@@ -196,7 +196,7 @@ describe('Settings → General — Use GPU acceleration (Phase 16)', () => {
     })
     stubApi({
       getSettings: vi.fn(async () => settings()), // server state: gpuMode 'auto' → ON
-      updateSettings: update as never
+      updateSettings: update
     })
     render(
       <ToastProvider>

@@ -80,8 +80,8 @@ function stub(opts: {
     getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: opts.activeModelId ?? null })),
     getPolicy: vi.fn(async () => opts.policy ?? policyStatus({ downloadsAllowed: true, settingOn: true })),
     getAppStatus: vi.fn(async () => appStatus),
-    downloadModel: (opts.downloadModel ?? vi.fn()) as never,
-    getDownloadJob: (opts.getDownloadJob ?? vi.fn()) as never
+    downloadModel: (opts.downloadModel ?? vi.fn()),
+    getDownloadJob: (opts.getDownloadJob ?? vi.fn())
   })
 }
 
@@ -825,8 +825,8 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: null })),
       getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
       getAppStatus: vi.fn(async () => appStatus),
-      downloadModel: downloadModel as never,
-      getDownloadJob: getDownloadJob as never
+      downloadModel: downloadModel,
+      getDownloadJob: getDownloadJob
     })
     const user = userEvent.setup()
     render(<ModelsScreen />)

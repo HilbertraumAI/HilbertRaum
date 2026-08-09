@@ -56,7 +56,7 @@ describe('doc-task store — no-change poll gate (PF-7b)', () => {
         startDocTask: vi.fn(async () => ({ jobId: 'jt' })),
         // A fresh object every poll, identical fields — the reference can never match.
         getDocTask: vi.fn(async () => ({ ...running, progress: { ...running.progress } }))
-      } as never)
+      })
       const listener = vi.fn()
       subscribeDocTask(listener)
       await startTask('summary', 'd1')
@@ -79,7 +79,7 @@ describe('doc-task store — no-change poll gate (PF-7b)', () => {
       stubApi({
         startDocTask: vi.fn(async () => ({ jobId: 'jt' })),
         getDocTask: vi.fn(async () => cur.status)
-      } as never)
+      })
       const listener = vi.fn()
       subscribeDocTask(listener)
       await startTask('summary', 'd1')
@@ -123,7 +123,7 @@ describe('doc-task store — poll-failure tolerance (CODE-6, SKA-40 port)', () =
             progress: { stepsDone: Math.min(polls, 3), stepsTotal: 3 }
           })
         })
-      } as never)
+      })
       await startTask('summary', 'd1')
       await vi.advanceTimersByTimeAsync(POLL_MS) // the failing tick
       // Below MAX_POLL_FAILURES the task is RETAINED with an untouched snapshot (pre-fix: null).
@@ -143,7 +143,7 @@ describe('doc-task store — poll-failure tolerance (CODE-6, SKA-40 port)', () =
       const getDocTask = vi.fn(async () => {
         throw new Error('transient IPC error')
       })
-      stubApi({ startDocTask: vi.fn(async () => ({ jobId: 'jt' })), getDocTask } as never)
+      stubApi({ startDocTask: vi.fn(async () => ({ jobId: 'jt' })), getDocTask })
       await startTask('summary', 'd1')
       await vi.advanceTimersByTimeAsync(POLL_MS * 3) // three consecutive failures = the max
       const task = getActiveDocTask()
@@ -176,7 +176,7 @@ describe('doc-task store — deep-index chain adoption (#38)', () => {
         return extractPolls > 1 ? extractDone : extractRunning
       }),
       getActiveDocTask: vi.fn(async () => extractRunning)
-    } as never)
+    })
 
     await startTask('tree', 'd1', { withExtract: true })
     // The store switches from the finished tree job to the chained extract job…
@@ -193,7 +193,7 @@ describe('doc-task store — deep-index chain adoption (#38)', () => {
       startDocTask: vi.fn(async () => ({ jobId: 'jt' })),
       getDocTask: vi.fn(async () => status({ state: 'done' })),
       getActiveDocTask: vi.fn(async () => null)
-    } as never)
+    })
 
     await startTask('tree', 'd1', { withExtract: true })
     await until(() => getActiveDocTask()?.status?.state === 'done')
@@ -206,7 +206,7 @@ describe('doc-task store — deep-index chain adoption (#38)', () => {
       startDocTask: vi.fn(async () => ({ jobId: 'jt' })),
       getDocTask: vi.fn(async () => status({ state: 'done' })),
       getActiveDocTask: getActive
-    } as never)
+    })
 
     await startTask('tree', 'd1')
     await until(() => getActiveDocTask()?.status?.state === 'done')

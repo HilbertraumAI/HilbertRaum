@@ -3,6 +3,7 @@ import {
   Banner,
   BrandMark,
   Button,
+  ErrorBanner,
   PasswordField,
   PasswordStrengthMeter,
   Progress,
@@ -76,6 +77,10 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const finishingSkipRef = useRef<HTMLButtonElement>(null)
   const starterPrimaryRef = useRef<HTMLButtonElement>(null)
+  // SH-12 (#145): the UNLOCK field's ref — after a wrong password, `setPassword('')` empties
+  // the field and `!canSubmit` disables the submit button focus was sitting on, dead-ending
+  // keyboard users (autoFocus fires only at mount). The retry path re-focuses the field.
+  const unlockInputRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (!creating) return // the UNLOCK path focuses its own field via autoFocus — don't disturb it.
     if (phase === 'password') passwordInputRef.current?.focus()
@@ -153,6 +158,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
           setError(result.message)
           setPassword('')
           setConfirm('')
+          passwordInputRef.current?.focus() // SH-12: focus back to the field for the retry
         }
       } else {
         const result = await window.api.unlockWorkspace(password)
@@ -161,6 +167,9 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
         } else {
           setError(result.message)
           setPassword('')
+          // SH-12 (#145): without this, focus stays on the now-disabled submit button —
+          // combined with a missed announcement the failure was entirely non-obvious to AT.
+          unlockInputRef.current?.focus()
         }
       }
     } catch {
@@ -194,6 +203,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
               placeholder={t('gate.passwordPlaceholder')}
               value={password}
               autoFocus
+              inputRef={unlockInputRef}
               autoComplete="current-password"
               show={showPassword}
               onToggleShow={() => setShowPassword((v) => !v)}
@@ -201,7 +211,8 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
               t={t}
             />
           </div>
-          {error && <Banner tone="error">{error}</Banner>}
+          {/* SH-2 (#145): always-mounted so the FIRST wrong-password failure is announced. */}
+          <ErrorBanner message={error} t={t} />
           <Button type="submit" variant="primary" disabled={!canSubmit || busy}>
             {busy ? t('gate.unlock.submitBusy') : t('gate.unlock.submit')}
           </Button>
@@ -351,7 +362,8 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
           <Banner tone="warning">{t('gate.create.plaintextWarning')}</Banner>
         )}
 
-        {error && <Banner tone="error">{error}</Banner>}
+        {/* SH-2 (#145): always-mounted so the FIRST create-flow failure is announced. */}
+        <ErrorBanner message={error} t={t} />
 
         <div className="gate-actions">
           <Button variant="ghost" disabled={busy} onClick={() => setPhase('welcome')}>

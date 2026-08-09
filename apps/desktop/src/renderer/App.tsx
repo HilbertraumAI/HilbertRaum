@@ -1,9 +1,16 @@
-import { Suspense, lazy, useEffect, useState } from 'react'
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useState,
+  type ComponentType,
+  type LazyExoticComponent
+} from 'react'
 import { HomeScreen } from './screens/HomeScreen'
 import { ChatScreen } from './screens/ChatScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
 
-// Route-level code split (full-audit 2026-07-10 PF-6). These six screens load as separate
+// Route-level code split (full-audit 2026-07-10 PF-6). These seven screens load as separate
 // async chunks on first navigation, keeping their code (and their exclusive deps — e.g.
 // pdfjs on Documents) out of the init bundle the modest-CPU target must parse before first
 // paint. Deliberately EAGER: the workspace gate + HomeScreen (the first frame) and
@@ -11,35 +18,54 @@ import { WorkspaceGate } from './screens/WorkspaceGate'
 // are used by several screens so splitting it would buy little). The i18n catalogs stay in
 // the init bundle by design — splitting them is a separate decision.
 // Each lazy screen suspends to the quiet fallback below, inside the existing per-screen
-// ErrorBoundary (a failed chunk load rejects the import and lands on the boundary's
-// localized fallback with retry).
-const DocumentsScreen = lazy(() =>
+// ErrorBoundary. SH-5 (#149): React caches a lazy factory's REJECTION for the session, so
+// the boundary's "Try again" (and navigate-away-and-back) can never recover a failed chunk
+// load on its own — the factory itself retries the import once, clearing the transient
+// media-hiccup class (a portable drive briefly stalling, an AV scan). A chunk that fails
+// BOTH attempts stays failed until the window reloads — the boundary fallback says so.
+
+/** Lazy screen factory with one in-factory retry (SH-5) — see the comment above. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- React.lazy's own constraint
+function lazyScreen<T extends ComponentType<any>>(
+  importer: () => Promise<{ default: T }>
+): LazyExoticComponent<T> {
+  return lazy(async () => {
+    try {
+      return await importer()
+    } catch {
+      return await importer() // one fresh disk attempt before the boundary sees it
+    }
+  })
+}
+
+const DocumentsScreen = lazyScreen(() =>
   import('./screens/DocumentsScreen').then((m) => ({ default: m.DocumentsScreen }))
 )
-const TranslateScreen = lazy(() =>
+const TranslateScreen = lazyScreen(() =>
   import('./screens/TranslateScreen').then((m) => ({ default: m.TranslateScreen }))
 )
-const ImagesScreen = lazy(() =>
+const ImagesScreen = lazyScreen(() =>
   import('./screens/ImagesScreen').then((m) => ({ default: m.ImagesScreen }))
 )
-const ModelsScreen = lazy(() =>
+const ModelsScreen = lazyScreen(() =>
   import('./screens/ModelsScreen').then((m) => ({ default: m.ModelsScreen }))
 )
-const SettingsScreen = lazy(() =>
+const SettingsScreen = lazyScreen(() =>
   import('./screens/SettingsScreen').then((m) => ({ default: m.SettingsScreen }))
 )
-const SkillsScreen = lazy(() =>
+const SkillsScreen = lazyScreen(() =>
   import('./screens/SkillsScreen').then((m) => ({ default: m.SkillsScreen }))
 )
 // Evidence-review workspace (EP-1 plan §7.1): lazy like the other non-first-frame screens.
 // No nav-rail entry — reachable ONLY via the openReview handoff below.
-const ReviewScreen = lazy(() =>
+const ReviewScreen = lazyScreen(() =>
   import('./screens/ReviewScreen').then((m) => ({ default: m.ReviewScreen }))
 )
 import {
   Banner,
   BrandMark,
   Button,
+  ErrorBanner,
   ErrorBoundary,
   Icon,
   LocalIndicator,
@@ -352,12 +378,10 @@ function AppShell(): JSX.Element {
 
       <main className="content">
         {/* CODE-26: the failed-lock notice — main's friendly persist-canonical copy
-            (already localized main-side), next to the content the user keeps working in. */}
-        {lockError && (
-          <Banner tone="error" t={t} onDismiss={() => setLockError(null)}>
-            {lockError}
-          </Banner>
-        )}
+            (already localized main-side), next to the content the user keeps working in.
+            SH-2 (#145): via the always-mounted ErrorBanner so AT announces the FIRST failure
+            (a freshly inserted alert element is missed by many screen readers — M-U1). */}
+        <ErrorBanner message={lockError} t={t} onDismiss={() => setLockError(null)} />
         {notice && (
           <Banner
             tone="info"

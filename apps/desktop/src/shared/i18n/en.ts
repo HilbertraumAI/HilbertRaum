@@ -147,6 +147,10 @@ export const en = {
   'chat.saveConversation': 'Save this conversation',
   'chat.savedTo': 'Saved to {path}',
   'chat.copied': 'Copied',
+  // CH-5 (#148): a refused/failed clipboard write gets feedback too — never silence.
+  'chat.copyFailed': 'Could not copy to the clipboard',
+  // CH-12 (#148): accessible name of the keyboard-scrollable transcript region.
+  'chat.transcript.label': 'Conversation transcript',
   'chat.stopped': 'Stopped — the reply may be incomplete',
   // #39: the calm one-time warm-up line under the pending first answer. Reassurance, not an
   // alert: the model IS working (one-time prompt prefill + load); later answers reuse it.
@@ -396,13 +400,8 @@ export const en = {
   // a "No documents yet · Add documents" affordance; "all" never shows a count.
   'chat.scope.usingAll': 'Using all documents',
   'chat.scope.none': 'No documents yet · Add documents',
-  'chat.scope.popoverAria': 'Documents to ask',
-  'chat.scope.allLine': 'Answers come from all your documents. Pick documents to ask only those:',
-  'chat.scope.someLine': 'Answers come from these documents only:',
-  'chat.scope.addLine': 'Add a document:',
   'chat.scope.stopAsking': 'Stop asking {title}',
   'chat.scope.askToo': 'Ask {title} too',
-  'chat.scope.useAll': 'Use all documents',
   'chat.scope.removedDoc': 'Removed document',
 
   // ---- Chat: sources (SourcesDisclosure.tsx) ----
@@ -642,13 +641,7 @@ export const en = {
   // User words only: "deeply indexed" (a ready summary tree), "sections" (chunks),
   // "passages" (retrieved excerpts). No tree/node/chunk/vector/embedding jargon.
   'docs.deepIndex.build': 'Build deep index',
-  'docs.deepIndex.buildTitle':
-    'Read the whole document into a deep index — summaries, "list every …" and "sum per ' +
-    'category" answers can then cover all of it — runs on this drive, nothing leaves it',
   'docs.deepIndex.reindexFirst': 'Re-index for deep index',
-  'docs.deepIndex.reindexFirstTitle':
-    'This document was added before deep indexing was available — re-index it first so a ' +
-    'deep index can cover the whole document',
   'docs.deepIndex.ready': 'Deeply indexed',
   'docs.deepIndex.readyTitle':
     'A whole-document deep index is ready — summaries and listing answers can cover everything',
@@ -1315,6 +1308,8 @@ export const en = {
     'When on, the app may apply a clearly matching app skill to an answer on its own, so you don’t have to pick it. Only app skills, never ones you made or imported. You’ll always see which skill was used, and you can answer without it for that turn. Off by default.',
   'skills.autoFire.on': 'Automatic skills on',
   'skills.autoFire.off': 'Automatic skills off',
+  // SH-8 (#149): a failed auto-fire SETTINGS save — distinct from the list-load failure copy.
+  'skills.autoFire.saveFailed': "Couldn't save the automatic-skills setting.",
   'skills.import': 'Import skill…',
   'skills.import.menuAria': 'Import a skill',
   'skills.import.fromFile': 'From a file (.skill.zip)…',
@@ -2219,6 +2214,9 @@ export const en = {
   // FE-C: a Files-bearing drop that resolved to no on-disk file (a browser-origin drag) — surfaced
   // instead of failing silently. Pairs with the FE-A drop-path fix (full-audit-2026-06-29 follow-up).
   'chat.attach.dropUnsupported': "Couldn't add that — drag in a file saved on your computer.",
+  // CH-6 (#148): the attach-import PROGRESS poll died (IPC failure) — the import itself may
+  // still finish; the per-file failure banner would have been lost, so say so honestly.
+  'chat.attach.trackFailed': "Couldn't follow the file import — check Documents for the result.",
 
   // ---- Images — "Ask about an image" (image-understanding §5/§11, Phase V3) ----
   // Visual understanding of ONE local PNG/JPEG via a local vision model — distinct from OCR
@@ -2314,6 +2312,8 @@ export const en = {
   'images.history.turns.other': '{count} questions',
   'images.history.open': 'Open',
   'images.history.delete': 'Delete',
+  // DOC-11 (#150): per-row accessible name — names the object so rows are distinct to AT.
+  'images.history.deleteAria': 'Delete {title}',
   'images.history.deleted': 'Removed from history',
   'images.history.delete.title': 'Delete this image?',
   'images.history.delete.confirm': 'Delete',

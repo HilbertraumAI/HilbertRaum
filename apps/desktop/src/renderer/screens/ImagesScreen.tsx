@@ -444,7 +444,10 @@ export function ImagesScreen({
             sizeBytes={selected.sizeBytes}
             onRemove={removeImage}
             onReplace={handleChoose}
-            busy={decoding}
+            // DOC-12 (#150): gate like the landing drop zone (`decoding || analyzing`) — a
+            // stray Replace click mid-analysis used to open the picker and cancel the
+            // streaming answer without confirmation.
+            busy={decoding || analyzing}
           />
         </div>
         <div className="image-pane-right">
@@ -454,7 +457,13 @@ export function ImagesScreen({
             onSend={() => {
               const q = composer
               setComposer('')
-              void runAnalyze(q)
+              void analyzeImage(q).then((outcome) => {
+                if (outcome === 'busy') setScreenError('busy')
+                // DOC-13 (#150): the draft is cleared optimistically; a refused analyze
+                // ('busy'/'noop') gives it back instead of discarding the typed question
+                // (unless the user already typed something new).
+                if (outcome !== 'started') setComposer((cur) => (cur === '' ? q : cur))
+              })
             }}
             onChip={onChip}
             chips={chips}

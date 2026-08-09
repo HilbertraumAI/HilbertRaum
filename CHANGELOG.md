@@ -207,6 +207,18 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Fixed
 
+- **Frontend-audit wave (issues #137–#151, 2026-08-09).** Rapid edits in the
+  chat scope picker no longer overwrite each other (#139), the skill run button
+  appears as soon as an attached file finishes processing (#140), the Documents
+  import progress survives navigating away and back (#141), typing review notes
+  no longer lags on long reviews (#142), the image drop zone shows an honest
+  no-drop cursor while busy (#143), the AI-engine download gained a Cancel
+  (#144), error messages — wrong password included — are announced to screen
+  readers the first time and focus returns to the password field (#145), the
+  Translate input's focus ring matches the design system and survives Windows
+  High Contrast (#146), plus the chat/shell/area low-priority sweeps (#148–#150:
+  stream-recovery resilience, lock-seam watcher purge, dialog dismissal no
+  longer counts as a decision, sub-12px text bumped to the floor, and more).
 - **A redacted Word copy can no longer leak masked text when a link contains an
   e-mail address** (issue #128). A URL with an embedded e-mail (an unsubscribe
   link, a `mailto:` address in a link) produced nested mask regions; the `.docx`

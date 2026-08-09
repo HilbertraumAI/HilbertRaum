@@ -8,7 +8,10 @@ import { useT, type I18n } from '../i18n'
 // for the documents-mode retrieval scope. The popover is a MULTI-SELECT source picker
 // (document-organization plan §13.2/D1): tick Library and/or any project, add specific
 // documents, or tap "All documents". Underneath, the composed `DocumentScope` is the UNION
-// of the ticked collections + the specific documents; an empty scope = the whole corpus.
+// of the ticked collections + the specific documents. RD-2 (#151): an empty explicit scope
+// is "the whole corpus" ONLY in a chat with no attachments — with attachments, main-side
+// resolveScope unions them in and the empty scope means JUST the attached files (D71 /
+// CODE-31; see the reset button's label branch below).
 //
 // Temporary and Generated are NOT pickable sources (N10/D3): a generated/temporary doc is
 // reached only via "Specific documents…". Chat attachments (Phase C) are shown read-only.

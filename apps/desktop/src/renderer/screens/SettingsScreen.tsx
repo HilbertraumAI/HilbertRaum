@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Banner,
   Button,
+  ErrorBanner,
   PasswordField,
   PasswordStrengthMeter,
   SegmentedControl,
@@ -319,7 +320,9 @@ function ChangePasswordCard(): JSX.Element {
           <Spinner /> {t('settings.changePassword.busy')}
         </p>
       )}
-      {error && <Banner tone="error">{error}</Banner>}
+      {/* SH-2 (#145): always-mounted so the FIRST failure (e.g. wrong current password) is
+          announced — a freshly inserted alert element is missed by many screen readers. */}
+      <ErrorBanner message={error} t={t} />
       <Button type="submit" variant="primary" disabled={!canSubmit}>
         {busy ? t('settings.changePassword.submitBusy') : t('settings.changePassword.submit')}
       </Button>

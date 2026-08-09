@@ -397,6 +397,9 @@ const api = {
     ipcRenderer.invoke(IPC.importPreflight, paths),
   getImportJob: (jobId: string): Promise<ImportJobStatus> =>
     ipcRenderer.invoke(IPC.getImportJob, jobId),
+  /** The in-flight import job (or null) — mount-time poll re-attach (DOC-1, #141). */
+  getActiveImportJob: (): Promise<ImportJobStatus | null> =>
+    ipcRenderer.invoke(IPC.getActiveImportJob),
   /** List documents, optionally filtered to a collection / lifecycle / smart view (plan §16). */
   listDocuments: (filter?: {
     collectionId?: string

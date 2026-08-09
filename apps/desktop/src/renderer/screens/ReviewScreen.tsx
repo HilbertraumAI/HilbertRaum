@@ -1,9 +1,10 @@
-import { useEffect, useId, useState, useSyncExternalStore } from 'react'
+import { memo, useEffect, useId, useMemo, useState, useSyncExternalStore } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { EvidenceReviewDetail, EvidenceReviewItem } from '@shared/types'
 import { AssistantMarkdown } from '../chat/AssistantMarkdownLazy'
 import { Button, ConfirmDialog, Modal, useToast } from '../components'
 import { formatCitationLabel, localizeServerCopy } from '../lib/displayMap'
+import { useEventCallback } from '../lib/useEventCallback'
 import {
   acknowledgeReviewFreshness,
   addReviewSelection,
@@ -111,6 +112,14 @@ export function ReviewScreen({
 
   const detail = session.detail
   const selectedItem = detail?.items.find((i) => i.id === selectedItemId) ?? null
+
+  // DOC-2 (frontend audit 2026-08-09, #142): stable-identity row handlers so the memoized
+  // ReviewItemRow below isn't busted by fresh closures on every keystroke (the DocRow recipe).
+  const onSelectItem = useEventCallback((id: string) => setSelectedItemId(id))
+  const onOpenDrawerFor = useEventCallback((id: string) => {
+    setSelectedItemId(id)
+    setDrawerOpen(true)
+  })
 
   // P5: back returns to the conversation this review came from (the named P2 UX debt) —
   // the fallback (no wiring, or nothing loaded) stays the P2 letter, chat home.
@@ -363,21 +372,21 @@ export function ReviewScreen({
           )}
 
           <ol className="review-items">
+            {/* DOC-2 (#142): rows are memoized — `applyItemLocally` preserves the identity of
+                untouched items and `sources` rides the same detail spread, so a note keystroke
+                re-renders ONLY its own row instead of every row (+ its snapshot localization). */}
             {detail.items.map((item, index) => (
               <ReviewItemRow
                 key={item.id}
                 item={item}
                 index={index}
-                detail={detail}
+                sources={detail.sources}
                 paneMode={paneMode}
                 selected={selectedItemId === item.id}
-                onSelect={() => setSelectedItemId(item.id)}
+                onSelect={onSelectItem}
                 narrow={narrow}
                 readOnly={readOnly}
-                onOpenDrawer={() => {
-                  setSelectedItemId(item.id)
-                  setDrawerOpen(true)
-                }}
+                onOpenDrawer={onOpenDrawerFor}
                 t={t}
               />
             ))}
@@ -530,14 +539,27 @@ function SaveStateLine({
 }
 
 /**
+ * Perf-test render probe (DOC-2, #142 — the PERF-5 recipe): per-item-id render counter so the
+ * memoization test can assert an untouched row did NOT re-render on a note keystroke. A Map
+ * write per row render — effectively free; production behaviour is identical without it.
+ */
+export const __reviewItemRowRenderCounts = new Map<string, number>()
+
+/**
  * One review item (spec §12): the frozen block text, its evidence-marker honesty note,
  * linked-evidence chips, the 6-value decision radio group, and the note field. Focusing
  * ANY control inside selects the item (keyboard parity with click — spec §28.10).
+ *
+ * DOC-2 (#142): memoized — the Review screen deliberately handles LONG answers, and every
+ * note/label keystroke rebuilds `detail.items` (identity preserved for untouched items) —
+ * without the memo each keystroke re-rendered every row and re-ran `localizeServerCopy`
+ * over every immutable snapshot (the PERF-5/PF-7c class fixed for DocRow/TurnRow). Handlers
+ * arrive as stable id-taking callbacks; `sources` rides the detail spread unchanged.
  */
-function ReviewItemRow({
+const ReviewItemRow = memo(function ReviewItemRow({
   item,
   index,
-  detail,
+  sources,
   paneMode,
   selected,
   onSelect,
@@ -548,17 +570,25 @@ function ReviewItemRow({
 }: {
   item: EvidenceReviewItem
   index: number
-  detail: EvidenceReviewDetail
+  sources: EvidenceReviewDetail['sources']
   paneMode: 'relevance' | 'whole_doc' | 'structured'
   selected: boolean
-  onSelect: () => void
+  onSelect: (itemId: string) => void
   narrow: boolean
   /** Ready review (FIX-1): decision/note/unlink controls disable until reopened. */
   readOnly: boolean
-  onOpenDrawer: () => void
+  onOpenDrawer: (itemId: string) => void
   t: I18n['t']
 }): JSX.Element {
+  if (import.meta.env.DEV)
+    __reviewItemRowRenderCounts.set(item.id, (__reviewItemRowRenderCounts.get(item.id) ?? 0) + 1)
   const isSelection = item.kind === 'selection'
+  // DOC-2: the snapshot never changes — localize it once per (t, snapshot), not per keystroke
+  // in this row (the memo already spares the OTHER rows).
+  const localizedSnapshot = useMemo(
+    () => (isSelection ? '' : localizeServerCopy(t, item.textSnapshot)),
+    [isSelection, t, item.textSnapshot]
+  )
   const isHeading = !isSelection && item.blockKind === 'heading'
   // Honesty note (spec §10.3/§13.2/§13.3): whole-document items say DERIVED, never cited;
   // an unmarked item in a citation-bearing answer says "no direct source marker" — which
@@ -579,8 +609,8 @@ function ReviewItemRow({
       className={selected ? 'review-item selected' : 'review-item'}
       aria-label={t('review.item.aria', { n: index + 1 })}
       aria-current={selected ? 'true' : undefined}
-      onClick={onSelect}
-      onFocusCapture={onSelect}
+      onClick={() => onSelect(item.id)}
+      onFocusCapture={() => onSelect(item.id)}
     >
       {isSelection ? (
         /* P5 (spec §12.1): a reviewer selection is the EXACT stored slice of its parent
@@ -605,7 +635,7 @@ function ReviewItemRow({
       ) : (
         <div className="review-item-text md">
           {/* The FROZEN snapshot slice — markers localize at render (D68), text never edits. */}
-          <AssistantMarkdown text={localizeServerCopy(t, item.textSnapshot)} />
+          <AssistantMarkdown text={localizedSnapshot} />
         </div>
       )}
       {note && <p className="hint review-item-note">{note}</p>}
@@ -616,7 +646,7 @@ function ReviewItemRow({
       {item.links.length > 0 && (
         <div className="review-item-links">
           {item.links.map((link) => {
-            const source = detail.sources.find((s) => s.key === link.evidenceKey)
+            const source = sources.find((s) => s.key === link.evidenceKey)
             const marker =
               source?.kind === 'direct_excerpt' && source.machineLabel
                 ? `[${formatCitationLabel(t, source.machineLabel)}] `
@@ -666,13 +696,13 @@ function ReviewItemRow({
         />
       </label>
       {narrow && (
-        <Button size="sm" onClick={onOpenDrawer}>
+        <Button size="sm" onClick={() => onOpenDrawer(item.id)}>
           {t('review.item.viewEvidence')}
         </Button>
       )}
     </li>
   )
-}
+})
 
 /**
  * P5 — carve a reviewer selection out of one block item (spec §12.1 "Review separately",

@@ -227,10 +227,23 @@ export function ModelsScreen(): JSX.Element {
   // While a model is starting in the background, poll runtime status so the "Starting…"
   // button flips to "Stop" on its own once the GGUF finishes loading (a full `refresh`
   // also picks up the new `running` model state).
+  // SH-9 (#149): while a model starts, poll ONLY the small getRuntimeStatus — the previous
+  // full 6-IPC refresh() (listModels full-verify, settings, policy, engine, runtime, app
+  // status) rebuilt every card ~2.5 s for minutes on a 20 GB GGUF. One full refresh runs on
+  // the starting→settled transition, which also re-fires this effect and clears the timer.
   useEffect(() => {
     if (!runtime?.startingModelId) return
     const timer = setInterval(() => {
-      void refresh().catch(() => undefined)
+      void Promise.resolve(window.api.getRuntimeStatus?.())
+        .then((rt) => {
+          if (!mountedRef.current || !rt) return
+          setRuntime(rt)
+          if (!rt.startingModelId) {
+            // Settled (running or stopped): the cards' install/active state may have changed.
+            void runAndSurface(refresh, (m) => mountedRef.current && setError(m))
+          }
+        })
+        .catch(() => undefined)
     }, RUNTIME_POLL_MS)
     return () => clearInterval(timer)
   }, [runtime?.startingModelId])
@@ -431,12 +444,18 @@ export function ModelsScreen(): JSX.Element {
             size="sm"
             disabled={mine.status === 'verifying'}
             // Surface a cancel rejection as a friendly error instead of an unhandled
-            // promise rejection (audit FE-2).
+            // promise rejection (audit FE-2). SH-6 (#149): the resolved state writes the
+            // module-scoped rememberedJob DIRECTLY (the state effect can't run after an
+            // unmount, so a remount used to briefly resume polling a cancelled job) and
+            // both setters take the FE-4 mounted guard.
             onClick={() =>
               window.api
                 .cancelDownload(mine.jobId)
-                .then(setJob)
-                .catch((e) => setError(friendlyIpcError(e)))
+                .then((next) => {
+                  rememberedJob = next
+                  if (mountedRef.current) setJob(next)
+                })
+                .catch((e) => mountedRef.current && setError(friendlyIpcError(e)))
             }
           >
             {t('models.download.cancel')}
@@ -446,7 +465,8 @@ export function ModelsScreen(): JSX.Element {
     }
     return (
       <div className="download-progress">
-        {mine?.status === 'failed' && <Banner tone="error">{mine.error}</Banner>}
+        {/* SH-2 (#145): always-mounted so the FIRST download failure is announced. */}
+        <ErrorBanner message={mine?.status === 'failed' ? mine.error : null} t={t} />
         {mine?.status === 'cancelled' && (
           <p className="hint">{t('models.download.cancelled')}</p>
         )}
@@ -548,7 +568,7 @@ export function ModelsScreen(): JSX.Element {
         {ramTooLow && <Banner tone="warning">{ramHint}</Banner>}
 
         {automatic ? (
-          <p className="hint" style={{ margin: '4px 0 0' }}>
+          <p className="hint hint-tight">
             {m.role === 'vision'
               ? installed
                 ? t('models.vision.installed')
@@ -764,27 +784,47 @@ export function ModelsScreen(): JSX.Element {
       <Banner tone={opts.tone}>
         <div className="engine-install">
           <strong>{t(opts.titleKey)}</strong>
-          <p className="hint" style={{ margin: '4px 0 8px' }}>
+          <p className="hint hint-lede">
             {t(opts.explainKey)}
           </p>
           {live && j ? (
-            <Progress
-              label={
-                j.status === 'extracting'
-                  ? t('models.engine.extracting')
-                  : j.status === 'verifying'
-                    ? t('models.engine.verifying')
-                    : pct != null
-                      ? t('models.engine.progress', { pct })
-                      : t('models.engine.downloadingNoTotal')
-              }
-              value={pct != null && j.status === 'downloading' ? j.receivedBytes : undefined}
-              max={pct != null && j.status === 'downloading' ? (j.totalBytes ?? undefined) : undefined}
-            />
+            <>
+              <Progress
+                label={
+                  j.status === 'extracting'
+                    ? t('models.engine.extracting')
+                    : j.status === 'verifying'
+                      ? t('models.engine.verifying')
+                      : pct != null
+                        ? t('models.engine.progress', { pct })
+                        : t('models.engine.downloadingNoTotal')
+                }
+                value={pct != null && j.status === 'downloading' ? j.receivedBytes : undefined}
+                max={pct != null && j.status === 'downloading' ? (j.totalBytes ?? undefined) : undefined}
+              />
+              {/* SH-1 (#144): the multi-hundred-MB engine fetch was the one long-running
+                  network action with no Cancel (cancelEngineDownload had zero callers).
+                  Mirrors the model-download cancel incl. its error surfacing; main treats
+                  verifying/extracting as cancellable states (F-33), so no disable here. */}
+              <Button
+                size="sm"
+                onClick={() =>
+                  window.api
+                    .cancelEngineDownload(j.jobId)
+                    .then((next) => {
+                      rememberedEngineJob = next
+                      if (mountedRef.current) setEngineJob(next)
+                    })
+                    .catch((e) => mountedRef.current && setError(friendlyIpcError(e)))
+                }
+              >
+                {t('models.download.cancel')}
+              </Button>
+            </>
           ) : (
             <>
               {j?.status === 'failed' && j.error && (
-                <p className="hint" style={{ marginTop: 0 }}>
+                <p className="hint mt-0">
                   {j.error}
                 </p>
               )}
@@ -798,7 +838,7 @@ export function ModelsScreen(): JSX.Element {
                 {j?.status === 'failed' ? t('models.engine.retry') : t(opts.installKey)}
               </Button>
               {downloadsBlockedReason && (
-                <p className="hint" style={{ marginBottom: 0 }}>
+                <p className="hint mb-0">
                   {downloadsBlockedReason}
                 </p>
               )}
@@ -864,7 +904,7 @@ export function ModelsScreen(): JSX.Element {
       {settings && chat.length > 0 && (
         <div className="card">
           <h2>{t('models.context.title')}</h2>
-          <label className="hint" style={{ display: 'block' }}>
+          <label className="hint hint-block">
             {t('models.context.label')}{' '}
             <select
               className="select"

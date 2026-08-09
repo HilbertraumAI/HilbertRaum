@@ -7,6 +7,7 @@ import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { resolveNavTarget } from '../../src/renderer/navigation'
 import { DEFAULT_SETTINGS, type PolicyStatus, type WorkspaceStateInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { appStatus, driveStatus } from '../helpers/status'
 
 // Phase 26 information architecture (guidelines §2): 5 nav destinations (4 everyday +
 // Settings), Privacy/Diagnostics folded into Settings tabs, and the navigate() virtual
@@ -99,20 +100,11 @@ function stubAppShell(): void {
     getWorkspaceState: vi.fn(async () => unlockedWorkspace),
     getPolicy: vi.fn(async () => offlinePolicy),
     getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-    onRuntimeNotice: vi.fn(() => () => {}) as never,
+    onRuntimeNotice: vi.fn(() => () => {}),
     // Home (the default screen) readiness data:
-    getAppStatus: vi.fn(async () => ({
-      appName: 'x',
-      appVersion: '0',
-      offlineMode: true,
-      networkAllowed: false,
-      activeModelId: null,
-      hardwareProfile: 'UNKNOWN' as const,
-      workspaceMode: 'plaintext_dev' as const,
-      workspaceReady: true,
-      machineRamGb: 16,
-      dictationAvailable: false
-    })),
+    getAppStatus: vi.fn(async () =>
+      appStatus({ appName: 'x', appVersion: '0', machineRamGb: 16 })
+    ),
     getRuntimeStatus: vi.fn(async () => ({
       running: false,
       modelId: null,
@@ -130,10 +122,10 @@ function stubAppShell(): void {
       problems: []
     })),
     // Settings tabs (visited via the offline badge):
-    getDriveStatus: vi.fn(async () => ({}) as never),
+    getDriveStatus: vi.fn(async () => driveStatus()),
     getRuntimeInstall: vi.fn(async () => null),
     getLogTail: vi.fn(async () => [])
-  } as never)
+  })
 }
 
 describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
@@ -180,21 +172,18 @@ describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
     // offlineMode=true, so the stubAppShell offline case above reads "Offline" honestly.)
     stubApi({
       getWorkspaceState: vi.fn(async () => unlockedWorkspace),
-      getPolicy: vi.fn(async () => ({ ...offlinePolicy, offlineMode: false }) as never),
+      getPolicy: vi.fn(async () => ({ ...offlinePolicy, offlineMode: false })),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}) as never,
-      getAppStatus: vi.fn(async () => ({
-        appName: 'x',
-        appVersion: '0',
-        offlineMode: false,
-        networkAllowed: true,
-        activeModelId: null,
-        hardwareProfile: 'UNKNOWN' as const,
-        workspaceMode: 'plaintext_dev' as const,
-        workspaceReady: true,
-        machineRamGb: 16,
-        dictationAvailable: false
-      })),
+      onRuntimeNotice: vi.fn(() => () => {}),
+      getAppStatus: vi.fn(async () =>
+        appStatus({
+          appName: 'x',
+          appVersion: '0',
+          offlineMode: false,
+          networkAllowed: true,
+          machineRamGb: 16
+        })
+      ),
       getRuntimeStatus: vi.fn(async () => ({
         running: false,
         modelId: null,
@@ -211,7 +200,7 @@ describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
         slowDriveWarning: null,
         problems: []
       }))
-    } as never)
+    })
     render(<App />)
     const nav = await screen.findByRole('navigation')
     await waitFor(() =>
@@ -277,8 +266,8 @@ describe('SettingsScreen — tabs (Phase 26)', () => {
     stubApi({
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
       getPolicy: vi.fn(async () => offlinePolicy),
-      getDriveStatus: vi.fn(async () => ({}) as never),
-      getAppStatus: vi.fn(async () => ({}) as never),
+      getDriveStatus: vi.fn(async () => driveStatus()),
+      getAppStatus: vi.fn(async () => appStatus()),
       getRuntimeStatus: vi.fn(async () => ({
         running: false,
         modelId: null,
@@ -288,7 +277,7 @@ describe('SettingsScreen — tabs (Phase 26)', () => {
       })),
       getRuntimeInstall: vi.fn(async () => null),
       getLogTail: vi.fn(async () => [])
-    } as never)
+    })
   }
 
   it('opens on General and switches between the three tabs', async () => {

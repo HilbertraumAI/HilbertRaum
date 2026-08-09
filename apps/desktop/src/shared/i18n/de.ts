@@ -177,6 +177,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.saveConversation': 'Diese Unterhaltung speichern',
   'chat.savedTo': 'Gespeichert unter {path}',
   'chat.copied': 'Kopiert',
+  // CH-5 (#148): auch ein fehlgeschlagenes Kopieren bekommt eine Rückmeldung.
+  'chat.copyFailed': 'Konnte nicht in die Zwischenablage kopieren',
+  // CH-12 (#148): zugänglicher Name des per Tastatur scrollbaren Verlaufsbereichs.
+  'chat.transcript.label': 'Gesprächsverlauf',
   'chat.stopped': 'Gestoppt – die Antwort ist möglicherweise unvollständig',
   // #39: die ruhige einmalige Aufwärm-Zeile unter der ersten ausstehenden Antwort.
   'chat.warmup.hint':
@@ -421,14 +425,8 @@ export const de: Record<keyof typeof en, string> = {
   // ---- Chat: document scope ----
   'chat.scope.usingAll': 'Nutzt alle Dokumente',
   'chat.scope.none': 'Noch keine Dokumente · Dokumente hinzufügen',
-  'chat.scope.popoverAria': 'Zu befragende Dokumente',
-  'chat.scope.allLine':
-    'Antworten kommen aus all deinen Dokumenten. Wähle Dokumente aus, um nur diese zu fragen:',
-  'chat.scope.someLine': 'Antworten kommen nur aus diesen Dokumenten:',
-  'chat.scope.addLine': 'Dokument hinzufügen:',
   'chat.scope.stopAsking': '{title} nicht mehr fragen',
   'chat.scope.askToo': '{title} auch fragen',
-  'chat.scope.useAll': 'Alle Dokumente verwenden',
   'chat.scope.removedDoc': 'Entferntes Dokument',
 
   // ---- Chat: sources ----
@@ -669,14 +667,7 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Tiefenindex + Abdeckung (whole-document-analysis plan §5.2) — D-L7-Review ausstehend ----
   'docs.deepIndex.build': 'Tiefenindex erstellen',
-  'docs.deepIndex.buildTitle':
-    'Liest das ganze Dokument in einen Tiefenindex ein — Zusammenfassungen, „Liste alle …“- ' +
-    'und „Summe pro Kategorie“-Antworten können dann alles abdecken — läuft auf diesem ' +
-    'Laufwerk, nichts verlässt es',
   'docs.deepIndex.reindexFirst': 'Für Tiefenindex neu indexieren',
-  'docs.deepIndex.reindexFirstTitle':
-    'Dieses Dokument wurde hinzugefügt, bevor es Tiefenindexe gab — indexiere es zuerst neu, ' +
-    'damit ein Tiefenindex das ganze Dokument abdecken kann',
   'docs.deepIndex.ready': 'Tief indexiert',
   'docs.deepIndex.readyTitle':
     'Ein Tiefenindex für das ganze Dokument ist fertig — Zusammenfassungen und ' +
@@ -1379,6 +1370,8 @@ export const de: Record<keyof typeof en, string> = {
     'Wenn eingeschaltet, darf die App einen eindeutig passenden App-Skill von sich aus auf eine Antwort anwenden, damit du ihn nicht selbst wählen musst. Nur App-Skills, nie selbst erstellte oder importierte. Du siehst immer, welcher Skill verwendet wurde, und kannst für diese Antwort ohne ihn antworten. Standardmäßig aus.',
   'skills.autoFire.on': 'Automatische Skills an',
   'skills.autoFire.off': 'Automatische Skills aus',
+  // SH-8 (#149): fehlgeschlagenes Speichern der Auto-Skills-Einstellung – nicht die Ladefehler-Meldung.
+  'skills.autoFire.saveFailed': 'Die Einstellung für automatische Skills konnte nicht gespeichert werden.',
   'skills.import': 'Skill importieren…',
   'skills.import.menuAria': 'Einen Skill importieren',
   'skills.import.fromFile': 'Aus einer Datei (.skill.zip)…',
@@ -2299,6 +2292,10 @@ export const de: Record<keyof typeof en, string> = {
   // gezogen) – wird angezeigt statt still zu scheitern (Begleitung zur FE-A-Korrektur).
   'chat.attach.dropUnsupported':
     'Konnte das nicht hinzufügen – bitte eine auf dem Computer gespeicherte Datei hierher ziehen.',
+  // CH-6 (#148): der Fortschritts-Poll des Datei-Imports ist abgerissen – der Import selbst
+  // kann trotzdem fertig werden; ehrlich sagen, wo das Ergebnis zu finden ist.
+  'chat.attach.trackFailed':
+    'Der Datei-Import konnte nicht weiter verfolgt werden – das Ergebnis steht unter Dokumente.',
 
   // ---- Bilder — „Frag ein Bild" (image-understanding §5/§11, Phase V3) ----
   // Visuelles Verstehen EINES lokalen PNG/JPEG über ein lokales KI-Modell — getrennt von
@@ -2387,6 +2384,8 @@ export const de: Record<keyof typeof en, string> = {
   'images.history.turns.other': '{count} Fragen',
   'images.history.open': 'Öffnen',
   'images.history.delete': 'Löschen',
+  // DOC-11 (#150): zugänglicher Name pro Zeile – benennt das Objekt.
+  'images.history.deleteAria': '{title} löschen',
   'images.history.deleted': 'Aus dem Verlauf entfernt',
   'images.history.delete.title': 'Dieses Bild löschen?',
   'images.history.delete.confirm': 'Löschen',

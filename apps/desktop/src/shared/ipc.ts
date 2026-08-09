@@ -101,6 +101,9 @@ export const IPC = {
    *  renderer's size-aware audio import confirmation. Read-only. */
   importPreflight: 'docs:importPreflight',
   getImportJob: 'docs:getImportJob',
+  /** The in-flight import job (or null) — parameterless so the Documents screen re-attaches its
+   *  progress poll on mount without holding the job id across an unmount (DOC-1, #141). */
+  getActiveImportJob: 'docs:getActiveImportJob',
   listDocuments: 'docs:list',
   /** Add documents to a collection (membership; idempotent). "Move" = add + remove. */
   addToCollection: 'docs:addToCollection',

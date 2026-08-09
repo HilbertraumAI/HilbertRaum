@@ -167,11 +167,16 @@ describe('SkillsTab — enable / disable', () => {
   it('suppresses a second toggle while the first is pending and ends on the server state', async () => {
     const user = userEvent.setup()
     let resolveDisable: (() => void) | null = null
-    const disableSkill = vi.fn(() => new Promise<void>((res) => { resolveDisable = res }))
+    const disableSkill = vi.fn(
+      () =>
+        new Promise<SkillInfo>((res) => {
+          resolveDisable = () => res(skill({ enabled: false }))
+        })
+    )
     const listSkills = vi.fn()
     listSkills.mockResolvedValueOnce([skill({ enabled: true })]) // initial load
     listSkills.mockResolvedValue([skill({ enabled: false })]) // server state after the disable
-    stubApi({ listSkills, disableSkill: disableSkill as never })
+    stubApi({ listSkills, disableSkill: disableSkill })
     renderTab()
     const sw = await screen.findByRole('switch')
     expect(sw).toBeChecked()
@@ -313,7 +318,7 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     const pickSkillPackage = vi.fn(async () => {
       throw new Error('picker exploded')
     })
-    stubApi({ listSkills: vi.fn(async () => []), pickSkillPackage: pickSkillPackage as never })
+    stubApi({ listSkills: vi.fn(async () => []), pickSkillPackage: pickSkillPackage })
     renderTab()
     await screen.findByText('No skills yet')
     await user.click(screen.getByRole('button', { name: /Import a skill/ }))
@@ -358,7 +363,7 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
       listSkills: vi.fn(async () => []),
       pickSkillPackage: vi.fn(async () => '/tmp/race.skill.zip'),
       previewSkillPackage: vi.fn(async () => preview()),
-      importSkill: importSkill as never
+      importSkill: importSkill
     })
     renderTab()
     await screen.findByText('No skills yet')
@@ -379,7 +384,7 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
       listSkills: vi.fn(async () => []),
       pickSkillPackage: vi.fn(async () => '/tmp/new.skill.zip'),
       previewSkillPackage: vi.fn(async () => preview()),
-      importSkill: importSkill as never
+      importSkill: importSkill
     })
     renderTab()
     await screen.findByText('No skills yet')
@@ -416,7 +421,7 @@ describe('SkillsTab — auto-fire opt-in (S13c/D4)', () => {
     stubApi({
       listSkills: vi.fn(async () => [skill()]),
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillsAutoFireEnabled: false })),
-      updateSettings: updateSettings as never
+      updateSettings: updateSettings
     })
     renderTab()
     const toggle = (await screen.findByRole('switch', {

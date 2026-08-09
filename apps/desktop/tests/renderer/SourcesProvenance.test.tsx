@@ -169,12 +169,15 @@ describe('SourcesDisclosure a11y — toggle aria-controls names the region (FE-D
     })
     const controls = toggle.getAttribute('aria-controls')
     expect(controls).toBeTruthy()
-    // Region is named by the toggle and only present once expanded.
-    expect(screen.queryByRole('region')).toBeNull()
+    // The sources region is named by the toggle and only present once expanded. (CH-12/#148
+    // made the transcript scroller itself a labeled region, so the queries key on the
+    // aria-controls id rather than "the only region".)
+    expect(document.getElementById(controls!)).toBeNull()
     fireEvent.click(toggle)
-    const region = screen.getByRole('region')
-    expect(region.id).toBe(controls)
-    expect(within(region).getByText(t('en', 'chat.sources.wholeDocCaption'))).toBeInTheDocument()
+    const region = document.getElementById(controls!)
+    expect(region).not.toBeNull()
+    expect(region!.getAttribute('role')).toBe('region')
+    expect(within(region!).getByText(t('en', 'chat.sources.wholeDocCaption'))).toBeInTheDocument()
   })
 
   it('aria-controls resolves on a relevance disclosure too', () => {
@@ -183,6 +186,8 @@ describe('SourcesDisclosure a11y — toggle aria-controls names the region (FE-D
     const controls = toggle.getAttribute('aria-controls')
     expect(controls).toBeTruthy()
     fireEvent.click(toggle)
-    expect(screen.getByRole('region').id).toBe(controls)
+    const region = document.getElementById(controls!)
+    expect(region).not.toBeNull()
+    expect(region!.getAttribute('role')).toBe('region')
   })
 })

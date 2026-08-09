@@ -54,7 +54,7 @@ function resolve(name: string, vars: Record<string, string>, seen = new Set<stri
 function luminance(hex: string): number {
   const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
   const lin = c.map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
-  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.2152 * lin[2]
+  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
 }
 
 function contrast(aHex: string, bHex: string): number {

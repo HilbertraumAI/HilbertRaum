@@ -207,7 +207,20 @@ export function clearVisionSession(): void {
 /** Stop the in-flight analyze (the answer's Stop button): cancel main-side, mark the turn stopped. */
 export function stopActive(): void {
   const turnId = activeTurnId
-  if (!snapshot.activeJobId) return
+  if (!snapshot.activeJobId) {
+    // DOC-4 (#150, the translateSession L5 mirror): Stop renders as soon as the turn is
+    // 'starting' — BEFORE the imageAnalyze round-trip resolves and sets `activeJobId`. In
+    // that window there is no job to cancel yet, but the in-flight start must be SUPERSEDED
+    // (generation bump) so its post-await branch cancels the just-started orphan job —
+    // otherwise this Stop click was silently swallowed and the analyze ran to completion.
+    if (snapshot.analyzing) {
+      analyzeGen += 1
+      const starting = snapshot.turns.find((t) => t.state === 'starting')
+      if (starting) patchTurn(starting.id, { state: 'cancelled' })
+      set({ analyzing: false })
+    }
+    return
+  }
   flushPending() // PF-7c: tokens already received land in the stopped turn (pre-batching behavior)
   abortActive()
   if (turnId) patchTurn(turnId, { state: 'cancelled' })

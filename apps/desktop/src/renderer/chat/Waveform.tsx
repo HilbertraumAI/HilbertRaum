@@ -30,9 +30,12 @@ export function Waveform({ analyser }: WaveformProps): JSX.Element | null {
 
     const data = new Uint8Array(analyser.fftSize)
     // The accent colour is theme-driven; read it once from the canvas's computed style.
-    // Fallback is the brand teal (only used if --accent somehow resolves empty).
+    // CH-9 (#148): the fallback is the element's currentColor — never a hardcoded teal.
+    // The old literal was the DARK-theme bright teal, which lands on a LIGHT surface if
+    // --accent ever resolves empty (the §4.3 bright-teal-on-light breach).
     const accent =
-      getComputedStyle(canvas).getPropertyValue('--accent').trim() || '#57d0a4'
+      getComputedStyle(canvas).getPropertyValue('--accent').trim() ||
+      getComputedStyle(canvas).color
 
     let raf = 0
 

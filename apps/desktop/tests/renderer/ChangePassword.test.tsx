@@ -38,8 +38,8 @@ function stubSettings(opts: {
     )
   stubApi({
     getSettings: vi.fn(async () => opts.settings ?? settings()),
-    updateSettings: vi.fn(async (p: Partial<AppSettings>) => settings(p)) as never,
-    changeWorkspacePassword: change as never
+    updateSettings: vi.fn(async (p: Partial<AppSettings>) => settings(p)),
+    changeWorkspacePassword: change
   })
   return change
 }

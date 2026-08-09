@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Banner, Button, useToast } from '../../components'
+import { Banner, Button, ErrorBanner, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
 import { localizeServerCopy } from '../../lib/displayMap'
 import { friendlyIpcError, runAndSurface } from '../../lib/errors'
@@ -231,6 +231,8 @@ export function DiagnosticsTab(): JSX.Element {
   // flag (checked before each setState) is cleaner than per-effect `active` guards here and
   // prevents a setState after unmount when a late IPC reply resolves (audit FE-4).
   const mountedRef = useRef(true)
+  // SH-7 (#149): "Show earlier" in-flight guard (see loadMoreActivity).
+  const loadingMoreRef = useRef(false)
   useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -264,6 +266,10 @@ export function DiagnosticsTab(): JSX.Element {
   const loadMoreActivity = useCallback(async (): Promise<void> => {
     const last = events?.[events.length - 1]
     if (!last) return
+    // SH-7 (#149): in-flight guard — a double-click reused the same cursor and appended the
+    // same 50 rows twice (duplicate key={ev.id} warnings + a visually doubled page).
+    if (loadingMoreRef.current) return
+    loadingMoreRef.current = true
     try {
       const page = (await window.api?.getAuditEvents(ACTIVITY_PAGE_SIZE, last.id)) ?? []
       if (!mountedRef.current) return // late reply after unmount (FE-4)
@@ -272,6 +278,8 @@ export function DiagnosticsTab(): JSX.Element {
     } catch {
       if (!mountedRef.current) return
       setMoreAvailable(false)
+    } finally {
+      loadingMoreRef.current = false
     }
   }, [events])
 
@@ -412,10 +420,12 @@ export function DiagnosticsTab(): JSX.Element {
             {settings.gpuMode === 'auto' ? t('diag.gpu.tryHint') : t('diag.gpu.offHint')}
           </Banner>
         )}
-        {/* CODE-27: the re-probe's failure, in context under the button that triggered it. */}
-        {gpuRetryError && (
-          <Banner tone="error">{t('diag.gpu.tryFailed', { error: gpuRetryError })}</Banner>
-        )}
+        {/* CODE-27: the re-probe's failure, in context under the button that triggered it.
+            SH-2 (#145): always-mounted so the FIRST failure is announced. */}
+        <ErrorBanner
+          message={gpuRetryError ? t('diag.gpu.tryFailed', { error: gpuRetryError }) : null}
+          t={t}
+        />
         <div className="actions">
           <Button size="sm" onClick={() => void refreshStatus()}>
             {t('diag.refresh')}
@@ -447,13 +457,14 @@ export function DiagnosticsTab(): JSX.Element {
             </Button>
           )}
         </div>
-        {error && <Banner tone="error">{t('diag.bench.failed', { error })}</Banner>}
+        {/* SH-2 (#145): always-mounted so the FIRST failure is announced. */}
+        <ErrorBanner message={error ? t('diag.bench.failed', { error }) : null} t={t} />
 
         {bench && (
           <>
             {/* Match the 8px gap the .actions row has above it, so the results don't
                 crowd the buttons. */}
-            <dl className="kv" style={{ marginTop: 8 }}>
+            <dl className="kv mt-2">
               <dt>{t('diag.bench.profile')}</dt>
               <dd>
                 <strong>{bench.profile}</strong>
@@ -575,7 +586,7 @@ export function DiagnosticsTab(): JSX.Element {
         {showActivity && (
           <>
             {events != null && events.length > 0 && (
-              <label className="hint" style={{ display: 'block', marginTop: 8 }}>
+              <label className="hint hint-block mt-2">
                 {t('diag.activity.filterShow')}{' '}
                 <select
                   className="select"

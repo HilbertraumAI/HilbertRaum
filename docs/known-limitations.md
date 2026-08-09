@@ -645,12 +645,23 @@ password recovery — are documented in
   the in-app **section / smart-view filters** (which narrow over the full library, not just the visible rows)
   are the intended way to locate a document by name/attribute. Windowing engages only when a real scroll
   viewport is laid out — with none (e.g. a unit test rendering the screen standalone) the list renders every
-  row. The trade-off is **deliberately not** applied to the chat transcript (its scroll-to-bottom /
-  find-in-page / StreamAnnouncer behavior keeps it un-windowed for now). Windowing bounds the DOM
+  row. The trade-off is **deliberately not** applied to the chat transcript (see the next bullet).
+  Windowing bounds the DOM
   only, not the payload: the backend `listDocuments` still loads and ships the whole library per
   refresh (no LIMIT, unindexed `created_at` sort) — fine at ≤~1k documents, a multi-MB IPC payload
   at ~10k; revisit together with the `ocr_json` projection migration (the recorded DB-8 residual)
   if a library approaches that scale (full-audit 2026-07-10 PF-5, watch-item).
+- **The chat transcript is not virtualized: switching to a very long conversation re-parses its
+  whole history, a visible stall at several hundred messages (accepted — frontend audit
+  2026-08-09 CH-11, decision recorded per #148).** The transcript deliberately remounts per
+  conversation (`key={activeId}`, the CR-2 fix — stale-scroll/announcer state must not leak across
+  chats), so every switch re-renders and re-parses (Streamdown/KaTeX) every message; persisted
+  turns are memoized within a mounted conversation, so only the SWITCH pays. Windowing is declined
+  for now because the transcript's scroll-to-bottom contract, browser find-in-page over the whole
+  history, and the StreamAnnouncer's live-region behavior all assume an un-windowed DOM — the same
+  reasons the documents-list windowing was not extended here. Typical conversations (tens of
+  turns) switch instantly; revisit (window or cap old messages) if compaction-era conversations
+  routinely reach hundreds of turns.
 - **Chat "Try again" optimistically drops the last answer before regenerating; it self-heals, never
   data loss (accepted).** `ChatScreen.onTryAgain` slices the last
   assistant turn from the view before calling `stream(...)`, so the regenerate looks immediate. If the
@@ -778,7 +789,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   "Summarize" serves the tree root verbatim (full coverage, `truncated:false`) at no extra
   model call. The build is a background, *yielding* job that cedes the model slot to chat
   between nodes; it is auto-offered for documents the capped summary can't fully cover and
-  otherwise built on request. The coverage-meter UI is a later phase.
+  otherwise built on request. (#151 KL-1: the coverage-meter UI SHIPPED — CoverageMeter +
+  TierMenu render on every eligible turn — so the "later phase" caveat that stood here is gone.)
 - **A background deep-index build cedes the slot to chat, but not to other document tasks.**
   While an auto-started tree build runs (multi-minute on a weak CPU), an interactive chat
   answer pauses it and is served within ~one node, then the build resumes. A user-started
@@ -1602,7 +1614,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   unbudgeted, so a long multi-turn analysis (or a grounded turn carrying a large chunk block)
   accumulated past the model window and the server rejected the request with the same `HTTP 400
   exceed_context_size_error`. The history is now trimmed to `contextTokens` (`fitMessagesToContext`),
-  keeping the system prompt + the current turn and dropping older turns oldest-first. The retrieval
+  keeping the system prompt + the current turn and dropping older turns oldest-first — and,
+  since compaction (#151 KL-3), an L2 SUMMARIZE layer runs first at 0.85·window, condensing
+  the oldest turns into a stored checkpoint so the L1 oldest-first drop is the fallback, not
+  the first resort (turns are not silently discarded while a summary can stand in). The retrieval
   cap (`ragMaxContextTokens`) still bounds only the retrieved chunks; the new budget bounds the whole
   prompt. Unavoidable overflow (a single oversize turn on a tiny-context model) now surfaces the
   friendly `main.model.contextExceeded` copy on the invoke rejection, not the raw `HTTP 400`.
@@ -2154,9 +2169,11 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
 
 The sweep contrast-audited every role-token pairing in both themes (fix applied:
 `--border-strong` → `--n-500`, the only sub-3:1 non-text boundary that was the SOLE component
-identifier), added forced-colors (Windows High Contrast) rules for the two custom-drawn
-controls (Switch, strength meter), and verified the reduced-motion kill-switch. Accepted
-as-is, with reasons:
+identifier), added forced-colors (Windows High Contrast) rules for the custom-drawn
+controls (Switch, strength meter — #151 KL-3: the inventory is now THREE, the chat context
+meter `.context-meter-track/-fill` joined later and carries no forced-colors rule; accepted
+because its value is never color-only — the numeric label carries the meaning), and verified
+the reduced-motion kill-switch. Accepted as-is, with reasons:
 
 - **Hairline `--border` separators are ~1.3:1.** They are decorative row/card separators,
   never the sole identifier of a component (cards pair them with surface fill + shadow;
@@ -2164,9 +2181,10 @@ as-is, with reasons:
 - **The fatal "app could not start" screen shows the raw error string.** §7 keeps error
   codes inside Diagnostics, but when the backend never came up Diagnostics is unreachable —
   the raw string (plus the log pointer) is the only diagnostic the user can relay.
-- **The Documents screen's per-row selection checkbox is 15px.** Under the 24px target
-  minimum, but WCAG 2.5.8 is satisfied via the spacing exception: the row is ≥40px tall and
-  no other target falls within the 24px circle around it.
+- **The Documents screen's per-row selection checkbox is 16px** (#151 KL-2: numbers
+  refreshed — 16px in a 56px row). Under the 24px target minimum, but WCAG 2.5.8 is
+  satisfied via the spacing exception: the tall row means no other target falls within the
+  24px circle around it.
 - **The bundled main process can contain a duplicated, tree-shaken copy of a module**
   (observed: `workspace-vault`'s `WrongPasswordError`/`shredFile`), which breaks cross-copy
   `instanceof`. The wrong-password mapping now also matches `err.name`; other duplications

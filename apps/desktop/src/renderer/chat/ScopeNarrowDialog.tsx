@@ -14,9 +14,15 @@ export interface ScopeNarrowDialogProps {
   onNarrow: () => void
   /** "Whole library" — keep the corpus-wide default (and stop asking for this conversation). */
   onWhole: () => void
+  /**
+   * CH-13 (#148): Esc / overlay click — close WITHOUT deciding. Only the explicit buttons
+   * record the sticky per-conversation choice; a dismissal leaves the next attach free to
+   * re-ask. (Previously dismissal was mapped to "Whole library" AND made sticky.)
+   */
+  onDismiss: () => void
 }
 
-export function ScopeNarrowDialog({ open, fileName, onNarrow, onWhole }: ScopeNarrowDialogProps): JSX.Element {
+export function ScopeNarrowDialog({ open, fileName, onNarrow, onWhole, onDismiss }: ScopeNarrowDialogProps): JSX.Element {
   const { t } = useT()
   return (
     <ConfirmDialog
@@ -26,6 +32,7 @@ export function ScopeNarrowDialog({ open, fileName, onNarrow, onWhole }: ScopeNa
       cancelLabel={t('chat.scope.narrowWhole')}
       onConfirm={onNarrow}
       onCancel={onWhole}
+      onDismiss={onDismiss}
       t={t}
     >
       {t('chat.scope.narrowBody', { name: fileName })}

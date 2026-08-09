@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ImagesScreen } from '../../src/renderer/screens/ImagesScreen'
 import { ToastProvider } from '../../src/renderer/components'
@@ -360,7 +360,12 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
     expect(screen.getByRole('button', { name: 'Drop an image here' })).toBeInTheDocument()
   })
 
-  it('selecting a new image mid-analysis cancels the in-flight job and resets the thread', async () => {
+  it('Replace is disabled mid-analysis (DOC-12); after it settles, replacing resets the thread', async () => {
+    // DOC-12 (#150): this test used to pin the OLD behavior — Replace mid-analysis opened the
+    // picker and cancelled the streaming answer without confirmation. Replace now gates on
+    // `decoding || analyzing` like the landing drop zone; the reset-on-replace behavior is
+    // asserted for the settled state (the store's supersede/cancel invariant stays covered in
+    // visionSession.test.ts).
     const user = userEvent.setup()
     const s = streamStubs()
     stubApi({ ...s.api, ...pickStubs() })
@@ -373,11 +378,14 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
     // PF-7c: tokens land on the store's 40 ms batch flush, not synchronously — findByText waits.
     expect(await screen.findByText(/Partial…/)).toBeInTheDocument()
 
-    // Replace the image while the analyze is still running.
+    // Mid-analysis the Replace affordance is gated off.
+    expect(screen.getByRole('button', { name: 'Replace' })).toBeDisabled()
+
+    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'Partial… done.' }))
     await user.click(screen.getByRole('button', { name: 'Replace' }))
-    await waitFor(() => expect(s.cancel).toHaveBeenCalledWith('j1'))
-    // The previous turn is gone — the thread reset for the new image.
+    // The previous turn is gone — the thread reset for the new image; nothing to cancel.
     await waitFor(() => expect(screen.queryByText(/Partial…/)).not.toBeInTheDocument())
+    expect(s.cancel).not.toHaveBeenCalled()
   })
 
   it('Stop cancels the active job and marks the turn stopped', async () => {
@@ -521,7 +529,7 @@ describe('ImagesScreen — history (image-understanding history)', () => {
 
     await screen.findByText('receipt.png')
     // The row's Delete opens a ConfirmDialog; confirm inside the dialog (avoids the row button).
-    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(screen.getByRole('button', { name: 'Delete receipt.png' }))
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
 
@@ -549,7 +557,7 @@ describe('ImagesScreen — history (image-understanding history)', () => {
     )
 
     await screen.findByText('receipt.png')
-    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(screen.getByRole('button', { name: 'Delete receipt.png' }))
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
 
@@ -765,8 +773,56 @@ describe('ImagesScreen — copy feedback (full-audit 2026-07-11 CODE-36)', () =>
 })
 
 // Minimal drag-drop event with a files-bearing dataTransfer (jsdom has no real DataTransfer).
+// Carries `types: ['Files']` — DOC-3 (#143): the drop zone now accepts only real FILE drags
+// (the TranslateDropZone L8 pattern), exactly what a native OS file drop reports.
 function fireDrop(el: Element, files: File[]): void {
   const event = new Event('drop', { bubbles: true, cancelable: true })
-  Object.defineProperty(event, 'dataTransfer', { value: { files } })
+  Object.defineProperty(event, 'dataTransfer', { value: { files, types: ['Files'] } })
   el.dispatchEvent(event)
 }
+
+// DOC-12 + DOC-13 (frontend audit 2026-08-09, #150 — #143 companions).
+describe('ImagesScreen — analysis-window guards (DOC-12/DOC-13)', () => {
+  it('DOC-12: Replace and Remove are disabled while an analysis streams (like the landing zone)', async () => {
+    const user = userEvent.setup()
+    const s = streamStubs()
+    stubApi({ ...s.api, ...pickStubs() })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    await selectImageViaPicker(user)
+    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await screen.findByText('Starting the vision model…')
+
+    // Pre-fix Replace gated only on `decoding`: a stray click mid-analysis opened the picker
+    // and cancelled the streaming answer without confirmation.
+    expect(screen.getByRole('button', { name: 'Replace' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled()
+
+    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'A receipt.' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replace' })).toBeEnabled())
+  })
+
+  it('DOC-13: a busy-refused Ask restores the typed question instead of discarding it', async () => {
+    const user = userEvent.setup()
+    const s = streamStubs()
+    stubApi({ ...s.api, ...pickStubs() })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    await selectImageViaPicker(user)
+
+    const box = screen.getByPlaceholderText('Ask about this image…') as HTMLTextAreaElement
+    await user.type(box, 'Which totals are visible?')
+    // Two submits in the same flush — the F4 window where a click reaches onSend before React
+    // re-renders the disabled composer (one act() so the disable can't land in between). The
+    // second analyze is store-refused as 'busy'.
+    const ask = screen.getByRole('button', { name: 'Ask' })
+    await act(async () => {
+      fireEvent.click(ask)
+      fireEvent.click(ask)
+    })
+
+    // Pre-fix the second submit's optimistic clear discarded the question outright. Now the
+    // refused draft comes back, and the friendly busy banner explains why.
+    await waitFor(() => expect(box.value).toBe('Which totals are visible?'))
+    expect(await screen.findByText('Working on the previous question…')).toBeInTheDocument()
+  })
+})

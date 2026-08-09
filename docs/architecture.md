@@ -3062,7 +3062,8 @@ code comments cite them as "i18n record §N"** (the German style rules of §3.5 
 ### §3.1 The i18n module
 
 `apps/desktop/src/shared/i18n/` (importable from both processes): `en.ts` is the
-source-of-truth catalog (~600 keys; `MessageKey = keyof typeof en`), `de.ts` the typed
+source-of-truth catalog (~600 keys at the Phase-39 record; ~1,700 by 2026-08 — #151 AR-2;
+`MessageKey = keyof typeof en`), `de.ts` the typed
 German catalog with the §3.5 glossary pinned on top, `index.ts` exports `t(lang, key,
 params?)` (synchronous lookup + `{name}` interpolation; unknown key/missing param falls
 back to English — never a crash), `tCount(lang, keyBase, n)` (`.one` for exactly 1, else
@@ -3093,7 +3094,9 @@ osLocale)`.
 
 - **Rule 1 — persist canonical, translate at display (D-L4).** Anything written to the DB
   or settings keeps being written as the exact English catalog value via an explicit
-  `t('en', …)` at the persist site: the seven parser-failure constants (incl.
+  `t('en', …)` at the persist site: the parser-failure constants (seven at this record;
+  ten by 2026-08 — the audio + OCR waves added three, and the evidence-review default title
+  `main.evidenceReviews.defaultTitle` joined the same persist-canonical set — #151 AR-3) (incl.
   `PDF_SCAN_DETECTED_MESSAGE`, whose **exact-match derives `scanDetected`** — the OCR
   offer), source-missing/interrupted ingestion messages, `NO_DOCUMENT_CONTEXT_ANSWER` +
   `REINDEX_NEEDED_ANSWER` (persisted into `messages.content`), `DOC_TASK_BUSY_MESSAGE`
@@ -6915,7 +6918,7 @@ Per-finding disposition (fixed → phase@commit / declined → rationale / info 
 | **SK-5** | MED | P4 `8063a1e` | **fixed** — the two bank-statement aux files taught the instruction-only v1 (decline to sum/validate/categorize/export) — the opposite of shipped behavior. `examples/reading-a-statement.md` rewritten around the stable honesty posture (kept the three-question structure; "Where the numbers come from" replaces "What this version does not do"; exports always ask before saving); `schemas/transaction.schema.json` `description` fixed to reality (produced by `extract_transactions`, mirrors + pinned to the TS export). Files are never injected at runtime but ride skill export (`installer.ts:840-862`) — first thing a contributor reads. |
 | **SK-6** | MED | P4 `8063a1e` | **fixed** — `transaction.schema.json` was a hand-maintained mirror with no parity pin. `TRANSACTION_ROW_SCHEMA` exported from `tools/bank-statement.ts` (test-motivated, comment says so); new `tests/unit/skills-transaction-schema-parity.test.ts` structurally compares the JSON to the TS export (property-name set, per-property `type`/`pattern`/`minimum`/`minLength`, `required`, `additionalProperties`), the intentional `category` delta encoded by name. Teeth-checked (`^[A-Z]{3}$`→`{4}$` → RED). §8 carries the pin note. |
 | **SK-7** | MED | P3 `1af932b` | **fixed** — share-safe-review named the sibling skill by EN name only and quoted EN boilerplate under an "answer in the user's language" rule. §4 → "Document Redaction / Dokument schwärzen" (SKA-42 name-both precedent); §3/§4 boilerplate reframed to license translation ("in the user's language, equivalent to:" / "tell the user, in their language:") with the English kept as canonical content. Version → 1.1.0. |
-| **SK-8** | LOW | P1 `c08a0a9` | **fixed** — "just below the chat box" was spatially wrong (`SkillRunBar` renders ABOVE the composer, `ChatScreen.tsx:1721,1736`). Fixed in the same commit across both SKILL.md bodies, the EN routing copy, and the DE ("direkt über dem Eingabefeld", formal register `skill-i18n.test.ts` gates) so the model's directions and the on-screen UI agree. |
+| **SK-8** | LOW | P1 `c08a0a9` | **fixed** — "just below the chat box" was spatially wrong (`SkillRunBar` renders ABOVE the composer — its two ChatScreen render sites; line numbers drift, #151 AR-4). Fixed in the same commit across both SKILL.md bodies, the EN routing copy, and the DE ("direkt über dem Eingabefeld", formal register `skill-i18n.test.ts` gates) so the model's directions and the on-screen UI agree. |
 | **SK-9** | LOW | P1 `c08a0a9` | **fixed** — redaction body enumerated only the three default locate categories; added a clause noting that when the user steers the scope, other located items are masked as `[REDACTED]` (default still the three, matching `DEFAULT_LOCATE_DIRECTIVE`). |
 | **SK-10** | LOW | P3 `1af932b` | **fixed** — invoice honesty rule listed 2 of `validateInvoiceTotals`' 3 checks; added "or the tax doesn't match the stated rate" (`taxMatchesRate`) + the closing paragraph's "add up (including the stated tax rate)". |
 | **SK-11** | LOW | P1 `c08a0a9` | **fixed** — document-edit's "never repeat document text back to them" was over-broad (find/replace terms are user-typed and already in the transcript); narrowed to allow naming the user's own terms while forbidding quoting any OTHER document text. Redaction's stricter rule kept (its sensitive strings are app-detected, not user-typed). |
@@ -7098,7 +7101,7 @@ Per-finding disposition (fixed → phase@commit / deferred·watch → where regi
 | **PF-3** | LOW-MED | P7 `01ae6be` | **fixed** — `idx_runtime_events_created` added on the ensure-on-open path; the audit-log prune is slack-gated (`AUDIT_MAX_ROWS` 5000 + 250, prune back to the cap) and runs in ONE transaction with its insert; `recordEvent`'s never-throws contract kept. |
 | **PF-4** | LOW | P11 `c453f6d` | **fixed** — ONE manifest walk+parse per `composeServices` pass feeds all role resolvers (was five synchronous walks in `initBackend` before the window exists); deliberately NO stateful cache — per-action IPC callers stay fresh (real-discovery walk-count test). |
 | **PF-5** | LOW | — | **watch-item** — `listDocuments` is load-all with an unindexed `created_at` sort; fine at ≤~1k documents, multi-MB IPC payload at ~10k. Registered in `known-limitations.md` (documents-list bullet); revisit together with the DB-8 `ocr_json` projection migration when a library approaches that scale. |
-| **PF-6** | LOW | P12 `46d14ec` | **fixed (−20.5%)** — six screens route-level lazy behind the per-screen ErrorBoundary (Documents/Settings/Models/Images/Skills/Translate); init bundle 1,255 → 998 kB. The audit's −30% aspiration is unreachable screens-only: Chat stays deliberately eager (lazy Chat would de-facto split the shared chat components) and the ~290 kB i18n catalogs are excluded by design — both reserved as separate decisions. |
+| **PF-6** | LOW | P12 `46d14ec` | **fixed (−20.5%)** — route-level lazy screens behind the per-screen ErrorBoundary (Documents/Settings/Models/Images/Skills/Translate at this record; Review joined with EP-1 — seven total, #151 AR-4); init bundle 1,255 → 998 kB. The audit's −30% aspiration is unreachable screens-only: Chat stays deliberately eager (lazy Chat would de-facto split the shared chat components) and the ~290 kB i18n catalogs are excluded by design — both reserved as separate decisions. |
 | **PF-7** | LOW | P11 `c453f6d` | **fixed (a–d)** — (a) Home runtime poll gates on value change + stops once running (focus re-arm); (b) doctasks store ports the `sameRun`-style no-change gate; (c) visionSession batches token notifies through a 40 ms flush + the `useEventCallback` sweep over ImagesScreen handlers — **closes carried-forward PERF-5** (2026-06-30 ledger row marked); (d) ScopePopover memoizes its list derivations. |
 | **PF-8** | LOW | — | **watch-item** — the resident vector cache at the 1M-chunk bound is a RAM problem (~1.8 GB resident), not just scan time; the P4b worker fixes blocking, not residency. Folded into the P4b deferral record (above) so the residency axis is part of the P4b design when its ">100 ms routinely" trigger fires. |
 | **TS-1** | MED | P10 `9f044d8` | **fixed** — fixed-sleep sweep: the six remaining raw sleep sync points converted to deterministic gates (`reached()` probes, `seenSignal` polls, a positive-control sentinel, an empty-`act` flush); every surviving sleep comment-justified; full suite run 3× — zero flakes; CONTRIBUTING gains the no-fixed-sleeps rule. |
@@ -9130,7 +9133,9 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   → downscale longest side to 1536 → re-encode to the input MIME on `OffscreenCanvas`/`<canvas>` →
   `data:` URL, EXIF stripped by the draw **best-effort** (#120 item 5: the original-bytes fallback
   below ships EXIF intact), best-effort fallback to original bytes. Images is the
-  **6th primary nav destination** — `design-guidelines.md §2` updated to "6 primary + 1 utility".
+  **6th primary nav destination** — `design-guidelines.md §2` updated to "6 primary + 1 utility"
+  *at that wave's date*. (#151 AR-1: superseded by TG-4 — Translate joined and Images now sits
+  5th of **7 primary + 1 utility**; §2 and the TG-4 note earlier in this file are current.)
 - **Lifecycle wiring** — `ctx.vision` built once in `main/index.ts`; torn down on `will-quit` and on
   workspace **LOCK** (in `registerWorkspaceIpc`, beside `ctx.embedder.suspend()` — its KV cache holds
   the decoded image, so it must die before the vault re-encrypts).

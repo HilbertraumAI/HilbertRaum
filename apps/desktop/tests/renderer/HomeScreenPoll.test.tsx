@@ -48,7 +48,7 @@ describe('HomeScreen — runtime poll gate (PF-7a)', () => {
       listDocuments: vi.fn(async () => []),
       runPreflight: vi.fn(async () => PREFLIGHT),
       getRuntimeStatus
-    } as never)
+    })
     await renderSettled()
 
     // One warm-up tick: React renders a component ONCE more to confirm a bailed-out state
@@ -75,7 +75,7 @@ describe('HomeScreen — runtime poll gate (PF-7a)', () => {
       listDocuments: vi.fn(async () => []),
       runPreflight: vi.fn(async () => PREFLIGHT),
       getRuntimeStatus
-    } as never)
+    })
     await renderSettled()
 
     const callsAfterMount = getRuntimeStatus.mock.calls.length

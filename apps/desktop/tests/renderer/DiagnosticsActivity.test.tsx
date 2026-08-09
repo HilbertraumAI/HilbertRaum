@@ -6,6 +6,7 @@ import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AuditEvent, type RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { appStatus, driveStatus } from '../helpers/status'
 
 // Phase 19: the "Activity" panel over the audit log — on-demand load, the client-side
 // type filter, the load-more cursor, and the export action. Friendly §11.4 copy; the
@@ -32,13 +33,13 @@ function event(n: number, type: AuditEvent['type'], message: string): AuditEvent
 
 function stubDiagnostics(overrides: Record<string, ReturnType<typeof vi.fn>>): void {
   stubApi({
-    getAppStatus: vi.fn(async () => ({}) as never),
-    getDriveStatus: vi.fn(async () => ({}) as never),
+    getAppStatus: vi.fn(async () => appStatus()),
+    getDriveStatus: vi.fn(async () => driveStatus()),
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getRuntimeInstall: vi.fn(async () => null),
     getSettings: vi.fn(async () => DEFAULT_SETTINGS),
     ...overrides
-  } as never)
+  })
 }
 
 afterEach(cleanup)

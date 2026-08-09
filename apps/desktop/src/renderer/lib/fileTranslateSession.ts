@@ -520,7 +520,11 @@ export async function adoptActiveFileTranslation(): Promise<void> {
   // Re-check the token FIRST, before any other post-await work: if it moved, this read's result
   // belongs to a session that no longer exists.
   if (entryGen !== gen) return
-  if (!task || task.kind !== 'translation' || task.state !== 'running') return
+  // DOC-8 (#150, the FA-3/F-3 symptom): accept `queued` alongside `running` — the text-path
+  // adopt (translateSession.ts) already does. A renderer reload in the queued window used to
+  // leave the task running invisibly, with new starts refused `docTaskBusy`.
+  if (!task || task.kind !== 'translation' || (task.state !== 'running' && task.state !== 'queued'))
+    return
   // Same `idle` rule on the re-check, not just `busy` (AUD-04): a session can also go TERMINAL while
   // the read above was in flight — a rejected drop (multi-file, no path, a foreign task on the lane)
   // lands `failed` synchronously — and that just-raised banner must not be replaced either. Kept
