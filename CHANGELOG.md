@@ -128,13 +128,13 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Changed
 
-- **The AI model and Skills screens use the wider workspace width** (issue
-  #171, following up issue #166's width tiers). Both are card/row lists with
-  badges and action buttons, so they now share the workspace width of
-  Documents, Translate and Images instead of the narrow reading column. Home,
-  Settings and the chat transcript deliberately keep their reading widths —
-  they are prose surfaces, and longer lines would be harder to read. The
-  centred content also no longer shifts sideways by the scrollbar's width when
+- **Every screen shares one content width** (issues #166/#171). All screens —
+  Home, Documents, Translate, Images, AI model, Skills, Settings — now use the
+  same centred content width with symmetric side gutters, so pages no longer
+  read as differently sized; only the chat keeps its full-bleed layout with the
+  centred transcript. Explanatory texts inside are capped at a readable line
+  length, so the wider pages don't make help texts harder to read. The centred
+  content also no longer shifts sideways by the scrollbar's width when
   switching between scrolling and non-scrolling pages.
 - **Document translations pack fuller windows on compound-heavy languages**
   (issue #165). The window planner now budgets and fills in the same unit

@@ -3,13 +3,12 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-// #166: the screen containers had drifted into three undocumented caps (860 / 1100 / 1180px),
-// all left-aligned, so the leftover space piled up as a differently-sized right gutter on
-// every screen. Guidelines §14 fixes TWO centred tiers — reading 860px (`.screen`) and
-// workspace 1180px — and these pins keep a third width (or a left-aligned container) from
-// creeping back in with a future wave. #171 (§14 amendment) re-tiered the two card/row-list
-// screens (AI model, Skills) from reading to workspace — the same §11.6 "list needs more
-// than a reading column" argument that placed docs / translate / images / review.
+// #166 found the screen containers drifted into three undocumented left-aligned caps; #171
+// first re-tiered the card/list screens, then the owner's live review settled the end state
+// (guidelines §14 as amended): ONE centred 1180px width for every screen — the same frame
+// and orientation on every page — with the READING measure protected one level down by 72ch
+// caps on the prose roles. These pins keep per-screen widths (the drift §14 closed) from
+// coming back, and keep the prose caps that make the single wide frame readable.
 
 const stylesCss = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'renderer', 'styles.css'),
@@ -20,11 +19,19 @@ const stylesCss = readFileSync(
 const rule = (selector: string) =>
   stylesCss.match(new RegExp(`^\\.${selector}\\s*\\{([^}]*)\\}`, 'm'))?.[1] ?? ''
 
-describe('styles.css — screen width tiers (guidelines §14, #166)', () => {
-  it('reading tier: .screen caps at 860px and centres (symmetric gutters)', () => {
+describe('styles.css — the single screen width (guidelines §14, #166/#171)', () => {
+  it('.screen is the one width: 1180px, centred (symmetric gutters)', () => {
     const screen = rule('screen')
-    expect(screen).toContain('max-width: 860px')
+    expect(screen).toContain('max-width: 1180px')
     expect(screen).toContain('margin: 0 auto')
+  })
+
+  it('no per-screen container re-introduces its own max-width', () => {
+    // Every `.<something>-screen { … }` container rule must inherit the shared frame.
+    const offenders = [...stylesCss.matchAll(/^(\.[\w-]+-screen)\s*\{([^}]*)\}/gm)]
+      .filter(([, , body]) => /max-width/.test(body))
+      .map(([, selector]) => selector)
+    expect(offenders).toEqual([])
   })
 
   it('the scroll container reserves the scrollbar gutter on both edges (#171)', () => {
@@ -33,23 +40,10 @@ describe('styles.css — screen width tiers (guidelines §14, #166)', () => {
     expect(rule('content')).toContain('scrollbar-gutter: stable both-edges')
   })
 
-  it.each([
-    'docs-screen',
-    'translate-screen',
-    'images-screen',
-    'review-screen',
-    'models-screen',
-    'skills-screen'
-  ])('workspace tier: .%s caps at 1180px', (selector) => {
-    expect(rule(selector)).toContain('max-width: 1180px')
-  })
-
-  it('no screen container invents a third width tier', () => {
-    const widths = [
-      ...stylesCss.matchAll(/^\.[\w-]*screen\s*\{[^}]*?max-width:\s*(\d+)px/gm)
-    ].map((m) => Number(m[1]))
-    // .screen + the six workspace containers must all be present and on-tier.
-    expect(widths.length).toBeGreaterThanOrEqual(7)
-    for (const width of widths) expect([860, 1180]).toContain(width)
-  })
+  it.each(['lead', 'hint', 'offline-statement'])(
+    'prose role .%s keeps the 72ch reading measure inside the wide frame',
+    (selector) => {
+      expect(rule(selector)).toContain('max-width: 72ch')
+    }
+  )
 })
