@@ -369,6 +369,67 @@ non-comparable mmap basis — §9.3 "§4 RSS"), and the 9B + both 27B §9.1 smok
 rescored table did NOT contradict the promoted ranks. Residuals live in the wave follow-up
 issue: the Windows-basis RSS re-measure and the 35B-A3B §9.1 smoke.)*
 
+### 6.5 Signal-aware picker: the measured-tok/s step-down (issue #95 item 1, 2026-08-09)
+
+**Status: design record for the option-2 signal-aware picker (issue #53's residue, tracked in
+issue #95). Changes recommendation behavior for every benchmarked machine, so it carries the
+BUILD_STATE §5 item 8 standing requirement: owner sign-off (@comilionas) in PR review before
+merge. It also resolves issue #52's deferred downgrade question (see "What this resolves"
+below).**
+
+The RAM-best-fit picker (§6.2/§6.3) sees capacity only. Two machines with 16 GB get the same
+pick even when one of them demonstrably generates text at a crawl (issue #53's weak-iGPU laptop
+class). Since issue #52 the Diagnostics benchmark persists the honest pairing (`tokensPerSecond`
+plus `measuredModelId`, the model that actually produced the number), so the picker can now
+consume it. The rules:
+
+1. **Required behavior.** A loaded-model tok/s probe under the threshold
+   (`SLOW_PICK_TOKENS_PER_SECOND = 5`, strictly below) steps the RAM-best-fit recommendation
+   down ONE size tier. At or above the threshold, or with no probe, nothing changes.
+2. **Applicability predicate (the #52 lesson).** The crawl is a valid signal ONLY when
+   `measuredModelId` resolves to a catalog manifest of the same role whose `recommended_ram_gb`
+   is at or below the would-be pick's `recommended_ram_gb`. A crawl measured on an OVERSIZED
+   loaded model (the user manually started something above their tier) is expected and never
+   downgrades the pick. A `measuredModelId` that no longer resolves in the catalog is no
+   signal. The signal applies to the CHAT recommendation only: the probe streams through a
+   chat model, and the embeddings pick never moves on it.
+3. **"One tier down" defined.** Re-run the §6.2 comfortable stage excluding the top band (every
+   model sharing the winner's `recommended_ram_gb`), over RANKED models only: the §6.3
+   ranked-only guard applies unchanged, and the step therefore can never land on a rank-0 model
+   (`gemma4-e2b` stays unreachable until its own #95-item-2 gate resolves). If no lower ranked
+   tier exists, KEEP the original pick: the step never lands on nothing. A pick that came from
+   the runnable fallback stage (machine below every comfortable line) also keeps: it is already
+   the lightest honest answer. Against the committed catalog today the step moves 24 GB boxes
+   `qwen3.6-27b-q4` → `qwen3.5-9b-ud-q4kxl` and ≥32 GB boxes `qwen3.6-27b-q5` →
+   `qwen3.6-27b-q4`; the 16 GB tier keeps its pick (no ranked band below 16 exists yet). The
+   step's reach grows as RAM lines are retuned from measured RSS (#95 item 3) or lower tiers
+   earn ranks (#95 item 2): the rule is structural, not a hardcoded mapping.
+4. **Stateless, single-step.** The stepped pick is derived fresh on every `listModels` call
+   from the persisted `settings.lastBenchmark`; a re-benchmark replaces the sample. The base
+   pick is always recomputed from RAM alone, so downgrades never compound across runs.
+5. **No-signal path byte-identical.** No benchmark yet, probe skipped (no runtime was
+   running), tok/s at/above threshold, or predicate fails: the result is today's pure
+   RAM-best-fit answer, exactly. The no-signal mapping (≤12 → Qwen3.5 4B, 16–20 → Qwen3.5 9B,
+   24 → Qwen3.6 27B Q4, ≥32 → Qwen3.6 27B Q5) stays pinned untouched in
+   `committed-catalog.test.ts` and `benchmark.test.ts`.
+6. **Consistency across surfaces.** `runBenchmark` (the Diagnostics card's
+   `recommendedModelId`) applies the same rule with the just-measured values, and
+   `listModels` applies it with the persisted ones, so the two surfaces cannot disagree:
+   both call the same `recommendModelIdByRam(manifests, ram, role, speedSignal)` picker.
+7. **Surfacing.** When the step-down fires, the #52 named-warning family gains a sibling
+   (`main.benchmark.warnRecommendationLowered`): it says the recommendation was moved down one
+   size tier and names the measured model and the measured figure. EN + DE catalogs; persisted
+   in `settings.lastBenchmark.warnings` as canonical English (i18n record §3.3 rule 1), display
+   translated via the interpolated display map. The #110 slow-read warning upsert is untouched.
+
+**What this resolves.** Issue #52 deliberately deferred the question "should the profile
+downgrade be suppressed when the measured model is much larger than the recommendation?"
+(recorded in `benchmark.md` "Profile classification"). Answer, as built: the legacy PROFILE
+downgrade stays as-is (it feeds the profile table, a fallback surface), and the
+RECOMMENDATION applies the predicate above instead: an oversized crawl never moves the pick,
+a right-sized crawl moves it exactly one tier. The #52 warning keeps naming the measured
+model; the new sibling warning names the consequence for the pick.
+
 ---
 
 ## 7. Design record — catalog expansion (Phases 28–29, decisions D16–D22)

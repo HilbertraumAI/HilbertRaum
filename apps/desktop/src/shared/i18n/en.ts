@@ -1811,6 +1811,13 @@ export const en = {
     'Text generation was very slow with the loaded model ({model}), so the assigned profile ' +
     'was stepped down one level. If that model is larger than the recommended one, start the ' +
     'recommended model and run the benchmark again.',
+  // Interpolated persist-canonical (issue #95, model-benchmarks §6.5): carries the measured
+  // figure AND the measured model's id, so the display map reverse-matches it via a
+  // two-parameter template regex (INTERPOLATED_MAP_KEYS), not exact match.
+  'main.benchmark.warnRecommendationLowered':
+    'Text generation measured about {tps} tokens per second with the loaded model ({model}), ' +
+    'so the recommended model was moved down one size tier to keep answers quick on this ' +
+    'computer.',
   'main.benchmark.locked': 'Workspace is locked. Unlock it to run the benchmark.',
 
   // EMISSION set (D-L5): ephemeral strings localized at the emission site via tMain()

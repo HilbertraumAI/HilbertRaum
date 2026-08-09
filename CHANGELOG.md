@@ -126,6 +126,14 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Changed
 
+- **The model recommendation now listens to measured speed** (issue #95, resolving
+  issue #52's deferred question). When the Diagnostics benchmark measures text
+  generation under 5 tokens per second on a model that is right-sized for this
+  machine (or smaller), the recommendation steps down one size tier to a quicker
+  model, and a warning names the measured model and figure. A crawl measured on
+  an oversized, manually started model never moves the pick, machines without a
+  benchmark or with a healthy reading are byte-identical to before, and the step
+  can never land on a model the benchmark record has not ranked.
 - **Diagnostics now shows a real read speed** (issue #108). The old "Drive read
   (cached)" figure came from the operating system's memory cache and showed
   four-digit MB/s numbers even on a slow USB stick — it is gone. In its place,

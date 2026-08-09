@@ -1868,6 +1868,10 @@ export const de: Record<keyof typeof en, string> = {
     'Die Textgenerierung war mit dem geladenen Modell ({model}) sehr langsam, daher wurde ' +
     'das zugewiesene Profil eine Stufe herabgesetzt. Wenn dieses Modell größer ist als das ' +
     'empfohlene, starte das empfohlene Modell und führe den Benchmark erneut aus.',
+  'main.benchmark.warnRecommendationLowered':
+    'Die Textgenerierung lag mit dem geladenen Modell ({model}) bei etwa {tps} Tokens pro ' +
+    'Sekunde, daher wurde die Modell-Empfehlung eine Größenstufe herabgesetzt, damit ' +
+    'Antworten auf diesem Computer schnell bleiben.',
   'main.benchmark.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um den Benchmark auszuführen.',
 
   // Emission set (D-L5): localized at the emission site via tMain().

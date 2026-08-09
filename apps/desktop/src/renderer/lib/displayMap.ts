@@ -60,14 +60,19 @@ export type BoundT = (key: MessageKey, params?: MessageParams) => string
 export const INTERPOLATED_MAP_KEYS: readonly MessageKey[] = [
   'main.ingest.unsupportedType',
   'main.benchmark.warnVeryLowTokens',
-  'main.benchmark.warnSlowRead'
+  'main.benchmark.warnSlowRead',
+  'main.benchmark.warnRecommendationLowered'
 ]
 
-/** Build a `^…$` regex from an English template by escaping it and turning its single
- *  `{param}` placeholder into a capture group. */
-function templateToRegex(template: string, param: string): RegExp {
-  const escaped = template.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`^${escaped.replace(`\\{${param}\\}`, '(.+?)')}$`)
+/** Build a `^…$` regex from an English template by escaping it and turning each `{param}`
+ *  placeholder into a capture group. Pass params in TEMPLATE ORDER: capture group N is the
+ *  Nth placeholder in the English template. */
+function templateToRegex(template: string, ...params: string[]): RegExp {
+  let escaped = template.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  for (const param of params) {
+    escaped = escaped.replace(`\\{${param}\\}`, '(.+?)')
+  }
+  return new RegExp(`^${escaped}$`)
 }
 
 const UNSUPPORTED_TYPE_RE = templateToRegex(en['main.ingest.unsupportedType'], 'ext')
@@ -76,6 +81,13 @@ const UNSUPPORTED_TYPE_RE = templateToRegex(en['main.ingest.unsupportedType'], '
 const WARN_VERY_LOW_TOKENS_RE = templateToRegex(en['main.benchmark.warnVeryLowTokens'], 'model')
 // #110: the slow-read warning carries the measured effective MB/s the same way.
 const WARN_SLOW_READ_RE = templateToRegex(en['main.benchmark.warnSlowRead'], 'mbps')
+// Issue #95 (§6.5): the recommendation-lowered warning carries TWO values — the measured
+// figure and the model id — in that order in the English template.
+const WARN_RECOMMENDATION_LOWERED_RE = templateToRegex(
+  en['main.benchmark.warnRecommendationLowered'],
+  'tps',
+  'model'
+)
 // Legacy pattern for rows persisted by Phase-4-era ingestion (before this message was
 // localized): the old raw English form ended with the offending extension. Matched here so an
 // already-failed row still localizes after this change instead of leaking raw English into a
@@ -146,6 +158,10 @@ export function localizeServerCopy(t: BoundT, raw: string): string {
   if (model != null) return t('main.benchmark.warnVeryLowTokens', { model })
   const mbps = WARN_SLOW_READ_RE.exec(raw)?.[1]
   if (mbps != null) return t('main.benchmark.warnSlowRead', { mbps })
+  const lowered = WARN_RECOMMENDATION_LOWERED_RE.exec(raw)
+  if (lowered) {
+    return t('main.benchmark.warnRecommendationLowered', { tps: lowered[1], model: lowered[2] })
+  }
   const busy = en['main.chat.docTaskBusy']
   if (raw.includes(busy)) return raw.replace(busy, t('main.chat.docTaskBusy'))
   return localizeCitationMarkers(t, raw)

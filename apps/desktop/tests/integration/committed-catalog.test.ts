@@ -269,6 +269,58 @@ describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
   })
 })
 
+// §6.5 speed-signal step-down (issue #95) against the REAL committed catalog: a sub-threshold
+// crawl measured on the tier's own pick steps the recommendation exactly one capacity band
+// down. The no-signal mapping above ("NEVER auto-recommends…" + benchmark.test.ts's
+// 8/12/16/20/24/32 table) stays byte-identical — these rows only pin the stepped picks.
+describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', () => {
+  /** A crawl measured on the tier's own no-signal pick: the predicate always applies. */
+  function slowOnOwnPick(chat: ModelManifest[], ram: number) {
+    return { tokensPerSecond: 2.0, measuredModelId: recommendModelIdByRam(chat, ram, 'chat') }
+  }
+
+  it('steps each tier down one band on a right-sized crawl (stepped mapping)', () => {
+    const chat = committedManifests()
+    // ≤12 GB: the pick is the runnable-stage fallback (nothing fits comfortably) — keeps.
+    expect(recommendModelIdByRam(chat, 8, 'chat', slowOnOwnPick(chat, 8))).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(recommendModelIdByRam(chat, 12, 'chat', slowOnOwnPick(chat, 12))).toBe('qwen3.5-4b-ud-q4kxl')
+    // 16–20 GB: no ranked band exists below 16 (the fast tier is rank 0) — keeps. The weak-
+    // 16 GB-box tier resolution stays with #95 item 2 (E2B's rank) / item 3 (RAM retune).
+    expect(recommendModelIdByRam(chat, 16, 'chat', slowOnOwnPick(chat, 16))).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(recommendModelIdByRam(chat, 20, 'chat', slowOnOwnPick(chat, 20))).toBe('qwen3.5-9b-ud-q4kxl')
+    // 24 GB: 27B Q4 crawling steps to the 16-band winner.
+    expect(recommendModelIdByRam(chat, 24, 'chat', slowOnOwnPick(chat, 24))).toBe('qwen3.5-9b-ud-q4kxl')
+    // ≥32 GB: 27B Q5 crawling steps to the 24-band winner.
+    expect(recommendModelIdByRam(chat, 32, 'chat', slowOnOwnPick(chat, 32))).toBe('qwen3.6-27b-q4')
+    expect(recommendModelIdByRam(chat, 48, 'chat', slowOnOwnPick(chat, 48))).toBe('qwen3.6-27b-q4')
+    expect(recommendModelIdByRam(chat, 128, 'chat', slowOnOwnPick(chat, 128))).toBe('qwen3.6-27b-q4')
+  })
+
+  it('an oversized crawl never moves the pick (the #52 lesson, real manifests)', () => {
+    const chat = committedManifests()
+    // 24 GB box, crawl measured on the manually-started 32 GB-tier Q5: pick unchanged.
+    expect(
+      recommendModelIdByRam(chat, 24, 'chat', { tokensPerSecond: 2.0, measuredModelId: 'qwen3.6-27b-q5' })
+    ).toBe('qwen3.6-27b-q4')
+    // 16 GB box, crawl on the 24 GB-tier Q4: pick unchanged.
+    expect(
+      recommendModelIdByRam(chat, 16, 'chat', { tokensPerSecond: 2.0, measuredModelId: 'qwen3.6-27b-q4' })
+    ).toBe('qwen3.5-9b-ud-q4kxl')
+  })
+
+  it('still NEVER lands on a rank-0 or below-rank-3 wave model with a slow signal', () => {
+    const chat = committedManifests()
+    const neverAutoPick = new Set([
+      ...QWEN35_WAVE_IDS.filter((id) => QWEN_WAVE_RANKS[id] < 3),
+      ...GEMMA4_WAVE_IDS
+    ])
+    for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
+      const picked = recommendModelIdByRam(chat, ram, 'chat', slowOnOwnPick(chat, ram))
+      expect(neverAutoPick.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
+    }
+  })
+})
+
 // full-audit 2026-07-12 TQ-2: the 2507 refresh is the one RANKED (auto-recommendable) chat
 // manifest that carried no named CI invariant — a rank/license/hash mis-edit or an accidental
 // deletion passed the suite (issue #48 closed exactly this gap for the fast-tier pair; this
