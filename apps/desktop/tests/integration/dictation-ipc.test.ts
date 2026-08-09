@@ -265,6 +265,14 @@ describe('registerDictationIpc', () => {
 
   // REL-3 (TEST-4): a wedged child must not hang the mic spinner forever — the wall-clock
   // ceiling aborts it (→ kills the whisper child) and the renderer gets the friendly copy.
+  //
+  // Explicit 120 s timeout — the #84/#97/#101/vault-lock-cipher starved-runner class, second
+  // occurrence for this test: PR #100's run flaked it at the old 15 s budget (pure fork
+  // starvation, windows leg only), and the 2026-08-09 master push run 31337902509 (version-
+  // bump-only diff, PR-green same content, 3/4 legs green) blew even the 60 s CI budget on
+  // windows/24.x while the leg ran ~2× the ubuntu legs. The test's OWN ceiling is the
+  // injected 30 ms maxDurationMs below — every assertion is semantic, so the wide budget
+  // loosens nothing; it only outlasts a frozen runner.
   it('a wedged child rejects on the wall-clock timeout, not a hang (REL-3)', async () => {
     const workspacePath = freshWorkspacePath()
     // Only settles when the dictation timeout aborts the signal (mimics a killed child).
@@ -286,5 +294,5 @@ describe('registerDictationIpc', () => {
     )
     // The temp WAV is shredded even though the child wedged (finally ran).
     expect(readdirSync(documentsDir(workspacePath))).toEqual([])
-  })
+  }, 120_000)
 })
