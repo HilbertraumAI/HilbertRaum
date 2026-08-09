@@ -1366,6 +1366,8 @@ export const de: Record<keyof typeof en, string> = {
     'Wenn eingeschaltet, darf die App einen eindeutig passenden App-Skill von sich aus auf eine Antwort anwenden, damit du ihn nicht selbst wählen musst. Nur App-Skills, nie selbst erstellte oder importierte. Du siehst immer, welcher Skill verwendet wurde, und kannst für diese Antwort ohne ihn antworten. Standardmäßig aus.',
   'skills.autoFire.on': 'Automatische Skills an',
   'skills.autoFire.off': 'Automatische Skills aus',
+  // SH-8 (#149): fehlgeschlagenes Speichern der Auto-Skills-Einstellung – nicht die Ladefehler-Meldung.
+  'skills.autoFire.saveFailed': 'Die Einstellung für automatische Skills konnte nicht gespeichert werden.',
   'skills.import': 'Skill importieren…',
   'skills.import.menuAria': 'Einen Skill importieren',
   'skills.import.fromFile': 'Aus einer Datei (.skill.zip)…',

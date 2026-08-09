@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   Badge,
@@ -50,21 +50,34 @@ export function SkillsTab(): JSX.Element {
   // optimistic UI — simpler and robust; `refresh()` reconciles to the server state at the end.
   const [toggling, setToggling] = useState<ReadonlySet<string>>(() => new Set())
 
+  // SH-8 (#149): this was the file's one loader without an unmount guard — a late listSkills
+  // reply setState'd a dead component (the FE-4 class every sibling loader already handles).
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   const refresh = useCallback(async (): Promise<void> => {
     try {
       const list = await window.api.listSkills()
+      if (!mountedRef.current) return
       setSkills(list)
       setLoadError(null)
     } catch {
+      if (!mountedRef.current) return
       setSkills([])
       setLoadError(t('skills.loadFailed'))
     }
     // SKA-32: best-effort — an unreadable/absent status simply shows no notice (never blocks the list).
     try {
       const status = await window.api.getSkillReconcileStatus()
+      if (!mountedRef.current) return
       setReconcileStatus(typeof status?.errorCount === 'number' ? status : null)
     } catch {
-      setReconcileStatus(null)
+      if (mountedRef.current) setReconcileStatus(null)
     }
   }, [t])
 
@@ -98,7 +111,9 @@ export function SkillsTab(): JSX.Element {
       setSettings(next)
       toast(on ? t('skills.autoFire.on') : t('skills.autoFire.off'))
     } catch {
-      toast(t('skills.loadFailed'))
+      // SH-8 (#149): a failed SETTINGS SAVE used to toast "Skills couldn't be loaded" — the
+      // CODE-37 wrong-copy class this same file fixed for applyEnabled. Dedicated key.
+      toast(t('skills.autoFire.saveFailed'))
     }
   }
 

@@ -54,12 +54,13 @@ button { min-width: 24px; min-height: 24px; }
 .app-shell {
   display: grid;
   /* A quiet, compact navigation RAIL (guidelines §2/§12.1): icon + short label, so the
-     conversation canvas is the centre of gravity, not the chrome. The column is 100px —
-     widened from 80px just enough that the longest SINGLE-word label in either locale
-     ("Einstellungen", DE) fits on ONE line at the 12px text floor (§4.4) with the rail's
-     padding, since labels never break mid-word (`.nav-label hyphens:none`). Still far
-     slimmer than the original ~220px panel. */
-  grid-template-columns: 100px 1fr;
+     conversation canvas is the centre of gravity, not the chrome. The column is 106px —
+     widened from 80px (Task A) and again by 6px (E-1, #149) so the longest SINGLE-word
+     label in either locale ("Einstellungen", DE) fits on ONE line at the 12px text floor
+     (§4.4) AT THE ACTIVE ROW'S 600 WEIGHT — the 100px rail was measured for the regular
+     weight and the bold selected label clipped ~5px. Labels never break mid-word
+     (`.nav-label hyphens:none`). Still far slimmer than the original ~220px panel. */
+  grid-template-columns: 106px 1fr;
   height: 100vh;
 }
 
@@ -336,6 +337,14 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 /* CH-10 (#148): the token-spaced variant — replaces the chat area's one magic-number inline
    style (marginTop: 12 on the no-model actions row). */
 .actions-spaced { margin-top: var(--space-3); }
+/* SH-14 (#149): spacing/display utilities replacing the scattered inline style={{ margin… }}
+   escapes in ModelsScreen/DiagnosticsTab (spacing comes from the token scale, not literals). */
+.mt-0 { margin-top: 0; }
+.mb-0 { margin-bottom: 0; }
+.mt-2 { margin-top: var(--space-2); }
+.hint-tight { margin: var(--space-1) 0 0; }
+.hint-lede { margin: var(--space-1) 0 var(--space-2); }
+.hint-block { display: block; }
 /* Buttons (guidelines §6): three levels — .btn = Secondary (default), .btn.primary,
    .btn.ghost. Screens use the Button component (components/Button.tsx). */
 .btn {
@@ -1011,7 +1020,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 17, 21, 0.55);
+  background: var(--overlay); /* SH-14 (#149): tokenized scrim */
   z-index: 50;
 }
 .dialog {
@@ -1050,7 +1059,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .modal-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 6px; }
 .preview-segment { margin-bottom: 12px; }
 .preview-label {
-  font-size: 10px;
+  font-size: var(--text-xs); /* SH-13 (#149): 12px floor */
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-muted);
@@ -1452,7 +1461,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .docs-rail-more:hover { background: var(--surface-hover); color: var(--text); }
 .docs-rail-more-caret { font-size: 10px; }
 .doc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.doc-chip { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
+.doc-chip { font-size: var(--text-xs); padding: 1px 8px; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
 .text-input {
   width: 100%; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px;
   background: var(--surface); color: var(--text); font-size: 14px;
@@ -1463,10 +1472,10 @@ code, pre, kbd { font-family: var(--font-mono); }
 .scope-sources { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
 .scope-source-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; cursor: pointer; }
 .scope-source-name { color: var(--text); }
-.scope-source-hint { color: var(--text-muted); font-size: 11px; }
+.scope-source-hint { color: var(--text-muted); font-size: var(--text-xs); }
 .scope-specific-toggle { background: none; border: none; cursor: pointer; text-align: left; }
 /* Conversation list — creation-anchor project sections (plan §13.4) */
-.chat-proj-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 8px 10px 2px; font-weight: 600; }
+.chat-proj-group-label { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 8px 10px 2px; font-weight: 600; }
 
 @media (max-width: 760px) {
   /* The section rail collapses to a horizontal scrolling strip above the list (plan §12 L4).
@@ -2173,7 +2182,7 @@ code, pre, kbd { font-family: var(--font-mono); }
   margin-top: 10px;
   max-height: 320px;
   overflow: auto;
-  font-size: 11px;
+  font-size: var(--text-xs); /* SH-13 (#149): 12px floor */
   line-height: 1.5;
   font-family: var(--font-mono);
   background: var(--code-bg);

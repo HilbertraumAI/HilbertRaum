@@ -265,6 +265,19 @@ export function acknowledgeSkillRun(runHandle: string): void {
   void window.api.clearSkillRun?.(runHandle)
 }
 
+/**
+ * Workspace-lock purge (SH-4, #149 — the lockPurge.ts seam): stop every per-run watcher (they
+ * kept firing IPC against the locked workspace until the SKA-40 give-up parked `stateUnknown`
+ * entries that survived into the next unlock for runs main already aborted) and drop the
+ * entries. Listeners are kept and notified — unlike the test reset.
+ */
+export function clearSkillRunSession(): void {
+  for (const e of entries.values()) stopTimer(e)
+  entries.clear()
+  snapshot = []
+  notify()
+}
+
 /** Test-only: drop module-level state between renderer tests. */
 export function resetSkillRunStoreForTests(): void {
   for (const e of entries.values()) stopTimer(e)

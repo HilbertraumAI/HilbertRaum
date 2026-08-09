@@ -177,6 +177,18 @@ export function acknowledgeDocTask(): void {
   }
 }
 
+/**
+ * Workspace-lock purge (SH-4, #149 — the lockPurge.ts seam; subsumes DOC-9): stop the 400 ms
+ * watcher (it would keep firing IPC against the locked workspace until the CODE-6 give-up
+ * parked a `stateUnknown` row that then SURVIVED into the next unlock for a task main already
+ * aborted) and drop the entry. Listeners are kept and notified — unlike the test reset.
+ */
+export function clearDocTaskSession(): void {
+  stopPolling()
+  pollFailures = 0
+  if (active) setActive(null)
+}
+
 /** Test-only: drop the module-level state between renderer tests. */
 export function resetDocTaskStoreForTests(): void {
   stopPolling()

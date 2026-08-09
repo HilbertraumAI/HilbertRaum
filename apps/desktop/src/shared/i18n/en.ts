@@ -1302,6 +1302,8 @@ export const en = {
     'When on, the app may apply a clearly matching app skill to an answer on its own, so you don’t have to pick it. Only app skills, never ones you made or imported. You’ll always see which skill was used, and you can answer without it for that turn. Off by default.',
   'skills.autoFire.on': 'Automatic skills on',
   'skills.autoFire.off': 'Automatic skills off',
+  // SH-8 (#149): a failed auto-fire SETTINGS save — distinct from the list-load failure copy.
+  'skills.autoFire.saveFailed': "Couldn't save the automatic-skills setting.",
   'skills.import': 'Import skill…',
   'skills.import.menuAria': 'Import a skill',
   'skills.import.fromFile': 'From a file (.skill.zip)…',

@@ -18,6 +18,14 @@ export function consumeSkillDetailRequest(): string | null {
   return p
 }
 
+/**
+ * Workspace-lock purge (SH-4, #149 — the lockPurge.ts seam): a pending installId from before
+ * the lock must not pop a detail modal on the next unlock's first Skills visit.
+ */
+export function clearSkillDetailRequest(): void {
+  pending = null
+}
+
 /** Test-only: drop any pending request so cases stay independent. */
 export function resetSkillDetailRequestForTests(): void {
   pending = null
