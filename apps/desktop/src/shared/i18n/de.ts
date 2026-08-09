@@ -2455,6 +2455,10 @@ export const de: Record<keyof typeof en, string> = {
     'Das Übersetzungsmodell konnte nicht starten — möglicherweise ist zu wenig Arbeitsspeicher frei. Schließe andere Programme oder starte HilbertRaum neu und versuche es dann erneut.',
   'translate.err.empty': 'Es kam keine Übersetzung zurück. Versuche es erneut oder formuliere den Text um.',
   'translate.err.sameLang': 'Wähle zwei verschiedene Sprachen.',
+  // #160 (BE-3): die endliche Eingabegrenze (TRANSLATE_MAX_TEXT_CHARS — Zahl synchron halten).
+  'translate.err.tooLong':
+    'Der Text ist zu lang, um ihn hier zu übersetzen (über 200.000 Zeichen). Teile ihn in ' +
+    'kleinere Abschnitte, oder speichere ihn als Datei und übersetze ihn als Dokument.',
 
   // ---- Dokument per Drag-and-drop übersetzen (TG-5, Plan §2 D7) ----
   'translate.drop.title': 'Oder ein Dokument zum Übersetzen ablegen',

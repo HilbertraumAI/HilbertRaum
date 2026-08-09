@@ -2395,6 +2395,10 @@ export const en = {
     "The translation model couldn't start — the device may be low on memory. Close other apps or restart HilbertRaum, then try again.",
   'translate.err.empty': 'No translation came back. Try again, or rephrase the text.',
   'translate.err.sameLang': 'Pick two different languages.',
+  // #160 (BE-3): the finite paste bound (TRANSLATE_MAX_TEXT_CHARS — keep the number in sync).
+  'translate.err.tooLong':
+    'The text is too long to translate here (over 200,000 characters). Split it into smaller ' +
+    'parts, or save it as a file and translate it as a document.',
 
   // ---- Document drag-and-drop translation (TG-5, plan §2 D7) ----
   // A dropped/picked document is imported as a Temporary doc, translated on the existing

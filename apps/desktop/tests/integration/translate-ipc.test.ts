@@ -21,6 +21,7 @@ import type { Translator } from '../../src/main/services/translation'
 import { TRANSLATION_STOP_TOKEN, TranslationStartError } from '../../src/main/services/translation'
 import { planTranslationWindows } from '../../src/main/services/doctasks/translation'
 import { IPC, STREAM } from '../../src/shared/ipc'
+import { TRANSLATE_MAX_TEXT_CHARS } from '../../src/shared/types'
 import type { TranslateJob, TranslateRequest } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
@@ -452,5 +453,114 @@ describe('registerTranslateIpc — translate job contract', () => {
   it('translateStart refuses a locked workspace (never respawns the suspended sidecar)', async () => {
     registerTranslateIpc(ctxFor(false), service({ translator: scriptedTranslator() }))
     await expect(invoke(handlers, IPC.translateStart, goodReq())).rejects.toThrow()
+  })
+})
+
+// ---- #160: backend hardening (BE-2 timeout classification, BE-3 input cap, BE-4 sync terminal) ----
+
+describe('#160 — TranslateJobService hardening', () => {
+  it('BE-3: a paste over TRANSLATE_MAX_TEXT_CHARS is refused tooLong, takes no slot, never reaches the sidecar', async () => {
+    const translator = scriptedTranslator()
+    const spy = vi.spyOn(translator, 'translate')
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const big = 'a '.repeat(TRANSLATE_MAX_TEXT_CHARS / 2 + 8) // just past the cap
+    const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq({ text: big }))) as TranslateJob
+    expect(job.state).toBe('failed')
+    expect(job.error).toBe('tooLong')
+    expect(spy).not.toHaveBeenCalled() // refused before any planning/sidecar work
+
+    // The refusal is untracked (no slot): an ordinary start right after runs to done.
+    const ok = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    expect(ok.state).toBe('queued')
+    const terminal = await waitForTerminal(event, ok.jobId)
+    expect(terminal.state).toBe('done')
+  })
+
+  it('BE-3 control: a paste AT the cap is admitted (the bound is exclusive)', async () => {
+    registerTranslateIpc(ctxFor(), service({ translator: scriptedTranslator() }))
+    const event = makeEvent()
+    const atCap = 'a '.repeat(TRANSLATE_MAX_TEXT_CHARS / 2) // exactly the cap
+    expect(atCap.length).toBe(TRANSLATE_MAX_TEXT_CHARS)
+    const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq({ text: atCap }))) as TranslateJob
+    expect(job.state).toBe('queued')
+    // Don't decode ~140 windows in a unit test — cancel the admitted job immediately.
+    await invoke(handlers, IPC.translateCancel, job.jobId)
+  })
+
+  it('BE-2: a per-request timeout DURING a live decode (tokens flowed) fails the window without a retry', async () => {
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 4096,
+      async translate(o) {
+        calls += 1
+        o.onToken?.('slow ') // the decode was LIVE — tokens flowed until the bound
+        throw new DOMException('The operation timed out.', 'TimeoutError')
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const terminal = await waitForTerminal(event, job.jobId)
+    expect(terminal.state).toBe('failed')
+    expect(terminal.error).toBe('runtimeFailed')
+    // Deterministic (temperature-0, same hardware): retrying reproduces the same too-slow
+    // decode and doubles the worst case — exactly one attempt (pre-fix: two).
+    expect(calls).toBe(1)
+  })
+
+  it('BE-2 control: a timeout with NO tokens (wedged server) keeps its one transient retry', async () => {
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 4096,
+      async translate() {
+        calls += 1
+        throw new DOMException('The operation timed out.', 'TimeoutError')
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const terminal = await waitForTerminal(event, job.jobId)
+    expect(terminal.state).toBe('failed')
+    expect(calls).toBe(2) // a fresh request against a wedged server IS a reasonable bet
+  })
+
+  it('BE-4: a terminal from run()\'s synchronous prefix emits strictly AFTER start() returned', async () => {
+    // Force a SYNCHRONOUS fault in run()'s prefix: contextWindow() is called before the first
+    // await used to run, so the catch → emit.error fired inside start()'s own call stack — the
+    // renderer would miss trError against its stale 'queued' snapshot. The microtask deferral
+    // makes every terminal strictly-after-return by construction.
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => {
+        throw new Error('sync boom')
+      },
+      async translate() {
+        return ''
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    const svc = service({ translator })
+    let returned = false
+    let emittedAfterReturn: boolean | null = null
+    const job = svc.start(goodReq(), {
+      token: () => {},
+      done: () => {},
+      error: () => {
+        emittedAfterReturn = returned
+      }
+    })
+    returned = true
+    expect(job.state).toBe('queued')
+    await vi.waitFor(() => expect(emittedAfterReturn).not.toBe(null))
+    expect(emittedAfterReturn).toBe(true) // pre-fix: false (emitted synchronously inside start)
   })
 })

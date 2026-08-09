@@ -62,7 +62,8 @@ const ERR_KEY: Partial<Record<ClientTranslateError, MessageKey>> = {
   runtimeFailed: 'translate.err.runtimeFailed',
   startFailed: 'translate.err.startFailed',
   empty: 'translate.err.empty',
-  sameLang: 'translate.err.sameLang'
+  sameLang: 'translate.err.sameLang',
+  tooLong: 'translate.err.tooLong'
 }
 
 // File-path error CODES → friendly copy (a backend-provided friendly MESSAGE shows verbatim instead).

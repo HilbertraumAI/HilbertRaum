@@ -9,7 +9,7 @@ import { tMain } from '../../i18n'
 import { getDocument } from '../../ingestion'
 import { isAbortError } from '../../chat'
 import { log } from '../../logging'
-import { isCleanStop, isTranslationStartError } from '../../translation'
+import { isCleanStop, isRequestTimeoutError, isTranslationStartError } from '../../translation'
 import type { CompletionFinal, Translator } from '../../translation'
 import type { TranslationSourceLang, TranslationTargetLang } from '../../../../shared/types'
 import {
@@ -59,6 +59,9 @@ async function translateWithRetry(
   if (req.signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
   for (let attempt = 1; attempt <= 2; attempt++) {
     let final: CompletionFinal | undefined
+    // #160 (BE-2): did any token flow during THIS attempt? Splits the per-request timeout into
+    // its two causes — see the classification note in the catch below.
+    let sawTokens = false
     try {
       const out = (
         await translator.translate({
@@ -67,6 +70,9 @@ async function translateWithRetry(
           text: req.text,
           maxTokens: req.maxTokens,
           signal: req.signal,
+          onToken: () => {
+            sawTokens = true
+          },
           onFinal: (info) => {
             final = info
           }
@@ -98,6 +104,16 @@ async function translateWithRetry(
       if (isTranslationStartError(err)) {
         log.warn('Translation sidecar start failed', { error: err.message })
         throw new Error(tMain('main.translation.startFailed'))
+      }
+      // #160 (BE-2): a per-request TIMEOUT during a LIVE decode (tokens flowed) is as
+      // deterministic as a limit stop — temperature-0 on the same hardware reproduces the same
+      // too-slow decode, so the retry would hold the one-at-a-time lane another full ~45-min
+      // timeout for the same marked-window outcome. Mark now (return null), no retry. A timeout
+      // with NO tokens is a wedged server — a fresh request IS a reasonable transient bet, so
+      // that class falls through to the existing retry.
+      if (isRequestTimeoutError(err) && sawTokens) {
+        log.warn('Translation window timed out mid-decode — not retried', { attempt })
+        return null
       }
       log.warn('Translation window failed', {
         attempt,

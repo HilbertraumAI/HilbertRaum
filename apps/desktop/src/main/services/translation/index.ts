@@ -9,6 +9,7 @@ import type { TranslateOptions, TranslationDeviceStatus } from './runtime'
 export {
   TranslationRuntime,
   TranslationStartError,
+  isRequestTimeoutError,
   isTranslationStartError,
   TRANSLATION_START_FAILED_CODE
 } from './runtime'

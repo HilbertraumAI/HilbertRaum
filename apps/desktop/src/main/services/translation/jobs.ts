@@ -6,12 +6,12 @@ import type {
   TranslationSourceLang,
   TranslationTargetLang
 } from '../../../shared/types'
-import { isTranslationLangCode } from '../../../shared/types'
+import { TRANSLATE_MAX_TEXT_CHARS, isTranslationLangCode } from '../../../shared/types'
 import { planTranslationWindows } from '../doctasks/translation'
 import { log } from '../logging'
 import { isCleanStop } from './completion'
 import type { CompletionFinal } from './completion'
-import { isTranslationStartError } from './runtime'
+import { isRequestTimeoutError, isTranslationStartError } from './runtime'
 import type { Translator } from './index'
 
 // Translate-view job orchestration (TG wave, plan §2 D6). The Translate screen's live TEXT
@@ -112,6 +112,11 @@ export class TranslateJobService {
       return failedJob('badRequest')
     }
     if (text.trim() === '') return failedJob('badRequest')
+    // #160 (BE-3): a generous but FINITE input bound (mirroring the ingest-side caps). Window
+    // planning runs synchronously on the main process over the whole paste and the window count
+    // is unbounded, so a multi-MB paste stalled the main thread and started an effectively
+    // unbounded job; the honest `tooLong` copy points at the document path instead.
+    if (text.length > TRANSLATE_MAX_TEXT_CHARS) return failedJob('tooLong')
     // Busy-REJECT (never queue) then the doc-task lane guard (D9).
     if (this.activeJobId) return failedJob('busy')
     if (this.deps.hasActiveDocTask()) return failedJob('docTaskBusy')
@@ -135,6 +140,13 @@ export class TranslateJobService {
     signal: AbortSignal,
     emit: TranslateStreamEmitter
   ): Promise<void> {
+    // #160 (BE-4): yield one microtask before ANY fallible step. run() executes synchronously up
+    // to its first await, so a synchronous terminal (a sync throw, or the plan.windows === 0
+    // fail path if it ever became reachable) would emit BEFORE start() returned — the renderer
+    // would miss trError against its stale 'queued' snapshot and the IPC layer would attach a
+    // destroyed listener + detachers entry for an already-terminal job. The deferral makes every
+    // terminal emit strictly-after-return by construction instead of by a packer invariant.
+    await Promise.resolve()
     try {
       // The real defense against a start that interleaves a lock/quit teardown is `signal.aborted`:
       // `stop()` aborts every controller BEFORE the vault re-encrypts, so a run() scheduled just
@@ -197,11 +209,19 @@ export class TranslateJobService {
         let clean = false
         let limitStop = false
         let startFailed = false
-        for (let attempt = 1; attempt <= 2 && !clean && !limitStop && !startFailed; attempt++) {
+        let timedOutSlow = false
+        for (
+          let attempt = 1;
+          attempt <= 2 && !clean && !limitStop && !startFailed && !timedOutSlow;
+          attempt++
+        ) {
           // Roll back a prior failed attempt's streamed deltas. patch-level, so the cancelled
           // guard in patch() holds — a job cancelled mid-flight is never resurrected by the restore.
           if (attempt > 1) this.patch(jobId, { text: checkpoint })
           let final: CompletionFinal | undefined
+          // #160 (BE-2): did any token flow during THIS attempt? Splits the per-request timeout
+          // into its two causes — see the classification note in the catch below.
+          let sawTokens = false
           try {
             const out = await translator.translate({
               sourceLang: req.sourceLang,
@@ -209,7 +229,10 @@ export class TranslateJobService {
               text: plan.windows[i],
               maxTokens: plan.windowMaxTokens,
               signal,
-              onToken: (delta) => this.emitDelta(jobId, delta, emit),
+              onToken: (delta) => {
+                sawTokens = true
+                this.emitDelta(jobId, delta, emit)
+              },
               onFinal: (info) => {
                 final = info
               }
@@ -240,7 +263,21 @@ export class TranslateJobService {
               startFailed = true
               break
             }
-            // A per-request timeout / runtime error — never a user cancel (that aborts `signal`).
+            // #160 (BE-2): a per-request TIMEOUT during a LIVE decode (tokens flowed) is as
+            // deterministic as a limit stop — temperature-0 on the same hardware reproduces the
+            // same too-slow decode, so a retry burns another full timeout for the same outcome.
+            // A timeout with NO tokens is a wedged server, where a fresh request IS a reasonable
+            // transient bet — that class keeps the retry (fall through).
+            if (isRequestTimeoutError(err) && sawTokens) {
+              log.warn('Translate view window timed out mid-decode — not retried', {
+                jobId,
+                window: i + 1,
+                attempt
+              })
+              timedOutSlow = true
+              break
+            }
+            // A runtime error / no-tokens timeout — never a user cancel (that aborts `signal`).
             // A throw is TRANSIENT (F-2): log content-free and let the retry run; a second failure
             // fails the job below.
             log.warn('Translate view window failed', { jobId, window: i + 1, attempt, error: String(err) })

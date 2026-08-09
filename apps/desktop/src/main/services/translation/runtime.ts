@@ -276,6 +276,18 @@ export function isTranslationStartError(err: unknown): err is TranslationStartEr
   return err instanceof TranslationStartError
 }
 
+/**
+ * #160 (BE-2): the per-request timeout `combineSignals` aborts with (`TimeoutError`
+ * DOMException — the fetch/SSE read rejects with the abort reason). Both retry loops use it,
+ * together with a tokens-flowed flag, to tell "decode too slow" (tokens flowed steadily until
+ * the bound — deterministic at temperature 0, retrying reproduces it and burns another full
+ * timeout) from "server wedged" (no tokens flowed — a fresh request is a reasonable transient
+ * bet, the class the retry exists for).
+ */
+export function isRequestTimeoutError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'TimeoutError'
+}
+
 /** Owns one lazily-started TranslateGemma `llama-server` and translates one window over loopback. */
 export class TranslationRuntime {
   readonly modelId: string

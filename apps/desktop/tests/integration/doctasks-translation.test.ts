@@ -630,6 +630,57 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     expect(text).toContain(`word${budget}`)
   })
 
+  it('#160 (BE-2): a mid-decode TIMEOUT (tokens flowed) is marked WITHOUT a retry', async () => {
+    const docId = await importDoc(40) // one window
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'timing-out-translator',
+      contextWindow: () => 4096,
+      async translate(o) {
+        calls += 1
+        o.onToken?.('slow ') // the decode was LIVE — tokens flowed until the bound
+        throw new DOMException('The operation timed out.', 'TimeoutError')
+      },
+      async stop() {}
+    }
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    // Single window, marked failed → all windows failed → the task fails friendly.
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(TASK_GENERIC_FAILURE_MESSAGE)
+    // Deterministic (temperature-0, same hardware): the retry would hold the one-at-a-time
+    // lane another full per-request timeout for the identical outcome — exactly ONE attempt.
+    expect(calls).toBe(1)
+  })
+
+  it('#160 (BE-2) control: a timeout with NO tokens (wedged server) keeps its one transient retry', async () => {
+    const docId = await importDoc(40)
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'wedged-translator',
+      contextWindow: () => 4096,
+      async translate() {
+        calls += 1
+        throw new DOMException('The operation timed out.', 'TimeoutError')
+      },
+      async stop() {}
+    }
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('failed')
+    expect(calls).toBe(2) // a fresh request against a wedged server IS a reasonable bet
+  })
+
   // L12: the attribution line + failed-window notice are PERSISTED into the generated document,
   // so they localize to the app language at materialization time (via tMain), not the
   // canonical-English DB strings. With German selected, the materialized Markdown is German.
