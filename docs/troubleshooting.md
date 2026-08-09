@@ -269,7 +269,9 @@ than installing something unsafe — nothing is written when an import is refuse
 - **"A skill must be a .skill.zip file or a folder containing SKILL.md."** — you picked something that
   isn't a skill. Choose a `.skill.zip` file, or a **folder** that has a `SKILL.md` at its top level.
 - **"The package does not contain a SKILL.md file."** — the zip/folder is missing the one required
-  file. Every skill needs a `SKILL.md`.
+  file. Every skill needs a `SKILL.md`. (A zip made with macOS Finder's "Compress" used to trip this
+  wrongly — its hidden `__MACOSX`/`.DS_Store` entries confused the folder detection; fixed in #131,
+  Finder zips now import normally.)
 - **"The skill manifest is invalid."** / **"The skill id is not a valid name."** — the `SKILL.md`
   header is malformed or the skill's id has unexpected characters. Fix the header and re-import.
 - **The package "could not be read as a valid zip…"**, "uses an unsupported … zip format", "contains

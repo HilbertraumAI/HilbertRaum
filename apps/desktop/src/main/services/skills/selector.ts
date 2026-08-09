@@ -38,11 +38,15 @@ export const SUGGEST_SCORE_THRESHOLD = 2
 
 /**
  * The SEPARATE, higher bar an auto-fire (S13b) must clear — the ratified D2 setting
- * (skills-s13-plan.md §2.1). A lone doc signal maxes at MIME(1)+filename(1)=2, so a score ≥ 3
- * STRUCTURALLY means "a keyword hit corroborated by ≥ 1 doc signal" — never a lone keyword and never
- * a lone doc signal. Kept distinct from `SUGGEST_SCORE_THRESHOLD` (the inert in-picker offer stays at
- * 2): auto-fire silently shapes a turn, so it demands the stricter, baseline-proven (100% precision)
- * gate. The §3.3.1 baseline harness asserts this threshold clears the D1 ≥ 95% precision bar.
+ * (skills-s13-plan.md §2.1). The ratified meaning is "a keyword hit corroborated by ≥ 1 doc
+ * signal" — never a lone keyword and never a lone doc signal. NOTE (#130): the threshold ALONE never
+ * guaranteed that — TWO capped keyword hits score 2×KEYWORD_WEIGHT = 4 ≥ 3 with ZERO doc signals
+ * (this comment used to claim the arithmetic sufficed; it reasoned only about the lone-DOC-SIGNAL
+ * direction) — so `selectAutoFire` additionally REQUIRES a doc signal (`requireDocSignal` in
+ * `selectByThreshold`), making the D2 contract structurally enforced rather than asserted. Kept
+ * distinct from `SUGGEST_SCORE_THRESHOLD` (the inert in-picker offer stays at 2): auto-fire silently
+ * shapes a turn, so it demands the stricter gate. The §3.3.1 baseline harness asserts this gate
+ * clears the D1 ≥ 95% precision bar.
  */
 export const AUTOFIRE_SCORE_THRESHOLD = 3
 
@@ -154,17 +158,33 @@ export function countKeywordHits(keywords: readonly string[], question: string):
  */
 export function scoreSkillTriggers(triggers: SkillTriggers, ctx: SkillTriggerContext): number {
   const keywordHits = countKeywordHits(triggers.keywords, ctx.question)
-  const mimeHit = triggers.mimeTypes.some((m) => m.trim() && ctx.docMimeTypes.includes(m.trim()))
-  const filenameHit = triggers.filenamePatterns.some((p) => {
+  return (
+    Math.min(keywordHits, MAX_SCORED_KEYWORD_HITS) * KEYWORD_WEIGHT +
+    (hasMimeSignal(triggers, ctx) ? MIME_WEIGHT : 0) +
+    (hasFilenameSignal(triggers, ctx) ? FILENAME_WEIGHT : 0)
+  )
+}
+
+function hasMimeSignal(triggers: SkillTriggers, ctx: SkillTriggerContext): boolean {
+  return triggers.mimeTypes.some((m) => m.trim() && ctx.docMimeTypes.includes(m.trim()))
+}
+
+function hasFilenameSignal(triggers: SkillTriggers, ctx: SkillTriggerContext): boolean {
+  return triggers.filenamePatterns.some((p) => {
     const pat = p.trim()
     if (!pat) return false
     return ctx.docTitles.some((t) => globMatches(pat, t))
   })
-  return (
-    Math.min(keywordHits, MAX_SCORED_KEYWORD_HITS) * KEYWORD_WEIGHT +
-    (mimeHit ? MIME_WEIGHT : 0) +
-    (filenameHit ? FILENAME_WEIGHT : 0)
-  )
+}
+
+/**
+ * Does the scope contribute ANY doc signal for this skill (a MIME or filename hit — the exact
+ * booleans `scoreSkillTriggers` weighs)? The #130 auto-fire gate: the D2 contract is "keyword AND
+ * doc signal", and the score alone cannot enforce the doc-signal half (two capped keyword hits
+ * reach 4 with an empty scope). Exported so the eval harness can mirror the runtime gate 1:1.
+ */
+export function hasDocSignal(triggers: SkillTriggers, ctx: SkillTriggerContext): boolean {
+  return hasMimeSignal(triggers, ctx) || hasFilenameSignal(triggers, ctx)
 }
 
 /**
@@ -207,16 +227,21 @@ export interface SkillCandidate {
 function selectByThreshold(
   candidates: SkillCandidate[],
   ctx: SkillTriggerContext,
-  threshold: number
+  threshold: number,
+  opts: { requireDocSignal?: boolean } = {}
 ): SkillCandidate | null {
   let best: SkillCandidate | null = null
   let bestScore = 0
   for (const c of candidates) {
     // §4.2 (W5): a suggestion/auto-fire REQUIRES at least one keyword hit — the doc signals are
     // supporting-only. Without this a lone `statement.pdf` in scope stands a permanent question-
-    // independent offer (mime + filename = 2 clears the bar). Auto-fire (threshold 3) already implied a
-    // keyword; this makes the property explicit and shared by both gates.
+    // independent offer (mime + filename = 2 clears the bar).
     if (countKeywordHits(c.triggers.keywords, ctx.question) < 1) continue
+    // #130 (D2, auto-fire only): the converse gate — a keyword hit must be corroborated by ≥ 1 doc
+    // signal. The threshold alone never enforced this (two capped keyword hits = 4 ≥ 3 with zero
+    // docs in scope), silently bypassing the U4 narrowing on exactly the on-topic phrasings the
+    // bilingual vocabulary is built to catch.
+    if (opts.requireDocSignal === true && !hasDocSignal(c.triggers, ctx)) continue
     const score = scoreSkillTriggers(c.triggers, ctx)
     if (score < threshold) continue
     if (score > bestScore || (score === bestScore && best != null && c.installId < best.installId)) {
@@ -240,13 +265,15 @@ export function selectSuggestion(
 
 /**
  * Pick the single best AUTO-FIRE candidate at or above `AUTOFIRE_SCORE_THRESHOLD`, or null (S13b).
- * Same deterministic scoring + tie-break as `selectSuggestion`; only the gate is stricter (D2). The
- * caller (`resolveAutoFireSkill`) has already narrowed candidates to enabled + compatible + app-only
- * + `triggers.autoFire` and checked the user opt-in.
+ * Same deterministic scoring + tie-break as `selectSuggestion`; the gate is stricter (D2): the
+ * higher threshold AND (#130) a REQUIRED doc signal, so "the user asked AND a relevant doc is
+ * present" holds structurally — a two-keyword question over an empty/whole-corpus scope never
+ * silently shapes a turn. The caller (`resolveAutoFireSkill`) has already narrowed candidates to
+ * enabled + compatible + app-only + `triggers.autoFire` and checked the user opt-in.
  */
 export function selectAutoFire(
   candidates: SkillCandidate[],
   ctx: SkillTriggerContext
 ): SkillCandidate | null {
-  return selectByThreshold(candidates, ctx, AUTOFIRE_SCORE_THRESHOLD)
+  return selectByThreshold(candidates, ctx, AUTOFIRE_SCORE_THRESHOLD, { requireDocSignal: true })
 }

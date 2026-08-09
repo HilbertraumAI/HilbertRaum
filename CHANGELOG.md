@@ -214,6 +214,16 @@ first public release. Consciously-accepted gaps are tracked in
   (the plain-text copy was never affected). The saved file now masks the whole
   region exactly once, and the "N items hidden" count counts masked regions
   instead of double-counting the nested item.
+- **Skill auto-fire (the opt-in) now really requires a matching document in
+  scope** (issue #130). The documented rule — "the user asked *and* a relevant
+  document is deliberately in scope" — could be bypassed when a question hit two
+  of a skill's keywords: the skill then silently shaped a document-less turn.
+  The document requirement is now enforced structurally; the inert picker
+  suggestion is unchanged.
+- **Skill packages zipped with macOS Finder now import** (issue #131). Finder's
+  "Compress" adds hidden `__MACOSX`/`.DS_Store` entries that defeated the
+  package-folder detection, so a perfectly valid skill failed with the
+  misleading "The package does not contain a SKILL.md file."
 - **Clicking a skill suggestion for a skill you have since disabled or removed
   no longer silently re-answers without it** (issue #132). The suggestion button
   now disables with an explanation, and the app refuses (rather than quietly

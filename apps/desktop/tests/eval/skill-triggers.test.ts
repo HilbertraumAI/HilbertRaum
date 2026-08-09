@@ -278,10 +278,17 @@ describe('U4 gate — narrowed auto-fire signals + skill opt-ins (§2.4/§4.4)',
     expect(predict(candidates, toAutoFireContext(item('wc-meeting-attached-01')), t3)).toBe('meeting-protocol')
   })
 
-  it('strong keyword intent still auto-fires at whole-corpus scope (narrowing removes only doc corroboration)', () => {
-    // Two distinct keywords reach the ≥3 bar on words alone, so no explicit doc is required.
-    expect(predict(candidates, toAutoFireContext(item('wc-bank-strong-01')), t3)).toBe('bank-statement')
-    expect(predict(candidates, toAutoFireContext(item('wc-invoice-strong-01')), t3)).toBe('invoice')
+  it('#130: strong keyword intent does NOT auto-fire at whole-corpus scope (the doc-signal gate holds)', () => {
+    // SUPERSEDES the pre-#130 pin ("two distinct keywords reach the ≥3 bar on words alone, so no
+    // explicit doc is required"): that was the exact structural hole the audit confirmed — two capped
+    // hits scored 4 with zero doc signals, bypassing the U4 narrowing on the on-topic phrasings the
+    // vocabulary is built to catch. The ratified D2 contract is "keyword AND a relevant doc
+    // deliberately in scope"; keyword strength alone never suffices now. The SUGGESTION still offers
+    // (full scope, inert) — only the silent auto-fire demands the explicit doc.
+    expect(predict(candidates, toAutoFireContext(item('wc-bank-strong-01')), t3)).toBe('none')
+    expect(predict(candidates, toAutoFireContext(item('wc-invoice-strong-01')), t3)).toBe('none')
+    expect(predict(candidates, toContext(item('wc-bank-strong-01')), kwReq)).toBe('bank-statement')
+    expect(predict(candidates, toContext(item('wc-invoice-strong-01')), kwReq)).toBe('invoice')
   })
 
   it('the audit example never fires either path — dsgvo dropped AND the library doc narrowed away', () => {
@@ -290,13 +297,15 @@ describe('U4 gate — narrowed auto-fire signals + skill opt-ins (§2.4/§4.4)',
     expect(predict(candidates, toAutoFireContext(it), t3), 'no auto-fire').toBe('none')
   })
 
-  it('threshold-3 holds fired-wrong==0 AND precision ≥ 0.95 over the WHOLE-CORPUS subset', () => {
-    // The plan's explicit bar: the auto-fire gate must survive the whole-corpus shapes specifically.
+  it('#130: threshold-3 TOTALLY ABSTAINS over the WHOLE-CORPUS subset (nothing fires without an explicit doc)', () => {
+    // SUPERSEDES the pre-#130 bar (fired-wrong==0 AND ≥1 fire): with the doc-signal gate, a
+    // whole-corpus item has its doc signals narrowed away (U4) and therefore NEVER auto-fires —
+    // strong keywords included. Zero fires ⇒ zero wrong fires; the "missed" cells here are
+    // deliberate (the user must put the doc in front of the skill — wc-meeting-attached-01, an
+    // explicitly-scoped sibling, still fires and is pinned above).
     const wc = corpus.filter((c) => c.scope === 'whole-corpus')
     const result = scoreCorpus(wc, candidates, t3) // scoreCorpus narrows for threshold-3
     expect(result.confusion.firedWrong).toBe(0)
-    expect(result.confusion.firedCorrect).toBeGreaterThan(0)
-    expect(result.precision).not.toBeNull()
-    expect(result.precision!).toBeGreaterThanOrEqual(0.95)
+    expect(result.confusion.firedCorrect).toBe(0)
   })
 })

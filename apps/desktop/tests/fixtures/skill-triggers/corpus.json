@@ -692,7 +692,7 @@
       "inScopeDocs": [{ "title": "q1-statement.pdf", "mimeType": "application/pdf" }],
       "expected": "bank-statement",
       "scope": "whole-corpus",
-      "note": "U4/§4.4 — STRONG intent (two distinct bank keywords: 'bank statement' + 'transactions', capped → 4) still auto-fires at whole-corpus scope with NO explicit doc: the narrowing removes only the DOC corroboration, never keyword strength."
+      "note": "U4/§4.4 — STRONG intent (two distinct bank keywords: 'bank statement' + 'transactions', capped → 4). Pre-#130 this auto-fired at whole-corpus scope on words alone; since #130 the doc-signal-required gate means it does NOT (the suggestion still offers at full scope). Expected names the SUGGESTION-level match; the auto-fire abstention is pinned in the test."
     },
     {
       "id": "wc-invoice-strong-01",
@@ -700,7 +700,7 @@
       "inScopeDocs": [{ "title": "invoice-2026-05.pdf", "mimeType": "application/pdf" }],
       "expected": "invoice",
       "scope": "whole-corpus",
-      "note": "U4/§4.4 — strong invoice intent ('line items' + 'invoice number', capped → 4) auto-fires at whole-corpus scope without an explicit doc."
+      "note": "U4/§4.4 — strong invoice intent ('line items' + 'invoice number', capped → 4). Pre-#130 this auto-fired without an explicit doc; since #130 the doc-signal gate abstains (suggestion still offers). Expected names the SUGGESTION-level match."
     },
     {
       "id": "wc-none-libdoc-01",

@@ -384,7 +384,16 @@ function stageZip(zipPath: string, limits: SkillLimits): StagedFile[] {
     }
   }
 
-  const rels = fileEntries.map((e) => safeRelPath(e.name, limits)).filter((r) => r !== '')
+  // #131 (skills-pipeline audit ACT-2): compute the strip over PACKAGE CONTENT only — dot-segment
+  // members are exactly the entries the staging loop below skips as "not package content" (SKA-34),
+  // yet they used to feed this decision. A macOS Finder zip of `myskill/` carries
+  // `__MACOSX/myskill/._SKILL.md` AppleDouble mirrors (first segment ≠ `myskill` ⇒ no shared
+  // prefix), and a root `.DS_Store` is a one-segment path (⇒ no shared prefix either) — both
+  // defeated the strip, so `SKILL.md` staged as `myskill/SKILL.md` and a perfectly valid package
+  // failed with the misleading "does not contain a SKILL.md file."
+  const rels = fileEntries
+    .map((e) => safeRelPath(e.name, limits))
+    .filter((r) => r !== '' && !hasDotSegment(r))
   const strip = stripCommonPrefix(rels)
 
   const staged: StagedFile[] = []

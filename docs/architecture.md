@@ -4662,8 +4662,10 @@ question is content: scored, never logged (a privacy guard extends the S12 senti
 
 **The ratified contract (owner, 2026-06-17 — D1–D6).** D1 **≥ 95% precision**. D2 **`threshold-3`** —
 fire only when a keyword hit is corroborated by ≥ 1 doc signal (a separate `AUTOFIRE_SCORE_THRESHOLD = 3`,
-distinct from `SUGGEST_SCORE_THRESHOLD = 2`; a lone keyword = 2, a lone doc signal ≤ 2, so the gate
-structurally means "the user asked **and** a relevant doc is present"). D3 **silent apply + the
+distinct from `SUGGEST_SCORE_THRESHOLD = 2`, **plus — since #130 (2026-08-09) — an explicit
+doc-signal-required gate in `selectAutoFire`**: the threshold alone never enforced the doc half — a
+lone keyword = 2 and a lone doc signal ≤ 2, but TWO capped keyword hits = 4 fired with zero docs in
+scope — so the gate now structurally means "the user asked **and** a relevant doc is present"). D3 **silent apply + the
 existing glyph + a one-click undo** (never a confirm-before-firing dialog). D4 **opt-in, app-skills
 only in v1**. D5 **fire only when the turn has no skill set** (never override a sticky default or a
 per-turn pick/clear). D6 additive **`triggers.autoFire?: boolean`** (only `true` opts a skill in). On
