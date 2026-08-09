@@ -1,10 +1,20 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
   COMPATIBILITY_MODE_NOTICE,
+  WARMUP_MAX_TOKENS,
+  WARMUP_PROMPT,
   type LlamaRungOptions
 } from '../../src/main/services/runtime/factory'
+import {
+  isNextModelLoadSuppressed,
+  latestEffectiveRead,
+  MIN_READ_SAMPLE_MS,
+  resetEffectiveReadForTests,
+  suppressNextModelLoadSample
+} from '../../src/main/services/read-speed'
+import type { ModelPrefetch, PrefetchOutcome } from '../../src/main/services/runtime/prefetch'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { UnexpectedExitInfo } from '../../src/main/services/runtime/sidecar'
@@ -37,12 +47,46 @@ function ladderHarness(config: {
   tokens?: string[]
   /** Reasoning delta the fake fires via options.onReasoning before any token (#39 deep mode). */
   reasoningDelta?: string
+  /** #109: fired at the top of every chatStream call (observe ordering, e.g. vs labeling). */
+  onChat?: () => void
+  /** #109: chatStream awaits this before streaming — holds the warm-up window open. */
+  chatGate?: Promise<void>
+  /** #109: chatStream throws this after the gate — warm-up failure/cancel paths. */
+  chatError?: Error
+  /** #109: chatStream never streams and rejects only when options.signal aborts (cap expiry). */
+  chatHangsUntilAbort?: boolean
+  /** #109 cap override forwarded to the factory (avoid real 90 s waits in tests). */
+  warmupTimeoutMs?: number
+  /** #108: successful starts await this long, so the load window passes the sample floor. */
+  startDelayMs?: number
+  /** #114: the fake prefetch settles 'failed' immediately (a read error). */
+  prefetchFails?: boolean
 }) {
   const calls: LadderCall[] = []
   const failures: string[] = []
   const selected: Array<{ kind: string; reason: string }> = []
   const crashes: Array<{ opts: RuntimeStartOptions; info: UnexpectedExitInfo }> = []
+  const warmups: Array<{ event: string; detail?: string }> = []
+  const chatCalls: Array<{ content: string; maxTokens?: number; mode?: string; hasSignal: boolean }> = []
+  // #114: every prefetch the ladder created (recorded fake — no real file IO in this suite).
+  const prefetches: Array<{ paths: string[]; aborted: boolean }> = []
+  const prefetchEvents: Array<{ event: string; detail?: string }> = []
   let mockMade = false
+
+  const makePrefetch = (paths: string[]): ModelPrefetch => {
+    const entry = { paths, aborted: false }
+    prefetches.push(entry)
+    let settle!: (o: PrefetchOutcome) => void
+    const done = new Promise<PrefetchOutcome>((r) => (settle = r))
+    if (config.prefetchFails) settle('failed')
+    return {
+      done,
+      abort: () => {
+        entry.aborted = true
+        settle('aborted')
+      }
+    }
+  }
 
   const makeLlama = (o: RuntimeStartOptions, binPath: string, rung?: LlamaRungOptions): ModelRuntime => {
     const index = calls.length
@@ -53,10 +97,27 @@ function ladderHarness(config: {
         if (index < (config.failFirst ?? 0)) {
           throw new Error(config.failMessage ?? `rung ${index + 1} failed to start`)
         }
+        if (config.startDelayMs) await new Promise((r) => setTimeout(r, config.startDelayMs))
       },
       stop: async () => {},
       health: async () => ({ healthy: true, message: 'ok', port: 5000 + index }),
-      chatStream: async function* (_messages, options) {
+      chatStream: async function* (messages, options) {
+        chatCalls.push({
+          content: messages[messages.length - 1]?.content ?? '',
+          maxTokens: options?.maxTokens,
+          mode: options?.mode,
+          hasSignal: options?.signal != null
+        })
+        config.onChat?.()
+        if (config.chatHangsUntilAbort) {
+          await new Promise<never>((_resolve, reject) => {
+            const abort = (): void => reject(abortError())
+            if (options?.signal?.aborted) abort()
+            else options?.signal?.addEventListener('abort', abort, { once: true })
+          })
+        }
+        if (config.chatGate) await config.chatGate
+        if (config.chatError) throw config.chatError
         if (config.reasoningDelta) options?.onReasoning?.(config.reasoningDelta)
         for (const tok of config.tokens ?? []) yield tok
       }
@@ -82,6 +143,10 @@ function ladderHarness(config: {
     makeLlama,
     makeMock,
     onSelect: (kind, _o, reason) => selected.push({ kind, reason }),
+    onWarmup: (_o, event, detail) => warmups.push({ event, detail }),
+    warmupTimeoutMs: config.warmupTimeoutMs,
+    onPrefetch: (_o, event, detail) => prefetchEvents.push({ event, detail }),
+    makePrefetch,
     gpu: {
       getGpuMode: () => config.gpuMode ?? 'auto',
       getGpuAutoDisabled: () => config.gpuAutoDisabled ?? false,
@@ -92,7 +157,34 @@ function ladderHarness(config: {
     }
   })
 
-  return { factory, calls, failures, selected, crashes, wasMock: () => mockMade }
+  return {
+    factory,
+    calls,
+    failures,
+    selected,
+    crashes,
+    warmups,
+    chatCalls,
+    prefetches,
+    prefetchEvents,
+    wasMock: () => mockMade
+  }
+}
+
+/** An `AbortError`-named rejection — what a signal-aborted fetch/stream read raises in prod. */
+function abortError(): Error {
+  const err = new Error('The operation was aborted.')
+  err.name = 'AbortError'
+  return err
+}
+
+/** Resolve once `cond` holds (micro/macro-task polling; injected budgets keep this fast). */
+async function until(cond: () => boolean): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (cond()) return
+    await new Promise((r) => setTimeout(r, 1))
+  }
+  throw new Error('condition not reached')
 }
 
 describe('the GPU start ladder', () => {
@@ -241,6 +333,8 @@ describe('ladder start cancellation (full-audit 2026-07-11 CODE-2)', () => {
   function cancellableHarness() {
     const failures: string[] = []
     const rungStops: number[] = []
+    // #114: the prefetch must join the CODE-2 cancel contract (recorded fake).
+    const prefetches: Array<{ paths: string[]; aborted: boolean }> = []
     let mockMade = false
     let rungStarts = 0
     let failInFlight: (err: Error) => void = () => {
@@ -278,6 +372,16 @@ describe('ladder start cancellation (full-audit 2026-07-11 CODE-2)', () => {
           chatStream: async function* () {}
         }
       },
+      makePrefetch: (paths) => {
+        const entry = { paths, aborted: false }
+        prefetches.push(entry)
+        return {
+          done: new Promise<PrefetchOutcome>(() => {}),
+          abort: () => {
+            entry.aborted = true
+          }
+        }
+      },
       gpu: {
         probeDevices: async () => [],
         onGpuFailure: (reason) => failures.push(reason),
@@ -288,6 +392,7 @@ describe('ladder start cancellation (full-audit 2026-07-11 CODE-2)', () => {
       runtime: factory(opts),
       failures,
       rungStops,
+      prefetches,
       wasMock: () => mockMade,
       rungStartCount: () => rungStarts,
       failInFlight: (err: Error) => failInFlight(err)
@@ -303,6 +408,9 @@ describe('ladder start cancellation (full-audit 2026-07-11 CODE-2)', () => {
     const stopP = h.runtime.stop() // sets the cancel flag + forwards stop to the in-flight rung
     await stopP
     expect(h.rungStops).toContain(0) // the loading rung's runtime WAS stopped (kill reached it)
+    // #114: the prefetch reader joined the cancel — it must not keep the drive busy.
+    expect(h.prefetches).toHaveLength(1)
+    expect(h.prefetches[0].aborted).toBe(true)
 
     // The killed child's start() rejects (in prod: waitForHealthy's exit-check throw)…
     h.failInFlight(new Error('llama-server exited before becoming healthy (code 0)'))
@@ -454,5 +562,294 @@ describe('warm-up tracking (#39)', () => {
       /* zero chunks */
     }
     expect(runtime.warmedUp?.()).toBe(false)
+  })
+})
+
+// #109: the hidden warm-up generation. After a real rung turns healthy (and its backend
+// label is set), start() runs one tiny content-free generation against the INNER runtime
+// and discards the output, so "ready" only reports once the one-time prefill/graph
+// warm-up cost is paid. The #39 `served` flag deliberately does NOT flip — the real first
+// prompt still pays the full system-prompt prefill (no shared cache_prompt prefix), so
+// the warm-up hint stays armed as a safety net.
+describe('hidden warm-up generation (#109)', () => {
+  it('runs AFTER backend labeling on the winning rung and completes BEFORE start() resolves', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const backendsAtWarmup: string[] = []
+    let ladder: ModelRuntime
+    const h = ladderHarness({
+      probe: [RTX],
+      chatGate: gate,
+      onChat: () => backendsAtWarmup.push(ladder.backend ?? 'unset')
+    })
+    ladder = h.factory(opts)
+    let started = false
+    const startP = ladder.start().then(() => {
+      started = true
+    })
+
+    await until(() => h.chatCalls.length === 1)
+    // The label was already set when the warm-up fired — a GPU crash inside this window
+    // routes through the §5.3 onGpuCrash auto-fallback (gated on backend === 'gpu').
+    expect(backendsAtWarmup).toEqual(['gpu'])
+    // …and the "started via rung" selection was logged before the warm-up window.
+    expect(h.selected.at(-1)?.reason).toContain('rung 1')
+    expect(started).toBe(false) // ready is NOT reported while the warm-up is still running
+
+    release()
+    await startP
+    expect(started).toBe(true)
+    expect(h.warmups).toEqual([{ event: 'done', detail: undefined }])
+  })
+
+  it('the request is content-free, thinking-off (no mode), tiny-capped, abortable — and leaves #39 cold', async () => {
+    const h = ladderHarness({ probe: [RTX], tokens: ['warm', 'up'] })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(h.chatCalls).toHaveLength(1)
+    expect(h.chatCalls[0]).toEqual({
+      content: WARMUP_PROMPT,
+      maxTokens: WARMUP_MAX_TOKENS,
+      mode: undefined, // omitted = 'balanced' → enable_thinking: false (requestParamsForMode)
+      hasSignal: true // the cap can abort it
+    })
+    expect(WARMUP_MAX_TOKENS).toBeLessThanOrEqual(8)
+    // The warm-up called inner.chatStream directly: the #39 served flag did NOT flip, so
+    // the warm-up hint stays armed for the real first prompt (its full-prefill safety net).
+    expect(runtime.warmedUp?.()).toBe(false)
+  })
+
+  it('the rung-4 mock never warms up (zero-assets starts stay instant)', async () => {
+    // All real rungs fail → mock commit: no chatStream call is ever made.
+    const allFail = ladderHarness({ failFirst: 3 })
+    const mockRuntime = allFail.factory(opts)
+    await mockRuntime.start()
+    expect(mockRuntime.backend).toBe('mock')
+    expect(allFail.chatCalls).toHaveLength(0)
+    expect(allFail.warmups).toEqual([])
+
+    // No binary on the drive → the mock is returned at creation: same guarantee.
+    const noBin = ladderHarness({ resolveBin: null })
+    const direct = noBin.factory(opts)
+    await direct.start()
+    expect(noBin.chatCalls).toHaveLength(0)
+  })
+
+  it('a warm-up failure that is NOT a cancel never fails the start (the server IS healthy)', async () => {
+    const h = ladderHarness({ probe: [RTX], chatError: new Error('slot busy') })
+    const runtime = h.factory(opts)
+    await runtime.start() // resolves despite the failed warm-up
+    expect(runtime.backend).toBe('gpu')
+    expect(h.warmups).toEqual([{ event: 'failed', detail: 'slot busy' }])
+    // Not a rung failure: nothing persisted gpuAutoDisabled, no fallback walk, no mock.
+    expect(h.failures).toEqual([])
+    expect(h.calls).toHaveLength(1)
+    expect(h.wasMock()).toBe(false)
+  })
+
+  it('cap expiry aborts the warm-up request and proceeds to ready (never doubles the start)', async () => {
+    const h = ladderHarness({ probe: [RTX], chatHangsUntilAbort: true, warmupTimeoutMs: 25 })
+    const runtime = h.factory(opts)
+    await runtime.start() // a pathological warm-up cannot hold the start hostage
+    expect(runtime.backend).toBe('gpu')
+    expect(h.warmups).toHaveLength(1)
+    expect(h.warmups[0].event).toBe('timeout')
+    expect(h.chatCalls[0].hasSignal).toBe(true)
+  })
+
+  it('stop() during the warm-up window settles as CANCELLED: no rung walk, no mock, no GPU fault', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    // The killed server makes the warm-up stream error — model the same shape here.
+    const h = ladderHarness({ probe: [RTX], chatGate: gate, chatError: new Error('socket closed') })
+    const runtime = h.factory(opts)
+    const startP = runtime.start()
+    startP.catch(() => undefined)
+    await until(() => h.chatCalls.length === 1)
+
+    await runtime.stop() // quit / "Lock now" / manual stop lands mid-warm-up
+    release()
+    await expect(startP).rejects.toThrow(/cancelled/i)
+
+    expect(h.calls).toHaveLength(1) // the walk aborted — rung 2/3 never attempted
+    expect(h.wasMock()).toBe(false) // no mock commit for a cancelled start
+    expect(h.failures).toEqual([]) // a cancel is not a GPU fault
+    expect(h.warmups).toEqual([]) // …and is not logged as a warm-up fault either
+  })
+
+  it('a warm-up that completes cleanly despite a racing stop() still settles as CANCELLED', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const h = ladderHarness({ probe: [RTX], chatGate: gate, tokens: ['x'] })
+    const runtime = h.factory(opts)
+    const startP = runtime.start()
+    startP.catch(() => undefined)
+    await until(() => h.chatCalls.length === 1)
+
+    await runtime.stop()
+    release() // the stream finishes normally — the cancel must STILL win over ready
+    await expect(startP).rejects.toThrow(/cancelled/i)
+    expect(h.wasMock()).toBe(false)
+  })
+
+  it('RuntimeManager.status() stays "Starting" through the warm-up window; ready reports warmedUp=false', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const h = ladderHarness({ probe: [RTX], chatGate: gate })
+    const mgr = new RuntimeManager(h.factory)
+    const startP = mgr.start(opts)
+    await until(() => h.chatCalls.length === 1)
+
+    // The server is already healthy, but the user-facing state is still "Starting" — that
+    // is the whole point: ready means warmed.
+    expect(mgr.status().running).toBe(false)
+    expect(mgr.status().message).toBe('Starting')
+    expect(mgr.status().startingModelId).toBe('m')
+
+    release()
+    const status = await startP
+    expect(status.running).toBe(true)
+    expect(status.healthy).toBe(true)
+    expect(status.backend).toBe('gpu')
+    expect(status.warmedUp).toBe(false) // the #39 hint stays armed as the safety net
+  })
+
+  it('manager stop() during the warm-up settles promptly; the CODE-3 shutdown latch is respected', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const h = ladderHarness({ probe: [RTX], chatGate: gate, chatError: new Error('socket closed') })
+    const mgr = new RuntimeManager(h.factory)
+    const startP = mgr.start(opts)
+    startP.catch(() => undefined)
+    await until(() => h.chatCalls.length === 1)
+
+    mgr.shutdown() // quit teardown arms the latch first…
+    const stopP = mgr.stop() // …then stops; the cancel reaches the warm-up window
+    release()
+    await stopP
+    await expect(startP).rejects.toThrow(/cancelled/i)
+
+    expect(mgr.active()).toBeNull() // never committed
+    expect(mgr.status().running).toBe(false)
+    // The latch holds: a late auto-start cannot spawn a fresh warm-up/runtime.
+    await expect(mgr.start(opts)).rejects.toThrow(/shut down/i)
+    expect(h.calls).toHaveLength(1)
+  })
+})
+
+// #108: the ladder records an honest effective-read sample (window bytes / elapsed) from
+// the FIRST rung of a walk only — a later rung re-reads a file the failed attempt
+// already pulled through the page cache, so its number would be inflated. `weightBytes`
+// (from the caller's manifest — covers a vision model's mmproj too) stands in for a
+// floor-sized on-disk fixture.
+describe('effective-read sample capture (#108)', () => {
+  const WEIGHT_BYTES = 6_000_000_000
+
+  beforeEach(() => resetEffectiveReadForTests())
+
+  it('a successful first-rung start records a model_load sample', async () => {
+    const h = ladderHarness({ probe: [RTX], startDelayMs: MIN_READ_SAMPLE_MS + 60 })
+    const runtime = h.factory({
+      modelId: 'm',
+      modelPath: '/w.gguf',
+      contextTokens: 2048,
+      weightBytes: WEIGHT_BYTES
+    })
+    await runtime.start()
+
+    const sample = latestEffectiveRead()
+    expect(sample).not.toBeNull()
+    expect(sample?.source).toBe('model_load')
+    expect(sample?.modelId).toBe('m')
+    expect(sample?.bytes).toBe(WEIGHT_BYTES)
+    expect(sample?.ms).toBeGreaterThanOrEqual(MIN_READ_SAMPLE_MS)
+  })
+
+  it('a start that succeeds on a LATER rung records nothing (page-cache-warm re-read)', async () => {
+    const h = ladderHarness({
+      probe: [RTX],
+      failFirst: 1,
+      startDelayMs: MIN_READ_SAMPLE_MS + 60
+    })
+    const runtime = h.factory({
+      modelId: 'm',
+      modelPath: '/w.gguf',
+      contextTokens: 2048,
+      weightBytes: WEIGHT_BYTES
+    })
+    await runtime.start()
+
+    expect(h.calls).toHaveLength(2) // rung 1 failed, rung 2 carried the start
+    expect(latestEffectiveRead()).toBeNull()
+  })
+
+  it('a missing weight path with no byte total records nothing and never disturbs the start', async () => {
+    const h = ladderHarness({ probe: [RTX], startDelayMs: MIN_READ_SAMPLE_MS + 60 })
+    const runtime = h.factory({ modelId: 'm', modelPath: '/no/such/w.gguf', contextTokens: 2048 })
+    await runtime.start()
+    expect(latestEffectiveRead()).toBeNull()
+  })
+})
+
+// #114: the concurrent sequential weight prefetch that rides the first rung's load
+// window. Evidence for the design (measured cold-start wins, the skip rules, the
+// rejection of --no-mmap) lives in prefetch.ts's header + issue #114; these tests pin
+// the CONTRACT: first rung only, skip-when-just-hashed, abort at window end + on a
+// CODE-2 stop, and total isolation of the start from any prefetch outcome.
+describe('concurrent weight prefetch (#114)', () => {
+  beforeEach(() => resetEffectiveReadForTests())
+
+  it('rides the first rung: started with the load, aborted when the window ends', async () => {
+    const h = ladderHarness({})
+    await h.factory(opts).start()
+    expect(h.prefetches).toHaveLength(1)
+    // No weightPaths supplied → the bare modelPath is the file set.
+    expect(h.prefetches[0].paths).toEqual([opts.modelPath])
+    // The load finished → the window closed and the reader was told to stop.
+    expect(h.prefetches[0].aborted).toBe(true)
+    await until(() => h.prefetchEvents.length >= 2)
+    expect(h.prefetchEvents.map((e) => e.event)).toEqual(['started', 'aborted'])
+  })
+
+  it('prefetches the full weightPaths file set (vision: GGUF + mmproj)', async () => {
+    const h = ladderHarness({})
+    await h.factory({ ...opts, weightPaths: ['/w.gguf', '/mm.proj'] }).start()
+    expect(h.prefetches).toHaveLength(1)
+    expect(h.prefetches[0].paths).toEqual(['/w.gguf', '/mm.proj'])
+  })
+
+  it('skipped when the install-state pass just hashed the weights (page-cache-warm)', async () => {
+    suppressNextModelLoadSample()
+    const h = ladderHarness({})
+    await h.factory(opts).start()
+    expect(h.prefetches).toHaveLength(0)
+    expect(h.prefetchEvents.map((e) => e.event)).toEqual(['skipped'])
+    // The peek did NOT consume the #108 suppression — recordModelLoadRead did, as before.
+    expect(isNextModelLoadSuppressed()).toBe(false)
+    expect(latestEffectiveRead()).toBeNull()
+  })
+
+  it('first rung only: a failed rung 1 does not re-prefetch on rung 2', async () => {
+    const h = ladderHarness({ failFirst: 1 })
+    await h.factory(opts).start()
+    expect(h.calls).toHaveLength(2) // rung 1 failed, rung 2 carried the start
+    expect(h.prefetches).toHaveLength(1) // …but only rung 1 got a prefetch
+    expect(h.prefetches[0].aborted).toBe(true) // ended on the rung-1 failure path
+  })
+
+  it('a prefetch read failure never affects the start', async () => {
+    const h = ladderHarness({ prefetchFails: true })
+    await h.factory(opts).start() // resolves ready — nothing to catch
+    await until(() => h.prefetchEvents.some((e) => e.event === 'failed'))
+    expect(h.prefetchEvents[0]?.event).toBe('started')
+    expect(h.wasMock()).toBe(false)
+  })
+
+  it('the mock fallback (no binary) never prefetches', async () => {
+    const h = ladderHarness({ resolveBin: null })
+    await h.factory(opts).start()
+    expect(h.wasMock()).toBe(true)
+    expect(h.prefetches).toHaveLength(0)
+    expect(h.prefetchEvents).toHaveLength(0)
   })
 })

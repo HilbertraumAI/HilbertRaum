@@ -583,6 +583,23 @@ password recovery — are documented in
 
 ## Engineering trade-offs (noted, intentionally unchanged)
 
+- **On RAM-constrained machines every model start re-reads the full GGUF at media speed — warm
+  starts included (issue #107).** llama-server maps the weights with mmap; when the model file is a
+  large fraction of total RAM, the page cache cannot keep the previous load's pages resident, so a
+  "warm" start reads the file again end-to-end exactly like a cold one. Measured on a 16 GB laptop
+  (i7-8550U, CPU-only, volume-level IO tracing): the 4B (2.9 GB) from a 70 MB/s USB stick loaded in
+  44 s cold and 42.7 s warm (2.71 GB re-read); the 9B (6.0 GB) 98.7 s cold, 87.9 s warm (5.56 GB
+  re-read); the same 9B from an internal SSD 14.4 s cold, 11.6 s warm (6.84 GB read — more than the
+  5.97 GB file: paging rework). On a 128 GB machine the same warm start takes ~3 s — a
+  memory-pressure effect, not a media effect. Consequences the app now surfaces honestly instead of
+  hiding: the measured effective read speed drives Diagnostics + the slow-read warning (#108/#110),
+  and the "Starting…" panel shows approximate progress from that measured speed (#107). Since #114
+  a concurrent sequential prefetch primes the page cache at full media speed alongside the mmap
+  load (validated on-hardware first: −49% cold start on a slow stick, −36% on a USB SSD, measured
+  on exactly the 16 GB box class the memory-pressure risk targeted — the feared self-eviction did
+  not defeat it; architecture.md "Concurrent weight prefetch (#114)"). The warm-start full re-read
+  on RAM-constrained machines remains a fact of mmap + memory pressure — the prefetch makes it
+  cheaper, not free.
 - **Text / Markdown / CSV imports are capped at 64 MiB, separately from the 1 GiB document ceiling
   ([`architecture.md`](architecture.md) §35).** Those parsers
   read the whole file into one UTF-16 JS string (CSV then derives the papaparse row array + the rebuilt

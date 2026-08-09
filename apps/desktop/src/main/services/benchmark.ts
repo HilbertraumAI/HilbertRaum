@@ -11,8 +11,10 @@ import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { randomFillSync } from 'node:crypto'
 import { t } from '../../shared/i18n'
+import { perfMark } from './perf'
+import { throughputMbps } from './read-speed'
 import type { ModelManifest } from '../../shared/manifest'
-import type { BenchmarkResult, HardwareProfile } from '../../shared/types'
+import type { BenchmarkResult, EffectiveReadSample, HardwareProfile } from '../../shared/types'
 import type { ModelRuntime } from './runtime'
 import { recommendModelId, recommendModelIdByRam } from './models'
 
@@ -25,8 +27,21 @@ import { recommendModelId, recommendModelIdByRam } from './models'
 
 /** Tokens/sec at or below this count as "very low" and downgrade the profile one step (spec §11.3). */
 export const VERY_LOW_TOKENS_PER_SECOND = 3
-/** Drive throughput below this (MB/s) earns a non-blocking "slow drive" warning (spec §11.3). */
+/** Drive WRITE throughput below this (MB/s) earns a non-blocking "slow drive" warning
+ *  (spec §11.3). Calibrated against the fsync-bound write leg of the 8 MB probe; kept as
+ *  the secondary check for genuinely broken media after #110 re-keyed the primary
+ *  warning to the honest effective READ figure below. */
 export const SLOW_DRIVE_MBPS = 30
+/**
+ * Effective READ throughput below this (MB/s) earns the slow-read warning (#110). The
+ * felt cost of a slow drive is read-bound: every model start reads the whole GGUF at
+ * media speed (on RAM-constrained machines even warm starts do — issue #107), measured
+ * 88–99 s per 9B start at ~70 MB/s effective read vs 12–14 s from an SSD. 100 MB/s
+ * separates the USB-stick class (~70) from SSDs (430+ measured) with margin on both
+ * sides; checksum-pass samples are hash-CPU-bound at a few hundred MB/s and stay above
+ * it on any healthy SSD (#108 measured 136 MB/s worst-case).
+ */
+export const SLOW_EFFECTIVE_READ_MBPS = 100
 /** Size of the temp file written to probe drive speed. Small + bounded so the UI never hangs. */
 export const DRIVE_PROBE_BYTES = 8 * 1024 * 1024 // 8 MB
 /** Bytes per gigabyte (GiB) used to convert total memory for classification + display. */
@@ -163,10 +178,13 @@ export async function measureDriveSpeed(workspacePath: string): Promise<DriveSpe
       closeSync(rfd)
     }
 
-    return {
+    const speed = {
       writeMbps: throughputMbps(DRIVE_PROBE_BYTES, writeMs),
       readMbps: throughputMbps(DRIVE_PROBE_BYTES, readMs)
     }
+    // readMbps is the page-cache figure (F-35 above): reference only, never a drive claim.
+    perfMark('drive_benchmark', speed)
+    return speed
   } catch (err) {
     return { readMbps: null, writeMbps: null, error: err instanceof Error ? err.message : String(err) }
   } finally {
@@ -178,11 +196,10 @@ export async function measureDriveSpeed(workspacePath: string): Promise<DriveSpe
   }
 }
 
-/** MB/s from a byte count + elapsed ms (MB = 1e6 bytes). null when the timing is unusable. */
-function throughputMbps(bytes: number, ms: number): number | null {
-  if (!Number.isFinite(ms) || ms <= 0) return null
-  return Math.round(((bytes / 1e6 / (ms / 1000)) + Number.EPSILON) * 10) / 10
-}
+// `throughputMbps` (the single MB/s definition) lives in read-speed.ts — imported above
+// so the probe figures and the effective-read samples can never disagree on what "MB/s"
+// means. (The import direction matters: read-speed.ts is a leaf; importing this module
+// from there would cycle through models.ts.)
 
 /** Prompt used for the short tokens/sec probe (spec §11.2 step 7). */
 export const BENCHMARK_PROMPT = 'Write one sentence about privacy.'
@@ -235,6 +252,14 @@ export interface WarningInputs {
   tokensDowngraded?: boolean
   /** Model the tokens/sec probe streamed through — named in the downgrade warning (issue #52). */
   measuredModelId?: string | null
+  /**
+   * Honest effective read MB/s (#108/#110) — from a REAL model-load/checksum read, never
+   * the probe's page-cached read leg. Gates the slow-read warning; null/absent (no
+   * qualifying read yet — a fresh install) never warns. Preflight deliberately does not
+   * supply it (its 8 MB probe has no honest read), so the slow-read warning can never
+   * appear in the preflight note.
+   */
+  effectiveReadMbps?: number | null
 }
 
 /**
@@ -263,17 +288,56 @@ export function buildWarnings(input: WarningInputs): string[] {
     warnings.push(t('en', 'main.benchmark.warnVeryLowTokens', { model: input.measuredModelId }))
   }
 
+  // #110: the PRIMARY drive warning — keyed on the honest effective READ figure, which is
+  // what the user actually feels (model starts read the whole file at this speed). Fires
+  // independently of the probe branches below: the probe can fail while real loads still
+  // produced a read sample. No sample (fresh install) → no warning, never a guess.
+  if (input.effectiveReadMbps != null && input.effectiveReadMbps < SLOW_EFFECTIVE_READ_MBPS) {
+    warnings.push(slowReadWarning(input.effectiveReadMbps))
+  }
+
   if (input.driveError) {
     warnings.push(t('en', 'main.benchmark.warnDriveProbe'))
   } else if (input.driveWriteMbps != null && input.driveWriteMbps < SLOW_DRIVE_MBPS) {
-    // F-35 (audit 2026-07-16): gate on the fsync-bound WRITE figure only. The read probe reads back a
-    // page-cached file (RAM speed, ~100× inflated on slow media), so a `min(read, write)` gate never
-    // fired on the read leg anyway — using write alone makes the code match the honest "(cached)" read
-    // label and the documented "write < SLOW_DRIVE_MBPS" condition (benchmark.md).
+    // F-35 (audit 2026-07-16): gate on the fsync-bound WRITE figure only — the probe's read
+    // leg is page-cache-served (RAM speed) and never gates anything. Since #110 this write
+    // gate is the SECONDARY check (genuinely broken media: fsync writes below 30 MB/s);
+    // the primary felt-cost warning is the effective-read gate above.
     warnings.push(t('en', 'main.benchmark.warnSlowDrive'))
   }
 
   return warnings
+}
+
+/** The canonical slow-read warning string for a measured MB/s (#110). Math.floor, not
+ *  round: a 99.6 sample must not warn "about 100 MB/s" while the gate documents
+ *  "< 100" — the named figure always satisfies the condition the copy claims. */
+function slowReadWarning(effectiveReadMbps: number): string {
+  return t('en', 'main.benchmark.warnSlowRead', { mbps: Math.floor(effectiveReadMbps) })
+}
+
+/** Matches any persisted slow-read warning (whatever `{mbps}` it named) — the main-side
+ *  twin of the renderer display map's template regex. */
+const SLOW_READ_WARNING_RE = new RegExp(
+  `^${t('en', 'main.benchmark.warnSlowRead', { mbps: '@@MBPS@@' })
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace('@@MBPS@@', '\\d+')}$`
+)
+
+/**
+ * Re-key the ONE warning that tracks `effectiveRead` against a fresh sample (#110):
+ * drop any previously persisted slow-read warning and append the current one when the
+ * sample is below the gate. `buildWarnings` computes the full set only at benchmark
+ * time, but the sample is updated in place between runs (`persistEffectiveRead`) — on
+ * the default journey the ONLY automatic benchmark runs before any model exists, so
+ * without this the primary #110 warning would never appear (and a stale one could
+ * contradict the freshly updated Diagnostics row above it). All other warnings are
+ * benchmark-time facts and pass through untouched.
+ */
+export function upsertSlowReadWarning(warnings: string[], effectiveReadMbps: number): string[] {
+  const kept = warnings.filter((w) => !SLOW_READ_WARNING_RE.test(w))
+  if (effectiveReadMbps < SLOW_EFFECTIVE_READ_MBPS) kept.push(slowReadWarning(effectiveReadMbps))
+  return kept
 }
 
 /** The GPU probe summary INJECTED into the benchmark (architecture.md GPU record §5.1/§8). */
@@ -297,6 +361,14 @@ export interface RunBenchmarkDeps {
    * `child_process` purity (and with it the strictly-local guarantee).
    */
   gpu?: GpuBenchmarkInput | null
+  /**
+   * Latest honest effective-read sample (issue #108), injected by the caller
+   * (registerBenchmarkIpc reads the session latch in services/read-speed.ts, falling
+   * back to the previously persisted sample so a re-run never loses it). NEVER measured
+   * in here — the sample is a byproduct of real model loads / checksum passes, and this
+   * module keeps its zero-`child_process`, probe-only I/O posture.
+   */
+  effectiveRead?: EffectiveReadSample | null
   /** Injectable clock for deterministic `ranAt` in tests. */
   now?: () => Date
 }
@@ -334,7 +406,8 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     driveWriteMbps: drive.writeMbps,
     driveError: drive.error,
     tokensDowngraded,
-    measuredModelId
+    measuredModelId,
+    effectiveReadMbps: deps.effectiveRead?.mbps ?? null
   })
 
   return {
@@ -348,6 +421,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     driveWriteMbps: drive.writeMbps,
     tokensPerSecond,
     measuredModelId,
+    effectiveRead: deps.effectiveRead ?? null,
     profile,
     recommendedModelId,
     warnings,

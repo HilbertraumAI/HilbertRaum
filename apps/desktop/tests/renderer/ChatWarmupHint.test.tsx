@@ -13,6 +13,13 @@ import { stubApi } from '../helpers/renderer'
 //    (RuntimeStatus.warmedUp === false — a warmed session never sees it);
 //  - dropped the instant ANYTHING streams (answer token OR Deep-mode reasoning delta);
 //  - absent `warmedUp` (older/bare runtime shape) fails safe: no hint, ever.
+//
+// #109 decision (hidden warm-up generation): the ladder's start() now runs a tiny discarded
+// generation BEFORE reporting ready, but it calls the inner runtime directly, so `warmedUp`
+// stays false and everything below is UNCHANGED — the hint remains armed as the safety net
+// for the real first prompt (which still pays the full system-prompt prefill; the warm-up
+// shares no cache_prompt prefix with it). Most first prompts now stream fast enough that the
+// 3 s gate simply never trips; a still-slow one keeps its honest explanation.
 
 const HINT = t('en', 'chat.warmup.hint')
 

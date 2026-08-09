@@ -1096,6 +1096,53 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   and stream instantly, so they neither mark the runtime warm nor show the hint; an absent field
   fails safe. Design record: design-guidelines §11.11. Tests: `ChatWarmupHint.test.tsx` + the
   `warm-up tracking (#39)` block in `runtime-ladder.test.ts`.
+- **Hidden warm-up generation (#109, 2026-08-08) — "ready means ready".** The #39 hint explained
+  the first-prompt stall; #109 removes most of it: `/health` resolving says nothing about the
+  one-time prefill/graph warm-up, which measured **6–8× the settled TTFT** (10–30 s CPU-only,
+  medium-independent — compute, not IO). `LadderRuntime.start()` now runs one tiny hidden
+  generation after the winning rung turns healthy and BEFORE start() resolves, so the extra
+  seconds live inside the existing "Starting…" state (`startingModelId`; the Chat screen already
+  shows its friendly `chat.noModel.starting` panel throughout — no new status value, no new i18n).
+  Placement decisions, each test-pinned in the `hidden warm-up generation (#109)` block of
+  `runtime-ladder.test.ts` + the `#109 warm-up window` block of `runtime-manager.test.ts`:
+  (1) in `LadderRuntime` only — never `LlamaServer` (shared with the embedder/reranker/vision/
+  translation sidecars, which must never get a chat warm-up), never the rung-4 mock (zero-assets
+  starts stay instant); (2) AFTER the probe-derived backend label, so a GPU crash mid-warm-up
+  routes through the §5.3 `onGpuCrash` auto-fallback (gated on `backend === 'gpu'`);
+  (3) the CODE-2 cancel + CODE-3 latch reach the window — `stop()` kills the inner server, the
+  warm-up stream errors, and the ladder settles as `cancelledStartError()` (never a rung walk or
+  mock commit); (4) a non-cancel warm-up failure never fails the start (the server IS healthy —
+  warn via `onWarmup`, proceed to ready; a crash still reports via `onUnexpectedExit`); (5) an
+  overall `WARMUP_TIMEOUT_MS` (90 s ≈ 3× the worst #109 measurement) aborts a pathological
+  warm-up and proceeds — the CB-5 idle watchdog rides along inside it; (6) the request is
+  content-free (`"Hi"`), thinking off (omitted mode → `enable_thinking: false`), `max_tokens` 8,
+  loopback-only, discarded — never persisted, never audited as a chat; (7) it calls
+  `inner.chatStream` directly so the #39 `served` flag does NOT flip: the real first prompt still
+  pays the full system-prompt prefill (no shared `cache_prompt` prefix), and the #39 hint stays
+  armed as the safety net. Observability: the `onWarmup` hook (`done`/`timeout`/`failed`) logs
+  through main/index.ts.
+- **Concurrent weight prefetch (#114, 2026-08-09).** llama-server's mmap load faults pages in a
+  non-sequential order that slow media punishes (#107: ~2/3 of a stick's sequential throughput;
+  2.4× the pure-sequential time under memory pressure). `LadderRuntime.start()` now launches a
+  plain sequential read of the weight file set (`startModelPrefetch`, `runtime/prefetch.ts`)
+  ALONGSIDE the first rung's load — the bytes are discarded; priming the OS page cache at full
+  media speed is the whole effect. Shipped on the #114 on-hardware matrix (16 GB box, all four
+  variants × cold/warm × stick/SSD, evidence in the issue): **−49% cold start** on a 23.5 MB/s
+  stick (6.65 GB model: 680 s → 346 s), **−36%** on an 868 MB/s USB SSD (15.0 → 9.6 s), ~neutral
+  in every other cell; concurrent beat prefetch-then-spawn, and `--no-mmap` was REJECTED (fastest
+  cold on the stick but forfeits the page cache: 292 s warm restarts vs 5 s, worst in every SSD
+  cell). Contract, pinned in the `concurrent weight prefetch (#114)` block of
+  `runtime-ladder.test.ts` + `runtime-prefetch.test.ts`: (1) FIRST rung only — a later rung
+  re-reads a file the failed attempt already pulled through the cache (the #108 sample rule's
+  reasoning); (2) skipped when the install-state pass just hashed the weights — the same one-shot
+  #108 suppression signal, peeked without consuming (`isNextModelLoadSuppressed`); (3) aborted the
+  moment the load window ends either way, and by the CODE-2 stop/lock cancel (the reader must not
+  keep the drive busy past a stop; abort lands within one 4 MiB chunk); (4) any prefetch outcome
+  is control-flow-inert — 'failed' means the load proceeds unassisted; (5) the file set is
+  `weightPaths` (GGUF + a vision model's mmproj, from `startModelRuntime`'s manifest), falling
+  back to `modelPath`. The #108 `model_load` sample now measures the prefetch-assisted window —
+  still the honest rate the user felt, closer to what the medium can deliver. Observability: the
+  `onPrefetch` hook logs through main/index.ts + a `model_prefetch` perf mark pair.
 - **Surfaced runtime errors (fix 2026-06-14, hardened 2026-06-16).** `LlamaRuntime.chatStream`
   throws a typed `ChatRequestError` carrying the server's `{error:{message,type}}` body
   (previously the body was discarded and only "HTTP <status>" survived). `isExceedContextError`
@@ -1536,8 +1583,10 @@ sentinel-tested), zero native deps.
   has NO OffscreenCanvas (probed — option (b) was impossible). So a **hidden
   BrowserWindow** (`ocr.html`, its own tiny sandboxed preload exposing exactly the five
   `OCR_RASTER` channels, never the app API) does ONLY pdf→PNG rasterization with the
-  SAME pinned pdfjs **legacy** build the PdfParser uses (the modern v6 build calls
-  `Uint8Array.prototype.toHex`, which the pinned Chromium lacks) at 300 DPI (capped at
+  SAME pinned pdfjs **legacy** build the PdfParser uses (originally forced by the modern
+  build's `Uint8Array.prototype.toHex`, which Electron 37's Chromium lacked; that motive
+  expired with pdfjs 6.2 + Chromium 142 — see the DEP-3 record — and the legacy build is
+  retained for one-build-everywhere consistency) at 300 DPI (capped at
   4096 px/side). **Recognition always runs MAIN-side** in tesseract.js **Node mode**
   (`services/ocr/tesseract.ts`): image Buffers decode inside the WASM core (no canvas),
   the worker script + core load from the app's own `node_modules` (packaged:
@@ -3031,14 +3080,16 @@ osLocale)`.
   `PDF_SCAN_DETECTED_MESSAGE`, whose **exact-match derives `scanDetected`** — the OCR
   offer), source-missing/interrupted ingestion messages, `NO_DOCUMENT_CONTEXT_ANSWER` +
   `REINDEX_NEEDED_ANSWER` (persisted into `messages.content`), `DOC_TASK_BUSY_MESSAGE`
-  (recognized renderer-side via `includes`), the four `buildWarnings` strings (persisted in
-  `settings.lastBenchmark`), and the default conversation title `'New chat'` (exact-matched
+  (recognized renderer-side via `includes`), the `buildWarnings` strings (persisted in
+  `settings.lastBenchmark`: four exact-match + the interpolated `warnVeryLowTokens` (#52)
+  and `warnSlowRead` (#110)), and the default conversation title `'New chat'` (exact-matched
   by `maybeSetTitleFromFirstMessage`). The renderer translates at display via the
   exact-match reverse lookup `localizeServerCopy()` over `DISPLAY_MAP_KEYS` — the en.ts
   **persist-canonical section is a data contract**: editing a value breaks the match for
-  already-persisted rows. Unknown/interpolated strings (e.g. `Unsupported file type: …`,
-  raw parser-library errors) render as-is by design. A hygiene test pins
-  `DISPLAY_MAP_KEYS` ↔ the persist-canonical section key-for-key.
+  already-persisted rows. Interpolated persisted constants are reverse-matched by template
+  regex instead (`INTERPOLATED_MAP_KEYS`). Unknown strings (e.g. raw parser-library errors)
+  render as-is by design. A hygiene test pins `DISPLAY_MAP_KEYS` +
+  `INTERPOLATED_MAP_KEYS` ↔ the persist-canonical section key-for-key.
 - **Rule 2 — emit localized (D-L5).** Anything ephemeral (IPC guard throws, task-status
   errors, download/policy refusals, preflight problems, `runtime:notice`, dialog titles +
   picker filter names) localizes **in the main process at emission** via `tMain()`.
@@ -7525,7 +7576,7 @@ fine-print folded into its rows):
 | **F-32** | LOW | P5 `9bc861b` | **fixed** — the engine (re-)install in-use guard covered only the CHAT runtime while embedder/reranker/vision/translation sidecars and a running whisper transcription execute from the same install dirs: the CODE-11 sidecar PID registry partitioned by `SidecarFamily` (`registerSidecarChild(pid, family)`); the guard refuses a `llama_cpp` install while chat OR any llama-server sidecar is live and a `whisper_cpp` install mid-transcription, via new `llamaSidecarInUse()`/`whisperSidecarInUse()` seams threaded as `StartEngineDownloadOptions` signals. Reused `main.engine.runtimeRunning` for the llama family; new EN+DE `main.engine.transcriptionRunning` (thrown-and-localized, session-only). Both refusal cases red first. |
 | **F-33** | LOW | P5 `a7e61de` | **fixed (residual accepted + honestly labelled)** — `extractWithTar` was the codebase's only unbounded child: no timeout, kill escalation, or abort signal — a wedged tar wedged the engine job forever, and cancel-during-extract re-opened the one-job-at-a-time slot while tar still ran. Now: a 5-min deadline (`HILBERTRAUM_EXTRACT_DEADLINE_MS`-overridable) + SIGTERM→SIGKILL escalation (the whisper REL-2 pattern) + an OPTIONAL `signal` on `ExtractFn` threaded from `installOne`; a `runSettled` latch makes `activeJob()`/`start()` treat a not-yet-settled `run()` as busy. The concurrent-install window is **narrowed to the ≤2 s SIGKILL grace, not closed** (the extractor rejects after signalling the child, not after its exit — deliberate: waiting on an unkillable child would reintroduce the unbounded wait this fix removes; phrasing honesty-corrected in the review pass). The optional-signal shape kept the ~12 injected `extractImpl` test sites compiling unchanged — a ledgered smaller-than-audited blast radius, not a scope change. |
 | **F-34** | LOW | P5 `eb50209` | **fixed** — model-weight downloads skipped fsync before the `renameSync` into place (violating the repo's own CODE-10 standard; a power cut after completion could leave a torn weight the primed `(size,mtime)` checksum cache reports as verified): `downloadToFile` fsyncs the `.part` to the DEVICE (opened `r+` so Windows `FlushFileBuffers` succeeds; best-effort) before returning. New `download-fsync-durability.test.ts` — a CODE-10 wiring pin (`vi.mock('node:fs')`) asserting fsync-before-rename, red first. |
-| **F-35** | LOW | P8 `42e5d32` ⟨D-B⟩ | **fixed (owner-decided relabel)** — the drive-speed READ probe read the just-written 8 MB file back from the OS page cache (RAM): `driveReadMbps` inflated ~100×, and the read half of the slow-drive warning could never fire. Relabelled `diag.bench.driveRead` → "Drive read (cached)" EN+DE; `driveWriteMbps` stays the honest headline; `buildWarnings` gates the slow-drive warning on the fsync-bound WRITE only (code now matches the documented "write < SLOW_DRIVE_MBPS"); already-persisted inflated values render sanely under the new label (no migration); no cold-read build (D-B: not worth the complexity). DiagnosticsCopySave pins moved in lockstep; benchmark.md + data-contracts updated. |
+| **F-35** | LOW | P8 `42e5d32` ⟨D-B⟩ | **fixed (owner-decided relabel)** — the drive-speed READ probe read the just-written 8 MB file back from the OS page cache (RAM): `driveReadMbps` inflated ~100×, and the read half of the slow-drive warning could never fire. Relabelled `diag.bench.driveRead` → "Drive read (cached)" EN+DE; `driveWriteMbps` stays the honest headline; `buildWarnings` gates the slow-drive warning on the fsync-bound WRITE only (code now matches the documented "write < SLOW_DRIVE_MBPS"); already-persisted inflated values render sanely under the new label (no migration); no cold-read build (D-B: not worth the complexity). DiagnosticsCopySave pins moved in lockstep; benchmark.md + data-contracts updated. **Superseded in part 2026-08-08 (issues #108/#110):** #108's measurements showed the "(cached)" label does not repair a figure wrong by ~30× (1672–2846 MB/s on a 70 MB/s stick), so the cached read row is now RETIRED from display and replaced by `BenchmarkResult.effectiveRead` — an honest sample measured as a **byproduct of real model-load/checksum reads** (`services/read-speed.ts`), which is NOT the synthetic cold-read probe D-B rejected (no new probe I/O exists; D-B's "no cold-read build" stands). The slow-drive warning is re-keyed to that figure (`SLOW_EFFECTIVE_READ_MBPS = 100`, #110) with the write gate retained as the secondary broken-media check; `driveReadMbps` is still computed + persisted, display-only retired. See benchmark.md "Drive speed" + "Warnings". |
 | **F-36** | LOW | P7 `397a7fc` | **fixed** — marketing shell captures staged an impossible workspace posture: the `getSettings` override forces `workspaceMode:'encrypted'` (the privacy card) but `getWorkspaceState` unconditionally returned `plaintext_dev`, and App gates the rail's Lock-now control on `mode==='encrypted'` — every shell shot showed the encrypted card with no Lock-now. Override made case-aware (mirrors `getSettings`): `isMkt()` → `{state:'unlocked', mode:'encrypted', plaintextAllowed:false, encryptionRequired:true}`. Captures re-run + eyeballed: Lock-now present in all shell shots, the walker still reaches every goal. |
 | **F-37** | LOW | P1 | **fixed** — the stale soft-hyphen comment on `nav.documents` invited re-adding U+00AD, which would silently break the marketing walker's exact-textContent nav matching (the hyphens were removed in bad4eaf): comment rewritten in en.ts + de.ts + the audit-listed THIRD copy in `InformationArchitecture.test.tsx` (executing the report's blast radius — the condensed plan named only two). The optional `mktClickNav` hardening deferred: the re-add risk is already CI-fenced (`rail-labels.test.ts` + `i18n.test.ts` block U+00AD), and it would have forced a capture re-run for a belt-and-suspenders no-op. |
 | **F-38** | LOW | P7 `397a7fc` | **fixed** — `body[data-marketing-ready]` was sticky once set (StagedShell `clearInterval`'d on success, making its own flag-delete unreachable), so an acknowledged post-walk remount could yield a silently WRONG (reset-shell) capture: fix option (a), fully local to StagedShell — keep observing after readiness; a vanished goal clears the flag and re-walks (waitReady re-blocks); the tries-cap give-up now prints an actionable `console.warn`. Verified manually with an injected 800 ms settle delay + a forced give-up (both temp probes reverted, diff-confirmed); `scripts/screenshot.mjs` untouched. |
@@ -7658,7 +7709,12 @@ failed once and looped). Gate: baseline **4,680/50 → 4,812/50 across 347 files
 files, skip count unchanged) — typecheck + build green throughout, the single full-suite run at the
 verification phase (weak-box discipline: 8-core / 16 GB box, `--maxWorkers=2` under load). The env-gated
 real-model e2e leg was **skipped — the prepared drive carries a 9 KB stub `llama-server.exe`, not the
-real binary** (a recorded skip, never the gate; e2e is a confidence leg).
+real binary** (a recorded skip, never the gate; e2e is a confidence leg). *(Corrected 2026-08-09,
+#114 investigation: that "stub" was a misdiagnosis — the upstream llama.cpp Windows layout ships
+EVERY tool exe as a ~9 KB shim backed by an `-impl.dll` (`llama-server-impl.dll` carries the real
+~9–14 MB payload next to it), and the prepared drive's runtime was verified real and runnable
+(`--version` answers; build b9849). The skip itself remains recorded fact — only its stated reason
+was wrong, and the e2e leg owes a re-run on real hardware.)*
 
 **Headline negative results worth recording:** the hard product guarantees re-verified clean — **no
 new `fetch`/net/WebSocket call sites** in main or preload since v0.1.51, the offline guard, vault
@@ -9779,6 +9835,64 @@ recovers it. Citations of that form resolve here:
 Surviving sources for anything not resolved above: this record, the wave branch
 `fix/dependabot-2026-07`'s six phase commits (listed at the top of this record), and the PR #77
 body.
+
+## Dependabot triage — design record (wave DEP-3, PR #115)
+
+_Wave DEP-3 (2026-08-09) triaged and cleared **all 19 open Dependabot alerts** on the default
+branch (5 high / 13 moderate / 1 low) in one batch — every alert had a first-patched version
+reachable through existing semver ranges, so the whole set landed as patch/minor bumps: **no
+majors, no `overrides`, no dismissals** — plus seven high **auto-dismissed** alerts
+(brace-expansion ×5, nanoid ×2; dev-scope, outside the open list) cleared in passing. Branch `fix/dependabot-2026-08-09`, squashed as PR #115.
+This record is the durable per-alert ledger; the DEP-1 record above holds the wave conventions
+(pinned-npm lockfile writes, build-before-test gate order) that this wave reused._
+
+### §1 Alert ledger + dispositions
+
+| Alerts | Package (locked → fixed) | Scope | Disposition + in-context verdict |
+|---|---|---|---|
+| #75 (high) | **pdfjs-dist 6.0.227 → 6.2.108** — direct dep, deliberate manifest bump `^6.0.227 → ^6.2.108` | **runtime** (parses user-imported PDFs) | **Fixed.** CVE-2026-16633 (arbitrary JS on malicious PDF): the app was **never exposed** — the vulnerable path is worker-side appearance-serialization code requiring `enableScripting: true` plus a permissive CSP; the app calls `getDocument({data, verbosity})` only (zero uses of enableScripting / AnnotationLayer / pdf.sandbox anywhere) and the OCR window CSP is `script-src 'self'`. (`isEvalSupported` does not exist in pdf.js v6 — nothing to set.) Upstream api-minor changes across 6.1/6.2 (getAttachments/getDestinations/getViewerPreferences/getOpenAction → Map; `convertToViewportRectangle` removed) touch nothing the app calls; the module-level `DOMMatrix` need is unchanged, so the ingest polyfill stays necessary and sufficient. Verified beyond the suite: evidence-pack PDF smoke 6/6 and the real-data PDF gold-set (`HILBERTRAUM_PDF_GOLDSET=1`, bank-statement geometry recall) green on 6.2.108. |
+| #70–#74 (4 mod + 1 low) | mermaid 11.16.0 → 11.16.1 (transitive: streamdown `^11.12.2`) | runtime scope | **Fixed (hygiene — all five unreachable).** Three independent dead layers: (1) Streamdown only renders mermaid when a mermaid plugin is passed and `AssistantMarkdown` passes only the module-level `mdPlugins = { math }` constant as `plugins` (the single Streamdown mount site) — a ```` ```mermaid ```` fence from model output renders as a plain code block, no mermaid parser ever sees the string; (2) the actual `mermaid` importer is `@streamdown/mermaid`, a streamdown devDependency that is **not installed**; (3) the chain is tree-shaken out of the renderer bundle — zero diagram-engine symbols (flowchart/sequenceDiagram/cytoscape/dagre/d3-) in `out/renderer/assets`; the chunk Vite names `mermaid-*` is streamdown's own wrapper + KaTeX, and dompurify has zero hits — and negated out of `app.asar` (`electron-builder.yml`, pinned by `packaging.test.ts`). 11.16.1's dependency object is byte-identical to 11.16.0's → the packaging-test mermaid-only closure is unchanged. **New pin landed with the wave**: `assistant-markdown.test.tsx` asserts a mermaid fence stays a plain code block — wiring the plugin in later fails the pin and forces a re-triage of this whole family. |
+| #80 (mod) | dompurify 3.4.12 → 3.4.13 (transitive: mermaid `^3.3.3`) | runtime scope | **Fixed (hygiene — unreachable).** DOMPurify is used nowhere directly (zero hits; the app's markdown sanitizer is rehype-sanitize, an AST walker with no DOM), is absent from bundle and asar per the mermaid row, and the vulnerable config (`IN_PLACE` + hook removal) is one mermaid itself doesn't use. **Correction to DEP-2's recorded framing** (its CHANGELOG 2026-07-23 bullet + then-BUILD_STATE entry — DEP-2 has no architecture record): dompurify is production-scope **in the npm dependency graph** (why Dependabot/`npm audit` flag it) but it ships in **neither** the renderer bundle **nor** `app.asar` — "ships in the renderer" was wrong; `docs/packaging.md` and `THIRD-PARTY-NOTICES.md` always had it right. |
+| #60–#64 (1 high + 4 mod) | undici 7.28.0 → 7.29.0 (transitive: jsdom `^7.25.0`) | development | **Fixed (supply-chain hygiene — unreachable in product).** jsdom exists only in the vitest environment; the undici cache/cookie/CRLF/desync classes need a server-facing HTTP client. Nothing ships. |
+| #66/#67/#69 (3 mod) | undici 6.27.0 → 6.28.0 (transitive: electron-builder → @electron/rebuild → node-gyp `^6.25.0`) | development | **Fixed (hygiene).** Packaging-toolchain only; runs at build time on the dev machine, ships nothing. |
+| #68 (high) | fast-uri 3.1.4 → 3.1.5 (transitive: app-builder-lib → ajv `^3.0.1`) | development | **Fixed (hygiene).** ajv validates electron-builder's config at package time; the host-confusion class needs URI parsing of attacker input. |
+| #57/#78 (high + mod) | postcss 8.5.15 → 8.5.26 (transitive: vite `^8.5.3`) | development | **Fixed (hygiene).** Build-time CSS processing; the sourceMappingURL `.map`-disclosure classes need attacker-controlled stylesheets at build time (= an already-compromised repo). 8.5.26 clears both alerts' ranges (#57 ≤ 8.5.17, #78 ≤ 8.5.22). |
+| #79 (high) | js-yaml 4.3.0 → 4.3.1 (transitive: app-builder-lib/builder-util/dmg-builder `^4.1.0`, deduped) | development | **Fixed (hygiene).** electron-builder's own config parsing at package time. The app's runtime manifest parser is the separate `yaml` production dep — never affected (same note as DEP-2). |
+| #58/#59/#65/#76/#77 (5 high, **auto-dismissed**) | brace-expansion → 1.1.18 / 2.1.4 / 5.0.9 (all 7 in-tree copies) | development | **Fixed (outside the open set).** GHSA-mh99-v99m-4gvg + GHSA-rgw5-rvv9-x895 (unbounded-expansion OOM DoS) — Dependabot's auto-triage had already auto-dismissed all five alerts as dev-scope, so they never appeared in the open list, but `npm audit` still flagged them. The bump lands exactly the three first-patched versions the auto-dismissed alerts name, clearing `npm audit` to 0. Correction from review: the working framing "npm-audit-only, no alert yet / advisory lag" was wrong — the alerts existed and were auto-dismissed, which this ledger records honestly. |
+| #81/#82 (2 high, **auto-dismissed**) | nanoid 3.3.12 → 3.3.18 (transitive: postcss `^3.3.17`) | development | **Fixed (rode in as the postcss collateral).** CVE-2026-67213 / CVE-2026-67214, auto-dismissed dev-scope like the brace-expansion set; postcss 8.5.26's raised floor pulled 3.3.18, which clears both. Initially recorded as mere lockfile collateral — upgraded to a ledger row at review when the auto-dismissed alerts surfaced. |
+
+### §2 Wave facts
+
+- **Mechanism:** `npm install pdfjs-dist@^6.2.108 -w apps/desktop --package-lock-only` (the one
+  deliberate manifest edit — DEP-1 precedent for direct-dep floors) + targeted
+  `npm update <pkg> --package-lock-only` for the transitives. Every lockfile write through the
+  pinned npm 11.6.2 (which is also the local npm since AUD-26). No `npm audit fix`, no lockfile
+  regen. Lockfile collateral: exactly one entry — nanoid 3.3.12 → 3.3.18 (postcss 8.5.26 raised
+  its dependency floor to `^3.3.17`); dev-scope, verified line-level, and itself clears the two
+  auto-dismissed nanoid alerts (#81/#82 row above).
+- **THIRD-PARTY-NOTICES.md** regenerated deterministically; 4-line diff — pdfjs-dist is the only
+  member of the shipped set that moved (the mermaid chain is excluded from notices by design).
+- **Gates:** fresh `npm ci` from deleted `node_modules`, typecheck, build, full suite
+  **4866 pass / 50 skip / 4916 total, 350 files** (baseline 4865/50 + the new mermaid-fence pin;
+  the third-party-notices freshness gate correctly went red pre-regeneration and green after),
+  `documents` + `chat-byproject` screenshot smoke, real-data PDF gold-set, `npm audit` **0
+  vulnerabilities**.
+- **Impact analysis:** two independent read-only analysis passes (pdfjs usage + upstream-delta
+  review; mermaid/dompurify reachability + bundle/asar verification), each verified empirically
+  against the bumped tree, plus an adversarial diff review before merge.
+
+### §3 Follow-up register
+
+1. The DEP-1 §5 follow-up #4 (**a `.github/dependabot.yml` with grouped weekly updates** — none
+   exists) remains open and owner-gated; this third hand-rolled batch in 22 days (DEP-1
+   2026-07-19, DEP-2 2026-07-23, DEP-3 2026-08-09) is the recurring cost of not having it.
+2. ~~Stale legacy-build rationale~~ **landed with the wave after review**: the "modern v6 build
+   calls `Uint8Array.prototype.toHex`" justification (expired — 6.2.108's modern build no longer
+   references `toHex` and Chromium 142 ships it) was refreshed at all three sites
+   (`renderer/ocr/main.ts`, `parsers/pdfjs.d.ts`, and the D31 bullet above), along with
+   `pdfjs.d.ts`'s inaccurate "one declaration serves both tsconfig programs" claim (only the
+   node program resolves it; the web program gets the real `pdf.d.mts`). The legacy-build
+   decision itself stands — one build everywhere.
 
 ## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
 

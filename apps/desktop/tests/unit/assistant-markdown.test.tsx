@@ -50,6 +50,20 @@ describe('AssistantMarkdown security posture', () => {
     expect(container.textContent).toContain('<b>bold</b>')
     expect(container.textContent).toContain('<img src="x.png">')
   })
+
+  it('renders a ```mermaid fence as a plain code block — the mermaid plugin stays absent', () => {
+    // DEP-3 (2026-08-09) judged the mermaid/DOMPurify Dependabot alerts unreachable because no
+    // mermaid plugin is passed (mdPlugins = { math }); wiring one in makes that chain a live
+    // attack surface — this pin fails and forces a re-triage. Ledger: architecture.md
+    // "Dependabot triage — design record (wave DEP-3)".
+    const { container } = render(
+      <AssistantMarkdown text={'```mermaid\ngraph TD; A-->B\n```'} />
+    )
+    // Streamdown stamps plugin-rendered diagrams with this attribute (the chart itself mounts
+    // async behind Suspense, so asserting on <svg> would never fire).
+    expect(container.querySelector('[data-streamdown="mermaid-block"]')).toBeNull()
+    expect(container.querySelector('code')?.textContent).toContain('graph TD; A-->B')
+  })
 })
 
 describe('AssistantMarkdown math (KaTeX)', () => {

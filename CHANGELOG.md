@@ -73,8 +73,53 @@ first public release. Consciously-accepted gaps are tracked in
   `scripts/build-commercial-drive.*`.
 - **Standard project docs** — this `CHANGELOG.md` and a
   [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+- **Windows engine build attached to releases** (issue #102 item 1). Each release
+  now carries `llama-runtime-win-x64.zip` beside the existing mac Metal zip: the
+  same SHA-256-verified llama.cpp build the in-app installer fetches, packaged so
+  it unzips straight into the drive's `runtime/llama.cpp/` folder — an offline /
+  air-gapped install path that needs no repo scripts.
+- **Opt-in perf mark log** for measurement runs: with `HILBERTRAUM_PERF_LOG=1` set in
+  the environment, the app appends timestamped timing marks (startup phases, vault
+  unlock/lock split, model checksum vs. load split, time to first token, document
+  ingestion phases) to `logs/perf.log`. Off by default; no file is created without the
+  variable. Records the cold-load figures `docs/model-benchmarks.md` §11.4 lists as
+  still missing. See `docs/benchmark.md` "Perf marks".
+- **Model checksum passes are visible now** (issue #106). Verifying a model's
+  multi-GB file — which can take minutes from a slow USB stick and used to run
+  with no trace anywhere — now writes one diagnostics-log line per real
+  verification (which model, how many bytes, how long), plus `checksum_start` /
+  `checksum_done` marks in the opt-in perf log. Overlapping verifications of the
+  same file (for example a start racing an AI Model screen visit) also no longer
+  each read the whole file — they share one pass.
+- **Honest progress while a model starts** (issue #107). Once the app has
+  measured your drive's real read speed, the Chat screen's "your model is
+  starting" panel shows the model file size and an approximate percentage read
+  instead of an indefinite spinner. Fresh installs (no measurement yet) keep the
+  plain message rather than showing a made-up number.
+- **Cold model starts are much faster on slow drives** (issue #114). While a
+  model loads, the app now also reads the model file front-to-back in the
+  background, which lines the operating system's file cache up with what the
+  load is about to need. Measured on a 16 GB laptop: a 6.65 GB model from a slow
+  USB stick started in 5:46 instead of 11:20 (−49%), and from a portable SSD in
+  10 s instead of 15 s (−36%). Starts that are already fast stay as they are —
+  the helper is skipped when the file was just verified (its content is already
+  in the cache) and stops the moment the load finishes or is cancelled.
 
 ### Changed
+
+- **Diagnostics now shows a real read speed** (issue #108). The old "Drive read
+  (cached)" figure came from the operating system's memory cache and showed
+  four-digit MB/s numbers even on a slow USB stick — it is gone. In its place,
+  "Measured read speed" reports the throughput of the last real multi-GB read
+  the app performed (a model load or a full file check), the number that
+  actually decides how long model starts take. Shown as "not measured yet" until
+  the first model start.
+- **The slow-drive warning now keys on read speed** (issue #110). The warning
+  used to fire on slow *writes*, but what makes a slow drive painful is
+  *reading* — every model start reads the whole model file. It now fires when
+  the measured read speed is below 100 MB/s and says what that means ("model
+  starts will be slow on this drive"), naming the measured speed. The old
+  write-based warning remains as a secondary check for genuinely broken media.
 
 - **The recommended model now leads the picker** (issue #93 item 3). The AI Model
   screen's RAM-best-fit recommendation always ran unprompted, but the ★ card sat
@@ -121,6 +166,17 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Fixed
 
+- **"Ready" now means ready — the first prompt after a model start no longer
+  stalls** (issue #109). The first generation after a start paid a one-time
+  warm-up that measured 6–8× the settled response time (10–30 s on CPU-only
+  machines) while the UI already showed the model as ready, which read as a
+  hang. The model start now runs a small hidden warm-up generation (content-free,
+  thinking off, output discarded, never stored) before reporting ready, so the
+  wait moves into the existing "Starting…" state and the first real answer
+  arrives at normal speed. The warm-up is bounded (a slow one is abandoned after
+  90 s and the model still becomes ready), never runs in demo mode, and a stop
+  or quit during it still cancels the start promptly; the one-time "the model is
+  warming up" note stays as a fallback for a first answer that is still slow.
 - **Standalone portable installs can download models again** (issue #93). A
   packaged build run without a prepared drive (the GitHub-release `.exe`
   double-clicked standalone) lands on an app-data fallback root that never had a
@@ -187,6 +243,21 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Security
 
+- **All 19 open Dependabot alerts cleared (wave DEP-3, PR #115, 2026-08-09)** — one
+  patch/minor-only batch, no dismissals: pdfjs-dist 6.2.108 (CVE-2026-16633,
+  arbitrary JS on a malicious PDF — the app was never exposed: no annotation
+  scripting, and the OCR window enforces `script-src 'self'`; bump verified
+  against the real-data PDF gold-set), mermaid 11.16.1 + DOMPurify 3.4.13 (all
+  six alerts unreachable — the Streamdown mermaid plugin is never wired, the
+  chain is tree-shaken from the renderer bundle and excluded from the packaged
+  app; production-scope in the dependency graph only, a correction to the DEP-2
+  entry's "ships in the renderer" framing — plus a new test pinning that a
+  mermaid code fence stays a plain code block), and dev/build-tooling hygiene:
+  undici 7.29.0 + 6.28.0, fast-uri 3.1.5, postcss 8.5.26, js-yaml 4.3.1, plus
+  all seven brace-expansion copies and nanoid 3.3.18 — clearing seven further
+  high alerts Dependabot's auto-triage had auto-dismissed as dev-scope.
+  `npm audit`: 0 vulnerabilities. Triage ledger:
+  `docs/architecture.md` "Dependabot triage — design record (wave DEP-3)".
 - **Hardened the workspace-lock confidentiality contract (full audit 2026-07-23)**
   — closed the "Lock now"/quit races above (a content-bearing sidecar could keep
   user-derived text in memory after the workspace reported locked), and stopped a
@@ -204,7 +275,8 @@ first public release. Consciously-accepted gaps are tracked in
   package and was never affected), fast-uri 3.1.4 (host confusion ×2),
   brace-expansion 1.1.16 / 2.1.2 / 5.0.8 (exponential-time `{}` expansion DoS,
   CVE-2026-13149 — Dependabot alert #56), and DOMPurify 3.4.12 (the one
-  production-scope member: streamdown → mermaid ships it in the renderer;
+  production-scope member — in the dependency graph; DEP-3 later verified it
+  ships in neither the renderer bundle nor the packaged app;
   `CUSTOM_ELEMENT_HANDLING` sanitizer bypass, low severity, config not used by
   mermaid). `npm audit`: 0 vulnerabilities again.
 - **All critical- and high-severity Dependabot alerts cleared (wave DEP-1, PR #77)**

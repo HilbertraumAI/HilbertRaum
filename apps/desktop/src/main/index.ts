@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +17,7 @@ import { loadPolicy, buildPolicyStatus } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog, detachVaultKey } from './services/logging'
+import { initPerf, perfMark, perfMs } from './services/perf'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModelIpc'
@@ -49,7 +50,7 @@ import { RuntimeManager } from './services/runtime'
 import { createGpuCrashAutoFallback, createSelectingRuntimeFactory } from './services/runtime/factory'
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import { createCachedGpuProbe } from './services/runtime/gpu'
-import { EVENTS } from '../shared/ipc'
+import { EVENTS, IPC } from '../shared/ipc'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { findManifestById, launchContextTokens, resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
@@ -99,6 +100,9 @@ function initBackend(): void {
   })
   ensureWorkspaceDirs(paths)
   initLogging(paths.logsPath)
+  // Perf marks (opt-in, HILBERTRAUM_PERF_LOG=1) land beside app.log; buffered marks
+  // (app_ready) flush here. See services/perf.ts for the content rules.
+  initPerf(paths.logsPath)
   log.info('Workspace resolved', {
     root: paths.rootPath,
     preparedDrive: paths.isPreparedDrive,
@@ -241,8 +245,37 @@ function initBackend(): void {
       rootPath: paths.rootPath,
       // M-5: the dev-only HILBERTRAUM_LLAMA_BIN override is honoured only in a dev build.
       isDev,
-      onSelect: (kind, opts, reason) =>
-        log.info('Runtime backend selected', { kind, modelId: opts.modelId, reason }),
+      onSelect: (kind, opts, reason) => {
+        log.info('Runtime backend selected', { kind, modelId: opts.modelId, reason })
+        // The reason string names the winning ladder rung and backend (gpu/cpu/mock).
+        perfMark('runtime_selected', { kind, modelId: opts.modelId, reason })
+      },
+      // #109: the hidden warm-up generation inside the "Starting…" window. A non-done
+      // outcome never fails the start (the server is healthy) — it just means the first
+      // prompt may still be cold, which the #39 warm-up hint then covers.
+      onWarmup: (opts, event, detail) =>
+        event === 'done'
+          ? log.info('Model warm-up generation done', { modelId: opts.modelId })
+          : log.warn('Model warm-up generation did not complete — proceeding to ready', {
+              modelId: opts.modelId,
+              event,
+              detail
+            }),
+      // #114: the concurrent sequential prefetch riding the load window. Only a read
+      // failure warns — 'aborted' is the normal outcome (the load finished first), and
+      // none of the events affects the start. The mark pair (started → settle) lets a
+      // HILBERTRAUM_PERF_LOG run time the window offline.
+      onPrefetch: (opts, event, detail) => {
+        perfMark('model_prefetch', { modelId: opts.modelId, event })
+        if (event === 'failed') {
+          log.warn('Model prefetch failed — the load proceeds unassisted', {
+            modelId: opts.modelId,
+            detail
+          })
+        } else {
+          log.info(`Model prefetch ${event}`, { modelId: opts.modelId, ...(detail ? { detail } : {}) })
+        }
+      },
       gpu: {
         ...gpuSignals,
         onGpuFailure: persistGpuFailure,
@@ -524,7 +557,10 @@ function createWindow(): void {
     allowMicrophoneFor: mainWindow.webContents
   })
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show())
+  mainWindow.once('ready-to-show', () => {
+    perfMark('window_ready_to_show')
+    mainWindow?.show()
+  })
 
   // Open external links in the OS browser, never inside the app window — policy in
   // window-security.ts (only http(s) reaches the OS handler; the in-app open is always
@@ -550,14 +586,23 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  perfMark('app_ready')
   // `app.getLocale()` is only meaningful after whenReady (R-L1: verified on Windows —
   // it returns a BCP-47 tag like "en-US"/"de"). Best guess until settings are readable.
   initMainI18n(app.getLocale())
+  const backendT0 = performance.now()
   try {
     initBackend()
   } catch (err) {
     log.error('Backend initialization failed', String(err))
   }
+  perfMark('backend_init_done', { ms: perfMs(backendT0) })
+  // The renderer's one allowed timing mark: the WorkspaceGate (password prompt) became
+  // visible. Hard allowlist, since the renderer is the untrusted boundary (M-S2); any
+  // other payload is dropped. No-op unless HILBERTRAUM_PERF_LOG=1.
+  ipcMain.on(IPC.perfMark, (_e, event: unknown) => {
+    if (event === 'gate_visible') perfMark('gate_visible')
+  })
   createWindow()
 
   app.on('activate', () => {

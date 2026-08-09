@@ -817,6 +817,18 @@ reasoning-retires-it) + the `warm-up tracking (#39)` block in `tests/unit/runtim
 Related: #36 (the header `model · GPU/CPU` hint) names the *persistent* speed context; this names
 the *one-time* cost.
 
+**Superseded in emphasis, not in mechanism (#109, 2026-08-08):** the hint is now the FALLBACK,
+not the fix. Since #109 the model start itself pays the one-time prefill/graph warm-up via a
+hidden generation before reporting ready — **"ready" means ready**, and the extra seconds live
+inside the existing "Starting…" state (`chat.noModel.starting` / the Models-screen "Starting…"
+button), where waiting is already expected and explained. The rule this records: when the app
+knows about a one-time cost, *pay it inside the state that already promises waiting* rather than
+explaining it after a state that promised readiness. The hint's three gates are untouched and it
+stays armed (the warm-up deliberately does not flip `warmedUp` — the real first prompt still
+prefills the actual system prompt), so a first answer that is still slow keeps its honest
+explanation; on most machines the 3 s gate simply never trips anymore. Design record:
+architecture.md "Hidden warm-up generation (#109)".
+
 ### 11.12 Evidence-review workspace — EP-1 Phase 2 rollout (IMPLEMENTED 2026-07-18, plan §7)
 
 The review workspace (`ReviewScreen.tsx` + `renderer/review/*`) is the first **handoff-only

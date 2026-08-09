@@ -100,10 +100,13 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
     const warnings = buildWarnings({
       profile: 'TINY',
       driveReadMbps: 5,
-      driveWriteMbps: 5
+      driveWriteMbps: 5,
+      // #110: the interpolated slow-read warning persists canonical English too.
+      effectiveReadMbps: 70
     })
     expect(warnings).toContain(t('en', 'main.benchmark.warnTiny'))
     expect(warnings).toContain(t('en', 'main.benchmark.warnSlowDrive'))
+    expect(warnings).toContain(t('en', 'main.benchmark.warnSlowRead', { mbps: 70 }))
   })
 
   it('scanDetected survives a language switch (en → de → en)', async () => {

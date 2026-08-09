@@ -3,9 +3,11 @@
 // we declare just the slices of the API we use: text extraction (the PdfParser, plain
 // Node, no worker — validated in Phase 4, BUILD_STATE R3) and page rendering (the
 // Phase-38 hidden OCR rasterizer window, which deliberately uses the SAME legacy
-// build: the modern v6 build calls Uint8Array.prototype.toHex, an ES proposal the
-// pinned Electron's Chromium does not ship). One declaration serves both tsconfig
-// programs, so `canvas` is structurally typed (the node program has no DOM lib).
+// build — one build everywhere; the original motive (the modern build's
+// Uint8Array.prototype.toHex, missing from Electron 37's Chromium) expired with
+// pdfjs 6.2 + Chromium 142 — see the DEP-3 record in docs/architecture.md. Only the
+// node program (src/main) resolves this declaration — the web program resolves the
+// package's real pdf.d.mts — so `canvas` is structurally typed (no DOM lib here).
 declare module 'pdfjs-dist/legacy/build/pdf.mjs' {
   export interface TextItem {
     str: string

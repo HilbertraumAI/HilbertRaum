@@ -6,7 +6,8 @@
 // self-describing. This file is dev-only (never bundled into the shipped app).
 import { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DEFAULT_SETTINGS, type Citation, type Collection, type Conversation, type DocumentInfo, type DriveStatus, type Message, type ModelInfo, type PolicyStatus, type SkillInfo } from '@shared/types'
+import { DEFAULT_SETTINGS, type BenchmarkResult, type Citation, type Collection, type Conversation, type DocumentInfo, type DriveStatus, type Message, type ModelInfo, type PolicyStatus, type SkillInfo } from '@shared/types'
+import { t as tCatalog } from '@shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY, useT } from '../i18n'
 import { LocalIndicator, ToastProvider } from '../components'
 import { ConversationList } from '../chat/ConversationList'
@@ -20,6 +21,7 @@ import { App } from '../App'
 import { ChatScreen } from '../screens/ChatScreen'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
 import { ModelsScreen } from '../screens/ModelsScreen'
+import { SettingsScreen } from '../screens/SettingsScreen'
 import { TranslateScreen } from '../screens/TranslateScreen'
 import '../tokens.css'
 import '../styles.css'
@@ -154,13 +156,69 @@ const overrides: Record<string, unknown> = {
   listSkills: async () => [],
   // ModelsScreen data (only the `models*` cases render it; other cases never call these).
   listModels: async () => PREVIEW_MODELS,
-  getSettings: async () => ({ ...DEFAULT_SETTINGS, activeModelId: 'active-running' }),
+  getSettings: async () => {
+    // #108: the diagnostics-read cases exercise the honest "Measured read speed" row —
+    // a stick-class sample with the #110 slow-read warning, vs a legacy blob without the
+    // field ("not measured yet"). Other cases keep the minimal settings shape.
+    const c = new URLSearchParams(location.search).get('case') ?? ''
+    if (!c.startsWith('diagnostics-read')) {
+      return { ...DEFAULT_SETTINGS, activeModelId: 'active-running' }
+    }
+    const bench: BenchmarkResult = {
+      os: 'win32',
+      arch: 'x64',
+      cpuModel: 'Intel Core i7-8550U',
+      cpuCores: 8,
+      ramGb: 15.8,
+      gpu: null,
+      driveReadMbps: 2412, // the retired page-cache figure — must appear NOWHERE
+      driveWriteMbps: 11.2,
+      tokensPerSecond: 6,
+      measuredModelId: 'qwen3-9b',
+      effectiveRead:
+        c === 'diagnostics-read'
+          ? {
+              mbps: 70.4,
+              bytes: 5_970_000_000,
+              ms: 84_800,
+              source: 'model_load',
+              modelId: 'qwen3-9b',
+              at: '2026-08-08T10:00:00Z'
+            }
+          : null,
+      profile: 'LITE',
+      recommendedModelId: 'qwen3-4b',
+      warnings:
+        c === 'diagnostics-read'
+          ? [
+              tCatalog('en', 'main.benchmark.warnSlowRead', { mbps: 70 }),
+              tCatalog('en', 'main.benchmark.warnSlowDrive')
+            ]
+          : [],
+      ranAt: '2026-08-08T10:05:00Z'
+    }
+    return { ...DEFAULT_SETTINGS, activeModelId: 'active-running', lastBenchmark: bench }
+  },
   getPolicy: async () => null,
   getEngineStatus: async () => null,
   getRuntimeStatus: async () => {
+    const c = new URLSearchParams(location.search).get('case') ?? ''
+    // #107: the chat-starting-progress case exercises the honest load-progress panel —
+    // a 6 GB model 30 s into an ~85.7 s expected load (≈35%).
+    if (c === 'chat-starting-progress') {
+      return {
+        running: false,
+        modelId: null,
+        startingModelId: 'qwen3-9b',
+        port: null,
+        healthy: false,
+        message: 'Starting',
+        starting: { elapsedMs: 30_000, bytesTotal: 5_970_000_000, expectedMs: 85_700 }
+      }
+    }
     // #36: the chat-runtime cases exercise the header hint — GPU form vs. the CPU
     // "compatibility mode" form fed by the gpuAutoDisabled enrichment.
-    const compat = (new URLSearchParams(location.search).get('case') ?? '') === 'chat-runtime-compat'
+    const compat = c === 'chat-runtime-compat'
     return {
       running: true,
       modelId: 'active-running',
@@ -445,6 +503,30 @@ CASES['skill-run-result-offer'] = {
         onCancel={noop}
         onDismiss={noop}
       />
+    </div>
+  )
+}
+// #108/#110: the Diagnostics benchmark card — honest "Measured read speed" row (stick-class
+// sample + the interpolated slow-read warning + the secondary write warning), and the legacy
+// "not measured yet" state for a blob persisted before the field existed.
+CASES['diagnostics-read'] = {
+  label: 'Settings → Diagnostics — measured read speed + slow-read warning (#108/#110)',
+  node: (
+    <div style={{ width: 900, height: 1400 }}>
+      <SettingsScreen tab="diagnostics" />
+    </div>
+  )
+}
+CASES['diagnostics-read-empty'] = {
+  ...CASES['diagnostics-read'],
+  label: 'Settings → Diagnostics — read speed not measured yet (legacy blob, #108)'
+}
+// #107: the Chat no-model panel with honest load progress (determinate bar + "about {pct}%").
+CASES['chat-starting-progress'] = {
+  label: 'Chat screen — honest model-load progress in the Starting panel (#107)',
+  node: (
+    <div style={{ width: 1100, height: 700 }}>
+      <ChatScreen onNavigate={noop} />
     </div>
   )
 }

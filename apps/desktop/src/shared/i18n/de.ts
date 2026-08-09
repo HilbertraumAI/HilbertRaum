@@ -136,6 +136,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.noModel.starting':
     'Dein Modell wird gestartet — große Modelle brauchen einen Moment zum Laden. Es geht ' +
     'hier automatisch weiter, sobald es bereit ist.',
+  'chat.noModel.startingProgress':
+    'Dein Modell wird gestartet — die Modelldatei ({gb} GB) wird gelesen, bisher etwa ' +
+    '{pct} %. Es geht hier automatisch weiter, sobald es bereit ist.',
   'chat.noModel.open': 'KI-Modell öffnen',
   'chat.noModel.recheck': 'Erneut prüfen',
   'chat.empty.title': 'Stell eine Frage — oder frag deine Dokumente.',
@@ -1637,9 +1640,13 @@ export const de: Record<keyof typeof en, string> = {
   'diag.bench.osArch': 'OS / Architektur',
   'diag.bench.gpu': 'GPU',
   'diag.bench.notDetected': 'nicht erkannt',
-  // F-35 (audit 2026-07-16): der Lesewert kommt aus dem OS-Seitencache (RAM, nicht Laufwerk) —
-  // als „(zwischengespeichert)" gekennzeichnet; die ehrliche Kennzahl ist „Laufwerk schreiben".
-  'diag.bench.driveRead': 'Laufwerk lesen (zwischengespeichert)',
+  // #108 (F-35-Auflösung): die Seitencache-Lesezahl der Sonde wird nicht mehr angezeigt —
+  // diese Zeile zeigt die ehrliche effektive Lesegeschwindigkeit, gemessen an echten
+  // Multi-GB-Lesevorgängen (Modellstart oder vollständige Dateiprüfung).
+  'diag.bench.effectiveRead': 'Gemessene Lesegeschwindigkeit',
+  'diag.bench.effectiveReadNone': 'noch nicht gemessen — der Start eines Modells misst sie',
+  'diag.bench.effectiveReadLoad': 'aus einem Modellstart am {when}, {gb} GB gelesen',
+  'diag.bench.effectiveReadHash': 'aus einer Dateiprüfung am {when}, {gb} GB gelesen',
   'diag.bench.driveWrite': 'Laufwerk schreiben',
   'diag.bench.notMeasured': 'nicht gemessen',
   // RD-3-Glossar: „Token", nicht „Tokens" — steht auf Diagnose direkt neben
@@ -1837,6 +1844,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.benchmark.warnSlowDrive':
     'Dieses Laufwerk ist eher langsam. Modelle funktionieren trotzdem, das Laden kann aber ' +
     'länger dauern.',
+  'main.benchmark.warnSlowRead':
+    'Das Lesen von diesem Laufwerk lag bei etwa {mbps} MB/s. Beim Modellstart wird die ganze ' +
+    'Modelldatei mit dieser Geschwindigkeit gelesen, Modellstarts dauern auf diesem Laufwerk ' +
+    'daher lange.',
   'main.benchmark.warnVeryLowTokens':
     'Die Textgenerierung war mit dem geladenen Modell ({model}) sehr langsam, daher wurde ' +
     'das zugewiesene Profil eine Stufe herabgesetzt. Wenn dieses Modell größer ist als das ' +
