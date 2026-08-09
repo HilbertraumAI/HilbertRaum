@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, waitFor, cleanup } from '@testing-library/react'
+import { act, render, waitFor, cleanup } from '@testing-library/react'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import type {
   AppSettings,
@@ -121,6 +121,28 @@ afterEach(() => {
   window.localStorage.clear()
 })
 
+/**
+ * T-3 (#147): deterministic settle for the negative assertions below — drain queued task
+ * cascades until the observed IPC counter is unchanged for 3 consecutive rounds (bounded).
+ * Replaces a real 50 ms sleep, which was only a sampling window: an effect firing later
+ * passed undetected, and CI load narrowed the window further.
+ */
+async function settleUntilQuiescent(count: () => number): Promise<void> {
+  let quiet = 0
+  let last = count()
+  for (let i = 0; i < 50 && quiet < 3; i++) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const now = count()
+    if (now === last) quiet += 1
+    else {
+      quiet = 0
+      last = now
+    }
+  }
+}
+
 describe('AUD-12 — chat chip state is ONE round trip per conversation open', () => {
   it(`opens a ${HISTORY_ANSWERS}-answer conversation with exactly ONE batch call and ZERO per-message calls`, async () => {
     const messages = longHistory()
@@ -148,9 +170,14 @@ describe('AUD-12 — chat chip state is ONE round trip per conversation open', (
           getEvidenceReviewForMessage.mock.calls.length
       ).toBeGreaterThan(0)
     )
-    // …then let every follow-up effect pass settle: the map is now fully answered, so the
-    // effect's own "unknown candidates" gate must close and stop it re-firing.
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    // …then let every follow-up effect pass settle DETERMINISTICALLY (T-3, #147): drain
+    // task cascades until the IPC counters are quiescent for 3 consecutive rounds — the old
+    // real 50 ms sleep was only a sampling window CI load could narrow past a late effect.
+    await settleUntilQuiescent(
+      () =>
+        getEvidenceReviewSummariesForConversation.mock.calls.length +
+        getEvidenceReviewForMessage.mock.calls.length
+    )
 
     // THE ASSERTION: ONE batch round trip for the whole history, and not a single
     // per-message one (the shape whose cost scaled with the history).
@@ -184,7 +211,11 @@ describe('AUD-12 — chat chip state is ONE round trip per conversation open', (
           getEvidenceReviewForMessage.mock.calls.length
       ).toBeGreaterThan(0)
     )
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await settleUntilQuiescent(
+      () =>
+        getEvidenceReviewSummariesForConversation.mock.calls.length +
+        getEvidenceReviewForMessage.mock.calls.length
+    )
     // One attempt, no per-message fallback fan-out, no retry storm.
     expect({
       batch: getEvidenceReviewSummariesForConversation.mock.calls.length,

@@ -25,9 +25,10 @@ import { WorkspaceGate } from './screens/WorkspaceGate'
 // BOTH attempts stays failed until the window reloads — the boundary fallback says so.
 
 /** Lazy screen factory with one in-factory retry (SH-5) — see the comment above. */
-function lazyScreen<P extends object>(
-  importer: () => Promise<{ default: ComponentType<P> }>
-): LazyExoticComponent<ComponentType<P>> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- React.lazy's own constraint
+function lazyScreen<T extends ComponentType<any>>(
+  importer: () => Promise<{ default: T }>
+): LazyExoticComponent<T> {
   return lazy(async () => {
     try {
       return await importer()

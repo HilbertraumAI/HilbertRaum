@@ -40,9 +40,11 @@ function countAsNever(dir: string): number {
   return total
 }
 
-// The count AT Phase 9's commit, after converting the five heaviest cast files. LOWER this when
+// The count AT Phase 9's commit was 110, after converting the five heaviest cast files.
+// T-2 (frontend audit 2026-08-09, #147) swept the renderer whole-bag/per-field casts
+// (typed stub bags + the shared tests/helpers/status.ts fixtures) → 50. LOWER this when
 // you remove casts; the test fails if it ever climbs (a new `as never` was added).
-const BASELINE = 110
+const BASELINE = 50
 
 describe('F-41 `as never` ratchet (audit-2026-07-16)', () => {
   it('the number of `as never` casts under tests/ never exceeds the recorded baseline', () => {

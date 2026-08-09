@@ -84,7 +84,7 @@ describe('ChatScreen — FE-1 setState-after-unmount guards (import poll + strea
             releaseJob = () => res({ jobId: 'j1', total: 1, completed: 1, failed: 0, done: true })
           })
       )
-      const listDocuments = vi.fn(async () => [] as never[])
+      const listDocuments = vi.fn(async () => [])
       const job: ImportJob = { jobId: 'j1', documentIds: ['d1'] }
 
       // Stream: askDocuments PARKS (never resolves) so the stream stays in flight and onToken
@@ -93,7 +93,7 @@ describe('ChatScreen — FE-1 setState-after-unmount guards (import poll + strea
       const askDocuments = vi.fn(() => new Promise<Message>(() => {}))
 
       stubApi({
-        getDroppedFilePath: getDroppedFilePath as never,
+        getDroppedFilePath: getDroppedFilePath,
         listConversations: vi.fn(async () => [docConv()]),
         getRuntimeStatus: vi.fn(async () => runningStatus),
         listMessages: vi.fn(async () => []),

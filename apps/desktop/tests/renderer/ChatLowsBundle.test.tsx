@@ -138,7 +138,7 @@ describe('ChatScreen — double-submit guard (CH-14, #148)', () => {
           release = resolve
         })
     )
-    const sendChatMessage = vi.fn(async () => {})
+    const sendChatMessage = vi.fn(async () => assistantMsg('a1', 'c1', 'ok'))
     stubApi({
       listConversations: vi.fn(async () => []),
       getRuntimeStatus: vi.fn(async () => runningStatus),

@@ -26,6 +26,7 @@ import {
 } from '../../src/renderer/lib/reviewSession'
 import { stubApi } from '../helpers/renderer'
 import { makeDetail, stubReviewApi } from '../helpers/evidenceReview'
+import type { DocTaskStatus, ImportJob, StartSkillRunResult } from '../../src/shared/types'
 
 // TA-2 / H3: the renderer lock purge used to be a dead screen effect (gated on a component-state
 // `locked` flag that lock unmounts before it can fire). It now lives at the real seam,
@@ -68,10 +69,10 @@ describe('purgeSessionStores — the real lock seam (TA-2)', () => {
       onTranslateError: vi.fn(() => () => {}),
       // Document translation: import never resolves, so the store stays 'importing'/busy.
       getDroppedFilePath: vi.fn(() => 'C:\\docs\\secret.pdf'),
-      importDocuments: vi.fn(() => new Promise(() => {})),
+      importDocuments: vi.fn(() => new Promise<ImportJob>(() => {})),
       // Evidence review: an open review with a pending (unsaved) note edit resident.
       getEvidenceReview: vi.fn(async () => makeDetail())
-    } as never)
+    })
 
     // Seed the document store FIRST — `runImport` clears the text store as it starts, so seeding the
     // text store afterwards is the realistic order (each path resets the other on a real start).
@@ -140,7 +141,7 @@ describe('purgeSessionStores — the real lock seam (TA-2)', () => {
       onTranslateToken: vi.fn(() => () => {}),
       onTranslateDone: vi.fn(() => () => {}),
       onTranslateError: vi.fn(() => () => {})
-    } as never)
+    })
     await adoptActiveJob()
     expect(getTranslateSession().translating).toBe(true)
 
@@ -149,7 +150,7 @@ describe('purgeSessionStores — the real lock seam (TA-2)', () => {
     expect(getTranslateSession().state).toBe('idle')
 
     // Main reports nothing running now (the job was aborted at lock) — adopt is a clean no-op.
-    stubApi({ getActiveTranslateJob: vi.fn(async () => null) } as never)
+    stubApi({ getActiveTranslateJob: vi.fn(async () => null) })
     await adoptActiveJob()
     expect(getTranslateSession().activeJobId).toBeNull()
     expect(getTranslateSession().translating).toBe(false)
@@ -176,20 +177,30 @@ describe('purgeSessionStores — watcher stores (SH-4)', () => {
     try {
       stubApi({
         startDocTask: vi.fn(async () => ({ jobId: 'task1' })),
-        getDocTask: vi.fn(async () => ({ jobId: 'task1', state: 'running' })),
-        startSkillRun: vi.fn(async () => ({
-          started: true,
-          run: {
-            runHandle: 'h1',
-            skillInstallId: 'app:bank-statement',
-            toolName: 'extract_transactions',
-            documentCount: 1,
+        getDocTask: vi.fn(
+          async (): Promise<DocTaskStatus> => ({
+            jobId: 'task1',
+            kind: 'summary',
+            documentIds: ['d1'],
             state: 'running',
-            progress: { done: 0, total: 1 }
-          }
-        })),
+            progress: { stepsDone: 0, stepsTotal: 1 }
+          })
+        ),
+        startSkillRun: vi.fn(
+          async (): Promise<StartSkillRunResult> => ({
+            started: true,
+            run: {
+              runHandle: 'h1',
+              skillInstallId: 'app:bank-statement',
+              toolName: 'extract_transactions',
+              documentCount: 1,
+              state: 'running',
+              progress: { done: 0, total: 1 }
+            }
+          })
+        ),
         getSkillRun: vi.fn(async () => null)
-      } as never)
+      })
 
       await startTask('summary', 'd1')
       expect(getActiveDocTask()).not.toBeNull()

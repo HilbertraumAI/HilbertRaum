@@ -100,8 +100,11 @@ describe('ConversationList — search (Phase 31)', () => {
 
     await user.type(screen.getByRole('searchbox', { name: 'Search conversations' }), 'liability')
     const row = await screen.findByRole('button', { name: /Contract questions/ })
-    // Debounced: one IPC call for the finished query, not one per keystroke.
+    // Debounced: one IPC call for the finished query, not one per keystroke. T-3 (#147):
+    // assert the COUNT too — the with-only assertion also passed for per-keystroke IPC
+    // (the final call always carries the full query).
     await waitFor(() => expect(searchConversations).toHaveBeenCalledWith('liability'))
+    expect(searchConversations).toHaveBeenCalledTimes(1)
     // The matched term renders as <mark>, the rest as plain text.
     expect(screen.getByText('liability').tagName).toBe('MARK')
     expect(row.textContent).toContain('the liability cap is two million')

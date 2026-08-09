@@ -16,7 +16,7 @@ import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsT
 import { Banner, CoverageMeter, PasswordField, type Translator } from '../../src/renderer/components'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
-import type { AppStatus, RuntimeStatus } from '../../src/shared/types'
+import { DEFAULT_SETTINGS, type AppStatus, type RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Phase-40 German render smokes (i18n record §5): one per migrated screen. Each renders
@@ -252,7 +252,7 @@ describe('German render smokes (Phase 40)', () => {
   it('ModelsScreen renders German (empty manifests)', async () => {
     stubApi({
       listModels: vi.fn(async () => []),
-      getSettings: vi.fn(async () => ({}) as never),
+      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
       getPolicy: vi.fn(async () => {
         throw new Error('no policy')
       }),

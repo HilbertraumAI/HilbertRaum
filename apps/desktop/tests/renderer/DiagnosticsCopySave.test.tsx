@@ -6,6 +6,7 @@ import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type BenchmarkResult, type RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { appStatus, driveStatus } from '../helpers/status'
 
 // Diagnostics copy/save: the per-card "Copy" buttons (App & runtime, Hardware benchmark,
 // Logs) hand technical details to support without retyping, and "Save to file…" writes the
@@ -58,13 +59,10 @@ function stubDiagnostics(
 ): void {
   lastCopied = null
   stubApi({
-    getAppStatus: vi.fn(async () => ({
-      appName: 'HilbertRaum',
-      appVersion: '0.1.20',
-      activeModelId: 'qwen3-4b',
-      hardwareProfile: 'BALANCED'
-    })) as never,
-    getDriveStatus: vi.fn(async () => ({}) as never),
+    getAppStatus: vi.fn(async () =>
+      appStatus({ appVersion: '0.1.20', activeModelId: 'qwen3-4b', hardwareProfile: 'BALANCED' })
+    ),
+    getDriveStatus: vi.fn(async () => driveStatus()),
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getRuntimeInstall: vi.fn(async () => null),
     getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: bench })),
@@ -73,7 +71,7 @@ function stubDiagnostics(
       return true
     }),
     ...overrides
-  } as never)
+  })
 }
 
 function renderDiagnostics() {

@@ -36,7 +36,10 @@ function mkRun(over: Partial<SkillRunState> = {}): SkillRunState {
   }
 }
 
-type Api = Record<string, unknown>
+// T-2 (frontend audit 2026-08-09, #147): typed against the real bridge contract — the old
+// `Record<string, unknown>` bag meant a startSkillRun/getSkillRun/listSkillRuns/clearSkillRun
+// rename (or a signature change) reddened NOTHING here. Same shape as stubApi's overrides.
+type Api = Partial<import('../../src/preload').PreloadApi>
 function setApi(api: Api): void {
   ;(window as unknown as { api: Api }).api = api
 }
@@ -153,9 +156,10 @@ describe('skill-run store — poll resilience (SKA-39/40)', () => {
   })
 
   it('marks a running run "state unknown" (dismissable) when a poll returns null — never a stuck bar', async () => {
-    const cur = { run: mkRun() as SkillRunState | null }
+    const initial = mkRun()
+    const cur = { run: initial as SkillRunState | null }
     setApi({
-      startSkillRun: async () => ({ started: true, run: cur.run }),
+      startSkillRun: async () => ({ started: true, run: initial }),
       getSkillRun: async () => cur.run
     })
     await startSkillRun({ skillInstallId: 'app:bank-statement', toolName: 'extract_transactions', conversationId: 'conv-1', documentId: 'doc-1' })

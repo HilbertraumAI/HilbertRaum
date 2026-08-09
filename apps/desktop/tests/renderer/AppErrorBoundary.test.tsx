@@ -38,8 +38,8 @@ function stubShell(settings: AppSettings = DEFAULT_SETTINGS): void {
     getWorkspaceState: vi.fn(async () => unlocked),
     getPolicy: vi.fn(async () => offlinePolicy),
     getSettings: vi.fn(async () => settings),
-    onRuntimeNotice: vi.fn(() => () => {}) as never
-  } as never)
+    onRuntimeNotice: vi.fn(() => () => {})
+  })
 }
 
 // React logs the caught render error to console.error — silence the noise.

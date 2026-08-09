@@ -4,6 +4,7 @@ import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
 import { DEFAULT_SETTINGS, type DownloadJob, type ModelInfo, type PolicyStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { appStatus } from '../helpers/status'
 
 // F22 (audit full-audit-2026-06-29 postmerge): ModelsScreen was the lone hold-out from the
 // FE-4 `mountedRef` discipline. Its download/engine poll callbacks ran `setJob(next)` and (on a
@@ -99,9 +100,9 @@ describe('ModelsScreen — FE-4 setState-after-unmount guard (download poll)', (
         listModels,
         getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: null })),
         getPolicy: vi.fn(async () => policyAllowed()),
-        getAppStatus: vi.fn(async () => ({ machineRamGb: 32 }) as never),
-        downloadModel: downloadModel as never,
-        getDownloadJob: getDownloadJob as never
+        getAppStatus: vi.fn(async () => appStatus({ machineRamGb: 32 })),
+        downloadModel: downloadModel,
+        getDownloadJob: getDownloadJob
       })
 
       const flush = async (): Promise<void> => {

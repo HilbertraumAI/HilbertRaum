@@ -21,19 +21,74 @@ function sourceFiles(dir: string): string[] {
   return out
 }
 
-/** Lines where `phrase` occurs inside a quoted string (rough but effective). */
+/**
+ * Lines where `phrase` occurs inside a string literal. T-3 (#147): a real single-pass
+ * scanner replacing the old per-line quote-parity count, which (a) missed phrases inside
+ * MULTI-LINE template literals entirely and (b) let an apostrophe in a same-line comment
+ * flip the parity — both false-NEGATIVE modes that let stale phrases slip back silently.
+ * The scanner tracks comment state (quotes in comments never count) and carries template-
+ * literal state across lines. Still a heuristic (regex literals containing quote chars can
+ * briefly confuse it), but strictly tighter than the parity count it replaces.
+ */
 function literalOccurrences(phrase: string): string[] {
   const hits: string[] = []
   for (const file of sourceFiles(SRC)) {
-    const lines = readFileSync(file, 'utf8').split('\n')
-    lines.forEach((line, i) => {
-      const idx = line.indexOf(phrase)
-      if (idx === -1) return
-      // Inside a string literal = an odd number of quote chars before the phrase.
-      const before = line.slice(0, idx)
-      const quotes = (before.match(/['"`]/g) ?? []).length
-      if (quotes % 2 === 1) hits.push(`${file}:${i + 1}`)
-    })
+    const src = readFileSync(file, 'utf8')
+    let inLine = false
+    let inBlock = false
+    let quote: string | null = null
+    let literal = ''
+    let literalStartLine = 0
+    let lineNo = 1
+    const closeLiteral = (): void => {
+      if (literal.includes(phrase)) hits.push(`${file}:${literalStartLine}`)
+      literal = ''
+    }
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i]
+      const next = src[i + 1]
+      if (c === '\n') lineNo++
+      if (inLine) {
+        if (c === '\n') inLine = false
+        continue
+      }
+      if (inBlock) {
+        if (c === '*' && next === '/') {
+          inBlock = false
+          i++
+        }
+        continue
+      }
+      if (quote) {
+        if (c === '\\') {
+          literal += c + (next ?? '')
+          i++
+          continue
+        }
+        if (c === quote) {
+          quote = null
+          closeLiteral()
+          continue
+        }
+        literal += c
+        continue
+      }
+      if (c === '/' && next === '/') {
+        inLine = true
+        i++
+        continue
+      }
+      if (c === '/' && next === '*') {
+        inBlock = true
+        i++
+        continue
+      }
+      if (c === "'" || c === '"' || c === '`') {
+        quote = c
+        literalStartLine = lineNo
+      }
+    }
+    if (quote) closeLiteral() // unterminated at EOF — still check what accumulated
   }
   return hits
 }

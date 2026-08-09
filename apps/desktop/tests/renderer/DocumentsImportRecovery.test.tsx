@@ -98,3 +98,49 @@ describe('DocumentsScreen — import poll re-attach on mount (DOC-1, #141)', () 
     expect(getImportJob).not.toHaveBeenCalled()
   })
 })
+
+// #147 coverage add: the "Import folder" HAPPY PATH — only the disabled state was tested.
+// Pins the D1 capability flow: pickDocuments mints the token, importPreflight gates audio,
+// importDocuments carries the token, and the poll drives busy → done.
+describe('DocumentsScreen — Import folder happy path (#147)', () => {
+  it('picks a folder, imports via the picker token, and re-enables when the job settles', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    const pickDocuments = vi.fn(async () => ({ token: 'cap-1', paths: ['D:/docs/a.pdf'] }))
+    const importPreflight = vi.fn(async () => ({ fileCount: 1, audioFileCount: 0, audioBytes: 0 }))
+    const importDocuments = vi.fn(async () => ({ jobId: 'j7', documentIds: ['d7'] }))
+    const getImportJob = vi
+      .fn<(jobId: string) => Promise<ImportJobStatus>>()
+      .mockResolvedValueOnce({ jobId: 'j7', total: 1, completed: 0, failed: 0, done: false })
+      .mockResolvedValue({ jobId: 'j7', total: 1, completed: 1, failed: 0, done: true })
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [doc({ id: 'd7', title: 'a.pdf', status: 'indexed', chunkCount: 2 })]),
+      getActiveImportJob: vi.fn(async () => null),
+      pickDocuments,
+      importPreflight,
+      importDocuments,
+      getImportJob
+    })
+    render(
+      <ToastProvider>
+        <DocumentsScreen />
+      </ToastProvider>
+    )
+
+    await user.click(await screen.findByRole('button', { name: 'Import folder' }))
+    await waitFor(() => expect(pickDocuments).toHaveBeenCalledWith('folder'))
+    // The import references the one-time capability token, never raw renderer-chosen paths (D1).
+    await waitFor(() =>
+      expect(importDocuments).toHaveBeenCalledWith(['D:/docs/a.pdf'], { pickerToken: 'cap-1' })
+    )
+    // Busy while the job runs…
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Importing…' })).toBeDisabled())
+    // …and the poll notices completion, re-enabling both entry points.
+    await waitFor(
+      () => expect(screen.getByRole('button', { name: 'Import files' })).toBeEnabled(),
+      { timeout: 5000 }
+    )
+    expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled()
+  })
+})

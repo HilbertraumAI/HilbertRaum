@@ -84,7 +84,11 @@ describe('WorkspaceGate — failed unlock: focus + announcement (SH-2/SH-12)', (
   it('re-focuses the password field after a wrong password (SH-12)', async () => {
     const user = userEvent.setup()
     const unlockWorkspace = vi.fn(
-      async (): Promise<WorkspaceActionResult> => ({ ok: false, message: 'Wrong password.' })
+      async (): Promise<WorkspaceActionResult> => ({
+        ok: false,
+        reason: 'wrong_password',
+        message: 'Wrong password.'
+      })
     )
     stubApi({ unlockWorkspace })
     render(<WorkspaceGate state={LOCKED} onUnlocked={vi.fn()} />)

@@ -14,6 +14,7 @@ import {
 } from '../../src/shared/types'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
 import { stubApi } from '../helpers/renderer'
+import { appStatus } from '../helpers/status'
 import { makeDetail } from '../helpers/evidenceReview'
 
 // Route-level code split (full-audit 2026-07-10 PF-6): Documents/Translate/Images/Models/
@@ -65,19 +66,12 @@ function stubAppShell(): void {
     getWorkspaceState: vi.fn(async () => unlockedWorkspace),
     getPolicy: vi.fn(async () => offlinePolicy),
     getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-    onRuntimeNotice: vi.fn(() => () => {}) as never,
+    onRuntimeNotice: vi.fn(() => () => {}),
     // Home (the default, eager screen) readiness data:
-    getAppStatus: vi.fn(async () => ({
+    getAppStatus: vi.fn(async () => appStatus({
       appName: 'x',
       appVersion: '0',
-      offlineMode: true,
-      networkAllowed: false,
-      activeModelId: null,
-      hardwareProfile: 'UNKNOWN' as const,
-      workspaceMode: 'plaintext_dev' as const,
-      workspaceReady: true,
-      machineRamGb: 16,
-      dictationAvailable: false
+      machineRamGb: 16
     })),
     getRuntimeStatus: vi.fn(async () => ({
       running: false,
@@ -98,7 +92,7 @@ function stubAppShell(): void {
     // The lazy AI Model screen's data:
     listModels: vi.fn(async () => []),
     getRuntimeInstall: vi.fn(async () => null)
-  } as never)
+  })
 }
 
 describe('lazy screens — suspense fallback → content (PF-6)', () => {

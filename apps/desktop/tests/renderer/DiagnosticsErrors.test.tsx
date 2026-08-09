@@ -7,6 +7,7 @@ import { I18nProvider } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AppStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { driveStatus } from '../helpers/status'
 
 // Audit FE-8 — diagnostics copy must be fully localized: a benchmark failure routes through
 // friendlyIpcError (no raw Electron transport / Error-class prefix in the localized line), and
@@ -46,7 +47,7 @@ function stubDiag(
   } = {}
 ): void {
   stubApi({
-    getDriveStatus: vi.fn(async () => ({}) as never),
+    getDriveStatus: vi.fn(async () => driveStatus()),
     getRuntimeInstall: vi.fn(async () => null),
     getSettings: vi.fn(async () => over.settings ?? DEFAULT_SETTINGS),
     getAppStatus: vi.fn(async () => appStatus),
@@ -57,9 +58,9 @@ function stubDiag(
       healthy: false,
       message: 'Stopped'
     })),
-    runBenchmark: (over.runBenchmark ?? vi.fn()) as never,
-    tryGpuAgain: (over.tryGpuAgain ?? vi.fn()) as never
-  } as never)
+    runBenchmark: (over.runBenchmark ?? vi.fn()),
+    tryGpuAgain: (over.tryGpuAgain ?? vi.fn())
+  })
 }
 
 describe('DiagnosticsTab — localized errors (FE-8)', () => {
