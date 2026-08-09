@@ -28,7 +28,7 @@
 | Chat (Qwen3.6 27B Q4) | Qwen3.6 27B Q4_K_M | ~16.8 GB | 20 GB | — (rank 3) | **Recommended 24 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Productized 2026-07-12 from a local-test stub: unsloth Q4_K_M (the exact quant the #48 tester eval scored), real HF-LFS hash, apache-2.0 review. Top of the §9 quality table with its Q5 sibling (hallucinations 0 on the v3 rescore); **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 16.87 GiB vulkan — the formula-exact min-20 confirmation). Text-only, not bundled. |
 | Chat (Qwen3.6 27B Q5) | Qwen3.6 27B Q5_K_M | ~19.5 GB | 24 GB | — (rank 3) | **Recommended ≥32 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Same productization posture as the Q4; the eval's outright top scorer (F1 .3573, zero unanswerable-set hallucinations); **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 19.38 GiB vulkan). Text-only, not bundled. |
 | Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~22.2 GB | 24 GB | — (rank 1) | **Qwen3.5 wave (2026-07-01); rank 1 since the 2026-08-03 ratification (`model-benchmarks.md` §9.3).** ~35B total / ~3B active MoE (256 experts, 8+1 active); beat the incumbent MoE `qwen3-30b-a3b-q4` on hallucinations (0 real vs 2, EM parity) with the speed case confirmed (140.9 t/s vulkan / 12.1 cpu tg). Ranked alternative for ≥32 GB — never the auto-pick (the Qwen3.6 Q5 holds ≥32). Text-only, not bundled; §9.1 in-app smoke still owed (follow-up issue). |
-| Chat (Gemma E2B) | Gemma 4 E2B Instruct QAT Q4_0 | ~3.3 GB | 8 GB | — (rank 0) | **Gemma 4 QAT wave (2026-07-23, issue #82); eval ratified 2026-08-03 (§9.3).** Official Google QAT; MatFormer effective-2B. Eval: F1 .3373 edges the bundled Qwen3 4B with equal hallucinations (3) and the fastest cpu decode measured (24.3 t/s) — rank stays 0 until the #53 weak-16 GB-box datapoint lands (follow-up issue). Text-only. In-app b9849 smoke PASSED 2026-07-23. |
+| Chat (Gemma E2B) | Gemma 4 E2B Instruct QAT Q4_0 | ~3.3 GB | 8 GB | 12–15 GB boxes + the §6.5 step-down landing tier (rank 3) | **Gemma 4 QAT wave (2026-07-23, issue #82); eval ratified 2026-08-03 (§9.3); PROMOTED 2026-08-09 (issue #153).** Official Google QAT; MatFormer effective-2B. Eval: F1 .3373 edges the bundled Qwen3 4B with equal hallucinations (3) and the fastest cpu decode measured (24.3 t/s); the #153 weak-16 GB-box leg confirmed 17.0 tok/s settled vs the prior 12 GB pick's 9.0 (iGPU basis) → rank 3, rec-RAM retuned to 12 (`model-benchmarks.md` §6.5 #153 amendment). Text-only. In-app b9849 smoke PASSED 2026-07-23. |
 | Chat (Gemma E4B) | Gemma 4 E4B Instruct QAT Q4_0 | ~5.2 GB | 12 GB | — (rank 0) | **Gemma 4 QAT wave; eval ratified 2026-08-03 (§9.3): F1 .2999 misses the 8B bar — no promotion.** MatFormer effective-4B. Text-only; thinks by default, `enable_thinking: false` suppression verified per size. In-app b9849 smoke PASSED 2026-07-23. |
 | Chat (Gemma 26B-A4B) | Gemma 4 26B-A4B Instruct QAT Q4_0 MoE | ~14.4 GB | 20 GB | — (rank 2) | **Gemma 4 QAT wave; rank 2 since the 2026-08-03 ratification (§9.3).** MoE, ~3.8B active (8 of 128 experts): EM parity with the 24 GB pick Qwen3.6 27B Q4, ZERO audited hallucinations, ~4× its decode speed at 2.5 GB less disk — F1 .3307 vs .3523 keeps the Qwen the pick, so this is the ranked runner-up / MoE speed alternative (never the auto-pick). Supersedes the `gemma-4-26b-q4` local-test stub for distribution. All §9.1 legs PASSED 2026-07-30 (in-app peak RSS 14.28 GiB, vulkan). |
 | Chat (Gemma 31B) | Gemma 4 31B Instruct QAT Q4_0 | ~17.7 GB | 24 GB | — (rank 0) | **Gemma 4 QAT wave; eval ratified 2026-08-03 (§9.3): DO NOT PROMOTE — the issue-#82 drop condition met** (ties the 26B-A4B within .003 F1 at 4.2–6× slower decode, +3.3 GB disk). Stays a selectable opt-in — the Apache-2.0 dense quality ceiling for 32 GB GPU boxes. All §9.1 legs PASSED 2026-07-30 incl. the first load smoke. |
@@ -170,6 +170,8 @@ repos ungated), 140+ languages:
   #42 field datapoint). The E2B's `recommended_ram_gb` deliberately sits on the small-tier **16
   floor**: a unique lower value would make a rank-0 model the only "comfortable fit" at that RAM
   level and slip past the picker's preferRanked guard (caught by the wave-invariant tests).
+  *(Superseded 2026-08-09 by the #153 promotion: ranked 3, the E2B now carries its honest
+  rec-RAM 12 and that "hijack" is the ratified pick — see the amendment below.)*
 - **None are auto-recommended.** All four carry `recommendation_rank: 0` + `recommended_profiles:
   []` + `bundled_on_preconfigured_drive: false` — selectable manually, never the RAM-best-fit
   auto-pick, never bundled, **until the local German/English grounded-QA eval promotes them**
@@ -189,6 +191,15 @@ repos ungated), 140+ languages:
   NO); §9.1 smokes complete for 26B-A4B + 31B; RAM lines confirmed on the vulkan basis and kept
   (the Linux-cpu values are a non-comparable mmap basis). Smoke-status and RAM-estimate bullets
   above describe the wave-open state.)_
+
+  _(#153 amendment, 2026-08-09, owner-ratified: **E2B → rank 3**. The owed weak-16 GB-box
+  in-app Diagnostics leg landed on the designated class (i7-1185G7 / Iris Xe / 15.8 GB, Vulkan
+  b9849): E2B 17.0 tok/s settled vs `qwen3.5-4b` 9.0 and bundled `qwen3-4b` 14.6 — the big-rig
+  ~2× cpu ratio reproduces (iGPU basis; full table on issue #153). `recommended_ram_gb` retuned
+  16 → 12: E2B is the sub-16 comfortable band (12–15 GB boxes) and the §6.5 step-down's landing
+  tier for 16–20 GB crawls. `qwen3-4b-2507` keeps the tier quality lead but stays rank 1;
+  E2B beats the previous 12 GB pick `qwen3.5-4b` on both F1 (.3373 vs .2728) and speed.
+  Full record: `model-benchmarks.md` §6.5 "#153 amendment".)_
 
 ## Manifest format & parsing
 Manifests are **YAML**, parsed with the pure-JS [`yaml`](https://www.npmjs.com/package/yaml) package

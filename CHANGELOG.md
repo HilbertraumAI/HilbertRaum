@@ -128,6 +128,12 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Changed
 
+- **Gemma 4 E2B is now the recommended model for 12–15 GB machines** (issue #153,
+  owner-ratified 2026-08-09). The weak-hardware measurement the rank was gated on
+  landed: on the designated 16 GB weak-iGPU class, E2B generates ~1.9× faster than
+  the previous 12 GB pick with better grounded-QA quality. Slow 16–20 GB machines
+  (the speed-signal step-down below) now step down to E2B instead of keeping a
+  too-slow pick. The bundled drive default is unchanged.
 - **The model recommendation now listens to measured speed** (issue #95, resolving
   issue #52's deferred question). When the Diagnostics benchmark measures text
   generation under 5 tokens per second on a model that is right-sized for this
