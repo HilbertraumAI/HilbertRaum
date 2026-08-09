@@ -367,7 +367,8 @@ both i9 runs ratified as the §9 record, the 2026-07-30 run supplied §3/§4 row
 promoted set (RAM lines confirmed on the vulkan basis; the Linux-cpu numbers are a
 non-comparable mmap basis — §9.3 "§4 RSS"), and the 9B + both 27B §9.1 smokes PASSED. The
 rescored table did NOT contradict the promoted ranks. Residuals live in the wave follow-up
-issue: the Windows-basis RSS re-measure and the 35B-A3B §9.1 smoke.)*
+issue: the Windows-basis RSS re-measure and the 35B-A3B §9.1 smoke — the latter PASSED
+2026-08-09, §9.3 smokes record.)*
 
 ### 6.5 Signal-aware picker: the measured-tok/s step-down (issue #95 item 1, 2026-08-09)
 
@@ -750,7 +751,8 @@ in BUILD_STATE. **Capture tokens/sec + peak RSS** where the existing manual harn
 
 **3. New Qwen3.5 models load on b9849:**
 - [ ] `qwen3.5-4b-ud-q4kxl` · [ ] `qwen3.5-9b-ud-q4kxl` ·
-  [ ] `qwen3.5-27b-ud-q4kxl` (32 GB+ machine) · [ ] `qwen3.5-35b-a3b-ud-q4kxl` (32 GB+ machine)
+  [ ] `qwen3.5-27b-ud-q4kxl` (32 GB+ machine) · [x] `qwen3.5-35b-a3b-ud-q4kxl` (32 GB+ machine —
+  PASSED 2026-08-09, all item-4 legs; see the §9.3 smokes record)
 
 **4. For each Qwen3.5 smoke, through the APP (not raw llama.cpp):**
 - [ ] start the model via the AI Model screen
@@ -878,7 +880,7 @@ recorded next to the rank in its manifest:
 | `gemma4-31b-it-qat-q4` | **rank 0 forever — DO NOT PROMOTE** | Issue #82's drop condition is met: ties the 26B-A4B within .003 F1 (.3334 vs .3307; both 0 hallucinations, both the same two cautious DE over-abstentions) while decoding 4.2× (vulkan) / 6× (cpu) slower at +3.3 GB disk. Stays selectable as the Apache-2.0 GPU-box quality ceiling; catalog removal deliberately not taken (shipped in v0.1.55). |
 | `gemma4-e4b-it-qat-q4` | **rank 0** — missed the 8B bar | F1 .2999 vs Ministral .3111 / `qwen3.5-9b` .3152 / `qwen3-8b` .3262; hallucination-honest after audit (1 real). |
 | `gemma4-e2b-it-qat-q4` | **rank 0** — gated on the owed weak-hardware datapoint | F1 .3373 edges the bundled `qwen3-4b` (.3277) with equal audited hallucinations (3) and the fastest cpu decode measured (24.3 t/s tg) — but `qwen3-4b-2507` keeps the tier quality lead (.3613, 1 real), Deep failed the flip rule at this size (7/8 vs Balanced 8/8), and the issue-#53 weak-16 GB-box measured-tok/s leg is still owed. That datapoint decides (wave follow-up issue). |
-| `qwen3.5-35b-a3b-ud-q4kxl` *(§9's deferred-to-speed rank)* | **rank 1** — ranked MoE alternative | The §9 bar ("beat `qwen3-30b-a3b-q4` on speed OR quality by enough") is met on both axes: 0 real hallucinations vs the incumbent MoE's 2 at EM parity (quality), and the 3B-active speed case confirmed (tg 140.9 t/s vulkan / 12.1 cpu vs the dense 27B-Q4's 40.1 / 2.8). Residual: its §9.1 in-app smoke is still owed — rank 1 exposes no auto-pick. |
+| `qwen3.5-35b-a3b-ud-q4kxl` *(§9's deferred-to-speed rank)* | **rank 1** — ranked MoE alternative | The §9 bar ("beat `qwen3-30b-a3b-q4` on speed OR quality by enough") is met on both axes: 0 real hallucinations vs the incumbent MoE's 2 at EM parity (quality), and the 3B-active speed case confirmed (tg 140.9 t/s vulkan / 12.1 cpu vs the dense 27B-Q4's 40.1 / 2.8). *(Residual settled: its §9.1 in-app smoke PASSED 2026-08-09 — see the smokes record below.)* |
 
 Nothing in the run contradicts the §6.4 promoted ranks — where the eval is clear it agrees at the
 top end (the Qwen3.6 pair still leads the quality table on the rescored numbers).
@@ -910,7 +912,23 @@ E2B/E4B were owner-PASSED 2026-07-23 (win-vulkan) and this run adds the missing 
 harness+eval. The still-owed §6.4 smokes for the promoted set also PASSED: `qwen3.5-9b`,
 `qwen3.6-27b-q4`, `qwen3.6-27b-q5` — all legs, in-app peaks 6.57 / 16.87 / 19.38 GiB. No
 `llama-server` survived a stop or quit in any smoke. Open smokes after this wave: the 35B-A3B
-(rank 1, no auto-pick exposure) — tracked in the follow-up issue.
+(rank 1, no auto-pick exposure) — tracked in the follow-up issue. *(Closed 2026-08-09, below.)*
+
+**§9.1 smoke — `qwen3.5-35b-a3b-ud-q4kxl` (2026-08-09, through the real UI via CDP, b9849
+linux-vulkan):** the last owed promoted-set smoke, run on the same rig + reusable eval drive
+as the 2026-07-30 evidence run (i9-9900X, 125.5 GB, RTX 3090, Ubuntu 22.04.5, dev build of
+repo head at `f2a152df`; issue #95 item 4). PASS on every leg: in-app checksum verify of the
+22.2 GB sha256-pinned weight (81 s); start via the AI Model screen (spawn-to-running 14 s,
+real `llama-server` sidecar on the 35B GGUF, GPU backend shown in the chat header); normal
+chat prompt streams coherently; document-grounded ask in "Ask my documents" mode answers from
+the corpus with a correct `[S1]` citation; mid-stream abort (stream ended 203 ms after Stop);
+Deep shows the reasoning line, Balanced suppresses it cleanly (0 reasoning surfaced —
+consistent with the §9.3 thinking table); stop teardown and quit-while-running teardown both
+leave NO new `llama-server` (asserted twice; a pre-existing orphaned sidecar from an earlier
+unrelated session was recorded and excluded). Sidecar peak `VmHWM` 22.07 GiB (Linux basis,
+consistent with the 21.46 GiB vulkan peak above; the Windows-basis question is unchanged).
+Weights were already on the eval drive from the 2026-07-30 run; the in-app SHA-256 verify
+this run re-confirmed the manifest pin, so no re-download was performed.
 
 **Scorer v3 (step (a), 2026-08-03):** the refusal detector missed 9 genuine abstentions across
 the two i9 runs (4 in 2026-07-09 incl. the "kein/keine … erwähnt" family; 5 in 2026-07-30:

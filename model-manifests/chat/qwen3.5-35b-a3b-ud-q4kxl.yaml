@@ -18,10 +18,10 @@ recommended_ram_gb: 32
 # gap inside the §9 verbosity confound) and the §3 sweep confirms the 3B-active speed case
 # (140.9 t/s vulkan / 12.1 t/s cpu tg vs the dense 27B-Q4's 40.1 / 2.8). Ranked MoE alternative
 # for ≥32 GB machines; never the auto-pick (qwen3.6-27b-q5, rank 3, holds ≥32 GB). MoE: 35B
-# total / ~3B active (256 experts, 8 routed + 1 shared active). RESIDUAL: the §9.1
-# through-the-app smoke for this model is still owed (the §2 eval + §3/§4 sweeps ran it via
-# the RAG path and raw runtime only) — no user-facing exposure at rank 1; tracked in the wave
-# follow-up issue.
+# total / ~3B active (256 experts, 8 routed + 1 shared active). The §9.1 through-the-app
+# smoke PASSED 2026-08-09 (i9-9900X, b9849 linux-vulkan, through the real UI via CDP; all
+# legs incl. abort, stop+quit teardown, Deep on + Balanced suppressed; in-app checksum
+# verify of the 22.2 GB weight; sidecar VmHWM 22.07 GiB) — model-benchmarks.md §9.3.
 recommendation_rank: 1
 # Native context is 262,144 tokens (extensible to ~1,010,000 via YaRN). Manifest runtime context
 # is 8192 for now — the safe local runtime budget for normal laptops, not the model maximum.
