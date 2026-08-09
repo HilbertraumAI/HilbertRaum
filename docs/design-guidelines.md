@@ -595,7 +595,9 @@ reading column.** The chips/badges/Preview/"⋯" are wrapped in one `.doc-row-tr
 min-width:0`); the filename uses the available width and only ellipsizes when genuinely out of
 room, while Preview + "⋯" form a clean aligned column down the list. The list is capped to a
 ~1000px reading column (`.doc-list`) and the **Documents screen widened past the 860px `.screen`
-prose cap** (`.docs-screen { max-width: 1180px }`, left-aligned, NOT centred) because a list with
+prose cap** (`.docs-screen { max-width: 1180px }`, left-aligned, NOT centred — **superseded
+2026-08-09, #166:** all capped screens now centre via the `.screen` margin, see §14; the width
+argument below stands unchanged) because a list with
 chips + three badges + actions needs more width than a reading column; `.docs-main { min-width:0 }`
 is the grid-blowout guard so a long unbreakable filename ellipsizes instead of widening the row
 and pushing Preview/"⋯" off the edge. (2) **Tags read as tags, not buttons.** The row tag Chips
@@ -1261,3 +1263,35 @@ and drive the gate by CSS/`input[type=password]` (locale-independent — the dev
 German). New guards added: `token-contrast.test.ts` (§13.2) and `tests/renderer/BrandMark.test.tsx`
 (theme-asset choice, relative src, min-size clamp, clear-space, a11y, asset existence). Final suite:
 **1852 passed / 27 skipped**; typecheck + build clean.
+
+## 14. Screen width tiers — design record (IMPLEMENTED 2026-08-09, issue #166)
+
+_The app-wide rule for how wide a screen's container is and where its whitespace goes.
+Code comments cite this section as **§14**._
+
+**The problem (#166):** the container caps accreted wave by wave — 860px `.screen` (a single
+undocumented CSS line), 1100px Translate/Images (comments pointing at retired wave plans), 1180px
+Documents (§11.6), Review inheriting the 860px prose cap around a two-pane workspace — and every
+capped container was **left-aligned**, so the leftover space piled up as a differently-sized right
+gutter on every screen. Chat, which centres its 720px transcript inside a full-bleed grid (§3),
+read as designed; the capped screens read as accidental, especially on wide windows.
+
+**Decisions (the facts they rest on):**
+1. **Two tiers, no more.** **Reading tier 860px** (`.screen`): prose, forms, card lists — Home,
+   AI model, Settings, Skills, and the gate/loading/error/empty states. **Workspace tier 1180px**
+   (`.docs-screen`, `.translate-screen`, `.images-screen`, `.review-screen`): row sets and
+   two-pane layouts that need more than a reading column — the §11.6 argument, now applied
+   consistently: Translate and Images are structurally the same "more than a reading column" case
+   that gave Documents 1180px (their 1100px had no recorded rationale), and Review's answer
+   canvas had only ~480px beside its 280–360px evidence pane under the inherited reading cap.
+   A new screen picks one of the two tiers; a third width needs a decision recorded here first.
+2. **Centred, both tiers.** `.screen` now carries `margin: 0 auto`, so leftover space splits into
+   symmetric gutters exactly like the chat transcript — capping reads as intent, not as a
+   half-used window. Capping itself stays: §1.1 calm/whitespace, §1.5 legibility, and §8's
+   warning against dashboard sprawl all argue against full-width. This **supersedes §11.6's
+   "left-aligned, NOT centred" choice** (dated note there); §11.6's *width* argument stands
+   unchanged.
+3. **Chat stays full-bleed** (§3): `.chat-layout` fills the content area and the 720px transcript
+   centres inside it; Chat's no-model/empty states are plain `.screen` (reading tier).
+4. **Guarded:** `tests/unit/screen-width-tiers.test.ts` pins the two tier values, the centring
+   margin, and sweeps every `*-screen` container so a third width can't creep back in.

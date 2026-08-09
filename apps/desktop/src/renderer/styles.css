@@ -316,7 +316,13 @@ button { min-width: 24px; min-height: 24px; }
 .hint.warn { color: var(--warning); }
 
 .content { overflow-y: auto; padding: 32px 40px; }
-.screen { max-width: 860px; }
+/* Screen width tiers (guidelines §14, issue #166): TWO documented widths, both centred
+   (margin auto — symmetric gutters, like the 720px chat transcript). Reading tier 860px
+   (this rule: prose, forms, card lists — Home, AI model, Settings, Skills, empty states);
+   workspace tier 1180px (.docs-screen / .translate-screen / .images-screen / .review-screen
+   below — row sets and two-pane layouts that need more than a reading column). Don't invent
+   a third width; new screens pick one of the two. */
+.screen { max-width: 860px; margin: 0 auto; }
 h1 { font-size: 22px; margin: 0 0 8px; }
 h2 { font-size: 15px; margin: 0 0 12px; }
 .lead { color: var(--text-muted); margin-top: 0; }
@@ -1405,11 +1411,12 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 
 /* Documents screen — section rail + organization (document-organization plan §12) */
-/* The Documents screen is a list, not a prose column, so it gets more width than the 860px
-   `.screen` reading cap (§11.6 refinement) — left-aligned (no auto margins), the doc list caps
-   itself at ~1000px below. min-width:0 on the grid item is the grid-blowout guard: it lets the
-   1fr track shrink so a long, unbreakable filename ellipsizes instead of widening the row and
-   pushing the trailing Preview/⋯ off the edge. */
+/* The Documents screen is a list, not a prose column, so it gets the 1180px workspace tier
+   (guidelines §14; §11.6's original "left-aligned, NOT centred" choice is superseded — the
+   container now centres via the `.screen` margin, #166). The doc list caps itself at ~1000px
+   below. min-width:0 on the grid item is the grid-blowout guard: it lets the 1fr track shrink
+   so a long, unbreakable filename ellipsizes instead of widening the row and pushing the
+   trailing Preview/⋯ off the edge. */
 .docs-screen { max-width: 1180px; }
 .docs-layout { display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: start; }
 /* Collapsed sub-nav (§11.6): the rail is gone and the list takes the full width. */
@@ -1491,7 +1498,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 
 /* ---- Images screen (image-understanding §5/§11, Phase V3) ---- */
-.images-screen { max-width: 1100px; }
+/* Two-pane workspace → the 1180px workspace tier (guidelines §14, #166; was an undocumented
+   1100px). */
+.images-screen { max-width: 1180px; }
 /* Drop zone (§5.2): a large, calm, focusable target. Dashed border, centered stack, with a
    clear drag-over highlight and the standard focus ring. */
 .image-dropzone {
@@ -1610,7 +1619,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 
 /* ---- Translate screen (TranslateGemma wave, plan §2 D6, TG-4) ---- */
-.translate-screen { max-width: 1100px; }
+/* Two-pane workspace → the 1180px workspace tier (guidelines §14, #166; was an undocumented
+   1100px). */
+.translate-screen { max-width: 1180px; }
 .translate-workspace { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
 /* Language bar: source select · swap · target select, centered on one calm row. */
 .translate-langbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -1826,7 +1837,10 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Two-pane layout (spec §11.1): the answer is the canvas (flexible), evidence a fixed
    sidebar. Below the narrow breakpoint the JS swaps the aside for a Modal drawer, so no
    display:none dance is needed here — the pane simply isn't mounted. */
-.review-screen { display: flex; flex-direction: column; min-height: 0; }
+/* Answer canvas + evidence sidebar → the 1180px workspace tier (guidelines §14, #166; the
+   inherited 860px reading cap squeezed the answer pane to ~480px beside the 280–360px
+   evidence pane). */
+.review-screen { max-width: 1180px; display: flex; flex-direction: column; min-height: 0; }
 .review-head {
   display: flex;
   align-items: center;

@@ -141,6 +141,12 @@ first public release. Consciously-accepted gaps are tracked in
   #160). Pastes over 200,000 characters are declined up front with a note
   pointing at the document path, instead of freezing the app while an unbounded
   job is planned.
+- **Consistent screen widths** (issue #166). Every screen now centres its content
+  with symmetric side gutters (as the chat transcript always did), and the ad-hoc
+  per-screen widths collapse to two documented tiers: a reading width for
+  prose/forms/lists (Home, AI model, Settings, Skills) and a wider workspace
+  width for Documents, Translate, Images, and the evidence review — which
+  previously squeezed its two panes into the narrow reading column.
 - **Gemma 4 E2B is now the recommended model for 12–15 GB machines** (issue #153,
   owner-ratified 2026-08-09). The weak-hardware measurement the rank was gated on
   landed: on the designated 16 GB weak-iGPU class, E2B generates ~1.9× faster than
