@@ -51,22 +51,24 @@ export function TranslateDropZone({
     onDropFiles(Array.from(e.dataTransfer.files))
   }
 
+  // #161 (FE-6): the zone is no longer `role="button"` — a role=button's children are
+  // presentational per ARIA, so the real inner <Button> was a nested interactive AT may
+  // flatten, plus a redundant second tab stop firing the same onChoose. The inner Button is
+  // now THE accessible control (WCAG 2.5.7's non-drag path, one tab stop); the zone keeps a
+  // redundant pointer onClick for mouse users and the drag surface. Mirrors ImageDropZone —
+  // the shared house pattern is fixed in both.
   return (
     <div
       className={`translate-dropzone${dragOver ? ' drag-over' : ''}`}
-      role="button"
-      tabIndex={0}
-      aria-label={t('translate.drop.title')}
-      aria-disabled={busy || undefined}
       onClick={() => !busy && onChoose()}
-      onKeyDown={(e) => {
-        if ((e.key === 'Enter' || e.key === ' ') && !busy) {
-          e.preventDefault()
-          onChoose()
-        }
-      }}
       onDragOver={onDragOver}
-      onDragLeave={() => setDragOver(false)}
+      onDragLeave={(e) => {
+        // #162 (FE-7): only a leave that actually EXITS the zone clears the highlight —
+        // dragging across the inner title/button/types fires dragleave at each child
+        // boundary and made the dashed highlight flicker. `relatedTarget` is null when
+        // leaving the window, which correctly clears too.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false)
+      }}
       onDrop={onDrop}
     >
       <p className="translate-dropzone-title">{t('translate.drop.title')}</p>

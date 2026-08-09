@@ -2406,7 +2406,6 @@ export const de: Record<keyof typeof en, string> = {
   'translate.lead':
     'Tippe oder füge Text ein, wähle die Sprachen und übersetze lokal. Nichts verlässt dieses Laufwerk.',
   'translate.starting': 'Übersetzungsmodell wird vorbereitet…',
-  'translate.locked': 'Entsperre deinen Arbeitsbereich, um Text zu übersetzen.',
   'translate.avail.noModel': 'Zum Übersetzen wird das Übersetzungsmodell auf diesem Laufwerk benötigt.',
   'translate.avail.hint': 'Lade es einmalig im KI-Modell-Bildschirm — dann funktioniert das Übersetzen vollständig offline.',
   'translate.avail.cta': 'Zum KI-Modell',
@@ -2475,6 +2474,8 @@ export const de: Record<keyof typeof en, string> = {
   'translate.file.exported': 'Dokument exportiert',
   'translate.file.show': 'Unter Dokumente anzeigen',
   'translate.file.reset': 'Weiteres Dokument übersetzen',
+  // #161 (FE-5): die höfliche Live-Region-Meldung nach einer fertigen Dokumentübersetzung.
+  'translate.file.doneAnnounce': 'Dokumentübersetzung abgeschlossen. Das Ergebnis wird angezeigt.',
   // Issue #58 — die Vollständigkeits-Hinweise neben einer fertigen Übersetzung. {pages} kommt
   // vorformatiert ("3" / "3–4, 7"); count = fehlende Seiten insgesamt / fehlgeschlagene Teile.
   'translate.file.gapPages.one':

@@ -350,7 +350,9 @@ function fileStubs(opts: {
 }
 
 function dropOnZone(files: File[], zoneName: string = t('en', 'translate.drop.title')): void {
-  const zone = screen.getByRole('button', { name: zoneName })
+  // #161 (FE-6): the zone is a plain drag surface (no button role) — locate it via its title.
+  const zone = screen.getByText(zoneName).closest('.translate-dropzone')
+  if (!(zone instanceof HTMLElement)) throw new Error('drop zone not rendered')
   // A real file drag reports the 'Files' type — the zone gates on it (L8).
   fireEvent.drop(zone, { dataTransfer: { files, types: ['Files'] } })
 }

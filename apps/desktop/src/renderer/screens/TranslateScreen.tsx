@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { Banner, Button, EmptyState, Icon, useToast } from '../components'
+import { Button, EmptyState, ErrorBanner, Icon, useToast } from '../components'
 import { AssistantMarkdown, StreamAnnouncer } from '../chat'
 import {
   acknowledgeError,
@@ -191,9 +191,11 @@ export function TranslateScreen({
   // The #36-style muted device line: posture + the parsed offload split of the LAST cold start.
   // The partial-offload form is the point of the feature — under GPU auto-offload a large resident
   // chat model can leave the translator a sliver of VRAM, which decodes at ~processor speed and
-  // would otherwise be indistinguishable from "GPU translation not working"; its tooltip explains
-  // the cause and the remedy (smaller chat model; the ~2-min idle teardown re-fits).
-  const deviceHint = ((): { text: string; title: string } | null => {
+  // would otherwise be indistinguishable from "GPU translation not working". #161 (FE-4): the
+  // cause/remedy for the starved outcomes ("a smaller chat model frees memory…") rides `remedy`
+  // and renders as VISIBLE text — a `title` tooltip on a non-focusable <p> is unreachable by
+  // keyboard, touch, and most screen readers, which defeated the entire point of the #42 reopen.
+  const deviceHint = ((): { text: string; title: string; remedy?: string } | null => {
     if (!device) return null
     if (device.device === 'cpu') {
       return { text: t('translate.device.cpu'), title: t('translate.device.title') }
@@ -204,14 +206,16 @@ export function TranslateScreen({
       if (device.gpuLayers === 0) {
         return {
           text: t('translate.device.gpuNone', { total: device.totalLayers }),
-          title: t('translate.device.gpuNoneTitle')
+          title: t('translate.device.gpuNoneTitle'),
+          remedy: t('translate.device.gpuNoneTitle')
         }
       }
       const partial = device.gpuLayers < device.totalLayers
       const params = { done: device.gpuLayers, total: device.totalLayers }
       return {
         text: t(partial ? 'translate.device.gpuPartial' : 'translate.device.gpu', params),
-        title: t(partial ? 'translate.device.partialTitle' : 'translate.device.title')
+        title: t(partial ? 'translate.device.partialTitle' : 'translate.device.title'),
+        ...(partial ? { remedy: t('translate.device.partialTitle') } : {})
       }
     }
     // GPU posture but the server printed no offload line — say GPU without inventing a split.
@@ -233,13 +237,23 @@ export function TranslateScreen({
     }).then((outcome) => {
       // A second translate while one is in flight is busy-rejected. The trigger is already disabled
       // while busy, but surface the friendly banner if a click still reaches here so the action is
-      // never silently swallowed.
+      // never silently swallowed. #162 (FE-3): a FOREIGN doc task holding the lane now reports its
+      // own outcome, so the banner says "a document task is running" instead of falsely claiming
+      // "a translation is already running".
       if (outcome === 'busy') setScreenError('busy')
+      else if (outcome === 'docTaskBusy') setScreenError('docTaskBusy')
     })
   }
 
   function onDropFiles(files: File[]): void {
     setScreenError(null)
+    // #162 (FE-2): the same-language guard the TEXT path always had, mirrored BEFORE the import —
+    // without it a de→de drop imported the whole file (minutes for a big PDF, plus an orphan
+    // Temporary document) only to be rejected by the backend's late language-pair validation.
+    if (sameLang) {
+      setScreenError('sameLang')
+      return
+    }
     // The store clears any lingering text result only when the file translation actually STARTS
     // (past its reject guards), so a rejected drop keeps the text result behind the error banner.
     void translateDroppedFiles(files, choice)
@@ -247,6 +261,11 @@ export function TranslateScreen({
 
   function onChooseFile(): void {
     setScreenError(null)
+    if (sameLang) {
+      // #162 (FE-2) — see onDropFiles.
+      setScreenError('sameLang')
+      return
+    }
     void translatePickedFile(choice)
   }
 
@@ -353,9 +372,14 @@ export function TranslateScreen({
                 <Button size="sm" variant="ghost" onClick={() => onNavigate('documents')}>
                   {t('translate.file.show')}
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => onCopy(fileTx.output)}>
-                  {t('translate.copy')}
-                </Button>
+                {/* #162 (FE-8): for a TRUNCATED result the panel holds only the bounded first
+                    page — a Copy would silently paste one page of a 50-page translation, so it
+                    is hidden and Export / "Show in Documents" are the whole-document paths. */}
+                {!fileTx.truncated && (
+                  <Button size="sm" variant="ghost" onClick={() => onCopy(fileTx.output)}>
+                    {t('translate.copy')}
+                  </Button>
+                )}
               </>
             )}
             {(done || fileTx.state === 'failed' || fileTx.state === 'cancelled') && (
@@ -470,11 +494,18 @@ export function TranslateScreen({
         </div>
 
         {/* Issue #42 reopen: the muted device line (the chat #36 analogue). Appears once the
-            sidecar has cold-started this session; `title` carries the explanation/remedy. */}
+            sidecar has cold-started this session. #161 (FE-4): for the starved outcomes the
+            cause/remedy is VISIBLE text below the fact line — the tooltip stays as a bonus for
+            pointer users but is no longer the only carrier. */}
         {deviceHint && (
-          <p className="hint translate-device-hint" title={deviceHint.title}>
-            {deviceHint.text}
-          </p>
+          <>
+            <p className="hint translate-device-hint" title={deviceHint.title}>
+              {deviceHint.text}
+            </p>
+            {deviceHint.remedy && (
+              <p className="hint translate-device-remedy">{deviceHint.remedy}</p>
+            )}
+          </>
         )}
 
         {sameLang && <p className="hint">{t('translate.err.sameLang')}</p>}
@@ -499,8 +530,14 @@ export function TranslateScreen({
               {translating && <Button onClick={onStop}>{t('translate.stop')}</Button>}
             </div>
             {/* Document drag-and-drop / choose (TG-5). Disabled (with the text triggers) while any
-                translation runs, keeping ONE busy state. The current file name shows as a caption. */}
-            <TranslateDropZone onDropFiles={onDropFiles} onChoose={onChooseFile} busy={busy} />
+                translation runs, keeping ONE busy state — and (#162 FE-2) while the language pair
+                is same-language, mirroring the text path's disabled Translate button (the visible
+                sameLang hint above explains why). The current file name shows as a caption. */}
+            <TranslateDropZone
+              onDropFiles={onDropFiles}
+              onChoose={onChooseFile}
+              busy={busy || sameLang}
+            />
             {fileTx.fileName && (
               <p className="hint translate-file-name">{fileTx.fileName}</p>
             )}
@@ -539,11 +576,17 @@ export function TranslateScreen({
     <div className="screen translate-screen">
       <h1>{t('translate.title')}</h1>
       <p className="lead">{t('translate.lead')}</p>
-      {bannerText && (
-        <Banner tone="error" onDismiss={dismissBanner} t={t}>
-          {bannerText}
-        </Banner>
-      )}
+      {/* #161 (FE-1): the always-mounted ErrorBanner region (M-U1 / the #145 SH-2 idiom) — a
+          conditionally-inserted role="alert" that already contains text is missed by many
+          screen readers, so ALL translate errors (runtimeFailed/startFailed/doc-task failures)
+          now announce reliably; the visible Banner mounts inside the stable region. */}
+      <ErrorBanner message={bannerText} onDismiss={bannerText ? dismissBanner : undefined} t={t} />
+      {/* #161 (FE-5): the document path has no StreamAnnouncer (nothing streams), so after
+          minutes of silence the finished Markdown appeared unannounced. A polite region
+          announces the terminal swap; failures already announce via the ErrorBanner above. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {fileActive && fileTx.state === 'done' ? t('translate.file.doneAnnounce') : ''}
+      </div>
       {renderBody()}
     </div>
   )

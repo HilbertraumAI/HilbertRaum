@@ -230,6 +230,10 @@ function guardStart(): FileTranslateOutcome | null {
  * via the preload `getDroppedFilePath` bridge (a browser-origin drag with no path resolves to '').
  */
 export async function translateDroppedFiles(files: File[], choice: Choice): Promise<FileTranslateOutcome> {
+  // #162 (FE-2): store-level same-language defense (the screen guards + disables first — this
+  // keeps the invariant if a drop slips through): never burn a full import on a pair the
+  // backend is guaranteed to reject after it.
+  if (choice.sourceLang === choice.targetLang) return 'noop'
   const blocked = guardStart()
   if (blocked) return blocked
   if (files.length === 0) return 'noop'
@@ -250,6 +254,8 @@ export async function translateDroppedFiles(files: File[], choice: Choice): Prom
  * capability token main resolves to the exact picked paths (D1) — passed back as `pickerToken`.
  */
 export async function translatePickedFile(choice: Choice): Promise<FileTranslateOutcome> {
+  // #162 (FE-2) — see translateDroppedFiles.
+  if (choice.sourceLang === choice.targetLang) return 'noop'
   const blocked = guardStart()
   if (blocked) return blocked
   let picked

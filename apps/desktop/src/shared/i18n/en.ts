@@ -2337,8 +2337,6 @@ export const en = {
     'Type or paste text, pick the languages, and translate it locally. Nothing leaves this drive.',
   // Brief placeholder while the first availability read resolves.
   'translate.starting': 'Getting the translation model ready…',
-  // Locked posture: the app shell normally gates the whole app behind unlock, so this is a calm fallback.
-  'translate.locked': 'Unlock your workspace to translate text.',
   // Availability EmptyState (the O2 install path) — a friendly refusal + a deep link to AI Model.
   'translate.avail.noModel': 'Translation needs the translation model on this drive.',
   'translate.avail.hint': 'Download it once on the AI Model screen — then translation works fully offline.',
@@ -2418,6 +2416,9 @@ export const en = {
   'translate.file.exported': 'Document exported',
   'translate.file.show': 'Show in Documents',
   'translate.file.reset': 'Translate another document',
+  // #161 (FE-5): the polite live-region ping when a document translation finishes — the panel
+  // swap after minutes of silence was never announced to assistive tech.
+  'translate.file.doneAnnounce': 'Document translation finished. The result is shown.',
   // Issue #58 — the at-a-glance completeness warnings next to a finished translation. The
   // {pages} value is preformatted ("3" / "3–4, 7"); count = total missing pages / failed parts.
   'translate.file.gapPages.one':

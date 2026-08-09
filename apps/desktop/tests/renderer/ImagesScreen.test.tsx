@@ -128,12 +128,21 @@ describe('ImagesScreen — availability (§5.6)', () => {
   })
 })
 
+/** #161 (FE-6): the drop zone is a plain drag surface now (no button role) — find it by title. */
+async function findImageZone(): Promise<HTMLElement> {
+  const el = (await screen.findByText('Drop an image here')).closest('.image-dropzone')
+  if (!(el instanceof HTMLElement)) throw new Error('drop zone not rendered')
+  return el
+}
+
 describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
   it('shows the drop zone when a model is available and no image is selected', async () => {
     stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
-    expect(await screen.findByRole('button', { name: 'Drop an image here' })).toBeInTheDocument()
+    expect(await findImageZone()).toBeInTheDocument()
+    // The inner Button is THE single accessible control (FE-6 — no nested interactive).
     expect(screen.getByRole('button', { name: 'or choose an image' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Drop an image here' })).toBeNull()
   })
 
   it('decodes a picked image into the two-pane workspace (preview + composer + chips)', async () => {
@@ -157,7 +166,7 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
     const decodeSpy = vi.fn(fakeDecode)
     stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={decodeSpy} />)
-    const zone = await screen.findByRole('button', { name: 'Drop an image here' })
+    const zone = await findImageZone()
     const webp = new File([new Uint8Array([0x52, 0x49, 0x46, 0x46])], 'shot.webp', {
       type: 'image/webp'
     })
@@ -171,7 +180,7 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
   it('a dropped HEIC shows the specific convert-to-JPEG copy (#124)', async () => {
     stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
-    const zone = await screen.findByRole('button', { name: 'Drop an image here' })
+    const zone = await findImageZone()
     const heic = new File([new Uint8Array([1])], 'IMG_0001.HEIC', { type: '' })
     await act(async () => {
       fireDrop(zone, [heic])
@@ -180,20 +189,20 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
       await screen.findByText("iPhone HEIC photos aren't supported yet. Convert the photo to JPEG first.")
     ).toBeInTheDocument()
     // Still on the drop zone — nothing was taken.
-    expect(screen.getByRole('button', { name: 'Drop an image here' })).toBeInTheDocument()
+    expect(screen.getByText('Drop an image here')).toBeInTheDocument()
   })
 
   it('rejects a multi-drop with a friendly banner rather than taking the first file', async () => {
     stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
-    const zone = await screen.findByRole('button', { name: 'Drop an image here' })
+    const zone = await findImageZone()
     const file = (n: string) => new File([new Uint8Array([1])], n, { type: 'image/png' })
     await act(async () => {
       fireDrop(zone, [file('a.png'), file('b.png')])
     })
     expect(await screen.findByText('Drop one image at a time.')).toBeInTheDocument()
     // Still on the drop zone — no image was taken.
-    expect(screen.getByRole('button', { name: 'Drop an image here' })).toBeInTheDocument()
+    expect(screen.getByText('Drop an image here')).toBeInTheDocument()
   })
 })
 
@@ -357,7 +366,7 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
     await user.click(screen.getByRole('button', { name: 'Remove' }))
     // The thread + preview are gone; the drop zone is back.
     expect(screen.queryByText('Answer.')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Drop an image here' })).toBeInTheDocument()
+    expect(screen.getByText('Drop an image here')).toBeInTheDocument()
   })
 
   it('Replace is disabled mid-analysis (DOC-12); after it settles, replacing resets the thread', async () => {
