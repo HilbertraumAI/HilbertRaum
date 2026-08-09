@@ -163,11 +163,14 @@ describe('committed catalog — Qwen3.6 27B pair (2026-07-12 promotion)', () => 
 
 // The Gemma 4 QAT wave (model-policy.md "Gemma 4 QAT wave", issue #82): the four official
 // Google QAT Q4_0 additions around the shipped 12B winner. Text-only chat, not bundled.
-// Ranks per the 2026-08-03 wave ratification (model-benchmarks.md §9.3 wave outcome): the
-// 26B-A4B carries rank 2 (ranked runner-up to the rank-3 qwen3.6-27b-q4 — EM parity + zero
-// hallucinations at ~4x the speed, F1 under it); E2B stays 0 (rank gated on the owed weak-16
-// GB-box datapoint), E4B stays 0 (missed the 8B bar), 31B stays 0 (issue-#82 drop condition
-// met — never promote). NONE may ever be the auto-pick (asserted below).
+// Ranks per the 2026-08-03 wave ratification (model-benchmarks.md §9.3 wave outcome), amended
+// 2026-08-09: the 26B-A4B carries rank 2 (ranked runner-up to the rank-3 qwen3.6-27b-q4 — EM
+// parity + zero hallucinations at ~4x the speed, F1 under it); E2B carries rank 3 since the
+// issue-#153 promotion (the weak-16 GB-box datapoint landed: 17.0 tok/s settled vs the previous
+// 12 GB pick qwen3.5-4b's 9.0 on the designated class, F1 .3373 vs .2728 — E2B wins the sub-16
+// band it now defines, rec-RAM retuned 16 → 12); E4B stays 0 (missed the 8B bar), 31B stays 0
+// (issue-#82 drop condition met — never promote). Only the rank-3 E2B may be the auto-pick
+// (asserted below).
 const GEMMA4_WAVE_IDS = [
   'gemma4-e2b-it-qat-q4',
   'gemma4-e4b-it-qat-q4',
@@ -175,22 +178,23 @@ const GEMMA4_WAVE_IDS = [
   'gemma4-31b-it-qat-q4'
 ]
 
-// The committed rank facts of the 2026-08-03 ratification.
+// The committed rank facts: 2026-08-03 ratification + the 2026-08-09 issue-#153 E2B promotion.
 const GEMMA4_WAVE_RANKS: Record<string, number> = {
-  'gemma4-e2b-it-qat-q4': 0,
+  'gemma4-e2b-it-qat-q4': 3,
   'gemma4-e4b-it-qat-q4': 0,
   'gemma4-26b-a4b-it-qat-q4': 2,
   'gemma4-31b-it-qat-q4': 0
 }
 
-// The committed RAM lines (ESTIMATES pending measured peak RSS — each manifest carries the
-// recalibration note) and display names. RAM is pinned because a silent mis-edit here is
-// exactly how a rank-0 model becomes an auto-pick (the E2B rec-12 near-miss below: a UNIQUE
-// low recommended_ram_gb slips past the preferRanked guard at RAM levels the sample misses) or
-// gets locked out of machines it fits; display names are pinned per the Qwen3.5 precedent so a
-// copy-paste swap can't mislabel the picker UI.
+// The committed RAM lines and display names. RAM is pinned because a silent mis-edit here is
+// exactly how a rank-0 model becomes an auto-pick (a UNIQUE low recommended_ram_gb slips past
+// the preferRanked guard at RAM levels the sample misses) or gets locked out of machines it
+// fits; display names are pinned per the Qwen3.5 precedent so a copy-paste swap can't mislabel
+// the picker UI. E2B's rec-RAM is 12 SINCE the #153 promotion — the same value whose earlier
+// accidental appearance on the then-rank-0 manifest this block caught as a hijack; ranked, it
+// is the deliberate sub-16 capacity band (and the §6.5 step-down's 16–20 GB landing tier).
 const GEMMA4_WAVE_FACTS: Record<string, { minRam: number; recRam: number; displayName: string }> = {
-  'gemma4-e2b-it-qat-q4': { minRam: 8, recRam: 16, displayName: 'Gemma 4 E2B Instruct QAT Q4' },
+  'gemma4-e2b-it-qat-q4': { minRam: 8, recRam: 12, displayName: 'Gemma 4 E2B Instruct QAT Q4' },
   'gemma4-e4b-it-qat-q4': { minRam: 12, recRam: 16, displayName: 'Gemma 4 E4B Instruct QAT Q4' },
   'gemma4-26b-a4b-it-qat-q4': {
     minRam: 20,
@@ -245,21 +249,36 @@ describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
     }
   })
 
-  it('NEVER auto-recommends any Gemma 4 wave model at any realistic RAM level', () => {
+  it('NEVER auto-recommends a below-rank-3 Gemma 4 wave model at any realistic RAM level', () => {
     // A rank-0 model with a UNIQUE recommended_ram_gb below every ranked model's would become
     // the only "comfortable fit" at that RAM level and slip past the preferRanked guard —
-    // exactly what happened when the E2B briefly declared 12 (the small-tier floor is 16).
-    // 14 and 20 are deliberately in the sample: unsampled odd values are where a RAM mis-edit
-    // hides (a rec of 13–15 would win ram=14 unseen), and 20 is the 26B-A4B's own hard-min
-    // boundary introduced by this wave. Since the 2026-08-03 ratification this deliberately
-    // includes the rank-2 26B-A4B: a ranked runner-up must still lose every tier to the
-    // rank-3 holders (qwen3.6-27b-q4 at 24 GB, qwen3.6-27b-q5 at ≥32 GB).
+    // exactly what happened when the then-rank-0 E2B briefly declared 12 (since the #153
+    // promotion the rank-3 E2B holds rec-12 deliberately and is EXCLUDED here — its positive
+    // pins live in the test below). 14 and 20 are deliberately in the sample: unsampled odd
+    // values are where a RAM mis-edit hides (a rec of 13–15 would win ram=14 unseen), and 20
+    // is the 26B-A4B's own hard-min boundary introduced by this wave. Since the 2026-08-03
+    // ratification this deliberately includes the rank-2 26B-A4B: a ranked runner-up must
+    // still lose every tier to the rank-3 holders (qwen3.6-27b-q4 at 24 GB, qwen3.6-27b-q5
+    // at ≥32 GB).
     const chat = committedManifests()
-    const waveSet = new Set(GEMMA4_WAVE_IDS)
+    const waveSet = new Set(GEMMA4_WAVE_IDS.filter((id) => GEMMA4_WAVE_RANKS[id] < 3))
     for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
       const picked = recommendModelIdByRam(chat, ram, 'chat')
       expect(waveSet.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
     }
+  })
+
+  it('the promoted E2B owns exactly the sub-16 comfortable band (#153 promotion pins)', () => {
+    // The two RAM points the #153 promotion CHANGED (base mapping): 12 and the unsampled-odd
+    // guard point 14 both fit E2B's retuned rec-12 comfortably and nothing else ranked fits
+    // below 16. The neighbors are pinned unchanged on both sides: 8 stays the runnable-stage
+    // qwen3.5-4b (min-8 tie → rank tie → disk-asc, 2.9 GB < 3.3 GB), 16 stays the 16-band
+    // rank-3 winner 9B (capacity-first: the 16 tier outranks the 12 tier at ram=16).
+    const chat = committedManifests()
+    expect(recommendModelIdByRam(chat, 8, 'chat')).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(recommendModelIdByRam(chat, 12, 'chat')).toBe('gemma4-e2b-it-qat-q4')
+    expect(recommendModelIdByRam(chat, 14, 'chat')).toBe('gemma4-e2b-it-qat-q4')
+    expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
   })
 
   it('the shipped 12B winner keeps its Phase-29 rank next to the wave', () => {
@@ -271,8 +290,9 @@ describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
 
 // §6.5 speed-signal step-down (issue #95) against the REAL committed catalog: a sub-threshold
 // crawl measured on the tier's own pick steps the recommendation exactly one capacity band
-// down. The no-signal mapping above ("NEVER auto-recommends…" + benchmark.test.ts's
-// 8/12/16/20/24/32 table) stays byte-identical — these rows only pin the stepped picks.
+// down. The no-signal mapping is pinned separately ("NEVER auto-recommends…" + the #153 pins
+// above + benchmark.test.ts's 8/12/16/20/24/32 table) — these rows only pin the stepped picks.
+// Since the #153 E2B promotion the 16–20 GB crawl has a landing tier (previously rule 3: keeps).
 describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', () => {
   /** A crawl measured on the tier's own no-signal pick: the predicate always applies. */
   function slowOnOwnPick(chat: ModelManifest[], ram: number) {
@@ -281,13 +301,14 @@ describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', (
 
   it('steps each tier down one band on a right-sized crawl (stepped mapping)', () => {
     const chat = committedManifests()
-    // ≤12 GB: the pick is the runnable-stage fallback (nothing fits comfortably) — keeps.
+    // 8 GB: the pick is the runnable-stage fallback (nothing fits comfortably) — keeps.
     expect(recommendModelIdByRam(chat, 8, 'chat', slowOnOwnPick(chat, 8))).toBe('qwen3.5-4b-ud-q4kxl')
-    expect(recommendModelIdByRam(chat, 12, 'chat', slowOnOwnPick(chat, 12))).toBe('qwen3.5-4b-ud-q4kxl')
-    // 16–20 GB: no ranked band exists below 16 (the fast tier is rank 0) — keeps. The weak-
-    // 16 GB-box tier resolution stays with #95 item 2 (E2B's rank) / item 3 (RAM retune).
-    expect(recommendModelIdByRam(chat, 16, 'chat', slowOnOwnPick(chat, 16))).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(recommendModelIdByRam(chat, 20, 'chat', slowOnOwnPick(chat, 20))).toBe('qwen3.5-9b-ud-q4kxl')
+    // 12 GB: the pick is E2B itself (#153) and no ranked band exists below 12 — keeps.
+    expect(recommendModelIdByRam(chat, 12, 'chat', slowOnOwnPick(chat, 12))).toBe('gemma4-e2b-it-qat-q4')
+    // 16–20 GB: a 9B crawl steps down to the #153 sub-16 band — the landing tier issue #153
+    // created for exactly the weak-16 GB-box class (previously: keeps, no ranked band below 16).
+    expect(recommendModelIdByRam(chat, 16, 'chat', slowOnOwnPick(chat, 16))).toBe('gemma4-e2b-it-qat-q4')
+    expect(recommendModelIdByRam(chat, 20, 'chat', slowOnOwnPick(chat, 20))).toBe('gemma4-e2b-it-qat-q4')
     // 24 GB: 27B Q4 crawling steps to the 16-band winner.
     expect(recommendModelIdByRam(chat, 24, 'chat', slowOnOwnPick(chat, 24))).toBe('qwen3.5-9b-ud-q4kxl')
     // ≥32 GB: 27B Q5 crawling steps to the 24-band winner.
@@ -312,7 +333,7 @@ describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', (
     const chat = committedManifests()
     const neverAutoPick = new Set([
       ...QWEN35_WAVE_IDS.filter((id) => QWEN_WAVE_RANKS[id] < 3),
-      ...GEMMA4_WAVE_IDS
+      ...GEMMA4_WAVE_IDS.filter((id) => GEMMA4_WAVE_RANKS[id] < 3)
     ])
     for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
       const picked = recommendModelIdByRam(chat, ram, 'chat', slowOnOwnPick(chat, ram))
