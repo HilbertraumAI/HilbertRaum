@@ -184,12 +184,18 @@ describe('concurrent same-destination PDF exports (AUD-17)', () => {
       )
 
     // A reaches its (parked) load first, so window 0 is A's…
+    // The 30 s waitFor bound is the #84/#97/#101 starved-runner allowance: each export
+    // renders a real pack (pipeline + SQLite + disk) before its load parks, and the vitest
+    // default (1 s) flaked on a starved windows/22.x runner (PR #168 run 31329444828 — B's
+    // render outlived the wait, and the then-dangling export polluted the NEXT test's
+    // `electron.windows`, failing two tests from one slow render). The condition itself is
+    // load-order semantics, not a timing proof — nothing is loosened by waiting longer.
     const exportA = startExport(reviewA, PACK_ID_A)
-    await vi.waitFor(() => expect(entered).toContain(0))
+    await vi.waitFor(() => expect(entered).toContain(0), { timeout: 30_000 })
     // …then B writes its own print source and parks too. This is the exact window in which
     // the shared-name build had already replaced the bytes A was about to print.
     const exportB = startExport(reviewB, PACK_ID_B)
-    await vi.waitFor(() => expect(entered).toContain(1))
+    await vi.waitFor(() => expect(entered).toContain(1), { timeout: 30_000 })
 
     release[0]!()
     const recordA = (await exportA) as { reviewId: string; fileSha256: string; format: string }
