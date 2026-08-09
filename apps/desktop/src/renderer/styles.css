@@ -1613,7 +1613,11 @@ code, pre, kbd { font-family: var(--font-mono); }
   background: var(--surface); color: var(--text);
   font-family: inherit; font-size: var(--text-md); line-height: var(--line-md);
 }
-.translate-input:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-ring, rgba(80, 130, 255, 0.25)); }
+/* SH-3 (#146): the global focus idiom — the old rule relied on an UNDEFINED --focus-ring
+   token, so its hardcoded translucent-blue fallback always won (off-brand vs the §4.3
+   two-token accent), and `outline: none` + box-shadow made the indicator vanish entirely
+   under forced-colors (Windows High Contrast keeps outlines, drops shadows). */
+.translate-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-color: var(--focus); }
 /* Output panel: same footprint as the input so the panes read as a pair. */
 .translate-output {
   min-height: 320px; padding: 12px;
