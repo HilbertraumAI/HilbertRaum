@@ -192,7 +192,7 @@ papaparse@5.5.3
 parse-entities@4.0.2
 parse5@7.3.0
 path-is-absolute@1.0.1
-pdfjs-dist@6.0.227
+pdfjs-dist@6.2.108
 process-nextick-args@2.0.1
 property-information@7.2.0
 react@18.3.1
@@ -6234,7 +6234,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### pdfjs-dist@6.0.227
+### pdfjs-dist@6.2.108
 
 - License: Apache-2.0
 - Repository: https://github.com/mozilla/pdf.js
