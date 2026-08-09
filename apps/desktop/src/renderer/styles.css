@@ -315,7 +315,12 @@ button { min-width: 24px; min-height: 24px; }
 .offline-statement.off strong { color: var(--accent); }
 .hint.warn { color: var(--warning); }
 
-.content { overflow-y: auto; padding: 32px 40px; }
+/* scrollbar-gutter (#171): reserve the scrollbar's width on BOTH edges, always — without it
+   the centred screen column sits ~8px further left on scrolling pages (Models, Settings)
+   than on non-scrolling ones, and its right edge shifts by the full ~15px scrollbar width
+   between adjacent nav clicks. `both-edges` keeps §14's symmetric gutters exact whether or
+   not a scrollbar is present. */
+.content { overflow-y: auto; padding: 32px 40px; scrollbar-gutter: stable both-edges; }
 /* Screen width tiers (guidelines §14, issue #166): TWO documented widths, both centred
    (margin auto — symmetric gutters, like the 720px chat transcript). Reading tier 860px
    (this rule: prose, forms, card lists — Home, AI model, Settings, Skills, empty states);
@@ -416,6 +421,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 .settings-tabs { margin: 12px 0 4px; }
 
 /* AI Model screen */
+/* A card list (name + description + badge cluster + action row per card), not a prose
+   column → the 1180px workspace tier (guidelines §14 amendment, #171). */
+.models-screen { max-width: 1180px; }
 .model-card { display: flex; flex-direction: column; gap: 10px; }
 /* #35: the picker's installed/needs-download boundary is explicit — a small label per
    group, and not-yet-downloaded cards render quieter (transparent fill + dashed border;
@@ -2124,6 +2132,12 @@ code, pre, kbd { font-family: var(--font-mono); }
 .sources-review:disabled { opacity: 0.5; cursor: default; }
 
 /* ---- Settings → Skills (skills plan §15) ---- */
+/* A row list with trailing chips/switch/⋯ (the §11.6 row pattern, cited below), not a
+   prose column → the 1180px workspace tier (guidelines §14 amendment, #171). The class
+   sits on the SkillsScreen wrapper — the file section keeps its historical "Settings →"
+   name, but Skills is a top-level rail destination and SkillsScreen is SkillsTab's only
+   render site. */
+.skills-screen { max-width: 1180px; }
 /* Toolbar: the intro line takes the flex space, the Import action stays right + shrink:0. */
 .skills-toolbar { display: flex; align-items: flex-start; gap: 16px; }
 .skills-intro { flex: 1; margin: 0; }
