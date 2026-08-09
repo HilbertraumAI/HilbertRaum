@@ -1561,8 +1561,10 @@ sentinel-tested), zero native deps.
   has NO OffscreenCanvas (probed — option (b) was impossible). So a **hidden
   BrowserWindow** (`ocr.html`, its own tiny sandboxed preload exposing exactly the five
   `OCR_RASTER` channels, never the app API) does ONLY pdf→PNG rasterization with the
-  SAME pinned pdfjs **legacy** build the PdfParser uses (the modern v6 build calls
-  `Uint8Array.prototype.toHex`, which the pinned Chromium lacks) at 300 DPI (capped at
+  SAME pinned pdfjs **legacy** build the PdfParser uses (originally forced by the modern
+  build's `Uint8Array.prototype.toHex`, which Electron 37's Chromium lacked; that motive
+  expired with pdfjs 6.2 + Chromium 142 — see the DEP-3 record — and the legacy build is
+  retained for one-build-everywhere consistency) at 300 DPI (capped at
   4096 px/side). **Recognition always runs MAIN-side** in tesseract.js **Node mode**
   (`services/ocr/tesseract.ts`): image Buffers decode inside the WASM core (no canvas),
   the worker script + core load from the app's own `node_modules` (packaged:
@@ -9806,6 +9808,64 @@ recovers it. Citations of that form resolve here:
 Surviving sources for anything not resolved above: this record, the wave branch
 `fix/dependabot-2026-07`'s six phase commits (listed at the top of this record), and the PR #77
 body.
+
+## Dependabot triage — design record (wave DEP-3, PR #115)
+
+_Wave DEP-3 (2026-08-09) triaged and cleared **all 19 open Dependabot alerts** on the default
+branch (5 high / 13 moderate / 1 low) in one batch — every alert had a first-patched version
+reachable through existing semver ranges, so the whole set landed as patch/minor bumps: **no
+majors, no `overrides`, no dismissals** — plus seven high **auto-dismissed** alerts
+(brace-expansion ×5, nanoid ×2; dev-scope, outside the open list) cleared in passing. Branch `fix/dependabot-2026-08-09`, squashed as PR #115.
+This record is the durable per-alert ledger; the DEP-1 record above holds the wave conventions
+(pinned-npm lockfile writes, build-before-test gate order) that this wave reused._
+
+### §1 Alert ledger + dispositions
+
+| Alerts | Package (locked → fixed) | Scope | Disposition + in-context verdict |
+|---|---|---|---|
+| #75 (high) | **pdfjs-dist 6.0.227 → 6.2.108** — direct dep, deliberate manifest bump `^6.0.227 → ^6.2.108` | **runtime** (parses user-imported PDFs) | **Fixed.** CVE-2026-16633 (arbitrary JS on malicious PDF): the app was **never exposed** — the vulnerable path is worker-side appearance-serialization code requiring `enableScripting: true` plus a permissive CSP; the app calls `getDocument({data, verbosity})` only (zero uses of enableScripting / AnnotationLayer / pdf.sandbox anywhere) and the OCR window CSP is `script-src 'self'`. (`isEvalSupported` does not exist in pdf.js v6 — nothing to set.) Upstream api-minor changes across 6.1/6.2 (getAttachments/getDestinations/getViewerPreferences/getOpenAction → Map; `convertToViewportRectangle` removed) touch nothing the app calls; the module-level `DOMMatrix` need is unchanged, so the ingest polyfill stays necessary and sufficient. Verified beyond the suite: evidence-pack PDF smoke 6/6 and the real-data PDF gold-set (`HILBERTRAUM_PDF_GOLDSET=1`, bank-statement geometry recall) green on 6.2.108. |
+| #70–#74 (4 mod + 1 low) | mermaid 11.16.0 → 11.16.1 (transitive: streamdown `^11.12.2`) | runtime scope | **Fixed (hygiene — all five unreachable).** Three independent dead layers: (1) Streamdown only renders mermaid when a mermaid plugin is passed and `AssistantMarkdown` passes only the module-level `mdPlugins = { math }` constant as `plugins` (the single Streamdown mount site) — a ```` ```mermaid ```` fence from model output renders as a plain code block, no mermaid parser ever sees the string; (2) the actual `mermaid` importer is `@streamdown/mermaid`, a streamdown devDependency that is **not installed**; (3) the chain is tree-shaken out of the renderer bundle — zero diagram-engine symbols (flowchart/sequenceDiagram/cytoscape/dagre/d3-) in `out/renderer/assets`; the chunk Vite names `mermaid-*` is streamdown's own wrapper + KaTeX, and dompurify has zero hits — and negated out of `app.asar` (`electron-builder.yml`, pinned by `packaging.test.ts`). 11.16.1's dependency object is byte-identical to 11.16.0's → the packaging-test mermaid-only closure is unchanged. **New pin landed with the wave**: `assistant-markdown.test.tsx` asserts a mermaid fence stays a plain code block — wiring the plugin in later fails the pin and forces a re-triage of this whole family. |
+| #80 (mod) | dompurify 3.4.12 → 3.4.13 (transitive: mermaid `^3.3.3`) | runtime scope | **Fixed (hygiene — unreachable).** DOMPurify is used nowhere directly (zero hits; the app's markdown sanitizer is rehype-sanitize, an AST walker with no DOM), is absent from bundle and asar per the mermaid row, and the vulnerable config (`IN_PLACE` + hook removal) is one mermaid itself doesn't use. **Correction to DEP-2's recorded framing** (its CHANGELOG 2026-07-23 bullet + then-BUILD_STATE entry — DEP-2 has no architecture record): dompurify is production-scope **in the npm dependency graph** (why Dependabot/`npm audit` flag it) but it ships in **neither** the renderer bundle **nor** `app.asar` — "ships in the renderer" was wrong; `docs/packaging.md` and `THIRD-PARTY-NOTICES.md` always had it right. |
+| #60–#64 (1 high + 4 mod) | undici 7.28.0 → 7.29.0 (transitive: jsdom `^7.25.0`) | development | **Fixed (supply-chain hygiene — unreachable in product).** jsdom exists only in the vitest environment; the undici cache/cookie/CRLF/desync classes need a server-facing HTTP client. Nothing ships. |
+| #66/#67/#69 (3 mod) | undici 6.27.0 → 6.28.0 (transitive: electron-builder → @electron/rebuild → node-gyp `^6.25.0`) | development | **Fixed (hygiene).** Packaging-toolchain only; runs at build time on the dev machine, ships nothing. |
+| #68 (high) | fast-uri 3.1.4 → 3.1.5 (transitive: app-builder-lib → ajv `^3.0.1`) | development | **Fixed (hygiene).** ajv validates electron-builder's config at package time; the host-confusion class needs URI parsing of attacker input. |
+| #57/#78 (high + mod) | postcss 8.5.15 → 8.5.26 (transitive: vite `^8.5.3`) | development | **Fixed (hygiene).** Build-time CSS processing; the sourceMappingURL `.map`-disclosure classes need attacker-controlled stylesheets at build time (= an already-compromised repo). 8.5.26 clears both alerts' ranges (#57 ≤ 8.5.17, #78 ≤ 8.5.22). |
+| #79 (high) | js-yaml 4.3.0 → 4.3.1 (transitive: app-builder-lib/builder-util/dmg-builder `^4.1.0`, deduped) | development | **Fixed (hygiene).** electron-builder's own config parsing at package time. The app's runtime manifest parser is the separate `yaml` production dep — never affected (same note as DEP-2). |
+| #58/#59/#65/#76/#77 (5 high, **auto-dismissed**) | brace-expansion → 1.1.18 / 2.1.4 / 5.0.9 (all 7 in-tree copies) | development | **Fixed (outside the open set).** GHSA-mh99-v99m-4gvg + GHSA-rgw5-rvv9-x895 (unbounded-expansion OOM DoS) — Dependabot's auto-triage had already auto-dismissed all five alerts as dev-scope, so they never appeared in the open list, but `npm audit` still flagged them. The bump lands exactly the three first-patched versions the auto-dismissed alerts name, clearing `npm audit` to 0. Correction from review: the working framing "npm-audit-only, no alert yet / advisory lag" was wrong — the alerts existed and were auto-dismissed, which this ledger records honestly. |
+| #81/#82 (2 high, **auto-dismissed**) | nanoid 3.3.12 → 3.3.18 (transitive: postcss `^3.3.17`) | development | **Fixed (rode in as the postcss collateral).** CVE-2026-67213 / CVE-2026-67214, auto-dismissed dev-scope like the brace-expansion set; postcss 8.5.26's raised floor pulled 3.3.18, which clears both. Initially recorded as mere lockfile collateral — upgraded to a ledger row at review when the auto-dismissed alerts surfaced. |
+
+### §2 Wave facts
+
+- **Mechanism:** `npm install pdfjs-dist@^6.2.108 -w apps/desktop --package-lock-only` (the one
+  deliberate manifest edit — DEP-1 precedent for direct-dep floors) + targeted
+  `npm update <pkg> --package-lock-only` for the transitives. Every lockfile write through the
+  pinned npm 11.6.2 (which is also the local npm since AUD-26). No `npm audit fix`, no lockfile
+  regen. Lockfile collateral: exactly one entry — nanoid 3.3.12 → 3.3.18 (postcss 8.5.26 raised
+  its dependency floor to `^3.3.17`); dev-scope, verified line-level, and itself clears the two
+  auto-dismissed nanoid alerts (#81/#82 row above).
+- **THIRD-PARTY-NOTICES.md** regenerated deterministically; 4-line diff — pdfjs-dist is the only
+  member of the shipped set that moved (the mermaid chain is excluded from notices by design).
+- **Gates:** fresh `npm ci` from deleted `node_modules`, typecheck, build, full suite
+  **4866 pass / 50 skip / 4916 total, 350 files** (baseline 4865/50 + the new mermaid-fence pin;
+  the third-party-notices freshness gate correctly went red pre-regeneration and green after),
+  `documents` + `chat-byproject` screenshot smoke, real-data PDF gold-set, `npm audit` **0
+  vulnerabilities**.
+- **Impact analysis:** two independent read-only analysis passes (pdfjs usage + upstream-delta
+  review; mermaid/dompurify reachability + bundle/asar verification), each verified empirically
+  against the bumped tree, plus an adversarial diff review before merge.
+
+### §3 Follow-up register
+
+1. The DEP-1 §5 follow-up #4 (**a `.github/dependabot.yml` with grouped weekly updates** — none
+   exists) remains open and owner-gated; this third hand-rolled batch in 22 days (DEP-1
+   2026-07-19, DEP-2 2026-07-23, DEP-3 2026-08-09) is the recurring cost of not having it.
+2. ~~Stale legacy-build rationale~~ **landed with the wave after review**: the "modern v6 build
+   calls `Uint8Array.prototype.toHex`" justification (expired — 6.2.108's modern build no longer
+   references `toHex` and Chromium 142 ships it) was refreshed at all three sites
+   (`renderer/ocr/main.ts`, `parsers/pdfjs.d.ts`, and the D31 bullet above), along with
+   `pdfjs.d.ts`'s inaccurate "one declaration serves both tsconfig programs" claim (only the
+   node program resolves it; the web program gets the real `pdf.d.mts`). The legacy-build
+   decision itself stands — one build everywhere.
 
 ## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
 

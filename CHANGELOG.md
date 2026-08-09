@@ -235,6 +235,21 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Security
 
+- **All 19 open Dependabot alerts cleared (wave DEP-3, PR #115, 2026-08-09)** — one
+  patch/minor-only batch, no dismissals: pdfjs-dist 6.2.108 (CVE-2026-16633,
+  arbitrary JS on a malicious PDF — the app was never exposed: no annotation
+  scripting, and the OCR window enforces `script-src 'self'`; bump verified
+  against the real-data PDF gold-set), mermaid 11.16.1 + DOMPurify 3.4.13 (all
+  six alerts unreachable — the Streamdown mermaid plugin is never wired, the
+  chain is tree-shaken from the renderer bundle and excluded from the packaged
+  app; production-scope in the dependency graph only, a correction to the DEP-2
+  entry's "ships in the renderer" framing — plus a new test pinning that a
+  mermaid code fence stays a plain code block), and dev/build-tooling hygiene:
+  undici 7.29.0 + 6.28.0, fast-uri 3.1.5, postcss 8.5.26, js-yaml 4.3.1, plus
+  all seven brace-expansion copies and nanoid 3.3.18 — clearing seven further
+  high alerts Dependabot's auto-triage had auto-dismissed as dev-scope.
+  `npm audit`: 0 vulnerabilities. Triage ledger:
+  `docs/architecture.md` "Dependabot triage — design record (wave DEP-3)".
 - **Hardened the workspace-lock confidentiality contract (full audit 2026-07-23)**
   — closed the "Lock now"/quit races above (a content-bearing sidecar could keep
   user-derived text in memory after the workspace reported locked), and stopped a
@@ -252,7 +267,8 @@ first public release. Consciously-accepted gaps are tracked in
   package and was never affected), fast-uri 3.1.4 (host confusion ×2),
   brace-expansion 1.1.16 / 2.1.2 / 5.0.8 (exponential-time `{}` expansion DoS,
   CVE-2026-13149 — Dependabot alert #56), and DOMPurify 3.4.12 (the one
-  production-scope member: streamdown → mermaid ships it in the renderer;
+  production-scope member — in the dependency graph; DEP-3 later verified it
+  ships in neither the renderer bundle nor the packaged app;
   `CUSTOM_ELEMENT_HANDLING` sanitizer bypass, low severity, config not used by
   mermaid). `npm audit`: 0 vulnerabilities again.
 - **All critical- and high-severity Dependabot alerts cleared (wave DEP-1, PR #77)**
