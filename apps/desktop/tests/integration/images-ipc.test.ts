@@ -314,6 +314,18 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     expect(Buffer.from(result as Uint8Array).equals(Buffer.from([9, 8, 7]))).toBe(true)
   })
 
+  // #124: WEBP joins the INTAKE accept set (picker filter + readBytes). The ANALYZE accept set
+  // stays PNG/JPEG — the renderer normalizes WEBP to PNG before imageAnalyze.
+  it('reads a picked .webp (intake accepts it; analyze-side normalization happens renderer-side)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
+    const file = join(dir, 'shot.webp')
+    writeFileSync(file, Buffer.from([0x52, 0x49, 0x46, 0x46, 1, 2]))
+    registerImagesIpc(ctxFor(dir))
+    const token = await tokenFor(file)
+    const { result } = await invoke(handlers, IPC.imageReadBytes, token)
+    expect(Buffer.from(result as Uint8Array).equals(Buffer.from([0x52, 0x49, 0x46, 0x46, 1, 2]))).toBe(true)
+  })
+
   it('refuses an unsupported extension (even via a real token)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'note.txt')

@@ -10,10 +10,12 @@ import {
   decodeImage,
   imageMimeFromName,
   imageMimeOfFile,
+  isHeicName,
   ImageDecodeError,
   MAX_IMAGE_BYTES,
   type ComposerChip,
   type DecodeImage,
+  type ImageInputMime,
   type ImageMime
 } from '../images'
 import {
@@ -54,7 +56,15 @@ const CHIP_KEYS: { labelKey: MessageKey; promptKey: MessageKey }[] = [
 // `multiDrop` is a UI-only concern (NOT a VisionErrorCode — there is no such backend code);
 // it joins the client-guard codes the screen-level banner can show. `openFailed`/`deleteFailed`
 // (full-audit 2026-07-11 CODE-36/34) are UI-only too: a history entry whose open/delete IPC threw.
-type ClientImageError = VisionErrorCode | 'multiDrop' | 'openFailed' | 'deleteFailed'
+// `heicUnsupported` (#124) is UI-only detection by extension: HEIC stays unsupported (no
+// Chromium decode; a decoder would be a new native dep) but gets specific "convert to JPEG"
+// copy instead of the generic unsupported banner.
+type ClientImageError =
+  | VisionErrorCode
+  | 'multiDrop'
+  | 'openFailed'
+  | 'deleteFailed'
+  | 'heicUnsupported'
 
 // Client-guard error codes → friendly banner copy (the runtime codes map inside AnswerThread).
 const CLIENT_ERR_KEY: Partial<Record<ClientImageError, MessageKey>> = {
@@ -64,7 +74,8 @@ const CLIENT_ERR_KEY: Partial<Record<ClientImageError, MessageKey>> = {
   multiDrop: 'images.err.multiDrop',
   busy: 'images.err.busy',
   openFailed: 'images.err.openFailed',
-  deleteFailed: 'images.err.deleteFailed'
+  deleteFailed: 'images.err.deleteFailed',
+  heicUnsupported: 'images.err.heic'
 }
 
 export function ImagesScreen({
@@ -227,7 +238,8 @@ export function ImagesScreen({
     setScreenError(null)
     const mime = imageMimeOfFile(file)
     if (!mime) {
-      setScreenError('unsupportedType')
+      // #124: an iPhone HEIC/HEIF gets its specific "convert to JPEG" copy.
+      setScreenError(isHeicName(file.name) ? 'heicUnsupported' : 'unsupportedType')
       return
     }
     if (file.size > MAX_IMAGE_BYTES) {
@@ -262,7 +274,8 @@ export function ImagesScreen({
     if (!chosen) return
     const mime = imageMimeFromName(chosen.name)
     if (!mime) {
-      setScreenError('unsupportedType')
+      // #124: an iPhone HEIC/HEIF gets its specific "convert to JPEG" copy.
+      setScreenError(isHeicName(chosen.name) ? 'heicUnsupported' : 'unsupportedType')
       return
     }
     if (chosen.sizeBytes > MAX_IMAGE_BYTES) {
@@ -284,7 +297,7 @@ export function ImagesScreen({
 
   async function decodeAndSelect(
     blob: Blob,
-    mime: ImageMime,
+    mime: ImageInputMime,
     name: string,
     sizeBytes: number
   ): Promise<void> {

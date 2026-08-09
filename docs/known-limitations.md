@@ -1963,9 +1963,20 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the idle teardown (default 2 min) reclaims the ~4.6 GB once the user stops asking, but during active
   use the peak stands. Vision is realistically co-resident **only with a small chat model, or after
   the chat sidecar idles out** — not "12B chat + vision simultaneously" (model-benchmarks §8.4).
-- **One image at a time; PNG/JPEG only; single-turn-thread per session; persisted but NOT
-  searchable.** The Images screen takes a single image (no multi-image compare, no video, no camera);
-  WEBP is deliberately out of MVP (no native dep to prove it safe in the import stack). As of the
+- **One image at a time; PNG/JPEG/WEBP in, PNG/JPEG shipped; HEIC unsupported (detected);
+  single-turn-thread per session; persisted but NOT searchable.** The Images screen takes a
+  single image (no multi-image compare, no video, no camera). Format matrix (2026-08-09, #124):
+  **PNG and JPEG** are native; **WEBP** is accepted at intake and **normalized in the renderer**
+  (Chromium decodes it, the pipeline re-encodes to PNG), so the main-side analyze accept set and
+  the SEC-3/D4 header parsers stay PNG/JPEG-only — no new attacker-facing parser; the
+  original-bytes re-encode fallback is disabled for WEBP (those bytes would be rejected
+  main-side). **HEIC/HEIF stays unsupported** (no Chromium decode; a decoder would break the
+  no-new-native-dep rule) but is detected by extension with specific "convert to JPEG" copy.
+  There is **no fixed dimension reject** any more (also 2026-08-09, #118): the renderer's old
+  post-decode 4096 px hard reject — which refused a routine 48 MP phone photo AFTER already
+  paying the decode — is gone; a pre-decode header prescreen (the same parse as main's D4
+  guard) refuses ~50 MP+ before decoding, everything decodable below that is downscaled to
+  1536 px as before, and the main-side 50 MP header cap remains authoritative. As of the
   2026-06-20 change, an analyzed image and its Q&A turns are **persisted automatically** — the image
   rows live in `image_sessions`/`image_turns` and the bytes rest **encrypted at rest** under the SAME
   `DocumentCipher` as the document cache (`workspace/images/<id><ext>.enc`), browsable in an Images

@@ -27,6 +27,9 @@ export function imagesDir(workspacePath: string): string {
   return dir
 }
 
+// Deliberately NO 'image/webp' row (#124): WEBP intake is normalized to PNG in the renderer
+// before `imageAnalyze`, and `validateAnalyzeRequest` accepts PNG/JPEG only — a WEBP MIME can
+// never reach persistence. If the analyze accept set ever widens, extend this map with it.
 const EXT_BY_MIME: Record<string, string> = {
   'image/png': '.png',
   'image/jpeg': '.jpg'

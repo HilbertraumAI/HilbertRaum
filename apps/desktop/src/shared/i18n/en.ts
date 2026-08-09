@@ -2024,7 +2024,7 @@ export const en = {
   'main.dialog.filterImages': 'Images',
   // #120 item 4: the images IPC refusal backstops (near-dead text — the renderer shows its own
   // coded copy — but localized like the sibling main.docs.locked).
-  'main.images.unsupportedType': "That file type isn't supported. Choose a PNG or JPEG.",
+  'main.images.unsupportedType': "That file type isn't supported. Choose a PNG, JPEG, or WEBP.",
   'main.images.tooLarge': 'That image is too large to analyze. Try a smaller image.',
   'main.dialog.importSkill': 'Import a skill package',
   'main.dialog.importSkillFolder': 'Import a skill folder',
@@ -2206,7 +2206,7 @@ export const en = {
   // Drop zone (§5.2) — a large, focusable target; the "choose" button is the non-drag path.
   'images.drop.title': 'Drop an image here',
   'images.drop.choose': 'or choose an image',
-  'images.drop.types': 'PNG or JPEG',
+  'images.drop.types': 'PNG, JPEG, or WEBP',
   // Shown while an analysis is running: a new upload is disabled (vision is one-at-a-time).
   'images.drop.busy': 'An analysis is running. Wait for it to finish to start another.',
   // Detail view → back to the upload + previous-results view.
@@ -2250,7 +2250,9 @@ export const en = {
   'images.answer.stopped': 'Stopped.',
   // Friendly error rows (§5.6) — a CODE is mapped here; raw model/runtime text never shows.
   'images.err.tooLarge': 'This image is too large to analyze. Try a smaller image.',
-  'images.err.unsupported': "That file type isn't supported. Choose a PNG or JPEG.",
+  'images.err.unsupported': "That file type isn't supported. Choose a PNG, JPEG, or WEBP.",
+  // #124: HEIC detected by extension — specific remedy instead of the generic unsupported copy.
+  'images.err.heic': "iPhone HEIC photos aren't supported yet. Convert the photo to JPEG first.",
   'images.err.decodeFailed':
     "That image couldn't be opened. It may be damaged or in an unsupported format.",
   'images.err.multiDrop': 'Drop one image at a time.',

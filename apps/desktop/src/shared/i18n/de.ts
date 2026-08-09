@@ -2113,7 +2113,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.filterImages': 'Bilder',
   // #120 Punkt 4: die IPC-Ablehnungstexte des Bild-Moduls (fast toter Text — der Renderer zeigt
   // seine eigene Code-Meldung — aber lokalisiert wie das benachbarte main.docs.locked).
-  'main.images.unsupportedType': 'Dieser Dateityp wird nicht unterstützt. Wähle ein PNG oder JPEG.',
+  'main.images.unsupportedType':
+    'Dieser Dateityp wird nicht unterstützt. Wähle ein PNG, JPEG oder WEBP.',
   'main.images.tooLarge': 'Dieses Bild ist zu groß zum Analysieren. Versuch ein kleineres Bild.',
   'main.dialog.importSkill': 'Ein Skill-Paket importieren',
   'main.dialog.importSkillFolder': 'Einen Skill-Ordner importieren',
@@ -2286,7 +2287,7 @@ export const de: Record<keyof typeof en, string> = {
   'images.locked': 'Entsperre deinen Arbeitsbereich, um ein Bild zu verstehen.',
   'images.drop.title': 'Bild hier ablegen',
   'images.drop.choose': 'oder ein Bild auswählen',
-  'images.drop.types': 'PNG oder JPEG',
+  'images.drop.types': 'PNG, JPEG oder WEBP',
   'images.drop.busy': 'Eine Analyse läuft. Warten Sie, bis sie fertig ist, um eine neue zu starten.',
   'images.back': 'Zurück zu den Analysen',
   'images.preview.remove': 'Entfernen',
@@ -2323,7 +2324,10 @@ export const de: Record<keyof typeof en, string> = {
   'images.answer.stop': 'Stopp',
   'images.answer.stopped': 'Gestoppt.',
   'images.err.tooLarge': 'Dieses Bild ist zu groß zum Analysieren. Versuch ein kleineres Bild.',
-  'images.err.unsupported': 'Dieser Dateityp wird nicht unterstützt. Wähle ein PNG oder JPEG.',
+  'images.err.unsupported': 'Dieser Dateityp wird nicht unterstützt. Wähle ein PNG, JPEG oder WEBP.',
+  // #124: HEIC per Endung erkannt — konkreter Hinweis statt der allgemeinen Meldung.
+  'images.err.heic':
+    'iPhone-HEIC-Fotos werden noch nicht unterstützt. Wandle das Foto zuerst in JPEG um.',
   'images.err.decodeFailed':
     'Dieses Bild konnte nicht geöffnet werden. Es ist vielleicht beschädigt oder hat ein nicht unterstütztes Format.',
   'images.err.multiDrop': 'Leg immer nur ein Bild ab.',

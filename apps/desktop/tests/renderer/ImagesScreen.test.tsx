@@ -151,6 +151,38 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
     expect(screen.getByRole('button', { name: 'Summarize this image' })).toBeInTheDocument()
   })
 
+  // #124: WEBP is an accepted INTAKE format (normalized to PNG inside decode — faked here);
+  // HEIC stays unsupported but gets its specific "convert to JPEG" copy, not the generic banner.
+  it('accepts a dropped WEBP into the decode pipeline (#124)', async () => {
+    const decodeSpy = vi.fn(fakeDecode)
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={decodeSpy} />)
+    const zone = await screen.findByRole('button', { name: 'Drop an image here' })
+    const webp = new File([new Uint8Array([0x52, 0x49, 0x46, 0x46])], 'shot.webp', {
+      type: 'image/webp'
+    })
+    await act(async () => {
+      fireDrop(zone, [webp])
+    })
+    await screen.findByText('shot.webp') // reached the workspace — not rejected as unsupported
+    expect(decodeSpy).toHaveBeenCalledWith(expect.anything(), 'image/webp')
+  })
+
+  it('a dropped HEIC shows the specific convert-to-JPEG copy (#124)', async () => {
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const zone = await screen.findByRole('button', { name: 'Drop an image here' })
+    const heic = new File([new Uint8Array([1])], 'IMG_0001.HEIC', { type: '' })
+    await act(async () => {
+      fireDrop(zone, [heic])
+    })
+    expect(
+      await screen.findByText("iPhone HEIC photos aren't supported yet. Convert the photo to JPEG first.")
+    ).toBeInTheDocument()
+    // Still on the drop zone — nothing was taken.
+    expect(screen.getByRole('button', { name: 'Drop an image here' })).toBeInTheDocument()
+  })
+
   it('rejects a multi-drop with a friendly banner rather than taking the first file', async () => {
     stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)

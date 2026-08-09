@@ -116,7 +116,8 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
         title: tMain('main.dialog.chooseImage'),
         properties: ['openFile'] as Array<'openFile'>,
         filters: [
-          { name: tMain('main.dialog.filterImages'), extensions: ['png', 'jpg', 'jpeg'] },
+          // #124: WEBP joins the intake filter (normalized to PNG renderer-side).
+          { name: tMain('main.dialog.filterImages'), extensions: ['png', 'jpg', 'jpeg', 'webp'] },
           { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
         ]
       }
