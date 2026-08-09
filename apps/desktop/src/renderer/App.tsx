@@ -40,6 +40,7 @@ import {
   Banner,
   BrandMark,
   Button,
+  ErrorBanner,
   ErrorBoundary,
   Icon,
   LocalIndicator,
@@ -352,12 +353,10 @@ function AppShell(): JSX.Element {
 
       <main className="content">
         {/* CODE-26: the failed-lock notice — main's friendly persist-canonical copy
-            (already localized main-side), next to the content the user keeps working in. */}
-        {lockError && (
-          <Banner tone="error" t={t} onDismiss={() => setLockError(null)}>
-            {lockError}
-          </Banner>
-        )}
+            (already localized main-side), next to the content the user keeps working in.
+            SH-2 (#145): via the always-mounted ErrorBanner so AT announces the FIRST failure
+            (a freshly inserted alert element is missed by many screen readers — M-U1). */}
+        <ErrorBanner message={lockError} t={t} onDismiss={() => setLockError(null)} />
         {notice && (
           <Banner
             tone="info"

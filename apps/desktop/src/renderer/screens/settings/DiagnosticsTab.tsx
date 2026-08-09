@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Banner, Button, useToast } from '../../components'
+import { Banner, Button, ErrorBanner, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
 import { localizeServerCopy } from '../../lib/displayMap'
 import { friendlyIpcError, runAndSurface } from '../../lib/errors'
@@ -412,10 +412,12 @@ export function DiagnosticsTab(): JSX.Element {
             {settings.gpuMode === 'auto' ? t('diag.gpu.tryHint') : t('diag.gpu.offHint')}
           </Banner>
         )}
-        {/* CODE-27: the re-probe's failure, in context under the button that triggered it. */}
-        {gpuRetryError && (
-          <Banner tone="error">{t('diag.gpu.tryFailed', { error: gpuRetryError })}</Banner>
-        )}
+        {/* CODE-27: the re-probe's failure, in context under the button that triggered it.
+            SH-2 (#145): always-mounted so the FIRST failure is announced. */}
+        <ErrorBanner
+          message={gpuRetryError ? t('diag.gpu.tryFailed', { error: gpuRetryError }) : null}
+          t={t}
+        />
         <div className="actions">
           <Button size="sm" onClick={() => void refreshStatus()}>
             {t('diag.refresh')}
@@ -447,7 +449,8 @@ export function DiagnosticsTab(): JSX.Element {
             </Button>
           )}
         </div>
-        {error && <Banner tone="error">{t('diag.bench.failed', { error })}</Banner>}
+        {/* SH-2 (#145): always-mounted so the FIRST failure is announced. */}
+        <ErrorBanner message={error ? t('diag.bench.failed', { error }) : null} t={t} />
 
         {bench && (
           <>

@@ -5,6 +5,7 @@ import {
   Banner,
   Button,
   ConfirmDialog,
+  ErrorBanner,
   Icon,
   Modal,
   Switch,
@@ -240,7 +241,8 @@ export function SkillsTab(): JSX.Element {
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
         </div>
-        {loadError && <Banner tone="error">{loadError}</Banner>}
+        {/* SH-2 (#145): always-mounted so the FIRST load failure is announced. */}
+        <ErrorBanner message={loadError} t={t} />
         {/* SKA-32: reconcile errors were previously dropped silently — a drop-in with one YAML typo
             simply never appeared. Count only; the folder itself is user content and never named. */}
         {(reconcileStatus?.errorCount ?? 0) > 0 && (

@@ -452,7 +452,8 @@ export function ModelsScreen(): JSX.Element {
     }
     return (
       <div className="download-progress">
-        {mine?.status === 'failed' && <Banner tone="error">{mine.error}</Banner>}
+        {/* SH-2 (#145): always-mounted so the FIRST download failure is announced. */}
+        <ErrorBanner message={mine?.status === 'failed' ? mine.error : null} t={t} />
         {mine?.status === 'cancelled' && (
           <p className="hint">{t('models.download.cancelled')}</p>
         )}

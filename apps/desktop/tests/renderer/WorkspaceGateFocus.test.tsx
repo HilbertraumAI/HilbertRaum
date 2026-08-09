@@ -68,3 +68,44 @@ describe('WorkspaceGate — F20 phase-change focus management (WCAG 2.4.3)', () 
     await waitFor(() => expect(document.activeElement).toBe(choose))
   })
 })
+
+// SH-12 + SH-2 (frontend audit 2026-08-09, #145): a WRONG password empties the field and
+// disables the submit button focus was sitting on — the retry path must steer focus back to
+// the field, and the error must live in an ALWAYS-mounted alert region so the FIRST failure
+// is announced (a freshly inserted role="alert" element is missed by many screen readers).
+describe('WorkspaceGate — failed unlock: focus + announcement (SH-2/SH-12)', () => {
+  const LOCKED: WorkspaceStateInfo = {
+    state: 'locked',
+    mode: 'encrypted',
+    plaintextAllowed: false,
+    encryptionRequired: true
+  }
+
+  it('re-focuses the password field after a wrong password (SH-12)', async () => {
+    const user = userEvent.setup()
+    const unlockWorkspace = vi.fn(
+      async (): Promise<WorkspaceActionResult> => ({ ok: false, message: 'Wrong password.' })
+    )
+    stubApi({ unlockWorkspace })
+    render(<WorkspaceGate state={LOCKED} onUnlocked={vi.fn()} />)
+
+    const pw = await screen.findByPlaceholderText('Password')
+    await user.type(pw, 'nope')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+
+    // The field emptied, the error shows, and focus is back ON the field for the retry
+    // (pre-fix it stayed on the now-disabled submit button — a keyboard dead end).
+    await screen.findByText('Wrong password.')
+    expect((pw as HTMLInputElement).value).toBe('')
+    await waitFor(() => expect(document.activeElement).toBe(pw))
+  })
+
+  it('the unlock error lives in an always-mounted alert region (SH-2)', async () => {
+    stubApi({})
+    render(<WorkspaceGate state={LOCKED} onUnlocked={vi.fn()} />)
+    await screen.findByPlaceholderText('Password')
+    // The region is present BEFORE any failure — that is what makes the first message a
+    // text-swap inside a live region (announced) instead of a fresh pre-filled alert (missed).
+    expect(document.querySelector('.error-banner-region')).not.toBeNull()
+  })
+})
