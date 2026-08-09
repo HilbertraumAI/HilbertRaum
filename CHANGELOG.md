@@ -207,6 +207,19 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Fixed
 
+- **A redacted Word copy can no longer leak masked text when a link contains an
+  e-mail address** (issue #128). A URL with an embedded e-mail (an unsubscribe
+  link, a `mailto:` address in a link) produced nested mask regions; the `.docx`
+  writer re-emitted part of the masked link **in cleartext** in the saved copy
+  (the plain-text copy was never affected). The saved file now masks the whole
+  region exactly once, and the "N items hidden" count counts masked regions
+  instead of double-counting the nested item.
+- **Redacting or editing a very large document no longer fails at the end of
+  the run** (issue #134). On documents long enough that the model proposed more
+  than 4,096 places, the run used to fail with a generic error *after* the full
+  multi-minute detection pass. Proposals are now de-duplicated and capped; the
+  run completes, and when the cap was hit the result says so and asks for a
+  careful review of the saved copy.
 - **One failed vision start no longer disables image understanding until
   restart** (issue #117). If the vision model failed to start once (for
   example under memory pressure), every later attempt failed instantly for

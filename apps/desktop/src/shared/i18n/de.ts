@@ -333,6 +333,11 @@ export const de: Record<keyof typeof en, string> = {
     'Geschwärzte Kopie gespeichert – {count} Einträge verborgen (nur regelbasierte Offline-Erkennung, kein Modell aktiv). Prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.done.redactedCleanFloor':
     'Keine personenbezogenen Daten erkannt (nur regelbasierte Offline-Erkennung, kein Modell aktiv); Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
+  // #134: der Suchlauf hat seine Vorschlagsgrenze erreicht – ein sehr großes Dokument.
+  'chat.skill.run.done.redactedCapped.one':
+    'Geschwärzte Kopie gespeichert – {count} Eintrag verborgen. Dieses Dokument ist sehr groß, die automatische Erkennung hat an ihrer Grenze gestoppt – spätere Einträge können sichtbar sein. Prüfe die ganze Kopie, bevor du sie weitergibst.',
+  'chat.skill.run.done.redactedCapped.other':
+    'Geschwärzte Kopie gespeichert – {count} Einträge verborgen. Dieses Dokument ist sehr groß, die automatische Erkennung hat an ihrer Grenze gestoppt – spätere Einträge können sichtbar sein. Prüfe die ganze Kopie, bevor du sie weitergibst.',
   // Phase 8 (D76/D78): gezielte Änderungen – N Änderungen angewendet (alle gefunden), eine Teil-Variante,
   // wenn ein Teil des gesuchten Textes nicht gefunden und übersprungen wurde, und der Kein-Treffer-Fall.
   'chat.skill.run.done.edited.one': '{count} Änderung angewendet und eine bearbeitete Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
@@ -340,6 +345,11 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.done.editedPartial.one': '{count} Änderung angewendet; ein Teil des gesuchten Textes wurde nicht gefunden und übersprungen. Bearbeitete Kopie gespeichert – prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.done.editedPartial.other': '{count} Änderungen angewendet; ein Teil des gesuchten Textes wurde nicht gefunden und übersprungen. Bearbeitete Kopie gespeichert – prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.done.editedNone': 'Kein gesuchter Text wurde gefunden – es wurde nichts geändert und keine Kopie gespeichert.',
+  // #134: der Suchlauf hat seine Vorschlagsgrenze erreicht – spätere Stellen wurden womöglich nie gesehen.
+  'chat.skill.run.done.editedCapped.one':
+    '{count} Änderung angewendet. Dieses Dokument ist sehr groß, die Suche nach zu ändernden Stellen hat an ihrer Grenze gestoppt – prüfe die Kopie; spätere Stellen können unverändert sein.',
+  'chat.skill.run.done.editedCapped.other':
+    '{count} Änderungen angewendet. Dieses Dokument ist sehr groß, die Suche nach zu ändernden Stellen hat an ihrer Grenze gestoppt – prüfe die Kopie; spätere Stellen können unverändert sein.',
   'chat.skill.run.failedGeneric': 'Das hat nicht geklappt. Es wurde nichts geändert.',
   'chat.skill.run.error.unavailable': 'Dieses Werkzeug ist nicht verfügbar.',
   'chat.skill.run.error.needsExtraction': 'Lies das Dokument zuerst mit der Schaltfläche „{button}“ ein, dann führe dieses Werkzeug aus.',

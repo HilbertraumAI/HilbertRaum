@@ -298,6 +298,11 @@ export const en = {
   'chat.skill.run.done.redactedFloor.one': 'Saved a redacted copy — {count} item hidden (offline rule-based detection only, no model running). Review it before sharing.',
   'chat.skill.run.done.redactedFloor.other': 'Saved a redacted copy — {count} items hidden (offline rule-based detection only, no model running). Review it before sharing.',
   'chat.skill.run.done.redactedCleanFloor': 'No personal data was detected (offline rule-based detection only, no model running); saved a copy. Review it before sharing.',
+  // #134: the locate pass hit its proposal cap — a very large document; detection stopped at the limit.
+  'chat.skill.run.done.redactedCapped.one':
+    'Saved a redacted copy — {count} item hidden. This document is very large, so automatic detection stopped at its limit and later items may be unmasked — review the whole copy before sharing.',
+  'chat.skill.run.done.redactedCapped.other':
+    'Saved a redacted copy — {count} items hidden. This document is very large, so automatic detection stopped at its limit and later items may be unmasked — review the whole copy before sharing.',
   // Phase 8 (D76/D78): targeted edits — N changes applied (all found), a partial variant when some
   // requested text wasn’t found and was skipped, and the no-match case (nothing written). Counts only.
   'chat.skill.run.done.edited.one': 'Applied {count} change and saved an edited copy. Review it before sharing.',
@@ -305,6 +310,11 @@ export const en = {
   'chat.skill.run.done.editedPartial.one': 'Applied {count} change; some requested text wasn’t found and was skipped. Saved an edited copy — review it before sharing.',
   'chat.skill.run.done.editedPartial.other': 'Applied {count} changes; some requested text wasn’t found and was skipped. Saved an edited copy — review it before sharing.',
   'chat.skill.run.done.editedNone': 'None of the requested text was found — nothing was changed and no copy was saved.',
+  // #134: the locate pass hit its proposal cap — later places to change may never have been seen.
+  'chat.skill.run.done.editedCapped.one':
+    'Applied {count} change. This document is very large, so the search for places to change stopped at its limit — review the copy; later places may be unchanged.',
+  'chat.skill.run.done.editedCapped.other':
+    'Applied {count} changes. This document is very large, so the search for places to change stopped at its limit — review the copy; later places may be unchanged.',
   'chat.skill.run.failedGeneric': "That didn't work. Nothing was changed.",
   'chat.skill.run.error.unavailable': 'This tool isn’t available.',
   'chat.skill.run.error.needsExtraction': 'Read the document first with the “{button}” button, then run this tool.',

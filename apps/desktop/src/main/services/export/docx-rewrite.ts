@@ -174,12 +174,26 @@ export async function applySpansToDocx(bytes: Uint8Array, spans: readonly Transf
   const { nodes } = parseTextLayer(xml)
 
   const sorted = spans.filter(validSpan).slice().sort((a, b) => a.start - b.start)
+  // #128: drop any span overlapping an already-kept one — the SAME deterministic rule as
+  // span-transform's `applySpans` (ascending order; a span starting before the end of the last kept
+  // span is skipped, so equal-start keeps the first). The redaction union is NOT always disjoint
+  // (URL_RE matches the █ mask, so a floor URL span can CONTAIN an email/entity mask); feeding a
+  // contained span to `rewriteNodeText`'s cursor walk re-emitted the inner replacement AND rewound the
+  // cursor, re-emitting the outer masked span's tail in CLEARTEXT. Under perChar the outer mask covers
+  // every contained span's characters, so dropping the inner span loses nothing.
+  const disjoint: TransformSpan[] = []
+  let lastEnd = 0
+  for (const s of sorted) {
+    if (s.start < lastEnd) continue
+    disjoint.push(s)
+    lastEnd = s.start + s.length
+  }
   // For each node, gather the spans overlapping its layer range and rewrite only if the text changes.
   const changes: Array<{ rawStart: number; rawEnd: number; newRaw: string }> = []
   for (const node of nodes) {
     const nStart = node.layerStart
     const nEnd = nStart + node.layerText.length
-    const overlapping = sorted.filter((s) => s.start < nEnd && s.start + s.length > nStart)
+    const overlapping = disjoint.filter((s) => s.start < nEnd && s.start + s.length > nStart)
     if (overlapping.length === 0) continue
     const newText = rewriteNodeText(node, overlapping)
     if (newText !== node.layerText) {

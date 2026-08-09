@@ -1350,10 +1350,12 @@ export interface RedactionResult {
   redactionCount?: number
   /**
    * A content-free outcome discriminator the renderer maps to copy:
-   *   'redacted'      — the LLM locate pass ran, items were masked;
-   *   'clean'         — the LLM locate pass ran, nothing was masked;
-   *   'redactedFloor' — DEGRADED (no runtime / locate failed): only the regex floor ran, items masked;
-   *   'cleanFloor'    — DEGRADED: only the regex floor ran, nothing masked.
+   *   'redacted'       — the LLM locate pass ran, items were masked;
+   *   'clean'          — the LLM locate pass ran, nothing was masked;
+   *   'redactedFloor'  — DEGRADED (no runtime / locate failed): only the regex floor ran, items masked;
+   *   'cleanFloor'     — DEGRADED: only the regex floor ran, nothing masked;
+   *   'redactedCapped' — #134: the locate pass hit its proposal cap (a very large document) — items
+   *                      were masked, but automatic detection stopped at the limit; review carefully.
    */
   resultKind?: string
   /** True when the run ended because it was CANCELLED (vs a genuine failure) — the seam is authority (B2). */
@@ -1375,23 +1377,25 @@ async function runRedactionLocate(
   text: string,
   deps: RedactionDeps,
   signal: AbortSignal
-): Promise<{ entities: LocatedEntity[]; degraded: boolean }> {
-  if (deps.runtime == null) return { entities: [], degraded: true }
-  if (text.length === 0) return { entities: [], degraded: false }
+): Promise<{ entities: LocatedEntity[]; degraded: boolean; truncated: boolean }> {
+  if (deps.runtime == null) return { entities: [], degraded: true, truncated: false }
+  if (text.length === 0) return { entities: [], degraded: false, truncated: false }
   try {
-    const entities = await locateEntities(text, deps.instruction ?? '', {
+    const located = await locateEntities(text, deps.instruction ?? '', {
       runtime: deps.runtime,
       signal,
       onProgress: (done, total) => deps.onProgress?.({ done, total })
     })
-    return { entities, degraded: false }
+    // `truncated` (#134): the locate pass hit its global proposal cap (the tool schema's maxItems) —
+    // the run proceeds with the capped list, and the outcome says so ('redactedCapped').
+    return { entities: located.entities, degraded: false, truncated: located.truncated }
   } catch (e) {
     // GAP-4 (full-audit 2026-07-11): the app-wide `isAbortError(e, signal)` instead of the narrow
     // DOMException name-check — a user cancel surfacing as a wrapped runtime error (e.g.
     // 'terminated' from a killed fetch) must rethrow as a cancel, never degrade to the floor.
     if (isAbortError(e, signal)) throw e
     console.error('[skills] redaction locate pass failed — degrading to the rule-based floor')
-    return { entities: [], degraded: true }
+    return { entities: [], degraded: true, truncated: false }
   }
 }
 
@@ -1489,10 +1493,12 @@ export async function runDocumentRedaction(
     }
     let entities: LocatedEntity[] = []
     let degraded: boolean
+    let locateTruncated = false
     try {
       const located = await runRedactionLocate(joined, deps, signal)
       entities = located.entities
       degraded = located.degraded
+      locateTruncated = located.truncated
     } catch (e) {
       // GAP-4: the app-wide abort classifier — a cancel surfacing as a wrapped runtime error is
       // still a calm cancel, never a 'failed' run.
@@ -1520,10 +1526,14 @@ export async function runDocumentRedaction(
     }
 
     const output = result.output as RedactDocumentOutput
-    // The resultKind carries BOTH whether anything was masked AND whether the LLM pass ran (D78 honesty:
-    // a degraded run says so). The renderer maps the four discriminators to copy.
+    // The resultKind carries whether anything was masked, whether the LLM pass ran (D78 honesty: a
+    // degraded run says so), and — #134 — whether the locate pass hit its proposal cap ('redactedCapped':
+    // detection stopped at the limit on a very large document, so the copy needs an extra-careful
+    // review; capped ∧ degraded is impossible — a degraded run had no locate pass to cap. A capped run
+    // whose every proposal was unverifiable AND whose floor found nothing would read 'clean'; that
+    // corner is a pathological all-hallucination reply, accepted). The renderer maps the discriminators.
     const resultKind = output.totalRedactions > 0
-      ? degraded ? 'redactedFloor' : 'redacted'
+      ? degraded ? 'redactedFloor' : locateTruncated ? 'redactedCapped' : 'redacted'
       : degraded ? 'cleanFloor' : 'clean'
 
     // Cancelled after the tool produced the text but before the write — don't open the save dialog,
@@ -1644,6 +1654,8 @@ export interface DocumentEditResult {
    * A content-free outcome discriminator the renderer maps to copy:
    *   'edited'        — ≥1 edit applied, none dropped;
    *   'editedPartial' — ≥1 edit applied, some requested text wasn't found and was skipped;
+   *   'editedCapped'  — #134: ≥1 edit applied, but the locate pass hit its proposal cap (a very large
+   *                     document) — later places to change may have been missed; review the copy;
    *   'none'          — nothing matched verbatim, no file written.
    */
   resultKind?: string
@@ -1757,13 +1769,18 @@ export async function runDocumentEdit(
       joined = '' // an unreadable document surfaces through the tool's own read below; skip locate
     }
     let edits: LocatedEdit[] = []
+    let locateTruncated = false
     if (joined.length > 0) {
       try {
-        edits = await locateDocumentEdits(joined, instruction, {
+        const located = await locateDocumentEdits(joined, instruction, {
           runtime: deps.runtime,
           signal,
           onProgress: (done, total) => deps.onProgress?.({ done, total })
         })
+        edits = located.edits
+        // `truncated` (#134): the locate pass hit its global proposal cap (the tool schema's maxItems)
+        // — the run proceeds with the capped list, and the outcome says so ('editedCapped').
+        locateTruncated = located.truncated
       } catch (e) {
         // GAP-4 (full-audit 2026-07-11): the app-wide `isAbortError(e, signal)` — a cancel
         // surfacing as a wrapped runtime error must record 'cancelled', not a 'failed' run with
@@ -1805,7 +1822,9 @@ export async function runDocumentEdit(
       return { ok: true, runId, editCount: 0, droppedCount: output.dropped, resultKind: 'none' }
     }
 
-    const resultKind = output.dropped > 0 ? 'editedPartial' : 'edited'
+    // #134: a capped locate pass outranks 'editedPartial' — missed WINDOWS are a stronger caveat than
+    // dropped proposals (both mean "review the copy", but the cap means later places were never seen).
+    const resultKind = locateTruncated ? 'editedCapped' : output.dropped > 0 ? 'editedPartial' : 'edited'
 
     // Cancelled after the tool produced the text but before the write — don't open the save dialog, and
     // report it as cancelled (not failed), so nothing is written under a cancel (B2).

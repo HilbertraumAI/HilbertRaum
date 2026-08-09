@@ -144,6 +144,63 @@ describe('docx-rewrite — applySpansToDocx', () => {
   })
 })
 
+// #128 (skills-pipeline audit 2026-08-09, RUN-1): the redaction span union is NOT always disjoint —
+// URL_RE matches the █ mask character (U+2588 is neither whitespace nor in its excluded set), so a
+// floor URL span can CONTAIN an earlier-pass email mask or a swept entity mask. `rewriteNodeText`'s
+// cursor walk assumed disjoint spans: a contained span re-emitted its replacement AND rewound the
+// cursor to its own end, so the closing slice re-emitted the OUTER masked span's tail in CLEARTEXT
+// (plus duplicate mask glyphs). The writer now drops any span overlapping an already-applied one —
+// the same deterministic rule as span-transform's `applySpans` (the .txt path, which was always safe).
+describe('docx-rewrite — overlapping spans are dropped, never re-emitted (#128)', () => {
+  const URL = 'https://x.co/?e=a@b.co&l=de'
+  const NESTED_XML =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' +
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+    '<w:p><w:r><w:t xml:space="preserve">See https://x.co/?e=a@b.co&amp;l=de ok</w:t></w:r></w:p>' +
+    '</w:body></w:document>'
+
+  async function makeNestedDocx(): Promise<Buffer> {
+    const zip = new JSZip()
+    zip.file('[Content_Types].xml', CONTENT_TYPES)
+    zip.file('_rels/.rels', RELS)
+    zip.file('word/document.xml', NESTED_XML)
+    return zip.generateAsync({ type: 'nodebuffer' })
+  }
+
+  it('a span CONTAINED in an earlier one leaks no cleartext and inflates no length', async () => {
+    const bytes = await makeNestedDocx()
+    const { text } = await readDocxTextLayer(bytes)
+    expect(text).toBe(`See ${URL} ok\n`)
+    // The audit's traced pair: URL span [4, 4+27) fully containing the email span [21, 27).
+    const urlSpan: TransformSpan = {
+      start: text.indexOf('https'),
+      length: URL.length,
+      replacement: '█'.repeat(URL.length)
+    }
+    const emailSpan: TransformSpan = { start: text.indexOf('a@b.co'), length: 6, replacement: '██████' }
+    const out = await applySpansToDocx(bytes, [urlSpan, emailSpan])
+    const layer = await readDocxTextLayer(out)
+    // The whole URL region is one mask: no `&l=de` tail in cleartext, no extra mask glyphs.
+    expect(layer.text).toBe(`See ${'█'.repeat(URL.length)} ok\n`)
+    expect(layer.text).not.toContain('&l=de')
+    expect(layer.text).not.toContain('a@b.co')
+  })
+
+  it('span order in the input does not matter (the writer sorts, then drops overlaps)', async () => {
+    const bytes = await makeNestedDocx()
+    const { text } = await readDocxTextLayer(bytes)
+    const urlSpan: TransformSpan = {
+      start: text.indexOf('https'),
+      length: URL.length,
+      replacement: '█'.repeat(URL.length)
+    }
+    const emailSpan: TransformSpan = { start: text.indexOf('a@b.co'), length: 6, replacement: '██████' }
+    const out = await applySpansToDocx(bytes, [emailSpan, urlSpan])
+    const layer = await readDocxTextLayer(out)
+    expect(layer.text).toBe(`See ${'█'.repeat(URL.length)} ok\n`)
+  })
+})
+
 // F-11 (audit 2026-07-16): a SELF-CLOSING `<w:t …/>` (attribute-bearing empty node — Apache POI /
 // lxml-style OOXML producers emit these for empty runs; Word itself rarely does) used to be read as an
 // OPENING tag: `(?:\s[^>]*)?` consumed the trailing `/`, and the lazy body then swallowed every

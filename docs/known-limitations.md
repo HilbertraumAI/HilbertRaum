@@ -444,6 +444,14 @@ password recovery — are documented in
     Format-preserving **PDF output remains open** (true-redaction PDF or a regenerated, attributed PDF
     would need a PDF-writing dependency plus a shipped embeddable font — neither exists in the tree;
     see §5 next actions in `BUILD_STATE.md`).
+  - **Very large documents: the locate pass stops at a proposal cap and says so (#134).** The
+    model-assisted locate pass collects at most **4,096 unique proposals** per run (the tool input
+    bound; duplicates from the overlapping windows are collapsed first, so the cap binds on genuinely
+    huge PII-dense documents — a member/address list, not a normal contract). A run that hits the cap
+    **completes** — it no longer fails with a generic error after the full multi-minute pass — and the
+    outcome copy says detection stopped at its limit ("later items may be unmasked" / "later places may
+    be unchanged"), asking for a whole-copy review. The deterministic regex floor still runs over the
+    entire document regardless (e-mails/IBANs/phones/cards/dates/links are never subject to the cap).
   - **Date masking now accepts EITHER field order and a 2-digit year — the BL-N6 leak is closed (U2,
     audit §5.7).** For *redaction* (unlike extraction, which stays day-first) a candidate is masked when it
     parses in **day-first OR month-first** order, so a **US-ordered** `mm/dd/yyyy` value like `12/31/2026`

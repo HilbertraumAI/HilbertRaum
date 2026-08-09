@@ -559,6 +559,78 @@ describe('document-redaction — Phase 9 same-format DOCX export (D77)', () => {
     expect(layer.text).toContain('█')
   })
 
+  // #128 (skills-pipeline audit 2026-08-09, RUN-1): the audit's traced repro. URL_RE matches the █ mask
+  // character, so the email masked in pass 1 sits INSIDE the pass-2 URL span — a nested pair. The flat
+  // .txt path was always safe (`applySpans` drops the contained span); the DOCX writer re-emitted the
+  // inner mask AND rewound its cursor, leaking the URL tail (`&l=de`) in cleartext into the file the
+  // user was told was redacted.
+  it('#128: a URL with an embedded e-mail is ONE clean mask in the saved .docx — no cleartext tail', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, 'ignored — the DOCX branch reads the injected original bytes')
+    const url = 'https://x.co/?e=a@b.co&l=de'
+    const original = await makeDocx([`See ${url} ok`])
+    const { audit } = capturingAudit()
+    let savedBinary: Uint8Array | null = null
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: original }),
+      saveBinaryFile: async (_name, bytes) => {
+        savedBinary = bytes
+        return true
+      },
+      saveTextFile: async () => true
+    })
+    expect(res.ok).toBe(true)
+    const layer = await readDocxTextLayer(savedBinary!)
+    // The whole URL region is one same-length mask: no leaked tail, no duplicate mask glyphs.
+    expect(layer.text).toBe(`See ${'█'.repeat(url.length)} ok\n`)
+    expect(layer.text).not.toContain('&l=de')
+    expect(layer.text).not.toContain('a@b.co')
+    // The honest count: one masked region, not the detector-hit sum of 2.
+    expect(res.redactionCount).toBe(1)
+  })
+
+  // #134 (RUN-3): a locate pass that hits the proposal cap no longer overflows the tool gate ("This
+  // tool was given input it cannot accept." after minutes of model time) — the seam clamps, the run
+  // completes, and the outcome says so via the 'redactedCapped' discriminator.
+  it('#134: a cap-hitting locate pass completes the run and reports resultKind redactedCapped', async () => {
+    const db = freshDb()
+    // 1300 filler lines + one real e-mail so the floor masks something (totalRedactions ≥ 1).
+    const text = [
+      ...Array.from({ length: 1300 }, (_, i) => `filler line ${i + 1}`),
+      'Contact jane.doe@example.com now.'
+    ].join('\n')
+    const docId = seedDocWithChunks(db, text)
+    const { audit } = capturingAudit()
+    // Every window proposes 128 unique SHORT strings that are NOT in the document (dropped by the
+    // verify — the cap and the truncation flag are independent of verification; short so the reply
+    // stays under the locate stream's runaway char cap).
+    const runtime = scriptedRuntime(({ messages }) => {
+      const firstLine = messages[1].content.split('\t')[0]
+      return JSON.stringify({
+        entities: Array.from({ length: 128 }, (_, i) => ({
+          text: `g${firstLine}x${i}`,
+          category: 'name',
+          line: 1
+        }))
+      })
+    })
+    let written: string | null = null
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      runtime,
+      saveTextFile: async (_name, content) => {
+        written = content
+        return true
+      }
+    })
+    expect(res.ok).toBe(true) // the run COMPLETES — no "input it cannot accept" terminal failure
+    expect(res.resultKind).toBe('redactedCapped') // the cap is surfaced honestly
+    expect(written).not.toContain('jane.doe@example.com') // the floor still masked the real item
+  })
+
   it('source-format branch: a non-DOCX source keeps the unchanged .txt path (no binary write)', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, PII_TEXT)
