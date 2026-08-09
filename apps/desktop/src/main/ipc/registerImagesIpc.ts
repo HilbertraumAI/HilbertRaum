@@ -23,6 +23,7 @@ import {
   createImageSession,
   deleteImageSession,
   getImageSession,
+  imageSessionExists,
   imagesDir,
   listImageSessions
 } from '../services/vision/history'
@@ -52,7 +53,21 @@ const imageUnsupportedMessage = (): string => tMain('main.images.unsupportedType
 /** Friendly refusal for an over-cap image. */
 const imageTooLargeMessage = (): string => tMain('main.images.tooLarge')
 
+// #120 item 2: persistence-field clamps. The title is a filename (basename-sized — 255 is the
+// common filesystem component limit); dimensions are decoded pixel sizes, so anything beyond
+// ~1e6 px per side (≫ the 50 MP D4 budget allows) is junk.
+const MAX_IMAGE_TITLE_CHARS = 255
+const MAX_IMAGE_DIM = 1_000_000
+/** Coerce a renderer-supplied dimension to a finite positive integer, or null. */
+const clampImageDim = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 1 && v <= MAX_IMAGE_DIM ? Math.floor(v) : null
+
 export function registerImagesIpc(ctx: AppContext, service?: VisionService): void {
+  // WARNING (#119): this `??` fallback constructs a VisionService WITHOUT the
+  // `isWorkspaceLocking` latch (AUD-02). Production always wires the LATCHED instance via
+  // `ctx.vision` (main/index.ts), so the fallback is TEST-ONLY today — do not "simplify" the
+  // call site to rely on it, or an analyze landing during the multi-second lock teardown could
+  // rebuild a fresh vision sidecar that outlives the vault re-encrypt.
   const vision =
     service ??
     new VisionService({
@@ -111,6 +126,11 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
   ipcMain.handle(
     IPC.imageChooseImage,
     async (): Promise<{ token: string; name: string; sizeBytes: number } | null> => {
+      // #119: chooseImage is a FILE handler and follows the module's documented invariant
+      // (file/runtime handlers requireUnlocked) like its siblings. Nothing legitimate calls it
+      // locked (the Images screen never mounts then); ungated it would pop the OS dialog and
+      // bank D2 tokens for a compromised renderer to redeem the moment the workspace unlocks.
+      requireUnlocked()
       const win = BrowserWindow.getFocusedWindow()
       const options = {
         title: tMain('main.dialog.chooseImage'),
@@ -193,7 +213,19 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     // image encrypted-at-rest and creates a session; a follow-up reuses it. The session is
     // created lazily and at most once; a busy/failed reject persists nothing. Persistence is
     // best-effort — any failure is logged content-free and the live analysis still runs.
-    let sessionId: string | null = typeof req.sessionId === 'string' ? req.sessionId : null
+    //
+    // #120 item 2: the persistence fields are renderer input (threat #1) and were the module's
+    // one unclamped surface — clamp them here at the IPC boundary. The title is length-capped,
+    // width/height coerced to finite positive ints or null, and a sessionId that names no
+    // existing row is treated as absent (a fresh session) instead of trusted for the append.
+    const name =
+      typeof req.name === 'string' ? req.name.trim().slice(0, MAX_IMAGE_TITLE_CHARS) : undefined
+    const width = clampImageDim(req.width)
+    const height = clampImageDim(req.height)
+    let sessionId: string | null =
+      typeof req.sessionId === 'string' && imageSessionExists(ctx.db, req.sessionId)
+        ? req.sessionId
+        : null
     // ASYNC (audit 2026-07-16 F-12): createImageSession now runs the ~20 MiB write+encrypt+shred off the
     // main thread. The `done` wrapper AWAITS this before `base.done` so the sessionId still rides the
     // done event (the renderer's follow-up contract, pinned by images-ipc.test.ts). Best-effort — a
@@ -204,7 +236,14 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
         sessionId = await createImageSession(
           ctx.db,
           imagesDir(ctx.paths.workspacePath),
-          req,
+          // The CLAMPED persistence fields (#120 item 2) — never the raw renderer values.
+          {
+            imageBytes: req.imageBytes,
+            mimeType: req.mimeType,
+            name,
+            width: width ?? undefined,
+            height: height ?? undefined
+          },
           ctx.workspace.documentCipher()
         )
       } catch (err) {

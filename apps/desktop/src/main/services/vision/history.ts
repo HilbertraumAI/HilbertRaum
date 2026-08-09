@@ -112,6 +112,12 @@ export async function createImageSession(
   return id
 }
 
+/** True when a session row exists (#120 item 2: the IPC layer verifies a renderer-supplied
+ *  sessionId names a real session before trusting it for an append). */
+export function imageSessionExists(db: Db, id: string): boolean {
+  return db.prepare('SELECT 1 FROM image_sessions WHERE id = ?').get(id) !== undefined
+}
+
 /** Append a completed (non-empty) turn and bump the session's updated_at. */
 export function addImageTurn(db: Db, sessionId: string, question: string, answer: string): void {
   const now = new Date().toISOString()

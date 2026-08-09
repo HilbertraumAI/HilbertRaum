@@ -422,7 +422,9 @@ describe('vision security sentinel', () => {
 
   // MEDIUM vuln-scan-2026-06-21: imageGetJob/imageCancel are gated on unlock, like imageAnalyze
   // and the history handlers — a locked workspace exposes no job (or its answer) over IPC.
-  it('imageGetJob/imageCancel refuse while the workspace is locked', async () => {
+  // #119: imageChooseImage joins them — it is a FILE handler per the module's documented
+  // invariant, and ungated it would pop the OS dialog + bank D2 tokens while locked.
+  it('imageGetJob/imageCancel/imageChooseImage refuse while the workspace is locked', async () => {
     const audit = vi.fn()
     const service = new VisionService({
       getStatus: async () => AVAILABLE,
@@ -432,5 +434,55 @@ describe('vision security sentinel', () => {
 
     await expect(invoke(handlers, IPC.imageGetJob, 'any-job-id')).rejects.toThrow()
     await expect(invoke(handlers, IPC.imageCancel, 'any-job-id')).rejects.toThrow()
+    await expect(invoke(handlers, IPC.imageChooseImage)).rejects.toThrow()
+  })
+
+  // #120 item 2: the history-persistence fields were the module's one UNCLAMPED renderer input.
+  // A compromised renderer (threat #1) sending junk must not store multi-MB titles / NaN
+  // dimensions, and a sessionId that names no existing session must not be trusted for the
+  // append — a fresh session is created instead.
+  it('clamps hostile persistence fields and refuses a forged sessionId (validation clamps)', async () => {
+    const audit = vi.fn()
+    const service = new VisionService({
+      getStatus: async () => AVAILABLE,
+      createRuntime: () => ({
+        analyze: async (o: { onToken?: (d: string) => void }) => {
+          o.onToken?.('an answer')
+          return 'an answer'
+        }
+      })
+    })
+    registerImagesIpc(ctxFor(audit), service)
+
+    const event = makeEvent()
+    const hostile = {
+      ...sentinelReq(),
+      name: 'A'.repeat(2 * 1024 * 1024) + '.png', // multi-MB junk title
+      width: Number.NaN,
+      height: -5,
+      sessionId: 'no-such-session-id' // forged — names no existing row
+    }
+    const initial = (await invokeWithEvent(handlers, IPC.imageAnalyze, event, hostile)) as ImageJob
+    const done = await waitForTerminal(initial.jobId)
+    expect(done.state).toBe('done')
+    // Persistence is async — wait for the streamed done event before inspecting the rows.
+    for (let i = 0; i < 200; i++) {
+      if (event.sender.send.mock.calls.some((c: unknown[]) => c[0] === STREAM.imgDone(initial.jobId))) break
+      await new Promise((r) => setTimeout(r, 5))
+    }
+
+    const list = (await invoke(handlers, IPC.imageListSessions)).result as Array<{
+      id: string
+      title: string
+      width: number | null
+      height: number | null
+      turnCount: number
+    }>
+    expect(list).toHaveLength(1) // a FRESH session — the forged id appended nothing anywhere
+    expect(list[0].id).not.toBe('no-such-session-id')
+    expect(list[0].title.length).toBeLessThanOrEqual(255) // clamped, not multi-MB
+    expect(list[0].width).toBeNull() // NaN coerced to null
+    expect(list[0].height).toBeNull() // negative coerced to null
+    expect(list[0].turnCount).toBe(1)
   })
 })

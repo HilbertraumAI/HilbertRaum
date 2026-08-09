@@ -28,8 +28,10 @@ function stubCreateImageBitmap(width: number, height: number): ReturnType<typeof
   return stub
 }
 
-/** A 24-byte PNG header (signature + IHDR width/height) — what the prescreen parses. */
-function pngHeader(w: number, h: number): Uint8Array {
+/** A 24-byte PNG header (signature + IHDR width/height) — what the prescreen parses.
+ *  (Inferred return type: `Uint8Array<ArrayBuffer>` — the annotation-free form keeps it a
+ *  valid `BlobPart` under TS 5.7's generic TypedArrays.) */
+function pngHeader(w: number, h: number) {
   const b = new Uint8Array(24)
   b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
   const dv = new DataView(b.buffer)
