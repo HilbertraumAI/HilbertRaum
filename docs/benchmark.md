@@ -222,7 +222,10 @@ REAL full-file hash wherever it runs — the cached model-weight path and the do
 verify alike — with a shared `seq` to pair interleaved hashes, `{modelId, file:
 weight|mmproj|download}`, bytes, ms, ok; each real hash also writes one plain `app.log`
 line, visible without the perf log), `sidecar_healthy`, `runtime_selected`,
-`runtime_ready`, `first_token`, `stream_done`, `embedder_selected`, `drive_benchmark`,
+`model_prefetch` (issue #114: one mark per event of the concurrent weight prefetch riding
+the load window — `started`/`skipped`, then the settle outcome `done`/`aborted`/`failed`;
+`started` → settle times the window), `runtime_ready`, `first_token`, `stream_done`,
+`embedder_selected`, `drive_benchmark`,
 and the `ingest_*` phase marks (`start`, `copy_done`, `parse_done`, `chunks_committed`,
 `embed_done`, `indexed`).
 

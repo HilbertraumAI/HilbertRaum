@@ -14,7 +14,8 @@ import type {
 import { createMockRuntime } from './mock'
 import { createLlamaRuntime } from './llama'
 import { probeGpuDevices } from './gpu'
-import { recordModelLoadRead } from '../read-speed'
+import { startModelPrefetch, type ModelPrefetch } from './prefetch'
+import { isNextModelLoadSuppressed, recordModelLoadRead } from '../read-speed'
 import {
   isBindRaceError,
   resolveCpuFallbackServerPath,
@@ -122,6 +123,21 @@ export interface RuntimeSelectionDeps {
   onWarmup?: (opts: RuntimeStartOptions, event: 'done' | 'timeout' | 'failed', detail?: string) => void
   /** Test seam: override the {@link WARMUP_TIMEOUT_MS} cap. */
   warmupTimeoutMs?: number
+  /**
+   * Observability for the #114 concurrent prefetch; never affects control flow.
+   * 'started' = the reader began alongside the first rung's load, 'skipped' = the
+   * weights were just hashed (page-cache-warm — reading them again buys nothing),
+   * 'done' = the reader reached EOF before the load finished, 'aborted' = the load
+   * (or a stop) ended the window first — the normal outcome, 'failed' = a read
+   * error; the load proceeds unassisted.
+   */
+  onPrefetch?: (
+    opts: RuntimeStartOptions,
+    event: 'started' | 'skipped' | 'done' | 'aborted' | 'failed',
+    detail?: string
+  ) => void
+  /** Test seam: override the prefetch reader (default {@link startModelPrefetch}). */
+  makePrefetch?: (paths: string[]) => ModelPrefetch
   /** GPU ladder hooks. Omitted → defaults (gpuMode 'auto', no persistence). */
   gpu?: GpuLadderDeps
 }
@@ -167,6 +183,8 @@ class LadderRuntime implements ModelRuntime {
   private cancelled = false
   /** The rung runtime whose `start()` is currently in flight (CODE-2), if any. */
   private startingInner: ModelRuntime | null = null
+  /** The #114 concurrent prefetch riding the first rung's load window, if any. */
+  private prefetch: ModelPrefetch | null = null
 
   constructor(
     private readonly opts: RuntimeStartOptions,
@@ -177,6 +195,8 @@ class LadderRuntime implements ModelRuntime {
       onSelect?: RuntimeSelectionDeps['onSelect']
       onWarmup?: RuntimeSelectionDeps['onWarmup']
       warmupTimeoutMs: number
+      onPrefetch?: RuntimeSelectionDeps['onPrefetch']
+      makePrefetch: NonNullable<RuntimeSelectionDeps['makePrefetch']>
       gpu: GpuLadderDeps
     }
   ) {
@@ -208,10 +228,29 @@ class LadderRuntime implements ModelRuntime {
       })
       // Visible to stop() so a cancel can reach the in-flight LlamaServer (CODE-2).
       this.startingInner = runtime
+      // #114: concurrent sequential prefetch of the weights, riding the FIRST rung's load
+      // window (a later rung re-reads a file the failed attempt already pulled through the
+      // page cache — prefetching again buys nothing, same reasoning as the #108 sample
+      // rule below). Skipped when the install-state pass just hashed the file (the page
+      // cache is already warm — the same one-shot signal that suppresses the #108 sample,
+      // peeked here without consuming it). Evidence + design record: prefetch.ts header.
+      // Aborted the moment the load window ends (either way), on a CODE-2 stop, and never
+      // awaited — a prefetch failure means the load proceeds unassisted, nothing more.
+      if (rungIndex === 0) {
+        if (isNextModelLoadSuppressed()) {
+          this.deps.onPrefetch?.(this.opts, 'skipped', 'weights just hashed — page-cache-warm')
+        } else {
+          const prefetch = this.deps.makePrefetch(this.opts.weightPaths ?? [this.opts.modelPath])
+          this.prefetch = prefetch
+          this.deps.onPrefetch?.(this.opts, 'started')
+          void prefetch.done.then((outcome) => this.deps.onPrefetch?.(this.opts, outcome))
+        }
+      }
       const loadT0 = performance.now()
       try {
         await runtime.start()
       } catch (err) {
+        this.abortPrefetch()
         this.startingInner = null
         lastError = err
         try {
@@ -234,6 +273,7 @@ class LadderRuntime implements ModelRuntime {
         }
         continue
       }
+      this.abortPrefetch()
       this.startingInner = null
       // #108: the load window just read the model's files start-to-finish — bytes over
       // elapsed is an honest effective media read speed, as a byproduct. FIRST rung of
@@ -242,7 +282,10 @@ class LadderRuntime implements ModelRuntime {
       // install-state pass just hashed the file is suppressed inside read-speed.ts for
       // the same page-cache reason.) Excludes the #109 warm-up (which runs below) and
       // never throws; a mock rung never reaches here. `weightBytes` covers a vision
-      // model's mmproj too — the bare modelPath stat under-counts it.
+      // model's mmproj too — the bare modelPath stat under-counts it. Since #114 the
+      // window is prefetch-assisted — the figure remains the honest effective rate the
+      // user FELT for this load (this module's contract), now closer to what the medium
+      // can actually deliver.
       if (rungIndex === 0) {
         recordModelLoadRead(
           this.opts.modelPath,
@@ -349,9 +392,17 @@ class LadderRuntime implements ModelRuntime {
     }
   }
 
+  /** #114: end the prefetch window. Idempotent; safe when no prefetch ran. */
+  private abortPrefetch(): void {
+    this.prefetch?.abort()
+    this.prefetch = null
+  }
+
   async stop(): Promise<void> {
     // CODE-2: flag first so the walk aborts at the next rung boundary…
     this.cancelled = true
+    // …and the #114 prefetch reader must not keep the drive busy past a stop/lock.
+    this.abortPrefetch()
     // …then unblock an in-flight rung: `LlamaServer.stop()` during `waitForHealthy` makes
     // the readiness loop throw via its exit check (the layer that already worked — this
     // makes it reachable). Best-effort: the walk's catch path re-stops idempotently.
@@ -477,6 +528,8 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
       onSelect: deps.onSelect,
       onWarmup: deps.onWarmup,
       warmupTimeoutMs: deps.warmupTimeoutMs ?? WARMUP_TIMEOUT_MS,
+      onPrefetch: deps.onPrefetch,
+      makePrefetch: deps.makePrefetch ?? startModelPrefetch,
       gpu
     })
   }

@@ -169,7 +169,10 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     contextTokens: launchContextTokens(s, found.manifest),
     // #107/#108: everything the load window reads (a vision model reads its mmproj
     // projector too) — the progress denominator and the read-sample byte count.
-    weightBytes: manifestReadBytes(ctx.paths.rootPath, found.manifest)
+    weightBytes: manifestReadBytes(ctx.paths.rootPath, found.manifest),
+    // #114: the same file set as paths, in load order — the concurrent prefetch
+    // reads them sequentially alongside the first rung's load.
+    weightPaths: manifestFiles(ctx.paths.rootPath, found.manifest).map((f) => f.path)
   })
   perfMark('runtime_ready', {
     modelId,

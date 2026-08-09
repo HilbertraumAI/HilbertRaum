@@ -62,6 +62,13 @@ export interface RuntimeStartOptions {
    * vision loads by the projector's size.
    */
   weightBytes?: number | null
+  /**
+   * Absolute paths of every file the load window reads (the GGUF plus, for a vision
+   * model, its mmproj projector) — the #114 concurrent prefetch reads them sequentially
+   * alongside the first rung's load. Optional — supplied by `startModelRuntime` (which
+   * has the manifest); when absent the ladder prefetches `modelPath` alone.
+   */
+  weightPaths?: string[]
 }
 
 export interface HealthStatus {

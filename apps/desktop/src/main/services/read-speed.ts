@@ -137,6 +137,16 @@ export function suppressNextModelLoadSample(): void {
   suppressNextModelLoad = true
 }
 
+/**
+ * #114: peek — without consuming — whether the next model-load window follows a real
+ * hash. The same fact that makes the load sample dishonest (the file is page-cache-warm)
+ * makes the ladder's concurrent prefetch pointless, so `LadderRuntime.start` skips it.
+ * `recordModelLoadRead` still consumes the flag afterwards.
+ */
+export function isNextModelLoadSuppressed(): boolean {
+  return suppressNextModelLoad
+}
+
 /** Record a completed full-file checksum read (#106 instrumentation feeds this — cold
  *  files only; the download verify is excluded at the call site). */
 export function recordChecksumRead(bytes: number, ms: number, modelId: string | null): void {

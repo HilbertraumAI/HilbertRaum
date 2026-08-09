@@ -96,6 +96,14 @@ first public release. Consciously-accepted gaps are tracked in
   starting" panel shows the model file size and an approximate percentage read
   instead of an indefinite spinner. Fresh installs (no measurement yet) keep the
   plain message rather than showing a made-up number.
+- **Cold model starts are much faster on slow drives** (issue #114). While a
+  model loads, the app now also reads the model file front-to-back in the
+  background, which lines the operating system's file cache up with what the
+  load is about to need. Measured on a 16 GB laptop: a 6.65 GB model from a slow
+  USB stick started in 5:46 instead of 11:20 (−49%), and from a portable SSD in
+  10 s instead of 15 s (−36%). Starts that are already fast stay as they are —
+  the helper is skipped when the file was just verified (its content is already
+  in the cache) and stops the moment the load finishes or is cancelled.
 
 ### Changed
 

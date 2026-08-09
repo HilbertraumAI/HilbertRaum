@@ -261,6 +261,21 @@ function initBackend(): void {
               event,
               detail
             }),
+      // #114: the concurrent sequential prefetch riding the load window. Only a read
+      // failure warns — 'aborted' is the normal outcome (the load finished first), and
+      // none of the events affects the start. The mark pair (started → settle) lets a
+      // HILBERTRAUM_PERF_LOG run time the window offline.
+      onPrefetch: (opts, event, detail) => {
+        perfMark('model_prefetch', { modelId: opts.modelId, event })
+        if (event === 'failed') {
+          log.warn('Model prefetch failed — the load proceeds unassisted', {
+            modelId: opts.modelId,
+            detail
+          })
+        } else {
+          log.info(`Model prefetch ${event}`, { modelId: opts.modelId, ...(detail ? { detail } : {}) })
+        }
+      },
       gpu: {
         ...gpuSignals,
         onGpuFailure: persistGpuFailure,
