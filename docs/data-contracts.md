@@ -82,7 +82,12 @@ ONLY the hidden rasterizer window's preload, never the app bridge.
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
 ('chat' | 'documents') and an optional `scopeDocumentIds` (Phase 17); `Conversation` carries
 `scopeDocumentIds: string[] | null` (additive `conversations.scope_json` column, guarded
-ALTER-TABLE migration in `db.ts`)._
+ALTER-TABLE migration in `db.ts`). **#138 (D-7):** since the document-organization wave it
+ALSO takes `collectionId?: string` (creation anchor) and `scope?: DocumentScope` (the
+composite `scope_v2_json` union — see rag-design §13), with the companions
+`setConversationScope(conversationId, scope | null)`, `setConversationCollection(conversationId,
+collectionId | null)`, and `listAttachments(conversationId): Promise<DocumentInfo[]>` (the
+chat's temporary attachments)._
 
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
@@ -127,7 +132,9 @@ States: `unsupported→missing→checksum_failed→installed` (+`running` overla
 ✅ **`services/runtime/`** — `ModelRuntime` interface + `RuntimeManager` (single active runtime,
 restart on switch) + `MockRuntime` (health ok; `chatStream` stubbed until Phase 3). Factory swap →
 `LlamaRuntime` in Phase 10. `RuntimeStatus` shape per `shared/types.ts`.
-✅ **IPC** `src/main/ipc/registerModelIpc.ts` — `listModels`, `selectModel`, `startRuntime`,
+✅ **IPC** `src/main/ipc/registerModelIpc.ts` — `listModels(lazyVerify?: boolean)` (#138 D-7:
+the RT-3 param — `true` hashes only the active model on a cold cache; the gate-into-chat path
+passes it, the Models screen omits it to hash the full set), `selectModel`, `startRuntime`,
 `stopRuntime`; wired in `initBackend()`. `ctx` now carries `runtime` + `manifestsDir`. Runtime stopped
 on `will-quit`. Preload exposes all four. **Models screen** renders states/license/recommend/verify/
 select/start-stop. Hardware profile now comes from the **persisted Phase-7 benchmark**
@@ -235,7 +242,9 @@ document answers always run balanced (deep-grounded = wave 2).
 - **Stored copy.** Imports are **copied into `workspace/documents/<id><ext>`** (`stored_path`);
   `original_path` is also kept. Self-contained drive: re-index re-parses the stored copy; delete
   removes the stored copy + chunks + embeddings + row (never the original).
-- **Async-with-polling.** `importDocuments(paths)` expands the selection, inserts `queued` rows,
+- **Async-with-polling.** `importDocuments(paths, options?: ImportOptions)` (#138 D-7: `options`
+  carries `destination` — `{ kind: 'conversation', conversationId }` files a chat attachment —
+  and `pickerToken`, the D1 capability below) expands the selection, inserts `queued` rows,
   returns `{ jobId, documentIds }`, then ingests **sequentially in the background**. The
   `documents` table is the per-file source of truth (survives restart); the `ImportJobStatus`
   aggregate is **in-memory** in `registerDocsIpc.ts`, read via `getImportJob(jobId)` (unknown job
@@ -243,6 +252,12 @@ document answers always run balanced (deep-grounded = wave 2).
   every 400 ms while a job runs. No streaming channel is used (ingestion progress is coarse).
 - **Picker.** `pickDocuments('files' | 'folder')` opens the OS dialog in **main**
   (renderer has no dialog access); Windows can't mix file+dir selection, hence the mode.
+  **#138 (D-7):** it returns `PickDocumentsResult` — `{ paths, token }` where `token` is the
+  ONE-TIME picker capability (vuln-scan D1): `importDocuments` resolves a picker import from
+  the token main-side and ignores renderer-supplied paths for that flow.
+- **Mount re-attach (#141/DOC-1).** `getActiveImportJob(): Promise<ImportJobStatus | null>` —
+  parameterless read of the in-flight import (at most one runs), so the Documents screen
+  re-attaches its progress poll on mount (the `getReindexAllJob` recovery pattern).
 - **Documents screen** (`renderer/screens/DocumentsScreen.tsx`): import files/folder, per-file
   status badge + chunk count + size, error surfacing, delete + re-index.
 
@@ -309,7 +324,11 @@ document answers always run balanced (deep-grounded = wave 2).
   degrades to NULL). Undefined on user turns, ordinary answers, and pre-migration rows — an
   older app ignores the column. The renderer's accept action re-runs the turn through the
   EXISTING regenerate path (`askDocuments(conversationId, '', installId, true)`) — no new IPC
-  channel. The composer-picker `SkillSuggestion` contract itself is byte-unchanged.
+  channel. **#138 (D-7): the full live signature is**
+  `askDocuments(conversationId, question, skillInstallId?: string | null, regenerate?: boolean,
+  pinnedDocumentId?: string | null)` — the 5th param (U3/ux-6) pins a documents answer to ONE
+  in-scope document (the routed-run relay passes the run's target); main re-validates it
+  against the resolved scope. The composer-picker `SkillSuggestion` contract itself is byte-unchanged.
 
 ### Hardware benchmark + recommendation (Phase 7 live)
 ✅ **`services/benchmark.ts`** (spec §7.3, §11). Full detail in [`docs/benchmark.md`](benchmark.md).
@@ -1133,6 +1152,67 @@ images wave (issues #117–#124):
   when empty/absent, `null` when unreadable. Surfaced in the Diagnostics "System" card beside
   free space — runaway image-history growth threatens the lock path's re-encrypt free-space
   need, so it must be visible where storage is reported.
+
+### Post-Phase-38 renderer bridge surfaces — backfill (2026-08-09, #138)
+
+Coverage above effectively stopped at Phase 38 + EP-1 + the #80/#107–110/#117–124 bullets;
+the surfaces below shipped without landing here. Each entry states the bridge contract
+(method names + owning types in `shared/types.ts`) and points at the living design record
+that carries the full story — the record stays authoritative for behavior; THIS list is the
+charter-required index so a contributor consulting the declared source of truth sees the
+whole renderer-visible surface.
+
+- **Engine (llama.cpp/whisper.cpp sidecar) downloader** — `getEngineStatus(): Promise<EngineStatus>`
+  (`installed`/`available`/`version`/`backend`/`missingFamilies`), `downloadEngine(): Promise<EngineDownloadJob>`,
+  `getEngineJob(jobId)`, `cancelEngineDownload(jobId)` (a UI caller since #144; `verifying`/
+  `extracting` are cancellable states — F-33). `EngineDownloadJob` =
+  `{ jobId, status: queued|downloading|verifying|extracting|done|failed|cancelled, receivedBytes,
+  totalBytes|null, unverified, binaryPath|null, error|null }`. This doc is the living home of
+  these two types (previously only `docs/packaging.md` + the frozen build-log described them);
+  gating (policy ∧ setting) mirrors the model downloader (Phase 18 above).
+- **Image understanding (vision)** — `imageGetStatus(): Promise<VisionStatus>`,
+  `imageChooseImage()` (opaque token + name + sizeBytes; the path stays in main, D2),
+  `imageReadBytes(token)`, `imageAnalyze(req: ImageAnalyzeRequest): Promise<ImageJob>`,
+  `imageGetJob`/`imageCancel`, per-job streams `onImageToken`/`onImageDone`/`onImageError`,
+  history `listImageSessions`/`getImageSession`/`deleteImageSession`/`clearImageSessions`.
+  Types: `VisionStatus`, `ImageJob`, `ImageSessionSummary`/`ImageSessionDetail`
+  (see also the #117–#124 wave section above). Record: `architecture.md` "Image
+  understanding — design record".
+- **Translate view (text path)** — `translateStart(req: TranslateRequest): Promise<TranslateJob>`,
+  `translateCancel(jobId)`, `getActiveTranslateJob(): Promise<TranslateJob | null>` (remount
+  recovery), streams `onTranslateToken`/`onTranslateDone`/`onTranslateError`. Record:
+  `architecture.md` "Translation sidecar — design record" (TG waves).
+- **Skills surface** — `listSkills`/`getSkill`/`importSkill`/`deleteSkill`/`enableSkill`/
+  `disableSkill`/`getSkillReconcileStatus`, suggestion `suggestSkills(conversationId, question?)`,
+  Tier-2 runs `listRunnableTools(skillInstallId, conversationId): Promise<RunnableToolSet>`
+  (tools + in-scope `documentIds` — resolved at FETCH time, so the renderer re-fetches after a
+  scope write or attach settle, #140), `startSkillRun(req): Promise<StartSkillRunResult>`,
+  `getSkillRun`/`listSkillRuns`/`cancelSkillRun`/`clearSkillRun` (ids/counts-only
+  `SkillRunState`). Record: `architecture.md` Skills records (§42/§44).
+- **Collections CRUD** — `listCollections(): Promise<Collection[]>`, `createCollection(name)`,
+  `renameCollection`, `archiveCollection`, `deleteCollection`, membership
+  `addToCollection`/`removeFromCollection`, lifecycle `setDocumentLifecycle`. Types:
+  `Collection`, `DocumentScope`. Record: rag-design §13 + the document-organization record.
+- **Context compaction reads** — `getConversationContextUsage(conversationId): Promise<ContextUsage>`
+  (`usedTokens`/`window`), `getConversationSummary(conversationId): Promise<ConversationSummaryMarker | null>`,
+  events `onCompaction(conversationId, cb)` (notice kind: 'compaction' | 'analysis') and
+  `onContextUsage(conversationId, cb)` (the real assembled-prompt usage, fired once per turn).
+  Record: architecture.md compaction record.
+- **Stream recovery** — `getActiveStream(conversationId): Promise<ActiveStreamSnapshot | null>`
+  (`content`/`reasoning` accumulated so far) and `listActiveStreamConversations(): Promise<string[]>`
+  — the remount re-attach pair the Chat screen polls (renderer tolerance for transient
+  rejections is #148 CH-4). Record: architecture.md "Chat & streaming".
+- **Bulk re-index** — `startReindexAll(documentIds)`, `getReindexAllJob(): Promise<ReindexJobStatus | null>`
+  (parameterless mount recovery), `cancelReindexAll()`. Type: `ReindexJobStatus`.
+- **Smaller members** (owned here so the index is complete): `exportMessageTable(messageId)`
+  (result-table CSV via save dialog), `previewDocument`/`previewDocumentPage` (bounded pages),
+  `exportSummary(documentId)`, `exportDocumentOriginal(documentId)` (#90 — stored original
+  bytes via save dialog), `exportLog()`/`getLogTail()`, `getDroppedFilePath(file)` (the
+  Electron-37 `webUtils.getPathForFile` bridge — drag-drop path resolution), `perfMark(event)`
+  (one-way, allowlisted timing mark for opt-in measurement runs — no data channel),
+  `onModelVerifyProgress(cb)` (cold-hash progress stream), `onScopeNotice(conversationId, cb)`
+  (filename auto-scope one-shot), `copyToClipboard(text): Promise<boolean>` (main-process
+  clipboard — the renderer's `navigator.clipboard` is denied in the `file://` context).
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |
