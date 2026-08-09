@@ -3603,10 +3603,13 @@ provisioning…", "Skill tool ceiling (Tier-2)"), the **drive layout** in
   per-conversation default (`conversations.active_skill_id`); the per-message glyph marks the answer it
   shaped. Auto-fire is deferred to **S13**, gated on an evaluation harness.
 - **DS17** — app skills are committed to the repo (`app-skills/`, text only) and copied by
-  `prepare-drive` — never network-fetched. **Eight** bundled app skills now ship. Three are **Tier-2**
-  tool references — **`bank-statement`** (the first, `kind: tool`, app-orchestrated tools through the
-  §7 gate), **`invoice`** (the second Tier-2, proving the gate generalizes to a second content class),
-  and **`document-redaction`** (read-transform-export). The rest are **Tier-1 instruction** skills
+  `prepare-drive` — never network-fetched. **Nine** bundled app skills now ship (count corrected
+  2026-08-09, #136/DOC-2 — the prior DOC-106 fix updated drive-layout + README but missed this
+  bullet). Four are **Tier-2** tool references — **`bank-statement`** (the first, `kind: tool`,
+  app-orchestrated tools through the §7 gate), **`invoice`** (the second Tier-2, proving the gate
+  generalizes to a second content class), **`document-redaction`** (read-transform-export), and
+  **`document-edit`** (`kind: tool`, tool `apply_document_edits` — split out so redaction's privacy
+  posture stays untangled; its own record below). The rest are **Tier-1 instruction** skills
   (`kind: instruction`, `allowedTools` empty / `reservesTools` false — they only inject fenced
   guidance): **`meeting-protocol`** (titled *Meeting Minutes*, the Tier-1 reference) plus the
   **Professional Documents** wave — **`contract-brief`**, **`deadline-obligation-finder`**,
