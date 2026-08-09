@@ -21,10 +21,33 @@ export function ImageDropZone({
   const { t } = useT()
   const [dragOver, setDragOver] = useState(false)
 
-  function onDrop(e: DragEvent<HTMLDivElement>): void {
+  // DOC-3 (#143): only a real FILE drag lights up / is accepted — the TranslateDropZone L8
+  // pattern. A text/link/element drag reports its own MIME types (never 'Files') and must not
+  // highlight the zone or be preventDefaulted; its drop would resolve to zero files and be
+  // silently discarded by the screen.
+  function isFileDrag(e: DragEvent<HTMLDivElement>): boolean {
+    return Array.from(e.dataTransfer?.types ?? []).includes('Files')
+  }
+
+  function onDragOver(e: DragEvent<HTMLDivElement>): void {
+    // While busy, or for a non-file drag, do NOT preventDefault — the browser then shows the
+    // OS no-drop cursor and the drop never lands on us (L8), instead of a copy cursor luring
+    // a drop the zone would silently discard mid-analysis.
+    if (busy || !isFileDrag(e)) {
+      e.dataTransfer.dropEffect = 'none'
+      if (dragOver) setDragOver(false)
+      return
+    }
     e.preventDefault()
+    setDragOver(true)
+  }
+
+  function onDrop(e: DragEvent<HTMLDivElement>): void {
     setDragOver(false)
-    if (busy) return
+    // A busy/non-file drop is discarded WITHOUT preventDefault (see onDragOver — such a drop
+    // should not reach us at all; this is the belt-and-braces guard).
+    if (busy || !isFileDrag(e)) return
+    e.preventDefault()
     onDropFiles(Array.from(e.dataTransfer.files))
   }
 
@@ -34,6 +57,7 @@ export function ImageDropZone({
       role="button"
       tabIndex={0}
       aria-label={t('images.drop.title')}
+      aria-disabled={busy || undefined}
       onClick={() => !busy && onChoose()}
       onKeyDown={(e) => {
         if ((e.key === 'Enter' || e.key === ' ') && !busy) {
@@ -41,10 +65,7 @@ export function ImageDropZone({
           onChoose()
         }
       }}
-      onDragOver={(e) => {
-        e.preventDefault()
-        if (!busy) setDragOver(true)
-      }}
+      onDragOver={onDragOver}
       onDragLeave={() => setDragOver(false)}
       onDrop={onDrop}
     >
