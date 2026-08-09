@@ -28,8 +28,13 @@ import { invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
-function ctxFor(unlocked = true): AppContext {
-  return { workspace: { isUnlocked: () => unlocked } } as unknown as AppContext
+function ctxFor(unlocked = true, locking = false): AppContext {
+  // #163 (T-1): carry BOTH halves of `workspaceAdmitsWork` — the production guard is
+  // `isUnlocked() && isLocking?.() !== true` (AUD-02), and stubbing only `isUnlocked` left a
+  // regression back to a bare isUnlocked() check green across the whole suite.
+  return {
+    workspace: { isUnlocked: () => unlocked, isLocking: () => locking }
+  } as unknown as AppContext
 }
 
 const goodReq = (over: Partial<TranslateRequest> = {}): TranslateRequest => ({
@@ -319,13 +324,17 @@ describe('registerTranslateIpc — translate job contract', () => {
 
   it('busy-REJECTS a second start while one is in flight (never queued)', async () => {
     const gated = gatedTranslator()
-    registerTranslateIpc(ctxFor(), service({ translator: gated.translator }))
+    const svc = service({ translator: gated.translator })
+    registerTranslateIpc(ctxFor(), svc)
     const first = (await invoke(handlers, IPC.translateStart, goodReq())).result as TranslateJob
     expect(first.state).toBe('queued')
     const second = (await invoke(handlers, IPC.translateStart, goodReq())).result as TranslateJob
     expect(second.state).toBe('failed')
     expect(second.error).toBe('busy')
+    // #163 (T-9): don't leave the first job running past test end — release the gate AND
+    // await its settle so no stray async work bleeds into later tests.
     gated.release()
+    await vi.waitFor(() => expect(svc.getActiveJob()).toBeNull())
   })
 
   it('refuses while a document task holds the lane (docTaskBusy, D9)', async () => {
@@ -454,6 +463,36 @@ describe('registerTranslateIpc — translate job contract', () => {
     registerTranslateIpc(ctxFor(false), service({ translator: scriptedTranslator() }))
     await expect(invoke(handlers, IPC.translateStart, goodReq())).rejects.toThrow()
   })
+
+  it('#163 (T-1): translateStart refuses an UNLOCKED workspace whose lock teardown is under way (AUD-02)', async () => {
+    // The exact AUD-02 hole: the DB stays open (isUnlocked TRUE) for the whole multi-second
+    // teardown, so a bare isUnlocked() check admits a translate that lazily respawns the ~10 GB
+    // sidecar the teardown just suspended — with the pasted plaintext in its KV cache while the
+    // vault re-encrypts. The guard must be `workspaceAdmitsWork` (isLocking wins).
+    const translator = scriptedTranslator()
+    const spy = vi.spyOn(translator, 'translate')
+    registerTranslateIpc(ctxFor(true, /* locking */ true), service({ translator }))
+    await expect(invoke(handlers, IPC.translateStart, goodReq())).rejects.toThrow()
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('#163 (T-1): the SERVICE-level isWorkspaceLocking refusal (the non-IPC callers\' guard)', async () => {
+    // jobs.ts:105 — never constructed in any test before. The production wiring
+    // (main/index.ts) passes isWorkspaceLocking; a start during the teardown must come back
+    // terminal without touching the sidecar.
+    const translator = scriptedTranslator()
+    const spy = vi.spyOn(translator, 'translate')
+    const svc = new TranslateJobService({
+      getTranslator: () => translator,
+      hasActiveDocTask: () => false,
+      isWorkspaceLocking: () => true
+    })
+    const job = svc.start(goodReq(), { token: () => {}, done: () => {}, error: () => {} })
+    expect(job.state).toBe('failed')
+    expect(job.error).toBe('cancelled') // the documented honest code for the lock terminal
+    expect(spy).not.toHaveBeenCalled()
+    expect(svc.getActiveJob()).toBeNull() // untracked — no slot taken
+  })
 })
 
 // ---- #160: backend hardening (BE-2 timeout classification, BE-3 input cap, BE-4 sync terminal) ----
@@ -562,5 +601,105 @@ describe('#160 — TranslateJobService hardening', () => {
     expect(job.state).toBe('queued')
     await vi.waitFor(() => expect(emittedAfterReturn).not.toBe(null))
     expect(emittedAfterReturn).toBe(true) // pre-fix: false (emitted synchronously inside start)
+  })
+})
+
+// ---- #163 (T-5): TranslateJobService edges — the 'empty' terminal, history eviction, ----
+// ---- and a cancel landing BETWEEN the windows of a multi-window job                  ----
+
+describe('#163 (T-5) — TranslateJobService edges', () => {
+  const silentEmit = () => ({ token: () => {}, done: () => {}, error: () => {} })
+
+  /** Await one job's terminal state via emitter promises (no IPC layer needed). */
+  function startAndWait(
+    svc: TranslateJobService,
+    req: TranslateRequest
+  ): { initial: TranslateJob; terminal: Promise<TranslateJob> } {
+    let resolve!: (j: TranslateJob) => void
+    const terminal = new Promise<TranslateJob>((r) => (resolve = r))
+    const initial = svc.start(req, {
+      token: () => {},
+      done: (_id, job) => resolve(job),
+      error: (_id, job) => resolve(job)
+    })
+    if (initial.state !== 'queued') resolve(initial)
+    return { initial, terminal }
+  }
+
+  it("the 'empty' terminal: windows resolve clean but stream nothing — the job fails 'empty'", async () => {
+    // A translator that RESOLVES non-empty with a clean stop but never calls onToken: every
+    // window passes the clean check while the accumulated job text stays '' — the exact path
+    // the screen's translate.err.empty copy exists for, never driven before.
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 4096,
+      async translate(o) {
+        o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
+        return 'resolved but never streamed'
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    const svc = service({ translator })
+    const { terminal } = startAndWait(svc, goodReq())
+    const job = await terminal
+    expect(job.state).toBe('failed')
+    expect(job.error).toBe('empty')
+  })
+
+  it('history eviction: the job map is bounded at 8 — the oldest terminal job reports the unknown-id shape', async () => {
+    const svc = service({ translator: scriptedTranslator() })
+    const ids: string[] = []
+    for (let i = 0; i < 10; i++) {
+      const { initial, terminal } = startAndWait(svc, goodReq({ text: `Satz ${i}.` }))
+      ids.push(initial.jobId)
+      const done = await terminal
+      expect(done.state).toBe('done')
+    }
+    // TRANSLATE_MAX_JOB_HISTORY = 8: the two oldest jobs were evicted — their poll now returns
+    // the unknown-id terminal shape (failed, error null), while a recent job still reads done.
+    expect(svc.getJob(ids[0])).toEqual({ jobId: ids[0], state: 'failed', error: null })
+    expect(svc.getJob(ids[1])).toEqual({ jobId: ids[1], state: 'failed', error: null })
+    expect(svc.getJob(ids[9]).state).toBe('done')
+  })
+
+  it('a cancel landing BETWEEN windows never starts the next window', async () => {
+    // Two-window paste (two paragraphs over the ctx-1024 budget). The first window cancels the
+    // job as its last act — run()'s post-window abort check must stop the loop before window 2
+    // touches the sidecar (post-suspend that lazy restart would respawn a ~10 GB child).
+    const words = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `${tag}${i}`).join(' ')
+    const text = `${words(120, 'a')}\n\n${words(120, 'b')}`
+    let calls = 0
+    let cancelSelf: () => void = () => {}
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 1024,
+      async translate(o) {
+        calls += 1
+        o.onToken?.('uebersetzt ')
+        o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
+        cancelSelf() // Stop lands while the lane sits between window 1 and window 2
+        return 'uebersetzt '
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    const svc = service({ translator })
+    let sawTerminal = false
+    const job = svc.start(goodReq({ text }), {
+      token: () => {},
+      done: () => {
+        sawTerminal = true
+      },
+      error: () => {
+        sawTerminal = true
+      }
+    })
+    cancelSelf = () => svc.cancel(job.jobId)
+    await vi.waitFor(() => expect(svc.getJob(job.jobId).state).toBe('cancelled'))
+    expect(calls).toBe(1) // window 2 never started
+    expect(sawTerminal).toBe(false) // a user cancel emits neither done nor error
+    expect(svc.getActiveJob()).toBeNull() // the slot was released
+    void silentEmit
   })
 })

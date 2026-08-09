@@ -724,9 +724,11 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
     await rt.translate(translateOpts).catch(() => undefined)
     await rt.translate(translateOpts).catch(() => undefined)
     expect(fallbacks.length).toBe(0) // a port steal is not a device fault (chat REL-1 parity)
-    // LlamaServer itself retries a bind race once on a fresh port → 2 spawns per translate. The
-    // point here: EVERY spawn kept the GPU posture — the CPU rung was never walked, nothing latched.
-    expect(calls.length).toBe(4)
+    // #163 (T-9): the LOAD-BEARING assertions are the device posture + no-latch — every spawn
+    // kept GPU and the CPU rung was never walked. The spawn COUNT is LlamaServer's internal
+    // bind-retry policy (currently one retry → 2 spawns per translate); pin only a lower bound
+    // so a benign retry-policy change can't fail this test for the wrong cause.
+    expect(calls.length).toBeGreaterThanOrEqual(2)
     expect(calls.every((c) => deviceOf(c.args) === 'auto')).toBe(true)
     await rt.stop()
   })
@@ -1013,4 +1015,99 @@ describe('#159 (BE-1) — teardown aborts an in-flight cold start', () => {
     expect(calls[0].args.join(' ')).not.toContain('--device')
     await rt.stop()
   }, 15_000)
+})
+
+// ---- #163 (T-3): the per-request timeout WIRING — generation, not just classification ----
+//
+// `requestTimeoutMs` → combineSignals(opts.signal, timeoutMs) → the /completion fetch. The
+// existing coverage only classified a SCRIPTED TimeoutError; nothing ever drove the runtime
+// into GENERATING one (a wedged sidecar holding the busy lane forever would be invisible to
+// CI), nor proved a settled window's cleared timer can't disturb a later request.
+describe('#163 (T-3) — per-request timeout wiring', () => {
+  it('a wedged /completion (no bytes ever) rejects with the TimeoutError after requestTimeoutMs', async () => {
+    const { spawn } = fakeSpawn()
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/completion')) {
+        // A server that accepted the request and then never responds — reject only when the
+        // combined signal aborts (the real fetch contract).
+        return await new Promise<Response>((_res, rej) => {
+          const sig = init?.signal
+          if (sig?.aborted) return rej(sig.reason)
+          sig?.addEventListener('abort', () => rej(sig.reason))
+        })
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      requestTimeoutMs: 60
+    })
+    const t0 = Date.now()
+    await expect(rt.translate(translateOpts)).rejects.toSatisfy(
+      (e) => e instanceof DOMException && e.name === 'TimeoutError'
+    )
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(50) // the injected bound, not a fluke reject
+    expect(Date.now() - t0).toBeLessThan(5_000) // …and never the 45-min default
+    await rt.stop()
+  })
+
+  it('a settled window clears its timer: a later slow-but-legal window on the SAME caller signal is untouched', async () => {
+    const { spawn } = fakeSpawn()
+    let completions = 0
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/completion')) {
+        completions += 1
+        if (completions === 1) {
+          return { ok: true, status: 200, body: sseBody(COMPLETION_SSE) } as unknown as Response
+        }
+        // The second window streams SLOWLY (two chunks ~30 ms apart — well under its own
+        // 120 ms budget). If the first window's timer had leaked un-cleared, its firing
+        // during this stretch would abort the wrong thing.
+        const bytes = new TextEncoder().encode(COMPLETION_SSE)
+        const half = Math.floor(bytes.length / 2)
+        let step = 0
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (init?.signal?.aborted) return controller.error(init.signal.reason)
+            step += 1
+            if (step === 1) {
+              controller.enqueue(bytes.slice(0, half))
+              return new Promise((r) => setTimeout(r, 30))
+            }
+            if (step === 2) {
+              controller.enqueue(bytes.slice(half))
+              return
+            }
+            controller.close()
+          }
+        })
+        return { ok: true, status: 200, body } as unknown as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      requestTimeoutMs: 120
+    })
+    const caller = new AbortController()
+    await expect(rt.translate({ ...translateOpts, signal: caller.signal })).resolves.toBe(
+      COMPLETION_TEXT
+    )
+    // Sit past the FIRST window's timeout budget — a leaked timer would fire in here.
+    await sleep(150)
+    await expect(rt.translate({ ...translateOpts, signal: caller.signal })).resolves.toBe(
+      COMPLETION_TEXT
+    )
+    await rt.stop()
+  })
 })

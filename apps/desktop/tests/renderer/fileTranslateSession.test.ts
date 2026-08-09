@@ -994,3 +994,43 @@ describe('fileTranslateSession — poll-tick render churn (#165 / P-2)', () => {
     }
   })
 })
+
+// ---- #163 (T-8): picker edges — cancel, multi-pick, and a throwing dialog ----
+
+describe('fileTranslateSession — picker edges (#163 / T-8)', () => {
+  it('a cancelled OS dialog resolves noop and leaves the store untouched', async () => {
+    const api = { ...happyApi(), pickDocuments: vi.fn(async () => ({ token: '', paths: [] as string[] })) }
+    stubApi(api)
+    expect(await translatePickedFile(CHOICE)).toBe('noop')
+    expect(getFileTranslate().state).toBe('idle')
+    expect(api.importDocuments).not.toHaveBeenCalled()
+  })
+
+  it('a multi-path pick is rejected multiDrop before any import', async () => {
+    const api = {
+      ...happyApi(),
+      pickDocuments: vi.fn(async () => ({ token: 'tok1', paths: ['C:\a.pdf', 'C:\b.pdf'] }))
+    }
+    stubApi(api)
+    expect(await translatePickedFile(CHOICE)).toBe('started')
+    const snap = getFileTranslate()
+    expect(snap.state).toBe('failed')
+    expect(snap.error).toBe('multiDrop')
+    expect(api.importDocuments).not.toHaveBeenCalled()
+  })
+
+  it('a THROWING pickDocuments fails importFailed (never an unhandled rejection)', async () => {
+    const api = {
+      ...happyApi(),
+      pickDocuments: vi.fn(async () => {
+        throw new Error('dialog exploded')
+      })
+    }
+    stubApi(api)
+    expect(await translatePickedFile(CHOICE)).toBe('started')
+    const snap = getFileTranslate()
+    expect(snap.state).toBe('failed')
+    expect(snap.error).toBe('importFailed')
+    expect(api.importDocuments).not.toHaveBeenCalled()
+  })
+})

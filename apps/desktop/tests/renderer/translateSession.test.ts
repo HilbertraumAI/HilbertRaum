@@ -545,3 +545,72 @@ describe('translateSession — adoptActiveJob must not re-seed content a lock pu
     expect(getTranslateSession().output).toBe('Teil zwei') // the live stream really is wired
   })
 })
+
+// ---- #163 (T-6): translateSession edges — a REJECTING translateStart, and the stale-token guard ----
+
+describe('translateSession — #163 (T-6) edges', () => {
+  it('a REJECTING translateStart lands the store in failed (never wedged in translating)', async () => {
+    // Only the malformed-RESOLVE sibling (L6b) was tested; an IPC THROW — a destroyed handler,
+    // a serialization fault — must reach `failed` with a dead-safe Stop, not wedge the store
+    // in `translating` forever (TranslateScreen's .then chain has no .catch).
+    stubApi({
+      translateStart: vi.fn(async () => {
+        throw new Error('ipc broke')
+      }),
+      onTranslateToken: vi.fn(() => () => {}),
+      onTranslateDone: vi.fn(() => () => {}),
+      onTranslateError: vi.fn(() => () => {})
+    })
+    const outcome = await translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
+    expect(outcome).toBe('started')
+    const snap = getTranslateSession()
+    expect(snap.state).toBe('failed')
+    expect(snap.error).toBe('runtimeFailed')
+    expect(snap.translating).toBe(false)
+    expect(snap.activeJobId).toBeNull()
+  })
+
+  it('the stale-token guard: a late event for a SUPERSEDED job never mutates the newer session', async () => {
+    // Capture job A's stream callbacks, then supersede A with a fresh translate (job B). A's
+    // late token/done events — a slow IPC hop delivering after the switch — must be ignored
+    // (the wireStream guard keys on snapshot.activeJobId).
+    const callbacks = new Map<string, { token?: (t: string) => void; done?: (j: TranslateJob) => void }>()
+    let nextJob = 'jA'
+    stubApi({
+      translateStart: vi.fn(async () => ({ jobId: nextJob, state: 'queued', text: '' }) as TranslateJob),
+      onTranslateToken: vi.fn((id: string, cb: (t: string) => void) => {
+        callbacks.set(id, { ...callbacks.get(id), token: cb })
+        return () => {}
+      }),
+      onTranslateDone: vi.fn((id: string, cb: (j: TranslateJob) => void) => {
+        callbacks.set(id, { ...callbacks.get(id), done: cb })
+        return () => {}
+      }),
+      onTranslateError: vi.fn(() => () => {}),
+      translateCancel: vi.fn(async () => ({ jobId: 'jA', state: 'cancelled' }) as TranslateJob)
+    })
+
+    await translate({ sourceLang: 'de', targetLang: 'en', text: 'Erster' })
+    expect(getTranslateSession().activeJobId).toBe('jA')
+
+    // Stop A, then start B — the session now belongs to jB.
+    stopActive()
+    nextJob = 'jB'
+    await translate({ sourceLang: 'de', targetLang: 'en', text: 'Zweiter' })
+    expect(getTranslateSession().activeJobId).toBe('jB')
+    const before = getTranslateSession()
+
+    // A's LATE events arrive. The guard must drop them: output untouched, state untouched.
+    callbacks.get('jA')?.token?.('GEISTERTEXT ')
+    callbacks.get('jA')?.done?.({ jobId: 'jA', state: 'done', text: 'GEISTERTEXT' })
+    const after = getTranslateSession()
+    expect(after.output).not.toContain('GEISTERTEXT')
+    expect(after.activeJobId).toBe('jB')
+    expect(after.translating).toBe(true)
+    expect(after.state).toBe(before.state)
+
+    // B's own stream still works.
+    callbacks.get('jB')?.token?.('echt')
+    expect(getTranslateSession().output).toBe('echt')
+  })
+})
