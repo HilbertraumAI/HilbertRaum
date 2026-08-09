@@ -546,7 +546,17 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Four job
   CHANGELOG `[Unreleased]` block (prefixed with the "this download is the app only — models are
   fetched separately" line, which now also points offline installers at the `llama-runtime-*.zip`
   assets), and creates a **DRAFT** GitHub release (`prerelease: true` while 0.x) with everything
-  attached (both runtime zips included).
+  attached (both runtime zips included). **The notes are fully automated below the curated block**,
+  in two appended layers computed against the **latest published release** (drafts don't count, so
+  an abandoned draft folds into the next tag's notes): an **"Issues resolved"** section from
+  [`scripts/release-issues-section.sh`](../scripts/release-issues-section.sh) — compare
+  `PREV...TAG` → each commit's associated PRs (robust against squash AND true merge commits) →
+  each PR's `closingIssuesReferences` (the links GitHub tracks from "Fixes #N" keywords in PR
+  bodies, so those keywords are what feeds the list); then GitHub's **generated notes**
+  (`generate_release_notes: true` — "What's Changed" PR list with authors, "New Contributors",
+  Full Changelog link). The issues step is best-effort: on API failure it warns and the draft is
+  created without the section — notes never block a release build. The script is locally testable:
+  `scripts/release-issues-section.sh HilbertraumAI/HilbertRaum master`.
 
 **The ritual is draft → owner smoke → publish.** The workflow never publishes: the owner downloads
 the draft's artifacts, runs the applicable "Manual pre-ship checklist" below (at minimum item 1 —

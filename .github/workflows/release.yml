@@ -139,6 +139,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write # create the draft release
+      issues: read # enumerate the issues the range's PRs closed (notes section)
+      pull-requests: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Assert tag matches package version
@@ -168,11 +170,30 @@ jobs:
               ' provision a drive up front instead (README step 2). Unsigned build: see the' +
               ' SmartScreen/Gatekeeper notes in docs/troubleshooting.md.\n\n' + body + '\n');
           "
+      - name: Append issues resolved since last published release
+        # GitHub's generated notes (below) list PRs only; this section lists the
+        # ISSUES those PRs closed, from the same PREV baseline. Best-effort: an API
+        # hiccup must never block the release build — the draft's notes can be
+        # hand-edited before publishing.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if bash scripts/release-issues-section.sh "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" > issues-section.md; then
+            cat issues-section.md >> dist/NOTES.md
+          else
+            echo "::warning::Issues-resolved section skipped (release-issues-section.sh failed)"
+          fi
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true
           prerelease: true # while 0.x
           body_path: dist/NOTES.md
+          # Appends GitHub's auto-generated notes AFTER the body above: "What's
+          # Changed" (each merged PR + author), "New Contributors", and the Full
+          # Changelog compare link — computed against the latest PUBLISHED release
+          # at draft-creation time, so an abandoned draft just folds into the next
+          # tag's notes.
+          generate_release_notes: true
           files: |
             dist/HilbertRaum-*
             dist/llama-runtime-mac-arm64.zip
