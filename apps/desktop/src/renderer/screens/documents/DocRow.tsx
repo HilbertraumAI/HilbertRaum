@@ -65,6 +65,7 @@ export const DocRow = memo(function DocRow({
   onMakeSearchable,
   onBuildDeepIndex,
   onExport,
+  setConfirmExportOriginal,
   setAddToProjectFor,
   setProjectModal,
   onKeepInLibrary,
@@ -114,6 +115,9 @@ export const DocRow = memo(function DocRow({
   onMakeSearchable: (d: DocumentInfo) => void
   onBuildDeepIndex: (d: DocumentInfo) => void
   onExport: (d: DocumentInfo) => void
+  /** #90: open the export-original confirm (the encryption-boundary warning dialog) for an
+   *  IMPORTED document — a stable setState setter, like `setConfirmDelete` (PERF-5). */
+  setConfirmExportOriginal: (d: DocumentInfo | null) => void
   setAddToProjectFor: (ids: string[] | null) => void
   setProjectModal: (m: { mode: 'create' | 'rename'; id?: string; name: string } | null) => void
   onKeepInLibrary: (id: string) => void
@@ -424,13 +428,27 @@ export const DocRow = memo(function DocRow({
                   >
                     {t('docs.reindex')}
                   </DropdownMenu.Item>
-                  {d.origin && (
+                  {d.origin ? (
                     <DropdownMenu.Item
                       className="menu-item"
                       disabled={ACTIVE_STATUSES.has(d.status)}
                       onSelect={() => void onExport(d)}
                     >
                       {t('docs.export')}
+                    </DropdownMenu.Item>
+                  ) : (
+                    /* #90: IMPORTED documents export their stored ORIGINAL bytes (any format).
+                       The text "Export" above stays generated-only — its Markdown semantics
+                       serve materialized translations/compare reports; an imported PDF/DOCX/
+                       recording leaves as the original file instead. The screen gates this
+                       behind the encryption-boundary warning ConfirmDialog before the native
+                       save dialog (the review-export §24.3 posture). */
+                    <DropdownMenu.Item
+                      className="menu-item"
+                      disabled={ACTIVE_STATUSES.has(d.status)}
+                      onSelect={() => setConfirmExportOriginal(d)}
+                    >
+                      {t('docs.exportOriginal')}
                     </DropdownMenu.Item>
                   )}
                   {/* Organize (plan §12.3): add to a project, keep in Library, lifecycle,

@@ -12,7 +12,7 @@ import type {
   StartSkillRunResult
 } from '../../shared/types'
 import { buildDocumentSegmentReader, buildOriginalDocumentReader } from './documentSegments'
-import { bomFor } from './save-export'
+import { bomFor, saveBinaryExport } from './save-export'
 import { getLatestUserMessage } from '../services/chat'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -105,22 +105,23 @@ export function registerSkillsIpc(ctx: AppContext): void {
 
   // Phase 9 (D77): the MAIN-side BINARY write for the same-format DOCX export — the `.docx` sibling of
   // `saveTextFile` (a `.docx` source → a `.docx` copy). Identical save-dialog + privacy posture (the path +
-  // bytes are NEVER logged/audited); the only difference is `writeFile` gets a Buffer with no `'utf8'`.
+  // bytes are NEVER logged/audited). #90 hoist: the dialog + write now live in the shared
+  // `saveBinaryExport` (save-export.ts, also serving `docs:exportOriginal`), which upgraded this
+  // export from a plain `writeFile` to the atomic tmp→fsync→rename tail — same dialog, same bytes.
   const saveBinaryFile = async (
     defaultFileName: string,
     content: Uint8Array,
     dialogMeta: SaveFileDialogMeta = SAVE_DIALOG_CSV
   ): Promise<boolean> => {
-    const win = BrowserWindow.getFocusedWindow()
-    const options = {
-      title: tMain(dialogMeta.titleKey),
-      defaultPath: defaultFileName,
-      filters: [{ name: tMain(dialogMeta.filterNameKey), extensions: dialogMeta.extensions }]
-    }
-    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return false
-    await writeFile(result.filePath, content)
-    return true
+    const filePath = await saveBinaryExport(
+      {
+        title: tMain(dialogMeta.titleKey),
+        defaultPath: defaultFileName,
+        filters: [{ name: tMain(dialogMeta.filterNameKey), extensions: dialogMeta.extensions }]
+      },
+      content
+    )
+    return filePath != null
   }
 
   // Phase 9 (D77): probe a document's stored SOURCE format + read its original bytes for the DOCX writer.

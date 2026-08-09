@@ -103,6 +103,9 @@ const REVIEW_SOURCE_SENTINEL = 'XREVSOURCE_SENTINEL_merger-term-sheet'
 // workspace data — as the bare name) must NEVER reach runtime_events; nor may the title,
 // which seeds the suggested name (audit = {reviewId, format} only).
 const REVIEW_EXPORT_PATH_SENTINEL = 'XREVPATH_SENTINEL_private-client-folder'
+// #90: the original-bytes export's chosen destination is user-private (a path can reveal
+// private workstation structure); `document_exported` records the documentId ONLY.
+const DOC_EXPORT_PATH_SENTINEL = 'XDOCPATH_SENTINEL_private-desktop-folder'
 const SENTINELS = [
   CHAT_SENTINEL,
   DOC_SENTINEL,
@@ -112,6 +115,7 @@ const SENTINELS = [
   PASSWORD_SENTINEL,
   PROJECT_SENTINEL,
   FILENAME_SENTINEL,
+  DOC_EXPORT_PATH_SENTINEL,
   REVIEW_TITLE_SENTINEL,
   REVIEWER_SENTINEL,
   REVIEW_NOTE_SENTINEL,
@@ -325,6 +329,23 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     }, 'import job')
     const documentId = job.documentIds[0]
     await invoke(handlers, IPC.reindexDocument, documentId)
+
+    // -- #90: export the imported document's ORIGINAL bytes through the real handler. The
+    // sentinel-named destination and the sentinel filename/title are both user-private:
+    // the sweep below proves neither reached runtime_events, and the metadata pin further
+    // down proves `document_exported` carries the documentId ONLY.
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = join(rootPath, `${DOC_EXPORT_PATH_SENTINEL}.txt`)
+    const { result: originalExportPath } = await invoke(
+      handlers,
+      IPC.exportDocumentOriginal,
+      documentId
+    )
+    expect(originalExportPath).toBeTruthy()
+    // The export really is the stored original (the sentinel body round-trips).
+    expect(readFileSync(join(rootPath, `${DOC_EXPORT_PATH_SENTINEL}.txt`), 'utf8')).toContain(
+      DOC_SENTINEL
+    )
 
     // -- document task (Phase 33): summarize the sentinel-bearing document through the
     // real engine + echo runtime, so the sentinel REALLY flows into the persisted
@@ -606,6 +627,17 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       status: 'indexed',
       chunkCount: expect.any(Number)
     })
+
+    // #90: the original-bytes export event is ids-only — never the title (FILENAME_SENTINEL)
+    // or the chosen destination (DOC_EXPORT_PATH_SENTINEL); both would otherwise leave the
+    // workspace verbatim through the plaintext activity-log export below.
+    const originalExportEvent = listAuditEvents(db, { limit: 5000 }).find(
+      (e) =>
+        e.type === 'document_exported' &&
+        (e.metadata as { documentId?: string } | null)?.documentId === documentId
+    )
+    expect(originalExportEvent).toBeTruthy()
+    expect(originalExportEvent?.metadata).toEqual({ documentId })
 
     // S1: the plaintext activity-log.json export (the exfiltration amplifier) carries no
     // sentinel either — drive the REAL exportAuditLog handler and grep the written file.

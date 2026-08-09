@@ -1430,9 +1430,26 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   Phase-36 size-aware audio confirm); **listing + lifecycle** (`listDocuments`, `deleteDocument`,
   `setDocumentLifecycle`, `addToCollection`/`removeFromCollection`); **single + bulk re-index**
   (`reindexDocument`; `startReindexAll`/`getReindexAllJob`/`cancelReindexAll`); **bounded preview**
-  (`previewDocument`, `previewDocumentPage`); and **export** (`exportDocument`, `exportSummary`).
-  See the "Document organization" §5 IPC table; full pipeline detail lives in
-  [`rag-design.md`](rag-design.md).
+  (`previewDocument`, `previewDocumentPage`); and **export** (`exportDocument`, `exportSummary`,
+  `exportDocumentOriginal`). See the "Document organization" §5 IPC table; full pipeline detail
+  lives in [`rag-design.md`](rag-design.md).
+- **Original-file export (issue #90) — design record.** `docs:exportOriginal` saves a document's
+  stored ORIGINAL bytes — any format — to a user-chosen file. Decisions: (1) a NEW channel, not a
+  widening — `docs:export` stays text-only because the Translate screen shares its
+  save-as-Markdown semantics, and `EXPORTABLE_TEXT_EXTENSIONS` stays its gate; (2) the reader is
+  the existing D77 `readStoredDocumentBytes` (stored `.enc`-aware copy first, `original_path`
+  fallback, decrypt transient shredded in `finally`) — no new byte path; (3) the DocRow menu gate
+  became a deliberate split: generated docs (`d.origin`) keep the text "Export", IMPORTED docs get
+  "Export original file" — before #90 imported documents had NO export action at all (the reported
+  bug); (4) the write is the shared `saveBinaryExport` (`ipc/save-export.ts`), hoisted from
+  `registerSkillsIpc`'s module-local DOCX writer and upgraded to the evidence-pack atomic tail
+  (tmp sibling → fsync → rename), which the skills export now gets too; (5) the byte read holds
+  the `beginDocumentWork` lease (released before the dialog opens) so it cannot interleave with a
+  password-change re-key of the sidecar; (6) consent + boundary per the evidence-pack §24.3
+  posture — renderer ConfirmDialog warning before the native dialog, same copy in the dialog
+  `message`; audit `document_exported` `{documentId}` ONLY. Bulk/multi-select export was
+  deliberately deferred (single document per invocation). Boundary detail:
+  [`security-model.md`](security-model.md) "Document original export boundary (#90)".
 
 ## Audio transcription (Phase 36, wave-3 plan §9)
 
@@ -3499,6 +3516,7 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
 | `skills:pick/preview/import` | OS picker ⇒ path · `(source) ⇒ SkillPreview` (no write) · `(source) ⇒ SkillInfo` (validate→place→DS7) | `registerSkillsIpc.ts` |
 | `skills:export/delete` | save dialog ⇒ `.skill.zip` (package tree only) · default-clear + rm folder — message stamps survive (GAP-1/SKA-38; app skills refuse) | `registerSkillsIpc.ts` |
 | `skills:enable/disable/acknowledgeWarning` | `(installId) ⇒ SkillInfo`; enable enforces one-active-per-id (DS12) | `registerSkillsIpc.ts` |
+| `docs:exportOriginal` (#90) | `(documentId) ⇒ path \| null` — stored ORIGINAL bytes (any format) via save dialog + atomic `saveBinaryExport`; encryption-boundary warning; audit ids-only | `registerDocsIpc.ts` |
 
 Renderer-untrusted inputs are sanitized at the boundary (`sanitizeDestination` ⇒ Library fallback;
 `safeIdArray`). Every channel mirrors 1:1 in `preload/index.ts`. **Smart views** (§7.6) are query-time

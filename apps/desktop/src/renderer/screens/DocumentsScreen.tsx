@@ -163,6 +163,9 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null)
   // Destructive delete goes through a ConfirmDialog (guidelines §6), not browser confirm.
   const [confirmDelete, setConfirmDelete] = useState<DocumentInfo | null>(null)
+  // #90: the export-original target — the encryption-boundary warning ConfirmDialog opens
+  // BEFORE the native save dialog (the review-export §24.3 posture); null = closed.
+  const [confirmExportOriginal, setConfirmExportOriginal] = useState<DocumentInfo | null>(null)
   // Large-audio import confirmation: pending paths + their preflight.
   const [confirmAudio, setConfirmAudio] = useState<{
     paths: string[]
@@ -665,6 +668,17 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     }
   }
 
+  // #90: save an IMPORTED document's stored ORIGINAL bytes (any format) to a user-chosen
+  // file. Reached only through the confirmExportOriginal warning dialog below.
+  async function onExportOriginal(d: DocumentInfo): Promise<void> {
+    setError(null)
+    try {
+      await window.api.exportDocumentOriginal(d.id)
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
   // Derived collections (plan §12) — memoized so the render body (re-run on every 400 ms import
   // poll + every unrelated state change: menu/hover/modal) doesn't re-filter the whole list each
   // time (FE-2). Keyed only on the inputs each derivation actually reads.
@@ -1000,6 +1014,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         onMakeSearchable={handleMakeSearchable}
         onBuildDeepIndex={handleBuildDeepIndex}
         onExport={handleExport}
+        setConfirmExportOriginal={setConfirmExportOriginal}
         setAddToProjectFor={setAddToProjectFor}
         setProjectModal={setProjectModal}
         onKeepInLibrary={handleKeepInLibrary}
@@ -1376,6 +1391,24 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         onCancel={() => setConfirmDelete(null)}
       >
         <p className="hint">{t('docs.deleteConfirm.body')}</p>
+      </ConfirmDialog>
+
+      {/* #90: the encryption-boundary warning gates the original-file export — shown BEFORE
+          the native save dialog on every platform (the review-export §24.3 posture; the same
+          copy also rides the dialog `message` on macOS). */}
+      <ConfirmDialog
+        open={confirmExportOriginal != null}
+        title={t('docs.exportOriginalConfirm.title')}
+        confirmLabel={t('docs.exportOriginal')}
+        t={t}
+        onConfirm={() => {
+          const d = confirmExportOriginal
+          setConfirmExportOriginal(null)
+          if (d) void onExportOriginal(d)
+        }}
+        onCancel={() => setConfirmExportOriginal(null)}
+      >
+        <p className="hint">{t('docs.exportOriginal.warning')}</p>
       </ConfirmDialog>
 
       <ConfirmDialog
