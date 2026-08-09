@@ -50,21 +50,32 @@ if [ -z "$APP" ]; then
   CACHE="$HOME/Library/Caches/HilbertRaum/$(basename "$ZIP" .zip)"
   if [ ! -d "$CACHE" ]; then
     echo "  First run for this version: unpacking the app (about 400 MB, one time)..."
-    rm -rf "$CACHE.partial"
-    mkdir -p "$CACHE.partial"
+    # The partial dir is PID-unique: extraction takes long enough that an impatient
+    # second double-click is likely, and two runs sharing one partial path would
+    # rm -rf each other's in-progress extraction (and could publish a half tree).
+    # Stale partials from killed runs are swept here instead (-f: no-match is fine).
+    rm -rf "$CACHE".partial.*
+    PARTIAL="$CACHE.partial.$$"
+    mkdir -p "$PARTIAL"
     # ditto, not unzip: it is the macOS-native tool that restores the bundle's
     # symlinks, permissions and extended attributes intact.
-    if ! ditto -x -k "$ZIP" "$CACHE.partial"; then
+    if ! ditto -x -k "$ZIP" "$PARTIAL"; then
       echo
       echo "  Could not unpack '$ZIP'."
       echo "  Copy it to your Desktop and double-click it, then see docs/troubleshooting.md."
       echo
-      rm -rf "$CACHE.partial"
+      rm -rf "$PARTIAL"
       exit 1
     fi
     # Only publish the cache once extraction fully succeeded, so an interrupted
-    # first run cannot leave a half-unpacked bundle that looks complete.
-    mv "$CACHE.partial" "$CACHE"
+    # first run cannot leave a half-unpacked bundle that looks complete. If a
+    # parallel launch published first, use its copy (mv onto an existing dir would
+    # nest ours INSIDE it, not replace it).
+    if [ -d "$CACHE" ]; then
+      rm -rf "$PARTIAL"
+    else
+      mv "$PARTIAL" "$CACHE"
+    fi
   fi
 
   for candidate in "$CACHE"/*.app; do
