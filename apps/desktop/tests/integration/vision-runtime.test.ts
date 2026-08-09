@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { VisionRuntime, type VisionAnalyzeOptions } from '../../src/main/services/vision/runtime'
+import {
+  VisionAnalyzeError,
+  VisionRuntime,
+  type VisionAnalyzeOptions
+} from '../../src/main/services/vision/runtime'
 import { VisionService, type VisionStreamEmitter } from '../../src/main/services/vision'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
@@ -198,6 +202,105 @@ describe('VisionRuntime — start + analyze', () => {
     await expect(p).rejects.toThrow(/abort/i)
     expect(seenSignal?.aborted).toBe(true)
     await rt.stop()
+  })
+
+  // #123: the two user-actionable runtime failures used to collapse into the generic
+  // 'runtimeFailed'. The timeout-driven abort (the caller signal did NOT fire, so `combineSignals`'
+  // timeout did) and llama-server's context-exceeded rejection now carry their own codes.
+  it('maps the request-timeout abort to timedOut (#123)', async () => {
+    const { spawn } = fakeSpawn()
+    const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError'))
+        )
+      })
+    }) as typeof fetch
+    const rt = new VisionRuntime({
+      ...base,
+      spawn,
+      fetchImpl: hangingFetch,
+      requestTimeoutMs: 30,
+      idleTimeoutMs: 100_000
+    })
+    const err = (await rt.analyze(analyzeOpts).catch((e) => e)) as VisionAnalyzeError
+    expect(err).toBeInstanceOf(VisionAnalyzeError)
+    expect(err.code).toBe('timedOut')
+    await rt.stop()
+  })
+
+  it('a USER abort is NOT mis-mapped to timedOut (the caller signal fired first)', async () => {
+    const { spawn } = fakeSpawn()
+    let seenSignal: AbortSignal | undefined
+    const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      seenSignal = init?.signal ?? undefined
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError'))
+        )
+      })
+    }) as typeof fetch
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl: hangingFetch, idleTimeoutMs: 100_000 })
+    const controller = new AbortController()
+    const p = rt.analyze({ ...analyzeOpts, signal: controller.signal })
+    while (!seenSignal) await sleep(1)
+    controller.abort()
+    const err = await p.catch((e) => e)
+    expect(err).not.toBeInstanceOf(VisionAnalyzeError) // stays a plain abort → service maps 'cancelled'
+    await rt.stop()
+  })
+
+  it('maps the llama-server context-exceeded rejection to contextExceeded (#123)', async () => {
+    const { spawn } = fakeSpawn()
+    const overflowFetch = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      // The documented b9849 rejection shape (known-limitations "exceed_context_size_error").
+      return {
+        ok: false,
+        status: 400,
+        text: async () =>
+          '{"error":{"code":400,"message":"the request exceeds the available context size","type":"exceed_context_size_error"}}'
+      } as unknown as Response
+    }) as typeof fetch
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl: overflowFetch, idleTimeoutMs: 100_000 })
+    const err = (await rt.analyze(analyzeOpts).catch((e) => e)) as VisionAnalyzeError
+    expect(err).toBeInstanceOf(VisionAnalyzeError)
+    expect(err.code).toBe('contextExceeded')
+    await rt.stop()
+  })
+
+  it('a generic non-OK response stays a plain error (→ runtimeFailed in the service)', async () => {
+    const { spawn } = fakeSpawn()
+    const failingFetch = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      return { ok: false, status: 500, body: null } as unknown as Response
+    }) as typeof fetch
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl: failingFetch, idleTimeoutMs: 100_000 })
+    const err = await rt.analyze(analyzeOpts).catch((e) => e)
+    expect(err).not.toBeInstanceOf(VisionAnalyzeError)
+    expect(String(err)).toContain('HTTP 500')
+    await rt.stop()
+  })
+
+  it('the typed code rides the job to the renderer as job.error (#123, service mapping)', async () => {
+    const service = new VisionService({
+      getStatus: async () => VLM_AVAILABLE,
+      createRuntime: () => ({
+        analyze: async () => {
+          throw new VisionAnalyzeError('timedOut', 'Vision request timed out after 30 ms')
+        }
+      })
+    })
+    const job = await runToTerminal(service, serviceReq())
+    expect(job.state).toBe('failed')
+    expect(job.error).toBe('timedOut')
+    await service.stop()
   })
 
   it('stop() during the in-flight lazy start kills the child (no orphan) and blocks restart', async () => {

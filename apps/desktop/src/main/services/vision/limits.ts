@@ -145,6 +145,9 @@ export function validateAnalyzeRequest(
   // it as undecodable and reject rather than admit unverifiable bytes to the sidecar.
   if (pixels === null) return 'decodeFailed'
   if (pixels > maxPixels) return 'tooLarge'
-  if (typeof question !== 'string' || question.trim() === '') return 'emptyResponse'
+  // #120 item 1: a blank question is an INPUT problem — its own code, not 'emptyResponse'
+  // (whose copy means "the model returned an empty answer"). The renderer pre-guards blank
+  // questions (visionSession `noop`), so this backstop fires only for non-renderer callers.
+  if (typeof question !== 'string' || question.trim() === '') return 'emptyQuestion'
   return null
 }

@@ -2111,6 +2111,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.filterAll': 'Alle Dateien',
   'main.dialog.chooseImage': 'Bild auswählen',
   'main.dialog.filterImages': 'Bilder',
+  // #120 Punkt 4: die IPC-Ablehnungstexte des Bild-Moduls (fast toter Text — der Renderer zeigt
+  // seine eigene Code-Meldung — aber lokalisiert wie das benachbarte main.docs.locked).
+  'main.images.unsupportedType': 'Dieser Dateityp wird nicht unterstützt. Wähle ein PNG oder JPEG.',
+  'main.images.tooLarge': 'Dieses Bild ist zu groß zum Analysieren. Versuch ein kleineres Bild.',
   'main.dialog.importSkill': 'Ein Skill-Paket importieren',
   'main.dialog.importSkillFolder': 'Einen Skill-Ordner importieren',
   'main.dialog.exportSkill': 'Skill exportieren',
@@ -2327,6 +2331,13 @@ export const de: Record<keyof typeof en, string> = {
     'Das KI-Bildmodell konnte nicht starten. Versuch es erneut oder wähle ein anderes Modell.',
   'images.err.emptyResponse':
     'Für dieses Bild kam keine Antwort zurück. Formulier deine Frage anders.',
+  // #120 Punkt 1: eine LEERE Frage ist ein Eingabeproblem, keine leere Modellantwort.
+  'images.err.emptyQuestion': 'Gib zuerst eine Frage zu diesem Bild ein.',
+  // #123: die zwei behebbaren Laufzeitfehler bekommen eigene Hinweise (vorher fielen sie
+  // in die allgemeine runtimeFailed-Meldung).
+  'images.err.timedOut': 'Das dauert zu lange. Versuch ein kleineres Bild oder frag noch einmal.',
+  'images.err.contextExceeded':
+    'Dieses Gespräch ist zu lang für dieses Bild geworden. Stell eine kürzere Frage oder starte eine neue Analyse.',
   'images.err.busy': 'Die vorige Frage wird noch bearbeitet…',
   // full-audit 2026-07-11 CODE-36/34: ein FEHLGESCHLAGENES Öffnen einer gespeicherten Analyse
   // (anders als eine verschwundene, die nur die Liste aktualisiert) und ein fehlgeschlagenes

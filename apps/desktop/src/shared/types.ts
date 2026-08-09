@@ -580,7 +580,13 @@ export type ImageJobState = 'queued' | 'starting' | 'analyzing' | 'done' | 'fail
  * A small enum the renderer maps to friendly localized copy — the technical reason stays in
  * the local log only (the chat `friendlyIpcError` precedent). `decodeFailed` is raised
  * CLIENT-side when `createImageBitmap` throws (corrupt / HEIC-as-jpg / animated-PNG / zero
- * byte). `busy` is a busy-REJECT (never a queue — §9.4).
+ * byte). `busy` is a busy-REJECT (never a queue — §9.4). `timedOut` is the per-request
+ * timeout (the remedy is retry / a smaller image, not "the runtime is broken");
+ * `contextExceeded` is the sidecar's 4096-token context overflowing (ask shorter / start a
+ * fresh analysis); `emptyQuestion` is a blank question (an input problem — distinct from
+ * `emptyResponse`, which means the model returned nothing). Renderers must keep an
+ * unknown-code fallback (AnswerThread falls back to the `runtimeFailed` copy), so adding
+ * codes here stays skew-safe (#123 / #120).
  */
 export type VisionErrorCode =
   | 'tooLarge'
@@ -588,6 +594,9 @@ export type VisionErrorCode =
   | 'decodeFailed'
   | 'runtimeFailed'
   | 'emptyResponse'
+  | 'emptyQuestion'
+  | 'timedOut'
+  | 'contextExceeded'
   | 'cancelled'
   | 'busy'
 

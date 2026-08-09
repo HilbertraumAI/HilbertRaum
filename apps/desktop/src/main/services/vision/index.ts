@@ -5,7 +5,7 @@ import { discoverManifests, mmprojPath, weightPath } from '../models'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
 import { log } from '../logging'
 import { getVisionStatus } from './status'
-import { VisionRuntime } from './runtime'
+import { VisionRuntime, VisionAnalyzeError } from './runtime'
 import { validateAnalyzeRequest, VISION_MAX_IMAGE_BYTES } from './limits'
 
 // Vision job orchestration (image-understanding plan §9.4 / §10 `index.ts`). Owns the
@@ -228,9 +228,10 @@ export class VisionService {
         return
       }
       // The reason is for the local log only (stderr tails, never content); the renderer
-      // gets a friendly code.
+      // gets a friendly code. A runtime failure that knows its own code (#123: timedOut /
+      // contextExceeded) keeps it; everything else stays the generic runtimeFailed.
       log.warn('Vision analyze failed', { jobId, error: String(err) })
-      this.fail(jobId, 'runtimeFailed', emit)
+      this.fail(jobId, err instanceof VisionAnalyzeError ? err.code : 'runtimeFailed', emit)
     } finally {
       // #120 item 3: the busy slot is released HERE — after the (possibly aborted) runtime call
       // fully unwound — never in cancel(), so a new analyze can't run concurrently against the

@@ -43,11 +43,14 @@ import { log } from '../services/logging'
 //     where a code-exec'd renderer (threat #1) could read ANY supported-extension file by
 //     handing back an arbitrary path. The byte cap is re-checked on the open fd (no TOCTOU).
 
+// #120 item 4: the refusal strings are LOCALIZED at throw time (tMain — the sibling
+// `main.docs.locked` precedent), no longer hard-coded English constants. They are near-dead
+// text (the renderer swallows the thrown message and shows its own coded copy) but a caller
+// that surfaces raw IPC errors now sees the user's language.
 /** Friendly refusal for an unsupported picked file (the renderer pre-filters; this is a backstop). */
-export const IMAGE_UNSUPPORTED_MESSAGE =
-  'That file type isn’t supported. Choose a PNG or JPEG.'
+const imageUnsupportedMessage = (): string => tMain('main.images.unsupportedType')
 /** Friendly refusal for an over-cap image. */
-export const IMAGE_TOO_LARGE_MESSAGE = 'That image is too large to analyze. Try a smaller image.'
+const imageTooLargeMessage = (): string => tMain('main.images.tooLarge')
 
 export function registerImagesIpc(ctx: AppContext, service?: VisionService): void {
   const vision =
@@ -144,7 +147,7 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     requireUnlocked()
     const path = consumeImageToken(token)
     if (path === null || !isSupportedImagePath(path)) {
-      throw new Error(IMAGE_UNSUPPORTED_MESSAGE)
+      throw new Error(imageUnsupportedMessage())
     }
     let fh: FileHandle
     try {
@@ -154,7 +157,7 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
       // errno code only. `String(err)` of an fs error embeds the full path; never log that.
       const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined
       log.warn('Vision readBytes open failed', { ext: imageExtensionOf(path), code })
-      throw new Error(IMAGE_UNSUPPORTED_MESSAGE)
+      throw new Error(imageUnsupportedMessage())
     }
     try {
       // PERF-1: read off the main thread with fs/promises (mirrors the ING-8 async conversion in
@@ -162,8 +165,8 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
       // The SEC-3/TOCTOU invariant is unchanged — we fstat THIS handle then read THE SAME handle, so
       // the size guard is authoritative for these exact bytes; a concurrent truncation yields fewer.
       const st = await fh.stat()
-      if (!st.isFile()) throw new Error(IMAGE_UNSUPPORTED_MESSAGE)
-      if (st.size > VISION_MAX_IMAGE_BYTES) throw new Error(IMAGE_TOO_LARGE_MESSAGE)
+      if (!st.isFile()) throw new Error(imageUnsupportedMessage())
+      if (st.size > VISION_MAX_IMAGE_BYTES) throw new Error(imageTooLargeMessage())
       const buf = Buffer.allocUnsafe(st.size)
       let off = 0
       while (off < st.size) {

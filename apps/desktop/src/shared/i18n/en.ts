@@ -2022,6 +2022,10 @@ export const en = {
   'main.dialog.filterAll': 'All files',
   'main.dialog.chooseImage': 'Choose an image',
   'main.dialog.filterImages': 'Images',
+  // #120 item 4: the images IPC refusal backstops (near-dead text — the renderer shows its own
+  // coded copy — but localized like the sibling main.docs.locked).
+  'main.images.unsupportedType': "That file type isn't supported. Choose a PNG or JPEG.",
+  'main.images.tooLarge': 'That image is too large to analyze. Try a smaller image.',
   'main.dialog.importSkill': 'Import a skill package',
   'main.dialog.importSkillFolder': 'Import a skill folder',
   'main.dialog.exportSkill': 'Export skill',
@@ -2252,6 +2256,13 @@ export const en = {
   'images.err.multiDrop': 'Drop one image at a time.',
   'images.err.runtimeFailed': "The vision model couldn't start. Try again, or pick another model.",
   'images.err.emptyResponse': 'No answer came back for that image. Try rephrasing your question.',
+  // #120 item 1: a BLANK question is an input problem, not an empty model answer.
+  'images.err.emptyQuestion': 'Type a question about the image first.',
+  // #123: the two user-actionable runtime failures get their own remedies (they used to
+  // collapse into the generic runtimeFailed copy).
+  'images.err.timedOut': 'This is taking too long. Try a smaller image, or ask again.',
+  'images.err.contextExceeded':
+    'This conversation has grown too long for this image. Ask a shorter question, or start a new analysis.',
   'images.err.busy': 'Working on the previous question…',
   // full-audit 2026-07-11 CODE-36/34: a saved-analysis open that FAILED (vs one that vanished,
   // which just resyncs the list) and a delete that failed — both used to be silent/mislabelled.
