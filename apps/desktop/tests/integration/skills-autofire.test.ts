@@ -21,8 +21,10 @@ import { updateSettings } from '../../src/main/services/settings'
 // Skills S13b — AUTO-FIRE mechanics (skills-s13-plan.md §2.1/§4). Proves the ratified contract:
 //   D4  off by default (the safe-merge property — inert in production) AND app-skills only.
 //   D6  only a skill that declares triggers.autoFire is a candidate.
-//   D2  fire only at AUTOFIRE_SCORE_THRESHOLD (3) — a keyword corroborated by ≥1 doc signal; a lone
-//       keyword (2) or a lone doc signal (≤2) does not auto-fire.
+//   D2  fire only on a keyword corroborated by ≥1 doc signal: AUTOFIRE_SCORE_THRESHOLD (3) PLUS the
+//       #130 doc-signal-required gate (the threshold alone let TWO capped keyword hits — score 4 —
+//       fire doc-less); a lone keyword (2), two keywords with no doc (4), or a lone doc signal (≤2)
+//       does not auto-fire.
 //   D5  never override a sticky default or an explicit per-turn clear — fire ONLY when no skill is set.
 //   §6.5 an enabled-but-incompatible app skill never auto-fires.
 // All deterministic + DB-only (no model, no Electron).
@@ -120,6 +122,41 @@ describe('resolveAutoFireSkill (S13b — the ratified contract)', () => {
     // A conversation with no documents in scope ⇒ keyword-only ⇒ score 2 < 3.
     const conv = createConversation(db, {})
     expect(resolveAutoFireSkill(db, dirs, conv.id, Q_MATCH)).toBeNull()
+  })
+
+  // #130 (skills-pipeline audit ACT-1): the structural hole in the old arithmetic — TWO capped
+  // keyword hits score 4 ≥ 3 with ZERO doc signals, so a doc-less on-topic question silently
+  // auto-fired, bypassing the U4 narrowing on exactly the phrasings the bilingual vocabulary is
+  // built to catch (real shipped repro: meeting-protocol's "meeting minutes" + "agenda"). The D2
+  // contract ("keyword AND a relevant doc deliberately in scope") is now ENFORCED by the
+  // doc-signal-required gate in selectAutoFire, not merely implied by the threshold.
+  it('#130: TWO keyword hits with zero docs in scope (score 4) do NOT auto-fire', () => {
+    const { db, dirs } = envWithAutoFireSkill((dirs) => {
+      writeSkill(dirs.appSkillsDir, 'autominutes', {
+        keywords: ['meeting minutes', 'agenda'],
+        mimeTypes: ['application/pdf'],
+        autoFire: true
+      })
+    })
+    updateSettings(db, { skillsAutoFireEnabled: true })
+    const conv = createConversation(db, {}) // no attachment, no hand-picked document
+    // Two distinct capped hits (score 4) — previously fired despite the empty scope.
+    expect(resolveAutoFireSkill(db, dirs, conv.id, 'write the meeting minutes and the agenda')).toBeNull()
+  })
+
+  it('#130: the SAME two-keyword question WITH a matching doc in scope still fires (no over-tightening)', () => {
+    const { db, dirs } = envWithAutoFireSkill((dirs) => {
+      writeSkill(dirs.appSkillsDir, 'autominutes', {
+        keywords: ['meeting minutes', 'agenda'],
+        mimeTypes: ['application/pdf'],
+        autoFire: true
+      })
+    })
+    updateSettings(db, { skillsAutoFireEnabled: true })
+    const docId = seedIndexedDoc(db, 'protokoll.pdf', 'application/pdf')
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+    const skill = resolveAutoFireSkill(db, dirs, conv.id, 'write the meeting minutes and the agenda')
+    expect(skill?.installId).toBe('app:autominutes')
   })
 
   it('D2: a lone doc signal (no keyword) does NOT auto-fire', () => {

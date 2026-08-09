@@ -223,17 +223,21 @@ export function SkillRunBar({
     if (d?.resultShape === 'redaction' && d.redactionKeys) {
       // 'clean' = nothing detected (a copy was still saved); 'redacted' = N items hidden. The *Floor
       // variants (Phase 7, D78) are the DEGRADED run — the model was unavailable, so only rule-based
-      // detection ran; the copy says so honestly.
+      // detection ran; the copy says so honestly. 'redactedCapped' (#134) = the locate pass hit its
+      // proposal cap on a very large document — detection stopped at the limit; review carefully.
       if (state.resultKind === 'clean') return t(d.redactionKeys.clean)
       if (state.resultKind === 'cleanFloor') return t(d.redactionKeys.cleanFloor)
       if (state.resultKind === 'redactedFloor') return tCount(d.redactionKeys.redactedFloor, count)
+      if (state.resultKind === 'redactedCapped') return tCount(d.redactionKeys.redactedCapped, count)
       return tCount(d.redactionKeys.redacted, count)
     }
     if (d?.resultShape === 'edit' && d.editKeys) {
       // 'none' = nothing matched verbatim (no file written); 'editedPartial' = N applied but some
       // requested text wasn't found and was skipped; 'edited' = N applied, all found (Phase 8, D76/D78).
+      // 'editedCapped' (#134) = the locate pass hit its proposal cap — later places may be unseen.
       if (state.resultKind === 'none') return t(d.editKeys.none)
       if (state.resultKind === 'editedPartial') return tCount(d.editKeys.editedPartial, count)
+      if (state.resultKind === 'editedCapped') return tCount(d.editKeys.editedCapped, count)
       return tCount(d.editKeys.edited, count)
     }
     return tCount(d?.doneKey ?? 'chat.skill.run.done', count)
@@ -270,6 +274,12 @@ export function SkillRunBar({
             : ('chat.skill.confirm.outputText' as const)
         })()
       : null
+
+  // #129: the redaction confirm carries an explicit SCOPE line — what automatic masking does NOT
+  // reach (pictures/scanned pages, embedded objects) — so the same-format export never implies
+  // whole-file redaction. Text parts + metadata ARE covered since #129; this names the residuals.
+  const confirmScopeKey: MessageKey | null =
+    confirmTool && confirmTool.name === 'redact_document' ? 'chat.skill.confirm.redactionScope' : null
 
   const onClickTool = (tool: RunnableTool): void => {
     if (tool.requiresConfirmation) setConfirmTool(tool)
@@ -385,6 +395,7 @@ export function SkillRunBar({
         >
           {t('chat.skill.confirm.body')}
           {confirmFormatKey && <p className="hint skill-confirm-format">{t(confirmFormatKey)}</p>}
+          {confirmScopeKey && <p className="hint skill-confirm-format">{t(confirmScopeKey)}</p>}
         </ConfirmDialog>
       </div>
     )

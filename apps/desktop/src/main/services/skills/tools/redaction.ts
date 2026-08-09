@@ -12,7 +12,7 @@ import {
   type ReplacementStrategy,
   type TransformSpan
 } from './span-transform'
-import type { LocateCategory, LocatedEntity } from './redaction-locate'
+import { MAX_LOCATED_ENTITIES, type LocateCategory, type LocatedEntity } from './redaction-locate'
 
 // Re-exported so callers migrating to the shared strategy vocabulary import it from one place.
 export type { ReplacementStrategy } from './span-transform'
@@ -512,7 +512,9 @@ export const MIN_ENTITY_CHARS = 3
 
 /** The fixed token each located category masks to under `token` strategy (the `perChar` strategy uses
  *  `█` regardless — see replacementText). Like the regex tokens they carry no digit/@/scheme, so the
- *  regex floor never re-matches inside a masked span (idempotent). */
+ *  email/IBAN/card/date/phone floors never re-match inside a masked span. URL_RE is the one exception
+ *  (#128): its negated class matches mask characters, so a URL containing a masked span re-matches as
+ *  a WIDER span — resolved by the perChar union resolution in `redactWithEntities`. */
 export const MASK_ENTITY_TOKENS: Record<LocateCategory, string> = {
   name: '[NAME]',
   address: '[ADDRESS]',
@@ -599,6 +601,31 @@ export function redactWithEntities(
   const swept = applySpans(input, spans)
   const entityMaskCount = swept.applied.length
   const floor = redactText(swept.text, strategy)
+  if (strategy === 'perChar') {
+    // The DOCX writer's span set (Phase 9): the APPLIED entity spans (verified against pristine `input`)
+    // ∪ the floor spans (matched over the entity-masked text) — under `perChar` both address `input`
+    // (same-length masks). The union is NOT disjoint by construction (#128): URL_RE's negated character
+    // class matches the █ mask (U+2588), so a floor URL span can CONTAIN an earlier-pass email mask or
+    // a swept entity mask (a URL with an embedded e-mail — the only overlap class; every other detector
+    // is a positive class that cannot match █, and a URL match can neither start nor end mid-mask, so
+    // overlaps are always containment). Resolve through the SAME `applySpans` overlap rule the .txt
+    // path applies: the outer mask wins, contained spans drop — the writer set is genuinely disjoint,
+    // `applySpans(input, resolved.applied).text === floor.text` actually holds, and `totalRedactions`
+    // counts masked REGIONS (a nested email-in-URL is ONE item hidden, not two).
+    const resolved = applySpans(input, [...swept.applied, ...floor.spans])
+    return {
+      text: floor.text,
+      counts: floor.counts,
+      entityCounts,
+      entityMaskCount,
+      droppedEntities: dropped,
+      totalRedactions: resolved.applied.length,
+      spans: resolved.applied
+    }
+  }
+  // 'token': the per-pass mask lengths differ, so the accumulated spans are per-pass coordinates and
+  // NOT a coherent single-coordinate set (see RedactWithEntitiesResult.spans) — no overlap resolution
+  // is possible here. Token callers use `.text`/`.counts` only; the DOCX branch is always perChar.
   return {
     text: floor.text,
     counts: floor.counts,
@@ -606,10 +633,6 @@ export function redactWithEntities(
     entityMaskCount,
     droppedEntities: dropped,
     totalRedactions: floor.totalRedactions + entityMaskCount,
-    // The DOCX writer's span set (Phase 9): the APPLIED entity spans (verified against pristine `input`)
-    // ∪ the floor spans (matched over the entity-masked text). Under `perChar` both address `input`
-    // (same-length masks) and are mutually disjoint — the floor cannot re-match inside a █ entity mask —
-    // so `applySpans(input, spans).text === floor.text`. See RedactWithEntitiesResult.spans.
     spans: [...swept.applied, ...floor.spans]
   }
 }
@@ -681,7 +704,8 @@ export const redactDocumentTool: SkillTool = {
       strategy: { type: 'string', enum: ['token', 'perChar'] },
       entities: {
         type: 'array',
-        maxItems: 4096,
+        maxItems: MAX_LOCATED_ENTITIES, // == the locate pass's collection cap (#134) — never overflows
+
         items: {
           type: 'object',
           additionalProperties: false,

@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
-import { readDocxTextLayer, applySpansToDocx } from '../../src/main/services/export/docx-rewrite'
+import {
+  readDocxTextLayer,
+  readDocxRedactionLayers,
+  applySpansToDocx,
+  applySpansToDocxParts
+} from '../../src/main/services/export/docx-rewrite'
+import { makeDocx, docxPartText } from '../helpers/docx'
 import type { TransformSpan } from '../../src/main/services/skills/tools/span-transform'
 
 // Same-format DOCX export unit tests (beta-feedback-2026-07 Phase 9, #22/#23, D77; architecture.md
@@ -144,6 +150,63 @@ describe('docx-rewrite — applySpansToDocx', () => {
   })
 })
 
+// #128 (skills-pipeline audit 2026-08-09, RUN-1): the redaction span union is NOT always disjoint —
+// URL_RE matches the █ mask character (U+2588 is neither whitespace nor in its excluded set), so a
+// floor URL span can CONTAIN an earlier-pass email mask or a swept entity mask. `rewriteNodeText`'s
+// cursor walk assumed disjoint spans: a contained span re-emitted its replacement AND rewound the
+// cursor to its own end, so the closing slice re-emitted the OUTER masked span's tail in CLEARTEXT
+// (plus duplicate mask glyphs). The writer now drops any span overlapping an already-applied one —
+// the same deterministic rule as span-transform's `applySpans` (the .txt path, which was always safe).
+describe('docx-rewrite — overlapping spans are dropped, never re-emitted (#128)', () => {
+  const URL = 'https://x.co/?e=a@b.co&l=de'
+  const NESTED_XML =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' +
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+    '<w:p><w:r><w:t xml:space="preserve">See https://x.co/?e=a@b.co&amp;l=de ok</w:t></w:r></w:p>' +
+    '</w:body></w:document>'
+
+  async function makeNestedDocx(): Promise<Buffer> {
+    const zip = new JSZip()
+    zip.file('[Content_Types].xml', CONTENT_TYPES)
+    zip.file('_rels/.rels', RELS)
+    zip.file('word/document.xml', NESTED_XML)
+    return zip.generateAsync({ type: 'nodebuffer' })
+  }
+
+  it('a span CONTAINED in an earlier one leaks no cleartext and inflates no length', async () => {
+    const bytes = await makeNestedDocx()
+    const { text } = await readDocxTextLayer(bytes)
+    expect(text).toBe(`See ${URL} ok\n`)
+    // The audit's traced pair: URL span [4, 4+27) fully containing the email span [21, 27).
+    const urlSpan: TransformSpan = {
+      start: text.indexOf('https'),
+      length: URL.length,
+      replacement: '█'.repeat(URL.length)
+    }
+    const emailSpan: TransformSpan = { start: text.indexOf('a@b.co'), length: 6, replacement: '██████' }
+    const out = await applySpansToDocx(bytes, [urlSpan, emailSpan])
+    const layer = await readDocxTextLayer(out)
+    // The whole URL region is one mask: no `&l=de` tail in cleartext, no extra mask glyphs.
+    expect(layer.text).toBe(`See ${'█'.repeat(URL.length)} ok\n`)
+    expect(layer.text).not.toContain('&l=de')
+    expect(layer.text).not.toContain('a@b.co')
+  })
+
+  it('span order in the input does not matter (the writer sorts, then drops overlaps)', async () => {
+    const bytes = await makeNestedDocx()
+    const { text } = await readDocxTextLayer(bytes)
+    const urlSpan: TransformSpan = {
+      start: text.indexOf('https'),
+      length: URL.length,
+      replacement: '█'.repeat(URL.length)
+    }
+    const emailSpan: TransformSpan = { start: text.indexOf('a@b.co'), length: 6, replacement: '██████' }
+    const out = await applySpansToDocx(bytes, [emailSpan, urlSpan])
+    const layer = await readDocxTextLayer(out)
+    expect(layer.text).toBe(`See ${'█'.repeat(URL.length)} ok\n`)
+  })
+})
+
 // F-11 (audit 2026-07-16): a SELF-CLOSING `<w:t …/>` (attribute-bearing empty node — Apache POI /
 // lxml-style OOXML producers emit these for empty runs; Word itself rarely does) used to be read as an
 // OPENING tag: `(?:\s[^>]*)?` consumed the trailing `/`, and the lazy body then swallowed every
@@ -207,5 +270,94 @@ describe('docx-rewrite — self-closing <w:t …/> nodes (F-11)', () => {
     const { text, nodes } = await readDocxTextLayer(bytes)
     expect(text).toBe('Tail\n')
     expect(nodes).toHaveLength(1)
+  })
+})
+
+// #129 (skills-pipeline audit 2026-08-09, RUN-2): the D77 rewrite touched ONLY `word/document.xml`
+// `<w:t>` nodes — every other zip part was copied byte-identical AS A FEATURE, so a "redacted" copy
+// still carried unmasked PII in headers/footers (letterhead), footnotes, comments, tracked-changes
+// DELETED text (`<w:delText>` inside document.xml itself), field instructions (`<w:instrText>`),
+// hyperlink targets (`word/_rels/document.xml.rels` — masking the display text left the `mailto:`),
+// author metadata (`docProps/core.xml`, `w:author`/`w:initials` attributes). The redaction walk now
+// covers every WordprocessingML text part + delText/instrText, and scrubs the metadata carriers. The
+// EDIT path deliberately keeps the body-only `<w:t>` walk (edits are targeted changes, not
+// anonymization) — pinned in the integration suite.
+describe('docx-rewrite — the #129 redaction parts walk', () => {
+  it('readDocxRedactionLayers lists document.xml FIRST, then every other WML text part', async () => {
+    const bytes = await makeDocx(['Body text.'], {
+      headers: ['ACME letterhead'],
+      footers: ['Footer line'],
+      footnotes: ['A footnote'],
+      comments: ['A comment']
+    })
+    const parts = await readDocxRedactionLayers(bytes)
+    expect(parts[0].path).toBe('word/document.xml')
+    expect(parts.map((p) => p.path).sort()).toEqual(
+      ['word/comments.xml', 'word/document.xml', 'word/footer1.xml', 'word/footnotes.xml', 'word/header1.xml'].sort()
+    )
+    expect(parts[0].text).toBe('Body text.\n')
+    expect(parts.find((p) => p.path === 'word/header1.xml')!.text).toBe('ACME letterhead\n')
+  })
+
+  it('tracked-changes <w:delText> and <w:instrText> content is IN the redaction layer', async () => {
+    const bytes = await makeDocx(['Visible text.'], {
+      trackedDeletion: { text: 'Jane Doe must go' },
+      fieldInstruction: 'MERGEFIELD ClientName'
+    })
+    const parts = await readDocxRedactionLayers(bytes)
+    const body = parts[0].text
+    expect(body).toContain('Jane Doe must go')
+    expect(body).toContain('MERGEFIELD ClientName')
+    // The plain (edit-path) layer keeps its narrower <w:t>-only contract — deleted text stays out.
+    const editLayer = await readDocxTextLayer(bytes)
+    expect(editLayer.text).not.toContain('Jane Doe must go')
+    expect(editLayer.text).not.toContain('MERGEFIELD')
+  })
+
+  it('applySpansToDocxParts splices spans into a header part (letterhead masking)', async () => {
+    const bytes = await makeDocx(['Body.'], { headers: ['Dr. Jane Doe, Kanzlei'] })
+    const parts = await readDocxRedactionLayers(bytes)
+    const header = parts.find((p) => p.path === 'word/header1.xml')!
+    const at = header.text.indexOf('Jane Doe')
+    const out = await applySpansToDocxParts(bytes, [
+      { path: header.path, spans: [{ start: at, length: 8, replacement: '████████' }] }
+    ])
+    const headerXml = await docxPartText(out, 'word/header1.xml')
+    expect(headerXml).not.toContain('Jane Doe')
+    expect(headerXml).toContain('████████')
+    // The body part is untouched.
+    expect(await docxPartText(out, 'word/document.xml')).toContain('Body.')
+  })
+
+  it('scrubMetadata empties creator/lastModifiedBy, author attributes, and external link targets', async () => {
+    const bytes = await makeDocx(['See the link.'], {
+      hyperlink: { display: 'write me', target: 'mailto:jane.doe@example.com' },
+      trackedDeletion: { text: 'gone', author: 'Jane Doe' },
+      comments: ['check this'],
+      commentAuthor: 'Jane Doe',
+      creator: 'Jane Doe'
+    })
+    const out = await applySpansToDocxParts(bytes, [], { scrubMetadata: true })
+    const core = await docxPartText(out, 'docProps/core.xml')
+    expect(core).toContain('<dc:creator></dc:creator>')
+    expect(core).not.toContain('Jane Doe')
+    const rels = await docxPartText(out, 'word/_rels/document.xml.rels')
+    expect(rels).not.toContain('mailto:jane.doe@example.com')
+    expect(rels).toContain('about:blank')
+    // The document rel (internal, no TargetMode="External") is untouched.
+    const rootRels = await docxPartText(out, '_rels/.rels')
+    expect(rootRels).toContain('word/document.xml')
+    // Author/initials attributes are emptied wherever they appear.
+    expect(await docxPartText(out, 'word/document.xml')).not.toContain('Jane Doe')
+    const comments = await docxPartText(out, 'word/comments.xml')
+    expect(comments).not.toContain('w:author="Jane Doe"')
+    expect(comments).toContain('check this') // the comment TEXT is the parts walk's job, not the scrub's
+  })
+
+  it('without scrubMetadata (the edit path) every untouched part stays byte-identical', async () => {
+    const bytes = await makeDocx(['Body line.'], { creator: 'Jane Doe', headers: ['ACME'] })
+    const out = await applySpansToDocxParts(bytes, [])
+    expect(await docxPartText(out, 'docProps/core.xml')).toContain('Jane Doe')
+    expect(await docxPartText(out, 'word/header1.xml')).toContain('ACME')
   })
 })

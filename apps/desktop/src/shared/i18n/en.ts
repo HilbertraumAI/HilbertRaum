@@ -227,6 +227,9 @@ export const en = {
   'chat.skill.offer.lead': 'This looks like a job for a skill.',
   'chat.skill.offer.run': 'Run “{title}” for this question',
   'chat.skill.offer.model': 'Suggested by the local model',
+  // #132: the offered skill was disabled/removed after the offer was made — the button disables with
+  // this honest tooltip instead of silently re-answering without the skill.
+  'chat.skill.offer.unavailable': 'This skill is disabled or was removed — enable it under Skills to run it.',
   // U3 (audit §4.3): a pick applies PER-TURN by default now — the persistent composer chip's × clears
   // both the session pick and any saved default, and the in-picker checkbox is the explicit opt-in to
   // persist the pick as this conversation's default. Nothing is silently kept across turns any more.
@@ -298,6 +301,11 @@ export const en = {
   'chat.skill.run.done.redactedFloor.one': 'Saved a redacted copy — {count} item hidden (offline rule-based detection only, no model running). Review it before sharing.',
   'chat.skill.run.done.redactedFloor.other': 'Saved a redacted copy — {count} items hidden (offline rule-based detection only, no model running). Review it before sharing.',
   'chat.skill.run.done.redactedCleanFloor': 'No personal data was detected (offline rule-based detection only, no model running); saved a copy. Review it before sharing.',
+  // #134: the locate pass hit its proposal cap — a very large document; detection stopped at the limit.
+  'chat.skill.run.done.redactedCapped.one':
+    'Saved a redacted copy — {count} item hidden. This document is very large, so automatic detection stopped at its limit and later items may be unmasked — review the whole copy before sharing.',
+  'chat.skill.run.done.redactedCapped.other':
+    'Saved a redacted copy — {count} items hidden. This document is very large, so automatic detection stopped at its limit and later items may be unmasked — review the whole copy before sharing.',
   // Phase 8 (D76/D78): targeted edits — N changes applied (all found), a partial variant when some
   // requested text wasn’t found and was skipped, and the no-match case (nothing written). Counts only.
   'chat.skill.run.done.edited.one': 'Applied {count} change and saved an edited copy. Review it before sharing.',
@@ -305,6 +313,11 @@ export const en = {
   'chat.skill.run.done.editedPartial.one': 'Applied {count} change; some requested text wasn’t found and was skipped. Saved an edited copy — review it before sharing.',
   'chat.skill.run.done.editedPartial.other': 'Applied {count} changes; some requested text wasn’t found and was skipped. Saved an edited copy — review it before sharing.',
   'chat.skill.run.done.editedNone': 'None of the requested text was found — nothing was changed and no copy was saved.',
+  // #134: the locate pass hit its proposal cap — later places to change may never have been seen.
+  'chat.skill.run.done.editedCapped.one':
+    'Applied {count} change. This document is very large, so the search for places to change stopped at its limit — review the copy; later places may be unchanged.',
+  'chat.skill.run.done.editedCapped.other':
+    'Applied {count} changes. This document is very large, so the search for places to change stopped at its limit — review the copy; later places may be unchanged.',
   'chat.skill.run.failedGeneric': "That didn't work. Nothing was changed.",
   'chat.skill.run.error.unavailable': 'This tool isn’t available.',
   'chat.skill.run.error.needsExtraction': 'Read the document first with the “{button}” button, then run this tool.',
@@ -333,6 +346,10 @@ export const en = {
   // save dialog. Derived from the selected target's extension (mirrors main's source-format probe);
   // the matrix line is the no-known-target fallback.
   'chat.skill.confirm.outputDocx': 'The saved copy keeps this document’s Word format (.docx).',
+  // #129: the redaction scope line — names what automatic masking cannot reach, so the same-format
+  // export never implies whole-file redaction.
+  'chat.skill.confirm.redactionScope':
+    'Masking covers the document’s text (including headers, footers, footnotes, comments, and tracked changes) and clears author metadata and link targets. Pictures, scanned pages, and embedded objects are not checked — review the saved copy before sharing.',
   'chat.skill.confirm.outputText':
     'The saved copy will be plain text (.txt) — the original layout and formatting are not kept.',
   'chat.skill.confirm.outputMatrix':
@@ -1883,6 +1900,11 @@ export const en = {
   'main.chat.streamError':
     'The AI model ran into an error before finishing the answer. Try again — if it keeps happening, restart the model on the AI Model screen.',
   'main.chat.nothingToRegenerate': 'Nothing to regenerate yet.',
+  // #132: an EXPLICIT per-turn skill id (an offer click / composer pick) that no longer resolves
+  // refuses instead of silently re-answering without the skill (the graceful-null is for sticky
+  // defaults only, §10.3).
+  'main.chat.skillUnavailable':
+    'This skill is no longer available — it was disabled or removed. Enable it under Skills, or ask again without it.',
   // AUD-01: re-answering a turn DELETES the previous assistant reply, and the message foreign
   // key cascades that delete through the reply's whole evidence review — decisions, notes,
   // links, export history — none of which the restore snapshot carries. The turn is refused

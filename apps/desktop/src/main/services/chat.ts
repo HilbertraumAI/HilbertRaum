@@ -872,6 +872,10 @@ export interface DeletedMessage {
   readonly kind: string | null
   readonly coversThroughRowid: number | null
   readonly truncated: number | null
+  /** #132/#135 (skills-pipeline audit): the persisted per-answer skill OFFER (#80). Omitting it from
+   *  the snapshot silently stripped the offer row on BOTH restore legs (F2 + CB-2) — the exact class
+   *  the result-table capture below exists for. */
+  readonly skillOfferJson: string | null
   /** The message's result tables, oldest-first. Empty for the common table-less answer. */
   readonly resultTables: readonly DeletedResultTable[]
 }
@@ -890,6 +894,7 @@ interface DeletedMessageRow {
   kind: string | null
   covers_through_rowid: number | null
   truncated: number | null
+  skill_offer_json: string | null
 }
 
 interface ResultTableRow {
@@ -962,7 +967,8 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
   const row = db
     .prepare(
       `SELECT id, conversation_id, role, content, created_at, token_count, citations_json,
-              skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated
+              skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated,
+              skill_offer_json
        FROM messages WHERE conversation_id = ? AND kind IS NOT 'compaction'
        ORDER BY created_at DESC, rowid DESC LIMIT 1`
     )
@@ -990,6 +996,7 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
     kind: row.kind,
     coversThroughRowid: row.covers_through_rowid,
     truncated: row.truncated,
+    skillOfferJson: row.skill_offer_json,
     resultTables: tableRows.map((t) => ({
       id: t.id,
       messageId: t.message_id,
@@ -1023,8 +1030,9 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     db,
     `INSERT INTO messages
        (id, conversation_id, role, content, created_at, token_count, citations_json,
-        skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated,
+        skill_offer_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     m.id,
     m.conversationId,
@@ -1038,7 +1046,8 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     m.coverageJson,
     m.kind,
     m.coversThroughRowid,
-    m.truncated
+    m.truncated,
+    m.skillOfferJson
   )
   if (m.resultTables.length === 0) return
   try {

@@ -430,6 +430,40 @@ describe('document-edit — Phase 9 same-format DOCX export (D77)', () => {
     for (const [path, b64] of before) expect(after.get(path), `${path} byte-identical`).toBe(b64)
   })
 
+  // #129 decision pin: the EDIT walk stays body-only `<w:t>` and never scrubs metadata — an edit is a
+  // user-directed change to the visible text, not an anonymization sweep. Headers/docProps carrying
+  // names survive an edit byte-identical (the REDACTION walk is where #129's privacy sweep lives).
+  it('#129: an edit leaves headers and docProps byte-identical (no privacy sweep on the edit path)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, 'ignored — the DOCX branch reads the injected original bytes')
+    const original = await makeDocx(['Der Vertreter kennt den Fall.'], {
+      headers: ['Kanzlei Jane Doe'],
+      creator: 'Jane Doe'
+    })
+    const { audit } = capturingAudit()
+    const runtime = scriptedRuntime(() =>
+      JSON.stringify({ edits: [{ line: 1, find: 'Vertreter', occurrence: 1, replace: 'Anwalt' }] })
+    )
+    let savedBinary: Uint8Array | null = null
+    const res = await runDocumentEdit(db, { skillInstallId: skillInstall, documentId: docId }, {
+      audit,
+      confirmed: true,
+      runtime,
+      instruction: 'replace Vertreter with Anwalt',
+      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: original }),
+      saveBinaryFile: async (_name, bytes) => {
+        savedBinary = bytes
+        return true
+      },
+      saveTextFile: async () => true
+    })
+    expect(res.ok).toBe(true)
+    const before = await otherDocxParts(original)
+    const after = await otherDocxParts(savedBinary!)
+    expect(after.get('word/header1.xml')).toBe(before.get('word/header1.xml'))
+    expect(after.get('docProps/core.xml')).toBe(before.get('docProps/core.xml'))
+  })
+
   it('source-format branch: a non-DOCX source keeps the unchanged .txt path (no binary write)', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, 'Der Vertreter kennt den Fall.')

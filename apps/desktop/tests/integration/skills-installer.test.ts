@@ -501,6 +501,39 @@ describe('import → install (DS7 enabled-with-warning, folder named by id)', ()
     expect(existsSync(join(deps.userSkillsDir, 'wrapped', 'SKILL.md'))).toBe(true)
   })
 
+  // #131 (skills-pipeline audit ACT-2): macOS Finder's "Compress" adds `__MACOSX/…/._*` AppleDouble
+  // mirrors (and often a `.DS_Store`). Those members are dot-segment — the staging loop skips them
+  // as "not package content" (SKA-34) — yet they used to feed `stripCommonPrefix`, defeating the
+  // shared-prefix detection: `SKILL.md` staged as `<folder>/SKILL.md` and a perfectly valid package
+  // failed with the misleading "does not contain a SKILL.md file." The strip now sees package
+  // content only. This was the whole community skill-sharing path for the most common macOS flow.
+  it('#131: a Finder-style zip (__MACOSX mirrors + .DS_Store) imports like a clean wrapped zip', async () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    const zip = await writeZip([
+      { name: 'myskill/SKILL.md', content: skillMd({ id: 'myskill' }) },
+      { name: 'myskill/notes.md', content: 'Extra resource.' },
+      // The AppleDouble mirrors: dot-named leaves under the non-shared __MACOSX root.
+      { name: '__MACOSX/myskill/._SKILL.md', content: Buffer.from([0x00, 0x05, 0x16, 0x07]) },
+      { name: '__MACOSX/myskill/._notes.md', content: Buffer.from([0x00, 0x05, 0x16, 0x07]) },
+      // A stray root .DS_Store: a ONE-segment path, the other way the shared-prefix check broke.
+      { name: '.DS_Store', content: 'not package content' }
+    ])
+    // Preview sees the real package…
+    const preview = previewSkillPackage(db, zip, deps)
+    expect(preview.ok).toBe(true)
+    expect(preview.errors).toEqual([])
+    expect(preview.id).toBe('myskill')
+    // …and the import stages SKILL.md at the ROOT (prefix stripped), with the junk skipped.
+    const info = importSkill(db, zip, deps).info
+    expect(info.id).toBe('myskill')
+    expect(existsSync(join(deps.userSkillsDir, 'myskill', 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(deps.userSkillsDir, 'myskill', 'notes.md'))).toBe(true)
+    expect(existsSync(join(deps.userSkillsDir, 'myskill', '.DS_Store'))).toBe(false)
+    expect(existsSync(join(deps.userSkillsDir, 'myskill', '__MACOSX'))).toBe(false)
+    expect(existsSync(join(deps.userSkillsDir, 'myskill', 'myskill'))).toBe(false) // the old failure shape
+  })
+
   it('imports a folder source as well as a zip', async () => {
     const db = freshDb()
     const deps = makeDeps()

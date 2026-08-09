@@ -22,6 +22,7 @@ import {
   countKeywordHits,
   scoreSkillTriggers,
   selectSuggestion,
+  hasDocSignal,
   SUGGEST_SCORE_THRESHOLD,
   AUTOFIRE_SCORE_THRESHOLD,
   type SkillCandidate,
@@ -123,7 +124,9 @@ export interface FirePolicy {
   name: string
   /** Short human description for the baseline report. */
   description: string
-  eligible: (score: number, kwHits: number) => boolean
+  /** `docSignal` (#130): does the (policy-scoped) context contribute ≥1 MIME/filename hit — the
+   *  runtime's `hasDocSignal`, threaded so `threshold-3` can mirror `selectAutoFire`'s gate 1:1. */
+  eligible: (score: number, kwHits: number, docSignal: boolean) => boolean
   /**
    * U4 (audit §4.4): does this policy model the AUTO-FIRE path, which reads only EXPLICITLY scoped
    * documents? When true, `scoreCorpus` scores it through `toAutoFireContext` (a whole-corpus item's doc
@@ -137,10 +140,12 @@ export interface FirePolicy {
  * The policies the baseline sweeps. `threshold-2` reproduces today's `selectSuggestion` exactly
  * (the faithfulness guard pins this). The rest are the D2 "higher bar" candidates the owner weighs.
  *
- * Note a lone doc signal maxes at MIME(1)+filename(1)=2, so any score ≥ 3 already implies a keyword
- * hit — `threshold-3` is therefore "a keyword corroborated by ≥1 doc signal". `keyword-required` is
- * the literal D2 proposal: require a keyword hit (≥1), reject a lone doc signal, but still accept a
- * lone strong keyword.
+ * Note (#130): a lone doc signal maxes at MIME(1)+filename(1)=2, so a score ≥ 3 implies a keyword
+ * hit — but NOT the converse: two capped keyword hits reach 4 with zero doc signals, so the
+ * threshold alone is NOT "a keyword corroborated by ≥1 doc signal". `threshold-3` therefore ALSO
+ * requires the doc signal, mirroring the runtime's `selectAutoFire` gate exactly.
+ * `keyword-required` is the literal old D2 proposal: require a keyword hit (≥1), reject a lone doc
+ * signal, but still accept a lone strong keyword.
  */
 export const POLICIES: FirePolicy[] = [
   {
@@ -154,13 +159,15 @@ export const POLICIES: FirePolicy[] = [
     eligible: (score, kwHits) => kwHits >= 1 && score >= SUGGEST_SCORE_THRESHOLD
   },
   {
-    // The RATIFIED auto-fire gate (D2): score ≥ AUTOFIRE_SCORE_THRESHOLD ⇒ "a keyword corroborated
-    // by ≥1 doc signal". The harness and the runtime (`resolveAutoFireSkill`) share the constant, so
-    // the gate-assertion below measures exactly the production threshold. U4/§4.4: it also mirrors the
-    // runtime's `explicitDocumentsOnly` narrowing — a whole-corpus doc signal doesn't count here either.
+    // The RATIFIED auto-fire gate (D2, #130): score ≥ AUTOFIRE_SCORE_THRESHOLD AND ≥1 doc signal —
+    // "a keyword corroborated by ≥1 doc signal", now structurally (the threshold alone let two
+    // keyword hits fire doc-less). The harness and the runtime (`selectAutoFire`) share the constant
+    // AND the doc-signal requirement, so the gate-assertion below measures exactly the production
+    // gate. U4/§4.4: it also mirrors the runtime's `explicitDocumentsOnly` narrowing — a
+    // whole-corpus doc signal doesn't count here either.
     name: 'threshold-3',
-    description: `auto-fire gate (score ≥ ${AUTOFIRE_SCORE_THRESHOLD}): a keyword + ≥1 EXPLICITLY-scoped doc signal`,
-    eligible: (score) => score >= AUTOFIRE_SCORE_THRESHOLD,
+    description: `auto-fire gate (score ≥ ${AUTOFIRE_SCORE_THRESHOLD} + ≥1 EXPLICITLY-scoped doc signal)`,
+    eligible: (score, _kwHits, docSignal) => score >= AUTOFIRE_SCORE_THRESHOLD && docSignal,
     narrowsDocSignals: true
   },
   {
@@ -180,7 +187,7 @@ export function predict(candidates: SkillCandidate[], ctx: SkillTriggerContext, 
   let bestScore = 0
   for (const c of candidates) {
     const score = scoreSkillTriggers(c.triggers, ctx)
-    if (!policy.eligible(score, keywordHits(c.triggers, ctx.question))) continue
+    if (!policy.eligible(score, keywordHits(c.triggers, ctx.question), hasDocSignal(c.triggers, ctx))) continue
     if (score > bestScore || (score === bestScore && best != null && c.installId < best.installId)) {
       best = c
       bestScore = score

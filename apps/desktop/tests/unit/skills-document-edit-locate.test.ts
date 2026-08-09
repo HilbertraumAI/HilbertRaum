@@ -5,6 +5,7 @@ import {
   editLocateSchema,
   locateDocumentEdits,
   parseEditReply,
+  MAX_LOCATED_EDITS,
   type LocatedEdit
 } from '../../src/main/services/skills/tools/document-edit-locate'
 import { verifyAndSpliceEdits } from '../../src/main/services/skills/tools/document-edit'
@@ -124,9 +125,72 @@ describe('document-edit-locate — locateDocumentEdits over the runtime', () => 
     expect(calls.length).toBe(2) // two windows
     expect(calls[0].options?.temperature).toBe(0)
     expect(calls[0].options?.responseSchema).toBeTruthy()
-    expect(found.some((e) => e.find === 'Vollmachtgeber')).toBe(true)
+    expect(found.edits.some((e) => e.find === 'Vollmachtgeber')).toBe(true)
+    expect(found.truncated).toBe(false)
     // The instruction (the CORE input) rides into the locate system prompt.
     expect(calls[0].messages[0].content).toContain('Vollmachtgeber → Vollmachtgeberin')
+  })
+
+  // #134 (skills-pipeline audit 2026-08-09, RUN-3) — the edit-side mirror of the redaction-locate cap:
+  // duplicate {line, find, occurrence} anchors collapse (the window overlap re-proposes them; a
+  // same-anchor duplicate would be dropped by the splice anyway), the unique list is capped at
+  // MAX_LOCATED_EDITS (== the apply_document_edits schema cap, so the seam can never overflow the
+  // gate), a hit cap stops paying for further windows, and `truncated` reports it honestly.
+  it('#134: de-duplicates identical {line, find, occurrence} anchors across windows', async () => {
+    const text = Array.from({ length: 50 }, (_, i) => (i === 35 ? 'der Vertrag' : `line ${i + 1}`)).join('\n')
+    // Line 36 sits in BOTH windows (33..40 overlap) — each window proposes the same anchored edit.
+    const runtime = scriptedRuntime(({ messages }) =>
+      messages[1].content.includes('der Vertrag')
+        ? JSON.stringify({ edits: [{ line: 36, find: 'der', occurrence: 1, replace: 'die' }] })
+        : JSON.stringify({ edits: [] })
+    )
+    const { edits, truncated } = await locateDocumentEdits(text, 'der → die', {
+      runtime,
+      signal: new AbortController().signal
+    })
+    expect(edits.filter((e) => e.line === 36 && e.find === 'der' && e.occurrence === 1)).toHaveLength(1)
+    expect(truncated).toBe(false)
+    // A DIFFERENT occurrence of the same find on the same line is a distinct anchor — kept.
+    const two = await locateDocumentEdits(text, 'der → die', {
+      runtime: scriptedRuntime(() =>
+        JSON.stringify({
+          edits: [
+            { line: 36, find: 'der', occurrence: 1, replace: 'die' },
+            { line: 36, find: 'der', occurrence: 2, replace: 'die' }
+          ]
+        })
+      ),
+      signal: new AbortController().signal
+    })
+    expect(two.edits.filter((e) => e.find === 'der')).toHaveLength(2)
+  })
+
+  it('#134: caps unique proposals at MAX_LOCATED_EDITS, reports truncated, and stops early', async () => {
+    expect(MAX_LOCATED_EDITS).toBe(4096) // == the apply_document_edits schema's edits maxItems
+    const text = Array.from({ length: 1400 }, (_, i) => `line ${i + 1}`).join('\n')
+    const windows = buildEditWindows(text)
+    expect(windows.length).toBeGreaterThan(42) // 4096/100-per-window ⇒ 41 windows overflow the cap
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    // Every window returns 100 UNIQUE anchors (keyed off its own first global line number) — dense
+    // enough to overflow, short enough that the reply stays under the stream's runaway char cap.
+    const runtime = scriptedRuntime(({ messages }) => {
+      const firstLine = Number(messages[1].content.split('\t')[0])
+      return JSON.stringify({
+        edits: Array.from({ length: 100 }, (_, i) => ({
+          line: firstLine,
+          find: `f${firstLine}-${i}`,
+          occurrence: 1,
+          replace: ''
+        }))
+      })
+    }, calls)
+    const { edits, truncated } = await locateDocumentEdits(text, 'change things', {
+      runtime,
+      signal: new AbortController().signal
+    })
+    expect(edits).toHaveLength(MAX_LOCATED_EDITS)
+    expect(truncated).toBe(true)
+    expect(calls.length).toBeLessThan(windows.length)
   })
 
   it('propagates an abort as an AbortError (the seam maps it to a calm cancel)', async () => {

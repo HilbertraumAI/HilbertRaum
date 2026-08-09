@@ -35,6 +35,7 @@ import { createConversation, listMessages } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
+import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { SCAN_MARKER_TYPE, aggregateExtractions } from '../../src/main/services/analysis/extract'
 import { buildListingAnswer } from '../../src/main/services/analysis/listing-answer'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
@@ -295,5 +296,123 @@ describe('askDocuments — the #80 offer cascade', () => {
     expect(rt.calls).toBe(1)
     expect(rt.options[0]?.responseSchema?.properties?.skill?.enum).toEqual(['app:invoice', 'none'])
     expect(msg.skillOffer).toBeUndefined()
+  })
+
+  // #135 (audit TEST-1): the accept flow — the feature's core promise ("re-run via the EXISTING
+  // regenerate path with the skill explicitly set") — through the REAL handler, main-side.
+  it('#135: accepting the offer replaces the prior answer with a skill-stamped re-run (no new offer)', async () => {
+    const { db, workspacePath, skillsDirs } = freshWorld()
+    const embedder = new MockEmbedder()
+    const docId = await seedDocument(db, embedder, 'statement.pdf', 'Zahlung 12,50 EUR an Acme.')
+    plantExtraction(db, docId, [{ type: 'amount', value: '12,50 EUR', normalized: '12.50' }])
+    // Call 1 (the accept's classifier — the deterministic ask re-triggers classification with bank
+    // excluded as the turn's own skill): declines, so the re-answer carries no fresh offer here.
+    const rt = scriptedRuntime(['{"skill":"none"}'])
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+    registerRagIpc(makeCtx(db, workspacePath, rt, skillsDirs))
+
+    // Turn 1: the deterministic offer is minted (zero model calls).
+    const { result: first } = await invoke(handlers, IPC.askDocuments, conv.id, AMOUNT_AGG_ASK)
+    const firstMsg = first as Message
+    expect(firstMsg.skillOffer?.installId).toBe('app:bank-statement')
+    expect(rt.calls).toBe(0)
+
+    // The ACCEPT: regenerate with the offered skill explicitly set — the renderer's wire tuple.
+    const { result: second } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      conv.id,
+      '',
+      'app:bank-statement',
+      /* regenerate */ true
+    )
+    const msg = second as Message
+
+    // The prior assistant row is REPLACED (deleted + re-answered), not duplicated.
+    const history = listMessages(db, conv.id)
+    expect(history.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(history.at(-1)?.id).toBe(msg.id)
+    expect(history.some((m) => m.id === firstMsg.id)).toBe(false)
+    // The re-run is stamped with the accepted skill (the provenance glyph is honest).
+    expect(msg.skillId).toBe('app:bank-statement')
+    // The bank skill is excluded from its own re-offer (self-exclusion) and the classifier declined:
+    // no offer on the accepted turn — the affordance does not ping-pong back.
+    expect(msg.skillOffer).toBeUndefined()
+    expect(rt.calls).toBe(1) // exactly the one bounded classification on the accepted turn
+  })
+
+  // #132 (audit OFFER-1): an explicit id that no longer resolves REFUSES — never a silent skill-free
+  // re-answer — and the refusal fires BEFORE the F2-deferred delete, so the prior answer survives.
+  it('#132: accepting an offer for a since-disabled skill refuses and leaves the answer untouched', async () => {
+    const { db, workspacePath, skillsDirs } = freshWorld()
+    const embedder = new MockEmbedder()
+    const docId = await seedDocument(db, embedder, 'statement.pdf', 'Zahlung 12,50 EUR an Acme.')
+    plantExtraction(db, docId, [{ type: 'amount', value: '12,50 EUR', normalized: '12.50' }])
+    const rt = scriptedRuntime([])
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+    registerRagIpc(makeCtx(db, workspacePath, rt, skillsDirs))
+    const { result: first } = await invoke(handlers, IPC.askDocuments, conv.id, AMOUNT_AGG_ASK)
+    const firstMsg = first as Message
+    expect(firstMsg.skillOffer?.installId).toBe('app:bank-statement')
+
+    // The user disables the skill in Settings → Skills, then clicks the (stale) offer.
+    setSkillEnabled(db, 'app:bank-statement', false)
+    await expect(
+      invoke(handlers, IPC.askDocuments, conv.id, '', 'app:bank-statement', /* regenerate */ true)
+    ).rejects.toThrow(tr('main.chat.skillUnavailable'))
+
+    // The prior answer (offer included) is untouched — the click destroyed nothing.
+    const history = listMessages(db, conv.id)
+    expect(history.at(-1)?.id).toBe(firstMsg.id)
+    expect(history.at(-1)?.skillOffer?.installId).toBe('app:bank-statement')
+    expect(inFlightStreams.has(conv.id)).toBe(false)
+    expect(rt.calls).toBe(0) // and no classifier call was wasted on the refused turn
+  })
+
+  // #135 Low (audit): the classifier's SELF-exclusion — a fallback turn already shaped by a skill
+  // must exclude that skill from the enum (previously untested; every prior test ran skill-less,
+  // making the `c.installId !== skill?.installId` filter vacuous).
+  it('the classifier enum excludes the skill that already shaped the turn', async () => {
+    const { db, workspacePath, skillsDirs } = freshWorld()
+    const embedder = new MockEmbedder()
+    const docId = await seedDocument(db, embedder, 'contract.pdf', 'Vertrag zwischen Acme und Globex.')
+    plantExtraction(db, docId, [{ type: 'party', value: 'Acme', normalized: 'acme' }])
+    const rt = scriptedRuntime(['{"skill":"none"}'])
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+    registerRagIpc(makeCtx(db, workspacePath, rt, skillsDirs))
+
+    // The turn is explicitly shaped by bank-statement (an instruction-kind skill in this world, so
+    // the coverage-extract engine still serves the listing) — the classifier must not re-offer it.
+    await invoke(handlers, IPC.askDocuments, conv.id, PARTY_AGG_ASK, 'app:bank-statement')
+
+    expect(rt.calls).toBe(1)
+    expect(rt.options[0]?.responseSchema?.properties?.skill?.enum).toEqual(['app:invoice', 'none'])
+  })
+})
+
+// #133 (audit ROUTE-1): the mint-time ENGAGEMENT filter, with the REAL analysis handlers registered
+// (module-global registry — this describe runs LAST in the file so the earlier instruction-skill
+// worlds stay handler-free). The audit's traced scenario: a party-grouping ask draws a classifier
+// offer for Invoice Analysis, whose `applies()`/`classMatches` miss the question — the accept then
+// silently re-ran the same engine stamped `skillId: app:invoice` and re-classified with invoice
+// excluded (offer ping-pong). The enum now structurally excludes a candidate whose engine would not
+// engage this question+scope.
+describe('askDocuments — the #133 engagement filter (real handlers)', () => {
+  it('a candidate whose engine would not engage is OUT of the enum; an engaging one stays', async () => {
+    registerBuiltinSkillAnalysisHandlers()
+    const { db, workspacePath, skillsDirs } = freshWorld()
+    const embedder = new MockEmbedder()
+    const docId = await seedDocument(db, embedder, 'contract.pdf', 'Vertrag zwischen Acme und Globex.')
+    plantExtraction(db, docId, [{ type: 'party', value: 'Acme', normalized: 'acme' }])
+    const rt = scriptedRuntime(['{"skill":"none"}'])
+
+    await ask(db, workspacePath, rt, skillsDirs, PARTY_AGG_ASK, docId)
+
+    expect(rt.calls).toBe(1)
+    // Invoice: `routeMatch('invoice', …)` misses a party-grouping ask, no invoice extraction, no doc
+    // signals ⇒ its engine would skip and the same answer would regenerate mis-stamped — EXCLUDED.
+    // Bank: "gruppiere" is category-shaped ⇒ `intends()` holds (the W2 pre-pass handles any doc-count
+    // miss honestly) — KEPT.
+    expect(rt.options[0]?.responseSchema?.properties?.skill?.enum).toEqual(['app:bank-statement', 'none'])
   })
 })

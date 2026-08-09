@@ -180,6 +180,15 @@ export function registerRagIpc(ctx: AppContext): void {
       // question is passed so the resolver can S13b AUTO-FIRE when the turn has no skill set (content —
       // scored, not logged; off by default).
       const skill = resolveTurnSkillFromRegistry(ctx.db, ctx.skills, conversationId, skillInstallId, text)
+      // #132: an EXPLICIT per-turn skill id (an offer click / composer pick) that no longer resolves —
+      // disabled, removed, needs a newer app, or its body no longer parses — REFUSES instead of
+      // silently degrading to a skill-free re-answer. The resolver's graceful-null is the sticky-DEFAULT
+      // contract (§10.3); an explicit id is a consent the answer must honor or decline out loud.
+      // Thrown before any stream/slot/delete work (the F2-deferred regenerate delete never ran), so the
+      // prior answer is untouched. `null`/`''` (a deliberate skill-free re-run) stays allowed.
+      if (typeof skillInstallId === 'string' && skillInstallId.length > 0 && skill == null) {
+        throw new Error(tMain('main.chat.skillUnavailable'))
+      }
 
       const settings = ragSettingsFrom(getSettings(ctx.db))
 
@@ -602,10 +611,39 @@ export function registerRagIpc(ctx: AppContext): void {
       // offer) inside a hard few-second bound — the mock runtime always degrades, so mock/dev
       // behaviour is byte-identical to today. Ordinary high-confidence questions never get here
       // (0 model calls preserved by construction).
+      // #133: would OFFERING this candidate be honest — i.e. would the accept click (regenerate with
+      // the skill explicitly set) actually produce a skill-shaped turn? Mirrors the dispatch gate
+      // above over the SAME (possibly narrowed) scope: a candidate with no analysis handler is an
+      // instruction skill whose fence shapes the prompt (always honestly stamped); a tool/analysis
+      // candidate engages when its `intends()` is true (the W2 pre-pass then handles a doc-count miss
+      // HONESTLY — narrowing or a routing answer, never a silent no-op), when `applies()` is true, or
+      // via the A4 classMatches inversion. Without this check an accepted offer whose handler misses
+      // the question re-ran the SAME engine, stamped the skill's provenance glyph on an answer its
+      // engine never touched, and re-classified with that skill excluded — offer ping-pong.
+      const wouldSkillEngage = (installId: string): boolean => {
+        const record = getSkill(ctx.db, installId)
+        if (!record) return false
+        const handler =
+          getSkillAnalysisHandler(installId) ?? manifestAnalysisHandler(record.kind, record.manifest.analysis)
+        if (!handler) return true
+        const input = { question: text, scope, db: ctx.db }
+        if (handler.intends?.(input) === true) return true
+        if (handler.applies(input)) return true
+        return (
+          typeof handler.classMatches === 'function' &&
+          !isSmallTalk(text) &&
+          allInScopeDocsFullyChunked(ctx.db, scope) &&
+          handler.classMatches(input, installId)
+        )
+      }
+
       const classifierOffer = async (signal: AbortSignal): Promise<SkillOffer | null> => {
         if (!isClassificationTrigger(decision, text)) return null
+        // Candidates = the shared offer gate, minus the turn's own skill, minus (#133) any skill
+        // whose engine would NOT engage this question+scope — an offer must be a real capability,
+        // not a provenance-stamped re-run of the same answer.
         const candidates: ClassifyCandidate[] = offerableSkillCandidates(ctx.db, ctx.skills?.appVersion ?? '')
-          .filter((c) => c.installId !== skill?.installId)
+          .filter((c) => c.installId !== skill?.installId && wouldSkillEngage(c.installId))
           .map((c) => ({ installId: c.installId, title: c.title }))
         const picked = await classifySkillPointer(text, candidates, { runtime, signal })
         return picked ? { installId: picked.installId, title: picked.title, source: 'classifier' } : null
@@ -642,7 +680,11 @@ export function registerRagIpc(ctx: AppContext): void {
           const bank = offerableSkillCandidates(ctx.db, ctx.skills?.appVersion ?? '').find(
             (c) => c.installId === BANK_STATEMENT_INSTALL_ID
           )
-          if (bank) {
+          // #133: only offer bank when its engine would actually ENGAGE the accept (an aggregation-
+          // shaped amount ask is category-shaped, so `intends()` normally holds — this guards the
+          // residual class where it wouldn't, e.g. an exotic phrasing over a scope its handler
+          // cannot serve; the prose hint remains as the degradation).
+          if (bank && wouldSkillEngage(bank.installId)) {
             deterministicOffer = { installId: bank.installId, title: bank.title, source: 'deterministic' }
           }
         }

@@ -133,8 +133,11 @@ password recovery — are documented in
   active (routing uses substring stems — recall beats precision under an already-chosen skill, spec §8.2);
   (2) `meeting` is offer-able as a bare word (the "Summarize this meeting" incident requires the offer to
   fire), so a scheduling ask ("schedule a meeting") can still draw a meeting-protocol offer — the measured
-  suggestion precision is ~98 % on the eval corpus, and the offer is inert (in-picker only, never
-  auto-applied). The redaction manifest↔handler pair is now **aligned** (Skills U4, audit §4.4): the pure
+  suggestion precision is ~98 % on the eval corpus, and every suggestion surface stays consent-first
+  (updated for #80/#130, per #136): the in-picker suggestion is inert, the **per-answer offer row**
+  ("Run "…" for this question", #80) runs only on an explicit click, and **auto-fire** (the separate
+  opt-in, default off) additionally requires a matching document deliberately in scope (#130) — never
+  auto-applied from a suggestion alone. The redaction manifest↔handler pair is now **aligned** (Skills U4, audit §4.4): the pure
   legal words (`datenschutz`/`dsgvo`/`gdpr`) were **dropped** from the vocabulary — the handler acts on
   neither `routeMatch` nor the informational PII scan for them ("Was regelt die DSGVO?" is about the LAW,
   not the document), so redaction no longer offers **or** auto-fires on them; the PII-content topics
@@ -422,28 +425,46 @@ password recovery — are documented in
   never logs) — only per-run **counts** are surfaced (architecture.md "Skills — design record" §22). The
   edited copy is a **starting point that still needs a human review** before sharing; the SKILL.md body and
   the run's "done" copy both say so.
-  - **Same-format export keeps DOCX as DOCX; other formats save as `.txt` (#22/#23, D77;
-    architecture.md "Skills — design record" §23).** When the source is a **Word `.docx`**, redaction and
-    targeted-edit save a **same-format `.docx` copy** — styles, numbering, tables and headers survive because
-    the app changes **only the text inside `<w:t>` nodes** of `word/document.xml` and copies every other zip
-    part **byte-identical** (the diff-verifiable "unchanged outside the located spans" guarantee extends from
-    the extracted text to the real file). For a DOCX source the locate + verify pass **re-runs on the DOCX
-    text layer** (which differs from the extracted preview text), so the masks/edits land in the text that is
-    actually rewritten. **A DOCX with no readable `word/document.xml`** (corrupt / unusual package) falls back
-    to the `.txt` copy. **PDF re-export is out of scope** (writing PDFs is a separate problem): a **PDF or any
-    non-DOCX source saves as `.txt`** (segment-faithful — the newline-preserving parser segments, so PDF line
-    structure survives as well as extraction allows, and per-char `█` masks keep line length). A **scanned /
-    image PDF** has only its **OCR text layer** to work on — there is no reliable way to paint masks back onto
-    the page image, so such a document is best redacted from its `.txt` output, not in place. A **DOCX whose
-    `<w:t>` runs split a word across multiple runs** is handled (a span crossing a run boundary splits across
-    the nodes); a mask/edit is never allowed to change a paragraph break or any non-`<w:t>` markup.
+  - **Same-format export keeps DOCX as DOCX; other formats save as `.txt` (#22/#23, D77, #129;
+    architecture.md "Skills — design record" §23 + its 2026-08-09 supersede note).** When the source is
+    a **Word `.docx`**, redaction and targeted-edit save a **same-format `.docx` copy** — styles,
+    numbering and tables survive because the app changes only TEXT content, never formatting markup.
+    **Redaction covers the whole file's text since #129:** the body (including tracked-changes
+    **deleted text** and field instructions), **headers and footers** (letterhead), footnotes/endnotes,
+    and comment text are all masked under the same rules, and the metadata PII carriers are scrubbed —
+    document author fields (`docProps`), tracked-change/comment **author names**, and **hyperlink /
+    `mailto:` link targets** (re-pointed at `about:blank`; masking only the display text would have
+    left the address recoverable on hover). **What automatic masking still does NOT reach — and the
+    pre-run confirm now says so:** pictures and scanned page images (including any text ON them),
+    embedded objects (spreadsheets, charts), and custom XML parts travel into the copy unchanged —
+    review the saved copy before sharing. A targeted **edit** deliberately stays a body-text change
+    (no header rewrite, no metadata scrub — it is not an anonymization). For a DOCX source the locate +
+    verify pass **re-runs on the DOCX text layers** (which differ from the extracted preview text), so
+    the masks/edits land in the text that is actually rewritten. **A DOCX with no readable
+    `word/document.xml`** (corrupt / unusual package) falls back to the `.txt` copy. **PDF re-export is
+    out of scope** (writing PDFs is a separate problem): a **PDF or any non-DOCX source saves as
+    `.txt`** (segment-faithful — the newline-preserving parser segments, so PDF line structure survives
+    as well as extraction allows, and per-char `█` masks keep line length). A **scanned / image PDF**
+    has only its **OCR text layer** to work on — there is no reliable way to paint masks back onto the
+    page image, so such a document is best redacted from its `.txt` output, not in place. A **DOCX
+    whose `<w:t>` runs split a word across multiple runs** is handled (a span crossing a run boundary
+    splits across the nodes); a mask/edit never changes a paragraph break or formatting markup.
     **Said up front since #45:** the pre-run **confirmation dialog states the output format** for the
     selected document (derived from its extension, the same signal main branches on) — "keeps its Word
     format (.docx)" vs "will be plain text (.txt) — the original layout and formatting are not kept" —
-    so the format cliff is visible **before** the run, not first in the save dialog / result file.
+    and, for redaction, the **masking-scope line** (#129) naming the unreachable content, so neither
+    the format cliff nor the privacy boundary is first discovered in the saved file.
     Format-preserving **PDF output remains open** (true-redaction PDF or a regenerated, attributed PDF
     would need a PDF-writing dependency plus a shipped embeddable font — neither exists in the tree;
     see §5 next actions in `BUILD_STATE.md`).
+  - **Very large documents: the locate pass stops at a proposal cap and says so (#134).** The
+    model-assisted locate pass collects at most **4,096 unique proposals** per run (the tool input
+    bound; duplicates from the overlapping windows are collapsed first, so the cap binds on genuinely
+    huge PII-dense documents — a member/address list, not a normal contract). A run that hits the cap
+    **completes** — it no longer fails with a generic error after the full multi-minute pass — and the
+    outcome copy says detection stopped at its limit ("later items may be unmasked" / "later places may
+    be unchanged"), asking for a whole-copy review. The deterministic regex floor still runs over the
+    entire document regardless (e-mails/IBANs/phones/cards/dates/links are never subject to the cap).
   - **Date masking now accepts EITHER field order and a 2-digit year — the BL-N6 leak is closed (U2,
     audit §5.7).** For *redaction* (unlike extraction, which stays day-first) a candidate is masked when it
     parses in **day-first OR month-first** order, so a **US-ordered** `mm/dd/yyyy` value like `12/31/2026`
@@ -794,15 +815,20 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   relevance answer ("based on the most relevant passages"). v1 has no live full-scan for unmapped
   types and does not auto-run the extract pass at import (it is started on request) — both are later
   phases. The extract pass, like the deep index, requires a fully-chunked (re-indexed if legacy) doc.
-  **The listing cannot categorize or sum — and since issue #54 (2026-07-17) it says so.** An
-  aggregation-shaped ask ("categorize the transactions, sum per category") deliberately routes here
-  (never a lossy top-k sum, #37), but the engine only groups values with counts; the answer used to
-  present the raw frequency list with no hint that it wasn't what was asked. A non-empty listing for
-  such an ask now LEADS with an honest shape hint, plus the bank-statement-skill pointer for amounts
-  (that skill's category engine is the one path that groups transactions and sums each category
-  exactly). Plain "list / how many" asks are unchanged. A generic no-skill categorized-sums path
-  (tabular routing over a generic row extractor) remains deferred (architecture.md result-tables
-  record §5/§6).
+  **The listing cannot categorize or sum — and since issue #54 (2026-07-17) it says so; since #80
+  (2026-08-09) it also offers the fix.** An aggregation-shaped ask ("categorize the transactions,
+  sum per category") deliberately routes here (never a lossy top-k sum, #37), but the engine only
+  groups values with counts; the answer used to present the raw frequency list with no hint that it
+  wasn't what was asked. A non-empty listing for such an ask now LEADS with an honest shape hint,
+  plus — for amount asks — a one-click **"Run "Bank Statement Analysis" for this question"** offer on
+  the answer (that skill's category engine is the one path that groups transactions and sums each
+  category exactly; clicking re-answers with it — nothing runs unclicked). Non-amount aggregation
+  asks, and low-confidence fallbacks, may instead spend **one bounded (≤ 4 s), grammar-constrained
+  local classification call** inside the already-held answer slot to pick the suggested skill — its
+  output can only name an enabled skill (whose engine would actually engage, #133) or "none", and it
+  never changes the answer text. Plain "list / how many" asks are unchanged (0 extra calls). A
+  generic no-skill categorized-sums path (tabular routing over a generic row extractor) remains
+  deferred (architecture.md result-tables record §5/§6).
 - **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
   (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
   coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the
