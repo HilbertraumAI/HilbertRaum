@@ -27,6 +27,9 @@ export function imagesDir(workspacePath: string): string {
   return dir
 }
 
+// Deliberately NO 'image/webp' row (#124): WEBP intake is normalized to PNG in the renderer
+// before `imageAnalyze`, and `validateAnalyzeRequest` accepts PNG/JPEG only — a WEBP MIME can
+// never reach persistence. If the analyze accept set ever widens, extend this map with it.
 const EXT_BY_MIME: Record<string, string> = {
   'image/png': '.png',
   'image/jpeg': '.jpg'
@@ -107,6 +110,12 @@ export async function createImageSession(
     now
   )
   return id
+}
+
+/** True when a session row exists (#120 item 2: the IPC layer verifies a renderer-supplied
+ *  sessionId names a real session before trusting it for an append). */
+export function imageSessionExists(db: Db, id: string): boolean {
+  return db.prepare('SELECT 1 FROM image_sessions WHERE id = ?').get(id) !== undefined
 }
 
 /** Append a completed (non-empty) turn and bump the session's updated_at. */
@@ -254,4 +263,38 @@ export async function deleteImageSession(db: Db, dir: string, id: string): Promi
   }
   const stored = join(dir, row.stored_name)
   if (existsSync(stored)) await shredFileAsync(stored)
+}
+
+/**
+ * Clear the WHOLE image history (#122): delete every session row in ONE transaction (turns
+ * cascade), then best-effort shred each stored image. Returns the number of sessions removed.
+ *
+ * Same REL-5 ordering as {@link deleteImageSession} — rows first, shreds only after the commit —
+ * so a failed transaction destroys nothing (no ghost sessions whose image is already gone), and
+ * a file that fails to shred can never resurrect its already-deleted row. The shreds run on
+ * `shredFileAsync` (off the main thread, the F-12 posture) sequentially — dozens of ~MB files,
+ * not a latency-critical path.
+ */
+export async function clearImageSessions(db: Db, dir: string): Promise<number> {
+  const rows = db.prepare('SELECT id, stored_name FROM image_sessions').all() as Array<
+    Pick<SessionRow, 'id' | 'stored_name'>
+  >
+  if (rows.length === 0) return 0
+  db.exec('BEGIN')
+  try {
+    db.prepare('DELETE FROM image_sessions').run()
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure as the thrown error */
+    }
+    throw err
+  }
+  for (const row of rows) {
+    const stored = join(dir, row.stored_name)
+    if (existsSync(stored)) await shredFileAsync(stored)
+  }
+  return rows.length
 }

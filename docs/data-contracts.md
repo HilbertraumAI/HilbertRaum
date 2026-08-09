@@ -1106,6 +1106,34 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   `/MarkInfo Marked` (tagged) true, kill-after-load rejection with no output, and EVERY
   Chromium request `file://` + the REAL offline guard silent across the run.
 
+### Image understanding (vision) — wave #117–#124 additions (2026-08-09)
+
+The vision DTOs live in `shared/types.ts` ("Image understanding" block); the full design is
+`architecture.md` "Image understanding — design record". Contract changes from the 2026-08-09
+images wave (issues #117–#124):
+
+- **`VisionErrorCode` WIDENED (additive)** with `'timedOut'` (the per-request timeout fired —
+  remedy: retry / smaller image), `'contextExceeded'` (the sidecar's 4096-token context
+  overflowed — remedy: shorter question / fresh analysis), and `'emptyQuestion'` (blank
+  question — an input problem, replacing the misleading `'emptyResponse'` reuse for that
+  case). Skew-safe by contract: renderers MUST keep an unknown-code fallback (`AnswerThread`'s
+  `ERR_KEY` lookup falls back to the `runtimeFailed` copy), so main may add codes without a
+  lockstep renderer change.
+- **`ImageAnalyzeRequest` persistence fields are CLAMPED main-side** (#120 item 2): `name` is
+  truncated to 255 chars, `width`/`height` are coerced to finite positive integers (≤ 1e6) or
+  null, and a `sessionId` that names no existing session row is treated as absent (a new
+  session is created) instead of trusted for the append.
+- **New IPC `images:clearSessions`** (#122): bulk "clear image history" — transactional row
+  deletes (turns cascade), best-effort post-commit shreds of every stored image, preserving
+  the REL-5 row-first/shred-after ordering. `requireUnlocked`-gated like its siblings.
+  Resolves with the number of sessions removed. `ImageSessionSummary.sizeBytes` (already
+  shipped) now backs the per-entry size + total the history UI shows.
+- **`DriveStatus` WIDENED (additive)** with `imagesBytes: number | null` (#122): the on-disk
+  footprint of `workspace/images/` (sum of stored file sizes, `.enc` overhead included), `0`
+  when empty/absent, `null` when unreadable. Surfaced in the Diagnostics "System" card beside
+  free space — runaway image-history growth threatens the lock path's re-encrypt free-space
+  need, so it must be visible where storage is reported.
+
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |
 |---|---|

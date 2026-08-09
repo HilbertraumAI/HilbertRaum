@@ -9085,13 +9085,15 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   `QuestionComposer`, `AnswerThread`, `VisionUnavailable`,
   `decode.ts` = `createImageBitmap({imageOrientation:'from-image'})`
   → downscale longest side to 1536 → re-encode to the input MIME on `OffscreenCanvas`/`<canvas>` →
-  `data:` URL, EXIF stripped by the draw, best-effort fallback to original bytes. Images is the
+  `data:` URL, EXIF stripped by the draw **best-effort** (#120 item 5: the original-bytes fallback
+  below ships EXIF intact), best-effort fallback to original bytes. Images is the
   **6th primary nav destination** — `design-guidelines.md §2` updated to "6 primary + 1 utility".
 - **Lifecycle wiring** — `ctx.vision` built once in `main/index.ts`; torn down on `will-quit` and on
   workspace **LOCK** (in `registerWorkspaceIpc`, beside `ctx.embedder.suspend()` — its KV cache holds
   the decoded image, so it must die before the vault re-encrypts).
 
-**Flow:** drop/choose a PNG/JPEG → renderer decodes/downscales (EXIF-normalized) → `imageAnalyze`
+**Flow:** drop/choose a PNG/JPEG/WEBP → renderer prescreens (pre-decode header parse, #118),
+decodes/downscales (EXIF-normalized best-effort; WEBP re-encodes to PNG, #124) → `imageAnalyze`
 ships the bytes to main once → `VisionService` validates + serializes → `VisionRuntime` lazily starts
 the sidecar (cold) → base64-inlines the image into one loopback request → streams the answer back via
 `STREAM.img*` → idle teardown reclaims the RAM after 2 min.
@@ -9144,10 +9146,11 @@ trust is unchanged (no new binary on the recommended path).
 - **RAM peak is co-resident** — chat + E5 + vision = three sidecars; the idle teardown bounds the
   *window*, not the active-use peak. A 12B chat (~7 GB) + vision (~4.6 GB) + embedder ⇒ **>16 GB**;
   the `recommended_min_ram_gb` / RAM-best-fit gate keeps vision off small tiers (model-benchmarks §8.4).
-- **MVP scope:** single image only (no compare/video/camera), PNG/JPEG only (WEBP deferred), ctx
-  capped at 4096 (vs train 128000). Full list in `known-limitations.md`. (The original "ephemeral,
-  no persistence" scope was **lifted 2026-06-20** — analyses are now saved to an encrypted, deletable
-  history, §10.)
+- **MVP scope:** single image only (no compare/video/camera); PNG/JPEG native + **WEBP normalized
+  in the renderer** (the 2026-06 "WEBP deferred" was lifted 2026-08-09, #124 — see §11; HEIC stays
+  unsupported but detected); ctx capped at 4096 (vs train 128000). Full list in
+  `known-limitations.md`. (The original "ephemeral, no persistence" scope was **lifted 2026-06-20**
+  — analyses are now saved to an encrypted, deletable history, §10.)
 
 **Commercial-drive gate (closed — verifies BOTH files; DIST-2).** `assertCommercialDrive` →
 `verifyDriveModels` now iterates the same `manifestFiles` set (GGUF + `mmproj`) that
@@ -9232,6 +9235,47 @@ instead of plain `pre-wrap` text).
 **History:** Phases V1–V5 on branch `image-understanding` (2026-06-20); commits `1917f55` (V1 gate),
 `6d66e16` (V2), `688d49b` (V3), `27ff275` (V4), + the V5 closeout. Markdown-fix + encrypted analysis
 history added 2026-06-20 (§10). Full original plan: `git log --follow docs/image-understanding-plan.md`.
+
+### §11 The 2026-08-09 hardening wave (issues #117–#124, branch `fix/images-wave-117-124`)
+
+The 2026-08-09 feature analysis produced eight issues, fixed as one wave (one PR, one commit per
+phase). Deltas against §1–§10 above:
+
+- **Failed-start recovery (#117):** `VisionRuntime.isStartFailed()` + `VisionService.run()`'s catch
+  discards a start-failed runtime so the next analyze rebuilds fresh — the "INTENTIONALLY sticky"
+  `startFailed` latch no longer bricks vision for the session after one transient OOM/port-race.
+  A short injectable cooldown (`VISION_START_FAILURE_COOLDOWN_MS`, 5 s) keeps the corrupt-GGUF
+  case fast-failing across rapid retries; a deliberate user retry lands past it and re-spawns.
+- **Cancel slot-release (#120.3):** the busy slot is released in `run()`'s `finally`, not in
+  `cancel()` — a new analyze can never run concurrently against the `--parallel 1` sidecar while
+  the aborted request drains (the RUNTIME-5 single-slot-server edge class).
+- **Error-code surface (#123, #120.1):** additive `VisionErrorCode`s `timedOut` (`combineSignals`
+  distinguishes the timeout signal from the caller's), `contextExceeded` (llama-server's
+  context-exceeded response detected content-free in `runAnalyze`'s non-OK branch), and
+  `emptyQuestion` (blank input, previously mislabeled `emptyResponse`). Skew-safe by the
+  `AnswerThread` `ERR_KEY` unknown-code fallback. IPC refusal strings localized via `tMain`
+  (#120.4).
+- **Intake (#118 + #124):** the renderer's post-decode 4096 px reject is GONE; a PRE-decode
+  header prescreen (`shared/image-headers.ts` — the same parse as the main-side D4 cap, pure +
+  unit-tested) refuses ~50 MP+ before `createImageBitmap`, and everything decodable below that
+  downscales as before (main's 50 MP cap stays authoritative). WEBP is accepted at intake and
+  **normalized in the renderer** (re-encode ships PNG) so the main-side accept set and SEC-3/D4
+  parsers stay PNG/JPEG-only; the original-bytes fallback is disabled for WEBP. HEIC detected by
+  extension with specific "convert to JPEG" copy.
+- **IPC hardening (#119, #120.2):** `imageChooseImage` is `requireUnlocked()`-gated like its
+  file-handler siblings; the history persistence fields are clamped at the IPC boundary (title
+  ≤ 255, dims finite-positive-or-null, unknown `sessionId` ⇒ fresh session).
+- **History surface (#121, #122):** reopening a saved analysis bypasses `decodeImage` when the
+  persisted dims prove no scaling is needed — stored bytes ship VERBATIM (no more compounding
+  JPEG q0.9 generation loss per open; `cache_prompt` byte-identity restored); the list shows
+  per-entry size + a total, `images:clearSessions` adds a confirmed bulk clear (REL-5 ordering),
+  and `DriveStatus.imagesBytes` surfaces the `workspace/images/` footprint in Diagnostics. An
+  automatic retention/eviction cap was deliberately NOT built (deferred product decision, #122).
+- **Doc corrections (#120.5):** the shared/types.ts "nothing is persisted" claim, the limits.ts
+  D4 "original bytes" wording, and §5's "EXIF stripped" (→ best-effort) fixed in place above.
+
+Contract details: `docs/data-contracts.md` "Image understanding (vision) — wave #117–#124
+additions". User-facing bounds: `known-limitations.md` "Image understanding".
 
 
 ## Data flow (RAG)

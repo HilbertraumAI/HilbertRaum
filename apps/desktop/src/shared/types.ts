@@ -155,6 +155,9 @@ export interface DriveStatus {
   isPreparedDrive: boolean
   writable: boolean
   freeBytes: number | null
+  /** On-disk footprint of `workspace/images/` — the saved image-analysis history (#122).
+   *  `0` when empty/absent; `null` when the directory could not be read. */
+  imagesBytes: number | null
   platform: string
   arch: string
 }
@@ -533,8 +536,12 @@ export interface EngineStatus {
 // ---- Image understanding (vision) — image-understanding plan §9.3 ----
 //
 // A separate, lazily-started `llama-server --mmproj` sidecar answers a question about ONE
-// image (PNG/JPEG). The bytes are base64-inlined into the loopback request (no disk write,
-// V1-resolved). Nothing is persisted; the screen state and these DTOs are the whole surface.
+// image (PNG/JPEG). The bytes are base64-inlined into the loopback request (no disk write on
+// the ANALYZE path, V1-resolved). Since the §10 history (2026-06-20), a COMPLETED analysis IS
+// persisted — the image encrypted-at-rest under workspace/images/ + its Q&A turns in
+// image_sessions/image_turns (the sessionId fields below ride that contract); the live screen
+// state remains renderer-only. (#120 item 5: this comment previously still claimed "nothing
+// is persisted".)
 
 /** Why image understanding is unavailable. NO `'locked'` reason (PROD-2): `getVisionStatus`
  *  is WORKSPACE-AGNOSTIC — vision weights aren't encrypted, so status doesn't fail on lock;
@@ -580,7 +587,13 @@ export type ImageJobState = 'queued' | 'starting' | 'analyzing' | 'done' | 'fail
  * A small enum the renderer maps to friendly localized copy — the technical reason stays in
  * the local log only (the chat `friendlyIpcError` precedent). `decodeFailed` is raised
  * CLIENT-side when `createImageBitmap` throws (corrupt / HEIC-as-jpg / animated-PNG / zero
- * byte). `busy` is a busy-REJECT (never a queue — §9.4).
+ * byte). `busy` is a busy-REJECT (never a queue — §9.4). `timedOut` is the per-request
+ * timeout (the remedy is retry / a smaller image, not "the runtime is broken");
+ * `contextExceeded` is the sidecar's 4096-token context overflowing (ask shorter / start a
+ * fresh analysis); `emptyQuestion` is a blank question (an input problem — distinct from
+ * `emptyResponse`, which means the model returned nothing). Renderers must keep an
+ * unknown-code fallback (AnswerThread falls back to the `runtimeFailed` copy), so adding
+ * codes here stays skew-safe (#123 / #120).
  */
 export type VisionErrorCode =
   | 'tooLarge'
@@ -588,6 +601,9 @@ export type VisionErrorCode =
   | 'decodeFailed'
   | 'runtimeFailed'
   | 'emptyResponse'
+  | 'emptyQuestion'
+  | 'timedOut'
+  | 'contextExceeded'
   | 'cancelled'
   | 'busy'
 

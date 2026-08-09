@@ -8,12 +8,16 @@ export { AnswerThread, __turnRowRenderCounts, type ImageTurn } from './AnswerThr
 export { ImageHistory } from './ImageHistory'
 export { VisionUnavailable } from './VisionUnavailable'
 export {
+  blobToDataUrl,
   decodeImage,
+  DOWNSCALE_TARGET,
   imageMimeFromName,
   imageMimeOfFile,
+  isHeicName,
   ImageDecodeError,
   MAX_IMAGE_BYTES,
   type DecodedImage,
   type DecodeImage,
+  type ImageInputMime,
   type ImageMime
 } from './decode'

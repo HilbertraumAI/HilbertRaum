@@ -37,7 +37,9 @@ first public release. Consciously-accepted gaps are tracked in
   reranker, scoped by **collections**.
 - **Image understanding** — ask questions about a picture with a local vision
   model (Qwen2.5-VL); the analysis history is stored locally, encrypted at rest,
-  and deletable.
+  and deletable — per-entry and total sizes are shown, a confirmed "Clear
+  history" removes everything at once (issue #122), and the history's disk
+  footprint appears in Settings → Diagnostics.
 - **Audio & voice** — transcribe audio files (Whisper), dictate prompts, and run
   on-device OCR ("Make searchable") on scanned pages (bundled German + English
   language files; no cloud OCR).
@@ -134,6 +136,18 @@ first public release. Consciously-accepted gaps are tracked in
   an oversized, manually started model never moves the pick, machines without a
   benchmark or with a healthy reading are byte-identical to before, and the step
   can never land on a model the benchmark record has not ranked.
+- **The Images screen now takes WEBP pictures and big phone photos** (issues
+  #124, #118). WEBP files are converted on the fly (nothing new touches the
+  security-sensitive parsers), and the old hidden 4096-pixel rejection is gone
+  — a routine 48 MP phone photo now simply downscales like everything else,
+  with the real safety cap (~50 megapixels) checked *before* any decoding
+  work is spent. iPhone HEIC photos are still unsupported, but now get a
+  specific "convert to JPEG first" message instead of a generic refusal.
+- **Image-analysis errors now say what to do** (issue #123). A too-slow
+  answer ("try a smaller image or ask again"), an over-long conversation
+  about one image ("ask a shorter question or start a new analysis"), and an
+  empty question each get their own message instead of the generic "the
+  vision model had a problem".
 - **Diagnostics now shows a real read speed** (issue #108). The old "Drive read
   (cached)" figure came from the operating system's memory cache and showed
   four-digit MB/s numbers even on a slow USB stick — it is gone. In its place,
@@ -193,6 +207,15 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Fixed
 
+- **One failed vision start no longer disables image understanding until
+  restart** (issue #117). If the vision model failed to start once (for
+  example under memory pressure), every later attempt failed instantly for
+  the rest of the session and "Try again" could never succeed. A retry now
+  starts fresh.
+- **Reopening a saved image analysis no longer degrades the picture** (issue
+  #121). Every reopen used to re-compress the stored image (JPEG quality
+  0.9, compounding per open), quietly blurring receipts and forms for
+  follow-up questions. The stored image is now used exactly as saved.
 - **The macOS launcher now works on exFAT drives** (PR #104, contributed). exFAT
   cannot store the symlinks inside a Mac `.app` bundle, so a prepared drive
   carries the app as a zip — but the launcher only looked for an unpacked

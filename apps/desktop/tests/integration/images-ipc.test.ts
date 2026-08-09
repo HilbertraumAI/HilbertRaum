@@ -40,11 +40,8 @@ vi.mock('electron', () => ({
   dialog: { showOpenDialog: async () => dialogState.result }
 }))
 
-import {
-  IMAGE_TOO_LARGE_MESSAGE,
-  IMAGE_UNSUPPORTED_MESSAGE,
-  registerImagesIpc
-} from '../../src/main/ipc/registerImagesIpc'
+import { registerImagesIpc } from '../../src/main/ipc/registerImagesIpc'
+import { tMain } from '../../src/main/services/i18n'
 import { VisionService, type VisionAnalyzer } from '../../src/main/services/vision'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import type {
@@ -317,13 +314,25 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     expect(Buffer.from(result as Uint8Array).equals(Buffer.from([9, 8, 7]))).toBe(true)
   })
 
+  // #124: WEBP joins the INTAKE accept set (picker filter + readBytes). The ANALYZE accept set
+  // stays PNG/JPEG — the renderer normalizes WEBP to PNG before imageAnalyze.
+  it('reads a picked .webp (intake accepts it; analyze-side normalization happens renderer-side)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
+    const file = join(dir, 'shot.webp')
+    writeFileSync(file, Buffer.from([0x52, 0x49, 0x46, 0x46, 1, 2]))
+    registerImagesIpc(ctxFor(dir))
+    const token = await tokenFor(file)
+    const { result } = await invoke(handlers, IPC.imageReadBytes, token)
+    expect(Buffer.from(result as Uint8Array).equals(Buffer.from([0x52, 0x49, 0x46, 0x46, 1, 2]))).toBe(true)
+  })
+
   it('refuses an unsupported extension (even via a real token)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'note.txt')
     writeFileSync(file, 'hi')
     registerImagesIpc(ctxFor(dir))
     const token = await tokenFor(file)
-    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(IMAGE_UNSUPPORTED_MESSAGE)
+    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(tMain('main.images.unsupportedType'))
   })
 
   it('refuses an over-cap image (the cap is the default 20 MiB constant)', async () => {
@@ -333,7 +342,7 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     writeFileSync(file, Buffer.alloc(20 * 1024 * 1024 + 1))
     registerImagesIpc(ctxFor(dir))
     const token = await tokenFor(file)
-    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(IMAGE_TOO_LARGE_MESSAGE)
+    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(tMain('main.images.tooLarge'))
   })
 
   // PERF-1: the read now runs on a fs/promises FileHandle. The over-cap reject must still close the
@@ -346,7 +355,7 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     registerImagesIpc(ctxFor(dir))
     const token = await tokenFor(file)
     fhState.closes = 0
-    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(IMAGE_TOO_LARGE_MESSAGE)
+    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(tMain('main.images.tooLarge'))
     expect(fhState.closes).toBe(1) // the finally closed the handle even though the size guard rejected
   })
 
@@ -366,7 +375,7 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     const file = join(dir, 'real.png')
     writeFileSync(file, Buffer.from([1, 2, 3]))
     registerImagesIpc(ctxFor(dir))
-    await expect(invoke(handlers, IPC.imageReadBytes, file)).rejects.toThrow(IMAGE_UNSUPPORTED_MESSAGE)
+    await expect(invoke(handlers, IPC.imageReadBytes, file)).rejects.toThrow(tMain('main.images.unsupportedType'))
   })
 
   it('treats a token as single-use (a replay reads nothing)', async () => {
@@ -376,7 +385,7 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     registerImagesIpc(ctxFor(dir))
     const token = await tokenFor(file)
     await invoke(handlers, IPC.imageReadBytes, token) // consumes it
-    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(IMAGE_UNSUPPORTED_MESSAGE)
+    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(tMain('main.images.unsupportedType'))
   })
 })
 

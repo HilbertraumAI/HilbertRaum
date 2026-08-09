@@ -4,6 +4,7 @@ import { useT, type I18n } from '../../i18n'
 import { localizeServerCopy } from '../../lib/displayMap'
 import { friendlyIpcError, runAndSurface } from '../../lib/errors'
 import { fmt1 } from '../../lib/format'
+import { formatSize } from '../documents/format'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
   AppSettings,
@@ -512,6 +513,12 @@ export function DiagnosticsTab(): JSX.Element {
               {drive.freeBytes != null
                 ? `${fmt1(drive.freeBytes / 1e9, lang)} GB`
                 : t('diag.app.unknown')}
+            </dd>
+            {/* #122: the images/ history footprint — runaway growth here threatens the lock
+                path's re-encrypt free-space need, so it must be visible where storage is. */}
+            <dt>{t('diag.system.imagesSize')}</dt>
+            <dd>
+              {drive.imagesBytes != null ? formatSize(drive.imagesBytes, lang) : t('diag.app.unknown')}
             </dd>
           </dl>
         ) : (

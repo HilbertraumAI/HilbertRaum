@@ -1,16 +1,24 @@
 import type { VisionErrorCode } from '../../../shared/types'
+import { decodedPixelCount, DEFAULT_MAX_IMAGE_PIXELS } from '../../../shared/image-headers'
+
+// #118: the PNG/JPEG header parsers moved to `shared/image-headers.ts` so the renderer can run
+// the SAME parse as a PRE-decode guard (the old renderer check ran after createImageBitmap had
+// already spent the decode memory). Re-exported here so main-side callers/tests are unchanged.
+export { decodedPixelCount } from '../../../shared/image-headers'
 
 // Vision input caps (image-understanding plan §14), mirroring `ingestion/limits.ts`. The
 // image is attacker-controllable (any file the user drops), so the byte cap is the
 // main-process backstop against a crafted huge image OOMing the sidecar — net-new enforcement
 // (SEC-3): `imageReadBytes`/`imageAnalyze` re-check the extension + cap themselves.
 //
-// D4 (vuln-scan-2026-06-21): the byte cap alone does NOT stop a decompression bomb — a small
-// (<20 MiB) PNG/JPEG can decode to enormous dimensions, and runtime.ts inlines the ORIGINAL
-// bytes to the sidecar, where clip/llama.cpp allocates width*height*channels and OOMs. The
-// renderer's MAX_DIMENSION downscale is for DISPLAY and does not bound what the sidecar decodes,
-// so the authoritative main-side guard now parses the image header and rejects above a pixel
-// budget too (no full decode — just the dimensions in the header).
+// D4 (vuln-scan-2026-06-21; wording corrected 2026-08-09, #120 item 5): the byte cap alone
+// does NOT stop a decompression bomb — a small (<20 MiB) PNG/JPEG can decode to enormous
+// dimensions, and runtime.ts inlines the REQUEST bytes to the sidecar (normally the renderer's
+// downscaled re-encode, but renderer output is attacker-controllable — threat #1 — so nothing
+// upstream can be trusted), where clip/llama.cpp allocates width*height*channels and OOMs.
+// The renderer's 1536 px downscale is client hygiene and does not bound what the sidecar
+// decodes, so the authoritative main-side guard parses the image header and rejects above a
+// pixel budget too (no full decode — just the dimensions in the header).
 
 /** Max accepted image bytes. ~20 MiB default; env-overridable (`HILBERTRAUM_MAX_IMAGE_BYTES`). */
 export const VISION_MAX_IMAGE_BYTES = readByteCap()
@@ -22,10 +30,22 @@ export const VISION_MAX_IMAGE_BYTES = readByteCap()
  */
 export const VISION_MAX_IMAGE_PIXELS = readPixelCap()
 
-/** The image file extensions the picker + main-side guard accept (lower-case, with the dot). */
-export const VISION_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(['.png', '.jpg', '.jpeg'])
+/**
+ * The image file extensions the INTAKE path accepts (picker filter + `imageReadBytes`,
+ * lower-case, with the dot). WEBP joined 2026-08-09 (#124) under the normalize-in-renderer
+ * decision: the renderer decodes WEBP natively (Chromium) and re-encodes to PNG before
+ * `imageAnalyze`, so the ANALYZE accept set + the SEC-3/D4 parsers below never see WEBP.
+ */
+export const VISION_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp'
+])
 
-/** The MIME types `ImageAnalyzeRequest.mimeType` may carry (the renderer-decided format). */
+/** The MIME types `ImageAnalyzeRequest.mimeType` may carry (the renderer-decided format).
+ *  Deliberately PNG/JPEG only — WEBP is normalized renderer-side (#124), so no WEBP header
+ *  parser ever joins the attacker-facing D4 surface. */
 export const VISION_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg'])
 
 function readByteCap(): number {
@@ -37,70 +57,7 @@ function readByteCap(): number {
 function readPixelCap(): number {
   const raw = process.env.HILBERTRAUM_MAX_IMAGE_PIXELS?.trim()
   const n = raw ? Number(raw) : NaN
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 50 * 1000 * 1000
-}
-
-function readU16BE(b: Uint8Array, o: number): number {
-  return (b[o] << 8) | b[o + 1]
-}
-function readU32BE(b: Uint8Array, o: number): number {
-  // `* 0x1000000` (not `<<24`) so the high byte stays unsigned (JS bit-ops are 32-bit signed).
-  return b[o] * 0x1000000 + (b[o + 1] << 16) + (b[o + 2] << 8) + b[o + 3]
-}
-
-/** PNG: 8-byte signature, then the IHDR chunk with width@16 and height@20 (big-endian u32). */
-function pngPixelCount(b: Uint8Array): number | null {
-  const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
-  if (b.length < 24) return null
-  for (let i = 0; i < 8; i++) if (b[i] !== SIG[i]) return null
-  const w = readU32BE(b, 16)
-  const h = readU32BE(b, 20)
-  return w > 0 && h > 0 ? w * h : null
-}
-
-/** JPEG: scan segment markers for a Start-Of-Frame (SOF0–SOF15) and read its height/width. */
-function jpegPixelCount(b: Uint8Array): number | null {
-  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return null
-  let o = 2
-  while (o + 1 < b.length) {
-    if (b[o] !== 0xff) {
-      o++
-      continue
-    }
-    // Collapse any run of 0xff fill bytes; the marker is the first non-0xff after them.
-    let marker = b[o + 1]
-    while (marker === 0xff && o + 2 < b.length) {
-      o++
-      marker = b[o + 1]
-    }
-    o += 2
-    // Markers with no payload length: SOI/EOI and the restart markers RST0–RST7.
-    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) continue
-    if (o + 1 >= b.length) break
-    const len = readU16BE(b, o)
-    // SOF markers (0xC0–0xCF) carry the frame dimensions — except DHT(C4), JPG(C8), DAC(CC).
-    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-      if (o + 6 >= b.length) break
-      const h = readU16BE(b, o + 3) // length(2) precision(1) THEN height(2), width(2)
-      const w = readU16BE(b, o + 5)
-      return w > 0 && h > 0 ? w * h : null
-    }
-    if (len < 2) break // malformed segment length — stop scanning
-    o += len
-  }
-  return null
-}
-
-/**
- * Decoded pixel count (width*height) parsed from the image HEADER only — no full decode, so this
- * is cheap and safe on a bomb. Returns null when the dimensions can't be determined (unknown MIME,
- * or a malformed/forged header). `validateAnalyzeRequest` treats a `null` for a CLAIMED png/jpeg
- * as suspicious and rejects it (SEC-6) — a `null` here is no longer a "byte-cap-only" fall-through.
- */
-export function decodedPixelCount(bytes: Uint8Array, mimeType: string): number | null {
-  if (mimeType === 'image/png') return pngPixelCount(bytes)
-  if (mimeType === 'image/jpeg') return jpegPixelCount(bytes)
-  return null
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_IMAGE_PIXELS
 }
 
 /** Lower-case extension (with the dot) of a filename/path, or '' when none. */
@@ -109,7 +66,7 @@ export function imageExtensionOf(pathOrName: string): string {
   return i < 0 ? '' : pathOrName.slice(i).toLowerCase()
 }
 
-/** True for a supported image path/name (png/jpg/jpeg). */
+/** True for an intake-supported image path/name (png/jpg/jpeg/webp — see the extension set). */
 export function isSupportedImagePath(pathOrName: string): boolean {
   return VISION_IMAGE_EXTENSIONS.has(imageExtensionOf(pathOrName))
 }
@@ -145,6 +102,9 @@ export function validateAnalyzeRequest(
   // it as undecodable and reject rather than admit unverifiable bytes to the sidecar.
   if (pixels === null) return 'decodeFailed'
   if (pixels > maxPixels) return 'tooLarge'
-  if (typeof question !== 'string' || question.trim() === '') return 'emptyResponse'
+  // #120 item 1: a blank question is an INPUT problem — its own code, not 'emptyResponse'
+  // (whose copy means "the model returned an empty answer"). The renderer pre-guards blank
+  // questions (visionSession `noop`), so this backstop fires only for non-renderer callers.
+  if (typeof question !== 'string' || question.trim() === '') return 'emptyQuestion'
   return null
 }

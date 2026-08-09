@@ -7,13 +7,18 @@ import {
   ImagePreview,
   QuestionComposer,
   VisionUnavailable,
+  blobToDataUrl,
   decodeImage,
+  DOWNSCALE_TARGET,
   imageMimeFromName,
   imageMimeOfFile,
+  isHeicName,
   ImageDecodeError,
   MAX_IMAGE_BYTES,
   type ComposerChip,
+  type DecodedImage,
   type DecodeImage,
+  type ImageInputMime,
   type ImageMime
 } from '../images'
 import {
@@ -54,7 +59,16 @@ const CHIP_KEYS: { labelKey: MessageKey; promptKey: MessageKey }[] = [
 // `multiDrop` is a UI-only concern (NOT a VisionErrorCode — there is no such backend code);
 // it joins the client-guard codes the screen-level banner can show. `openFailed`/`deleteFailed`
 // (full-audit 2026-07-11 CODE-36/34) are UI-only too: a history entry whose open/delete IPC threw.
-type ClientImageError = VisionErrorCode | 'multiDrop' | 'openFailed' | 'deleteFailed'
+// `heicUnsupported` (#124) is UI-only detection by extension: HEIC stays unsupported (no
+// Chromium decode; a decoder would be a new native dep) but gets specific "convert to JPEG"
+// copy instead of the generic unsupported banner.
+type ClientImageError =
+  | VisionErrorCode
+  | 'multiDrop'
+  | 'openFailed'
+  | 'deleteFailed'
+  | 'clearFailed'
+  | 'heicUnsupported'
 
 // Client-guard error codes → friendly banner copy (the runtime codes map inside AnswerThread).
 const CLIENT_ERR_KEY: Partial<Record<ClientImageError, MessageKey>> = {
@@ -64,7 +78,9 @@ const CLIENT_ERR_KEY: Partial<Record<ClientImageError, MessageKey>> = {
   multiDrop: 'images.err.multiDrop',
   busy: 'images.err.busy',
   openFailed: 'images.err.openFailed',
-  deleteFailed: 'images.err.deleteFailed'
+  deleteFailed: 'images.err.deleteFailed',
+  clearFailed: 'images.err.clearFailed',
+  heicUnsupported: 'images.err.heic'
 }
 
 export function ImagesScreen({
@@ -182,7 +198,28 @@ export function ImagesScreen({
     const mime: ImageMime = detail.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png'
     try {
       const blob = new Blob([detail.imageBytes as unknown as BlobPart], { type: mime })
-      const decoded = await decodeImpl(blob, mime)
+      // #121: the stored bytes ARE the pipeline's output from the original analyze (≤1536 px,
+      // re-encoded) — running them through decodeImage again was a no-op scale plus a fresh
+      // JPEG q0.9 re-encode, compounding generation loss into every reopened follow-up (and
+      // byte-shifting the image out of any warm `cache_prompt` prefill). When the persisted
+      // dimensions prove no scaling is needed, ship/show the stored bytes VERBATIM; the full
+      // pipeline remains only for legacy/oversized entries (dims missing or > target).
+      let decoded: DecodedImage
+      if (
+        detail.width != null &&
+        detail.height != null &&
+        Math.max(detail.width, detail.height) <= DOWNSCALE_TARGET
+      ) {
+        decoded = {
+          bytes: detail.imageBytes,
+          mimeType: mime,
+          dataUrl: await blobToDataUrl(blob),
+          width: detail.width,
+          height: detail.height
+        }
+      } else {
+        decoded = await decodeImpl(blob, mime)
+      }
       setComposer('')
       loadVisionSession(
         { decoded, name: detail.title, sizeBytes: detail.sizeBytes },
@@ -223,11 +260,33 @@ export function ImagesScreen({
     showToast(t('images.history.deleted'))
   }
 
+  // #122: the bulk "Clear image history" action. Same honesty contract as deleteSession
+  // (CODE-34): a FAILED clear resyncs the list and says so — never the success toast.
+  async function clearHistory(): Promise<void> {
+    try {
+      await window.api?.clearImageSessions?.()
+    } catch {
+      await loadSessions()
+      setScreenError('clearFailed')
+      return
+    }
+    // Every persisted session is gone — if the on-screen analysis was one of them, reset it
+    // (mirrors the per-entry delete of the open session; a not-yet-persisted run is untouched).
+    if (getVisionSession().sessionId != null) {
+      removeVisionImage()
+      setComposer('')
+      setViewingDetail(false)
+    }
+    await loadSessions()
+    showToast(t('images.history.cleared'))
+  }
+
   async function handleFile(file: File): Promise<void> {
     setScreenError(null)
     const mime = imageMimeOfFile(file)
     if (!mime) {
-      setScreenError('unsupportedType')
+      // #124: an iPhone HEIC/HEIF gets its specific "convert to JPEG" copy.
+      setScreenError(isHeicName(file.name) ? 'heicUnsupported' : 'unsupportedType')
       return
     }
     if (file.size > MAX_IMAGE_BYTES) {
@@ -262,7 +321,8 @@ export function ImagesScreen({
     if (!chosen) return
     const mime = imageMimeFromName(chosen.name)
     if (!mime) {
-      setScreenError('unsupportedType')
+      // #124: an iPhone HEIC/HEIF gets its specific "convert to JPEG" copy.
+      setScreenError(isHeicName(chosen.name) ? 'heicUnsupported' : 'unsupportedType')
       return
     }
     if (chosen.sizeBytes > MAX_IMAGE_BYTES) {
@@ -284,7 +344,7 @@ export function ImagesScreen({
 
   async function decodeAndSelect(
     blob: Blob,
-    mime: ImageMime,
+    mime: ImageInputMime,
     name: string,
     sizeBytes: number
   ): Promise<void> {
@@ -364,6 +424,7 @@ export function ImagesScreen({
             running={analyzing && selected ? { title: selected.name, onOpen: () => setViewingDetail(true) } : null}
             onOpen={(id) => void openSession(id)}
             onDelete={(id) => void deleteSession(id)}
+            onClearAll={() => void clearHistory()}
           />
         </>
       )

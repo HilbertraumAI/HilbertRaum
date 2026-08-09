@@ -160,8 +160,8 @@ const api = {
   // ---- Image understanding (vision) ----
   /** Is image understanding available (runtime + a verified vision model + projector)? */
   imageGetStatus: (): Promise<VisionStatus> => ipcRenderer.invoke(IPC.imageGetStatus),
-  /** Open the OS picker filtered to png/jpg/jpeg; returns an opaque token + name + sizeBytes,
-   *  or null. The absolute path stays in MAIN (D2) — readBytes takes only the token. */
+  /** Open the OS picker filtered to png/jpg/jpeg/webp; returns an opaque token + name +
+   *  sizeBytes, or null. The absolute path stays in MAIN (D2) — readBytes takes only the token. */
   imageChooseImage: (): Promise<{ token: string; name: string; sizeBytes: number } | null> =>
     ipcRenderer.invoke(IPC.imageChooseImage),
   /** Read a PICKED image's bytes by the one-time token from chooseImage (main owns the path +
@@ -206,6 +206,8 @@ const api = {
   /** Delete one history entry: shred the stored image + cascade-remove its turns. */
   deleteImageSession: (id: string): Promise<void> =>
     ipcRenderer.invoke(IPC.imageDeleteSession, id),
+  /** Clear the WHOLE image history (#122). Resolves with the number of sessions removed. */
+  clearImageSessions: (): Promise<number> => ipcRenderer.invoke(IPC.imageClearSessions),
 
   // ---- Translate view (TG-4) ----
   /** Start a one-at-a-time text translation on the TranslateGemma sidecar; resolves with the

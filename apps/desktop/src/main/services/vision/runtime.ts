@@ -1,5 +1,6 @@
 import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime/sidecar'
 import { readChatSSE } from '../runtime/llama'
+import type { VisionErrorCode } from '../../../shared/types'
 
 // The lazily-started vision sidecar (image-understanding plan §7 Option A, §10 `runtime.ts`).
 // It composes `LlamaServer` DIRECTLY — like `E5Embedder`, NOT the chat `RuntimeManager` — so it
@@ -140,6 +141,35 @@ export interface VisionRuntimeOptions extends VisionRuntimeDeps {
   idleTimeoutMs?: number
   /** Idle-teardown clock (default: the global `setTimeout`). Tests inject a controllable clock. */
   idleClock?: IdleClock
+}
+
+/**
+ * A runtime failure that already knows its friendly `VisionErrorCode` (#123). The service's
+ * catch maps it straight to the job error instead of the generic `runtimeFailed`, so the two
+ * user-actionable failure modes — the per-request timeout and the sidecar's context overflow —
+ * surface with their own copy (retry / smaller image vs. ask shorter / fresh analysis).
+ * The message stays content-free (it reaches the local log only).
+ */
+export class VisionAnalyzeError extends Error {
+  constructor(
+    public readonly code: VisionErrorCode,
+    message: string
+  ) {
+    super(message)
+    this.name = 'VisionAnalyzeError'
+  }
+}
+
+/**
+ * True when a non-OK llama-server response is its context-exceeded rejection (#123): the
+ * documented b9849 shape is an HTTP 400 whose JSON body carries
+ * `"type":"exceed_context_size_error"` (see known-limitations "exceed_context_size_error");
+ * the wording match is the tolerant fallback for older builds. Pure, unit-testable.
+ */
+export function isContextExceededBody(bodyText: string): boolean {
+  return (
+    bodyText.includes('exceed_context_size') || /exceeds? (the )?available context/i.test(bodyText)
+  )
 }
 
 export interface VisionAnalyzeOptions {
@@ -289,7 +319,22 @@ export class VisionRuntime {
         signal: combined.signal
       })
       if (!res.ok) {
-        void res.body?.cancel().catch(() => undefined)
+        // #123: llama-server rejects a context overflow with its own error body — read it
+        // (best-effort; the loopback error payload is small) to surface the actionable
+        // `contextExceeded` code instead of the generic runtime failure. The body text is
+        // consumed for DETECTION only and never logged/rethrown (content-free posture, §12).
+        let errBody = ''
+        try {
+          errBody = (await res.text?.()) ?? ''
+        } catch {
+          void res.body?.cancel().catch(() => undefined)
+        }
+        if (isContextExceededBody(errBody)) {
+          throw new VisionAnalyzeError(
+            'contextExceeded',
+            `Vision request failed: HTTP ${res.status} (context exceeded)`
+          )
+        }
         throw new Error(`Vision request failed: HTTP ${res.status}`)
       }
       if (!res.body) throw new Error('Vision request returned an empty response body')
@@ -301,9 +346,30 @@ export class VisionRuntime {
         opts.onToken?.(delta)
       }
       return answer
+    } catch (err) {
+      // #123: `combined` aborts on EITHER the caller signal (a user Stop — the service maps
+      // that to `cancelled`) OR the per-request timeout. Only the timeout leaves the caller
+      // signal un-aborted, so this is the timeout-driven abort — give it its own code.
+      if (err instanceof VisionAnalyzeError) throw err
+      if (combined.signal.aborted && !opts.signal?.aborted) {
+        throw new VisionAnalyzeError('timedOut', `Vision request timed out after ${timeoutMs} ms`)
+      }
+      throw err
     } finally {
       combined.clear()
     }
+  }
+
+  /**
+   * True once a start attempt failed (the sticky latch is armed). The latch stays per-instance
+   * sticky — but the ORCHESTRATOR (`VisionService.run()`'s catch) reads this to DISCARD the
+   * instance so the next analyze rebuilds a fresh runtime (#117): a transient cold-start failure
+   * (OOM under RAM pressure, the known-limitations startup port race) must not brick image
+   * understanding for the rest of the session. The corrupt-GGUF fast-fail intent survives via
+   * the service's short cooldown window (see `VISION_START_FAILURE_COOLDOWN_MS`).
+   */
+  isStartFailed(): boolean {
+    return this.startFailed !== null
   }
 
   /** Kill the sidecar (no-op if never started). Permanent for this instance; the orchestrator
