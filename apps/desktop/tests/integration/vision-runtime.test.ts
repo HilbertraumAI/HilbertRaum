@@ -2,8 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { VisionRuntime, type VisionAnalyzeOptions } from '../../src/main/services/vision/runtime'
+import {
+  VisionAnalyzeError,
+  VisionRuntime,
+  type VisionAnalyzeOptions
+} from '../../src/main/services/vision/runtime'
+import { VisionService, type VisionStreamEmitter } from '../../src/main/services/vision'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
+import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
 
 // V4 hardening tests for the real VisionRuntime (image-understanding plan §16 V4 / §17): lazy
 // single-flight start, the failed-start latch, cancellation, NO orphan on a racing stop, and —
@@ -85,6 +91,33 @@ const analyzeOpts: VisionAnalyzeOptions = {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+// ---- VisionService-level helpers (the #117 failed-start-recovery cases) ----------------------
+
+const VLM_AVAILABLE: VisionStatus = { available: true, modelId: 'vlm', modelDisplayName: 'VLM' }
+
+/** A request that passes the main-side guard: a parseable PNG header (SEC-6). */
+function serviceReq(): ImageAnalyzeRequest {
+  const b = new Uint8Array(24)
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
+  const dv = new DataView(b.buffer)
+  dv.setUint32(16, 2) // width
+  dv.setUint32(20, 2) // height
+  return { imageBytes: b, mimeType: 'image/png', question: 'What is in this image?' }
+}
+
+/** Run one service analyze to its terminal job (done/failed/cancelled) via polling. */
+async function runToTerminal(service: VisionService, req: ImageAnalyzeRequest): Promise<ImageJob> {
+  const emit: VisionStreamEmitter = { token: () => {}, done: () => {}, error: () => {} }
+  const initial = service.analyze(req, emit)
+  if (initial.state === 'failed' || initial.state === 'cancelled') return initial
+  for (let i = 0; i < 400; i++) {
+    const job = service.getJob(initial.jobId)
+    if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') return job
+    await sleep(5)
+  }
+  throw new Error('vision job never reached a terminal state')
+}
 
 describe('VisionRuntime — start + analyze', () => {
   it('lazily spawns the sidecar with --mmproj + --device none and streams the answer', async () => {
@@ -169,6 +202,105 @@ describe('VisionRuntime — start + analyze', () => {
     await expect(p).rejects.toThrow(/abort/i)
     expect(seenSignal?.aborted).toBe(true)
     await rt.stop()
+  })
+
+  // #123: the two user-actionable runtime failures used to collapse into the generic
+  // 'runtimeFailed'. The timeout-driven abort (the caller signal did NOT fire, so `combineSignals`'
+  // timeout did) and llama-server's context-exceeded rejection now carry their own codes.
+  it('maps the request-timeout abort to timedOut (#123)', async () => {
+    const { spawn } = fakeSpawn()
+    const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError'))
+        )
+      })
+    }) as typeof fetch
+    const rt = new VisionRuntime({
+      ...base,
+      spawn,
+      fetchImpl: hangingFetch,
+      requestTimeoutMs: 30,
+      idleTimeoutMs: 100_000
+    })
+    const err = (await rt.analyze(analyzeOpts).catch((e) => e)) as VisionAnalyzeError
+    expect(err).toBeInstanceOf(VisionAnalyzeError)
+    expect(err.code).toBe('timedOut')
+    await rt.stop()
+  })
+
+  it('a USER abort is NOT mis-mapped to timedOut (the caller signal fired first)', async () => {
+    const { spawn } = fakeSpawn()
+    let seenSignal: AbortSignal | undefined
+    const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      seenSignal = init?.signal ?? undefined
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError'))
+        )
+      })
+    }) as typeof fetch
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl: hangingFetch, idleTimeoutMs: 100_000 })
+    const controller = new AbortController()
+    const p = rt.analyze({ ...analyzeOpts, signal: controller.signal })
+    while (!seenSignal) await sleep(1)
+    controller.abort()
+    const err = await p.catch((e) => e)
+    expect(err).not.toBeInstanceOf(VisionAnalyzeError) // stays a plain abort → service maps 'cancelled'
+    await rt.stop()
+  })
+
+  it('maps the llama-server context-exceeded rejection to contextExceeded (#123)', async () => {
+    const { spawn } = fakeSpawn()
+    const overflowFetch = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      // The documented b9849 rejection shape (known-limitations "exceed_context_size_error").
+      return {
+        ok: false,
+        status: 400,
+        text: async () =>
+          '{"error":{"code":400,"message":"the request exceeds the available context size","type":"exceed_context_size_error"}}'
+      } as unknown as Response
+    }) as typeof fetch
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl: overflowFetch, idleTimeoutMs: 100_000 })
+    const err = (await rt.analyze(analyzeOpts).catch((e) => e)) as VisionAnalyzeError
+    expect(err).toBeInstanceOf(VisionAnalyzeError)
+    expect(err.code).toBe('contextExceeded')
+    await rt.stop()
+  })
+
+  it('a generic non-OK response stays a plain error (→ runtimeFailed in the service)', async () => {
+    const { spawn } = fakeSpawn()
+    const failingFetch = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      return { ok: false, status: 500, body: null } as unknown as Response
+    }) as typeof fetch
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl: failingFetch, idleTimeoutMs: 100_000 })
+    const err = await rt.analyze(analyzeOpts).catch((e) => e)
+    expect(err).not.toBeInstanceOf(VisionAnalyzeError)
+    expect(String(err)).toContain('HTTP 500')
+    await rt.stop()
+  })
+
+  it('the typed code rides the job to the renderer as job.error (#123, service mapping)', async () => {
+    const service = new VisionService({
+      getStatus: async () => VLM_AVAILABLE,
+      createRuntime: () => ({
+        analyze: async () => {
+          throw new VisionAnalyzeError('timedOut', 'Vision request timed out after 30 ms')
+        }
+      })
+    })
+    const job = await runToTerminal(service, serviceReq())
+    expect(job.state).toBe('failed')
+    expect(job.error).toBe('timedOut')
+    await service.stop()
   })
 
   it('stop() during the in-flight lazy start kills the child (no orphan) and blocks restart', async () => {
@@ -458,6 +590,107 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     expect(answer).toBe(FIXTURE_ANSWER)
     expect(calls.length).toBe(2) // cold-started a fresh child rather than reusing the dead one
     await rt.stop()
+  })
+
+  // #117 (alongside the F-14/M1 pin above): F-14 recovers a child that dies AFTER becoming
+  // healthy; a child that dies DURING start used to latch forever — `startFailed` is sticky and
+  // `VisionService` never discarded the cached runtime, so ONE transient cold-start failure
+  // (OOM under RAM pressure, the startup port race) bricked image understanding for the rest
+  // of the session and made "Try again" permanently misleading. The service now discards a
+  // start-failed runtime and rebuilds fresh past a short cooldown.
+  it('recovers from a FAILED start: past the cooldown the next analyze rebuilds a fresh runtime (#117)', async () => {
+    const { fetchImpl } = visionFetch()
+    let spawnCount = 0
+    // First spawn dies during start (transient OOM); every later spawn is healthy.
+    const spawn = (_c: string, _args: string[]): ChildProcessLike => {
+      spawnCount++
+      const child = new FakeChild()
+      if (spawnCount === 1) queueMicrotask(() => child.emit('exit', 137, null))
+      return child
+    }
+    const failingFetch = (async (url: string | URL, init?: RequestInit) => {
+      // The first child is dead, so its health poll must fail; later children are healthy.
+      if (spawnCount === 1) throw new Error('connection refused')
+      return fetchImpl(url as never, init)
+    }) as typeof fetch
+    let built = 0
+    const service = new VisionService({
+      getStatus: async () => VLM_AVAILABLE,
+      createRuntime: () => {
+        built++
+        return new VisionRuntime({ ...base, spawn, fetchImpl: failingFetch, idleTimeoutMs: 100_000 })
+      },
+      startFailureCooldownMs: 0 // the retry lands "past" the window deterministically
+    })
+
+    const first = await runToTerminal(service, serviceReq())
+    expect(first.state).toBe('failed')
+    expect(first.error).toBe('runtimeFailed')
+
+    // The user's retry: the start-failed runtime was DISCARDED, a fresh one is built + spawned.
+    const second = await runToTerminal(service, serviceReq())
+    expect(second.state).toBe('done')
+    expect(second.answer).toBe(FIXTURE_ANSWER)
+    expect(built).toBe(2)
+    expect(spawnCount).toBe(2)
+    await service.stop()
+  })
+
+  it('fails FAST within the start-failure cooldown — no re-spawn per retry (corrupt-GGUF case, #117)', async () => {
+    let spawnCount = 0
+    const spawn = (_c: string, _args: string[]): ChildProcessLike => {
+      spawnCount++
+      const child = new FakeChild()
+      queueMicrotask(() => child.emit('exit', 1, null)) // dies every time (corrupt GGUF)
+      return child
+    }
+    let built = 0
+    const service = new VisionService({
+      getStatus: async () => VLM_AVAILABLE,
+      createRuntime: () => {
+        built++
+        return new VisionRuntime({
+          ...base,
+          spawn,
+          fetchImpl: (async () => {
+            throw new Error('connection refused')
+          }) as unknown as typeof fetch
+        })
+      },
+      startFailureCooldownMs: 60_000
+    })
+
+    expect((await runToTerminal(service, serviceReq())).error).toBe('runtimeFailed')
+    // A retry INSIDE the window fast-fails without building or spawning anything new.
+    expect((await runToTerminal(service, serviceReq())).error).toBe('runtimeFailed')
+    expect(built).toBe(1)
+    expect(spawnCount).toBe(1)
+    await service.stop()
+  })
+
+  it('isStartFailed() reports the latch (false before/after a healthy start, true after a failed one)', async () => {
+    const { spawn } = fakeSpawn()
+    const { fetchImpl } = visionFetch()
+    const healthy = new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    expect(healthy.isStartFailed()).toBe(false)
+    await healthy.analyze(analyzeOpts)
+    expect(healthy.isStartFailed()).toBe(false)
+    await healthy.stop()
+
+    const dying = new VisionRuntime({
+      ...base,
+      spawn: (_c: string, _args: string[]): ChildProcessLike => {
+        const child = new FakeChild()
+        queueMicrotask(() => child.emit('exit', 1, null))
+        return child
+      },
+      fetchImpl: (async () => {
+        throw new Error('connection refused')
+      }) as unknown as typeof fetch
+    })
+    await expect(dying.analyze(analyzeOpts)).rejects.toThrow()
+    expect(dying.isStartFailed()).toBe(true)
+    await dying.stop()
   })
 
   it('a healthy crash does NOT clobber a newer instance (identity-compared)', async () => {

@@ -21,10 +21,15 @@ export interface ImageTurn {
 }
 
 // The runtime-side error codes a turn can surface (client-guard codes are screen-level
-// banners). `cancelled` is handled separately as a quiet note, not an error.
+// banners). `cancelled` is handled separately as a quiet note, not an error. An UNKNOWN code
+// (version skew) falls back to the runtimeFailed copy at the lookup site — keep that fallback:
+// it is what makes adding codes main-side skew-safe (#123).
 const ERR_KEY: Partial<Record<VisionErrorCode, MessageKey>> = {
   runtimeFailed: 'images.err.runtimeFailed',
   emptyResponse: 'images.err.emptyResponse',
+  emptyQuestion: 'images.err.emptyQuestion',
+  timedOut: 'images.err.timedOut',
+  contextExceeded: 'images.err.contextExceeded',
   busy: 'images.err.busy',
   tooLarge: 'images.err.tooLarge',
   unsupportedType: 'images.err.unsupported',

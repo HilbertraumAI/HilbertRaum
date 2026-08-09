@@ -13,7 +13,8 @@ const MIME_LABEL: Record<ImageMime, string> = {
 }
 
 // Decimal separator follows the UI language (i18n record §5), mirroring DocumentsScreen.
-function formatSize(bytes: number, lang: UiLanguage): string {
+// Exported for the history list's per-entry size + total (#122) — one images-surface definition.
+export function formatSize(bytes: number, lang: UiLanguage): string {
   if (bytes < 1024) return `${bytes} B`
   const fmt = (n: number): string =>
     n.toLocaleString(lang, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })

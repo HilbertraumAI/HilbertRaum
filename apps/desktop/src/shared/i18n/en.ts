@@ -1627,6 +1627,9 @@ export const en = {
   'diag.system.title': 'System',
   'diag.system.osPlatform': 'OS / platform',
   'diag.system.freeSpace': 'Free space',
+  // #122: the workspace/images/ footprint — visible where storage is reported, because runaway
+  // growth there threatens the lock path's re-encrypt free-space need on a portable drive.
+  'diag.system.imagesSize': 'Image history size',
   'diag.system.loadFailed': 'System details could not be loaded yet. Try reopening this tab.',
   'diag.paths.title': 'Paths',
   'diag.paths.prepared': 'Prepared drive',
@@ -2022,6 +2025,10 @@ export const en = {
   'main.dialog.filterAll': 'All files',
   'main.dialog.chooseImage': 'Choose an image',
   'main.dialog.filterImages': 'Images',
+  // #120 item 4: the images IPC refusal backstops (near-dead text — the renderer shows its own
+  // coded copy — but localized like the sibling main.docs.locked).
+  'main.images.unsupportedType': "That file type isn't supported. Choose a PNG, JPEG, or WEBP.",
+  'main.images.tooLarge': 'That image is too large to analyze. Try a smaller image.',
   'main.dialog.importSkill': 'Import a skill package',
   'main.dialog.importSkillFolder': 'Import a skill folder',
   'main.dialog.exportSkill': 'Export skill',
@@ -2202,7 +2209,7 @@ export const en = {
   // Drop zone (§5.2) — a large, focusable target; the "choose" button is the non-drag path.
   'images.drop.title': 'Drop an image here',
   'images.drop.choose': 'or choose an image',
-  'images.drop.types': 'PNG or JPEG',
+  'images.drop.types': 'PNG, JPEG, or WEBP',
   // Shown while an analysis is running: a new upload is disabled (vision is one-at-a-time).
   'images.drop.busy': 'An analysis is running. Wait for it to finish to start another.',
   // Detail view → back to the upload + previous-results view.
@@ -2246,17 +2253,28 @@ export const en = {
   'images.answer.stopped': 'Stopped.',
   // Friendly error rows (§5.6) — a CODE is mapped here; raw model/runtime text never shows.
   'images.err.tooLarge': 'This image is too large to analyze. Try a smaller image.',
-  'images.err.unsupported': "That file type isn't supported. Choose a PNG or JPEG.",
+  'images.err.unsupported': "That file type isn't supported. Choose a PNG, JPEG, or WEBP.",
+  // #124: HEIC detected by extension — specific remedy instead of the generic unsupported copy.
+  'images.err.heic': "iPhone HEIC photos aren't supported yet. Convert the photo to JPEG first.",
   'images.err.decodeFailed':
     "That image couldn't be opened. It may be damaged or in an unsupported format.",
   'images.err.multiDrop': 'Drop one image at a time.',
   'images.err.runtimeFailed': "The vision model couldn't start. Try again, or pick another model.",
   'images.err.emptyResponse': 'No answer came back for that image. Try rephrasing your question.',
+  // #120 item 1: a BLANK question is an input problem, not an empty model answer.
+  'images.err.emptyQuestion': 'Type a question about the image first.',
+  // #123: the two user-actionable runtime failures get their own remedies (they used to
+  // collapse into the generic runtimeFailed copy).
+  'images.err.timedOut': 'This is taking too long. Try a smaller image, or ask again.',
+  'images.err.contextExceeded':
+    'This conversation has grown too long for this image. Ask a shorter question, or start a new analysis.',
   'images.err.busy': 'Working on the previous question…',
   // full-audit 2026-07-11 CODE-36/34: a saved-analysis open that FAILED (vs one that vanished,
   // which just resyncs the list) and a delete that failed — both used to be silent/mislabelled.
   'images.err.openFailed': "That analysis couldn't be opened. Try again.",
   'images.err.deleteFailed': "That analysis couldn't be deleted. Try again.",
+  // #122: the bulk clear shares the CODE-34 honesty contract with the per-entry delete.
+  'images.err.clearFailed': "The history couldn't be cleared. Try again.",
   // History (image-understanding history): saved analyses, encrypted at rest, deletable.
   'images.history.title': 'History',
   'images.history.empty': 'Images you analyze will appear here.',
@@ -2272,6 +2290,15 @@ export const en = {
   'images.history.delete.confirm': 'Delete',
   'images.history.delete.body':
     '“{title}” and its answers will be permanently removed from this drive.',
+  // #122: per-entry + total stored size, and the bulk clear (disk is the scarce resource on a
+  // portable drive — the list says what it costs, and one action gives it all back).
+  'images.history.total': 'Total: {size}',
+  'images.history.clear': 'Clear history',
+  'images.history.clear.title': 'Clear image history?',
+  'images.history.clear.confirm': 'Clear history',
+  'images.history.clear.body':
+    'All saved analyses ({size}) and their stored images will be permanently removed from this drive.',
+  'images.history.cleared': 'Image history cleared',
 
   // ---- Translate screen (TranslateGemma wave, plan §2 D6, TG-4) ----
   // Live TEXT translation on the local TranslateGemma sidecar. Everything stays local; nothing is

@@ -20,9 +20,11 @@ import {
 } from '../services/vision'
 import {
   addImageTurn,
+  clearImageSessions,
   createImageSession,
   deleteImageSession,
   getImageSession,
+  imageSessionExists,
   imagesDir,
   listImageSessions
 } from '../services/vision/history'
@@ -43,13 +45,30 @@ import { log } from '../services/logging'
 //     where a code-exec'd renderer (threat #1) could read ANY supported-extension file by
 //     handing back an arbitrary path. The byte cap is re-checked on the open fd (no TOCTOU).
 
+// #120 item 4: the refusal strings are LOCALIZED at throw time (tMain — the sibling
+// `main.docs.locked` precedent), no longer hard-coded English constants. They are near-dead
+// text (the renderer swallows the thrown message and shows its own coded copy) but a caller
+// that surfaces raw IPC errors now sees the user's language.
 /** Friendly refusal for an unsupported picked file (the renderer pre-filters; this is a backstop). */
-export const IMAGE_UNSUPPORTED_MESSAGE =
-  'That file type isn’t supported. Choose a PNG or JPEG.'
+const imageUnsupportedMessage = (): string => tMain('main.images.unsupportedType')
 /** Friendly refusal for an over-cap image. */
-export const IMAGE_TOO_LARGE_MESSAGE = 'That image is too large to analyze. Try a smaller image.'
+const imageTooLargeMessage = (): string => tMain('main.images.tooLarge')
+
+// #120 item 2: persistence-field clamps. The title is a filename (basename-sized — 255 is the
+// common filesystem component limit); dimensions are decoded pixel sizes, so anything beyond
+// ~1e6 px per side (≫ the 50 MP D4 budget allows) is junk.
+const MAX_IMAGE_TITLE_CHARS = 255
+const MAX_IMAGE_DIM = 1_000_000
+/** Coerce a renderer-supplied dimension to a finite positive integer, or null. */
+const clampImageDim = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 1 && v <= MAX_IMAGE_DIM ? Math.floor(v) : null
 
 export function registerImagesIpc(ctx: AppContext, service?: VisionService): void {
+  // WARNING (#119): this `??` fallback constructs a VisionService WITHOUT the
+  // `isWorkspaceLocking` latch (AUD-02). Production always wires the LATCHED instance via
+  // `ctx.vision` (main/index.ts), so the fallback is TEST-ONLY today — do not "simplify" the
+  // call site to rely on it, or an analyze landing during the multi-second lock teardown could
+  // rebuild a fresh vision sidecar that outlives the vault re-encrypt.
   const vision =
     service ??
     new VisionService({
@@ -108,12 +127,18 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
   ipcMain.handle(
     IPC.imageChooseImage,
     async (): Promise<{ token: string; name: string; sizeBytes: number } | null> => {
+      // #119: chooseImage is a FILE handler and follows the module's documented invariant
+      // (file/runtime handlers requireUnlocked) like its siblings. Nothing legitimate calls it
+      // locked (the Images screen never mounts then); ungated it would pop the OS dialog and
+      // bank D2 tokens for a compromised renderer to redeem the moment the workspace unlocks.
+      requireUnlocked()
       const win = BrowserWindow.getFocusedWindow()
       const options = {
         title: tMain('main.dialog.chooseImage'),
         properties: ['openFile'] as Array<'openFile'>,
         filters: [
-          { name: tMain('main.dialog.filterImages'), extensions: ['png', 'jpg', 'jpeg'] },
+          // #124: WEBP joins the intake filter (normalized to PNG renderer-side).
+          { name: tMain('main.dialog.filterImages'), extensions: ['png', 'jpg', 'jpeg', 'webp'] },
           { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
         ]
       }
@@ -144,7 +169,7 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     requireUnlocked()
     const path = consumeImageToken(token)
     if (path === null || !isSupportedImagePath(path)) {
-      throw new Error(IMAGE_UNSUPPORTED_MESSAGE)
+      throw new Error(imageUnsupportedMessage())
     }
     let fh: FileHandle
     try {
@@ -154,7 +179,7 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
       // errno code only. `String(err)` of an fs error embeds the full path; never log that.
       const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined
       log.warn('Vision readBytes open failed', { ext: imageExtensionOf(path), code })
-      throw new Error(IMAGE_UNSUPPORTED_MESSAGE)
+      throw new Error(imageUnsupportedMessage())
     }
     try {
       // PERF-1: read off the main thread with fs/promises (mirrors the ING-8 async conversion in
@@ -162,8 +187,8 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
       // The SEC-3/TOCTOU invariant is unchanged — we fstat THIS handle then read THE SAME handle, so
       // the size guard is authoritative for these exact bytes; a concurrent truncation yields fewer.
       const st = await fh.stat()
-      if (!st.isFile()) throw new Error(IMAGE_UNSUPPORTED_MESSAGE)
-      if (st.size > VISION_MAX_IMAGE_BYTES) throw new Error(IMAGE_TOO_LARGE_MESSAGE)
+      if (!st.isFile()) throw new Error(imageUnsupportedMessage())
+      if (st.size > VISION_MAX_IMAGE_BYTES) throw new Error(imageTooLargeMessage())
       const buf = Buffer.allocUnsafe(st.size)
       let off = 0
       while (off < st.size) {
@@ -189,7 +214,19 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     // image encrypted-at-rest and creates a session; a follow-up reuses it. The session is
     // created lazily and at most once; a busy/failed reject persists nothing. Persistence is
     // best-effort — any failure is logged content-free and the live analysis still runs.
-    let sessionId: string | null = typeof req.sessionId === 'string' ? req.sessionId : null
+    //
+    // #120 item 2: the persistence fields are renderer input (threat #1) and were the module's
+    // one unclamped surface — clamp them here at the IPC boundary. The title is length-capped,
+    // width/height coerced to finite positive ints or null, and a sessionId that names no
+    // existing row is treated as absent (a fresh session) instead of trusted for the append.
+    const name =
+      typeof req.name === 'string' ? req.name.trim().slice(0, MAX_IMAGE_TITLE_CHARS) : undefined
+    const width = clampImageDim(req.width)
+    const height = clampImageDim(req.height)
+    let sessionId: string | null =
+      typeof req.sessionId === 'string' && imageSessionExists(ctx.db, req.sessionId)
+        ? req.sessionId
+        : null
     // ASYNC (audit 2026-07-16 F-12): createImageSession now runs the ~20 MiB write+encrypt+shred off the
     // main thread. The `done` wrapper AWAITS this before `base.done` so the sessionId still rides the
     // done event (the renderer's follow-up contract, pinned by images-ipc.test.ts). Best-effort — a
@@ -200,7 +237,14 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
         sessionId = await createImageSession(
           ctx.db,
           imagesDir(ctx.paths.workspacePath),
-          req,
+          // The CLAMPED persistence fields (#120 item 2) — never the raw renderer values.
+          {
+            imageBytes: req.imageBytes,
+            mimeType: req.mimeType,
+            name,
+            width: width ?? undefined,
+            height: height ?? undefined
+          },
           ctx.workspace.documentCipher()
         )
       } catch (err) {
@@ -276,5 +320,13 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     requireUnlocked()
     // ASYNC (audit 2026-07-16 F-12): the post-commit shred runs off the main thread.
     if (typeof id === 'string') await deleteImageSession(ctx.db, imagesDir(ctx.paths.workspacePath), id)
+  })
+
+  // #122: the bulk "Clear image history" action — one transactional row sweep, post-commit
+  // best-effort shreds (REL-5 ordering preserved; see clearImageSessions). Gated like its
+  // history siblings.
+  ipcMain.handle(IPC.imageClearSessions, async (): Promise<number> => {
+    requireUnlocked()
+    return clearImageSessions(ctx.db, imagesDir(ctx.paths.workspacePath))
   })
 }

@@ -71,7 +71,10 @@ describe('validateAnalyzeRequest pixel budget (D4)', () => {
     // Byte cap (tiny maxBytes) fires before dimensions are even consulted.
     expect(validateAnalyzeRequest(pngHeader(10, 10), 'image/png', Q, 4)).toBe('tooLarge')
     expect(validateAnalyzeRequest(new Uint8Array(0), 'image/png', Q)).toBe('decodeFailed')
-    expect(validateAnalyzeRequest(pngHeader(10, 10), 'image/png', '   ')).toBe('emptyResponse')
+    // #120 item 1: a blank question is an INPUT problem with its own code — no longer the
+    // misleading 'emptyResponse' (whose copy means "the model returned an empty answer").
+    expect(validateAnalyzeRequest(pngHeader(10, 10), 'image/png', '   ')).toBe('emptyQuestion')
+    expect(validateAnalyzeRequest(pngHeader(10, 10), 'image/png', undefined)).toBe('emptyQuestion')
   })
 
   it('honours an explicit maxPixels argument', () => {

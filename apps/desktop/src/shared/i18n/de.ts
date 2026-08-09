@@ -1674,6 +1674,8 @@ export const de: Record<keyof typeof en, string> = {
   'diag.system.title': 'System',
   'diag.system.osPlatform': 'OS / Plattform',
   'diag.system.freeSpace': 'Freier Speicher',
+  // #122: der Platzbedarf von workspace/images/ — sichtbar dort, wo Speicher berichtet wird.
+  'diag.system.imagesSize': 'Größe des Bildverlaufs',
   'diag.system.loadFailed':
     'Systemdetails konnten noch nicht geladen werden. Öffne den Tab noch einmal.',
   'diag.paths.title': 'Pfade',
@@ -2111,6 +2113,11 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.filterAll': 'Alle Dateien',
   'main.dialog.chooseImage': 'Bild auswählen',
   'main.dialog.filterImages': 'Bilder',
+  // #120 Punkt 4: die IPC-Ablehnungstexte des Bild-Moduls (fast toter Text — der Renderer zeigt
+  // seine eigene Code-Meldung — aber lokalisiert wie das benachbarte main.docs.locked).
+  'main.images.unsupportedType':
+    'Dieser Dateityp wird nicht unterstützt. Wähle ein PNG, JPEG oder WEBP.',
+  'main.images.tooLarge': 'Dieses Bild ist zu groß zum Analysieren. Versuch ein kleineres Bild.',
   'main.dialog.importSkill': 'Ein Skill-Paket importieren',
   'main.dialog.importSkillFolder': 'Einen Skill-Ordner importieren',
   'main.dialog.exportSkill': 'Skill exportieren',
@@ -2282,7 +2289,7 @@ export const de: Record<keyof typeof en, string> = {
   'images.locked': 'Entsperre deinen Arbeitsbereich, um ein Bild zu verstehen.',
   'images.drop.title': 'Bild hier ablegen',
   'images.drop.choose': 'oder ein Bild auswählen',
-  'images.drop.types': 'PNG oder JPEG',
+  'images.drop.types': 'PNG, JPEG oder WEBP',
   'images.drop.busy': 'Eine Analyse läuft. Warten Sie, bis sie fertig ist, um eine neue zu starten.',
   'images.back': 'Zurück zu den Analysen',
   'images.preview.remove': 'Entfernen',
@@ -2319,7 +2326,10 @@ export const de: Record<keyof typeof en, string> = {
   'images.answer.stop': 'Stopp',
   'images.answer.stopped': 'Gestoppt.',
   'images.err.tooLarge': 'Dieses Bild ist zu groß zum Analysieren. Versuch ein kleineres Bild.',
-  'images.err.unsupported': 'Dieser Dateityp wird nicht unterstützt. Wähle ein PNG oder JPEG.',
+  'images.err.unsupported': 'Dieser Dateityp wird nicht unterstützt. Wähle ein PNG, JPEG oder WEBP.',
+  // #124: HEIC per Endung erkannt — konkreter Hinweis statt der allgemeinen Meldung.
+  'images.err.heic':
+    'iPhone-HEIC-Fotos werden noch nicht unterstützt. Wandle das Foto zuerst in JPEG um.',
   'images.err.decodeFailed':
     'Dieses Bild konnte nicht geöffnet werden. Es ist vielleicht beschädigt oder hat ein nicht unterstütztes Format.',
   'images.err.multiDrop': 'Leg immer nur ein Bild ab.',
@@ -2327,12 +2337,22 @@ export const de: Record<keyof typeof en, string> = {
     'Das KI-Bildmodell konnte nicht starten. Versuch es erneut oder wähle ein anderes Modell.',
   'images.err.emptyResponse':
     'Für dieses Bild kam keine Antwort zurück. Formulier deine Frage anders.',
+  // #120 Punkt 1: eine LEERE Frage ist ein Eingabeproblem, keine leere Modellantwort.
+  'images.err.emptyQuestion': 'Gib zuerst eine Frage zu diesem Bild ein.',
+  // #123: die zwei behebbaren Laufzeitfehler bekommen eigene Hinweise (vorher fielen sie
+  // in die allgemeine runtimeFailed-Meldung).
+  'images.err.timedOut': 'Das dauert zu lange. Versuch ein kleineres Bild oder frag noch einmal.',
+  'images.err.contextExceeded':
+    'Dieses Gespräch ist zu lang für dieses Bild geworden. Stell eine kürzere Frage oder starte eine neue Analyse.',
   'images.err.busy': 'Die vorige Frage wird noch bearbeitet…',
   // full-audit 2026-07-11 CODE-36/34: ein FEHLGESCHLAGENES Öffnen einer gespeicherten Analyse
   // (anders als eine verschwundene, die nur die Liste aktualisiert) und ein fehlgeschlagenes
   // Löschen — beides war vorher stumm bzw. falsch beschriftet.
   'images.err.openFailed': 'Diese Analyse konnte nicht geöffnet werden. Versuch es erneut.',
   'images.err.deleteFailed': 'Diese Analyse konnte nicht gelöscht werden. Versuch es erneut.',
+  // #122: das Leeren des Verlaufs folgt demselben Ehrlichkeitsvertrag (CODE-34) wie das
+  // Löschen einzelner Einträge.
+  'images.err.clearFailed': 'Der Verlauf konnte nicht geleert werden. Versuch es erneut.',
   // Verlauf (Bildverständnis-Verlauf): gespeicherte Analysen, verschlüsselt, löschbar.
   'images.history.title': 'Verlauf',
   'images.history.empty': 'Analysierte Bilder erscheinen hier.',
@@ -2347,6 +2367,15 @@ export const de: Record<keyof typeof en, string> = {
   'images.history.delete.confirm': 'Löschen',
   'images.history.delete.body':
     '„{title}“ und die zugehörigen Antworten werden dauerhaft von diesem Laufwerk entfernt.',
+  // #122: Größe pro Eintrag + gesamt, und das Leeren des Verlaufs (Speicherplatz ist auf einem
+  // mobilen Laufwerk DIE knappe Ressource — die Liste sagt, was sie kostet).
+  'images.history.total': 'Gesamt: {size}',
+  'images.history.clear': 'Verlauf leeren',
+  'images.history.clear.title': 'Bildverlauf leeren?',
+  'images.history.clear.confirm': 'Verlauf leeren',
+  'images.history.clear.body':
+    'Alle gespeicherten Analysen ({size}) und die zugehörigen Bilder werden dauerhaft von diesem Laufwerk entfernt.',
+  'images.history.cleared': 'Bildverlauf geleert',
 
   // ---- Übersetzen-Bildschirm (TranslateGemma-Welle, Plan §2 D6, TG-4) ----
   'translate.title': 'Text übersetzen',

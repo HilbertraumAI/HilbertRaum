@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
-import { statfs } from 'node:fs/promises'
+import { readdir, stat, statfs } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { DriveStatus } from '../../shared/types'
 
@@ -102,6 +102,26 @@ async function freeBytes(dir: string): Promise<number | null> {
   }
 }
 
+/**
+ * On-disk footprint of `workspace/images/` — the saved image-analysis history (#122). The dir
+ * is flat (one stored file per session) and its `.enc` sidecars stat fine while locked, so this
+ * is a cheap sum of file sizes. `0` when the dir doesn't exist yet; `null` only when unreadable.
+ */
+async function imagesFootprintBytes(workspacePath: string): Promise<number | null> {
+  const dir = join(workspacePath, 'images')
+  try {
+    const entries = await readdir(dir, { withFileTypes: true })
+    let total = 0
+    for (const e of entries) {
+      if (!e.isFile()) continue
+      total += (await stat(join(dir, e.name))).size
+    }
+    return total
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === 'ENOENT' ? 0 : null
+  }
+}
+
 /** Build the DriveStatus shown in the UI (spec §7.2). */
 export async function buildDriveStatus(paths: ResolvedPaths): Promise<DriveStatus> {
   return {
@@ -112,6 +132,7 @@ export async function buildDriveStatus(paths: ResolvedPaths): Promise<DriveStatu
     isPreparedDrive: paths.isPreparedDrive,
     writable: isWritable(paths.workspacePath),
     freeBytes: await freeBytes(paths.rootPath),
+    imagesBytes: await imagesFootprintBytes(paths.workspacePath),
     platform: process.platform,
     arch: process.arch
   }
