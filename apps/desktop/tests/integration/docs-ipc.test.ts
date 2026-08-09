@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -10,13 +11,25 @@ import { join } from 'node:path'
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 const dialogState = vi.hoisted(() => ({ result: { canceled: true, filePaths: [] as string[] } }))
+// #90: the save-dialog seam for the original-bytes export; `lastOptions` captures the dialog
+// options so the suggested name / title / encryption-boundary `message` can be asserted.
+const saveDialogState = vi.hoisted(() => ({
+  result: { canceled: true as boolean, filePath: undefined as string | undefined },
+  lastOptions: null as Record<string, unknown> | null
+}))
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
   BrowserWindow: { getFocusedWindow: () => null },
-  dialog: { showOpenDialog: async () => dialogState.result }
+  dialog: {
+    showOpenDialog: async () => dialogState.result,
+    showSaveDialog: async (options: Record<string, unknown>) => {
+      saveDialogState.lastOptions = options
+      return saveDialogState.result
+    }
+  }
 }))
 
 import { registerDocsIpc } from '../../src/main/ipc/registerDocsIpc'
@@ -29,7 +42,8 @@ import {
   processDocument,
   extractDocumentPreview,
   readStoredDocumentText,
-  documentsDir
+  documentsDir,
+  ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
 import {
   conversationAttachmentIds,
@@ -74,17 +88,19 @@ function ctxWith(
   workspacePath: string,
   embedder: Embedder,
   unlocked: boolean,
-  docTasks?: unknown
+  docTasks?: unknown,
+  cipher: DocumentCipher | null = null
 ): AppContext {
   return {
     db,
     paths: { workspacePath },
     embedder,
-    // A full-enough workspace for the background import loop (lease + null cipher).
+    // A full-enough workspace for the background import loop (lease + null cipher by default;
+    // #90 export tests pass a fake cipher to exercise the `.enc` storage path).
     workspace: {
       isUnlocked: () => unlocked,
       beginDocumentWork: () => () => {},
-      documentCipher: () => null
+      documentCipher: () => cipher
     },
     // Optional: a fake DocTaskManager (e.g. one whose maybeEnqueueTreeBuild throws) to prove the
     // deep-index offer is fire-and-forget and never fails a (re)index.
@@ -1393,4 +1409,167 @@ describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
     const redo = manager.startDocTask({ kind: 'ocr', documentIds: [info.id] })
     expect(await waitTerminal(manager, redo.jobId)).toBe('done')
   }, 60_000)
+})
+
+// ---- Issue #90: export the stored ORIGINAL bytes (docs:exportOriginal) --------------------
+// The text export (`docs:export`) refuses every non-text format, and the DocRow gate hid even
+// that from imported documents — so an imported PDF/DOCX/recording could never leave the
+// workspace again. The new channel saves the stored original (any format) via the native save
+// dialog: MAIN-only dialog+fs, encryption-boundary warning in the dialog `message`, atomic
+// write, ids-only audit (`document_exported`), lease-serialized against a password-change
+// re-key.
+describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => {
+  beforeEach(() => {
+    saveDialogState.result = { canceled: true, filePath: undefined }
+    saveDialogState.lastOptions = null
+  })
+
+  /** Bytes that are deliberately NOT valid UTF-8: a text-decode round-trip would corrupt
+   *  them, so a byte-identical export proves the handler never treats content as text. */
+  function binaryishSource(workspacePath: string, name: string): { path: string; bytes: Buffer } {
+    const bytes = Buffer.concat([
+      Buffer.from('alpha beta gamma delta epsilon zeta eta theta iota kappa\n', 'utf8'),
+      Buffer.from([0xff, 0xfe, 0x00, 0x01, 0x80, 0xc3, 0x28])
+    ])
+    const path = join(workspacePath, name)
+    writeFileSync(path, bytes)
+    return { path, bytes }
+  }
+
+  function sha256Hex(data: Buffer): string {
+    return createHash('sha256').update(data).digest('hex')
+  }
+
+  it('saves the stored original byte-identically (sha256 match), audits ids ONLY, and holds the doc-work lease', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const release = vi.fn()
+    const beginDocumentWork = vi.fn(() => release)
+    const audit = vi.fn()
+    const ctx = ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true)
+    ;(ctx.workspace as unknown as { beginDocumentWork: unknown }).beginDocumentWork = beginDocumentWork
+    ;(ctx as unknown as { audit: unknown }).audit = audit
+    registerDocsIpc(ctx)
+
+    const { path, bytes } = binaryishSource(workspacePath, 'notes.txt')
+    const job = await runImport([path])
+    const id = job.documentIds[0]
+    beginDocumentWork.mockClear() // the import loop held it too — count the EXPORT's hold alone
+
+    const dest = join(workspacePath, 'exported-notes.txt')
+    saveDialogState.result = { canceled: false, filePath: dest }
+    const { result } = await invoke(handlers, IPC.exportDocumentOriginal, id)
+    expect(result).toBe(dest)
+    // Byte-for-byte: the export is the ORIGINAL, not a re-render.
+    const exported = readFileSync(dest)
+    expect(sha256Hex(exported)).toBe(sha256Hex(bytes))
+    // The save dialog carried the document's own extension as suggestion + the
+    // encryption-boundary warning as `message` (the macOS-sheet voice of the warning).
+    expect(String(saveDialogState.lastOptions?.defaultPath)).toMatch(/\.txt$/)
+    expect(String(saveDialogState.lastOptions?.message)).toMatch(
+      /not protected by your workspace password/
+    )
+    // Atomic write: no tmp sibling residue next to the destination.
+    expect(readdirSync(workspacePath).filter((n) => n.includes('.tmp'))).toEqual([])
+    // Audit: ids only — never the title, path, or content (the S1 privacy rule).
+    expect(audit).toHaveBeenCalledWith('document_exported', expect.any(String), { documentId: id })
+    const meta = audit.mock.calls.find((c) => c[0] === 'document_exported')?.[2] as Record<
+      string,
+      unknown
+    >
+    expect(Object.keys(meta)).toEqual(['documentId'])
+    // The read was serialized against a password-change re-key (the import-job posture).
+    expect(beginDocumentWork).toHaveBeenCalledTimes(1)
+    expect(release).toHaveBeenCalled()
+  })
+
+  it('exports the original of an ENCRYPTED stored doc and shreds the decrypt transient', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const storeDir = documentsDir(workspacePath)
+    const copy = (src: string, dest: string): void => writeFileSync(dest, readFileSync(src))
+    const cipher: DocumentCipher = {
+      encryptFile: copy,
+      decryptFile: copy,
+      encryptFileAsync: async (src, dest) => copy(src, dest),
+      decryptFileAsync: async (src, dest) => copy(src, dest)
+    }
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), true, undefined, cipher))
+
+    const { path, bytes } = binaryishSource(workspacePath, 'contract.txt')
+    const job = await runImport([path])
+    const id = job.documentIds[0]
+    // The stored copy is the `.enc` artifact; the on-disk original is now redundant.
+    expect(readdirSync(storeDir).every((n) => n.endsWith(ENCRYPTED_DOC_SUFFIX))).toBe(true)
+    rmSync(path)
+
+    const dest = join(workspacePath, 'exported-contract.txt')
+    saveDialogState.result = { canceled: false, filePath: dest }
+    const { result } = await invoke(handlers, IPC.exportDocumentOriginal, id)
+    expect(result).toBe(dest)
+    expect(readFileSync(dest).equals(bytes)).toBe(true)
+    // The decrypt transient (`.parse-export-bin-*`) was shredded — only the `.enc` remains.
+    expect(readdirSync(storeDir).every((n) => n.endsWith(ENCRYPTED_DOC_SUFFIX))).toBe(true)
+  })
+
+  it('cancel in the save dialog returns null: no file, no audit event', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const audit = vi.fn()
+    const ctx = ctxWith(db, workspacePath, createMockEmbedder(), true)
+    ;(ctx as unknown as { audit: unknown }).audit = audit
+    registerDocsIpc(ctx)
+    const { path } = binaryishSource(workspacePath, 'notes.txt')
+    const job = await runImport([path])
+    audit.mockClear()
+
+    saveDialogState.result = { canceled: true, filePath: undefined }
+    const { result } = await invoke(handlers, IPC.exportDocumentOriginal, job.documentIds[0])
+    expect(result).toBeNull()
+    expect(audit).not.toHaveBeenCalled()
+  })
+
+  it('refuses cleanly while the workspace is locked', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ false))
+    await expect(invoke(handlers, IPC.exportDocumentOriginal, 'any-id')).rejects.toThrow(
+      /Workspace is locked/
+    )
+  })
+
+  it('missing stored copy AND missing original → the clear "no longer on disk" error', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), true))
+    const { path } = binaryishSource(workspacePath, 'gone.txt')
+    const job = await runImport([path])
+    const id = job.documentIds[0]
+    // Sever both sources: the workspace copy and the (deleted) import original.
+    const row = db.prepare('SELECT stored_path FROM documents WHERE id = ?').get(id) as unknown as {
+      stored_path: string | null
+    }
+    if (row.stored_path) rmSync(row.stored_path)
+    rmSync(path)
+    saveDialogState.result = { canceled: false, filePath: join(workspacePath, 'never.txt') }
+    await expect(invoke(handlers, IPC.exportDocumentOriginal, id)).rejects.toThrow(
+      /no longer on disk/
+    )
+  })
+
+  it('refuses while the document is still being processed (the T-3 gate)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const { embedder, release, reached } = gatedEmbedder()
+    registerDocsIpc(ctxWith(db, workspacePath, embedder, true))
+    const { path } = binaryishSource(workspacePath, 'slow.txt')
+    const gated = (await invoke(handlers, IPC.importDocuments, [path])).result as ImportJob
+    const id = gated.documentIds[0]
+    while (!reached()) await new Promise((r) => setTimeout(r, 1))
+
+    await expect(invoke(handlers, IPC.exportDocumentOriginal, id)).rejects.toThrow(
+      /still being processed/
+    )
+
+    release()
+    for (let i = 0; i < 200; i++) {
+      const s = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
+      if (s.done) break
+      await new Promise((r) => setTimeout(r, 5))
+    }
+  })
 })

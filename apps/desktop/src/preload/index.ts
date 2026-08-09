@@ -446,6 +446,10 @@ const api = {
    *  file; resolves with the path, or null on cancel. */
   exportDocument: (documentId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.exportDocument, documentId),
+  /** Save a document's stored ORIGINAL bytes — any format — to a user-chosen file (#90);
+   *  resolves with the path, or null on cancel. */
+  exportDocumentOriginal: (documentId: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.exportDocumentOriginal, documentId),
   /** Save a document's persisted summary (Markdown) to a user-chosen file;
    *  resolves with the path, or null on cancel / when there is no summary. */
   exportSummary: (documentId: string): Promise<string | null> =>

@@ -552,6 +552,14 @@ export const en = {
     'Translating needs the translation model — download it on the AI Model screen',
   'docs.export': 'Export',
   'docs.exportTitle': 'Save this document as a Markdown file',
+  // #90: the original-bytes export for IMPORTED documents (generated docs keep the text
+  // "Export" above). The warning is the docs voice of the §24.3 encryption-boundary copy
+  // (review.export.encryptionWarning, verbatim) — shown in the ConfirmDialog on every
+  // platform and in the macOS save sheet via the dialog `message`.
+  'docs.exportOriginal': 'Export original file',
+  'docs.exportOriginalConfirm.title': 'Export the original file?',
+  'docs.exportOriginal.warning':
+    'This exported file is stored outside the encrypted HilbertRaum workspace and is not protected by your workspace password.',
   'docs.reindex': 'Re-index',
   'docs.reindexBusy': 'Re-indexing…',
   'docs.reindexTitle': 'Read and prepare the stored copy again',
@@ -2003,6 +2011,7 @@ export const en = {
   'main.dialog.importDocuments': 'Import documents',
   'main.dialog.importFolder': 'Import a folder of documents',
   'main.dialog.exportDocument': 'Export document',
+  'main.dialog.exportOriginal': 'Export original file',
   'main.dialog.exportSummary': 'Export summary',
   'main.dialog.exportChat': 'Export chat transcript',
   'main.dialog.exportTableCsv': 'Export table as CSV',

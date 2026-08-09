@@ -11,6 +11,7 @@ import {
   deleteDocument,
   documentsDir,
   extractDocumentPreview,
+  readStoredDocumentBytes,
   ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
 import {
@@ -269,5 +270,49 @@ describe('shredStalePlaintext — transient sweep (H1/M9)', () => {
     shredStalePlaintext(vp)
 
     expect(existsSync(ocrTransient)).toBe(false)
+  })
+})
+
+// ---- Issue #90: the original-bytes export reader against a REAL encrypted store ----------
+// `readStoredDocumentBytes` (the D77 reader the new `docs:exportOriginal` channel reuses) must
+// return the imported file's exact bytes from the `.enc` copy under real AES-256-GCM, shred its
+// decrypt transient, and refuse without a cipher — the H1 plaintext-leak rules apply throughout.
+describe('original-bytes export from an encrypted store (#90)', () => {
+  it('returns the ORIGINAL bytes from the .enc copy (real cipher) and leaks no plaintext', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const cipher = testCipher()
+    const file = writeSource('contract.txt', SECRET_TEXT)
+    const original = readFileSync(file)
+
+    const doc = createQueuedDocument(db, file)
+    await processDocument(db, store, doc.id, { cipher })
+    // Self-contained drive posture: the import source is gone; only the `.enc` copy serves.
+    rmSync(file)
+
+    const { title, bytes } = await readStoredDocumentBytes(db, store, doc.id, { cipher })
+    expect(title).toBe('contract.txt')
+    expect(bytes.equals(original)).toBe(true)
+
+    // The `.parse-export-bin-*` decrypt transient was shredded on the way out: the store
+    // holds exactly the `.enc` artifact and no plaintext SECRET_TEXT anywhere.
+    const stored = readdirSync(store)
+    expect(stored).toHaveLength(1)
+    expect(stored[0].endsWith(ENCRYPTED_DOC_SUFFIX)).toBe(true)
+    expect(plaintextLeaks(store)).toEqual([])
+  })
+
+  it('refuses without a cipher (locked workspace) instead of serving ciphertext', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const cipher = testCipher()
+    const file = writeSource('contract.txt', SECRET_TEXT)
+    const doc = createQueuedDocument(db, file)
+    await processDocument(db, store, doc.id, { cipher })
+    rmSync(file)
+
+    await expect(readStoredDocumentBytes(db, store, doc.id)).rejects.toThrow(
+      /unlock the workspace/i
+    )
   })
 })

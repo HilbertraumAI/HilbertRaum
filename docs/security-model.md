@@ -440,6 +440,39 @@ boundary is made explicit and everything around it stays inside the data-class r
 - **No model, no network:** the pipeline is pure SQLite read → pure render → local write;
   the real offline connect-guard is asserted silent across every export test.
 
+## Document original export boundary (issue #90)
+
+`docs:exportOriginal` moves an imported document's stored ORIGINAL bytes — any format —
+across the encryption boundary into one user-chosen plaintext file. Like the evidence pack
+above, that is its purpose (the user gets their own file back out of the workspace), so the
+same posture applies:
+
+- **Consent + warning:** the renderer shows the encryption-boundary warning
+  (`docs.exportOriginal.warning` — the `review.export.encryptionWarning` copy, verbatim) in
+  a ConfirmDialog BEFORE the native save dialog on every platform; the same copy rides the
+  dialog `message` (its macOS save-sheet voice). The dialog + fs live in MAIN only
+  (`saveBinaryExport`, `ipc/save-export.ts`); the renderer never touches fs.
+- **What is read:** the existing `readStoredDocumentBytes` reader (D77) — the workspace
+  `.enc` copy decrypted to a unique `.parse-export-bin-<uuid>` transient that is **shredded
+  in a `finally`** (crash-sweep-covered via the `.parse` infix), falling back to
+  `original_path` only when the stored copy is gone; both gone ⇒ a clean localized error,
+  never a silent no-op. A locked vault refuses before any read
+  (`workspaceAdmitsWork`); an encrypted copy without a cipher refuses with the
+  unlock-to-export copy. The byte read holds the `beginDocumentWork` lease — it can never
+  interleave with a password-change re-key of the sidecar — and releases it BEFORE the
+  dialog opens (an unbounded dialog wait must not wedge a password change; the bytes are
+  already in memory).
+- **Atomicity:** tmp sibling (per-call random token, the AUD-17 naming posture) → short-
+  write check → fsync → rename; any failure up to the rename leaves NO destination file and
+  removes the tmp sibling best-effort. No hash is recorded — unlike the evidence pack there
+  is no provenance row to keep honest; the export is the user's own original bytes.
+- **Audit:** `document_exported` records `{documentId}` and nothing else — not the path,
+  not the file name, not the title (which seeds the suggested name and is content, S1).
+  Sentinel-swept in `audit-ipc.test.ts` with a path-sentinel destination and the
+  sentinel-named source file.
+- **Scope:** one document per invocation (the save dialog is the per-file consent);
+  bulk/multi-select export is deliberately deferred.
+
 ## Workspace modes (Phase 9)
 
 The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceController`):

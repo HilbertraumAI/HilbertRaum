@@ -114,6 +114,15 @@ first public release. Consciously-accepted gaps are tracked in
   grammar-constrained on-device model pick (marked "Suggested by the local
   model") may fill the same offer; ordinary questions keep their zero-model-call
   routing, and every failure quietly falls back to today's answer.
+- **Export your original files from the workspace** (issue #90). Every imported
+  document's ⋯ menu now offers **Export original file**, which saves the stored
+  original — PDF, Word, recording, photo, any format — byte-for-byte to a
+  location you choose, even when the file you imported it from is long gone.
+  Imported documents previously had no export action at all (only generated
+  documents did). The export shows the encryption-boundary warning first (the
+  saved copy is not protected by your workspace password), writes atomically,
+  and records only the document id in the activity log. One document per export
+  for now; bulk export is a possible follow-up.
 
 ### Changed
 

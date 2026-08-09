@@ -3,6 +3,7 @@ import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { lstatSync, realpathSync, statSync } from 'node:fs'
+import { extname } from 'node:path'
 import type {
   DocumentInfo,
   DocumentLifecycle,
@@ -31,6 +32,7 @@ import {
   prepareDocument,
   finalizeDocument,
   type PreparedDocument,
+  readStoredDocumentBytes,
   readStoredDocumentText,
   reconcileStuckDocuments,
   reconcileStuckTrees,
@@ -51,7 +53,7 @@ import { reconcileStuckSkillRuns } from '../services/skills/run'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
-import { saveTextExport } from './save-export'
+import { saveBinaryExport, saveTextExport } from './save-export'
 
 // Process-start watermark (captured once at module load ≈ app boot). `skill_runs` rows created before
 // this belong to a PREVIOUS, killed session; current-session rows are protected regardless of status.
@@ -707,6 +709,72 @@ export function registerDocsIpc(ctx: AppContext): void {
     ctx.audit?.('document_exported', 'Document exported to a file', { documentId })
     return filePath
   })
+
+  // Issue #90: save a document's stored ORIGINAL bytes — any format (PDF, DOCX, audio,
+  // image, …) — to a user-chosen file. `docs:export` above is TEXT-only by design (the
+  // Translate screen shares its semantics), and the DocRow gate meant imported documents
+  // had no export action at all; this is the binary sibling. Same consent boundary as
+  // every export (dialog + fs in MAIN, never the renderer); the encryption-boundary
+  // warning rides the dialog `message` (macOS sheet) and the renderer's ConfirmDialog
+  // shows the same copy BEFORE the dialog on every platform — the evidence-pack §24.3
+  // posture. The write is atomic (`saveBinaryExport`: tmp sibling → fsync → rename).
+  // The byte read holds the `beginDocumentWork` lease so it can never interleave with a
+  // password-change re-key of the `.enc` sidecar (the import-job posture); the lease is
+  // released BEFORE the dialog opens — the unbounded dialog wait must not wedge a
+  // password change, and the decrypted bytes are already in memory by then.
+  ipcMain.handle(
+    IPC.exportDocumentOriginal,
+    async (_e, documentId: string): Promise<string | null> => {
+      requireUnlocked()
+      // Untrusted-boundary guard (the safeIdArray posture, scalar form).
+      if (typeof documentId !== 'string' || documentId.length === 0) {
+        throw new Error('Unknown document')
+      }
+      requireNotProcessing(documentId)
+      requireNoActiveTask(documentId)
+      requireNoActiveSkillRun(documentId)
+      const releaseDocWork = ctx.workspace.beginDocumentWork()
+      let title: string
+      let bytes: Buffer
+      try {
+        ;({ title, bytes } = await readStoredDocumentBytes(ctx.db, storeDir, documentId, {
+          cipher: ctx.workspace.documentCipher()
+        }))
+      } finally {
+        releaseDocWork()
+      }
+      // Suggested name per the exportDocument pattern above; the ORIGINAL extension
+      // survives sanitization so the OS file association and the dialog filter match
+      // the format.
+      const rawExt = extname(title).toLowerCase()
+      const ext = /^\.[a-z0-9]{1,10}$/.test(rawExt) ? rawExt : ''
+      const dot = title.lastIndexOf('.')
+      const baseName = (dot > 0 ? title.slice(0, dot) : title)
+        .replace(/[^\p{L}\p{N} ()_-]/gu, '')
+        .trim()
+        .slice(0, 60)
+      const filePath = await saveBinaryExport(
+        {
+          title: tMain('main.dialog.exportOriginal'),
+          defaultPath: `${baseName || 'document'}${ext}`,
+          filters: ext
+            ? [
+                { name: ext.slice(1).toUpperCase(), extensions: [ext.slice(1)] },
+                { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
+              ]
+            : [{ name: tMain('main.dialog.filterAll'), extensions: ['*'] }],
+          message: tMain('docs.exportOriginal.warning')
+        },
+        bytes
+      )
+      if (!filePath) return null
+      log.info('Document original exported', { documentId })
+      // Audit privacy rule: the id only — the chosen path is user-private, the
+      // title/bytes are content (S1).
+      ctx.audit?.('document_exported', 'Document exported to a file', { documentId })
+      return filePath
+    }
+  )
 
   // Save a document's persisted summary to a user-chosen Markdown file (the
   // exportDocument pattern: dialog + fs in MAIN, never the renderer). The summary is

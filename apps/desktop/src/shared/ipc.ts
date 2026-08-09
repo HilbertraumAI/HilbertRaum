@@ -126,6 +126,10 @@ export const IPC = {
   /** Save a text document's stored content to a user-chosen file (the
    *  exportConversation pattern; enables exporting materialized translations). */
   exportDocument: 'docs:export',
+  /** Save a document's stored ORIGINAL bytes — any format — to a user-chosen file (#90).
+   *  Deliberately a NEW channel: `docs:export` stays text-only (the Translate screen
+   *  shares its semantics); this is its binary sibling (atomic write, ids-only audit). */
+  exportDocumentOriginal: 'docs:exportOriginal',
   /** Save a document's persisted summary (Markdown) to a user-chosen file
    *  (the exportDocument pattern: dialog + fs in MAIN). */
   exportSummary: 'docs:exportSummary',

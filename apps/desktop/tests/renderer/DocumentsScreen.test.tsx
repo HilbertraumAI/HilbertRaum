@@ -1617,3 +1617,66 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     }
   })
 })
+
+// ---- Issue #90: "Export original file" for imported documents ------------------------------
+// The old `d.origin && …` gate meant IMPORTED documents (the common case) had no export action
+// at all — only generated docs saw the text "Export". Imported docs now get "Export original
+// file" (any format, original bytes) behind the encryption-boundary warning ConfirmDialog;
+// generated docs keep the text export unchanged (its Markdown semantics serve translations).
+describe('DocumentsScreen — export original file (#90)', () => {
+  it('offers "Export original file" on an imported doc, behind the encryption warning', async () => {
+    const user = userEvent.setup()
+    const exportDocumentOriginal = vi.fn(async () => 'C:/out/contract.pdf')
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), exportDocumentOriginal })
+    render(<DocumentsScreen />)
+
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Export original file' }))
+    // The warning ConfirmDialog is the in-app voice of the encryption boundary (the
+    // review.export.encryptionWarning precedent) — nothing exports before it is confirmed.
+    expect(exportDocumentOriginal).not.toHaveBeenCalled()
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(/not protected by your workspace password/)
+    await user.click(within(dialog).getByRole('button', { name: 'Export original file' }))
+    await waitFor(() => expect(exportDocumentOriginal).toHaveBeenCalledWith('d1'))
+  })
+
+  it('cancelling the warning dialog exports nothing', async () => {
+    const user = userEvent.setup()
+    const exportDocumentOriginal = vi.fn(async () => null)
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), exportDocumentOriginal })
+    render(<DocumentsScreen />)
+
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Export original file' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(exportDocumentOriginal).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('a generated doc keeps the text "Export" and does NOT offer the original export', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({
+          id: 'g1',
+          title: 'contract (Deutsch).md',
+          origin: { kind: 'translation', sourceDocumentIds: ['d1'], createdAt: '2026-01-01T00:00:00Z' }
+        })
+      ])
+    })
+    render(<DocumentsScreen />)
+
+    await screen.findByText('contract (Deutsch).md')
+    await user.click(
+      screen.getByRole('button', { name: 'More actions for contract (Deutsch).md' })
+    )
+    expect(await screen.findByRole('menuitem', { name: 'Export' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('menuitem', { name: 'Export original file' })
+    ).not.toBeInTheDocument()
+  })
+})

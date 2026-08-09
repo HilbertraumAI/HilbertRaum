@@ -377,10 +377,22 @@ its name and a muted line of details (type, size, sections), any **location/proj
 a **status badge** (and small **Summary** / **Deeply indexed** badges once those exist), one
 inline **Preview** button, and a **⋯** menu. The **⋯** menu (also opened by right-clicking the
 row) holds the document's actions — **Summarize**, **Translate**, **Re-index**, **Build deep
-index**, **Read again (OCR)** (on documents read with OCR), **Move to project…**, **Export**,
+index**, **Read again (OCR)** (on documents read with OCR), **Move to project…**, **Export**
+(on generated documents) or **Export original file** (on imported ones),
 and a **Delete** at the bottom (which always confirms first). Tick a document's checkbox and a **selection toolbar**
 appears at the top of the list with the actions that work across documents — **Ask these
 documents**, **Compare (2)**, **Move to project…**, **Mark temporary**, **Archive**, and **Delete**.
+
+**Export a document (get your file back).** Every imported document keeps its original file
+inside the workspace — encrypted when your workspace is. **Export original file** in the
+**⋯** menu saves that original — PDF, Word, recording, photo, anything — wherever you
+choose, byte-for-byte as it was imported, even if the file you once imported it from is
+long gone. Because the saved copy leaves the workspace, the app first reminds you that
+*the exported file is stored outside the encrypted workspace and is not protected by your
+workspace password* — the same warning every export shows. Generated documents
+(translations, comparison reports) offer **Export** instead, which saves their text as a
+Markdown file. Exporting one document at a time is deliberate: the save dialog is your
+consent for each file.
 
 **Summarize a document.** On the **Documents** screen, every Ready document offers
 **Summarize** in its **⋯** menu. The local model writes a summary on this drive — nothing leaves it —

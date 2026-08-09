@@ -582,6 +582,13 @@ export const de: Record<keyof typeof en, string> = {
     'Zum Übersetzen wird das Übersetzungsmodell benötigt — lade es im KI-Modell-Bereich herunter',
   'docs.export': 'Exportieren',
   'docs.exportTitle': 'Dieses Dokument als Markdown-Datei speichern',
+  // #90: Original-Export für IMPORTIERTE Dokumente (generierte behalten das Text-"Exportieren"
+  // oben). Die Warnung ist die Dokumente-Stimme des §24.3-Verschlüsselungsgrenze-Texts
+  // (review.export.encryptionWarning, wortgleich).
+  'docs.exportOriginal': 'Originaldatei exportieren',
+  'docs.exportOriginalConfirm.title': 'Originaldatei exportieren?',
+  'docs.exportOriginal.warning':
+    'Diese exportierte Datei liegt außerhalb des verschlüsselten HilbertRaum-Arbeitsbereichs und ist nicht durch dein Arbeitsbereich-Passwort geschützt.',
   'docs.reindex': 'Neu indexieren',
   'docs.reindexBusy': 'Wird neu indexiert…',
   'docs.reindexTitle': 'Die gespeicherte Kopie erneut lesen und vorbereiten',
@@ -2093,6 +2100,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.importDocuments': 'Dokumente importieren',
   'main.dialog.importFolder': 'Einen Ordner mit Dokumenten importieren',
   'main.dialog.exportDocument': 'Dokument exportieren',
+  'main.dialog.exportOriginal': 'Originaldatei exportieren',
   'main.dialog.exportSummary': 'Zusammenfassung exportieren',
   'main.dialog.exportChat': 'Chat-Verlauf exportieren',
   'main.dialog.exportTableCsv': 'Tabelle als CSV exportieren',
