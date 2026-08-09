@@ -799,6 +799,15 @@ export interface Message {
    * answers without a table (pre-migration rows read as before).
    */
   hasResultTable?: boolean
+  /**
+   * The actionable skill OFFER attached to this assistant answer (issue #80, wave R80): the
+   * engine that produced the answer could not serve the asked SHAPE (the #54 aggregation class /
+   * a low-confidence router fallback), and this names the skill that can — one click re-runs the
+   * turn with it (regenerate + explicit `skillInstallId`; the click IS the consent, S13b/D4).
+   * Persisted as `messages.skill_offer_json` (structural only — id + title + provenance, never
+   * content). Undefined on user turns, ordinary answers, and every pre-migration row.
+   */
+  skillOffer?: SkillOffer
 }
 
 /**
@@ -1899,6 +1908,22 @@ export interface SkillReconcileStatus {
 export interface SkillSuggestion {
   installId: string
   title: string
+}
+
+/**
+ * A per-ANSWER skill offer (issue #80, wave R80) — the actionable sibling of the composer-picker
+ * `SkillSuggestion`, attached to an assistant `Message` whose engine could not serve the asked
+ * shape (the #54 aggregation class / a low-confidence router fallback). Same posture as the
+ * picker offer: an OFFER, never auto-applied — the renderer shows a one-click "run the {title}
+ * analysis" action and the CLICK is the consent (S13b/D4; the turn re-runs via the regenerate
+ * path with the skill explicitly set). STRUCTURAL only (id + title + provenance) — never the
+ * question, the matched trigger, or any document text (§22-M1). `source` is the provenance
+ * marker: `'deterministic'` = the #54-class rule produced it (no model involved);
+ * `'classifier'` = the bounded single-shot grammar-constrained classification picked it
+ * (STR-1 §5.2). When both sources would offer the same skill, deterministic wins (dedupe).
+ */
+export interface SkillOffer extends SkillSuggestion {
+  source: 'deterministic' | 'classifier'
 }
 
 // ---- Tier-2 skill tools (skills plan §12 — DESIGNED here in S10; the bank-statement tools land

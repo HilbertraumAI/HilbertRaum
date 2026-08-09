@@ -1040,6 +1040,11 @@ export function openDatabase(path: string): Db {
   // user turn, or user Stop). Additive + nullable — an older app ignores it and reads every reply as
   // complete, byte-identical to before. CONTENT-free (a single boolean).
   ensureColumn(db, 'messages', 'truncated', 'truncated INTEGER')
+  // Issue #80 (wave R80) — the per-answer actionable skill OFFER: JSON-serialized `SkillOffer`
+  // (installId + title + provenance 'deterministic' | 'classifier'), or NULL (no offer — every
+  // ordinary answer and every pre-migration row). Additive + nullable, STRUCTURAL only (never the
+  // question or document text, §22-M1); an older app ignores the column and renders no offer.
+  ensureColumn(db, 'messages', 'skill_offer_json', 'skill_offer_json TEXT')
   // EP-1 Phase 4 (spec §15.5/§28.6): the acknowledged-drift record — JSON
   // { acknowledgedAt, fingerprint } written by acknowledgeEvidenceReviewFreshness; NULL =
   // never acknowledged. Additive + nullable so P0–P3 workspaces open unchanged; the ack is

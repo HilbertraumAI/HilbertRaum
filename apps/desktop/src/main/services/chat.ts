@@ -12,7 +12,8 @@ import {
   type ConversationSearchResult,
   type CoverageInfo,
   type DocumentScope,
-  type Message
+  type Message,
+  type SkillOffer
 } from '../../shared/types'
 import { parseDocumentScope } from './collections'
 import { buildFtsMatchQuery } from './fts'
@@ -223,6 +224,8 @@ interface MessageRow {
   /** Derived by listMessages (EXISTS over `result_tables`): 1 when a result table is attached
    *  (result-tables plan §4, Phase 2). Absent on other query paths — coalesced to undefined. */
   has_result_table?: number | null
+  /** Issue #80 (wave R80) — JSON-serialized `SkillOffer` (id + title + provenance), or NULL (no offer). */
+  skill_offer_json?: string | null
 }
 
 /**
@@ -304,6 +307,37 @@ function serializeCoverage(coverage: CoverageInfo | null | undefined): string | 
   }
 }
 
+/**
+ * Parse a stored per-answer skill offer (issue #80): a JSON `SkillOffer` with a non-empty
+ * `installId`/`title` and a known `source`, else undefined. Tolerant like `parseCoverage` — a
+ * malformed payload must never break rendering a conversation.
+ */
+export function parseSkillOffer(json: string | null | undefined): SkillOffer | undefined {
+  if (!json) return undefined
+  try {
+    const v = JSON.parse(json) as unknown
+    if (typeof v !== 'object' || v === null) return undefined
+    const o = v as Record<string, unknown>
+    if (typeof o.installId !== 'string' || o.installId.length === 0) return undefined
+    if (typeof o.title !== 'string' || o.title.length === 0) return undefined
+    if (o.source !== 'deterministic' && o.source !== 'classifier') return undefined
+    return { installId: o.installId, title: o.title, source: o.source }
+  } catch {
+    return undefined
+  }
+}
+
+/** Serialize an offer for `messages.skill_offer_json` (the write side of `parseSkillOffer`).
+ *  Null/omitted ⇒ NULL; a value that cannot stringify degrades to NULL (the answer always persists). */
+function serializeSkillOffer(offer: SkillOffer | null | undefined): string | null {
+  if (!offer) return null
+  try {
+    return JSON.stringify({ installId: offer.installId, title: offer.title, source: offer.source })
+  } catch {
+    return null
+  }
+}
+
 function rowToMessage(r: MessageRow): Message {
   const citations = parseCitations(r.citations_json)
   const coverage = parseCoverage(r.coverage_json)
@@ -332,7 +366,9 @@ function rowToMessage(r: MessageRow): Message {
     truncated: r.truncated === 1 ? true : undefined,
     // Positive-flag convention (Phase 2 result tables): 1 → true, anything else (incl. query paths
     // that don't compute the EXISTS) → undefined, so older rows and other readers are byte-identical.
-    hasResultTable: r.has_result_table === 1 ? true : undefined
+    hasResultTable: r.has_result_table === 1 ? true : undefined,
+    // #80: the per-answer actionable skill offer — undefined on every row without one (tolerant parse).
+    skillOffer: parseSkillOffer(r.skill_offer_json)
   }
 }
 
@@ -685,6 +721,12 @@ export interface AppendMessageInput {
    * set on a user-initiated Stop (that partial is intentional and user-known, not a length overflow).
    */
   truncated?: boolean
+  /**
+   * The actionable per-answer skill OFFER (issue #80, wave R80) — persisted to
+   * `messages.skill_offer_json`. Assistant rows only; omitted/null ⇒ NULL (no offer — every
+   * ordinary answer stays byte-identical). Structural only (id + title + provenance), never content.
+   */
+  skillOffer?: SkillOffer | null
 }
 
 /** Append a message and bump the conversation's updated_at. */
@@ -699,6 +741,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   // Stamp auto-fire provenance only when a skill is actually stamped; 1 = auto-fired, NULL otherwise.
   const autoFired = skillId != null && input.autoFired === true
   const truncated = input.truncated === true
+  // #80: best-effort like coverage — a serialization fault degrades to NULL, never blocks the answer.
+  const skillOfferJson = serializeSkillOffer(input.skillOffer)
   const msg: Message = {
     id: randomUUID(),
     conversationId: input.conversationId,
@@ -710,12 +754,13 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     skillId,
     autoFired,
     coverage: input.coverage ?? undefined,
-    truncated: truncated ? true : undefined
+    truncated: truncated ? true : undefined,
+    skillOffer: skillOfferJson != null ? (input.skillOffer ?? undefined) : undefined
   }
   prepareCached(
     db,
-    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json, truncated)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json, truncated, skill_offer_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     msg.id,
     msg.conversationId,
@@ -727,13 +772,27 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     skillId,
     autoFired ? 1 : null,
     coverageJson,
-    truncated ? 1 : null
+    truncated ? 1 : null,
+    skillOfferJson
   )
   prepareCached(db, 'UPDATE conversations SET updated_at = ? WHERE id = ?').run(
     now,
     input.conversationId
   )
   return msg
+}
+
+/**
+ * Attach a per-answer skill OFFER to an already-persisted message (issue #80). Used by the
+ * document-answer path when the answer was persisted deep inside `generateGroundedAnswer` and the
+ * offer is decided at the call site — an update-in-place of `messages.skill_offer_json` only, so
+ * the answer content and every other column stay byte-untouched. Best-effort: a null/unserializable
+ * offer is a no-op (the column stays NULL).
+ */
+export function setMessageSkillOffer(db: Db, messageId: string, offer: SkillOffer | null | undefined): void {
+  const json = serializeSkillOffer(offer)
+  if (json == null) return
+  prepareCached(db, 'UPDATE messages SET skill_offer_json = ? WHERE id = ?').run(json, messageId)
 }
 
 /**

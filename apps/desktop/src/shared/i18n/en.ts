@@ -218,6 +218,15 @@ export const en = {
   // SKA-38 (skills audit 2026-07-03, U6): the glyph label when a stamped turn's skill was later
   // DELETED — the provenance (and the undo) survive the deletion, honestly labelled.
   'chat.skill.removed': '(removed skill)',
+  // #80 (wave R80) — the per-answer actionable skill OFFER: this answer's engine could not serve
+  // the asked SHAPE (categories/sums from a list-only engine, or a low-confidence fallback), and
+  // one click re-runs the same question with the named skill. The click IS the consent — nothing
+  // auto-fires (S13b/D4). `offer.lead` is the quiet lead-in; `offer.model` is the provenance
+  // marker shown ONLY on an offer the bounded local classification produced (vs the deterministic
+  // rule, which needs no extra label — the answer's prose hint already explains it).
+  'chat.skill.offer.lead': 'This looks like a job for a skill.',
+  'chat.skill.offer.run': 'Run “{title}” for this question',
+  'chat.skill.offer.model': 'Suggested by the local model',
   // U3 (audit §4.3): a pick applies PER-TURN by default now — the persistent composer chip's × clears
   // both the session pick and any saved default, and the in-picker checkbox is the explicit opt-in to
   // persist the pick as this conversation's default. Nothing is silently kept across turns any more.

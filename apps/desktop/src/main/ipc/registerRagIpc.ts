@@ -4,7 +4,8 @@ import type { AppContext } from '../services/context'
 import {
   type ExtractRecordType,
   type Message,
-  type RetrievalScope
+  type RetrievalScope,
+  type SkillOffer
 } from '../../shared/types'
 import {
   appendMessage,
@@ -24,7 +25,12 @@ import {
   wholeDocumentFitBudgetTokens
 } from '../services/rag'
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
-import { getSkillAnalysisHandler, manifestAnalysisHandler } from '../services/skills/analysis'
+import {
+  BANK_STATEMENT_INSTALL_ID,
+  getSkillAnalysisHandler,
+  manifestAnalysisHandler
+} from '../services/skills/analysis'
+import { offerableSkillCandidates } from '../services/skills/suggest'
 import { documentsInScope } from '../services/skills/scope-documents'
 import { getSkill } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
@@ -593,10 +599,28 @@ export function registerRagIpc(ctx: AppContext): void {
         // with counts. The renderer leads such an answer with an honest shape hint (+ the
         // bank-statement-skill pointer for `amount`) so a frequency list is never presented
         // as the requested categories/sums.
+        const aggregationAsk = isAggregationShaped(text)
         const listingAnswer = buildListingAnswer(ctx.db, listing, (key, params) => tMain(key, params), {
-          aggregationAsk: isAggregationShaped(text)
+          aggregationAsk
         })
         const answer = scopeNotice ? `${scopeNotice}\n\n${listingAnswer}` : listingAnswer
+        // #80 P1 — the ACTIONABLE sibling of the #54 prose hint: an aggregation-shaped `amount`
+        // ask served by this list-only engine gets a wrong-shaped answer, and the hint already
+        // points at the bank-statement skill. Attach the skill as a one-click OFFER on the answer
+        // (deterministic — no model): the click re-runs the turn with the skill (regenerate +
+        // explicit skillInstallId; click = consent, S13b/D4 — auto-fire stays OFF). Gated on the
+        // ONE shared candidate gate (enabled + available + app-compatible) and never offered for
+        // the skill that already shaped this turn. The prose hint STAYS as the degradation path
+        // (offer gated out / older renderer).
+        let deterministicOffer: SkillOffer | null = null
+        if (aggregationAsk && recordType === 'amount' && skill?.installId !== BANK_STATEMENT_INSTALL_ID) {
+          const bank = offerableSkillCandidates(ctx.db, ctx.skills?.appVersion ?? '').find(
+            (c) => c.installId === BANK_STATEMENT_INSTALL_ID
+          )
+          if (bank) {
+            deterministicOffer = { installId: bank.installId, title: bank.title, source: 'deterministic' }
+          }
+        }
         return withChatStream(
           event,
           conversationId,
@@ -609,7 +633,8 @@ export function registerRagIpc(ctx: AppContext): void {
               role: 'assistant',
               content: answer,
               skillId: skill?.installId,
-              autoFired: skill?.autoFired === true
+              autoFired: skill?.autoFired === true,
+              skillOffer: deterministicOffer
             })
           }),
           // Acquire the slot so a yielding deep-index build is paused/resumed cleanly even
