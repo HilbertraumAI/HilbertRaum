@@ -166,6 +166,15 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Fixed
 
+- **The macOS launcher now works on exFAT drives** (PR #104, contributed). exFAT
+  cannot store the symlinks inside a Mac `.app` bundle, so a prepared drive
+  carries the app as a zip — but the launcher only looked for an unpacked
+  `.app` and always failed. It now unpacks the zip once into the local user
+  cache (`~/Library/Caches/HilbertRaum`, keyed by version so updates on the
+  drive take effect) and starts the app from there; workspace, models and
+  runtime all stay on the drive. A drive with an unpacked `.app` beside the
+  launcher behaves exactly as before. Not yet smoke-tested on Apple hardware —
+  the extract path replaces a launcher that could never succeed on exFAT.
 - **"Ready" now means ready — the first prompt after a model start no longer
   stalls** (issue #109). The first generation after a start paid a one-time
   warm-up that measured 6–8× the settled response time (10–30 s on CPU-only

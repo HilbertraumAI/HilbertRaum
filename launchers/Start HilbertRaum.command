@@ -7,6 +7,13 @@
 #  drive works on any Mac no matter where it mounts (/Volumes/HILBERTRAUM, etc.).
 #  NO path is hardcoded.
 #
+#  exFAT CANNOT STORE SYMLINKS, and a .app bundle contains framework version
+#  symlinks (Electron Framework.framework/Versions/Current and friends). So the
+#  drive carries the ditto-zip instead, and this launcher extracts it ONCE into a
+#  local cache and runs it from there. The workspace, models and runtime all stay
+#  on the drive -- only the app binary is unpacked locally.
+#  See docs/packaging.md "The release workflow".
+#
 #  Mirrors apps/desktop/src/main/services/launcher.ts resolveDriveRootFromLauncher.
 # ============================================================================
 set -e
@@ -17,19 +24,71 @@ export HILBERTRAUM_DRIVE_ROOT="$DIR"
 # One source of truth: the app reads the SAME manifests the drive scripts verified.
 export HILBERTRAUM_MANIFESTS_DIR="$DIR/model-manifests"
 
-# Find the packaged app bundle.
+# --- 1. An already-extracted bundle on the drive wins (non-exFAT drives can hold one).
 APP=""
 for candidate in "$DIR"/*.app; do
   if [ -d "$candidate" ]; then APP="$candidate"; break; fi
 done
 
+# --- 2. Otherwise extract the ditto-zip into a local cache, keyed by zip name so a
+#        new version on the drive re-extracts instead of running the stale one.
 if [ -z "$APP" ]; then
-  echo
-  echo "  Could not find the HilbertRaum app on this drive."
-  echo "  Make sure 'HilbertRaum.app' is in this folder."
-  echo "  See docs/troubleshooting.md for help."
-  echo
-  exit 1
+  ZIP=""
+  for candidate in "$DIR"/HilbertRaum-*-mac-arm64.app.zip; do
+    if [ -f "$candidate" ]; then ZIP="$candidate"; break; fi
+  done
+
+  if [ -z "$ZIP" ]; then
+    echo
+    echo "  Could not find the HilbertRaum app on this drive."
+    echo "  Expected 'HilbertRaum.app' or 'HilbertRaum-<version>-mac-arm64.app.zip' in this folder."
+    echo "  See docs/troubleshooting.md for help."
+    echo
+    exit 1
+  fi
+
+  CACHE="$HOME/Library/Caches/HilbertRaum/$(basename "$ZIP" .zip)"
+  if [ ! -d "$CACHE" ]; then
+    echo "  First run for this version: unpacking the app (about 400 MB, one time)..."
+    # The partial dir is PID-unique: extraction takes long enough that an impatient
+    # second double-click is likely, and two runs sharing one partial path would
+    # rm -rf each other's in-progress extraction (and could publish a half tree).
+    # Stale partials from killed runs are swept here instead (-f: no-match is fine).
+    rm -rf "$CACHE".partial.*
+    PARTIAL="$CACHE.partial.$$"
+    mkdir -p "$PARTIAL"
+    # ditto, not unzip: it is the macOS-native tool that restores the bundle's
+    # symlinks, permissions and extended attributes intact.
+    if ! ditto -x -k "$ZIP" "$PARTIAL"; then
+      echo
+      echo "  Could not unpack '$ZIP'."
+      echo "  Copy it to your Desktop and double-click it, then see docs/troubleshooting.md."
+      echo
+      rm -rf "$PARTIAL"
+      exit 1
+    fi
+    # Only publish the cache once extraction fully succeeded, so an interrupted
+    # first run cannot leave a half-unpacked bundle that looks complete. If a
+    # parallel launch published first, use its copy (mv onto an existing dir would
+    # nest ours INSIDE it, not replace it).
+    if [ -d "$CACHE" ]; then
+      rm -rf "$PARTIAL"
+    else
+      mv "$PARTIAL" "$CACHE"
+    fi
+  fi
+
+  for candidate in "$CACHE"/*.app; do
+    if [ -d "$candidate" ]; then APP="$candidate"; break; fi
+  done
+
+  if [ -z "$APP" ]; then
+    echo
+    echo "  Unpacked '$ZIP' but found no .app inside it."
+    echo "  See docs/troubleshooting.md for help."
+    echo
+    exit 1
+  fi
 fi
 
 # Launch the app binary directly so it inherits HILBERTRAUM_DRIVE_ROOT.
