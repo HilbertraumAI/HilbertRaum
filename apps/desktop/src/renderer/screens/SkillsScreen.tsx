@@ -7,7 +7,7 @@ import { useT } from '../i18n'
 export function SkillsScreen(): JSX.Element {
   const { t } = useT()
   return (
-    <div className="screen">
+    <div className="screen skills-screen">
       <h1>{t('skills.title')}</h1>
       <SkillsTab />
     </div>

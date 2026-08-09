@@ -347,7 +347,7 @@ export function ModelsScreen(): JSX.Element {
 
   if (error && !models) {
     return (
-      <div className="screen">
+      <div className="screen models-screen">
         <h1>{t('models.title')}</h1>
         <p className="hint">{t('models.loadError', { error })}</p>
       </div>
@@ -361,7 +361,7 @@ export function ModelsScreen(): JSX.Element {
         ? Math.min(100, Math.round((p.overallBytesHashed / p.overallBytesTotal) * 100))
         : null
     return (
-      <div className="screen">
+      <div className="screen models-screen">
         <h1>{t('models.title')}</h1>
         {p && pct != null ? (
           <Progress
@@ -850,7 +850,7 @@ export function ModelsScreen(): JSX.Element {
   }
 
   return (
-    <div className="screen">
+    <div className="screen models-screen">
       <h1>{t('models.title')}</h1>
       <p className="lead">{t('models.lead')}</p>
 

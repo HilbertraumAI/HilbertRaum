@@ -1295,3 +1295,29 @@ read as designed; the capped screens read as accidental, especially on wide wind
    centres inside it; Chat's no-model/empty states are plain `.screen` (reading tier).
 4. **Guarded:** `tests/unit/screen-width-tiers.test.ts` pins the two tier values, the centring
    margin, and sweeps every `*-screen` container so a third width can't creep back in.
+
+**Amendment (2026-08-09, issue #171 — fullscreen follow-up):** with the window fully expanded the
+reading-tier screens still read as under-using the window (~50% used at 1920px, ~36% at 2560px).
+The owner-ratified resolution re-examined the tier FIT per screen instead of the tier VALUES:
+
+- **AI model and Skills move to the workspace tier** (`.models-screen`, `.skills-screen`,
+  1180px). Both are card/row lists with badge clusters and trailing action rows — the same
+  §11.6 "a list needs more than a reading column" argument that placed Documents, Translate,
+  Images and Review; the Skills list even implements the §11.6 row pattern. Their original
+  reading-tier assignment in this record is superseded in place (decision 1's tier lists read
+  accordingly).
+- **Home and Settings stay reading tier, deliberately.** They are the prose-heaviest screens:
+  at ~14px system font, 860px already yields ~105–115 characters per line — above the classic
+  45–90 readability ideal — so widening them optimises the *feeling* of fullness at the direct
+  cost of what the cap protects. Their fullscreen gutters are the recorded price of the
+  §1.1/§1.5/§8 posture.
+- **Chat's 720px transcript stands** (§3 priority design — the standard chat reading column);
+  its no-model/empty states stay reading tier with it.
+- Fluid caps (`clamp()`-scaled tiers) were considered and NOT taken: they re-open the
+  "every wave invents a width" drift this record §14 closed, for a perceptual gain the two
+  re-tierings already deliver where it is real. Full width remains rejected (#166, #171).
+- **The scroll container reserves the scrollbar gutter on both edges**
+  (`.content { scrollbar-gutter: stable both-edges }`): without it the centred column sat
+  ~8px further left on scrolling pages (Models, Settings) than on non-scrolling ones — the
+  same-width columns visibly jumped between nav clicks. Reserved symmetrically, the §14
+  gutters measure identical on every screen whether or not a scrollbar is present.
