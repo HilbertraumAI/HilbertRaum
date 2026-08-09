@@ -52,6 +52,7 @@ function msg(over: Partial<Message>): Message {
 function renderTranscript(opts: {
   messages: Message[]
   onRunWithSkill?: (installId: string) => void
+  isSkillOfferAvailable?: (installId: string) => boolean
   reviewSummaries?: ReadonlyMap<string, EvidenceReviewSummary | null>
   actionsDisabled?: boolean
 }): void {
@@ -66,6 +67,7 @@ function renderTranscript(opts: {
       onThinkingOpenChange={noop}
       emptyState={null}
       onRunWithSkill={opts.onRunWithSkill ?? noop}
+      isSkillOfferAvailable={opts.isSkillOfferAvailable}
       onCopy={noop}
       onSave={noop}
       reviewSummaries={opts.reviewSummaries}
@@ -135,5 +137,31 @@ describe('per-answer skill offer (#80)', () => {
   it('the shared streaming gate disables it like every message action', () => {
     renderTranscript({ messages: [msg({ skillOffer: OFFER })], actionsDisabled: true })
     expect(screen.getByRole('button', { name: RUN_LABEL })).toBeDisabled()
+  })
+
+  // #132 (skills-pipeline audit OFFER-1): the offer persists in `messages.skill_offer_json`
+  // indefinitely, but its enabled/available gate ran only at MINT time. Click-time re-validation:
+  // a stale offer renders DISABLED with an honest tooltip — never hidden (the AUD-01 posture),
+  // and never a silent skill-free re-answer (main refuses the stale id too).
+  it('#132: a since-disabled/removed skill renders the run action DISABLED with the honest tooltip', () => {
+    const onRunWithSkill = vi.fn()
+    renderTranscript({
+      messages: [msg({ skillOffer: OFFER })],
+      onRunWithSkill,
+      isSkillOfferAvailable: () => false
+    })
+    const run = screen.getByRole('button', { name: RUN_LABEL })
+    expect(run).toBeDisabled()
+    expect(run).toHaveAttribute('title', t('en', 'chat.skill.offer.unavailable'))
+    run.click()
+    expect(onRunWithSkill).not.toHaveBeenCalled()
+  })
+
+  it('#132: an available skill keeps the enabled action (the re-check is a gate, not a rewrite)', () => {
+    renderTranscript({
+      messages: [msg({ skillOffer: OFFER })],
+      isSkillOfferAvailable: (id) => id === 'app:bank-statement'
+    })
+    expect(screen.getByRole('button', { name: RUN_LABEL })).toBeEnabled()
   })
 })

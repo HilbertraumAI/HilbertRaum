@@ -227,6 +227,9 @@ export const en = {
   'chat.skill.offer.lead': 'This looks like a job for a skill.',
   'chat.skill.offer.run': 'Run “{title}” for this question',
   'chat.skill.offer.model': 'Suggested by the local model',
+  // #132: the offered skill was disabled/removed after the offer was made — the button disables with
+  // this honest tooltip instead of silently re-answering without the skill.
+  'chat.skill.offer.unavailable': 'This skill is disabled or was removed — enable it under Skills to run it.',
   // U3 (audit §4.3): a pick applies PER-TURN by default now — the persistent composer chip's × clears
   // both the session pick and any saved default, and the in-picker checkbox is the explicit opt-in to
   // persist the pick as this conversation's default. Nothing is silently kept across turns any more.
@@ -1897,6 +1900,11 @@ export const en = {
   'main.chat.streamError':
     'The AI model ran into an error before finishing the answer. Try again — if it keeps happening, restart the model on the AI Model screen.',
   'main.chat.nothingToRegenerate': 'Nothing to regenerate yet.',
+  // #132: an EXPLICIT per-turn skill id (an offer click / composer pick) that no longer resolves
+  // refuses instead of silently re-answering without the skill (the graceful-null is for sticky
+  // defaults only, §10.3).
+  'main.chat.skillUnavailable':
+    'This skill is no longer available — it was disabled or removed. Enable it under Skills, or ask again without it.',
   // AUD-01: re-answering a turn DELETES the previous assistant reply, and the message foreign
   // key cascades that delete through the reply's whole evidence review — decisions, notes,
   // links, export history — none of which the restore snapshot carries. The turn is refused

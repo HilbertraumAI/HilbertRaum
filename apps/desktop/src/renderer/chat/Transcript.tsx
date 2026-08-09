@@ -51,6 +51,15 @@ interface TranscriptProps {
    * auto-fires. Absent ⇒ the affordance never renders (the answer's prose hint remains).
    */
   onRunWithSkill?: (installId: string) => void
+  /**
+   * #132: is the offered skill STILL runnable right now (enabled + installed + available)? The offer
+   * persists in `messages.skill_offer_json` indefinitely, but its offer-time gate ran only at mint —
+   * without a click-time re-check, a click on an offer for a since-disabled/removed skill silently
+   * regenerated the answer with NO skill. When this returns false the row renders DISABLED with an
+   * honest tooltip (the AUD-01 disabled-never-hidden posture the undo shares). Absent ⇒ treated as
+   * available (older callers keep their behavior; main still refuses the stale id).
+   */
+  isSkillOfferAvailable?: (installId: string) => boolean
   onCopy: (content: string) => void
   onSave: () => void
   /**
@@ -111,6 +120,7 @@ export const Transcript = memo(function Transcript({
   onTryAgain,
   onAnswerWithoutSkill,
   onRunWithSkill,
+  isSkillOfferAvailable,
   onCopy,
   onSave,
   onExportTable,
@@ -180,6 +190,7 @@ export const Transcript = memo(function Transcript({
               onTryAgain={onTryAgain}
               onAnswerWithoutSkill={onAnswerWithoutSkill}
               onRunWithSkill={onRunWithSkill}
+              isSkillOfferAvailable={isSkillOfferAvailable}
               onCopy={onCopy}
               onSave={onSave}
               onExportTable={onExportTable}
@@ -287,6 +298,7 @@ const MessageBlock = memo(function MessageBlock({
   onTryAgain,
   onAnswerWithoutSkill,
   onRunWithSkill,
+  isSkillOfferAvailable,
   onCopy,
   onSave,
   onExportTable,
@@ -303,6 +315,7 @@ const MessageBlock = memo(function MessageBlock({
   onTryAgain?: () => void
   onAnswerWithoutSkill?: () => void
   onRunWithSkill?: (installId: string) => void
+  isSkillOfferAvailable?: (installId: string) => boolean
   onCopy: (content: string) => void
   onSave: () => void
   onExportTable?: (messageId: string) => void
@@ -424,28 +437,43 @@ const MessageBlock = memo(function MessageBlock({
             variant carries the "suggested by the local model" provenance label; the deterministic
             variant needs none (the answer's own hint explains it). Quiet vocabulary: the
             .msg-skill row + link-style action, never a loud button. */}
-        {skillOffer && onRunWithSkill && (
-          <div className="msg-skill msg-skill-offer">
-            <Icon name="brain" className="msg-skill-icon" />
-            <span>{t('chat.skill.offer.lead')}</span>
-            {skillOffer.source === 'classifier' && (
-              <span className="msg-skill-offer-provenance">{t('chat.skill.offer.model')}</span>
-            )}
-            <button
-              type="button"
-              className="msg-skill-undo msg-skill-offer-run"
-              onClick={() => onRunWithSkill(skillOffer.installId)}
-              disabled={actionsDisabled || reviewSummary != null}
-              title={reviewSummary != null ? t('chat.skill.answerWithoutBlockedByReview') : undefined}
-            >
-              {t('chat.skill.offer.run', {
-                title: resolveSkillTitle
-                  ? resolveSkillTitle(skillOffer.installId, skillOffer.title)
-                  : skillOffer.title
-              })}
-            </button>
-          </div>
-        )}
+        {skillOffer &&
+          onRunWithSkill &&
+          (() => {
+            // #132: click-time re-validation — the offer persists indefinitely, but the skill's state
+            // can change between mint and click (disabled, deleted, folder gone). A stale offer
+            // renders DISABLED with an honest tooltip (never hidden — the AUD-01 posture; and never a
+            // silent skill-free re-answer — main refuses the stale id too, defense in depth).
+            const offerAvailable = isSkillOfferAvailable ? isSkillOfferAvailable(skillOffer.installId) : true
+            return (
+              <div className="msg-skill msg-skill-offer">
+                <Icon name="brain" className="msg-skill-icon" />
+                <span>{t('chat.skill.offer.lead')}</span>
+                {skillOffer.source === 'classifier' && (
+                  <span className="msg-skill-offer-provenance">{t('chat.skill.offer.model')}</span>
+                )}
+                <button
+                  type="button"
+                  className="msg-skill-undo msg-skill-offer-run"
+                  onClick={() => onRunWithSkill(skillOffer.installId)}
+                  disabled={actionsDisabled || reviewSummary != null || !offerAvailable}
+                  title={
+                    !offerAvailable
+                      ? t('chat.skill.offer.unavailable')
+                      : reviewSummary != null
+                        ? t('chat.skill.answerWithoutBlockedByReview')
+                        : undefined
+                  }
+                >
+                  {t('chat.skill.offer.run', {
+                    title: resolveSkillTitle
+                      ? resolveSkillTitle(skillOffer.installId, skillOffer.title)
+                      : skillOffer.title
+                  })}
+                </button>
+              </div>
+            )
+          })()}
         {/* Honest-signal truncation notice (§L0): a quiet, labelled line on an assistant reply the
             model cut off at the token/context ceiling (finish_reason 'length'). Never colour-only —
             a labelled marker with an explanatory tooltip (guidelines §9); role="note" so AT reads it

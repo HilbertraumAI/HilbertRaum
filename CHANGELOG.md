@@ -214,6 +214,16 @@ first public release. Consciously-accepted gaps are tracked in
   (the plain-text copy was never affected). The saved file now masks the whole
   region exactly once, and the "N items hidden" count counts masked regions
   instead of double-counting the nested item.
+- **Clicking a skill suggestion for a skill you have since disabled or removed
+  no longer silently re-answers without it** (issue #132). The suggestion button
+  now disables with an explanation, and the app refuses (rather than quietly
+  ignores) a stale run request — your existing answer stays untouched. The
+  suggestion also survives a failed or stopped re-answer instead of vanishing.
+- **Skill suggestions are only made when the skill could actually help** (issue
+  #133). A suggested skill whose engine would not engage your question used to
+  regenerate an essentially identical answer mis-labeled as skill-assisted, then
+  suggest a different skill — suggestion ping-pong. Such candidates are no
+  longer offered.
 - **A redacted Word copy no longer carries personal data outside the visible
   body text** (issue #129). Redaction used to rewrite only the document body:
   headers and footers (letterhead), footnotes, comment text, tracked-changes

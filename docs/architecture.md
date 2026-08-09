@@ -8245,6 +8245,29 @@ review found are refinements inside the architecture (§3 below), not a change o
 
 ### §5.2 as built — the suggestion-only cascade (wave R80, 2026-08-09, issue #80)
 
+> **Wave delta (2026-08-09, skills-pipeline audit — issues #132/#133/#135).** Three lifecycle gaps in
+> the surface below are closed: **(1) click-time re-validation (#132)** — the persisted offer's gate
+> ran only at mint; a click on an offer for a since-disabled/removed skill silently regenerated the
+> answer with NO skill (the resolver's graceful-null is the sticky-DEFAULT contract, §10.3, not a
+> consent contract). Now the renderer disables the stale offer row with an honest tooltip
+> (`isSkillOfferAvailable`, the AUD-01 disabled-never-hidden posture; ChatScreen also passes the
+> accept handler during streaming so `actionsDisabled` — not an unmount — carries that state), and
+> BOTH chat channels refuse an explicit per-turn id that no longer resolves
+> (`main.chat.skillUnavailable`, thrown before the F2-deferred delete — the prior answer survives).
+> **(2) mint-time engagement (#133)** — the classifier enum and the deterministic bank offer now
+> exclude a candidate whose engine would not ENGAGE the question+scope (`wouldSkillEngage` mirrors
+> the dispatch gate: handler-less instruction skills always engage via the fence; a tool/analysis
+> candidate needs `intends()` — the W2 pre-pass handles doc-count misses honestly — or `applies()`
+> or the A4 inversion), ending the silent identical re-run with a mis-stamped provenance glyph and
+> the offer ping-pong. **(3) restore fidelity (#132/#135)** — `deleteLastAssistantMessage`/
+> `restoreMessage` now carry `skill_offer_json`, so the F2/CB-2 restore legs keep the offer (the
+> result-tables class). The accept flow itself is now end-to-end pinned on both sides (#135):
+> main (`rag-classify-offer.test.ts` accept/refusal/self-exclusion/engagement blocks, the restore
+> leg in `rag-regenerate-ipc.test.ts`) and renderer (`SkillOfferAccept.test.tsx` — the wire tuple
+> `askDocuments(convId, '', installId, true, …)` + optimistic drop; `SkillOffer.test.tsx` #132
+> states). Residual (recorded): a Stop landing inside the in-slot classification window still has
+> no dedicated IPC test.
+
 Owner-ratified shape, implemented exactly (branch `wave/r80-router-cascade`, phases P1–P5, one
 PR): the deterministic router (`analysis/router.ts`) stays pure and byte-unchanged — its purity is
 load-bearing and every currently-confident route still answers at **0 model calls**

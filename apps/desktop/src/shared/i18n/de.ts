@@ -255,6 +255,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.offer.lead': 'Das sieht nach einer Aufgabe für einen Skill aus.',
   'chat.skill.offer.run': '„{title}“ für diese Frage ausführen',
   'chat.skill.offer.model': 'Vom lokalen Modell vorgeschlagen',
+  // #132: der angebotene Skill wurde nach dem Angebot deaktiviert/entfernt – der Knopf wird mit
+  // diesem ehrlichen Hinweis deaktiviert, statt stillschweigend ohne den Skill neu zu antworten.
+  'chat.skill.offer.unavailable':
+    'Dieser Skill ist deaktiviert oder wurde entfernt – aktiviere ihn unter Skills, um ihn auszuführen.',
   // U3 (audit §4.3): ein Skill gilt jetzt standardmäßig PRO TURN – das × am Chip verwirft die Wahl und
   // eine gespeicherte Vorgabe, die Checkbox im Menü ist die ausdrückliche Zustimmung, die Wahl als
   // Vorgabe des Gesprächs zu behalten. Nichts bleibt still über Turns hinweg gesetzt.
@@ -1952,6 +1956,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.chat.streamError':
     'Beim KI-Modell ist ein Fehler aufgetreten, bevor die Antwort fertig war. Versuche es erneut — wenn das öfter passiert, starte das Modell im Bildschirm „KI-Modell“ neu.',
   'main.chat.nothingToRegenerate': 'Es gibt noch keine Antwort, die neu erstellt werden könnte.',
+  // #132: eine EXPLIZITE Skill-Wahl (Angebots-Klick / Auswahl), die sich nicht mehr auflösen lässt,
+  // lehnt ab, statt stillschweigend ohne den Skill neu zu antworten.
+  'main.chat.skillUnavailable':
+    'Dieser Skill ist nicht mehr verfügbar – er wurde deaktiviert oder entfernt. Aktiviere ihn unter Skills oder frage erneut ohne ihn.',
   // AUD-01: Eine neue Antwort LÖSCHT die bisherige Antwort, und der Fremdschlüssel der Nachricht
   // reißt die gesamte Nachweis-Prüfung mit — Entscheidungen, Notizen, Verknüpfungen, Exportverlauf.
   // Nichts davon steckt im Wiederherstellungs-Abbild, deshalb wird der Turn abgelehnt.
