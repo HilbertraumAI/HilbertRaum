@@ -1321,3 +1321,21 @@ The owner-ratified resolution re-examined the tier FIT per screen instead of the
   ~8px further left on scrolling pages (Models, Settings) than on non-scrolling ones — the
   same-width columns visibly jumped between nav clicks. Reserved symmetrically, the §14
   gutters measure identical on every screen whether or not a scrollbar is present.
+
+**Amendment 2 (2026-08-09, #171 follow-up — owner decision at live review, supersedes the
+two-tier scheme):** clicking through the merged build, the owner judged the remaining
+per-screen width difference (reading 860 vs workspace 1180) as reading like inconsistency,
+not intent — the uniform frame won over the per-screen reading cap. End state, chosen over
+keeping the tiers and over uncapped full width:
+
+- **One width: every screen's container is the centred 1180px `.screen` frame.** The six
+  per-screen `max-width` rules are gone (the class names stay in the markup as semantic
+  hooks); "don't invent a width" now means don't add ANY per-screen `max-width`.
+- **The reading measure moved one level down:** the prose roles — `.lead`, `.hint`,
+  `.offline-statement` — cap at **72ch**, so Settings/Home explanations keep readable line
+  lengths inside the wide frame while lists, cards and controls use all of it. This preserves
+  what the 860px tier was FOR (§1.1/§1.5/§8) without the frame-width inconsistency it caused.
+- **Chat stays the sole exception** (§3): full-bleed grid, 720px centred transcript; its
+  no-model/empty states now share the 1180px frame like every other screen.
+- Guards updated in `screen-width-tiers.test.ts`: the single width, a no-per-screen-max-width
+  sweep, the `scrollbar-gutter` reserve, and the three 72ch prose pins.
