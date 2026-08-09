@@ -718,20 +718,18 @@ per-process job map for the life of the job and in renderer memory (`lib/transla
   Generated document that already lives in the workspace — and drops it on lock via the same
   App-level `purgeSessionStores()` seam described above (`clearFileTranslate`; TA-2). No new IPC,
   no new audit surface.
-- **Accepted residual — the lock-handler window (systemic, shared with vision; TG-4 review).**
-  `isUnlocked()` is `this._db !== null`, and `_db` is nulled only at `workspace.lock()` — the LAST
-  step of the lock handler. Between `translator.suspend()` (which nulls the server + clears its
-  `tearingDown`) and that final `lock()`, the handler yields at `awaitInFlightStreamsSettled()`
-  while `isUnlocked()` still reads `true`. A `translate:start` dispatched in that narrow window
-  passes `requireUnlocked()` and can spawn a fresh sidecar that outlives the lock, holding the
-  source prompt in its KV cache until the 120 s idle teardown (or the next lock/quit). This is a
-  **pre-existing systemic gap**, not a TG-4 regression: `VisionService.analyze` has the identical
-  `requireUnlocked`/`isUnlocked` window via `ctx.vision.stop()`. Low severity (narrow timing — it
-  needs an in-flight stream still settling after the sidecar kills complete) and bounded by the
-  idle teardown. The robust fix is cross-cutting — a workspace "locking-in-progress" latch that
-  every spawn-capable `requireUnlocked` guard observes for the whole duration of the lock, not just
-  after `_db` flips — so it is deferred out of the TG-4 UI phase and tracked as a systemic
-  hardening item (BUILD_STATE TG-4 watch item).
+- **CLOSED residual — the lock-handler window (was: accepted at TG-4 review; fixed by AUD-02,
+  full-audit 2026-07-23).** The TG-4 review accepted, as a deferred systemic gap, that a
+  `translate:start` dispatched between `translator.suspend()` and the final `workspace.lock()`
+  passed `requireUnlocked()` (then just `isUnlocked()`) and could spawn a fresh sidecar that
+  outlived the lock. Exactly the cross-cutting fix the acceptance called for — a workspace
+  "locking-in-progress" latch observed by every spawn-capable admission guard — **shipped as
+  AUD-02**: `workspaceAdmitsWork` = `isUnlocked() && isLocking?.() !== true`, armed as the lock's
+  FIRST act and wired into the translate IPC guard, `TranslateJobService.start`, the doc-task
+  manager, imports, and the vision service (see the AUD-02/AUD-03 section below for the full
+  mechanism). This bullet stays as the historical record only; there is no remaining accepted
+  spawn-past-lock hole here. (The former "BUILD_STATE TG-4 watch item" pointer is retired — the
+  item was discharged by AUD-02; issue #164 D-2 removed the dangling reference.)
 - **No confused-deputy surface:** unlike vision's picker/readBytes, the Translate view takes only
   the text the user typed — no file paths, no byte reads — so there is nothing to harden there.
 - **Prompt-injection containment (D2) covers control tokens, not just plain-text imperatives

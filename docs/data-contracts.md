@@ -50,9 +50,13 @@ the Diagnostics Activity panel, newest-first paging + save-dialog export) +
 document tasks, async-with-polling; `cancelDocTask()` with no jobId cancels the active task;
 shapes `StartDocTaskRequest`/`DocTaskStatus`/`DocumentSummary` in `shared/types.ts`, and
 `DocumentInfo` gained an optional `summary` from the additive `documents.summary_json` column;
-Phase 34: `kind: 'translation'` takes `params.targetLang: TranslationTargetLang ('de'|'en')`,
-`resultRef.documentId` = the NEW materialized document, and `DocumentInfo` gained an optional
-`origin: DocumentOrigin` from the additive `documents.origin_json` column;
+Phase 34: `kind: 'translation'` takes BOTH `params.sourceLang: TranslationSourceLang` and
+`params.targetLang: TranslationTargetLang` (as shipped since TG-3 — TranslateGemma has no
+auto-detect and source ≠ target is enforced server-side; both are `TranslationLangCode`, the
+closed 51-code WMT24++ set of `TRANSLATION_LANGUAGE_CODES` since issue #31 — the original
+Phase-34 `'de'|'en'` target-only shape is history, updated in place per this file's charter;
+issue #164 D-3), `resultRef.documentId` = the NEW materialized document, and `DocumentInfo`
+gained an optional `origin: DocumentOrigin` from the additive `documents.origin_json` column;
 Phase 35: `kind: 'compare'` takes exactly TWO distinct `documentIds` and `DocumentOrigin` is
 now a discriminated union — `{ type: 'translation', translatedFrom, targetLang }` |
 `{ type: 'compare', comparedFrom: [a, b] }`; Phase-34 rows persisted without `type` parse as
@@ -1183,6 +1187,16 @@ whole renderer-visible surface.
   `translateCancel(jobId)`, `getActiveTranslateJob(): Promise<TranslateJob | null>` (remount
   recovery), streams `onTranslateToken`/`onTranslateDone`/`onTranslateError`. Record:
   `architecture.md` "Translation sidecar — design record" (TG waves).
+  Wave #156–#165 additions (2026-08-09): `TranslateErrorCode` gained `'tooLong'` and
+  `shared/types.ts` the `TRANSLATE_MAX_TEXT_CHARS = 200_000` paste bound (#160 BE-3);
+  `AppStatus` carries the additive gates `translationAvailable: boolean` (issue #40) and
+  `translationDevice?: TranslationDeviceStatus` (issue #42 reopen — the Translate screen's
+  device hint; recorded here per #164 D-7a, the `dictationAvailable`/`ocrAvailable` siblings'
+  precedent). Doc-task side (#157): `cancelDocTask(jobId)` with a PRESENT id is an exact-id
+  targeted cancel, running OR queued (stale-safe: a settled id no-ops); NEW
+  `listActiveDocTasks(): Promise<DocTaskStatus[]>` (`doctasks:listActive`) returns running +
+  queued tasks in lane order — the file-translation reload-adoption read (`getActiveDocTask`
+  keeps its running-only contract for the #38 chain-adopt).
 - **Skills surface** — `listSkills`/`getSkill`/`importSkill`/`deleteSkill`/`enableSkill`/
   `disableSkill`/`getSkillReconcileStatus`, suggestion `suggestSkills(conversationId, question?)`,
   Tier-2 runs `listRunnableTools(skillInstallId, conversationId): Promise<RunnableToolSet>`

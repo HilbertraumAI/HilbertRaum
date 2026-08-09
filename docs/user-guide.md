@@ -442,8 +442,10 @@ A few honest notes about translations:
 - Long documents are translated part by part — you see the progress on the row and can
   cancel anytime (a cancelled translation leaves nothing behind). The translation model
   is thorough but not fast: a long document can take many minutes on a CPU laptop.
-- If a part cannot be translated even after a retry, the app **marks that part clearly in
-  the result and keeps the original text there** — it never silently drops content.
+- If a part cannot be translated, the app **marks that part clearly in the result and keeps
+  the original text there** — it never silently drops content. (Some failures get one retry;
+  others — like a part the model cut off mid-sentence — are marked right away, because a
+  second identical attempt would only repeat the same result.)
 - If a **page of the original contains no readable text** (for example a scanned page inside
   an otherwise normal PDF), the result **marks that page in place** — *"Page 3 of the original
   could not be translated…"* — and the Translate screen shows a warning naming the affected
@@ -673,7 +675,8 @@ transient: leave the screen (or lock the workspace) and it is gone. A translated
 though, is saved (that's the point) — you'll find it under **Documents**. If the translation model
 isn't installed, the screen shows a short note with a **Go to AI Model** button to download it (see
 the download note in §6); machine translations can contain errors. While a document task is running,
-translating here waits until it finishes.
+translating here is **declined with a short note** ("A document task is running…") — nothing is
+queued behind it; wait for the task to finish (or cancel it), then translate.
 
 ---
 

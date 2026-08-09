@@ -349,8 +349,8 @@ export function translationAttributionLine(modelId: string): string {
 
 /**
  * "report.pdf" + de → "report (Deutsch).md" (the materialized doc is Markdown). The
- * label is the target's NATIVE name (shared/types `TRANSLATION_NATIVE_NAMES` — the
- * curated 10, untranslated by design).
+ * label is the target's NATIVE name (shared/types `TRANSLATION_NATIVE_NAMES` — all 51
+ * production-tier codes since issue #31, untranslated by design).
  */
 export function translatedDocumentTitle(
   sourceTitle: string,

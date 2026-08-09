@@ -1667,10 +1667,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   fresh fit), and the remedy is a smaller chat model (or stopping it) before translating. Since
   the #42 reopen this state is OBSERVABLE instead of reading as "GPU translation not working":
   every cold start logs `"Translation sidecar started"` with the posture + the offloaded-layer
-  split, and the Translate screen shows a muted device line (GPU with the layer split / "partly on
-  the graphics card … about processor speed" with the cause + remedy in its tooltip / for a
-  fully-starved 0-layer fit "runs on the processor — no layers fit on the graphics card", same
-  tooltip family (full-audit 2026-07-11 CODE-23) / CPU).
+  split, and the Translate screen shows a muted device line in one of FIVE forms (#164 D-7b
+  completes the enumeration): GPU with the layer split / "partly on the graphics card … about
+  processor speed" / for a fully-starved 0-layer fit "runs on the processor — no layers fit on
+  the graphics card" (full-audit 2026-07-11 CODE-23) / plain "runs on the graphics card (GPU)"
+  when the GPU posture started but no offload line could be parsed from the server log
+  (`translate.device.gpuUnknown` — no split is invented) / CPU. Since #161 (FE-4) the
+  cause-and-remedy for the two starved forms is VISIBLE text under the device line, no longer
+  tooltip-only.
 - **Languages are a closed set of 51 — source AND target** (issue #31, 2026-07-07: the original
   curated 10 widened to TranslateGemma's full PRODUCTION tier — the 55 WMT24++-evaluated locales
   collapsed to 51 bare codes; `zh` is Simplified Chinese), validated server-side. The model's chat
@@ -1689,9 +1693,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   term can be rendered differently in different windows. A sliding glossary/context header is
   explicitly out of scope for now.
 - **Window sizing is "over-chunk, never overflow" for realistic prose — not an absolute
-  guarantee on adversarial emoji/astral input (audit L10, accepted).** The planner sizes
-  windows with the shared word-count estimator `approxTokenCount`, whose per-word token
-  ceilings are conservative over the TG-6-measured Gemma tokenizer, so a normal document can
+  guarantee on adversarial emoji/astral input (audit L10, accepted).** Since #165 (P-1) the
+  planner packs windows with `approxBudgetWordCount` — a WORD-count estimate that keeps the
+  token estimator's anti-collapse defenses (space-less scripts per character; over-long
+  no-space runs charged by length) — matching the per-word unit the TG-6 budget is derived in,
+  so compound-heavy prose (de/cs) no longer under-fills windows 1.5–2.5×; the per-word token
+  ceilings stay conservative over the measured Gemma tokenizer, so a normal document can
   only ever over-chunk (harmless). The estimator UNDER-charges a *pathological* glued run of
   emoji or astral-plane codepoints (each such codepoint can tokenize to several tokens while
   counting as a fraction of a "word"), so a window built from such input can carry more real
@@ -1720,12 +1727,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   A window that throws, comes back empty, **or runs to the output-limit cap without a clean
   stop** — the greedy-decode repetition loop that is the classic temperature-0 MT pathology, or a
   token-dense window clipping at the ~2,070-token cap — is now DETECTED via the completion's final
-  stop reason (`stopping_word`/eos) and treated as a failed attempt (TA-5). **Retry is by failure
-  class (FA-2 F-2):** a THROW or an EMPTY reply is TRANSIENT (a server-side close, a per-request
-  timeout, a crash-recovery) and is retried once; a NON-EMPTY window that did not stop cleanly is a
+  stop reason and treated as a failed attempt (TA-5). The shipped detector keys on the final
+  frame's **`stop_type ∈ {eos, word}`** first — the pinned b9849 does NOT emit the legacy
+  `stopping_word`/eos-flag fields on a clean stop (issue #31a); those legacy fields remain only
+  as the back-compat fallback for older builds (`completion.ts`; wording corrected per #164 D-4).
+  **Retry is by failure class (FA-2 F-2, refined by #160 BE-2):** a THROW or an EMPTY reply is
+  TRANSIENT (a server-side close, a crash-recovery, a per-request timeout where NO tokens ever
+  flowed — a wedged server) and is retried once; a NON-EMPTY window that did not stop cleanly is a
   DETERMINISTIC limit-stop — greedy decode with prompt caching reproduces the identical truncation,
   so it is marked/failed on the FIRST attempt rather than burning a second full decode (up to ~30 min
-  per window) for the same outcome. In the **document task**, a failed window's output carries a
+  per window) for the same outcome — and since #160 a per-request TIMEOUT during a LIVE decode
+  (tokens flowed until the bound) is classified the same deterministic way: marked immediately,
+  never retried into a second ~45-min timeout on the one-at-a-time lane. In the **document task**, a failed window's output carries a
   visible "could not be translated" notice with the ORIGINAL text kept below it; only an all-windows
   failure fails the whole task. In the **Translate view** (interactive), a failed window fails the
   whole job VISIBLY rather than completing with a mid-sentence-truncated or missing paragraph — a
@@ -1785,12 +1798,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   and the document path (FA-3 F-3).** Both Translate stores are module-level, so navigating
   away and back keeps a live translation streaming. A full renderer RELOAD drops the module
   stores, but each is re-adopted on the Translate screen's next mount: the live TEXT job via
-  `adoptActiveJob` (long-standing), and the running DOCUMENT translation doc-task via
-  `adoptActiveFileTranslation` — it re-seeds `translating` + window progress and resumes the
+  `adoptActiveJob` (long-standing), and the RUNNING **or QUEUED** DOCUMENT translation doc-task
+  via `adoptActiveFileTranslation` — it re-seeds `translating` + window progress and resumes the
   poll, so progress, Stop and the eventual result come back instead of the screen returning
   idle while the task ran on invisibly (and a fresh attempt being refused as busy until it
   finished). The file/document path previously had NO reload recovery while the text path did;
-  that asymmetry is closed. One tolerated cosmetic edge: the source **fileName is unavailable
+  that asymmetry is closed. (#150/DOC-8 added the queued-accept; #157 DT-5 made it REAL —
+  the adopt reads the new `listActiveDocTasks` lane list, so a translation queued behind a
+  foreign task — a Documents-row Summarize that took the lane during the import phase — is
+  adoptable too, with Stop targeting exactly it via the exact-id cancel.) One tolerated cosmetic edge: the source **fileName is unavailable
   after a reload** (main tracks document ids only), so an adopted document translation shows
   progress + result without the original filename label until it completes. At most one of the
   two is ever live (the D9 one-at-a-time lane), so the two adopts never both claim the panel.
