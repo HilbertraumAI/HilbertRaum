@@ -1027,7 +1027,12 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
     // The hint LEADS the ordinary relevance answer — it never replaces it.
     expect(msg.content).toContain('Model answer.')
-    expect(h.runtime.calls).toBe(1)
+    // #80 (wave R80): a LOW-CONFIDENCE fallback is a classification trigger class, so this turn
+    // now makes 2 calls — the bounded skill-pointer classification first, then the grounded
+    // answer. The harness's prose reply is unparseable for the classifier, so it degrades
+    // silently: no offer, answer content byte-unchanged (the pre-#80 pin, shifted by one call).
+    expect(h.runtime.calls).toBe(2)
+    expect(msg.skillOffer).toBeUndefined()
     expect(msg.coverage?.mode).toBe('relevance')
   })
 
@@ -1089,7 +1094,10 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     const msg = result as Message
     expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
     expect(msg.content).toContain('Model answer.')
-    expect(h.runtime.calls).toBe(1)
+    // #80: low-confidence fallback ⇒ classification (degrades on the prose reply) + the grounded
+    // answer — 2 calls; the answer itself stays byte-unchanged.
+    expect(h.runtime.calls).toBe(2)
+    expect(msg.skillOffer).toBeUndefined()
   })
 
   // Issue #54 — the wrong-shape half of the #37 incident: WITH extract data the aggregation
