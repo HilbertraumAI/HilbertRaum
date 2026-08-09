@@ -317,8 +317,15 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     (jobId: string): void => {
       if (pollRef.current) clearInterval(pollRef.current)
       let lastSettled = -1
+      // DOC-6 (#150): reentrancy latch — the 400 ms interval wraps an async body, so a slow
+      // tick (throttled refresh awaiting listDocuments) would otherwise overlap the next one
+      // and both could observe `job.done` (double completion handling). Same latch as
+      // fileTranslateSession's TA-3/H4.
+      let ticking = false
       const coalesceRefresh = makeRefreshCoalescer(refresh)
       pollRef.current = setInterval(async () => {
+        if (ticking) return
+        ticking = true
         try {
           const job = await window.api.getImportJob(jobId)
           // The interval may have been cleared (unmount) while this tick was awaiting — drop
@@ -340,6 +347,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
           if (!mountedRef.current) return
           setBusy(null)
           setError(friendlyIpcError(e))
+        } finally {
+          ticking = false
         }
       }, 400)
     },
@@ -353,8 +362,13 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   const watchReindex = useCallback((): void => {
     if (reindexPollRef.current) clearInterval(reindexPollRef.current)
     let lastSettled = -1
+    // DOC-6 (#150): reentrancy latch — without it a slow tick overlaps the next and both can
+    // observe `job.done`, double-firing the completion toast below.
+    let ticking = false
     const coalesceRefresh = makeRefreshCoalescer(refresh)
     reindexPollRef.current = setInterval(async () => {
+      if (ticking) return
+      ticking = true
       try {
         const job = await window.api.getReindexAllJob?.()
         if (!mountedRef.current) return
@@ -406,6 +420,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         setBusy(null)
         setReindexProgress(null)
         setError(friendlyIpcError(e))
+      } finally {
+        ticking = false
       }
     }, 400)
   }, [refresh, showToast, t, tCount])
@@ -429,6 +445,24 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       if (reindexPollRef.current) clearInterval(reindexPollRef.current)
     }
   }, [watchReindex])
+
+  // DOC-1 (#141): recover an IMPORT already running in main the same way. Without this, navigating
+  // away tore down the only poll: rows froze at "Preparing…" until a manual refresh, and `busy`
+  // reset to null so both Import buttons re-enabled mid-import (against the DR-5 gating intent).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const job = await window.api.getActiveImportJob?.()
+        if (job && !job.done && mountedRef.current) {
+          setBusy('import')
+          watchJob(job.jobId)
+        }
+      } catch {
+        // No bridge / locked — nothing to recover.
+      }
+    })()
+    // No cleanup here: the mount effect above already clears pollRef on unmount.
+  }, [watchJob])
 
   // `token` (D1) is the picker capability from `pickDocuments`; main imports exactly what was
   // picked and ignores the `paths` we pass (kept only so an old test/caller still type-checks).
