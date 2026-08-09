@@ -46,8 +46,13 @@ MANIFESTS_DIR="$TARGET/model-manifests"
 [[ -d "$MANIFESTS_DIR" ]] || { echo "No model-manifests found under '$TARGET' or repo root." >&2; exit 2; }
 
 sha256_of() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
-  else shasum -a 256 "$1" | awk '{print $1}'; fi
+  # Hash from STDIN, never by filename: when the path contains a backslash (git-bash on
+  # Windows, e.g. "$RUNNER_TEMP/…" = "D:\a\_temp/…"), GNU coreutils escapes the name and
+  # prefixes the whole output line with "\\" — the extracted hash then never string-equals
+  # the manifest value (v0.1.56 release run 31341651519, build-win: "expected ed6156…, got
+  # \ed6156…"). Stdin has no filename, so nothing is ever escaped.
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum < "$1" | awk '{print $1}'
+  else shasum -a 256 < "$1" | awk '{print $1}'; fi
 }
 
 # Flat-YAML line parse — first match wins (top-level sha256 over the nested download one).
