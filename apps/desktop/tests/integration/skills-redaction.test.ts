@@ -16,7 +16,7 @@ import { recordToInfo } from '../../src/main/services/skills/installer'
 import { runDocumentRedaction, type OriginalDocumentBytes } from '../../src/main/services/skills/run'
 import { runnableToolsForSkill, buildToolRunner } from '../../src/main/services/skills/tool-runs'
 import { readDocxTextLayer } from '../../src/main/services/export/docx-rewrite'
-import { makeDocx, otherDocxParts } from '../helpers/docx'
+import { makeDocx, otherDocxParts, docxPartText } from '../helpers/docx'
 import type { AuditEventType, RunnableTool } from '../../src/shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
@@ -557,6 +557,70 @@ describe('document-redaction — Phase 9 same-format DOCX export (D77)', () => {
     const layer = await readDocxTextLayer(savedBinary!)
     expect(layer.text).not.toContain('Jane Doe') // BOTH occurrences swept across the paragraphs (D75)
     expect(layer.text).toContain('█')
+  })
+
+  // #129 (skills-pipeline audit 2026-08-09, RUN-2): the audit's lawyer scenario. A "redacted" DOCX used
+  // to carry the PII verbatim in every part outside the body `<w:t>` walk: header/footer letterhead,
+  // tracked-changes DELETED text, comment text + authors, hyperlink targets (`mailto:` in the rels
+  // part), and docProps author fields. The redaction walk now covers every WordprocessingML text part
+  // and scrubs the metadata carriers; formatting parts (styles) remain byte-identical.
+  it('#129: header letterhead, tracked deletions, comments, rels, and docProps are redacted too', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, 'ignored — the DOCX branch reads the injected original bytes')
+    const original = await makeDocx(['Sehr geehrte Damen und Herren, betreffend Jane Doe.'], {
+      headers: ['Kanzlei Jane Doe — Musterstraße 1'],
+      footers: ['Kontakt: jane.doe@example.com'],
+      comments: ['Jane Doe should verify this'],
+      commentAuthor: 'Jane Doe',
+      trackedDeletion: { text: 'Jane Doe owes EUR 500', author: 'Jane Doe' },
+      hyperlink: { display: 'write me', target: 'mailto:jane.doe@example.com' },
+      creator: 'Jane Doe'
+    })
+    const { audit } = capturingAudit()
+    // The locate pass proposes the name — the sweep must mask it in EVERY part it appears in.
+    const runtime = scriptedRuntime(({ messages }) =>
+      messages[1].content.includes('Jane Doe')
+        ? JSON.stringify({ entities: [{ text: 'Jane Doe', category: 'name', line: 1 }] })
+        : JSON.stringify({ entities: [] })
+    )
+    let savedBinary: Uint8Array | null = null
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      runtime,
+      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: original }),
+      saveBinaryFile: async (_name, bytes) => {
+        savedBinary = bytes
+        return true
+      },
+      saveTextFile: async () => true
+    })
+    expect(res.ok).toBe(true)
+    const out = savedBinary! as Uint8Array
+    // The name is gone from EVERY text part — body, header, footer, comments, deleted text.
+    for (const path of [
+      'word/document.xml',
+      'word/header1.xml',
+      'word/footer1.xml',
+      'word/comments.xml'
+    ]) {
+      const xml = await docxPartText(out, path)
+      expect(xml, `${path} must not carry the name`).not.toContain('Jane Doe')
+    }
+    // The tracked-changes DELETED text is masked in place under the SAME rules as visible text — the
+    // name inside `<w:delText>` becomes a █ run (the non-PII remainder legitimately survives).
+    const body = await docxPartText(out, 'word/document.xml')
+    expect(body).toMatch(/<w:delText[^>]*>█+ owes EUR 500<\/w:delText>/)
+    // The footer e-mail fell to the regex floor even though it never appears in the body.
+    expect(await docxPartText(out, 'word/footer1.xml')).not.toContain('jane.doe@example.com')
+    // Metadata carriers scrubbed: docProps author fields, the mailto rel target.
+    expect(await docxPartText(out, 'docProps/core.xml')).not.toContain('Jane Doe')
+    const rels = await docxPartText(out, 'word/_rels/document.xml.rels')
+    expect(rels).not.toContain('mailto:')
+    expect(rels).toContain('about:blank')
+    // Formatting parts survive byte-identical.
+    const beforeStyles = await docxPartText(original, 'word/styles.xml')
+    expect(await docxPartText(out, 'word/styles.xml')).toBe(beforeStyles)
   })
 
   // #128 (skills-pipeline audit 2026-08-09, RUN-1): the audit's traced repro. URL_RE matches the █ mask

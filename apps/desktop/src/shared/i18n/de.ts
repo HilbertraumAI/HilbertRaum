@@ -377,6 +377,9 @@ export const de: Record<keyof typeof en, string> = {
   // VOR dem Lauf — vorher war die .docx-behält-Format / alles-andere-wird-.txt-Klippe erst im
   // Speichern-Dialog sichtbar.
   'chat.skill.confirm.outputDocx': 'Die gespeicherte Kopie behält das Word-Format (.docx) dieses Dokuments.',
+  // #129: die Schwärzungs-Reichweite – benennt, was die automatische Maskierung nicht erreichen kann.
+  'chat.skill.confirm.redactionScope':
+    'Die Maskierung erfasst den Text des Dokuments (einschließlich Kopf- und Fußzeilen, Fußnoten, Kommentaren und nachverfolgten Änderungen) und entfernt Autoren-Metadaten und Linkziele. Bilder, gescannte Seiten und eingebettete Objekte werden nicht geprüft – prüfe die gespeicherte Kopie, bevor du sie weitergibst.',
   'chat.skill.confirm.outputText':
     'Die gespeicherte Kopie wird reiner Text (.txt) – Layout und Formatierung des Originals bleiben nicht erhalten.',
   'chat.skill.confirm.outputMatrix':

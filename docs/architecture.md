@@ -8054,6 +8054,21 @@ tool-registry list). Suite 3773/47 (was 3739; +34).
 
 ### §23 Same-format DOCX export — `<w:t>` node rewrite (beta-feedback-2026-07 Phase 9, #22/#23, D77)
 
+> **Superseded in scope for REDACTION (2026-08-09, issue #129 — skills-pipeline audit RUN-2).** The
+> body-only walk this record describes was a PRIVACY hole when read as a redaction guarantee: a
+> "redacted" copy carried unmasked PII in headers/footers (letterhead), footnotes/endnotes, comment
+> text, tracked-changes DELETED text (`<w:delText>` inside `document.xml` itself), field instructions,
+> hyperlink/mailto rel targets, and docProps/author metadata. The **redaction** walk now covers every
+> WordprocessingML text part (`readDocxRedactionLayers` — extended node regex incl. `delText`/
+> `instrText`; one chunk per part through the tool, so counts + the locate pass see header text too)
+> and the write (`applySpansToDocxParts` + metadata scrub) empties `dc:creator`/`cp:lastModifiedBy`,
+> `Company`/`Manager`, `w:author`/`w:initials`/`w15:author` attributes, and re-points external rel
+> targets at `about:blank`. The **edit** path deliberately keeps the body-only `<w:t>` walk described
+> below (an edit is a user-directed change to visible text, not an anonymization sweep — pinned in the
+> edit integration suite). Byte-identity now reads: parts without located content and all non-listed
+> parts stay byte-identical; formatting markup is never touched. Residuals (pictures/scanned pages,
+> embedded objects, custom XML) are named in the pre-run confirm scope line + known-limitations.
+
 The export half of the C wave: **DOCX in → DOCX out with formatting intact.** A Word `.docx` source is
 redacted / edited IN PLACE — styles, numbering, tables, headers and every other zip part survive because
 the ONLY thing that changes is the text CONTENT inside `<w:t>` nodes of `word/document.xml`. This extends the

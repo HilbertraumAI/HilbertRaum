@@ -18,7 +18,13 @@ import { redactWithEntities, type RedactDocumentOutput } from './tools/redaction
 import { locateEntities, type LocatedEntity } from './tools/redaction-locate'
 import { verifyAndSpliceEdits, type ApplyDocumentEditsOutput } from './tools/document-edit'
 import { locateDocumentEdits, type LocatedEdit } from './tools/document-edit-locate'
-import { readDocxTextLayer, applySpansToDocx } from '../export/docx-rewrite'
+import {
+  readDocxTextLayer,
+  readDocxRedactionLayers,
+  applySpansToDocx,
+  applySpansToDocxParts,
+  type DocxRedactionLayer
+} from '../export/docx-rewrite'
 import { isAbortError } from '../chat'
 import type { ModelRuntime } from '../runtime'
 
@@ -1441,36 +1447,42 @@ export async function runDocumentRedaction(
 
     const signal = deps.signal ?? new AbortController().signal
 
-    // Phase 9 (D77) — SAME-FORMAT DOCX branch. A Word `.docx` source is redacted IN PLACE: build the
-    // `<w:t>` text layer, RE-RUN the locate pass over THAT layer (it differs from the mammoth-extracted
-    // chunk text the model saw in Phase 7 — the D77 re-anchor), and write a `.docx` copy whose `<w:t>` text
-    // is the only thing that changes (styles/numbering/tables/headers untouched, every other zip part
-    // byte-identical). The gate/audit/counts still run THROUGH the tool (fed the layer as one chunk); the
-    // seam additionally computes the SAME spans (`redactWithEntities(...).spans`) and splices them across
-    // the node map. A structural DOCX failure (corrupt zip / no document.xml) FALLS BACK to the `.txt`
-    // path so redaction still ships. Requires the binary save + a confirmed run (the IPC already gated it).
-    let docxLayer: string | null = null
+    // Phase 9 (D77) — SAME-FORMAT DOCX branch. A Word `.docx` source is redacted IN PLACE. Since #129
+    // the walk covers EVERY WordprocessingML text part — the body (now including tracked-changes
+    // `<w:delText>` and field `<w:instrText>`) plus headers/footers/footnotes/endnotes/comments — and
+    // the write scrubs the metadata PII carriers (docProps author fields, `w:author`/`w:initials`
+    // attributes, external hyperlink/mailto rel targets). The locate pass RE-RUNS over the part layers
+    // (they differ from the mammoth-extracted chunk text the model saw in Phase 7 — the D77 re-anchor;
+    // fed jointly, so a header-only name is located too), the gate/audit/counts run THROUGH the tool
+    // (fed the parts as chunks), and the seam computes each part's spans (`redactWithEntities(...)
+    // .spans` per part) and splices them across that part's node map. A structural DOCX failure
+    // (corrupt zip / no document.xml) FALLS BACK to the `.txt` path so redaction still ships.
+    // Requires the binary save + a confirmed run (the IPC already gated it).
+    let docxParts: DocxRedactionLayer[] | null = null
     let docxBytes: Uint8Array | null = null
     if (deps.readOriginalDocument && deps.saveBinaryFile && deps.confirmed === true) {
       const original = await deps.readOriginalDocument(args.documentId)
       if (original.format === 'docx') {
         try {
-          docxLayer = (await readDocxTextLayer(original.bytes)).text
+          docxParts = await readDocxRedactionLayers(original.bytes)
           docxBytes = original.bytes
         } catch {
           // Not a rewritable Word document (corrupt zip / no document.xml) — fall back to the .txt path.
           console.error('[skills] redaction DOCX layer unreadable — falling back to the text copy')
-          docxLayer = null
+          docxParts = null
           docxBytes = null
         }
       }
     }
-    const isDocx = docxLayer !== null && docxBytes !== null
+    const isDocx = docxParts !== null && docxBytes !== null
 
-    // The reader the tool reads through: the DOCX text layer as one chunk (so the tool verifies + counts
-    // over exactly the rewritten layer), or the segment-faithful reader for the .txt path.
+    // The reader the tool reads through: one chunk PER DOCX part (so the tool verifies + counts over
+    // exactly the rewritten layers, headers included), or the segment-faithful reader for the .txt path.
     const reader: SkillToolContext['readDocumentChunks'] = isDocx
-      ? (id: string) => (id === args.documentId ? [{ text: docxLayer as string, page: null, index: 0 }] : [])
+      ? (id: string) =>
+          id === args.documentId
+            ? (docxParts as DocxRedactionLayer[]).map((p, i) => ({ text: p.text, page: null, index: i }))
+            : []
       : await resolveDocumentReader(db, args.documentId, deps)
     const ctx: SkillToolContext = {
       documentIds,
@@ -1545,10 +1557,15 @@ export async function runDocumentRedaction(
     let saved: boolean
     try {
       if (isDocx) {
-        // Same-format write (D77): the SAME perChar span set the tool applied (identical inputs ⇒ identical
-        // spans) spliced across the `<w:t>` node map + rezip — every other part byte-identical.
-        const spans = redactWithEntities(docxLayer as string, entities, 'perChar').spans
-        const outBytes = await applySpansToDocx(docxBytes as Uint8Array, spans)
+        // Same-format write (D77/#129): recompute each part's perChar span set (identical inputs ⇒
+        // identical masks as the tool's joined pass; the sweep verifies each entity per part) and
+        // splice across that part's node map + scrub the metadata carriers + rezip. Parts without
+        // matches keep their bytes; styles/numbering/tables survive untouched.
+        const partSpans = (docxParts as DocxRedactionLayer[]).map((p) => ({
+          path: p.path,
+          spans: redactWithEntities(p.text, entities, 'perChar').spans
+        }))
+        const outBytes = await applySpansToDocxParts(docxBytes as Uint8Array, partSpans, { scrubMetadata: true })
         saved = await deps.saveBinaryFile!('redacted.docx', outBytes)
       } else {
         saved = await deps.saveTextFile('redacted.txt', output.redactedText)

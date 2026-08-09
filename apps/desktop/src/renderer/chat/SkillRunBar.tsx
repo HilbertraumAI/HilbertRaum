@@ -275,6 +275,12 @@ export function SkillRunBar({
         })()
       : null
 
+  // #129: the redaction confirm carries an explicit SCOPE line — what automatic masking does NOT
+  // reach (pictures/scanned pages, embedded objects) — so the same-format export never implies
+  // whole-file redaction. Text parts + metadata ARE covered since #129; this names the residuals.
+  const confirmScopeKey: MessageKey | null =
+    confirmTool && confirmTool.name === 'redact_document' ? 'chat.skill.confirm.redactionScope' : null
+
   const onClickTool = (tool: RunnableTool): void => {
     if (tool.requiresConfirmation) setConfirmTool(tool)
     else runTool(tool)
@@ -389,6 +395,7 @@ export function SkillRunBar({
         >
           {t('chat.skill.confirm.body')}
           {confirmFormatKey && <p className="hint skill-confirm-format">{t(confirmFormatKey)}</p>}
+          {confirmScopeKey && <p className="hint skill-confirm-format">{t(confirmScopeKey)}</p>}
         </ConfirmDialog>
       </div>
     )

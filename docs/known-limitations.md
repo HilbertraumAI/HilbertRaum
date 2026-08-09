@@ -422,25 +422,35 @@ password recovery — are documented in
   never logs) — only per-run **counts** are surfaced (architecture.md "Skills — design record" §22). The
   edited copy is a **starting point that still needs a human review** before sharing; the SKILL.md body and
   the run's "done" copy both say so.
-  - **Same-format export keeps DOCX as DOCX; other formats save as `.txt` (#22/#23, D77;
-    architecture.md "Skills — design record" §23).** When the source is a **Word `.docx`**, redaction and
-    targeted-edit save a **same-format `.docx` copy** — styles, numbering, tables and headers survive because
-    the app changes **only the text inside `<w:t>` nodes** of `word/document.xml` and copies every other zip
-    part **byte-identical** (the diff-verifiable "unchanged outside the located spans" guarantee extends from
-    the extracted text to the real file). For a DOCX source the locate + verify pass **re-runs on the DOCX
-    text layer** (which differs from the extracted preview text), so the masks/edits land in the text that is
-    actually rewritten. **A DOCX with no readable `word/document.xml`** (corrupt / unusual package) falls back
-    to the `.txt` copy. **PDF re-export is out of scope** (writing PDFs is a separate problem): a **PDF or any
-    non-DOCX source saves as `.txt`** (segment-faithful — the newline-preserving parser segments, so PDF line
-    structure survives as well as extraction allows, and per-char `█` masks keep line length). A **scanned /
-    image PDF** has only its **OCR text layer** to work on — there is no reliable way to paint masks back onto
-    the page image, so such a document is best redacted from its `.txt` output, not in place. A **DOCX whose
-    `<w:t>` runs split a word across multiple runs** is handled (a span crossing a run boundary splits across
-    the nodes); a mask/edit is never allowed to change a paragraph break or any non-`<w:t>` markup.
+  - **Same-format export keeps DOCX as DOCX; other formats save as `.txt` (#22/#23, D77, #129;
+    architecture.md "Skills — design record" §23 + its 2026-08-09 supersede note).** When the source is
+    a **Word `.docx`**, redaction and targeted-edit save a **same-format `.docx` copy** — styles,
+    numbering and tables survive because the app changes only TEXT content, never formatting markup.
+    **Redaction covers the whole file's text since #129:** the body (including tracked-changes
+    **deleted text** and field instructions), **headers and footers** (letterhead), footnotes/endnotes,
+    and comment text are all masked under the same rules, and the metadata PII carriers are scrubbed —
+    document author fields (`docProps`), tracked-change/comment **author names**, and **hyperlink /
+    `mailto:` link targets** (re-pointed at `about:blank`; masking only the display text would have
+    left the address recoverable on hover). **What automatic masking still does NOT reach — and the
+    pre-run confirm now says so:** pictures and scanned page images (including any text ON them),
+    embedded objects (spreadsheets, charts), and custom XML parts travel into the copy unchanged —
+    review the saved copy before sharing. A targeted **edit** deliberately stays a body-text change
+    (no header rewrite, no metadata scrub — it is not an anonymization). For a DOCX source the locate +
+    verify pass **re-runs on the DOCX text layers** (which differ from the extracted preview text), so
+    the masks/edits land in the text that is actually rewritten. **A DOCX with no readable
+    `word/document.xml`** (corrupt / unusual package) falls back to the `.txt` copy. **PDF re-export is
+    out of scope** (writing PDFs is a separate problem): a **PDF or any non-DOCX source saves as
+    `.txt`** (segment-faithful — the newline-preserving parser segments, so PDF line structure survives
+    as well as extraction allows, and per-char `█` masks keep line length). A **scanned / image PDF**
+    has only its **OCR text layer** to work on — there is no reliable way to paint masks back onto the
+    page image, so such a document is best redacted from its `.txt` output, not in place. A **DOCX
+    whose `<w:t>` runs split a word across multiple runs** is handled (a span crossing a run boundary
+    splits across the nodes); a mask/edit never changes a paragraph break or formatting markup.
     **Said up front since #45:** the pre-run **confirmation dialog states the output format** for the
     selected document (derived from its extension, the same signal main branches on) — "keeps its Word
     format (.docx)" vs "will be plain text (.txt) — the original layout and formatting are not kept" —
-    so the format cliff is visible **before** the run, not first in the save dialog / result file.
+    and, for redaction, the **masking-scope line** (#129) naming the unreachable content, so neither
+    the format cliff nor the privacy boundary is first discovered in the saved file.
     Format-preserving **PDF output remains open** (true-redaction PDF or a regenerated, attributed PDF
     would need a PDF-writing dependency plus a shipped embeddable font — neither exists in the tree;
     see §5 next actions in `BUILD_STATE.md`).

@@ -214,6 +214,13 @@ first public release. Consciously-accepted gaps are tracked in
   (the plain-text copy was never affected). The saved file now masks the whole
   region exactly once, and the "N items hidden" count counts masked regions
   instead of double-counting the nested item.
+- **A redacted Word copy no longer carries personal data outside the visible
+  body text** (issue #129). Redaction used to rewrite only the document body:
+  headers and footers (letterhead), footnotes, comment text, tracked-changes
+  deleted text, hyperlink/`mailto:` targets, and the author metadata all
+  traveled into the "redacted" copy unchanged and recoverable. All of these
+  are now masked or scrubbed; the pre-run confirmation states what automatic
+  masking still cannot reach (pictures, scanned pages, embedded objects).
 - **Redacting or editing a very large document no longer fails at the end of
   the run** (issue #134). On documents long enough that the model proposed more
   than 4,096 places, the run used to fail with a generic error *after* the full

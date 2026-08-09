@@ -343,6 +343,10 @@ export const en = {
   // save dialog. Derived from the selected target's extension (mirrors main's source-format probe);
   // the matrix line is the no-known-target fallback.
   'chat.skill.confirm.outputDocx': 'The saved copy keeps this document’s Word format (.docx).',
+  // #129: the redaction scope line — names what automatic masking cannot reach, so the same-format
+  // export never implies whole-file redaction.
+  'chat.skill.confirm.redactionScope':
+    'Masking covers the document’s text (including headers, footers, footnotes, comments, and tracked changes) and clears author metadata and link targets. Pictures, scanned pages, and embedded objects are not checked — review the saved copy before sharing.',
   'chat.skill.confirm.outputText':
     'The saved copy will be plain text (.txt) — the original layout and formatting are not kept.',
   'chat.skill.confirm.outputMatrix':
