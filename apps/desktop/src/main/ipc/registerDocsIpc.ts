@@ -445,6 +445,9 @@ export function registerDocsIpc(ctx: AppContext): void {
           const current = pending ?? startPrepare(i)
           // Look ahead: start file i+1's parse so it overlaps file i's embed below.
           pending = startPrepare(i + 1)
+          // #158 (DT-3): whether THIS document indexed cleanly — read after the `finally`
+          // below, so the deep-index offer runs only once `processing` released the id.
+          let indexedOk = false
           try {
             const prepared = current
               ? await current.promise
@@ -460,9 +463,7 @@ export function registerDocsIpc(ctx: AppContext): void {
               // in-session filing path; the crash-resume path (M1) files the same way from
               // `reindexDocument` (whoever drives a doc to `indexed` files it).
               fileFromPendingDestination(ctx.db, id)
-              // Offer a deep index for documents the cheap capped summary can't fully cover
-              // (whole-document-analysis Q1/Q4). Gated + fire-and-forget — never throws here.
-              offerDeepIndex(id)
+              indexedOk = true
             }
             // Audit: ids + counts only — the filename/title is CONTENT (S1,
             // full-audit-2026-06-30). A user-chosen document name (`biopsy-results.pdf`,
@@ -482,6 +483,13 @@ export function registerDocsIpc(ctx: AppContext): void {
             processing.delete(id)
             transcribing.delete(id)
           }
+          // Offer a deep index for documents the cheap capped summary can't fully cover
+          // (whole-document-analysis Q1/Q4). Gated + fire-and-forget — never throws here.
+          // #158 (DT-3): AFTER the `finally` released the id from `processing` — inside the
+          // try, the manager's BE-1 `isDocumentProcessing` guard saw the document as
+          // busy-ingesting and the best-effort catch swallowed every auto-enqueue whenever
+          // a chat runtime was up (no tree task, no `pending` marker).
+          if (indexedOk) offerDeepIndex(id)
         }
         // A look-ahead prepare may be in flight when the loop broke early (mid-job lock).
         // Drain it so its row settles and its `processing` entry is cleaned up before the job
@@ -822,8 +830,11 @@ export function registerDocsIpc(ctx: AppContext): void {
   // `beginDocumentWork` lease and decide how to count the result.
   const reindexOne = async (documentId: string): Promise<DocumentInfo> => {
     processing.add(documentId)
+    // Definite-assignment assertion: assigned in the try; any throw propagates out before
+    // the post-`finally` read below (TS cannot see that control flow).
+    let info!: DocumentInfo
     try {
-      const info = await reindexDocument(ctx.db, storeDir, documentId, ingestionDeps())
+      info = await reindexDocument(ctx.db, storeDir, documentId, ingestionDeps())
       // Audit: ids + counts only — the title is CONTENT (S1, full-audit-2026-06-30;
       // same reasoning as document_imported above).
       ctx.audit?.('document_reindexed', 'Document re-indexed', {
@@ -831,14 +842,16 @@ export function registerDocsIpc(ctx: AppContext): void {
         status: info.status,
         chunkCount: info.chunkCount
       })
-      // Re-index tore down any prior tree (→ stale); offer a fresh deep index where it
-      // helps. The warm summary_cache makes the rebuild cheap despite chunk-id churn.
-      if (info.status === 'indexed') offerDeepIndex(documentId)
-      return info
     } finally {
       processing.delete(documentId)
       transcribing.delete(documentId)
     }
+    // Re-index tore down any prior tree (→ stale); offer a fresh deep index where it
+    // helps. The warm summary_cache makes the rebuild cheap despite chunk-id churn.
+    // #158 (DT-3): after the `finally` released the id from `processing` — see the import
+    // loop's twin note (the BE-1 guard otherwise swallowed the offer with a runtime up).
+    if (info.status === 'indexed') offerDeepIndex(documentId)
+    return info
   }
 
   ipcMain.handle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {
