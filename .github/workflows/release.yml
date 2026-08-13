@@ -162,6 +162,9 @@ jobs:
             const body = (m ? m[1].trim() : '');
             fs.writeFileSync('dist/NOTES.md',
               '## Which file do I need?\n\n' +
+              'The downloads are at the very bottom of this page, in the **Assets** list' +
+              ' underneath all these notes. Scroll all the way down, and click Assets if the' +
+              ' list is folded. You need exactly one file:\n\n' +
               '| Your computer | Download this ONE file |\n' +
               '|---|---|\n' +
               '| **Windows** 10/11 | **HilbertRaum-' + v + '-portable.exe** |\n' +
