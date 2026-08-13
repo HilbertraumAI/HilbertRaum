@@ -156,10 +156,24 @@ jobs:
         run: |
           node -e "
             const fs = require('fs');
+            const v = require('./apps/desktop/package.json').version;
             const md = fs.readFileSync('CHANGELOG.md', 'utf8');
             const m = md.match(/## \[Unreleased\]([\s\S]*?)(\n## |$)/);
             const body = (m ? m[1].trim() : '');
             fs.writeFileSync('dist/NOTES.md',
+              '## Which file do I need?\n\n' +
+              'The downloads are at the very bottom of this page, in the **Assets** list' +
+              ' underneath all these notes. Scroll all the way down, and click Assets if the' +
+              ' list is folded. You need exactly one file:\n\n' +
+              '| Your computer | Download this ONE file |\n' +
+              '|---|---|\n' +
+              '| **Windows** 10/11 | **HilbertRaum-' + v + '-portable.exe** |\n' +
+              '| **macOS** (Apple Silicon) | **HilbertRaum-' + v + '-mac-arm64.app.zip** |\n' +
+              '| **Linux** | **HilbertRaum-' + v + '.AppImage** |\n\n' +
+              'The other files are NOT the app: the llama-runtime-*.zip files carry the AI' +
+              ' engine for offline/air-gapped installs only (normally the app offers that same' +
+              ' download built in), SHA256SUMS.txt is for optional download verification, and' +
+              ' the two Source code archives are the source for developers, not a runnable app.\n\n' +
               '> **This download is the app only** — a working chat needs **two more downloads**,' +
               ' both offered on the **AI Model** screen inside the app: the **AI engine**' +
               ' (llama.cpp — the screen shows an install banner until it is present; without it,' +
