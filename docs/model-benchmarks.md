@@ -967,6 +967,67 @@ hallucinations .0667→0 (both runs), `qwen3-8b` .2→.1333, `qwen3.5-35b-a3b` .
 `qwen3.5-2b` .3333→.2667 (its audit's "4–5 real" resolves to 4), E2B .40→.20 (3 real), E4B
 .1333→.0667 (1 real). EM/F1/citation columns are abstention-independent and unchanged.
 
+### 9.4 Qwen3.8-27B wave — measured, PENDING ratification (2026-08-15)
+
+Unsloth published `Qwen3.8-27B-GGUF` (dense 27B, vision-language upstream, thinking on by
+default, arch string `qwen35`) and four quants were measured the same day on the i9-9900X +
+RTX 3090 box: `Q4_K_M`, `UD-Q4_K_XL`, `Q5_K_M`, `Q6_K`. **No manifests yet, no ranks moved** —
+this section records the evidence; productization (manifest + hash + license review) and the
+§9.1 in-app smoke are open follow-ups. Text-only measurement; the upstream mmproj/vision side
+was not exercised (same posture as the `qwen3.6-27b` chat manifests).
+
+**Runtime caveat:** measured on the **b10430** ubuntu-vulkan release (not the b9849 pin) — the
+arch loads on b9849-era builds (`qwen35`), but the speed rows are NOT directly comparable to
+the b9849 CSVs and live in their own file: `eval/results/i9-9900X-vulkan-b10430-speed.csv`.
+
+**Quality (§2 harness, one combined 4-model run; raw files
+`eval/results/i9-9900X-qwen38-vulkan-{quality.csv,quality-rescored.csv,items.jsonl}`):**
+all four quants land inside a .0026 F1 band — quantization does not move this eval.
+
+| Model | mean F1 | EM | halluc | abstain(unans) | vs `qwen3.6-27b-q4` (.3523) |
+|---|---|---|---|---|---|
+| `qwen3.8-27b-q4` | .3500 | .9765 | 0 | 1.0000 | −.0023 (inside cross-run noise) |
+| `qwen3.8-27b-ud-q4kxl` | .3507 | .9765 | 0 | 1.0000 | −.0016 |
+| `qwen3.8-27b-q5` | .3523 | .9765 | 0 | 1.0000 | ties; `qwen3.6-27b-q5` (.3573) stays the table lead |
+| `qwen3.8-27b-q6` | .3503 | .9765 | 0 | 1.0000 | −.0020 |
+
+Zero hallucinations and perfect unanswerable-abstention on ALL four quants (the only other
+models with that profile: `qwen3.6-27b-q5`, `gemma-4-26b-q4`, and post-rescore `qwen3.6-27b-q4`
++ `qwen3.5-35b-a3b`). Thinking suppresses cleanly via `chat_template_kwargs.enable_thinking:
+false` (the harness's Balanced-mode default; verified — reasoning lands on `reasoning_content`
+and content stays intact). Determinism note: a repeated single-model q6 run differed by ±.002
+F1 (Vulkan reduction nondeterminism); immaterial at the decision scale.
+
+**Speed/RSS (§3/§4, b10430 vulkan, each quant measured solo from a ≤45 °C GPU):** rows in
+`i9-9900X-vulkan-b10430-speed.csv`. Method notes that matter for reproduction: `tg` is highly
+thermally sensitive on this box (Q6 dropped 31.7→23.6 t/s when run 4th in a back-to-back
+sweep — GDDR6X memory-clock throttle), so per-quant cool-start runs are the recorded numbers;
+`pp512` under-reads on Vulkan because the burst is shorter than the boost-clock ramp (reps
+climb monotonically), so the pp512 column is the **median of 3 reps after an in-invocation
+pp2048 warm-up**, while pp2048/pp8192/tg are plain llama-bench averages of 3.
+
+| Quant | pp512 | pp2048 | pp8192 | tg128 | peak VRAM bench / server 8k ctx | peak RSS | min RAM |
+|---|---|---|---|---|---|---|---|
+| Q4_K_M | 1085 | 1208 | 1168 | 39.9 | 17.1 / 17.2 GiB | 17.16 GiB | 21 |
+| UD-Q4_K_XL | 997 | 1096 | 1060 | 35.0 | 17.9 / 17.9 GiB | 17.92 GiB | 21 |
+| Q5_K_M | 1057 | 1134 | 1097 | 35.9 | 19.5 / 20.0 GiB | 19.70 GiB | 23 |
+| Q6_K | 985 | 1122 | 1092 | 31.7 | 22.2 / 22.7 GiB | 22.54 GiB | 26 |
+
+`qwen3.8-27b-q4` reproduces the `qwen3.6-27b-q4` envelope almost exactly (tg 39.9 vs 40.1,
+peak RSS 17.16 vs 16.87 GiB) — same tier, same formula minimum. `Q5_K_M` out-decodes the
+smaller `UD-Q4_K_XL` (35.9 vs 35.0 t/s; K-quant kernel efficiency), which weakens the UD
+quant's case at this size. **`Q6_K` fully fits a 24 GB GPU at ctx 8192** (22.7 GiB peak VRAM,
+no spill) — a genuine new option the 3.6 wave never had measured. CPU leg (Q4_K_M, `-ngl 0`,
+same build): pp512 118.4 / pp2048 120.1 / pp8192 118.3 / tg 2.83 t/s — the `qwen3.6-27b-q4`
+CPU envelope reproduced (tg 2.79 on b9849); peak-RSS cells left empty (not re-measured on the
+CPU basis — the §9.3 Windows-basis standing rule applies before any manifest carries a number).
+
+**Provisional read (NOT a rank move):** if this wave productizes, `q4` is the 24 GB-tier
+candidate against `qwen3.6-27b-q4` (quality tie, speed tie — newest-generation preference §6.4
+would decide), `q5` the ≥32 GB pick, `q6` a new "24 GB GPU, quality ceiling" option;
+`ud-q4kxl` earns no slot (slower than `q5` at no quality edge). Blocked on: license review
+(private/legal process), real HF-LFS hashes, §9.1 per-quant smoke, owner ratification.
+
 ---
 
 ## 10. Skills extraction & real-model smoke (skills-remediation T1, audit §7)

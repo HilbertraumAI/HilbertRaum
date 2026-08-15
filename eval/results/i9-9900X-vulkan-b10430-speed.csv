@@ -1,0 +1,6 @@
+model,backend,threads,pp512_tps,pp2048_tps,pp8192_tps,tg_tps,peak_rss_gib,suggested_min_ram_gb
+qwen3.8-27b-q4,vulkan,10,1085.2,1207.6,1167.6,39.9,17.16,21
+qwen3.8-27b-ud-q4kxl,vulkan,10,996.7,1095.9,1060.2,35.0,17.92,21
+qwen3.8-27b-q5,vulkan,10,1057.4,1134.5,1097.1,35.9,19.70,23
+qwen3.8-27b-q6,vulkan,10,985.4,1122.4,1091.6,31.7,22.54,26
+qwen3.8-27b-q4,cpu,10,118.4,120.1,118.3,2.83,,
