@@ -134,8 +134,8 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
 // newest-Qwen decision (owner, 2026-07-12, model-benchmarks.md §6.4). These are the #48 tester
 // eval's top quality scorers, and the only promoted models whose promotion the eval AGREES
 // with — pin the full promotion facts so a mis-edit fails CI, not a user's drive.
-describe('committed catalog — Qwen3.6 27B pair (2026-07-12 promotion)', () => {
-  it('both Qwen3.6 manifests hold the productization + promotion invariants', () => {
+describe('committed catalog — Qwen3.6 27B pair (2026-07-12 promotion; rank 1 since the 2026-08-16 §9.4 handover)', () => {
+  it('both Qwen3.6 manifests hold the productization + demoted-rank invariants', () => {
     const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
     for (const id of ['qwen3.6-27b-q4', 'qwen3.6-27b-q5']) {
       const m = byId[id]
@@ -144,7 +144,9 @@ describe('committed catalog — Qwen3.6 27B pair (2026-07-12 promotion)', () => 
       expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
       expect(m.format, `${id} format`).toBe('gguf')
       expect(m.family, `${id} family`).toBe('qwen3.6')
-      expect(m.recommendationRank, `${id} rank`).toBe(3)
+      // Rank 1 since the 2026-08-16 Qwen3.8 handover (owner decision, §6.4 newest-generation
+      // preference; model-benchmarks.md §9.4) — ranked + selectable, below the gemma rank-2s.
+      expect(m.recommendationRank, `${id} rank`).toBe(1)
       expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
       expect(m.license, `${id} license`).toBe('apache-2.0')
       expect(m.licenseReview.status, `${id} review`).toBe('approved')
@@ -155,9 +157,75 @@ describe('committed catalog — Qwen3.6 27B pair (2026-07-12 promotion)', () => 
       expect(m.mmproj, `${id} no mmproj`).toBeUndefined()
       expect(m.recommendedContextTokens, `${id} ctx not native`).toBeLessThanOrEqual(32768)
     }
-    // The tier split the promotion rests on: Q4 owns the 24 GB capacity group, Q5 the 32 GB one.
+    // The tier split the original promotion rested on: Q4 in the 24 GB capacity group, Q5 in 32.
     expect(byId['qwen3.6-27b-q4'].recommendedRamGb, 'Q4 comfortable tier').toBe(24)
     expect(byId['qwen3.6-27b-q5'].recommendedRamGb, 'Q5 comfortable tier').toBe(32)
+  })
+})
+
+// The Qwen3.8 wave (2026-08-16 promotion; model-benchmarks.md §9.4): three unsloth quants of
+// Qwen3.8-27B, productized with real HF-LFS hashes on day one. Ranks per the owner's §9.4
+// ratification (full generational handover): q4 rank 3 takes 24 GB, q5 rank 3 takes ≥32 GB,
+// q6 rank 0 BY DESIGN (the "24 GB GPU quality ceiling" selectable — its VRAM-fit niche is not
+// expressible in the RAM-tier picker; the gemma4-31b selectable-ceiling precedent). No
+// UD-Q4_K_XL manifest: measured slower than q5 at equal quality (§9.4).
+const QWEN38_WAVE_FACTS: Record<
+  string,
+  { rank: number; minRam: number; recRam: number; displayName: string }
+> = {
+  'qwen3.8-27b-q4': { rank: 3, minRam: 21, recRam: 24, displayName: 'Qwen3.8 27B Q4_K_M' },
+  'qwen3.8-27b-q5': { rank: 3, minRam: 23, recRam: 32, displayName: 'Qwen3.8 27B Q5_K_M' },
+  'qwen3.8-27b-q6': { rank: 0, minRam: 26, recRam: 32, displayName: 'Qwen3.8 27B Q6_K' }
+}
+
+describe('committed catalog — Qwen3.8 wave (2026-08-16 promotion, §9.4)', () => {
+  it('all three Qwen3.8 manifests hold the productization + promotion invariants', () => {
+    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
+    for (const [id, facts] of Object.entries(QWEN38_WAVE_FACTS)) {
+      const m = byId[id]
+      expect(m, id).toBeDefined()
+      expect(m.role, `${id} role`).toBe('chat')
+      expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
+      expect(m.format, `${id} format`).toBe('gguf')
+      expect(m.family, `${id} family`).toBe('qwen3.8')
+      expect(m.recommendationRank, `${id} rank`).toBe(facts.rank)
+      expect(m.recommendedMinRamGb, `${id} min RAM`).toBe(facts.minRam)
+      expect(m.recommendedRamGb, `${id} rec RAM`).toBe(facts.recRam)
+      expect(m.displayName, `${id} display name`).toBe(facts.displayName)
+      expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
+      expect(m.license, `${id} license`).toBe('apache-2.0')
+      expect(m.licenseReview.status, `${id} review`).toBe('approved')
+      expect(isRealSha256(m.sha256), `${id} real sha256`).toBe(true)
+      expect(m.download, `${id} download block`).toBeDefined()
+      expect(m.download!.sha256, `${id} download hash equals top-level`).toBe(m.sha256)
+      expect(m.mmproj, `${id} no mmproj`).toBeUndefined()
+      expect(m.recommendedContextTokens, `${id} ctx local budget`).toBe(8192)
+    }
+  })
+
+  it('the rank-3 pair owns exactly the 24 GB and ≥32 GB tiers (no-signal mapping)', () => {
+    const chat = committedManifests()
+    expect(recommendModelIdByRam(chat, 24, 'chat')).toBe('qwen3.8-27b-q4')
+    for (const ram of [32, 48, 64, 128]) {
+      expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram}`).toBe('qwen3.8-27b-q5')
+    }
+    // Below 24 the wave changes nothing (min-21 q4 must not leak into the 16-20 band).
+    expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(recommendModelIdByRam(chat, 20, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
+  })
+
+  it('NEVER auto-recommends the rank-0 Q6_K at any realistic RAM level, with or without a slow signal', () => {
+    const chat = committedManifests()
+    for (const ram of [8, 12, 14, 16, 20, 24, 26, 32, 48, 64, 128]) {
+      expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram}`).not.toBe('qwen3.8-27b-q6')
+      const slow = {
+        tokensPerSecond: 2.0,
+        measuredModelId: recommendModelIdByRam(chat, ram, 'chat')
+      }
+      expect(recommendModelIdByRam(chat, ram, 'chat', slow), `ram=${ram} slow`).not.toBe(
+        'qwen3.8-27b-q6'
+      )
+    }
   })
 })
 
@@ -258,8 +326,8 @@ describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
     // values are where a RAM mis-edit hides (a rec of 13–15 would win ram=14 unseen), and 20
     // is the 26B-A4B's own hard-min boundary introduced by this wave. Since the 2026-08-03
     // ratification this deliberately includes the rank-2 26B-A4B: a ranked runner-up must
-    // still lose every tier to the rank-3 holders (qwen3.6-27b-q4 at 24 GB, qwen3.6-27b-q5
-    // at ≥32 GB).
+    // still lose every tier to the rank-3 holders (qwen3.8-27b-q4 at 24 GB, qwen3.8-27b-q5
+    // at ≥32 GB since the 2026-08-16 §9.4 handover).
     const chat = committedManifests()
     const waveSet = new Set(GEMMA4_WAVE_IDS.filter((id) => GEMMA4_WAVE_RANKS[id] < 3))
     for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
@@ -311,21 +379,21 @@ describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', (
     expect(recommendModelIdByRam(chat, 20, 'chat', slowOnOwnPick(chat, 20))).toBe('gemma4-e2b-it-qat-q4')
     // 24 GB: 27B Q4 crawling steps to the 16-band winner.
     expect(recommendModelIdByRam(chat, 24, 'chat', slowOnOwnPick(chat, 24))).toBe('qwen3.5-9b-ud-q4kxl')
-    // ≥32 GB: 27B Q5 crawling steps to the 24-band winner.
-    expect(recommendModelIdByRam(chat, 32, 'chat', slowOnOwnPick(chat, 32))).toBe('qwen3.6-27b-q4')
-    expect(recommendModelIdByRam(chat, 48, 'chat', slowOnOwnPick(chat, 48))).toBe('qwen3.6-27b-q4')
-    expect(recommendModelIdByRam(chat, 128, 'chat', slowOnOwnPick(chat, 128))).toBe('qwen3.6-27b-q4')
+    // ≥32 GB: 27B Q5 crawling steps to the 24-band winner (qwen3.8 since the §9.4 handover).
+    expect(recommendModelIdByRam(chat, 32, 'chat', slowOnOwnPick(chat, 32))).toBe('qwen3.8-27b-q4')
+    expect(recommendModelIdByRam(chat, 48, 'chat', slowOnOwnPick(chat, 48))).toBe('qwen3.8-27b-q4')
+    expect(recommendModelIdByRam(chat, 128, 'chat', slowOnOwnPick(chat, 128))).toBe('qwen3.8-27b-q4')
   })
 
   it('an oversized crawl never moves the pick (the #52 lesson, real manifests)', () => {
     const chat = committedManifests()
     // 24 GB box, crawl measured on the manually-started 32 GB-tier Q5: pick unchanged.
     expect(
-      recommendModelIdByRam(chat, 24, 'chat', { tokensPerSecond: 2.0, measuredModelId: 'qwen3.6-27b-q5' })
-    ).toBe('qwen3.6-27b-q4')
+      recommendModelIdByRam(chat, 24, 'chat', { tokensPerSecond: 2.0, measuredModelId: 'qwen3.8-27b-q5' })
+    ).toBe('qwen3.8-27b-q4')
     // 16 GB box, crawl on the 24 GB-tier Q4: pick unchanged.
     expect(
-      recommendModelIdByRam(chat, 16, 'chat', { tokensPerSecond: 2.0, measuredModelId: 'qwen3.6-27b-q4' })
+      recommendModelIdByRam(chat, 16, 'chat', { tokensPerSecond: 2.0, measuredModelId: 'qwen3.8-27b-q4' })
     ).toBe('qwen3.5-9b-ud-q4kxl')
   })
 

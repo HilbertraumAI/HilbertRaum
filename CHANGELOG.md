@@ -128,6 +128,11 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Changed
 
+- **Qwen3.8 27B is the new recommended chat model for 24 GB and ≥32 GB machines**
+  (owner ratification 2026-08-16; `docs/model-benchmarks.md` §9.4). Three new
+  catalog entries (Q4_K_M, Q5_K_M, and the selectable Q6_K quality ceiling for
+  24 GB GPUs), all license-reviewed with verified upstream hashes. The Qwen3.6
+  27B pair stays in the catalog, still ranked and selectable.
 - **Every screen shares one content width** (issues #166/#171). All screens —
   Home, Documents, Translate, Images, AI model, Skills, Settings — now use the
   same centred content width with symmetric side gutters, so pages no longer

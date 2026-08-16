@@ -1,0 +1,44 @@
+id: qwen3.8-27b-q5
+display_name: Qwen3.8 27B Q5_K_M
+family: qwen3.8
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 19.8
+# MEASURED 2026-08-15 (i9-9900X + RTX 3090, b10430 linux-vulkan; model-benchmarks.md §9.4):
+# llama-server peak RSS 19.70 GiB at ctx 8192 (vulkan basis; formula min 23), peak VRAM
+# 20.0 GiB. tg 35.9 t/s vulkan — notably OUT-decodes the smaller UD-Q4_K_XL (35.0), which is
+# why no UD manifest exists this wave. b10430 measurement basis; arch `qwen35` loads on the
+# b9849 pin family. §9.1 in-app smoke PASSED all legs 2026-08-16 ON THE b9849 PIN (in-app
+# sha256 verify 76 s, VmHWM 19.68 GiB, thinking suppression + Deep verified, clean teardowns).
+recommended_min_ram_gb: 23
+recommended_ram_gb: 32
+# Rank 3 (owner decision 2026-08-16, newest-generation preference; model-benchmarks.md §6.4 +
+# §9.4): F1 .3523 exactly ties the former 24 GB pick qwen3.6-27b-q4; the all-time harness
+# record stays with qwen3.6-27b-q5 (.3573), but the 3.8 wave's zero-hallucination + perfect-
+# abstention profile across ALL quants plus the newest-generation preference takes the ≥32 GB
+# tier; qwen3.6-27b-q5 drops to rank 1 (full generational handover).
+recommendation_rank: 3
+# Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
+recommended_context_tokens: 8192
+supports_thinking_mode: true
+local_path: models/chat/qwen3.8-27b-q5.gguf
+# Real hash from HuggingFace LFS metadata (git-LFS OID = the file's SHA-256), captured
+# 2026-08-16 and independently confirmed by on-disk SHA-256 of the downloaded file (i9 rig).
+sha256: 07deb7fa91bf751d3000774fe5bb8afae5ffb41255fd19980147468052e07177
+# Quantization: unsloth Q5_K_M (established-quantizer posture; no official Qwen GGUF for 3.8).
+download:
+  url: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q5_K_M.gguf?download=true
+  sha256: 07deb7fa91bf751d3000774fe5bb8afae5ffb41255fd19980147468052e07177
+  size_bytes: 19834055648
+  license_url: https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# TEXT-ONLY USE: upstream Qwen3.8 is a vision-language model, but this chat manifest ships only
+# the language GGUF and no mmproj/projector, which is all our chat pipeline uses.
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF card/LFS verification)"
+  reviewed_at: "2026-08-16"
+  notes: "APPROVED 2026-08-16: base model Qwen/Qwen3.8-27B is apache-2.0 (verified via the HF API; LICENSE blob at download.license_url). Quantization provenance: unsloth Q5_K_M GGUF (https://huggingface.co/unsloth/Qwen3.8-27B-GGUF, card tag apache-2.0), a third-party requant of apache-2.0 weights; same established-quantizer posture as the Qwen3.5/3.6 waves. Hash is the HF-LFS OID AND confirmed by on-disk SHA-256 of the downloaded file. Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive (DRIVE-NOTICES.md regeneration required before any preload). Full record: offline-intelligence-private/legal/model-licensing-qwen38-addendum-2026-08-16.md."

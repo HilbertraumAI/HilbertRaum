@@ -328,7 +328,10 @@ per RAM tier: `qwen3.5-4b-ud-q4kxl` (≤12 GB), `qwen3.5-9b-ud-q4kxl` (16–20 G
 and `qwen3.6-27b-q5` (≥32 GB, same productization). Net mapping (asserted in `benchmark.test.ts`
 and `committed-catalog.test.ts`): **≤12 GB → Qwen3.5 4B, 16–20 GB → Qwen3.5 9B, 24 GB →
 Qwen3.6 27B Q4, ≥32 GB → Qwen3.6 27B Q5**. Granite, both MoEs, the fast-tier 2B/0.8B, and the
-superseded incumbents stay selectable, never auto-recommended.
+superseded incumbents stay selectable, never auto-recommended. *(Amended 2026-08-16: the same
+standing preference handed the 24 GB and ≥32 GB tiers to `qwen3.8-27b-q4` / `qwen3.8-27b-q5` at
+the §9.4 wave ratification — full generational handover, the Qwen3.6 pair to rank 1. The 4B/9B
+rows above are unchanged; the 12–15 GB row belongs to the #153 E2B promotion, §6.5.)*
 
 **The rationale (recorded verbatim so the trade-off stays visible).** A subjective owner
 judgment: newer model generations are expected to be better than the ones they replace (training
@@ -1022,11 +1025,37 @@ same build): pp512 118.4 / pp2048 120.1 / pp8192 118.3 / tg 2.83 t/s — the `qw
 CPU envelope reproduced (tg 2.79 on b9849); peak-RSS cells left empty (not re-measured on the
 CPU basis — the §9.3 Windows-basis standing rule applies before any manifest carries a number).
 
-**Provisional read (NOT a rank move):** if this wave productizes, `q4` is the 24 GB-tier
-candidate against `qwen3.6-27b-q4` (quality tie, speed tie — newest-generation preference §6.4
-would decide), `q5` the ≥32 GB pick, `q6` a new "24 GB GPU, quality ceiling" option;
-`ud-q4kxl` earns no slot (slower than `q5` at no quality edge). Blocked on: license review
-(private/legal process), real HF-LFS hashes, §9.1 per-quant smoke, owner ratification.
+**Wave outcome — RATIFIED (owner, 2026-08-16).** The provisional read became the decision, as a
+**full generational handover** (owner call at ratification, one step beyond the default
+demote-to-rank-2 option): `qwen3.8-27b-q4` **rank 3** takes 24 GB, `qwen3.8-27b-q5` **rank 3**
+takes ≥32 GB, and the Qwen3.6 pair drops to **rank 1** (below the gemma rank-2 runner-ups;
+still ranked + selectable; its Q5 keeps the all-time F1 record .3573 — recorded honestly in
+both manifests, the handover is the §6.4 generational call, not a quality verdict).
+`qwen3.8-27b-q6` enters at **rank 0 BY DESIGN** — the q5 sibling wins the ≥32 GB RAM tier
+(faster at equal quality) and Q6_K's real niche (fully fits a 24 GB GPU at ctx 8192) is not
+expressible in the RAM-tier picker; it stays the selectable "24 GB GPU quality ceiling" (the
+gemma4-31b precedent). `UD-Q4_K_XL` earns no manifest (out-decoded by the larger q5 at equal
+quality). Productization discharged at ratification: all three manifests carry real HF-LFS
+hashes independently confirmed by on-disk SHA-256, and the apache-2.0 license review is
+recorded per manifest (full record: `offline-intelligence-private/legal/`
+`model-licensing-qwen38-addendum-2026-08-16.md`). Mapping pins updated in `benchmark.test.ts` +
+`committed-catalog.test.ts` (new Qwen3.8 wave block). §9.1 smoke: see the wave smoke record
+below.
+
+**§9.1 smokes — all three quants PASSED (2026-08-16, through the app's real IPC/runtime path
+via CDP/Playwright `_electron`, dev build of this branch, i9-9900X + RTX 3090, drive runtime =
+the pinned b9849 linux-vulkan):** the smoke drive's runtime is the b9849 pin, so this ALSO
+discharges the §9.4 "b10430 measurement basis" runtime-compat caveat — the pinned binary loads
+and serves the `qwen35`-arch GGUFs. Per quant (q4 / q5 / q6): in-app SHA-256 verify of the
+manifest-pinned weight (66 / 76 / 90 s) then start via the app's model path (`useModel`, GPU
+backend, real `llama-server` sidecar); balanced chat streams coherently with ZERO reasoning
+frames (suppression verified); Deep surfaces reasoning frames (34 / 36 / 35); grounded ask
+answers from an imported document with the exact fact and a correct `[S1]` citation (DE);
+mid-stream abort ends the stream in 5 / 4 / 3 ms; sidecar `VmHWM` 17.14 / 19.68 / 22.52 GiB
+(Linux basis — consistent with the §4 llama-server peaks); `stopRuntime` teardown leaves no
+chat sidecar and quit-while-running teardown leaves no `llama-server` of any role (embeddings /
+reranker sidecars legitimately idle past a chat stop and are excluded from the stop leg only).
+Text-only chat needed no mmproj on any quant.
 
 ---
 

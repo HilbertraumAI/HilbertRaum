@@ -82,8 +82,8 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
 
 - **A computer:** Windows (first-class), macOS, or Linux.
 - **RAM decides which model the benchmark recommends** (the app benchmarks your machine and picks the
-  best *fit*): <12 GB → Qwen3.5 4B · 12–15 GB → Gemma 4 E2B · 16–20 GB → Qwen3.5 9B · 24 GB → Qwen3.6 27B (Q4) · ≥32 GB →
-  Qwen3.6 27B (Q5); the MoEs stay opt-in. These are *recommended best-fit* tiers, **not** hard
+  best *fit*): <12 GB → Qwen3.5 4B · 12–15 GB → Gemma 4 E2B · 16–20 GB → Qwen3.5 9B · 24 GB → Qwen3.8 27B (Q4) · ≥32 GB →
+  Qwen3.8 27B (Q5); the MoEs stay opt-in. These are *recommended best-fit* tiers, **not** hard
   minimums — each model's actual floor is the lower **Min RAM** column in the model table below
   (e.g. Qwen3.5 9B already runs from 12 GB).
 - **Disk space:** ~**3 GB** for the smallest *hand-built* setup (the 4B chat model + the embeddings
@@ -215,7 +215,7 @@ policy in **[`docs/model-policy.md`](docs/model-policy.md)**.
 **The default set** (`-WithAssets`) is enough for everyday use: a chat model + **embeddings**
 (document Q&A) + **reranker** (retrieval quality) + **Whisper** (audio). The benchmark
 auto-recommends the newest-generation chat model that fits your RAM: **<12 GB → Qwen3.5 4B,
-12–15 GB → Gemma 4 E2B, 16–20 GB → Qwen3.5 9B, 24 GB → Qwen3.6 27B (Q4), ≥32 GB → Qwen3.6 27B
+12–15 GB → Gemma 4 E2B, 16–20 GB → Qwen3.5 9B, 24 GB → Qwen3.8 27B (Q4), ≥32 GB → Qwen3.8 27B
 (Q5)** (best-*fit* tiers;
 the table's **Min RAM** column is each model's lower hard floor — except the two fast-tier entries,
 which deliberately carry the 4B's tier-aligned line rather than a measured floor so they cannot
@@ -238,11 +238,14 @@ speed **if** the ~18-22 GB weight fits in RAM).
 | Qwen3.5 9B (UD-Q4_K_XL) | **Recommended 16–20 GB**: newest-generation 9B | ~6.0 GB | 12 GB | Apache-2.0 |
 | Granite 4.1 8B Q4 | Challenger (selectable, not auto-recommended) | ~5.3 GB | 12 GB | Apache-2.0 |
 | Gemma 4 E4B Instruct QAT Q4_0 | Gemma 4 QAT wave 8B-tier challenger (selectable; not auto-recommended) | ~5.2 GB | 12 GB | Apache-2.0 |
-| Gemma 4 12B Instruct QAT Q4_0 | Phase-29 12–14B benchmark winner; has **Deep** (selectable; the ≥24 GB pick is now Qwen3.6 27B) | ~7.0 GB | 14 GB | Apache-2.0 |
+| Gemma 4 12B Instruct QAT Q4_0 | Phase-29 12–14B benchmark winner; has **Deep** (selectable; the ≥24 GB pick is now Qwen3.8 27B) | ~7.0 GB | 14 GB | Apache-2.0 |
 | Qwen3 14B Instruct Q4 | Dense, 32 GB+ | ~9.3 GB | 14 GB | Apache-2.0 |
 | Gemma 4 26B-A4B Instruct QAT Q4_0 | Gemma 4 QAT wave MoE (~3.8B active; rank 2 since the 2026-08-03 eval ratification — the 24 GB tier's ranked runner-up at ~4× the pick's speed, still never the auto-pick) | ~14.4 GB | 20 GB | Apache-2.0 |
-| Qwen3.6 27B Q4_K_M | **Recommended 24 GB**: newest generation, top scorer of the 2026-07 quality eval | ~16.8 GB | 20 GB | Apache-2.0 |
-| Qwen3.6 27B Q5_K_M | **Recommended ≥32 GB**: the same top scorer at a richer quant | ~19.5 GB | 24 GB | Apache-2.0 |
+| Qwen3.6 27B Q4_K_M | Former 24 GB pick (2026-07); still ranked and selectable after the 2026-08 Qwen3.8 handover | ~16.8 GB | 20 GB | Apache-2.0 |
+| Qwen3.6 27B Q5_K_M | Former ≥32 GB pick; still holds the all-time top score of our grounded-QA eval | ~19.5 GB | 24 GB | Apache-2.0 |
+| Qwen3.8 27B Q4_K_M | **Recommended 24 GB**: newest generation, zero hallucinations on the 2026-08 quality eval | ~17.1 GB | 21 GB | Apache-2.0 |
+| Qwen3.8 27B Q5_K_M | **Recommended ≥32 GB**: same zero-hallucination profile at a richer quant | ~19.8 GB | 23 GB | Apache-2.0 |
+| Qwen3.8 27B Q6_K | Quality ceiling for 24 GB GPUs (selectable, never auto-recommended; fully fits a 24 GB card at 8k context) | ~22.9 GB | 26 GB | Apache-2.0 |
 | Qwen3 30B-A3B (MoE) Q4 | ≈30B quality, ≈3B speed (opt-in) | ~18.6 GB | 24 GB | Apache-2.0 |
 | Qwen3.5 27B (UD-Q4_K_XL) | Qwen3.5 wave dense challenger (selectable; not auto-recommended) | ~17.6 GB | 24 GB | Apache-2.0 |
 | Gemma 4 31B Instruct QAT Q4_0 | Gemma 4 QAT wave dense ceiling (opt-in, selectable; slow on CPU) | ~17.7 GB | 24 GB | Apache-2.0 |
