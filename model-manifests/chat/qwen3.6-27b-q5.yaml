@@ -13,11 +13,15 @@ size_on_disk_gb: 19.5
 # 2026-07-30 (the §6.4 residual for this model).
 recommended_min_ram_gb: 24
 recommended_ram_gb: 32
-# Rank 3 (owner decision 2026-07-12, newest-generation preference; see the Q4 sibling for the
-# full record): top scorer of the #48 tester eval (F1 .3573, EM .9765, zero unanswerable-set
-# hallucinations, b9849 binary). The ~19.5 GB (18.2 GiB) weight needs the 32 GB tier to be comfortable;
-# the Q4 sibling covers 24 GB. Takes ≥32 GB from gemma4-12b (rank 2).
-recommendation_rank: 3
+# Rank 1 (owner decision 2026-08-16, §6.4 full generational handover to the Qwen3.8 wave;
+# model-benchmarks.md §9.4): qwen3.8-27b-q5 takes the ≥32 GB tier per the standing
+# newest-generation preference. This model still holds the all-time harness F1 record (.3573)
+# — recorded honestly; the handover is the generational call, not a quality verdict. Ranked
+# below gemma4-26b-a4b (rank 2) per the owner's handover call; still selectable.
+# HISTORY — rank 3 2026-07-12..2026-08-16: top scorer of the #48 tester eval (F1 .3573,
+# EM .9765, zero unanswerable-set hallucinations, b9849 binary). The ~19.5 GB (18.2 GiB)
+# weight needs the 32 GB tier to be comfortable; the Q4 sibling covered 24 GB.
+recommendation_rank: 1
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
 supports_thinking_mode: true

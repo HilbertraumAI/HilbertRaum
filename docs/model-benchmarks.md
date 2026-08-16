@@ -328,7 +328,10 @@ per RAM tier: `qwen3.5-4b-ud-q4kxl` (≤12 GB), `qwen3.5-9b-ud-q4kxl` (16–20 G
 and `qwen3.6-27b-q5` (≥32 GB, same productization). Net mapping (asserted in `benchmark.test.ts`
 and `committed-catalog.test.ts`): **≤12 GB → Qwen3.5 4B, 16–20 GB → Qwen3.5 9B, 24 GB →
 Qwen3.6 27B Q4, ≥32 GB → Qwen3.6 27B Q5**. Granite, both MoEs, the fast-tier 2B/0.8B, and the
-superseded incumbents stay selectable, never auto-recommended.
+superseded incumbents stay selectable, never auto-recommended. *(Amended 2026-08-16: the same
+standing preference handed the 24 GB and ≥32 GB tiers to `qwen3.8-27b-q4` / `qwen3.8-27b-q5` at
+the §9.4 wave ratification — full generational handover, the Qwen3.6 pair to rank 1. The 4B/9B
+rows above are unchanged; the 12–15 GB row belongs to the #153 E2B promotion, §6.5.)*
 
 **The rationale (recorded verbatim so the trade-off stays visible).** A subjective owner
 judgment: newer model generations are expected to be better than the ones they replace (training
@@ -966,6 +969,93 @@ wrong); devbox is byte-identical. Canonical rescored deltas vs the raw CSVs: `qw
 hallucinations .0667→0 (both runs), `qwen3-8b` .2→.1333, `qwen3.5-35b-a3b` .0667→0,
 `qwen3.5-2b` .3333→.2667 (its audit's "4–5 real" resolves to 4), E2B .40→.20 (3 real), E4B
 .1333→.0667 (1 real). EM/F1/citation columns are abstention-independent and unchanged.
+
+### 9.4 Qwen3.8-27B wave — measured, PENDING ratification (2026-08-15)
+
+Unsloth published `Qwen3.8-27B-GGUF` (dense 27B, vision-language upstream, thinking on by
+default, arch string `qwen35`) and four quants were measured the same day on the i9-9900X +
+RTX 3090 box: `Q4_K_M`, `UD-Q4_K_XL`, `Q5_K_M`, `Q6_K`. **No manifests yet, no ranks moved** —
+this section records the evidence; productization (manifest + hash + license review) and the
+§9.1 in-app smoke are open follow-ups. Text-only measurement; the upstream mmproj/vision side
+was not exercised (same posture as the `qwen3.6-27b` chat manifests).
+
+**Runtime caveat:** measured on the **b10430** ubuntu-vulkan release (not the b9849 pin) — the
+arch loads on b9849-era builds (`qwen35`), but the speed rows are NOT directly comparable to
+the b9849 CSVs and live in their own file: `eval/results/i9-9900X-vulkan-b10430-speed.csv`.
+
+**Quality (§2 harness, one combined 4-model run; raw files
+`eval/results/i9-9900X-qwen38-vulkan-{quality.csv,quality-rescored.csv,items.jsonl}`):**
+all four quants land inside a .0026 F1 band — quantization does not move this eval.
+
+| Model | mean F1 | EM | halluc | abstain(unans) | vs `qwen3.6-27b-q4` (.3523) |
+|---|---|---|---|---|---|
+| `qwen3.8-27b-q4` | .3500 | .9765 | 0 | 1.0000 | −.0023 (inside cross-run noise) |
+| `qwen3.8-27b-ud-q4kxl` | .3507 | .9765 | 0 | 1.0000 | −.0016 |
+| `qwen3.8-27b-q5` | .3523 | .9765 | 0 | 1.0000 | ties; `qwen3.6-27b-q5` (.3573) stays the table lead |
+| `qwen3.8-27b-q6` | .3503 | .9765 | 0 | 1.0000 | −.0020 |
+
+Zero hallucinations and perfect unanswerable-abstention on ALL four quants (the only other
+models with that profile: `qwen3.6-27b-q5`, `gemma-4-26b-q4`, and post-rescore `qwen3.6-27b-q4`
++ `qwen3.5-35b-a3b`). Thinking suppresses cleanly via `chat_template_kwargs.enable_thinking:
+false` (the harness's Balanced-mode default; verified — reasoning lands on `reasoning_content`
+and content stays intact). Determinism note: a repeated single-model q6 run differed by ±.002
+F1 (Vulkan reduction nondeterminism); immaterial at the decision scale.
+
+**Speed/RSS (§3/§4, b10430 vulkan, each quant measured solo from a ≤45 °C GPU):** rows in
+`i9-9900X-vulkan-b10430-speed.csv`. Method notes that matter for reproduction: `tg` is highly
+thermally sensitive on this box (Q6 dropped 31.7→23.6 t/s when run 4th in a back-to-back
+sweep — GDDR6X memory-clock throttle), so per-quant cool-start runs are the recorded numbers;
+`pp512` under-reads on Vulkan because the burst is shorter than the boost-clock ramp (reps
+climb monotonically), so the pp512 column is the **median of 3 reps after an in-invocation
+pp2048 warm-up**, while pp2048/pp8192/tg are plain llama-bench averages of 3.
+
+| Quant | pp512 | pp2048 | pp8192 | tg128 | peak VRAM bench / server 8k ctx | peak RSS | min RAM |
+|---|---|---|---|---|---|---|---|
+| Q4_K_M | 1085 | 1208 | 1168 | 39.9 | 17.1 / 17.2 GiB | 17.16 GiB | 21 |
+| UD-Q4_K_XL | 997 | 1096 | 1060 | 35.0 | 17.9 / 17.9 GiB | 17.92 GiB | 21 |
+| Q5_K_M | 1057 | 1134 | 1097 | 35.9 | 19.5 / 20.0 GiB | 19.70 GiB | 23 |
+| Q6_K | 985 | 1122 | 1092 | 31.7 | 22.2 / 22.7 GiB | 22.54 GiB | 26 |
+
+`qwen3.8-27b-q4` reproduces the `qwen3.6-27b-q4` envelope almost exactly (tg 39.9 vs 40.1,
+peak RSS 17.16 vs 16.87 GiB) — same tier, same formula minimum. `Q5_K_M` out-decodes the
+smaller `UD-Q4_K_XL` (35.9 vs 35.0 t/s; K-quant kernel efficiency), which weakens the UD
+quant's case at this size. **`Q6_K` fully fits a 24 GB GPU at ctx 8192** (22.7 GiB peak VRAM,
+no spill) — a genuine new option the 3.6 wave never had measured. CPU leg (Q4_K_M, `-ngl 0`,
+same build): pp512 118.4 / pp2048 120.1 / pp8192 118.3 / tg 2.83 t/s — the `qwen3.6-27b-q4`
+CPU envelope reproduced (tg 2.79 on b9849); peak-RSS cells left empty (not re-measured on the
+CPU basis — the §9.3 Windows-basis standing rule applies before any manifest carries a number).
+
+**Wave outcome — RATIFIED (owner, 2026-08-16).** The provisional read became the decision, as a
+**full generational handover** (owner call at ratification, one step beyond the default
+demote-to-rank-2 option): `qwen3.8-27b-q4` **rank 3** takes 24 GB, `qwen3.8-27b-q5` **rank 3**
+takes ≥32 GB, and the Qwen3.6 pair drops to **rank 1** (below the gemma rank-2 runner-ups;
+still ranked + selectable; its Q5 keeps the all-time F1 record .3573 — recorded honestly in
+both manifests, the handover is the §6.4 generational call, not a quality verdict).
+`qwen3.8-27b-q6` enters at **rank 0 BY DESIGN** — the q5 sibling wins the ≥32 GB RAM tier
+(faster at equal quality) and Q6_K's real niche (fully fits a 24 GB GPU at ctx 8192) is not
+expressible in the RAM-tier picker; it stays the selectable "24 GB GPU quality ceiling" (the
+gemma4-31b precedent). `UD-Q4_K_XL` earns no manifest (out-decoded by the larger q5 at equal
+quality). Productization discharged at ratification: all three manifests carry real HF-LFS
+hashes independently confirmed by on-disk SHA-256, and the apache-2.0 license review is
+recorded per manifest (full record: `offline-intelligence-private/legal/`
+`model-licensing-qwen38-addendum-2026-08-16.md`). Mapping pins updated in `benchmark.test.ts` +
+`committed-catalog.test.ts` (new Qwen3.8 wave block). §9.1 smoke: see the wave smoke record
+below.
+
+**§9.1 smokes — all three quants PASSED (2026-08-16, through the app's real IPC/runtime path
+via CDP/Playwright `_electron`, dev build of this branch, i9-9900X + RTX 3090, drive runtime =
+the pinned b9849 linux-vulkan):** the smoke drive's runtime is the b9849 pin, so this ALSO
+discharges the §9.4 "b10430 measurement basis" runtime-compat caveat — the pinned binary loads
+and serves the `qwen35`-arch GGUFs. Per quant (q4 / q5 / q6): in-app SHA-256 verify of the
+manifest-pinned weight (66 / 76 / 90 s) then start via the app's model path (`useModel`, GPU
+backend, real `llama-server` sidecar); balanced chat streams coherently with ZERO reasoning
+frames (suppression verified); Deep surfaces reasoning frames (34 / 36 / 35); grounded ask
+answers from an imported document with the exact fact and a correct `[S1]` citation (DE);
+mid-stream abort ends the stream in 5 / 4 / 3 ms; sidecar `VmHWM` 17.14 / 19.68 / 22.52 GiB
+(Linux basis — consistent with the §4 llama-server peaks); `stopRuntime` teardown leaves no
+chat sidecar and quit-while-running teardown leaves no `llama-server` of any role (embeddings /
+reranker sidecars legitimately idle past a chat stop and are excluded from the stop leg only).
+Text-only chat needed no mmproj on any quant.
 
 ---
 

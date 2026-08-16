@@ -53,6 +53,9 @@ model: qwen3.5-9b-q8 apache-2.0
 model: qwen3.5-9b-ud-q4kxl apache-2.0
 model: qwen3.6-27b-q4 apache-2.0
 model: qwen3.6-27b-q5 apache-2.0
+model: qwen3.8-27b-q4 apache-2.0
+model: qwen3.8-27b-q5 apache-2.0
+model: qwen3.8-27b-q6 apache-2.0
 model: translategemma-12b-it-q4 gemma
 model: whisper-small-multilingual mit
 ```
@@ -168,7 +171,7 @@ manifest's recorded `download.license_url`. A `license_review.status` other than
 `approved` is noted on the line — such a model is never pre-loaded on a sold drive
 (the sell gate requires an approved review for every manifest).
 
-### apache-2.0 (23 models)
+### apache-2.0 (26 models)
 
 Licensed under the Apache License 2.0 — the full text is reproduced once in the
 "Apache License 2.0" section at the end of this file.
@@ -196,6 +199,9 @@ Licensed under the Apache License 2.0 — the full text is reproduced once in th
 - Qwen3.5 9B (UD-Q4_K_XL) (`qwen3.5-9b-ud-q4kxl`) — upstream: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE)
 - Qwen3.6 27B Q4_K_M (`qwen3.6-27b-q4`) — upstream: https://huggingface.co/unsloth/Qwen3.6-27B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.6-27B/blob/main/LICENSE)
 - Qwen3.6 27B Q5_K_M (`qwen3.6-27b-q5`) — upstream: https://huggingface.co/unsloth/Qwen3.6-27B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.6-27B/blob/main/LICENSE)
+- Qwen3.8 27B Q4_K_M (`qwen3.8-27b-q4`) — upstream: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE)
+- Qwen3.8 27B Q5_K_M (`qwen3.8-27b-q5`) — upstream: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE)
+- Qwen3.8 27B Q6_K (`qwen3.8-27b-q6`) — upstream: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE)
 
 ### gemma (3 models)
 
