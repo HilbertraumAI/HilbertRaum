@@ -10255,6 +10255,14 @@ under the `electron`-mocking suite:
   console errors** and no horizontal overflow.
 - **electron-builder packaging Electron 43:** a real `package:win` completed and reports
   `electron=43.4.0`; the parity test guarantees that is the version actually packaged.
+- **All THREE platforms package on Electron 43** (`workflow_dispatch` on `release.yml`, run
+  32187938704, owner decision D-3). `build-win` + `build-mac` + `build-linux` all succeeded —
+  win-portable 110.7 MB, mac-app 155.3 MB, linux-appimage 163.8 MB — and the `release` job
+  correctly **skipped** (it is tag-gated, so an ad-hoc dispatch publishes nothing). This closes
+  the asymmetry `packaging.md` records and that the plan had registered as an accepted residual:
+  only Windows is packaged locally, but `release.yml` builds all three, so a macOS/Linux
+  packaging break under a new Electron major would otherwise first surface **on a version tag,
+  which has no PR gate ahead of it**. Measured instead of assumed, before merge.
 - **Suite parity:** 5249 / 50 / 5299 across 376 files at every gate from P2 onward, including one
   deliberately load-stressed run.
 
