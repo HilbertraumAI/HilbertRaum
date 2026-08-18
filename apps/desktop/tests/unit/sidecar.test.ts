@@ -17,6 +17,7 @@ import {
   killRegisteredSidecarChildren,
   LlamaServer,
   LOOPBACK_HOST,
+  redactSidecarSecrets,
   registeredSidecarPids,
   registerSidecarChild,
   unregisterSidecarChild,
@@ -38,12 +39,18 @@ class FakeChild extends EventEmitter implements ChildProcessLike {
   }
 }
 
-/** A spawn() stub that records its calls and returns a FakeChild. */
+/** A spawn() stub that records its calls — INCLUDING the options (env!) — and returns a
+ *  FakeChild. Recording options is load-bearing: the sidecar API key travels only in the
+ *  child-scoped env, so a helper that drops the third argument cannot assert on it. */
 function fakeSpawn() {
-  const calls: Array<{ command: string; args: string[] }> = []
+  const calls: Array<{ command: string; args: string[]; options: { env?: Record<string, string | undefined> } }> = []
   const child = new FakeChild()
-  const spawn = (command: string, args: string[]): ChildProcessLike => {
-    calls.push({ command, args })
+  const spawn = (
+    command: string,
+    args: string[],
+    options: { env?: Record<string, string | undefined> }
+  ): ChildProcessLike => {
+    calls.push({ command, args, options })
     return child
   }
   return { spawn, calls, child }
@@ -665,6 +672,195 @@ describe('LlamaServer', () => {
     expect(httpsSpy).not.toHaveBeenCalled()
     expect(connectSpy).not.toHaveBeenCalled()
     expect(socketConnectSpy).not.toHaveBeenCalled()
+  })
+})
+
+// ---- Sidecar API key (D9): env-delivered, header-injected, stderr-redacted --------------
+//
+// The internal llama-server used to accept any same-machine request unauthenticated. Each
+// spawn now generates a fresh key delivered ONLY via the child-scoped env (argv is visible
+// in process lists, and llama-server echoes resolved params to stderr), injected as a
+// Bearer header at the single fetch() chokepoint, and redacted from everything the
+// captured stderr tail flows into (start-failure errors → gpuLastError → audit → log
+// export). Verified against the pinned b9849 build: LLAMA_API_KEY enforces auth on every
+// content-bearing route (only /health and /v1/models are exempt upstream).
+
+/** healthFetch variant that also records each request's init (for header assertions). */
+function recordingFetch(readyAfter = 0) {
+  let polls = 0
+  const requests: Array<{ url: string; init?: RequestInit }> = []
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    requests.push({ url: String(url), init })
+    polls++
+    const ok = polls > readyAfter
+    return { ok, status: ok ? 200 : 503, json: async () => ({}) } as Response
+  }) as typeof fetch
+  return { fetchImpl, requests }
+}
+
+function makeServer(overrides: Partial<ConstructorParameters<typeof LlamaServer>[0]> = {}) {
+  const { spawn, calls, child } = fakeSpawn()
+  const { fetchImpl, requests } = recordingFetch(0)
+  const server = new LlamaServer({
+    binPath: '/bin/llama-server',
+    modelPath: '/models/x.gguf',
+    contextTokens: 2048,
+    spawn,
+    fetchImpl,
+    findPort: async () => 51300,
+    healthIntervalMs: 1,
+    ...overrides
+  })
+  return { server, calls, child, requests }
+}
+
+describe('LlamaServer sidecar API key (D9)', () => {
+  it('delivers a per-spawn hex key via the child-scoped env — never argv, never process.env', async () => {
+    const { server, calls } = makeServer()
+    await server.start()
+    expect(calls).toHaveLength(1)
+    const key = calls[0].options.env?.LLAMA_API_KEY
+    expect(key).toMatch(/^[0-9a-f]{64}$/) // 32 random bytes, hex (no argv-substring collisions)
+    // argv is clean: the key appears nowhere in the command line.
+    expect(calls[0].args.join(' ')).not.toContain(key!)
+    // The child env EXTENDS the parent env (PATH etc. must survive)…
+    expect(calls[0].options.env?.PATH ?? calls[0].options.env?.Path).toBeDefined()
+    // …but the parent's own env is never mutated (whisper/tar/GPU-probe would inherit it).
+    expect(process.env.LLAMA_API_KEY).toBeUndefined()
+    await server.stop()
+  })
+
+  it('generates a FRESH key on every spawn (stop/start rotates it)', async () => {
+    const { server, calls } = makeServer()
+    await server.start()
+    const first = calls[0].options.env?.LLAMA_API_KEY
+    await server.stop()
+    await server.start()
+    const second = calls[1].options.env?.LLAMA_API_KEY
+    expect(second).toMatch(/^[0-9a-f]{64}$/)
+    expect(second).not.toBe(first)
+    await server.stop()
+  })
+
+  it('injects Authorization: Bearer <key> on EVERY fetch, including /health', async () => {
+    const { server, calls, requests } = makeServer()
+    await server.start()
+    await server.health()
+    const res = await server.fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}'
+    })
+    expect(res.ok).toBe(true)
+    const key = calls[0].options.env?.LLAMA_API_KEY
+    expect(requests.length).toBeGreaterThanOrEqual(3) // start-health, health(), explicit fetch
+    for (const r of requests) {
+      const headers = new Headers(r.init?.headers)
+      expect(headers.get('authorization')).toBe(`Bearer ${key}`)
+    }
+    // The caller's own headers survive the merge.
+    const last = new Headers(requests[requests.length - 1].init?.headers)
+    expect(last.get('content-type')).toBe('application/json')
+    await server.stop()
+  })
+
+  it('merges a Headers-instance init without dropping entries', async () => {
+    const { server, calls, requests } = makeServer()
+    await server.start()
+    await server.fetch('/tokenize', { headers: new Headers({ 'content-type': 'application/json' }) })
+    const key = calls[0].options.env?.LLAMA_API_KEY
+    const last = new Headers(requests[requests.length - 1].init?.headers)
+    expect(last.get('authorization')).toBe(`Bearer ${key}`)
+    expect(last.get('content-type')).toBe('application/json')
+    await server.stop()
+  })
+
+  it('redacts the key from a start-failure error even when stderr echoes it (also chunk-split)', async () => {
+    let spawnedKey: string | undefined
+    const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
+    child.stderr = new EventEmitter()
+    const spawn = (
+      _c: string,
+      _args: string[],
+      options: { env?: Record<string, string | undefined> }
+    ): ChildProcessLike => {
+      spawnedKey = options.env?.LLAMA_API_KEY
+      queueMicrotask(() => {
+        // A future pin echoing resolved params — the key split across TWO chunks, so a
+        // per-chunk-only redaction would miss it in the accumulated tail.
+        child.stderr.emit('data', Buffer.from(`params: api_key = ${spawnedKey!.slice(0, 20)}`))
+        child.stderr.emit('data', Buffer.from(`${spawnedKey!.slice(20)}\nfatal: boom\n`))
+        child.emit('exit', 1, null)
+      })
+      return child
+    }
+    const fetchImpl = (async () => ({ ok: false, status: 503 }) as Response) as typeof fetch
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 51301,
+      healthIntervalMs: 1
+    })
+    let message = ''
+    await server.start().catch((err: Error) => (message = err.message))
+    expect(message).toContain('exited before becoming healthy')
+    expect(message).toContain('fatal: boom') // the useful tail survives
+    expect(message).not.toContain(spawnedKey!) // the key does not
+    expect(message).toContain('[redacted]')
+  })
+
+  it('redacts the key from onUnexpectedExit stderrTail (the gpuLastError/audit/log path)', async () => {
+    const exits: UnexpectedExitInfo[] = []
+    let spawnedKey: string | undefined
+    const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
+    child.stderr = new EventEmitter()
+    const spawn = (
+      _c: string,
+      _args: string[],
+      options: { env?: Record<string, string | undefined> }
+    ): ChildProcessLike => {
+      spawnedKey = options.env?.LLAMA_API_KEY
+      return child
+    }
+    const { fetchImpl } = healthFetch(0)
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      onUnexpectedExit: (info) => exits.push(info),
+      spawn,
+      fetchImpl,
+      findPort: async () => 51302,
+      healthIntervalMs: 1
+    })
+    await server.start()
+    child.stderr.emit('data', Buffer.from(`request denied: api-key ${spawnedKey} invalid\n`))
+    child.emit('exit', 134, null) // healthy server dies on its own → hook fires
+    expect(exits).toHaveLength(1)
+    expect(exits[0].stderrTail).toContain('request denied')
+    expect(exits[0].stderrTail).not.toContain(spawnedKey!)
+    expect(exits[0].stderrTail).toContain('[redacted]')
+  })
+})
+
+describe('redactSidecarSecrets', () => {
+  it('removes the exact key wherever it appears', () => {
+    const key = 'a'.repeat(64)
+    expect(redactSidecarSecrets(`x ${key} y ${key}`, key)).toBe('x [redacted] y [redacted]')
+  })
+
+  it('redacts generic api-key-adjacent values without a known key', () => {
+    expect(redactSidecarSecrets('--api-key secret123 --port 1', null)).toBe('--api-key [redacted] --port 1')
+    expect(redactSidecarSecrets('api_key: tok_abc', null)).toBe('api_key: [redacted]')
+    expect(redactSidecarSecrets('LLAMA_API_KEY=deadbeef', null)).toBe('LLAMA_API_KEY=[redacted]')
+  })
+
+  it('leaves ordinary stderr untouched', () => {
+    const line = 'load_tensors: offloaded 33/33 layers to GPU\nbind: address already in use'
+    expect(redactSidecarSecrets(line, 'f'.repeat(64))).toBe(line)
   })
 })
 

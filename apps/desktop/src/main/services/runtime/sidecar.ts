@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { cpus } from 'node:os'
 import { join } from 'node:path'
@@ -371,8 +372,28 @@ const HEALTH_PROBE_TIMEOUT_MS = 3_000
 /** Keep only the last N chars of captured stderr (enough to show the failing reason). */
 const STDERR_TAIL_MAX = 4000
 
+/**
+ * Redact API-key material from sidecar stderr BEFORE it is captured or forwarded. The
+ * captured tail flows into start-failure errors → the `gpuLastError` setting, the audit
+ * trail, the app log, and the support-log export — none of which may carry the key. The
+ * exact key is removed wherever it appears; the generic `api…key <value>` form guards a
+ * future llama.cpp pin that echoes resolved params to stderr (the current pin does not).
+ */
+export function redactSidecarSecrets(text: string, key: string | null): string {
+  const exact = key ? text.split(key).join('[redacted]') : text
+  return exact.replace(/(api[-_]?key\S*[\s:=]+)(?!\[redacted\])(\S+)/gi, '$1[redacted]')
+}
+
 export class LlamaServer {
   port: number | null = null
+  /**
+   * Per-spawn API key the child requires on every request (llama-server's `LLAMA_API_KEY`,
+   * verified enforced on the pinned build). Hex so random material can never collide with
+   * substring assertions on joined argv. Regenerated on each spawn; never leaves the main
+   * process, never appears in argv (visible in process lists) or in `process.env` (which
+   * every other child would inherit).
+   */
+  private apiKey: string | null = null
   private child: ChildProcessLike | null = null
   private spawnError: Error | null = null
   private exited = false
@@ -448,10 +469,17 @@ export class LlamaServer {
     return `http://${this.host}:${this.port}`
   }
 
-  /** Loopback fetch against this server (exempt from the offline guard by design). */
+  /** Loopback fetch against this server (exempt from the offline guard by design).
+   *  Sole HTTP chokepoint for every consumer — the per-spawn API key is injected here,
+   *  so no call site can reach the child unauthenticated or needs to know the key. */
   fetch(path: string, init?: RequestInit): Promise<Response> {
     if (this.port == null) throw new Error('llama-server is not started')
-    return this.fetchImpl(`${this.baseUrl()}${path}`, init)
+    if (this.apiKey == null) return this.fetchImpl(`${this.baseUrl()}${path}`, init)
+    // Headers-merge form: call sites pass plain object literals today, but a Headers
+    // instance or entries array must keep working too.
+    const headers = new Headers(init?.headers)
+    headers.set('authorization', `Bearer ${this.apiKey}`)
+    return this.fetchImpl(`${this.baseUrl()}${path}`, { ...init, headers })
   }
 
   /**
@@ -518,11 +546,17 @@ export class LlamaServer {
     // block a chatty `llama-server`. stderr is piped AND drained (below): draining prevents
     // the same deadlock, and the captured tail explains a failed start (e.g. a port
     // conflict's "bind: address already in use").
+    // Per-spawn API key, delivered via CHILD-SCOPED env only: argv is banned (visible to
+    // any same-user process list, and llama-server echoes resolved params to stderr), and
+    // the parent's own `process.env` must stay clean (whisper-cli, tar, and the GPU probe
+    // would inherit it). The spread copies process.env for THIS child only.
+    this.apiKey = randomBytes(32).toString('hex')
     const child = this.spawn(this.opts.binPath, this.buildArgs(this.port), {
       stdio: ['ignore', 'ignore', 'pipe'],
       // REL-7: never flash a console window on Windows for this high-frequency spawn (every
       // model start), matching the tar / transcriber / runtime-download spawns. No-op off Windows.
-      windowsHide: true
+      windowsHide: true,
+      env: { ...process.env, LLAMA_API_KEY: this.apiKey }
     })
     this.child = child
     // CODE-11: make the child reachable by the crash-exit reap for as long as it lives.
@@ -530,7 +564,10 @@ export class LlamaServer {
     // shared `runtime/llama.cpp/<os>/` binary, so it registers under the llama_cpp family.
     registerSidecarChild(child.pid, 'llama_cpp')
     child.stderr?.on('data', (chunk: unknown) => {
-      const text = String(chunk)
+      // Redact key material at the drain, before capture OR forwarding — everything
+      // downstream (error strings, gpuLastError, audit, log export, observer hooks)
+      // then never sees it, regardless of transport.
+      const text = redactSidecarSecrets(String(chunk), this.apiKey)
       this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_MAX)
       try {
         this.opts.onStderrData?.(text)
@@ -557,7 +594,7 @@ export class LlamaServer {
           this.opts.onUnexpectedExit?.({
             exitCode: this.exitCode,
             exitSignal: this.exitSignal,
-            stderrTail: this.stderrTail
+            stderrTail: this.redactedTail()
           })
         }
       }
@@ -574,7 +611,7 @@ export class LlamaServer {
         this.opts.onUnexpectedExit?.({
           exitCode: this.exitCode,
           exitSignal: this.exitSignal,
-          stderrTail: this.stderrTail
+          stderrTail: this.redactedTail()
         })
       }
     })
@@ -590,9 +627,16 @@ export class LlamaServer {
     })
   }
 
+  /** The captured stderr tail with key material redacted AGAIN at read time — a key split
+   *  across two stderr chunks would evade the per-chunk pass but reassembles in the
+   *  accumulated tail, so every tail-derived sink reads through this accessor. */
+  private redactedTail(): string {
+    return redactSidecarSecrets(this.stderrTail, this.apiKey)
+  }
+
   /** A ` — last output: …` suffix from the captured stderr tail, or '' if none. */
   private stderrSuffix(): string {
-    const tail = this.stderrTail.trim()
+    const tail = this.redactedTail().trim()
     return tail ? ` — last output: ${tail}` : ''
   }
 
