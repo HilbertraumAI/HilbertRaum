@@ -1057,6 +1057,21 @@ chat sidecar and quit-while-running teardown leaves no `llama-server` of any rol
 reranker sidecars legitimately idle past a chat stop and are excluded from the stop leg only).
 Text-only chat needed no mmproj on any quant.
 
+**MTP speculative decoding — measured, NOT adopted (2026-08-17 addendum; adoption tracked in
+a follow-up issue).** The Qwen3.8 GGUFs ship a trained-in draft head (`blk.64.nextn.*` — 15
+tensors the server loads and ignores by default; visible as "unused tensor" warnings in every
+§4 log). `--spec-type draft-mtp --spec-draft-n-max 2` activates it with no extra files and
+measured **+38–45% server-level decode** on the i9/3090 (Q4_K_M, b10430 vulkan, steady-state
+temp-0 completions: ~25 → 35.3 prose / 36.6 code t/s, draft acceptance 77–91%). Verified
+facts an adoption must respect: (1) works on the **b9849 pin** too (functionally verified);
+(2) costs ~2 GiB VRAM (draft head + its KV; the `--spec-draft-type-k/v q8_0` +
+`--cache-type-k/v q8_0` quartet recovers ~1.6 GiB) — Q4/Q5 keep 24 GB headroom, **Q6_K + MTP
+does not fit 24 GB** at ctx 8192; (3) breaks temp-0 byte-reproducibility (batched-verification
+near-tie flips; distribution-equivalent output — the §2 harness must be re-run as the adoption
+gate); (4) draft depths n=3/4 neither break nor help (n=4 acceptance falls to 64%) — the
+"n=4 emits junk" claim circulating publicly did not reproduce on this stack; n=2 is the pick.
+`-np 1` showed no throughput effect at ctx 8192 (default `n_slots=4`, unified KV).
+
 ---
 
 ## 10. Skills extraction & real-model smoke (skills-remediation T1, audit §7)
