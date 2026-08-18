@@ -27,25 +27,46 @@ export interface LocalIndicatorProps {
    */
   offline?: boolean
   variant?: 'header' | 'sidebar'
+  /**
+   * The local API endpoint is live (AppStatus.localApi.running). The indicator never
+   * pretends (D1): while other programs on this machine can reach the model, both the
+   * label and the tooltip say so — the network state itself is unchanged, since a
+   * loopback endpoint is not an internet connection.
+   */
+  localApiOn?: boolean
   /** Bound translate fn for the built-in label/detail (i18n record §5 ⑤); English default. */
   t?: Translator
 }
 
 /** The status text (icon + word — never color alone, WCAG 1.4.1). */
-export function localIndicatorLabel(offline: boolean, t: Translator = englishTranslator): string {
-  return offline ? t('indicator.offline') : t('indicator.online')
+export function localIndicatorLabel(
+  offline: boolean,
+  t: Translator = englishTranslator,
+  localApiOn = false
+): string {
+  const state = offline ? t('indicator.offline') : t('indicator.online')
+  return localApiOn ? t('indicator.withLocalApi', { state }) : state
 }
 
 /** The one-word label for the narrow app rail (full reassurance lives in the tooltip). */
 export function localIndicatorShortLabel(
   offline: boolean,
-  t: Translator = englishTranslator
+  t: Translator = englishTranslator,
+  localApiOn = false
 ): string {
-  return offline ? t('indicator.short.offline') : t('indicator.short.online')
+  const state = offline ? t('indicator.short.offline') : t('indicator.short.online')
+  return localApiOn ? t('indicator.withLocalApi', { state }) : state
 }
 
 /** The reassurance line shown on hover/focus (guidelines §7, honest variant). */
-export function localIndicatorDetail(offline: boolean, t: Translator = englishTranslator): string {
+export function localIndicatorDetail(
+  offline: boolean,
+  t: Translator = englishTranslator,
+  localApiOn = false
+): string {
+  // With the endpoint on, the "everything stays on this drive" reassurance would be the
+  // wrong sentence — answers now also go to another program on this machine.
+  if (localApiOn) return t('indicator.localApiDetail')
   return offline ? t('indicator.offlineDetail') : t('indicator.onlineDetail')
 }
 
@@ -53,6 +74,7 @@ export function LocalIndicator({
   onNavigate,
   offline,
   variant = 'header',
+  localApiOn = false,
   t = englishTranslator
 }: LocalIndicatorProps): JSX.Element {
   // Self-fetching fallback: deny-by-default (offline) until the policy answers.
@@ -77,7 +99,9 @@ export function LocalIndicator({
   const isOffline = controlled ? offline : fetched
   const sidebar = variant === 'sidebar'
   // The rail shows the short one-word label; the header shows the full "Local · …" form.
-  const label = sidebar ? localIndicatorShortLabel(isOffline, t) : localIndicatorLabel(isOffline, t)
+  const label = sidebar
+    ? localIndicatorShortLabel(isOffline, t, localApiOn)
+    : localIndicatorLabel(isOffline, t, localApiOn)
   return (
     <Tooltip.Provider delayDuration={200}>
       <Tooltip.Root>
@@ -95,7 +119,7 @@ export function LocalIndicator({
         </Tooltip.Trigger>
         <Tooltip.Portal>
           <Tooltip.Content className="tooltip" sideOffset={6}>
-            {localIndicatorDetail(isOffline, t)}
+            {localIndicatorDetail(isOffline, t, localApiOn)}
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>

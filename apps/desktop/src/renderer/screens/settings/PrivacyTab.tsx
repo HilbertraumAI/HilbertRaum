@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Banner } from '../../components'
+import { LocalApiCard } from './LocalApiCard'
 import { useT } from '../../i18n'
 import type { AppSettings, DriveStatus, PolicyStatus } from '@shared/types'
 
@@ -80,6 +81,8 @@ export function PrivacyTab(): JSX.Element {
         </dl>
         <p className="hint">{t('privacy.network.hint')}</p>
       </div>
+
+      <LocalApiCard policy={policy} settings={settings} onSettingsChanged={setSettings} />
 
       <div className="card">
         <h2>{t('privacy.data.title')}</h2>

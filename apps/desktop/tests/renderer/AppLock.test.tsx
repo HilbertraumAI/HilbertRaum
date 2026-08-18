@@ -29,6 +29,7 @@ import {
 } from '../../src/shared/types'
 import type { DecodedImage } from '../../src/renderer/images/decode'
 import { stubApi } from '../helpers/renderer'
+import { makePolicyStatus } from '../helpers/status'
 
 // F-41 (audit-2026-07-16): the stubApi payloads are typed against the real PreloadApi bridge
 // contract (no blanket `} as never)` erasure) — a rename of any mocked method now reddens
@@ -53,7 +54,7 @@ const lockedState: WorkspaceStateInfo = {
   plaintextAllowed: false,
   encryptionRequired: true
 }
-const offlinePolicy = { offlineMode: true } as PolicyStatus
+const offlinePolicy = makePolicyStatus()
 
 const CHOICE = { sourceLang: 'de', targetLang: 'en' } as const
 

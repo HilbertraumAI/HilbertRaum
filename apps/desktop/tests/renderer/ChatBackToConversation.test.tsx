@@ -18,6 +18,7 @@ import {
   type WorkspaceStateInfo
 } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { makePolicyStatus } from '../helpers/status'
 import { makeDetail } from '../helpers/evidenceReview'
 
 // EP-1 P5 (plan §10) — "Back to chat" returns to the ORIGINATING conversation: App hands
@@ -145,20 +146,7 @@ const unlockedWorkspace: WorkspaceStateInfo = {
   encryptionRequired: false
 }
 
-const offlinePolicy = {
-  policy: {
-    network: { allowModelDownloads: false, allowUpdateChecks: false, allowTelemetry: false, allowLocalApi: true },
-    workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
-    models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
-  },
-  policyFilePresent: false,
-  driveFilePresent: false,
-  allowNetworkSetting: false,
-  networkAllowedByPolicy: false,
-  networkAllowed: false,
-  offlineMode: true,
-  telemetryAllowed: false
-} as PolicyStatus
+const offlinePolicy = makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })
 
 describe('App — the back-handoff slot is one-shot across EVERY chat mount path (FIX-1)', () => {
   afterEach(() => {

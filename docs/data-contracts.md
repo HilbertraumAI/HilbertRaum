@@ -213,11 +213,27 @@ enforcement-grade loopback classifier (Host + Origin; handles WHATWG's bracketed
 **Policy ceiling (O3/O4 owner-ratified 2026-08-18):** `PrivacyPolicy.network.allowLocalApi`
 (file key `allow_local_api`, restrict-only) — DEFAULT true / STRICT false / **STANDALONE true**
 (O3: without it the feature is policy-dead on every GitHub-release install; the setting stays
-default-off behind consent); `PolicyStatus.localApiAllowedByPolicy` feeds the
-disabled-with-reason Settings card; effective = `localApiEffectivelyEnabled(policy, setting)`
-(policy ∧ setting — the single derivation the P3 start seams use). `prepare-drive` writes
+default-off behind consent). There is deliberately NO `PolicyStatus` copy field: the
+Settings card reads the ceiling from `policy.network.allowLocalApi` and derives its effective
+state with `localApiEffectivelyEnabled(policy, setting)` — the SAME single derivation the P3
+start seams use (policy ∧ setting). `prepare-drive` writes
 `allow_local_api: false` explicitly on commercial drives, `true` on `--dev` drives (O4;
 `buildPolicyJson` is canonical, script-drift-pinned in both provisioning scripts).
+**Renderer surfaces (local-api wave P4).** `AppStatus.localApi?: LocalApiStatus | null` —
+additive + optional (the `translationDevice` shape), read live off `ctx.localApi?.status()`;
+null when no server object exists. `LocalApiStatus` = `{ running, port, tokenRequired,
+requestsServed, rejectedCount, lastError, externalActive, lastPreemptedAt }` — **counts and
+flags only**, nothing that could describe a caller or a prompt (D1); `externalActive` +
+`lastPreemptedAt` (epoch ms of the last D8 pre-emption) exist so the Settings card raises its
+concurrent-use warning only while it is TRUE, not permanently. Three IPC channels carry the
+access key, and nothing else does: `localApi:getConnectionInfo` →
+`LocalApiConnectionInfo { serverAddress, maskedKey }` (`hr-…abcd` — the full key never crosses
+IPC), `localApi:copyKey` → boolean (Electron `clipboard` write MAIN-side + a best-effort clear
+after 60 s if the clipboard still holds it), `localApi:regenerateToken` →
+`LocalApiConnectionInfo` (rotates AND calls `LocalApiServer.abortExternalRequests`, because
+auth is checked once at admission — SEC-F6). All three refuse via `workspaceAdmitsWork`.
+`localApiServerAddress(port)` and `MIN/MAX_LOCAL_API_PORT` live in `shared/local-api.ts` so the
+card, the write gate, and the docs cannot disagree about the pasteable URL or the clamp.
 ✅ **IPC** `src/main/ipc/registerModelIpc.ts` — `listModels(lazyVerify?: boolean)` (#138 D-7:
 the RT-3 param — `true` hashes only the active model on a cold cache; the gate-into-chat path
 passes it, the Models screen omits it to hash the full set), `selectModel`, `startRuntime`,

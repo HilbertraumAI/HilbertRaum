@@ -14,7 +14,7 @@ import {
 } from '../../src/shared/types'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
 import { stubApi } from '../helpers/renderer'
-import { appStatus } from '../helpers/status'
+import { appStatus, makePolicyStatus } from '../helpers/status'
 import { makeDetail } from '../helpers/evidenceReview'
 
 // Route-level code split (full-audit 2026-07-10 PF-6): Documents/Translate/Images/Models/
@@ -46,20 +46,7 @@ const unlockedWorkspace: WorkspaceStateInfo = {
   encryptionRequired: false
 }
 
-const offlinePolicy = {
-  policy: {
-    network: { allowModelDownloads: false, allowUpdateChecks: false, allowTelemetry: false, allowLocalApi: true },
-    workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
-    models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
-  },
-  policyFilePresent: false,
-  driveFilePresent: false,
-  allowNetworkSetting: false,
-  networkAllowedByPolicy: false,
-  networkAllowed: false,
-  offlineMode: true,
-  telemetryAllowed: false
-} as PolicyStatus
+const offlinePolicy = makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })
 
 function stubAppShell(): void {
   stubApi({

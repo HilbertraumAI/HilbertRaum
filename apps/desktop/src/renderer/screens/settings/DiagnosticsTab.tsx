@@ -13,6 +13,7 @@ import type {
   AuditEventType,
   BenchmarkResult,
   DriveStatus,
+  LocalApiStatus,
   RuntimeInstallInfo,
   RuntimeStatus
 } from '@shared/types'
@@ -126,6 +127,20 @@ function runtimeStatusLine(runtime: RuntimeStatus | null, t: I18n['t']): string 
   })
 }
 
+/** The one-line local-API status, shared by the card row and the copy report. Counts
+ *  only — the endpoint records nothing about who called or what was asked (D1). */
+function localApiStatusLine(api: LocalApiStatus | null | undefined, t: I18n['t']): string {
+  if (api == null) return t('diag.localApi.off')
+  if (api.lastError === 'port_in_use') return t('diag.localApi.portInUse')
+  if (api.lastError === 'start_failed') return t('diag.localApi.startFailed')
+  if (!api.running) return t('diag.localApi.off')
+  return t('diag.localApi.running', {
+    port: String(api.port ?? '?'),
+    served: String(api.requestsServed),
+    rejected: String(api.rejectedCount)
+  })
+}
+
 /** Plain-text rendering of the "App & runtime" card for the Copy button — the same labels
  *  + values shown on screen, so a user can paste the lot into a support message. */
 function buildAppRuntimeReport(
@@ -142,6 +157,7 @@ function buildAppRuntimeReport(
     `${t('diag.app.profile')}: ${app?.hardwareProfile ?? t('diag.app.unknown')}`,
     `${t('diag.app.runtime')}: ${runtimeStatusLine(runtime, t)}`,
     `${t('diag.app.acceleration')}: ${accelerationLabel(runtime, settings, t)}`,
+    `${t('diag.localApi.label')}: ${localApiStatusLine(app?.localApi, t)}`,
     `${t('diag.app.runtimeBuild')}: ${
       install ? `llama.cpp ${install.version} (${install.backend})` : t('diag.app.noInstallMarker')
     }`
@@ -399,6 +415,8 @@ export function DiagnosticsTab(): JSX.Element {
           <dd>{runtimeStatusLine(runtime, t)}</dd>
           <dt>{t('diag.app.acceleration')}</dt>
           <dd>{accelerationLabel(runtime, settings, t)}</dd>
+          <dt>{t('diag.localApi.label')}</dt>
+          <dd>{localApiStatusLine(app?.localApi, t)}</dd>
           <dt>{t('diag.app.runtimeBuild')}</dt>
           <dd>
             {install

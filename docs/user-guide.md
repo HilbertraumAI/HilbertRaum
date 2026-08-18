@@ -869,6 +869,29 @@ to keep only the most recent messages that fit.
 
 See [`PRIVACY.md`](../PRIVACY.md) for the full statement.
 
+### Use HilbertRaum from other apps (local API)
+
+**Settings → Privacy & data → Local API** lets other programs on the same computer send text
+to your running model and read the answers — an editor plugin, a note-taking app, a script.
+It is **off until you turn it on**, and turning it on asks you to confirm what that means.
+
+The short version:
+
+- The connection never leaves this computer. Nothing is sent over the internet.
+- Connected apps get answers from the model. They **cannot** see your documents, files, or
+  conversations, and their requests are answered and forgotten — never saved to your chat
+  history or logs.
+- What a connected app does with the answers is up to that app. Check whether it stores or
+  syncs its data before you point it at confidential material.
+- The card shows the two values a client asks for: a **server address** and an **access key**.
+  Keep the access key requirement on unless an app genuinely cannot enter one.
+- Your own use of HilbertRaum always comes first: if you start a chat while an app is waiting,
+  the app's request is interrupted and it can simply try again.
+- A drive policy can switch the whole feature off; the card then says so instead of vanishing.
+
+*Full walkthrough (connecting a specific client, what the error numbers mean, firewall and
+port questions) lands in the next documentation pass.*
+
 ### The Activity panel (what did the app do?)
 
 **Settings → Diagnostics (advanced) → Activity** shows a local record of what the app did and when — models

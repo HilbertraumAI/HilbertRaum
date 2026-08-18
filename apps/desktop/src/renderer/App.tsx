@@ -149,6 +149,10 @@ function AppShell(): JSX.Element {
   // detail ("disabled by policy" vs. off by choice) lives on the Privacy & data tab the
   // indicator opens.
   const [offline, setOffline] = useState(true)
+  // Whether the opt-in local API endpoint is LISTENING right now — read from the same
+  // post-unlock/navigation refresh as the policy, so the rail indicator can state it
+  // instead of implying the model is reachable by nothing but this app (D1).
+  const [localApiOn, setLocalApiOn] = useState(false)
   // Set when the backend never came up (getWorkspaceState rejected). Faking 'unlocked'
   // here would render the full shell with every screen surfacing raw IPC errors.
   const [fatalError, setFatalError] = useState<string | null>(null)
@@ -196,6 +200,10 @@ function AppShell(): JSX.Element {
       ?.getPolicy()
       .then((p) => active && setOffline(p.offlineMode))
       .catch(() => active && setOffline(true))
+    window.api
+      ?.getAppStatus()
+      .then((st) => active && setLocalApiOn(st.localApi?.running === true))
+      .catch(() => active && setLocalApiOn(false))
     // Apply the persisted Appearance + Language settings. Settings are only readable
     // post-unlock; re-checked alongside the policy so a Settings-screen change made
     // this session is also picked up after navigation. applyLanguageSetting also
@@ -373,7 +381,13 @@ function AppShell(): JSX.Element {
             indicator at the foot of the rail, on EVERY screen. `offline` is the effective
             policy state owned by App, so a drive policy that forces downloads off reads
             "Offline" even with the toggle on. */}
-        <LocalIndicator variant="sidebar" offline={offline} onNavigate={navigate} t={t} />
+        <LocalIndicator
+          variant="sidebar"
+          offline={offline}
+          localApiOn={localApiOn}
+          onNavigate={navigate}
+          t={t}
+        />
       </nav>
 
       <main className="content">

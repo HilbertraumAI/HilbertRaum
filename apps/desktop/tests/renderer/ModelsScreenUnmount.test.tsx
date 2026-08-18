@@ -4,6 +4,7 @@ import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
 import { DEFAULT_SETTINGS, type DownloadJob, type ModelInfo, type PolicyStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { makePolicyStatus } from '../helpers/status'
 import { appStatus } from '../helpers/status'
 
 // F22 (audit full-audit-2026-06-29 postmerge): ModelsScreen was the lone hold-out from the
@@ -43,25 +44,10 @@ function model(over: Partial<ModelInfo> = {}): ModelInfo {
 }
 
 function policyAllowed(): PolicyStatus {
-  return {
-    policy: {
-      network: {
-        allowModelDownloads: true,
-        allowUpdateChecks: false,
-        allowTelemetry: false,
-        allowLocalApi: true
-      },
-      workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
-      models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
-    },
-    policyFilePresent: true,
-    driveFilePresent: true,
-    allowNetworkSetting: true,
-    networkAllowedByPolicy: true,
-    networkAllowed: true,
-    offlineMode: false,
-    telemetryAllowed: false
-  }
+  return makePolicyStatus({
+    network: { allowModelDownloads: true },
+    allowNetworkSetting: true
+  })
 }
 
 afterEach(cleanup)

@@ -7,7 +7,7 @@ import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { resolveNavTarget } from '../../src/renderer/navigation'
 import { DEFAULT_SETTINGS, type PolicyStatus, type WorkspaceStateInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
-import { appStatus, driveStatus } from '../helpers/status'
+import { appStatus, driveStatus, makePolicyStatus } from '../helpers/status'
 
 // Phase 26 information architecture (guidelines §2): 5 nav destinations (4 everyday +
 // Settings), Privacy/Diagnostics folded into Settings tabs, and the navigate() virtual
@@ -80,20 +80,7 @@ const unlockedWorkspace: WorkspaceStateInfo = {
   encryptionRequired: false
 }
 
-const offlinePolicy = {
-  policy: {
-    network: { allowModelDownloads: false, allowUpdateChecks: false, allowTelemetry: false, allowLocalApi: true },
-    workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
-    models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
-  },
-  policyFilePresent: false,
-  driveFilePresent: false,
-  allowNetworkSetting: false,
-  networkAllowedByPolicy: false,
-  networkAllowed: false,
-  offlineMode: true,
-  telemetryAllowed: false
-} as PolicyStatus
+const offlinePolicy = makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })
 
 function stubAppShell(): void {
   stubApi({

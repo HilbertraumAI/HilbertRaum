@@ -10,6 +10,7 @@ import {
 } from '../../src/renderer/components/LocalIndicator'
 import type { PolicyStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { makePolicyStatus } from '../helpers/status'
 
 // Phase 27 ambient trust signal (guidelines §7): the quiet "Local · Offline" status,
 // its honest downloads-allowed variant, the hover/focus reassurance tooltip, and the
@@ -18,20 +19,12 @@ import { stubApi } from '../helpers/renderer'
 afterEach(cleanup)
 
 function policy(offlineMode: boolean): PolicyStatus {
-  return {
-    policy: {
-      network: { allowModelDownloads: !offlineMode, allowUpdateChecks: false, allowTelemetry: false, allowLocalApi: true },
-      workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
-      models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
-    },
-    policyFilePresent: false,
-    driveFilePresent: false,
+  return makePolicyStatus({
+    network: { allowModelDownloads: !offlineMode },
     allowNetworkSetting: !offlineMode,
-    networkAllowedByPolicy: !offlineMode,
-    networkAllowed: !offlineMode,
-    offlineMode,
-    telemetryAllowed: false
-  } as PolicyStatus
+    policyFilePresent: false,
+    driveFilePresent: false
+  })
 }
 
 describe('localIndicator copy (pure)', () => {
@@ -42,6 +35,21 @@ describe('localIndicator copy (pure)', () => {
     )
     expect(localIndicatorLabel(false)).toBe('Local · Downloads allowed')
     expect(localIndicatorDetail(false)).toBe('Downloads allowed — chats and documents stay local.')
+  })
+
+  it('says so in BOTH label and tooltip while the local API is on (D1 — never pretend)', () => {
+    // The network state is unchanged (a loopback endpoint is not an internet connection),
+    // but "everything stays on this drive" would be the wrong reassurance: answers now
+    // also go to another program on this machine.
+    expect(localIndicatorLabel(true, undefined, true)).toBe('Local · Offline · API on')
+    expect(localIndicatorShortLabel(true, undefined, true)).toBe('Offline · API on')
+    expect(localIndicatorDetail(true, undefined, true)).toBe(
+      'Other apps on this computer can use your model. Nothing leaves this computer.'
+    )
+    // Off ⇒ byte-identical to the pre-API copy.
+    expect(localIndicatorDetail(true, undefined, false)).toBe(
+      'Everything stays on this drive. No internet connection is used.'
+    )
   })
 
   it('uses a short, rail-width label for the sidebar variant', () => {
@@ -69,6 +77,12 @@ describe('LocalIndicator', () => {
     stubApi({})
     render(<LocalIndicator offline={false} onNavigate={vi.fn()} />)
     expect(screen.getByRole('button', { name: 'Local · Downloads allowed' })).toBeInTheDocument()
+  })
+
+  it('renders the API-on state on the rail', () => {
+    stubApi({})
+    render(<LocalIndicator variant="sidebar" offline localApiOn onNavigate={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Offline · API on' })).toBeInTheDocument()
   })
 
   it('fetches the policy itself when uncontrolled (the chat-header placement)', async () => {

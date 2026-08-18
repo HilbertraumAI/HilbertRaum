@@ -1,6 +1,14 @@
-import type { AppStatus, DriveStatus } from '../../src/shared/types'
+import type {
+  AppStatus,
+  DriveStatus,
+  ModelsPolicy,
+  NetworkPolicy,
+  PolicyStatus,
+  PrivacyPolicy,
+  WorkspacePolicy
+} from '../../src/shared/types'
 
-// T-2 (frontend audit 2026-08-09, #147): shared TYPED fixtures for the two status shapes the
+// T-2 (frontend audit 2026-08-09, #147): shared TYPED fixtures for the status shapes the
 // renderer suites used to stub as partial `{} as never` bags — a field rename now reddens
 // typecheck here once instead of drifting silently in a dozen files. Override per test.
 
@@ -38,4 +46,59 @@ export function driveStatus(over: Partial<DriveStatus> = {}): DriveStatus {
     arch: 'x64',
     ...over
   } as DriveStatus
+}
+
+/**
+ * A complete `PolicyStatus` with the derived network flags computed the way
+ * `resolveNetwork`/`buildPolicyStatus` compute them — so a fixture can state the two
+ * facts that matter (what the policy allows, what the user toggled) instead of hand-
+ * spelling four flags that can silently contradict each other. Sibling of `appStatus`
+ * and `driveStatus` above; the `makePolicyStatus` name is the one the P2 review item
+ * used. Override any derived flag explicitly to test an impossible/legacy combination.
+ */
+export function makePolicyStatus(over: PolicyStatusOverrides = {}): PolicyStatus {
+  const network: NetworkPolicy = {
+    allowModelDownloads: false,
+    allowUpdateChecks: false,
+    allowTelemetry: false,
+    allowLocalApi: true,
+    ...over.network
+  }
+  const policy: PrivacyPolicy = {
+    network,
+    workspace: { encryptionRequired: false, allowPlaintextDevMode: true, ...over.workspace },
+    models: {
+      allowUnverifiedModels: true,
+      requireManifest: true,
+      requireSha256Match: false,
+      ...over.models
+    }
+  }
+  const allowNetworkSetting = over.allowNetworkSetting ?? false
+  const networkAllowedByPolicy =
+    over.networkAllowedByPolicy ?? (network.allowModelDownloads || network.allowUpdateChecks)
+  const networkAllowed = over.networkAllowed ?? (networkAllowedByPolicy && allowNetworkSetting)
+  return {
+    policy,
+    policyFilePresent: over.policyFilePresent ?? true,
+    driveFilePresent: over.driveFilePresent ?? true,
+    allowNetworkSetting,
+    networkAllowedByPolicy,
+    networkAllowed,
+    offlineMode: over.offlineMode ?? !networkAllowed,
+    telemetryAllowed: false
+  }
+}
+
+export interface PolicyStatusOverrides {
+  network?: Partial<NetworkPolicy>
+  workspace?: Partial<WorkspacePolicy>
+  models?: Partial<ModelsPolicy>
+  allowNetworkSetting?: boolean
+  policyFilePresent?: boolean
+  driveFilePresent?: boolean
+  /** Escape hatches for combinations the derivation would not produce. */
+  networkAllowedByPolicy?: boolean
+  networkAllowed?: boolean
+  offlineMode?: boolean
 }

@@ -68,6 +68,27 @@ settings:update. Contract: data-contracts.md P3 block; architecture.md bullet. T
 local-api-server.test.ts ×23 (real listener, full matrix), local-api-lifecycle.test.ts ×5
 (default-off = ZERO listeners pin, policy-beats-setting, locked refusal, live toggle),
 shutdown ordering pin.
+**P4 (Settings UX, status surfaces, i18n) landed:** Privacy-tab `LocalApiCard` — consent
+dialog whose confirm stays disabled until the acknowledgement is ticked (copy names what other
+apps can do, where HilbertRaum's control ends, that nothing is stored, and that it persists);
+"Connect another app" block with the pasteable `http://127.0.0.1:<port>/v1` address
+(`localApiServerAddress`, shared) + the access key MASKED; live model-state line; the D5
+concurrent-use warning at warning tone ONLY while an external request is active or was just
+pre-empted; key-requirement sub-switch with its own confirm for turning it OFF; regenerate
+behind a consequence dialog; port field clamped by the now-shared `MIN/MAX_LOCAL_API_PORT`;
+`PortInUseError` copy naming both the recovery and the impersonation risk; policy-forbidden
+renders the card DISABLED WITH A REASON, never hidden. Status: `AppStatus.localApi`
+(additive optional, counts/flags only — `externalActive` + `lastPreemptedAt` added to
+`LocalApiStatus`), Diagnostics row + copy-report line, `LocalIndicator` gains a truthful
+"· API on" state whose tooltip replaces the drive-scoped reassurance. IPC:
+`localApi:getConnectionInfo`/`copyKey`/`regenerateToken` (`registerLocalApiIpc`) — the full
+key never crosses IPC, copy + the 60 s best-effort clipboard clear run main-side, and
+regenerate calls `LocalApiServer.abortExternalRequests` so rotation really does invalidate
+in-flight clients. Full EN+DE key set. Tests: LocalApiCard ×17, local-api-ipc ×9,
+preload-local-api ×2, indicator state; NEW shared `makePolicyStatus` fixture in
+tests/helpers/status.ts — all 10 hand-spelled/cast `PolicyStatus` fixtures (3 Models + 7
+others) migrated onto it, zero `as PolicyStatus` casts left under tests/. Contract: data-contracts.md P4 block (+ corrected the stale `localApiAllowedByPolicy`
+sentence); user-guide "Use HilbertRaum from other apps" stub (full copy P5).
 
 _Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
