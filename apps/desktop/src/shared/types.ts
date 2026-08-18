@@ -52,6 +52,48 @@ export interface AppStatus {
    * reading as "GPU translation not working". Optional so older status fixtures stay valid.
    */
   translationDevice?: TranslationDeviceStatus | null
+  /**
+   * Live state of the opt-in local API endpoint (`ctx.localApi?.status()`), or null when
+   * no server object exists (workspace locked, feature never enabled). Additive +
+   * optional so older status fixtures stay valid — the `translationDevice` shape.
+   */
+  localApi?: LocalApiStatus | null
+}
+
+/**
+ * What the local API endpoint is doing right now — COUNTS AND STATE ONLY. The endpoint
+ * stores no request content anywhere (D1), so nothing here can identify a caller or a
+ * prompt. Produced by `LocalApiServer.status()` (main/services/local-api/server.ts) and
+ * carried to the renderer on `AppStatus.localApi`.
+ */
+export interface LocalApiStatus {
+  running: boolean
+  port: number | null
+  tokenRequired: boolean
+  requestsServed: number
+  rejectedCount: number
+  /** Why the last start failed (the Settings card's error surface); null while clean. */
+  lastError: 'port_in_use' | 'start_failed' | null
+  /** An external request is generating RIGHT NOW (drives the D5 concurrent-use warning). */
+  externalActive: boolean
+  /**
+   * Epoch ms of the last time an in-app turn pre-empted an external request (D8), or
+   * null. Lets the card explain a collision that already happened instead of showing a
+   * permanent scold — the warning fires when it is true (UX-L1).
+   */
+  lastPreemptedAt: number | null
+}
+
+/**
+ * What the Settings card shows in its "Connect another app" block: the exact string to
+ * paste as the client's base URL, and the access key MASKED (`hr-…abcd`). The full key
+ * never crosses IPC — copying happens main-side (`localApi:copyKey`).
+ */
+export interface LocalApiConnectionInfo {
+  /** e.g. `http://127.0.0.1:4980/v1` — the single source of truth for what to paste. */
+  serverAddress: string
+  /** Masked display form, or null when no key exists yet and none is required. */
+  maskedKey: string | null
 }
 
 /**
@@ -80,6 +122,14 @@ export interface NetworkPolicy {
   allowUpdateChecks: boolean
   /** Always treated as off; the app has no telemetry and no toggle for it. */
   allowTelemetry: boolean
+  /**
+   * Policy ceiling for the opt-in local API (loopback-only inbound endpoint, local-api
+   * wave). Restrict-only like every policy field: effective = this ∧ the user's
+   * `localApiEnabled` setting. File key: `allow_local_api`. O3: STANDALONE allows it
+   * (the setting is still default-off behind consent); O4: commercial prepared drives
+   * write an explicit `false`.
+   */
+  allowLocalApi: boolean
 }
 
 /** Workspace policy (spec §6 `workspace` block). */
@@ -288,6 +338,26 @@ export interface AppSettings {
    * created AND assembly ignores any existing checkpoint (pure L1, full-history replay).
    */
   chatCompactionEnabled: boolean
+  // ---- Local API (opt-in loopback endpoint; local-api wave) ----
+  /**
+   * Master switch for the local OpenAI-compatible loopback endpoint. DEFAULT OFF (D3):
+   * other programs on this machine can reach the loaded model only after an explicit,
+   * confirmed opt-in — and only when the drive policy's ceiling also allows it
+   * (effective = policy ∧ setting). The endpoint binds loopback ONLY, ever (D2).
+   */
+  localApiEnabled: boolean
+  /** Loopback port for the endpoint. Clamped by `updateSettings` to
+   *  [MIN_LOCAL_API_PORT, MAX_LOCAL_API_PORT]. */
+  localApiPort: number
+  /**
+   * Require the access key (Bearer token) on local-API requests. ON by default; turning
+   * it off is a deliberate user choice behind its own confirmation (D4). Web-origin
+   * rejection + Host validation stay unconditional in BOTH modes. NOTE: the token itself
+   * NEVER lives in AppSettings — `getSettings` returns every stored row to the renderer
+   * on three IPC surfaces, so the secret has its own main-process-only store
+   * (`services/local-api/token.ts`).
+   */
+  localApiTokenRequired: boolean
 }
 
 /** Appearance setting (see `AppSettings.theme`). */
@@ -335,7 +405,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   skillInfoSeen: [],
   // Compaction is ON by default (D-a): silent drop-oldest is strictly worse than a visible,
   // auditable summary, and every new path fails safe to today's L1 trim.
-  chatCompactionEnabled: true
+  chatCompactionEnabled: true,
+  // Local API is OPT-IN (D3): default off, token required by default (D4). 4980 avoids
+  // the ecosystem's common defaults (Ollama 11434, LM Studio 1234).
+  localApiEnabled: false,
+  localApiPort: 4980,
+  localApiTokenRequired: true
 }
 
 // ---- GPU probe ----
@@ -2257,6 +2332,10 @@ export type AuditEventType =
   | 'workspace_lock_failed'
   | 'workspace_password_changed'
   | 'settings_changed'
+  // The local API master switch flipped. Metadata is BOOLEANS ONLY ({ enabled }) — the
+  // audit-log export writes metadata verbatim to plaintext JSON outside the vault, so
+  // neither the port+token pairing nor any token material may ever ride here.
+  | 'local_api_toggled'
   | 'policy_warning'
   | 'offline_guard_violation'
   // Evidence Pack / Review Mode (EP-1 plan §5 item 5): review lifecycle + pack export.

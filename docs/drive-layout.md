@@ -126,7 +126,7 @@ HILBERTRAUM/
 
 ## Updating a drive (manual — spec §12.3)
 
-There is **no in-app updater** (by design: the app makes no network calls). Updating a prepared
+There is **no in-app updater** (by design: the app makes no internet calls of its own). Updating a prepared
 drive is the same flow as building it, run again from a machine with the repo:
 
 1. `prepare-drive --target <drive> --force` refreshes `model-manifests/` + the bundled docs +

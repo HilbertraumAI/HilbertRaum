@@ -23,6 +23,7 @@ import { App } from '../../src/renderer/App'
 import { UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { DEFAULT_SETTINGS, type AppSettings, type PolicyStatus, type WorkspaceStateInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { appStatus, makePolicyStatus } from '../helpers/status'
 
 const unlocked: WorkspaceStateInfo = {
   state: 'unlocked',
@@ -31,12 +32,13 @@ const unlocked: WorkspaceStateInfo = {
   encryptionRequired: false
 }
 
-const offlinePolicy = { offlineMode: true } as PolicyStatus
+const offlinePolicy = makePolicyStatus()
 
 function stubShell(settings: AppSettings = DEFAULT_SETTINGS): void {
   stubApi({
     getWorkspaceState: vi.fn(async () => unlocked),
     getPolicy: vi.fn(async () => offlinePolicy),
+    getAppStatus: vi.fn(async () => appStatus()),
     getSettings: vi.fn(async () => settings),
     onRuntimeNotice: vi.fn(() => () => {})
   })

@@ -171,6 +171,7 @@ export interface PolicyJson {
   network: {
     allow_model_downloads: boolean
     allow_update_checks: boolean
+    allow_local_api: boolean
   }
   workspace: {
     encryption_required: boolean
@@ -211,7 +212,11 @@ export function buildPolicyJson(opts: PolicyJsonOptions = {}): PolicyJson {
     // hardcodes `telemetryAllowed: false`.
     network: {
       allow_model_downloads: true,
-      allow_update_checks: false
+      allow_update_checks: false,
+      // Local API: commercial drives ship it policy-DISABLED explicitly (owner decision
+      // O4, 2026-08-18) — the drive's policy author flips it on deliberately; dev drives
+      // leave the ceiling open (the in-app setting is still default-off behind consent).
+      allow_local_api: dev
     },
     workspace: {
       encryption_required: !dev,

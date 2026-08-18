@@ -401,6 +401,75 @@ What to do:
 
 ---
 
+## Connecting another app to HilbertRaum (local API)
+
+These cover the optional **Settings → Privacy & data → Local API** feature. If you have not turned
+it on, none of them apply.
+
+### The app I connected says "connection refused"
+
+Work through these in order:
+
+1. **Is the switch actually on, and did the endpoint start?** The card says *Listening on port …*
+   when it is running. If it names a port conflict instead, see below.
+2. **Is your workspace unlocked?** The endpoint exists only while it is. Lock or quit stops it.
+3. **Are you using `localhost` instead of the address the card shows?** This is the most common
+   cause on Windows 11: `localhost` resolves to the IPv6 address `::1` first, and some clients try
+   only one of the two. HilbertRaum listens on **both** loopback addresses, but if a machine has
+   IPv6 disabled the IPv6 listener cannot be created — a client that only tries `::1` then fails
+   while `curl` works. **Paste the exact `http://127.0.0.1:<port>/v1` string from the card** rather
+   than typing `localhost`.
+4. **Did you change the port and forget to update the app?** The server address changes with it.
+
+### "Another program on this computer is already using this number"
+
+Something else holds the port. The switch stays on — only the bind failed — so just type a
+different number in the card (4981, for example) and press **Apply**; the endpoint starts on the
+new port straight away. Then paste the new server address into any app you had already connected.
+
+If you were not expecting a conflict, take it seriously before you continue: a program squatting on
+the port could be posing as HilbertRaum to collect the access key you are about to paste somewhere.
+Find out what is listening first — `netstat -ano | findstr :4980` on Windows, `lsof -i :4980` on
+macOS/Linux — and do not distribute your access key until you know.
+
+### Will Windows Firewall / my antivirus complain?
+
+**Windows Firewall does not prompt for this.** It filters traffic crossing the network stack, and a
+loopback listener never does — nothing leaves the machine. If you *are* seeing a firewall prompt
+naming HilbertRaum, something else is going on and it is worth investigating.
+
+Endpoint-protection (EDR) products are a different matter: some flag any process that opens a
+listening socket, whatever the address. That would show up as a "process listening on port 4980"
+alert, not a network-traffic one, and it is an accurate description of what the app is doing. If
+your organization's tooling objects, the honest answer is to leave the feature off — it is off by
+default and nothing else in the app depends on it. A managed drive can also forbid it outright via
+the drive policy.
+
+### What the error numbers from my client mean
+
+A connected app usually surfaces an HTTP status. Translated:
+
+| Number | What happened | What to do |
+|---|---|---|
+| **400** | The request asked for something this endpoint cannot do — tool/function calling, images, more than one answer at a time — or the text did not fit the model's context window. | The message names the field. Turn off tools/function calling in the client; send less text if it is a length problem. |
+| **401** | The access key is missing or wrong. | Copy the key again from the card. If you regenerated it, paste the new one into the app. |
+| **403** | The request looked like it came from a web page, or was addressed to a hostname the app does not serve. | Use the exact server address from the card. Browser JavaScript cannot use this endpoint by design. |
+| **404** | The app asked for a feature this endpoint does not provide. | Only chat completions and a model listing exist. Documents, embeddings, and image features are not exposed. |
+| **413** | The request was too large. | Send less text at once. |
+| **415** | The app did not send JSON. | Almost always a misconfigured client — check that you selected an OpenAI-compatible mode. |
+| **429** | HilbertRaum was busy with another answer, or your own chat interrupted this one. | Wait a moment and try again; the response says how long. |
+| **503 "model_not_loaded"** | No model is running. | Open HilbertRaum and start a model on the **AI Model** screen. |
+| **503 "model_starting"** | A model is loading right now. | Wait and retry; the response says roughly how long. |
+| **502** | The model did not answer. | Check the app — the model may have crashed; the Diagnostics tab has details. |
+
+### An app's request stopped halfway
+
+If you used HilbertRaum yourself while an outside app was generating, that is expected: your own
+turn always wins, and the app's request is cut short with a "retry" answer. The card tells you it
+just happened. The app can simply ask again.
+
+---
+
 ## Where are my data and logs?
 
 Everything is on the drive:

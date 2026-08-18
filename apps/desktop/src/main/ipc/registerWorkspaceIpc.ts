@@ -4,6 +4,7 @@ import type { AppContext } from '../services/context'
 import { VaultBusyError, WrongPasswordError, workspaceAdmitsWork } from '../services/workspace-vault'
 import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
+import { maybeStartLocalApi } from '../services/local-api/lifecycle'
 import { inFlightStreams, awaitInFlightStreamsSettled } from './inflight'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { getSettings } from '../services/settings'
@@ -108,6 +109,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       maybeRunFirstBenchmark(ctx)
       // Bring the selected model's runtime back up in the background.
       maybeAutoStartActiveModel(ctx)
+      // Post-unlock seam for the local API (policy ∧ setting gated; D3/D7).
+      maybeStartLocalApi(ctx)
       return { ok: true, state }
     } catch (err) {
       // instanceof PLUS the name: the production rollup bundle can contain a second,
@@ -168,6 +171,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // A fresh workspace has no active model yet; this is a no-op then, but covers
         // re-created vaults that restored settings.
         maybeAutoStartActiveModel(ctx)
+        // Third post-unlock seam (create runs the same pair as unlock): a re-created
+        // vault that restored `localApiEnabled: true` starts the endpoint here.
+        maybeStartLocalApi(ctx)
         return { ok: true, state }
       } catch (err) {
         // Plaintext refused by policy, and create-over-an-existing-vault (would wipe
@@ -325,6 +331,17 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   // ~10 GB sidecar with the source text while the vault re-encrypts. stop() also purges the job
   // map so the transient source/translation text does not linger past the lock (vision parity).
   void ctx.translateJobs?.stop()
+  // The local API dies FIRST (local-api wave, D7): its stop() aborts active + queued
+  // external streams and closes every socket, so no outside caller can reach the model
+  // (or hold a stream open) while the sidecars below are torn down and the vault
+  // re-encrypts. Restarted only by the post-unlock seam. Idempotent, non-latching —
+  // and best-effort like every sibling boundary: a throw here must never block the
+  // security action (the lock proceeds; the listener still dies with lock's stops).
+  try {
+    await (ctx.localApi?.stop() ?? Promise.resolve())
+  } catch {
+    /* best-effort — the lock must proceed */
+  }
   // `suspend()` (not `stop()`): the sidecars must come back lazily
   // after unlock — `stop()` latches permanently for the will-quit path and used to
   // leave every post-lock/unlock embed failing with "Embedder is stopped".

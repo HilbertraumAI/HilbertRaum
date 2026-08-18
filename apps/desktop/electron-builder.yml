@@ -6,7 +6,10 @@
 #
 # OFFLINE GUARANTEE: packaging adds NO runtime network dependency. The real backends
 # spawn `llama-server` on 127.0.0.1 only (Phase 10). The only network is dev-time
-# (Electron binary download R2, npm install R6).
+# (Electron binary download R2, npm install R6). One INBOUND listener can exist at
+# runtime — the opt-in local API (Settings -> Privacy & data), off by default, bound to
+# 127.0.0.1/::1 only, torn down on lock/quit, and forbiddable by drive policy. It is not
+# a network dependency: nothing is contacted, and a build never opens it on its own.
 #
 # node:sqlite REQUIREMENT: the packaged main process needs Electron >= 37 (Node 22.x);
 # `electron` is pinned to ^39.8.5 in devDependencies, so the bundled runtime has node:sqlite.

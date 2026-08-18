@@ -19,7 +19,30 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-08-18 — **Open wave: local API endpoint — branch `local-api-endpoint` (phase commit series `local-api-p1:`…`local-api-p6:`); one consolidated entry is maintained in place here as the wave progresses.**_
+_2026-08-18 — **Local API endpoint — wave CLOSED (P1–P6), PR #184.**_ The loaded chat model
+can now be used by **other programs on the same computer** through an opt-in, loopback-only,
+OpenAI-compatible endpoint — **off by default**, behind a consent dialog, access-key-protected by
+default, existing only while the workspace is unlocked, and forbiddable by drive policy. The wave
+also closed a latent gap it did not create: every `llama-server` sidecar is now authenticated with
+a per-spawn env-delivered key, redacted from every stderr-derived surface. **Durable record:**
+`docs/architecture.md` "Local API endpoint — design record (wave local-api, PR #184, §1–§9)" —
+decisions D1–D9, owner options O1–O6, the as-built gate/HTTP/UX design, the deliberate omissions,
+what the audits changed, and the §-anchor legend for the retired plan's citations. **Security half:**
+`docs/security-model.md` "The fifth threat: same-machine processes". **Wire contract:**
+`docs/data-contracts.md`. **User-facing:** `PRIVACY.md`, `SECURITY.md`, `docs/user-guide.md`
+("Use HilbertRaum from other apps"), `docs/troubleshooting.md` ("Connecting another app").
+Citations use PR # + the `local-api-p<N>` phase prefix + a record §, never a branch SHA (O6 —
+the repo squash-merges). **Filed out of scope, deliberately** (pre-existing in-app concurrency the
+new gate makes visible but does not serialize): the benchmark has no re-entrancy guard, and a skill
+run can generate alongside a chat stream — filed as **#185** and **#186**. **Post-closeout fix (owner decision 2026-08-18, prompted by a REAL attached drive):** a `policy.json` that PREDATES `allow_local_api` now inherits the permissive default instead of a packaged build's STRICT base — otherwise every drive already in the field would have read "turned off by your drive's policy" with no way to distinguish that from a deliberate ban. An explicit `false` still denies (O4 intact); a junk value and a malformed file still fail closed. Recorded as **O4b** in the design record. **Real-model smoke DONE 2026-08-18** on a real attached drive (H:, prepared "lite", encrypted
+workspace, pinned b9849 vulkan engine) against `gemma4-e2b-it-qat-q4` on GPU: default-off proven
+with the vault unlocked, 401 unauthenticated, a real non-streaming completion and a full streaming
+one, every Host/Origin/method/type refusal, **O5's dual loopback vindicated** (both `::1` and
+`localhost` answer on this Win11 box), 4×~10k-char endurance streams, **D8 pre-emption**
+(`preempted_by_user`, `[DONE]` absent) and **D7 lock kill** (`server_stopped` 449 ms BEFORE the
+vault teardown — the pinned stop-first order). Evidence table in the design record §9. Remaining
+manual gap: no PACKAGED-build smoke (this was a dev run via `HILBERTRAUM_DRIVE_ROOT`), and the
+key-off/regenerate dialogs were not captured.
 
 _Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the

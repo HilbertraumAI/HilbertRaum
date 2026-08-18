@@ -98,7 +98,8 @@ export const en = {
     'Chat and document Q&A need a model loaded. Open the AI Model screen, pick a downloaded ' +
     'model, and choose ',
   'chat.noModel.hintAction': 'Use this model',
-  'chat.noModel.hintAfter': '. Everything stays local — nothing is downloaded or sent anywhere.',
+  'chat.noModel.hintAfter':
+    '. Everything stays local — nothing is downloaded or sent over the internet.',
   'chat.noModel.stillLoading':
     'If you just opened the app, your selected model may still be loading — this screen ' +
     'continues automatically once it is ready.',
@@ -115,7 +116,7 @@ export const en = {
   'chat.noModel.recheck': 'Re-check',
   'chat.empty.title': 'Ask a question, or ask about your documents.',
   'chat.empty.lineDocuments': 'Answers come from your documents and cite their sources.',
-  'chat.empty.lineChat': 'Replies stream from the model on this drive — nothing leaves it.',
+  'chat.empty.lineChat': 'Replies stream from the model on this drive — nothing leaves this device.',
   'chat.empty.fillTitle': 'Fill the message box',
   'chat.empty.addDocs': 'Add documents to ask about them',
   // Two example sets: plain Chat has no documents, so its prompts are general-purpose;
@@ -1185,7 +1186,7 @@ export const en = {
   'settings.network.title': 'Privacy & Offline Mode',
   'settings.network.allow': 'Allow internet access for model downloads and updates',
   'settings.network.hint':
-    'Off by default. When off, the app makes no network calls. Turning it on only enables ' +
+    'Off by default. When off, the app makes no internet calls. Turning it on only enables ' +
     'model downloads from the AI Model screen — each one asks for confirmation first, and a ' +
     'drive policy can keep downloads disabled entirely. Your prompts and documents never ' +
     'leave this device regardless of this setting.',
@@ -1477,7 +1478,7 @@ export const en = {
   'privacy.networkState.enabled': 'Internet access is enabled for model downloads and updates.',
   'privacy.network.noFiles': 'No prompts or files leave this device.',
   'privacy.network.effective': 'Effective state',
-  'privacy.network.effectiveOffline': 'Offline (no network calls)',
+  'privacy.network.effectiveOffline': 'Offline (no internet calls)',
   'privacy.network.effectiveAllowed': 'Network allowed',
   'privacy.network.byPolicy': 'Allowed by policy',
   'privacy.network.policyYes': 'Yes',
@@ -1486,11 +1487,12 @@ export const en = {
   'privacy.network.settingAllowed': 'Internet access allowed',
   'privacy.network.settingOff': 'Off (default)',
   'privacy.network.telemetry': 'Telemetry',
-  'privacy.network.telemetryValue': 'Nothing leaves this drive — there’s no tracking to turn off',
+  'privacy.network.telemetryValue': 'Nothing leaves this device — there’s no tracking to turn off',
   'privacy.network.hint':
-    'The app warns before any network action. The only optional network feature is ' +
+    'The app warns before any internet action. The only thing it uses the internet for is ' +
     'downloading or updating models, which is off by default and must be enabled on the ' +
-    'General tab. A drive policy can disable it entirely.',
+    'General tab. A drive policy can disable it entirely. The Local API below is a separate, ' +
+    'opt-in feature that never touches the internet.',
   'privacy.data.title': 'Where your data lives',
   'privacy.data.driveRoot': 'Drive root',
   'privacy.data.workspace': 'Workspace',
@@ -1522,8 +1524,93 @@ export const en = {
     'password-derived key, nothing stored in plaintext — is what commercial drives use. ' +
     'Do not store sensitive documents in plaintext mode on a shared or removable drive.',
 
+  // ---- Settings → Privacy & data → "Local API" card (local-api wave P4) ----
+  // The consent copy is the trust surface the whole feature rests on: it names what other
+  // apps CAN do, what they cannot, where HilbertRaum's control ends, and that nothing is
+  // stored. Outcome-framed, sentence case (guidelines §7) — reviewed as code, not filler.
+  'settings.localApi.title': 'Local API',
+  'settings.localApi.lead':
+    'Let other programs on this computer send text to your AI model and read the answers. ' +
+    'This is off until you turn it on.',
+  'settings.localApi.toggle': 'Allow other apps on this computer to use my AI model',
+  'settings.localApi.hint':
+    'The connection never leaves this computer — nothing is sent over the internet.',
+  'settings.localApi.policyOff': 'Turned off by your drive’s policy.',
+  'settings.localApi.confirm.title': 'Allow other apps to use your model?',
+  'settings.localApi.confirm.what':
+    'Other programs on this computer will be able to send text to your AI model and read its ' +
+    'answers.',
+  'settings.localApi.confirm.boundary':
+    'They cannot see your documents, files, or conversations, and nothing leaves this computer ' +
+    'through HilbertRaum. But HilbertRaum can’t control what a connected program does with the ' +
+    'answers it receives — check whether an app stores or syncs its data before you connect it.',
+  'settings.localApi.confirm.persists': 'This stays on until you turn it off.',
+  'settings.localApi.confirm.neverStored':
+    'Requests from other apps are answered and forgotten — they are not saved to your chat ' +
+    'history or logs.',
+  'settings.localApi.confirm.ack': 'I understand what other apps will be able to do.',
+  'settings.localApi.confirm.cta': 'Turn on',
+  'settings.localApi.connect.title': 'Connect another app',
+  'settings.localApi.connect.hint':
+    'Paste these two values into the app you want to connect. Most apps call them “base URL” ' +
+    'and “API key”.',
+  'settings.localApi.connect.address': 'Server address',
+  'settings.localApi.connect.key': 'Access key',
+  'settings.localApi.connect.copy': 'Copy',
+  'settings.localApi.connect.copyAddressAria': 'Copy the server address',
+  'settings.localApi.connect.copyKeyAria': 'Copy the access key',
+  'settings.localApi.connect.copiedAddress': 'Server address copied.',
+  'settings.localApi.connect.copiedKey':
+    'Copied — cleared automatically in a minute. Windows clipboard history or sync may keep ' +
+    'copies.',
+  'settings.localApi.connect.copyFailed': 'Could not copy. Try again.',
+  'settings.localApi.connect.noKey': 'No access key is needed while the key requirement is off.',
+  'settings.localApi.model.running': 'A model is running — other apps can get answers.',
+  'settings.localApi.model.stopped':
+    'No model is running — other apps will get an error until you start one.',
+  'settings.localApi.status.port': 'Listening on port {port}.',
+  'settings.localApi.status.served.one': '{count} request answered so far.',
+  'settings.localApi.status.served.other': '{count} requests answered so far.',
+  'settings.localApi.status.off': 'Not running.',
+  'settings.localApi.busyWarning':
+    'An app is using your model right now. Chatting here at the same time can slow both down — ' +
+    'your own chat always goes first.',
+  'settings.localApi.preemptedWarning':
+    'Your own use of HilbertRaum interrupted an app’s request a moment ago. The app can simply ' +
+    'try again.',
+  'settings.localApi.token.toggle': 'Require an access key',
+  'settings.localApi.token.hint': 'Recommended: keep this on.',
+  'settings.localApi.token.confirm.title': 'Turn off the access key?',
+  'settings.localApi.token.confirm.body':
+    'Without an access key, any program on this computer can use your AI model without asking. ' +
+    'Keep it on unless an app truly cannot enter a key.',
+  'settings.localApi.token.confirm.cta': 'Turn it off',
+  'settings.localApi.token.regenerate': 'Create a new key',
+  'settings.localApi.token.regenerate.title': 'Create a new access key?',
+  'settings.localApi.token.regenerate.body':
+    'Apps using the old key will stop working until you paste the new key into them.',
+  'settings.localApi.token.regenerate.cta': 'Create new key',
+  'settings.localApi.token.regenerated': 'New access key created.',
+  'settings.localApi.token.regenerateFailed': 'Could not create a new key. Try again.',
+  'settings.localApi.port.label': 'Port number',
+  'settings.localApi.port.hint':
+    'Change this only if another program already uses this number. Between 1024 and 65535.',
+  'settings.localApi.error.portInUse':
+    'Another program on this computer is already using this number — this can also mean ' +
+    'another program is impersonating HilbertRaum, so do not paste your access key anywhere ' +
+    'until you’ve resolved it. Change the number (for example {suggestion}) and switch on ' +
+    'again; if an app was already connected, paste the new server address into it too.',
+  'settings.localApi.error.startFailed':
+    'The local API could not start. The Diagnostics tab has the details.',
+
   // ---- Settings → Diagnostics tab (DiagnosticsTab.tsx) ----
   'diag.localOnly': 'Local-only diagnostics. Nothing here is ever uploaded.',
+  // The local API's Diagnostics row — counts only, the same numbers the card shows.
+  'diag.localApi.label': 'Local API',
+  'diag.localApi.off': 'Off',
+  'diag.localApi.running': 'On · port {port} · {served} answered, {rejected} refused',
+  'diag.localApi.portInUse': 'Off — the port number is already in use',
+  'diag.localApi.startFailed': 'Off — it could not start',
   // Friendly labels for the Activity panel's entries + type filter (spec §11.4 tone).
   'diag.audit.runtime_started': 'Model started',
   'diag.audit.runtime_stopped': 'Model stopped',
@@ -1551,6 +1638,7 @@ export const en = {
   'diag.audit.workspace_lock_failed': 'Lock attempt failed (workspace stayed open)',
   'diag.audit.workspace_password_changed': 'Workspace password changed',
   'diag.audit.settings_changed': 'Settings changed',
+  'diag.audit.local_api_toggled': 'Local API switched on or off',
   'diag.audit.policy_warning': 'Policy notice',
   'diag.audit.offline_guard_violation': 'Network attempt noticed',
   'diag.audit.collection_created': 'Project created',
@@ -1687,6 +1775,7 @@ export const en = {
   'common.close': 'Close',
   'common.cancel': 'Cancel',
   'common.remove': 'Remove',
+  'common.apply': 'Apply',
   'indicator.offline': 'Local · Offline',
   'indicator.online': 'Local · Downloads allowed',
   'indicator.offlineDetail': 'Everything stays on this drive. No internet connection is used.',
@@ -1696,6 +1785,11 @@ export const en = {
   // one word) with the full reassurance in the tooltip.
   'indicator.short.offline': 'Offline',
   'indicator.short.online': 'Downloads on',
+  // Local-API state (local-api wave P4): the indicator never pretends — while other apps
+  // on this machine can reach the model, it says so in BOTH the label and the tooltip.
+  'indicator.withLocalApi': '{state} · API on',
+  'indicator.localApiDetail':
+    'Other apps on this computer can use your model. Nothing leaves this computer.',
 
   // ---- Shared password copy ----
   'password.mismatch': "Passwords don't match.",

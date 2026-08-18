@@ -104,10 +104,15 @@ describe('config generators', () => {
     expect(json.workspace.allow_plaintext_dev_mode).toBe(false)
     expect(json.models.require_sha256_match).toBe(true)
 
+    // Local API: commercial drives write an EXPLICIT false (owner decision O4).
+    expect(json.network.allow_local_api).toBe(false)
+
     const policy = parsePolicy(JSON.stringify(json))
     expect(policy.network.allowModelDownloads).toBe(true)
     expect(policy.workspace.encryptionRequired).toBe(true)
     expect(policy.models.requireSha256Match).toBe(true)
+    // The producer→consumer key coupling: what buildPolicyJson writes, parsePolicy reads.
+    expect(policy.network.allowLocalApi).toBe(false)
   })
 
   it('policy.json (dev) allows plaintext + unverified; model downloads permitted, no phone-home', () => {
@@ -121,6 +126,9 @@ describe('config generators', () => {
     const policy = mergePolicyObject(DEFAULT_POLICY, json)
     expect(policy.workspace.allowPlaintextDevMode).toBe(true)
     expect(policy.network.allowModelDownloads).toBe(true)
+    // Dev drives leave the local-API ceiling open (setting still default-off).
+    expect(json.network.allow_local_api).toBe(true)
+    expect(policy.network.allowLocalApi).toBe(true)
   })
 })
 

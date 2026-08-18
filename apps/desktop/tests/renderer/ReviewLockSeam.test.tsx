@@ -19,6 +19,7 @@ import {
 } from '../../src/shared/types'
 
 import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/evidenceReview'
+import { makePolicyStatus } from '../helpers/status'
 
 // EP-1 Phase 2 review FIX-3 — the review store's LOCK SEAM, pinned end-to-end through the
 // real `App.lockNow`. The wiring under test (App.tsx + lockPurge.ts):
@@ -41,7 +42,7 @@ const lockedState: WorkspaceStateInfo = {
   plaintextAllowed: false,
   encryptionRequired: true
 }
-const offlinePolicy = { offlineMode: true } as PolicyStatus
+const offlinePolicy = makePolicyStatus()
 
 afterEach(() => {
   cleanup()

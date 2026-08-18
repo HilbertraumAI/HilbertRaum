@@ -798,3 +798,48 @@ describe('the Activity surface (getAuditEvents + exportAuditLog)', () => {
     })
   })
 })
+
+// ---- Local API audit plumbing (local-api wave P2) ---------------------------------------
+
+describe('local API settings audit (local-api P2)', () => {
+  it('flipping the switch records local_api_toggled + settings_changed with BOOLEANS only; the access key never reaches runtime_events', async () => {
+    const { ctx, db } = makeHarness()
+    registerCoreIpc(ctx)
+
+    await invoke(handlers, IPC.updateSettings, { localApiEnabled: true, localApiTokenRequired: false })
+    const events = listAuditEvents(db, { limit: 100 })
+
+    const toggled = events.find((e) => e.type === 'local_api_toggled')
+    expect(toggled?.metadata).toEqual({ enabled: true }) // boolean-only, no port/token pairing
+    expect(toggled?.message).toBe('Local API enabled')
+
+    const changed = events.find((e) => e.type === 'settings_changed')
+    expect(changed?.metadata).toEqual({ localApiEnabled: true, localApiTokenRequired: false })
+    for (const v of Object.values(changed?.metadata ?? {})) expect(typeof v).toBe('boolean')
+
+    // A same-value re-write and a rejected-junk patch record NO toggle (event
+    // truthfulness: the message asserts a transition, so only real flips may fire).
+    await invoke(handlers, IPC.updateSettings, { localApiEnabled: true })
+    await invoke(handlers, IPC.updateSettings, { localApiEnabled: 'yes' as unknown as boolean })
+    expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'local_api_toggled')).toHaveLength(1)
+
+    // Flip back off: its own honest event.
+    await invoke(handlers, IPC.updateSettings, { localApiEnabled: false })
+    const off = listAuditEvents(db, { limit: 100 }).find(
+      (e) => e.type === 'local_api_toggled' && (e.metadata as { enabled?: boolean })?.enabled === false
+    )
+    expect(off?.message).toBe('Local API disabled')
+    expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'local_api_toggled')).toHaveLength(2)
+
+    // The real access key, minted in its dedicated store, must never appear in any
+    // recorded event (the export writes metadata verbatim to plaintext JSON).
+    const { getOrCreateToken } = await import('../../src/main/services/local-api/token')
+    const token = getOrCreateToken(ctx.db)
+    const all = listAuditEvents(db, { limit: 5000 })
+    for (const e of all) {
+      const flat = `${e.type} ${e.message} ${JSON.stringify(e.metadata)}`
+      expect(flat).not.toContain(token)
+      expect(flat).not.toContain(token.slice(3, 20)) // nor any fragment of its body
+    }
+  })
+})

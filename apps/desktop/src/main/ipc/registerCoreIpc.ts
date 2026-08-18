@@ -6,6 +6,8 @@ import { getSettings, updateSettings } from '../services/settings'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { buildPolicyStatus } from '../services/policy'
+import { applyLocalApiSettings } from '../services/local-api/lifecycle'
+import { LOCAL_API_SETTINGS_KEYS } from '../../shared/local-api'
 import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
 import { log, readLogTail, readLogFull } from '../services/logging'
@@ -69,7 +71,11 @@ export function registerCoreIpc(ctx: AppContext): void {
       // Issue #42 reopen: the sidecar's last cold-start device outcome (posture + parsed
       // offload split + liveness) — the Translate screen's #36-style hint. Null before the
       // first start / when unavailable; optional on the Translator seam (fakes omit it).
-      translationDevice: ctx.translator?.deviceStatus?.() ?? null
+      translationDevice: ctx.translator?.deviceStatus?.() ?? null,
+      // Local API live state (counts + flags only, never content — D1). Null when no
+      // server object exists at all; the object itself reports `running: false` when the
+      // feature is off, so the Settings card can distinguish "off" from "failed to bind".
+      localApi: ctx.localApi?.status() ?? null
     }
   })
 
@@ -138,20 +144,48 @@ export function registerCoreIpc(ctx: AppContext): void {
       throw new Error(tMain('main.settings.invalidPatch'))
     }
     log.info('Settings updated', Object.keys(patch))
+    // Read BEFORE the write so local_api_toggled records only a REAL flip — key-presence
+    // alone would log phantom enable/disable events for rejected-junk or same-value
+    // patches, polluting the exported audit trail's forensic value.
+    const localApiBefore = 'localApiEnabled' in patch ? getSettings(ctx.db).localApiEnabled : null
     const result = updateSettings(ctx.db, patch)
     // Keep the main-side cached UI language in step with the setting (D-L3) — the
     // post-validation value, so junk patches can't move it.
     if ('uiLanguage' in patch) applyUiLanguageSetting(result.uiLanguage)
+    // Local API start/stop/re-port on a live settings change (the seam precedent above).
+    // A bind failure is logged + lands in `status().lastError` (running:false) — the P4
+    // card reads THAT surface; the settings write itself always succeeds. Fire-and-forget
+    // is safe: the server serializes start/stop internally.
+    if (LOCAL_API_SETTINGS_KEYS.some((k) => k in patch)) {
+      void applyLocalApiSettings(ctx).catch((err) => {
+        log.warn('Local API settings change failed to apply', { error: String(err) })
+      })
+    }
     // Audit privacy rule: record ONLY the privacy-relevant keys — and their
     // post-validation values, which are booleans/enums — never any other setting's value.
-    const privacyKeys = (['allowNetwork', 'gpuMode', 'developerMode'] as const).filter(
-      (k) => k in patch
-    )
+    // The tuple is a hard allowlist: the local-API token cannot ride here structurally
+    // (it never enters AppSettings at all — services/local-api/token.ts), and the port
+    // is deliberately excluded (booleans only; the audit-log export writes metadata
+    // verbatim to plaintext JSON outside the vault).
+    const privacyKeys = (
+      ['allowNetwork', 'gpuMode', 'developerMode', 'localApiEnabled', 'localApiTokenRequired'] as const
+    ).filter((k) => k in patch)
     if (privacyKeys.length > 0) {
       ctx.audit?.(
         'settings_changed',
         `Privacy-relevant settings changed: ${privacyKeys.join(', ')}`,
         Object.fromEntries(privacyKeys.map((k) => [k, result[k]]))
+      )
+    }
+    // The local-API master switch gets its own first-class audit event (boolean only) —
+    // deliberately IN ADDITION to the settings_changed sweep (the filterable trust event
+    // the export/Activity surface keys on), but only when the accepted value actually
+    // changed.
+    if (localApiBefore !== null && result.localApiEnabled !== localApiBefore) {
+      ctx.audit?.(
+        'local_api_toggled',
+        `Local API ${result.localApiEnabled ? 'enabled' : 'disabled'}`,
+        { enabled: result.localApiEnabled }
       )
     }
     return result

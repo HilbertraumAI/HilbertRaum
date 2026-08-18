@@ -17,6 +17,10 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 - A malformed or hostile config file weakening the offline posture.
 - Plaintext data at rest on a removable/shared drive (mitigated by the Phase-9 encrypted workspace;
   plaintext dev mode is gated by policy and clearly labelled).
+- **Other processes on the same machine** (added by the local-api wave). Until this wave the model
+  was reachable only from inside the app; the opt-in local API deliberately opens a loopback door,
+  and the sidecars had always had an unauthenticated one. This threat is now modeled explicitly —
+  see "The fifth threat: same-machine processes" below.
 
 ## Security baseline (spec §3.5)
 
@@ -179,10 +183,13 @@ and the fallback for a **missing / malformed / partial** `policy.json` — depen
   `STANDALONE_POLICY`. This root was never touched by `prepare-drive`, so there was never a policy to
   fail closed *to* — failing closed there permanently disabled the in-app model downloader the
   release notes point users to (the policy is the ceiling, so the Settings toggle could not
-  re-enable it). The standalone posture relaxes **only** `allow_model_downloads` (still gated by the
-  `allowNetwork` setting + a per-download confirmation, downloads SHA-256-verified against their
-  manifests); update checks + telemetry stay denied, and the `workspace`/`models` blocks stay at the
-  **strict** value — M-4/M-6 enforcement is untouched. A prepared drive whose `policy.json` went
+  re-enable it). The standalone posture relaxes **two** network ceilings:
+  `allow_model_downloads` (still gated by the `allowNetwork` setting + a per-download
+  confirmation, downloads SHA-256-verified against their manifests) and — since the local-api
+  wave, owner decision O3 — `allow_local_api` (a loopback-only INBOUND ceiling; the feature
+  stays default-off behind its own consent dialog, and without this it would be policy-dead on
+  every standalone install); update checks + telemetry stay denied, and the
+  `workspace`/`models` blocks stay at the **strict** value — M-4/M-6 enforcement is untouched. A prepared drive whose `policy.json` went
   missing still fails closed: its `drive.json` marker keeps it in the provisioned branch above.
 
 `isDev` is threaded from `initBackend()` into every policy read (the model/download/core IPC handlers).
@@ -236,6 +243,58 @@ wrong host guess can never break local IPC or the sidecars. Real runtimes MUST b
 `127.0.0.1` only. The IPv4 loopback test is **anchored** (`/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/`,
 audit L-1) so a hostname like `127.evil.com` is not misclassified as loopback; `isLoopbackHost` is a
 detection helper only and must never gate an allowed-vs-blocked decision.
+
+**Sidecar requests are authenticated (local-api wave P1).** Loopback binding alone leaves a port any
+same-machine process can call, so every `llama-server` sidecar spawn (chat, embedder, reranker,
+vision, translation) now carries a fresh per-spawn API key, delivered via the **child-scoped env**
+(`LLAMA_API_KEY` — verified enforced on the pinned b9849 build) and injected as a Bearer header at
+the single `LlamaServer.fetch()` chokepoint. The key is never placed in argv (readable in any
+process list, and llama-server echoes resolved params to stderr) and never set on the app's own
+`process.env` (other children would inherit it); key material is redacted AT THE STDERR DRAIN over
+a partial-line hold-back window — so neither the captured tail (→ error strings, `gpuLastError`,
+the audit trail, the app log, the support-log export) nor the streaming `onStderrData` observer
+can ever see the key, whole or chunk-split. Upstream exempts `/health` and `/v1/models` from auth on this pin — a local
+process can still read liveness plus the loaded model's file path (metadata only, never content).
+Residual (recorded, accepted): an env-delivered key defends against cross-user and log/stderr
+exposure, not against a same-user debugger reading the child's environment.
+
+#### The fifth threat: same-machine processes (local-api wave)
+
+Loopback binding answers "can the network reach it?" — it says nothing about the **other programs
+running as you**. Two doors exist:
+
+1. **The sidecars' own HTTP ports**, which existed before this wave and were unauthenticated. Closed
+   by the per-spawn env-delivered API key described above.
+2. **The local API endpoint**, which this wave adds on purpose. Its bounding controls, in the order
+   a request meets them:
+
+| Control | What it stops |
+|---|---|
+| **Off by default; explicit consent dialog** | The door does not exist until the user opens it, knowing what it means. |
+| **Policy ceiling** `network.allow_local_api` (restrict-only) | A managed/commercial drive can forbid the feature outright; the user setting can never override it. A drive that forbids it must say so EXPLICITLY (`allow_local_api: false` — what `prepare-drive` writes): an absent key predates the feature and inherits the permissive default, so existing drives are not silently denied (O4b). A junk value or a malformed policy file still fails closed. |
+| **Exists only while unlocked** | A locked vault serves nothing — settings and the access key live inside it, and lock/quit tear the listener down before the sidecars. |
+| **Binds `127.0.0.1` + `::1` only** | Anything off-machine. There is no LAN mode, no `0.0.0.0`, no proxy or forward capability, and no setting that could produce one. Test-pinned. |
+| **`Host` header validation (absent ⇒ 403)** | DNS rebinding — a page that resolves an attacker domain to 127.0.0.1 still fails the Host check. |
+| **`http(s)` non-loopback `Origin` and `Origin: null` refused; `OPTIONS` refused; no CORS header ever emitted; JSON content-type required** | Drive-by browser access. A loopback-origin page is not refused by the Origin check itself — the refused preflight and the absent CORS headers are what stop a browser reading any response. Absent and custom-scheme origins (`app://`, `vscode-webview://`) pass, because that is what Electron-based local clients send. |
+| **Bearer access key, on by default, constant-time compared** | Casual use by any other program on the machine. Turning it off is a confirmed user choice. |
+| **Chat completions + a one-model listing, no other routes** | Everything else: documents, conversations, the vector index, settings, the audit log. There is no route to them, so there is nothing to authorize. (`GET /v1/models` is auth-gated like the completion route and consumes no admission slot — it is the cheap "is it up" probe clients expect.) |
+| **Counts-only accounting; nothing logged** | A record of what was asked or answered. Request and response text is held in memory for the request and dropped. |
+| **Single-slot admission, in-app pre-emption** | An outside caller starving the user's own use, or two generations colliding on the shared model slot. |
+
+**Residuals, accepted and recorded:**
+
+- A same-user debugger can read the sidecar key from the child's environment or the access key from
+  the unlocked workspace. A loopback endpoint cannot distinguish one local program from another;
+  the key is a boundary against *casual* use, not against code already running with your rights.
+  Full-memory crash dumps have the same property — minidumps are recommended.
+- With the key requirement switched off (a confirmed user choice), any local program can use the
+  model. The `Host`/`Origin`/content-type checks stay **unconditional** in that mode, so the
+  browser remains locked out either way.
+- On the pinned sidecar build, `/health` and `/v1/models` remain auth-exempt upstream, so a local
+  process can read liveness and the loaded model's **file path** (metadata, never content).
+- What a connected app does with the answers it receives is outside HilbertRaum's control; this is
+  stated to the user in the consent dialog, `PRIVACY.md`, and the user guide rather than pretended
+  away.
 
 #### Detection-only, not enforcement — a recorded decision (audit M-S1, 2026-06-13)
 

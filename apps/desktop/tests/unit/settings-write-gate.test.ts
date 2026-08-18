@@ -136,3 +136,62 @@ describe('settings write gate — object-valued size cap + array rejection (CODE
     expect(getSettings(db).gpuProbe).toBeNull()
   })
 })
+
+// ---- Local API settings (local-api wave P2) ---------------------------------------------
+
+describe('local API settings (local-api P2)', () => {
+  it('defaults: OFF, port 4980, token required (D3/D4)', () => {
+    const db = freshDb()
+    const s = getSettings(db)
+    expect(s.localApiEnabled).toBe(false)
+    expect(s.localApiPort).toBe(4980)
+    expect(s.localApiTokenRequired).toBe(true)
+  })
+
+  it('round-trips the three keys and clamps the port to [1024, 65535]', () => {
+    const db = freshDb()
+    expect(updateSettings(db, { localApiEnabled: true }).localApiEnabled).toBe(true)
+    expect(updateSettings(db, { localApiTokenRequired: false }).localApiTokenRequired).toBe(false)
+    expect(updateSettings(db, { localApiPort: 4981 }).localApiPort).toBe(4981)
+    expect(updateSettings(db, { localApiPort: 80 }).localApiPort).toBe(1024) // privileged -> floor
+    expect(updateSettings(db, { localApiPort: 70_000 }).localApiPort).toBe(65_535)
+    expect(updateSettings(db, { localApiPort: 4980.9 }).localApiPort).toBe(4980)
+    // Non-finite junk is DROPPED, never defaulted: a customized port must survive a
+    // buggy renderer patch (review 2026-08-18 — the contextTokensOverride convention).
+    updateSettings(db, { localApiPort: 9000 })
+    expect(updateSettings(db, { localApiPort: Number.NaN }).localApiPort).toBe(9000)
+    expect(updateSettings(db, { localApiPort: Number.POSITIVE_INFINITY }).localApiPort).toBe(9000)
+  })
+
+  it('rejects mistyped values (booleans/number only; null never clobbers)', () => {
+    // Whole-patch cast, not `as never` (the F-41 ratchet): these are deliberately-wrong
+    // renderer payloads crossing the IPC boundary.
+    type JunkPatch = Record<string, unknown>
+    const db = freshDb()
+    updateSettings(db, { localApiEnabled: 'yes' } as JunkPatch)
+    expect(getSettings(db).localApiEnabled).toBe(false)
+    updateSettings(db, { localApiPort: '4981' } as JunkPatch)
+    expect(getSettings(db).localApiPort).toBe(4980)
+    updateSettings(db, { localApiTokenRequired: null } as JunkPatch)
+    expect(getSettings(db).localApiTokenRequired).toBe(true)
+  })
+
+  it('getSettings NEVER carries a secret-bearing key or the access-key value (audit A3)', async () => {
+    const db = freshDb()
+    // Mint the real token in its dedicated store, then prove the settings surface -- the
+    // object the renderer receives on three IPC surfaces -- cannot leak it.
+    const { getOrCreateToken } = await import('../../src/main/services/local-api/token')
+    const token = getOrCreateToken(db)
+    const s = getSettings(db)
+    // The only /token/i keys are the known benign set; the secret has no settings key.
+    const tokenKeys = Object.keys(s).filter((k) => /token/i.test(k)).sort()
+    expect(tokenKeys).toEqual(
+      ['contextTokens', 'contextTokensOverride', 'localApiTokenRequired', 'ragMaxContextTokens'].sort()
+    )
+    expect(typeof s.localApiTokenRequired).toBe('boolean')
+    // And the serialized object contains neither the token value nor its hr- prefix.
+    const serialized = JSON.stringify(s)
+    expect(serialized).not.toContain(token)
+    expect(serialized).not.toContain('hr-')
+  })
+})

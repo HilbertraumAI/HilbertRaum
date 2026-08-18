@@ -12,6 +12,15 @@ export const IPC = {
   updateSettings: 'settings:update',
   // Privacy/offline policy
   getPolicy: 'policy:get',
+  // Local API endpoint (opt-in loopback server). Everything else about it rides
+  // `settings:update` (the toggles + port) and `app:getAppStatus` (live state); these
+  // three exist because the access key must NEVER cross to the renderer in full.
+  /** `{ serverAddress, maskedKey }` — what to paste into a client, key masked. */
+  localApiConnectionInfo: 'localApi:getConnectionInfo',
+  /** Copy the FULL key to the clipboard MAIN-side (the renderer never holds it). */
+  localApiCopyKey: 'localApi:copyKey',
+  /** Mint a new key + abort active/queued external streams; returns the new mask. */
+  localApiRegenerateToken: 'localApi:regenerateToken',
   // Models + runtime
   listModels: 'models:list',
   selectModel: 'models:select',

@@ -14,6 +14,7 @@ import {
 import { t } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { stubApi } from '../helpers/renderer'
+import { makePolicyStatus } from '../helpers/status'
 
 // Phase 18 — the Models screen download surface: the gate states (why downloads are
 // unavailable: policy vs. Settings), the per-download confirmation (license
@@ -46,24 +47,10 @@ function model(over: Partial<ModelInfo> = {}): ModelInfo {
 }
 
 function policyStatus(opts: { downloadsAllowed: boolean; settingOn: boolean }): PolicyStatus {
-  return {
-    policy: {
-      network: {
-        allowModelDownloads: opts.downloadsAllowed,
-        allowUpdateChecks: false,
-        allowTelemetry: false
-      },
-      workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
-      models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
-    },
-    policyFilePresent: true,
-    driveFilePresent: true,
-    allowNetworkSetting: opts.settingOn,
-    networkAllowedByPolicy: opts.downloadsAllowed,
-    networkAllowed: opts.downloadsAllowed && opts.settingOn,
-    offlineMode: !(opts.downloadsAllowed && opts.settingOn),
-    telemetryAllowed: false
-  }
+  return makePolicyStatus({
+    network: { allowModelDownloads: opts.downloadsAllowed },
+    allowNetworkSetting: opts.settingOn
+  })
 }
 
 const appStatus = { machineRamGb: 32 } as unknown as AppStatus

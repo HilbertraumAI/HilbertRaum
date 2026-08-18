@@ -109,6 +109,15 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   } catch (err) {
     log.error('Error aborting in-flight streams on quit', String(err))
   }
+  // The local API dies BEFORE the sidecars (local-api wave): stop() aborts active + queued
+  // external streams and closes every socket, so no outside caller holds the model while
+  // the children below are killed. In-process (no orphan class) — but awaited so its
+  // sockets are deterministically gone before the vault work.
+  try {
+    await (ctx?.localApi?.stop() ?? Promise.resolve())
+  } catch (err) {
+    log.error('Error stopping the local API on quit', String(err))
+  }
   try {
     await Promise.allSettled([
       ctx?.runtime.stop() ?? Promise.resolve(),

@@ -39,7 +39,10 @@ export const DEFAULT_POLICY: PrivacyPolicy = {
   network: {
     allowModelDownloads: true,
     allowUpdateChecks: false,
-    allowTelemetry: false
+    allowTelemetry: false,
+    // Local API: policy-permitted in dev (the setting is still default-off behind the
+    // consent dialog — D3); a policy.json can write allow_local_api: false to kill it.
+    allowLocalApi: true
   },
   workspace: {
     encryptionRequired: false,
@@ -67,7 +70,10 @@ export const STRICT_POLICY: PrivacyPolicy = {
   network: {
     allowModelDownloads: false,
     allowUpdateChecks: false,
-    allowTelemetry: false
+    allowTelemetry: false,
+    // Fail closed with everything else: a provisioned drive that lost its policy must
+    // not expose the model to other local processes.
+    allowLocalApi: false
   },
   workspace: {
     encryptionRequired: true,
@@ -98,7 +104,12 @@ export const STANDALONE_POLICY: PrivacyPolicy = {
   network: {
     allowModelDownloads: true,
     allowUpdateChecks: false,
-    allowTelemetry: false
+    allowTelemetry: false,
+    // O3 (owner-ratified 2026-08-18): a standalone install may enable the local API —
+    // it is the user's own machine, the setting is default-off behind the consent
+    // dialog, and without this the feature would be policy-dead on every
+    // GitHub-release install (the policy is the ceiling; the toggle can't exceed it).
+    allowLocalApi: true
   },
   workspace: STRICT_POLICY.workspace,
   models: STRICT_POLICY.models
@@ -129,7 +140,24 @@ export function mergePolicyObject(base: PrivacyPolicy, raw: unknown): PrivacyPol
   const network: NetworkPolicy = {
     allowModelDownloads: bool(net.allow_model_downloads, base.network.allowModelDownloads),
     allowUpdateChecks: bool(net.allow_update_checks, base.network.allowUpdateChecks),
-    allowTelemetry: bool(net.allow_telemetry, base.network.allowTelemetry)
+    allowTelemetry: bool(net.allow_telemetry, base.network.allowTelemetry),
+    // `allow_local_api` is NEWER than the drives already in the field. A `policy.json`
+    // written before the local-API wave has no such key, and inheriting a packaged build's
+    // STRICT base would have silently denied the feature on EVERY existing drive — a posture
+    // nobody chose (owner decision 2026-08-18, verified against a real 2026-06-30 drive).
+    // So the three cases are deliberately different:
+    //   absent            → "not yet decided": inherit the permissive DEFAULT, like a
+    //                       standalone install does. The setting is still default-off behind
+    //                       the consent dialog, so this permits, it does not enable.
+    //   explicit boolean  → that value wins (`prepare-drive` writes an explicit `false` for
+    //                       commercial drives, so a deliberate deny is unaffected).
+    //   present but junk  → the (possibly STRICT) base — garbage must never fail OPEN.
+    // A malformed FILE never reaches here at all: `parsePolicy` returns the base for those,
+    // so the M-4 fail-closed rule is unchanged.
+    allowLocalApi:
+      net.allow_local_api === undefined
+        ? DEFAULT_POLICY.network.allowLocalApi
+        : bool(net.allow_local_api, base.network.allowLocalApi)
   }
   const workspace: WorkspacePolicy = {
     encryptionRequired: bool(ws.encryption_required, base.workspace.encryptionRequired),
@@ -328,5 +356,12 @@ export function buildPolicyStatus(
     networkAllowed: net.networkAllowed,
     offlineMode: net.offlineMode,
     telemetryAllowed: false
+    // No localApiAllowedByPolicy copy field (review 2026-08-18): `PolicyStatus.policy`
+    // already carries `network.allowLocalApi` — the Settings card reads it there. A 1:1
+    // copy would let fixtures set the same fact twice, inconsistently.
   }
 }
+
+// localApiEffectivelyEnabled lives in shared/local-api.ts (review 2026-08-18): the
+// renderer cannot import main services, so a main-side helper would have forced the P4
+// Settings card to re-spell the policy∧setting rule by hand.

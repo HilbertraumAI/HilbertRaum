@@ -5,6 +5,10 @@
 # process Peak Working Set. The number calibrates each manifest's recommended_min_ram_gb
 # (peak RSS + 3 GiB OS/app headroom). Fully offline + local; no network beyond loopback.
 #
+# This script deliberately spawns its OWN llama-server without LLAMA_API_KEY, so its raw
+# HTTP calls need no Authorization header — do not "fix" it to mirror the app's keyed
+# sidecar spawn (the app's key lives in LlamaServer; this harness is self-contained).
+#
 # Usage:
 #   scripts\measure-peak-rss.ps1 -Root D:\ -Model granite-4.1-8b-q4.gguf -Ctx 8192
 #

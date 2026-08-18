@@ -2584,6 +2584,20 @@ files**.
     spawn passes **`windowsHide: true`** (REL-7, backend-audit-2026-06-27) so this high-frequency
     spawn (every model start — chat, embedder, reranker, vision all funnel through here) never
     flashes a console window on Windows, matching the tar / transcriber / runtime-download spawns.
+    **Sidecar auth (local-api wave P1):** every spawn generates a fresh 32-byte hex API key,
+    delivered via the **child-scoped env** (`LLAMA_API_KEY`, verified enforced on the pinned b9849
+    build — the upstream exempts only `/health` and `/v1/models`) — never argv (visible in process
+    lists; llama-server echoes resolved params to stderr) and never the parent `process.env`
+    (whisper-cli/tar/the GPU probe would inherit it). `LlamaServer.fetch()` is the single HTTP
+    chokepoint and injects `Authorization: Bearer <key>` for all consumers. Stderr never carries
+    the key out: the drain applies exact-key redaction over a partial-line hold-back (complete
+    lines publish with unchanged timing; a chunk-split key always lives in a partial line, so it is
+    reassembled and scrubbed before ANY sink — the capped tail or the `onStderrData` observer —
+    sees it), and tail reads (`redactedTail` → start-failure errors, `gpuLastError`, the audit
+    trail, the app log, the support-log export) add the generic `api…key <value>` pass once at
+    read time (value-shaped tokens only, so the routine `api_keys: 1 keys loaded` count line stays
+    legible). `scripts/measure-peak-rss.ps1` deliberately spawns its own keyless server and is
+    unaffected.
 - **`services/runtime/llama.ts`** — `LlamaRuntime implements ModelRuntime`, composing a `LlamaServer`.
   `chatStream` POSTs to the server's **OpenAI-compatible** `/v1/chat/completions` with `stream: true`,
   sending `messages` as plain role/content (the server applies the model's chat template — we never
@@ -2600,6 +2614,50 @@ files**.
   path is known), behind the unchanged `RuntimeManager`. `main/index.ts` uses it in place of the bare
   `createMockRuntime`. **Phase 15:** when binary + weights are present the factory returns the **GPU
   start ladder** (see below) instead of a bare `LlamaRuntime`.
+- **Generation gate (local-api wave P1).** `RuntimeManager.doStart` wraps the factory-returned
+  runtime (ladder AND mock — the shipped gate is the one CI exercises) in a decorator whose
+  `chatStream` counts in-flight generations per lane (`RuntimeChatOptions.lane`: `'in-app'` default /
+  `'external'`), because generation reaches the model through several lanes no single registry sees
+  (chat/RAG streams, doc tasks, skill runs, the benchmark, compaction, classification) — all via
+  `active().chatStream`, so the manager is the one chokepoint.
+  **`RuntimeManager.isExternallyBusy()` is THE predicate for external (local-API) admission** —
+  any in-flight generation OR no active runtime, fail closed: `active()` is null through the whole
+  start window, exactly when the #109 warm-up generation streams against the inner rung runtime,
+  invisible to the decorator. (`isGenerating()` is the narrower any-lane read; on its own it is NOT
+  fail-closed.) Lane rules (D8, in-app wins): an external entry is refused
+  (`ExternalGenerationBusyError`) in the same synchronous frame as its counter increment whenever
+  the in-app lane is active **or another external stream runs** (the slot is single, structurally —
+  admission's serialization is advisory); an entering in-app generation fires the registered
+  pre-emption hook on EVERY entry (`setExternalPreemption` — local-API admission's `abortAll`
+  cancels its active AND admitted-but-unstarted requests) and awaits the external stream's real
+  teardown before issuing — **bounded (~5 s)**, because the abort already cancels the sidecar
+  socket (the KV slot frees) even if a misbehaving consumer never resumes its generator. Counter
+  discipline: increment as the generator body's first act (a created-but-never-iterated generator
+  holds no count), decrement in `finally`, **epoch-guarded**: every model start/stop bumps the gate
+  epoch and zeroes the counts, so a count leaked by an abandoned external generator self-heals on
+  the next runtime transition instead of wedging admission forever. External-lane consumer
+  contract: `try { for await … } finally { await gen.return() }` on every exit path. The gate
+  deliberately does NOT serialize in-app lanes against each other (the pre-existing
+  skill-run/benchmark concurrency, A6/A7, is unchanged — now merely visible). External admission
+  itself lives in `services/local-api/admission.ts`: single external slot, queue depth 0–1 with a
+  ~30 s cap (deeper queues are silent multi-minute hangs on CPU boxes), `workspaceAdmitsWork`-class
+  lock refusal, `abortAll` for pre-emption + teardown, a promotion handoff that stays with the
+  holder until real stream teardown (an active caller's disconnect never releases in the abort
+  frame), and the invariant `ready:false ⇒ signal aborted`. Kin note: `analysis/model-slot-arbiter.ts`
+  coordinates the same physical slot for in-app yielding builders (cooperative pause/resume);
+  admission is refuse/queue/abort for outside callers — deliberately separate.
+- **Local API endpoint (local-api wave P3).** `services/local-api/server.ts` + `handlers.ts`:
+  the opt-in OpenAI-compatible loopback endpoint (`node:http`, no framework). Binds
+  **127.0.0.1 AND ::1** (O5), never 0.0.0.0 (D2); exists only while the workspace is unlocked
+  AND policy ∧ setting permit (D3/D7 — `maybeStartLocalApi` at the three post-unlock seams:
+  plaintext startup, unlock, create; `runLockTeardown`/`performShutdown` stop it FIRST, before
+  the sidecars, so no outside caller holds the model mid-teardown; `applyLocalApiSettings`
+  rides `settings:update`). Requests route through the manager-gated `active().chatStream`
+  (never a raw sidecar proxy) so external generations inherit abort registration, watchdogs,
+  context budgeting, and the D8 pre-emption contract. The full exposed HTTP contract (pipeline
+  order, field policy, envelopes, error mapping, limits) lives in `data-contracts.md`; the
+  request pipeline's check ORDER (Host → Origin → content-type → auth) is part of the security
+  contract and test-pinned in `local-api-server.test.ts`.
 
 ### GPU acceleration: probe + start ladder (Phase 15; design record below)
 
@@ -3274,8 +3332,10 @@ licensing: `model-policy.md` §"The in-app downloader"; user-facing posture: `PR
 `policy.json` with `allow_model_downloads: false` — or the packaged-build `STRICT_POLICY` fallback
 for a provisioned config dir — keeps the app offline regardless of the toggle. (Since issue #93,
 2026-08-03, an UNPROVISIONED config dir — neither `policy.json` nor `drive.json`, the standalone
-portable install's app-data fallback — gets `STANDALONE_POLICY` instead: downloads policy-permitted,
-everything else strict; see `security-model.md` "Fail-closed on a packaged build".) A prepared/commercial drive now writes
+portable install's app-data fallback — gets `STANDALONE_POLICY` instead: downloads + the local API
+policy-permitted (the latter per owner decision O3, local-api wave — both still behind their own
+default-off settings/consent), everything else strict; see `security-model.md` "Fail-closed on a
+packaged build".) A prepared/commercial drive now writes
 `allow_model_downloads: true` (2026-07-01), so the setting + the per-download confirmation are the
 effective gate there; update-checks + telemetry stay hardcoded/denied so the drive never phones home.
 A locked workspace still reads the setting as off.
@@ -10064,6 +10124,263 @@ This record is the durable per-alert ledger; the DEP-1 record above holds the wa
    `pdfjs.d.ts`'s inaccurate "one declaration serves both tsconfig programs" claim (only the
    node program resolves it; the web program gets the real `pdf.d.mts`). The legacy-build
    decision itself stands — one build everywhere.
+
+## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
+
+_The 2026-08-18 wave that made the loaded chat model available to **other programs on the same
+computer** over an opt-in loopback HTTP endpoint, and hardened the runtime it rides on. Six phases
+on branch `local-api-endpoint`, commit series `local-api-p1:`…`local-api-p6:`, merged as PR #184.
+The working plan (`plans/local-api-endpoint-plan.md`) and its execution log were local-only
+working papers under a git-ignored `plans/` directory — never committed, and deleted when the
+wave PR merges, per the CLAUDE.md doc-lifecycle rule. This record and the per-phase commit
+messages are therefore the surviving sources. **Citation rule (owner decision O6):** the
+repo squash-merges, so durable references use **PR #184 + the `local-api-p<N>` prefix + a § of
+this record**, never a branch SHA. The security half of the design lives in
+`docs/security-model.md` ("The fifth threat: same-machine processes"); the wire contract lives in
+`docs/data-contracts.md`._
+
+### §1 What it is
+
+```
+external app ──HTTP──▶ LocalApiServer (node:http, 127.0.0.1 + ::1, opt-in)
+                          │  unconditional: Host check, Origin policy, no CORS,
+                          │                 OPTIONS refused, JSON content-type
+                          │  optional:      Bearer access key (default ON)
+                          │  admission:     generation gate idle + single external slot
+                          ▼
+                    RuntimeManager.active().chatStream()   ← NOT a sidecar proxy
+                          ▼  (the gate counts every lane)
+                    llama-server sidecar (now authenticated)
+```
+
+Routing through `ModelRuntime.chatStream` rather than forwarding to the sidecar is the load-bearing
+choice: external requests inherit abort registration, the idle watchdogs, context budgeting,
+friendly error mapping, and shutdown ordering for free. A raw proxy would have bypassed every
+app-side guard, and was rejected on that basis.
+
+**Scope is completions against the already-running chat model.** No documents, no RAG, no
+embeddings, no workspace data, and the endpoint never starts, stops, or switches a model.
+
+### §2 Ratified framing decisions (D1–D9)
+
+| # | Decision | Where it lives now |
+|---|---|---|
+| D1 | "The space" = the user's machine. The model is made available to local apps; no content is logged, ever. | Counts-only `LocalApiStatus`; the P6 sentinel test |
+| D2 | Bind loopback only, always. No LAN mode, no `0.0.0.0`, no proxy/forward. | `server.ts` hard-coded literals; test-pinned |
+| D3 | Default OFF; policy can only restrict (`effective = policy ∧ setting`). | `localApiEffectivelyEnabled` in `shared/local-api.ts` |
+| D4 | Token auth is a user choice, ON by default. Web-origin + Host checks are unconditional in **both** modes. | `handlers.ts` check order |
+| D5 | Warn about concurrent use — but only while it is true. | The card's warning banner, driven by `externalActive` / `lastPreemptedAt` |
+| D6 | v1 = completions against the selected chat model only. | Two routes exist; there is no third |
+| D7 | The server lives only while the workspace is unlocked. | Three post-unlock start seams; stopped first in both teardowns |
+| D8 | In-app wins: one external request at a time, and in-app chat pre-empts external streams, never the reverse. | The gate's lane marker + `preemptExternal` |
+| D9 | Fix the latent no-auth gap on the internal sidecars in the same wave. | `sidecar.ts` env-delivered key |
+
+### §3 Owner options (O1–O6) — all ratified 2026-08-18, all as proposed
+
+| # | Question | Outcome |
+|---|---|---|
+| O1 | Default port | **4980** (avoids Ollama 11434 / LM Studio 1234), clamped 1024–65535 |
+| O2 | Launch visibility | **Not promoted** — neutral PR title, one CHANGELOG line, no README/blog push; ship one release that way before documenting it as a headline feature |
+| O3 | `STANDALONE_POLICY.allow_local_api` | **true** — without it the feature is policy-dead on every standalone GitHub-release install; the setting is still default-off behind the consent dialog |
+| O4 | `prepare-drive` policy write | Commercial/prepared drives write an explicit **false**; `--dev` drives write true |
+| O4b | Drives whose policy PREDATES the key (added 2026-08-18, after checking a real 2026-06-30 drive) | An **absent** `allow_local_api` inherits the permissive default, not the packaged STRICT base. Without this every drive already in the field would have been silently denied — a posture nobody chose. An explicit `false` still denies; a junk value and a malformed file still fail closed |
+| O5 | Loopback family | **Bind both `127.0.0.1` and `::1`** — Windows resolves `localhost` to `::1` first and many Electron/Node clients do not address-iterate. The UI still prints the unambiguous `127.0.0.1` form |
+| O6 | Citations under squash-merge | PR# + phase prefix + record §, never a branch SHA |
+
+### §4 The generation gate (P1)
+
+The admission decision needs one true answer to "is the model busy?", and generation reaches the
+model through **five** lanes: chat/RAG, doc tasks, skill runs, the benchmark, and
+`LadderRuntime.warmUp`. A check reading `inFlightStreams + docTasks` would have missed three.
+
+- The gate is a **`RuntimeManager`-level decorator** applied in `doStart`, wrapping whatever the
+  factory returned — ladder **or** mock. Hosting it inside `LadderRuntime` would have left it
+  untested, since all of CI runs the mock path. `active()` hands out the decorated instance, so
+  every existing call site passes through it with zero call-site churn.
+- `RuntimeChatOptions.lane` (`'in-app'` default / `'external'`) means an external request never
+  pre-empts itself, and in-app entry always wins.
+- `isGenerating()` / `isExternallyBusy()` **fail closed**: no active runtime ⇒ busy. That single
+  rule covers the whole start window including the warm-up generation, which streams against the
+  inner rung runtime while `active()` is still null.
+- Counter discipline: increment as the first act of the generator body, decrement in `finally`,
+  plus a guard on the synchronous pre-yield throw — a created-but-never-iterated generator cannot
+  wedge the gate. A **gate epoch** zeroes counts on every start/stop so a leaked count cannot
+  survive a restart.
+- Atomic acquisition: `tryAdmit` returning is **not** permission to stream. The external entry
+  re-checks synchronously in the same frame that increments, so the admit→stream await gap cannot
+  overlap generations; pre-emption also cancels an admitted-but-unstarted request and awaits the
+  external stream's real teardown (bounded 5 s, abort-aware) before the in-app generation issues.
+- Admission (`local-api/admission.ts`): a single external slot, queue depth 0–1 with a ~30 s cap
+  (on ~2 tok/s hardware a deeper queue is a silent multi-minute hang), lock refusal through
+  `workspaceAdmitsWork` — never a bare `isUnlocked()`, which is the AUD-02 class.
+- External streams deliberately do **not** register in `inFlightStreams`: that registry drives the
+  doc-task refusal, so registering them would have let an outside client block doc tasks — an
+  inversion of D8.
+
+### §5 The HTTP surface (P3)
+
+`node:http` only, no framework. Pipeline order, all of it unconditional except the key:
+`Host` → `OPTIONS` refusal → `Origin` → content-type → Bearer → route.
+
+- **Host**: must be a loopback literal with a matching port; **absent or empty ⇒ 403**, which is
+  what closes the DNS-rebinding backstop.
+- **Origin**: `http(s)` with a non-loopback host ⇒ 403, `Origin: null` ⇒ 403; absent and
+  custom-scheme origins (`app://`, `vscode-webview://`) pass, because that is exactly what the
+  Electron-based clients this feature targets send. **No CORS header is ever emitted** and
+  `OPTIONS` is refused, so browser JavaScript is structurally locked out regardless.
+- **Auth**: SHA-256 digests compared with `timingSafeEqual`; with the key requirement off a
+  present `Authorization` header is ignored rather than validated (SDKs always send one).
+  Re-validated after the body arrives, so a key rotation during a slow upload cannot be outrun.
+- **Envelopes are synthesized**: the runtime yields bare content-delta strings, so the server
+  builds the OpenAI shapes itself — role-first chunk → deltas → a `finish_reason` chunk →
+  `[DONE]` for streaming, one `chat.completion` for the (default) non-streaming mode.
+- **Errors are OpenAI-shaped** with codes clients can branch on: `model_not_loaded` vs
+  `model_starting` (distinct, the latter with `Retry-After`), `busy` (429 + `Retry-After`
+  derived from measured tok/s), `context_overflow`, `runtime_error`, `workspace_locked`.
+  Pre-emption emits `preempted_by_user` **and closes without `[DONE]`** — a `[DONE]` after an
+  error marks a truncated stream successful, which is the F-02 bug class.
+- **Bounds**: `headersTimeout` 10 s; `requestTimeout` **disabled** (Node's 300 s default would
+  kill legitimate multi-minute CPU generations) with wedge detection left to the app-side
+  watchdogs plus a 15 s SSE drain-timeout that aborts and reclaims the slot from a stalled reader;
+  a 30 s idle bound on the **body phase only**; a 1 MB body cap counted **as bytes arrive**, since
+  a chunked body makes `Content-Length` unenforceable.
+- **Field policy is split, not blanket-400**: capability fields we cannot honor (`tools`, image
+  parts, `n>1`) are refused by name; benign sampling/metadata fields are accepted and ignored;
+  `response_format.json_schema` is **supported**, mapped onto the existing grammar-constrained
+  decoding.
+
+### §6 Settings, key, policy, UX (P2/P4)
+
+- Three settings keys (`localApiEnabled`, `localApiPort`, `localApiTokenRequired`); the access key
+  is deliberately **not** among them, because `getSettings` spreads every stored row to the
+  renderer on three IPC surfaces. It lives in its own single-row `local_api_token` table, read and
+  written main-side only.
+- The renderer never holds the key: it receives `hr-…abcd`, copying runs main-side through
+  Electron's clipboard with a best-effort 60 s clear, and rotation both re-mints and aborts every
+  external stream the old key admitted.
+- The card is **shown disabled with its reason** under a forbidding policy, never hidden — a
+  silently absent card is a transparency regression a managed-drive user cannot recover from.
+- **A drive whose `policy.json` predates the key is permitted, not denied** (O4b). The key is
+  newer than the drives in the field; inheriting a packaged build's STRICT base would have shown
+  "turned off by your drive's policy" on every existing drive, with no way for the user to tell
+  that from a deliberate ban. Verified against a real 2026-06-30 "lite" drive: its other strict
+  keys (`encryption_required`, `require_sha256_match`) are still honored — only the undecided key
+  changes.
+- The consent dialog's confirm stays disabled until an acknowledgement is ticked, and its copy
+  names four facts: what other apps can do, what they cannot, where HilbertRaum's control ends,
+  and that nothing is stored.
+- The concurrent-use warning fires only while an external request is active or was just
+  pre-empted. A permanent amber notice is warning fatigue, and D8 already resolves the collision.
+
+### §7 Deliberate omissions (decided, not overlooked)
+
+| Omitted | Why |
+|---|---|
+| **Per-connection visibility** (who is connected, what they asked) | It would require keeping exactly the record D1 promises not to keep. Counts only. |
+| **`usage` token counts** in responses | The SSE reader discards them today; surfacing them means extending the runtime contract. Documented as absent so clients do not read `NaN` — a post-v1 candidate. |
+| **Sampling passthrough** (`top_p`, `stop`, penalties) | `RuntimeChatOptions` carries no such fields. Accept-and-ignore was chosen over extending the contract mid-wave. |
+| **A real `openai`-SDK parse test** | It would add a devDependency for a test; the wire-shape pins cover the envelope. An owner-optional line item. |
+| **Serializing the in-app lanes** (benchmark vs chat, skill run vs chat) | Pre-existing concurrency, made *visible* by the gate but not caused by it. Filed separately rather than smuggled into this wave. |
+
+### §8 What the audits changed
+
+Two adversarial rounds ran against the plan before any code (a two-agent verification pass, then
+six persona reviewers), and every phase carried a `/code-review` round. The findings that changed
+the **design** rather than the code:
+
+- The admission check originally read `inFlightStreams + docTasks` — invisible to skill runs and
+  the benchmark. Became the runtime-level gate (§4). *This was the wave's most dangerous bug, and
+  it never shipped.*
+- The sidecar key was originally an argv flag: visible in any process list, and echoed to stderr
+  whose captured tail flows into `gpuLastError`, the audit trail, and the support export. Became
+  env-delivered with drain-side redaction.
+- The access key was originally an `AppSettings` row, which would have put it in renderer state on
+  three IPC surfaces. Became its own table.
+- "Reject every `Origin`" would have broken exactly the Electron-plugin clients the feature
+  targets. Became scheme-based (§5).
+- `tryAdmit` was a TOCTOU: it snapshotted idle, then the handler awaited before streaming. Became
+  atomic acquisition at the decorator.
+- Queue depth 4 would have been a silent 10–25 minute hang on CPU hardware. Became 0–1 + fast 429.
+- Honoring SSE backpressure naively disarms the per-read idle watchdog — one stalled reader would
+  wedge the model. Became the drain-timeout.
+- The UI never showed the base URL, so setup dead-ended where the client asks for it. Became the
+  "Connect another app" block.
+
+Per-phase reviews additionally caught: a redaction pass that mangled a chunk-split key so neither
+pass could remove it (with a vacuous test that only checked the whole key); an unbounded
+pre-emption wait; an admission promotion race that gave the patient waiter a spurious 429; IPv6
+brackets making `URL.hostname` reject every `[::1]` origin; the real runtime rejecting with a
+plain `Error` named `AbortError` rather than a `DOMException`, so pre-empted requests answered
+502 instead of the D8 contract code; a stale bind error that outlived the feature being switched
+off; and a rotation window during a slow body upload.
+
+### §9 Verification
+
+**Pinned in CI:** the bind posture (loopback only, never `0.0.0.0`); **no listener at all** in the
+default-off and policy-forbidden states; the Host/Origin/content-type/auth matrix in both auth
+modes; zero CORS headers anywhere; streaming and non-streaming happy paths; the error-code
+mapping incl. `Retry-After`; pre-emption closing without `[DONE]`; counted-byte body cap over a
+chunked body; the drain-timeout reclaiming a slot; lock and quit killing the listener first;
+rotation aborting in-flight streams; the gate counting all lanes on both the mock and ladder
+paths with `isGenerating()` failing closed; the counter surviving never-iterated and
+throws-before-yield generators; the TOCTOU probe; a **no-content sentinel** driven through the
+success and failure paths and grepped out of every log, console stream, error body, and status
+object; and hostile wire input — a slow-loris header phase cut off **by the server itself**
+(the test shortens `headersTimeout` through a seam and watches for the server's own close, so an
+unarmed timeout fails it), a `Content-Length` + `Transfer-Encoding` request refused rather than
+interpreted twice, a smuggled second request line answered at most once and never successfully, a
+truncated upload that starts no generation, and a torn-down server that answers nothing further.
+
+**Manual real-model smoke — DONE 2026-08-18** on a real attached prepared drive (H:, "lite"
+edition created 2026-06-30, encrypted workspace with live data, the pinned **b9849 vulkan**
+engine with a recorded hash), against `gemma4-e2b-it-qat-q4` started via rung 1 on **GPU**.
+The owner unlocked the vault and drove the consent dialog; the checks ran against the real
+listener. Results:
+
+| Leg | Result |
+|---|---|
+| Default-off, workspace unlocked | nothing listening on 4980 (connection refused) |
+| Consent dialog → enable | listener up, `Local API listening {"port":4980}` |
+| Unauthenticated request | **401** |
+| `GET /v1/models` authenticated | 200, real model id + `context_window: 8192`, `Server: HilbertRaum/0.1.57`, zero CORS headers |
+| Non-streaming completion | 200 `chat.completion`, role assistant, content exactly `SMOKE_OK`, `finish_reason: stop`, 1528 ms |
+| Streaming completion | 11 frames, role-first delta, `finish_reason` frame, `[DONE]` last, answer assembled coherently |
+| Host / Origin / method / type | foreign Host 403 · absent Host 403 · `127.0.0.1.evil.com` 403 · web Origin 403 · OPTIONS 403 with no CORS · `text/plain` 415 · `application/json; charset=utf-8` 200 · unknown route 404 · `tools` 400 `unsupported_field` |
+| **O5 dual loopback** | BOTH `http://[::1]:4980` and `http://localhost:4980` → 200. On this Win11 box `localhost` resolves to `::1` first, so a v4-only bind would have failed every client that does not address-iterate — the decision vindicated on hardware, not from documentation |
+| Endurance | 4 consecutive ~10 000-char streams (14–16 s each) plus one 39.6 s / 8 105-char / 1 456-frame stream, all clean — the long-generation path Node's 300 s `requestTimeout` default would have killed |
+| **D8 pre-emption** | an in-app turn cut an external stream mid-generation (4 746 chars in): in-band `preempted_by_user`, and `[DONE]` **correctly absent** — the F-02 class demonstrably absent |
+| **D7 lock kill** | external stream ended `server_stopped` at 16:48:15.240; `Workspace locked (sidecars stopped)` logged at 16:48:15.689 — the endpoint died **449 ms BEFORE** the vault teardown, i.e. the pinned stop-first ordering, and the code was `server_stopped` not `preempted_by_user` (the P3 stopping-latch distinction). Port refused afterwards |
+
+The access key was read from the decrypted working DB rather than pasted anywhere, so the real
+auth path was exercised (401 vs 200) instead of being switched off, and the value never entered
+a transcript or a file.
+
+(The `LLAMA_API_KEY` env acceptance had already been verified directly on the pinned b9849 build
+during P1 — completions 401 without the key, 200 with it; only `/health` and `/v1/models` are
+auth-exempt upstream on that pin.) The Settings card and its consent dialog were also eyeballed
+offscreen in **both languages**; German holds at ~30% text expansion. Still not covered by any
+automated or manual pass: the key-off and regenerate confirmation dialogs were not captured
+(single-paragraph bodies), and no packaged-build smoke was run — the smoke above was a dev run
+pointed at the drive via `HILBERTRAUM_DRIVE_ROOT`.
+
+### §-anchor legend (historical plan citations)
+
+The wave's working paper is gone; its anchors resolve here:
+
+| Plan citation | Resolves to |
+|---|---|
+| `plan §0` (D1–D9) | §2 above |
+| `plan §0` (O1–O6) | §3 above |
+| `plan §1` (architecture overview) | §1 above |
+| `plan §3 P1` (runtime hardening) | §4 above + `security-model.md` "Sidecar requests are authenticated" |
+| `plan §3 P2` (settings/token/policy) | §6 above + `data-contracts.md` |
+| `plan §3 P3` (LocalApiServer) | §5 above + `data-contracts.md` |
+| `plan §3 P4` (Settings UX) | §6 above |
+| `plan §3 P5` (promise accuracy, threat model, docs) | `PRIVACY.md`, `SECURITY.md`, `security-model.md` "The fifth threat", `user-guide.md`, `troubleshooting.md` |
+| `plan §3 P6` (hardening, closeout) | §7–§9 above |
+| `plan §4` (the pin set) | §9 above |
+| `plan §7` (audit ledger A1–A10) | §8 above |
+| `plan §8` (six-persona ledger) | §8 above |
 
 ## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
 

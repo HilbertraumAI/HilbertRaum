@@ -170,17 +170,31 @@ function stripCreatedAt<T extends object>(o: T): Omit<T, 'created_at'> {
   return rest as Omit<T, 'created_at'>
 }
 
+/** Extract the dev/commercial variable assignments from the script's REAL
+ *  `if [[ $DEV -eq 1 ]] … else … fi` branch — hardcoding the expected values here would
+ *  let a flipped branch (e.g. a commercial drive shipping `ALLOW_LOCAL_API=true`,
+ *  violating owner decision O4) stay green (review 2026-08-18). */
+function parseShDevBranch(src: string, dev: boolean): Record<string, string> {
+  const m = src.match(/if \[\[ \$DEV -eq 1 \]\]; then\n([\s\S]*?)\nelse\n([\s\S]*?)\nfi/)
+  expect(m, 'prepare-drive.sh $DEV branch not found').not.toBeNull()
+  const branch = dev ? m![1] : m![2]
+  const out: Record<string, string> = {}
+  for (const am of branch.matchAll(/([A-Z_]+)=(\S+?)(?:;|\s|$)/g)) out[am[1]] = am[2]
+  expect(Object.keys(out).length, 'no assignments parsed from the $DEV branch').toBeGreaterThan(0)
+  return out
+}
+
 /** Parse a bash here-doc JSON body (DRIVE_JSON/POLICY_JSON), substituting the dev-mode
- *  shell vars the script computes above, then JSON.parse it. */
+ *  shell vars from the script's ACTUAL branch assignments, then JSON.parse it. */
 function parseShJson(src: string, varName: string, dev: boolean): Record<string, unknown> {
   const m = src.match(new RegExp(`${varName}=\\$\\(cat <<EOF\\n([\\s\\S]*?)\\nEOF`))
   expect(m, `${varName} here-doc not found`).not.toBeNull()
-  // The script sets these booleans from the --dev branch (lines ~68-72).
-  const subs: Record<string, string> = dev
-    ? { CREATED_AT: 'x', ENC_REQUIRED: 'false', PLAINTEXT: 'true', ALLOW_UNVERIFIED: 'true', REQUIRE_SHA: 'false' }
-    : { CREATED_AT: 'x', ENC_REQUIRED: 'true', PLAINTEXT: 'false', ALLOW_UNVERIFIED: 'false', REQUIRE_SHA: 'true' }
+  const subs: Record<string, string> = { CREATED_AT: 'x', ...parseShDevBranch(src, dev) }
   let body = m![1]
-  for (const [k, v] of Object.entries(subs)) body = body.replaceAll(`$${k}`, v)
+  // Longest names first so e.g. $ALLOW_LOCAL_API is never half-replaced by a prefix var.
+  for (const k of Object.keys(subs).sort((a, b) => b.length - a.length)) {
+    body = body.replaceAll(`$${k}`, subs[k])
+  }
   return JSON.parse(body) as Record<string, unknown>
 }
 

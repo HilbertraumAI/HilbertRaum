@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { cpus } from 'node:os'
 import { join } from 'node:path'
@@ -371,14 +372,62 @@ const HEALTH_PROBE_TIMEOUT_MS = 3_000
 /** Keep only the last N chars of captured stderr (enough to show the failing reason). */
 const STDERR_TAIL_MAX = 4000
 
+/**
+ * API-key redaction for sidecar stderr — two layers at DIFFERENT points, deliberately
+ * (review 2026-08-18: an earlier design ran both per chunk, and the generic pass mangled
+ * a chunk-split key's first half so the exact pass could never reassemble and remove the
+ * remainder — a 44-hex-char fragment survived every pass while tests stayed green):
+ *
+ *  - `redactExactKey` runs at the DRAIN over a sliding hold-back window (below), so the
+ *    known per-spawn key can never leave the drain — whole, chunk-split, or as an
+ *    escaped prefix — toward the tail OR the `onStderrData` observer.
+ *  - `redactSidecarSecrets` adds the generic `api…key <value>` form and runs ONCE at
+ *    read time on tail-derived sinks (start-failure errors → `gpuLastError`, the audit
+ *    trail, the app log, the support-log export), guarding a future pin that echoes some
+ *    other secret shape. Only value-shaped tokens (≥8 chars) are candidates —
+ *    llama-server's routine "api_keys: 1 keys loaded" count line and prose like
+ *    "set LLAMA_API_KEY to …" must survive un-mangled.
+ */
+export function redactExactKey(text: string, key: string | null): string {
+  return key ? text.split(key).join('[redacted]') : text
+}
+
+export function redactSidecarSecrets(text: string, key: string | null): string {
+  const exact = redactExactKey(text, key)
+  return exact.replace(/(api[-_]?key\S*[\s:=]+)(?!\[redacted\])(\S{8,})/gi, '$1[redacted]')
+}
+
+/**
+ * Partial-line hold-back at the stderr drain: published text cannot be un-published, so
+ * the drain publishes only COMPLETE lines and carries the trailing partial line until
+ * its newline arrives. A chunk-split key always lives inside a partial line (hex holds
+ * no newline), so by the time any line publishes, the exact-key pass has seen the whole
+ * key and removed it — while complete lines (offload reports, bind errors) flow with
+ * unchanged timing. Tail reads flush the carry (`redactedTail`), so error messages never
+ * lose a final unterminated line. The cap force-publishes a pathological newline-less
+ * stream so the carry cannot grow without bound.
+ */
+const STDERR_CARRY_MAX = 4096
+
 export class LlamaServer {
   port: number | null = null
+  /**
+   * Per-spawn API key the child requires on every request (llama-server's `LLAMA_API_KEY`,
+   * verified enforced on the pinned build). Hex so random material can never collide with
+   * substring assertions on joined argv. Regenerated on each spawn; never leaves the main
+   * process, never appears in argv (visible in process lists) or in `process.env` (which
+   * every other child would inherit).
+   */
+  private apiKey: string | null = null
   private child: ChildProcessLike | null = null
   private spawnError: Error | null = null
   private exited = false
   private exitCode: number | null = null
   private exitSignal: string | null = null
+  /** Published (exact-key-redacted) stderr, capped at STDERR_TAIL_MAX. */
   private stderrTail = ''
+  /** The held-back last ≤STDERR_REDACT_HOLDBACK chars — see the hold-back note above. */
+  private stderrCarry = ''
   /** True once /health reported ready — gates the unexpected-exit hook. */
   private ready = false
   /** True while stop() is tearing the child down — an exit then is EXPECTED. */
@@ -448,10 +497,17 @@ export class LlamaServer {
     return `http://${this.host}:${this.port}`
   }
 
-  /** Loopback fetch against this server (exempt from the offline guard by design). */
+  /** Loopback fetch against this server (exempt from the offline guard by design).
+   *  Sole HTTP chokepoint for every consumer — the per-spawn API key is injected here,
+   *  so no call site can reach the child unauthenticated or needs to know the key. */
   fetch(path: string, init?: RequestInit): Promise<Response> {
     if (this.port == null) throw new Error('llama-server is not started')
-    return this.fetchImpl(`${this.baseUrl()}${path}`, init)
+    if (this.apiKey == null) return this.fetchImpl(`${this.baseUrl()}${path}`, init)
+    // Headers-merge form: call sites pass plain object literals today, but a Headers
+    // instance or entries array must keep working too.
+    const headers = new Headers(init?.headers)
+    headers.set('authorization', `Bearer ${this.apiKey}`)
+    return this.fetchImpl(`${this.baseUrl()}${path}`, { ...init, headers })
   }
 
   /**
@@ -509,6 +565,7 @@ export class LlamaServer {
     this.exitCode = null
     this.exitSignal = null
     this.stderrTail = ''
+    this.stderrCarry = ''
     this.ready = false
     this.stopping = false
     this.port = await this.findPort(this.host)
@@ -518,11 +575,17 @@ export class LlamaServer {
     // block a chatty `llama-server`. stderr is piped AND drained (below): draining prevents
     // the same deadlock, and the captured tail explains a failed start (e.g. a port
     // conflict's "bind: address already in use").
+    // Per-spawn API key, delivered via CHILD-SCOPED env only: argv is banned (visible to
+    // any same-user process list, and llama-server echoes resolved params to stderr), and
+    // the parent's own `process.env` must stay clean (whisper-cli, tar, and the GPU probe
+    // would inherit it). The spread copies process.env for THIS child only.
+    this.apiKey = randomBytes(32).toString('hex')
     const child = this.spawn(this.opts.binPath, this.buildArgs(this.port), {
       stdio: ['ignore', 'ignore', 'pipe'],
       // REL-7: never flash a console window on Windows for this high-frequency spawn (every
       // model start), matching the tar / transcriber / runtime-download spawns. No-op off Windows.
-      windowsHide: true
+      windowsHide: true,
+      env: { ...process.env, LLAMA_API_KEY: this.apiKey }
     })
     this.child = child
     // CODE-11: make the child reachable by the crash-exit reap for as long as it lives.
@@ -530,12 +593,23 @@ export class LlamaServer {
     // shared `runtime/llama.cpp/<os>/` binary, so it registers under the llama_cpp family.
     registerSidecarChild(child.pid, 'llama_cpp')
     child.stderr?.on('data', (chunk: unknown) => {
-      const text = String(chunk)
-      this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_MAX)
-      try {
-        this.opts.onStderrData?.(text)
-      } catch {
-        /* observability only — never break the stderr drain */
+      // Exact-key redaction over carry + chunk, so the key can never leave the drain
+      // toward the tail OR the observer — whole, chunk-split, or as a prefix (see the
+      // partial-line hold-back note above). Re-passing carried text is safe: a partial
+      // key is untouched by the exact match until it completes, and '[redacted]' never
+      // reassembles into key material.
+      const combined = redactExactKey(this.stderrCarry + String(chunk), this.apiKey)
+      let cut = combined.lastIndexOf('\n') + 1 // 0 when no complete line yet
+      if (combined.length - cut > STDERR_CARRY_MAX) cut = combined.length
+      const published = combined.slice(0, cut)
+      this.stderrCarry = combined.slice(cut)
+      if (published.length > 0) {
+        this.stderrTail = (this.stderrTail + published).slice(-STDERR_TAIL_MAX)
+        try {
+          this.opts.onStderrData?.(published)
+        } catch {
+          /* observability only — never break the stderr drain */
+        }
       }
     })
     child.once('error', (err: unknown) => {
@@ -557,7 +631,7 @@ export class LlamaServer {
           this.opts.onUnexpectedExit?.({
             exitCode: this.exitCode,
             exitSignal: this.exitSignal,
-            stderrTail: this.stderrTail
+            stderrTail: this.redactedTail()
           })
         }
       }
@@ -574,7 +648,7 @@ export class LlamaServer {
         this.opts.onUnexpectedExit?.({
           exitCode: this.exitCode,
           exitSignal: this.exitSignal,
-          stderrTail: this.stderrTail
+          stderrTail: this.redactedTail()
         })
       }
     })
@@ -590,9 +664,16 @@ export class LlamaServer {
     })
   }
 
+  /** The captured stderr for tail-derived sinks: flushes the held-back carry (so the
+   *  final — usually most important — line is never missing) and applies the generic
+   *  api-key pattern once, at read time. Exact-key removal already happened at the drain. */
+  private redactedTail(): string {
+    return redactSidecarSecrets(this.stderrTail + this.stderrCarry, this.apiKey)
+  }
+
   /** A ` — last output: …` suffix from the captured stderr tail, or '' if none. */
   private stderrSuffix(): string {
-    const tail = this.stderrTail.trim()
+    const tail = this.redactedTail().trim()
     return tail ? ` — last output: ${tail}` : ''
   }
 

@@ -52,6 +52,7 @@ import type {
   ModelState,
   ModelVerifyProgress,
   PickDocumentsResult,
+  LocalApiConnectionInfo,
   PolicyStatus,
   PreflightResult,
   RuntimeInstallInfo,
@@ -88,6 +89,18 @@ const api = {
   // ---- Privacy / offline policy ----
   /** Effective privacy policy + derived network flags (policy ∧ setting). */
   getPolicy: (): Promise<PolicyStatus> => ipcRenderer.invoke(IPC.getPolicy),
+
+  // ---- Local API endpoint (opt-in loopback server) ----
+  // The toggles, the port, and the live status ride settings:update / app:getAppStatus;
+  // these three exist because the FULL access key must never reach the renderer.
+  /** Base URL to paste into a client + the masked key (never the full value). */
+  getLocalApiConnectionInfo: (): Promise<LocalApiConnectionInfo> =>
+    ipcRenderer.invoke(IPC.localApiConnectionInfo),
+  /** Copy the full key to the clipboard MAIN-side; resolves false if that failed. */
+  copyLocalApiKey: (): Promise<boolean> => ipcRenderer.invoke(IPC.localApiCopyKey),
+  /** Mint a new key and abort every external stream started under the old one. */
+  regenerateLocalApiToken: (): Promise<LocalApiConnectionInfo> =>
+    ipcRenderer.invoke(IPC.localApiRegenerateToken),
 
   // ---- Encrypted workspace lifecycle ----
   /** Current workspace state (uninitialized | locked | unlocked) for the unlock gate. */

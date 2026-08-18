@@ -399,3 +399,132 @@ describe('offline guarantee (core path: settings + status + policy)', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
+
+// ---- Local API policy ceiling (local-api wave P2 item 4; O3/O4 owner-ratified) ----------
+
+describe('local API policy ceiling (local-api P2)', () => {
+  it('postures: DEFAULT permits, STRICT denies, STANDALONE permits (O3)', async () => {
+    const { STANDALONE_POLICY } = await import('../../src/main/services/policy')
+    expect(DEFAULT_POLICY.network.allowLocalApi).toBe(true)
+    expect(STRICT_POLICY.network.allowLocalApi).toBe(false)
+    expect(STANDALONE_POLICY.network.allowLocalApi).toBe(true)
+  })
+
+  it('policy.json allow_local_api merges (restrict-only over DEFAULT); junk keeps the base', () => {
+    const off = parsePolicy('{"network":{"allow_local_api":false}}')
+    expect(off.network.allowLocalApi).toBe(false)
+    const junk = parsePolicy('{"network":{"allow_local_api":"yes"}}')
+    expect(junk.network.allowLocalApi).toBe(true) // non-boolean never widens or narrows
+  })
+
+  it('effective = policy AND setting: the ceiling always wins', async () => {
+    // Shared module (not main services): the P4 renderer card imports the SAME rule.
+    const { localApiEffectivelyEnabled } = await import('../../src/shared/local-api')
+    const allow = DEFAULT_POLICY
+    const deny = parsePolicy('{"network":{"allow_local_api":false}}')
+    expect(localApiEffectivelyEnabled(deny, true)).toBe(false) // policy off beats setting on
+    expect(localApiEffectivelyEnabled(allow, false)).toBe(false) // default-off setting holds
+    expect(localApiEffectivelyEnabled(allow, true)).toBe(true)
+    expect(localApiEffectivelyEnabled(deny, false)).toBe(false)
+  })
+
+  it('buildPolicyStatus carries the ceiling via policy.network.allowLocalApi (the card input)', () => {
+    // No 1:1 copy field on PolicyStatus (review 2026-08-18): consumers read the policy.
+    __resetPolicyCache()
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi-'))
+    writeFileSync(join(dir, 'policy.json'), '{"network":{"allow_local_api":false}}')
+    expect(buildPolicyStatus(dir, true).policy.network.allowLocalApi).toBe(false)
+    const dir2 = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi2-'))
+    expect(buildPolicyStatus(dir2, true).policy.network.allowLocalApi).toBe(true) // dev default
+  })
+
+  it('a drive whose policy PREDATES allow_local_api inherits the permissive default', () => {
+    // Owner decision 2026-08-18, taken after checking a REAL 2026-06-30 "lite" drive: every
+    // drive already in the field has a valid policy.json with no allow_local_api key, and
+    // inheriting a packaged build's STRICT base silently denied the feature on all of them.
+    // An ABSENT key now means "not yet decided" and inherits DEFAULT (permitted) — the setting
+    // is still default-off behind the consent dialog, so this permits, it does not enable.
+    __resetPolicyCache()
+    const legacy = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-legacy-'))
+    writeFileSync(join(legacy, 'drive.json'), '{"edition":"lite"}')
+    // Byte-for-byte the shape a pre-wave prepare-drive wrote: every other key present.
+    writeFileSync(
+      join(legacy, 'policy.json'),
+      JSON.stringify({
+        network: { allow_model_downloads: true, allow_update_checks: false },
+        workspace: { encryption_required: true, allow_plaintext_dev_mode: false },
+        models: { allow_unverified_models: false, require_manifest: true, require_sha256_match: true }
+      })
+    )
+    const packaged = loadPolicy(legacy, undefined, { isDev: false }).policy
+    expect(packaged.network.allowLocalApi).toBe(true)
+    // …while every OTHER key the file does state is still honored, strictly.
+    expect(packaged.workspace.encryptionRequired).toBe(true)
+    expect(packaged.workspace.allowPlaintextDevMode).toBe(false)
+    expect(packaged.models.requireSha256Match).toBe(true)
+    expect(packaged.network.allowUpdateChecks).toBe(false)
+  })
+
+  it('the absent-key rule holds for the SHARPEST shapes: {} and a missing network block', () => {
+    // Self-review of the P7 change: `asObject` turns a missing/non-object `network` into {},
+    // so these shapes all take the ABSENT path — the local API is permitted while every OTHER
+    // network field stays STRICT. That asymmetry is inherent to the owner's decision (absence
+    // means undecided) and is the documented footgun: a drive that wants the feature off must
+    // say so EXPLICITLY. Pinned here so nobody flips it silently in either direction.
+    for (const [label, body] of [
+      ['empty object', '{}'],
+      ['no network block', '{"workspace":{"encryption_required":true}}'],
+      ['non-object network', '{"network":"nope"}'],
+      ['null value', '{"network":{"allow_local_api":null}}']
+    ] as Array<[string, string]>) {
+      __resetPolicyCache()
+      const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-shape-'))
+      writeFileSync(join(dir, 'drive.json'), '{}')
+      writeFileSync(join(dir, 'policy.json'), body)
+      const net = loadPolicy(dir, undefined, { isDev: false }).policy.network
+      // `null` is present-but-not-a-boolean, so it fails CLOSED like any other junk value;
+      // the three genuinely ABSENT shapes are permitted.
+      expect(net.allowLocalApi, label).toBe(label !== 'null value')
+      // …and the rest of the network block still comes from STRICT in every shape.
+      expect(net.allowModelDownloads, label).toBe(false)
+      expect(net.allowUpdateChecks, label).toBe(false)
+    }
+  })
+
+  it('an EXPLICIT allow_local_api: false still denies, and junk fails CLOSED (not open)', () => {
+    // The permissive default applies ONLY to an absent key. O4 — commercial drives write an
+    // explicit false — must be unaffected, and a garbage value must never fail open.
+    __resetPolicyCache()
+    const denied = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-explicit-'))
+    writeFileSync(join(denied, 'drive.json'), '{}')
+    writeFileSync(join(denied, 'policy.json'), '{"network":{"allow_local_api":false}}')
+    expect(loadPolicy(denied, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
+
+    __resetPolicyCache()
+    const junk = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-junk-'))
+    writeFileSync(join(junk, 'drive.json'), '{}')
+    writeFileSync(join(junk, 'policy.json'), '{"network":{"allow_local_api":"no"}}')
+    // Present-but-not-a-boolean falls back to the STRICT base for a packaged build.
+    expect(loadPolicy(junk, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
+
+    // A MALFORMED file is a different path (parsePolicy returns the base) — still closed.
+    __resetPolicyCache()
+    const broken = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-broken-'))
+    writeFileSync(join(broken, 'drive.json'), '{}')
+    writeFileSync(join(broken, 'policy.json'), '{ this is not json')
+    expect(loadPolicy(broken, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
+    // And the STRICT constant itself is untouched — it is what a malformed file falls back to.
+    expect(STRICT_POLICY.network.allowLocalApi).toBe(false)
+  })
+
+  it('a packaged build fails CLOSED on a provisioned dir; standalone keeps the O3 posture', () => {
+    __resetPolicyCache()
+    // Provisioned (drive.json marker) + missing policy.json => STRICT => local API denied.
+    const provisioned = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi3-'))
+    writeFileSync(join(provisioned, 'drive.json'), '{}')
+    expect(loadPolicy(provisioned, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
+    // Unprovisioned app-data root => STANDALONE => permitted (setting still default-off).
+    const standalone = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi4-'))
+    expect(loadPolicy(standalone, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(true)
+  })
+})

@@ -13,6 +13,7 @@ import type { DocTaskManager } from './doctasks'
 import type { SkillRegistry } from './skills/registry'
 import type { VisionService } from './vision'
 import type { TranslateJobService } from './translation/jobs'
+import type { LocalApiServer } from './local-api/server'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 export interface AppContext {
@@ -125,6 +126,15 @@ export interface AppContext {
    * suspended (its next window would otherwise lazily respawn the just-killed server).
    */
   translateJobs?: TranslateJobService
+  /**
+   * The opt-in OpenAI-compatible loopback endpoint (local-api wave). Optional so partial
+   * test contexts stay valid. Exists only while the workspace is unlocked AND
+   * policy ∧ setting permit (D3/D7): started from the post-unlock seams via
+   * `maybeStartLocalApi`, stopped in `runLockTeardown`/`performShutdown` (it holds no
+   * child process — the listener dies with the app — but stop() aborts external streams
+   * and closes sockets deterministically).
+   */
+  localApi?: LocalApiServer
   /**
    * Fired by the in-app download manager when a model download completes (issue #40, all files in
    * place). The live wiring (main/index.ts) re-runs the availability selectors that composed to

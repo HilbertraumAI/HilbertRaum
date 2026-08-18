@@ -136,6 +136,110 @@ States: `unsupported→missing→checksum_failed→installed` (+`running` overla
 ✅ **`services/runtime/`** — `ModelRuntime` interface + `RuntimeManager` (single active runtime,
 restart on switch) + `MockRuntime` (health ok; `chatStream` stubbed until Phase 3). Factory swap →
 `LlamaRuntime` in Phase 10. `RuntimeStatus` shape per `shared/types.ts`.
+**Local-api wave P1 (additive):** `RuntimeChatOptions.lane?: 'in-app' | 'external'` (omitted =
+`'in-app'`) marks the admission lane; the manager wraps the factory-returned runtime in a
+generation-gate decorator (`active()` hands out the decorated instance).
+**`RuntimeManager.isExternallyBusy()` is the external-admission predicate** (any in-flight
+generation OR no active runtime — fail closed, covers the start window + #109 warm-up);
+`isGenerating()` is the narrower any-lane read. `RuntimeManager.setExternalPreemption(hook)`
+registers the local-API admission's abort hook — fired on EVERY in-app generation entry, then the
+gate awaits external teardown, bounded ~5 s (D8). Gate counts are epoch-reset on every model
+start/stop (leak self-heal). `ExternalGenerationBusyError` is the typed same-frame refusal an
+external-lane `chatStream` pull throws while the in-app lane is active or another external stream
+runs (HTTP layer maps it to 429). External-lane consumer contract: the stream generator MUST be
+settled on every exit path (`finally { await gen.return() }`).
+`services/local-api/admission.ts`: `LocalApiAdmission.tryAdmit(id, signal?) → Admission | 'busy' |
+'locked' | 'aborted'`; `Admission = { id, signal, ready: Promise<boolean>, release() }` (queue
+depth 0–1, ~30 s cap; `abortAll(reason)` = pre-emption AND teardown; invariant `ready:false ⇒
+signal aborted`; holders release only AFTER the stream generator settles — releasing mid-teardown
+would spuriously refuse the queued waiter at promotion).
+**Local-api wave P2 (additive):** `AppSettings` gains `localApiEnabled: boolean` (default false,
+D3), `localApiPort: number` (default 4980, clamped [1024, 65535] by `updateSettings`), and
+`localApiTokenRequired: boolean` (default true, D4). **The access key itself never enters
+AppSettings** (`getSettings` spreads every stored row to the renderer on three IPC surfaces) — it
+lives in the dedicated single-row workspace-DB table `local_api_token (id=1 CHECK, token,
+updated_at)`, read/written ONLY by `services/local-api/token.ts` (`getOrCreateToken` /
+`rotateToken` / `maskToken` — `hr-` + 32 bytes base64url; masked form `hr-…<last4>` is all the
+renderer ever sees; encrypted at rest on an encrypted workspace, unreadable pre-unlock — D7).
+New audit event `local_api_toggled` (metadata `{ enabled: boolean }` ONLY — the audit-log export
+writes metadata verbatim to plaintext outside the vault); `localApiEnabled` +
+`localApiTokenRequired` join the `privacyKeys` settings_changed allowlist (booleans only, port
+excluded).
+**Local-api wave P3 — the exposed HTTP contract (what external apps code against):**
+`LocalApiServer` (`services/local-api/server.ts` + `handlers.ts`) binds **127.0.0.1 AND ::1**
+(O5; never 0.0.0.0; no-IPv6 machines degrade to v4-only), default port **4980** (O1).
+Every response carries `Server: HilbertRaum/<version>`. Pipeline order (security contract):
+Host (loopback names only; absent ⇒ 403) → Origin (`http(s)` non-loopback + literal `null` ⇒
+403; absent/custom app schemes pass; OPTIONS ⇒ 403; **no CORS header is ever emitted**) →
+content-type (POST = `application/json`, charset tolerated; else 415) → Bearer auth
+(constant-time; when token NOT required a present Authorization is IGNORED; both routes gated).
+Routes (D6 — nothing else): **GET `/v1/models`** → `{object:'list', data:[{id, object:'model',
+owned_by:'hilbertraum', context_window}]}`; never consumes an admission slot; distinct probe
+outcomes: 200 running · 503 `model_starting` + Retry-After · 503 `model_not_loaded`.
+**POST `/v1/chat/completions`**: messages = role∈{system,user,assistant} × string content
+(text-only content-parts flatten; image parts 400); capability fields (`tools`/`functions`,
+`audio`/`modalities`, `n>1`, `response_format.type:'json_object'`) → 400 `unsupported_field`
+naming the field; benign fields (`top_p`, penalties, `n:1`, `user`, `stream_options`) accepted
+and IGNORED (v1 does not pass them through — deviation noted in the wave log);
+`response_format.json_schema` → grammar-constrained decoding (`responseSchema[Name]`).
+External generations run `lane:'external'`, mode balanced (thinking OFF), `max_tokens` clamped
+to the launched context window. **Streaming**: role-first `chat.completion.chunk` → content
+deltas → `finish_reason` chunk → `data: [DONE]`. **Non-streaming** (SDK default): one
+`chat.completion` object. **`usage` is deliberately ABSENT in v1** (the SSE reader discards
+token counts; documented rather than fabricated). Client disconnect aborts the generation in
+both modes. Errors are OpenAI-shaped `{"error":{message,type,code}}`: 400 invalid/unsupported ·
+401 `invalid_api_key` · 403 permission (`forbidden_host`/`forbidden_origin`/`no_cors`) ·
+404 `unknown_route` · 413 `body_too_large` (counted bytes, 1 MB; Content-Length never trusted) ·
+415 · 429 `busy` + Retry-After (derived from measured tok/s; ~5–180 s, default 30) ·
+502 `runtime_unresponsive` · 503 `model_starting`/`model_not_loaded`/`workspace_locked`/
+`server_stopped`. **Pre-emption (D8)**: an in-app turn aborts the external stream → in-band
+`{"error":{type:'server_error', code:'preempted_by_user'}}` frame, stream closes **without**
+`[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way. Baseline
+limits: headersTimeout 10 s, requestTimeout DISABLED (CPU generations exceed 300 s; watchdogs +
+a 15 s SSE drain-timeout reclaim wedged slots), body-idle 30 s (body phase only),
+maxConnections 16. Lifecycle: `ctx.localApi` built in initBackend; started ONLY from the three
+post-unlock seams via `maybeStartLocalApi` when policy ∧ setting permit (D3/D7) — both seams
+delegate to `applyLocalApiSettings` (one gate); stopped first in `runLockTeardown` (best-effort,
+pinned) + `performShutdown` (pinned); start/stop/applySettings are SERIALIZED inside the server
+(a disable racing a mid-bind start acts on the settled state); `LOCAL_API_SETTINGS_KEYS`
+(`shared/local-api.ts`) is the change-detection list; a failed bind lands in
+`LocalApiStatus.lastError` (`'port_in_use' | 'start_failed' | null`) — the P4 card's error
+surface. Abort classification uses the shared `isAbortError` + typed `isExceedContextError`
+(never message regexes); a queued waiter re-resolves runtime + status after promotion (a model
+switch during the wait can never stream from the stopped runtime); reclaimed/truncated streams
+count as rejected, never served. `isStrictLoopbackHostname` (`shared/local-api.ts`) is the ONE
+enforcement-grade loopback classifier (Host + Origin; handles WHATWG's bracketed
+`URL.hostname` for IPv6).
+**Policy ceiling (O3/O4 owner-ratified 2026-08-18):** `PrivacyPolicy.network.allowLocalApi`
+(file key `allow_local_api`, restrict-only) — DEFAULT true / STRICT false / **STANDALONE true**
+(O3: without it the feature is policy-dead on every GitHub-release install; the setting stays
+default-off behind consent). There is deliberately NO `PolicyStatus` copy field: the
+Settings card reads the ceiling from `policy.network.allowLocalApi` and derives its effective
+state with `localApiEffectivelyEnabled(policy, setting)` — the SAME single derivation the P3
+start seams use (policy ∧ setting). `prepare-drive` writes
+`allow_local_api: false` explicitly on commercial drives, `true` on `--dev` drives (O4;
+`buildPolicyJson` is canonical, script-drift-pinned in both provisioning scripts).
+**Absent-key rule (owner decision 2026-08-18):** the key is newer than the drives in the field, so
+`mergePolicyObject` treats an ABSENT `allow_local_api` as "not yet decided" and inherits the
+permissive `DEFAULT_POLICY` value rather than the packaged build's STRICT base — otherwise every
+pre-wave drive would have been silently policy-denied. Distinct from two neighbours that still fail
+CLOSED: a value that is present but not a boolean falls back to the base, and a MALFORMED file never
+reaches the merge at all (`parsePolicy` returns the base, the M-4 rule).
+**Renderer surfaces (local-api wave P4).** `AppStatus.localApi?: LocalApiStatus | null` —
+additive + optional (the `translationDevice` shape), read live off `ctx.localApi?.status()`;
+null when no server object exists. `LocalApiStatus` = `{ running, port, tokenRequired,
+requestsServed, rejectedCount, lastError, externalActive, lastPreemptedAt }` — **counts and
+flags only**, nothing that could describe a caller or a prompt (D1); `externalActive` +
+`lastPreemptedAt` (epoch ms of the last D8 pre-emption) exist so the Settings card raises its
+concurrent-use warning only while it is TRUE, not permanently. Three IPC channels carry the
+access key, and nothing else does: `localApi:getConnectionInfo` →
+`LocalApiConnectionInfo { serverAddress, maskedKey }` (`hr-…abcd` — the full key never crosses
+IPC), `localApi:copyKey` → boolean (Electron `clipboard` write MAIN-side + a best-effort clear
+after 60 s if the clipboard still holds it), `localApi:regenerateToken` →
+`LocalApiConnectionInfo` (rotates AND calls `LocalApiServer.abortExternalRequests`, because
+auth is checked once at admission — SEC-F6). All three refuse via `workspaceAdmitsWork`.
+`localApiServerAddress(port)` and `MIN/MAX_LOCAL_API_PORT` live in `shared/local-api.ts` so the
+card, the write gate, and the docs cannot disagree about the pasteable URL or the clamp.
 ✅ **IPC** `src/main/ipc/registerModelIpc.ts` — `listModels(lazyVerify?: boolean)` (#138 D-7:
 the RT-3 param — `true` hashes only the active model on a cold cache; the gate-into-chat path
 passes it, the Models screen omits it to hash the full set), `selectModel`, `startRuntime`,

@@ -401,6 +401,19 @@ code, pre, kbd { font-family: var(--font-mono); }
    German sentences mid-word (i18n audit) — while over-long paths can still break. */
 .kv dd { margin: 0; overflow-wrap: anywhere; }
 
+/* Settings → Privacy → Local API card (local-api wave P4). The two connect rows pair a
+   monospace value with its copy button; the value wraps rather than pushing the button
+   off a narrow card, and the German strings (~30% longer) get the same room. */
+.local-api-connect { margin-top: var(--space-3); }
+.local-api-connect h3 { font-size: 14px; margin: 0 0 4px; }
+.local-api-value { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.local-api-value code { overflow-wrap: anywhere; }
+.local-api-port { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: var(--space-3); }
+.local-api-port label { margin: 0; }
+/* Scoped so it beats `.text-input { width: 100% }` (declared later in this file) — a port
+   is four digits and must not stretch across the card like a prose field. */
+.local-api-port .local-api-port-input { width: 10ch; }
+
 .toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; cursor: pointer; min-height: 24px; }
 .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
 

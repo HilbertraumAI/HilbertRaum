@@ -84,6 +84,80 @@ function renderDiagnostics() {
 
 afterEach(cleanup)
 
+describe('Settings → Diagnostics (advanced) — the local API row', () => {
+  it('reports the live counters, and shows the same line in the copy report', async () => {
+    const user = userEvent.setup()
+    stubDiagnostics({
+      getAppStatus: vi.fn(async () =>
+        appStatus({
+          appVersion: '0.1.20',
+          localApi: {
+            running: true,
+            port: 4980,
+            tokenRequired: true,
+            requestsServed: 7,
+            rejectedCount: 2,
+            lastError: null,
+            externalActive: false,
+            lastPreemptedAt: null
+          }
+        })
+      )
+    })
+    renderDiagnostics()
+    const line = 'On · port 4980 · 7 answered, 2 refused'
+    expect(await screen.findByText(line)).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Copy' })[0])
+    expect(lastCopied).toContain(line)
+  })
+
+  it('an endpoint that was switched off after a bind failure reads "Off", not "port in use"', async () => {
+    // The server clears `lastError` on a deliberate stop, so a stale failure can never
+    // outlive the feature being turned off (review 2026-08-18) — this is the surface that
+    // would otherwise keep repeating it, in the row AND in a support paste.
+    stubDiagnostics({
+      getAppStatus: vi.fn(async () =>
+        appStatus({
+          localApi: {
+            running: false,
+            port: null,
+            tokenRequired: true,
+            requestsServed: 0,
+            rejectedCount: 0,
+            lastError: null,
+            externalActive: false,
+            lastPreemptedAt: null
+          }
+        })
+      )
+    })
+    renderDiagnostics()
+    expect(await screen.findByText('Off')).toBeInTheDocument()
+    expect(screen.queryByText(/port number is already in use/)).not.toBeInTheDocument()
+  })
+
+  it('still names a bind failure while it is the live state', async () => {
+    stubDiagnostics({
+      getAppStatus: vi.fn(async () =>
+        appStatus({
+          localApi: {
+            running: false,
+            port: null,
+            tokenRequired: true,
+            requestsServed: 0,
+            rejectedCount: 0,
+            lastError: 'port_in_use',
+            externalActive: false,
+            lastPreemptedAt: null
+          }
+        })
+      )
+    })
+    renderDiagnostics()
+    expect(await screen.findByText('Off — the port number is already in use')).toBeInTheDocument()
+  })
+})
+
 describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
   it('copies the App & runtime details to the clipboard', async () => {
     const user = userEvent.setup()

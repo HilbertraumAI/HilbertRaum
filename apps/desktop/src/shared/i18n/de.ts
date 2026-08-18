@@ -129,7 +129,7 @@ export const de: Record<keyof typeof en, string> = {
     'wähle ein heruntergeladenes Modell und wähle dann ',
   'chat.noModel.hintAction': 'Dieses Modell verwenden',
   'chat.noModel.hintAfter':
-    '. Alles bleibt lokal — nichts wird heruntergeladen oder irgendwohin gesendet.',
+    '. Alles bleibt lokal — nichts wird heruntergeladen oder ins Internet gesendet.',
   'chat.noModel.stillLoading':
     'Wenn du die App gerade erst geöffnet hast, wird dein ausgewähltes Modell ' +
     'möglicherweise noch geladen — es geht hier automatisch weiter, sobald es bereit ist.',
@@ -144,7 +144,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.empty.title': 'Stell eine Frage — oder frag deine Dokumente.',
   'chat.empty.lineDocuments': 'Antworten kommen aus deinen Dokumenten und nennen ihre Quellen.',
   'chat.empty.lineChat':
-    'Antworten kommen vom Modell auf diesem Laufwerk — nichts verlässt es.',
+    'Antworten kommen vom Modell auf diesem Laufwerk — nichts verlässt dieses Gerät.',
   'chat.empty.fillTitle': 'Text ins Eingabefeld übernehmen',
   'chat.empty.addDocs': 'Dokumente hinzufügen, um Fragen dazu zu stellen',
   // Zwei Beispielsätze: der reine Chat hat keine Dokumente, daher allgemeine Fragen;
@@ -1522,7 +1522,7 @@ export const de: Record<keyof typeof en, string> = {
     'Internetzugriff ist für Modell-Downloads und Updates aktiviert.',
   'privacy.network.noFiles': 'Keine Fragen oder Dateien verlassen dieses Gerät.',
   'privacy.network.effective': 'Effektiver Zustand',
-  'privacy.network.effectiveOffline': 'Offline (keine Netzwerkzugriffe)',
+  'privacy.network.effectiveOffline': 'Offline (keine Internetzugriffe)',
   'privacy.network.effectiveAllowed': 'Netzwerk erlaubt',
   'privacy.network.byPolicy': 'Durch Richtlinie erlaubt',
   'privacy.network.policyYes': 'Ja',
@@ -1532,11 +1532,12 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.network.settingOff': 'Aus (Standard)',
   'privacy.network.telemetry': 'Telemetrie',
   'privacy.network.telemetryValue':
-    'Nichts verlässt dieses Laufwerk — es gibt kein Tracking, das man abschalten müsste',
+    'Nichts verlässt dieses Gerät — es gibt kein Tracking, das man abschalten müsste',
   'privacy.network.hint':
-    'Die App warnt vor jeder Netzwerkaktion. Die einzige optionale Netzwerkfunktion ist ' +
-    'das Herunterladen oder Aktualisieren von Modellen — standardmäßig aus und nur über ' +
-    'den Allgemein-Tab aktivierbar. Eine Laufwerksrichtlinie kann sie komplett deaktivieren.',
+    'Die App warnt vor jeder Internetaktion. Das Internet nutzt sie einzig zum Herunterladen ' +
+    'oder Aktualisieren von Modellen — standardmäßig aus und nur über den Allgemein-Tab ' +
+    'aktivierbar. Eine Laufwerksrichtlinie kann das komplett deaktivieren. Die lokale API ' +
+    'weiter unten ist eine getrennte, freiwillige Funktion, die nie ins Internet geht.',
   'privacy.data.title': 'Wo deine Daten liegen',
   'privacy.data.driveRoot': 'Laufwerksstamm',
   'privacy.data.workspace': 'Arbeitsbereich',
@@ -1567,8 +1568,95 @@ export const de: Record<keyof typeof en, string> = {
     'Passwort abgeleitet, nichts unverschlüsselt gespeichert. Lege keine sensiblen ' +
     'Dokumente im unverschlüsselten Modus auf einem geteilten oder Wechsellaufwerk ab.',
 
+  // ---- Einstellungen → Datenschutz → Karte „Lokale API“ (Local-API-Welle P4) ----
+  'settings.localApi.title': 'Lokale API',
+  'settings.localApi.lead':
+    'Andere Programme auf diesem Computer können Text an dein KI-Modell schicken und die ' +
+    'Antworten lesen. Das ist aus, bis du es einschaltest.',
+  'settings.localApi.toggle': 'Anderen Apps auf diesem Computer erlauben, mein KI-Modell zu nutzen',
+  'settings.localApi.hint':
+    'Die Verbindung verlässt diesen Computer nie — es wird nichts ins Internet gesendet.',
+  'settings.localApi.policyOff': 'Durch die Richtlinie deines Laufwerks deaktiviert.',
+  'settings.localApi.confirm.title': 'Anderen Apps erlauben, dein Modell zu nutzen?',
+  'settings.localApi.confirm.what':
+    'Andere Programme auf diesem Computer können dann Text an dein KI-Modell schicken und ' +
+    'dessen Antworten lesen.',
+  'settings.localApi.confirm.boundary':
+    'Diese Programme sehen deine Dokumente, Dateien und Unterhaltungen nicht, und über ' +
+    'HilbertRaum verlässt nichts diesen Computer. HilbertRaum kann aber nicht steuern, was ein ' +
+    'verbundenes Programm mit den erhaltenen Antworten macht — prüfe vor dem Verbinden, ob eine ' +
+    'App ihre Daten speichert oder synchronisiert.',
+  'settings.localApi.confirm.persists': 'Das bleibt an, bis du es ausschaltest.',
+  'settings.localApi.confirm.neverStored':
+    'Anfragen anderer Apps werden beantwortet und danach vergessen — sie landen weder im ' +
+    'Chatverlauf noch in den Protokollen.',
+  'settings.localApi.confirm.ack': 'Ich habe verstanden, was andere Apps dann tun können.',
+  'settings.localApi.confirm.cta': 'Einschalten',
+  'settings.localApi.connect.title': 'Andere App verbinden',
+  'settings.localApi.connect.hint':
+    'Füge diese beiden Werte in die App ein, die du verbinden willst. Die meisten Apps nennen ' +
+    'sie „Base URL“ und „API-Key“.',
+  'settings.localApi.connect.address': 'Serveradresse',
+  'settings.localApi.connect.key': 'Zugangsschlüssel',
+  'settings.localApi.connect.copy': 'Kopieren',
+  'settings.localApi.connect.copyAddressAria': 'Serveradresse kopieren',
+  'settings.localApi.connect.copyKeyAria': 'Zugangsschlüssel kopieren',
+  'settings.localApi.connect.copiedAddress': 'Serveradresse kopiert.',
+  'settings.localApi.connect.copiedKey':
+    'Kopiert — wird in einer Minute automatisch geleert. Der Zwischenablageverlauf oder die ' +
+    'Synchronisierung von Windows kann trotzdem Kopien behalten.',
+  'settings.localApi.connect.copyFailed': 'Kopieren nicht möglich. Bitte erneut versuchen.',
+  'settings.localApi.connect.noKey':
+    'Solange kein Schlüssel verlangt wird, brauchst du keinen Zugangsschlüssel.',
+  'settings.localApi.model.running': 'Ein Modell läuft — andere Apps bekommen Antworten.',
+  'settings.localApi.model.stopped':
+    'Es läuft kein Modell — andere Apps bekommen eine Fehlermeldung, bis du eines startest.',
+  'settings.localApi.status.port': 'Erreichbar über Port {port}.',
+  'settings.localApi.status.served.one': '{count} Anfrage bisher beantwortet.',
+  'settings.localApi.status.served.other': '{count} Anfragen bisher beantwortet.',
+  'settings.localApi.status.off': 'Läuft nicht.',
+  'settings.localApi.busyWarning':
+    'Gerade nutzt eine App dein Modell. Wenn du gleichzeitig hier chattest, wird beides ' +
+    'langsamer — dein eigener Chat hat immer Vorrang.',
+  'settings.localApi.preemptedWarning':
+    'Deine eigene Nutzung von HilbertRaum hat gerade die Anfrage einer App unterbrochen. Die ' +
+    'App kann es einfach erneut versuchen.',
+  'settings.localApi.token.toggle': 'Zugangsschlüssel verlangen',
+  'settings.localApi.token.hint': 'Empfohlen: eingeschaltet lassen.',
+  'settings.localApi.token.confirm.title': 'Zugangsschlüssel ausschalten?',
+  'settings.localApi.token.confirm.body':
+    'Ohne Zugangsschlüssel kann jedes Programm auf diesem Computer dein KI-Modell ungefragt ' +
+    'nutzen. Lass ihn an, außer eine App kann wirklich keinen Schlüssel eingeben.',
+  'settings.localApi.token.confirm.cta': 'Ausschalten',
+  'settings.localApi.token.regenerate': 'Neuen Schlüssel erstellen',
+  'settings.localApi.token.regenerate.title': 'Neuen Zugangsschlüssel erstellen?',
+  'settings.localApi.token.regenerate.body':
+    'Apps mit dem alten Schlüssel funktionieren nicht mehr, bis du den neuen Schlüssel dort ' +
+    'einfügst.',
+  'settings.localApi.token.regenerate.cta': 'Neuen Schlüssel erstellen',
+  'settings.localApi.token.regenerated': 'Neuer Zugangsschlüssel erstellt.',
+  'settings.localApi.token.regenerateFailed':
+    'Neuer Schlüssel konnte nicht erstellt werden. Bitte erneut versuchen.',
+  'settings.localApi.port.label': 'Portnummer',
+  'settings.localApi.port.hint':
+    'Ändere das nur, wenn ein anderes Programm diese Nummer schon benutzt. Zwischen 1024 und ' +
+    '65535.',
+  'settings.localApi.error.portInUse':
+    'Ein anderes Programm auf diesem Computer benutzt diese Nummer bereits — das kann auch ' +
+    'bedeuten, dass sich ein anderes Programm als HilbertRaum ausgibt. Füge deinen ' +
+    'Zugangsschlüssel deshalb nirgends ein, bevor das geklärt ist. Ändere die Nummer (zum ' +
+    'Beispiel {suggestion}) und schalte wieder ein; war eine App schon verbunden, trage dort ' +
+    'auch die neue Serveradresse ein.',
+  'settings.localApi.error.startFailed':
+    'Die lokale API konnte nicht gestartet werden. Details stehen im Tab „Diagnose“.',
+
   // ---- Settings → Diagnostics tab ----
   'diag.localOnly': 'Nur lokale Diagnose. Nichts hiervon wird jemals hochgeladen.',
+  'diag.localApi.label': 'Lokale API',
+  'diag.localApi.off': 'Aus',
+  'diag.localApi.running': 'An · Port {port} · {served} beantwortet, {rejected} abgelehnt',
+  'diag.localApi.portInUse': 'Aus — die Portnummer ist bereits belegt',
+  'diag.localApi.startFailed': 'Aus — Start nicht möglich',
   'diag.audit.runtime_started': 'Modell gestartet',
   'diag.audit.runtime_stopped': 'Modell gestoppt',
   'diag.audit.runtime_crashed': 'Modell unerwartet beendet',
@@ -1595,6 +1683,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.workspace_lock_failed': 'Sperrversuch fehlgeschlagen (Arbeitsbereich blieb geöffnet)',
   'diag.audit.workspace_password_changed': 'Arbeitsbereich-Passwort geändert',
   'diag.audit.settings_changed': 'Einstellungen geändert',
+  'diag.audit.local_api_toggled': 'Lokale API ein- oder ausgeschaltet',
   'diag.audit.policy_warning': 'Richtlinien-Hinweis',
   'diag.audit.offline_guard_violation': 'Netzwerkversuch bemerkt',
   'diag.audit.collection_created': 'Projekt erstellt',
@@ -1734,6 +1823,7 @@ export const de: Record<keyof typeof en, string> = {
   'common.close': 'Schließen',
   'common.cancel': 'Abbrechen',
   'common.remove': 'Entfernen',
+  'common.apply': 'Übernehmen',
   'indicator.offline': 'Lokal · Offline',
   'indicator.online': 'Lokal · Downloads erlaubt',
   'indicator.offlineDetail':
@@ -1744,6 +1834,9 @@ export const de: Record<keyof typeof en, string> = {
   // (Symbol + ein Wort), die volle Beruhigung steht im Tooltip.
   'indicator.short.offline': 'Offline',
   'indicator.short.online': 'Downloads an',
+  'indicator.withLocalApi': '{state} · API an',
+  'indicator.localApiDetail':
+    'Andere Apps auf diesem Computer können dein Modell nutzen. Nichts verlässt diesen Computer.',
 
   // ---- Shared password copy ----
   'password.mismatch': 'Die Passwörter stimmen nicht überein.',

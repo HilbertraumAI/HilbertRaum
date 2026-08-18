@@ -40,11 +40,13 @@ import {
 } from './services/vision'
 import { registerTranslateIpc } from './ipc/registerTranslateIpc'
 import { TranslateJobService } from './services/translation/jobs'
+import { createLocalApiServer, maybeStartLocalApi } from './services/local-api/lifecycle'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerEngineIpc } from './ipc/registerEngineIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
+import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
 import { RuntimeManager } from './services/runtime'
 import { createGpuCrashAutoFallback, createSelectingRuntimeFactory } from './services/runtime/factory'
@@ -405,6 +407,10 @@ function initBackend(): void {
     // the same lock teardown would get a fresh controller and respawn the suspended sidecar.
     isWorkspaceLocking: () => workspace.isLocking()
   })
+  // The opt-in local API endpoint (local-api wave). Built here — not inside an IPC
+  // registrar — so the lock/quit teardowns reach it via `ctx.localApi`. It binds nothing
+  // until a post-unlock seam runs `maybeStartLocalApi` AND policy ∧ setting permit (D3/D7).
+  ctx.localApi = createLocalApiServer(ctx as AppContext, app.getVersion())
   // Issue #40: a completed in-app model download re-runs the translation selector, so the
   // Translate screen stops claiming the model is missing the moment the GGUF lands — no restart.
   // Only a NULL slot or a `startFailed`-latched instance is ever re-composed (BE-7, full-audit
@@ -470,6 +476,7 @@ function initBackend(): void {
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
   registerAuditIpc(ctx)
+  registerLocalApiIpc(ctx)
 
   // Spec §2.1 first-run benchmark: a plaintext-dev workspace is already open at
   // startup — benchmark it in the background if it never was. Encrypted workspaces get
@@ -479,6 +486,9 @@ function initBackend(): void {
   // restarted app matches what the Home screen shows. Encrypted workspaces do this
   // after unlock/create (registerWorkspaceIpc) — settings are unreadable until then.
   maybeAutoStartActiveModel(ctx)
+  // Plaintext-dev post-unlock seam for the local API (encrypted workspaces start it
+  // after unlock/create in registerWorkspaceIpc); no-op unless policy ∧ setting permit.
+  maybeStartLocalApi(ctx as AppContext)
 
   // Log the offline posture and install a defensive tripwire that flags any
   // attempt to reach a REMOTE host while offline (loopback is exempt — dev renderer +
@@ -628,6 +638,10 @@ app.on('will-quit', (event) => {
 process.on('uncaughtException', (err) => {
   try {
     log.error('Uncaught exception', String(err))
+    // Local API: the listener is IN-PROCESS (no orphan risk — it dies with exit(1)); the
+    // fire-and-forget stop is only so live external sockets abort instead of dangling
+    // until the OS reaps them. Never awaited on a crash path.
+    void ctx?.localApi?.stop().catch(() => {})
     detachVaultKey() // flush the encrypted log before lock() zeroes the key
     ctx?.workspace.shutdown()
   } catch {

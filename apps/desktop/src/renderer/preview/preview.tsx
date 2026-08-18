@@ -23,6 +23,7 @@ import { DocumentsScreen } from '../screens/DocumentsScreen'
 import { ModelsScreen } from '../screens/ModelsScreen'
 import { SettingsScreen } from '../screens/SettingsScreen'
 import { TranslateScreen } from '../screens/TranslateScreen'
+import { LocalApiCard } from '../screens/settings/LocalApiCard'
 import '../tokens.css'
 import '../styles.css'
 
@@ -140,6 +141,23 @@ const overrides: Record<string, unknown> = {
     // full offload vs the partial-offload (~CPU speed) form vs forced CPU. Other cases keep
     // the old minimal shape (translationAvailable stays falsy so e.g. `documents` is unchanged).
     const c = new URLSearchParams(location.search).get('case') ?? ''
+    // local-api wave P4: the Settings card's live counters + the D5 concurrent-use state.
+    if (c.startsWith('local-api')) {
+      return {
+        ready: true,
+        machineRamGb: 32,
+        localApi: {
+          running: true,
+          port: 4980,
+          tokenRequired: true,
+          requestsServed: 12,
+          rejectedCount: 1,
+          lastError: null,
+          externalActive: c.includes('busy'),
+          lastPreemptedAt: null
+        }
+      }
+    }
     if (!c.startsWith('translate-device')) return { ready: true, machineRamGb: 32 }
     const translationDevice =
       c === 'translate-device-partial'
@@ -199,6 +217,10 @@ const overrides: Record<string, unknown> = {
     }
     return { ...DEFAULT_SETTINGS, activeModelId: 'active-running', lastBenchmark: bench }
   },
+  getLocalApiConnectionInfo: async () => ({
+    serverAddress: 'http://127.0.0.1:4980/v1',
+    maskedKey: 'hr-…7f3q'
+  }),
   getPolicy: async () => null,
   getEngineStatus: async () => null,
   getRuntimeStatus: async () => {
@@ -244,6 +266,28 @@ const overrides: Record<string, unknown> = {
 )
 
 const noop = (): void => {}
+
+/** A permissive policy for the local-api cases — the ceiling is allowed, so the card renders
+ *  its live state rather than the disabled-with-reason form. */
+const PREVIEW_POLICY: PolicyStatus = {
+  policy: {
+    network: {
+      allowModelDownloads: false,
+      allowUpdateChecks: false,
+      allowTelemetry: false,
+      allowLocalApi: true
+    },
+    workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
+    models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
+  },
+  policyFilePresent: true,
+  driveFilePresent: true,
+  allowNetworkSetting: false,
+  networkAllowedByPolicy: false,
+  networkAllowed: false,
+  offlineMode: true,
+  telemetryAllowed: false
+}
 
 const CASES: Record<string, { label: string; node: JSX.Element }> = {
   // Issue #42 reopen: the muted device line under the Translate language bar (the chat-#36
@@ -530,6 +574,73 @@ CASES['chat-starting-progress'] = {
     </div>
   )
 }
+/** Clicks the card's master switch once after mount so the capture shows the CONSENT DIALOG
+ *  as the component really renders it (the alternative — restating the copy here — would drift
+ *  from the catalog the moment either changed). */
+function OpenedConsent(): JSX.Element {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      // Scoped to the case root and to the MASTER switch (the card has a second one for the
+      // access-key requirement, and a capture that silently missed the dialog would look like a
+      // deliberate screenshot of the card).
+      const root = document.querySelector('[data-preview-case]')
+      const el = root?.querySelector('input[role="switch"]')
+      if (el instanceof HTMLInputElement) el.click()
+      else console.warn('OpenedConsent: no switch found — the capture will show no dialog')
+    }, 60)
+    return () => clearTimeout(timer)
+  }, [])
+  return (
+    <LocalApiCard policy={PREVIEW_POLICY} settings={DEFAULT_SETTINGS} onSettingsChanged={noop} />
+  )
+}
+
+// local-api wave P4: the Settings → Privacy "Local API" card in its two loud states — ON with
+// the connect block + neutral status, and ON while an app is actually generating (the only
+// moment the D5 warning is true). Both render in DE too: the card + dialog strings are the
+// ~30%-expansion class, and the connect rows pair a monospace value with a copy button.
+CASES['local-api'] = {
+  label: 'Settings → Privacy — Local API card (on, idle)',
+  node: (
+    <div style={{ width: 820 }}>
+      <LocalApiCard
+        policy={PREVIEW_POLICY}
+        settings={{ ...DEFAULT_SETTINGS, localApiEnabled: true }}
+        onSettingsChanged={noop}
+      />
+    </div>
+  )
+}
+CASES['local-api-busy'] = {
+  label: 'Settings → Privacy — Local API card (an app is generating right now)',
+  node: (
+    <div style={{ width: 820 }}>
+      <LocalApiCard
+        policy={PREVIEW_POLICY}
+        settings={{ ...DEFAULT_SETTINGS, localApiEnabled: true }}
+        onSettingsChanged={noop}
+      />
+    </div>
+  )
+}
+CASES['local-api-consent'] = {
+  label: 'Settings → Privacy — Local API consent dialog (the trust surface)',
+  node: (
+    <div style={{ width: 820 }}>
+      <OpenedConsent />
+    </div>
+  )
+}
+CASES['local-api-consent-de'] = {
+  ...CASES['local-api-consent'],
+  label: `${CASES['local-api-consent'].label} — DE`
+}
+CASES['local-api-de'] = { ...CASES['local-api'], label: `${CASES['local-api'].label} — DE` }
+CASES['local-api-busy-de'] = {
+  ...CASES['local-api-busy'],
+  label: `${CASES['local-api-busy'].label} — DE`
+}
+
 CASES['skill-info-card-de'] = { ...CASES['skill-info-card'], label: `${CASES['skill-info-card'].label} — DE` }
 CASES['context-meter-de'] = { ...CASES['context-meter'], label: `${CASES['context-meter'].label} — DE` }
 CASES['models-de'] = { ...CASES.models, label: `${CASES.models.label} — DE` }
@@ -860,7 +971,19 @@ overrides.listDocuments = async () => (isMkt() ? mktDocuments() : DOCUMENTS)
 overrides.getPolicy = async () =>
   isMkt()
     ? ({
-        policy: {},
+        // Minimal but SHAPED policy: renderer code reading policy.network.* (e.g. the
+        // local-API card's allowLocalApi ceiling) must see real booleans, not undefined
+        // through the cast (review 2026-08-18). Commercial posture: local API denied.
+        policy: {
+          network: {
+            allowModelDownloads: true,
+            allowUpdateChecks: false,
+            allowTelemetry: false,
+            allowLocalApi: false
+          },
+          workspace: { encryptionRequired: true, allowPlaintextDevMode: false },
+          models: { allowUnverifiedModels: false, requireManifest: true, requireSha256Match: true }
+        },
         policyFilePresent: true,
         driveFilePresent: true,
         allowNetworkSetting: false,

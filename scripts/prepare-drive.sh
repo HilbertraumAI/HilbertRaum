@@ -96,9 +96,11 @@ DIRS=(
 )
 
 if [[ $DEV -eq 1 ]]; then
-  ENC_REQUIRED=false; PLAINTEXT=true; ALLOW_UNVERIFIED=true; REQUIRE_SHA=false
+  ENC_REQUIRED=false; PLAINTEXT=true; ALLOW_UNVERIFIED=true; REQUIRE_SHA=false; ALLOW_LOCAL_API=true
 else
-  ENC_REQUIRED=true; PLAINTEXT=false; ALLOW_UNVERIFIED=false; REQUIRE_SHA=true
+  # Local API ships policy-DISABLED explicitly on commercial drives (owner decision O4,
+  # 2026-08-18) — the drive's policy author flips it on deliberately.
+  ENC_REQUIRED=true; PLAINTEXT=false; ALLOW_UNVERIFIED=false; REQUIRE_SHA=true; ALLOW_LOCAL_API=false
 fi
 
 CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -212,7 +214,8 @@ POLICY_JSON=$(cat <<EOF
 {
   "network": {
     "allow_model_downloads": true,
-    "allow_update_checks": false
+    "allow_update_checks": false,
+    "allow_local_api": $ALLOW_LOCAL_API
   },
   "workspace": {
     "encryption_required": $ENC_REQUIRED,

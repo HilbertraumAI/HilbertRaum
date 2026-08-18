@@ -135,10 +135,16 @@ $DriveJson = [ordered]@{
   allow_network_by_default = $false
 }
 
+# Local API (allow_local_api): commercial drives ship it policy-DISABLED explicitly
+# (owner decision O4, 2026-08-18) -- the drive's policy author flips it on deliberately.
+# Dev drives leave the ceiling open (the in-app setting is still default-off behind a
+# consent dialog either way). NOTE: no comments INSIDE the hashtable -- script-drift's
+# parser walks the literal keys.
 $PolicyJson = [ordered]@{
   network   = [ordered]@{
     allow_model_downloads = $true
     allow_update_checks   = $false
+    allow_local_api       = [bool]$Dev
   }
   workspace = [ordered]@{
     encryption_required     = (-not $Dev)

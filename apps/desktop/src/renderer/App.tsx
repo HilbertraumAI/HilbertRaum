@@ -110,6 +110,11 @@ const NAV_TOP: NavItem[] = [
 
 const NAV_BOTTOM: NavItem[] = [{ id: 'settings', labelKey: 'nav.settings', icon: 'settings' }]
 
+/** How often the rail indicator re-reads whether the local API is listening. Deliberately
+ *  slow: the state changes at most a few times a session, and the read is an in-memory
+ *  status snapshot — this exists so the indicator self-corrects, not to be timely. */
+const LOCAL_API_INDICATOR_POLL_MS = 10_000
+
 export function App(): JSX.Element {
   // The language provider wraps EVERYTHING, including the pre-unlock gate (which
   // resolves from the localStorage mirror / OS locale — i18n record §3.2).
@@ -149,6 +154,10 @@ function AppShell(): JSX.Element {
   // detail ("disabled by policy" vs. off by choice) lives on the Privacy & data tab the
   // indicator opens.
   const [offline, setOffline] = useState(true)
+  // Whether the opt-in local API endpoint is LISTENING right now — read from the same
+  // post-unlock/navigation refresh as the policy, so the rail indicator can state it
+  // instead of implying the model is reachable by nothing but this app (D1).
+  const [localApiOn, setLocalApiOn] = useState(false)
   // Set when the backend never came up (getWorkspaceState rejected). Faking 'unlocked'
   // here would render the full shell with every screen surfacing raw IPC errors.
   const [fatalError, setFatalError] = useState<string | null>(null)
@@ -188,6 +197,34 @@ function AppShell(): JSX.Element {
   useEffect(() => {
     if (gateVisible) window.api?.perfMark?.('gate_visible')
   }, [gateVisible])
+
+  // The rail indicator must never claim the opposite of reality (D1), and the two events
+  // that change this state are both invisible to a navigation-scoped read: the post-unlock
+  // start is fire-and-forget, and the Settings toggle happens while the user stays put on
+  // the Settings screen. So this one re-reads on a slow interval (and on window focus) —
+  // enough to be self-correcting, far too rare to be a poll worth optimizing.
+  useEffect(() => {
+    if (!unlocked) {
+      setLocalApiOn(false)
+      return
+    }
+    let active = true
+    const read = (): void => {
+      window.api
+        ?.getAppStatus()
+        .then((st) => active && setLocalApiOn(st.localApi?.running === true))
+        .catch(() => active && setLocalApiOn(false))
+    }
+    read()
+    const onFocus = (): void => read()
+    window.addEventListener('focus', onFocus)
+    const timer = setInterval(read, LOCAL_API_INDICATOR_POLL_MS)
+    return () => {
+      active = false
+      window.removeEventListener('focus', onFocus)
+      clearInterval(timer)
+    }
+  }, [unlocked])
 
   useEffect(() => {
     if (!unlocked) return
@@ -373,7 +410,13 @@ function AppShell(): JSX.Element {
             indicator at the foot of the rail, on EVERY screen. `offline` is the effective
             policy state owned by App, so a drive policy that forces downloads off reads
             "Offline" even with the toggle on. */}
-        <LocalIndicator variant="sidebar" offline={offline} onNavigate={navigate} t={t} />
+        <LocalIndicator
+          variant="sidebar"
+          offline={offline}
+          localApiOn={localApiOn}
+          onNavigate={navigate}
+          t={t}
+        />
       </nav>
 
       <main className="content">

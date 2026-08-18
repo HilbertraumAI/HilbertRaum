@@ -124,6 +124,17 @@ CREATE TABLE IF NOT EXISTS runtime_events (
   created_at TEXT NOT NULL
 );
 
+-- Local-API access key (local-api wave P2). Single row BY CONSTRAINT. Deliberately NOT a
+-- settings row: getSettings spreads every stored row to the renderer on three IPC
+-- surfaces, so the secret lives in its own main-process-only table
+-- (services/local-api/token.ts is the sole reader/writer). Inside the workspace DB, so
+-- it is encrypted at rest on an encrypted workspace and unreadable before unlock (D7).
+CREATE TABLE IF NOT EXISTS local_api_token (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  token TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Document organization (architecture.md "Document organization — design record" §3). A collection is
 -- the unifying primitive: Projects are collections; Library/Temporary are seeded
 -- built-ins; Archive is a lifecycle; Generated is a role/view. Membership never

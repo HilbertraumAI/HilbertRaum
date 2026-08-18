@@ -1,5 +1,6 @@
 import type { Db } from './db'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
+import { MAX_LOCAL_API_PORT, MIN_LOCAL_API_PORT } from '../../shared/local-api'
 
 /** Upper bound on any persisted string[] setting so a buggy/hostile renderer can't bloat the
  *  encrypted settings blob (`skillInfoSeen` is the shipping case; the element-wise validation
@@ -38,6 +39,11 @@ const MIN_CONTEXT_TOKENS = 2048
  *  silent cap, and a start that doesn't fit falls down the GPU ladder to CPU or fails with a
  *  friendly error rather than wedging the app. */
 export const MAX_CONTEXT_TOKENS_OVERRIDE = 131_072
+
+/** Bounds for `localApiPort` (local-api wave P2) — defined in shared/ so the Settings
+ *  card's number field and this write gate can never disagree. A value outside the range
+ *  is pulled to the nearest bound here. */
+export { MIN_LOCAL_API_PORT, MAX_LOCAL_API_PORT } from '../../shared/local-api'
 
 // Settings persistence on top of the key/value `settings` table (spec §8).
 // Each AppSettings field is stored as its own row so partial updates are clean.
@@ -129,6 +135,14 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     if (key === 'contextTokensOverride' && value !== null) {
       if (typeof value !== 'number' || !Number.isFinite(value)) continue
       toStore = Math.min(MAX_CONTEXT_TOKENS_OVERRIDE, Math.max(MIN_CONTEXT_TOKENS, Math.floor(value)))
+    }
+    // localApiPort: clamp into the valid loopback-bind range (the booleans of the
+    // local-api trio validate for free via the generic type gate above). A non-finite
+    // number is DROPPED, not defaulted — clobbering a customized port back to 4980 would
+    // silently break every configured client (the contextTokensOverride convention).
+    if (key === 'localApiPort') {
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue
+      toStore = Math.min(MAX_LOCAL_API_PORT, Math.max(MIN_LOCAL_API_PORT, Math.floor(value)))
     }
     if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
     if (key === 'theme' && value !== 'system' && value !== 'light' && value !== 'dark') continue

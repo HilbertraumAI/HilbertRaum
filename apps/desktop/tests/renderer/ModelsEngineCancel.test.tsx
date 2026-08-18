@@ -11,6 +11,7 @@ import {
   type PolicyStatus
 } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { makePolicyStatus } from '../helpers/status'
 
 // SH-1 (frontend audit 2026-08-09, #144): the engine download (multi-hundred-MB llama.cpp
 // fetch) had NO Cancel — cancelEngineDownload was exposed on the bridge with zero callers.
@@ -20,20 +21,10 @@ import { stubApi } from '../helpers/renderer'
 // the test drives the job to a terminal 'cancelled' state so nothing live leaks onward.
 
 function policy(): PolicyStatus {
-  return {
-    policy: {
-      network: { allowModelDownloads: true, allowUpdateChecks: false, allowTelemetry: false },
-      workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
-      models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
-    },
-    policyFilePresent: true,
-    driveFilePresent: true,
-    allowNetworkSetting: true,
-    networkAllowedByPolicy: true,
-    networkAllowed: true,
-    offlineMode: false,
-    telemetryAllowed: false
-  }
+  return makePolicyStatus({
+    network: { allowModelDownloads: true },
+    allowNetworkSetting: true
+  })
 }
 
 const engineMissing: EngineStatus = {
