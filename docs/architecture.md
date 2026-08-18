@@ -10129,10 +10129,11 @@ This record is the durable per-alert ledger; the DEP-1 record above holds the wa
 
 _The 2026-08-18 wave that made the loaded chat model available to **other programs on the same
 computer** over an opt-in loopback HTTP endpoint, and hardened the runtime it rides on. Six phases
-on branch `local-api-endpoint`, commit series `local-api-p1:`…`local-api-p6:`, squash-merged as
-PR #184. The working plan (`plans/local-api-endpoint-plan.md`) and its execution log were
-local-only working papers, never committed, and were deleted at close-out — this record and the
-per-phase commit messages are the surviving sources. **Citation rule (owner decision O6):** the
+on branch `local-api-endpoint`, commit series `local-api-p1:`…`local-api-p6:`, merged as PR #184.
+The working plan (`plans/local-api-endpoint-plan.md`) and its execution log were local-only
+working papers under a git-ignored `plans/` directory — never committed, and deleted when the
+wave PR merges, per the CLAUDE.md doc-lifecycle rule. This record and the per-phase commit
+messages are therefore the surviving sources. **Citation rule (owner decision O6):** the
 repo squash-merges, so durable references use **PR #184 + the `local-api-p<N>` prefix + a § of
 this record**, never a branch SHA. The security half of the design lives in
 `docs/security-model.md` ("The fifth threat: same-machine processes"); the wire contract lives in
@@ -10317,8 +10318,11 @@ rotation aborting in-flight streams; the gate counting all lanes on both the moc
 paths with `isGenerating()` failing closed; the counter surviving never-iterated and
 throws-before-yield generators; the TOCTOU probe; a **no-content sentinel** driven through the
 success and failure paths and grepped out of every log, console stream, error body, and status
-object; and hostile wire input (slow-loris, request smuggling, CRLF header injection, truncated
-upload, torn-down server).
+object; and hostile wire input — a slow-loris header phase cut off **by the server itself**
+(the test shortens `headersTimeout` through a seam and watches for the server's own close, so an
+unarmed timeout fails it), a `Content-Length` + `Transfer-Encoding` request refused rather than
+interpreted twice, a smuggled second request line answered at most once and never successfully, a
+truncated upload that starts no generation, and a torn-down server that answers nothing further.
 
 **Manual / owner-gated, recorded as such:** the real-model smoke against a live `llama-server`
 (the `LLAMA_API_KEY` env acceptance was verified directly on the pinned b9849 build during P1 —

@@ -37,7 +37,9 @@ interface Harness {
   logged: string[]
 }
 
-async function makeHarness(opts: { echoAnswer?: string } = {}): Promise<Harness> {
+async function makeHarness(
+  opts: { echoAnswer?: string; headersTimeoutMs?: number } = {}
+): Promise<Harness> {
   const logged: string[] = []
   const mgr = new RuntimeManager((startOpts) => ({
     modelId: startOpts.modelId,
@@ -68,6 +70,9 @@ async function makeHarness(opts: { echoAnswer?: string } = {}): Promise<Harness>
     admitsWork: () => true,
     estimateBusySeconds: () => 30,
     appVersion: '0.0.0-test',
+    headersTimeoutMs: opts.headersTimeoutMs,
+    // Without a matching sweep interval Node would not notice the expiry for 30 s.
+    connectionsCheckIntervalMs: opts.headersTimeoutMs != null ? 100 : undefined,
     // Capture EVERYTHING the server would write to the app log.
     log: {
       info: (msg, meta) => logged.push(`${msg} ${JSON.stringify(meta ?? null)}`),
@@ -181,16 +186,31 @@ describe('local API hardening — no content in any sink (D1)', () => {
 })
 
 describe('local API hardening — hostile wire input is bounded', () => {
-  it('a slow-loris header phase is cut off by the headers timeout, not left hanging', async () => {
-    const h = await makeHarness()
-    // Headers that never terminate: the server must close the socket itself. A 3 s read window
-    // proves it does not answer; the point is that the connection cannot be held indefinitely
-    // (headersTimeout is 10 s, deliberately shorter than any generation).
-    const answer = await raw(h.port, `GET /v1/models HTTP/1.1\r\nhost: 127.0.0.1:${h.port}\r\nx-a: 1`, {
-      holdMs: 1500
+  it('the SERVER cuts off a slow-loris header phase (headersTimeout really is armed)', async () => {
+    // A client-side read deadline would prove nothing — an empty read looks identical to a
+    // patient server. The seam shortens the real `headersTimeout` so the test can watch the
+    // SERVER hang up, and the assertion is the close itself: with the timeout unset (or set to
+    // 0, which disables it in Node) this test times out instead of passing.
+    const h = await makeHarness({ headersTimeoutMs: 250 })
+    const socket = net.connect(h.port, '127.0.0.1')
+    socket.on('error', () => {}) // an RST here is a valid way for the server to end it
+    await new Promise<void>((r) => socket.once('connect', r))
+    // Headers that never terminate: no blank line is ever sent.
+    socket.write(`GET /v1/models HTTP/1.1\r\nhost: 127.0.0.1:${h.port}\r\nx-a: 1`)
+    const chunks: Buffer[] = []
+    socket.on('data', (c) => chunks.push(c))
+
+    const closedByServer = await new Promise<boolean>((resolve) => {
+      socket.once('close', () => resolve(true))
+      const timer = setTimeout(() => resolve(false), 5000)
+      timer.unref?.()
     })
-    expect(answer).not.toContain('200')
-    // The listener is unharmed: a well-formed request right after still works.
+    socket.destroy()
+    expect(closedByServer).toBe(true)
+    // Whatever it said (Node answers 408 or simply hangs up), it never served the route.
+    expect(Buffer.concat(chunks).toString('utf8')).not.toContain('200 OK')
+
+    // …and the listener is unharmed: a well-formed request right after still works.
     const ok = await fetch(`${h.base}/v1/models`, { headers: authed(h.token) })
     expect(ok.status).toBe(200)
   })
@@ -216,30 +236,32 @@ describe('local API hardening — hostile wire input is bounded', () => {
     expect(answer).not.toContain('chatcmpl-')
   })
 
-  it('a header value with CRLF cannot inject a second header or response line', async () => {
+  it('a smuggled request line behind a header value is never answered as a second request', async () => {
     const h = await makeHarness()
-    // The Host check runs on the parsed value; an injected CRLF must not survive into the reply.
+    // The interesting attack is not a reflected header (the endpoint reflects none) — it is
+    // getting TWO requests interpreted from one socket write. A bare LF in the header block is
+    // the classic vector: if the parser accepted it, the trailing GET would be answered too.
     const answer = await raw(
       h.port,
-      [
-        'GET /v1/models HTTP/1.1',
-        `host: 127.0.0.1:${h.port}`,
-        'x-evil: a\r\nx-injected: yes',
-        `authorization: Bearer ${h.token}`,
-        'connection: close',
-        '',
-        ''
-      ].join('\r\n')
+      `GET /v1/models HTTP/1.1\r\nhost: 127.0.0.1:${h.port}\r\n` +
+        `authorization: Bearer ${h.token}\r\n` +
+        `x-evil: a\nGET /v1/models HTTP/1.1\nhost: 127.0.0.1:${h.port}\n` +
+        `authorization: Bearer ${h.token}\r\nconnection: close\r\n\r\n`
     )
-    expect(answer).not.toContain('x-injected')
-    // Whatever the parser decided, exactly ONE status line came back.
+    // Node's strict parser refuses the malformed header block outright — one answer, and it is
+    // a rejection. The pin that matters: never TWO successful answers from one write.
     expect(answer.match(/HTTP\/1\.1 \d\d\d/g)?.length ?? 0).toBeLessThanOrEqual(1)
+    expect(answer).not.toContain('"object":"list"')
+    expect(answer).toContain('400')
   })
 
   it('a body that stops mid-upload frees the slot instead of holding the model', async () => {
     const h = await makeHarness()
     const body = JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] })
     const socket = net.connect(h.port, '127.0.0.1')
+    // Without this, a server-side close inside the window below surfaces as an uncaught
+    // ECONNRESET that kills the vitest worker instead of failing an assertion.
+    socket.on('error', () => {})
     await new Promise<void>((r) => socket.once('connect', r))
     socket.write(
       [

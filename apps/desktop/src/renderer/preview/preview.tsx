@@ -580,8 +580,13 @@ CASES['chat-starting-progress'] = {
 function OpenedConsent(): JSX.Element {
   useEffect(() => {
     const timer = setTimeout(() => {
-      const el = document.querySelector('input[role="switch"]')
+      // Scoped to the case root and to the MASTER switch (the card has a second one for the
+      // access-key requirement, and a capture that silently missed the dialog would look like a
+      // deliberate screenshot of the card).
+      const root = document.querySelector('[data-preview-case]')
+      const el = root?.querySelector('input[role="switch"]')
       if (el instanceof HTMLInputElement) el.click()
+      else console.warn('OpenedConsent: no switch found — the capture will show no dialog')
     }, 60)
     return () => clearTimeout(timer)
   }, [])

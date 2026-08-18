@@ -60,6 +60,11 @@ export interface LocalApiServerDeps {
   // Test seams:
   queueWaitMs?: number
   drainTimeoutMs?: number
+  headersTimeoutMs?: number
+  /** Node only SWEEPS for expired header phases every connectionsCheckingInterval (30 s by
+   *  default), so a test that shortens headersTimeoutMs must shorten this too or it would wait
+   *  out the sweep. Test-only: production keeps Node's default. */
+  connectionsCheckIntervalMs?: number
 }
 
 const HEADERS_TIMEOUT_MS = 10_000
@@ -138,8 +143,16 @@ export class LocalApiServer {
     }
     const bind = (host: string, bindPort: number): Promise<http.Server> =>
       new Promise((resolve, reject) => {
-        const server = http.createServer(handler)
-        server.headersTimeout = HEADERS_TIMEOUT_MS
+        // connectionsCheckingInterval is a CONSTRUCTOR option (not a settable property): it is
+        // how often Node sweeps for expired header phases, so a test that shortens
+        // headersTimeout must shorten it too or wait out the 30 s default sweep.
+        const server = http.createServer(
+          this.deps.connectionsCheckIntervalMs != null
+            ? { connectionsCheckingInterval: this.deps.connectionsCheckIntervalMs }
+            : {},
+          handler
+        )
+        server.headersTimeout = this.deps.headersTimeoutMs ?? HEADERS_TIMEOUT_MS
         // Node's 300 s default kills legitimate multi-minute CPU generations (PERF-H1);
         // wedge detection lives in the app-side watchdogs + the drain timeout instead.
         server.requestTimeout = 0
