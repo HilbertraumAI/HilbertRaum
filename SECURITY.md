@@ -33,9 +33,11 @@ HilbertRaum is a **local-first, offline** application. Full details live in
 - **The one inbound surface is opt-in and loopback-bound** — the optional local API (Settings →
   Privacy & data) listens only on `127.0.0.1`/`::1`, is **off by default**, exists only while the
   workspace is unlocked, requires a Bearer access key by default, and can be forbidden outright by
-  drive policy. It validates the `Host` header, refuses `http(s)` web origins and `OPTIONS`,
-  never emits CORS headers, caps request bodies, and serves **completions only** — it has no route
-  to documents, conversations, or any other workspace data. There is no LAN mode and no setting
+  drive policy. It validates the `Host` header, refuses `http(s)` origins whose host is not
+  a loopback address, refuses `OPTIONS`, never emits CORS headers, and caps request bodies —
+  so browser JavaScript is structurally locked out. It serves **chat completions plus a
+  one-model listing and nothing else**: there is no route to documents, conversations, or any
+  other workspace data. There is no LAN mode and no setting
   that could produce one.
 - **The model sidecars authenticate their own requests** — each `llama-server` spawn is given a
   fresh random API key through its **environment** (never argv, so it is not visible in a process

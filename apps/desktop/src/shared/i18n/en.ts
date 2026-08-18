@@ -1186,7 +1186,7 @@ export const en = {
   'settings.network.title': 'Privacy & Offline Mode',
   'settings.network.allow': 'Allow internet access for model downloads and updates',
   'settings.network.hint':
-    'Off by default. When off, the app makes no network calls. Turning it on only enables ' +
+    'Off by default. When off, the app makes no internet calls. Turning it on only enables ' +
     'model downloads from the AI Model screen — each one asks for confirmation first, and a ' +
     'drive policy can keep downloads disabled entirely. Your prompts and documents never ' +
     'leave this device regardless of this setting.',
@@ -1489,9 +1489,10 @@ export const en = {
   'privacy.network.telemetry': 'Telemetry',
   'privacy.network.telemetryValue': 'Nothing leaves this device — there’s no tracking to turn off',
   'privacy.network.hint':
-    'The app warns before any network action. The only optional network feature is ' +
+    'The app warns before any internet action. The only thing it uses the internet for is ' +
     'downloading or updating models, which is off by default and must be enabled on the ' +
-    'General tab. A drive policy can disable it entirely.',
+    'General tab. A drive policy can disable it entirely. The Local API below is a separate, ' +
+    'opt-in feature that never touches the internet.',
   'privacy.data.title': 'Where your data lives',
   'privacy.data.driveRoot': 'Drive root',
   'privacy.data.workspace': 'Workspace',

@@ -908,7 +908,9 @@ value works — HilbertRaum always answers with the model you have running.
 - **A model has to be running.** The card tells you whether one is: if not, connected apps get an
   error until you start a model on the **AI Model** screen. The app never starts a model because an
   outside program asked.
-- **One outside request at a time.** A second one waits briefly, then is told to try again.
+- **One outside request at a time.** A second one waits up to about 30 seconds for the first to
+  finish, then is told to try again; anything beyond that is turned away immediately rather than
+  left hanging.
 - **Your own use always wins.** If you start a chat here while an app is generating, the app's
   request is interrupted — it gets a clear "interrupted, retry" answer, and the card tells you it
   happened. That is deliberate: the model is one resource and you are the one sitting in front of it.
@@ -933,9 +935,10 @@ request that is still streaming. Any app still holding the old key needs the new
 
 **If the port is taken**
 
-If another program already uses port 4980, the card says so and the endpoint does not start. Pick a
-different number (4981, for example) and switch it on again — and paste the new server address into
-any app you had already connected. If you did not expect a conflict, treat it seriously: another
+If another program already uses port 4980, the card says so and the endpoint does not start. The
+switch stays on — only the bind failed — so type a different number (4981, for example) and press
+**Apply**; it starts on the new port straight away. Paste the new server address into any app you
+had already connected. If you did not expect a conflict, treat it seriously: another
 program sitting on the port could be impersonating HilbertRaum, so do not paste your access key
 anywhere until you know what is using it.
 

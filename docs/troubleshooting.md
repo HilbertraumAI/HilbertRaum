@@ -423,8 +423,9 @@ Work through these in order:
 
 ### "Another program on this computer is already using this number"
 
-Something else holds the port. Pick a different number in the card (4981, for example) and switch
-on again, then paste the new server address into any app you had already connected.
+Something else holds the port. The switch stays on — only the bind failed — so just type a
+different number in the card (4981, for example) and press **Apply**; the endpoint starts on the
+new port straight away. Then paste the new server address into any app you had already connected.
 
 If you were not expecting a conflict, take it seriously before you continue: a program squatting on
 the port could be posing as HilbertRaum to collect the access key you are about to paste somewhere.
@@ -450,6 +451,7 @@ A connected app usually surfaces an HTTP status. Translated:
 
 | Number | What happened | What to do |
 |---|---|---|
+| **400** | The request asked for something this endpoint cannot do — tool/function calling, images, more than one answer at a time — or the text did not fit the model's context window. | The message names the field. Turn off tools/function calling in the client; send less text if it is a length problem. |
 | **401** | The access key is missing or wrong. | Copy the key again from the card. If you regenerated it, paste the new one into the app. |
 | **403** | The request looked like it came from a web page, or was addressed to a hostname the app does not serve. | Use the exact server address from the card. Browser JavaScript cannot use this endpoint by design. |
 | **404** | The app asked for a feature this endpoint does not provide. | Only chat completions and a model listing exist. Documents, embeddings, and image features are not exposed. |

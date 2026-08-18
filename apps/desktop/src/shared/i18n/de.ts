@@ -1534,9 +1534,10 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.network.telemetryValue':
     'Nichts verlässt dieses Gerät — es gibt kein Tracking, das man abschalten müsste',
   'privacy.network.hint':
-    'Die App warnt vor jeder Netzwerkaktion. Die einzige optionale Netzwerkfunktion ist ' +
-    'das Herunterladen oder Aktualisieren von Modellen — standardmäßig aus und nur über ' +
-    'den Allgemein-Tab aktivierbar. Eine Laufwerksrichtlinie kann sie komplett deaktivieren.',
+    'Die App warnt vor jeder Internetaktion. Das Internet nutzt sie einzig zum Herunterladen ' +
+    'oder Aktualisieren von Modellen — standardmäßig aus und nur über den Allgemein-Tab ' +
+    'aktivierbar. Eine Laufwerksrichtlinie kann das komplett deaktivieren. Die lokale API ' +
+    'weiter unten ist eine getrennte, freiwillige Funktion, die nie ins Internet geht.',
   'privacy.data.title': 'Wo deine Daten liegen',
   'privacy.data.driveRoot': 'Laufwerksstamm',
   'privacy.data.workspace': 'Arbeitsbereich',

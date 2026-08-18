@@ -60,7 +60,7 @@ The app's **core path — chat, documents, indexing, search — always stays loc
 network calls. A visible indicator (in the chat header; clicking it opens
 Settings → **Privacy & data**) tells you the current state honestly: **Local · Offline** when
 no network is permitted, or "Downloads allowed — chats and documents stay local" when it is. The
-only optional network feature is downloading/updating models + the AI engine. That setting is now
+only thing the app uses the internet for is downloading/updating models + the AI engine. That setting is now
 **on by default** so a fresh install can fetch models out of the box — but it stays bounded:
 every download is explicit and confirmed, and you can turn it off in Settings:
 
@@ -89,7 +89,7 @@ The **only** thing the app can use the internet for is fetching a model file you
 The request goes only to the address printed in the model's local manifest; nothing about you, your
 prompts, or your documents is sent. There are **no update checks, no model catalog, and no
 background downloads** — with the checkbox off (or no internet at all) the app is fully usable and
-makes no network calls. Every downloaded file is checked against its expected checksum before the
+makes no internet calls. Every downloaded file is checked against its expected checksum before the
 app will use it.
 
 ## Letting other apps on this computer use your model (local API)
