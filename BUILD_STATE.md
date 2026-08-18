@@ -34,9 +34,15 @@ what the audits changed, and the §-anchor legend for the retired plan's citatio
 Citations use PR # + the `local-api-p<N>` phase prefix + a record §, never a branch SHA (O6 —
 the repo squash-merges). **Filed out of scope, deliberately** (pre-existing in-app concurrency the
 new gate makes visible but does not serialize): the benchmark has no re-entrancy guard, and a skill
-run can generate alongside a chat stream — filed as **#185** and **#186**. **Post-closeout fix (owner decision 2026-08-18, prompted by a REAL attached drive):** a `policy.json` that PREDATES `allow_local_api` now inherits the permissive default instead of a packaged build's STRICT base — otherwise every drive already in the field would have read "turned off by your drive's policy" with no way to distinguish that from a deliberate ban. An explicit `false` still denies (O4 intact); a junk value and a malformed file still fail closed. Recorded as **O4b** in the design record. **Owner-gated leftovers:** the real-model smoke against a
-live sidecar and the end-to-end `npm run dev` flow with an external client (the pinned build's
-`LLAMA_API_KEY` enforcement was verified directly during P1).
+run can generate alongside a chat stream — filed as **#185** and **#186**. **Post-closeout fix (owner decision 2026-08-18, prompted by a REAL attached drive):** a `policy.json` that PREDATES `allow_local_api` now inherits the permissive default instead of a packaged build's STRICT base — otherwise every drive already in the field would have read "turned off by your drive's policy" with no way to distinguish that from a deliberate ban. An explicit `false` still denies (O4 intact); a junk value and a malformed file still fail closed. Recorded as **O4b** in the design record. **Real-model smoke DONE 2026-08-18** on a real attached drive (H:, prepared "lite", encrypted
+workspace, pinned b9849 vulkan engine) against `gemma4-e2b-it-qat-q4` on GPU: default-off proven
+with the vault unlocked, 401 unauthenticated, a real non-streaming completion and a full streaming
+one, every Host/Origin/method/type refusal, **O5's dual loopback vindicated** (both `::1` and
+`localhost` answer on this Win11 box), 4×~10k-char endurance streams, **D8 pre-emption**
+(`preempted_by_user`, `[DONE]` absent) and **D7 lock kill** (`server_stopped` 449 ms BEFORE the
+vault teardown — the pinned stop-first order). Evidence table in the design record §9. Remaining
+manual gap: no PACKAGED-build smoke (this was a dev run via `HILBERTRAUM_DRIVE_ROOT`), and the
+key-off/regenerate dialogs were not captured.
 
 _Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the

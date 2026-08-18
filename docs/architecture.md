@@ -10331,12 +10331,37 @@ unarmed timeout fails it), a `Content-Length` + `Transfer-Encoding` request refu
 interpreted twice, a smuggled second request line answered at most once and never successfully, a
 truncated upload that starts no generation, and a torn-down server that answers nothing further.
 
-**Manual / owner-gated, recorded as such:** the real-model smoke against a live `llama-server`
-(the `LLAMA_API_KEY` env acceptance was verified directly on the pinned b9849 build during P1 —
-completions 401 without the key, 200 with it; only `/health` and `/v1/models` are auth-exempt
-upstream on that pin) and the end-to-end `npm run dev` flow with an external client. The Settings
-card and its consent dialog were eyeballed offscreen in **both languages**; German holds at ~30%
-text expansion.
+**Manual real-model smoke — DONE 2026-08-18** on a real attached prepared drive (H:, "lite"
+edition created 2026-06-30, encrypted workspace with live data, the pinned **b9849 vulkan**
+engine with a recorded hash), against `gemma4-e2b-it-qat-q4` started via rung 1 on **GPU**.
+The owner unlocked the vault and drove the consent dialog; the checks ran against the real
+listener. Results:
+
+| Leg | Result |
+|---|---|
+| Default-off, workspace unlocked | nothing listening on 4980 (connection refused) |
+| Consent dialog → enable | listener up, `Local API listening {"port":4980}` |
+| Unauthenticated request | **401** |
+| `GET /v1/models` authenticated | 200, real model id + `context_window: 8192`, `Server: HilbertRaum/0.1.57`, zero CORS headers |
+| Non-streaming completion | 200 `chat.completion`, role assistant, content exactly `SMOKE_OK`, `finish_reason: stop`, 1528 ms |
+| Streaming completion | 11 frames, role-first delta, `finish_reason` frame, `[DONE]` last, answer assembled coherently |
+| Host / Origin / method / type | foreign Host 403 · absent Host 403 · `127.0.0.1.evil.com` 403 · web Origin 403 · OPTIONS 403 with no CORS · `text/plain` 415 · `application/json; charset=utf-8` 200 · unknown route 404 · `tools` 400 `unsupported_field` |
+| **O5 dual loopback** | BOTH `http://[::1]:4980` and `http://localhost:4980` → 200. On this Win11 box `localhost` resolves to `::1` first, so a v4-only bind would have failed every client that does not address-iterate — the decision vindicated on hardware, not from documentation |
+| Endurance | 4 consecutive ~10 000-char streams (14–16 s each) plus one 39.6 s / 8 105-char / 1 456-frame stream, all clean — the long-generation path Node's 300 s `requestTimeout` default would have killed |
+| **D8 pre-emption** | an in-app turn cut an external stream mid-generation (4 746 chars in): in-band `preempted_by_user`, and `[DONE]` **correctly absent** — the F-02 class demonstrably absent |
+| **D7 lock kill** | external stream ended `server_stopped` at 16:48:15.240; `Workspace locked (sidecars stopped)` logged at 16:48:15.689 — the endpoint died **449 ms BEFORE** the vault teardown, i.e. the pinned stop-first ordering, and the code was `server_stopped` not `preempted_by_user` (the P3 stopping-latch distinction). Port refused afterwards |
+
+The access key was read from the decrypted working DB rather than pasted anywhere, so the real
+auth path was exercised (401 vs 200) instead of being switched off, and the value never entered
+a transcript or a file.
+
+(The `LLAMA_API_KEY` env acceptance had already been verified directly on the pinned b9849 build
+during P1 — completions 401 without the key, 200 with it; only `/health` and `/v1/models` are
+auth-exempt upstream on that pin.) The Settings card and its consent dialog were also eyeballed
+offscreen in **both languages**; German holds at ~30% text expansion. Still not covered by any
+automated or manual pass: the key-off and regenerate confirmation dialogs were not captured
+(single-paragraph bodies), and no packaged-build smoke was run — the smoke above was a dev run
+pointed at the drive via `HILBERTRAUM_DRIVE_ROOT`.
 
 ### §-anchor legend (historical plan citations)
 
