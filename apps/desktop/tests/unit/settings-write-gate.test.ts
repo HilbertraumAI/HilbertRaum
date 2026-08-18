@@ -160,12 +160,15 @@ describe('local API settings (local-api P2)', () => {
   })
 
   it('rejects mistyped values (booleans/number only; null never clobbers)', () => {
+    // Whole-patch cast, not `as never` (the F-41 ratchet): these are deliberately-wrong
+    // renderer payloads crossing the IPC boundary.
+    type JunkPatch = Record<string, unknown>
     const db = freshDb()
-    updateSettings(db, { localApiEnabled: 'yes' as never })
+    updateSettings(db, { localApiEnabled: 'yes' } as JunkPatch)
     expect(getSettings(db).localApiEnabled).toBe(false)
-    updateSettings(db, { localApiPort: '4981' as never })
+    updateSettings(db, { localApiPort: '4981' } as JunkPatch)
     expect(getSettings(db).localApiPort).toBe(4980)
-    updateSettings(db, { localApiTokenRequired: null as never })
+    updateSettings(db, { localApiTokenRequired: null } as JunkPatch)
     expect(getSettings(db).localApiTokenRequired).toBe(true)
   })
 

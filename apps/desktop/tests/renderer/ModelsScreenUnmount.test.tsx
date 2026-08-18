@@ -45,7 +45,12 @@ function model(over: Partial<ModelInfo> = {}): ModelInfo {
 function policyAllowed(): PolicyStatus {
   return {
     policy: {
-      network: { allowModelDownloads: true, allowUpdateChecks: false, allowTelemetry: false },
+      network: {
+        allowModelDownloads: true,
+        allowUpdateChecks: false,
+        allowTelemetry: false,
+        allowLocalApi: true
+      },
       workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
       models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
     },
@@ -55,7 +60,8 @@ function policyAllowed(): PolicyStatus {
     networkAllowedByPolicy: true,
     networkAllowed: true,
     offlineMode: false,
-    telemetryAllowed: false
+    telemetryAllowed: false,
+    localApiAllowedByPolicy: true
   }
 }
 

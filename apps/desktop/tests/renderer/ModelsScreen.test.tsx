@@ -51,7 +51,8 @@ function policyStatus(opts: { downloadsAllowed: boolean; settingOn: boolean }): 
       network: {
         allowModelDownloads: opts.downloadsAllowed,
         allowUpdateChecks: false,
-        allowTelemetry: false
+        allowTelemetry: false,
+        allowLocalApi: true
       },
       workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
       models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
@@ -62,7 +63,8 @@ function policyStatus(opts: { downloadsAllowed: boolean; settingOn: boolean }): 
     networkAllowedByPolicy: opts.downloadsAllowed,
     networkAllowed: opts.downloadsAllowed && opts.settingOn,
     offlineMode: !(opts.downloadsAllowed && opts.settingOn),
-    telemetryAllowed: false
+    telemetryAllowed: false,
+    localApiAllowedByPolicy: true
   }
 }
 

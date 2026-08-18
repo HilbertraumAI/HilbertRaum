@@ -39,7 +39,10 @@ export const DEFAULT_POLICY: PrivacyPolicy = {
   network: {
     allowModelDownloads: true,
     allowUpdateChecks: false,
-    allowTelemetry: false
+    allowTelemetry: false,
+    // Local API: policy-permitted in dev (the setting is still default-off behind the
+    // consent dialog — D3); a policy.json can write allow_local_api: false to kill it.
+    allowLocalApi: true
   },
   workspace: {
     encryptionRequired: false,
@@ -67,7 +70,10 @@ export const STRICT_POLICY: PrivacyPolicy = {
   network: {
     allowModelDownloads: false,
     allowUpdateChecks: false,
-    allowTelemetry: false
+    allowTelemetry: false,
+    // Fail closed with everything else: a provisioned drive that lost its policy must
+    // not expose the model to other local processes.
+    allowLocalApi: false
   },
   workspace: {
     encryptionRequired: true,
@@ -98,7 +104,12 @@ export const STANDALONE_POLICY: PrivacyPolicy = {
   network: {
     allowModelDownloads: true,
     allowUpdateChecks: false,
-    allowTelemetry: false
+    allowTelemetry: false,
+    // O3 (owner-ratified 2026-08-18): a standalone install may enable the local API —
+    // it is the user's own machine, the setting is default-off behind the consent
+    // dialog, and without this the feature would be policy-dead on every
+    // GitHub-release install (the policy is the ceiling; the toggle can't exceed it).
+    allowLocalApi: true
   },
   workspace: STRICT_POLICY.workspace,
   models: STRICT_POLICY.models
@@ -129,7 +140,8 @@ export function mergePolicyObject(base: PrivacyPolicy, raw: unknown): PrivacyPol
   const network: NetworkPolicy = {
     allowModelDownloads: bool(net.allow_model_downloads, base.network.allowModelDownloads),
     allowUpdateChecks: bool(net.allow_update_checks, base.network.allowUpdateChecks),
-    allowTelemetry: bool(net.allow_telemetry, base.network.allowTelemetry)
+    allowTelemetry: bool(net.allow_telemetry, base.network.allowTelemetry),
+    allowLocalApi: bool(net.allow_local_api, base.network.allowLocalApi)
   }
   const workspace: WorkspacePolicy = {
     encryptionRequired: bool(ws.encryption_required, base.workspace.encryptionRequired),
@@ -327,6 +339,16 @@ export function buildPolicyStatus(
     networkAllowedByPolicy: net.networkAllowedByPolicy,
     networkAllowed: net.networkAllowed,
     offlineMode: net.offlineMode,
-    telemetryAllowed: false
+    telemetryAllowed: false,
+    localApiAllowedByPolicy: loaded.policy.network.allowLocalApi
   }
+}
+
+/** Effective local-API permission (spec §3.6 precedence rule): policy ceiling ∧ user
+ *  setting — the single derivation P3's start seams and the Settings card both use. */
+export function localApiEffectivelyEnabled(
+  policy: PrivacyPolicy,
+  localApiEnabledSetting: boolean
+): boolean {
+  return policy.network.allowLocalApi && localApiEnabledSetting
 }

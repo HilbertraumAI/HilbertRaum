@@ -177,8 +177,8 @@ function parseShJson(src: string, varName: string, dev: boolean): Record<string,
   expect(m, `${varName} here-doc not found`).not.toBeNull()
   // The script sets these booleans from the --dev branch (lines ~68-72).
   const subs: Record<string, string> = dev
-    ? { CREATED_AT: 'x', ENC_REQUIRED: 'false', PLAINTEXT: 'true', ALLOW_UNVERIFIED: 'true', REQUIRE_SHA: 'false' }
-    : { CREATED_AT: 'x', ENC_REQUIRED: 'true', PLAINTEXT: 'false', ALLOW_UNVERIFIED: 'false', REQUIRE_SHA: 'true' }
+    ? { CREATED_AT: 'x', ENC_REQUIRED: 'false', PLAINTEXT: 'true', ALLOW_UNVERIFIED: 'true', REQUIRE_SHA: 'false', ALLOW_LOCAL_API: 'true' }
+    : { CREATED_AT: 'x', ENC_REQUIRED: 'true', PLAINTEXT: 'false', ALLOW_UNVERIFIED: 'false', REQUIRE_SHA: 'true', ALLOW_LOCAL_API: 'false' }
   let body = m![1]
   for (const [k, v] of Object.entries(subs)) body = body.replaceAll(`$${k}`, v)
   return JSON.parse(body) as Record<string, unknown>

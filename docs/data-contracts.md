@@ -165,6 +165,14 @@ New audit event `local_api_toggled` (metadata `{ enabled: boolean }` ONLY — th
 writes metadata verbatim to plaintext outside the vault); `localApiEnabled` +
 `localApiTokenRequired` join the `privacyKeys` settings_changed allowlist (booleans only, port
 excluded).
+**Policy ceiling (O3/O4 owner-ratified 2026-08-18):** `PrivacyPolicy.network.allowLocalApi`
+(file key `allow_local_api`, restrict-only) — DEFAULT true / STRICT false / **STANDALONE true**
+(O3: without it the feature is policy-dead on every GitHub-release install; the setting stays
+default-off behind consent); `PolicyStatus.localApiAllowedByPolicy` feeds the
+disabled-with-reason Settings card; effective = `localApiEffectivelyEnabled(policy, setting)`
+(policy ∧ setting — the single derivation the P3 start seams use). `prepare-drive` writes
+`allow_local_api: false` explicitly on commercial drives, `true` on `--dev` drives (O4;
+`buildPolicyJson` is canonical, script-drift-pinned in both provisioning scripts).
 ✅ **IPC** `src/main/ipc/registerModelIpc.ts` — `listModels(lazyVerify?: boolean)` (#138 D-7:
 the RT-3 param — `true` hashes only the active model on a cold cache; the gate-into-chat path
 passes it, the Models screen omits it to hash the full set), `selectModel`, `startRuntime`,

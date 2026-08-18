@@ -399,3 +399,51 @@ describe('offline guarantee (core path: settings + status + policy)', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
+
+// ---- Local API policy ceiling (local-api wave P2 item 4; O3/O4 owner-ratified) ----------
+
+describe('local API policy ceiling (local-api P2)', () => {
+  it('postures: DEFAULT permits, STRICT denies, STANDALONE permits (O3)', async () => {
+    const { STANDALONE_POLICY } = await import('../../src/main/services/policy')
+    expect(DEFAULT_POLICY.network.allowLocalApi).toBe(true)
+    expect(STRICT_POLICY.network.allowLocalApi).toBe(false)
+    expect(STANDALONE_POLICY.network.allowLocalApi).toBe(true)
+  })
+
+  it('policy.json allow_local_api merges (restrict-only over DEFAULT); junk keeps the base', () => {
+    const off = parsePolicy('{"network":{"allow_local_api":false}}')
+    expect(off.network.allowLocalApi).toBe(false)
+    const junk = parsePolicy('{"network":{"allow_local_api":"yes"}}')
+    expect(junk.network.allowLocalApi).toBe(true) // non-boolean never widens or narrows
+  })
+
+  it('effective = policy AND setting: the ceiling always wins', async () => {
+    const { localApiEffectivelyEnabled } = await import('../../src/main/services/policy')
+    const allow = DEFAULT_POLICY
+    const deny = parsePolicy('{"network":{"allow_local_api":false}}')
+    expect(localApiEffectivelyEnabled(deny, true)).toBe(false) // policy off beats setting on
+    expect(localApiEffectivelyEnabled(allow, false)).toBe(false) // default-off setting holds
+    expect(localApiEffectivelyEnabled(allow, true)).toBe(true)
+    expect(localApiEffectivelyEnabled(deny, false)).toBe(false)
+  })
+
+  it('buildPolicyStatus surfaces localApiAllowedByPolicy (the disabled-with-reason card input)', () => {
+    __resetPolicyCache()
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi-'))
+    writeFileSync(join(dir, 'policy.json'), '{"network":{"allow_local_api":false}}')
+    expect(buildPolicyStatus(dir, true).localApiAllowedByPolicy).toBe(false)
+    const dir2 = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi2-'))
+    expect(buildPolicyStatus(dir2, true).localApiAllowedByPolicy).toBe(true) // dev default
+  })
+
+  it('a packaged build fails CLOSED on a provisioned dir; standalone keeps the O3 posture', () => {
+    __resetPolicyCache()
+    // Provisioned (drive.json marker) + missing policy.json => STRICT => local API denied.
+    const provisioned = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi3-'))
+    writeFileSync(join(provisioned, 'drive.json'), '{}')
+    expect(loadPolicy(provisioned, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
+    // Unprovisioned app-data root => STANDALONE => permitted (setting still default-off).
+    const standalone = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi4-'))
+    expect(loadPolicy(standalone, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(true)
+  })
+})

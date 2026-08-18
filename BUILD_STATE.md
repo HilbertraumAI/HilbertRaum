@@ -48,8 +48,11 @@ structural single-external refusal, admission promotion-race fix (holder-driven 
 `services/local-api/token.ts` (never a settings row — `getSettings` spreads every row to the
 renderer; pinned: no secret key/value on the settings surface); `local_api_toggled` audit event
 (boolean metadata only) + the two booleans in the `privacyKeys` allowlist; EN+DE label. **Item 4
-(policy ceiling `allow_local_api` + STANDALONE/prepare-drive postures) BLOCKED on owner
-ratification of O3/O4** — P2 stays open until it lands.
+landed after the owner ratified O1–O6 (2026-08-18, all recommended options):**
+`network.allow_local_api` policy ceiling (DEFAULT true / STRICT false / STANDALONE true per O3),
+`PolicyStatus.localApiAllowedByPolicy`, `localApiEffectivelyEnabled` (policy ∧ setting),
+prepare-drive writes explicit `false` on commercial drives (O4) in both scripts +
+`buildPolicyJson` (script-drift-pinned). **P2 COMPLETE.**
 
 _Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the

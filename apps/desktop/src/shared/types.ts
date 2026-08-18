@@ -80,6 +80,14 @@ export interface NetworkPolicy {
   allowUpdateChecks: boolean
   /** Always treated as off; the app has no telemetry and no toggle for it. */
   allowTelemetry: boolean
+  /**
+   * Policy ceiling for the opt-in local API (loopback-only inbound endpoint, local-api
+   * wave). Restrict-only like every policy field: effective = this ∧ the user's
+   * `localApiEnabled` setting. File key: `allow_local_api`. O3: STANDALONE allows it
+   * (the setting is still default-off behind consent); O4: commercial prepared drives
+   * write an explicit `false`.
+   */
+  allowLocalApi: boolean
 }
 
 /** Workspace policy (spec §6 `workspace` block). */
@@ -122,6 +130,9 @@ export interface PolicyStatus {
   offlineMode: boolean
   /** Always false — telemetry is never enabled and has no toggle. */
   telemetryAllowed: boolean
+  /** Policy ceiling for the local API (`network.allow_local_api`). The Settings card
+   *  shows disabled-with-reason when false — never hidden. Effective = this ∧ setting. */
+  localApiAllowedByPolicy: boolean
 }
 
 // ---- Workspace vault / encryption (spec §3.5/§7.9) ----

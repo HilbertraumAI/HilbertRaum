@@ -22,7 +22,12 @@ import { stubApi } from '../helpers/renderer'
 function policy(): PolicyStatus {
   return {
     policy: {
-      network: { allowModelDownloads: true, allowUpdateChecks: false, allowTelemetry: false },
+      network: {
+        allowModelDownloads: true,
+        allowUpdateChecks: false,
+        allowTelemetry: false,
+        allowLocalApi: true
+      },
       workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
       models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
     },
@@ -32,7 +37,8 @@ function policy(): PolicyStatus {
     networkAllowedByPolicy: true,
     networkAllowed: true,
     offlineMode: false,
-    telemetryAllowed: false
+    telemetryAllowed: false,
+    localApiAllowedByPolicy: true
   }
 }
 
