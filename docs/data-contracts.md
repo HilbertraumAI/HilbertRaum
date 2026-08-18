@@ -153,6 +153,18 @@ settled on every exit path (`finally { await gen.return() }`).
 depth 0–1, ~30 s cap; `abortAll(reason)` = pre-emption AND teardown; invariant `ready:false ⇒
 signal aborted`; holders release only AFTER the stream generator settles — releasing mid-teardown
 would spuriously refuse the queued waiter at promotion).
+**Local-api wave P2 (additive):** `AppSettings` gains `localApiEnabled: boolean` (default false,
+D3), `localApiPort: number` (default 4980, clamped [1024, 65535] by `updateSettings`), and
+`localApiTokenRequired: boolean` (default true, D4). **The access key itself never enters
+AppSettings** (`getSettings` spreads every stored row to the renderer on three IPC surfaces) — it
+lives in the dedicated single-row workspace-DB table `local_api_token (id=1 CHECK, token,
+updated_at)`, read/written ONLY by `services/local-api/token.ts` (`getOrCreateToken` /
+`rotateToken` / `maskToken` — `hr-` + 32 bytes base64url; masked form `hr-…<last4>` is all the
+renderer ever sees; encrypted at rest on an encrypted workspace, unreadable pre-unlock — D7).
+New audit event `local_api_toggled` (metadata `{ enabled: boolean }` ONLY — the audit-log export
+writes metadata verbatim to plaintext outside the vault); `localApiEnabled` +
+`localApiTokenRequired` join the `privacyKeys` settings_changed allowlist (booleans only, port
+excluded).
 ✅ **IPC** `src/main/ipc/registerModelIpc.ts` — `listModels(lazyVerify?: boolean)` (#138 D-7:
 the RT-3 param — `true` hashes only the active model on a cold cache; the gate-into-chat path
 passes it, the Models screen omits it to hash the full set), `selectModel`, `startRuntime`,

@@ -288,6 +288,26 @@ export interface AppSettings {
    * created AND assembly ignores any existing checkpoint (pure L1, full-history replay).
    */
   chatCompactionEnabled: boolean
+  // ---- Local API (opt-in loopback endpoint; local-api wave) ----
+  /**
+   * Master switch for the local OpenAI-compatible loopback endpoint. DEFAULT OFF (D3):
+   * other programs on this machine can reach the loaded model only after an explicit,
+   * confirmed opt-in — and only when the drive policy's ceiling also allows it
+   * (effective = policy ∧ setting). The endpoint binds loopback ONLY, ever (D2).
+   */
+  localApiEnabled: boolean
+  /** Loopback port for the endpoint. Clamped by `updateSettings` to
+   *  [MIN_LOCAL_API_PORT, MAX_LOCAL_API_PORT]. */
+  localApiPort: number
+  /**
+   * Require the access key (Bearer token) on local-API requests. ON by default; turning
+   * it off is a deliberate user choice behind its own confirmation (D4). Web-origin
+   * rejection + Host validation stay unconditional in BOTH modes. NOTE: the token itself
+   * NEVER lives in AppSettings — `getSettings` returns every stored row to the renderer
+   * on three IPC surfaces, so the secret has its own main-process-only store
+   * (`services/local-api/token.ts`).
+   */
+  localApiTokenRequired: boolean
 }
 
 /** Appearance setting (see `AppSettings.theme`). */
@@ -335,7 +355,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   skillInfoSeen: [],
   // Compaction is ON by default (D-a): silent drop-oldest is strictly worse than a visible,
   // auditable summary, and every new path fails safe to today's L1 trim.
-  chatCompactionEnabled: true
+  chatCompactionEnabled: true,
+  // Local API is OPT-IN (D3): default off, token required by default (D4). 4980 avoids
+  // the ecosystem's common defaults (Ollama 11434, LM Studio 1234).
+  localApiEnabled: false,
+  localApiPort: 4980,
+  localApiTokenRequired: true
 }
 
 // ---- GPU probe ----
@@ -2257,6 +2282,10 @@ export type AuditEventType =
   | 'workspace_lock_failed'
   | 'workspace_password_changed'
   | 'settings_changed'
+  // The local API master switch flipped. Metadata is BOOLEANS ONLY ({ enabled }) — the
+  // audit-log export writes metadata verbatim to plaintext JSON outside the vault, so
+  // neither the port+token pairing nor any token material may ever ride here.
+  | 'local_api_toggled'
   | 'policy_warning'
   | 'offline_guard_violation'
   // Evidence Pack / Review Mode (EP-1 plan §5 item 5): review lifecycle + pack export.

@@ -39,6 +39,11 @@ const MIN_CONTEXT_TOKENS = 2048
  *  friendly error rather than wedging the app. */
 export const MAX_CONTEXT_TOKENS_OVERRIDE = 131_072
 
+/** Bounds for `localApiPort` (local-api wave P2): never a privileged port, never out of
+ *  range. A renderer value outside the clamp is pulled to the nearest bound. */
+export const MIN_LOCAL_API_PORT = 1024
+export const MAX_LOCAL_API_PORT = 65_535
+
 // Settings persistence on top of the key/value `settings` table (spec §8).
 // Each AppSettings field is stored as its own row so partial updates are clean.
 // The table lives inside the workspace database, so on an encrypted workspace the
@@ -129,6 +134,15 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     if (key === 'contextTokensOverride' && value !== null) {
       if (typeof value !== 'number' || !Number.isFinite(value)) continue
       toStore = Math.min(MAX_CONTEXT_TOKENS_OVERRIDE, Math.max(MIN_CONTEXT_TOKENS, Math.floor(value)))
+    }
+    // localApiPort: clamp into the valid loopback-bind range (the booleans of the
+    // local-api trio validate for free via the generic type gate above).
+    if (key === 'localApiPort') {
+      const n =
+        typeof value === 'number' && Number.isFinite(value)
+          ? Math.floor(value)
+          : DEFAULT_SETTINGS.localApiPort
+      toStore = Math.min(MAX_LOCAL_API_PORT, Math.max(MIN_LOCAL_API_PORT, n))
     }
     if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
     if (key === 'theme' && value !== 'system' && value !== 'light' && value !== 'dark') continue

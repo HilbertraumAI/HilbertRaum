@@ -144,14 +144,26 @@ export function registerCoreIpc(ctx: AppContext): void {
     if ('uiLanguage' in patch) applyUiLanguageSetting(result.uiLanguage)
     // Audit privacy rule: record ONLY the privacy-relevant keys — and their
     // post-validation values, which are booleans/enums — never any other setting's value.
-    const privacyKeys = (['allowNetwork', 'gpuMode', 'developerMode'] as const).filter(
-      (k) => k in patch
-    )
+    // The tuple is a hard allowlist: the local-API token cannot ride here structurally
+    // (it never enters AppSettings at all — services/local-api/token.ts), and the port
+    // is deliberately excluded (booleans only; the audit-log export writes metadata
+    // verbatim to plaintext JSON outside the vault).
+    const privacyKeys = (
+      ['allowNetwork', 'gpuMode', 'developerMode', 'localApiEnabled', 'localApiTokenRequired'] as const
+    ).filter((k) => k in patch)
     if (privacyKeys.length > 0) {
       ctx.audit?.(
         'settings_changed',
         `Privacy-relevant settings changed: ${privacyKeys.join(', ')}`,
         Object.fromEntries(privacyKeys.map((k) => [k, result[k]]))
+      )
+    }
+    // The local-API master switch gets its own first-class audit event (boolean only).
+    if ('localApiEnabled' in patch) {
+      ctx.audit?.(
+        'local_api_toggled',
+        `Local API ${result.localApiEnabled ? 'enabled' : 'disabled'}`,
+        { enabled: result.localApiEnabled }
       )
     }
     return result

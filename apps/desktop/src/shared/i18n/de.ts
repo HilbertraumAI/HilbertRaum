@@ -1595,6 +1595,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.workspace_lock_failed': 'Sperrversuch fehlgeschlagen (Arbeitsbereich blieb geöffnet)',
   'diag.audit.workspace_password_changed': 'Arbeitsbereich-Passwort geändert',
   'diag.audit.settings_changed': 'Einstellungen geändert',
+  'diag.audit.local_api_toggled': 'Lokale API ein- oder ausgeschaltet',
   'diag.audit.policy_warning': 'Richtlinien-Hinweis',
   'diag.audit.offline_guard_violation': 'Netzwerkversuch bemerkt',
   'diag.audit.collection_created': 'Projekt erstellt',

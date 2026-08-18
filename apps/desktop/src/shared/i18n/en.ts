@@ -1551,6 +1551,7 @@ export const en = {
   'diag.audit.workspace_lock_failed': 'Lock attempt failed (workspace stayed open)',
   'diag.audit.workspace_password_changed': 'Workspace password changed',
   'diag.audit.settings_changed': 'Settings changed',
+  'diag.audit.local_api_toggled': 'Local API switched on or off',
   'diag.audit.policy_warning': 'Policy notice',
   'diag.audit.offline_guard_violation': 'Network attempt noticed',
   'diag.audit.collection_created': 'Project created',

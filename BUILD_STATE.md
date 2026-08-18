@@ -42,6 +42,14 @@ had survived both passes), `isExternallyBusy()` as the one fail-closed admission
 bounded (5 s) abort-aware pre-emption wait + gate-epoch self-heal of leaked lane counts,
 structural single-external refusal, admission promotion-race fix (holder-driven release) +
 `'aborted'` outcome + single exit path.
+**P2 (settings/token/audit — items 1–3+5) landed:** `localApiEnabled` (default OFF, D3) /
+`localApiPort` (4980, clamped 1024–65535) / `localApiTokenRequired` (default ON, D4) in
+`AppSettings`; the access key in its OWN single-row workspace-DB table via
+`services/local-api/token.ts` (never a settings row — `getSettings` spreads every row to the
+renderer; pinned: no secret key/value on the settings surface); `local_api_toggled` audit event
+(boolean metadata only) + the two booleans in the `privacyKeys` allowlist; EN+DE label. **Item 4
+(policy ceiling `allow_local_api` + STANDALONE/prepare-drive postures) BLOCKED on owner
+ratification of O3/O4** — P2 stays open until it lands.
 
 _Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
