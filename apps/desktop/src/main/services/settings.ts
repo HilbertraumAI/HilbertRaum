@@ -1,5 +1,6 @@
 import type { Db } from './db'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
+import { MAX_LOCAL_API_PORT, MIN_LOCAL_API_PORT } from '../../shared/local-api'
 
 /** Upper bound on any persisted string[] setting so a buggy/hostile renderer can't bloat the
  *  encrypted settings blob (`skillInfoSeen` is the shipping case; the element-wise validation
@@ -39,10 +40,10 @@ const MIN_CONTEXT_TOKENS = 2048
  *  friendly error rather than wedging the app. */
 export const MAX_CONTEXT_TOKENS_OVERRIDE = 131_072
 
-/** Bounds for `localApiPort` (local-api wave P2): never a privileged port, never out of
- *  range. A renderer value outside the clamp is pulled to the nearest bound. */
-export const MIN_LOCAL_API_PORT = 1024
-export const MAX_LOCAL_API_PORT = 65_535
+/** Bounds for `localApiPort` (local-api wave P2) — defined in shared/ so the Settings
+ *  card's number field and this write gate can never disagree. A value outside the range
+ *  is pulled to the nearest bound here. */
+export { MIN_LOCAL_API_PORT, MAX_LOCAL_API_PORT } from '../../shared/local-api'
 
 // Settings persistence on top of the key/value `settings` table (spec §8).
 // Each AppSettings field is stored as its own row so partial updates are clean.

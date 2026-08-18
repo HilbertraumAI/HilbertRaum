@@ -33,7 +33,7 @@ vi.mock('electron', () => ({
   },
   // registerCoreIpc imports `app`/`clipboard`; only referenced inside handlers we don't drive.
   app: { getVersion: () => '0.0.0-test' },
-  clipboard: { writeText: () => {} }
+  clipboard: { writeText: () => {}, readText: () => '', clear: () => {} }
 }))
 
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
@@ -43,6 +43,7 @@ import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBenchmarkIpc } from '../../src/main/ipc/registerBenchmarkIpc'
 import { registerCollectionsIpc } from '../../src/main/ipc/registerCollectionsIpc'
 import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
+import { registerLocalApiIpc } from '../../src/main/ipc/registerLocalApiIpc'
 import { IPC } from '../../src/shared/ipc'
 import { initLogging } from '../../src/main/services/logging'
 import type { AppContext } from '../../src/main/services/context'
@@ -105,7 +106,10 @@ const MODULES: Array<{
     name: 'registerEvidenceReviewsIpc',
     register: registerEvidenceReviewsIpc,
     exempt: new Set<string>()
-  }
+  },
+  // local-api wave P4: all three channels read or write the access-key table in the
+  // workspace DB (mint / copy / rotate) — none may answer a locked vault.
+  { name: 'registerLocalApiIpc', register: registerLocalApiIpc, exempt: new Set<string>() }
 ]
 
 // DX-4 (full-audit-2026-06-29 follow-up, Phase 7): the locked-vault posture of every register*Ipc

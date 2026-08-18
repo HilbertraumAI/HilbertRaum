@@ -71,7 +71,11 @@ export function registerCoreIpc(ctx: AppContext): void {
       // Issue #42 reopen: the sidecar's last cold-start device outcome (posture + parsed
       // offload split + liveness) — the Translate screen's #36-style hint. Null before the
       // first start / when unavailable; optional on the Translator seam (fakes omit it).
-      translationDevice: ctx.translator?.deviceStatus?.() ?? null
+      translationDevice: ctx.translator?.deviceStatus?.() ?? null,
+      // Local API live state (counts + flags only, never content — D1). Null when no
+      // server object exists at all; the object itself reports `running: false` when the
+      // feature is off, so the Settings card can distinguish "off" from "failed to bind".
+      localApi: ctx.localApi?.status() ?? null
     }
   })
 

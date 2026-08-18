@@ -52,6 +52,48 @@ export interface AppStatus {
    * reading as "GPU translation not working". Optional so older status fixtures stay valid.
    */
   translationDevice?: TranslationDeviceStatus | null
+  /**
+   * Live state of the opt-in local API endpoint (`ctx.localApi?.status()`), or null when
+   * no server object exists (workspace locked, feature never enabled). Additive +
+   * optional so older status fixtures stay valid — the `translationDevice` shape.
+   */
+  localApi?: LocalApiStatus | null
+}
+
+/**
+ * What the local API endpoint is doing right now — COUNTS AND STATE ONLY. The endpoint
+ * stores no request content anywhere (D1), so nothing here can identify a caller or a
+ * prompt. Produced by `LocalApiServer.status()` (main/services/local-api/server.ts) and
+ * carried to the renderer on `AppStatus.localApi`.
+ */
+export interface LocalApiStatus {
+  running: boolean
+  port: number | null
+  tokenRequired: boolean
+  requestsServed: number
+  rejectedCount: number
+  /** Why the last start failed (the Settings card's error surface); null while clean. */
+  lastError: 'port_in_use' | 'start_failed' | null
+  /** An external request is generating RIGHT NOW (drives the D5 concurrent-use warning). */
+  externalActive: boolean
+  /**
+   * Epoch ms of the last time an in-app turn pre-empted an external request (D8), or
+   * null. Lets the card explain a collision that already happened instead of showing a
+   * permanent scold — the warning fires when it is true (UX-L1).
+   */
+  lastPreemptedAt: number | null
+}
+
+/**
+ * What the Settings card shows in its "Connect another app" block: the exact string to
+ * paste as the client's base URL, and the access key MASKED (`hr-…abcd`). The full key
+ * never crosses IPC — copying happens main-side (`localApi:copyKey`).
+ */
+export interface LocalApiConnectionInfo {
+  /** e.g. `http://127.0.0.1:4980/v1` — the single source of truth for what to paste. */
+  serverAddress: string
+  /** Masked display form, or null when no key exists yet and none is required. */
+  maskedKey: string | null
 }
 
 /**

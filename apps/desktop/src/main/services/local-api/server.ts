@@ -5,7 +5,7 @@ import type { ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { ExternalGenerationBusyError } from '../runtime'
 import { isExceedContextError } from '../runtime/llama'
 import { isAbortError } from '../chat'
-import type { RuntimeStatus } from '../../../shared/types'
+import type { LocalApiStatus, RuntimeStatus } from '../../../shared/types'
 import { LocalApiAdmission, type Admission } from './admission'
 import {
   checkAuth,
@@ -37,17 +37,6 @@ export class PortInUseError extends Error {
     super(`Port ${port} is already in use`)
     this.name = 'PortInUseError'
   }
-}
-
-export interface LocalApiStatus {
-  running: boolean
-  port: number | null
-  tokenRequired: boolean
-  /** Counts ONLY — the endpoint stores no request content anywhere (D1). */
-  requestsServed: number
-  rejectedCount: number
-  /** Why the last start failed (the P4 card's error surface); null while running/clean. */
-  lastError: 'port_in_use' | 'start_failed' | null
 }
 
 export interface LocalApiServerDeps {
@@ -88,6 +77,11 @@ export class LocalApiServer {
   private admission: LocalApiAdmission
   private requestsServed = 0
   private rejectedCount = 0
+  /** External completions holding the slot right now (0 or 1 — the gate is single-slot).
+   *  Counts only; the Settings card's D5 concurrent-use warning reads it via status(). */
+  private externalActive = 0
+  /** When an in-app turn last pre-empted an external request (D8), epoch ms. */
+  private lastPreemptedAt: number | null = null
   /** Distinguishes teardown aborts from D8 pre-emption in the client-facing error code. */
   private stopping = false
   /**
@@ -187,7 +181,12 @@ export class LocalApiServer {
         error: String(err)
       })
     }
-    this.deps.runtime.setExternalPreemption((reason) => this.admission.abortAll(reason))
+    // The hook fires ONLY on in-app entry (D8) — stamping here is therefore a truthful
+    // "your own turn interrupted an outside request", never a teardown or a rotation.
+    this.deps.runtime.setExternalPreemption((reason) => {
+      if (this.externalActive > 0) this.lastPreemptedAt = Date.now()
+      this.admission.abortAll(reason)
+    })
     this.deps.log?.info('Local API listening', { port: this.port })
   }
 
@@ -263,8 +262,21 @@ export class LocalApiServer {
       tokenRequired: this.deps.getSettings().localApiTokenRequired,
       requestsServed: this.requestsServed,
       rejectedCount: this.rejectedCount,
-      lastError: this.lastError
+      lastError: this.lastError,
+      externalActive: this.externalActive > 0,
+      lastPreemptedAt: this.lastPreemptedAt
     }
+  }
+
+  /**
+   * Abort every external request (active + queued) without touching the listener — the
+   * access-key rotation path. Auth is checked ONCE at admission, so an in-flight stream
+   * would otherwise outlive the key it was let in with and the "apps using the old key
+   * stop working" promise would be false (SEC-F6). Stopped streams get the D8
+   * `preempted_by_user` frame; the client's retry then meets the 401.
+   */
+  abortExternalRequests(reason: string): void {
+    this.admission.abortAll(reason)
   }
 
   // ---- Request handling -------------------------------------------------------------------
@@ -413,7 +425,15 @@ export class LocalApiServer {
       // label the stream with the old model id) — review 2026-08-18.
       const post = this.modelGate()
       if ('error' in post) return this.reject(res, post.error.status, post.error.body, post.error.headers)
-      await this.runCompletion(res, this.deps.runtime.active()!, post.status, parsed.req, admission)
+      // Occupancy span for status(): incremented only around the REAL generation, and
+      // decremented in the same finally that releases the slot, so a throw anywhere in
+      // runCompletion cannot leave the card claiming a request is still running.
+      this.externalActive++
+      try {
+        await this.runCompletion(res, this.deps.runtime.active()!, post.status, parsed.req, admission)
+      } finally {
+        this.externalActive--
+      }
     } finally {
       admission.release()
     }

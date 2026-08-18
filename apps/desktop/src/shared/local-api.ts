@@ -9,6 +9,12 @@ export const LOCAL_API_SETTINGS_KEYS = [
   'localApiTokenRequired'
 ] as const satisfies readonly (keyof AppSettings)[]
 
+/** Bounds for `localApiPort`: never a privileged port, never out of range. Shared so the
+ *  main-process write gate and the Settings card's number field enforce ONE range —
+ *  a renderer that allowed 80 would just watch the clamp silently rewrite it. */
+export const MIN_LOCAL_API_PORT = 1024
+export const MAX_LOCAL_API_PORT = 65_535
+
 // Local-API shared derivations (local-api wave P2). Lives in shared/ so BOTH processes
 // import the same rule: main's start seams (P3) gate the listener on it, and the P4
 // Settings card derives its enabled state from it — never a hand re-spelled `a && b`
@@ -21,6 +27,17 @@ export function localApiEffectivelyEnabled(
   localApiEnabledSetting: boolean
 ): boolean {
   return policy.network.allowLocalApi && localApiEnabledSetting
+}
+
+/**
+ * The base URL a client app must be pointed at — the ONE place this string is built, so
+ * the Settings card, the docs examples, and the tests can never disagree. Always the
+ * literal `127.0.0.1`, never `localhost`: both loopbacks are bound (O5), but a printed
+ * `localhost` is ambiguous on a machine whose resolver answers `::1` first, and the
+ * pasted value is what a user will debug against.
+ */
+export function localApiServerAddress(port: number): string {
+  return `http://127.0.0.1:${port}/v1`
 }
 
 /**

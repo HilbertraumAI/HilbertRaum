@@ -46,6 +46,7 @@ import { registerEngineIpc } from './ipc/registerEngineIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
+import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
 import { RuntimeManager } from './services/runtime'
 import { createGpuCrashAutoFallback, createSelectingRuntimeFactory } from './services/runtime/factory'
@@ -475,6 +476,7 @@ function initBackend(): void {
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
   registerAuditIpc(ctx)
+  registerLocalApiIpc(ctx)
 
   // Spec §2.1 first-run benchmark: a plaintext-dev workspace is already open at
   // startup — benchmark it in the background if it never was. Encrypted workspaces get
