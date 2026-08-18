@@ -11,11 +11,31 @@ export interface ChatMessage {
   content: string
 }
 
+/**
+ * Which admission lane a generation belongs to. 'in-app' (the default) covers every one
+ * of the app's own surfaces — chat/RAG, doc tasks, skill runs, compaction, the benchmark.
+ * 'external' is reserved for local-API requests. The manager's generation gate counts
+ * both lanes and lets an ENTERING in-app generation pre-empt the external lane, never
+ * the reverse (D8: in-app wins).
+ */
+export type GenerationLane = 'in-app' | 'external'
+
+/** Thrown synchronously-on-first-pull when an external-lane stream would run alongside an
+ *  in-app generation — the caller (local API) maps it to a 429 busy response. */
+export class ExternalGenerationBusyError extends Error {
+  constructor() {
+    super('An in-app generation is active — external request refused')
+    this.name = 'ExternalGenerationBusyError'
+  }
+}
+
 export interface RuntimeChatOptions {
   /** Explicit caps/sampling; when set they WIN over anything `mode` would derive. */
   maxTokens?: number
   temperature?: number
   signal?: AbortSignal
+  /** Admission lane (see `GenerationLane`). Omitted = 'in-app'. */
+  lane?: GenerationLane
   /**
    * Answer-depth mode (spec §10.3). Real runtimes map it to the model's thinking
    * switch + sampling (see `requestParamsForMode` in `llama.ts`); the mock runtime
@@ -181,7 +201,112 @@ export class RuntimeManager {
    */
   private stopped = false
 
+  // ---- Generation gate ------------------------------------------------------------------
+  //
+  // Generation reaches the model through several lanes (chat/RAG streams, doc tasks, skill
+  // runs, the benchmark, chat compaction, classification) — all via `active().chatStream`.
+  // No per-lane registry sees them all, so the busy signal lives HERE: `doStart` wraps the
+  // factory-returned runtime (ladder AND mock — the gate CI exercises is the shipped one)
+  // in a decorator whose chatStream counts per-lane in-flight generations. External
+  // admission (the local API) reads `isGenerating()` and FAILS CLOSED: no active runtime
+  // (which includes the whole start window — the #109 warm-up generation runs against the
+  // inner rung runtime while `active()` is still null) means "busy", never "idle".
+  /** In-flight generation count per lane; mutated only inside the gate wrapper. */
+  private readonly laneCounts: Record<GenerationLane, number> = { 'in-app': 0, external: 0 }
+  /** Resolvers parked by in-app entries waiting for the external lane's real teardown. */
+  private externalIdleWaiters: Array<() => void> = []
+  /**
+   * Fired synchronously when an in-app generation enters while the external lane is
+   * active or admitted (D8) — the local-API admission registers a hook that aborts its
+   * active AND queued/admitted-but-unstarted requests. The gate then AWAITS the external
+   * stream's actual teardown (count → 0) before the in-app generation issues, so both can
+   * never overlap on the shared KV slot.
+   */
+  private externalPreemptionHook: ((reason: string) => void) | null = null
+
   constructor(private readonly factory: RuntimeFactory) {}
+
+  /** True while ANY lane has an in-flight generation. Callers gating external admission
+   *  must ALSO refuse when `active()` is null (fail closed — covers start + warm-up). */
+  isGenerating(): boolean {
+    return this.laneCounts['in-app'] > 0 || this.laneCounts.external > 0
+  }
+
+  /** Register/clear the external pre-emption hook (one consumer: local-API admission). */
+  setExternalPreemption(hook: ((reason: string) => void) | null): void {
+    this.externalPreemptionHook = hook
+  }
+
+  /** Resolves once the external lane's in-flight count is 0 (immediately when idle). */
+  private waitExternalIdle(): Promise<void> {
+    if (this.laneCounts.external === 0) return Promise.resolve()
+    return new Promise((resolve) => this.externalIdleWaiters.push(resolve))
+  }
+
+  /** Wrap the factory's runtime so every `chatStream` pull passes the generation gate. */
+  private decorateWithGenerationGate(inner: ModelRuntime): ModelRuntime {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const manager = this
+    return {
+      get modelId() {
+        return inner.modelId
+      },
+      // Live getters: the ladder resolves backend/gpuName during start and flips
+      // warmedUp on the first stream — static copies would freeze pre-start values.
+      get backend() {
+        return inner.backend
+      },
+      get gpuName() {
+        return inner.gpuName
+      },
+      start: () => inner.start(),
+      stop: () => inner.stop(),
+      health: () => inner.health(),
+      contextWindow: inner.contextWindow ? () => inner.contextWindow!() : undefined,
+      warmedUp: inner.warmedUp ? () => inner.warmedUp!() : undefined,
+      chatStream: (messages, options) => manager.gatedChatStream(inner, messages, options)
+    }
+  }
+
+  /**
+   * The gate itself. Counter discipline: increment as the FIRST act of the generator body
+   * (so a created-but-never-iterated generator holds no count) and decrement in `finally`
+   * (so success, error, abort, and a pre-yield throw — the inner runtime's synchronous
+   * 'Runtime is not started' — all release it; a leak would wedge `isGenerating()` true).
+   * Lane rules (D8): an external entry refuses if the in-app lane is active — checked in
+   * the SAME synchronous frame as its increment, so an admitted-then-parked external
+   * request can never start alongside an in-app turn (the admit→stream TOCTOU). An in-app
+   * entry increments FIRST (blocking new external entries), then pre-empts the external
+   * lane and awaits its real teardown before issuing to the model.
+   */
+  private async *gatedChatStream(
+    inner: ModelRuntime,
+    messages: ChatMessage[],
+    options?: RuntimeChatOptions
+  ): AsyncGenerator<string, void, unknown> {
+    const lane: GenerationLane = options?.lane ?? 'in-app'
+    this.laneCounts[lane]++
+    try {
+      if (lane === 'external') {
+        if (this.laneCounts['in-app'] > 0) throw new ExternalGenerationBusyError()
+      } else if (this.laneCounts.external > 0) {
+        try {
+          this.externalPreemptionHook?.('in-app generation entered')
+        } catch {
+          /* the hook is observability/abort plumbing — never fail an in-app turn on it */
+        }
+        await this.waitExternalIdle()
+      }
+      yield* inner.chatStream(messages, options)
+    } finally {
+      this.laneCounts[lane]--
+      if (lane === 'external' && this.laneCounts.external === 0) {
+        const waiters = this.externalIdleWaiters
+        this.externalIdleWaiters = []
+        for (const resolve of waiters) resolve()
+      }
+    }
+  }
 
   /**
    * Arm the permanent shutdown latch (CODE-3). Synchronous and latch-only so the quit
@@ -333,7 +458,9 @@ export class RuntimeManager {
     try {
       await next.start()
       const health = await next.health()
-      this.current = next
+      // Commit the GATED runtime: `active()` hands out the decorator, so every caller's
+      // chatStream passes the generation gate with zero call-site changes.
+      this.current = this.decorateWithGenerationGate(next)
       this.last = health
     } catch (err) {
       try {

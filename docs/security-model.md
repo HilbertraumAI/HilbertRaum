@@ -237,6 +237,19 @@ wrong host guess can never break local IPC or the sidecars. Real runtimes MUST b
 audit L-1) so a hostname like `127.evil.com` is not misclassified as loopback; `isLoopbackHost` is a
 detection helper only and must never gate an allowed-vs-blocked decision.
 
+**Sidecar requests are authenticated (local-api wave P1).** Loopback binding alone leaves a port any
+same-machine process can call, so every `llama-server` sidecar spawn (chat, embedder, reranker,
+vision, translation) now carries a fresh per-spawn API key, delivered via the **child-scoped env**
+(`LLAMA_API_KEY` — verified enforced on the pinned b9849 build) and injected as a Bearer header at
+the single `LlamaServer.fetch()` chokepoint. The key is never placed in argv (readable in any
+process list, and llama-server echoes resolved params to stderr) and never set on the app's own
+`process.env` (other children would inherit it); key material is redacted from the captured stderr
+tail before it can flow into error strings, `gpuLastError`, the audit trail, the app log, or the
+support-log export. Upstream exempts `/health` and `/v1/models` from auth on this pin — a local
+process can still read liveness plus the loaded model's file path (metadata only, never content).
+Residual (recorded, accepted): an env-delivered key defends against cross-user and log/stderr
+exposure, not against a same-user debugger reading the child's environment.
+
 #### Detection-only, not enforcement — a recorded decision (audit M-S1, 2026-06-13)
 
 The tripwire deliberately **logs and audits** a remote connect, then **calls the original

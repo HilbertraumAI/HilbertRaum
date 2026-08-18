@@ -2584,6 +2584,15 @@ files**.
     spawn passes **`windowsHide: true`** (REL-7, backend-audit-2026-06-27) so this high-frequency
     spawn (every model start — chat, embedder, reranker, vision all funnel through here) never
     flashes a console window on Windows, matching the tar / transcriber / runtime-download spawns.
+    **Sidecar auth (local-api wave P1):** every spawn generates a fresh 32-byte hex API key,
+    delivered via the **child-scoped env** (`LLAMA_API_KEY`, verified enforced on the pinned b9849
+    build — the upstream exempts only `/health` and `/v1/models`) — never argv (visible in process
+    lists; llama-server echoes resolved params to stderr) and never the parent `process.env`
+    (whisper-cli/tar/the GPU probe would inherit it). `LlamaServer.fetch()` is the single HTTP
+    chokepoint and injects `Authorization: Bearer <key>` for all consumers; the stderr drain and
+    every tail read (`redactSidecarSecrets`) scrub key material before it can reach start-failure
+    errors, `gpuLastError`, the audit trail, the app log, or the support-log export.
+    `scripts/measure-peak-rss.ps1` deliberately spawns its own keyless server and is unaffected.
 - **`services/runtime/llama.ts`** — `LlamaRuntime implements ModelRuntime`, composing a `LlamaServer`.
   `chatStream` POSTs to the server's **OpenAI-compatible** `/v1/chat/completions` with `stream: true`,
   sending `messages` as plain role/content (the server applies the model's chat template — we never
@@ -2600,6 +2609,28 @@ files**.
   path is known), behind the unchanged `RuntimeManager`. `main/index.ts` uses it in place of the bare
   `createMockRuntime`. **Phase 15:** when binary + weights are present the factory returns the **GPU
   start ladder** (see below) instead of a bare `LlamaRuntime`.
+- **Generation gate (local-api wave P1).** `RuntimeManager.doStart` wraps the factory-returned
+  runtime (ladder AND mock — the shipped gate is the one CI exercises) in a decorator whose
+  `chatStream` counts in-flight generations per lane (`RuntimeChatOptions.lane`: `'in-app'` default /
+  `'external'`), because generation reaches the model through several lanes no single registry sees
+  (chat/RAG streams, doc tasks, skill runs, the benchmark, compaction, classification) — all via
+  `active().chatStream`, so the manager is the one chokepoint. `RuntimeManager.isGenerating()` is
+  the busy signal for external (local-API) admission, which **fails closed**: no active runtime =
+  busy — that denial also covers the #109 warm-up generation, which streams against the inner rung
+  runtime while `active()` is still null and bypasses the decorator. Lane rules (D8, in-app wins):
+  an external entry is refused (`ExternalGenerationBusyError`) in the same synchronous frame as its
+  counter increment whenever the in-app lane is active — an admitted-but-parked external request can
+  never start alongside an in-app turn; an entering in-app generation fires the registered external
+  pre-emption hook (`setExternalPreemption` — local-API admission aborts its active + queued
+  requests) and **awaits the external stream's real teardown** before issuing to the model, so the
+  two can never overlap on the shared KV slot. The gate deliberately does NOT serialize in-app
+  lanes against each other (the pre-existing skill-run/benchmark concurrency, A6/A7, is unchanged —
+  now merely visible). Counter discipline: increment as the generator body's first act (a
+  created-but-never-iterated generator holds no count), decrement in `finally` (success, error,
+  abort, and pre-yield throws all release it). External admission itself lives in
+  `services/local-api/admission.ts`: single external slot, queue depth 0–1 with a ~30 s cap
+  (deeper queues are silent multi-minute hangs on CPU boxes), `workspaceAdmitsWork`-class lock
+  refusal, and pre-emption/teardown that aborts both the active stream and the parked waiter.
 
 ### GPU acceleration: probe + start ladder (Phase 15; design record below)
 

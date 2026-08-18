@@ -136,6 +136,17 @@ States: `unsupported→missing→checksum_failed→installed` (+`running` overla
 ✅ **`services/runtime/`** — `ModelRuntime` interface + `RuntimeManager` (single active runtime,
 restart on switch) + `MockRuntime` (health ok; `chatStream` stubbed until Phase 3). Factory swap →
 `LlamaRuntime` in Phase 10. `RuntimeStatus` shape per `shared/types.ts`.
+**Local-api wave P1 (additive):** `RuntimeChatOptions.lane?: 'in-app' | 'external'` (omitted =
+`'in-app'`) marks the admission lane; `RuntimeManager.isGenerating(): boolean` is the any-lane busy
+signal (the manager wraps the factory-returned runtime in a generation-gate decorator — `active()`
+hands out the decorated instance); `RuntimeManager.setExternalPreemption(hook)` registers the
+local-API admission's abort hook (an entering in-app generation fires it, then awaits external
+teardown — D8). External callers must treat `active() == null` as busy (fail closed; covers the
+start window + #109 warm-up). `ExternalGenerationBusyError` is the typed same-frame refusal an
+external-lane `chatStream` pull throws while the in-app lane is active (HTTP layer maps it to 429).
+`services/local-api/admission.ts`: `LocalApiAdmission.tryAdmit(id, signal?) → Admission | 'busy' |
+'locked'`; `Admission = { id, signal, ready: Promise<boolean>, release() }` (queue depth 0–1,
+~30 s cap; `preemptExternal`/`abortAll` abort active + queued).
 ✅ **IPC** `src/main/ipc/registerModelIpc.ts` — `listModels(lazyVerify?: boolean)` (#138 D-7:
 the RT-3 param — `true` hashes only the active model on a cold cache; the gate-into-chat path
 passes it, the Models screen omits it to hash the full set), `selectModel`, `startRuntime`,

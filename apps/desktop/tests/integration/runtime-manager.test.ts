@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import {
   LlamaServer,
@@ -6,8 +6,8 @@ import {
   type SpawnFn,
   type UnexpectedExitInfo
 } from '../../src/main/services/runtime/sidecar'
-import { RuntimeManager } from '../../src/main/services/runtime'
-import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
+import { RuntimeManager, ExternalGenerationBusyError } from '../../src/main/services/runtime'
+import type { ModelRuntime, RuntimeStartOptions, RuntimeChatOptions } from '../../src/main/services/runtime'
 import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
@@ -839,5 +839,304 @@ describe('LlamaServer.start() — REL-2 single-flight', () => {
     await Promise.all([server.start(), server.start()])
     expect(spawns).toBe(1)
     expect((await server.health()).healthy).toBe(true)
+  })
+})
+
+// ---- Generation gate (local-api P1) ------------------------------------------------------
+//
+// The busy signal for external (local-API) admission lives at the MANAGER, not in any one
+// runtime: doStart wraps whatever the factory returned (ladder AND mock — the gate CI
+// exercises is the shipped one) so every lane that reaches the model via active().chatStream
+// — chat/RAG, doc tasks, skill runs, the benchmark, compaction, classification — is counted
+// with zero call-site changes. Known bypass, covered by fail-closed admission: the #109
+// warm-up generation talks to the INNER rung runtime while active() is still null, so
+// "no active runtime ⇒ busy" (asserted in local-api-admission.test.ts) closes that window.
+
+/** A hand-cranked token source: tests control exactly when tokens flow, end, or fail. */
+function manualSource() {
+  const queue: Array<{ value?: string; done?: boolean; error?: unknown }> = []
+  let notify: (() => void) | null = null
+  const wake = (): void => {
+    const n = notify
+    notify = null
+    n?.()
+  }
+  return {
+    push(v: string) {
+      queue.push({ value: v })
+      wake()
+    },
+    end() {
+      queue.push({ done: true })
+      wake()
+    },
+    fail(e: unknown) {
+      queue.push({ error: e })
+      wake()
+    },
+    async *stream(signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+      for (;;) {
+        while (queue.length === 0) {
+          if (signal?.aborted) return
+          await new Promise<void>((resolve) => {
+            notify = resolve
+            signal?.addEventListener('abort', () => resolve(), { once: true })
+          })
+          if (signal?.aborted) return
+        }
+        const item = queue.shift()!
+        if (item.error) throw item.error
+        if (item.done) return
+        yield item.value!
+      }
+    }
+  }
+}
+
+/** Manager whose factory returns a runtime streaming from a fresh manualSource per call. */
+async function gatedHarness() {
+  const sources: Array<ReturnType<typeof manualSource>> = []
+  const mgr = new RuntimeManager((opts) => ({
+    modelId: opts.modelId,
+    start: async () => {},
+    stop: async () => {},
+    health: async () => ({ healthy: true, message: '', port: null }),
+    chatStream(_messages, options?: RuntimeChatOptions) {
+      const src = manualSource()
+      sources.push(src)
+      return src.stream(options?.signal)
+    }
+  }))
+  await mgr.start({ modelId: 'gate-m', modelPath: '/m.gguf', contextTokens: 2048 })
+  const runtime = mgr.active()!
+  return { mgr, runtime, sources }
+}
+
+/** Pull one item from a generator with a descriptive stall guard. */
+async function next(gen: AsyncGenerator<string, void, unknown>): Promise<IteratorResult<string, void>> {
+  return gen.next()
+}
+
+describe('RuntimeManager generation gate (local-api P1)', () => {
+  it('counts an in-app stream while it runs; created-but-never-iterated holds NO count', async () => {
+    const { mgr, runtime, sources } = await gatedHarness()
+    expect(mgr.isGenerating()).toBe(false)
+    const gen = runtime.chatStream([{ role: 'user', content: 'q' }])
+    // Created but never pulled: the counter must not move (perf M5 leak class).
+    expect(mgr.isGenerating()).toBe(false)
+    const first = next(gen)
+    await Promise.resolve()
+    expect(mgr.isGenerating()).toBe(true)
+    sources[0].push('tok')
+    expect((await first).value).toBe('tok')
+    expect(mgr.isGenerating()).toBe(true)
+    sources[0].end()
+    expect((await next(gen)).done).toBe(true)
+    expect(mgr.isGenerating()).toBe(false)
+  })
+
+  it('releases the count on an inner error and on consumer abandonment (gen.return)', async () => {
+    const { mgr, runtime, sources } = await gatedHarness()
+    // Error path.
+    const failing = runtime.chatStream([{ role: 'user', content: 'q' }])
+    const firstPull = next(failing)
+    await Promise.resolve()
+    expect(mgr.isGenerating()).toBe(true)
+    sources[0].fail(new Error('mid-stream crash'))
+    await expect(firstPull).rejects.toThrow('mid-stream crash')
+    expect(mgr.isGenerating()).toBe(false)
+    // Abandonment path (the consumer walks away without erroring).
+    const abandoned = runtime.chatStream([{ role: 'user', content: 'q' }])
+    const pull = next(abandoned)
+    await Promise.resolve()
+    expect(mgr.isGenerating()).toBe(true)
+    sources[1].push('tok')
+    await pull
+    await abandoned.return()
+    expect(mgr.isGenerating()).toBe(false)
+  })
+
+  it('releases the count when the inner runtime throws BEFORE the first yield', async () => {
+    const mgr = new RuntimeManager((opts) => ({
+      modelId: opts.modelId,
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: '', port: null }),
+      // The real runtime's synchronous guard: chatStream throws 'Runtime is not started'.
+      // eslint-disable-next-line require-yield
+      chatStream: async function* (): AsyncGenerator<string, void, unknown> {
+        throw new Error('Runtime is not started')
+      }
+    }))
+    await mgr.start({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 })
+    const gen = mgr.active()!.chatStream([{ role: 'user', content: 'q' }])
+    await expect(next(gen)).rejects.toThrow('Runtime is not started')
+    expect(mgr.isGenerating()).toBe(false) // a pre-yield throw must not wedge the gate
+  })
+
+  it('REFUSES an external stream while an in-app generation is active (429 class)', async () => {
+    const { mgr, runtime, sources } = await gatedHarness()
+    const inApp = runtime.chatStream([{ role: 'user', content: 'q' }])
+    const inAppFirst = next(inApp)
+    await Promise.resolve()
+    sources[0].push('a')
+    await inAppFirst
+    const external = runtime.chatStream([{ role: 'user', content: 'x' }], { lane: 'external' })
+    await expect(next(external)).rejects.toThrow(ExternalGenerationBusyError)
+    // The refusal released its own count — the in-app stream still owns the gate.
+    expect(mgr.isGenerating()).toBe(true)
+    sources[0].end()
+    await inApp.return()
+    expect(mgr.isGenerating()).toBe(false)
+  })
+
+  it('TOCTOU probe: an external generator created BEFORE the in-app turn cannot start after it', async () => {
+    const { runtime, sources } = await gatedHarness()
+    // "Admitted" external request, parked before its first pull (the admit→stream await gap).
+    const external = runtime.chatStream([{ role: 'user', content: 'x' }], { lane: 'external' })
+    // An in-app turn enters and starts streaming.
+    const inApp = runtime.chatStream([{ role: 'user', content: 'q' }])
+    const inAppFirst = next(inApp)
+    await Promise.resolve()
+    sources[0].push('a')
+    await inAppFirst
+    // The parked external now tries to start: the same-frame check refuses it.
+    await expect(next(external)).rejects.toThrow(ExternalGenerationBusyError)
+    sources[0].end()
+    await inApp.return()
+  })
+
+  it('an entering in-app turn pre-empts the external lane and AWAITS its real teardown (D8)', async () => {
+    const { mgr, runtime, sources } = await gatedHarness()
+    const order: string[] = []
+    const externalAbort = new AbortController()
+    mgr.setExternalPreemption(() => {
+      order.push('preempt-hook')
+      externalAbort.abort(new DOMException('preempted', 'AbortError'))
+    })
+    // External stream running.
+    const external = runtime.chatStream([{ role: 'user', content: 'x' }], {
+      lane: 'external',
+      signal: externalAbort.signal
+    })
+    const extFirst = next(external)
+    await Promise.resolve()
+    sources[0].push('e1')
+    await extFirst
+    expect(mgr.isGenerating()).toBe(true)
+    // In-app turn enters: hook fires, external tears down, THEN the in-app stream issues.
+    const extDrain = (async () => {
+      // Consumer keeps pulling; the abort ends the stream (return) on the next pull.
+      const r = await next(external)
+      order.push(`external-settled:${r.done}`)
+    })()
+    const inApp = runtime.chatStream([{ role: 'user', content: 'q' }])
+    const inAppFirst = (async () => {
+      const r = await next(inApp)
+      order.push(`in-app-first:${String(r.value)}`)
+      return r
+    })()
+    await extDrain
+    // Feed the in-app stream only after the external one settled.
+    sources[1].push('a1')
+    await inAppFirst
+    expect(order).toEqual(['preempt-hook', 'external-settled:true', 'in-app-first:a1'])
+    expect(mgr.isGenerating()).toBe(true) // the in-app stream now owns the gate
+    sources[1].end()
+    await inApp.return()
+    expect(mgr.isGenerating()).toBe(false)
+    mgr.setExternalPreemption(null)
+  })
+
+  it('an external stream never fires the pre-emption hook (no self-pre-emption, perf M4)', async () => {
+    const { mgr, runtime, sources } = await gatedHarness()
+    const hook = vi.fn()
+    mgr.setExternalPreemption(hook)
+    const first = runtime.chatStream([{ role: 'user', content: 'x' }], { lane: 'external' })
+    const firstPull = next(first)
+    await Promise.resolve()
+    sources[0].push('e')
+    await firstPull
+    sources[0].end()
+    expect((await next(first)).done).toBe(true)
+    // A second external request after the first — still no pre-emption anywhere.
+    const second = runtime.chatStream([{ role: 'user', content: 'y' }], { lane: 'external' })
+    const secondPull = next(second)
+    await Promise.resolve()
+    sources[1].push('e2')
+    await secondPull
+    sources[1].end()
+    await second.return()
+    expect(hook).not.toHaveBeenCalled()
+    mgr.setExternalPreemption(null)
+  })
+
+  it('a throwing pre-emption hook never fails the in-app turn', async () => {
+    const { mgr, runtime, sources } = await gatedHarness()
+    const externalAbort = new AbortController()
+    mgr.setExternalPreemption(() => {
+      externalAbort.abort()
+      throw new Error('hook exploded')
+    })
+    const external = runtime.chatStream([{ role: 'user', content: 'x' }], {
+      lane: 'external',
+      signal: externalAbort.signal
+    })
+    const extFirst = next(external)
+    await Promise.resolve()
+    sources[0].push('e')
+    await extFirst
+    const drain = (async () => {
+      await next(external) // abort → done on next pull
+    })()
+    const inApp = runtime.chatStream([{ role: 'user', content: 'q' }])
+    const pull = next(inApp)
+    await drain
+    sources[1].push('a')
+    expect((await pull).value).toBe('a')
+    sources[1].end()
+    await inApp.return()
+    mgr.setExternalPreemption(null)
+  })
+
+  it('two concurrent IN-APP streams are both admitted (the gate serializes external only)', async () => {
+    // Pre-existing app behavior (A6/A7): in-app lanes are not serialized by this gate —
+    // it makes them VISIBLE to external admission. This pin documents that boundary.
+    const { mgr, runtime, sources } = await gatedHarness()
+    const g1 = runtime.chatStream([{ role: 'user', content: '1' }])
+    const g2 = runtime.chatStream([{ role: 'user', content: '2' }])
+    const p1 = next(g1)
+    const p2 = next(g2)
+    await Promise.resolve()
+    sources[0].push('a')
+    sources[1].push('b')
+    await p1
+    await p2
+    expect(mgr.isGenerating()).toBe(true)
+    sources[0].end()
+    sources[1].end()
+    await g1.return()
+    await g2.return()
+    expect(mgr.isGenerating()).toBe(false)
+  })
+
+  it('the gate rides the MOCK factory path too (maintainer F4 — the gate CI exercises)', async () => {
+    // No binary ⇒ createSelectingRuntimeFactory returns the MockRuntime directly (never
+    // a ladder) — the decorator must still wrap it.
+    const factory = createSelectingRuntimeFactory({ rootPath: '/nope', resolveBin: () => null })
+    const mgr = new RuntimeManager(factory)
+    await mgr.start({ modelId: 'mock-m', modelPath: '/nope.gguf', contextTokens: 2048 })
+    const runtime = mgr.active()!
+    expect(runtime.backend).toBe('mock')
+    const gen = runtime.chatStream([{ role: 'user', content: 'hello' }])
+    const first = await gen.next()
+    expect(first.done).toBe(false)
+    expect(mgr.isGenerating()).toBe(true)
+    // An external request during the mock stream is refused exactly like on the ladder.
+    const external = runtime.chatStream([{ role: 'user', content: 'x' }], { lane: 'external' })
+    await expect(external.next()).rejects.toThrow(ExternalGenerationBusyError)
+    await gen.return()
+    expect(mgr.isGenerating()).toBe(false)
+    await mgr.stop()
   })
 })

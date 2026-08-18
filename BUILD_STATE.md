@@ -19,7 +19,24 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-08-18 — **Open wave: local API endpoint — branch `local-api-endpoint` (phase commit series `local-api-p1:`…`local-api-p6:`); one consolidated entry is maintained in place here as the wave progresses.**_
+_2026-08-18 — **Open wave: local API endpoint — branch `local-api-endpoint` (phase commit series `local-api-p1:`…`local-api-p6:`; draft PR #184); one consolidated entry is maintained in place here as the wave progresses.**_
+**P1 (runtime hardening) — code+tests+docs landed on the branch:** (1) sidecar auth — every
+`LlamaServer` spawn now generates a per-spawn hex API key delivered via child-scoped env
+(`LLAMA_API_KEY`, verified enforced on the pinned b9849 build; only `/health` + `/v1/models` are
+auth-exempt upstream), injected as a Bearer header at the single `fetch()` chokepoint, redacted
+from stderr-derived surfaces (start-failure errors → `gpuLastError` → audit/log/export), argv +
+parent-env clean; `measure-peak-rss.ps1` stays deliberately keyless (noted in its header). (2)
+generation gate — `RuntimeManager.doStart` wraps the factory-returned runtime (ladder AND mock) in
+a lane-counting `chatStream` decorator (`RuntimeChatOptions.lane`); `isGenerating()` +
+`setExternalPreemption()` are the external-admission seam; in-app entry pre-empts the external lane
+and awaits its real teardown, external entry is refused same-frame while in-app is active (typed
+`ExternalGenerationBusyError`); fail-closed rule covers the `active() == null` start/warm-up
+window. (3) `services/local-api/admission.ts` — single external slot, queue depth 0–1 (~30 s cap),
+`workspaceAdmitsWork`-class lock refusal, pre-emption/teardown aborts active + queued. Records:
+architecture.md (sidecar bullet + "Generation gate" bullet), security-model.md ("Sidecar requests
+are authenticated"), data-contracts.md (runtime block). Known pre-existing, NOT fixed here (A6/A7,
+issues to file at wave close): benchmark + skill-run in-app concurrency — the gate makes them
+visible, not serialized.
 
 _Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
