@@ -574,6 +574,22 @@ CASES['chat-starting-progress'] = {
     </div>
   )
 }
+/** Clicks the card's master switch once after mount so the capture shows the CONSENT DIALOG
+ *  as the component really renders it (the alternative — restating the copy here — would drift
+ *  from the catalog the moment either changed). */
+function OpenedConsent(): JSX.Element {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const el = document.querySelector('input[role="switch"]')
+      if (el instanceof HTMLInputElement) el.click()
+    }, 60)
+    return () => clearTimeout(timer)
+  }, [])
+  return (
+    <LocalApiCard policy={PREVIEW_POLICY} settings={DEFAULT_SETTINGS} onSettingsChanged={noop} />
+  )
+}
+
 // local-api wave P4: the Settings → Privacy "Local API" card in its two loud states — ON with
 // the connect block + neutral status, and ON while an app is actually generating (the only
 // moment the D5 warning is true). Both render in DE too: the card + dialog strings are the
@@ -601,6 +617,18 @@ CASES['local-api-busy'] = {
       />
     </div>
   )
+}
+CASES['local-api-consent'] = {
+  label: 'Settings → Privacy — Local API consent dialog (the trust surface)',
+  node: (
+    <div style={{ width: 820 }}>
+      <OpenedConsent />
+    </div>
+  )
+}
+CASES['local-api-consent-de'] = {
+  ...CASES['local-api-consent'],
+  label: `${CASES['local-api-consent'].label} — DE`
 }
 CASES['local-api-de'] = { ...CASES['local-api'], label: `${CASES['local-api'].label} — DE` }
 CASES['local-api-busy-de'] = {

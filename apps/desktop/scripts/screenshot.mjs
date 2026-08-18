@@ -58,6 +58,10 @@ const READY = {
   // The benchmark card's dl renders once lastBenchmark loaded; the progress bar once status did.
   'diagnostics-read': '.benchmark-warnings',
   'diagnostics-read-empty': '.kv',
+  // The consent-dialog cases open the REAL dialog on mount (preview.tsx OpenedConsent), so
+  // the capture must wait for the portal, not merely for the card.
+  'local-api-consent': '.dialog-confirm',
+  'local-api-consent-de': '.dialog-confirm',
   'chat-starting-progress': '.progress'
 }
 
