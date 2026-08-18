@@ -202,7 +202,14 @@ async function waitTerminal(
     if (status.state === 'done' || status.state === 'failed' || status.state === 'cancelled') {
       return status
     }
-    if (Date.now() - start > 10_000) throw new Error(`task ${jobId} never finished: ${status.state}`)
+    // 30 s, not 10: this is a HANG DETECTOR, not a timing proof — every timing assertion in
+    // this file lives in an explicit expect(), never in this bound. The #157 (DT-2) case below
+    // translates a 600-unit doc at tokenDelayMs 5 and measures ~9.4 s in isolation, i.e. 6%
+    // headroom under a 10 s bound; under full-suite CPU load on this 16 GB box it crossed and
+    // failed 3 of 4 runs at ~10.16 s with "never finished: running" — the foreign task was
+    // still legitimately translating. Same class as #84/#97/#101 and the local-api wave fix:
+    // vitest's CI testTimeout budget does NOT widen a hand-rolled poll bound like this one.
+    if (Date.now() - start > 30_000) throw new Error(`task ${jobId} never finished: ${status.state}`)
     await new Promise((r) => setTimeout(r, 10))
   }
 }
@@ -1009,7 +1016,14 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
     expect(translator.calls.length).toBe(callsAtForeignDone)
     expect(manager.getDocTask(ours.jobId).state).toBe('cancelled')
     expect(manager.hasActiveTask()).toBe(false)
-  })
+    // 60 s budget (the #101 CI value), applied per-test because THIS test is the heavy one in
+    // the file: it deliberately drives a 600-unit foreign translation to completion so that OUR
+    // task is provably still queued behind it, which costs ~9.4 s of real wall-clock even when
+    // the box is idle. Against the 15 s local default that is only 1.6x headroom, and wave DEP-4
+    // watched it fail 3 of 5 full-suite runs on a loaded 16 GB machine (a run stretching to 312 s
+    // vs the usual ~140 s). Nothing is loosened: the cancel semantics are asserted above by
+    // explicit expect()s, and waitTerminal's own 30 s bound still catches a genuine hang first.
+  }, 60_000)
 
   it('a targeted exact-id cancel hits the running task; the no-arg fallback still works (old-caller parity)', async () => {
     const a = await importDoc(600, 'a.txt')
