@@ -10253,6 +10253,13 @@ under the `electron`-mocking suite:
   exposes the `getDroppedFilePath` seam.
 - **Packaged renderer smoke.** The app paints its onboarding screen on Chromium 150 with **zero
   console errors** and no horizontal overflow.
+- **Portable artifact on a REAL prepared drive (owner-run, 2026-08-19).** The portable `.exe`
+  copied to the root of an existing encrypted drive launches by double-click, resolves that
+  drive via `findPreparedDriveRoot` (`config/drive.json`) rather than falling back to a fresh
+  app-data workspace, unlocks the **existing encrypted workspace**, and lists its already-indexed
+  documents with their chunk counts. So the E43 build opens an E39-era encrypted workspace with
+  no migration and no format change — the strongest available confirmation of the "existing user
+  workspaces are unaffected" claim, on real data rather than a synthetic fixture.
 - **electron-builder packaging Electron 43:** a real `package:win` completed and reports
   `electron=43.4.0`; the parity test guarantees that is the version actually packaged.
 - **All THREE platforms package on Electron 43** (`workflow_dispatch` on `release.yml`, run
