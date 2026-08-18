@@ -1056,7 +1056,10 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   **no preload at all** (no IPC surface; wiring-pinned in `window-security.test.ts`),
   window-open + will-navigate/will-redirect ALL denied; writes the source html sibling,
   `loadFile` (= did-finish-load) → `document.fonts.ready` → `printToPDF` with the FULL
-  D-1 option set (verified supported by the installed Electron 39 types): `pageSize:'A4'`,
+  D-1 option set (verified supported by the installed Electron 43 types, and re-smoked on
+  the packaged Electron 43.4.0 / Chromium 150 build — DEP-4 P4, 2026-08-18: every option
+  accepted, output a valid `%PDF-1.4 … %%EOF`, and `generateTaggedPDF` produced actual
+  `StructTreeRoot`/`MarkInfo` structures): `pageSize:'A4'`,
   `preferCSSPageSize` (the template's `@page` is authoritative), `printBackground`,
   `displayHeaderFooter` + empty-span `headerTemplate` (suppresses Chromium's default
   date/title header) + `footerTemplate` = escaped pack-id + `pageNumber`/`totalPages`

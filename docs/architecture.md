@@ -83,7 +83,8 @@ a future move to Tauri/Rust is a localized swap.
   sidecar — design record" below.
 
 ## Storage
-`node:sqlite` — built into the Node bundled by **Electron ^39.8.5** (Node 22.x). It is loaded via
+`node:sqlite` — built into the Node bundled by **Electron ^43.4.0** (Node 24.x; measured 24.18.1 /
+SQLite 3.53.1 on the packaged E43 build, wave DEP-4). It is loaded via
 `createRequire` in `services/db.ts` because the experimental module is absent from
 `module.builtinModules`, which otherwise makes bundlers try to resolve a non-existent `sqlite`
 package. One SQLite DB per workspace (`workspace/hilbertraum.sqlite`) holds the original spec §8 tables
@@ -377,7 +378,7 @@ force-quit. The contract now:
 
 **Drag-drop intake (full-audit-2026-06-29 follow-up, Phase 2 — FE-A / FE-C).** Chat drag-and-drop
 attach was **silently dead in the shipped app**: `ChatScreen.pathsFromDrop` read `(file).path`, the
-non-standard `File.path` Electron **removed in v32** (the app pins `^39.8.5`; installed 39.8.10). At
+non-standard `File.path` Electron **removed in v32** (the app pins `^43.4.0`; installed 43.4.0). At
 runtime `.path` is `undefined`, so the loop produced `[]`, `attachFiles` was never called, and a drop
 did nothing — no import, no pending chip, no error. It went unnoticed because the only intake test
 (`ChatAttach.test.tsx`) **fabricated** `dataTransfer.files = [{ name, path }]`, injecting a property
@@ -406,7 +407,9 @@ never fabricate a platform property the renderer could read directly).
   red, verified). jsdom can't exercise `webUtils`, so the unit tests prove the **wiring**; the
   real-Electron leg (bridge exposes the resolver in the actual renderer; `webUtils.getPathForFile` is
   callable in the sandboxed preload on 37.10.3 (API unchanged in Electron 39 — not in the 38/39
-  breaking-changes; typechecks against 39.8.10's `electron.d.ts`) — a renderer-built File resolves
+  breaking-changes; unchanged again in Electron 43 — absent from every 40–43 breaking-change list,
+  and the packaged E43 preload still exposes the `getDroppedFilePath` seam, wave DEP-4; typechecks
+  against 43.4.0's `electron.d.ts`) — a renderer-built File resolves
   to `''` without throwing) was confirmed by launching the built preload under the app's exact
   `webPreferences`. A
   true native OS drag (Explorer → chat) isn't faithfully automatable (a synthetic File has no on-disk
@@ -9637,7 +9640,7 @@ real-Electron smoke runner needs a **`window-all-closed` no-op** (Electron's def
 otherwise races the print) and an **isolated `--user-data-dir`** (profile singleton); the
 pdfjs v6 verification path needs the legacy build + a DOMMatrix polyfill under Node, with
 `getOutline`/`getMarkInfo` asserting the bookmark tree and the tagged-PDF mark.
-`generateTaggedPDF` is EXPERIMENTAL per the Electron docs (still so in Electron 39) — accessible headings/reading order
+`generateTaggedPDF` is EXPERIMENTAL per the Electron docs (still so in Electron 43) — accessible headings/reading order
 are best-effort, **never a PDF/UA claim** (known-limitations.md). PDF bytes are
 nondeterministic (CreationDate/ID) → the HTML input stays golden, the PDF is smoke-tested.
 The freshness verdict and the outdated refusal stay BEFORE any dialog or window work for
@@ -9963,7 +9966,15 @@ saw comment-only changes (§4).
 Electron is a devDependency in npm terms but is the runtime shipped inside every packaged build,
 so the 37→39 bump forced re-measuring every fact that had been proven specifically "on Electron
 37." All of the following were re-run on the real packaged Electron **39.8.10** binary (Chromium
-**142.0.7444.265**, Node **22.22.1**, SQLite **3.51.2**):
+**142.0.7444.265**, Node **22.22.1**, SQLite **3.51.2**).
+
+> **⟶ SUPERSEDED for the version-specific facts (2026-08-18, wave DEP-4, Electron 43.4.0 /
+> Chromium 150.0.7871.224 / Node 24.18.1 / SQLite 3.53.1).** The measurements below stand as the
+> Electron-39 record; the DEP-4 record at the end of this file carries the re-taken ones. Note
+> SQLite moved 3.51.2 → **3.53.1**, which is NOT derivable from the Node version (host Node 24.13
+> bundles 3.50.4) — read it off the real binary after every bump.
+
+The Electron-39 ledger:
 
 - **CSP on `file://` (the headline):** the `onHeadersReceived` response header still ATTACHES
   and ENFORCES (`disposition: "enforce"`) in BOTH windows on the packaged build — a `base-uri`
@@ -10124,6 +10135,234 @@ This record is the durable per-alert ledger; the DEP-1 record above holds the wa
    `pdfjs.d.ts`'s inaccurate "one declaration serves both tsconfig programs" claim (only the
    node program resolves it; the web program gets the real `pdf.d.mts`). The legacy-build
    decision itself stands — one build everywhere.
+
+## Electron 39 → 43 — design record (wave DEP-4, PR #185)
+
+_Wave DEP-4 (2026-08-18) cleared the last open Dependabot alert, **#83** / issue **#179** —
+GHSA-jmr9-qjv8-65gv (CVE-2026-56876, high, CVSS 8.1), `extract-zip <= 2.0.1` unvalidated symlink
+path traversal — by removing `extract-zip` from the dependency tree entirely. It could not be
+patched: `first_patched_version` is `null` and the package is abandoned at 2.0.1 (last publish
+2023-03). Upstream Electron's remediation was **replacement, not repair** (the patched lines
+depend on `@electron-internal/extract-zip`), and an `overrides` alias had already been tested and
+rejected in #179 — the fork is ESM-only + native NAPI, so Electron 39's CJS `install.js` would get
+a non-callable namespace object and every contributor's `npm ci` would break while CI stayed
+green. The working plan (`plans/electron-43-upgrade-plan.md`) was a working paper, git-excluded,
+never committed, and deleted at close-out per the CLAUDE.md doc-lifecycle rule — this record and
+the phase commits below are the surviving sources (see the §-anchor legend at the end)._
+
+**Phase commits** (suite 5223 pass / 50 skip / 5273 total, 375 files → **5249 / 50 / 5299, 376
+files**; the +26 tests / +1 file are this wave's deliberate additions and the skip count returns
+to exactly 50; typecheck + build green at every gate, in that order): P0 `4fce4410` wave open ·
+P1 `47fb36bb` electronVersion parity test · *interlude* `b5ff27bb` #157 DT-2 load-proof budget ·
+P2 `efd1042d` the bump · P2b `39afbf68` electron-builder 26.15.7 · P3 `cb214580` automated
+re-verification · P4/P5 the packaged measurements + this record.
+
+### §1 Scope + outcome
+
+| | Before | After |
+|---|---|---|
+| `electron` | 39.8.10 (`^39.8.5`) | **43.4.0** (`^43.4.0`) |
+| Chromium | 142.0.7444.265 | **150.0.7871.224** (+8 majors) |
+| Node (main) | 22.22.1 | **24.18.1** (+2 majors) |
+| V8 | 14.x | **15.0.245.28** |
+| SQLite (`node:sqlite`) | 3.51.2 | **3.53.1** |
+| `@types/node` | ^22.5.0 (22.19.20) | **^24.9.0** (24.13.3) |
+| `engines.node` | `>=22.5` | **`>=22.12`** (Electron 43's own floor) |
+| `electron-builder` | 26.15.2 | **26.15.7** (§4c) |
+| zip extractor | `extract-zip@2.0.1` | **gone** — `@electron-internal/extract-zip` |
+
+`npm ls extract-zip` → **empty**. `npm audit` → **0 vulnerabilities** (was 2 high). No production
+dependency moved — a devDependency-only diff at the npm level, as in DEP-1 — and **no on-disk
+format changed**, so existing encrypted workspaces open unchanged in both directions.
+
+**Why 43 rather than 40, the smallest alert-clearing major.** DEP-1's rule was "floor at the
+alert-clearing version, don't chase latest." It is overridden here by Electron's support policy:
+only the latest three stable majors get security fixes, so the supported set is 41/42/43 and 40 is
+already outside it. Landing on an unsupported major to fix a security alert would mean re-running
+this wave at the next Electron CVE.
+
+**Correction to a premise the plan carried** (found at the P0 gate, from `npm audit`'s own
+advisory range): the vulnerable range is `1.3.1 - 40.10.2 || 41.0.0-alpha.1 - 41.7.1 ||
+42.0.0-alpha.1 - 42.3.3 || 43.0.0-alpha.1 - 43.0.0-beta.8`. The fork therefore landed at
+**41.7.2 / 42.3.4 / 43.0.0**, NOT at "Electron >= 40" — **all** of 40.x is vulnerable. Nothing
+propagated (43 was already the target), but the documented fallback ladder is `^41.7.2` / `^42.3.4`,
+never bare `^41` / `^42`.
+
+**Minimum OS floors are UNCHANGED** — confirmed, not assumed, because this product runs on the
+customer's machine: the `## Platform support` sections of the v39.8.10 and v43.4.0 READMEs are
+**byte-identical** (Windows 10+, macOS 12 Monterey+, Linux Ubuntu 18.04+/Fedora 32+/Debian 10+;
+the macOS-12 floor was set back at Electron 38). No customer is dropped. ⚠️ **Electron 44 is a
+different story and is a roadmap item, not a bump:** it removes macOS 12 support and drops 32-bit
+Windows (ia32) and Linux armv7l. E43 is the **last series shipping prebuilt 32-bit binaries**, EOL
+**January 2027**.
+
+### §2 Decisions (the ones that outlive the wave)
+
+- **The parity test lands BEFORE the bump.** DEP-1 §5 registered a test asserting
+  `electron-builder.yml`'s `electronVersion` matches the installed `electron`, and nobody wrote
+  it — confirmed by grep at P0: one hit in the whole repo, the yml line itself. Writing it first
+  is what made the bump safe to measure, and it paid immediately (§3).
+- **`verify-electron.mjs` is version-aware, deliberately.** Electron 39 and 41 still declare
+  `postinstall: node install.js`; 42 and 43 declare no scripts at all. Because the documented
+  fallback ladder includes `^41.7.2`, a version-blind script would silently lose the NTFS
+  half-extract protection on exactly the path a failed wave would take.
+- **Never measure the CSP header by registering `webRequest.onHeadersReceived`.** Electron allows
+  ONE listener per session, so a probe that registers its own REPLACES the app's — the very
+  handler that attaches the CSP — and then observes the absence of a header it removed itself.
+  Provoke a violation of a header-only directive (`base-uri`) and read the policy back out of the
+  violation's `originalPolicy`.
+- **Desk-check the toolchain pairing at the bump, not at the packaged run** (the plan's own audit
+  promoted this): discovering an electron-builder incompatibility during P4 wastes a packaged run.
+  It also surfaced §4(c), which had nothing to do with Electron.
+- Carried unchanged from DEP-1: one branch, one commit per phase, merged once; every
+  lockfile-writing command through pinned `npx npm@11.6.2`; the build-before-test gate order
+  (`csp-build-output.test.ts` reads the on-disk `out/`).
+
+### §3 The Electron-43 re-verification ledger (headline)
+
+Electron is a devDependency in npm terms but is the runtime shipped inside every packaged build,
+so the bump invalidates by definition every fact previously proven "on Electron 39." All of the
+following were measured on the **real packaged Windows build** (2026-08-18), not in dev and not
+under the `electron`-mocking suite:
+
+- **CSP on `file://` (the headline, and the wave's one blocking risk).** The `onHeadersReceived`
+  header still **ATTACHES and is ENFORCED** on `file://` in the packaged app on Chromium 150: a
+  `base-uri` injection — permitted by the page's baked meta, which carries no `base-uri`
+  directive — was blocked, `document.baseURI` stayed on the `file://` document, and the
+  violation's `originalPolicy` was **byte-exact** to `buildCsp(false)`. Both baked metas, read out
+  of the **shipped `app.asar`**, were byte-exact to `buildMetaCsp(false, page)` and carried no
+  `localhost`, no `ws://` and no `unsafe-eval`. This supersedes the DEP-1 Electron-39 measurement
+  of the same mechanism; the annotation lives in `security-model.md`'s CSP section.
+- **`node:sqlite` / FTS5.** Node **24.18.1**, SQLite **3.53.1**; `bm25()`, `snippet()` and
+  `highlight()` all correct in the packaged main process. The SQLite version is **not** a function
+  of the Node version (E39/Node 22.22.1 bundled 3.51.2; host Node 24.13.0 bundles 3.50.4), so it
+  cannot be inferred and must be read off the binary each time.
+- **Evidence-Pack `printToPDF`.** The full D-1 option set is still accepted on Chromium 150;
+  output is a valid `%PDF-1.4 … %%EOF`. `generateTaggedPDF` remains **Experimental** upstream but
+  now demonstrably emits `StructTreeRoot` and `MarkInfo` structures — still best-effort
+  accessibility, still **not** a PDF/UA claim.
+- **Permission taxonomy, both directions (the two-sided risk).** `permissions.ts` gates the app's
+  one allowed capability on the Chromium permission string `'media'`, and `index.ts` records that
+  without a check handler Electron **default-grants** — so a rename across 8 Chromium majors
+  fails either toward broken dictation or toward a silent widening. Measured on both handlers:
+  the REQUEST path (`getUserMedia({audio:true})`) → **GRANTED**, and `navigator.permissions.query`
+  through the CHECK path → `microphone: granted`, `camera` / `geolocation` / `notifications` all
+  **denied**. Dictation's capability survives and nothing else widened.
+- **`webUtils.getPathForFile`** (the repo's standing convention is to clear it explicitly on every
+  Electron major): absent from every 40–43 breaking-change list, and the packaged preload still
+  exposes the `getDroppedFilePath` seam.
+- **Packaged renderer smoke.** The app paints its onboarding screen on Chromium 150 with **zero
+  console errors** and no horizontal overflow.
+- **electron-builder packaging Electron 43:** a real `package:win` completed and reports
+  `electron=43.4.0`; the parity test guarantees that is the version actually packaged.
+- **Suite parity:** 5249 / 50 / 5299 across 376 files at every gate from P2 onward, including one
+  deliberately load-stressed run.
+
+**Explicitly NOT measured — recorded as gaps, not as passes:**
+- **Dev-mode OCR raster → IPC → recognize.** Not run: this build machine carries no
+  `*.traineddata` (`OCR backend selected {kind: none}`), the same gap DEP-1 hit.
+- **The OCR window's CSP at runtime.** Its baked meta was verified byte-exact from the shipped
+  asar, but the window itself opens only for OCR work and so could not be opened here. The header
+  is page-agnostic — one session-level handler emitting one `buildCsp(false)` string — so the
+  mechanism is proven by the main-window measurement; the OCR window's runtime `blob:`
+  intersection still rests on its Electron-39 measurement.
+
+### §4 Wave discoveries
+
+- **(a) `verify-electron.mjs` was silently invalidated by the Electron 42 postinstall removal —
+  the sharpest finding of the wave, and absent from issue #179.** Electron ≥ 42 removed the
+  postinstall binary download (supply-chain hardening); the binary now arrives lazily on first
+  invocation of the electron bin, so **`path.txt` legitimately does not exist after a healthy
+  fresh `npm ci`**. The old script read that as "extract did not finish" and responded by deleting
+  `dist/` and spawning `install.js` — meaning our own postinstall would have **re-created the
+  ~100 MB download Electron had just removed on purpose**, on every clean install, while printing
+  a false "binary looks broken" NTFS diagnosis, and defeating the `npm ci --ignore-scripts` flow
+  that motivated the upstream change. Proven rather than argued: the old decision function returns
+  `path.txt is missing (extract did not finish)` for a healthy Electron 43 install. CI never
+  caught it because `HILBERTRAUM_SKIP_ELECTRON_CHECK` early-exits the script, and the script had
+  no tests at all — it called `process.exit` at import time, i.e. it was **untestable by
+  construction**. Rewritten as a verifier (owner decision D-1a) with the CLI half argv-guarded and
+  the decision half pure and unit-tested (`tests/unit/verify-electron.test.ts`, +22).
+- **(b) The E42 change silently switched OFF a real test.**
+  `tests/integration/evidence-pack-pdf-smoke.test.ts` gates on reading `path.txt`, so the bump
+  dropped **6 tests with no failure anywhere** — the only visible trace was the skip count moving
+  50 → 56. That file is the **only** automated coverage of real Chromium `printToPDF`, i.e.
+  exactly what this wave most needed to re-prove, and its own comment claimed "on the first-class
+  Windows dev box a plain `npm test` always exercises it." It now announces the reason it skipped
+  and names the remedy (`npx electron --version` once), distinguishing "CI, deliberately
+  binary-free" from "installed but not fetched yet". **Generalisable lesson: a test gated on an
+  environment probe can be disabled by an upstream change without any signal — the gate must be
+  able to say why it is silent.**
+- **(c) electron-builder 26.15.2 sat inside a silent-corruption window, unrelated to Electron.**
+  eb issue #9983 (fixed in 26.15.6): the install-time `Nsis7z::Extract` plugin cannot decode the
+  BCJ2 filter that bundled 7za 24.09 applies, so the build **drops every PE file** — the main
+  `.exe`, all Chromium DLLs, the `.node` natives — while still **exiting 0**, producing an
+  unrunnable app from a build that reported success. Upstream documents it for the `nsis` target;
+  `npm run package:win` builds `portable`, which at 26.15.2 routes through the same
+  `archive()`/`app-64.7z` path, and whether portable is affected is **not stated upstream**.
+  Bumped to **26.15.7** before the packaged run rather than finding out from a release artifact;
+  that also picks up 26.15.4's fix for the sibling regression where 7za dereferenced symlinks and
+  corrupted macOS `.framework` bundles. **Verified on the shipped artifact:** the NSIS-extracted
+  payload is **SHA-256 identical** to `win-unpacked` for the main executable, `app.asar` and the
+  DLLs, and the extracted app launches and runs correctly. Note for reproducers:
+  `npm i electron-builder@latest` currently resolves to **26.15.3**, not 26.15.7 — npm's `latest`
+  tag and GitHub's "Latest" release disagree (upstream #9972); the `v26` dist-tag carries 26.15.7.
+- **(d) The `#157 DT-2` translation-cancel test was living on 6% timing headroom.** It drives a
+  600-unit foreign translation to completion (~9.4 s idle) against a hand-rolled 10 s poll bound,
+  and vitest's CI `testTimeout` widening does **not** apply to a hand-rolled poll. It failed 3 of
+  5 full-suite runs under load. Fixed as a labelled interlude commit: the poll bound became 30 s
+  (a hang detector, never a timing proof) and the test carries an explicit 60 s budget — the same
+  value CI already uses. No semantics loosened. Same family as #84/#97/#101.
+- **(e) `ELECTRON_SKIP_BINARY_DOWNLOAD` is dead** and was removed from `ci.yml`: Electron ≥ 42
+  reads it nowhere, so leaving it would advertise an effect it no longer has. CI needs no knob at
+  all now — it never invokes the electron bin, and the rewritten postinstall exits 0 on a
+  not-yet-downloaded binary. `HILBERTRAUM_SKIP_ELECTRON_CHECK` stays as belt-and-braces.
+- **(f) The `ELECTRON_RUN_AS_NODE` trap from DEP-1 §4(e) is still live** in agent tooling
+  environments — it was set in this wave's shell too, and was cleared before every dev/Electron
+  invocation. Not a repo condition; recorded so it is not re-diagnosed as a product bug.
+
+### §5 Follow-up register (owner-facing)
+
+1. **`.github/dependabot.yml`** — DEP-1 §5 follow-up #4, still open. Owner-approved during this
+   wave (decision D-4) to land as its **own PR**, deliberately not enlarging this wave's diff.
+   This was the fourth hand-rolled dependency batch (DEP-1, DEP-2, DEP-3, DEP-4).
+2. **Packaged-OCR fix bundle** — unchanged and still open (DEP-1 §5 follow-up #2): `asarUnpack`
+   the tesseract.js worker's hoisted deps, degrade the task instead of dying, make `ocrAvailable`
+   honest. Untouched by this wave — the defect is an `asarUnpack` gap, not a runtime-version
+   effect. The OCR-window CSP re-check rides along with it (§3).
+3. **OCR assets on a build machine.** Two DEP-4 gaps (dev-mode OCR recognize; the OCR window's
+   runtime CSP) exist only because no `*.traineddata` is present. Running the packaged measurement
+   on an asset-carrying drive would close both.
+4. **Electron 44 is a customer-facing decision, not a routine bump** (§1): it drops macOS 12 and
+   32-bit Windows/armv7l. E43 is the last series with prebuilt 32-bit binaries and is supported
+   until **January 2027**. Decide deliberately, with the drive product's OS matrix in hand.
+5. **electron-builder air-gapped builds** — upstream #10039: eb fails in air-gapped environments
+   even with a seeded cache, because `@electron/get` always fetches `SHASUMS256.txt`. Fixed on
+   master only, not in any 26.15.x. Relevant to this project's offline-first posture, but it
+   affects BUILD machines, not the shipped app.
+6. **`test:coverage` parallelism cap** — DEP-1 §5 follow-up #3, still open and unchanged.
+
+### §-anchor legend
+
+The phase commits cite `plan P0`…`plan P6` and the plan's `§N` sections. The plan
+(`plans/electron-43-upgrade-plan.md`) was a working paper, git-excluded and never committed, and
+was deleted at close-out — **no `git show` recovers it**. Citations of that form resolve here:
+
+| Plan citation | Resolves to |
+|---|---|
+| `plan §1` (why the bump exists) / `plan §2` (stack delta) | §1 above |
+| `plan §3` (blast radius) | §3 above (measured) + §4 (what it missed) |
+| `plan §3A` (`verify-electron.mjs` invalidated) | §4(a) |
+| `plan §3B` (`electronVersion` unguarded) | §2 + §3, and commit `47fb36bb` |
+| `plan §3E` / `§3G` (Chromium + security surfaces) | §3 above |
+| `plan §4` (risk register R1–R10) | §3 (R3/R5b/R6 cleared by measurement) + §4 |
+| `plan §5 P0`…`P6` (phases) | the phase commits listed at the top of this record |
+| `plan §7 D-1`…`D-4` (owner decisions) | §2 (D-1), §5 item 1 (D-4), §1/§3 (D-2), §3 (D-3) |
+| `plan §8` (abort branch / fallback ladder) | §1 — corrected to `^41.7.2` / `^42.3.4` |
+| `plan §11` (self-audit) | superseded: its findings were folded into the plan before execution |
+
+Surviving sources for anything not resolved above: this record, the phase commits, and the PR #185
+body.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 

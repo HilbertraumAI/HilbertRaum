@@ -3,8 +3,12 @@ import { randomUUID } from 'node:crypto'
 import { ocrMetaFromJson } from './ingestion/ocr-meta'
 
 // SQLite storage via Node's built-in driver (no native compilation).
-// Requires the bundled Node >= 22.5; Electron is pinned ^39.8.5 (Node 22.x) so the packaged
+// Requires the bundled Node >= 22.12; Electron is pinned ^43.4.0 (Node 24.x) so the packaged
 // main process has node:sqlite (Electron 33 bundles Node 20 and lacks it).
+// Measured on the packaged Electron 43.4.0 build (DEP-4 P4, 2026-08-18): Node 24.18.1,
+// SQLite 3.53.1, with the FTS5 trio (bm25/snippet/highlight) verified working. Note the
+// SQLite version is NOT a function of the Node version — E39 bundled 3.51.2 while host
+// Node 24.13 bundles 3.50.4 — so it must be read off the real binary after every bump.
 // Encrypted-at-rest mode wraps this same file/schema.
 //
 // node:sqlite is experimental and not listed in module.builtinModules, which
