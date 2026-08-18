@@ -2589,10 +2589,15 @@ files**.
     build — the upstream exempts only `/health` and `/v1/models`) — never argv (visible in process
     lists; llama-server echoes resolved params to stderr) and never the parent `process.env`
     (whisper-cli/tar/the GPU probe would inherit it). `LlamaServer.fetch()` is the single HTTP
-    chokepoint and injects `Authorization: Bearer <key>` for all consumers; the stderr drain and
-    every tail read (`redactSidecarSecrets`) scrub key material before it can reach start-failure
-    errors, `gpuLastError`, the audit trail, the app log, or the support-log export.
-    `scripts/measure-peak-rss.ps1` deliberately spawns its own keyless server and is unaffected.
+    chokepoint and injects `Authorization: Bearer <key>` for all consumers. Stderr never carries
+    the key out: the drain applies exact-key redaction over a partial-line hold-back (complete
+    lines publish with unchanged timing; a chunk-split key always lives in a partial line, so it is
+    reassembled and scrubbed before ANY sink — the capped tail or the `onStderrData` observer —
+    sees it), and tail reads (`redactedTail` → start-failure errors, `gpuLastError`, the audit
+    trail, the app log, the support-log export) add the generic `api…key <value>` pass once at
+    read time (value-shaped tokens only, so the routine `api_keys: 1 keys loaded` count line stays
+    legible). `scripts/measure-peak-rss.ps1` deliberately spawns its own keyless server and is
+    unaffected.
 - **`services/runtime/llama.ts`** — `LlamaRuntime implements ModelRuntime`, composing a `LlamaServer`.
   `chatStream` POSTs to the server's **OpenAI-compatible** `/v1/chat/completions` with `stream: true`,
   sending `messages` as plain role/content (the server applies the model's chat template — we never
@@ -2614,23 +2619,33 @@ files**.
   `chatStream` counts in-flight generations per lane (`RuntimeChatOptions.lane`: `'in-app'` default /
   `'external'`), because generation reaches the model through several lanes no single registry sees
   (chat/RAG streams, doc tasks, skill runs, the benchmark, compaction, classification) — all via
-  `active().chatStream`, so the manager is the one chokepoint. `RuntimeManager.isGenerating()` is
-  the busy signal for external (local-API) admission, which **fails closed**: no active runtime =
-  busy — that denial also covers the #109 warm-up generation, which streams against the inner rung
-  runtime while `active()` is still null and bypasses the decorator. Lane rules (D8, in-app wins):
-  an external entry is refused (`ExternalGenerationBusyError`) in the same synchronous frame as its
-  counter increment whenever the in-app lane is active — an admitted-but-parked external request can
-  never start alongside an in-app turn; an entering in-app generation fires the registered external
-  pre-emption hook (`setExternalPreemption` — local-API admission aborts its active + queued
-  requests) and **awaits the external stream's real teardown** before issuing to the model, so the
-  two can never overlap on the shared KV slot. The gate deliberately does NOT serialize in-app
-  lanes against each other (the pre-existing skill-run/benchmark concurrency, A6/A7, is unchanged —
-  now merely visible). Counter discipline: increment as the generator body's first act (a
-  created-but-never-iterated generator holds no count), decrement in `finally` (success, error,
-  abort, and pre-yield throws all release it). External admission itself lives in
-  `services/local-api/admission.ts`: single external slot, queue depth 0–1 with a ~30 s cap
-  (deeper queues are silent multi-minute hangs on CPU boxes), `workspaceAdmitsWork`-class lock
-  refusal, and pre-emption/teardown that aborts both the active stream and the parked waiter.
+  `active().chatStream`, so the manager is the one chokepoint.
+  **`RuntimeManager.isExternallyBusy()` is THE predicate for external (local-API) admission** —
+  any in-flight generation OR no active runtime, fail closed: `active()` is null through the whole
+  start window, exactly when the #109 warm-up generation streams against the inner rung runtime,
+  invisible to the decorator. (`isGenerating()` is the narrower any-lane read; on its own it is NOT
+  fail-closed.) Lane rules (D8, in-app wins): an external entry is refused
+  (`ExternalGenerationBusyError`) in the same synchronous frame as its counter increment whenever
+  the in-app lane is active **or another external stream runs** (the slot is single, structurally —
+  admission's serialization is advisory); an entering in-app generation fires the registered
+  pre-emption hook on EVERY entry (`setExternalPreemption` — local-API admission's `abortAll`
+  cancels its active AND admitted-but-unstarted requests) and awaits the external stream's real
+  teardown before issuing — **bounded (~5 s)**, because the abort already cancels the sidecar
+  socket (the KV slot frees) even if a misbehaving consumer never resumes its generator. Counter
+  discipline: increment as the generator body's first act (a created-but-never-iterated generator
+  holds no count), decrement in `finally`, **epoch-guarded**: every model start/stop bumps the gate
+  epoch and zeroes the counts, so a count leaked by an abandoned external generator self-heals on
+  the next runtime transition instead of wedging admission forever. External-lane consumer
+  contract: `try { for await … } finally { await gen.return() }` on every exit path. The gate
+  deliberately does NOT serialize in-app lanes against each other (the pre-existing
+  skill-run/benchmark concurrency, A6/A7, is unchanged — now merely visible). External admission
+  itself lives in `services/local-api/admission.ts`: single external slot, queue depth 0–1 with a
+  ~30 s cap (deeper queues are silent multi-minute hangs on CPU boxes), `workspaceAdmitsWork`-class
+  lock refusal, `abortAll` for pre-emption + teardown, a promotion handoff that stays with the
+  holder until real stream teardown (an active caller's disconnect never releases in the abort
+  frame), and the invariant `ready:false ⇒ signal aborted`. Kin note: `analysis/model-slot-arbiter.ts`
+  coordinates the same physical slot for in-app yielding builders (cooperative pause/resume);
+  admission is refuse/queue/abort for outside callers — deliberately separate.
 
 ### GPU acceleration: probe + start ladder (Phase 15; design record below)
 

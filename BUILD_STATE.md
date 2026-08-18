@@ -36,7 +36,12 @@ window. (3) `services/local-api/admission.ts` — single external slot, queue de
 architecture.md (sidecar bullet + "Generation gate" bullet), security-model.md ("Sidecar requests
 are authenticated"), data-contracts.md (runtime block). Known pre-existing, NOT fixed here (A6/A7,
 issues to file at wave close): benchmark + skill-run in-app concurrency — the gate makes them
-visible, not serialized.
+visible, not serialized. **P1 /code-review round (high) fixed pre-close:** redaction reworked to
+drain-side exact-key over a partial-line hold-back + read-time generic pass (a chunk-split key
+had survived both passes), `isExternallyBusy()` as the one fail-closed admission predicate,
+bounded (5 s) abort-aware pre-emption wait + gate-epoch self-heal of leaked lane counts,
+structural single-external refusal, admission promotion-race fix (holder-driven release) +
+`'aborted'` outcome + single exit path.
 
 _Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the

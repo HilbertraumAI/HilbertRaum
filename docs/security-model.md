@@ -243,9 +243,10 @@ vision, translation) now carries a fresh per-spawn API key, delivered via the **
 (`LLAMA_API_KEY` — verified enforced on the pinned b9849 build) and injected as a Bearer header at
 the single `LlamaServer.fetch()` chokepoint. The key is never placed in argv (readable in any
 process list, and llama-server echoes resolved params to stderr) and never set on the app's own
-`process.env` (other children would inherit it); key material is redacted from the captured stderr
-tail before it can flow into error strings, `gpuLastError`, the audit trail, the app log, or the
-support-log export. Upstream exempts `/health` and `/v1/models` from auth on this pin — a local
+`process.env` (other children would inherit it); key material is redacted AT THE STDERR DRAIN over
+a partial-line hold-back window — so neither the captured tail (→ error strings, `gpuLastError`,
+the audit trail, the app log, the support-log export) nor the streaming `onStderrData` observer
+can ever see the key, whole or chunk-split. Upstream exempts `/health` and `/v1/models` from auth on this pin — a local
 process can still read liveness plus the loaded model's file path (metadata only, never content).
 Residual (recorded, accepted): an env-delivered key defends against cross-user and log/stderr
 exposure, not against a same-user debugger reading the child's environment.

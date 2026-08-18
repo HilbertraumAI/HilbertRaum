@@ -373,16 +373,41 @@ const HEALTH_PROBE_TIMEOUT_MS = 3_000
 const STDERR_TAIL_MAX = 4000
 
 /**
- * Redact API-key material from sidecar stderr BEFORE it is captured or forwarded. The
- * captured tail flows into start-failure errors → the `gpuLastError` setting, the audit
- * trail, the app log, and the support-log export — none of which may carry the key. The
- * exact key is removed wherever it appears; the generic `api…key <value>` form guards a
- * future llama.cpp pin that echoes resolved params to stderr (the current pin does not).
+ * API-key redaction for sidecar stderr — two layers at DIFFERENT points, deliberately
+ * (review 2026-08-18: an earlier design ran both per chunk, and the generic pass mangled
+ * a chunk-split key's first half so the exact pass could never reassemble and remove the
+ * remainder — a 44-hex-char fragment survived every pass while tests stayed green):
+ *
+ *  - `redactExactKey` runs at the DRAIN over a sliding hold-back window (below), so the
+ *    known per-spawn key can never leave the drain — whole, chunk-split, or as an
+ *    escaped prefix — toward the tail OR the `onStderrData` observer.
+ *  - `redactSidecarSecrets` adds the generic `api…key <value>` form and runs ONCE at
+ *    read time on tail-derived sinks (start-failure errors → `gpuLastError`, the audit
+ *    trail, the app log, the support-log export), guarding a future pin that echoes some
+ *    other secret shape. Only value-shaped tokens (≥8 chars) are candidates —
+ *    llama-server's routine "api_keys: 1 keys loaded" count line and prose like
+ *    "set LLAMA_API_KEY to …" must survive un-mangled.
  */
-export function redactSidecarSecrets(text: string, key: string | null): string {
-  const exact = key ? text.split(key).join('[redacted]') : text
-  return exact.replace(/(api[-_]?key\S*[\s:=]+)(?!\[redacted\])(\S+)/gi, '$1[redacted]')
+export function redactExactKey(text: string, key: string | null): string {
+  return key ? text.split(key).join('[redacted]') : text
 }
+
+export function redactSidecarSecrets(text: string, key: string | null): string {
+  const exact = redactExactKey(text, key)
+  return exact.replace(/(api[-_]?key\S*[\s:=]+)(?!\[redacted\])(\S{8,})/gi, '$1[redacted]')
+}
+
+/**
+ * Partial-line hold-back at the stderr drain: published text cannot be un-published, so
+ * the drain publishes only COMPLETE lines and carries the trailing partial line until
+ * its newline arrives. A chunk-split key always lives inside a partial line (hex holds
+ * no newline), so by the time any line publishes, the exact-key pass has seen the whole
+ * key and removed it — while complete lines (offload reports, bind errors) flow with
+ * unchanged timing. Tail reads flush the carry (`redactedTail`), so error messages never
+ * lose a final unterminated line. The cap force-publishes a pathological newline-less
+ * stream so the carry cannot grow without bound.
+ */
+const STDERR_CARRY_MAX = 4096
 
 export class LlamaServer {
   port: number | null = null
@@ -399,7 +424,10 @@ export class LlamaServer {
   private exited = false
   private exitCode: number | null = null
   private exitSignal: string | null = null
+  /** Published (exact-key-redacted) stderr, capped at STDERR_TAIL_MAX. */
   private stderrTail = ''
+  /** The held-back last ≤STDERR_REDACT_HOLDBACK chars — see the hold-back note above. */
+  private stderrCarry = ''
   /** True once /health reported ready — gates the unexpected-exit hook. */
   private ready = false
   /** True while stop() is tearing the child down — an exit then is EXPECTED. */
@@ -537,6 +565,7 @@ export class LlamaServer {
     this.exitCode = null
     this.exitSignal = null
     this.stderrTail = ''
+    this.stderrCarry = ''
     this.ready = false
     this.stopping = false
     this.port = await this.findPort(this.host)
@@ -564,15 +593,23 @@ export class LlamaServer {
     // shared `runtime/llama.cpp/<os>/` binary, so it registers under the llama_cpp family.
     registerSidecarChild(child.pid, 'llama_cpp')
     child.stderr?.on('data', (chunk: unknown) => {
-      // Redact key material at the drain, before capture OR forwarding — everything
-      // downstream (error strings, gpuLastError, audit, log export, observer hooks)
-      // then never sees it, regardless of transport.
-      const text = redactSidecarSecrets(String(chunk), this.apiKey)
-      this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_MAX)
-      try {
-        this.opts.onStderrData?.(text)
-      } catch {
-        /* observability only — never break the stderr drain */
+      // Exact-key redaction over carry + chunk, so the key can never leave the drain
+      // toward the tail OR the observer — whole, chunk-split, or as a prefix (see the
+      // partial-line hold-back note above). Re-passing carried text is safe: a partial
+      // key is untouched by the exact match until it completes, and '[redacted]' never
+      // reassembles into key material.
+      const combined = redactExactKey(this.stderrCarry + String(chunk), this.apiKey)
+      let cut = combined.lastIndexOf('\n') + 1 // 0 when no complete line yet
+      if (combined.length - cut > STDERR_CARRY_MAX) cut = combined.length
+      const published = combined.slice(0, cut)
+      this.stderrCarry = combined.slice(cut)
+      if (published.length > 0) {
+        this.stderrTail = (this.stderrTail + published).slice(-STDERR_TAIL_MAX)
+        try {
+          this.opts.onStderrData?.(published)
+        } catch {
+          /* observability only — never break the stderr drain */
+        }
       }
     })
     child.once('error', (err: unknown) => {
@@ -627,11 +664,11 @@ export class LlamaServer {
     })
   }
 
-  /** The captured stderr tail with key material redacted AGAIN at read time — a key split
-   *  across two stderr chunks would evade the per-chunk pass but reassembles in the
-   *  accumulated tail, so every tail-derived sink reads through this accessor. */
+  /** The captured stderr for tail-derived sinks: flushes the held-back carry (so the
+   *  final — usually most important — line is never missing) and applies the generic
+   *  api-key pattern once, at read time. Exact-key removal already happened at the drain. */
   private redactedTail(): string {
-    return redactSidecarSecrets(this.stderrTail, this.apiKey)
+    return redactSidecarSecrets(this.stderrTail + this.stderrCarry, this.apiKey)
   }
 
   /** A ` — last output: …` suffix from the captured stderr tail, or '' if none. */

@@ -17,6 +17,13 @@ export interface ChatMessage {
  * 'external' is reserved for local-API requests. The manager's generation gate counts
  * both lanes and lets an ENTERING in-app generation pre-empt the external lane, never
  * the reverse (D8: in-app wins).
+ *
+ * CONSUMER CONTRACT for the external lane: the consumer MUST guarantee the stream
+ * generator settles — `try { for await … } finally { await gen.return() }` — on every
+ * exit path including client disconnects. The gate's counter decrements in the
+ * generator's `finally`, which only a pull or `return()` can reach; an abandoned
+ * generator leaks the count until the next model start/stop heals it (gate epoch), and
+ * in the meantime external admission stays refused.
  */
 export type GenerationLane = 'in-app' | 'external'
 
@@ -151,6 +158,15 @@ function shutdownError(): Error {
 }
 
 /**
+ * Bound on the in-app pre-emption wait for the external stream's teardown. The abort
+ * fired by the pre-emption hook cancels the external request's sidecar socket
+ * IMMEDIATELY (the KV slot frees), so past this bound only a misbehaving consumer's
+ * never-resumed generator is left — proceed rather than wedge every in-app turn behind
+ * it (its leaked count self-heals on the next start/stop via the gate epoch).
+ */
+const EXTERNAL_TEARDOWN_TIMEOUT_MS = 5_000
+
+/**
  * Holds the single active runtime. The factory lets us swap mock → llama.cpp
  * without touching callers (the IPC layer just sees start/stop/status).
  */
@@ -213,23 +229,49 @@ export class RuntimeManager {
   // inner rung runtime while `active()` is still null) means "busy", never "idle".
   /** In-flight generation count per lane; mutated only inside the gate wrapper. */
   private readonly laneCounts: Record<GenerationLane, number> = { 'in-app': 0, external: 0 }
-  /** Resolvers parked by in-app entries waiting for the external lane's real teardown. */
+  /** Parked settle-functions of in-app entries awaiting the external lane's teardown. */
   private externalIdleWaiters: Array<() => void> = []
   /**
-   * Fired synchronously when an in-app generation enters while the external lane is
-   * active or admitted (D8) — the local-API admission registers a hook that aborts its
-   * active AND queued/admitted-but-unstarted requests. The gate then AWAITS the external
-   * stream's actual teardown (count → 0) before the in-app generation issues, so both can
-   * never overlap on the shared KV slot.
+   * Gate generation counter: bumped (and lane counts zeroed, waiters flushed) on every
+   * model start/stop, so a count leaked by an abandoned external generator — whose
+   * `finally` only a pull or `return()` can reach — self-heals on the next runtime
+   * transition instead of wedging admission forever. In-flight streams of the old epoch
+   * skip their decrement (their count was already zeroed with the epoch).
+   */
+  private gateEpoch = 0
+  /**
+   * Fired synchronously whenever an in-app generation enters (D8) — the local-API
+   * admission registers a hook that aborts its active AND queued/admitted-but-unstarted
+   * requests (firing even when no external stream is counted yet is what cancels the
+   * admitted-but-unstarted class). The gate then awaits the active external stream's
+   * actual teardown (count → 0) before the in-app generation issues — bounded, because
+   * the abort already cancels the sidecar socket (freeing the KV slot) even when a
+   * misbehaving consumer never resumes its generator.
    */
   private externalPreemptionHook: ((reason: string) => void) | null = null
+  private readonly externalTeardownTimeoutMs: number
 
-  constructor(private readonly factory: RuntimeFactory) {}
+  constructor(
+    private readonly factory: RuntimeFactory,
+    opts?: { externalTeardownTimeoutMs?: number }
+  ) {
+    this.externalTeardownTimeoutMs = opts?.externalTeardownTimeoutMs ?? EXTERNAL_TEARDOWN_TIMEOUT_MS
+  }
 
-  /** True while ANY lane has an in-flight generation. Callers gating external admission
-   *  must ALSO refuse when `active()` is null (fail closed — covers start + warm-up). */
+  /** True while ANY lane has an in-flight generation. For external admission use
+   *  {@link isExternallyBusy} — this narrower read is NOT fail-closed on its own. */
   isGenerating(): boolean {
     return this.laneCounts['in-app'] > 0 || this.laneCounts.external > 0
+  }
+
+  /**
+   * THE busy predicate for external (local-API) admission: any in-flight generation, OR
+   * no active runtime — fail closed. `active()` is null through the whole start window,
+   * which is exactly when the #109 warm-up generation streams against the inner rung
+   * runtime, invisible to the gate; treating that window as busy closes it.
+   */
+  isExternallyBusy(): boolean {
+    return this.current == null || this.isGenerating()
   }
 
   /** Register/clear the external pre-emption hook (one consumer: local-API admission). */
@@ -237,16 +279,47 @@ export class RuntimeManager {
     this.externalPreemptionHook = hook
   }
 
-  /** Resolves once the external lane's in-flight count is 0 (immediately when idle). */
-  private waitExternalIdle(): Promise<void> {
-    if (this.laneCounts.external === 0) return Promise.resolve()
-    return new Promise((resolve) => this.externalIdleWaiters.push(resolve))
+  /** Zero the gate for a new runtime epoch (see {@link gateEpoch}). */
+  private resetGenerationGate(): void {
+    this.gateEpoch++
+    this.laneCounts['in-app'] = 0
+    this.laneCounts.external = 0
+    this.flushExternalIdleWaiters()
+  }
+
+  private flushExternalIdleWaiters(): void {
+    const waiters = this.externalIdleWaiters
+    this.externalIdleWaiters = []
+    for (const settle of waiters) settle()
+  }
+
+  /**
+   * Resolves when the external lane's count reaches 0, the caller aborts, or the
+   * teardown bound elapses — never parks forever. Kin to the model-slot arbiter's
+   * `handoffWaiters` pattern (analysis/model-slot-arbiter.ts), but refuse/abort
+   * semantics rather than cooperative pause/resume.
+   */
+  private waitExternalIdle(signal?: AbortSignal): Promise<void> {
+    if (this.laneCounts.external === 0 || signal?.aborted) return Promise.resolve()
+    return new Promise((resolve) => {
+      let settled = false
+      const settle = (): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', settle)
+        this.externalIdleWaiters = this.externalIdleWaiters.filter((w) => w !== settle)
+        resolve()
+      }
+      const timer = setTimeout(settle, this.externalTeardownTimeoutMs)
+      ;(timer as { unref?: () => void }).unref?.()
+      signal?.addEventListener('abort', settle, { once: true })
+      this.externalIdleWaiters.push(settle)
+    })
   }
 
   /** Wrap the factory's runtime so every `chatStream` pull passes the generation gate. */
   private decorateWithGenerationGate(inner: ModelRuntime): ModelRuntime {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const manager = this
     return {
       get modelId() {
         return inner.modelId
@@ -262,22 +335,22 @@ export class RuntimeManager {
       start: () => inner.start(),
       stop: () => inner.stop(),
       health: () => inner.health(),
-      contextWindow: inner.contextWindow ? () => inner.contextWindow!() : undefined,
-      warmedUp: inner.warmedUp ? () => inner.warmedUp!() : undefined,
-      chatStream: (messages, options) => manager.gatedChatStream(inner, messages, options)
+      contextWindow: inner.contextWindow?.bind(inner),
+      warmedUp: inner.warmedUp?.bind(inner),
+      chatStream: (messages, options) => this.gatedChatStream(inner, messages, options)
     }
   }
 
   /**
    * The gate itself. Counter discipline: increment as the FIRST act of the generator body
    * (so a created-but-never-iterated generator holds no count) and decrement in `finally`
-   * (so success, error, abort, and a pre-yield throw — the inner runtime's synchronous
-   * 'Runtime is not started' — all release it; a leak would wedge `isGenerating()` true).
-   * Lane rules (D8): an external entry refuses if the in-app lane is active — checked in
-   * the SAME synchronous frame as its increment, so an admitted-then-parked external
-   * request can never start alongside an in-app turn (the admit→stream TOCTOU). An in-app
-   * entry increments FIRST (blocking new external entries), then pre-empts the external
-   * lane and awaits its real teardown before issuing to the model.
+   * (success, error, abandonment via `return()`, and pre-yield throws all release it),
+   * epoch-guarded so a stale stream never corrupts a later runtime's counts.
+   * Lane rules (D8): an external entry refuses — same synchronous frame as its increment,
+   * closing the admit→stream TOCTOU — while the in-app lane is active OR another external
+   * stream runs (the external slot is single by design; admission's serialization is
+   * advisory, this check is structural). An in-app entry increments first (blocking new
+   * externals), cancels the external lane via the hook, then awaits its bounded teardown.
    */
   private async *gatedChatStream(
     inner: ModelRuntime,
@@ -285,25 +358,33 @@ export class RuntimeManager {
     options?: RuntimeChatOptions
   ): AsyncGenerator<string, void, unknown> {
     const lane: GenerationLane = options?.lane ?? 'in-app'
+    const epoch = this.gateEpoch
     this.laneCounts[lane]++
     try {
       if (lane === 'external') {
-        if (this.laneCounts['in-app'] > 0) throw new ExternalGenerationBusyError()
-      } else if (this.laneCounts.external > 0) {
+        if (this.laneCounts['in-app'] > 0 || this.laneCounts.external > 1) {
+          throw new ExternalGenerationBusyError()
+        }
+      } else {
         try {
           this.externalPreemptionHook?.('in-app generation entered')
         } catch {
-          /* the hook is observability/abort plumbing — never fail an in-app turn on it */
+          /* abort plumbing must never fail an in-app turn */
         }
-        await this.waitExternalIdle()
+        if (this.laneCounts.external > 0) {
+          await this.waitExternalIdle(options?.signal)
+          // A user Stop during the pre-emption wait ends the turn cleanly (the same
+          // yield-nothing shape every runtime uses for an abort).
+          if (options?.signal?.aborted) return
+        }
       }
       yield* inner.chatStream(messages, options)
     } finally {
-      this.laneCounts[lane]--
-      if (lane === 'external' && this.laneCounts.external === 0) {
-        const waiters = this.externalIdleWaiters
-        this.externalIdleWaiters = []
-        for (const resolve of waiters) resolve()
+      if (epoch === this.gateEpoch) {
+        this.laneCounts[lane]--
+        if (lane === 'external' && this.laneCounts.external === 0) {
+          this.flushExternalIdleWaiters()
+        }
       }
     }
   }
@@ -430,6 +511,9 @@ export class RuntimeManager {
     if (this.stopped) throw shutdownError()
     // Restart cleanly on a model switch (spec §7.5).
     if (this.current) await this.doStop()
+    // Fresh gate epoch for the new runtime: zeroes any count a misbehaving external
+    // consumer leaked in the previous session (see gateEpoch).
+    this.resetGenerationGate()
     // #107: re-stamp the progress clock now that the queue drained (a switch waits out
     // the old model's stop first — elapsed must measure THIS load, not that wait) and
     // resolve the weight's size once per window, here rather than per status() poll
@@ -483,6 +567,8 @@ export class RuntimeManager {
     this.current = null
     this.last = null
     await stopping.stop()
+    // The runtime is gone — no stream of its epoch can legitimately still count.
+    this.resetGenerationGate()
   }
 
   activeModelId(): string | null {

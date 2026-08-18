@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { LocalApiAdmission, type Admission, type LocalApiAdmissionDeps } from '../../src/main/services/local-api/admission'
 import { RuntimeManager } from '../../src/main/services/runtime'
+import { manualSource, type ManualSource } from '../helpers/manual-stream'
 
 // Admission unit tests (local-api P1). The module guards the single external slot in
-// front of the RuntimeManager generation gate: fail-closed on no runtime (covers the
-// start window incl. the #109 warm-up, which generates while active() is null), shallow
-// 0–1 queue, in-app pre-emption cancels the active stream AND the parked waiter, and the
-// lock/teardown latch refuses admission outright.
+// front of the RuntimeManager generation gate: fail-closed via the manager-owned
+// `isExternallyBusy` predicate (covers the start window incl. the #109 warm-up, which
+// generates while active() is null), shallow 0–1 queue, in-app pre-emption/teardown via
+// `abortAll` (cancels the active stream AND the parked waiter), and the lock latch
+// refusing admission outright. Invariant pinned throughout: ready:false ⇒ signal aborted.
 
 afterEach(() => {
   vi.useRealTimers()
@@ -14,8 +16,7 @@ afterEach(() => {
 
 function makeDeps(overrides: Partial<LocalApiAdmissionDeps> = {}): LocalApiAdmissionDeps {
   return {
-    isGenerating: () => false,
-    hasActiveRuntime: () => true,
+    runtimeBusy: () => false,
     hasActiveDocTask: () => false,
     admitsWork: () => true,
     ...overrides
@@ -23,8 +24,7 @@ function makeDeps(overrides: Partial<LocalApiAdmissionDeps> = {}): LocalApiAdmis
 }
 
 function admitted(outcome: ReturnType<LocalApiAdmission['tryAdmit']>): Admission {
-  expect(outcome).not.toBe('busy')
-  expect(outcome).not.toBe('locked')
+  expect(typeof outcome).not.toBe('string')
   return outcome as Admission
 }
 
@@ -63,35 +63,42 @@ describe('LocalApiAdmission', () => {
   })
 
   it('refuses while ANY generation lane is active — incl. a direct chatStream call no registry sees', async () => {
-    // Back isGenerating() with a REAL manager gate and drive a generation the way the
-    // benchmark / a skill run does: straight through active().chatStream, registered
-    // nowhere. The gate still counts it, so admission refuses.
+    // Back runtimeBusy with a REAL manager and drive a generation the way the benchmark /
+    // a skill run does: straight through active().chatStream, registered nowhere. The
+    // gate still counts it, so admission refuses.
+    const sources: ManualSource[] = []
     const mgr = new RuntimeManager((opts) => ({
       modelId: opts.modelId,
       start: async () => {},
       stop: async () => {},
       health: async () => ({ healthy: true, message: '', port: null }),
-      chatStream: async function* (): AsyncGenerator<string, void, unknown> {
-        yield 'tok'
-        await new Promise<void>(() => {}) // holds the lane until the consumer walks away
+      chatStream(_m, options) {
+        const src = manualSource()
+        sources.push(src)
+        return src.stream(options?.signal)
       }
     }))
     await mgr.start({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 })
-    const admission = new LocalApiAdmission(
-      makeDeps({
-        isGenerating: () => mgr.isGenerating(),
-        hasActiveRuntime: () => mgr.active() != null
-      })
-    )
+    const admission = new LocalApiAdmission(makeDeps({ runtimeBusy: () => mgr.isExternallyBusy() }))
     const direct = mgr.active()!.chatStream([{ role: 'user', content: 'benchmark-style' }])
-    await direct.next() // the lane is live
+    const pull = direct.next()
+    await Promise.resolve()
+    sources[0].push('tok')
+    await pull // the lane is live
     expect(admission.tryAdmit('r1')).toBe('busy')
+    sources[0].end()
     await direct.return()
     admitted(admission.tryAdmit('r2')).release()
+    await mgr.stop()
   })
 
   it('FAILS CLOSED: no active runtime (start window / #109 warm-up) refuses admission', () => {
-    const admission = new LocalApiAdmission(makeDeps({ hasActiveRuntime: () => false }))
+    // A fresh manager that never started anything: isExternallyBusy() is true.
+    const mgr = new RuntimeManager(() => {
+      throw new Error('factory must not run in this test')
+    })
+    const admission = new LocalApiAdmission(makeDeps({ runtimeBusy: () => mgr.isExternallyBusy() }))
+    expect(mgr.isExternallyBusy()).toBe(true)
     expect(admission.tryAdmit('r1')).toBe('busy')
   })
 
@@ -100,11 +107,11 @@ describe('LocalApiAdmission', () => {
     expect(admission.tryAdmit('r1')).toBe('busy')
   })
 
-  it('pre-emption aborts the ACTIVE stream signal and cancels the parked waiter', async () => {
+  it('abortAll aborts the ACTIVE stream signal and cancels the parked waiter (pre-emption + teardown)', async () => {
     const admission = new LocalApiAdmission(makeDeps())
     const a = admitted(admission.tryAdmit('r1'))
     const b = admitted(admission.tryAdmit('r2')) // admitted-but-unstarted (the TOCTOU class)
-    admission.preemptExternal('in-app generation entered')
+    admission.abortAll('in-app generation entered')
     expect(a.signal.aborted).toBe(true)
     expect(b.signal.aborted).toBe(true)
     await expect(b.ready).resolves.toBe(false) // the waiter never starts into the in-app turn
@@ -113,55 +120,71 @@ describe('LocalApiAdmission', () => {
     admitted(admission.tryAdmit('r3')).release()
   })
 
-  it('teardown (abortAll) aborts active + queued', async () => {
-    const admission = new LocalApiAdmission(makeDeps())
+  it('a queued waiter is refused (ready false + aborted signal) when the world changed at promotion', async () => {
+    let busy = false
+    const admission = new LocalApiAdmission(makeDeps({ runtimeBusy: () => busy }))
     const a = admitted(admission.tryAdmit('r1'))
     const b = admitted(admission.tryAdmit('r2'))
-    admission.abortAll('server stopping')
-    expect(a.signal.aborted).toBe(true)
-    expect(b.signal.aborted).toBe(true)
-    await expect(b.ready).resolves.toBe(false)
-  })
-
-  it('a queued waiter is promoted to FALSE when the world changed (in-app started meanwhile)', async () => {
-    let generating = false
-    const admission = new LocalApiAdmission(makeDeps({ isGenerating: () => generating }))
-    const a = admitted(admission.tryAdmit('r1'))
-    const b = admitted(admission.tryAdmit('r2'))
-    generating = true // an in-app turn began before the release
+    busy = true // an in-app turn began before the release
     a.release()
     // Honest fast refusal (429 + Retry-After at the HTTP layer), never a silent hang.
     await expect(b.ready).resolves.toBe(false)
+    expect(b.signal.aborted).toBe(true) // ready:false ⇒ aborted invariant
   })
 
-  it('caps the queued wait (default 30 s) and answers false', async () => {
+  it('caps the queued wait (default 30 s): ready false, signal aborted, queue slot freed', async () => {
     vi.useFakeTimers()
     const admission = new LocalApiAdmission(makeDeps())
     admitted(admission.tryAdmit('r1'))
     const b = admitted(admission.tryAdmit('r2'))
-    const ready = b.ready
     vi.advanceTimersByTime(30_000)
-    await expect(ready).resolves.toBe(false)
+    await expect(b.ready).resolves.toBe(false)
+    expect(b.signal.aborted).toBe(true)
     // The queue slot is free again for a fresh waiter.
     admitted(admission.tryAdmit('r3'))
   })
 
-  it('a caller disconnect frees the queue slot immediately', async () => {
+  it('a QUEUED caller disconnect frees the queue slot immediately', async () => {
     const admission = new LocalApiAdmission(makeDeps())
     admitted(admission.tryAdmit('r1'))
     const caller = new AbortController()
     const b = admitted(admission.tryAdmit('r2', caller.signal))
     caller.abort()
     await expect(b.ready).resolves.toBe(false)
+    expect(b.signal.aborted).toBe(true)
     // The vacated queue slot admits a new waiter (not 'busy').
     admitted(admission.tryAdmit('r3'))
   })
 
-  it('an already-aborted caller signal is never admitted', () => {
+  it('an ACTIVE caller disconnect does NOT release in the abort frame — the holder releases after teardown and the waiter is PROMOTED', async () => {
+    // The promotion-race fix (review 2026-08-18): releasing inside the abort frame ran
+    // the promotion re-check while the dying stream still counted as busy, refusing the
+    // patient waiter spuriously. The slot must stay with its holder until real teardown.
+    let busy = false
+    const admission = new LocalApiAdmission(makeDeps({ runtimeBusy: () => busy }))
+    const caller = new AbortController()
+    const a = admitted(admission.tryAdmit('r1', caller.signal))
+    busy = true // a's stream is now counted by the gate
+    const b = admitted(admission.tryAdmit('r2'))
+    caller.abort() // client vanishes mid-stream — the stream is still draining
+    expect(a.signal.aborted).toBe(true)
+    // No promotion yet — b still parked (would have been refused under the old code).
+    let bSettled: boolean | null = null
+    void b.ready.then((v) => (bSettled = v))
+    await Promise.resolve()
+    expect(bSettled).toBeNull()
+    // The holder's stream tears down, the gate count drops, THEN the holder releases.
+    busy = false
+    a.release()
+    await expect(b.ready).resolves.toBe(true)
+    b.release()
+  })
+
+  it("an already-aborted caller is 'aborted', never 'busy' (no phantom contention accounting)", () => {
     const admission = new LocalApiAdmission(makeDeps())
     const caller = new AbortController()
     caller.abort()
-    expect(admission.tryAdmit('r1', caller.signal)).toBe('busy')
+    expect(admission.tryAdmit('r1', caller.signal)).toBe('aborted')
   })
 
   it('release is idempotent and never double-promotes', async () => {
@@ -177,53 +200,23 @@ describe('LocalApiAdmission', () => {
   })
 
   it('END-TO-END with the manager gate: in-app entry pre-empts the admitted external stream', async () => {
-    // Wire admission ↔ gate exactly as the local API will: the manager's pre-emption hook
-    // aborts admission's signals; the gate awaits the external stream's real teardown.
-    const sources: Array<{ push: (v: string) => void; end: () => void }> = []
+    // Wire admission ↔ gate exactly as the local API will: the manager's pre-emption
+    // hook calls abortAll; the gate awaits the external stream's real teardown.
+    const sources: ManualSource[] = []
     const mgr = new RuntimeManager((opts) => ({
       modelId: opts.modelId,
       start: async () => {},
       stop: async () => {},
       health: async () => ({ healthy: true, message: '', port: null }),
       chatStream(_m, options) {
-        const queue: string[] = []
-        let ended = false
-        let wake: (() => void) | null = null
-        sources.push({
-          push: (v) => {
-            queue.push(v)
-            wake?.()
-          },
-          end: () => {
-            ended = true
-            wake?.()
-          }
-        })
-        const signal = options?.signal
-        return (async function* (): AsyncGenerator<string, void, unknown> {
-          for (;;) {
-            if (signal?.aborted) return
-            if (queue.length > 0) {
-              yield queue.shift()!
-              continue
-            }
-            if (ended) return
-            await new Promise<void>((resolve) => {
-              wake = resolve
-              signal?.addEventListener('abort', () => resolve(), { once: true })
-            })
-          }
-        })()
+        const src = manualSource()
+        sources.push(src)
+        return src.stream(options?.signal)
       }
     }))
     await mgr.start({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 })
-    const admission = new LocalApiAdmission(
-      makeDeps({
-        isGenerating: () => mgr.isGenerating(),
-        hasActiveRuntime: () => mgr.active() != null
-      })
-    )
-    mgr.setExternalPreemption((reason) => admission.preemptExternal(reason))
+    const admission = new LocalApiAdmission(makeDeps({ runtimeBusy: () => mgr.isExternallyBusy() }))
+    mgr.setExternalPreemption((reason) => admission.abortAll(reason))
 
     // External request: admitted, streaming.
     const adm = admitted(admission.tryAdmit('ext-1'))
@@ -239,7 +232,7 @@ describe('LocalApiAdmission', () => {
 
     // In-app turn enters: hook aborts the external signal; the gate awaits teardown.
     const externalRun = (async () => {
-      // The external consumer loop: drains until the abort ends the stream, then releases.
+      // The external consumer contract: drain until the abort ends the stream, THEN release.
       for (;;) {
         const r = await external.next()
         if (r.done) break
@@ -254,5 +247,6 @@ describe('LocalApiAdmission', () => {
     expect((await inAppFirst).value).toBe('a1')
     await inApp.return()
     mgr.setExternalPreemption(null)
+    await mgr.stop()
   })
 })
