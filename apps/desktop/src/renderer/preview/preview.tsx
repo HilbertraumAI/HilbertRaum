@@ -860,7 +860,19 @@ overrides.listDocuments = async () => (isMkt() ? mktDocuments() : DOCUMENTS)
 overrides.getPolicy = async () =>
   isMkt()
     ? ({
-        policy: {},
+        // Minimal but SHAPED policy: renderer code reading policy.network.* (e.g. the
+        // local-API card's allowLocalApi ceiling) must see real booleans, not undefined
+        // through the cast (review 2026-08-18). Commercial posture: local API denied.
+        policy: {
+          network: {
+            allowModelDownloads: true,
+            allowUpdateChecks: false,
+            allowTelemetry: false,
+            allowLocalApi: false
+          },
+          workspace: { encryptionRequired: true, allowPlaintextDevMode: false },
+          models: { allowUnverifiedModels: false, requireManifest: true, requireSha256Match: true }
+        },
         policyFilePresent: true,
         driveFilePresent: true,
         allowNetworkSetting: false,

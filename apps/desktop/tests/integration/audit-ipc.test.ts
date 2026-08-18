@@ -817,12 +817,19 @@ describe('local API settings audit (local-api P2)', () => {
     expect(changed?.metadata).toEqual({ localApiEnabled: true, localApiTokenRequired: false })
     for (const v of Object.values(changed?.metadata ?? {})) expect(typeof v).toBe('boolean')
 
+    // A same-value re-write and a rejected-junk patch record NO toggle (event
+    // truthfulness: the message asserts a transition, so only real flips may fire).
+    await invoke(handlers, IPC.updateSettings, { localApiEnabled: true })
+    await invoke(handlers, IPC.updateSettings, { localApiEnabled: 'yes' as unknown as boolean })
+    expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'local_api_toggled')).toHaveLength(1)
+
     // Flip back off: its own honest event.
     await invoke(handlers, IPC.updateSettings, { localApiEnabled: false })
     const off = listAuditEvents(db, { limit: 100 }).find(
       (e) => e.type === 'local_api_toggled' && (e.metadata as { enabled?: boolean })?.enabled === false
     )
     expect(off?.message).toBe('Local API disabled')
+    expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'local_api_toggled')).toHaveLength(2)
 
     // The real access key, minted in its dedicated store, must never appear in any
     // recorded event (the export writes metadata verbatim to plaintext JSON).

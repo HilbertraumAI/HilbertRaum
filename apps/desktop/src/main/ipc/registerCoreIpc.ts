@@ -138,6 +138,10 @@ export function registerCoreIpc(ctx: AppContext): void {
       throw new Error(tMain('main.settings.invalidPatch'))
     }
     log.info('Settings updated', Object.keys(patch))
+    // Read BEFORE the write so local_api_toggled records only a REAL flip — key-presence
+    // alone would log phantom enable/disable events for rejected-junk or same-value
+    // patches, polluting the exported audit trail's forensic value.
+    const localApiBefore = 'localApiEnabled' in patch ? getSettings(ctx.db).localApiEnabled : null
     const result = updateSettings(ctx.db, patch)
     // Keep the main-side cached UI language in step with the setting (D-L3) — the
     // post-validation value, so junk patches can't move it.
@@ -158,8 +162,11 @@ export function registerCoreIpc(ctx: AppContext): void {
         Object.fromEntries(privacyKeys.map((k) => [k, result[k]]))
       )
     }
-    // The local-API master switch gets its own first-class audit event (boolean only).
-    if ('localApiEnabled' in patch) {
+    // The local-API master switch gets its own first-class audit event (boolean only) —
+    // deliberately IN ADDITION to the settings_changed sweep (the filterable trust event
+    // the export/Activity surface keys on), but only when the accepted value actually
+    // changed.
+    if (localApiBefore !== null && result.localApiEnabled !== localApiBefore) {
       ctx.audit?.(
         'local_api_toggled',
         `Local API ${result.localApiEnabled ? 'enabled' : 'disabled'}`,

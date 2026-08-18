@@ -156,7 +156,11 @@ describe('local API settings (local-api P2)', () => {
     expect(updateSettings(db, { localApiPort: 80 }).localApiPort).toBe(1024) // privileged -> floor
     expect(updateSettings(db, { localApiPort: 70_000 }).localApiPort).toBe(65_535)
     expect(updateSettings(db, { localApiPort: 4980.9 }).localApiPort).toBe(4980)
-    expect(updateSettings(db, { localApiPort: Number.NaN }).localApiPort).toBe(4980) // default
+    // Non-finite junk is DROPPED, never defaulted: a customized port must survive a
+    // buggy renderer patch (review 2026-08-18 — the contextTokensOverride convention).
+    updateSettings(db, { localApiPort: 9000 })
+    expect(updateSettings(db, { localApiPort: Number.NaN }).localApiPort).toBe(9000)
+    expect(updateSettings(db, { localApiPort: Number.POSITIVE_INFINITY }).localApiPort).toBe(9000)
   })
 
   it('rejects mistyped values (booleans/number only; null never clobbers)', () => {

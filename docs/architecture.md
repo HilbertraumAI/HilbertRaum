@@ -3320,8 +3320,10 @@ licensing: `model-policy.md` §"The in-app downloader"; user-facing posture: `PR
 `policy.json` with `allow_model_downloads: false` — or the packaged-build `STRICT_POLICY` fallback
 for a provisioned config dir — keeps the app offline regardless of the toggle. (Since issue #93,
 2026-08-03, an UNPROVISIONED config dir — neither `policy.json` nor `drive.json`, the standalone
-portable install's app-data fallback — gets `STANDALONE_POLICY` instead: downloads policy-permitted,
-everything else strict; see `security-model.md` "Fail-closed on a packaged build".) A prepared/commercial drive now writes
+portable install's app-data fallback — gets `STANDALONE_POLICY` instead: downloads + the local API
+policy-permitted (the latter per owner decision O3, local-api wave — both still behind their own
+default-off settings/consent), everything else strict; see `security-model.md` "Fail-closed on a
+packaged build".) A prepared/commercial drive now writes
 `allow_model_downloads: true` (2026-07-01), so the setting + the per-download confirmation are the
 effective gate there; update-checks + telemetry stay hardcoded/denied so the drive never phones home.
 A locked workspace still reads the setting as off.

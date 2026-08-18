@@ -179,10 +179,13 @@ and the fallback for a **missing / malformed / partial** `policy.json` — depen
   `STANDALONE_POLICY`. This root was never touched by `prepare-drive`, so there was never a policy to
   fail closed *to* — failing closed there permanently disabled the in-app model downloader the
   release notes point users to (the policy is the ceiling, so the Settings toggle could not
-  re-enable it). The standalone posture relaxes **only** `allow_model_downloads` (still gated by the
-  `allowNetwork` setting + a per-download confirmation, downloads SHA-256-verified against their
-  manifests); update checks + telemetry stay denied, and the `workspace`/`models` blocks stay at the
-  **strict** value — M-4/M-6 enforcement is untouched. A prepared drive whose `policy.json` went
+  re-enable it). The standalone posture relaxes **two** network ceilings:
+  `allow_model_downloads` (still gated by the `allowNetwork` setting + a per-download
+  confirmation, downloads SHA-256-verified against their manifests) and — since the local-api
+  wave, owner decision O3 — `allow_local_api` (a loopback-only INBOUND ceiling; the feature
+  stays default-off behind its own consent dialog, and without this it would be policy-dead on
+  every standalone install); update checks + telemetry stay denied, and the
+  `workspace`/`models` blocks stay at the **strict** value — M-4/M-6 enforcement is untouched. A prepared drive whose `policy.json` went
   missing still fails closed: its `drive.json` marker keeps it in the provisioned branch above.
 
 `isDev` is threaded from `initBackend()` into every policy read (the model/download/core IPC handlers).

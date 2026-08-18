@@ -136,13 +136,12 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
       toStore = Math.min(MAX_CONTEXT_TOKENS_OVERRIDE, Math.max(MIN_CONTEXT_TOKENS, Math.floor(value)))
     }
     // localApiPort: clamp into the valid loopback-bind range (the booleans of the
-    // local-api trio validate for free via the generic type gate above).
+    // local-api trio validate for free via the generic type gate above). A non-finite
+    // number is DROPPED, not defaulted — clobbering a customized port back to 4980 would
+    // silently break every configured client (the contextTokensOverride convention).
     if (key === 'localApiPort') {
-      const n =
-        typeof value === 'number' && Number.isFinite(value)
-          ? Math.floor(value)
-          : DEFAULT_SETTINGS.localApiPort
-      toStore = Math.min(MAX_LOCAL_API_PORT, Math.max(MIN_LOCAL_API_PORT, n))
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue
+      toStore = Math.min(MAX_LOCAL_API_PORT, Math.max(MIN_LOCAL_API_PORT, Math.floor(value)))
     }
     if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
     if (key === 'theme' && value !== 'system' && value !== 'light' && value !== 'dark') continue

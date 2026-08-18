@@ -52,7 +52,7 @@ describe('local-api token store', () => {
     expect(rows.n).toBe(1)
   })
 
-  it('maskToken shows only the prefix and the last 4 chars', () => {
+  it('maskToken shows only the prefix and the last 4 chars; malformed values mask fully', () => {
     const { db } = freshDb()
     const token = getOrCreateToken(db)
     const masked = maskToken(token)
@@ -60,6 +60,19 @@ describe('local-api token store', () => {
     expect(masked.length).toBeLessThan(10)
     // The masked form can never reconstruct the key (43 secret chars, 4 shown).
     expect(token).not.toContain(masked)
+    // A tampered/short row must never "mask" into full disclosure (review 2026-08-18).
+    expect(maskToken('hr-abc')).toBe('hr-…')
+    expect(maskToken('short')).toBe('hr-…')
+  })
+
+  it('re-mints over a tampered/malformed stored row instead of serving it as a credential', () => {
+    const { db } = freshDb()
+    db.prepare(
+      `INSERT INTO local_api_token (id, token, updated_at) VALUES (1, '', '2026-01-01T00:00:00Z')`
+    ).run()
+    const token = getOrCreateToken(db)
+    expect(token).toMatch(/^hr-[A-Za-z0-9_-]{43}$/)
+    expect(readToken(db)).toBe(token)
   })
 
   it('tokens are unique across workspaces (no shared/global secret)', () => {

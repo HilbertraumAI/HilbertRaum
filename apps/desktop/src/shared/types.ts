@@ -130,9 +130,6 @@ export interface PolicyStatus {
   offlineMode: boolean
   /** Always false — telemetry is never enabled and has no toggle. */
   telemetryAllowed: boolean
-  /** Policy ceiling for the local API (`network.allow_local_api`). The Settings card
-   *  shows disabled-with-reason when false — never hidden. Effective = this ∧ setting. */
-  localApiAllowedByPolicy: boolean
 }
 
 // ---- Workspace vault / encryption (spec §3.5/§7.9) ----

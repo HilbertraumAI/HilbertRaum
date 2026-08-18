@@ -23,6 +23,12 @@ function writeToken(db: Db, token: string): void {
   ).run(token, new Date().toISOString())
 }
 
+/** A stored value this module could have minted. A tampered/truncated row must never be
+ *  served as a credential (or "masked" into full disclosure) — it gets re-minted. */
+function isWellFormedToken(token: string): boolean {
+  return token.startsWith(TOKEN_PREFIX) && token.length > TOKEN_PREFIX.length + 8
+}
+
 /** The stored key, or null when none was ever generated (fresh workspace). */
 export function readToken(db: Db): string | null {
   const row = db.prepare('SELECT token FROM local_api_token WHERE id = 1').get() as
@@ -31,10 +37,10 @@ export function readToken(db: Db): string | null {
   return row?.token ?? null
 }
 
-/** Single generation site: return the stored key, minting one on first use. */
+/** Return the stored key, minting one on first use — or re-minting over a malformed row. */
 export function getOrCreateToken(db: Db): string {
   const existing = readToken(db)
-  if (existing != null) return existing
+  if (existing != null && isWellFormedToken(existing)) return existing
   const token = generateToken()
   writeToken(db, token)
   return token
@@ -50,7 +56,8 @@ export function rotateToken(db: Db): string {
 }
 
 /** Display form for the renderer: prefix + ellipsis + last 4 chars. The full value never
- *  crosses IPC. */
+ *  crosses IPC. A malformed/short value masks fully rather than revealing its whole body. */
 export function maskToken(token: string): string {
+  if (!isWellFormedToken(token)) return `${TOKEN_PREFIX}…`
   return `${TOKEN_PREFIX}…${token.slice(-4)}`
 }

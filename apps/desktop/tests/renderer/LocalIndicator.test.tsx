@@ -20,7 +20,7 @@ afterEach(cleanup)
 function policy(offlineMode: boolean): PolicyStatus {
   return {
     policy: {
-      network: { allowModelDownloads: !offlineMode, allowUpdateChecks: false, allowTelemetry: false },
+      network: { allowModelDownloads: !offlineMode, allowUpdateChecks: false, allowTelemetry: false, allowLocalApi: true },
       workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
       models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
     },

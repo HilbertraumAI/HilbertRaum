@@ -339,16 +339,13 @@ export function buildPolicyStatus(
     networkAllowedByPolicy: net.networkAllowedByPolicy,
     networkAllowed: net.networkAllowed,
     offlineMode: net.offlineMode,
-    telemetryAllowed: false,
-    localApiAllowedByPolicy: loaded.policy.network.allowLocalApi
+    telemetryAllowed: false
+    // No localApiAllowedByPolicy copy field (review 2026-08-18): `PolicyStatus.policy`
+    // already carries `network.allowLocalApi` — the Settings card reads it there. A 1:1
+    // copy would let fixtures set the same fact twice, inconsistently.
   }
 }
 
-/** Effective local-API permission (spec §3.6 precedence rule): policy ceiling ∧ user
- *  setting — the single derivation P3's start seams and the Settings card both use. */
-export function localApiEffectivelyEnabled(
-  policy: PrivacyPolicy,
-  localApiEnabledSetting: boolean
-): boolean {
-  return policy.network.allowLocalApi && localApiEnabledSetting
-}
+// localApiEffectivelyEnabled lives in shared/local-api.ts (review 2026-08-18): the
+// renderer cannot import main services, so a main-side helper would have forced the P4
+// Settings card to re-spell the policy∧setting rule by hand.

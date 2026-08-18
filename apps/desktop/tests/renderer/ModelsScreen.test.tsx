@@ -63,8 +63,7 @@ function policyStatus(opts: { downloadsAllowed: boolean; settingOn: boolean }): 
     networkAllowedByPolicy: opts.downloadsAllowed,
     networkAllowed: opts.downloadsAllowed && opts.settingOn,
     offlineMode: !(opts.downloadsAllowed && opts.settingOn),
-    telemetryAllowed: false,
-    localApiAllowedByPolicy: true
+    telemetryAllowed: false
   }
 }
 

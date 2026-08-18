@@ -418,7 +418,8 @@ describe('local API policy ceiling (local-api P2)', () => {
   })
 
   it('effective = policy AND setting: the ceiling always wins', async () => {
-    const { localApiEffectivelyEnabled } = await import('../../src/main/services/policy')
+    // Shared module (not main services): the P4 renderer card imports the SAME rule.
+    const { localApiEffectivelyEnabled } = await import('../../src/shared/local-api')
     const allow = DEFAULT_POLICY
     const deny = parsePolicy('{"network":{"allow_local_api":false}}')
     expect(localApiEffectivelyEnabled(deny, true)).toBe(false) // policy off beats setting on
@@ -427,13 +428,14 @@ describe('local API policy ceiling (local-api P2)', () => {
     expect(localApiEffectivelyEnabled(deny, false)).toBe(false)
   })
 
-  it('buildPolicyStatus surfaces localApiAllowedByPolicy (the disabled-with-reason card input)', () => {
+  it('buildPolicyStatus carries the ceiling via policy.network.allowLocalApi (the card input)', () => {
+    // No 1:1 copy field on PolicyStatus (review 2026-08-18): consumers read the policy.
     __resetPolicyCache()
     const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi-'))
     writeFileSync(join(dir, 'policy.json'), '{"network":{"allow_local_api":false}}')
-    expect(buildPolicyStatus(dir, true).localApiAllowedByPolicy).toBe(false)
+    expect(buildPolicyStatus(dir, true).policy.network.allowLocalApi).toBe(false)
     const dir2 = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi2-'))
-    expect(buildPolicyStatus(dir2, true).localApiAllowedByPolicy).toBe(true) // dev default
+    expect(buildPolicyStatus(dir2, true).policy.network.allowLocalApi).toBe(true) // dev default
   })
 
   it('a packaged build fails CLOSED on a provisioned dir; standalone keeps the O3 posture', () => {

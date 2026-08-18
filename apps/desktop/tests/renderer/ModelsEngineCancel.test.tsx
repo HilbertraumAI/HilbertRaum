@@ -37,8 +37,7 @@ function policy(): PolicyStatus {
     networkAllowedByPolicy: true,
     networkAllowed: true,
     offlineMode: false,
-    telemetryAllowed: false,
-    localApiAllowedByPolicy: true
+    telemetryAllowed: false
   }
 }
 

@@ -147,7 +147,7 @@ const unlockedWorkspace: WorkspaceStateInfo = {
 
 const offlinePolicy = {
   policy: {
-    network: { allowModelDownloads: false, allowUpdateChecks: false, allowTelemetry: false },
+    network: { allowModelDownloads: false, allowUpdateChecks: false, allowTelemetry: false, allowLocalApi: true },
     workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
     models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
   },
