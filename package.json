@@ -18,7 +18,7 @@
     "package:win": "npm run package:win --workspace apps/desktop"
   },
   "engines": {
-    "node": ">=22.5",
+    "node": ">=22.12",
     "npm": ">=11"
   },
   "packageManager": "npm@11.6.2"
