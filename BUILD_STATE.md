@@ -1593,7 +1593,7 @@ tag triggers the release workflow's draft build).
     updates so the next wave arrives as PRs, not an audit (recommendation only — not
     implemented).
 18. **DEP-4 follow-up register (owner-facing; registered at the 2026-08-18 close-out; durable
-    ledger = `docs/architecture.md` "Electron 39 → 43 — design record (wave DEP-4, PR #185)"):**
+    ledger = `docs/architecture.md` "Electron 39 → 43 — design record (wave DEP-4, PR #187)"):**
     Wave DEP-4 cleared the LAST open Dependabot alert (#83 / issue #179) by moving Electron
     39.8.10 → 43.4.0 — Chromium 142 → 150, Node 22.22.1 → 24.18.1, SQLite 3.51.2 → 3.53.1;
     `extract-zip` is gone from the tree and `npm audit` is clean. OS floors unchanged

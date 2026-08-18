@@ -10136,7 +10136,7 @@ This record is the durable per-alert ledger; the DEP-1 record above holds the wa
    node program resolves it; the web program gets the real `pdf.d.mts`). The legacy-build
    decision itself stands — one build everywhere.
 
-## Electron 39 → 43 — design record (wave DEP-4, PR #185)
+## Electron 39 → 43 — design record (wave DEP-4, PR #187)
 
 _Wave DEP-4 (2026-08-18) cleared the last open Dependabot alert, **#83** / issue **#179** —
 GHSA-jmr9-qjv8-65gv (CVE-2026-56876, high, CVSS 8.1), `extract-zip <= 2.0.1` unvalidated symlink
@@ -10361,7 +10361,7 @@ was deleted at close-out — **no `git show` recovers it**. Citations of that fo
 | `plan §8` (abort branch / fallback ladder) | §1 — corrected to `^41.7.2` / `^42.3.4` |
 | `plan §11` (self-audit) | superseded: its findings were folded into the plan before execution |
 
-Surviving sources for anything not resolved above: this record, the phase commits, and the PR #185
+Surviving sources for anything not resolved above: this record, the phase commits, and the PR #187
 body.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)

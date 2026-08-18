@@ -418,7 +418,7 @@ first public release. Consciously-accepted gaps are tracked in
 ### Security
 
 - **Electron 39.8.10 → 43.4.0, clearing the last open Dependabot alert (wave DEP-4,
-  PR #185, 2026-08-18)** — alert #83 / issue #179, GHSA-jmr9-qjv8-65gv
+  PR #187, 2026-08-18)** — alert #83 / issue #179, GHSA-jmr9-qjv8-65gv
   (CVE-2026-56876, high), `extract-zip <= 2.0.1` unvalidated symlink path
   traversal. Unpatchable by design: `extract-zip` is abandoned at 2.0.1, and
   upstream Electron's fix was to replace it, so the alert could only be cleared
