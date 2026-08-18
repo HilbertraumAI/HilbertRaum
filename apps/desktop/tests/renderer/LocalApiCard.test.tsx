@@ -53,6 +53,8 @@ function runtimeStatus(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
 
 interface StubOpts {
   policy?: PolicyStatus
+  /** Render before the policy read resolves (`?? ` would swallow a null override). */
+  policyPending?: boolean
   settings?: AppSettings
   localApi?: LocalApiStatus | null
   runtime?: RuntimeStatus
@@ -87,7 +89,7 @@ function renderCard(opts: StubOpts = {}): { current: AppSettings } {
   render(
     <I18nProvider>
       <LocalApiCard
-        policy={opts.policy ?? makePolicyStatus()}
+        policy={opts.policyPending ? null : (opts.policy ?? makePolicyStatus())}
         settings={current}
         onSettingsChanged={(next) => {
           state.current = next
@@ -119,6 +121,15 @@ describe('LocalApiCard — off + policy states', () => {
     expect(screen.getByText("Turned off by your drive’s policy.")).toBeInTheDocument()
     // Policy off ∧ setting on ⇒ effectively off: no connection details anywhere.
     expect(screen.queryByText('Connect another app')).not.toBeInTheDocument()
+  })
+
+  it('says nothing about a drive policy while the policy read is still in flight', () => {
+    // Deny-by-default is right for the CONTROL, but "Turned off by your drive's policy."
+    // would be a false sentence on the many machines that have no such policy (review
+    // 2026-08-18) — the card stays inert and silent until it knows.
+    renderCard({ policyPending: true })
+    expect(screen.getByRole('switch')).toBeDisabled()
+    expect(screen.queryByText("Turned off by your drive’s policy.")).not.toBeInTheDocument()
   })
 })
 
@@ -298,6 +309,17 @@ describe('LocalApiCard — key requirement + rotation', () => {
 })
 
 describe('LocalApiCard — port', () => {
+  it('suggests a port that is not the one that just failed, even at the top of the range', async () => {
+    renderCard({
+      settings: settings({ localApiEnabled: true, localApiPort: 65535 }),
+      localApi: apiStatus({ running: false, port: null, lastError: 'port_in_use' })
+    })
+    const banner = await screen.findByText(/already using this number/)
+    expect(banner.textContent).toContain('65534')
+    expect(banner.textContent).not.toContain('65535')
+  })
+
+
   it('refuses a port outside the shared clamp and applies a valid one', async () => {
     const user = userEvent.setup()
     const updateSettings = vi.fn(async (p: Partial<AppSettings>) => settings(p))

@@ -110,6 +110,11 @@ const NAV_TOP: NavItem[] = [
 
 const NAV_BOTTOM: NavItem[] = [{ id: 'settings', labelKey: 'nav.settings', icon: 'settings' }]
 
+/** How often the rail indicator re-reads whether the local API is listening. Deliberately
+ *  slow: the state changes at most a few times a session, and the read is an in-memory
+ *  status snapshot — this exists so the indicator self-corrects, not to be timely. */
+const LOCAL_API_INDICATOR_POLL_MS = 10_000
+
 export function App(): JSX.Element {
   // The language provider wraps EVERYTHING, including the pre-unlock gate (which
   // resolves from the localStorage mirror / OS locale — i18n record §3.2).
@@ -193,6 +198,34 @@ function AppShell(): JSX.Element {
     if (gateVisible) window.api?.perfMark?.('gate_visible')
   }, [gateVisible])
 
+  // The rail indicator must never claim the opposite of reality (D1), and the two events
+  // that change this state are both invisible to a navigation-scoped read: the post-unlock
+  // start is fire-and-forget, and the Settings toggle happens while the user stays put on
+  // the Settings screen. So this one re-reads on a slow interval (and on window focus) —
+  // enough to be self-correcting, far too rare to be a poll worth optimizing.
+  useEffect(() => {
+    if (!unlocked) {
+      setLocalApiOn(false)
+      return
+    }
+    let active = true
+    const read = (): void => {
+      window.api
+        ?.getAppStatus()
+        .then((st) => active && setLocalApiOn(st.localApi?.running === true))
+        .catch(() => active && setLocalApiOn(false))
+    }
+    read()
+    const onFocus = (): void => read()
+    window.addEventListener('focus', onFocus)
+    const timer = setInterval(read, LOCAL_API_INDICATOR_POLL_MS)
+    return () => {
+      active = false
+      window.removeEventListener('focus', onFocus)
+      clearInterval(timer)
+    }
+  }, [unlocked])
+
   useEffect(() => {
     if (!unlocked) return
     let active = true
@@ -200,10 +233,6 @@ function AppShell(): JSX.Element {
       ?.getPolicy()
       .then((p) => active && setOffline(p.offlineMode))
       .catch(() => active && setOffline(true))
-    window.api
-      ?.getAppStatus()
-      .then((st) => active && setLocalApiOn(st.localApi?.running === true))
-      .catch(() => active && setLocalApiOn(false))
     // Apply the persisted Appearance + Language settings. Settings are only readable
     // post-unlock; re-checked alongside the policy so a Settings-screen change made
     // this session is also picked up after navigation. applyLanguageSetting also

@@ -201,6 +201,10 @@ export class LocalApiServer {
   private async doStop(): Promise<void> {
     this.admission.abortAll('server stopping')
     this.deps.runtime.setExternalPreemption(null)
+    // A deliberate stop ends the failure too: without this, a bind that lost the port race
+    // and was then switched OFF would keep every status surface reporting "the port is in
+    // use" forever — an off endpoint is off, not broken (review 2026-08-18).
+    this.lastError = null
     // Bounded grace so mid-stream handlers can flush their `server_stopped` frame — the
     // abort settles their generators within microtasks; a wedged one is force-closed.
     // Event-driven (the per-response close handler resolves the waiters), never a poll:
@@ -396,6 +400,15 @@ export class LocalApiServer {
     }
     const parsed = parseChatRequest(read.body)
     if (!parsed.ok) return this.reject(res, 400, parsed.error)
+
+    // Re-validate the key now that the body has arrived. Auth ran before the (up to 30 s)
+    // body phase, so a rotation landing in that window would otherwise let a request
+    // admitted under the OLD key still occupy the model — the same hole `abortExternalRequests`
+    // closes for streams already running (SEC-F6, review 2026-08-18). The key must be valid
+    // at the moment we commit the model, not merely when the headers arrived.
+    const auth = this.deps.getSettings()
+    const staleAuth = checkAuth(req, auth.localApiTokenRequired, () => this.deps.getToken())
+    if (staleAuth) return this.reject(res, 401, staleAuth)
 
     // Fast-fail the obvious before admission; the authoritative snapshot is re-taken
     // AFTER the (up-to-30 s) queued wait, which can span a model switch.

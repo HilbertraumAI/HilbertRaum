@@ -196,6 +196,61 @@ describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
     expect(within(nav).queryByRole('button', { name: 'Offline' })).not.toBeInTheDocument()
   })
 
+  it('states the local API on the rail, and self-corrects when it is switched off', async () => {
+    // D1 — the indicator never pretends. Neither event that changes this state is visible
+    // to a navigation-scoped read (the post-unlock start is fire-and-forget; the toggle
+    // happens while the user stays on Settings), so App re-reads on focus + a slow interval.
+    let running = true
+    stubApi({
+      getWorkspaceState: vi.fn(async () => unlockedWorkspace),
+      getPolicy: vi.fn(async () => offlinePolicy),
+      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+      onRuntimeNotice: vi.fn(() => () => {}),
+      getAppStatus: vi.fn(async () =>
+        appStatus({
+          machineRamGb: 16,
+          localApi: {
+            running,
+            port: 4980,
+            tokenRequired: true,
+            requestsServed: 0,
+            rejectedCount: 0,
+            lastError: null,
+            externalActive: false,
+            lastPreemptedAt: null
+          }
+        })
+      ),
+      getRuntimeStatus: vi.fn(async () => ({
+        running: false,
+        modelId: null,
+        port: null,
+        healthy: false,
+        message: 'Stopped'
+      })),
+      listDocuments: vi.fn(async () => []),
+      runPreflight: vi.fn(async () => ({
+        ok: true,
+        rootPath: '/drive',
+        writable: true,
+        freeBytes: 1024 * 1024 * 1024,
+        slowDriveWarning: null,
+        problems: []
+      }))
+    })
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    await waitFor(() =>
+      expect(within(nav).getByRole('button', { name: 'Offline · API on' })).toBeInTheDocument()
+    )
+
+    running = false
+    window.dispatchEvent(new Event('focus'))
+    await waitFor(() =>
+      expect(within(nav).getByRole('button', { name: 'Offline' })).toBeInTheDocument()
+    )
+  })
+
   it('routes the rail-foot privacy indicator to Settings → Privacy & data', async () => {
     // Clicking the ambient indicator (guidelines §7) still opens Settings → Privacy & data
     // (the settings:privacy route is unchanged).

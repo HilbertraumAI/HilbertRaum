@@ -157,22 +157,24 @@ export function LocalApiCard({
         }}
         label={t('settings.localApi.toggle')}
       />
-      {allowedByPolicy ? (
-        <p className="hint">{t('settings.localApi.hint')}</p>
-      ) : (
-        // Disabled WITH the reason, never hidden (transparency): an administratively
-        // disabled feature the user cannot see reads as a feature that does not exist.
-        <p className="hint">{t('settings.localApi.policyOff')}</p>
-      )}
+      {/* While the policy read is still in flight the switch is inert (deny-by-default)
+          but says NOTHING about why: claiming "your drive's policy" before knowing the
+          policy would be a false sentence on every machine that has none (review
+          2026-08-18). Disabled WITH the reason — never hidden — once it IS known:
+          an administratively disabled feature nobody can see reads as no feature. */}
+      {policy != null &&
+        (allowedByPolicy ? (
+          <p className="hint">{t('settings.localApi.hint')}</p>
+        ) : (
+          <p className="hint">{t('settings.localApi.policyOff')}</p>
+        ))}
       {saveError && <Banner tone="error">{saveError}</Banner>}
 
       {effective && (
         <>
           {status?.lastError === 'port_in_use' && (
             <Banner tone="warning">
-              {t('settings.localApi.error.portInUse', {
-                suggestion: String(Math.min(MAX_LOCAL_API_PORT, port + 1))
-              })}
+              {t('settings.localApi.error.portInUse', { suggestion: String(suggestPort(port)) })}
             </Banner>
           )}
           {status?.lastError === 'start_failed' && (
@@ -408,6 +410,13 @@ export function LocalApiCard({
       </ConfirmDialog>
     </div>
   )
+}
+
+/** A concrete alternative to offer when the configured port is taken: the next number up,
+ *  or the previous one at the top of the range — suggesting the very port that just failed
+ *  would be useless advice (review 2026-08-18). */
+function suggestPort(port: number): number {
+  return port < MAX_LOCAL_API_PORT ? port + 1 : port - 1
 }
 
 /** A draft port is applicable when it is a whole number inside the shared clamp range and

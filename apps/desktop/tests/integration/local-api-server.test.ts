@@ -19,6 +19,8 @@ interface Harness {
   sources: ManualSource[]
   lastOptions: () => RuntimeChatOptions | undefined
   setDocTask: (busy: boolean) => void
+  /** Rotate the access key the server validates against (the P4 regenerate flow). */
+  setToken: (t: string) => void
   setAdmitsWork: (v: boolean) => void
   stopAll: () => Promise<void>
 }
@@ -67,9 +69,10 @@ async function makeHarness(opts?: {
   let docTask = false
   let admits = true
   const token = 'hr-' + 'a'.repeat(43)
+  let liveToken = token
   const server = new LocalApiServer({
     getSettings: () => ({ localApiPort: 0, localApiTokenRequired: opts?.tokenRequired ?? true }),
-    getToken: () => token,
+    getToken: () => liveToken,
     runtime: {
       status: () => mgr.status(),
       active: () => mgr.active(),
@@ -94,6 +97,7 @@ async function makeHarness(opts?: {
     sources,
     lastOptions: () => optionsSeen[optionsSeen.length - 1],
     setDocTask: (b) => (docTask = b),
+    setToken: (t) => (liveToken = t),
     setAdmitsWork: (v) => (admits = v),
     stopAll: async () => {
       await server.stop()
@@ -169,6 +173,37 @@ describe('LocalApiServer — bind posture (D2/O5)', () => {
     expect(server.status().running).toBe(false)
     // The P4 card's error surface: the failed bind is queryable, not just logged.
     expect(server.status().lastError).toBe('port_in_use')
+    await new Promise<void>((r) => blocker.close(() => r()))
+  })
+
+  it('a deliberate stop clears the bind failure — "off" is off, not broken', async () => {
+    // Without this the Diagnostics row (and the copy report) would keep telling a user who
+    // simply switched the feature back off that the port is still in use (review 2026-08-18).
+    const blocker = net.createServer()
+    await new Promise<void>((r) => blocker.listen(0, '127.0.0.1', () => r()))
+    const takenPort = (blocker.address() as net.AddressInfo).port
+    const mgr = new RuntimeManager(() => {
+      throw new Error('unused')
+    })
+    const server = new LocalApiServer({
+      getSettings: () => ({ localApiPort: takenPort, localApiTokenRequired: true }),
+      getToken: () => 'hr-x',
+      runtime: {
+        status: () => mgr.status(),
+        active: () => null,
+        isExternallyBusy: () => true,
+        setExternalPreemption: () => {}
+      },
+      hasActiveDocTask: () => false,
+      admitsWork: () => true,
+      estimateBusySeconds: () => 30,
+      appVersion: 't'
+    })
+    await expect(server.start()).rejects.toThrow(PortInUseError)
+    expect(server.status().lastError).toBe('port_in_use')
+    await server.applySettings({ shouldRun: false })
+    expect(server.status().lastError).toBeNull()
+    expect(server.status().running).toBe(false)
     await new Promise<void>((r) => blocker.close(() => r()))
   })
 
@@ -280,6 +315,43 @@ describe('LocalApiServer — Host / Origin / content-type / auth matrix', () => 
     const body = (await res.json()) as { error: { message: string; type: string; code: string } }
     expect(body.error.type).toBe('invalid_request_error')
     expect(typeof body.error.message).toBe('string')
+  })
+})
+
+describe('LocalApiServer — key rotation mid-request (SEC-F6)', () => {
+  it('a request that authenticated with the OLD key is refused once the body arrives', async () => {
+    // Auth runs before the (up to 30 s) body phase, so a rotation landing in that window
+    // would otherwise let a request admitted under the dead key occupy the model — the same
+    // hole abortExternalRequests closes for streams already running.
+    const h = await makeHarness()
+    const body = JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] })
+    const socket = net.connect(h.port, '127.0.0.1')
+    await new Promise<void>((r) => socket.once('connect', r))
+    const chunks: Buffer[] = []
+    socket.on('data', (c) => chunks.push(c))
+    // Headers (with the still-valid key) first, body withheld.
+    socket.write(
+      [
+        'POST /v1/chat/completions HTTP/1.1',
+        `host: 127.0.0.1:${h.port}`,
+        `authorization: Bearer ${h.token}`,
+        'content-type: application/json',
+        `content-length: ${Buffer.byteLength(body)}`,
+        'connection: close',
+        '',
+        ''
+      ].join('\r\n')
+    )
+    await new Promise((r) => setTimeout(r, 50))
+    h.setToken('hr-' + 'b'.repeat(43)) // the user pressed "Create a new key"
+    socket.write(body)
+    await waitFor(() => Buffer.concat(chunks).toString('utf8').includes('\r\n\r\n'), 5_000)
+    const answer = Buffer.concat(chunks).toString('utf8')
+    socket.destroy()
+    expect(answer).toContain('401')
+    expect(answer).toContain('invalid_api_key')
+    // …and nothing was generated for it.
+    expect(h.mgr.isGenerating()).toBe(false)
   })
 })
 
