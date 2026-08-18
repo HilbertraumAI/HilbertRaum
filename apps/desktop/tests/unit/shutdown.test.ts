@@ -48,6 +48,9 @@ function fakeCtx(order: string[]): AppContext {
     ocrEngine: { stop: stop('ocr.stop') },
     vision: { stop: stop('vision.stop') },
     translator: { stop: stop('translator.stop') },
+    // Local-api wave: the endpoint's stop() (aborts external streams, closes sockets)
+    // runs BEFORE the sidecar stops, so no outside caller holds the model mid-teardown.
+    localApi: { stop: stop('localApi.stop') },
     // Issue #51: quit calls workspace.shutdown() (lock + plaintext checkpoint/close). The
     // ordering event keeps its historical 'lock' label — every assertion below pins it.
     workspace: { shutdown: () => order.push('lock') }
@@ -91,6 +94,10 @@ describe('performShutdown ordering (REL-4)', () => {
     // so a running/queued translation can't materialize a half-translated transient during teardown.
     expect(i('cancel-tasks')).toBeGreaterThanOrEqual(0)
     expect(i('cancel-tasks')).toBeLessThan(i('translator.stop'))
+    // Local-api wave: the endpoint dies BEFORE the runtime sidecar, so no external caller
+    // can reach (or hold a stream on) the model while the children are killed.
+    expect(i('localApi.stop')).toBeGreaterThanOrEqual(0)
+    expect(i('localApi.stop')).toBeLessThan(i('runtime.stop'))
     // …and its abort-unwind SETTLE is awaited after the sidecar stop, before the vault re-encrypts.
     expect(i('task-settle')).toBeGreaterThan(i('runtime.stop'))
     expect(i('task-settle')).toBeLessThan(i('lock'))

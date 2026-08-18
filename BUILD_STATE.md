@@ -52,7 +52,22 @@ landed after the owner ratified O1–O6 (2026-08-18, all recommended options):**
 `network.allow_local_api` policy ceiling (DEFAULT true / STRICT false / STANDALONE true per O3),
 `PolicyStatus.localApiAllowedByPolicy`, `localApiEffectivelyEnabled` (policy ∧ setting),
 prepare-drive writes explicit `false` on commercial drives (O4) in both scripts +
-`buildPolicyJson` (script-drift-pinned). **P2 COMPLETE.**
+`buildPolicyJson` (script-drift-pinned). **P2 COMPLETE** (review round: audit truthfulness,
+port-junk drop, PolicyStatus copy-field removed, shared/local-api.ts effective-rule,
+script-drift real-branch parsing, token-store hardening).
+**P3 (LocalApiServer core + lifecycle) landed:** `services/local-api/server.ts` + `handlers.ts`
+(node:http; dual-loopback bind per O5, port 4980 per O1; Host→Origin→content-type→auth pipeline;
+OpenAI envelopes synthesized incl. non-streaming; `usage` deliberately absent v1; capability-400
+vs benign-ignore field policy; json_schema → grammar-constrained decoding; distinct
+model_starting/model_not_loaded 503s + Retry-After; preempted_by_user/server_stopped in-band
+frames close WITHOUT [DONE]; counted-bytes 1 MB body cap; requestTimeout disabled +
+15 s drain-timeout + 30 s body-idle; PortInUseError typed). Lifecycle: `ctx.localApi` in
+initBackend; three post-unlock seams via `maybeStartLocalApi` (policy ∧ setting, D3/D7);
+stopped FIRST in runLockTeardown + performShutdown (pinned); `applyLocalApiSettings` on
+settings:update. Contract: data-contracts.md P3 block; architecture.md bullet. Tests:
+local-api-server.test.ts ×23 (real listener, full matrix), local-api-lifecycle.test.ts ×5
+(default-off = ZERO listeners pin, policy-beats-setting, locked refusal, live toggle),
+shutdown ordering pin.
 
 _Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the

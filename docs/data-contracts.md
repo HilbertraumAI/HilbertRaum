@@ -165,6 +165,42 @@ New audit event `local_api_toggled` (metadata `{ enabled: boolean }` ONLY — th
 writes metadata verbatim to plaintext outside the vault); `localApiEnabled` +
 `localApiTokenRequired` join the `privacyKeys` settings_changed allowlist (booleans only, port
 excluded).
+**Local-api wave P3 — the exposed HTTP contract (what external apps code against):**
+`LocalApiServer` (`services/local-api/server.ts` + `handlers.ts`) binds **127.0.0.1 AND ::1**
+(O5; never 0.0.0.0; no-IPv6 machines degrade to v4-only), default port **4980** (O1).
+Every response carries `Server: HilbertRaum/<version>`. Pipeline order (security contract):
+Host (loopback names only; absent ⇒ 403) → Origin (`http(s)` non-loopback + literal `null` ⇒
+403; absent/custom app schemes pass; OPTIONS ⇒ 403; **no CORS header is ever emitted**) →
+content-type (POST = `application/json`, charset tolerated; else 415) → Bearer auth
+(constant-time; when token NOT required a present Authorization is IGNORED; both routes gated).
+Routes (D6 — nothing else): **GET `/v1/models`** → `{object:'list', data:[{id, object:'model',
+owned_by:'hilbertraum', context_window}]}`; never consumes an admission slot; distinct probe
+outcomes: 200 running · 503 `model_starting` + Retry-After · 503 `model_not_loaded`.
+**POST `/v1/chat/completions`**: messages = role∈{system,user,assistant} × string content
+(text-only content-parts flatten; image parts 400); capability fields (`tools`/`functions`,
+`audio`/`modalities`, `n>1`, `response_format.type:'json_object'`) → 400 `unsupported_field`
+naming the field; benign fields (`top_p`, penalties, `n:1`, `user`, `stream_options`) accepted
+and IGNORED (v1 does not pass them through — deviation noted in the wave log);
+`response_format.json_schema` → grammar-constrained decoding (`responseSchema[Name]`).
+External generations run `lane:'external'`, mode balanced (thinking OFF), `max_tokens` clamped
+to the launched context window. **Streaming**: role-first `chat.completion.chunk` → content
+deltas → `finish_reason` chunk → `data: [DONE]`. **Non-streaming** (SDK default): one
+`chat.completion` object. **`usage` is deliberately ABSENT in v1** (the SSE reader discards
+token counts; documented rather than fabricated). Client disconnect aborts the generation in
+both modes. Errors are OpenAI-shaped `{"error":{message,type,code}}`: 400 invalid/unsupported ·
+401 `invalid_api_key` · 403 permission (`forbidden_host`/`forbidden_origin`/`no_cors`) ·
+404 `unknown_route` · 413 `body_too_large` (counted bytes, 1 MB; Content-Length never trusted) ·
+415 · 429 `busy` + Retry-After (derived from measured tok/s; ~5–180 s, default 30) ·
+502 `runtime_unresponsive` · 503 `model_starting`/`model_not_loaded`/`workspace_locked`/
+`server_stopped`. **Pre-emption (D8)**: an in-app turn aborts the external stream → in-band
+`{"error":{type:'server_error', code:'preempted_by_user'}}` frame, stream closes **without**
+`[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way. Baseline
+limits: headersTimeout 10 s, requestTimeout DISABLED (CPU generations exceed 300 s; watchdogs +
+a 15 s SSE drain-timeout reclaim wedged slots), body-idle 30 s (body phase only),
+maxConnections 16. Lifecycle: `ctx.localApi` built in initBackend; started ONLY from the three
+post-unlock seams via `maybeStartLocalApi` when policy ∧ setting permit (D3/D7); stopped first
+in `runLockTeardown` + `performShutdown`; `applyLocalApiSettings` rides `settings:update`;
+`PortInUseError` is surfaced via status + log (the P4 card owns the copy).
 **Policy ceiling (O3/O4 owner-ratified 2026-08-18):** `PrivacyPolicy.network.allowLocalApi`
 (file key `allow_local_api`, restrict-only) — DEFAULT true / STRICT false / **STANDALONE true**
 (O3: without it the feature is policy-dead on every GitHub-release install; the setting stays

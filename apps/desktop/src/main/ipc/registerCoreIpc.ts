@@ -6,6 +6,7 @@ import { getSettings, updateSettings } from '../services/settings'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { buildPolicyStatus } from '../services/policy'
+import { applyLocalApiSettings } from '../services/local-api/lifecycle'
 import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
 import { log, readLogTail, readLogFull } from '../services/logging'
@@ -146,6 +147,14 @@ export function registerCoreIpc(ctx: AppContext): void {
     // Keep the main-side cached UI language in step with the setting (D-L3) — the
     // post-validation value, so junk patches can't move it.
     if ('uiLanguage' in patch) applyUiLanguageSetting(result.uiLanguage)
+    // Local API start/stop/re-port on a live settings change (the seam precedent above).
+    // A PortInUseError is logged + reflected in status (not running) — the P4 card owns
+    // the user-facing copy; the settings write itself always succeeds.
+    if ('localApiEnabled' in patch || 'localApiPort' in patch || 'localApiTokenRequired' in patch) {
+      void applyLocalApiSettings(ctx).catch((err) => {
+        log.warn('Local API settings change failed to apply', { error: String(err) })
+      })
+    }
     // Audit privacy rule: record ONLY the privacy-relevant keys — and their
     // post-validation values, which are booleans/enums — never any other setting's value.
     // The tuple is a hard allowlist: the local-API token cannot ride here structurally

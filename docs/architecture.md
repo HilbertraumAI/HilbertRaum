@@ -2646,6 +2646,18 @@ files**.
   frame), and the invariant `ready:false ⇒ signal aborted`. Kin note: `analysis/model-slot-arbiter.ts`
   coordinates the same physical slot for in-app yielding builders (cooperative pause/resume);
   admission is refuse/queue/abort for outside callers — deliberately separate.
+- **Local API endpoint (local-api wave P3).** `services/local-api/server.ts` + `handlers.ts`:
+  the opt-in OpenAI-compatible loopback endpoint (`node:http`, no framework). Binds
+  **127.0.0.1 AND ::1** (O5), never 0.0.0.0 (D2); exists only while the workspace is unlocked
+  AND policy ∧ setting permit (D3/D7 — `maybeStartLocalApi` at the three post-unlock seams:
+  plaintext startup, unlock, create; `runLockTeardown`/`performShutdown` stop it FIRST, before
+  the sidecars, so no outside caller holds the model mid-teardown; `applyLocalApiSettings`
+  rides `settings:update`). Requests route through the manager-gated `active().chatStream`
+  (never a raw sidecar proxy) so external generations inherit abort registration, watchdogs,
+  context budgeting, and the D8 pre-emption contract. The full exposed HTTP contract (pipeline
+  order, field policy, envelopes, error mapping, limits) lives in `data-contracts.md`; the
+  request pipeline's check ORDER (Host → Origin → content-type → auth) is part of the security
+  contract and test-pinned in `local-api-server.test.ts`.
 
 ### GPU acceleration: probe + start ladder (Phase 15; design record below)
 

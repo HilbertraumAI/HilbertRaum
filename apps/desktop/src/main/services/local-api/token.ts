@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import type { Db } from '../db'
+import { prepareCached, type Db } from '../db'
 
 // Local-API access-key store (local-api wave P2) — MAIN-PROCESS-ONLY by design. The key
 // must never enter AppSettings: `getSettings` spreads every stored settings row into the
@@ -29,9 +29,10 @@ function isWellFormedToken(token: string): boolean {
   return token.startsWith(TOKEN_PREFIX) && token.length > TOKEN_PREFIX.length + 8
 }
 
-/** The stored key, or null when none was ever generated (fresh workspace). */
+/** The stored key, or null when none was ever generated (fresh workspace). Cached
+ *  statement: this runs on EVERY local-API request (the auth check). */
 export function readToken(db: Db): string | null {
-  const row = db.prepare('SELECT token FROM local_api_token WHERE id = 1').get() as
+  const row = prepareCached(db, 'SELECT token FROM local_api_token WHERE id = 1').get() as
     | { token: string }
     | undefined
   return row?.token ?? null
