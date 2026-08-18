@@ -271,7 +271,7 @@ running as you**. Two doors exist:
 | Control | What it stops |
 |---|---|
 | **Off by default; explicit consent dialog** | The door does not exist until the user opens it, knowing what it means. |
-| **Policy ceiling** `network.allow_local_api` (restrict-only) | A managed/commercial drive can forbid the feature outright; the user setting can never override it. |
+| **Policy ceiling** `network.allow_local_api` (restrict-only) | A managed/commercial drive can forbid the feature outright; the user setting can never override it. A drive that forbids it must say so EXPLICITLY (`allow_local_api: false` — what `prepare-drive` writes): an absent key predates the feature and inherits the permissive default, so existing drives are not silently denied (O4b). A junk value or a malformed policy file still fails closed. |
 | **Exists only while unlocked** | A locked vault serves nothing — settings and the access key live inside it, and lock/quit tear the listener down before the sidecars. |
 | **Binds `127.0.0.1` + `::1` only** | Anything off-machine. There is no LAN mode, no `0.0.0.0`, no proxy or forward capability, and no setting that could produce one. Test-pinned. |
 | **`Host` header validation (absent ⇒ 403)** | DNS rebinding — a page that resolves an attacker domain to 127.0.0.1 still fails the Host check. |

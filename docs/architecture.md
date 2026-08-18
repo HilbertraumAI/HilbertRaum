@@ -10183,6 +10183,7 @@ embeddings, no workspace data, and the endpoint never starts, stops, or switches
 | O2 | Launch visibility | **Not promoted** — neutral PR title, one CHANGELOG line, no README/blog push; ship one release that way before documenting it as a headline feature |
 | O3 | `STANDALONE_POLICY.allow_local_api` | **true** — without it the feature is policy-dead on every standalone GitHub-release install; the setting is still default-off behind the consent dialog |
 | O4 | `prepare-drive` policy write | Commercial/prepared drives write an explicit **false**; `--dev` drives write true |
+| O4b | Drives whose policy PREDATES the key (added 2026-08-18, after checking a real 2026-06-30 drive) | An **absent** `allow_local_api` inherits the permissive default, not the packaged STRICT base. Without this every drive already in the field would have been silently denied — a posture nobody chose. An explicit `false` still denies; a junk value and a malformed file still fail closed |
 | O5 | Loopback family | **Bind both `127.0.0.1` and `::1`** — Windows resolves `localhost` to `::1` first and many Electron/Node clients do not address-iterate. The UI still prints the unambiguous `127.0.0.1` form |
 | O6 | Citations under squash-merge | PR# + phase prefix + record §, never a branch SHA |
 
@@ -10259,6 +10260,12 @@ model through **five** lanes: chat/RAG, doc tasks, skill runs, the benchmark, an
   external stream the old key admitted.
 - The card is **shown disabled with its reason** under a forbidding policy, never hidden — a
   silently absent card is a transparency regression a managed-drive user cannot recover from.
+- **A drive whose `policy.json` predates the key is permitted, not denied** (O4b). The key is
+  newer than the drives in the field; inheriting a packaged build's STRICT base would have shown
+  "turned off by your drive's policy" on every existing drive, with no way for the user to tell
+  that from a deliberate ban. Verified against a real 2026-06-30 "lite" drive: its other strict
+  keys (`encryption_required`, `require_sha256_match`) are still honored — only the undecided key
+  changes.
 - The consent dialog's confirm stays disabled until an acknowledgement is ticked, and its copy
   names four facts: what other apps can do, what they cannot, where HilbertRaum's control ends,
   and that nothing is stored.

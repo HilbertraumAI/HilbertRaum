@@ -141,7 +141,23 @@ export function mergePolicyObject(base: PrivacyPolicy, raw: unknown): PrivacyPol
     allowModelDownloads: bool(net.allow_model_downloads, base.network.allowModelDownloads),
     allowUpdateChecks: bool(net.allow_update_checks, base.network.allowUpdateChecks),
     allowTelemetry: bool(net.allow_telemetry, base.network.allowTelemetry),
-    allowLocalApi: bool(net.allow_local_api, base.network.allowLocalApi)
+    // `allow_local_api` is NEWER than the drives already in the field. A `policy.json`
+    // written before the local-API wave has no such key, and inheriting a packaged build's
+    // STRICT base would have silently denied the feature on EVERY existing drive — a posture
+    // nobody chose (owner decision 2026-08-18, verified against a real 2026-06-30 drive).
+    // So the three cases are deliberately different:
+    //   absent            → "not yet decided": inherit the permissive DEFAULT, like a
+    //                       standalone install does. The setting is still default-off behind
+    //                       the consent dialog, so this permits, it does not enable.
+    //   explicit boolean  → that value wins (`prepare-drive` writes an explicit `false` for
+    //                       commercial drives, so a deliberate deny is unaffected).
+    //   present but junk  → the (possibly STRICT) base — garbage must never fail OPEN.
+    // A malformed FILE never reaches here at all: `parsePolicy` returns the base for those,
+    // so the M-4 fail-closed rule is unchanged.
+    allowLocalApi:
+      net.allow_local_api === undefined
+        ? DEFAULT_POLICY.network.allowLocalApi
+        : bool(net.allow_local_api, base.network.allowLocalApi)
   }
   const workspace: WorkspacePolicy = {
     encryptionRequired: bool(ws.encryption_required, base.workspace.encryptionRequired),

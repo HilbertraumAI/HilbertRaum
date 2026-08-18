@@ -219,6 +219,12 @@ state with `localApiEffectivelyEnabled(policy, setting)` — the SAME single der
 start seams use (policy ∧ setting). `prepare-drive` writes
 `allow_local_api: false` explicitly on commercial drives, `true` on `--dev` drives (O4;
 `buildPolicyJson` is canonical, script-drift-pinned in both provisioning scripts).
+**Absent-key rule (owner decision 2026-08-18):** the key is newer than the drives in the field, so
+`mergePolicyObject` treats an ABSENT `allow_local_api` as "not yet decided" and inherits the
+permissive `DEFAULT_POLICY` value rather than the packaged build's STRICT base — otherwise every
+pre-wave drive would have been silently policy-denied. Distinct from two neighbours that still fail
+CLOSED: a value that is present but not a boolean falls back to the base, and a MALFORMED file never
+reaches the merge at all (`parsePolicy` returns the base, the M-4 rule).
 **Renderer surfaces (local-api wave P4).** `AppStatus.localApi?: LocalApiStatus | null` —
 additive + optional (the `translationDevice` shape), read live off `ctx.localApi?.status()`;
 null when no server object exists. `LocalApiStatus` = `{ running, port, tokenRequired,

@@ -438,6 +438,59 @@ describe('local API policy ceiling (local-api P2)', () => {
     expect(buildPolicyStatus(dir2, true).policy.network.allowLocalApi).toBe(true) // dev default
   })
 
+  it('a drive whose policy PREDATES allow_local_api inherits the permissive default', () => {
+    // Owner decision 2026-08-18, taken after checking a REAL 2026-06-30 "lite" drive: every
+    // drive already in the field has a valid policy.json with no allow_local_api key, and
+    // inheriting a packaged build's STRICT base silently denied the feature on all of them.
+    // An ABSENT key now means "not yet decided" and inherits DEFAULT (permitted) — the setting
+    // is still default-off behind the consent dialog, so this permits, it does not enable.
+    __resetPolicyCache()
+    const legacy = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-legacy-'))
+    writeFileSync(join(legacy, 'drive.json'), '{"edition":"lite"}')
+    // Byte-for-byte the shape a pre-wave prepare-drive wrote: every other key present.
+    writeFileSync(
+      join(legacy, 'policy.json'),
+      JSON.stringify({
+        network: { allow_model_downloads: true, allow_update_checks: false },
+        workspace: { encryption_required: true, allow_plaintext_dev_mode: false },
+        models: { allow_unverified_models: false, require_manifest: true, require_sha256_match: true }
+      })
+    )
+    const packaged = loadPolicy(legacy, undefined, { isDev: false }).policy
+    expect(packaged.network.allowLocalApi).toBe(true)
+    // …while every OTHER key the file does state is still honored, strictly.
+    expect(packaged.workspace.encryptionRequired).toBe(true)
+    expect(packaged.workspace.allowPlaintextDevMode).toBe(false)
+    expect(packaged.models.requireSha256Match).toBe(true)
+    expect(packaged.network.allowUpdateChecks).toBe(false)
+  })
+
+  it('an EXPLICIT allow_local_api: false still denies, and junk fails CLOSED (not open)', () => {
+    // The permissive default applies ONLY to an absent key. O4 — commercial drives write an
+    // explicit false — must be unaffected, and a garbage value must never fail open.
+    __resetPolicyCache()
+    const denied = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-explicit-'))
+    writeFileSync(join(denied, 'drive.json'), '{}')
+    writeFileSync(join(denied, 'policy.json'), '{"network":{"allow_local_api":false}}')
+    expect(loadPolicy(denied, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
+
+    __resetPolicyCache()
+    const junk = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-junk-'))
+    writeFileSync(join(junk, 'drive.json'), '{}')
+    writeFileSync(join(junk, 'policy.json'), '{"network":{"allow_local_api":"no"}}')
+    // Present-but-not-a-boolean falls back to the STRICT base for a packaged build.
+    expect(loadPolicy(junk, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
+
+    // A MALFORMED file is a different path (parsePolicy returns the base) — still closed.
+    __resetPolicyCache()
+    const broken = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-broken-'))
+    writeFileSync(join(broken, 'drive.json'), '{}')
+    writeFileSync(join(broken, 'policy.json'), '{ this is not json')
+    expect(loadPolicy(broken, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
+    // And the STRICT constant itself is untouched — it is what a malformed file falls back to.
+    expect(STRICT_POLICY.network.allowLocalApi).toBe(false)
+  })
+
   it('a packaged build fails CLOSED on a provisioned dir; standalone keeps the O3 posture', () => {
     __resetPolicyCache()
     // Provisioned (drive.json marker) + missing policy.json => STRICT => local API denied.

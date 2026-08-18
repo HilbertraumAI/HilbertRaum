@@ -34,7 +34,7 @@ what the audits changed, and the §-anchor legend for the retired plan's citatio
 Citations use PR # + the `local-api-p<N>` phase prefix + a record §, never a branch SHA (O6 —
 the repo squash-merges). **Filed out of scope, deliberately** (pre-existing in-app concurrency the
 new gate makes visible but does not serialize): the benchmark has no re-entrancy guard, and a skill
-run can generate alongside a chat stream — filed as **#185** and **#186**. **Owner-gated leftovers:** the real-model smoke against a
+run can generate alongside a chat stream — filed as **#185** and **#186**. **Post-closeout fix (owner decision 2026-08-18, prompted by a REAL attached drive):** a `policy.json` that PREDATES `allow_local_api` now inherits the permissive default instead of a packaged build's STRICT base — otherwise every drive already in the field would have read "turned off by your drive's policy" with no way to distinguish that from a deliberate ban. An explicit `false` still denies (O4 intact); a junk value and a malformed file still fail closed. Recorded as **O4b** in the design record. **Owner-gated leftovers:** the real-model smoke against a
 live sidecar and the end-to-end `npm run dev` flow with an external client (the pinned build's
 `LLAMA_API_KEY` enforcement was verified directly during P1).
 
