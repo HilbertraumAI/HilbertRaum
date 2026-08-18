@@ -10253,6 +10253,21 @@ under the `electron`-mocking suite:
   exposes the `getDroppedFilePath` seam.
 - **Packaged renderer smoke.** The app paints its onboarding screen on Chromium 150 with **zero
   console errors** and no horizontal overflow.
+- **Dialog `defaultPath` — the one candidate user-visible behaviour change, MEASURED and
+  DISPROVEN (owner-run, 2026-08-19).** Electron 43's breaking-changes list says the `defaultPath`
+  option "now defaults to the user's Downloads folder", which most directly describes the case
+  where the option is OMITTED. All 11 call sites in this repo PASS it, as a bare filename with no
+  directory, and whether a bare filename now resolves its DIRECTORY half against Downloads was
+  never stated upstream. Probed on the packaged E43 build launched from the root of a prepared
+  drive: the save dialog for the activity-log export (`registerAuditIpc.ts`, `defaultPath:
+  'activity-log.json'`) pre-selected the **drive**, not Downloads. Exports therefore do NOT start
+  landing on the host. **Owner decision D-2 is VOID** — no explicit-root change was made at the
+  `save-export.ts` seam, and the plan's inference is recorded as disproven by measurement rather
+  than carried forward as a risk. *Caveat, stated because it bounds the claim:* the drive had
+  already been used as a save target once in the same session, so this reading cannot fully
+  separate "Electron's default resolves to the working/app directory" from "the Windows shell's
+  per-app last-used directory". Both outcomes are drive-local; the Downloads hypothesis is the
+  one that is excluded, and it is the only one D-2 existed to guard against.
 - **Portable artifact on a REAL prepared drive (owner-run, 2026-08-19).** The portable `.exe`
   copied to the root of an existing encrypted drive launches by double-click, resolves that
   drive via `findPreparedDriveRoot` (`config/drive.json`) rather than falling back to a fresh
