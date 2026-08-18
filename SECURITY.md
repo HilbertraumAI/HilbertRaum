@@ -33,7 +33,9 @@ HilbertRaum is a **local-first, offline** application. Full details live in
 - **The one inbound surface is opt-in and loopback-bound** — the optional local API (Settings →
   Privacy & data) listens only on `127.0.0.1`/`::1`, is **off by default**, exists only while the
   workspace is unlocked, requires a Bearer access key by default, and can be forbidden outright by
-  drive policy. It validates the `Host` header, refuses `http(s)` origins whose host is not
+  drive policy — a drive that forbids it must say so **explicitly** (`allow_local_api: false`,
+  which is what `prepare-drive` writes), because a policy file written before the feature
+  existed has no such key and inherits the permissive default rather than being silently denied. It validates the `Host` header, refuses `http(s)` origins whose host is not
   a loopback address, refuses `OPTIONS`, never emits CORS headers, and caps request bodies —
   so browser JavaScript is structurally locked out. It serves **chat completions plus a
   one-model listing and nothing else**: there is no route to documents, conversations, or any

@@ -465,6 +465,32 @@ describe('local API policy ceiling (local-api P2)', () => {
     expect(packaged.network.allowUpdateChecks).toBe(false)
   })
 
+  it('the absent-key rule holds for the SHARPEST shapes: {} and a missing network block', () => {
+    // Self-review of the P7 change: `asObject` turns a missing/non-object `network` into {},
+    // so these shapes all take the ABSENT path — the local API is permitted while every OTHER
+    // network field stays STRICT. That asymmetry is inherent to the owner's decision (absence
+    // means undecided) and is the documented footgun: a drive that wants the feature off must
+    // say so EXPLICITLY. Pinned here so nobody flips it silently in either direction.
+    for (const [label, body] of [
+      ['empty object', '{}'],
+      ['no network block', '{"workspace":{"encryption_required":true}}'],
+      ['non-object network', '{"network":"nope"}'],
+      ['null value', '{"network":{"allow_local_api":null}}']
+    ] as Array<[string, string]>) {
+      __resetPolicyCache()
+      const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-shape-'))
+      writeFileSync(join(dir, 'drive.json'), '{}')
+      writeFileSync(join(dir, 'policy.json'), body)
+      const net = loadPolicy(dir, undefined, { isDev: false }).policy.network
+      // `null` is present-but-not-a-boolean, so it fails CLOSED like any other junk value;
+      // the three genuinely ABSENT shapes are permitted.
+      expect(net.allowLocalApi, label).toBe(label !== 'null value')
+      // …and the rest of the network block still comes from STRICT in every shape.
+      expect(net.allowModelDownloads, label).toBe(false)
+      expect(net.allowUpdateChecks, label).toBe(false)
+    }
+  })
+
   it('an EXPLICIT allow_local_api: false still denies, and junk fails CLOSED (not open)', () => {
     // The permissive default applies ONLY to an absent key. O4 — commercial drives write an
     // explicit false — must be unaffected, and a garbage value must never fail open.
