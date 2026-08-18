@@ -198,9 +198,18 @@ both modes. Errors are OpenAI-shaped `{"error":{message,type,code}}`: 400 invali
 limits: headersTimeout 10 s, requestTimeout DISABLED (CPU generations exceed 300 s; watchdogs +
 a 15 s SSE drain-timeout reclaim wedged slots), body-idle 30 s (body phase only),
 maxConnections 16. Lifecycle: `ctx.localApi` built in initBackend; started ONLY from the three
-post-unlock seams via `maybeStartLocalApi` when policy ∧ setting permit (D3/D7); stopped first
-in `runLockTeardown` + `performShutdown`; `applyLocalApiSettings` rides `settings:update`;
-`PortInUseError` is surfaced via status + log (the P4 card owns the copy).
+post-unlock seams via `maybeStartLocalApi` when policy ∧ setting permit (D3/D7) — both seams
+delegate to `applyLocalApiSettings` (one gate); stopped first in `runLockTeardown` (best-effort,
+pinned) + `performShutdown` (pinned); start/stop/applySettings are SERIALIZED inside the server
+(a disable racing a mid-bind start acts on the settled state); `LOCAL_API_SETTINGS_KEYS`
+(`shared/local-api.ts`) is the change-detection list; a failed bind lands in
+`LocalApiStatus.lastError` (`'port_in_use' | 'start_failed' | null`) — the P4 card's error
+surface. Abort classification uses the shared `isAbortError` + typed `isExceedContextError`
+(never message regexes); a queued waiter re-resolves runtime + status after promotion (a model
+switch during the wait can never stream from the stopped runtime); reclaimed/truncated streams
+count as rejected, never served. `isStrictLoopbackHostname` (`shared/local-api.ts`) is the ONE
+enforcement-grade loopback classifier (Host + Origin; handles WHATWG's bracketed
+`URL.hostname` for IPv6).
 **Policy ceiling (O3/O4 owner-ratified 2026-08-18):** `PrivacyPolicy.network.allowLocalApi`
 (file key `allow_local_api`, restrict-only) — DEFAULT true / STRICT false / **STANDALONE true**
 (O3: without it the feature is policy-dead on every GitHub-release install; the setting stays

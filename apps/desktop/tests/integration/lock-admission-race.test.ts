@@ -276,6 +276,22 @@ async function parkedLock(h: Harness): Promise<{ lockP: Promise<{ result: unknow
 beforeEach(() => ipcState.handlers.clear())
 
 describe('admission during the lock teardown (AUD-02)', () => {
+  it('stops the local API BEFORE the sidecar suspends (local-api D7 — the lock-path ordering pin)', async () => {
+    // The quit-path twin lives in shutdown.test.ts; without THIS pin a runLockTeardown
+    // reorder could let an external stream hold the model while the vault re-encrypts.
+    const h = await harness()
+    const stop = vi.fn(async () => {
+      // The API must die before the teardown reaches the gated sidecar block.
+      expect(h.suspendEntered()).toBe(false)
+    })
+    ;(h.ctx as { localApi?: { stop: () => Promise<void> } }).localApi = { stop }
+    const { lockP } = await parkedLock(h)
+    expect(stop).toHaveBeenCalledTimes(1)
+    h.releaseSuspend()
+    await lockP
+    expect(h.ctrl.isUnlocked()).toBe(false)
+  })
+
   it('refuses startDocTask("translation") while the lock teardown is parked — no sidecar respawn', async () => {
     const h = await harness()
     const { lockP } = await parkedLock(h)

@@ -167,6 +167,8 @@ describe('LocalApiServer — bind posture (D2/O5)', () => {
     })
     await expect(server.start()).rejects.toThrow(PortInUseError)
     expect(server.status().running).toBe(false)
+    // The P4 card's error surface: the failed bind is queryable, not just logged.
+    expect(server.status().lastError).toBe('port_in_use')
     await new Promise<void>((r) => blocker.close(() => r()))
   })
 
@@ -210,6 +212,16 @@ describe('LocalApiServer — Host / Origin / content-type / auth matrix', () => 
       headers: { ...authed(h.token), origin: `http://127.0.0.1:${h.port}` }
     })
     expect(loopbackWeb.status).toBe(200)
+    // WHATWG quirk pin (review 2026-08-18): URL.hostname keeps IPv6 brackets — an
+    // IPv6-loopback web origin must pass, and localhost too.
+    const v6Web = await fetch(`${h.base}/v1/models`, {
+      headers: { ...authed(h.token), origin: 'http://[::1]:5173' }
+    })
+    expect(v6Web.status).toBe(200)
+    const localhostWeb = await fetch(`${h.base}/v1/models`, {
+      headers: { ...authed(h.token), origin: 'http://localhost:5173' }
+    })
+    expect(localhostWeb.status).toBe(200)
   })
 
   it('refuses OPTIONS and never emits a CORS header on ANY response', async () => {

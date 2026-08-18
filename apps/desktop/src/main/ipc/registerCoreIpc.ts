@@ -7,6 +7,7 @@ import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { buildPolicyStatus } from '../services/policy'
 import { applyLocalApiSettings } from '../services/local-api/lifecycle'
+import { LOCAL_API_SETTINGS_KEYS } from '../../shared/local-api'
 import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
 import { log, readLogTail, readLogFull } from '../services/logging'
@@ -148,9 +149,10 @@ export function registerCoreIpc(ctx: AppContext): void {
     // post-validation value, so junk patches can't move it.
     if ('uiLanguage' in patch) applyUiLanguageSetting(result.uiLanguage)
     // Local API start/stop/re-port on a live settings change (the seam precedent above).
-    // A PortInUseError is logged + reflected in status (not running) — the P4 card owns
-    // the user-facing copy; the settings write itself always succeeds.
-    if ('localApiEnabled' in patch || 'localApiPort' in patch || 'localApiTokenRequired' in patch) {
+    // A bind failure is logged + lands in `status().lastError` (running:false) — the P4
+    // card reads THAT surface; the settings write itself always succeeds. Fire-and-forget
+    // is safe: the server serializes start/stop internally.
+    if (LOCAL_API_SETTINGS_KEYS.some((k) => k in patch)) {
       void applyLocalApiSettings(ctx).catch((err) => {
         log.warn('Local API settings change failed to apply', { error: String(err) })
       })

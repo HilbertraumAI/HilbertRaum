@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import type { ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { ExternalGenerationBusyError } from '../runtime'
+import { isExceedContextError } from '../runtime/llama'
+import { isAbortError } from '../chat'
 import type { RuntimeStatus } from '../../../shared/types'
 import { LocalApiAdmission, type Admission } from './admission'
 import {
@@ -28,9 +30,10 @@ import {
 // sidecar proxy), so external requests inherit abort registration, watchdogs, context
 // budgeting, and the D8 pre-emption contract for free.
 
-/** Typed bind failure surfaced to Settings (never a crash). */
+/** Typed bind failure surfaced to Settings (never a crash). Carries the port so error
+ *  handlers never need a DB read (the workspace may have locked since). */
 export class PortInUseError extends Error {
-  constructor(port: number) {
+  constructor(readonly port: number) {
     super(`Port ${port} is already in use`)
     this.name = 'PortInUseError'
   }
@@ -43,6 +46,8 @@ export interface LocalApiStatus {
   /** Counts ONLY — the endpoint stores no request content anywhere (D1). */
   requestsServed: number
   rejectedCount: number
+  /** Why the last start failed (the P4 card's error surface); null while running/clean. */
+  lastError: 'port_in_use' | 'start_failed' | null
 }
 
 export interface LocalApiServerDeps {
@@ -85,10 +90,21 @@ export class LocalApiServer {
   private rejectedCount = 0
   /** Distinguishes teardown aborts from D8 pre-emption in the client-facing error code. */
   private stopping = false
-  private starting: Promise<void> | null = null
+  /**
+   * Serializes start/stop/applySettings (the RuntimeManager `op` pattern): a disable
+   * racing the fire-and-forget post-unlock start, or two rapid settings changes, would
+   * otherwise interleave stop()'s teardown with a concurrent start()'s bind and strand
+   * a listener the setting says is off (review 2026-08-18).
+   */
+  private op: Promise<unknown> = Promise.resolve()
   /** Live responses — stop() lets them flush their teardown error frame before the
    *  force-close (bounded; a wedged handler never delays lock/quit past the grace). */
   private readonly inFlight = new Set<http.ServerResponse>()
+  /** Resolvers parked by stop() waiting for `inFlight` to drain (event-driven, no poll). */
+  private inFlightDrainWaiters: Array<() => void> = []
+  /** Last failed start reason — the P4 card's error surface (`status().lastError`);
+   *  cleared by a successful start. */
+  private lastError: 'port_in_use' | 'start_failed' | null = null
 
   constructor(private readonly deps: LocalApiServerDeps) {
     this.admission = new LocalApiAdmission({
@@ -99,23 +115,29 @@ export class LocalApiServer {
     })
   }
 
+  /** Run `task` after every previously queued start/stop/applySettings. */
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.op.then(task, task)
+    this.op = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
+  }
+
   /** Bind both loopbacks (O5). Idempotent; port-taken → typed PortInUseError. A machine
    *  without IPv6 degrades to v4-only (logged) — `::1` failing with EADDRINUSE still
    *  refuses, because half-bound would mislead `localhost`-configured clients. */
   async start(): Promise<void> {
-    if (this.starting) return this.starting
-    if (this.servers.length > 0) return
-    const run = this.doStart()
-    this.starting = run
-    try {
-      await run
-    } finally {
-      this.starting = null
-    }
+    return this.enqueue(async () => {
+      if (this.servers.length > 0) return
+      await this.doStart()
+    })
   }
 
   private async doStart(): Promise<void> {
     this.stopping = false
+    this.lastError = null
     const port = this.deps.getSettings().localApiPort
     const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
       void this.handle(req, res)
@@ -139,17 +161,25 @@ export class LocalApiServer {
       this.servers.push(await bind('127.0.0.1', port))
     } catch (err) {
       await this.closeAll()
-      if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') throw new PortInUseError(port)
+      if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+        this.lastError = 'port_in_use'
+        throw new PortInUseError(port)
+      }
+      this.lastError = 'start_failed'
       throw err
     }
     // The ::1 twin uses the RESOLVED v4 port (identical in production, where the clamp
-    // forbids 0; test harnesses bind port 0 and both listeners must still agree).
-    const resolvedPort = (this.servers[0].address() as AddressInfo).port
+    // forbids 0; test harnesses bind port 0 and both listeners must still agree). Set
+    // `this.port` BEFORE the ::1 bind: the v4 listener is already live in that await
+    // gap, and a request landing there must checkHost against the real bound port.
+    this.port = (this.servers[0].address() as AddressInfo).port
     try {
-      this.servers.push(await bind('::1', resolvedPort))
+      this.servers.push(await bind('::1', this.port))
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
         await this.closeAll()
+        this.port = null
+        this.lastError = 'port_in_use'
         throw new PortInUseError(port)
       }
       // No IPv6 on this machine — v4-only is honest (the UI shows 127.0.0.1).
@@ -157,28 +187,34 @@ export class LocalApiServer {
         error: String(err)
       })
     }
-    this.port = (this.servers[0].address() as AddressInfo).port
     this.deps.runtime.setExternalPreemption((reason) => this.admission.abortAll(reason))
     this.deps.log?.info('Local API listening', { port: this.port })
   }
 
-  /** Abort active/queued requests, close the listeners. Idempotent; safe pre-start. */
+  /** Abort active/queued requests, close the listeners. Idempotent; safe pre-start.
+   *  `stopping` is set SYNCHRONOUSLY so in-flight handlers label their teardown frames
+   *  `server_stopped` even while an earlier queued operation is still settling. */
   async stop(): Promise<void> {
     this.stopping = true
-    if (this.starting) {
-      try {
-        await this.starting
-      } catch {
-        /* a failed start left nothing to stop */
-      }
-    }
+    return this.enqueue(() => this.doStop())
+  }
+
+  private async doStop(): Promise<void> {
     this.admission.abortAll('server stopping')
     this.deps.runtime.setExternalPreemption(null)
     // Bounded grace so mid-stream handlers can flush their `server_stopped` frame — the
     // abort settles their generators within microtasks; a wedged one is force-closed.
-    const deadline = Date.now() + 500
-    while (this.inFlight.size > 0 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 10))
+    // Event-driven (the per-response close handler resolves the waiters), never a poll:
+    // this runs FIRST in the lock/quit teardowns and must return the instant it can.
+    if (this.inFlight.size > 0) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 500)
+        ;(timer as { unref?: () => void }).unref?.()
+        this.inFlightDrainWaiters.push(() => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
     }
     await this.closeAll()
     this.port = null
@@ -201,17 +237,23 @@ export class LocalApiServer {
   }
 
   /** Start/stop/re-port on a live settings change (the `applyUiLanguageSetting` seam
-   *  precedent). Caller decides WHETHER the endpoint should run (policy ∧ setting). */
+   *  precedent). Caller decides WHETHER the endpoint should run (policy ∧ setting).
+   *  Serialized with start/stop, so a toggle landing mid-bind acts on the SETTLED state. */
   async applySettings(next: { shouldRun: boolean }): Promise<void> {
-    const runningPort = this.port
-    const wantPort = this.deps.getSettings().localApiPort
-    if (!next.shouldRun) {
-      if (this.servers.length > 0) await this.stop()
-      return
-    }
-    if (this.servers.length > 0 && runningPort === wantPort) return
-    if (this.servers.length > 0) await this.stop()
-    await this.start()
+    if (!next.shouldRun) this.stopping = true
+    return this.enqueue(async () => {
+      if (!next.shouldRun) {
+        await this.doStop()
+        return
+      }
+      const wantPort = this.deps.getSettings().localApiPort
+      if (this.servers.length > 0 && this.port === wantPort) {
+        this.stopping = false
+        return
+      }
+      if (this.servers.length > 0) await this.doStop()
+      await this.doStart()
+    })
   }
 
   status(): LocalApiStatus {
@@ -220,7 +262,8 @@ export class LocalApiServer {
       port: this.port,
       tokenRequired: this.deps.getSettings().localApiTokenRequired,
       requestsServed: this.requestsServed,
-      rejectedCount: this.rejectedCount
+      rejectedCount: this.rejectedCount,
+      lastError: this.lastError
     }
   }
 
@@ -233,7 +276,14 @@ export class LocalApiServer {
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     this.inFlight.add(res)
-    res.once('close', () => this.inFlight.delete(res))
+    res.once('close', () => {
+      this.inFlight.delete(res)
+      if (this.inFlight.size === 0) {
+        const waiters = this.inFlightDrainWaiters
+        this.inFlightDrainWaiters = []
+        for (const resolve of waiters) resolve()
+      }
+    })
     try {
       res.setHeader('server', `HilbertRaum/${this.deps.appVersion}`)
 
@@ -241,8 +291,9 @@ export class LocalApiServer {
       req.setTimeout(BODY_IDLE_TIMEOUT_MS, () => req.destroy())
       req.once('end', () => req.setTimeout(0))
 
-      const port = this.port ?? this.deps.getSettings().localApiPort
-      const hostErr = checkHost(req, port)
+      // `this.port` is set the moment the v4 listener binds, so it is never null while a
+      // request can arrive; the fallback only satisfies the type.
+      const hostErr = checkHost(req, this.port ?? 0)
       if (hostErr) return this.reject(res, 403, hostErr)
       // OPTIONS (a CORS preflight) is structurally refused — no CORS headers EVER.
       if (req.method === 'OPTIONS') {
@@ -253,7 +304,8 @@ export class LocalApiServer {
       const ctErr = checkContentType(req)
       if (ctErr) return this.reject(res, 415, ctErr)
       const settings = this.deps.getSettings()
-      const authErr = checkAuth(req, settings.localApiTokenRequired, this.deps.getToken())
+      // getToken is LAZY: with auth off, no request pays the token-store read.
+      const authErr = checkAuth(req, settings.localApiTokenRequired, () => this.deps.getToken())
       if (authErr) return this.reject(res, 401, authErr)
 
       const url = (req.url ?? '/').split('?')[0]
@@ -262,11 +314,9 @@ export class LocalApiServer {
       return this.reject(res, 404, errorBody('Not found', 'invalid_request_error', 'unknown_route'))
     } catch (err) {
       this.deps.log?.warn('Local API request failed', { error: String(err) })
-      if (!res.headersSent) {
-        this.reject(res, 500, errorBody('Internal error', 'server_error', 'internal_error'))
-      } else {
-        res.destroy()
-      }
+      // reject() delegates to sendError, whose already-answered guard destroys instead of
+      // throwing — one predicate for "was this response answered", one rejection counter.
+      this.reject(res, 500, errorBody('Internal error', 'server_error', 'internal_error'))
     }
   }
 
@@ -314,19 +364,31 @@ export class LocalApiServer {
     res.end(payload)
   }
 
+  /** The one 429-busy refusal (message + code + Retry-After) — three call paths, one
+   *  contract clients key retry logic on. */
+  private rejectBusy(res: http.ServerResponse): void {
+    this.reject(
+      res,
+      429,
+      errorBody('HilbertRaum is busy with another answer — try again shortly', 'rate_limit_error', 'busy'),
+      { 'retry-after': String(this.deps.estimateBusySeconds()) }
+    )
+  }
+
   private async handleCompletions(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const read = await readJsonBody(req, res)
     if (!read.ok) {
-      this.rejectedCount++
+      // Count only ANSWERED refusals — a socket that died mid-upload got no response.
+      if (read.responded) this.rejectedCount++
       return
     }
     const parsed = parseChatRequest(read.body)
     if (!parsed.ok) return this.reject(res, 400, parsed.error)
 
+    // Fast-fail the obvious before admission; the authoritative snapshot is re-taken
+    // AFTER the (up-to-30 s) queued wait, which can span a model switch.
     const gate = this.modelGate()
     if ('error' in gate) return this.reject(res, gate.error.status, gate.error.body, gate.error.headers)
-    const runtime = this.deps.runtime.active()!
-    const model = gate.status.modelId ?? 'unknown'
 
     // Client disconnect aborts everything downstream (an abandoned request must not burn
     // a multi-minute generation nobody reads — both modes).
@@ -341,26 +403,17 @@ export class LocalApiServer {
     if (outcome === 'locked') {
       return this.reject(res, 503, errorBody('The workspace is locked', 'unavailable_error', 'workspace_locked'))
     }
-    if (outcome === 'busy') {
-      return this.reject(
-        res,
-        429,
-        errorBody('HilbertRaum is busy with another answer — try again shortly', 'rate_limit_error', 'busy'),
-        { 'retry-after': String(this.deps.estimateBusySeconds()) }
-      )
-    }
+    if (outcome === 'busy') return this.rejectBusy(res)
     const admission: Admission = outcome
     try {
       const held = await admission.ready
-      if (!held) {
-        return this.reject(
-          res,
-          429,
-          errorBody('HilbertRaum is busy with another answer — try again shortly', 'rate_limit_error', 'busy'),
-          { 'retry-after': String(this.deps.estimateBusySeconds()) }
-        )
-      }
-      await this.runCompletion(req, res, runtime, model, parsed.req, admission)
+      if (!held) return this.rejectBusy(res)
+      // Re-resolve runtime + status now that the slot is held: a queued waiter promoted
+      // after a model switch must never generate against the stopped old runtime (or
+      // label the stream with the old model id) — review 2026-08-18.
+      const post = this.modelGate()
+      if ('error' in post) return this.reject(res, post.error.status, post.error.body, post.error.headers)
+      await this.runCompletion(res, this.deps.runtime.active()!, post.status, parsed.req, admission)
     } finally {
       admission.release()
     }
@@ -391,24 +444,19 @@ export class LocalApiServer {
   }
 
   private async runCompletion(
-    _req: http.IncomingMessage,
     res: http.ServerResponse,
     runtime: ModelRuntime,
-    model: string,
+    status: RuntimeStatus,
     parsed: ParsedChatRequest,
     admission: Admission
   ): Promise<void> {
     const id = `chatcmpl-${randomUUID()}`
     const created = Math.floor(Date.now() / 1000)
+    const model = status.modelId ?? 'unknown'
     let finishReason = 'stop'
-    const options = this.buildChatOptions(
-      parsed,
-      admission.signal,
-      this.deps.runtime.status().contextWindow,
-      (reason) => {
-        finishReason = reason
-      }
-    )
+    const options = this.buildChatOptions(parsed, admission.signal, status.contextWindow, (reason) => {
+      finishReason = reason
+    })
     const generator = runtime.chatStream(parsed.messages, options)
 
     if (!parsed.stream) {
@@ -421,7 +469,7 @@ export class LocalApiServer {
           await generator.return(undefined)
         }
       } catch (err) {
-        return this.completionError(res, err)
+        return this.completionError(res, err, admission.signal)
       }
       if (admission.signal.aborted) {
         // Aborted mid-buffer: nothing useful to return. Distinguish teardown/pre-emption
@@ -458,41 +506,10 @@ export class LocalApiServer {
         })
       }
     }
-    try {
-      try {
-        for await (const delta of generator) {
-          if (!started) {
-            started = true
-            res.writeHead(200, {
-              'content-type': 'text/event-stream',
-              'cache-control': 'no-cache',
-              connection: 'keep-alive'
-            })
-            await write(chunkEnvelope(id, created, model, { role: 'assistant' }, null))
-          }
-          await write(chunkEnvelope(id, created, model, { content: delta }, null))
-          if (res.destroyed) break
-        }
-      } finally {
-        await generator.return(undefined)
-      }
-    } catch (err) {
-      if (!started) return this.completionError(res, err)
-      // Mid-stream failure: in-band error frame, close WITHOUT [DONE] (the F-02 class —
-      // a [DONE] after an error marks the truncated stream successful).
-      await write(JSON.stringify(errorBody('The generation failed', 'server_error', 'runtime_error')))
-      res.end()
-      return
-    }
-    if (admission.signal.aborted && !res.destroyed) {
-      if (!started) return this.abortedBeforeStream(res)
-      const code = this.stopping ? 'server_stopped' : 'preempted_by_user'
-      await write(JSON.stringify(errorBody('The answer was interrupted', 'server_error', code)))
-      res.end() // NO [DONE] — the stream is truncated, not successful (client-dev 7)
-      return
-    }
-    if (!started) {
-      // Zero-token generation: still a valid (empty) stream.
+    // ONE SSE prologue for both the first-delta and the zero-token paths — the stream
+    // shape must never depend on which branch opened it.
+    const startSse = async (): Promise<void> => {
+      started = true
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
@@ -500,6 +517,48 @@ export class LocalApiServer {
       })
       await write(chunkEnvelope(id, created, model, { role: 'assistant' }, null))
     }
+    try {
+      try {
+        for await (const delta of generator) {
+          if (!started) await startSse()
+          await write(chunkEnvelope(id, created, model, { content: delta }, null))
+          if (res.destroyed) break
+        }
+      } finally {
+        await generator.return(undefined)
+      }
+    } catch (err) {
+      if (!started) return this.completionError(res, err, admission.signal)
+      // Mid-stream failure: in-band error frame, close WITHOUT [DONE] (the F-02 class —
+      // a [DONE] after an error marks the truncated stream successful). The REAL runtime
+      // rejects with an AbortError-named plain Error when the pre-emption abort lands
+      // inside a token read (review 2026-08-18) — that is the D8 contract frame, not a
+      // generic runtime failure.
+      const frame = isAbortError(err, admission.signal)
+        ? errorBody(
+            'The answer was interrupted',
+            'server_error',
+            this.stopping ? 'server_stopped' : 'preempted_by_user'
+          )
+        : errorBody('The generation failed', 'server_error', 'runtime_error')
+      await write(JSON.stringify(frame))
+      if (!res.destroyed) res.end()
+      return
+    }
+    if (res.destroyed) {
+      // Reclaimed (drain timeout) or vanished client: the stream was truncated — count
+      // it as rejected, never served, and never end() a destroyed response.
+      this.rejectedCount++
+      return
+    }
+    if (admission.signal.aborted) {
+      if (!started) return this.abortedBeforeStream(res)
+      const code = this.stopping ? 'server_stopped' : 'preempted_by_user'
+      await write(JSON.stringify(errorBody('The answer was interrupted', 'server_error', code)))
+      res.end() // NO [DONE] — the stream is truncated, not successful (client-dev 7)
+      return
+    }
+    if (!started) await startSse() // zero-token generation: still a valid (empty) stream
     await write(chunkEnvelope(id, created, model, {}, finishReason))
     await write('[DONE]')
     this.requestsServed++
@@ -519,27 +578,21 @@ export class LocalApiServer {
     )
   }
 
-  private completionError(res: http.ServerResponse, err: unknown): void {
-    if (err instanceof ExternalGenerationBusyError) {
+  private completionError(res: http.ServerResponse, err: unknown, signal: AbortSignal): void {
+    if (err instanceof ExternalGenerationBusyError) return this.rejectBusy(res)
+    // The TYPED overflow predicate the chat IPC layer uses — never a message regex,
+    // which drifts on pin bumps and false-positives on unrelated wording (review 2026-08-18).
+    if (isExceedContextError(err)) {
       return this.reject(
         res,
-        429,
-        errorBody('HilbertRaum is busy with another answer — try again shortly', 'rate_limit_error', 'busy'),
-        { 'retry-after': String(this.deps.estimateBusySeconds()) }
+        400,
+        errorBody('The request does not fit the model context window', 'invalid_request_error', 'context_overflow')
       )
     }
-    const message = err instanceof Error ? err.message : String(err)
-    if (/context|token budget|overflow/i.test(message)) {
-      return this.reject(res, 400, errorBody('The request does not fit the model context window', 'invalid_request_error', 'context_overflow'))
-    }
-    if (admissionAbort(err)) {
-      return this.abortedBeforeStream(res)
-    }
+    // The shared abort classifier: the real runtime rejects with a PLAIN Error named
+    // 'AbortError' (not a DOMException) — `isAbortError` also covers the signal fallback.
+    if (isAbortError(err, signal)) return this.abortedBeforeStream(res)
     // Runtime unresponsive / anything else: 502 with a content-free reason.
     this.reject(res, 502, errorBody('The model runtime did not answer', 'server_error', 'runtime_unresponsive'))
   }
-}
-
-function admissionAbort(err: unknown): boolean {
-  return err instanceof DOMException && err.name === 'AbortError'
 }

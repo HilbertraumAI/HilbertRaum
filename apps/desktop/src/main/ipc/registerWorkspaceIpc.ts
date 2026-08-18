@@ -334,8 +334,14 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   // The local API dies FIRST (local-api wave, D7): its stop() aborts active + queued
   // external streams and closes every socket, so no outside caller can reach the model
   // (or hold a stream open) while the sidecars below are torn down and the vault
-  // re-encrypts. Restarted only by the post-unlock seam. Idempotent, non-latching.
-  await (ctx.localApi?.stop() ?? Promise.resolve())
+  // re-encrypts. Restarted only by the post-unlock seam. Idempotent, non-latching —
+  // and best-effort like every sibling boundary: a throw here must never block the
+  // security action (the lock proceeds; the listener still dies with lock's stops).
+  try {
+    await (ctx.localApi?.stop() ?? Promise.resolve())
+  } catch {
+    /* best-effort — the lock must proceed */
+  }
   // `suspend()` (not `stop()`): the sidecars must come back lazily
   // after unlock — `stop()` latches permanently for the will-quit path and used to
   // leave every post-lock/unlock embed failing with "Embedder is stopped".

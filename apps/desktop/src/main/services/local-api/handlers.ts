@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { isStrictLoopbackHostname } from '../../../shared/local-api'
 
 // Local-API request pipeline (local-api wave P3): the pure(ish) checks and the OpenAI
 // envelope/error synthesis. The ORDER of the checks is part of the security contract —
@@ -40,14 +41,17 @@ export function sendError(
 
 // ---- Pipeline checks --------------------------------------------------------------------
 
-/** Hosts a request may address us as (O5: both loopbacks + localhost), with/without port. */
+/** Hosts a request may address us as (O5: both loopbacks + localhost), with/without port.
+ *  The hostname half shares the one strict loopback classifier (`shared/local-api.ts`). */
 function isAllowedHostHeader(host: string, port: number): boolean {
   const h = host.trim().toLowerCase()
-  const allowed = ['127.0.0.1', 'localhost', '[::1]']
-  for (const base of allowed) {
-    if (h === base || h === `${base}:${port}`) return true
-  }
-  return false
+  // Split a trailing :port (the IPv6 literal keeps its brackets: `[::1]:4980`).
+  const m = h.match(/^(.*?)(?::(\d{1,5}))?$/)
+  if (!m) return false
+  const hostname = m[1]
+  const portPart = m[2]
+  if (portPart !== undefined && Number(portPart) !== port) return false
+  return isStrictLoopbackHostname(hostname)
 }
 
 /** `Host` must be a loopback name for OUR port. Absent/empty (HTTP/1.0) → refuse: the
@@ -77,10 +81,12 @@ export function checkOrigin(req: IncomingMessage): ApiErrorBody | null {
   const lower = value.toLowerCase()
   if (lower.startsWith('http://') || lower.startsWith('https://')) {
     try {
-      const url = new URL(lower)
-      const host = url.hostname
-      const loopback = host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
-      if (!loopback) return errorBody('Forbidden origin', 'permission_error', 'forbidden_origin')
+      // WHATWG quirk: `URL.hostname` returns IPv6 literals WITH brackets (`[::1]`) —
+      // the shared strict classifier strips them (review 2026-08-18: a bare `=== '::1'`
+      // compare 403'd every legitimate IPv6-loopback web origin).
+      if (!isStrictLoopbackHostname(new URL(lower).hostname)) {
+        return errorBody('Forbidden origin', 'permission_error', 'forbidden_origin')
+      }
     } catch {
       return errorBody('Forbidden origin', 'permission_error', 'forbidden_origin')
     }
@@ -104,6 +110,17 @@ export function checkContentType(req: IncomingMessage): ApiErrorBody | null {
   return null
 }
 
+/** Memo of the expected token's digest — a pure function of the stored token, so it is
+ *  safely cacheable (rotation changes the key and misses the memo). The PRESENTED value
+ *  is hashed per request; hashing both sides to equal length IS the timing safety. */
+let expectedDigestMemo: { token: string; digest: Buffer } | null = null
+function expectedDigest(token: string): Buffer {
+  if (expectedDigestMemo?.token !== token) {
+    expectedDigestMemo = { token, digest: createHash('sha256').update(token).digest() }
+  }
+  return expectedDigestMemo.digest
+}
+
 /**
  * Bearer auth, constant-time (compare sha256 digests — `timingSafeEqual` needs equal
  * lengths). When the key is NOT required, a present Authorization header is IGNORED,
@@ -112,7 +129,7 @@ export function checkContentType(req: IncomingMessage): ApiErrorBody | null {
 export function checkAuth(
   req: IncomingMessage,
   tokenRequired: boolean,
-  expectedToken: string
+  expectedToken: () => string
 ): ApiErrorBody | null {
   if (!tokenRequired) return null
   const header = req.headers.authorization
@@ -120,8 +137,7 @@ export function checkAuth(
   const match = value.match(/^Bearer\s+(.+)$/i)
   const presented = match ? match[1].trim() : ''
   const a = createHash('sha256').update(presented).digest()
-  const b = createHash('sha256').update(expectedToken).digest()
-  if (!timingSafeEqual(a, b)) {
+  if (!timingSafeEqual(a, expectedDigest(expectedToken()))) {
     return errorBody('Invalid or missing access key', 'authentication_error', 'invalid_api_key')
   }
   return null
@@ -142,7 +158,7 @@ const BODY_HARD_KILL_BYTES = BODY_MAX_BYTES * 4
 export function readJsonBody(
   req: IncomingMessage,
   res: ServerResponse
-): Promise<{ ok: true; body: unknown } | { ok: false }> {
+): Promise<{ ok: true; body: unknown } | { ok: false; responded: boolean }> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = []
     let total = 0
@@ -152,7 +168,7 @@ export function readJsonBody(
       settled = true
       chunks.length = 0
       sendError(res, status, body)
-      resolve({ ok: false })
+      resolve({ ok: false, responded: true })
     }
     req.on('data', (chunk: Buffer) => {
       total += chunk.length
@@ -169,7 +185,8 @@ export function readJsonBody(
     req.on('error', () => {
       if (!settled) {
         settled = true
-        resolve({ ok: false })
+        // The socket died mid-upload — nothing was (or can be) answered.
+        resolve({ ok: false, responded: false })
       }
     })
     req.on('end', () => {
@@ -179,7 +196,7 @@ export function readJsonBody(
         resolve({ ok: true, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) })
       } catch {
         sendError(res, 400, errorBody('Body is not valid JSON', 'invalid_request_error', 'invalid_json'))
-        resolve({ ok: false })
+        resolve({ ok: false, responded: true })
       }
     })
   })
