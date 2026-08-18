@@ -129,7 +129,7 @@ export const de: Record<keyof typeof en, string> = {
     'wähle ein heruntergeladenes Modell und wähle dann ',
   'chat.noModel.hintAction': 'Dieses Modell verwenden',
   'chat.noModel.hintAfter':
-    '. Alles bleibt lokal — nichts wird heruntergeladen oder irgendwohin gesendet.',
+    '. Alles bleibt lokal — nichts wird heruntergeladen oder ins Internet gesendet.',
   'chat.noModel.stillLoading':
     'Wenn du die App gerade erst geöffnet hast, wird dein ausgewähltes Modell ' +
     'möglicherweise noch geladen — es geht hier automatisch weiter, sobald es bereit ist.',
@@ -144,7 +144,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.empty.title': 'Stell eine Frage — oder frag deine Dokumente.',
   'chat.empty.lineDocuments': 'Antworten kommen aus deinen Dokumenten und nennen ihre Quellen.',
   'chat.empty.lineChat':
-    'Antworten kommen vom Modell auf diesem Laufwerk — nichts verlässt es.',
+    'Antworten kommen vom Modell auf diesem Laufwerk — nichts verlässt dieses Gerät.',
   'chat.empty.fillTitle': 'Text ins Eingabefeld übernehmen',
   'chat.empty.addDocs': 'Dokumente hinzufügen, um Fragen dazu zu stellen',
   // Zwei Beispielsätze: der reine Chat hat keine Dokumente, daher allgemeine Fragen;
@@ -1522,7 +1522,7 @@ export const de: Record<keyof typeof en, string> = {
     'Internetzugriff ist für Modell-Downloads und Updates aktiviert.',
   'privacy.network.noFiles': 'Keine Fragen oder Dateien verlassen dieses Gerät.',
   'privacy.network.effective': 'Effektiver Zustand',
-  'privacy.network.effectiveOffline': 'Offline (keine Netzwerkzugriffe)',
+  'privacy.network.effectiveOffline': 'Offline (keine Internetzugriffe)',
   'privacy.network.effectiveAllowed': 'Netzwerk erlaubt',
   'privacy.network.byPolicy': 'Durch Richtlinie erlaubt',
   'privacy.network.policyYes': 'Ja',
@@ -1532,7 +1532,7 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.network.settingOff': 'Aus (Standard)',
   'privacy.network.telemetry': 'Telemetrie',
   'privacy.network.telemetryValue':
-    'Nichts verlässt dieses Laufwerk — es gibt kein Tracking, das man abschalten müsste',
+    'Nichts verlässt dieses Gerät — es gibt kein Tracking, das man abschalten müsste',
   'privacy.network.hint':
     'Die App warnt vor jeder Netzwerkaktion. Die einzige optionale Netzwerkfunktion ist ' +
     'das Herunterladen oder Aktualisieren von Modellen — standardmäßig aus und nur über ' +

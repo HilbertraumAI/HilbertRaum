@@ -89,6 +89,33 @@ preload-local-api ×2, indicator state; NEW shared `makePolicyStatus` fixture in
 tests/helpers/status.ts — all 10 hand-spelled/cast `PolicyStatus` fixtures (3 Models + 7
 others) migrated onto it, zero `as PolicyStatus` casts left under tests/. Contract: data-contracts.md P4 block (+ corrected the stale `localApiAllowedByPolicy`
 sentence); user-guide "Use HilbertRaum from other apps" stub (full copy P5).
+**P5 (promise-accuracy sweep, threat model, user docs) landed:** copy sweep by STEM (EN
+`leave|leaves|stays?|this (device|machine|drive)`, DE `verlass|verläss|bleib|Gerät|Laufwerk`)
+over both catalogs — 4 strings per language changed, every other hit reviewed and deliberately
+KEPT with its reason recorded. Changed: `privacy.network.telemetryValue` +
+`chat.empty.lineChat` (drive-scoped absolutes → device-scoped, which is true in BOTH states),
+`chat.noModel.hintAfter` ("sent anywhere" → "sent over the internet"),
+`privacy.network.effectiveOffline` ("no network calls" → "no internet calls", now that an
+inbound loopback listener exists). Kept as still-true: every `this device/machine` claim (the
+API never leaves the machine), the document-scoped drive claims (D6 — no route to documents),
+and `gate.welcome.stays` (pre-unlock, where D7 means the endpoint cannot exist).
+`PRIVACY.md`: heading corrected ("the app's only network feature" → "only use of the
+internet"), new "Letting other apps on this computer use your model" section (loopback,
+answers-only, never-stored, unlocked-only, key-by-default, policy-forbiddable) + a
+"Your responsibility" paragraph (a connected app may store or sync what it receives — that is
+the app's doing, but the privacy effect is the same); the short version now points at it.
+`SECURITY.md`: two mitigation bullets (the opt-in loopback surface; env-delivered sidecar keys
++ stderr redaction) and two limitations (same-user debugger/crash-dump residual → minidumps
+recommended; the local API trusts every program running as you).
+`docs/security-model.md`: the **fifth threat** (same-machine processes) as its own §, with the
+bounding-control table in request order and the accepted residuals; listed in "Threats
+considered". `docs/user-guide.md`: the stub replaced by the full section (turn-on flow, the
+client-vocabulary value table, what connected apps can/cannot do, honest limits, your
+responsibility, key rotation, port conflict incl. the squat warning, policy-disabled).
+`docs/troubleshooting.md`: new "Connecting another app" § — the `localhost`→`::1` symptom
+(works in curl, fails in the plugin), the port-conflict + impersonation check, "Windows Firewall
+does not prompt for a loopback listener" vs what an EDR flag looks like, and a plain-language
+table of what each error number means. `electron-builder.yml` header amended.
 
 _Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the

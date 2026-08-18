@@ -871,26 +871,79 @@ See [`PRIVACY.md`](../PRIVACY.md) for the full statement.
 
 ### Use HilbertRaum from other apps (local API)
 
-**Settings → Privacy & data → Local API** lets other programs on the same computer send text
-to your running model and read the answers — an editor plugin, a note-taking app, a script.
-It is **off until you turn it on**, and turning it on asks you to confirm what that means.
+**Settings → Privacy & data → Local API** lets other programs on the same computer send text to your
+running model and read the answers — an editor plugin, a note-taking app, a script you wrote. It is
+**off until you turn it on**, and turning it on asks you to confirm what that means.
 
-The short version:
+**Turn it on**
 
-- The connection never leaves this computer. Nothing is sent over the internet.
-- Connected apps get answers from the model. They **cannot** see your documents, files, or
-  conversations, and their requests are answered and forgotten — never saved to your chat
-  history or logs.
-- What a connected app does with the answers is up to that app. Check whether it stores or
-  syncs its data before you point it at confidential material.
-- The card shows the two values a client asks for: a **server address** and an **access key**.
-  Keep the access key requirement on unless an app genuinely cannot enter one.
-- Your own use of HilbertRaum always comes first: if you start a chat while an app is waiting,
-  the app's request is interrupted and it can simply try again.
-- A drive policy can switch the whole feature off; the card then says so instead of vanishing.
+1. Open **Settings → Privacy & data** and find the **Local API** card.
+2. Switch on **Allow other apps on this computer to use my AI model**.
+3. Read the dialog, tick the acknowledgement, and choose **Turn on**. Nothing is saved until you do.
 
-*Full walkthrough (connecting a specific client, what the error numbers mean, firewall and
-port questions) lands in the next documentation pass.*
+The card then shows a **Connect another app** block with the two values every client asks for:
+
+| The card says | Your app probably calls it |
+|---|---|
+| **Server address** — `http://127.0.0.1:4980/v1` | "Base URL", "API base", "endpoint", "OpenAI-compatible URL" |
+| **Access key** — starts with `hr-` | "API key", "token", "secret key" |
+
+Use the **Copy** buttons rather than retyping. The access key is only ever shown shortened
+(`hr-…7f3q`); copying puts the real key on your clipboard, and the app clears it again about a
+minute later if you have not copied something else since. If your app asks for a *model name*, any
+value works — HilbertRaum always answers with the model you have running.
+
+**What connected apps can and cannot do**
+
+- They can send text and get answers, streaming or all at once. Requests that ask for JSON in a
+  given shape work too.
+- They **cannot** see your documents, your conversations, your search index, or anything else in
+  your workspace. The endpoint has no route to any of it.
+- Their requests are answered and then forgotten — never written to your chat history or the logs.
+  The card shows counts only ("12 requests answered so far").
+- Nothing goes to the internet. The endpoint listens only on this computer.
+
+**Honest limits**
+
+- **A model has to be running.** The card tells you whether one is: if not, connected apps get an
+  error until you start a model on the **AI Model** screen. The app never starts a model because an
+  outside program asked.
+- **One outside request at a time.** A second one waits briefly, then is told to try again.
+- **Your own use always wins.** If you start a chat here while an app is generating, the app's
+  request is interrupted — it gets a clear "interrupted, retry" answer, and the card tells you it
+  happened. That is deliberate: the model is one resource and you are the one sitting in front of it.
+- **It stops when you lock or quit**, and starts again next time you unlock — as long as the switch
+  is still on.
+
+**Your responsibility**
+
+Once a connected app has an answer, that answer is in that app's hands. HilbertRaum cannot control
+what it does next: it may store the text in its own files, index it, or sync it to its own cloud
+service as part of normal behaviour. That would be **that app** sending your data somewhere, not
+HilbertRaum — but the effect on your privacy is the same. Check a program's own logging and sync
+behaviour before you point it at confidential material, exactly as you would before pasting
+confidential text into it.
+
+**The access key**
+
+Keep **Require an access key** switched on unless an app genuinely cannot enter one — without it,
+any program on this computer can use your model without asking. If a key leaks, or you simply want
+to cut an app off, use **Create a new key**: the old key stops working immediately, including for a
+request that is still streaming. Any app still holding the old key needs the new one pasted in.
+
+**If the port is taken**
+
+If another program already uses port 4980, the card says so and the endpoint does not start. Pick a
+different number (4981, for example) and switch it on again — and paste the new server address into
+any app you had already connected. If you did not expect a conflict, treat it seriously: another
+program sitting on the port could be impersonating HilbertRaum, so do not paste your access key
+anywhere until you know what is using it.
+
+**Turned off by your drive's policy?**
+
+Some managed or commercial drives forbid the feature. The card then appears greyed out with that
+reason instead of disappearing, so you can see the feature exists and that a policy — not a bug —
+is what disabled it.
 
 ### The Activity panel (what did the app do?)
 

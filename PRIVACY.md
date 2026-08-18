@@ -8,7 +8,9 @@ language, what the app does and does not do with your data.
 > Offline Mode is on. HilbertRaum runs the AI model on your laptop.
 > Your prompts, documents, embeddings, and chat history stay local.
 
-This app does not send your data to cloud AI providers.
+This app does not send your data to cloud AI providers. One optional feature lets other programs
+*on your own computer* use your model — it is off by default, never touches the internet, and is
+described under "Letting other apps on this computer use your model" below.
 
 ## No telemetry, no cloud
 
@@ -72,7 +74,7 @@ toggle allows. The effective state is `policy AND your setting`. Telemetry is **
 no toggle. A startup self-check logs the offline posture and flags (logs, never sends) any attempt
 to reach a remote host while offline; local-only connections (`127.0.0.1`/`localhost`) are exempt.
 
-## Model downloads — the app's only network feature
+## Model downloads — the app's only use of the internet
 
 The **only** thing the app can use the internet for is fetching a model file you ask for, from the
 **Models** screen. Three things must all be true before a single byte moves:
@@ -89,6 +91,39 @@ prompts, or your documents is sent. There are **no update checks, no model catal
 background downloads** — with the checkbox off (or no internet at all) the app is fully usable and
 makes no network calls. Every downloaded file is checked against its expected checksum before the
 app will use it.
+
+## Letting other apps on this computer use your model (local API)
+
+There is one more optional feature that involves a connection — but not an internet one. If you
+switch on **Settings → Privacy & data → Local API**, other programs *on the same computer* can send
+text to the model you have running and read its answers. It is **off until you turn it on**, and
+turning it on asks you to confirm what it means.
+
+- **It never reaches the internet.** The endpoint listens only on this computer's loopback address
+  (`127.0.0.1` / `::1`). It cannot be reached from your network, and the app has no mode, setting,
+  or policy that would let it be. Web pages are structurally locked out (browser requests are
+  refused and no CORS headers are ever sent).
+- **It is answers only.** Connected apps can ask the model for text. They cannot read your
+  documents, your conversations, your search index, or anything else in your workspace — the
+  endpoint has no route to any of it.
+- **Requests are answered and forgotten.** What a connected app asks and what the model answers are
+  held in memory for the length of the request and then dropped. They are **never** written to your
+  chat history, your documents, or the logs. The app keeps counts only — how many requests were
+  answered or refused — so you can see the feature is being used without a record of what was said.
+- **It only exists while your workspace is unlocked**, and it stops the moment you lock or quit.
+- **An access key is required by default**, so another program has to be given the key before it can
+  use your model. You can switch that off; the app tells you what that means when you do.
+- **A drive policy can forbid it entirely** — on a managed or commercial drive the card says so
+  instead of disappearing.
+
+### Your responsibility
+
+Once a connected app has an answer, that answer is in that app's hands. HilbertRaum cannot control
+what it does next: an editor plugin or note app may store the text in its own files, index it, or
+sync it to its own cloud service as part of its normal behaviour. That would be **that app**
+sending your data somewhere — not HilbertRaum — but the effect on your privacy is the same. Before
+you point a program at your model, check its own logging and sync behaviour, exactly as you would
+before pasting confidential text into it.
 
 ## Deleting your data
 

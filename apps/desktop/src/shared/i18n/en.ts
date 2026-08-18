@@ -98,7 +98,8 @@ export const en = {
     'Chat and document Q&A need a model loaded. Open the AI Model screen, pick a downloaded ' +
     'model, and choose ',
   'chat.noModel.hintAction': 'Use this model',
-  'chat.noModel.hintAfter': '. Everything stays local — nothing is downloaded or sent anywhere.',
+  'chat.noModel.hintAfter':
+    '. Everything stays local — nothing is downloaded or sent over the internet.',
   'chat.noModel.stillLoading':
     'If you just opened the app, your selected model may still be loading — this screen ' +
     'continues automatically once it is ready.',
@@ -115,7 +116,7 @@ export const en = {
   'chat.noModel.recheck': 'Re-check',
   'chat.empty.title': 'Ask a question, or ask about your documents.',
   'chat.empty.lineDocuments': 'Answers come from your documents and cite their sources.',
-  'chat.empty.lineChat': 'Replies stream from the model on this drive — nothing leaves it.',
+  'chat.empty.lineChat': 'Replies stream from the model on this drive — nothing leaves this device.',
   'chat.empty.fillTitle': 'Fill the message box',
   'chat.empty.addDocs': 'Add documents to ask about them',
   // Two example sets: plain Chat has no documents, so its prompts are general-purpose;
@@ -1477,7 +1478,7 @@ export const en = {
   'privacy.networkState.enabled': 'Internet access is enabled for model downloads and updates.',
   'privacy.network.noFiles': 'No prompts or files leave this device.',
   'privacy.network.effective': 'Effective state',
-  'privacy.network.effectiveOffline': 'Offline (no network calls)',
+  'privacy.network.effectiveOffline': 'Offline (no internet calls)',
   'privacy.network.effectiveAllowed': 'Network allowed',
   'privacy.network.byPolicy': 'Allowed by policy',
   'privacy.network.policyYes': 'Yes',
@@ -1486,7 +1487,7 @@ export const en = {
   'privacy.network.settingAllowed': 'Internet access allowed',
   'privacy.network.settingOff': 'Off (default)',
   'privacy.network.telemetry': 'Telemetry',
-  'privacy.network.telemetryValue': 'Nothing leaves this drive — there’s no tracking to turn off',
+  'privacy.network.telemetryValue': 'Nothing leaves this device — there’s no tracking to turn off',
   'privacy.network.hint':
     'The app warns before any network action. The only optional network feature is ' +
     'downloading or updating models, which is off by default and must be enabled on the ' +

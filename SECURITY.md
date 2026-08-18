@@ -30,6 +30,17 @@ HilbertRaum is a **local-first, offline** application. Full details live in
 - **Strict Content-Security-Policy** — no remote origins are permitted.
 - **Deny-by-default renderer permissions** (Phase 31) — geolocation, notifications, camera, and
   screen capture are refused; the single exception is microphone access for voice dictation.
+- **The one inbound surface is opt-in and loopback-bound** — the optional local API (Settings →
+  Privacy & data) listens only on `127.0.0.1`/`::1`, is **off by default**, exists only while the
+  workspace is unlocked, requires a Bearer access key by default, and can be forbidden outright by
+  drive policy. It validates the `Host` header, refuses `http(s)` web origins and `OPTIONS`,
+  never emits CORS headers, caps request bodies, and serves **completions only** — it has no route
+  to documents, conversations, or any other workspace data. There is no LAN mode and no setting
+  that could produce one.
+- **The model sidecars authenticate their own requests** — each `llama-server` spawn is given a
+  fresh random API key through its **environment** (never argv, so it is not visible in a process
+  list), and the key is redacted from captured stderr before that text can reach an error message,
+  the audit trail, the log, or a support export.
 - **No model weights or user data in version control.**
 - **Engine binaries re-hashed before every spawn** — each bundled `llama-server` (chat + translation
   sidecars), whisper, and GPU-probe binary is verified against its recorded install hash immediately
@@ -79,6 +90,17 @@ HilbertRaum is a **local-first, offline** application. Full details live in
   (`logs/app.log.enc`) under the vault key on an encrypted workspace, and is plaintext only on a
   `plaintext_dev` workspace. In either case it never contains document contents or chat text, but may
   contain file names/paths and model ids.
+- **Secrets in this process are only as private as the account running it.** The sidecar API key is
+  passed through the child's environment and the local API's access key lives in the workspace
+  database, so both defend against *other users*, process listings, and log/stderr exposure — they
+  do **not** defend against a debugger running as **you** (`/proc/<pid>/environ`,
+  `ReadProcessMemory`) or against a full-memory crash dump written to disk. On Windows we
+  recommend leaving crash dumps at the **minidump** default rather than full dumps, so process
+  memory holding a key is not persisted.
+- **The local API trusts every program running as you.** A loopback endpoint cannot tell one local
+  program from another; the access key is the boundary, and any program that can read your workspace
+  could read the key. This is why the feature is off by default, asks for explicit consent, and
+  keeps the key requirement on unless you turn it off.
 - **Secure erase is best-effort.** Shredding overwrites then deletes the plaintext copy, but on SSDs
   wear-levelling may leave the original blocks recoverable.
 - **No password recovery.** The workspace password is never stored; if it is lost, the encrypted
