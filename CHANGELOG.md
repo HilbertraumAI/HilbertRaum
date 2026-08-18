@@ -125,6 +125,13 @@ first public release. Consciously-accepted gaps are tracked in
   saved copy is not protected by your workspace password), writes atomically,
   and records only the document id in the activity log. One document per export
   for now; bulk export is a possible follow-up.
+- **Local API (optional, off by default)**. Other programs on the same computer
+  can be allowed to use the running chat model over a loopback-only,
+  OpenAI-compatible endpoint. It is off until switched on behind a consent
+  dialog, requires an access key by default, never reaches the internet, exposes
+  no documents or conversations, keeps no record of what was asked or answered,
+  exists only while the workspace is unlocked, and can be forbidden by drive
+  policy.
 
 ### Changed
 

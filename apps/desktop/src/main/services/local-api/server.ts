@@ -326,7 +326,12 @@ export class LocalApiServer {
 
       const url = (req.url ?? '/').split('?')[0]
       if (req.method === 'GET' && url === '/v1/models') return this.handleModels(res)
-      if (req.method === 'POST' && url === '/v1/chat/completions') return this.handleCompletions(req, res)
+      // `return await`, NOT a bare `return`: an async promise returned out of a try block
+      // escapes the enclosing catch, so a late rejection (a DB throw if the workspace locks
+      // during the body window) would surface as an unhandled rejection in the main process
+      // instead of the 500 below. It fails closed either way — this makes it answer.
+      if (req.method === 'POST' && url === '/v1/chat/completions')
+        return await this.handleCompletions(req, res)
       return this.reject(res, 404, errorBody('Not found', 'invalid_request_error', 'unknown_route'))
     } catch (err) {
       this.deps.log?.warn('Local API request failed', { error: String(err) })

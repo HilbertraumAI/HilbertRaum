@@ -19,103 +19,24 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-08-18 — **Open wave: local API endpoint — branch `local-api-endpoint` (phase commit series `local-api-p1:`…`local-api-p6:`; draft PR #184); one consolidated entry is maintained in place here as the wave progresses.**_
-**P1 (runtime hardening) — code+tests+docs landed on the branch:** (1) sidecar auth — every
-`LlamaServer` spawn now generates a per-spawn hex API key delivered via child-scoped env
-(`LLAMA_API_KEY`, verified enforced on the pinned b9849 build; only `/health` + `/v1/models` are
-auth-exempt upstream), injected as a Bearer header at the single `fetch()` chokepoint, redacted
-from stderr-derived surfaces (start-failure errors → `gpuLastError` → audit/log/export), argv +
-parent-env clean; `measure-peak-rss.ps1` stays deliberately keyless (noted in its header). (2)
-generation gate — `RuntimeManager.doStart` wraps the factory-returned runtime (ladder AND mock) in
-a lane-counting `chatStream` decorator (`RuntimeChatOptions.lane`); `isGenerating()` +
-`setExternalPreemption()` are the external-admission seam; in-app entry pre-empts the external lane
-and awaits its real teardown, external entry is refused same-frame while in-app is active (typed
-`ExternalGenerationBusyError`); fail-closed rule covers the `active() == null` start/warm-up
-window. (3) `services/local-api/admission.ts` — single external slot, queue depth 0–1 (~30 s cap),
-`workspaceAdmitsWork`-class lock refusal, pre-emption/teardown aborts active + queued. Records:
-architecture.md (sidecar bullet + "Generation gate" bullet), security-model.md ("Sidecar requests
-are authenticated"), data-contracts.md (runtime block). Known pre-existing, NOT fixed here (A6/A7,
-issues to file at wave close): benchmark + skill-run in-app concurrency — the gate makes them
-visible, not serialized. **P1 /code-review round (high) fixed pre-close:** redaction reworked to
-drain-side exact-key over a partial-line hold-back + read-time generic pass (a chunk-split key
-had survived both passes), `isExternallyBusy()` as the one fail-closed admission predicate,
-bounded (5 s) abort-aware pre-emption wait + gate-epoch self-heal of leaked lane counts,
-structural single-external refusal, admission promotion-race fix (holder-driven release) +
-`'aborted'` outcome + single exit path.
-**P2 (settings/token/audit — items 1–3+5) landed:** `localApiEnabled` (default OFF, D3) /
-`localApiPort` (4980, clamped 1024–65535) / `localApiTokenRequired` (default ON, D4) in
-`AppSettings`; the access key in its OWN single-row workspace-DB table via
-`services/local-api/token.ts` (never a settings row — `getSettings` spreads every row to the
-renderer; pinned: no secret key/value on the settings surface); `local_api_toggled` audit event
-(boolean metadata only) + the two booleans in the `privacyKeys` allowlist; EN+DE label. **Item 4
-landed after the owner ratified O1–O6 (2026-08-18, all recommended options):**
-`network.allow_local_api` policy ceiling (DEFAULT true / STRICT false / STANDALONE true per O3),
-`PolicyStatus.localApiAllowedByPolicy`, `localApiEffectivelyEnabled` (policy ∧ setting),
-prepare-drive writes explicit `false` on commercial drives (O4) in both scripts +
-`buildPolicyJson` (script-drift-pinned). **P2 COMPLETE** (review round: audit truthfulness,
-port-junk drop, PolicyStatus copy-field removed, shared/local-api.ts effective-rule,
-script-drift real-branch parsing, token-store hardening).
-**P3 (LocalApiServer core + lifecycle) landed:** `services/local-api/server.ts` + `handlers.ts`
-(node:http; dual-loopback bind per O5, port 4980 per O1; Host→Origin→content-type→auth pipeline;
-OpenAI envelopes synthesized incl. non-streaming; `usage` deliberately absent v1; capability-400
-vs benign-ignore field policy; json_schema → grammar-constrained decoding; distinct
-model_starting/model_not_loaded 503s + Retry-After; preempted_by_user/server_stopped in-band
-frames close WITHOUT [DONE]; counted-bytes 1 MB body cap; requestTimeout disabled +
-15 s drain-timeout + 30 s body-idle; PortInUseError typed). Lifecycle: `ctx.localApi` in
-initBackend; three post-unlock seams via `maybeStartLocalApi` (policy ∧ setting, D3/D7);
-stopped FIRST in runLockTeardown + performShutdown (pinned); `applyLocalApiSettings` on
-settings:update. Contract: data-contracts.md P3 block; architecture.md bullet. Tests:
-local-api-server.test.ts ×23 (real listener, full matrix), local-api-lifecycle.test.ts ×5
-(default-off = ZERO listeners pin, policy-beats-setting, locked refusal, live toggle),
-shutdown ordering pin.
-**P4 (Settings UX, status surfaces, i18n) landed:** Privacy-tab `LocalApiCard` — consent
-dialog whose confirm stays disabled until the acknowledgement is ticked (copy names what other
-apps can do, where HilbertRaum's control ends, that nothing is stored, and that it persists);
-"Connect another app" block with the pasteable `http://127.0.0.1:<port>/v1` address
-(`localApiServerAddress`, shared) + the access key MASKED; live model-state line; the D5
-concurrent-use warning at warning tone ONLY while an external request is active or was just
-pre-empted; key-requirement sub-switch with its own confirm for turning it OFF; regenerate
-behind a consequence dialog; port field clamped by the now-shared `MIN/MAX_LOCAL_API_PORT`;
-`PortInUseError` copy naming both the recovery and the impersonation risk; policy-forbidden
-renders the card DISABLED WITH A REASON, never hidden. Status: `AppStatus.localApi`
-(additive optional, counts/flags only — `externalActive` + `lastPreemptedAt` added to
-`LocalApiStatus`), Diagnostics row + copy-report line, `LocalIndicator` gains a truthful
-"· API on" state whose tooltip replaces the drive-scoped reassurance. IPC:
-`localApi:getConnectionInfo`/`copyKey`/`regenerateToken` (`registerLocalApiIpc`) — the full
-key never crosses IPC, copy + the 60 s best-effort clipboard clear run main-side, and
-regenerate calls `LocalApiServer.abortExternalRequests` so rotation really does invalidate
-in-flight clients. Full EN+DE key set. Tests: LocalApiCard ×17, local-api-ipc ×9,
-preload-local-api ×2, indicator state; NEW shared `makePolicyStatus` fixture in
-tests/helpers/status.ts — all 10 hand-spelled/cast `PolicyStatus` fixtures (3 Models + 7
-others) migrated onto it, zero `as PolicyStatus` casts left under tests/. Contract: data-contracts.md P4 block (+ corrected the stale `localApiAllowedByPolicy`
-sentence); user-guide "Use HilbertRaum from other apps" stub (full copy P5).
-**P5 (promise-accuracy sweep, threat model, user docs) landed:** copy sweep by STEM (EN
-`leave|leaves|stays?|this (device|machine|drive)`, DE `verlass|verläss|bleib|Gerät|Laufwerk`)
-over both catalogs — 4 strings per language changed, every other hit reviewed and deliberately
-KEPT with its reason recorded. Changed: `privacy.network.telemetryValue` +
-`chat.empty.lineChat` (drive-scoped absolutes → device-scoped, which is true in BOTH states),
-`chat.noModel.hintAfter` ("sent anywhere" → "sent over the internet"),
-`privacy.network.effectiveOffline` ("no network calls" → "no internet calls", now that an
-inbound loopback listener exists). Kept as still-true: every `this device/machine` claim (the
-API never leaves the machine), the document-scoped drive claims (D6 — no route to documents),
-and `gate.welcome.stays` (pre-unlock, where D7 means the endpoint cannot exist).
-`PRIVACY.md`: heading corrected ("the app's only network feature" → "only use of the
-internet"), new "Letting other apps on this computer use your model" section (loopback,
-answers-only, never-stored, unlocked-only, key-by-default, policy-forbiddable) + a
-"Your responsibility" paragraph (a connected app may store or sync what it receives — that is
-the app's doing, but the privacy effect is the same); the short version now points at it.
-`SECURITY.md`: two mitigation bullets (the opt-in loopback surface; env-delivered sidecar keys
-+ stderr redaction) and two limitations (same-user debugger/crash-dump residual → minidumps
-recommended; the local API trusts every program running as you).
-`docs/security-model.md`: the **fifth threat** (same-machine processes) as its own §, with the
-bounding-control table in request order and the accepted residuals; listed in "Threats
-considered". `docs/user-guide.md`: the stub replaced by the full section (turn-on flow, the
-client-vocabulary value table, what connected apps can/cannot do, honest limits, your
-responsibility, key rotation, port conflict incl. the squat warning, policy-disabled).
-`docs/troubleshooting.md`: new "Connecting another app" § — the `localhost`→`::1` symptom
-(works in curl, fails in the plugin), the port-conflict + impersonation check, "Windows Firewall
-does not prompt for a loopback listener" vs what an EDR flag looks like, and a plain-language
-table of what each error number means. `electron-builder.yml` header amended.
+_2026-08-18 — **Local API endpoint — wave CLOSED (P1–P6), PR #184.**_ The loaded chat model
+can now be used by **other programs on the same computer** through an opt-in, loopback-only,
+OpenAI-compatible endpoint — **off by default**, behind a consent dialog, access-key-protected by
+default, existing only while the workspace is unlocked, and forbiddable by drive policy. The wave
+also closed a latent gap it did not create: every `llama-server` sidecar is now authenticated with
+a per-spawn env-delivered key, redacted from every stderr-derived surface. **Durable record:**
+`docs/architecture.md` "Local API endpoint — design record (wave local-api, PR #184, §1–§9)" —
+decisions D1–D9, owner options O1–O6, the as-built gate/HTTP/UX design, the deliberate omissions,
+what the audits changed, and the §-anchor legend for the retired plan's citations. **Security half:**
+`docs/security-model.md` "The fifth threat: same-machine processes". **Wire contract:**
+`docs/data-contracts.md`. **User-facing:** `PRIVACY.md`, `SECURITY.md`, `docs/user-guide.md`
+("Use HilbertRaum from other apps"), `docs/troubleshooting.md` ("Connecting another app").
+Citations use PR # + the `local-api-p<N>` phase prefix + a record §, never a branch SHA (O6 —
+the repo squash-merges). **Filed out of scope, deliberately** (pre-existing in-app concurrency the
+new gate makes visible but does not serialize): the benchmark has no re-entrancy guard, and a skill
+run can generate alongside a chat stream — filed as **#185** and **#186**. **Owner-gated leftovers:** the real-model smoke against a
+live sidecar and the end-to-end `npm run dev` flow with an external client (the pinned build's
+`LLAMA_API_KEY` enforcement was verified directly during P1).
 
 _Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
