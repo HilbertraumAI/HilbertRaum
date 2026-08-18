@@ -38,7 +38,42 @@ function electronBinaryPath(): string | null {
   }
 }
 
+/**
+ * Wave DEP-4: say WHY we skipped, out loud.
+ *
+ * Electron >= 42 removed the postinstall binary download — `path.txt` does not exist after a
+ * healthy fresh `npm ci`, and the binary only materializes when something first invokes the
+ * electron bin. That silently flipped this file from "always runs on the Windows dev box" (the
+ * claim in the block comment above) to "never runs until someone happens to launch Electron",
+ * and it did so without a single failing test: the E43 bump dropped 6 tests from the suite and
+ * the only visible trace was the skip count moving 50 -> 56.
+ *
+ * This is the one file that drives REAL Chromium printToPDF, so a silent skip here is a silent
+ * hole in exactly the evidence the wave exists to produce. Nothing here downloads ~100 MB behind
+ * your back — it just refuses to be quiet about the difference between "intentionally absent"
+ * and "not fetched yet".
+ */
+function announceSkipReason(): void {
+  if (process.env.HILBERTRAUM_SKIP_ELECTRON_CHECK || process.env.ELECTRON_SKIP_BINARY_DOWNLOAD) {
+    return // CI, deliberately binary-free — the documented, expected case.
+  }
+  let installed = true
+  try {
+    req.resolve('electron/package.json')
+  } catch {
+    installed = false
+  }
+  if (!installed) return // no electron at all; nothing to say.
+  console.warn(
+    '[evidence-pack-pdf-smoke] SKIPPED: the electron package is installed but its platform ' +
+      'binary has not been downloaded yet (Electron >= 42 fetches lazily, so a fresh `npm ci` ' +
+      'leaves no path.txt). Real-Chromium printToPDF coverage is OFF for this run. Run ' +
+      '`npx electron --version` once to materialize the binary, then re-run.'
+  )
+}
+
 const ELECTRON_BIN = electronBinaryPath()
+if (ELECTRON_BIN === null) announceSkipReason()
 const displayReachable =
   process.platform !== 'linux' ||
   Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)

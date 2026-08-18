@@ -285,7 +285,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 | `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm ci` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise; `npm ci` = lockfile-exact, never rewrites `package-lock.json` — issue #49, the dev half of hardening L-8) + build + test smoke. |
-| `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Verifies Electron's platform binary actually extracted; force-re-extracts from the cached download when a half-extract is detected (the silent NTFS-on-Linux `extract-zip` failure), else fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Cross-platform Node (not a shell mirror). Skips via `ELECTRON_SKIP_BINARY_DOWNLOAD` / `ELECTRON_OVERRIDE_DIST_PATH` / `HILBERTRAUM_SKIP_ELECTRON_CHECK`. |
+| `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Detects a genuine HALF-EXTRACT — `path.txt`/`dist/version` present but the platform binary missing or zero-length (the silent NTFS-on-Linux failure) — force-re-extracts it, and otherwise fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Since wave DEP-4 it is **version-aware**: on Electron ≥ 42 an absent `path.txt` is NORMAL (lazy download) and the script exits 0 silently; on ≤ 41, which still ships the postinstall, an absent `path.txt` is still a broken install. Cross-platform Node (not a shell mirror); the decision half is pure and unit-tested in `tests/unit/verify-electron.test.ts`. Skips via `HILBERTRAUM_SKIP_ELECTRON_CHECK` / `ELECTRON_OVERRIDE_DIST_PATH` / `ELECTRON_SKIP_BINARY_DOWNLOAD` (the last honoured by this script only — Electron ≥ 42 ignores it). |
 
 The asset **download / verify / plan** logic is mirrored from the unit-tested
 `apps/desktop/src/main/services/assets.ts` (the canonical reference for *that* logic — keep in sync),
@@ -492,14 +492,36 @@ the explicit global install is the reliable mechanism and replaced it.
 
 **Why it can run with zero weights / zero network / zero binaries:** the unit + integration suite
 is offline by construction — mock runtime, mock embedder, `electron` mocked — and nothing in
-`typecheck`/`build`/`test` launches Electron. So CI sets two env knobs to skip the ~100 MB Electron
-platform-binary download and the repo's `verify-electron` postinstall (which only guards the
-dev-time NTFS half-extract bug):
+`typecheck`/`build`/`test` launches Electron. So the ~100 MB Electron platform binary is never
+needed in CI.
+
+**How that works changed with Electron 42 (wave DEP-4, 2026-08-18).** Electron **removed the
+`postinstall` binary download** as supply-chain hardening: the package declares no `scripts` at
+all, `install.js` survives only as an `install-electron` bin, and `index.js` downloads **lazily**
+— it reads `path.txt` and, when that or the binary is missing, spawns the installer on first use
+of the electron bin. Two consequences worth stating plainly, because both have already bitten:
+
+- **`ELECTRON_SKIP_BINARY_DOWNLOAD` is dead.** Electron ≥ 42 does not read it anywhere. It was
+  removed from `ci.yml` rather than left in place advertising an effect it no longer has.
+  `scripts/verify-electron.mjs` still honours it as its own knob for older checkouts.
+- **A fresh `npm ci` legitimately leaves NO `path.txt`.** Anything that treats an absent
+  `path.txt` as a broken install is now wrong. `verify-electron.mjs` did exactly that until
+  DEP-4 rewrote it, and would have re-created the very download Electron had just removed, on
+  every clean install, while printing a false NTFS diagnosis. Its check is now version-aware —
+  Electron 39 and 41 still HAVE the postinstall, 42 and 43 do not — because the documented
+  Electron-43 fallback ladder includes `^41.7.2`.
 
 | Env var (CI only) | Effect |
 | --- | --- |
-| `ELECTRON_SKIP_BINARY_DOWNLOAD=1` | Electron's own postinstall skips the platform-binary download. |
-| `HILBERTRAUM_SKIP_ELECTRON_CHECK=1` | [`scripts/verify-electron.mjs`](../scripts/verify-electron.mjs) early-exits (it also early-exits on the var above). |
+| `HILBERTRAUM_SKIP_ELECTRON_CHECK=1` | [`scripts/verify-electron.mjs`](../scripts/verify-electron.mjs) early-exits. Now belt-and-braces rather than load-bearing: the script already exits 0 when the binary is merely not downloaded yet. It stays because it also skips the check on a genuinely half-extracted tree, which CI can neither repair nor usefully diagnose. |
+| `ELECTRON_OVERRIDE_DIST_PATH` | Points at an out-of-tree Electron build; the one env var Electron ≥ 42's `index.js` still reads. |
+
+**Getting the binary on a dev box:** it arrives by itself the first time anything runs the
+electron bin (`npm run dev`, `npm run package:win`). To materialize it deliberately —
+e.g. so `tests/integration/evidence-pack-pdf-smoke.test.ts` (the only automated coverage of
+real Chromium `printToPDF`) does not skip — run `npx electron --version` once. That test now
+says so out loud when it skips for this reason; before DEP-4 it went silent, and the E43 bump
+dropped 6 tests with no failing signal at all.
 
 npm downloads are cached via `actions/setup-node` (`cache: npm`, keyed off the root
 `package-lock.json`); `concurrency: cancel-in-progress` cancels a superseded run when a branch/PR
@@ -576,9 +598,12 @@ publicly linkable.
 
 Non-clash with `ci.yml`: `release.yml` never fires on `pull_request`/`push: master` — only tags and
 manual dispatch. It runs on **Node 24** (electron-builder ships its own pinned Electron runtime),
-which `ci.yml`'s matrix now also covers, does **not** set the `ELECTRON_SKIP_BINARY_DOWNLOAD` knobs
-(packaging needs the binary), and installs with `npm ci` (lockfile-pinned — the CI half of hardening
-L-8). It does **not** pin the exact npm: Node 24 already bundles npm 11.x, so the `engines.npm >= 11`
+which `ci.yml`'s matrix now also covers, does **not** set the skip knobs (packaging needs the
+binary), and installs with `npm ci` (lockfile-pinned — the CI half of hardening L-8). Since
+Electron 42 the mechanism there differs from what this used to describe: `npm ci` downloads
+nothing, and the binary reaches a release leg either lazily on the first electron-bin invocation
+or — for the artifact itself — via electron-builder's own `@electron/get` fetch, which is
+independent of the npm package. The outcome is unchanged. It does **not** pin the exact npm: Node 24 already bundles npm 11.x, so the `engines.npm >= 11`
 floor holds there on the bundled npm; only CI installs the exact `npm@11.6.2`. Pinning here too
 would make the two installs byte-identical, at the cost of exercising a new step for the first time
 on a tag (a release leg has no PR gate ahead of it) — a deliberate, registered residual.

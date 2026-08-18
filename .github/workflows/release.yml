@@ -12,10 +12,15 @@
 # windows) upgrades to signed builds with no repo change — then drop the
 # CSC_IDENTITY_AUTO_DISCOVERY line below.
 #
-# This is dev infrastructure (same network class as ci.yml): the packaging needs
-# the Electron binary, so the ELECTRON_SKIP_BINARY_DOWNLOAD knobs are deliberately
-# NOT set here. The shipped app itself makes no network calls. `npm ci` keeps the
-# install lockfile-pinned (hardening L-8, CI half).
+# This is dev infrastructure (same network class as ci.yml): the packaging needs the
+# Electron binary, so the skip knobs are deliberately NOT set here. Since wave DEP-4
+# (Electron 43) the mechanism differs from what this comment used to describe: Electron
+# >= 42 has no postinstall at all, so `npm ci` downloads nothing, and the binary arrives
+# either lazily on the first electron-bin invocation or — for the packaged artifact —
+# via electron-builder's own @electron/get fetch, which is independent of the npm
+# package. The outcome is unchanged: the release legs get the binary they need.
+# The shipped app itself makes no network calls. `npm ci` keeps the install
+# lockfile-pinned (hardening L-8, CI half).
 name: release
 
 on:

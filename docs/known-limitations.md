@@ -1997,7 +1997,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   exception kills the process, and `ocrAvailable` still reports `true` beforehand, so
   nothing warns the user first. **Dev mode is unaffected** — the full raster → IPC →
   recognize pipeline was proven end to end on Electron 39 outside packaging, and no other
-  packaged feature is touched. Until the fix bundle lands (unpack the hoisted deps,
+  packaged feature is touched. Unchanged by the Electron 43 bump (wave DEP-4): the defect is
+  an `asarUnpack` gap, not a runtime-version effect, so it neither improved nor worsened —
+  and DEP-4 did NOT re-run the recognition leg at all, because that build machine carries no
+  `*.traineddata`. Until the fix bundle lands (unpack the hoisted deps,
   degrade the task instead of dying, make `ocrAvailable` honest about the packaged mode —
   registered as follow-up 2 in [`architecture.md`](architecture.md) "Dependency
   remediation — design record (wave DEP-1, PR #77)" §5), do **not** run "Make searchable

@@ -417,6 +417,29 @@ first public release. Consciously-accepted gaps are tracked in
 
 ### Security
 
+- **Electron 39.8.10 → 43.4.0, clearing the last open Dependabot alert (wave DEP-4,
+  PR #187, 2026-08-18)** — alert #83 / issue #179, GHSA-jmr9-qjv8-65gv
+  (CVE-2026-56876, high), `extract-zip <= 2.0.1` unvalidated symlink path
+  traversal. Unpatchable by design: `extract-zip` is abandoned at 2.0.1, and
+  upstream Electron's fix was to replace it, so the alert could only be cleared
+  by moving Electron. `npm ls extract-zip` is now empty and `npm audit` reports
+  0 vulnerabilities. Target 43 rather than the smallest clearing major because
+  Electron supports only the latest three stable majors (41/42/43). Chromium
+  142 → 150, Node 22.22.1 → 24.18.1, SQLite 3.51.2 → 3.53.1; `@types/node` → ^24
+  so main-process code is typechecked against the runtime it ships on;
+  `engines.node` → `>=22.12` (Electron 43's own floor). **Minimum OS floors are
+  unchanged** — Windows 10+, macOS 12+ — so no existing machine is dropped, and
+  no on-disk format changed, so existing workspaces open unchanged. Re-measured
+  on the real packaged build: the CSP-on-`file://` header still attaches and
+  enforces (byte-exact to `buildCsp(false)`), the FTS5 trio still works,
+  `printToPDF` still accepts the full option set, and the permission handlers
+  still grant exactly one capability and deny the rest. Also in the wave:
+  `scripts/verify-electron.mjs` rewritten (Electron ≥ 42 removed the postinstall
+  download, and the old script would have re-created that ~100 MB download on
+  every clean install while reporting a healthy install as broken), a test
+  pinning `electron-builder.yml`'s `electronVersion` to the installed Electron
+  (the guard DEP-1 registered and nobody wrote), and electron-builder →
+  26.15.7 to clear a silent Windows PE-file-dropping regression (#9983).
 - **All 19 open Dependabot alerts cleared (wave DEP-3, PR #115, 2026-08-09)** — one
   patch/minor-only batch, no dismissals: pdfjs-dist 6.2.108 (CVE-2026-16633,
   arbitrary JS on a malicious PDF — the app was never exposed: no annotation

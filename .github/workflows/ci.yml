@@ -32,11 +32,19 @@ concurrency:
 permissions:
   contents: read
 
-# Keep CI fast and free of network flakiness: skip the ~100 MB Electron platform-binary
-# download (nothing here launches Electron) and short-circuit the repo's verify-electron
-# postinstall (scripts/verify-electron.mjs early-exits on either of these). See packaging.md.
+# Keep CI fast and free of network flakiness: nothing here launches Electron, so the ~100 MB
+# platform binary is never needed. Since wave DEP-4 (Electron 43) that costs nothing to arrange:
+# Electron >= 42 REMOVED the postinstall download entirely — the binary now arrives lazily on the
+# first invocation of the electron bin, which CI never performs. ELECTRON_SKIP_BINARY_DOWNLOAD
+# was dropped from this block because electron >= 42 no longer reads it; keeping it would leave a
+# knob advertising an effect it no longer has.
+#
+# HILBERTRAUM_SKIP_ELECTRON_CHECK short-circuits the repo's own verify-electron postinstall
+# (scripts/verify-electron.mjs). It is now belt-and-braces rather than load-bearing: that script
+# understands the lazy-download model and already exits 0 when the binary is simply not present
+# yet. It stays because it also skips the check on a genuinely half-extracted tree, which CI can
+# neither repair nor usefully diagnose. See packaging.md.
 env:
-  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
   HILBERTRAUM_SKIP_ELECTRON_CHECK: '1'
 
 jobs:

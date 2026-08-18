@@ -1592,6 +1592,35 @@ tag triggers the release workflow's draft build).
     (script/CI unchanged). (d) **Recommend `.github/dependabot.yml`** with grouped weekly npm
     updates so the next wave arrives as PRs, not an audit (recommendation only — not
     implemented).
+18. **DEP-4 follow-up register (owner-facing; registered at the 2026-08-18 close-out; durable
+    ledger = `docs/architecture.md` "Electron 39 → 43 — design record (wave DEP-4, PR #187)"):**
+    Wave DEP-4 cleared the LAST open Dependabot alert (#83 / issue #179) by moving Electron
+    39.8.10 → 43.4.0 — Chromium 142 → 150, Node 22.22.1 → 24.18.1, SQLite 3.51.2 → 3.53.1;
+    `extract-zip` is gone from the tree and `npm audit` is clean. OS floors unchanged
+    (Win 10+/macOS 12+), no on-disk format change. Open items:
+    (a) **`.github/dependabot.yml`** — DEP-1 §5 #4, owner-APPROVED during this wave (D-4) to
+    land as its **own PR**; this was the fourth hand-rolled dependency batch. Supersedes item
+    16(d).
+    (b) **Packaged-OCR fix bundle** — unchanged, still open; see item 16(b). DEP-4 did not touch
+    it (the defect is an `asarUnpack` gap, not a runtime-version effect).
+    (c) **OCR assets on a build machine** — two DEP-4 measurement gaps exist ONLY because this
+    machine carries no `*.traineddata`: dev-mode OCR recognize, and the OCR window's RUNTIME
+    CSP leg (its baked meta WAS verified byte-exact from the shipped asar; the header is
+    page-agnostic, so the mechanism is proven by the main window). Running the packaged
+    measurement on an asset-carrying drive closes both.
+    (d) ⚠️ **Electron 44 is a CUSTOMER-FACING decision, not a routine bump** — it removes macOS 12
+    support and drops 32-bit Windows (ia32) + Linux armv7l. **E43 is the last series shipping
+    prebuilt 32-bit binaries, supported until January 2027.** Decide deliberately with the drive
+    product's OS matrix in hand; do not let it arrive as a Dependabot PR.
+    (e) **electron-builder air-gapped builds** (upstream #10039) — eb fails in air-gapped
+    environments even with a seeded cache, because `@electron/get` always fetches
+    `SHASUMS256.txt`; fixed on master only, not in any 26.15.x. Affects BUILD machines, not the
+    shipped app, but it rubs against the offline-first posture.
+    (f) **Manual legs still owed by the owner** (P4's human-only items): the `defaultPath`
+    dialog probe that decides whether Electron 43 pre-selects the host Downloads folder
+    (owner decision D-2, conditional — if it fires, pass an explicit root at the
+    `save-export.ts` seam), a real OS drag-and-drop onto the composer (`webUtils`), and a
+    double-click launch of the portable `.exe`.
 17. **STR-1 follow-up register (owner-facing; registered at the 2026-07-20 close-out; durable
     ledger = `docs/architecture.md` "Skills & tools architecture review (2026-07-19) — design
     record (wave STR-1, 2026-07-20)"):** (a) **Issue #80** — the constrained

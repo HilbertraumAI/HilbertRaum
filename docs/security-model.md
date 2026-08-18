@@ -54,7 +54,22 @@ the intersection of both**. All four policy strings live in `main/window-securit
    (2026-07-19, DEP-1 P4)** by the same method: a `base-uri` injection (both windows) and a
    `blob:` image (ocr window) — each permitted by that page's baked meta — were blocked with
    the `buildCsp(false)` string as the violation's `originalPolicy`, and both baked metas were
-   localhost-free.
+   localhost-free. **Re-confirmed again on the Electron 43.4.0 / Chromium 150.0.7871.224
+   packaged build (2026-08-18, DEP-4 P4)**, the measurement that eight Chromium majors made
+   mandatory: a `base-uri` injection in the main window was blocked, `document.baseURI` stayed
+   on the `file://` document, and the violation's `originalPolicy` was **byte-exact** to
+   `buildCsp(false)`. Both baked metas, read out of the SHIPPED `app.asar`, were byte-exact to
+   `buildMetaCsp(false, page)` and carried no `localhost`, no `ws://` and no `unsafe-eval`.
+   Method note for whoever re-runs this: do **not** measure the header by registering your own
+   `webRequest.onHeadersReceived` — Electron allows only ONE listener per session, so doing so
+   REPLACES the app's handler and the probe then observes the absence of a header it removed
+   itself. Provoke a violation of a directive that exists only in the header (`base-uri`) and
+   read the header back out of the violation's `originalPolicy`. The DEP-4 run measured only
+   the main window at runtime; the OCR window's runtime leg stayed unmeasured because that
+   window opens only for OCR work and the build machine carries no `*.traineddata` — the
+   header is page-agnostic (one session-level handler, one `buildCsp(false)` string), so the
+   mechanism is proven, but the OCR window's runtime `blob:` intersection is still carrying
+   its Electron-39 measurement.
 2. **`<meta http-equiv="Content-Security-Policy">`** in each page — `buildMetaCsp(isDev, page)`,
    **generated at build time** by the `hilbertraum:csp-meta` transform in
    `electron.vite.config.ts`. The checked-in HTML carries the dev policy (Vite HMR needs the

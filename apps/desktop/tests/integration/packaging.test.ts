@@ -23,6 +23,9 @@ interface BuilderConfig {
   mac?: { executableName?: string }
   linux?: { executableName?: string }
   portable?: { executableName?: string; artifactName?: string }
+  // Deliberately loose: a YAML scalar like `43.0` parses as a NUMBER, and the DEP-4 parity
+  // test below must be able to CATCH that mistake rather than be typed out of it.
+  electronVersion?: string | number
 }
 
 function loadBuilderConfig(): BuilderConfig {
@@ -259,5 +262,100 @@ describe('electron-builder pins a path-safe executableName (PR #30)', () => {
         )
       }
     }
+  })
+})
+
+// DEP-1 §5 follow-up #1, discharged by wave DEP-4 (plan P1). `electron-builder.yml`'s
+// `electronVersion:` — NOT the npm `electron` devDependency — selects the runtime that is
+// actually packaged: electron-builder 26 runs from apps/desktop and cannot resolve the hoisted
+// `^`-range devDep, so the field is a hand-maintained pin. DEP-1 §4(b) records what that costs:
+// the first `package:win` of that wave silently shipped Electron 37 after the devDep had been
+// bumped to 39, and it was caught only because a human happened to notice. The failure is
+// invisible to typecheck, test and CI — it surfaces only in the bytes of a release artifact,
+// which is the worst possible place to find a stale, still-vulnerable runtime.
+//
+// The lockfile is the source of truth here, not `node_modules`: it is committed, deterministic,
+// and it is what `npm ci` installs on every CI leg and release runner. A node_modules-only check
+// would false-pass against a stale local install. The installed copy is checked too, but only
+// when present — CI legs set ELECTRON_SKIP_BINARY_DOWNLOAD and a slimmed context may have no
+// electron at all.
+describe('electron-builder.yml electronVersion tracks the electron devDependency (DEP-1 §5 #1)', () => {
+  /** The version the lockfile pins for the hoisted root `node_modules/electron`. */
+  function lockedElectronVersion(): string {
+    const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as {
+      packages: Record<string, { version?: string }>
+    }
+    const entry = lock.packages['node_modules/electron']
+    expect(entry?.version, 'package-lock.json pins node_modules/electron').toBeTruthy()
+    return entry!.version!
+  }
+
+  /** The `^x.y.z` range declared in apps/desktop/package.json devDependencies. */
+  function declaredElectronRange(): string {
+    const pkg = JSON.parse(
+      readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8')
+    ) as { devDependencies?: Record<string, string> }
+    const range = pkg.devDependencies?.electron
+    expect(range, 'apps/desktop declares an electron devDependency').toBeTruthy()
+    return range!
+  }
+
+  const parse3 = (v: string): [number, number, number] => {
+    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v)
+    expect(m, `"${v}" is a plain three-part version`).not.toBeNull()
+    return [Number(m![1]), Number(m![2]), Number(m![3])]
+  }
+
+  it('electronVersion is a plain three-part version STRING, not a YAML number', () => {
+    const raw = loadBuilderConfig().electronVersion
+    // `electronVersion: 43.0` is valid YAML and parses to the number 43 — electron-builder
+    // would then look for a nonexistent "43" release. Two dots keep it a string; assert that.
+    expect(typeof raw, 'electronVersion must be quoted/dotted enough to stay a string').toBe(
+      'string'
+    )
+    expect(String(raw)).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+
+  it('electronVersion EQUALS the electron version pinned in package-lock.json', () => {
+    const pinned = String(loadBuilderConfig().electronVersion)
+    expect(
+      pinned,
+      'electron-builder.yml packages this exact runtime — if it disagrees with the lockfile, ' +
+        'the release artifact ships a different Electron than the one CI tested (DEP-1 §4(b))'
+    ).toBe(lockedElectronVersion())
+  })
+
+  it('electronVersion satisfies the caret range declared in apps/desktop/package.json', () => {
+    const range = declaredElectronRange()
+    const caret = /^\^(\d+\.\d+\.\d+)$/.exec(range)
+    // If the range form ever changes, fail loudly rather than silently stop checking.
+    expect(caret, `electron devDependency "${range}" is a plain caret range`).not.toBeNull()
+    const [fMaj, fMin, fPat] = parse3(caret![1])
+    const [pMaj, pMin, pPat] = parse3(String(loadBuilderConfig().electronVersion))
+    expect(pMaj, 'same major as the declared floor').toBe(fMaj)
+    const atOrAbove =
+      pMin > fMin || (pMin === fMin && pPat >= fPat)
+    expect(atOrAbove, `${pMaj}.${pMin}.${pPat} is at or above the ${caret![1]} floor`).toBe(true)
+  })
+
+  it('the INSTALLED electron agrees too, when node_modules is present', () => {
+    let installed: string | null = null
+    try {
+      installed = (
+        JSON.parse(
+          readFileSync(
+            join(LOCKFILE, '..', 'node_modules', 'electron', 'package.json'),
+            'utf8'
+          )
+        ) as { version: string }
+      ).version
+    } catch {
+      // No electron installed (slimmed/lint-only context) — the lockfile assertions above
+      // are the load-bearing ones; nothing to compare against here.
+      return
+    }
+    expect(installed, 'a stale node_modules would package a runtime nobody tested').toBe(
+      String(loadBuilderConfig().electronVersion)
+    )
   })
 })
