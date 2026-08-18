@@ -10249,8 +10249,14 @@ under the `electron`-mocking suite:
   through the CHECK path → `microphone: granted`, `camera` / `geolocation` / `notifications` all
   **denied**. Dictation's capability survives and nothing else widened.
 - **`webUtils.getPathForFile`** (the repo's standing convention is to clear it explicitly on every
-  Electron major): absent from every 40–43 breaking-change list, and the packaged preload still
-  exposes the `getDroppedFilePath` seam.
+  Electron major): absent from every 40–43 breaking-change list, the packaged preload still
+  exposes the `getDroppedFilePath` seam, and — **owner-run on the packaged E43 build,
+  2026-08-19** — a REAL OS drag-and-drop from Explorer onto the chat composer imports the file.
+  That last leg is the one that matters and the one automation cannot fake: a synthetic
+  `DataTransfer` carries no on-disk path, so only a genuine native drag exercises the resolver.
+  The failure mode being excluded is silent by nature — when `File.path` was removed in Electron
+  32 the drop did nothing at all (no chip, no import, no error; `architecture.md` §"Drag-drop
+  intake"), so "it still works" can only be established by dropping a file and watching it land.
 - **Packaged renderer smoke.** The app paints its onboarding screen on Chromium 150 with **zero
   console errors** and no horizontal overflow.
 - **Dialog `defaultPath` — the one candidate user-visible behaviour change, MEASURED and
