@@ -410,7 +410,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 .local-api-value code { overflow-wrap: anywhere; }
 .local-api-port { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: var(--space-3); }
 .local-api-port label { margin: 0; }
-.local-api-port-input { width: 9ch; }
+/* Scoped so it beats `.text-input { width: 100% }` (declared later in this file) — a port
+   is four digits and must not stretch across the card like a prose field. */
+.local-api-port .local-api-port-input { width: 10ch; }
 
 .toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; cursor: pointer; min-height: 24px; }
 .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
