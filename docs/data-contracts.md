@@ -81,6 +81,15 @@ scan-detected or already OCR'd; needs the OCR engine, not the chat runtime);
 content and never leaves the DB); `AppStatus` gained the additive
 `ocrAvailable: boolean` gate. The internal `OCR_RASTER` channels (shared/ipc.ts) bind
 ONLY the hidden rasterizer window's preload, never the app bridge.
+**Issue #188 (wave 188):** `DocumentInfo` gained the optional `storedCopy?: 'present' | 'missing'`
+— whether the document's workspace copy is on disk right now, so the `⋯` menu can refuse to offer a
+byte-level action that would fail after the click. It is populated ONLY by callers that hold a store
+dir (`listDocuments(db, embedderId, storeDir)`; the docs IPC passes it), derived from ONE
+`readdirSync` of `workspace/documents/` per call rather than a stat per row. **`undefined` means
+"not evaluated", never "missing"** — `getDocument`/`createQueuedDocument` results simply do not
+carry it, and every consumer must treat absence as unknown. Backed by the additive
+`documents.stored_name` column (the stored copy's leaf name, RELATIVE to the store dir; NULL until
+the resolver heals the row) — see architecture.md "Portable stored copies — design record".
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`

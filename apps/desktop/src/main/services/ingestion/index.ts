@@ -48,6 +48,13 @@ import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
 import { parseOcrMeta } from './ocr-meta'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import { resolveIngestionLimits, withParseTimeout, type IngestionLimits } from './limits'
+import {
+  canonicalLeafFor,
+  locateOriginal,
+  locateStoredCopy,
+  resolveStoredCopy,
+  warnOriginalChanged
+} from './stored-copy'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
 //   queued → extracting → chunking → embedding → indexed   (failed on error)
@@ -155,6 +162,8 @@ interface DocumentRow {
   title: string
   original_path: string | null
   stored_path: string | null
+  /** #188: leaf name of the stored copy, relative to the store dir. NULL until healed. */
+  stored_name?: string | null
   mime_type: string | null
   size_bytes: number | null
   sha256: string | null
@@ -334,11 +343,51 @@ function ocrInfoForRow(row: DocumentRow): DocumentOcrInfo | null {
   return ocrInfoOf(parseOcr(row.ocr_json))
 }
 
-function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boolean): DocumentInfo {
+/**
+ * #188 — whether a document's workspace copy is on disk right now, for the callers that have a
+ * store dir. Derived from ONE `readdirSync` of the store per list call (`present` is a Set
+ * lookup), never a `statSync` per row: `listDocuments` is polled every 400 ms during an import
+ * and on USB each stat is a real seek (the ING-4 reasoning). `undefined` when the caller passed
+ * no store dir — those call sites are byte-identical to before.
+ */
+function storedCopyStateFor(
+  row: DocumentRow,
+  present: Set<string> | null
+): DocumentInfo['storedCopy'] {
+  if (!present) return undefined
+  const leaf = canonicalLeafFor(row)
+  if (leaf && present.has(leaf)) return 'present'
+  // A row whose file sits outside the store (a legacy absolute path that still resolves on this
+  // machine) is present too — the readers accept it, so the menu must not claim otherwise.
+  if (row.stored_path && existsSync(row.stored_path)) return 'present'
+  return 'missing'
+}
+
+/**
+ * ONE directory read of the store, turned into a name Set. Costs a single readdir per list
+ * call instead of N stats; null when the caller supplied no store dir, or the dir is
+ * unreadable (then no row claims to be missing — never scare the UI on a transient error).
+ */
+function storedCopyIndex(storeDir: string | undefined): Set<string> | null {
+  if (!storeDir) return null
+  try {
+    return new Set(readdirSync(storeDir))
+  } catch {
+    return null
+  }
+}
+
+function rowToInfo(
+  row: DocumentRow,
+  chunkCount: number,
+  staleEmbeddings?: boolean,
+  storedPresent: Set<string> | null = null
+): DocumentInfo {
   return {
     id: row.id,
     title: row.title,
     originalPath: row.original_path,
+    storedCopy: storedCopyStateFor(row, storedPresent),
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
     status: toStatus(row.status),
@@ -686,14 +735,20 @@ export async function prepareDocument(
     const ext = extname(row.title).toLowerCase()
     const cipher = deps.cipher ?? null
 
-    // Ensure a self-contained workspace copy exists (`stored_path`). In an encrypted
-    // workspace the copy rests ENCRYPTED (`<id><ext>.enc`); `sha256`/`size_bytes`
-    // describe the plaintext content in both modes.
-    let storedPath = row.stored_path
+    // Ensure a self-contained workspace copy exists. In an encrypted workspace the copy
+    // rests ENCRYPTED (`<id><ext>.enc`); `sha256`/`size_bytes` describe the plaintext
+    // content in both modes.
+    //
+    // #188: the copy is LOCATED through the resolver, not read off `row.stored_path` — an
+    // absolute path recorded under a previous mount point would otherwise look "missing"
+    // here and send a perfectly healthy document down the re-copy path (or, with the
+    // original gone too, straight to `failed`).
+    const located = resolveStoredCopy(db, storeDir, row)
+    let storedPath = located?.path ?? null
     /** The plaintext file the parser reads. */
     let parseSource: string
 
-    if (!storedPath || !existsSync(storedPath)) {
+    if (!storedPath) {
       const origin = row.original_path
       if (!origin || !existsSync(origin)) {
         // Persist-canonical English (i18n record §3.3 rule 1): the catch below writes
@@ -716,12 +771,11 @@ export async function prepareDocument(
         await copyFile(origin, storedPath)
         parseSource = storedPath
       }
-      db.prepare('UPDATE documents SET stored_path = ?, sha256 = ?, size_bytes = ? WHERE id = ?').run(
-        storedPath,
-        sha,
-        size,
-        documentId
-      )
+      // #188: record the portable leaf alongside the absolute path. `stored_name` is what the
+      // resolver trusts; `stored_path` is kept for legacy readers and provenance.
+      db.prepare(
+        'UPDATE documents SET stored_path = ?, stored_name = ?, sha256 = ?, size_bytes = ? WHERE id = ?'
+      ).run(storedPath, basename(storedPath), sha, size, documentId)
       // Covers the source hash + the copy (encrypted or plain) into the workspace.
       perfMark('ingest_copy_done', { docId: documentId, bytes: size, ms: perfMs(copyT0) })
     } else if (cipher && !storedPath.endsWith(ENCRYPTED_DOC_SUFFIX)) {
@@ -729,9 +783,15 @@ export async function prepareDocument(
       // existed (or in plaintext mode). Re-indexing in an encrypted workspace upgrades
       // the stored copy: encrypt it, point the row at the `.enc`, parse the old
       // plaintext one last time, then shred it.
+      // #188: `storedPath` is the RESOLVED location, so the `.enc` lands beside the copy that
+      // actually exists (not beside a stale recorded path), and the portable leaf moves with it.
       const encPath = `${storedPath}${ENCRYPTED_DOC_SUFFIX}`
       await cipher.encryptFileAsync(storedPath, encPath) // PERF-1: yields between chunks
-      db.prepare('UPDATE documents SET stored_path = ? WHERE id = ?').run(encPath, documentId)
+      db.prepare('UPDATE documents SET stored_path = ?, stored_name = ? WHERE id = ?').run(
+        encPath,
+        basename(encPath),
+        documentId
+      )
       parseSource = storedPath
       transients.push(storedPath)
       storedPath = encPath
@@ -1120,8 +1180,11 @@ export async function extractDocumentPreview(
   const transients: string[] = []
   try {
     let parseSource: string
-    if (row.stored_path && existsSync(row.stored_path)) {
-      if (cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+    // #188: resolve through the canonical location first, so a drive that came back under a
+    // different mount point still previews (and heals the row on the way past).
+    const stored = resolveStoredCopy(db, storeDir, row)
+    if (stored) {
+      if (cipher && stored.encrypted) {
         const ext = extname(row.title).toLowerCase()
         // Unique per call (DB-2): a deterministic `${documentId}.parse-preview${ext}` is shared by
         // the preview IPC, `buildDocumentSegmentReader`, and `extractSegmentTexts`, so two
@@ -1130,18 +1193,22 @@ export async function extractDocumentPreview(
         // the startup crash sweep (`workspace-vault.ts` matches `name.includes('.parse')`) covering
         // a leak. Every caller uses the returned `parseSource` local, so nothing depends on the name.
         parseSource = join(storeDir, `${documentId}.parse-preview-${randomUUID()}${ext}`)
-        await cipher.decryptFileAsync(row.stored_path, parseSource) // PERF-1: yields between chunks
+        await cipher.decryptFileAsync(stored.path, parseSource) // PERF-1: yields between chunks
         transients.push(parseSource)
-      } else if (!cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+      } else if (!cipher && stored.encrypted) {
         // Emission (§3.3 rule 2): IPC throws below are transient — localized via tMain.
         throw new Error(tMain('main.docs.previewEncrypted'))
       } else {
-        parseSource = row.stored_path
+        parseSource = stored.path
       }
-    } else if (row.original_path && existsSync(row.original_path)) {
-      parseSource = row.original_path
     } else {
-      throw new Error(tMain('main.docs.previewGone'))
+      // #188: the user's own file is the LAST resort — on a portable drive it names a location
+      // on the other machine. A changed original still parses (re-reading current content is
+      // what a preview/re-index is for) but is recorded, so the log can explain a surprise.
+      const original = await locateOriginal(row)
+      if (!original) throw new Error(tMain('main.docs.previewGone'))
+      if (original.contentMatchesImport === false) warnOriginalChanged(documentId)
+      parseSource = original.path
     }
 
     // An OCR'd PDF previews its STORED recognition (the same ocrPages hook
@@ -1417,6 +1484,25 @@ const EXPORTABLE_TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
  * shredded on the way out; the plaintext leaves the main process only as the returned
  * string, which the caller writes to the user-chosen destination.
  */
+/**
+ * #188 — the export paths' last-resort fallback to the user's own file.
+ *
+ * Export promises "the original as imported", so unlike the parse paths this one REFUSES a file
+ * whose content no longer hashes to `documents.sha256`: handing back an edited file as though it
+ * were the stored original is a quiet correctness hole, not a convenience. An undecidable hash
+ * (no recorded sha256, or an unreadable file) is allowed through — that is the pre-existing
+ * behaviour and refusing on "don't know" would break legitimate exports.
+ */
+async function originalForExport(row: DocumentRow): Promise<string> {
+  const original = await locateOriginal(row)
+  // Emission (§3.3 rule 2): IPC throws are transient — localized via tMain.
+  if (!original) throw new Error(tMain('main.docs.exportGone'))
+  if (original.contentMatchesImport === false) {
+    throw new Error(tMain('main.docs.exportOriginalChanged'))
+  }
+  return original.path
+}
+
 export async function readStoredDocumentText(
   db: Db,
   storeDir: string,
@@ -1435,8 +1521,11 @@ export async function readStoredDocumentText(
   const transients: string[] = []
   try {
     let source: string
-    if (row.stored_path && existsSync(row.stored_path)) {
-      if (row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+    // #188: canonical location first — the recorded absolute path goes stale the moment the
+    // drive returns under a different mount point, and this is the reader that reported it.
+    const stored = resolveStoredCopy(db, storeDir, row)
+    if (stored) {
+      if (stored.encrypted) {
         if (!cipher) {
           throw new Error(tMain('main.docs.exportEncrypted'))
         }
@@ -1446,15 +1535,13 @@ export async function readStoredDocumentText(
         source = join(storeDir, `${documentId}.parse-export-${randomUUID()}${ext}`)
         // DB-7: async decrypt (PERF-1) — a large encrypted DOCX/DOC no longer blocks the main
         // process for the whole decrypt+read; the `finally` shred still runs after the await.
-        await cipher.decryptFileAsync(row.stored_path, source)
+        await cipher.decryptFileAsync(stored.path, source)
         transients.push(source)
       } else {
-        source = row.stored_path
+        source = stored.path
       }
-    } else if (row.original_path && existsSync(row.original_path)) {
-      source = row.original_path
     } else {
-      throw new Error(tMain('main.docs.exportGone'))
+      source = await originalForExport(row)
     }
     return { title: row.title, text: await readFile(source, 'utf8') }
   } finally {
@@ -1486,22 +1573,23 @@ export async function readStoredDocumentBytes(
   const transients: string[] = []
   try {
     let source: string
-    if (row.stored_path && existsSync(row.stored_path)) {
-      if (row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+    // #188: canonical location first — this is the exact reader whose stale-path failure was
+    // reported ("Die Dokumentdatei ist nicht mehr vorhanden") while the bytes sat in the store.
+    const stored = resolveStoredCopy(db, storeDir, row)
+    if (stored) {
+      if (stored.encrypted) {
         if (!cipher) throw new Error(tMain('main.docs.exportEncrypted'))
         // Unique per call (DB-2): as above — collision-free transient, `.parse` infix for the sweep.
         source = join(storeDir, `${documentId}.parse-export-bin-${randomUUID()}${ext}`)
         // DB-7: async decrypt (PERF-1) — the §22-M1 content boundary is unchanged; the `finally`
         // shred still runs after the await.
-        await cipher.decryptFileAsync(row.stored_path, source)
+        await cipher.decryptFileAsync(stored.path, source)
         transients.push(source)
       } else {
-        source = row.stored_path
+        source = stored.path
       }
-    } else if (row.original_path && existsSync(row.original_path)) {
-      source = row.original_path
     } else {
-      throw new Error(tMain('main.docs.exportGone'))
+      source = await originalForExport(row)
     }
     return { title: row.title, mimeType: row.mime_type, bytes: await readFile(source) }
   } finally {
@@ -1577,11 +1665,20 @@ export function reconcileStuckExtracts(db: Db, beforeIso: string): number {
 // `DocumentRow` field `rowToInfo` reads is listed; `original_path` is in DocumentRow but unused by
 // the list (rowToInfo maps it but it is dropped client-side) — included to keep the row complete.
 const LIST_DOCUMENT_COLUMNS =
-  'id, title, original_path, stored_path, mime_type, size_bytes, sha256, status, error_message, ' +
+  'id, title, original_path, stored_path, stored_name, mime_type, size_bytes, sha256, status, error_message, ' +
   'summary_json, origin_json, ocr_meta_json, lifecycle, source_folder_label, tree_status, ' +
   'tree_meta_json, fully_chunked, extract_status, created_at, updated_at'
 
-export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): DocumentInfo[] {
+/**
+ * #188: pass `storeDir` to have each row report whether its workspace copy is on disk
+ * (`DocumentInfo.storedCopy`), so the `⋯` menu can stop offering an export that cannot
+ * succeed. Omit it and the field stays undefined — every pre-existing caller is unchanged.
+ */
+export function listDocuments(
+  db: Db,
+  activeEmbeddingModelId?: string | null,
+  storeDir?: string
+): DocumentInfo[] {
   const rows = prepareCached(
     db,
     `SELECT ${LIST_DOCUMENT_COLUMNS} FROM documents WHERE status != 'deleted' ORDER BY created_at DESC, rowid DESC`
@@ -1637,6 +1734,7 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
       embeddedCounts.set(e.documentId, e.n)
     }
   }
+  const storedPresent = storedCopyIndex(storeDir)
   return rows.map((r) => {
     const chunkCount = chunkCounts.get(r.id) ?? 0
     let stale: boolean | undefined
@@ -1647,7 +1745,10 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
       if (force) stale = true
       else if (activeEmbeddingModelId) stale = (embeddedCounts.get(r.id) ?? 0) === 0
     }
-    return { ...rowToInfo(r, chunkCount, stale), collections: memberships.get(r.id) ?? [] }
+    return {
+      ...rowToInfo(r, chunkCount, stale, storedPresent),
+      collections: memberships.get(r.id) ?? []
+    }
   })
 }
 
@@ -1796,9 +1897,15 @@ function purgeDocumentDerivatives(db: Db, id: string): void {
  * workspace copy while the row delete could still fail, which is exactly the window that left a
  * corrupt, undeletable document when a bank/invoice extraction blocked the (un-transacted) delete.
  */
-export function deleteDocument(db: Db, id: string): void {
+export function deleteDocument(db: Db, storeDir: string, id: string): void {
   const row = getRow(db, id)
   if (!row) return
+  // #188: LOCATE the copy BEFORE the DB delete — afterwards the row that names it is gone and
+  // nothing could ever find it again. Keyed on the recorded absolute `stored_path`, this shred
+  // silently no-opped on a relocated drive: the rows vanished and the user's encrypted content
+  // stayed on the disk, unreferenced, forever. `locateStoredCopy` (not `resolveStoredCopy`) —
+  // healing a row we are about to delete is pointless work inside the delete path.
+  const doomed = locateStoredCopy(storeDir, row)
   // F12 (post-merge close-out): capture this doc's embedding chunk_ids BEFORE the delete so the
   // post-commit `invalidateResidentVectors` applies a named delta (drop these ids) rather than the
   // O(N) chunk-id rescan.
@@ -1821,10 +1928,12 @@ export function deleteDocument(db: Db, id: string): void {
   }
   // The DB delete committed. Now shred (overwrite-then-unlink) the workspace copy rather than a bare
   // unlink (plan M5). Best-effort: a locked/missing copy must not resurrect the already-deleted DB
-  // rows. Shredding AFTER the commit closes the DATA-1 window where the file was destroyed before a
-  // failing delete left a row with no chunks and no stored file.
-  if (row.stored_path && existsSync(row.stored_path)) {
-    shredFile(row.stored_path)
+  // rows — so this stays non-throwing (#188 §8.4: making it throw would resurrect DATA-1, leaving a
+  // half-deleted, undeletable document). Shredding AFTER the commit closes the DATA-1 window where
+  // the file was destroyed before a failing delete left a row with no chunks and no stored file.
+  // #188 changed only WHICH path is shredded, never WHEN.
+  if (doomed) {
+    shredFile(doomed.path)
   }
   // RAG-6 (Wave P4) / PERF-1 (Phase 5) / F12 (post-merge close-out) belt: this doc's vectors were
   // just DELETEd — flag the resident decoded-vector cache with the exact REMOVED chunk_ids so the

@@ -246,7 +246,7 @@ describe('resident cache — ingestion lifecycle', () => {
     }
 
     // Delete — the delete hook invalidates; no chunks remain.
-    deleteDocument(db, queued.id)
+    deleteDocument(db, storeDir, queued.id)
     expect(index.search(qOrig, 5)).toHaveLength(0)
   })
 })

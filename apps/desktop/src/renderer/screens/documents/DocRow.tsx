@@ -447,7 +447,11 @@ export const DocRow = memo(function DocRow({
                        save dialog (the review-export §24.3 posture). */
                     <DropdownMenu.Item
                       className="menu-item"
-                      disabled={ACTIVE_STATUSES.has(d.status)}
+                      /* #188: never offer an action that cannot succeed. `storedCopy` is
+                         'missing' only when the workspace copy is genuinely not on disk —
+                         undefined means "not evaluated", which must NOT disable the entry. */
+                      disabled={ACTIVE_STATUSES.has(d.status) || d.storedCopy === 'missing'}
+                      title={d.storedCopy === 'missing' ? t('docs.exportOriginal.gone') : undefined}
                       onSelect={() => setConfirmExportOriginal(d)}
                     >
                       {t('docs.exportOriginal')}

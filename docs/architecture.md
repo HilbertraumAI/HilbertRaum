@@ -10657,6 +10657,212 @@ The wave's working paper is gone; its anchors resolve here:
 | `plan §7` (audit ledger A1–A10) | §8 above |
 | `plan §8` (six-persona ledger) | §8 above |
 
+## Portable stored copies — design record (wave 188, issue #188, §1–§8)
+
+_Issue **#188** was filed as a UI defect: "Originaldatei exportieren" failed with "Die
+Dokumentdatei ist nicht mehr vorhanden" on a real prepared drive whose `workspace/documents/`
+held 24 intact `<uuid><ext>.enc` files. The analysis found the reported symptom to be the
+smallest of three defects sharing one cause — `documents.stored_path` was persisted **absolute**
+on a drive whose whole premise is that it moves between machines. The working paper
+(`plans/issue-188-stored-path-portability.md`) was git-excluded, never committed, and deleted at
+close-out per the CLAUDE.md doc-lifecycle rule; this record is the surviving source (§-anchor
+legend at the end)._
+
+### §1 The defect class
+
+`documents.stored_path` held `H:\workspace\documents\<uuid><ext>.enc` (written at
+`ingestion/index.ts` in `prepareDocument`) and was consumed by a bare `existsSync` at **six**
+hand-written resolution ladders, none of which shared a resolver. Nothing anywhere rebased it —
+`grep rebase|relocat|driveLetter|remap` across the services layer returned nothing.
+
+So a drive returning under a different mount point (`H:` → `E:`, or a Windows letter ↔
+`/Volumes/…`) took **every** stored copy stale at once. The row was intact, the bytes were
+intact, only the recorded string was wrong — and the app told the user the file was gone.
+
+**It was the last absolute path in persisted state.** Every other path store had already been
+made portable, each by a named prior finding, and `stored_path` was simply missed:
+
+| Store | Portable | Fixed by |
+|---|---|---|
+| `image_sessions.stored_name` | relative filename under `images/` | image-understanding record |
+| `skills.path` | on-disk folder basename | Skills record |
+| `settings.checksumCache` | `driveRelKey` + lazy legacy adoption | **CODE-15** (full audit 2026-07-11) |
+| runtime install marker | posix `markerBinaryKey` | GPU wave |
+| `documents.source_relative_path` | forward-slash relative | **CODE-1** (full audit 2026-07-12) |
+| `config/drive.json`, `checksums.json` | `"models_dir": "models"`, `"local_path": "models/…"` | drive layout |
+| `documents.stored_path` | **NO** | **this wave** |
+
+The **vault layer already disagreed with the ingestion layer**: password-change re-encryption
+(`listEncryptedDocSidecars`) enumerates `workspace/documents/` by **directory walk**, never by
+`stored_path`. The `.enc` sidecars were canonically addressed everywhere except the six places
+that read them — which is why a relocated drive still re-keys correctly but cannot export.
+
+### §2 The three defects, in severity order
+
+**D-1 — "Delete document" did not delete (privacy/retention, not disk space).** The shred in
+`deleteDocument` was guarded by `if (row.stored_path && existsSync(row.stored_path))`. On a
+relocated drive that guard is false, so the DB rows committed-deleted and **the encrypted content
+stayed on the drive with no row left to ever reference, sweep, or shred it again** — the startup
+sweep (`shredStalePlaintext`) matches only `.parse`/`.tmp` names, never `<uuid><ext>.enc`. The
+guard conflated "already gone, nothing to do" with "I looked in the wrong place". Measured
+pre-fix: the row vanished and `<uuid>.txt.enc` remained. On a drive a user may sell, lend, or
+lose, this was the most serious item in the issue and it was not the item the issue reported.
+
+**D-2 — re-index degraded a healthy row.** `prepareDocument` fell through to `original_path`
+(gone, on a second laptop) and threw `main.ingest.sourceMissing`, flipping the row to `failed`.
+Non-destructive — the `sourceMissing` throw fires *before* the chunk DELETE, so the M13/C4
+"fail closed before the destructive replace" discipline already preserved the index — but it is
+the most likely user response to the reported symptom ("Importiere sie neu" → "Neu aufbereiten").
+
+**D-3 — the reported UI defect.** Export/preview/OCR/skills threw loudly and correctly; the
+complaint was that `DocumentInfo` carried **no availability signal at all**, so the `⋯` menu
+offered an action it could not perform and the failure arrived after the click, on a
+screen-level banner that did not say which document it was about.
+
+### §3 Decisions
+
+**D1 — one resolver, adopted by every consumer including the shred.** `ingestion/stored-copy.ts`
+is the single place that answers "where are this document's bytes". Scoping the fix to the export
+screen would have left D-1 in place. Six adoption sites: `prepareDocument`, `extractDocumentPreview`
+(which fans in to the Vorschau modal, skills runs, translate, compare, categorize),
+`readStoredDocumentText`, `readStoredDocumentBytes`, `readStoredPdfBytes` (OCR), `deleteDocument`.
+
+**D2 — `documents.stored_name`, not suffix probing.** A new nullable column holds the leaf
+(`<id><ext>[.enc]`) relative to the store dir, mirroring `image_sessions.stored_name`. The
+alternative — recompute `<id> + extname(title)` and probe both suffixes — works today only
+because `documents.title` is immutable (written once in `insertQueuedRow`; there is no rename
+feature) and it would have coupled on-disk resolution to a display string. `encrypted` is
+**derived** from the leaf's `.enc` suffix, exactly as the old code derived it from `stored_path`,
+so no second column was needed.
+
+**D3 — resolve at read time AND heal lazily; no bulk migration.** The resolution order is
+canonical (`join(storeDir, leaf)`) → recorded `stored_path` verbatim → the user's original. Keeping
+the recorded path as step 2 makes the resolver a **strict superset** of the previous behaviour:
+nothing that resolved before stops resolving. When step 1 wins and differs from the row,
+`healStoredCopy` writes `stored_path` + `stored_name` back — best-effort, wrapped, because a
+locked/closed/read-only DB must never fail a read that already succeeded. The same shape as
+`createSettingsHashStore`'s lazy adoption of legacy absolute keys (CODE-15). A startup migration
+was rejected: it is a write burst on the slowest possible medium, it cannot run before unlock, and
+it would need its own crash-safety story. A legacy row's leaf is derived from `stored_path`, so
+even an un-healed row resolves on its first read — including inside `deleteDocument`.
+
+**D4 — orphaned `.enc` files already on drives are reported, never swept.** A "delete every
+`.enc` with no owning row" sweep is the obvious cleanup and must not be built: a concurrent
+import has its file on disk before/while its row is written, and `stageRekey` stages
+`<file>.enc.new`. An orphan sweep would race both. Existing orphans from past silent no-ops stay
+on affected drives; the diagnostic in §6 counts them.
+
+**D5 — `original_path` demoted to a checked last resort.** On a portable drive it is the *least*
+durable of the two paths — it names a location on the other machine — yet the old ladder tried it
+immediately after a stale `stored_path`. It is also nulled outright for generated documents
+(`setDocumentOrigin`). And nothing re-checked it: a source file edited since import was handed
+back as though it were "the original as imported". Now `locateOriginal` compares it to
+`documents.sha256` and the two classes of caller diverge: **export refuses** a changed original
+(`main.docs.exportOriginalChanged` — its promise is the bytes as imported), while the **parse
+paths warn and proceed** (their promise is readable content, and re-reading current content is
+what re-index is for). An *undecidable* hash — no recorded sha256, or an unreadable file — is
+allowed through; refusing on "don't know" would break legitimate exports.
+
+**D6 — `DocumentInfo.storedCopy`, computed from one `readdirSync` per list call.** `listDocuments`
+takes an optional `storeDir`; supplied, every row reports `'present' | 'missing'`. It is
+deliberately **not** a `statSync` per row: the list is polled every 400 ms during an import and on
+USB each stat is a real seek (the ING-4 reasoning). Omit the argument and the field stays
+`undefined` — every pre-existing caller is byte-identical, and the renderer treats `undefined` as
+*unknown*, never as *missing*, so the menu entry is disabled only on a positive "missing".
+
+### §4 The safety guard (this fix touches deletion)
+
+`deleteDocument` shreds whatever the resolver returns, so "which file is this document's?" is a
+data-destruction question. `canonicalLeafFor` therefore refuses any leaf that is not a bare file
+name (no separators, no `.`/`..`) **starting with the row's own `id`** — a UUID primary key that is
+never reused. A refused leaf falls back to the recorded absolute path verbatim, never to a guess.
+Without it, a corrupted or foreign `stored_name` could make the shred destroy another document's
+copy. Three further invariants were held deliberately:
+
+- the shred still runs **strictly after** the DB commit — this wave changed *which* path is
+  shredded, never *when* (the DATA-1 ordering);
+- the shred stays **best-effort and non-throwing** — making it throw would resurrect DATA-1,
+  leaving a half-deleted, undeletable document;
+- `deleteDocument` **locates before the DB delete**, because afterwards the row that names the
+  file is gone.
+
+`storedCopyLeaf` splits on **both** separators rather than using host `basename`: a legacy row can
+carry a path written on another OS, and posix `basename` returns the whole Windows string. Same
+scar as `markerBinaryKey` / `resolveTarBinary` (the cross-platform path bugs that failed the
+Ubuntu CI leg).
+
+### §5 Transients and the encrypted workspace — unchanged
+
+Every transient is already `join(storeDir, …)` with a `.parse` infix (plus a `randomUUID()` where
+DB-2 requires it), so they are canonical and mount-independent by construction; the startup crash
+sweep matches by name inside the walked directory. A resolver change can neither strand nor leak
+them. Verified unaffected and **not** re-audited in future rounds: evidence packs (`snapshot.ts`
+reads `title, sha256, mime_type` from the DB only), audio preview and doc-task transcript
+re-extraction (read the `chunks` table, never the file), summary export, chat citations, FTS and
+vector search, password change/rekey, image sessions.
+
+### §6 What is proven, and what still needs hardware
+
+Provable in the suite, and proven: export original / export text / preview / re-index / delete
+after the store directory moves (encrypted and plaintext), a legacy row naming a drive that does
+not exist (resolves **and heals**), a genuinely absent copy (still fails loudly; `storedCopy`
+reports `'missing'`; delete does not throw), a delete that must not touch a sibling document's
+copy, and the changed-fallback-original refusal. Each guard was **mutation-checked** — reverting
+the canonical branch, removing the id guard, and putting the shred back on the recorded path each
+turned the corresponding tests red.
+
+**Still owed, and it cannot be CI'd:** the real relocated-drive run — plugging the prepared drive
+in under a different letter and confirming export, preview, delete, and re-index. That is exactly
+**BUILD_STATE §5 item 1's "second-laptop continuity check"**, which remains OPEN: this wave makes
+the code correct, but the check is only *answered* by a real run.
+
+**Also outstanding: the root-cause diagnostic on the reporting drive was never run.** The fix is
+correct in either world — D-1 and the resolver stand on their own — but two questions are still
+open on that specific drive: whether its rows are in fact stale (the issue reports "Vorschau
+works" alongside an export failure, and preview and export share the same ladder, so those two
+observations cannot both describe the same document), and how many orphaned `.enc` files past
+silent deletes left behind (D4). A read-only diagnostic that copies `config/workspace.json` +
+`hilbertraum.sqlite.enc` to scratch, decrypts the copy, and reports directory histograms with no
+titles or content was written and smoke-tested against a synthetic vault; it needs the owner's
+password to run.
+
+### §7 §-anchor legend
+
+| Working-paper anchor | Resolves to |
+|---|---|
+| `plan §1` (mechanism), `plan §2` (the six sites) | §1 + §2 above |
+| `plan §3` (loud vs silent vs worse) | §2 above (D-1/D-2/D-3) |
+| `plan §4` (`original_path` as fallback) | §3 D5 above |
+| `plan §5` (migration) | §3 D2 + D3 above |
+| `plan §6` (encrypted-workspace dimension) | §5 above |
+| `plan §7` (absolute paths elsewhere on the drive) | §1 table above |
+| `plan §8` (data-safety review of the fix) | §4 above |
+| `plan §9` (test strategy, T1–T9) | §6 above |
+| `plan §10` (the unproven hypothesis + diagnostic) | §6 above, last paragraph |
+| `plan §12` (owner decisions D1–D5) | §3 above (same numbering) |
+
+### §8 Bundler landmine (cost a debug cycle; recorded so it never recurs)
+
+`npm run build` failed with `index.mjs: ERROR: Unterminated string literal` pointing at
+`const MIME_BY_EXT = {` — untouched code — while **typecheck and the whole suite passed**.
+
+electron-vite's `esmShimPlugin` picks its CommonJS-shim injection point as the LAST match of a
+loose static-import regex (`ESMStaticImportRe`) over the entire rendered chunk. A **string literal
+ending in the bare word `import`** matches that regex:
+
+```ts
+log.warn('… it has changed since import', { documentId })   // ` import'` looks like an import
+```
+
+Sitting after the real last import in the bundle, the shim was appended INSIDE the literal.
+Comments are stripped before the plugin runs, so only string literals are the hazard (the three
+pre-existing `… import"` occurrences in comments are harmless). Reworded to `… what was imported`;
+a **tripwire** in `tests/integration/repo-hygiene.test.ts` now fails on the pattern (mutation-
+checked — reinstating the old wording turns it red), following the DEP-3 mermaid-fence precedent.
+
+**This is the standing argument for the gate order `typecheck → build → test`.** Neither typecheck
+nor the suite can see this class; only the build can.
+
 ## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
 
 The frozen original product/architecture spec **`CLAUDE_HilbertRaum_MVP.md` was retired and

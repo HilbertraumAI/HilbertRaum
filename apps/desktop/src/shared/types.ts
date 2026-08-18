@@ -1435,6 +1435,15 @@ export interface DocumentInfo {
   id: string
   title: string
   originalPath: string | null
+  /**
+   * Whether the document's workspace copy is on disk right now (#188). `'missing'` means every
+   * byte-level action — export the original, preview, re-index, OCR, skill runs — will fail, so
+   * the `⋯` menu disables them with a reason instead of failing after the click. `undefined`
+   * when not evaluated: only the callers that hold a store dir compute it (`listDocuments` with
+   * its optional third argument), so a `DocumentInfo` from `getDocument`/`createQueuedDocument`
+   * simply does not carry the signal. Treat undefined as "unknown", never as "missing".
+   */
+  storedCopy?: 'present' | 'missing'
   mimeType: string | null
   sizeBytes: number | null
   status: IngestionStatus

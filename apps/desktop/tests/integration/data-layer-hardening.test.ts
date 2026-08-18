@@ -213,7 +213,7 @@ describe('tree_edges no-dangling-chunk-edge invariant (DATA-2)', () => {
 
     // The authoritative chunk-delete path also deletes tree_nodes (purgeDocumentDerivatives), so the
     // edges cascade via their parent_id FK — the invariant the polymorphic child_id relies on.
-    deleteDocument(db, docId)
+    deleteDocument(db, mkdtempSync(join(tmpdir(), 'hilbertraum-dlh-store-')), docId)
     expect(edgeCount(db)).toBe(0) // whole tree gone
     expect(danglingChunkEdges(db)).toBe(0) // invariant holds
   })

@@ -167,7 +167,7 @@ export async function materializeDocument(
     })
     return info.id
   } catch (err) {
-    if (newDocId) deleteDocument(db, newDocId)
+    if (newDocId) deleteDocument(db, storeDir, newDocId)
     throw err
   } finally {
     shredFile(tempPath)

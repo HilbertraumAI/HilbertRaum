@@ -214,7 +214,7 @@ describe('deleteDocument — purges bank/invoice derivatives (audit DATA-1, exis
     })
     expect(existsSync(storedPath)).toBe(true)
 
-    expect(() => deleteDocument(db, docId)).not.toThrow()
+    expect(() => deleteDocument(db, fileDir, docId)).not.toThrow()
 
     expect(derivedCounts(db, docId)).toEqual({
       documents: 0,

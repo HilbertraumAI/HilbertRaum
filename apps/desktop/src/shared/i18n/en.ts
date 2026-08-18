@@ -574,6 +574,10 @@ export const en = {
   // (review.export.encryptionWarning, verbatim) — shown in the ConfirmDialog on every
   // platform and in the macOS save sheet via the dialog `message`.
   'docs.exportOriginal': 'Export original file',
+  // #188: the reason the entry is disabled, shown on hover — the menu no longer offers an
+  // export that would fail after the click.
+  'docs.exportOriginal.gone':
+    'The stored copy of this file is not on this drive, so it cannot be exported. You can still export its extracted text.',
   'docs.exportOriginalConfirm.title': 'Export the original file?',
   'docs.exportOriginal.warning':
     'This exported file is stored outside the encrypted HilbertRaum workspace and is not protected by your workspace password.',
@@ -2091,6 +2095,11 @@ export const en = {
   'main.docs.exportTextOnly': 'Only text documents (Markdown, TXT, CSV) can be exported this way.',
   'main.docs.exportEncrypted': 'This document is encrypted; unlock the workspace to export it.',
   'main.docs.exportGone': 'The document file is no longer on disk. Re-import it to export.',
+  // #188: the workspace copy is gone AND the user's own file has changed since import, so it is
+  // no longer the original this document was made from — exporting it would be a quiet lie.
+  'main.docs.exportOriginalChanged':
+    'Only your own copy of this file is still available, and it has changed since it was ' +
+    'imported — so it is no longer the original. Export the extracted text instead.',
   'main.docs.noStoredTranscript':
     'No transcript is stored for this recording yet. Re-index it to transcribe again.',
   'main.models.noManifests':

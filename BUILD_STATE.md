@@ -19,6 +19,33 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-19 — **Portable stored copies — wave CLOSED (issue #188).**_ `documents.stored_path` was
+persisted **absolute** and consumed with a bare `existsSync` at six hand-written ladders, so a
+portable drive returning under a different mount point took **every** stored copy stale at once —
+row intact, bytes intact, only the recorded string wrong. It was the **last absolute path in
+persisted state** (images, skills, checksum cache, runtime marker and `source_relative_path` had
+each already been made portable by a named prior finding), and the vault layer already disagreed:
+rekey enumerates `workspace/documents/` by directory walk. The reported export failure was the
+SMALLEST of three defects sharing that cause: **"Delete document" silently did not delete** — the
+shred's `existsSync` guard conflated "already gone, nothing to do" with "I looked in the wrong
+place", leaving encrypted user content on the drive with no row left to ever reference it
+(**measured** pre-fix, not inferred) — and re-index degraded a healthy row to `failed`. Fixed at
+the **resolver**, not the reporting screen: new `services/ingestion/stored-copy.ts` +
+`documents.stored_name` (portable leaf, lazily healed), adopted by all six sites including the
+shred; `DocumentInfo.storedCopy` so the `⋯` menu stops offering what cannot succeed;
+`original_path` demoted to a sha256-checked last resort. **Durable record:** `docs/architecture.md`
+"Portable stored copies — design record (wave 188, issue #188, §1–§8)" — decisions D1–D6, the
+safety guard the shred rests on, the verified-clean list, and the bundler landmine (§8: a string
+literal ending in the bare word `import` makes electron-vite wedge its CommonJS shim inside the
+literal; typecheck and the full suite pass and only `npm run build` fails — now tripwired in
+`repo-hygiene.test.ts`, and the standing argument for the typecheck → build → test gate order).
+**STILL OPEN, both carried into §5 item 1:** the real relocated-drive run (the code is now correct;
+the second-laptop continuity check is only *answered* by hardware), and the read-only root-cause
+diagnostic on the reporting drive, which was never run — it needs the owner's password and would
+also settle whether that drive's rows are in fact stale (the issue reports "Vorschau works"
+alongside the export failure, and preview and export share one ladder, so both cannot describe the
+same document) and count the orphaned `.enc` files past silent deletes left behind.
+
 _2026-08-18 — **Local API endpoint — wave CLOSED (P1–P6), PR #184.**_ The loaded chat model
 can now be used by **other programs on the same computer** through an opt-in, loopback-only,
 OpenAI-compatible endpoint — **off by default**, behind a consent dialog, access-key-protected by
@@ -917,7 +944,17 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    portable `.exe` + a **signed & notarized** macOS `.app`, run `build-commercial-drive`
    end-to-end onto a real drive (`-AppArtifact` the signed build), then do the spec §17 demo on
    a **fresh laptop with Wi-Fi off** + the **second-laptop continuity** check (same encrypted
-   workspace, different drive letter). The `electron-builder.yml` hooks + the pipeline are
+   workspace, different drive letter). **⚠️ 2026-08-19, wave 188 — this check has already
+   FIRED once, from a real drive, before it was ever run deliberately:** issue #188 was exactly the
+   failure it exists to catch (`documents.stored_path` absolute ⇒ every stored copy stale under a
+   different mount point, and "Delete document" silently not deleting). The code is fixed and
+   covered by `stored-copy-portability.test.ts`, but the manual check is **NOT** answered — a
+   moved-directory unit test is not a relocated drive. When it is finally run, cover **export
+   original / preview / re-index / delete** on a workspace populated under a DIFFERENT letter, and
+   confirm the rows self-heal (`documents.stored_name` populated after the first read).
+   **Also still owed:** the read-only #188 root-cause diagnostic on the reporting drive (needs the
+   owner password; settles whether that drive was stale and counts orphaned `.enc` files left by
+   past silent delete no-ops — architecture.md record §6). The `electron-builder.yml` hooks + the pipeline are
    wired; only the secrets + hardware are missing. **GPU additions:** a SmartScreen sanity
    re-check (the Vulkan build adds one more unsigned DLL of the same class) and re-running
    `build-commercial-drive` end-to-end with the two-build fetch. **Phase-38 addition:** a
