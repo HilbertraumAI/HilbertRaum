@@ -69,12 +69,15 @@ gate 3 ("harmless on CPU, or drop it off-GPU") closed structurally, without hard
 again" re-arms the latch. **Durable record:** `docs/architecture.md` "MTP speculative decoding —
 design record (issue #182, §1–§7)" — decisions, the precondition arithmetic, the failure paths, and
 what the wave deliberately did not do. Field reference: `docs/model-policy.md` "Manifest fields";
-status + owed gates: `docs/model-benchmarks.md` §9.4. **STILL OPEN — both need the i9-9900X + RTX
-3090 rig, tracked in §5 item 8b:** the §2 grounded-QA re-run for both quants with MTP on (the gate is
-score parity within cross-run tolerance — MTP breaks temp-0 BYTE reproducibility by design, so byte
-identity is the wrong gate), and the §9.1 smoke legs on the b9849 pin incl. teardown + 24 GB VRAM
-headroom. No RAM/VRAM line was retuned: the manifests keep their pre-MTP measured numbers until
-re-measured with the flag on.
+status + gate figures: `docs/model-benchmarks.md` §9.4 "Gate results". **Both hardware gates RAN
+AND PASSED 2026-08-19 on the i9-9900X + RTX 3090 rig** (tracked in §5 item 8b): the §2 grounded-QA
+re-run with MTP on held score parity inside cross-run tolerance for both quants (q4 F1 .3499 vs
+.3500, q5 .3518 vs .3523; zero hallucinations and 1.0000 unanswerable-abstention held; 92/100 resp.
+91/100 answers byte-identical, every diff a near-tie token flip), and the §9.1 smoke legs on the
+b9849 pin passed for both quants incl. rung-1a selection, full offload with 24 GB headroom (peak
+VRAM 19.7 / 21.5 GiB), clean teardown, and the shim-forced fall-through + re-arm legs. No RAM/VRAM
+line was retuned: the manifests keep their pre-MTP measured numbers until re-measured with the
+flag on.
 
 _2026-08-19 — **Portable stored copies — wave CLOSED (issue #188).**_ `documents.stored_path` was
 persisted **absolute** and consumed with a bare `existsSync` at six hand-written ladders, so a
@@ -1144,24 +1147,28 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    question) and the 35B-A3B §9.1 smoke PASSED. Still open on #95: the weak-16 GB-box
    measured-tok/s leg (decides E2B's rank; needs the designated weak-iGPU box) and the
    Windows-basis peak-RSS re-measure standing rule (§9.3 "§4 RSS") for any RAM-line retune.)*
-8b. **MTP speculative decoding — the two owed hardware gates (issue #182; adoption shipped
-   2026-08-19, record: architecture.md "MTP speculative decoding").** Both need the i9-9900X +
-   RTX 3090 rig that produced §9.4, and both are run WITH `speculative_decoding: mtp` active on
-   `qwen3.8-27b-q4` + `qwen3.8-27b-q5`:
-   - **§2 grounded-QA re-run, both quants** — `HILBERTRAUM_EVAL_SPECULATIVE=mtp` +
-     `HILBERTRAUM_EVAL_MODEL=<quant>.gguf` + a distinct `HILBERTRAUM_EVAL_MACHINE` label (§2
-     "Run"). Baseline to compare against: the committed
-     `eval/results/i9-9900X-qwen38-vulkan-quality.csv`. The gate is **score parity within
-     cross-run tolerance, NOT byte identity** — MTP breaks temp-0 byte-reproducibility by
-     construction (batched-verification near-ties flip; the verified output stays
-     distribution-equivalent), so a byte-diff gate would fail a correct implementation.
-   - **§9.1 smoke legs on the b9849 pin**, incl. teardown and 24 GB VRAM headroom — the flags are
-     functionally verified on b9849 but the app-path smoke was never re-run with them on.
-   - **Then, and only then:** re-measure §4 peak RSS/VRAM with the flag on before touching any
-     `recommended_min_ram_gb`. The manifests deliberately still carry the PRE-MTP numbers.
-   Until these run, the ladder's guards are what make the adoption survivable: on the hardware the
-   gates cover, the worst unratified outcome is a start that falls back one rung to today's plain
-   GPU behavior; on every other machine the rung is never attempted at all.
+8b. **MTP speculative decoding — the two hardware gates: BOTH PASSED 2026-08-19 (issue #182;
+   adoption shipped 2026-08-19, record: architecture.md "MTP speculative decoding"; full figures:
+   model-benchmarks.md §9.4 "Gate results").** Run on the i9-9900X + RTX 3090 rig with
+   `speculative_decoding: mtp` active on `qwen3.8-27b-q4` + `qwen3.8-27b-q5`:
+   - **§2 grounded-QA re-run, both quants: PASSED.** Score parity inside cross-run tolerance vs
+     the committed pre-MTP baseline (the gate was parity, NOT byte identity: MTP breaks temp-0
+     byte-reproducibility by construction). q4 F1 .3499 vs .3500, q5 .3518 vs .3523; EM,
+     citation-correct, grounded columns unchanged; hallucinations 0 and unanswerable-abstention
+     1.0000 held on both. Flags argv-verified on every scored server; item dumps audited (92/100
+     resp. 91/100 byte-identical, the rest near-tie token flips). Committed:
+     `eval/results/i9-9900X-qwen38-mtp-q{4,5}-vulkan-{quality.csv,items.jsonl}`.
+   - **§9.1 smoke legs on the b9849 pin, both quants: PASSED** through the app's real IPC path
+     (CDP/Playwright `_electron`). Rung 1a selected (log + argv), full offload with 24 GB
+     headroom (peak VRAM 19.7 / 21.5 GiB, no spill), balanced chat zero reasoning frames, Deep
+     32 / 31 frames, grounded DE ask exact fact + `[S1]`, abort 3 ms, stop + quit teardown
+     clean. Fall-through leg (shim rejecting `--spec-type`): rung 1a fails, plain rung 1 comes
+     up at `backend: gpu`, `gpuAutoDisabled` NOT persisted, session latch skips 1a, "Try GPU
+     again" re-arms it.
+   - **STILL OPEN:** re-measure §4 peak RSS/VRAM with the flag on before touching any
+     `recommended_min_ram_gb` (§9.3 Windows-basis standing rule; the manifests deliberately
+     still carry the PRE-MTP numbers). Data point from the smokes: `VmHWM` with MTP on matched
+     the pre-MTP record byte-for-byte (17.14 / 19.68 GiB); the draft head lives in VRAM.
 9. **Issue #51 residuals (owner decisions — the app-side quit close + docs shipped 2026-07-11):**
    - **Idle posture:** checkpoint + release the DB when the app is idle, so an unplug while "open
      but not in use" is harmless. New machinery (no app-level idle detector exists); the

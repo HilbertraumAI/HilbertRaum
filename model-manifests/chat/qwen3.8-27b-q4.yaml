@@ -35,6 +35,9 @@ supports_thinking_mode: true
 # ~15.9 GiB (the weight) + 3.5 GiB free, so a card that cannot hold it silently gets
 # today's plain GPU start instead of a silent partial offload (§4 peak VRAM here: 17.2 GiB).
 # RAM/VRAM lines below are the pre-MTP measurements and are NOT retuned on an estimate.
+# Both #182 hardware gates PASSED 2026-08-19 on the i9/3090 rig: §2 grounded-QA parity with MTP
+# on (F1 .3499 vs .3500, zero hallucinations, abstention 1.0000) and the §9.1 app-path smokes on
+# the b9849 pin (rung 1a, full offload, peak VRAM 19.7 GiB on the 24 GB card, clean teardown).
 speculative_decoding: mtp
 local_path: models/chat/qwen3.8-27b-q4.gguf
 # Real hash from HuggingFace LFS metadata (git-LFS OID = the file's SHA-256), captured

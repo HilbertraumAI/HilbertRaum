@@ -11143,12 +11143,13 @@ the lesson of #42 applied up front rather than after a bug report.
   one SSE delta, the probe would under-read on an MTP model and could feed the very-low-tps
   downgrade. Not observed; recorded so the next person who sees a nonsense figure on a fast
   machine has the thread.
-- **Two owed hardware gates** (issue #182, both need the i9-9900X + RTX 3090 rig): the §2
-  grounded-QA harness re-run for both quants with MTP on (score parity within cross-run
-  tolerance — NOT byte identity), and the §9.1 smoke legs on the b9849 pin including teardown and
-  24 GB VRAM headroom. Until they run, the guards above are what make shipping it survivable: on
-  hardware the gates would cover, the worst unratified outcome is a start that falls back one
-  rung; everywhere else the rung is never even attempted.
+- **Two owed hardware gates — both RAN AND PASSED 2026-08-19** (issue #182, on the i9-9900X +
+  RTX 3090 rig): the §2 grounded-QA harness re-run for both quants with MTP on held score parity
+  within cross-run tolerance (which was the gate, NOT byte identity), and the §9.1 smoke legs on
+  the b9849 pin passed including teardown, 24 GB VRAM headroom with full offload, and the §5
+  fall-through + re-arm paths exercised via a flag-rejecting shim binary. Figures:
+  `model-benchmarks.md` §9.4 "Gate results". Until they ran, the guards above were what made
+  shipping it survivable; they are now also field-exercised, not just designed.
 
 ## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
 

@@ -1068,15 +1068,46 @@ reranker sidecars legitimately idle past a chat stop and are excluded from the s
 Text-only chat needed no mmproj on any quant.
 
 **MTP speculative decoding — measured 2026-08-17; ADOPTED 2026-08-19 for the Q4/Q5 manifests
-(issue #182).** _Adoption record: `architecture.md` "MTP speculative decoding — design record
-(issue #182, §1–§7)". The two manifests carry `speculative_decoding: mtp`; the runtime gates the
-flags on a probed GPU with the weight + 3.5 GiB free VRAM and falls back to the plain GPU rung
-otherwise. **Two gates from the issue remain OWED and need the i9-9900X + RTX 3090 rig:** the §2
-grounded-QA re-run for both quants with MTP on (score parity within cross-run tolerance — MTP
-breaks temp-0 byte-reproducibility, so byte identity is the WRONG gate), and the §9.1 smoke legs
-on the b9849 pin incl. teardown + 24 GB VRAM headroom. Issue gate 3 (CPU-only path) is closed by
-construction: the runtime drops the flags off-GPU. The RAM/VRAM rows below and in the manifests
-stay the PRE-MTP measurements until re-measured with the flag on._
+(issue #182); both hardware gates PASSED 2026-08-19.** _Adoption record: `architecture.md` "MTP
+speculative decoding — design record (issue #182, §1–§7)". The two manifests carry
+`speculative_decoding: mtp`; the runtime gates the flags on a probed GPU with the weight +
+3.5 GiB free VRAM and falls back to the plain GPU rung otherwise. Issue gate 3 (CPU-only path)
+is closed by construction: the runtime drops the flags off-GPU. The RAM/VRAM rows below and in
+the manifests stay the PRE-MTP measurements until re-measured with the flag on._
+
+**Gate results (2026-08-19, i9-9900X + RTX 3090, drive runtime = the pinned b9849
+linux-vulkan; Wi-Fi off, each timed run from a ≤45 °C GPU):**
+
+- **§2 grounded-QA re-run with MTP on, both quants: score parity HELD.** Run per quant with
+  `HILBERTRAUM_EVAL_SPECULATIVE=mtp` under its own machine label; the flag pair was verified on
+  every scored server's argv, and a standalone b9849 spawn of the same weight logged
+  `draft acceptance = 0.81` with no `blk.64.nextn.*` "unused tensor" warnings, so the head was
+  live, not a no-op. Against the committed pre-MTP baseline: `qwen3.8-27b-q4` mean F1 .3499 vs
+  .3500, `qwen3.8-27b-q5` .3518 vs .3523 (f1_de .3532/.3568 both exactly reproduced; f1_en
+  −.0004/−.0014), EM .9765, citation-correct .9882, grounded .9765 all unchanged, and the two
+  hard metrics held on both quants: hallucinations 0, unanswerable-abstention 1.0000. Every
+  delta sits inside the ±.002 §9.4 determinism floor, and the parity also spans the build
+  difference (baseline measured on b10430, this re-run on the b9849 pin). Item audit: 92/100
+  (q4) and 91/100 (q5) answers byte-identical; each changed answer is a near-tie token flip
+  (rephrase or citation formatting) with the same facts and the same abstention decision.
+  Raw files committed: `eval/results/i9-9900X-qwen38-mtp-q{4,5}-vulkan-{quality.csv,items.jsonl}`.
+- **§9.1 smoke legs with the flag on, b9849 pin, both quants PASSED** (through the app's real
+  IPC/runtime path via CDP/Playwright `_electron`, dev build of the #191 branch, same driver
+  shape as the 2026-08-16 wave smokes). Per quant (q4 / q5): rung 1a taken (log shows
+  `Speculative decoding enabled (MTP draft head)` and `started via rung 1a (GPU auto-offload +
+  MTP speculative decoding) (backend: gpu)`; sidecar argv carries the flag pair); **full
+  offload with 24 GB headroom, no spill: peak VRAM 19.7 / 21.5 GiB** (pre-MTP server peaks
+  17.2 / 20.0 GiB, so the draft head cost ~2.5 / ~1.5 GiB here); balanced chat streams
+  coherently with ZERO reasoning frames; Deep surfaces 32 / 31 reasoning frames; grounded DE
+  ask answers with the exact fact and a correct `[S1]` citation; mid-stream abort ends the
+  stream in 3 / 3 ms; sidecar `VmHWM` 17.14 / 19.68 GiB, byte-for-byte the pre-MTP §9.1
+  record (the draft head and its KV live in VRAM), recorded only: no `recommended_min_ram_gb`
+  touched; `stopRuntime` leaves no chat sidecar and quit-while-running leaves no `llama-server`
+  of any role. **Fall-through + re-arm also exercised** (q4, a shim binary rejecting
+  `--spec-type`): rung 1a fails with `error: invalid argument: --spec-type`, the model comes up
+  on plain rung 1 at `backend: gpu`, `gpuAutoDisabled` stays false, the next start in the same
+  session skips 1a with `latched off for this session by an earlier attempt`, and Diagnostics'
+  "Try GPU again" re-arms the rung (a fresh 1a attempt on the following start). Teardown clean.
 
 The measurement record, unchanged: the Qwen3.8 GGUFs ship a trained-in draft head (`blk.64.nextn.*` — 15
 tensors the server loads and ignores by default; visible as "unused tensor" warnings in every
