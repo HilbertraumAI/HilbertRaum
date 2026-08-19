@@ -50,9 +50,19 @@ $env:HILBERTRAUM_MODEL_EVAL = "D:\"
 $env:HILBERTRAUM_EVAL_MACHINE = "devbox"      # or "i7-1185G7"
 $env:HILBERTRAUM_EVAL_BACKEND = "cpu"          # or "vulkan"
 # $env:HILBERTRAUM_EVAL_MODEL = "granite-4.1-8b-q4.gguf"   # optional: a single model
+# $env:HILBERTRAUM_EVAL_SPECULATIVE = "mtp"                # optional: run WITH the #182 MTP flags
 cd apps\desktop
 npx vitest run tests/manual/model-eval.test.ts
 ```
+`HILBERTRAUM_EVAL_SPECULATIVE=mtp` spawns each scored model with the same code-owned flag pair
+the start ladder's rung 1a passes (`MTP_SERVER_ARGS`, imported — this harness composes
+`createLlamaRuntime` directly and never walks the ladder, so without the knob it is structurally
+unable to score a model the way rung 1a runs it). Pair it with `HILBERTRAUM_EVAL_MODEL` (the
+harness enumerates GGUF *files* and cannot tell which weight carries a draft head) and a distinct
+`HILBERTRAUM_EVAL_MACHINE` label, so the run gets its own CSV stem instead of overwriting the
+pre-MTP baseline. **The comparison is score parity within cross-run tolerance, never byte
+identity** — see the §9.4 MTP addendum.
+
 Retrieval is embedded **once** (E5) and reranked once, so it is **identical across chat
 models** — every cross-model delta in EM / citation-correctness / abstention is the chat model
 following the grounded prompt. Each model is loaded at `-c 8192` and answers all 100 items at

@@ -8,6 +8,7 @@ import { encodeVector } from '../../src/main/services/embeddings'
 import { createE5Embedder } from '../../src/main/services/embeddings/e5'
 import { createLlamaReranker } from '../../src/main/services/reranker'
 import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
+import { MTP_SERVER_ARGS } from '../../src/main/services/runtime/factory'
 import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 import { generateGroundedAnswer, ragSettingsFrom, type RagRetrievalSettings } from '../../src/main/services/rag'
 import { createConversation, appendMessage } from '../../src/main/services/chat'
@@ -35,6 +36,7 @@ import {
 //   HILBERTRAUM_EVAL_MACHINE=<label>                   # optional: CSV machine column (default hostname)
 //   HILBERTRAUM_EVAL_BACKEND=cpu|vulkan                # optional: CSV backend column (default cpu)
 //   HILBERTRAUM_EVAL_DIR=<dir>                         # optional: override the eval/ data dir
+//   HILBERTRAUM_EVAL_SPECULATIVE=mtp                    # optional: run WITH the #182 MTP flags
 //   npx vitest run tests/manual/model-eval.test.ts
 //
 // Retrieval is IDENTICAL across chat models (one E5 embedding of the corpus, one reranker),
@@ -54,6 +56,28 @@ const RESULTS_DIR = join(EVAL_DIR, 'results')
 
 const MACHINE = process.env.HILBERTRAUM_EVAL_MACHINE?.trim() || hostname()
 const BACKEND = process.env.HILBERTRAUM_EVAL_BACKEND?.trim() || 'cpu'
+/**
+ * Issue #182 adoption gate. This harness composes `createLlamaRuntime` DIRECTLY (like the
+ * app's other manual harnesses), so it never walks the start ladder and would otherwise be
+ * structurally unable to score a model as the ladder's rung 1a actually runs it. Set to
+ * `mtp` to spawn every scored model with the SAME code-owned flag pair rung 1a passes —
+ * imported, never re-typed, so the harness cannot drift from the runtime.
+ *
+ * Pair it with `HILBERTRAUM_EVAL_MODEL` (the flags are applied to whatever runs — the
+ * harness enumerates GGUF FILES, it does not read manifests, so it cannot tell which weight
+ * carries a draft head) and with a distinct `HILBERTRAUM_EVAL_MACHINE` label so the run
+ * lands in its own CSV stem instead of overwriting the pre-MTP baseline.
+ *
+ * The gate this feeds is **score parity within cross-run tolerance, NOT byte identity**: MTP
+ * breaks temp-0 byte-reproducibility by construction (batched verification flips near-ties;
+ * the verified output stays distribution-equivalent). A byte-diff gate fails a correct
+ * implementation. See model-benchmarks.md §9.4 and BUILD_STATE §5 item 8b.
+ */
+const SPECULATIVE = process.env.HILBERTRAUM_EVAL_SPECULATIVE?.trim().toLowerCase() || ''
+if (SPECULATIVE && SPECULATIVE !== 'mtp') {
+  throw new Error(`HILBERTRAUM_EVAL_SPECULATIVE must be "mtp" or unset (got: ${SPECULATIVE})`)
+}
+const SPECULATIVE_ARGS = SPECULATIVE === 'mtp' ? [...MTP_SERVER_ARGS] : []
 
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 
@@ -170,9 +194,17 @@ describe.skipIf(!enabled)('Phase-29 model quality benchmark (manual, real RAG pa
         for (const model of models) {
           // eslint-disable-next-line no-console
           console.log(`\n=== ${model.id} (${items.length} items) ===`)
+          if (SPECULATIVE_ARGS.length > 0) {
+            // eslint-disable-next-line no-console
+            console.log(`    speculative decoding ON: ${SPECULATIVE_ARGS.join(' ')}`)
+          }
           const runtime = createLlamaRuntime(
             { modelId: model.id, modelPath: model.path, contextTokens: 8192 },
-            { binPath: binPath!, healthTimeoutMs: PATIENT_MS }
+            {
+              binPath: binPath!,
+              healthTimeoutMs: PATIENT_MS,
+              ...(SPECULATIVE_ARGS.length > 0 ? { extraArgs: SPECULATIVE_ARGS } : {})
+            }
           )
           await runtime.start()
           const scores: ItemScore[] = []

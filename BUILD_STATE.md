@@ -47,6 +47,7 @@ the leak posture, and what the wave deliberately did not do. **User-facing:**
 `docs/troubleshooting.md` "The model is busy — one job at a time". Suite 5312/50; 39 new tests in
 `model-occupancy.test.ts` + `model-occupancy-ipc.test.ts`. No hardware gate owed — every lane is
 exercised by scripted fake runtimes.
+
 _2026-08-19 — **MTP speculative decoding — wave CLOSED in code, TWO HARDWARE GATES OWED (issue
 #182).**_ The Qwen3.8 GGUFs already contained a trained-in draft head (`blk.64.nextn.*`) that
 llama-server loaded and ignored — the "unused tensor" warnings in every §4 log were the feature
@@ -1147,10 +1148,13 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    2026-08-19, record: architecture.md "MTP speculative decoding").** Both need the i9-9900X +
    RTX 3090 rig that produced §9.4, and both are run WITH `speculative_decoding: mtp` active on
    `qwen3.8-27b-q4` + `qwen3.8-27b-q5`:
-   - **§2 grounded-QA re-run, both quants.** The gate is **score parity within cross-run
-     tolerance, NOT byte identity** — MTP breaks temp-0 byte-reproducibility by construction
-     (batched-verification near-ties flip; the verified output stays distribution-equivalent), so
-     a byte-diff gate would fail a correct implementation.
+   - **§2 grounded-QA re-run, both quants** — `HILBERTRAUM_EVAL_SPECULATIVE=mtp` +
+     `HILBERTRAUM_EVAL_MODEL=<quant>.gguf` + a distinct `HILBERTRAUM_EVAL_MACHINE` label (§2
+     "Run"). Baseline to compare against: the committed
+     `eval/results/i9-9900X-qwen38-vulkan-quality.csv`. The gate is **score parity within
+     cross-run tolerance, NOT byte identity** — MTP breaks temp-0 byte-reproducibility by
+     construction (batched-verification near-ties flip; the verified output stays
+     distribution-equivalent), so a byte-diff gate would fail a correct implementation.
    - **§9.1 smoke legs on the b9849 pin**, incl. teardown and 24 GB VRAM headroom — the flags are
      functionally verified on b9849 but the app-path smoke was never re-run with them on.
    - **Then, and only then:** re-measure §4 peak RSS/VRAM with the flag on before touching any
