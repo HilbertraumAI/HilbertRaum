@@ -19,6 +19,35 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-20 — **Stored-copy diagnostic REBUILT — issue #190 phase 1 (no hardware, no password, fully
+CI-verified).**_ `architecture.md` §6 said the #188 root-cause diagnostic "was written and
+smoke-tested against a synthetic vault" and only needed the owner's password. **It never existed**:
+it lived in the git-excluded working paper and went with it at close-out — nothing matching it was
+ever committed on any branch. So #190 checkbox 1 was never hardware-blocked; it was ordinary CI-able
+work, and that is what this wave did. §6 now carries the correction and a new **§9** records the
+tool as built. Shape: a **pure classifier + renderer** (`tests/helpers/stored-copy-audit.ts` — rows
++ a directory listing in, report out, no I/O), a **read-only collector**
+(`stored-copy-audit-run.ts` — copy → decrypt the COPY → open `{ readOnly: true }` → probe the schema
+→ query → walk `documents/` → shred the scratch), a **witness** (`read-only-witness.ts`), the
+env-gated operator shell (`tests/manual/stored-copy-diagnostic.test.ts`), and both CI halves. It is
+test-tree code on purpose — it must not ship in the bundle as dead code, and `tsconfig.web.json`
+already typechecks `tests/`. Three things are load-bearing: every MUTATING vault entry point is
+forbidden by name (`unlockEncryptedVault` commits/discards staged rekeys and can roll a `.recovery`
+over the `.enc`; `openDatabase` writes the schema + ~20 `ensureColumn` calls just by opening), the
+`stored_name` column is **probed** because the reporting drive predates #189, and the report is
+public-issue-safe **by construction** (counts, two closed allowlists, 8-char shape tokens — no
+titles, content, paths or file names, asserted against a vault full of planted secrets). Seven
+mutations each turned the intended test red, incl. the dangerous one — a loose `.enc` match that
+files a live `<id><ext>.enc.new` as an orphan. The first end-to-end operator smoke against a
+synthetic drive earned its keep: it exposed a phantom orphan (a row whose corrupt strings name
+nothing left its healthy copy unclaimed), fixed by making a file’s LEADING id a fourth ownership
+source — over-counting orphans is the one error direction that can cost data.
+**D4 rider:** orphans are NOT inert —
+`listEncryptedDocSidecars` walks the directory, so a **v1** vault's first password change re-encrypts
+every orphan and stages an `.enc.new` for each (a v2 rekey is O(1) and does not); that asymmetry is
+why the report carries the descriptor version. **Deliberately not built:** any cleanup/sweep —
+#190 checkbox 2 is an owner decision that needs the orphan count first. Suite 5363/361 files green.
+
 _2026-08-19 — **Model occupancy — wave CLOSED (issues #185/#186).**_ The two issues the local-API
 wave filed out of scope were one defect seen from two sides, and were fixed together as both asked.
 "Who has the model" was answered by three registries and one hole: chat had `inFlightStreams`, doc
@@ -94,17 +123,19 @@ the **resolver**, not the reporting screen: new `services/ingestion/stored-copy.
 `documents.stored_name` (portable leaf, lazily healed), adopted by all six sites including the
 shred; `DocumentInfo.storedCopy` so the `⋯` menu stops offering what cannot succeed;
 `original_path` demoted to a sha256-checked last resort. **Durable record:** `docs/architecture.md`
-"Portable stored copies — design record (wave 188, issue #188, §1–§8)" — decisions D1–D6, the
+"Portable stored copies — design record (wave 188, issues #188/#190, §1–§9)" — decisions D1–D6, the
 safety guard the shred rests on, the verified-clean list, and the bundler landmine (§8: a string
 literal ending in the bare word `import` makes electron-vite wedge its CommonJS shim inside the
 literal; typecheck and the full suite pass and only `npm run build` fails — now tripwired in
 `repo-hygiene.test.ts`, and the standing argument for the typecheck → build → test gate order).
-**STILL OPEN, both carried into §5 item 1:** the real relocated-drive run (the code is now correct;
-the second-laptop continuity check is only *answered* by hardware), and the read-only root-cause
-diagnostic on the reporting drive, which was never run — it needs the owner's password and would
-also settle whether that drive's rows are in fact stale (the issue reports "Vorschau works"
-alongside the export failure, and preview and export share one ladder, so both cannot describe the
-same document) and count the orphaned `.enc` files past silent deletes left behind.
+**STILL OPEN, both now tracked in issue #190 (see the 2026-08-20 entry above):** the real
+relocated-drive run (the code is now correct; the second-laptop continuity check is only *answered*
+by hardware), and the read-only root-cause diagnostic on the reporting drive — which §6 wrongly
+claimed already existed. It has since been REBUILT and CI-proven (§9); running it on that drive
+needs the owner's password and would settle whether its rows are in fact stale (the issue reports
+"Vorschau works" alongside the export failure, and preview and export share one ladder, so both
+cannot describe the same document) and count the orphaned `.enc` files past silent deletes left
+behind.
 
 _2026-08-18 — **Local API endpoint — wave CLOSED (P1–P6), PR #184.**_ The loaded chat model
 can now be used by **other programs on the same computer** through an opt-in, loopback-only,
@@ -1012,9 +1043,18 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    moved-directory unit test is not a relocated drive. When it is finally run, cover **export
    original / preview / re-index / delete** on a workspace populated under a DIFFERENT letter, and
    confirm the rows self-heal (`documents.stored_name` populated after the first read).
-   **Also still owed:** the read-only #188 root-cause diagnostic on the reporting drive (needs the
-   owner password; settles whether that drive was stale and counts orphaned `.enc` files left by
-   past silent delete no-ops — architecture.md record §6). The `electron-builder.yml` hooks + the pipeline are
+   **Also still owed (issue #190):** RUN the read-only stored-copy diagnostic on the reporting
+   drive. It exists as of 2026-08-20 and is CI-proven (architecture.md record §9); the run needs
+   the owner's password, and the tool never writes to the drive. From `apps/desktop/`, in an
+   interactive shell (it prompts for the password with no echo):
+   `$env:HILBERTRAUM_STORED_COPY_AUDIT = "H:\"; npx vitest run tests/manual/stored-copy-diagnostic.test.ts`
+   Its output is public-issue-safe by construction — paste it into #190. It settles whether that
+   drive's rows are stale, counts the orphaned `.enc` files left by past silent delete no-ops (the
+   number #190 checkbox 2 waits on), and its extension histogram settles the checkbox-3
+   contradiction (leading hypothesis: one AUDIO document — audio preview reads the stored chunks
+   and never touches the file). **It also doubles as the continuity check's evidence collector:**
+   run it before and after the relocation; `stale` / `healable` / `stored_name populated` is the
+   self-heal proof in pasteable form. The `electron-builder.yml` hooks + the pipeline are
    wired; only the secrets + hardware are missing. **GPU additions:** a SmartScreen sanity
    re-check (the Vulkan build adds one more unsigned DLL of the same class) and re-running
    `build-commercial-drive` end-to-end with the two-build fetch. **Phase-38 addition:** a
