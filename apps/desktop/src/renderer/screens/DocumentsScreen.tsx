@@ -707,7 +707,12 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     try {
       await window.api.exportDocumentOriginal(d.id)
     } catch (e) {
-      setError(friendlyIpcError(e))
+      // #188: name the document. This is a screen-level banner and the list can be long, so a
+      // bare "the file is no longer present" left the user guessing WHICH one failed. The
+      // common cause (a stale stored path on a relocated drive) is fixed in the resolver and
+      // the menu now disables the entry outright when the copy is genuinely gone, so what
+      // reaches here is the race — the copy vanished between the list refresh and the click.
+      setError(`${d.title}: ${friendlyIpcError(e)}`)
     }
   }
 

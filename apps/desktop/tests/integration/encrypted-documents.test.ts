@@ -177,7 +177,7 @@ describe('encrypted document cache (H1)', () => {
     await processDocument(db, store, doc.id, { cipher: testCipher() })
     expect(readdirSync(store)).toHaveLength(1)
 
-    deleteDocument(db, doc.id)
+    deleteDocument(db, store, doc.id)
     expect(readdirSync(store)).toHaveLength(0)
   })
 })

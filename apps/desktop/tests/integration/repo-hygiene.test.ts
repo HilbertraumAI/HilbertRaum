@@ -459,3 +459,43 @@ describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlist
     ).toEqual(ALLOWLIST)
   })
 })
+
+// #188 wave — the bundler tripwire. `electron-vite`'s `esmShimPlugin` decides where to inject its
+// CommonJS shim by finding the LAST match of a loose "static import" regex over the whole rendered
+// chunk. That regex matches the bare word `import` (preceded by whitespace/`;`/start) followed
+// immediately by a quote — which is ALSO what a string literal ending in the word "import" looks
+// like. When such a literal lands after the real last import in the bundle, the plugin computes a
+// bogus offset and wedges the shim INTO the string, and the build dies with a bewildering
+// "Unterminated string literal" pointing at unrelated code hundreds of lines away.
+//
+// It cost this wave a full debug cycle: `npm run typecheck` and the entire test suite pass, and
+// only `npm run build` fails — which is exactly why the phase gate is typecheck → build → test in
+// that order. Comments are stripped before the plugin runs, so only STRING LITERALS are the hazard.
+describe('repo hygiene — no string literal ends with the bare word "import" (#188 bundler trap)', () => {
+  const walk = (dir: string): string[] => {
+    const out: string[] = []
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      if (entry.isDirectory()) out.push(...walk(p))
+      else if (/\.(ts|tsx)$/.test(entry.name)) out.push(p)
+    }
+    return out
+  }
+  // A quote closing immediately after ` import`, with the line NOT being a real import statement.
+  const TRAP = /(^|[\s;])import(['"])/
+
+  it('no src file closes a string literal right after the word "import"', () => {
+    const offenders: string[] = []
+    for (const p of walk(join(process.cwd(), 'src'))) {
+      readFileSync(p, 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          if (/^\s*(import|export)\s/.test(line)) return // a real import/export statement
+          if (/^\s*(\/\/|\*|\/\*)/.test(line)) return // comments are stripped before the plugin
+          if (TRAP.test(line)) offenders.push(`${p}:${i + 1}: ${line.trim()}`)
+        })
+    }
+    // If this fires: reword the string so it does not END on "import" (e.g. "…was imported").
+    expect(offenders).toEqual([])
+  })
+})

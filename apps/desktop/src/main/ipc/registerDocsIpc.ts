@@ -571,7 +571,9 @@ export function registerDocsIpc(ctx: AppContext): void {
     // (search is scoped to `ctx.embedder.id`), so the UI can prompt a re-index.
     // Merge in-memory transcription progress so the polling UI can show
     // "Transcribing… N%" without any new channel.
-    const docs = listDocuments(ctx.db, ctx.embedder.id).map((d) => {
+    // #188: pass the store dir so every row carries `storedCopy` — the `⋯` menu needs to know
+    // whether a byte-level action can succeed BEFORE offering it. One readdir per call.
+    const docs = listDocuments(ctx.db, ctx.embedder.id, storeDir).map((d) => {
       const percent = transcribing.get(d.id)
       return percent !== undefined && d.status === 'extracting'
         ? { ...d, transcriptionProgress: percent }
@@ -598,7 +600,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     requireNoActiveTask(documentId)
     requireNoActiveSkillRun(documentId)
     log.info('Delete document', { documentId })
-    deleteDocument(ctx.db, documentId)
+    deleteDocument(ctx.db, storeDir, documentId)
     ctx.audit?.('document_deleted', 'Document deleted', { documentId })
   })
 
@@ -649,7 +651,7 @@ export function registerDocsIpc(ctx: AppContext): void {
         })
       }
       // Return the affected documents, fully populated (collections come from listDocuments).
-      const byId = new Map(listDocuments(ctx.db, ctx.embedder.id).map((d) => [d.id, d]))
+      const byId = new Map(listDocuments(ctx.db, ctx.embedder.id, storeDir).map((d) => [d.id, d]))
       return ids.map((id) => byId.get(id)).filter((d): d is DocumentInfo => d != null)
     }
   )

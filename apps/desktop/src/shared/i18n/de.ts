@@ -601,6 +601,8 @@ export const de: Record<keyof typeof en, string> = {
   // oben). Die Warnung ist die Dokumente-Stimme des §24.3-Verschlüsselungsgrenze-Texts
   // (review.export.encryptionWarning, wortgleich).
   'docs.exportOriginal': 'Originaldatei exportieren',
+  'docs.exportOriginal.gone':
+    'Die gespeicherte Kopie dieser Datei liegt nicht auf diesem Laufwerk und kann daher nicht exportiert werden. Der extrahierte Text lässt sich weiterhin exportieren.',
   'docs.exportOriginalConfirm.title': 'Originaldatei exportieren?',
   'docs.exportOriginal.warning':
     'Diese exportierte Datei liegt außerhalb des verschlüsselten HilbertRaum-Arbeitsbereichs und ist nicht durch dein Arbeitsbereich-Passwort geschützt.',
@@ -2173,6 +2175,9 @@ export const de: Record<keyof typeof en, string> = {
     'Dieses Dokument ist verschlüsselt; entsperre den Arbeitsbereich, um es zu exportieren.',
   'main.docs.exportGone':
     'Die Dokumentdatei ist nicht mehr vorhanden. Importiere sie neu, um sie zu exportieren.',
+  'main.docs.exportOriginalChanged':
+    'Nur deine eigene Kopie dieser Datei ist noch vorhanden, und sie hat sich seit dem Import ' +
+    'geändert — sie ist also nicht mehr das Original. Exportiere stattdessen den extrahierten Text.',
   'main.docs.noStoredTranscript':
     'Für diese Aufnahme ist noch kein Transkript gespeichert. Indexiere sie neu, um sie ' +
     'noch einmal zu transkribieren.',

@@ -11,7 +11,7 @@ import {
   renameCollection,
   setCollectionArchived
 } from '../services/collections'
-import { deleteDocument } from '../services/ingestion'
+import { deleteDocument, documentsDir } from '../services/ingestion'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 
@@ -91,7 +91,7 @@ export function registerCollectionsIpc(ctx: AppContext): void {
         const onlyHere = projectOnlyDocumentIds(ctx.db, id)
         deleteCollection(ctx.db, id)
         for (const docId of onlyHere) {
-          deleteDocument(ctx.db, docId)
+          deleteDocument(ctx.db, documentsDir(ctx.paths.workspacePath), docId)
           deletedCount += 1
         }
       } else {

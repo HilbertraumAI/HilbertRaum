@@ -8,7 +8,8 @@ import { join } from 'node:path'
 import { tMain } from '../../i18n'
 import { getDocument, reindexDocument, setDocumentOcr } from '../../ingestion'
 import type { OcrPage } from '../../ocr'
-import { ENCRYPTED_DOC_SUFFIX, shredFile } from '../../workspace-vault'
+import { shredFile } from '../../workspace-vault'
+import { resolveStoredCopy } from '../../ingestion/stored-copy'
 import { isAbortError } from '../../chat'
 import { log } from '../../logging'
 import type { DocTaskCtx, InternalTask } from '../context'
@@ -124,27 +125,37 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
 async function readStoredPdfBytes(documentId: string, ctx: DocTaskCtx): Promise<Buffer> {
   const db = ctx.deps.getDb()
   const row = db
-    .prepare('SELECT title, stored_path, original_path FROM documents WHERE id = ?')
+    .prepare('SELECT id, title, stored_path, stored_name, original_path FROM documents WHERE id = ?')
     .get(documentId) as unknown as
-    | { title: string; stored_path: string | null; original_path: string | null }
+    | {
+        id: string
+        title: string
+        stored_path: string | null
+        stored_name: string | null
+        original_path: string | null
+      }
     | undefined
   if (!row) throw new Error(tMain('main.task.sourceUnreadable'))
   const cipher = ctx.deps.getIngestionDeps().cipher ?? null
+  const storeDir = ctx.deps.getStoreDir()
   try {
     // ING-8 (perf audit 2026-06-18): read the (potentially huge, up to ~1 GiB) PDF with async
     // `readFile` so the bytes stream off the main event loop instead of a blocking `readFileSync`.
-    if (row.stored_path && existsSync(row.stored_path)) {
-      if (row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+    // #188: located through the shared resolver, so "Make searchable" still finds the stored PDF
+    // after the drive comes back under a different mount point.
+    const stored = resolveStoredCopy(db, storeDir, row)
+    if (stored) {
+      if (stored.encrypted) {
         if (!cipher) throw new Error(tMain('main.task.sourceUnreadable'))
-        const transient = join(ctx.deps.getStoreDir(), `${documentId}.parse-ocr.pdf`)
+        const transient = join(storeDir, `${documentId}.parse-ocr.pdf`)
         try {
-          await cipher.decryptFileAsync(row.stored_path, transient) // PERF-1: yields between chunks
+          await cipher.decryptFileAsync(stored.path, transient) // PERF-1: yields between chunks
           return await readFile(transient)
         } finally {
           shredFile(transient)
         }
       }
-      return await readFile(row.stored_path)
+      return await readFile(stored.path)
     }
     if (row.original_path && existsSync(row.original_path)) {
       return await readFile(row.original_path)

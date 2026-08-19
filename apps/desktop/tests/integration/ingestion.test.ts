@@ -338,7 +338,7 @@ describe('ingestion pipeline', () => {
     }).stored_path
     expect(existsSync(stored)).toBe(true)
 
-    deleteDocument(db, queued.id)
+    deleteDocument(db, storeDir, queued.id)
     expect(listDocuments(db)).toHaveLength(0)
     expect(existsSync(stored)).toBe(false)
     const n = db.prepare('SELECT COUNT(*) AS n FROM chunks WHERE document_id = ?').get(queued.id) as {

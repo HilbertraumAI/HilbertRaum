@@ -429,7 +429,7 @@ describe('summary persistence lifecycle (D25)', () => {
     const { jobId } = manager.startDocTask({ kind: 'summary', documentIds: [docId] })
     await waitTerminal(manager, jobId)
 
-    deleteDocument(db, docId)
+    deleteDocument(db, storeDir, docId)
     expect(getDocument(db, docId)).toBeNull()
     expect(getDocumentSummary(db, docId)).toBeNull()
   })

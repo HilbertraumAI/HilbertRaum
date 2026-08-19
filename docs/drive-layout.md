@@ -109,6 +109,20 @@ HILBERTRAUM/
 > by `scripts/build-commercial-drive.{ps1,sh}` (canonical: `services/commercial-drive.ts`). See
 > [`packaging.md`](packaging.md).
 
+> **Portability is a whole-stack property, not just the launcher (issue #188).** The launcher
+> deriving the root from its own location is necessary but was not sufficient: until wave 188,
+> `documents.stored_path` recorded each stored copy as an **absolute** path, so a drive that came
+> back under a different letter still resolved its ROOT correctly while every stored document
+> looked missing — and "Delete document" silently stopped shredding. **Nothing on this drive may
+> persist an absolute path.** The portable spellings, all of which resolve against a dir computed
+> at runtime: `documents.stored_name` and `image_sessions.stored_name` (leaf under
+> `workspace/documents` / `workspace/images`), `skills.path` (folder basename), the checksum cache
+> (`driveRelKey`), the runtime install marker (`markerBinaryKey`, posix separators), and the
+> `local_path` fields in `config/*.json`. The one deliberate exception is
+> `documents.original_path`, which names a file on the **user's own machine** and is therefore
+> expected not to survive a move — it is a last-resort fallback, never the source of truth. See
+> architecture.md "Portable stored copies — design record".
+
 > **Naming reconciliation.** This layout reflects what the **code actually reads**,
 > which is the source of truth:
 > - Sidecar OS sub-dirs are **`win` / `mac` / `linux`** (resolved by `services/runtime/sidecar.ts`

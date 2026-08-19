@@ -1009,6 +1009,13 @@ export function openDatabase(path: string): Db {
   // grammar allows no DEFAULT/NOT NULL, so NULL is the sentinel, coalesced in code
   // (`lifecycle` NULL ⇒ 'permanent', the parseScope precedent).
   ensureColumn(db, 'documents', 'lifecycle', 'lifecycle TEXT')
+  // Issue #188 — the stored copy's leaf name (`<id><ext>[.enc]`), RELATIVE to the workspace's
+  // `documents/` dir, mirroring `image_sessions.stored_name` and `skills.path`. `stored_path`
+  // stays (it is what a legacy row carries, and the tooltip/provenance reads it) but is no
+  // longer authoritative: it is absolute, so it goes stale the moment the drive comes back
+  // under a different mount point. Nullable — NULL means "not yet healed", and the resolver
+  // derives the leaf from `stored_path` and writes it back on the next read (D3, lazy).
+  ensureColumn(db, 'documents', 'stored_name', 'stored_name TEXT')
   ensureColumn(db, 'documents', 'source_relative_path', 'source_relative_path TEXT')
   ensureColumn(db, 'documents', 'source_folder_label', 'source_folder_label TEXT')
   ensureColumn(db, 'documents', 'pending_destination_json', 'pending_destination_json TEXT')
