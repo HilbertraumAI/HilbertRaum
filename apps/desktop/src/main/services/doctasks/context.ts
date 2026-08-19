@@ -14,6 +14,7 @@ import type {
   TranslationTargetLang
 } from '../../../shared/types'
 import type { ModelRuntime, RuntimeChatOptions } from '../runtime'
+import type { OccupancyLane } from '../runtime/occupancy'
 import type { Translator } from '../translation'
 import type { IngestionDeps } from '../ingestion'
 import type { OcrEngine } from '../ocr'
@@ -87,6 +88,27 @@ export interface DocTaskDeps {
    * unwired ⇒ never locking, so partial test deps stay valid.
    */
   isWorkspaceLocking?: () => boolean
+  /**
+   * The OTHER background lane currently holding a model-occupancy span, or null (#185/#186 —
+   * `services/runtime/occupancy.ts`). `startDocTask` refuses on it, completing the exclusion
+   * that `isChatStreaming` only half-covered: a skill run's LLM locate pass and the hardware
+   * benchmark's speed probe both reach `chatStream` without ever entering `inFlightStreams`.
+   *
+   * Deliberately scoped to the lanes OTHER than `doc-task`. A doc task must never refuse on
+   * the doc-task span: the running task holds one, and the #38 tree→extract chain enqueues its
+   * follow-up from inside `run()` while it is still held — refusing there would break the
+   * chain. Task-vs-task exclusion is the queue's job, not this signal's. Absent/unwired ⇒
+   * never occupied, so partial test deps stay valid.
+   */
+  occupiedLane?: () => Exclude<OccupancyLane, 'doc-task'> | null
+  /**
+   * Take the `doc-task` occupancy span for the RUNNING task, returning its release (#185/#186).
+   * Held across the whole dispatch so the lanes that must not join it — a skill run, the
+   * benchmark, and external local-API admission — see a multi-step task as continuously busy
+   * instead of idle in the gaps between its model calls. Absent/unwired ⇒ no span is taken and
+   * nothing else changes.
+   */
+  beginOccupancy?: () => () => void
   audit?: AuditRecorder
 }
 

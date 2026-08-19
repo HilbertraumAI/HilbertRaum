@@ -25,6 +25,7 @@ import {
   isExceedContextError,
   isRuntimeUnresponsiveError
 } from '../services/runtime/llama'
+import { modelBusyMessageKey } from '../services/runtime/occupancy'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { perfMark, perfMs } from '../services/perf'
@@ -38,9 +39,9 @@ import { inFlightStreams, streamBuffers, streamSettled } from './inflight'
 
 /**
  * Shared guard preamble: the conversation must exist, a runtime must be active, no doc
- * task may be running, and no stream may already be in flight for this conversation.
- * Throws the same friendly/ephemeral errors both handlers used. Returns the looked-up
- * conversation + the active runtime so the caller can proceed.
+ * task and no model-lane skill run may be working, and no stream may already be in flight
+ * for this conversation. Throws the same friendly/ephemeral errors both handlers used.
+ * Returns the looked-up conversation + the active runtime so the caller can proceed.
  */
 export async function assertChatStreamReady(
   ctx: AppContext,
@@ -62,6 +63,18 @@ export async function assertChatStreamReady(
   // build that is only queued, not yet holding the slot) still refuses chat (plan §4.1/H10).
   if (ctx.docTasks?.hasActiveTask() && !ctx.docTasks.isYieldingBuildActive()) {
     throw new Error(DOC_TASK_BUSY_MESSAGE)
+  }
+  // #186: the same one-at-a-time rule for a skill run whose tool streams on the chat runtime
+  // directly (the `modelLane: 'direct'` redaction / document-edit locate passes). It is the
+  // same shape of work as a doc task — user-started, cancellable, visible in the run bar — and
+  // a `categorize_transactions` run has ALWAYS refused chat this way, because its model call
+  // happens inside a doc task. Without this, that one skill run was excluded and its two
+  // siblings were not. The benchmark is deliberately NOT in this check: it is short, and the
+  // first-run benchmark fires right after unlock, where refusing the user's first message
+  // would be a regression — it yields to chat instead (#185, `benchmark.ts` modelBusy).
+  // Optional-chained: partial test contexts build a fake `runtime` object with only `active()`.
+  if (ctx.runtime.occupancy?.held('skill-run')) {
+    throw new Error(tMain(modelBusyMessageKey('skill-run')))
   }
   // One active stream per conversation (shared registry across plain chat + RAG).
   if (inFlightStreams.has(conversationId)) {

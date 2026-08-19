@@ -347,6 +347,21 @@ function initBackend(): void {
     // closes the DB at the very end of its multi-second teardown, so without it a task admitted
     // mid-teardown would pump immediately and lazily respawn the just-suspended sidecar.
     isWorkspaceLocking: () => workspace.isLocking(),
+    // #185/#186: the other half of the chat exclusion. `isChatStreaming` above sees only the
+    // lanes that register in `inFlightStreams`; a skill run's LLM locate pass and the hardware
+    // benchmark's speed probe reach `chatStream` without ever appearing there. Scoped to the
+    // OTHER lanes — a doc task must never refuse on the doc-task span it holds itself (the #38
+    // tree→extract chain enqueues from inside `run()`, span still held).
+    occupiedLane: () => {
+      const lane = runtime.occupancy.heldLane(['doc-task'])
+      // `heldLane` already filtered it out; the re-test is what narrows the type to the two
+      // lanes the manager's dep accepts, so the exclusion above cannot be widened by accident.
+      return lane === 'doc-task' ? null : lane
+    },
+    // …and the span the RUNNING task holds, so a skill run, the benchmark, and external
+    // local-API admission see a multi-step task as continuously busy rather than idle in the
+    // gaps between its model calls.
+    beginOccupancy: () => runtime.occupancy.begin('doc-task'),
     audit
   })
 

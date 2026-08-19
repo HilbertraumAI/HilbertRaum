@@ -171,6 +171,35 @@ kept safely on the drive and secured at the next unlock — you don't lose the s
 
 ---
 
+## "The model is busy" — one job at a time
+
+HilbertRaum runs **one** local model, and it does **one job at a time**. When you start something
+that would need the model while it is already working, the app says so and does nothing, rather
+than running both at half speed. You will see one of these:
+
+- **"An answer is being written right now."** — a chat answer is streaming. Wait for it, or press
+  **Stop** in the chat.
+- **"A document task is using the model."** — a summary, comparison, translation or deep-index
+  build is running or queued. Wait for it, or cancel it from the document.
+- **"A skill is working on a document."** — a skill run (for example *Redact document* or an edit)
+  is in flight. Wait for it, or press **Cancel** in the run bar at the bottom of the chat.
+- **"A hardware benchmark is measuring this computer right now."** — a benchmark is running. It is
+  short; try again in a moment.
+
+Nothing is lost when you see one of these: the thing you started simply did not start. Try it
+again once the other job finishes.
+
+Two deliberate exceptions:
+
+- **Chatting is never blocked by the benchmark.** The benchmark gives way instead — if you send a
+  message while it is running, it finishes without its speed reading and says so on the Diagnostics
+  card ("Text-generation speed was not measured this time…"). Run it again when nothing else is
+  using the model if you want the full reading; the RAM, CPU and drive figures are unaffected.
+- **Chatting while a deep index is building** is allowed. That build pauses itself for your
+  question and resumes afterwards.
+
+---
+
 ## The app feels slow
 
 - **Slow drive:** running from a slow USB stick makes model loading and indexing sluggish. Use

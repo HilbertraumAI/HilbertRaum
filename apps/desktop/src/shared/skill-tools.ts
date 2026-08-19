@@ -28,6 +28,20 @@ import type { CountMessageKey, MessageKey } from './i18n'
 export type SkillToolSeamKind = 'extract' | 'downstream' | 'export'
 
 /**
+ * How a tool's model use reaches the one chat runtime — the #186 exclusion, declared here so
+ * the guard is derived from this table instead of a hand-kept name list in the IPC layer:
+ *   - `'direct'`  — the run streams on the chat runtime itself (the redaction / document-edit
+ *     LLM locate passes, the only tools `buildToolRunner` hands `deps.runtime`). These runs
+ *     hold a `skill-run` occupancy span, and refuse to start while anything else has the model.
+ *   - `'doctask'` — the model call happens inside an enqueued doc task (`categorize_transactions`,
+ *     D26). The doctask lane already owns the exclusion, and such a run must take NO span: one
+ *     that did would refuse the very task it enqueues.
+ *   - absent — the tool never calls the model (deterministic extraction, validation, exports).
+ * `tool-runs.ts` passing `deps.runtime` into a case is pinned to `'direct'` by a source test.
+ */
+export type SkillToolModelLane = 'direct' | 'doctask'
+
+/**
  * The shape of a run's terminal outcome, which the renderer maps to copy:
  *   - `count`     — a plain pluralized count ("Extracted N transactions." / "Saved N rows.").
  *   - `reconcile` — a pass/fail balance verdict keyed off `resultKind` (reconciled/unchecked/…).
@@ -92,6 +106,8 @@ export interface SkillToolDescriptor {
   labelKey: MessageKey
   /** Which dispatch seam the runner uses — keeps the wired set derived, not a parallel hardcoded list. */
   seamKind: SkillToolSeamKind
+  /** How this tool's model use reaches the chat runtime (#186). Absent ⇒ it never generates. */
+  modelLane?: SkillToolModelLane
   /** True ⇒ a write/export/destructive tool the renderer confirm-gates. MUST agree with the tool's
    *  `permissions` (`toolRequiresConfirmation`) — a registry test pins the two together. */
   confirm: boolean
@@ -188,6 +204,7 @@ export const SKILL_TOOL_DESCRIPTORS: readonly SkillToolDescriptor[] = [
     name: 'categorize_transactions',
     labelKey: 'chat.skill.tool.categorize',
     seamKind: 'downstream',
+    modelLane: 'doctask', // D26: the LLM categorizer runs INSIDE an enqueued doctask, never here
     confirm: false,
     resultShape: 'count',
     doneKey: 'chat.skill.run.done.categorize'
@@ -260,6 +277,7 @@ export const SKILL_TOOL_DESCRIPTORS: readonly SkillToolDescriptor[] = [
     name: 'redact_document',
     labelKey: 'chat.skill.tool.redactDocument',
     seamKind: 'export',
+    modelLane: 'direct', // Phase 7 D73: the LLM locate pass streams on the chat runtime
     confirm: true,
     resultShape: 'redaction',
     redactionKeys: {
@@ -276,6 +294,7 @@ export const SKILL_TOOL_DESCRIPTORS: readonly SkillToolDescriptor[] = [
     name: 'apply_document_edits',
     labelKey: 'chat.skill.tool.applyDocumentEdits',
     seamKind: 'export',
+    modelLane: 'direct', // Phase 8 D76: the LLM locate pass streams on the chat runtime
     confirm: true,
     resultShape: 'edit',
     editKeys: {

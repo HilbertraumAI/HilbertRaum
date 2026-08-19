@@ -19,6 +19,35 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-19 — **Model occupancy — wave CLOSED (issues #185/#186).**_ The two issues the local-API
+wave filed out of scope were one defect seen from two sides, and were fixed together as both asked.
+"Who has the model" was answered by three registries and one hole: chat had `inFlightStreams`, doc
+tasks had their queue, **skill runs had per-DOCUMENT bookkeeping that is not a global busy signal
+(#186), and the benchmark had nothing at all (#185)** — so `startSkillRun` consulted neither of the
+other two, and two Diagnostics clicks (or one during a chat answer) both reached the model. The
+generation gate could not be the fix: it counts in-flight `chatStream` **pulls**, so a multi-step
+job reads IDLE between two of its own calls and a guard riding it would admit a second job into that
+gap. Shape: a **span** registry (`services/runtime/occupancy.ts`) on the `RuntimeManager`, held by
+the three BACKGROUND lanes only — chat keeps `inFlightStreams` as its one record, and the guards
+compose the sources (`ipc/model-busy.ts`) rather than mirroring them. `isExternallyBusy()` folds the
+spans in, so the local API now waits on a background job honestly instead of slipping into its gap.
+The skill lane is **declared in the descriptor table** (`SkillToolDescriptor.modelLane`), pinned to
+the dispatch by a source test — `'direct'` (redact/edit) takes a span, `'doctask'`
+(`categorize_transactions`) takes NONE, because its model call happens inside a task it enqueues and
+a span there would refuse its own task (the D26 deadlock). Two non-guards are load-bearing: a doc
+task never refuses on the doc-task span it holds itself (the #38 tree→extract chain enqueues from
+inside `run()`), and **chat is never refused by the benchmark** — the first-run benchmark fires right
+after unlock, so it YIELDS instead: the tokens/sec probe re-checks before it starts and on every
+chunk and **discards** a contended reading, which matters because a depressed reading steps the
+profile AND the recommendation down and is then PERSISTED (the one case where the issues'
+"degraded, not corruption" understates it). The discard raises the new persist-canonical
+`warnSpeedSkipped` — never a silent hole. **Durable record:** `docs/architecture.md` "Model
+occupancy — design record (issues #185/#186, §1–§6)" — decisions D1–D8, the full exclusion table,
+the leak posture, and what the wave deliberately did not do. **User-facing:**
+`docs/troubleshooting.md` "The model is busy — one job at a time". Suite 5312/50; 39 new tests in
+`model-occupancy.test.ts` + `model-occupancy-ipc.test.ts`. No hardware gate owed — every lane is
+exercised by scripted fake runtimes.
+
 _2026-08-19 — **Portable stored copies — wave CLOSED (issue #188).**_ `documents.stored_path` was
 persisted **absolute** and consumed with a bare `existsSync` at six hand-written ladders, so a
 portable drive returning under a different mount point took **every** stored copy stale at once —
@@ -61,7 +90,7 @@ what the audits changed, and the §-anchor legend for the retired plan's citatio
 Citations use PR # + the `local-api-p<N>` phase prefix + a record §, never a branch SHA (O6 —
 the repo squash-merges). **Filed out of scope, deliberately** (pre-existing in-app concurrency the
 new gate makes visible but does not serialize): the benchmark has no re-entrancy guard, and a skill
-run can generate alongside a chat stream — filed as **#185** and **#186**. **Post-closeout fix (owner decision 2026-08-18, prompted by a REAL attached drive):** a `policy.json` that PREDATES `allow_local_api` now inherits the permissive default instead of a packaged build's STRICT base — otherwise every drive already in the field would have read "turned off by your drive's policy" with no way to distinguish that from a deliberate ban. An explicit `false` still denies (O4 intact); a junk value and a malformed file still fail closed. Recorded as **O4b** in the design record. **Real-model smoke DONE 2026-08-18** on a real attached drive (H:, prepared "lite", encrypted
+run can generate alongside a chat stream — filed as **#185** and **#186** (both CLOSED 2026-08-19, see the model-occupancy entry above). **Post-closeout fix (owner decision 2026-08-18, prompted by a REAL attached drive):** a `policy.json` that PREDATES `allow_local_api` now inherits the permissive default instead of a packaged build's STRICT base — otherwise every drive already in the field would have read "turned off by your drive's policy" with no way to distinguish that from a deliberate ban. An explicit `false` still denies (O4 intact); a junk value and a malformed file still fail closed. Recorded as **O4b** in the design record. **Real-model smoke DONE 2026-08-18** on a real attached drive (H:, prepared "lite", encrypted
 workspace, pinned b9849 vulkan engine) against `gemma4-e2b-it-qat-q4` on GPU: default-off proven
 with the vault unlocked, 401 unauthenticated, a real non-streaming completion and a full streaming
 one, every Host/Origin/method/type refusal, **O5's dual loopback vindicated** (both `::1` and

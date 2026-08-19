@@ -113,7 +113,10 @@ describe('localizeServerCopy (D-L4)', () => {
       'main.benchmark.warnTiny',
       'main.benchmark.warnUnknown',
       'main.benchmark.warnDriveProbe',
-      'main.benchmark.warnSlowDrive'
+      'main.benchmark.warnSlowDrive',
+      // #185: the tokens/sec probe was discarded because another lane held the model — a
+      // persisted `lastBenchmark.warnings` entry like its siblings, and uninterpolated.
+      'main.benchmark.warnSpeedSkipped'
     ]
     expect([...DISPLAY_MAP_KEYS].sort()).toEqual(persistCanonical.sort())
     // Every mapped English value must round-trip to its German catalog value.

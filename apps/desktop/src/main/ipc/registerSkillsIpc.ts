@@ -19,6 +19,8 @@ import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { skillNeedsNewerApp } from '../../shared/skill-manifest'
+import { getToolDescriptor } from '../../shared/skill-tools'
+import { modelBusyLane, modelBusyMessageKey } from './model-busy'
 import { getSkill, getSkillsByDeclaredId, setSkillEnabled } from '../services/skills/registry'
 import { suggestSkillsForTurn } from '../services/skills/suggest'
 import { SkillRunController } from '../services/skills/run-controller'
@@ -442,6 +444,41 @@ export function registerSkillsIpc(ctx: AppContext): void {
       }
     )
     if (!runner) return { started: false, error: tMain('main.skills.run.unavailable') }
+    // #186: the model-lane guard. A `modelLane: 'direct'` tool (the redaction / document-edit
+    // LLM locate passes) streams on the chat runtime inside its run, so it must not start on
+    // top of a chat answer, a document task, the benchmark, or another such run — before this,
+    // `startSkillRun` consulted neither `inFlightStreams` nor the doc-task registry, and the
+    // per-document `SkillRunController` key is not a global "the model is busy" signal.
+    //
+    // Two deliberate exclusions from the span:
+    //   - `modelLane: 'doctask'` (`categorize_transactions`) takes NONE. Its model call happens
+    //     inside a doc task it enqueues, which holds the `doc-task` span itself; a span here
+    //     would make that task refuse its own parent run (the D26 deadlock).
+    //   - a null runtime takes none either. The locate pass needs one — redaction degrades to
+    //     its deterministic floor and the edit tool refuses — so there is nothing to exclude,
+    //     and chat cannot be running without a runtime anyway.
+    // `ctx.runtime` is optional in the partial contexts the skills tests build; unwired ⇒ no
+    // guard and no span, exactly like `ctx.docTasks?` in the sibling checks.
+    const occupancy = ctx.runtime?.occupancy ?? null
+    const modelLane = getToolDescriptor(toolName)?.modelLane
+    const occupies = modelLane === 'direct' && occupancy != null && ctx.runtime?.active() != null
+    if (occupies) {
+      const busy = modelBusyLane(ctx)
+      if (busy) return { started: false, error: tMain(modelBusyMessageKey(busy)) }
+    }
+    // Taken BEFORE `runController.start` and synchronously, so two runs racing this handler
+    // cannot both read idle. Released in the runner's own `finally` — every terminal path
+    // (success, failure, cancel) settles that promise, and the release is idempotent.
+    const releaseOccupancy = occupies ? occupancy!.begin('skill-run') : null
+    const gatedRunner = releaseOccupancy
+      ? async (deps: Parameters<typeof runner>[0]): ReturnType<typeof runner> => {
+          try {
+            return await runner(deps)
+          } finally {
+            releaseOccupancy()
+          }
+        }
+      : runner
     try {
       // API-3 (backend-audit 2026-06-27): `documentCount` is the v1 constant 1 because every wired
       // tool is single-document (`buildToolRunner` targets exactly `targetId`). TODO: when a
@@ -457,10 +494,13 @@ export function registerSkillsIpc(ctx: AppContext): void {
         documentId: targetId,
         documentCount: 1,
         conversationId,
-        runner
+        runner: gatedRunner
       })
       return { started: true, run }
     } catch {
+      // The controller refused (a run is already in flight on this document) — it never invoked
+      // the runner, so nothing will reach that `finally`. Release here or the span leaks.
+      releaseOccupancy?.()
       // One-at-a-time: a run is already in flight ON THIS DOCUMENT. Surface its handle (SKA-17) so a
       // renderer whose own store was reset (a reload) can RE-ADOPT the orphaned run — the fallback
       // re-attach path — instead of being stuck with "cancel it first" and nothing to cancel.

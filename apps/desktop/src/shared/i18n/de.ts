@@ -1967,6 +1967,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.benchmark.warnSlowDrive':
     'Dieses Laufwerk ist eher langsam. Modelle funktionieren trotzdem, das Laden kann aber ' +
     'länger dauern.',
+  'main.benchmark.warnSpeedSkipped':
+    'Die Textgeschwindigkeit wurde diesmal nicht gemessen, weil das Modell mit etwas anderem ' +
+    'beschäftigt war. Das Profil unten nutzt nur RAM, CPU und Laufwerksgeschwindigkeit — ' +
+    'führe den Benchmark noch einmal aus, wenn nichts anderes das Modell nutzt.',
   'main.benchmark.warnSlowRead':
     'Das Lesen von diesem Laufwerk lag bei etwa {mbps} MB/s. Beim Modellstart wird die ganze ' +
     'Modelldatei mit dieser Geschwindigkeit gelesen, Modellstarts dauern auf diesem Laufwerk ' +
@@ -2060,6 +2064,17 @@ export const de: Record<keyof typeof en, string> = {
   'main.chat.stopFirst':
     'Für diese Unterhaltung wird noch eine Antwort erstellt. Stoppe sie zuerst.',
   'main.chat.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um zu chatten.',
+  'main.busy.chat':
+    'Gerade wird eine Antwort geschrieben. Warte, bis sie fertig ist (oder stoppe sie), und ' +
+    'versuch es dann noch einmal.',
+  'main.busy.docTask':
+    'Eine Dokumentaufgabe nutzt gerade das Modell. Warte, bis sie fertig ist, oder brich sie ' +
+    'ab, und versuch es dann noch einmal.',
+  'main.busy.skillRun':
+    'Ein Skill arbeitet gerade an einem Dokument. Warte, bis er fertig ist, oder brich ihn in ' +
+    'der Leiste ab, und versuch es dann noch einmal.',
+  'main.busy.benchmark':
+    'Gerade läuft ein Hardware-Benchmark für diesen Computer. Versuch es in einem Moment noch einmal.',
   'main.task.unknownKind': 'Unbekannte Dokumentaufgabe.',
   'main.task.refusedChatStreaming':
     'Gerade wird eine Antwort geschrieben. Warte, bis sie fertig ist (oder stoppe sie), und ' +
