@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs'
 import type { ChatDepthMode, JsonSchema, RuntimeStatus } from '../../../shared/types'
 import { ModelOccupancy } from './occupancy'
+import type { SpeculativeDecoding } from '../../../shared/manifest'
 
 export { ModelOccupancy } from './occupancy'
 export type { OccupancyLane } from './occupancy'
@@ -100,6 +101,14 @@ export interface RuntimeStartOptions {
    * has the manifest); when absent the ladder prefetches `modelPath` alone.
    */
   weightPaths?: string[]
+  /**
+   * The model manifest's `speculative_decoding` opt-in (#182), or null/absent for the
+   * models that do not declare it — which is all of them but the two Qwen3.8 chat quants.
+   * Supplied by `startModelRuntime` (which has the manifest); the START LADDER decides
+   * whether the hardware actually permits it and maps the name to server flags. Nothing
+   * downstream of the ladder reads it.
+   */
+  speculativeDecoding?: SpeculativeDecoding | null
 }
 
 export interface HealthStatus {

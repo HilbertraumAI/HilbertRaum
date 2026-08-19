@@ -49,7 +49,11 @@ import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
 import { RuntimeManager } from './services/runtime'
-import { createGpuCrashAutoFallback, createSelectingRuntimeFactory } from './services/runtime/factory'
+import {
+  createGpuCrashAutoFallback,
+  createSelectingRuntimeFactory,
+  createSpeculativeCrashAutoFallback
+} from './services/runtime/factory'
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
@@ -229,6 +233,26 @@ function initBackend(): void {
     },
     notify: notifyRenderer
   })
+  // #182: the same force-restart discipline for a crash of the SPECULATIVE rung — but the
+  // GPU flags stay untouched, so the model comes back ON the GPU with MTP latched off for
+  // the session (the ladder set that latch before calling this).
+  const speculativeCrashFallback = createSpeculativeCrashAutoFallback({
+    restart: (opts) => {
+      // Same AUD-02 admission check as the GPU sibling above: never respawn past a lock.
+      if (!workspaceAdmitsWork(workspace)) {
+        log.info('Speculative crash restart skipped — the workspace is locked or locking')
+        return Promise.resolve()
+      }
+      return runtimeRef?.forceRestart(opts) ?? Promise.resolve()
+    },
+    onCrash: (reason) => {
+      audit('runtime_crashed', 'Model runtime stopped unexpectedly', {
+        reason: reason.slice(0, 500)
+      })
+      log.warn('Speculative decoding crashed mid-session — restarting without it', { reason })
+    },
+    notify: notifyRenderer
+  })
   const readGpuSetting = <T>(pick: (s: ReturnType<typeof getSettings>) => T, fallback: T): T => {
     try {
       return pick(getSettings(workspace.requireDb()))
@@ -267,6 +291,15 @@ function initBackend(): void {
       // failure warns — 'aborted' is the normal outcome (the load finished first), and
       // none of the events affects the start. The mark pair (started → settle) lets a
       // HILBERTRAUM_PERF_LOG run time the window offline.
+      // #182: whether the MTP rung ran, was skipped, or was latched off — the ONLY place
+      // that decision is visible, and the answer to "is the speed-up actually on?".
+      onSpeculative: (opts, event, detail) => {
+        perfMark('runtime_speculative', { modelId: opts.modelId, event })
+        const fields = { modelId: opts.modelId, ...(detail ? { detail } : {}) }
+        if (event === 'enabled') log.info('Speculative decoding enabled (MTP draft head)', fields)
+        else if (event === 'skipped') log.info('Speculative decoding not used', fields)
+        else log.warn(`Speculative decoding ${event} — continuing without it`, fields)
+      },
       onPrefetch: (opts, event, detail) => {
         perfMark('model_prefetch', { modelId: opts.modelId, event })
         if (event === 'failed') {
@@ -282,7 +315,8 @@ function initBackend(): void {
         ...gpuSignals,
         onGpuFailure: persistGpuFailure,
         probeDevices: gpuProbe,
-        onGpuCrash: (opts, info) => gpuCrashFallback(opts, info)
+        onGpuCrash: (opts, info) => gpuCrashFallback(opts, info),
+        onSpeculativeCrash: (opts, info) => speculativeCrashFallback(opts, info)
       }
     })
   )

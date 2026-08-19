@@ -23,6 +23,21 @@ recommendation_rank: 3
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
 supports_thinking_mode: true
+# MTP speculative decoding — OPT-IN (issue #182; model-benchmarks.md §9.4 addendum + the
+# architecture.md "MTP speculative decoding" record). This GGUF ships a trained-in draft head
+# (`blk.64.nextn.*`, 15 tensors llama-server otherwise loads and ignores — the "unused tensor"
+# warnings in every §4 log). The chat ladder maps this ONE name to a fixed flag pair
+# (`--spec-type draft-mtp --spec-draft-n-max 2`); the manifest never supplies arguments.
+# Measured +38-45% server-level decode on the i9-9900X + RTX 3090 (~25 -> 35.3 prose / 36.6 code
+# t/s, draft acceptance 77-91%), on the b10430 build and functionally verified on the b9849 pin.
+# Costs ~2 GiB VRAM (draft head + its KV): the ladder refuses the rung unless ONE device reports
+# ~18.5 GiB (the weight) + 3.5 GiB free, so a card that cannot hold it silently gets
+# today's plain GPU start instead of a silent partial offload (§4 peak VRAM here: 20.0 GiB).
+# RAM/VRAM lines below are the pre-MTP measurements and are NOT retuned on an estimate.
+# Both #182 hardware gates PASSED 2026-08-19 on the i9/3090 rig: §2 grounded-QA parity with MTP
+# on (F1 .3518 vs .3523, zero hallucinations, abstention 1.0000) and the §9.1 app-path smokes on
+# the b9849 pin (rung 1a, full offload, peak VRAM 21.5 GiB on the 24 GB card, clean teardown).
+speculative_decoding: mtp
 local_path: models/chat/qwen3.8-27b-q5.gguf
 # Real hash from HuggingFace LFS metadata (git-LFS OID = the file's SHA-256), captured
 # 2026-08-16 and independently confirmed by on-disk SHA-256 of the downloaded file (i9 rig).

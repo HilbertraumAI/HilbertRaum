@@ -203,6 +203,28 @@ describe('committed catalog — Qwen3.8 wave (2026-08-16 promotion, §9.4)', () 
     }
   })
 
+  // Issue #182 (§9.4 MTP addendum): the draft head costs ~2 GiB VRAM, so exactly the two
+  // quants that keep 24 GB headroom opt in. Q6_K peaks at 22.7 GiB on a 24 GB card at ctx
+  // 8192 — its VRAM fit IS its reason to exist, and MTP would spend it. The runtime's VRAM
+  // guard would refuse it anyway; this pins the DECISION so nobody "fixes" the asymmetry.
+  it('opts exactly the Q4 and Q5 quants into MTP speculative decoding — never the Q6_K', () => {
+    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
+    expect(byId['qwen3.8-27b-q4'].speculativeDecoding).toBe('mtp')
+    expect(byId['qwen3.8-27b-q5'].speculativeDecoding).toBe('mtp')
+    expect(byId['qwen3.8-27b-q6'].speculativeDecoding).toBeUndefined()
+  })
+
+  it('no OTHER committed manifest claims a draft head it does not ship', () => {
+    // The flag is a claim about the WEIGHT (Qwen3.8's in-GGUF `blk.64.nextn.*` tensors), not a
+    // tuning knob: copying it onto a model without the head makes llama-server refuse to start,
+    // which the ladder then recovers from by falling back — a wasted multi-GB load per session.
+    const claiming = committedManifests()
+      .filter((m) => m.speculativeDecoding !== undefined)
+      .map((m) => m.id)
+      .sort()
+    expect(claiming).toEqual(['qwen3.8-27b-q4', 'qwen3.8-27b-q5'])
+  })
+
   it('the rank-3 pair owns exactly the 24 GB and ≥32 GB tiers (no-signal mapping)', () => {
     const chat = committedManifests()
     expect(recommendModelIdByRam(chat, 24, 'chat')).toBe('qwen3.8-27b-q4')

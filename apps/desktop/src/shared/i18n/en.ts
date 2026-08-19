@@ -1964,6 +1964,11 @@ export const en = {
     'Free some space on the drive, then try again.',
   'main.runtime.compatibilityMode':
     'Switched to compatibility mode for stability. Everything keeps working — responses may be a bit slower.',
+  // Issue #182: the speculative-decoding rung crashed mid-answer. The graphics card is fine
+  // and the model comes back on it — only the optional speed-up is off — so this must NOT
+  // borrow the compatibility-mode copy above, which promises slower answers.
+  'main.runtime.speedUpDisabled':
+    'Turned off an optional speed-up for stability. The model is restarting — send your message again.',
   'main.noModelRunning': 'No AI model is running. Open the AI Model screen and start one first.',
   'main.translation.noModel':
     'Translating needs the translation model, which is not installed on this drive. ' +

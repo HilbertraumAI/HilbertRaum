@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
+  createSpeculativeCrashAutoFallback,
+  clearSpeculativeSuppression,
+  isSpeculativeSuppressed,
   COMPATIBILITY_MODE_NOTICE,
+  SPEED_UP_DISABLED_NOTICE,
+  MTP_SERVER_ARGS,
   WARMUP_MAX_TOKENS,
   WARMUP_PROMPT,
   type LlamaRungOptions
@@ -71,6 +76,8 @@ function ladderHarness(config: {
   // #114: every prefetch the ladder created (recorded fake — no real file IO in this suite).
   const prefetches: Array<{ paths: string[]; aborted: boolean }> = []
   const prefetchEvents: Array<{ event: string; detail?: string }> = []
+  const speculative: Array<{ event: string; detail?: string }> = []
+  const specCrashes: Array<{ opts: RuntimeStartOptions; info: UnexpectedExitInfo }> = []
   let mockMade = false
 
   const makePrefetch = (paths: string[]): ModelPrefetch => {
@@ -146,6 +153,7 @@ function ladderHarness(config: {
     onWarmup: (_o, event, detail) => warmups.push({ event, detail }),
     warmupTimeoutMs: config.warmupTimeoutMs,
     onPrefetch: (_o, event, detail) => prefetchEvents.push({ event, detail }),
+    onSpeculative: (_o, event, detail) => speculative.push({ event, detail }),
     makePrefetch,
     gpu: {
       getGpuMode: () => config.gpuMode ?? 'auto',
@@ -153,7 +161,8 @@ function ladderHarness(config: {
       onGpuFailure: (reason) => failures.push(reason),
       probeDevices: async () => config.probe ?? [],
       resolveCpuBin: () => (config.cpuBin === undefined ? '/bin/cpu/llama-server' : config.cpuBin),
-      onGpuCrash: (o, info) => crashes.push({ opts: o, info })
+      onGpuCrash: (o, info) => crashes.push({ opts: o, info }),
+      onSpeculativeCrash: (o, info) => specCrashes.push({ opts: o, info })
     }
   })
 
@@ -167,6 +176,8 @@ function ladderHarness(config: {
     chatCalls,
     prefetches,
     prefetchEvents,
+    speculative,
+    specCrashes,
     wasMock: () => mockMade
   }
 }
@@ -851,5 +862,221 @@ describe('concurrent weight prefetch (#114)', () => {
     expect(h.wasMock()).toBe(true)
     expect(h.prefetches).toHaveLength(0)
     expect(h.prefetchEvents).toHaveLength(0)
+  })
+})
+
+// Issue #182 — MTP speculative decoding (rung 1a). Design record: architecture.md
+// "MTP speculative decoding"; measured evidence: model-benchmarks.md §9.4 addendum.
+//
+// The shape under test: the manifest OPTS IN, the ladder DECIDES. Every "don't know" answers
+// no, because a skipped rung costs nothing while a wrong yes costs a silent partial offload.
+describe('MTP speculative decoding (#182)', () => {
+  /** 1 GiB of weights ⇒ 1024 + MTP_VRAM_HEADROOM_MB = 4608 MiB of free VRAM needed. */
+  const WEIGHT_BYTES = 1024 * 1024 * 1024
+  const mtpOpts: RuntimeStartOptions = {
+    modelId: 'qwen3.8-27b-q4',
+    modelPath: '/w.gguf',
+    contextTokens: 8192,
+    weightBytes: WEIGHT_BYTES,
+    speculativeDecoding: 'mtp'
+  }
+  /** Roomy enough for the weight + the draft head. */
+  const BIG: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, freeMb: 23000 }
+  /** Holds the weight, but not the ~2 GiB draft head on top of it. */
+  const TIGHT: GpuDevice = { id: 'Vulkan0', name: 'Small card', totalMb: 8192, freeMb: 4000 }
+
+  beforeEach(() => clearSpeculativeSuppression())
+
+  it('starts rung 1a with EXACTLY the code-owned flag pair when the machine can hold it', async () => {
+    const h = ladderHarness({ probe: [BIG] })
+    const runtime = h.factory(mtpOpts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(1)
+    expect(h.calls[0].extraArgs).toEqual(['--spec-type', 'draft-mtp', '--spec-draft-n-max', '2'])
+    expect(h.calls[0].extraArgs).toEqual([...MTP_SERVER_ARGS])
+    expect(runtime.backend).toBe('gpu')
+    expect(h.speculative).toEqual([{ event: 'enabled', detail: undefined }])
+    expect(h.selected[0].reason).toContain('rung 1a')
+  })
+
+  it('adds NO rung for a model that did not opt in', async () => {
+    const h = ladderHarness({ probe: [BIG] })
+    await h.factory({ ...mtpOpts, speculativeDecoding: null }).start()
+    expect(h.calls).toHaveLength(1)
+    expect(h.calls[0].extraArgs).toEqual([])
+    expect(h.speculative).toEqual([])
+  })
+
+  // The three "don't know / can't" refusals. All three SKIP the rung — no spawn, no failure,
+  // no wasted multi-GB load — and land on exactly today's plain GPU start.
+  it('skips the rung without spawning when the probe finds no GPU', async () => {
+    const h = ladderHarness({ probe: [] })
+    const runtime = h.factory(mtpOpts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(1)
+    expect(h.calls[0].extraArgs).toEqual([])
+    expect(runtime.backend).toBe('cpu')
+    expect(h.speculative[0].event).toBe('skipped')
+    expect(h.speculative[0].detail).toContain('no GPU device')
+    expect(h.failures).toEqual([]) // a skip is never a GPU fault
+  })
+
+  it('skips the rung when no single device has the weight + 3.5 GiB of free VRAM', async () => {
+    const h = ladderHarness({ probe: [TIGHT] })
+    await h.factory(mtpOpts).start()
+    expect(h.calls[0].extraArgs).toEqual([])
+    expect(h.speculative[0].event).toBe('skipped')
+    expect(h.speculative[0].detail).toContain('not enough free VRAM')
+  })
+
+  it('never sums free VRAM across devices — one card must hold all of it', async () => {
+    // Two cards, 4000 MiB free each: 8000 total would clear the 4608 MiB bar, one card cannot.
+    const h = ladderHarness({ probe: [TIGHT, { ...TIGHT, id: 'Vulkan1' }] })
+    await h.factory(mtpOpts).start()
+    expect(h.calls[0].extraArgs).toEqual([])
+    expect(h.speculative[0].event).toBe('skipped')
+  })
+
+  it('skips the rung when the weight size is unknown (the VRAM check cannot be made)', async () => {
+    const h = ladderHarness({ probe: [BIG] })
+    await h.factory({ ...mtpOpts, weightBytes: null }).start()
+    expect(h.calls[0].extraArgs).toEqual([])
+    expect(h.speculative[0].detail).toContain('weight size unknown')
+  })
+
+  it('is never offered at all when GPU is off or auto-disabled', async () => {
+    for (const config of [{ gpuMode: 'off' as const }, { gpuAutoDisabled: true }]) {
+      const h = ladderHarness({ ...config, probe: [BIG] })
+      await h.factory(mtpOpts).start()
+      expect(h.calls[0].extraArgs).toEqual(['--device', 'none'])
+      expect(h.speculative).toEqual([])
+    }
+  })
+
+  // The safety net that makes enabling this survivable: an older runtime that rejects the flag,
+  // a weight without the draft head, a driver that refuses — rung 1 is next in the walk.
+  it('falls through to the plain GPU rung on failure, and never blames the GPU', async () => {
+    const h = ladderHarness({
+      failFirst: 1,
+      probe: [BIG],
+      failMessage: 'error: unknown argument: --spec-type'
+    })
+    const runtime = h.factory(mtpOpts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(2)
+    expect(h.calls[0].extraArgs).toEqual([...MTP_SERVER_ARGS])
+    expect(h.calls[1].extraArgs).toEqual([]) // plain rung 1 — GPU, not CPU
+    expect(runtime.backend).toBe('gpu')
+    // The whole point: `gpuAutoDisabled` is NOT persisted, so one bad flag cannot exile a
+    // working GPU to CPU for every later start.
+    expect(h.failures).toEqual([])
+    expect(h.speculative.map((e) => e.event)).toEqual(['enabled', 'failed'])
+    expect(h.speculative[1].detail).toContain('--spec-type')
+  })
+
+  it('latches the model off for the session after one failure — no repeat doomed load', async () => {
+    const h = ladderHarness({ failFirst: 1, probe: [BIG] })
+    await h.factory(mtpOpts).start()
+    expect(h.calls).toHaveLength(2)
+    await h.factory(mtpOpts).start()
+    expect(h.calls).toHaveLength(3) // one attempt, not two
+    expect(h.calls[2].extraArgs).toEqual([])
+    expect(h.speculative.at(-1)).toEqual({
+      event: 'skipped',
+      detail: 'latched off for this session by an earlier attempt'
+    })
+    // …and "Try GPU again" re-arms it (the user asking for the accelerated path back).
+    clearSpeculativeSuppression()
+    await h.factory(mtpOpts).start()
+    expect(h.calls.at(-1)!.extraArgs).toEqual([...MTP_SERVER_ARGS])
+  })
+
+  it('keeps the forced-CPU rungs free of the flags when the whole GPU half fails', async () => {
+    const h = ladderHarness({ failFirst: 2, probe: [BIG] })
+    const runtime = h.factory(mtpOpts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(3)
+    expect(h.calls[0].extraArgs).toEqual([...MTP_SERVER_ARGS]) // rung 1a
+    expect(h.calls[1].extraArgs).toEqual([]) // rung 1
+    expect(h.calls[2].extraArgs).toEqual(['--device', 'none']) // rung 2 — exactly, nothing more
+    expect(runtime.backend).toBe('cpu')
+    expect(h.failures).toHaveLength(1) // only the PLAIN GPU rung's failure is a GPU fault
+  })
+
+  // A mid-session crash of rung 1a routes to the speculative handler, NOT the §5.3 GPU one:
+  // the device is not the suspect, and persisting `gpuAutoDisabled` would need a Diagnostics
+  // visit to undo. The model restarts on the GPU with MTP latched off.
+  it('routes a mid-session crash to the speculative handler, never to the GPU auto-disable', async () => {
+    const h = ladderHarness({ probe: [BIG] })
+    const runtime = h.factory(mtpOpts)
+    await runtime.start()
+    h.calls[0].onUnexpectedExit({ exitCode: 1, exitSignal: null, stderrTail: 'vk out of memory' })
+    expect(h.specCrashes).toHaveLength(1)
+    expect(h.crashes).toEqual([])
+    expect(isSpeculativeSuppressed(mtpOpts.modelId)).toBe(true)
+    expect(h.speculative.at(-1)!.event).toBe('crashed')
+    expect(h.speculative.at(-1)!.detail).toContain('vk out of memory')
+  })
+
+  it('leaves a PLAIN GPU rung crash on the §5.3 path untouched', async () => {
+    const h = ladderHarness({ failFirst: 1, probe: [BIG] })
+    await h.factory(mtpOpts).start()
+    h.calls[1].onUnexpectedExit({ exitCode: 1, exitSignal: null, stderrTail: 'device lost' })
+    expect(h.crashes).toHaveLength(1)
+    expect(h.specCrashes).toEqual([])
+  })
+
+  // Regression guard for the trap this wave walked into: the #108 read sample and the #114
+  // prefetch used to be gated on `rungs[0]`, and a SKIPPED rung 1a consumes index 0 without
+  // opening a load window — which would have switched both off on every machine that skips it.
+  it('still prefetches and samples the load when rung 1a is skipped', async () => {
+    const h = ladderHarness({ probe: [] })
+    await h.factory({ ...mtpOpts, weightPaths: ['/w.gguf', '/mmproj.gguf'] }).start()
+    expect(h.prefetches).toHaveLength(1)
+    expect(h.prefetches[0].paths).toEqual(['/w.gguf', '/mmproj.gguf'])
+    expect(h.prefetchEvents[0].event).toBe('started')
+  })
+
+  it('does NOT re-prefetch for the plain rung after rung 1a actually opened a load window', async () => {
+    const h = ladderHarness({ failFirst: 1, probe: [BIG] })
+    await h.factory(mtpOpts).start()
+    expect(h.calls).toHaveLength(2)
+    expect(h.prefetches).toHaveLength(1) // the failed attempt already warmed the page cache
+  })
+})
+
+describe('createSpeculativeCrashAutoFallback (#182)', () => {
+  const info: UnexpectedExitInfo = { exitCode: 1, exitSignal: null, stderrTail: 'ggml assert' }
+  const startOpts: RuntimeStartOptions = { modelId: 'm', modelPath: '/w.gguf', contextTokens: 2048 }
+
+  it('restarts once and notifies WITHOUT the compatibility-mode (slower answers) copy', async () => {
+    const restarts: RuntimeStartOptions[] = []
+    const notices: string[] = []
+    const reasons: string[] = []
+    const handler = createSpeculativeCrashAutoFallback({
+      restart: async (o) => void restarts.push(o),
+      onCrash: (r) => reasons.push(r),
+      notify: (m) => notices.push(m)
+    })
+    handler(startOpts, info)
+    handler(startOpts, info) // re-entrancy guard: one restart, never a loop
+    await until(() => restarts.length > 0)
+    expect(restarts).toHaveLength(1)
+    expect(notices).toEqual([SPEED_UP_DISABLED_NOTICE])
+    expect(notices[0]).not.toBe(COMPATIBILITY_MODE_NOTICE)
+    expect(reasons[0]).toContain('ggml assert')
+  })
+
+  it('re-arms after a restart that throws synchronously (the M-C3 class)', async () => {
+    let calls = 0
+    const handler = createSpeculativeCrashAutoFallback({
+      restart: () => {
+        calls++
+        throw new Error('sync boom')
+      }
+    })
+    handler(startOpts, info)
+    handler(startOpts, info)
+    expect(calls).toBe(2)
   })
 })

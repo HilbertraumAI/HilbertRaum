@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { clearSpeculativeSuppression } from '../services/runtime/factory'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { AppSettings, BenchmarkResult, GpuDevice } from '../../shared/types'
@@ -145,9 +146,15 @@ export function maybeRunFirstBenchmark(ctx: AppContext): void {
  * a probe that timed out once (cold/wedged driver) stays cached for the session and
  * would keep labeling a now-working GPU machine as CPU. Invalidate the cache, clear
  * the flags, re-probe + persist, and hand the renderer the fresh settings.
+ *
+ * #182: the session latch that switches the speculative rung off after one bad attempt is
+ * the same shape of sticky, hardware-derived "no" — this button is the user asking for the
+ * accelerated paths back, so it re-arms that too (the ladder's VRAM/probe guard still has
+ * the final say on the next start).
  */
 export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
   ctx.probeGpu?.invalidate?.()
+  clearSpeculativeSuppression()
   updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null })
   await probeAndPersistGpu(ctx)
   return getSettings(ctx.db)

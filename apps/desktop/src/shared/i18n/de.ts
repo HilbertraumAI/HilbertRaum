@@ -2009,6 +2009,11 @@ export const de: Record<keyof typeof en, string> = {
   'main.runtime.compatibilityMode':
     'Aus Stabilitätsgründen in den Kompatibilitätsmodus gewechselt. Alles funktioniert ' +
     'weiter — Antworten können etwas langsamer sein.',
+  // Issue #182: Die spekulative Beschleunigung ist mitten in der Antwort abgestürzt. Die
+  // Grafikkarte bleibt in Betrieb — nur die optionale Beschleunigung ist aus.
+  'main.runtime.speedUpDisabled':
+    'Eine optionale Beschleunigung wurde aus Stabilitätsgründen abgeschaltet. Das Modell ' +
+    'startet neu — schick deine Nachricht bitte noch einmal.',
   'main.noModelRunning':
     'Es läuft kein KI-Modell. Öffne den KI-Modell-Bereich und starte zuerst eines.',
   'main.translation.noModel':

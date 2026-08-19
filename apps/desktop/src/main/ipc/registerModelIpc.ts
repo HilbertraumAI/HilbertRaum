@@ -172,7 +172,10 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     weightBytes: manifestReadBytes(ctx.paths.rootPath, found.manifest),
     // #114: the same file set as paths, in load order — the concurrent prefetch
     // reads them sequentially alongside the first rung's load.
-    weightPaths: manifestFiles(ctx.paths.rootPath, found.manifest).map((f) => f.path)
+    weightPaths: manifestFiles(ctx.paths.rootPath, found.manifest).map((f) => f.path),
+    // #182: the manifest's opt-in, not a decision. The ladder gates it on the hardware it
+    // actually finds and silently drops it when the machine cannot benefit.
+    speculativeDecoding: found.manifest.speculativeDecoding ?? null
   })
   perfMark('runtime_ready', {
     modelId,
