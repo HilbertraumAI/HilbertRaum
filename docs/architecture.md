@@ -10848,12 +10848,22 @@ in under a different letter and confirming export, preview, delete, and re-index
 **BUILD_STATE §5 item 1's "second-laptop continuity check"**, which remains OPEN: this wave makes
 the code correct, but the check is only *answered* by a real run.
 
-**Also outstanding: the root-cause diagnostic on the reporting drive was never run.** The fix is
-correct in either world — D-1 and the resolver stand on their own — but two questions are still
-open on that specific drive: whether its rows are in fact stale (the issue reports "Vorschau
-works" alongside an export failure, and preview and export share the same ladder, so those two
-observations cannot both describe the same document), and how many orphaned `.enc` files past
-silent deletes left behind (D4). Both are tracked as **issue #190**.
+**The root-cause diagnostic on the reporting drive — RUN, and its questions ANSWERED (2026-08-20).**
+The fix was correct in either world — D-1 and the resolver stand on their own — but two questions
+were open on that specific drive: whether its rows are in fact stale, and how many orphaned `.enc`
+files past silent deletes left behind (D4). Both are now measured, on `G:\`, with the drive coming
+back byte-identical:
+
+- **Stale: yes, all of them — 24 rows, 24 stale, 24 healable, 0 with no copy anywhere.** The
+  relocation took the entire corpus at once and every byte is still at the canonical location, so
+  the #189 resolver heals all 24 on first read. #188 is confirmed outright, not merely plausible.
+- **Orphans: one, 115.2 KiB**, on a **v2** descriptor — so it costs nothing at rekey (D4 rider).
+  The `documents/` directory also held zero parse-transients and zero staged `.enc.new` files.
+- The `stored_name` column was **absent** (pre-#189 schema), which is what D8 exists for.
+
+The "Vorschau works alongside an export failure" contradiction is settled too, and **not** the way
+this record first guessed — see **§9**, which carries the measured report, the refutation, and the
+verification that replaced it.
 
 > **CORRECTION (issue #190, 2026-08-20).** This paragraph previously stated that the read-only
 > diagnostic "was written and smoke-tested against a synthetic vault" and only needed the owner's
@@ -10863,7 +10873,8 @@ silent deletes left behind (D4). Both are tracked as **issue #190**.
 > lesson is the doc-lifecycle rule's own: a design record may cite a working paper's *reasoning*,
 > never inherit its *artifacts* — anything a later wave has to run has to be in the tree.
 >
-> It has been rebuilt, in the tree, and is CI-proven rather than smoke-tested. See **§9** below.
+> It has been rebuilt, in the tree, is CI-proven rather than smoke-tested, and has now been run for
+> real. See **§9** below.
 
 ### §7 §-anchor legend
 
@@ -10902,7 +10913,7 @@ checked — reinstating the old wording turns it red), following the DEP-3 merma
 **This is the standing argument for the gate order `typecheck → build → test`.** Neither typecheck
 nor the suite can see this class; only the build can.
 
-### §9 The stored-copy diagnostic, as rebuilt (issue #190 phase 1, 2026-08-20)
+### §9 The stored-copy diagnostic, as rebuilt and as run (issue #190 phases 1–2, 2026-08-20)
 
 The read-only diagnostic §6 wrongly claimed to exist now does exist, in the tree, split so that
 everything except the drive itself is proven by CI:
@@ -10912,7 +10923,9 @@ everything except the drive itself is proven by CI:
 | `apps/desktop/tests/helpers/stored-copy-audit.ts` | The **pure classifier + report renderer**. Takes rows + a directory listing, returns a report. No fs, no crypto, no I/O. |
 | `apps/desktop/tests/helpers/stored-copy-audit-run.ts` | The **read-only collector**: copy → decrypt the copy → open read-only → probe the schema → query → walk `documents/` → classify → shred the scratch. |
 | `apps/desktop/tests/helpers/read-only-witness.ts` | The **witness**: fingerprints a tree (path + size + mtime of every entry) so "it never writes to the drive" is an assertion, not a claim. |
-| `apps/desktop/tests/manual/stored-copy-diagnostic.test.ts` | The **operator shell**, env-gated on `HILBERTRAUM_STORED_COPY_AUDIT` in the `tests/manual/*-smoke.test.ts` shape. Hidden TTY password prompt. |
+| `apps/desktop/tests/manual/stored-copy-diagnostic.test.ts` | The **operator shell**, env-gated on `HILBERTRAUM_STORED_COPY_AUDIT` in the `tests/manual/*-smoke.test.ts` shape. Hidden password prompt read from the console DEVICE (§9.3). |
+| `apps/desktop/tests/helpers/console-password.ts` | The **console password prompt** (§9.3): opens the terminal DEVICE (`\\.\CONIN$` / `/dev/tty`) in raw mode, or fails fast with a recipe. Never `process.stdin`. |
+| `apps/desktop/tests/unit/console-password.test.ts` | CI proof for the non-TTY path: the forked worker’s own piped stdin, the fail-fast text, the no-cooked-fallback refusal, and a source pin on the harness. |
 | `apps/desktop/tests/unit/stored-copy-audit.test.ts` | Classifier fixtures, the mutation guards, the public-safety assertion, and the `node:sqlite` `{ readOnly: true }` floor probe (CI runs both ends of `engines.node`). |
 | `apps/desktop/tests/integration/stored-copy-audit-run.test.ts` | The collector end-to-end against a **synthetic vault** (v2, legacy v1, and `plaintext_dev`) with exact counts, plus the witness on each branch. |
 
@@ -10969,24 +10982,125 @@ in the scratch-containment check, which lets `…/driveX` pass as outside `…/d
 the drive, which the witness caught on both the encrypted and the plaintext branch; (g) dropping
 the id-based ownership of D10, which re-creates the phantom orphan the smoke found.
 
-**The extension histogram is a required output, and it is what settles #190 checkbox 3.** The
-issue records "Vorschau works" alongside the export failure; pre-#189 the preview and export
-ladders were structurally identical (`stored_path` → `original_path` → throw), so they cannot
-disagree about the same document. The exception is **audio**, whose preview reads the stored
-CHUNKS via `audioSegmentsFromChunks` and never touches the file at all. OCR'd PDFs do **not**
-qualify — `ocrPages` feeds the parser, which still needs the file. So **one audio document explains
-both observations with no contradiction**, which is the leading hypothesis; the fallbacks are two
-different documents or two different sessions. The histogram plus the per-row shape tokens
-distinguish all three.
+### §9.1 The measured run (2026-08-20, `G:\`) — and the hypothesis it refuted
+
+The report, verbatim as pasted into #190. The drive was byte-identical afterwards (the §D11
+witness passed), and one row carries no `original_path` — a generated document, which
+`setDocumentOrigin` nulls by design.
+
+```
+workspace mode          encrypted
+vault descriptor        v2
+stored_name column      ABSENT (pre-#189 schema)
+stored_name populated   0 / 24
+
+(1) documents rows      24        all indexed
+(2) stale stored_path   24
+(3)   of those healable 24
+      of those unnamed   0
+(4) no copy anywhere     0
+    never stored a copy  0
+    resolved as recorded 0
+(5) ORPHAN .enc files    1        115.2 KiB   token: 72957f7f pdf <1M
+(6) file classes        stored-copy 25 (2.1 MiB); parse-transient 0; rekey-staged 0;
+                        write-temp 0; unknown 0
+(7) extension classes   pdf 17, docx 6, md 1     -> audio rows 0
+(10) at rest            .recovery no, -wal no, -shm no, db .enc.new no
+```
+
+**#188 confirmed outright.** 24/24 stale, 24/24 healable, 0 with no copy anywhere: the drive-letter
+relocation took the whole corpus stale in one step and every byte is still at the canonical
+location, so the resolver heals all 24 on first read. **Field residue is one orphan, 115.2 KiB, on
+a v2 descriptor** — the cheap side of the D4-rider asymmetry (a v2 rekey is the O(1) key re-wrap,
+so this orphan costs nothing at a password change), and the directory holds no transients and no
+staged rekey files, so nothing is mid-flight. That is the whole input to the checkbox-2 cleanup
+decision, and it is a much smaller number than "leave them" was defended against.
+
+**The extension histogram was the required output for #190 checkbox 3, and it REFUTED this
+record's own leading hypothesis.** §9 previously argued that the issue's "Vorschau works" alongside
+the export failure was explained by **one audio document**, whose preview reads the stored CHUNKS
+via `audioSegmentsFromChunks` and never touches the file. **Audio rows = 0.** There is no audio
+document on that drive, so that explanation is dead — pdf 17 / docx 6 / md 1 is the whole corpus,
+and every one of those classes needs the file.
+
+**What replaced it, verified against the pre-#189 code rather than traced.** The temporal reading
+below rests on the claim that preview and export shared one ladder — the same trace that produced
+the refuted audio hypothesis — so it was re-walked directly against the pre-#189 tree
+(`2151e445`, the commit before the #189 fix), covering every path the Vorschau modal can reach and
+every path "Originaldatei exportieren" can reach:
+
+| Path | Ladder, pre-#189 | Chunk-backed or cached? |
+|---|---|---|
+| `extractDocumentPreview` (non-audio) | `stored_path` → `original_path` → throw `main.docs.previewGone` | no |
+| `extractDocumentPreview` (audio) | stored `chunks` only | **yes — the sole exception** |
+| `extractDocumentPreviewPage` (what the modal actually calls) | thin slice wrapper over the above | no |
+| `readStoredDocumentBytes` ("Originaldatei exportieren") | `stored_path` → `original_path` → throw `main.docs.exportGone` | no |
+| `readStoredDocumentText` (`docs:export`) | same, after a text-extension gate | no |
+| `buildDocumentSegmentReader` (skills / translate / compare) | `extractDocumentPreview` | no |
+
+Three further checks close the fan-in: the modal is opened by `setPreview(await previewDocument(id))`
+in `DocumentsScreen`, so a thrown preview **never opens a modal** (the failure lands in the screen
+banner instead); the modal's own extra sources are the persisted summary and coverage, both
+DB-only, and it is only reachable once the preview resolved; and OCR'd PDFs do **not** qualify as a
+second exception — `ocrPages` feeds the parser, which still needs the file. Even the two German
+strings are near-identical (`main.docs.previewGone` / `main.docs.exportGone` both open "Die
+Dokumentdatei ist nicht mehr vorhanden."), differing only in the trailing infinitive.
+
+So with 24/24 stale under pre-#189 code, **preview failed for every document on that drive**,
+including the generated `.md` row whose `original_path` is null. The two observations therefore
+cannot be concurrent: the contradiction is **TEMPORAL** — two sessions, with the "Vorschau works"
+observation predating the drive-letter change — not per-document. Nothing in the fix depends on
+this; it is recorded because the issue's narrative did.
+
+### §9.2 What is still owner-owned
 
 **Deliberately not built (issue #190 phases 3–4).** No cleanup, no sweep, not even an opt-in one:
-the posture is an owner decision that needs the orphan count and the descriptor version first (D4
-rider above). If it is ever built it must be explicit, owner-confirmed, unlocked-only, and refuse
-to start with an import or a rekey in flight — D4's race is the whole problem. The second-laptop
-continuity check (BUILD_STATE §5 item 1) is likewise a human run, but the diagnostic **doubles as
-its evidence collector**: run it before and after the relocation and the `stale` / `healable` /
-`stored_name populated` triple is exactly the "rows self-heal on first read" proof that check owes,
-in a form that can be pasted into the issue.
+the posture is an owner decision, and it needed the orphan count and the descriptor version first
+(D4 rider above) — which §9.1 now supplies, at n=1 on a v2 vault. If it is ever built it must be
+explicit, owner-confirmed, unlocked-only, and refuse to start with an import or a rekey in flight —
+D4's race is the whole problem. The second-laptop continuity check (BUILD_STATE §5 item 1) is
+likewise a human run, but the diagnostic **doubles as its evidence collector**: the §9.1 run is
+already a valid **"before" snapshot**, and re-running it after the relocation gives the
+`stale` / `healable` / `stored_name populated` triple — exactly the "rows self-heal on first read"
+proof that check owes, in a form that can be pasted into the issue (it should read 0 stale and
+24 populated once each document has been read once).
+
+### §9.3 The password prompt had to bypass `process.stdin` (phase 2)
+
+The first harness prompted only `if (process.stdin.isTTY)`. **Vitest runs every test file in a
+forked worker whose stdin is a pipe**, so that branch is dead in the only process that ever
+executes it — the hidden prompt could not fire from a fully interactive PowerShell, and the failure
+text told the operator to "re-run from an interactive shell", which cannot help. The §9.1 run
+worked only through the env-var fallback, the variant with the shell-history hazard.
+
+**D12 — talk to the console device, not to the process's streams.** `tests/helpers/console-password.ts`
+opens `\\.\CONIN$` / `\\.\CONOUT$` on Windows and `/dev/tty` on POSIX. Two details are load-bearing
+and each cost a probe: the Windows path must be the **device form** (`//./CONIN$`) because libuv
+makes a bare `CONIN$` absolute against the cwd and turns it into ENOENT, and it must be opened
+**read-write** (`r+`) because `SetConsoleMode` needs `GENERIC_READ | GENERIC_WRITE` — a `'r'` open
+fails `setRawMode` with EPERM. The prompt is written to the console handle too, since vitest
+captures `process.stdout`.
+
+**D13 — echo suppression is delegated, and its absence is fatal rather than degraded.** Node
+exposes no console-mode API, so raw mode comes from `tty.ReadStream.setRawMode(true)` — libuv's
+`uv_tty_set_mode(UV_TTY_MODE_RAW)`, which clears `ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT` on Windows
+and drops ECHO/ICANON on POSIX. Raw mode is probed **as part of opening**; if it is refused the
+opener returns `null` and the harness **fails fast** with a copy-pasteable
+`Read-Host -AsSecureString` / `read -rs` recipe for the env var. There is deliberately no cooked
+fallback: a half-hidden prompt echoes the workspace password onto the screen, which is worse than
+no prompt on a product whose premise is that nothing leaves the space.
+
+CI covers everything except a human typing, and the coverage is the defect's own witness rather
+than a simulation of it: `tests/unit/console-password.test.ts` runs **in that same forked worker**,
+so it asserts `process.stdin.isTTY` is falsy directly, then pins the fail-fast message (the recipe,
+the env var, the history hazard, and the *absence* of the "interactive shell" advice), the refusal
+to resolve from a console that could not be put into raw mode, and a source pin on the harness —
+mutation-checked by reinstating the `isTTY` gate, which turns it red.
+
+One more operator-facing correction rides along: `npx` is blocked by the PowerShell execution
+policy on the maintainer's machine (its shim is a `.ps1`), so the header now documents
+`..\..\node_modules\.bin\vitest.cmd run tests/manual/stored-copy-diagnostic.test.ts` from
+`apps/desktop/`.
 
 ## Model occupancy — design record (issues #185/#186, §1–§6)
 

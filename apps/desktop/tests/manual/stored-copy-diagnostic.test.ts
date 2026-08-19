@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runStoredCopyAudit, isUnder } from '../helpers/stored-copy-audit-run'
 import { fingerprintTree, treeUnchanged } from '../helpers/read-only-witness'
+import { PASSWORD_ENV_VAR, promptHiddenPassword } from '../helpers/console-password'
 
 // MANUAL stored-copy diagnostic (issue #190 checkbox 1) — NOT CI.
 //
@@ -13,27 +14,40 @@ import { fingerprintTree, treeUnchanged } from '../helpers/read-only-witness'
 // be CI'd is pointing it at the real prepared drive, which needs the drive and the owner's
 // password — hence the env gate, in the shape of the other `tests/manual/*-smoke.test.ts` files.
 //
+// RUN OF RECORD: 2026-08-20 against the prepared drive on `G:\` (encrypted, v2 descriptor,
+// pre-#189 schema). 24/24 rows stale, 24/24 healable, 1 orphan (115.2 KiB), tree byte-identical.
+// The measured report and what it settles are in `docs/architecture.md` §9.
+//
 // ---------------------------------------------------------------------------------------------
-// RUN IT
+// RUN IT — from `apps/desktop/`.
 //
 //   PowerShell (Windows — the reporting drive):
-//     $env:HILBERTRAUM_STORED_COPY_AUDIT = "H:\"          # the drive ROOT (holds config\ + workspace\)
-//     npx vitest run tests/manual/stored-copy-diagnostic.test.ts
+//     $env:HILBERTRAUM_STORED_COPY_AUDIT = "G:\"          # the drive ROOT (holds config\ + workspace\)
+//     ..\..\node_modules\.bin\vitest.cmd run tests/manual/stored-copy-diagnostic.test.ts
 //
 //   bash / zsh (macOS, Linux):
 //     HILBERTRAUM_STORED_COPY_AUDIT=/Volumes/HILBERTRAUM \
-//       npx vitest run tests/manual/stored-copy-diagnostic.test.ts
+//       ../../node_modules/.bin/vitest run tests/manual/stored-copy-diagnostic.test.ts
 //
-//   Run it from `apps/desktop/`. The report is printed to stdout; add
+//   Use those paths, NOT `npx` — it is blocked by the PowerShell execution policy on the
+//   maintainer's machine (its shim is a `.ps1`). The `node_modules/.bin/vitest.cmd` form above is
+//   a `.cmd` and runs under any policy. The report is printed to stdout; add
 //   HILBERTRAUM_STORED_COPY_AUDIT_OUT=<file> to also write it somewhere you can copy from.
 //
-// THE PASSWORD. The harness prompts on the terminal (no echo) whenever stdin is a TTY, which is
-// the way to supply it: nothing is recorded anywhere. If you must run non-interactively, set
-//   HILBERTRAUM_STORED_COPY_AUDIT_PASSWORD=…
-// and understand the hazard: an environment variable typed at a shell lands in that shell's
-// HISTORY (bash `~/.bash_history`, PowerShell's PSReadLine `ConsoleHost_history.txt`, which is a
-// plain file in your roaming profile) and is readable in the process environment by anything
-// running as you. Prefer the prompt. A `plaintext_dev` workspace needs no password at all.
+// THE PASSWORD. The harness prompts on the CONSOLE with the input hidden — `\\.\CONIN$` on
+// Windows, `/dev/tty` on POSIX, in raw mode, opened directly. It deliberately does NOT look at
+// `process.stdin`: vitest runs this file in a forked worker whose stdin is a pipe, so
+// `process.stdin.isTTY` is always false and a prompt gated on it can never fire, however
+// interactive your shell is (measured on Windows PowerShell, 2026-08-20 — it is why the run of
+// record had to use the env var). Nothing is recorded anywhere.
+//
+// If there is no console at all — CI, a detached process, a redirected terminal — the run FAILS
+// FAST with the exact recipe for setting `HILBERTRAUM_STORED_COPY_AUDIT_PASSWORD` from a hidden
+// prompt (`Read-Host -AsSecureString` / `read -rs`), because a value typed at a prompt does not
+// enter the shell history the way one typed on a command line does (bash `~/.bash_history`,
+// PowerShell's PSReadLine `ConsoleHost_history.txt` — a plain file in your roaming profile).
+// While it is set it is readable in the process environment by anything running as you, so clear
+// it afterwards. A `plaintext_dev` workspace needs no password at all.
 //
 // WHAT IT WILL NOT DO. It never writes to the drive: it copies `config/workspace.json` +
 // `workspace/hilbertraum.sqlite.enc` to a scratch directory in your temp dir, decrypts the COPY,
@@ -45,56 +59,14 @@ import { fingerprintTree, treeUnchanged } from '../helpers/read-only-witness'
 //
 // WHAT THE OUTPUT IS FOR. It is designed to be pasted verbatim into public issue #190: counts,
 // histograms, and shape tokens only — no titles, no content, no paths, no file names. Read it
-// once before pasting anyway (checklist in the PR body).
+// once before pasting anyway (checklist in the PR body). It is also the evidence collector for
+// the second-laptop continuity check (BUILD_STATE §5 item 1): run it before and after the
+// relocation and compare the stale / healable / `stored_name populated` triple.
 
 const ROOT = process.env.HILBERTRAUM_STORED_COPY_AUDIT?.trim() ?? ''
-const PASSWORD_ENV = process.env.HILBERTRAUM_STORED_COPY_AUDIT_PASSWORD ?? ''
+const PASSWORD_ENV = process.env[PASSWORD_ENV_VAR] ?? ''
 const OUT = process.env.HILBERTRAUM_STORED_COPY_AUDIT_OUT?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
-
-/** Read a password from the terminal without echoing it. Never logged, never persisted. */
-async function promptPassword(): Promise<string> {
-  const stdin = process.stdin
-  process.stdout.write('Workspace password (input hidden, Enter to submit): ')
-  return new Promise<string>((resolve, reject) => {
-    let buf = ''
-    const finish = (fn: () => void): void => {
-      stdin.removeListener('data', onData)
-      stdin.setRawMode?.(false)
-      stdin.pause()
-      process.stdout.write('\n')
-      fn()
-    }
-    const onData = (chunk: string): void => {
-      for (const ch of chunk) {
-        if (ch === '\r' || ch === '\n') {
-          const out = buf
-          buf = ''
-          finish(() => {
-            resolve(out)
-          })
-          return
-        }
-        if (ch === '\u0003') {
-          // Ctrl-C: abort the run rather than proceeding with a partial password.
-          finish(() => {
-            reject(new Error('cancelled'))
-          })
-          return
-        }
-        if (ch === '\u007f' || ch === '\b') {
-          buf = buf.slice(0, -1)
-          continue
-        }
-        buf += ch
-      }
-    }
-    stdin.setRawMode?.(true)
-    stdin.resume()
-    stdin.setEncoding('utf8')
-    stdin.on('data', onData)
-  })
-}
 
 describe.skipIf(!enabled)('HILBERTRAUM_STORED_COPY_AUDIT — read-only stored-copy diagnostic (#190)', () => {
   it(
@@ -113,16 +85,8 @@ describe.skipIf(!enabled)('HILBERTRAUM_STORED_COPY_AUDIT — read-only stored-co
 
       let password = PASSWORD_ENV
       const needsPassword = existsSync(join(ROOT, 'config', 'workspace.json'))
-      if (needsPassword && !password) {
-        if (!process.stdin.isTTY) {
-          throw new Error(
-            'This workspace is encrypted and stdin is not a terminal. Re-run from an interactive ' +
-              'shell for the hidden prompt, or set HILBERTRAUM_STORED_COPY_AUDIT_PASSWORD (see the ' +
-              'shell-history hazard in this file’s header).'
-          )
-        }
-        password = await promptPassword()
-      }
+      // The console prompt, or a fail-fast carrying the recipe. Never an echoing fallback.
+      if (needsPassword && !password) password = await promptHiddenPassword()
 
       // The read-only witness. Anything that moves between these two fingerprints — a size, an
       // mtime, an added or removed path — fails the run and is a defect in the tool, not in the

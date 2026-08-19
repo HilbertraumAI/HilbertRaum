@@ -19,6 +19,34 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-20 — **The diagnostic RAN on the real drive (G:\), and it refuted our own leading
+hypothesis — issue #190 checkbox 1 ANSWERED, checkbox 3 re-answered.**_ Measured, drive byte-identical
+(the read-only witness passed): encrypted workspace, **v2** descriptor, `stored_name` column ABSENT
+(pre-#189 schema), **24 rows, 24 stale, 24 healable, 0 unnamed, 0 with no copy anywhere**; **1 orphan
+`.enc`, 115.2 KiB**; file classes stored-copy 25 (2.1 MiB) with **zero** parse-transients and **zero**
+staged rekey files; extensions pdf 17 / docx 6 / md 1; nothing at rest (.recovery, -wal, -shm,
+`.enc.new` all absent). So **#188 is confirmed outright** — drive-letter relocation took the whole
+corpus stale at once, every byte still at the canonical location, and the #189 resolver heals all 24
+on first read. **But `audio` rows = 0, which kills the record's leading explanation of checkbox 3**
+("one audio document previews from chunks while export fails"). The replacement, re-verified against
+the pre-#189 code rather than traced: `extractDocumentPreview` and `readStoredDocumentBytes` had
+*identical* ladders (`stored_path` → `original_path` → throw), audio was the only chunk-backed branch,
+the Vorschau modal never opens on a failed preview, and there is no cache — so with 24/24 stale,
+preview failed for EVERY document on that drive. The contradiction is **TEMPORAL** (the "Vorschau
+works" observation predates the relocation), not per-document. `architecture.md` §9 and §6 corrected.
+**Harness fix (phase 2):** the password prompt was gated on `process.stdin.isTTY`, which vitest's
+FORKED WORKER makes permanently false — the hidden prompt could never fire from any shell, and the
+failure text told the operator to "re-run from an interactive shell", which cannot help. It now reads
+the console DEVICE directly (`\\.\CONIN$` / `/dev/tty`, opened `r+` so `SetConsoleMode` is permitted,
+raw mode via libuv = echo off); no console ⇒ **fail fast** with the copy-pasteable
+`Read-Host -AsSecureString` / `read -rs` recipe, never a cooked read that would echo the password.
+New `tests/helpers/console-password.ts` + `tests/unit/console-password.test.ts` (5 tests — the
+worker's own non-TTY stdin is the witness; the source pin was mutation-checked). The header now
+carries the invocation that actually works here: `..\..\node_modules\.bin\vitest.cmd` — `npx` is
+blocked by this machine's PowerShell execution policy. **Still owner-owned:** checkbox 2 (cleanup
+posture — a recommendation is written, no sweep built) and checkbox 4 (second-laptop continuity; the
+G:\ run above is a valid "before" snapshot for it).
+
 _2026-08-20 — **Stored-copy diagnostic REBUILT — issue #190 phase 1 (no hardware, no password, fully
 CI-verified).**_ `architecture.md` §6 said the #188 root-cause diagnostic "was written and
 smoke-tested against a synthetic vault" and only needed the owner's password. **It never existed**:
@@ -48,125 +76,13 @@ every orphan and stages an `.enc.new` for each (a v2 rekey is O(1) and does not)
 why the report carries the descriptor version. **Deliberately not built:** any cleanup/sweep —
 #190 checkbox 2 is an owner decision that needs the orphan count first. Suite 5363/361 files green.
 
-_2026-08-19 — **Model occupancy — wave CLOSED (issues #185/#186).**_ The two issues the local-API
-wave filed out of scope were one defect seen from two sides, and were fixed together as both asked.
-"Who has the model" was answered by three registries and one hole: chat had `inFlightStreams`, doc
-tasks had their queue, **skill runs had per-DOCUMENT bookkeeping that is not a global busy signal
-(#186), and the benchmark had nothing at all (#185)** — so `startSkillRun` consulted neither of the
-other two, and two Diagnostics clicks (or one during a chat answer) both reached the model. The
-generation gate could not be the fix: it counts in-flight `chatStream` **pulls**, so a multi-step
-job reads IDLE between two of its own calls and a guard riding it would admit a second job into that
-gap. Shape: a **span** registry (`services/runtime/occupancy.ts`) on the `RuntimeManager`, held by
-the three BACKGROUND lanes only — chat keeps `inFlightStreams` as its one record, and the guards
-compose the sources (`ipc/model-busy.ts`) rather than mirroring them. `isExternallyBusy()` folds the
-spans in, so the local API now waits on a background job honestly instead of slipping into its gap.
-The skill lane is **declared in the descriptor table** (`SkillToolDescriptor.modelLane`), pinned to
-the dispatch by a source test — `'direct'` (redact/edit) takes a span, `'doctask'`
-(`categorize_transactions`) takes NONE, because its model call happens inside a task it enqueues and
-a span there would refuse its own task (the D26 deadlock). Two non-guards are load-bearing: a doc
-task never refuses on the doc-task span it holds itself (the #38 tree→extract chain enqueues from
-inside `run()`), and **chat is never refused by the benchmark** — the first-run benchmark fires right
-after unlock, so it YIELDS instead: the tokens/sec probe re-checks before it starts and on every
-chunk and **discards** a contended reading, which matters because a depressed reading steps the
-profile AND the recommendation down and is then PERSISTED (the one case where the issues'
-"degraded, not corruption" understates it). The discard raises the new persist-canonical
-`warnSpeedSkipped` — never a silent hole. **Durable record:** `docs/architecture.md` "Model
-occupancy — design record (issues #185/#186, §1–§6)" — decisions D1–D8, the full exclusion table,
-the leak posture, and what the wave deliberately did not do. **User-facing:**
-`docs/troubleshooting.md` "The model is busy — one job at a time". Suite 5312/50; 39 new tests in
-`model-occupancy.test.ts` + `model-occupancy-ipc.test.ts`. No hardware gate owed — every lane is
-exercised by scripted fake runtimes.
-
-_2026-08-19 — **MTP speculative decoding — wave CLOSED in code, TWO HARDWARE GATES OWED (issue
-#182).**_ The Qwen3.8 GGUFs already contained a trained-in draft head (`blk.64.nextn.*`) that
-llama-server loaded and ignored — the "unused tensor" warnings in every §4 log were the feature
-sitting unused. `qwen3.8-27b-q4` and `qwen3.8-27b-q5` now carry a new manifest field
-`speculative_decoding: mtp`, worth a **measured +38–45 % decode** on the §9.4 rig. Shape:
-the manifest **opts in**, the start ladder **decides**. The field is a **closed enum** the runtime
-maps to a fixed flag pair, never a free-form arg list — manifests are on-drive and user-editable,
-and `buildArgs` appends extras LAST, so a smuggled `--host 0.0.0.0` would beat the loopback-only
-invariant. Mechanism: a new **rung 1a** above the plain GPU rung, so rung 1 IS the automatic
-fallback (an older runtime, a weight without the head, a driver refusal → one failed attempt, then
-exactly today's behavior). Three guards, all conservative-by-construction because llama.cpp answers
-a VRAM shortfall by *silently offloading fewer layers* rather than failing (the #42 class): the rung
-is skipped unless the session-cached probe shows ONE device with the weight's bytes + 3.5 GiB free
-(the measured sum — it independently reproduces "Q6_K does not fit 24 GB"); a rung-1a start failure
-never persists `gpuAutoDisabled` and latches the model off for the session; a mid-session rung-1a
-crash takes its own handler that restarts **on the GPU** with MTP off, instead of exiling the
-machine to CPU over an optional speed-up. Forced-CPU rungs never carry the flags — that is issue
-gate 3 ("harmless on CPU, or drop it off-GPU") closed structurally, without hardware. "Try GPU
-again" re-arms the latch. **Durable record:** `docs/architecture.md` "MTP speculative decoding —
-design record (issue #182, §1–§7)" — decisions, the precondition arithmetic, the failure paths, and
-what the wave deliberately did not do. Field reference: `docs/model-policy.md` "Manifest fields";
-status + gate figures: `docs/model-benchmarks.md` §9.4 "Gate results". **Both hardware gates RAN
-AND PASSED 2026-08-19 on the i9-9900X + RTX 3090 rig** (tracked in §5 item 8b): the §2 grounded-QA
-re-run with MTP on held score parity inside cross-run tolerance for both quants (q4 F1 .3499 vs
-.3500, q5 .3518 vs .3523; zero hallucinations and 1.0000 unanswerable-abstention held; 92/100 resp.
-91/100 answers byte-identical, every diff a near-tie token flip), and the §9.1 smoke legs on the
-b9849 pin passed for both quants incl. rung-1a selection, full offload with 24 GB headroom (peak
-VRAM 19.7 / 21.5 GiB), clean teardown, and the shim-forced fall-through + re-arm legs. No RAM/VRAM
-line was retuned: the manifests keep their pre-MTP measured numbers until re-measured with the
-flag on.
-
-_2026-08-19 — **Portable stored copies — wave CLOSED (issue #188).**_ `documents.stored_path` was
-persisted **absolute** and consumed with a bare `existsSync` at six hand-written ladders, so a
-portable drive returning under a different mount point took **every** stored copy stale at once —
-row intact, bytes intact, only the recorded string wrong. It was the **last absolute path in
-persisted state** (images, skills, checksum cache, runtime marker and `source_relative_path` had
-each already been made portable by a named prior finding), and the vault layer already disagreed:
-rekey enumerates `workspace/documents/` by directory walk. The reported export failure was the
-SMALLEST of three defects sharing that cause: **"Delete document" silently did not delete** — the
-shred's `existsSync` guard conflated "already gone, nothing to do" with "I looked in the wrong
-place", leaving encrypted user content on the drive with no row left to ever reference it
-(**measured** pre-fix, not inferred) — and re-index degraded a healthy row to `failed`. Fixed at
-the **resolver**, not the reporting screen: new `services/ingestion/stored-copy.ts` +
-`documents.stored_name` (portable leaf, lazily healed), adopted by all six sites including the
-shred; `DocumentInfo.storedCopy` so the `⋯` menu stops offering what cannot succeed;
-`original_path` demoted to a sha256-checked last resort. **Durable record:** `docs/architecture.md`
-"Portable stored copies — design record (wave 188, issues #188/#190, §1–§9)" — decisions D1–D6, the
-safety guard the shred rests on, the verified-clean list, and the bundler landmine (§8: a string
-literal ending in the bare word `import` makes electron-vite wedge its CommonJS shim inside the
-literal; typecheck and the full suite pass and only `npm run build` fails — now tripwired in
-`repo-hygiene.test.ts`, and the standing argument for the typecheck → build → test gate order).
-**STILL OPEN, both now tracked in issue #190 (see the 2026-08-20 entry above):** the real
-relocated-drive run (the code is now correct; the second-laptop continuity check is only *answered*
-by hardware), and the read-only root-cause diagnostic on the reporting drive — which §6 wrongly
-claimed already existed. It has since been REBUILT and CI-proven (§9); running it on that drive
-needs the owner's password and would settle whether its rows are in fact stale (the issue reports
-"Vorschau works" alongside the export failure, and preview and export share one ladder, so both
-cannot describe the same document) and count the orphaned `.enc` files past silent deletes left
-behind.
-
-_2026-08-18 — **Local API endpoint — wave CLOSED (P1–P6), PR #184.**_ The loaded chat model
-can now be used by **other programs on the same computer** through an opt-in, loopback-only,
-OpenAI-compatible endpoint — **off by default**, behind a consent dialog, access-key-protected by
-default, existing only while the workspace is unlocked, and forbiddable by drive policy. The wave
-also closed a latent gap it did not create: every `llama-server` sidecar is now authenticated with
-a per-spawn env-delivered key, redacted from every stderr-derived surface. **Durable record:**
-`docs/architecture.md` "Local API endpoint — design record (wave local-api, PR #184, §1–§9)" —
-decisions D1–D9, owner options O1–O6, the as-built gate/HTTP/UX design, the deliberate omissions,
-what the audits changed, and the §-anchor legend for the retired plan's citations. **Security half:**
-`docs/security-model.md` "The fifth threat: same-machine processes". **Wire contract:**
-`docs/data-contracts.md`. **User-facing:** `PRIVACY.md`, `SECURITY.md`, `docs/user-guide.md`
-("Use HilbertRaum from other apps"), `docs/troubleshooting.md` ("Connecting another app").
-Citations use PR # + the `local-api-p<N>` phase prefix + a record §, never a branch SHA (O6 —
-the repo squash-merges). **Filed out of scope, deliberately** (pre-existing in-app concurrency the
-new gate makes visible but does not serialize): the benchmark has no re-entrancy guard, and a skill
-run can generate alongside a chat stream — filed as **#185** and **#186** (both CLOSED 2026-08-19, see the model-occupancy entry above). **Post-closeout fix (owner decision 2026-08-18, prompted by a REAL attached drive):** a `policy.json` that PREDATES `allow_local_api` now inherits the permissive default instead of a packaged build's STRICT base — otherwise every drive already in the field would have read "turned off by your drive's policy" with no way to distinguish that from a deliberate ban. An explicit `false` still denies (O4 intact); a junk value and a malformed file still fail closed. Recorded as **O4b** in the design record. **Real-model smoke DONE 2026-08-18** on a real attached drive (H:, prepared "lite", encrypted
-workspace, pinned b9849 vulkan engine) against `gemma4-e2b-it-qat-q4` on GPU: default-off proven
-with the vault unlocked, 401 unauthenticated, a real non-streaming completion and a full streaming
-one, every Host/Origin/method/type refusal, **O5's dual loopback vindicated** (both `::1` and
-`localhost` answer on this Win11 box), 4×~10k-char endurance streams, **D8 pre-emption**
-(`preempted_by_user`, `[DONE]` absent) and **D7 lock kill** (`server_stopped` 449 ms BEFORE the
-vault teardown — the pinned stop-first order). Evidence table in the design record §9. Remaining
-manual gap: no PACKAGED-build smoke (this was a dev run via `HILBERTRAUM_DRIVE_ROOT`), and the
-key-off/regenerate dialogs were not captured.
-
-_Older dated entries (2026-08-16 and earlier) and the Skills S2–S12 handoff sections were
+_Older dated entries (2026-08-19 and earlier) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
 retention budget), the 2026-07-11…2026-08-16 closed-wave block on 2026-08-18 (pre-wave archive
-ritual) — citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
+ritual), and the four CLOSED waves of 2026-08-18/19 (local API #184, portable stored copies #188,
+MTP speculative decoding #182, model occupancy #185/#186) on 2026-08-20 for the retention budget —
+citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
 ---
@@ -1043,18 +959,23 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    moved-directory unit test is not a relocated drive. When it is finally run, cover **export
    original / preview / re-index / delete** on a workspace populated under a DIFFERENT letter, and
    confirm the rows self-heal (`documents.stored_name` populated after the first read).
-   **Also still owed (issue #190):** RUN the read-only stored-copy diagnostic on the reporting
-   drive. It exists as of 2026-08-20 and is CI-proven (architecture.md record §9); the run needs
-   the owner's password, and the tool never writes to the drive. From `apps/desktop/`, in an
-   interactive shell (it prompts for the password with no echo):
-   `$env:HILBERTRAUM_STORED_COPY_AUDIT = "H:\"; npx vitest run tests/manual/stored-copy-diagnostic.test.ts`
-   Its output is public-issue-safe by construction — paste it into #190. It settles whether that
-   drive's rows are stale, counts the orphaned `.enc` files left by past silent delete no-ops (the
-   number #190 checkbox 2 waits on), and its extension histogram settles the checkbox-3
-   contradiction (leading hypothesis: one AUDIO document — audio preview reads the stored chunks
-   and never touches the file). **It also doubles as the continuity check's evidence collector:**
-   run it before and after the relocation; `stale` / `healable` / `stored_name populated` is the
-   self-heal proof in pasteable form. The `electron-builder.yml` hooks + the pipeline are
+   **✅ The diagnostic half of issue #190 is DISCHARGED (2026-08-20).** The read-only stored-copy
+   diagnostic was RUN on the reporting drive (`G:\`) and the drive came back byte-identical:
+   **24 rows, 24 stale, 24 healable**, `stored_name` column absent (pre-#189 schema), **1 orphan
+   `.enc` (115.2 KiB)** on a **v2** descriptor, zero parse-transients, zero staged rekey files,
+   audio rows **0**. That confirms #188 outright and makes this drive a valid **"before" snapshot**
+   for the continuity check below — re-run the same command after the relocation and the
+   `stale` / `healable` / `stored_name populated` triple is the self-heal proof in pasteable form
+   (it should read 0 stale / 24 populated once the app has read each document once). From
+   `apps/desktop/` (the prompt is hidden and reads the console device, not stdin — `npx` is blocked
+   by this machine's execution policy, so use the `.cmd` shim):
+   `$env:HILBERTRAUM_STORED_COPY_AUDIT = "G:\"; ..\..\node_modules\.bin\vitest.cmd run tests/manual/stored-copy-diagnostic.test.ts`
+   Its output is public-issue-safe by construction — paste it into #190. **What it settled:**
+   checkbox 1 (yes, stale — all of them), the checkbox-2 number (one orphan), and checkbox 3 — for
+   which it **refuted** the record's leading "one AUDIO document" hypothesis (audio rows = 0). The
+   surviving answer is temporal: under pre-#189 code 24/24 stale means preview failed for every
+   document too, so the "Vorschau works" observation predates the relocation. See
+   `architecture.md` §9. The `electron-builder.yml` hooks + the pipeline are
    wired; only the secrets + hardware are missing. **GPU additions:** a SmartScreen sanity
    re-check (the Vulkan build adds one more unsigned DLL of the same class) and re-running
    `build-commercial-drive` end-to-end with the two-build fetch. **Phase-38 addition:** a
