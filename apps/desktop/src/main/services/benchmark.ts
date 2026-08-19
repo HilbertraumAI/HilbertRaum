@@ -218,9 +218,21 @@ export const BENCHMARK_TOKEN_TARGET = 64
  */
 export async function measureTokensPerSecond(
   runtime: ModelRuntime | null | undefined,
-  opts?: { signal?: AbortSignal }
+  opts?: { signal?: AbortSignal; modelBusy?: () => boolean; onBusySkip?: () => void }
 ): Promise<number | null> {
   if (!runtime) return null
+  // #185: refuse to measure a CONTENDED model. The benchmark's own admission guard already
+  // refused to start beside a chat answer or a document task, but the admission is followed by
+  // a GPU probe and an 8 MB drive probe — seconds in which the user can send a message. A
+  // reading taken while something else generates is not slow hardware, it is a shared slot, and
+  // a low reading is not cosmetic: it steps the profile down (VERY_LOW_TOKENS_PER_SECOND) and
+  // with it the recommended model, then PERSISTS that in `settings.lastBenchmark`. Null — the
+  // same value a machine with no runtime yields — is the honest answer, and the caller turns it
+  // into `warnSpeedSkipped` so the hole is never silent.
+  if (opts?.modelBusy?.()) {
+    opts.onBusySkip?.()
+    return null
+  }
   try {
     const t0 = performance.now()
     let count = 0
@@ -230,6 +242,14 @@ export async function measureTokensPerSecond(
     )) {
       count++
       if (count >= BENCHMARK_TOKEN_TARGET) break
+      // …and DISCARD a reading that became contended mid-probe (a message sent while the 64
+      // tokens stream). Breaking runs the generator's `return()`, so the runtime manager's
+      // generation gate decrements normally — an abandoned count is exactly what its epoch
+      // guard exists to catch, and this path never creates one.
+      if (opts?.modelBusy?.()) {
+        opts.onBusySkip?.()
+        return null
+      }
     }
     const seconds = (performance.now() - t0) / 1000
     if (count === 0 || seconds <= 0) return null
@@ -262,6 +282,13 @@ export interface WarningInputs {
   /** The measured figure named in the recommendation-lowered warning. */
   tokensPerSecond?: number | null
   /**
+   * True when the tokens/sec probe was DISCARDED because another lane was using the model
+   * (#185). Distinct from a plain absent reading (no runtime at all), which stays silent —
+   * this one says why the profile below has no speed input, so a re-run is an informed choice
+   * rather than a mystery.
+   */
+  speedSkipped?: boolean
+  /**
    * Honest effective read MB/s (#108/#110) — from a REAL model-load/checksum read, never
    * the probe's page-cached read leg. Gates the slow-read warning; null/absent (no
    * qualifying read yet — a fresh install) never warns. Preflight deliberately does not
@@ -288,6 +315,13 @@ export function buildWarnings(input: WarningInputs): string[] {
     warnings.push(t('en', 'main.benchmark.warnTiny'))
   } else if (input.profile === 'UNKNOWN') {
     warnings.push(t('en', 'main.benchmark.warnUnknown'))
+  }
+
+  // #185: say so when the speed leg was skipped because the model was busy elsewhere. Placed
+  // before the tok/s warnings below, which cannot fire in the same run (they all need a
+  // measured figure), so the two never contradict each other on one card.
+  if (input.speedSkipped) {
+    warnings.push(t('en', 'main.benchmark.warnSpeedSkipped'))
   }
 
   // Issue #52: the tok/s downgrade used to be completely silent — a crawl measured on an
@@ -390,6 +424,15 @@ export interface RunBenchmarkDeps {
    * module keeps its zero-`child_process`, probe-only I/O posture.
    */
   effectiveRead?: EffectiveReadSample | null
+  /**
+   * True while ANOTHER lane is using the chat model (#185) — injected by the caller
+   * (registerBenchmarkIpc binds it to `modelBusyLane`, ignoring the benchmark's own span).
+   * Consulted immediately before the tokens/sec probe and again on every streamed chunk: a
+   * contended reading measures a shared slot, not this computer, and it would be PERSISTED as
+   * a stepped-down profile + recommendation. Absent ⇒ measure unconditionally (today's
+   * behavior for every non-IPC caller, including the preflight harnesses).
+   */
+  modelBusy?: () => boolean
   /** Injectable clock for deterministic `ranAt` in tests. */
   now?: () => Date
 }
@@ -403,7 +446,15 @@ export interface RunBenchmarkDeps {
 export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkResult> {
   const sys = detectSystem()
   const drive = await measureDriveSpeed(deps.workspacePath)
-  const tokensPerSecond = await measureTokensPerSecond(deps.runtime ?? null)
+  // #185: `speedSkipped` distinguishes "no runtime was up, nothing to measure" (silent, the
+  // long-standing behavior) from "a runtime WAS up but something else was using it" (warned).
+  let speedSkipped = false
+  const tokensPerSecond = await measureTokensPerSecond(deps.runtime ?? null, {
+    modelBusy: deps.modelBusy,
+    onBusySkip: () => {
+      speedSkipped = true
+    }
+  })
   // Issue #52: record WHICH model produced the tok/s number — the currently loaded one,
   // which is often not the recommended one. null whenever nothing was measured.
   const measuredModelId = tokensPerSecond != null ? (deps.runtime?.modelId ?? null) : null
@@ -436,6 +487,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     measuredModelId,
     recommendationLowered,
     tokensPerSecond,
+    speedSkipped,
     effectiveReadMbps: deps.effectiveRead?.mbps ?? null
   })
 

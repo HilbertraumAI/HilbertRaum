@@ -38,7 +38,10 @@ export const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
   'main.benchmark.warnTiny',
   'main.benchmark.warnUnknown',
   'main.benchmark.warnDriveProbe',
-  'main.benchmark.warnSlowDrive'
+  'main.benchmark.warnSlowDrive',
+  // #185: the contended-probe warning is persisted into settings.lastBenchmark.warnings like
+  // its siblings, and carries no interpolated value — so it is exact-match, not INTERPOLATED.
+  'main.benchmark.warnSpeedSkipped'
 ]
 
 const KEY_BY_ENGLISH: ReadonlyMap<string, MessageKey> = new Map(

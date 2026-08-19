@@ -1,5 +1,9 @@
 import { statSync } from 'node:fs'
 import type { ChatDepthMode, JsonSchema, RuntimeStatus } from '../../../shared/types'
+import { ModelOccupancy } from './occupancy'
+
+export { ModelOccupancy } from './occupancy'
+export type { OccupancyLane } from './occupancy'
 
 // Runtime manager (spec §7.5). Defines the swappable ModelRuntime interface so the
 // mock runtime and the real llama.cpp sidecar are interchangeable behind the same
@@ -217,6 +221,17 @@ export class RuntimeManager {
    */
   private stopped = false
 
+  /**
+   * The background-job occupancy spans (issues #185/#186 — see `occupancy.ts`). It lives on
+   * the manager because the manager is the authority on who has the model: the generation
+   * gate below answers "is a `chatStream` pull in flight RIGHT NOW", this answers "is a
+   * multi-step background job holding the model across its own gaps". Every guard that has
+   * to refuse a second job reads this one; `isExternallyBusy` folds it in so the local API
+   * waits on a doc task / skill run / benchmark honestly instead of slipping into a gap
+   * between two of its model calls.
+   */
+  readonly occupancy = new ModelOccupancy()
+
   // ---- Generation gate ------------------------------------------------------------------
   //
   // Generation reaches the model through several lanes (chat/RAG streams, doc tasks, skill
@@ -269,9 +284,14 @@ export class RuntimeManager {
    * no active runtime — fail closed. `active()` is null through the whole start window,
    * which is exactly when the #109 warm-up generation streams against the inner rung
    * runtime, invisible to the gate; treating that window as busy closes it.
+   *
+   * #185/#186: a held occupancy span counts too. Without it a doc task, a skill run, or the
+   * benchmark would look idle in the gap between two of its own model calls, and an external
+   * request admitted into that gap would then interleave with the job's next call — the same
+   * defect the spans exist to close in-app, appearing on the external lane.
    */
   isExternallyBusy(): boolean {
-    return this.current == null || this.isGenerating()
+    return this.current == null || this.isGenerating() || this.occupancy.isBusy()
   }
 
   /** Register/clear the external pre-emption hook (one consumer: local-API admission). */

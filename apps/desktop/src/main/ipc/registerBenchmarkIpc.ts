@@ -10,6 +10,7 @@ import { discoverManifests } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
+import { modelBusyLane, modelBusyMessageKey } from './model-busy'
 import { log } from '../services/logging'
 
 // IPC for the hardware benchmark + model recommendation (spec §9.1, §11).
@@ -43,8 +44,37 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   return { name: devices[0]?.name ?? null, useful: gpuUsefulForProfile(devices) }
 }
 
-/** Run the benchmark and persist the result (the shared core of IPC + first-run). */
+/**
+ * Run the benchmark and persist the result (the shared core of IPC + first-run).
+ *
+ * #185 — the re-entrancy and busy guard. This is the only entry point (both the Diagnostics
+ * button and the first-run background call land here), and it had NO guard at all: two runs
+ * started in quick succession, or one started while a chat streamed, both reached the model.
+ * The guard is one read of the shared occupancy signal, taken and acted on SYNCHRONOUSLY —
+ * before the first `await` — so two callers cannot both see idle, and the span the run then
+ * holds covers the whole thing (GPU probe, drive probe, speed probe), which is what makes a
+ * second run see the first.
+ *
+ * The benchmark's own lane is deliberately NOT ignored: a second benchmark seeing the first
+ * IS the re-entrancy guard.
+ *
+ * Throws the friendly, localized refusal. The Diagnostics button surfaces it; the first-run
+ * caller (`maybeRunFirstBenchmark`) already logs and drops it, and re-runs next launch because
+ * `lastBenchmark` stays null.
+ */
 export async function runAndPersistBenchmark(ctx: AppContext): Promise<BenchmarkResult> {
+  const busy = modelBusyLane(ctx)
+  if (busy) throw new Error(tMain(modelBusyMessageKey(busy)))
+  const releaseOccupancy = ctx.runtime.occupancy.begin('benchmark')
+  try {
+    return await runBenchmarkAndPersist(ctx)
+  } finally {
+    releaseOccupancy()
+  }
+}
+
+/** The benchmark body, run under the `benchmark` occupancy span held by the caller above. */
+async function runBenchmarkAndPersist(ctx: AppContext): Promise<BenchmarkResult> {
   const manifests = ctx.manifestsDir
     ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
     : []
@@ -61,7 +91,11 @@ export async function runAndPersistBenchmark(ctx: AppContext): Promise<Benchmark
     manifests,
     runtime: ctx.runtime.active(),
     gpu,
-    effectiveRead
+    effectiveRead,
+    // #185: the admission guard above ran seconds ago — before the GPU + drive probes — so
+    // re-check right at the speed probe, ignoring our OWN span (which is held for this whole
+    // function and would otherwise report the benchmark as busy against itself).
+    modelBusy: () => modelBusyLane(ctx, { ignore: ['benchmark'] }) != null
   })
 
   // Persist the last result via the settings store (spec §8 defines no benchmarks table).
@@ -98,8 +132,11 @@ export function maybeRunFirstBenchmark(ctx: AppContext): void {
     return // settings unreadable (e.g. just locked again) — a manual run still works
   }
   log.info('First run: benchmarking hardware in the background')
+  // #185: the busy refusal lands here too (this fires right after unlock, where a doc task or
+  // the user's first message can already own the model). Dropping it is correct — `lastBenchmark`
+  // stays null, so the next launch tries again, and Diagnostics can run it on demand meanwhile.
   void runAndPersistBenchmark(ctx).catch((err) =>
-    log.warn('First-run benchmark failed (re-run from Diagnostics)', String(err))
+    log.warn('First-run benchmark skipped or failed (re-run from Diagnostics)', String(err))
   )
 }
 

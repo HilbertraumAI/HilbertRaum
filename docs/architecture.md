@@ -10491,6 +10491,10 @@ model through **five** lanes: chat/RAG, doc tasks, skill runs, the benchmark, an
 - External streams deliberately do **not** register in `inFlightStreams`: that registry drives the
   doc-task refusal, so registering them would have let an outside client block doc tasks — an
   inversion of D8.
+- **Since #185/#186 the gate has a sibling, not a successor.** It still answers "is a pull in
+  flight right now"; the occupancy spans answer "is a multi-step background job holding the model
+  across its own gaps", and `isExternallyBusy` is the OR of both. See "Model occupancy — design
+  record" below for why the gate's counter alone could not carry that second question.
 
 ### §5 The HTTP surface (P3)
 
@@ -10555,7 +10559,7 @@ model through **five** lanes: chat/RAG, doc tasks, skill runs, the benchmark, an
 | **`usage` token counts** in responses | The SSE reader discards them today; surfacing them means extending the runtime contract. Documented as absent so clients do not read `NaN` — a post-v1 candidate. |
 | **Sampling passthrough** (`top_p`, `stop`, penalties) | `RuntimeChatOptions` carries no such fields. Accept-and-ignore was chosen over extending the contract mid-wave. |
 | **A real `openai`-SDK parse test** | It would add a devDependency for a test; the wire-shape pins cover the envelope. An owner-optional line item. |
-| **Serializing the in-app lanes** (benchmark vs chat, skill run vs chat) | Pre-existing concurrency, made *visible* by the gate but not caused by it. Filed separately rather than smuggled into this wave. |
+| **Serializing the in-app lanes** (benchmark vs chat, skill run vs chat) | Pre-existing concurrency, made *visible* by the gate but not caused by it. Filed separately rather than smuggled into this wave — as **#185/#186**, closed 2026-08-19 by the shared occupancy span ("Model occupancy — design record" below), which also folds into `isExternallyBusy` so the external lane waits on a background job instead of slipping into the gap between two of its model calls. |
 
 ### §8 What the audits changed
 
@@ -10862,6 +10866,155 @@ checked — reinstating the old wording turns it red), following the DEP-3 merma
 
 **This is the standing argument for the gate order `typecheck → build → test`.** Neither typecheck
 nor the suite can see this class; only the build can.
+
+## Model occupancy — design record (issues #185/#186, §1–§6)
+
+_The 2026-08-19 wave that gave the four in-app lanes one shared "a background job is holding the
+model" signal, closing the two concurrency gaps the local-API wave surfaced but deliberately did
+not fold into its own contract (that wave's §7 "deliberate omissions" row). Branch
+`fix/issues-185-186-model-occupancy`. Both issues were the same defect seen from two sides, so
+they were designed and fixed together, exactly as both issues proposed._
+
+### §1 The defect class
+
+The one `llama-server` slot serves one job at a time. Overlapping it does not corrupt anything —
+the sidecar serializes at the slot level — but it halves both jobs' throughput, and in the
+benchmark's case it corrupts a **measurement that is then persisted**.
+
+Before this wave, "who has the model" was answered by three registries and one hole:
+
+| Lane | Its record of itself | Did the other lanes see it? |
+|---|---|---|
+| chat / RAG | `inFlightStreams` (per conversation) | yes — the doc-task admission guard reads it |
+| doc tasks | `DocTaskManager` queue + `hasActiveTask()` | yes — the chat guard reads it |
+| **skill runs** | `SkillRunController`, keyed **per document** | **no** — not a global busy signal (#186) |
+| **the benchmark** | *nothing at all* | **no** (#185) |
+
+So `startSkillRun` consulted neither `inFlightStreams` nor the doc-task registry, and the
+benchmark had no guard of any kind: two Diagnostics clicks, or one click during a chat answer,
+both reached the model.
+
+**Why the generation gate could not be the fix.** The `RuntimeManager` gate added by the local-API
+wave already sees every lane — that is how these issues were spotted — but it counts in-flight
+`chatStream` **pulls**. A doc task, a skill run, and the benchmark are all multi-step: generate, do
+local work, generate again. Between two calls the gate reads IDLE, so a guard riding it would admit
+a second job into that gap and the two would interleave on the next call. The gate answers "right
+now"; these guards need "for the duration of a job". Both issues named the shape — a shared
+occupancy span — and that is what was built.
+
+### §2 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| D1 | A **span registry** (`services/runtime/occupancy.ts`), not a boolean on the gate | A span covers a multi-step job's own gaps; the gate's counter cannot (§1) |
+| D2 | It lives **on the `RuntimeManager`** (`runtime.occupancy`) | The manager is already the authority on who has the model, and it is a required field on `AppContext` — so no new optional context field to thread through every partial test context |
+| D3 | **Only the three background lanes take spans**; chat does not | Chat has `inFlightStreams`, which the doc-task guard has read since wave 3. A second record of the same fact is a drift source, not a simplification — and the app's hottest path gains no new bookkeeping and no new leak surface |
+| D4 | Guards **compose** the sources (`ipc/model-busy.ts`), each read at its origin | The alternative — mirroring chat and the doc-task queue into the registry — is the duplication D3 rejects. The composition is one function, not a per-call-site ladder |
+| D5 | The doc-task lane is read from **`hasActiveTask()` (queued + running)**, while its **span covers only the running task** | A queued task does not occupy the model *yet* but will the moment the pump frees, so a benchmark admitted "into the queue's shadow" would collide seconds later. The span is the narrower fact the external lane needs |
+| D6 | The skill lane is **declared in the descriptor table** (`SkillToolDescriptor.modelLane`), not hand-listed in the IPC layer | That table is already the single source every layer derives from (skills audit §6.2). A hand-kept name list in `registerSkillsIpc` is exactly the drift it exists to prevent — a tenth tool that started generating without declaring itself would silently reopen #186 |
+| D7 | `isExternallyBusy()` folds the spans in | Both issues asked for it: the local API now waits on a background job **honestly**, instead of slipping into the gap between two of its model calls — the same defect appearing on the external lane |
+| D8 | The benchmark **yields to chat** rather than blocking it | See §4 |
+
+### §3 The exclusion table as built
+
+Read down the left column for what is starting, across for what refuses it.
+
+| Entering | Refused by | Copy |
+|---|---|---|
+| chat / RAG | an active doc task (unchanged, incl. the yielding-build exception) | `main.chat.docTaskBusy` |
+| chat / RAG | a **`skill-run`** span (**new**, #186) | `main.busy.skillRun` |
+| doc task | a chat stream (unchanged) | `main.task.refusedChatStreaming` |
+| doc task | a `skill-run` or `benchmark` span (**new**) | `main.busy.*` |
+| skill run (`modelLane:'direct'`) | chat, doc task, benchmark, another direct run (**new**, #186) | `main.busy.*` |
+| benchmark | chat, doc task, skill run, **another benchmark** (**new**, #185) | `main.busy.*` |
+| external (local API) | any held span (**new**, D7) | its existing 429 |
+
+There is **one message per lane** (`main.busy.chat` / `.docTask` / `.skillRun` / `.benchmark`),
+shared by every surface that refuses — a per-surface × per-lane matrix would be twelve strings
+saying the same four things. Each names the affordance the user has right now (stop the answer,
+cancel the task, cancel the run in the bar). The doc-task manager's pre-existing chat refusal keeps
+`main.task.refusedChatStreaming`, which is renderer- and test-pinned since wave 3.
+
+Two rows are deliberately absent, and both are load-bearing:
+
+- **chat is never refused by the benchmark** (§4).
+- **a doc task never refuses on the `doc-task` span.** The running task holds one, and the #38
+  tree→extract chain enqueues its follow-up from inside `run()` while it is still held — refusing
+  there would break the chain. Task-vs-task exclusion is the queue's job, not this signal's; the
+  manager's `occupiedLane` dep is typed to exclude that lane so it cannot be widened by accident.
+
+**Why chat now refuses a direct skill run.** It is the same shape of work as a doc task —
+user-started, cancellable, visible in the run bar with its own Cancel — and a
+`categorize_transactions` run has ALWAYS refused chat this way, because its model call happens
+inside an enqueued doc task (D26). Before this wave that one skill run was excluded and its two
+siblings (`redact_document`, `apply_document_edits`) were not; this makes the three consistent.
+
+**The `modelLane` values, and the deadlock D6 avoids.** `'direct'` = the run streams on the chat
+runtime itself, so it takes a span. `'doctask'` = the model call happens inside a doc task the run
+enqueues (`categorize_transactions`), so it takes **none** — a span there would make `startDocTask`
+refuse the very task the run is waiting on. Absent = the tool never generates. A run also takes no
+span when no runtime is active: the locate pass needs one (redaction degrades to its deterministic
+floor, the edit tool refuses cleanly), so there is nothing to exclude. A source test pins the
+declaration to the dispatch: a `case` in `buildToolRunner` forwards `deps.runtime` **iff** its tool
+declares `modelLane: 'direct'`.
+
+### §4 The benchmark: a busy guard AND a yield
+
+`runAndPersistBenchmark` is the single entry point for both the Diagnostics button and the
+first-run background call, so the guard lives there. The span is taken **synchronously, before the
+first `await`** — two callers cannot both read idle — and covers the whole run (GPU probe, drive
+probe, speed probe), which is what makes a second run see the first. The benchmark's own lane is
+deliberately not ignored in that read: **a second benchmark seeing the first IS the re-entrancy
+guard.** The first-run caller already logs and drops the refusal, and re-runs next launch because
+`lastBenchmark` stays null.
+
+But a guard at admission is not enough, and blocking chat for the whole run is not acceptable:
+
+- The **first-run** benchmark fires right after unlock. Refusing the user's first message there
+  would be a regression, so the benchmark is absent from the chat guard (§3).
+- That leaves a window: admission passes, then the GPU + drive probes take seconds, and the user
+  sends a message. The tokens/sec probe would then measure a **shared slot** and report it as slow
+  hardware. That is not cosmetic — a low reading steps the profile down
+  (`VERY_LOW_TOKENS_PER_SECOND`) and with it the recommended model, and the result is **persisted**
+  into `settings.lastBenchmark`. The issue's "slow or degraded answer rather than corruption" is
+  accurate for every lane except this one.
+
+So the probe re-checks occupancy immediately before it starts **and on every streamed chunk**, and
+**discards** a contended reading (`modelBusy` / `onBusySkip` in `benchmark.ts`). `tokensPerSecond:
+null` is the honest answer and an already-supported one — it is exactly what a machine with no
+runtime yields. The discard is never silent: it raises **`main.benchmark.warnSpeedSkipped`** (a
+persist-canonical warning, so it is in `DISPLAY_MAP_KEYS`), distinct from "no runtime was up,
+nothing to measure", which stays silent as it always has. Breaking out of the `for await` runs the
+generator's `return()`, so the generation gate decrements normally — this path never creates the
+abandoned count the gate's epoch guard exists to heal.
+
+### §5 Leak posture
+
+A leaked span would make the background lanes — and external local-API admission (D7) — refuse
+until the app restarts, so every `begin()` is paired with a release that cannot be skipped:
+
+- **doc task** — taken in `pump()` (the one place a task starts running), released in the SAME
+  `finally` that clears `runningId`. The span cannot outlive the task it describes.
+- **skill run** — taken synchronously before `runController.start`, released in a `finally`
+  wrapping the runner, which every terminal path settles (success, failure, cancel, a dismissed
+  save dialog). The controller can also refuse the start *before* it ever invokes the runner (a run
+  already in flight on that document), so the `catch` releases too.
+- **benchmark** — a `try/finally` around the whole body; a mid-run throw releases it.
+
+Every release is **idempotent** — a double call is a no-op, never an under-count that would free a
+concurrent span. The tests pin that, the release-on-throw path, and the fact that a *refused* start
+takes nothing at all (a refusal must not leave the model looking permanently busy).
+
+### §6 What this wave deliberately did not do
+
+| Not done | Why |
+|---|---|
+| Make chat **pause** a skill run (the `ModelSlotArbiter` handshake) instead of refusing it | The arbiter exists for the yielding tree build, whose node boundaries are natural park points. A redaction locate pass has no such boundary, and refusing matches the doc-task precedent that the run bar's Cancel already supports |
+| Give chat its own span | D3 |
+| Serialize chat against chat | Several conversations streaming at once is pre-existing, supported behavior (`listActiveStreamConversations`), and part of neither issue |
+| Fold the doc-task **queue** into the span | D5 — the span is the "actually using the model" fact; the queue's own state is the wider one, and `modelBusyLane` reads both at their sources |
+| Drop `admission.ts`'s own `hasActiveDocTask()` leg, now that `isExternallyBusy` covers a *running* task | It also covers a **queued** one, which the span deliberately does not (D5). Removing it would narrow external admission, not simplify it. The redundancy for the running half is intentional and harmless — and that leg is the reason the external lane already respected doc tasks before this wave |
+| Retune any RAM/tok-s figure | Nothing measured changed. A benchmark that skips its speed leg simply records `tokensPerSecond: null` and says so |
 
 ## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
 

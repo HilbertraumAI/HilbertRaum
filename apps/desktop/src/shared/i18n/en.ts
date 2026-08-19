@@ -1912,6 +1912,14 @@ export const en = {
     'Drive speed could not be measured, so the recommendation uses RAM and CPU only.',
   'main.benchmark.warnSlowDrive':
     'This drive is on the slower side. Models will still work, but loading them may take longer.',
+  // #185: the speed measurement was DISCARDED because a chat answer or a document task
+  // started using the model while it ran — a contended reading is a slow reading, and a slow
+  // reading steps the profile (and the recommendation) down. Persist-canonical: it is stored
+  // in settings.lastBenchmark.warnings like its siblings above, so it is display-map matched.
+  'main.benchmark.warnSpeedSkipped':
+    'Text-generation speed was not measured this time, because the model was busy with ' +
+    'something else. The profile below uses RAM, CPU and drive speed only — run the ' +
+    'benchmark again when nothing else is using the model for a full reading.',
   // Interpolated persist-canonical (#110): carries the measured effective read speed, so the
   // display map reverse-matches it via a template regex (INTERPOLATED_MAP_KEYS), not exact match.
   // Names the consequence (model starts) rather than a generic slow-drive line.
@@ -2009,6 +2017,19 @@ export const en = {
   'main.chat.emptyQuestion': 'Cannot send an empty question.',
   'main.chat.stopFirst': 'A response is still being generated for this conversation. Stop it first.',
   'main.chat.locked': 'Workspace is locked. Unlock it to chat.',
+  // The shared model-occupancy refusals (issues #185/#186, `ipc/model-busy.ts`): ONE line per
+  // lane, used by every surface that refuses to start a second job on the one model — the
+  // benchmark, a skill run, a document task, and (for `skillRun`) chat itself. Each names the
+  // affordance the user has right now rather than just stating the conflict.
+  'main.busy.chat':
+    'An answer is being written right now. Wait for it to finish (or stop it), then try again.',
+  'main.busy.docTask':
+    'A document task is using the model. Wait for it to finish, or cancel it, then try again.',
+  'main.busy.skillRun':
+    'A skill is working on a document. Wait for it to finish, or cancel it in the run bar, ' +
+    'then try again.',
+  'main.busy.benchmark':
+    'A hardware benchmark is measuring this computer right now. Try again in a moment.',
   'main.task.unknownKind': 'Unknown document task.',
   'main.task.refusedChatStreaming':
     'An answer is being written right now. Wait for it to finish (or stop it), then try again.',

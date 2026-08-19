@@ -12,6 +12,7 @@ import {
 } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { isExceedContextError } from '../runtime/llama'
+import { modelBusyMessageKey } from '../runtime/occupancy'
 import { ContextOverflowError } from './errors'
 import { getDocument } from '../ingestion'
 import { isPdfPath } from '../ingestion/parsers'
@@ -283,6 +284,14 @@ export class DocTaskManager {
     if (this.deps.isChatStreaming()) {
       throw new Error(tMain('main.task.refusedChatStreaming'))
     }
+    // #185/#186: the other half of the same exclusion. `isChatStreaming` sees only the lanes
+    // that register in `inFlightStreams`, which a skill run's LLM locate pass and the hardware
+    // benchmark's speed probe never do — both reach `chatStream` directly, so a task admitted
+    // beside one of them would interleave two generations on the single llama-server slot.
+    const occupied = this.deps.occupiedLane?.() ?? null
+    if (occupied) {
+      throw new Error(tMain(modelBusyMessageKey(occupied)))
+    }
     // OCR runs the local recognition engine, not the chat model — it needs the
     // vendored language files instead of a running runtime. TRANSLATION (TG-3, plan D3/O2)
     // runs the TranslateGemma sidecar — it needs the installed translation model, and the
@@ -542,9 +551,16 @@ export class DocTaskManager {
       return
     }
     this.runningId = next
+    // #185/#186: hold the `doc-task` occupancy span for exactly the dispatch. Taken here — the
+    // single place a task starts running — and released in the SAME `finally` that clears
+    // `runningId`, so the span can never outlive the task it describes. A multi-step task is
+    // then continuously busy to the lanes that must not join it (skill runs, the benchmark, and
+    // external local-API admission) instead of flickering idle between its model calls.
+    const releaseOccupancy = this.deps.beginOccupancy?.() ?? ((): void => {})
     // Track the dispatch promise so `awaitActiveTaskSettled()` (the lock/quit lifecycle) can
     // wait for this task's abort-unwind before the DB closes. `run()` never rejects.
     this.runningPromise = this.run(task).finally(() => {
+      releaseOccupancy()
       this.runningId = null
       this.runningPromise = null
       this.evictTerminalTasks()
@@ -733,7 +749,12 @@ const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.task.ocrNotAScan',
   'main.task.ocrNoText',
   'main.task.ocrFailed',
-  'main.task.documentBusyIngesting'
+  'main.task.documentBusyIngesting',
+  // #185/#186 — the occupancy refusals `startDocTask` can throw. Only these two lanes: the
+  // chat lane is refused by `main.task.refusedChatStreaming` above, and a doc task never
+  // refuses on the doc-task lane (the queue serializes tasks; see `DocTaskDeps.occupiedLane`).
+  'main.busy.skillRun',
+  'main.busy.benchmark'
 ]
 
 /**
