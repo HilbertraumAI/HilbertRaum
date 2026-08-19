@@ -145,7 +145,9 @@ repos ungated), 140+ languages:
 
 - **Evaluated and NOT added:** `google/diffusiongemma-26B-A4B-it` (diffusion decoder — llama.cpp
   cannot run it; do not revisit without llama.cpp support); the `gemma-4-*-it-assistant` models
-  (78M–0.5B **speculative-decoding drafts**, not standalone chat — parked until the chat sidecar
+  (78M–0.5B **speculative-decoding drafts**, not standalone chat — still parked; the shipped
+  speculative decoding (issue #182) is the Qwen3.8 in-GGUF draft head, which needs no second
+  weight and no `--model-draft`. Parked until the chat sidecar
   wires `--model-draft`); base non-`-it` variants.
 - **Relation to the local-test stubs:** `gemma-4-26b-q4` (Unsloth UD Q4_K_M of the same base
   model, `sha256: local-unverified`, no download block) and `gemma4-coding-q8` are user-added
@@ -217,7 +219,8 @@ recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_pa
 `license_review` block. Optional: `recommended_profiles` (a list of hardware profiles — the legacy
 no-RAM picker), `recommendation_rank` (integer, default 0; higher = preferred among models that fit
 the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
-`supports_thinking_mode` (below), a `download` block (below), and — for a `role: vision`
+`supports_thinking_mode` (below), `speculative_decoding` (below), a `download` block (below),
+and — for a `role: vision`
 model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
 vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools`, `dimensions`,
 `bundled_on_preconfigured_drive`) are ignored by the validator.
@@ -242,6 +245,23 @@ vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools
   (8/8 = Balanced), so the flag was flipped. Ministral 3, Granite 4.1, and the "Qwen3 4B Instruct
   **2507**" refresh are instruct-only and declare `false`: Deep behaves like Balanced on them, by
   design.
+
+- **`speculative_decoding`** (optional, issue #182) is a **closed enum** — today only `mtp` —
+  and it is **chat-role only** (a value on any other role is a validation error, because only the
+  chat start ladder consumes it). It declares that the WEIGHT ships a trained-in multi-token-
+  prediction draft head (Qwen3.8's `blk.64.nextn.*` tensors, which llama-server otherwise loads
+  and ignores); the runtime maps that ONE name to a fixed, code-owned flag pair
+  (`--spec-type draft-mtp --spec-draft-n-max 2`). **A manifest never supplies arguments** — an
+  `extra_server_args`-style field would let a hand-edited on-drive manifest inject any
+  llama-server flag, and a smuggled `--host 0.0.0.0` would defeat the loopback-only invariant
+  (extras are appended last, and a later flag wins).
+  Declaring it is an **opt-in, not a decision**: the start ladder tries it on a dedicated rung
+  above the plain GPU rung, only when a device probe shows one card with the weight's bytes plus
+  3.5 GiB free, and falls back to exactly today's behavior otherwise — so setting it on a model
+  without the head costs one failed start attempt per session, never a broken model. Carried
+  today by `qwen3.8-27b-q4` and `qwen3.8-27b-q5`; deliberately NOT by `qwen3.8-27b-q6`, whose
+  22.7 GiB VRAM fit on a 24 GB card is its whole reason to exist. Design record:
+  `architecture.md` "MTP speculative decoding"; measured evidence: `model-benchmarks.md` §9.4.
 
 ## Model states (spec §7.4)
 Computed by `services/models.ts` with this precedence:

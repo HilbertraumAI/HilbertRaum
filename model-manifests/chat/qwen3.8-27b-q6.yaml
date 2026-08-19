@@ -22,6 +22,15 @@ recommendation_rank: 0
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
 supports_thinking_mode: true
+# NO `speculative_decoding` — deliberate, and the one Qwen3.8 quant that must never carry it
+# (issue #182). The draft head costs ~2 GiB VRAM and Q6_K already peaks at 22.7 GiB on a 24 GB
+# card at ctx 8192, which is this manifest's entire reason to exist (rank 0, the "24 GB GPU
+# quality ceiling" pick). MTP would push it into a silent partial offload and cost more than it
+# buys. The `--spec-draft-type-k/v q8_0` + `--cache-type-k/v q8_0` quartet recovers ~1.6 GiB —
+# still not enough, and it quantizes the MAIN KV cache, whose long-context quality is
+# unvalidated on our harness. The runtime's VRAM guard would refuse the rung here anyway
+# (21.3 GiB weight + 3.5 GiB > 24 GiB); this comment records that it is a DECISION, not an
+# omission, so a later editor does not "fix" the inconsistency.
 local_path: models/chat/qwen3.8-27b-q6.gguf
 # Real hash from HuggingFace LFS metadata (git-LFS OID = the file's SHA-256), captured
 # 2026-08-16 and independently confirmed by on-disk SHA-256 of the downloaded file (i9 rig).

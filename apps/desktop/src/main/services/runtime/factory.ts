@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import type { GpuDevice } from '../../../shared/types'
+import type { SpeculativeDecoding } from '../../../shared/manifest'
 import type {
   ChatMessage,
   HealthStatus,
@@ -29,6 +30,9 @@ import {
 // GPUs, so the real `LlamaRuntime` is opt-in by availability (binary + weights present)
 // and every GPU decision degrades automatically:
 //
+//   rung 1a default binary + the MTP speculative-decoding flags (#182) — ONLY for a
+//           manifest that opts in AND a machine the probe proves can hold the model
+//           plus the draft head in one device's VRAM. Skipped, never failed, otherwise.
 //   rung 1  default binary, NO device args   (b9585: ngl=auto + fit=on → VRAM-aware
 //           offload; on a GPU-less machine this IS CPU mode — the ladder ends here
 //           for almost everyone)
@@ -73,6 +77,63 @@ export const WARMUP_MAX_TOKENS = 8
  */
 export const WARMUP_TIMEOUT_MS = 90_000
 
+/**
+ * Server flags that switch ON the trained-in MTP draft head some GGUFs already carry
+ * (issue #182; measured evidence in model-benchmarks.md §9.4 "MTP speculative decoding",
+ * design record: architecture.md "MTP speculative decoding"). CODE-OWNED and constant —
+ * the manifest names a scheme, it never supplies arguments (see `SpeculativeDecoding`).
+ *
+ * `--spec-draft-n-max 2` is the measured pick: n=2 gave 77–91 % draft acceptance and
+ * +38–45 % decode; n=3/4 neither broke nor helped (acceptance falls to 64 % at n=4).
+ * Deliberately NOT included: the `--spec-draft-type-k/v q8_0` + `--cache-type-k/v q8_0`
+ * quartet — it recovers ~1.6 GiB of VRAM but quantizes the MAIN KV cache, whose long-context
+ * quality is unvalidated on our harness, and it still does not make Q6_K fit 24 GB.
+ */
+export const MTP_SERVER_ARGS: readonly string[] = ['--spec-type', 'draft-mtp', '--spec-draft-n-max', '2']
+
+/**
+ * Free VRAM (MiB) an MTP start needs ON TOP of the weight file's own bytes, before the
+ * ladder will try rung 1a. Two measured components (§9.4, i9-9900X + RTX 3090, ctx 8192):
+ * a full-offload llama-server peaks ~1.3–1.4 GiB above the GGUF's size (KV + compute
+ * buffers), and the draft head plus its own KV costs ~2 GiB more. 3.5 GiB is that sum with
+ * no padding, so the guard reproduces the measured verdicts exactly: Q4 (15.9 GiB) and Q5
+ * (18.5 GiB) clear a 24 GB card, Q6_K (21.3 GiB) does NOT — which is precisely why the q6
+ * manifest does not opt in.
+ *
+ * The guard exists because llama.cpp's `--fit` does not FAIL when VRAM is short: it silently
+ * offloads fewer layers, so an unaffordable MTP start would look healthy while decoding at
+ * partial-offload speed (the issue-#42 class). A skipped rung 1a costs nothing; a silent
+ * partial offload costs everything the flag was added to buy.
+ */
+export const MTP_VRAM_HEADROOM_MB = 3584
+
+/**
+ * Model ids whose speculative rung has been proven unviable ON THIS MACHINE, for the rest
+ * of the app session. Module-level and session-scoped on purpose (the `read-speed.ts`
+ * suppression idiom), never persisted: the reasons are hardware/driver state, and a wrong
+ * latch must not outlive the process.
+ *
+ * Without it, a machine where the flag fails would pay a doomed multi-GB model load on
+ * EVERY start before falling through to rung 1. Cleared by "Try GPU again" (the user
+ * explicitly asking for the accelerated path back) — see `tryGpuAgain`.
+ */
+const speculativeSuppressed = new Set<string>()
+
+/** Latch this model's speculative rung off for the rest of the session. */
+export function suppressSpeculative(modelId: string): void {
+  speculativeSuppressed.add(modelId)
+}
+
+/** True once {@link suppressSpeculative} has latched this model off this session. */
+export function isSpeculativeSuppressed(modelId: string): boolean {
+  return speculativeSuppressed.has(modelId)
+}
+
+/** Re-arm every latched model (wired to "Try GPU again"; also the test reset). */
+export function clearSpeculativeSuppression(): void {
+  speculativeSuppressed.clear()
+}
+
 /** GPU-ladder hooks; all optional — omitting them yields plain rung-1-only behavior. */
 export interface GpuLadderDeps {
   /** User intent from Settings ('auto' default). */
@@ -91,6 +152,14 @@ export interface GpuLadderDeps {
    * rung 2), and surfaces the friendly compatibility-mode notice.
    */
   onGpuCrash?: (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void
+  /**
+   * #182: fired INSTEAD of {@link onGpuCrash} when the runtime that died mid-session was
+   * the speculative rung. The GPU itself is not the suspect — the extra flags are — so the
+   * caller must NOT persist `gpuAutoDisabled` (that would exile the machine to CPU over an
+   * optional speed-up). The ladder has already latched the model off speculative for the
+   * session, so the caller's restart comes back on the plain GPU rung.
+   */
+  onSpeculativeCrash?: (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void
 }
 
 /** Extra knobs `makeLlama` receives per rung. */
@@ -136,6 +205,19 @@ export interface RuntimeSelectionDeps {
     event: 'started' | 'skipped' | 'done' | 'aborted' | 'failed',
     detail?: string
   ) => void
+  /**
+   * #182 observability for the speculative rung; never affects control flow.
+   * 'enabled' = rung 1a was SPAWNED with the MTP flags (a 'failed' follows if it would not
+   * come up), 'skipped' = the precondition said no — reason in `detail`, nothing spawned,
+   * 'failed' = rung 1a would not start and the walk continues on the plain GPU rung,
+   * 'crashed' = a running MTP rung died mid-session. The last two latch the model off for
+   * the rest of the session.
+   */
+  onSpeculative?: (
+    opts: RuntimeStartOptions,
+    event: 'enabled' | 'skipped' | 'failed' | 'crashed',
+    detail?: string
+  ) => void
   /** Test seam: override the prefetch reader (default {@link startModelPrefetch}). */
   makePrefetch?: (paths: string[]) => ModelPrefetch
   /** GPU ladder hooks. Omitted → defaults (gpuMode 'auto', no persistence). */
@@ -147,8 +229,14 @@ interface Rung {
   label: string
   binPath: string
   extraArgs: string[]
-  /** True only for rung 1 — the attempt whose failure auto-disables GPU. */
+  /** True for the GPU attempts — the rung whose failure auto-disables GPU (rung 1). */
   gpuAttempt: boolean
+  /**
+   * #182: rung 1a — the same binary and the same auto-offload as rung 1, plus
+   * {@link MTP_SERVER_ARGS}. Its failure is NEVER a GPU fault (rung 1 follows immediately
+   * and is the real GPU verdict), so it never persists `gpuAutoDisabled`.
+   */
+  speculative?: boolean
 }
 
 /**
@@ -194,6 +282,7 @@ class LadderRuntime implements ModelRuntime {
       makeMock: NonNullable<RuntimeSelectionDeps['makeMock']>
       onSelect?: RuntimeSelectionDeps['onSelect']
       onWarmup?: RuntimeSelectionDeps['onWarmup']
+      onSpeculative?: RuntimeSelectionDeps['onSpeculative']
       warmupTimeoutMs: number
       onPrefetch?: RuntimeSelectionDeps['onPrefetch']
       makePrefetch: NonNullable<RuntimeSelectionDeps['makePrefetch']>
@@ -205,7 +294,12 @@ class LadderRuntime implements ModelRuntime {
 
   async start(): Promise<void> {
     let lastError: unknown = null
-    for (const [rungIndex, rung] of this.rungs.entries()) {
+    // #182: the #108 read sample and the #114 prefetch belong to the first rung we actually
+    // SPAWN, which is no longer the same thing as `rungs[0]`: a skipped speculative rung
+    // consumes index 0 without opening a load window, and gating on the index would have
+    // silently switched both off on every machine that skips it.
+    let attempted = 0
+    for (const rung of this.rungs) {
       // CODE-2: cancelled between rungs — abort the walk instead of paying the next
       // rung's health timeout.
       if (this.cancelled) throw cancelledStartError()
@@ -215,15 +309,42 @@ class LadderRuntime implements ModelRuntime {
       // stall the first start by up to the probe's 10 s bound and mislabel a crash
       // inside that window as 'cpu'.
       const probe = this.deps.gpu.probeDevices ?? ((bin: string) => probeGpuDevices(bin))
+      // #182: the speculative rung is the ONE rung that must know the device BEFORE it
+      // spawns — its whole justification is measured on a fully offloaded GPU start, and
+      // llama.cpp answers a VRAM shortfall by silently offloading fewer layers rather than
+      // failing. So this await is deliberate, and deliberately narrow: it happens only for
+      // a manifest that opted in, the probe is the session-cached one (sub-second after the
+      // first call, hard-capped at 10 s, never rejects), and the very next rung reuses the
+      // same cached answer. Every other model keeps the concurrent probe below untouched.
+      if (rung.speculative) {
+        const verdict = await this.speculativeVerdict(probe, rung.binPath)
+        // CODE-2: an await inside the walk is a cancellation point like any other.
+        if (this.cancelled) throw cancelledStartError()
+        if (!verdict.ok) {
+          this.deps.onSpeculative?.(this.opts, 'skipped', verdict.reason)
+          continue
+        }
+      }
       const probePromise = rung.gpuAttempt
         ? probe(rung.binPath).catch(() => [] as GpuDevice[])
         : null
+      if (rung.speculative) this.deps.onSpeculative?.(this.opts, 'enabled')
       const runtime = this.deps.makeLlama(this.opts, rung.binPath, {
         extraArgs: rung.extraArgs,
         // Only a crash of a runtime that actually landed on the GPU triggers the
         // auto-fallback; CPU-mode crashes keep today's behavior (error + manual restart).
         onUnexpectedExit: (info) => {
-          if (this.backend === 'gpu') this.deps.gpu.onGpuCrash?.(this.opts, info)
+          if (this.backend !== 'gpu') return
+          // #182: on the speculative rung the extra flags are the prime suspect, not the
+          // device — latch MTP off for the session and route to the speculative handler,
+          // which restarts on the plain GPU rung instead of exiling the machine to CPU.
+          if (rung.speculative) {
+            suppressSpeculative(this.opts.modelId)
+            this.deps.onSpeculative?.(this.opts, 'crashed', describeExit(info))
+            this.deps.gpu.onSpeculativeCrash?.(this.opts, info)
+            return
+          }
+          this.deps.gpu.onGpuCrash?.(this.opts, info)
         }
       })
       // Visible to stop() so a cancel can reach the in-flight LlamaServer (CODE-2).
@@ -236,7 +357,8 @@ class LadderRuntime implements ModelRuntime {
       // peeked here without consuming it). Evidence + design record: prefetch.ts header.
       // Aborted the moment the load window ends (either way), on a CODE-2 stop, and never
       // awaited — a prefetch failure means the load proceeds unassisted, nothing more.
-      if (rungIndex === 0) {
+      const firstAttempt = attempted++ === 0
+      if (firstAttempt) {
         if (isNextModelLoadSuppressed()) {
           this.deps.onPrefetch?.(this.opts, 'skipped', 'weights just hashed — page-cache-warm')
         } else {
@@ -262,6 +384,16 @@ class LadderRuntime implements ModelRuntime {
         // and must never be persisted as a GPU fault (the child was loading, not broken),
         // so this check runs before the gpuAttempt persist below.
         if (this.cancelled) throw cancelledStartError()
+        // #182: rung 1a failing says nothing about the GPU — the plain GPU rung is next in
+        // the walk and IS the device verdict. Never persist `gpuAutoDisabled` here (an
+        // unsupported flag on an older runtime would otherwise exile the machine to CPU),
+        // but do latch the model off so later starts skip the doomed multi-GB load attempt.
+        if (rung.speculative) {
+          const reason = err instanceof Error ? err.message : String(err)
+          suppressSpeculative(this.opts.modelId)
+          this.deps.onSpeculative?.(this.opts, 'failed', reason)
+          continue
+        }
         if (rung.gpuAttempt) {
           // Persist so later starts skip straight to rung 2 — no repeated GPU timeouts.
           const reason = err instanceof Error ? err.message : String(err)
@@ -286,7 +418,7 @@ class LadderRuntime implements ModelRuntime {
       // window is prefetch-assisted — the figure remains the honest effective rate the
       // user FELT for this load (this module's contract), now closer to what the medium
       // can actually deliver.
-      if (rungIndex === 0) {
+      if (firstAttempt) {
         recordModelLoadRead(
           this.opts.modelPath,
           performance.now() - loadT0,
@@ -355,6 +487,43 @@ class LadderRuntime implements ModelRuntime {
     this.gpuName = null
     const reason = lastError instanceof Error ? lastError.message : String(lastError)
     this.deps.onSelect?.('mock', this.opts, `all llama-server start attempts failed: ${reason}`)
+  }
+
+  /**
+   * #182: may rung 1a run on THIS machine, right now? Conservative by construction — every
+   * "don't know" answers no, because a skipped speculative rung costs nothing while a wrong
+   * yes costs a silent partial offload (or, off-GPU, an unmeasured configuration).
+   *
+   * Ordered cheapest-first so the common no-op paths never touch the probe.
+   */
+  private async speculativeVerdict(
+    probe: (binPath: string) => Promise<GpuDevice[]>,
+    binPath: string
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (isSpeculativeSuppressed(this.opts.modelId)) {
+      return { ok: false, reason: 'latched off for this session by an earlier attempt' }
+    }
+    const bytes = this.opts.weightBytes
+    if (bytes == null || !(bytes > 0)) {
+      // `startModelRuntime` always supplies this; a null means a file stat failed, i.e. the
+      // VRAM check below cannot be made. Refuse rather than guess.
+      return { ok: false, reason: 'weight size unknown — cannot check VRAM headroom' }
+    }
+    const devices = await probe(binPath).catch(() => [] as GpuDevice[])
+    if (devices.length === 0) {
+      return { ok: false, reason: 'no GPU device (the measured gain is a full-offload GPU result)' }
+    }
+    const neededMb = Math.ceil(bytes / (1024 * 1024)) + MTP_VRAM_HEADROOM_MB
+    // ONE device must hold all of it: a multi-device split with a draft head is unmeasured,
+    // so free VRAM is never summed across cards.
+    const best = devices.reduce((a, d) => (d.freeMb > a.freeMb ? d : a))
+    if (best.freeMb < neededMb) {
+      return {
+        ok: false,
+        reason: `not enough free VRAM (${best.freeMb} MiB free on ${best.name}, ${neededMb} MiB needed)`
+      }
+    }
+    return { ok: true }
   }
 
   /**
@@ -506,6 +675,20 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
     const tryGpu = (gpu.getGpuMode?.() ?? 'auto') === 'auto' && !(gpu.getGpuAutoDisabled?.() ?? false)
     const rungs: Rung[] = []
     if (tryGpu) {
+      // Rung 1a (#182): rung 1 plus the MTP flags, for a manifest that opts in. Listed
+      // BEFORE rung 1 so the plain GPU attempt is its automatic fallback — a rung 1a that
+      // will not start (an older runtime that rejects the flag, a weight without the draft
+      // head, a VRAM refusal) costs one attempt and lands on exactly today's behavior. The
+      // rung is DECLARED here and gated at walk time, where the device probe can be awaited.
+      if (opts.speculativeDecoding === 'mtp') {
+        rungs.push({
+          label: 'rung 1a (GPU auto-offload + MTP speculative decoding)',
+          binPath,
+          extraArgs: [...MTP_SERVER_ARGS],
+          gpuAttempt: true,
+          speculative: true
+        })
+      }
       // Rung 1: NO -ngl / --device args — b9585 defaults to ngl=auto + fit=on.
       rungs.push({ label: 'rung 1 (default args, GPU auto-offload)', binPath, extraArgs: [], gpuAttempt: true })
     }
@@ -527,6 +710,7 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
       makeMock,
       onSelect: deps.onSelect,
       onWarmup: deps.onWarmup,
+      onSpeculative: deps.onSpeculative,
       warmupTimeoutMs: deps.warmupTimeoutMs ?? WARMUP_TIMEOUT_MS,
       onPrefetch: deps.onPrefetch,
       makePrefetch: deps.makePrefetch ?? startModelPrefetch,
@@ -542,6 +726,8 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
  * (i18n record §3.3 rule 2 — runtime:notice is ephemeral).
  */
 export const COMPATIBILITY_MODE_NOTICE = t('en', 'main.runtime.compatibilityMode')
+/** #182 sibling of {@link COMPATIBILITY_MODE_NOTICE} — the speculative-rung restart notice. */
+export const SPEED_UP_DISABLED_NOTICE = t('en', 'main.runtime.speedUpDisabled')
 
 export interface GpuCrashFallbackDeps {
   /** Restart the same model (the ladder now starts at rung 2 — CPU). */
@@ -552,31 +738,33 @@ export interface GpuCrashFallbackDeps {
   notify?: (message: string) => void
 }
 
+/** One-line human summary of an unexpected sidecar exit, used by the crash handlers. */
+function describeExit(info: UnexpectedExitInfo): string {
+  const code = info.exitCode != null ? `code ${info.exitCode}` : `signal ${info.exitSignal}`
+  const tail = info.stderrTail.trim()
+  return `crashed mid-session (${code})${tail ? ` — last output: ${tail}` : ''}`
+}
+
 /**
- * The §5.3 mid-generation crash handler: persist the auto-disable flag, restart the
- * same model ONCE at CPU, and surface the compatibility-mode notice — so the user's
- * *next* message just works. Re-entrancy guarded: overlapping crash reports while a
- * restart is in flight are ignored (a single restart, never a loop — after it, the
- * backend is CPU and the ladder no longer routes crashes here).
+ * Shared shape of the mid-generation auto-restart handlers: react once, restart the same
+ * model ONCE, and never loop. Re-entrancy guarded — overlapping crash reports while a
+ * restart is in flight are ignored.
  */
-export function createGpuCrashAutoFallback(
-  deps: GpuCrashFallbackDeps
+function createCrashAutoRestart(
+  react: (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void,
+  restart: (opts: RuntimeStartOptions) => Promise<unknown>
 ): (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void {
   let restarting = false
   return (opts, info) => {
     if (restarting) return
     restarting = true
-    const code = info.exitCode != null ? `code ${info.exitCode}` : `signal ${info.exitSignal}`
-    const tail = info.stderrTail.trim()
-    deps.persistFailure(`crashed mid-session (${code})${tail ? ` — last output: ${tail}` : ''}`)
-    deps.notify?.(tMain('main.runtime.compatibilityMode'))
+    react(opts, info)
     // restart() may throw SYNCHRONOUSLY (before returning a promise). Without this
     // try/catch the throw escapes before `.finally` is attached, `restarting` stays
     // true forever, and EVERY future crash auto-fallback is silently suppressed (M-C3).
     try {
-      void deps
-        .restart(opts)
-        .catch(() => undefined) // a failed CPU restart surfaces on the user's next start
+      void restart(opts)
+        .catch(() => undefined) // a failed restart surfaces on the user's next start
         .finally(() => {
           restarting = false
         })
@@ -584,4 +772,42 @@ export function createGpuCrashAutoFallback(
       restarting = false // a sync throw surfaces on the user's next start; re-arm the guard
     }
   }
+}
+
+/**
+ * The §5.3 mid-generation crash handler: persist the auto-disable flag, restart the
+ * same model ONCE at CPU, and surface the compatibility-mode notice — so the user's
+ * *next* message just works. (After the restart the backend is CPU and the ladder no
+ * longer routes crashes here.)
+ */
+export function createGpuCrashAutoFallback(
+  deps: GpuCrashFallbackDeps
+): (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void {
+  return createCrashAutoRestart((_opts, info) => {
+    deps.persistFailure(describeExit(info))
+    deps.notify?.(tMain('main.runtime.compatibilityMode'))
+  }, deps.restart)
+}
+
+/**
+ * #182: the same handler for a crash of the SPECULATIVE rung. Two deliberate differences
+ * from its GPU sibling — the reason both exist:
+ *
+ *  - it does NOT persist `gpuAutoDisabled`. The device is not the suspect; the optional
+ *    extra flags are, and the ladder has already latched them off for this session. Exiling
+ *    a working GPU to CPU over a speed-up would be a far worse outcome than losing the
+ *    speed-up, and would need a Diagnostics visit ("Try GPU again") to undo.
+ *  - its notice says what actually happened: the restart lands back on the GPU, so the
+ *    compatibility-mode copy ("responses may be a bit slower") would be a plain lie.
+ */
+export function createSpeculativeCrashAutoFallback(deps: {
+  restart: (opts: RuntimeStartOptions) => Promise<unknown>
+  /** Observability only — never persisted as a GPU fault. */
+  onCrash?: (reason: string) => void
+  notify?: (message: string) => void
+}): (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void {
+  return createCrashAutoRestart((_opts, info) => {
+    deps.onCrash?.(describeExit(info))
+    deps.notify?.(tMain('main.runtime.speedUpDisabled'))
+  }, deps.restart)
 }

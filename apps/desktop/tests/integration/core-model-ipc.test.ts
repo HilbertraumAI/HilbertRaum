@@ -267,6 +267,35 @@ describe('registerModelIpc', () => {
     expect(startedWith).not.toBeNull()
   })
 
+  // Issue #182: the manifest's `speculative_decoding` opt-in has to REACH the start ladder —
+  // it is the ladder, not the manifest, that decides whether the flags are actually used, so a
+  // dropped field here would be invisible (the model just quietly never speeds up).
+  it('forwards the manifest speculative_decoding opt-in into the runtime start options', async () => {
+    const started: Array<Record<string, unknown>> = []
+    const db = seededDb()
+    updateSettings(db, { developerMode: true })
+    const ctx = {
+      db,
+      manifestsDir: REPO_MANIFESTS,
+      paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: devPolicyConfigDir() },
+      isDev: false,
+      runtime: {
+        start: async (o: Record<string, unknown>) => {
+          started.push(o)
+          return { running: true, modelId: String(o.modelId), port: null, healthy: true, message: 'ok' }
+        },
+        activeModelId: () => null
+      }
+    } as unknown as AppContext
+    reg(ctx)
+    await invoke(handlers, IPC.startRuntime, 'qwen3.8-27b-q4')
+    expect(started[0].speculativeDecoding).toBe('mtp')
+    // Every other model passes an explicit null rather than an absent key — the ladder's
+    // "did this manifest opt in?" question must never be answered by an undefined.
+    await invoke(handlers, IPC.startRuntime, 'qwen3.8-27b-q6')
+    expect(started[1].speculativeDecoding).toBeNull()
+  })
+
   it('refuses the mock fallback on a PACKAGED build with no policy.json (M-4 fail-closed)', async () => {
     // developerMode is ON, but a packaged build (isDev:false) with a missing policy.json
     // now fails closed to the strict posture (allow_unverified_models:false), so the

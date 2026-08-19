@@ -1057,8 +1057,18 @@ chat sidecar and quit-while-running teardown leaves no `llama-server` of any rol
 reranker sidecars legitimately idle past a chat stop and are excluded from the stop leg only).
 Text-only chat needed no mmproj on any quant.
 
-**MTP speculative decoding — measured, NOT adopted (2026-08-17 addendum; adoption tracked in
-a follow-up issue).** The Qwen3.8 GGUFs ship a trained-in draft head (`blk.64.nextn.*` — 15
+**MTP speculative decoding — measured 2026-08-17; ADOPTED 2026-08-19 for the Q4/Q5 manifests
+(issue #182).** _Adoption record: `architecture.md` "MTP speculative decoding — design record
+(issue #182, §1–§7)". The two manifests carry `speculative_decoding: mtp`; the runtime gates the
+flags on a probed GPU with the weight + 3.5 GiB free VRAM and falls back to the plain GPU rung
+otherwise. **Two gates from the issue remain OWED and need the i9-9900X + RTX 3090 rig:** the §2
+grounded-QA re-run for both quants with MTP on (score parity within cross-run tolerance — MTP
+breaks temp-0 byte-reproducibility, so byte identity is the WRONG gate), and the §9.1 smoke legs
+on the b9849 pin incl. teardown + 24 GB VRAM headroom. Issue gate 3 (CPU-only path) is closed by
+construction: the runtime drops the flags off-GPU. The RAM/VRAM rows below and in the manifests
+stay the PRE-MTP measurements until re-measured with the flag on._
+
+The measurement record, unchanged: the Qwen3.8 GGUFs ship a trained-in draft head (`blk.64.nextn.*` — 15
 tensors the server loads and ignores by default; visible as "unused tensor" warnings in every
 §4 log). `--spec-type draft-mtp --spec-draft-n-max 2` activates it with no extra files and
 measured **+38–45% server-level decode** on the i9/3090 (Q4_K_M, b10430 vulkan, steady-state

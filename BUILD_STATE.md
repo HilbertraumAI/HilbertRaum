@@ -47,6 +47,33 @@ the leak posture, and what the wave deliberately did not do. **User-facing:**
 `docs/troubleshooting.md` "The model is busy — one job at a time". Suite 5312/50; 39 new tests in
 `model-occupancy.test.ts` + `model-occupancy-ipc.test.ts`. No hardware gate owed — every lane is
 exercised by scripted fake runtimes.
+_2026-08-19 — **MTP speculative decoding — wave CLOSED in code, TWO HARDWARE GATES OWED (issue
+#182).**_ The Qwen3.8 GGUFs already contained a trained-in draft head (`blk.64.nextn.*`) that
+llama-server loaded and ignored — the "unused tensor" warnings in every §4 log were the feature
+sitting unused. `qwen3.8-27b-q4` and `qwen3.8-27b-q5` now carry a new manifest field
+`speculative_decoding: mtp`, worth a **measured +38–45 % decode** on the §9.4 rig. Shape:
+the manifest **opts in**, the start ladder **decides**. The field is a **closed enum** the runtime
+maps to a fixed flag pair, never a free-form arg list — manifests are on-drive and user-editable,
+and `buildArgs` appends extras LAST, so a smuggled `--host 0.0.0.0` would beat the loopback-only
+invariant. Mechanism: a new **rung 1a** above the plain GPU rung, so rung 1 IS the automatic
+fallback (an older runtime, a weight without the head, a driver refusal → one failed attempt, then
+exactly today's behavior). Three guards, all conservative-by-construction because llama.cpp answers
+a VRAM shortfall by *silently offloading fewer layers* rather than failing (the #42 class): the rung
+is skipped unless the session-cached probe shows ONE device with the weight's bytes + 3.5 GiB free
+(the measured sum — it independently reproduces "Q6_K does not fit 24 GB"); a rung-1a start failure
+never persists `gpuAutoDisabled` and latches the model off for the session; a mid-session rung-1a
+crash takes its own handler that restarts **on the GPU** with MTP off, instead of exiling the
+machine to CPU over an optional speed-up. Forced-CPU rungs never carry the flags — that is issue
+gate 3 ("harmless on CPU, or drop it off-GPU") closed structurally, without hardware. "Try GPU
+again" re-arms the latch. **Durable record:** `docs/architecture.md` "MTP speculative decoding —
+design record (issue #182, §1–§7)" — decisions, the precondition arithmetic, the failure paths, and
+what the wave deliberately did not do. Field reference: `docs/model-policy.md` "Manifest fields";
+status + owed gates: `docs/model-benchmarks.md` §9.4. **STILL OPEN — both need the i9-9900X + RTX
+3090 rig, tracked in §5 item 8b:** the §2 grounded-QA re-run for both quants with MTP on (the gate is
+score parity within cross-run tolerance — MTP breaks temp-0 BYTE reproducibility by design, so byte
+identity is the wrong gate), and the §9.1 smoke legs on the b9849 pin incl. teardown + 24 GB VRAM
+headroom. No RAM/VRAM line was retuned: the manifests keep their pre-MTP measured numbers until
+re-measured with the flag on.
 
 _2026-08-19 — **Portable stored copies — wave CLOSED (issue #188).**_ `documents.stored_path` was
 persisted **absolute** and consumed with a bare `existsSync` at six hand-written ladders, so a
@@ -1116,6 +1143,21 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    question) and the 35B-A3B §9.1 smoke PASSED. Still open on #95: the weak-16 GB-box
    measured-tok/s leg (decides E2B's rank; needs the designated weak-iGPU box) and the
    Windows-basis peak-RSS re-measure standing rule (§9.3 "§4 RSS") for any RAM-line retune.)*
+8b. **MTP speculative decoding — the two owed hardware gates (issue #182; adoption shipped
+   2026-08-19, record: architecture.md "MTP speculative decoding").** Both need the i9-9900X +
+   RTX 3090 rig that produced §9.4, and both are run WITH `speculative_decoding: mtp` active on
+   `qwen3.8-27b-q4` + `qwen3.8-27b-q5`:
+   - **§2 grounded-QA re-run, both quants.** The gate is **score parity within cross-run
+     tolerance, NOT byte identity** — MTP breaks temp-0 byte-reproducibility by construction
+     (batched-verification near-ties flip; the verified output stays distribution-equivalent), so
+     a byte-diff gate would fail a correct implementation.
+   - **§9.1 smoke legs on the b9849 pin**, incl. teardown and 24 GB VRAM headroom — the flags are
+     functionally verified on b9849 but the app-path smoke was never re-run with them on.
+   - **Then, and only then:** re-measure §4 peak RSS/VRAM with the flag on before touching any
+     `recommended_min_ram_gb`. The manifests deliberately still carry the PRE-MTP numbers.
+   Until these run, the ladder's guards are what make the adoption survivable: on the hardware the
+   gates cover, the worst unratified outcome is a start that falls back one rung to today's plain
+   GPU behavior; on every other machine the rung is never attempted at all.
 9. **Issue #51 residuals (owner decisions — the app-side quit close + docs shipped 2026-07-11):**
    - **Idle posture:** checkpoint + release the DB when the app is idle, so an unplug while "open
      but not in use" is harmless. New machinery (no app-level idle detector exists); the

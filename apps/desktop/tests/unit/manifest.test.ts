@@ -96,6 +96,30 @@ describe('validateManifest', () => {
     expect(res.errors.some((e) => e.includes('supports_thinking_mode'))).toBe(true)
   })
 
+  // Issue #182: `speculative_decoding` is a CLOSED enum on purpose — a free-form argument list
+  // would let a hand-edited on-drive manifest inject any llama-server flag (`--host 0.0.0.0`
+  // defeats the loopback-only invariant, since extras are appended last and a later flag wins).
+  it('parses speculative_decoding: mtp, absent by default', () => {
+    expect(
+      validateManifest(rawManifest({ speculative_decoding: 'mtp' })).manifest?.speculativeDecoding
+    ).toBe('mtp')
+    expect(validateManifest(rawManifest()).manifest?.speculativeDecoding).toBeUndefined()
+  })
+
+  it('rejects any speculative_decoding value outside the closed enum', () => {
+    for (const value of ['draft-mtp', 'MTP', true, 1, ['mtp'], '--spec-type draft-mtp', '']) {
+      const res = validateManifest(rawManifest({ speculative_decoding: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('speculative_decoding')), String(value)).toBe(true)
+    }
+  })
+
+  it('rejects speculative_decoding on a non-chat role (only the chat ladder consumes it)', () => {
+    const res = validateManifest(rawManifest({ role: 'embeddings', speculative_decoding: 'mtp' }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('role: chat'))).toBe(true)
+  })
+
   // vuln-scan-2026-06-21 [path-traversal]: a hostile manifest's local_path is rejected at the
   // source so discoverManifests records it in errors and SKIPS it — the throw on the model-list
   // path (which broke the whole Models screen) can no longer be reached by these shapes.

@@ -12,6 +12,20 @@ import type { HardwareProfile } from './types'
 
 export type ModelRole = 'chat' | 'embeddings' | 'reranker' | 'transcriber' | 'vision' | 'translation'
 
+/**
+ * Speculative-decoding scheme a chat GGUF supports (issue #182). A CLOSED enum, never a
+ * free-form argument list: manifests live on the drive and are user-editable, so an
+ * `extra_server_args`-style field would let a hand-edited YAML inject ANY llama-server flag
+ * — `--host 0.0.0.0` alone would break the loopback-only invariant the security model rests
+ * on, because `LlamaServer.buildArgs` appends the extras LAST and a later flag wins. The enum
+ * member is a NAME the runtime maps to a fixed, code-owned argument list.
+ *
+ *   'mtp'  the model ships a trained-in multi-token-prediction draft head inside the same
+ *          GGUF (Qwen3.8's `blk.64.nextn.*`), which llama-server loads and then IGNORES
+ *          unless `--spec-type draft-mtp` is passed. No second model file, no `--model-draft`.
+ */
+export type SpeculativeDecoding = 'mtp'
+
 export interface LicenseReview {
   status: 'pending' | 'approved' | 'rejected'
   reviewedBy: string | null
@@ -78,6 +92,15 @@ export interface ModelManifest {
    * model that did not declare it.
    */
   supportsThinkingMode: boolean
+  /**
+   * Opt-in speculative decoding for this chat model (`speculative_decoding`, issue #182).
+   * Absent = off, which is what every manifest that does not name it gets. Declaring it
+   * asserts that the WEIGHT carries the draft head; the runtime still gates the actual flag
+   * on the hardware it finds (GPU present + VRAM headroom) and degrades silently — see the
+   * architecture.md "MTP speculative decoding" design record. Chat role only: the chat start
+   * ladder is the sole consumer.
+   */
+  speculativeDecoding?: SpeculativeDecoding
   /** Path of the weight file relative to the DRIVE ROOT (e.g. `models/chat/x.gguf`). */
   localPath: string
   /** Expected SHA-256 (lower-case hex). May be a placeholder until a real drive is built. */
@@ -116,6 +139,7 @@ export interface ValidationResult {
 const ROLES: ModelRole[] = ['chat', 'embeddings', 'reranker', 'transcriber', 'vision', 'translation']
 const PROFILES: HardwareProfile[] = ['TINY', 'LITE', 'BALANCED', 'PRO', 'UNKNOWN']
 const REVIEW_STATUSES = ['pending', 'approved', 'rejected'] as const
+const SPECULATIVE_SCHEMES: SpeculativeDecoding[] = ['mtp']
 
 /** 64 lower-case hex chars. Used to tell a real hash from a placeholder. */
 const SHA256_RE = /^[a-f0-9]{64}$/
@@ -271,6 +295,21 @@ export function validateManifest(raw: unknown): ValidationResult {
     }
   }
 
+  // Optional speculative-decoding opt-in (#182). Closed enum (see SpeculativeDecoding) and
+  // chat-only — the chat start ladder is the sole consumer, so a value on an embeddings or
+  // vision manifest would be silently inert; rejected rather than ignored.
+  let speculativeDecoding: SpeculativeDecoding | undefined
+  const sd = raw['speculative_decoding']
+  if (sd !== undefined) {
+    if (typeof sd !== 'string' || !SPECULATIVE_SCHEMES.includes(sd as SpeculativeDecoding)) {
+      errors.push(`"speculative_decoding" must be one of: ${SPECULATIVE_SCHEMES.join(', ')}`)
+    } else if (roleRaw !== 'chat') {
+      errors.push('"speculative_decoding" is only supported for role: chat')
+    } else {
+      speculativeDecoding = sd as SpeculativeDecoding
+    }
+  }
+
   // Optional: which hardware profiles this model targets.
   let recommendedProfiles: HardwareProfile[] = []
   const rp = raw['recommended_profiles']
@@ -391,6 +430,7 @@ export function validateManifest(raw: unknown): ValidationResult {
       recommendedRamGb,
       recommendedContextTokens,
       supportsThinkingMode,
+      ...(speculativeDecoding ? { speculativeDecoding } : {}),
       localPath,
       sha256,
       recommendedProfiles,

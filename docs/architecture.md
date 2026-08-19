@@ -2883,12 +2883,19 @@ acceleration: probe + start ladder" subsection above. The ladder, as a picture:
 
 ```
 start(model), settings.gpuMode = 'auto' (default)
+├─ Rung 1a— default binary + the MTP speculative-decoding flags (#182; opted-in manifests only,
+│           and only past the probe/VRAM precondition — MTP record §4). Rung 1 IS its fallback.
 ├─ Rung 1 — default binary, NO -ngl/--device args (auto-offload; GPU-less machine ⇒ already CPU)
 │           the cached probe runs CONCURRENTLY with the server start and labels backend gpu|cpu
 ├─ Rung 2 — same binary + `--device none`   (after rung-1 spawn error / exit / health timeout)
 ├─ Rung 3 — pure-CPU safety-net build <os>/cpu/llama-server (if present)
 └─ Rung 4 — MockRuntime (existing graceful-fallback rule — never stuck)
 ```
+
+(**Rung 1a**, the speculative-decoding rung, is documented in its own record — "MTP speculative
+decoding — design record (issue #182)" below. It never persists `gpuAutoDisabled`, and its
+mid-session crashes take a separate handler from §5.3 for the same reason: the extra flags are
+the suspect, not the device.)
 
 **§5.3 Mid-session crash auto-fallback (corrected — full-audit 2026-06-28, REL-1):**
 
@@ -11015,6 +11022,133 @@ takes nothing at all (a refusal must not leave the model looking permanently bus
 | Fold the doc-task **queue** into the span | D5 — the span is the "actually using the model" fact; the queue's own state is the wider one, and `modelBusyLane` reads both at their sources |
 | Drop `admission.ts`'s own `hasActiveDocTask()` leg, now that `isExternallyBusy` covers a *running* task | It also covers a **queued** one, which the span deliberately does not (D5). Removing it would narrow external admission, not simplify it. The redundancy for the running half is intentional and harmless — and that leg is the reason the external lane already respected doc tasks before this wave |
 | Retune any RAM/tok-s figure | Nothing measured changed. A benchmark that skips its speed leg simply records `tokensPerSecond: null` and says so |
+## MTP speculative decoding — design record (issue #182, §1–§7)
+
+_Measured evidence: `docs/model-benchmarks.md` §9.4 "MTP speculative decoding". Manifest-field
+reference: `docs/model-policy.md` "Manifest fields". **§ numbers below are stable — code comments
+cite them as "MTP record §N".**_
+
+### §1 What the feature is
+
+The Qwen3.8 GGUFs ship a **trained-in multi-token-prediction draft head** inside the same file
+(`blk.64.nextn.*` — 15 tensors llama-server loads and then ignores, which is what the "unused
+tensor" warnings in every §4 benchmark log were). Passing `--spec-type draft-mtp
+--spec-draft-n-max 2` activates it: the head proposes the next tokens, the full model verifies
+them in one batched pass, and the accepted run is emitted together. Measured on the i9-9900X +
+RTX 3090 (Q4_K_M, b10430 vulkan, steady-state temp-0 completions): **~25 → 35.3 t/s prose /
+36.6 t/s code, +38–45 % server-level decode**, draft acceptance 77–91 %.
+
+Speculative decoding is **not** a quality trade: the full model verifies every proposed token, so
+the output distribution is preserved. What it does break is temp-0 **byte**-reproducibility —
+batched verification flips near-ties — which is why the §2 grounded-QA gate is score parity
+within cross-run tolerance, never byte identity.
+
+This needs **no second model file and no `--model-draft`**, which is what makes it adoptable at
+all: the parked `-it-assistant` draft models in the Gemma 4 wave (`model-policy.md`) needed a
+whole second weight on the drive, this needs a flag.
+
+### §2 Decisions
+
+| Decision | Choice | Why |
+|---|---|---|
+| Who opts in | A **per-manifest** field, `speculative_decoding: mtp` | The draft head is a property of the WEIGHT, not of the machine or the user's preference. A settings toggle would ask the user a question they cannot answer. |
+| Field shape | A **closed enum** the runtime maps to a fixed, code-owned argument list | Manifests live on the drive and are user-editable. An `extra_server_args` list would let a hand-edited YAML inject any llama-server flag — and `LlamaServer.buildArgs` appends extras LAST, so a smuggled `--host 0.0.0.0` would win and break the loopback-only invariant the whole security model rests on. |
+| Which manifests | `qwen3.8-27b-q4` and `qwen3.8-27b-q5` only | The draft head costs ~2 GiB VRAM. Both keep 24 GB headroom; `qwen3.8-27b-q6` already peaks at 22.7 GiB on a 24 GB card at ctx 8192, and that VRAM fit is its entire reason to exist (rank 0, the "24 GB GPU quality ceiling" pick). |
+| Draft depth | `--spec-draft-n-max 2` | Measured pick: n=2 gives 77–91 % acceptance; n=3/4 neither break nor help (acceptance falls to 64 % at n=4). The publicly circulating "n=4 emits junk" claim did not reproduce on this stack. |
+| KV quantization | **Not adopted** (`--spec-draft-type-k/v q8_0` + `--cache-type-k/v q8_0`) | Recovers ~1.6 GiB but quantizes the MAIN KV cache, whose long-context quality is unvalidated on our harness — and it still does not make Q6_K fit 24 GB, which was the only reason to consider it. |
+| The off-GPU question (issue gate 3) | **The runtime drops it off-GPU**, structurally | The issue offered two ways to close this: prove the flag harmless on CPU, or drop it. Dropping is decidable without hardware and cannot regress: the measured gain is a full-offload GPU result, and MTP on CPU is simply unmeasured. |
+| `-np 1` | Not passed | Showed no throughput effect at ctx 8192 (default `n_slots=4`, unified KV) — a change with no measured benefit is not a change. |
+
+### §3 The mechanism: rung 1a
+
+The start ladder (GPU record §5.2) gains one rung, **before** rung 1:
+
+```
+├─ Rung 1a — default binary + `--spec-type draft-mtp --spec-draft-n-max 2`   (#182)
+│            only for a manifest that opts in, and only past the §4 precondition
+├─ Rung 1  — default binary, NO -ngl/--device args (the existing GPU attempt)
+├─ Rung 2  — same binary + `--device none`
+├─ Rung 3  — pure-CPU safety-net build
+└─ Rung 4  — MockRuntime
+```
+
+Rung 1 sitting immediately below it **is** the fallback, and that is the point of expressing this
+as a rung at all: an older runtime that rejects the flag, a weight without the draft head, a
+driver that refuses — every one of them costs one failed attempt and lands on exactly today's
+behavior. Rungs 2 and 3 are forced-CPU and never carry the flags, which is how the off-GPU
+decision above is enforced structurally rather than by a comment.
+
+### §4 The precondition (why the ladder awaits the probe here, and only here)
+
+Rung 1a is the one rung that must know the device **before** it spawns, because llama.cpp does
+not fail when VRAM is short — `--fit` silently offloads fewer layers. An unaffordable MTP start
+would therefore look perfectly healthy while decoding at partial-offload speed: the issue-#42
+class, where a silent partial offload cost roughly the whole GPU advantage and nobody could see
+it. A skipped rung costs nothing; a silent partial offload costs everything the flag buys.
+
+So when — and only when — a manifest opted in, the ladder awaits the **session-cached** device
+probe before spawning (sub-second after the first call, hard-capped at 10 s, never rejects), and
+the very next rung reuses the same cached answer. Every other model keeps the concurrent
+probe-alongside-load behavior untouched.
+
+Three refusals, all of which **skip** the rung (no spawn, no failure, no GPU blame):
+
+1. **No probed device** — the measured gain is a full-offload GPU result.
+2. **Not enough free VRAM** — one device must report the weight's own bytes plus
+   `MTP_VRAM_HEADROOM_MB` = 3.5 GiB free. That number is the measured sum, unpadded: a
+   full-offload llama-server peaks ~1.3–1.4 GiB above the GGUF's size (KV + compute buffers) and
+   the draft head plus its KV costs ~2 GiB more. It reproduces the §9.4 verdicts exactly — Q4
+   (15.9 GiB) and Q5 (18.5 GiB) clear a 24 GB card, Q6_K (21.3 GiB) does not. Free VRAM is never
+   summed across cards: a multi-device split with a draft head is unmeasured.
+3. **Weight size unknown** — a failed file stat means the VRAM check cannot be made. Refuse
+   rather than guess.
+
+### §5 Failure handling: never let a speed-up cost the GPU
+
+Two paths, and both exist to keep an *optional* accelerator from doing *permanent* damage:
+
+- **Rung 1a will not start.** It never persists `gpuAutoDisabled` — rung 1 is next in the walk
+  and is the real device verdict, so an unsupported flag on an older runtime must not exile a
+  working GPU to CPU for every later start. It does set a **session latch** for that model id, so
+  later starts skip the rung instead of paying a doomed multi-GB load attempt every single time.
+  The latch is module-scoped and never persisted (the `read-speed.ts` suppression idiom): the
+  reasons are hardware/driver state, and a wrong latch must not outlive the process.
+- **A running rung-1a runtime dies mid-session.** It routes to `createSpeculativeCrashAutoFallback`
+  instead of the §5.3 GPU handler. Same force-restart discipline, two deliberate differences: the
+  GPU flags stay untouched (the device is not the suspect; the ladder has already latched MTP off,
+  so the restart comes back **on the GPU**), and the notice says what actually happened —
+  `main.runtime.speedUpDisabled`, not the compatibility-mode copy, whose "responses may be a bit
+  slower" promise would be a plain lie when the model is still on the GPU.
+
+"Try GPU again" (Diagnostics) clears the latch as well as the probe cache and the GPU flags: it is
+the user asking for the accelerated paths back, and it is the same shape of sticky,
+hardware-derived "no". The §4 precondition still has the final say on the next start.
+
+### §6 Observability
+
+The decision is invisible in the UI by design — a user cannot act on it — so it goes to the log
+and `perfMark('runtime_speculative')` via the `onSpeculative` hook: `enabled` / `skipped` (with
+the refusal reason) / `failed` / `crashed`, plus the winning rung's label in the existing
+"Runtime backend selected" line. This is the answer to "is the speed-up actually on?", and it is
+the lesson of #42 applied up front rather than after a bug report.
+
+### §7 What this wave deliberately did not do
+
+- **No RAM/VRAM retuning.** `recommended_min_ram_gb` and the manifests' measured VRAM lines are
+  pre-MTP figures and stay that way until re-measured with the flag on. The repo rule is that
+  manifest numbers are measured, never estimated.
+- **No UI.** Nothing to decide, nothing to show.
+- **Watch item — the tokens/sec probe.** `measureTokensPerSecond` counts stream **chunks**, an
+  approximation it already documents. If a future llama-server batches an accepted draft run into
+  one SSE delta, the probe would under-read on an MTP model and could feed the very-low-tps
+  downgrade. Not observed; recorded so the next person who sees a nonsense figure on a fast
+  machine has the thread.
+- **Two owed hardware gates** (issue #182, both need the i9-9900X + RTX 3090 rig): the §2
+  grounded-QA harness re-run for both quants with MTP on (score parity within cross-run
+  tolerance — NOT byte identity), and the §9.1 smoke legs on the b9849 pin including teardown and
+  24 GB VRAM headroom. Until they run, the guards above are what make shipping it survivable: on
+  hardware the gates would cover, the worst unratified outcome is a start that falls back one
+  rung; everywhere else the rung is never even attempted.
 
 ## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
 

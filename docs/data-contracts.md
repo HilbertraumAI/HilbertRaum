@@ -324,6 +324,15 @@ reasoning surface, and it disappears once the persisted reply lands.
 `getRuntimeStatus` handler for the running model only) → the composer offers Deep only when
 true (stale Deep choices coerce to Balanced at send). `askDocuments` never passes a mode —
 document answers always run balanced (deep-grounded = wave 2).
+✅ **Speculative decoding (#182):** manifest `speculative_decoding` (closed enum, today only
+`mtp`, chat role only) → `ModelManifest.speculativeDecoding` → `RuntimeStartOptions
+.speculativeDecoding` (supplied by `startModelRuntime`, explicit `null` when absent) → the start
+ladder's **rung 1a**, which spawns with `CHAT_SERVER_ARGS` + `MTP_SERVER_ARGS` = `--spec-type
+draft-mtp --spec-draft-n-max 2`. The manifest names a scheme and NEVER supplies arguments (the
+flag list is code-owned; extras are appended last in `buildArgs`, so a free-form field could
+override `--host`). The ladder gates the rung on a probed GPU with the weight's bytes +
+`MTP_VRAM_HEADROOM_MB` free, and forced-CPU rungs never carry the flags. Design record:
+`architecture.md` "MTP speculative decoding".
 
 ### Document ingestion (Phase 4 live)
 ✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
