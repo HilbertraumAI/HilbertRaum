@@ -609,7 +609,11 @@ export const de: Record<keyof typeof en, string> = {
   'docs.reindex': 'Neu indexieren',
   'docs.reindexBusy': 'Wird neu indexiert…',
   'docs.reindexTitle': 'Die gespeicherte Kopie erneut lesen und vorbereiten',
+  // #194: Rückmeldung für die Aktionen an einem einzelnen Dokument (siehe en.ts).
+  'docs.reindexDone': '„{title}“ neu indexiert.',
   'docs.delete': 'Löschen',
+  'docs.deleteBusy': 'Wird gelöscht…',
+  'docs.deleteDone': '„{title}“ gelöscht.',
   // Aktionen für eine fehlgeschlagene Zeile (§11.6): kein Vorschau-Knopf (es gibt keinen Text),
   // sondern Entfernen und — nur wenn ein erneuter Versuch helfen kann — „Erneut versuchen".
   'docs.failed.remove': 'Entfernen',

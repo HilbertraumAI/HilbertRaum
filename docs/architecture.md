@@ -10668,7 +10668,7 @@ The wave's working paper is gone; its anchors resolve here:
 | `plan §7` (audit ledger A1–A10) | §8 above |
 | `plan §8` (six-persona ledger) | §8 above |
 
-## Portable stored copies — design record (wave 188, issues #188/#190, §1–§9)
+## Portable stored copies — design record (wave 188, issues #188/#190/#194, §1–§10)
 
 _Issue **#188** was filed as a UI defect: "Originaldatei exportieren" failed with "Die
 Dokumentdatei ist nicht mehr vorhanden" on a real prepared drive whose `workspace/documents/`
@@ -11179,7 +11179,75 @@ operator no feedback of any kind — "it worked" and "nothing happened" were the
 single-document path returns silently from the shared `run()` helper while the **bulk** "Re-index
 all" toasts and carries a determinate progress bar. Its failure path is the screen-level banner
 that does not name the document — **D-3 recurring on a neighbouring action**, which this wave fixed
-for export and did not sweep.
+for export and did not sweep. **Fixed — see §10 below.**
+
+### §10 D-3 swept: feedback for the single-document actions (issue #194)
+
+_§9.4's out-of-scope finding, closed. The continuity check's re-index leg **succeeded** and told
+the operator nothing — no success signal, no progress, no error — so "it worked" and "nothing
+happened" were the same event, and it took a diagnostic run to learn which had occurred. A
+feedback defect, not a functional one: all 24 rows were still `indexed` afterwards._
+
+**The screen was inconsistent with itself.** The bulk "Re-index all" is a main-owned job that
+toasts (`docs.reindexAllDone` / `…Cancelled` / `…Partial`) and carries a determinate bar built to
+survive navigation. The single-document twin is a plain blocking `ipcMain.handle(IPC.reindexDocument)`
+that the renderer awaits inside one shared helper — `run()` in `DocumentsScreen.tsx`, which also
+serves **delete** — and that helper refreshed the list and returned silently. Three gaps, all in
+the renderer, all in that helper:
+
+| Gap | Before | After |
+|---|---|---|
+| 1 — success | nothing; a healthy document redraws an IDENTICAL list | a toast naming the document (`docs.reindexDone` / `docs.deleteDone`) |
+| 2 — progress | `disabled={busy !== null}` — every row's buttons grey out, no spinner, no label | the clicked row shows the disabled `<Spinner/>` + "Re-indexing…" / "Deleting…" pair |
+| 3 — failure | the screen-level banner, not naming the document | the banner, **prefixed with the title** |
+
+**Gap 3 is D-3 recurring, not a new finding.** §2's D-3 is verbatim "the failure arrived after the
+click, on a screen-level banner that did not say which document it was about". Wave 188 fixed that
+for `onExportOriginal` and did not sweep the neighbouring single-document actions, so `run()` kept
+the old shape. The fix is the same one line (`${d.title}: ${friendlyIpcError(e)}`), now on the
+helper both actions share.
+
+**Decisions.**
+
+- **D15 — the helper takes the document, not a busy key.** `run(kind, d, fn)` replaces
+  `run(key, fn)` and derives `busy` as `${kind}-${d.id}` itself. All three channels need the
+  document (the toast and the banner need its title, the row needs its id), so threading it once is
+  what makes the three fixes one change instead of three. The five call sites — the ⋯ menu, the
+  failed-row "Try again"/"Remove" pair, the deep-index "Re-index first" chain, and the delete
+  ConfirmDialog — pass it directly.
+- **D16 — delete is covered too, though its success is self-evidencing.** The row disappears, so
+  the toast is redundant *there*; keeping one shape in one helper is worth more than the saved
+  toast, and a special case would drift. Its progress and named failure are not redundant at all.
+- **D17 — the screen-global `busy` scalar STAYS; only its legibility changed.** It serializes the
+  blocking actions deliberately (DR-5: a bulk re-index shares the same scalar, so an import cannot
+  start beside one). What was wrong was that it was the *only* signal. The parent narrows it to a
+  per-row `rowBusy: 'reindex' | 'delete' | null` in `renderRow` — the same PERF-5 discipline as
+  `rowTask` (`null` is Object.is-stable, so the ~all idle rows keep their memo) — and `DocRow`
+  renders the busy pair the doc-task lane already uses, **minus a Cancel**: these IPCs are plain
+  blocking invokes with nothing to cancel, and an enabled Cancel that does nothing is worse than
+  none (the FE-5/GAP-7 honesty rule).
+- **D18 — the toast is fired behind `mountedRef`.** The toast host is app-level, so an unguarded
+  one surfaces on whatever screen the user navigated to while the re-embed ran.
+
+**Deliberately NOT built** (each would be a larger change than the defect):
+
+- **A per-row inline error surface.** The issue notes the banner sits above a list the user may
+  have scrolled away from. Naming the document is exactly the remedy D-3 accepted for export;
+  a second error channel per row races the screen banner and needs its own dismissal story.
+  Design-guidelines §6 also keeps actionable errors OFF toasts, so promoting the failure to a toast
+  was not an option either.
+- **Promoting single-document re-index to a main-owned cancellable job with a determinate bar**
+  (the bulk architecture). A real IPC/lifecycle change for one document; the spinner answers the
+  question the operator actually asked ("is it working?").
+- **The selection toolbar's bulk delete**, which is a different loop and whose success is likewise
+  the rows vanishing.
+
+**Proof.** `tests/renderer/DocumentsScreen.test.tsx` — "single-document action feedback (#194)":
+the success toast for re-index and for delete, the in-flight spinner asserted on the clicked row
+**and its absence on the sibling row**, and a rejected re-index landing on the banner as
+`contract.pdf: …` with no success toast. Each guard was mutation-checked: dropping the `showToast`
+call reds the two toast tests, disabling the `rowBusy` branch reds the spinner test, and reverting
+the title prefix reds the D-3 test.
 
 ## Model occupancy — design record (issues #185/#186, §1–§6)
 

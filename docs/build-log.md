@@ -20,6 +20,103 @@
 > `../BUILD_STATE.md` pointer above and any `http(s)://` targets; a few `](…)` sequences that were only
 > ever inline code (a regex, an `arr[kind](args)` call) are untouched because they never rendered as links.
 
+_2026-08-20 — **The diagnostic RAN on the real drive (G:\), and it refuted our own leading
+hypothesis — issue #190 checkbox 1 ANSWERED, checkbox 3 re-answered.**_ Measured, drive byte-identical
+(the read-only witness passed): encrypted workspace, **v2** descriptor, `stored_name` column ABSENT
+(pre-#189 schema), **24 rows, 24 stale, 24 healable, 0 unnamed, 0 with no copy anywhere**; **1 orphan
+`.enc`, 115.2 KiB**; file classes stored-copy 25 (2.1 MiB) with **zero** parse-transients and **zero**
+staged rekey files; extensions pdf 17 / docx 6 / md 1; nothing at rest (.recovery, -wal, -shm,
+`.enc.new` all absent). So **#188 is confirmed outright** — drive-letter relocation took the whole
+corpus stale at once, every byte still at the canonical location, and the #189 resolver heals all 24
+on first read. **But `audio` rows = 0, which kills the record's leading explanation of checkbox 3**
+("one audio document previews from chunks while export fails"). The replacement, re-verified against
+the pre-#189 code rather than traced: `extractDocumentPreview` and `readStoredDocumentBytes` had
+*identical* ladders (`stored_path` → `original_path` → throw), audio was the only chunk-backed branch,
+the Vorschau modal never opens on a failed preview, and there is no cache — so with 24/24 stale,
+preview failed for EVERY document on that drive. The contradiction is **TEMPORAL** (the "Vorschau
+works" observation predates the relocation), not per-document. `architecture.md` §9 and §6 corrected.
+**Harness fix (phase 2):** the password prompt was gated on `process.stdin.isTTY`, which vitest's
+FORKED WORKER makes permanently false — the hidden prompt could never fire from any shell, and the
+failure text told the operator to "re-run from an interactive shell", which cannot help. It now reads
+the console DEVICE directly (`\\.\CONIN$` / `/dev/tty`, opened `r+` so `SetConsoleMode` is permitted,
+raw mode via libuv = echo off); no console ⇒ **fail fast** with the copy-pasteable
+`Read-Host -AsSecureString` / `read -rs` recipe, never a cooked read that would echo the password.
+New `tests/helpers/console-password.ts` + `tests/unit/console-password.test.ts` (5 tests — the
+worker's own non-TTY stdin is the witness; the source pin was mutation-checked). The header now
+carries the invocation that actually works here: `..\..\node_modules\.bin\vitest.cmd` — `npx` is
+blocked by this machine's PowerShell execution policy.
+
+_2026-08-20 — **Cleanup posture DECIDED (owner): leave the orphans, ship nothing — issue #190
+checkbox 2 closed, and with it the last open item of the wave.**_ The decision D4's rider deferred
+until the count and the descriptor version were known was taken on that evidence: **n=1,
+115.2 KiB, v2**. v2 means a password change is the O(1) `rewrapVaultKey`, so the rider's expensive
+branch (a v1 migration re-encrypting every orphan, with the ENOSPC exposure that scales with
+orphaned bytes) never applies here; what remains is 115 KiB of unreferenced ciphertext beside
+2.1 MiB of live ciphertext under the same key — ~5% of the drive's document ciphertext, and nothing
+at all against an attacker without the password. The load-bearing argument against building even
+the *opt-in* version: a one-time named delete IS safer than a sweep, but the safety comes from **a
+human picked the file**, not from guards — put it in the app and code picks the file again, which
+reinstates D4's race and the D10 over-count hazard (the phantom-orphan bug the first end-to-end
+smoke found). The surface would be Diagnostics-only + unlock-gated + typed confirmation + an
+import/rekey refusal + de-AT copy + tests, i.e. a permanently-reachable delete path over the
+encrypted store shipped for a one-off 115 KiB, for a condition #189 already made unreachable.
+**Revisit trigger** (so this does not decay into "never look again"): any run reporting a **v1**
+descriptor with orphans, or orphan bytes at a material fraction of the store (order >50 files or
+>100 MiB) — both already reported by the diagnostic, so no new code is needed to notice. Record:
+`architecture.md` **§9.2 (D14)**, with a pointer from the §3 D4 rider.
+
+_2026-08-20 — **The relocation continuity check RAN — issue #190 checkbox 4 ANSWERED, and #188's
+worst defect is now proven fixed on hardware.**_ The same drive came back under a different letter
+(`G:\` → `K:\`), which is exactly the check BUILD_STATE §5 item 1 has carried as open since wave 188.
+Run as diagnostic → functional walk in the app → diagnostic, with the app **quit cleanly in between**
+— load-bearing, because the healed rows live in the plaintext working DB until `lockEncryptedVault`
+re-encrypts it, so an "after" run against a still-unlocked workspace reads the PRE-walk state and
+looks like nothing healed. Measured: `stored_name` populated **0 → 14 / 24**, stale **24 → 10**,
+resolved-as-recorded **0 → 14**, orphans **1 → 1**, 24 rows all still `indexed`, nothing at rest.
+Per-row tokens moved `EOPSH` → `ENOP` for exactly the 14 documents that were opened. **Four things
+no test could establish:** (1) D3's lazy heal works on a real relocated drive and heals ONLY what is
+read — no startup migration burst, which is what D3 traded a bulk migration away for; (2) **D-1 is
+fixed on hardware** — an import + delete left NO new orphan, where pre-#189 it would have left a
+second one; (3) the pre-walk baseline reproduced the §9.1 report field for field under the new
+letter, same orphan token included, so the canonical-location step is genuinely mount-independent
+rather than accidentally right on one drive; (4) the vault teardown is clean under the new letter.
+**Residual:** the delete leg used a post-#189 throwaway row, so D-1's *original* condition (a legacy
+row whose absolute `stored_path` names the old mount point) is still not exercised directly — 10 such
+rows remain on that drive. **Filed out of scope: #194** — the re-index leg SUCCEEDED but gave the
+operator no feedback of any kind; the single-document path returns silently from the shared `run()`
+helper while bulk "Re-index all" toasts and carries a determinate progress bar, and its failure path
+is the screen-level banner that does not name the document — **D-3 recurring on a neighbouring
+action**, which wave 188 fixed for export and never swept. Record: `architecture.md` §9.4.
+
+_2026-08-20 — **Stored-copy diagnostic REBUILT — issue #190 phase 1 (no hardware, no password, fully
+CI-verified).**_ `architecture.md` §6 said the #188 root-cause diagnostic "was written and
+smoke-tested against a synthetic vault" and only needed the owner's password. **It never existed**:
+it lived in the git-excluded working paper and went with it at close-out — nothing matching it was
+ever committed on any branch. So #190 checkbox 1 was never hardware-blocked; it was ordinary CI-able
+work, and that is what this wave did. §6 now carries the correction and a new **§9** records the
+tool as built. Shape: a **pure classifier + renderer** (`tests/helpers/stored-copy-audit.ts` — rows
++ a directory listing in, report out, no I/O), a **read-only collector**
+(`stored-copy-audit-run.ts` — copy → decrypt the COPY → open `{ readOnly: true }` → probe the schema
+→ query → walk `documents/` → shred the scratch), a **witness** (`read-only-witness.ts`), the
+env-gated operator shell (`tests/manual/stored-copy-diagnostic.test.ts`), and both CI halves. It is
+test-tree code on purpose — it must not ship in the bundle as dead code, and `tsconfig.web.json`
+already typechecks `tests/`. Three things are load-bearing: every MUTATING vault entry point is
+forbidden by name (`unlockEncryptedVault` commits/discards staged rekeys and can roll a `.recovery`
+over the `.enc`; `openDatabase` writes the schema + ~20 `ensureColumn` calls just by opening), the
+`stored_name` column is **probed** because the reporting drive predates #189, and the report is
+public-issue-safe **by construction** (counts, two closed allowlists, 8-char shape tokens — no
+titles, content, paths or file names, asserted against a vault full of planted secrets). Seven
+mutations each turned the intended test red, incl. the dangerous one — a loose `.enc` match that
+files a live `<id><ext>.enc.new` as an orphan. The first end-to-end operator smoke against a
+synthetic drive earned its keep: it exposed a phantom orphan (a row whose corrupt strings name
+nothing left its healthy copy unclaimed), fixed by making a file’s LEADING id a fourth ownership
+source — over-counting orphans is the one error direction that can cost data.
+**D4 rider:** orphans are NOT inert —
+`listEncryptedDocSidecars` walks the directory, so a **v1** vault's first password change re-encrypts
+every orphan and stages an `.enc.new` for each (a v2 rekey is O(1) and does not); that asymmetry is
+why the report carries the descriptor version. **Deliberately not built:** any cleanup/sweep —
+#190 checkbox 2 is an owner decision that needs the orphan count first. Suite 5363/361 files green.
+
 _2026-08-19 — **Model occupancy — wave CLOSED (issues #185/#186).**_ The two issues the local-API
 wave filed out of scope were one defect seen from two sides, and were fixed together as both asked.
 "Who has the model" was answered by three registries and one hole: chat had `inFlightStreams`, doc

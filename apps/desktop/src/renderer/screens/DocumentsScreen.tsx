@@ -500,14 +500,34 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     }
   }
 
-  async function run(key: string, fn: () => Promise<unknown>): Promise<void> {
-    setBusy(key)
+  // The two blocking single-document actions (re-index, delete). #194: this helper used to take a
+  // bare busy key and, on success, refresh and return SILENTLY — so a re-index of an
+  // already-healthy document redrew an identical list and "it worked" and "nothing happened" were
+  // the same event (measured on the relocated drive in the #190 continuity check; the re-index had
+  // in fact succeeded). It now takes the document itself, which is what all three feedback
+  // channels need:
+  //  · success  → a toast naming the document, mirroring the bulk twin's `docs.reindexAllDone`;
+  //  · progress → `busy` is `${kind}-${d.id}`, which `renderRow` narrows to a per-row spinner
+  //               instead of the screen-global disable being the only signal;
+  //  · failure  → the banner is PREFIXED with the title. That is #188's D-3 verbatim ("the failure
+  //               arrived after the click, on a screen-level banner that did not say which document
+  //               it was about") — fixed there for export-original only, swept onto its neighbours
+  //               here (architecture.md "Portable stored copies" §10).
+  // Delete gets the same treatment on purpose even though its success is self-evidencing (the row
+  // disappears): one helper, one shape, no special case to keep in step.
+  async function run(kind: 'reindex' | 'delete', d: DocumentInfo, fn: () => Promise<unknown>): Promise<void> {
+    setBusy(`${kind}-${d.id}`)
     setError(null)
     try {
       await fn()
       await refresh()
+      // Guarded like every other post-await effect on this screen: the toast host is APP-level, so
+      // an unguarded toast would surface on whatever screen the user navigated to instead.
+      if (mountedRef.current) {
+        showToast(t(kind === 'reindex' ? 'docs.reindexDone' : 'docs.deleteDone', { title: d.title }))
+      }
     } catch (e) {
-      setError(friendlyIpcError(e))
+      setError(`${d.title}: ${friendlyIpcError(e)}`)
     } finally {
       setBusy(null)
     }
@@ -637,7 +657,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     setError(null)
     try {
       if (d.fullyChunked === false) {
-        await run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))
+        await run('reindex', d, () => window.api.reindexDocument(d.id))
       } else if (d.treeStatus === 'ready') {
         await startTask('extract', d.id)
       } else {
@@ -1014,6 +1034,13 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       !isDocTaskTerminal(activeTask.status)
         ? activeTask
         : null
+    // #194 gap 2: the same narrowing for the blocking single-document actions. `busy` is one
+    // screen-global scalar (DR-5 — it serializes them deliberately), so before this the ONLY
+    // signal was `disabled={busy !== null}` on every row's buttons: no spinner, no label change,
+    // and re-embedding is not instant, so a long re-index read as a frozen UI. Narrowed here for
+    // the same PERF-5 reason as `rowTask`: `null` for every row but the one actually working.
+    const rowBusy: 'reindex' | 'delete' | null =
+      busy === `reindex-${d.id}` ? 'reindex' : busy === `delete-${d.id}` ? 'delete' : null
     return (
       <DocRow
         key={d.id}
@@ -1033,6 +1060,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         ocrAvailable={ocrAvailable}
         translationAvailable={translationAvailable}
         busy={busy}
+        rowBusy={rowBusy}
         // DR-4: per-row — a stable `false` for every row except the one actually opening.
         previewLoading={previewLoadingId === d.id}
         showCheckbox={Boolean(onAskSelected)}
@@ -1423,7 +1451,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         onConfirm={() => {
           const d = confirmDelete
           setConfirmDelete(null)
-          if (d) void run(`delete-${d.id}`, () => window.api.deleteDocument(d.id))
+          if (d) void run('delete', d, () => window.api.deleteDocument(d.id))
         }}
         onCancel={() => setConfirmDelete(null)}
       >
