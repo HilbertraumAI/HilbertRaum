@@ -16,15 +16,32 @@ recommended_context_tokens: 8192
 supports_thinking_mode: true  # Phase-29 run #2: thinking-quality check passed (Deep 8/8 = Balanced 8/8, real reasoning) → flipped
 supports_tools: false
 local_path: models/chat/gemma4-12b-it-qat-q4.gguf
-sha256: faff1a63667fac17ac5e777f47114688fcefea96e220e211aaa8d62c2c4561f1
+sha256: 93567e57a8fe10b23569b9d9ec38cd005deedf71e29477c421a4b83f418a538b
 # Phase 28 (model-catalog-expansion-plan D16): where `fetch-models` downloads the weight
 # from + what to verify it against. Filename + byte size verified against the HF repo file
 # listing 2026-06-10 (the file name is lower-case `gemma-4-12b-...` while the repo id keeps
 # `12B`); hash promoted via `verify-models --generate` after the first fetch.
+# REPOINTED IN PLACE 2026-08-20 (issue 201) — both sha256 fields + size_bytes. Google re-uploaded
+# this checkpoint on 2026-07-17 (repo commit 29d09777, "corrected vocabulary"), so the URL stayed
+# alive while serving different bytes: the old pin faff1a63... failed SHA-256 verification at the
+# END of a ~7 GB download. Re-measured on the i9-9900X + RTX 3090 rig 2026-08-20, old checkpoint vs
+# corrected, same harness, same day, temp 0. WHAT WAS MEASURED: §2 grounded-QA (100 items),
+# peak RSS + peak VRAM at ctx 8192 on the b10430 basis, and the full §9.1 in-app leg set on the
+# b9849 pin. VERDICT: the same model on every surface we ship — all 100 §2 answers BYTE-IDENTICAL
+# to the old checkpoint (mean F1 .3399, EM .9765, citation .9882, hallucination .0667 — unchanged,
+# so the rank-2 standing carries on evidence), peak RSS delta 44 kB (7,917,560 → 7,917,516 kB, i.e.
+# zero), peak VRAM identical at 9,720 MiB, all §9.1 legs green. In place rather than a successor id
+# (the issue-196 posture) because the file was SUPERSEDED, not deleted, and two provably
+# indistinguishable catalog entries would be the successor cost -- see model-benchmarks.md §9.6.
+# LOADER OBSERVATION, saved here because it looks alarming and is not: the corrected file emits TWO
+# control-token override warnings the old file does not ("control-looking token '</s>' was not
+# control-type ... will be overridden", same for '<|tool_response>'). llama.cpp re-types those
+# tokens; neither plays any part in our chat-template path, so the warnings are inert.
+# Raw rows: eval/results/i9-9900X-gemma4fix-{old,new}-vulkan-{items.jsonl,quality.csv}.
 download:
   url: https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf/resolve/main/gemma-4-12b-it-qat-q4_0.gguf?download=true
-  sha256: faff1a63667fac17ac5e777f47114688fcefea96e220e211aaa8d62c2c4561f1
-  size_bytes: 6975877728
+  sha256: 93567e57a8fe10b23569b9d9ec38cd005deedf71e29477c421a4b83f418a538b
+  size_bytes: 6975879296
   license_url: https://www.apache.org/licenses/LICENSE-2.0
 bundled_on_preconfigured_drive: false
 # PROMOTED challenger (Phase 29, §5.4): beats the incumbent Qwen3 14B on EVERY axis in the

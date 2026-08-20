@@ -29,6 +29,18 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-20 — **gemma4-12b checkpoint repointed IN PLACE after the measurement wave — issue #201
+CLOSED.**_ Google superseded the pinned GGUF at the same URL on 2026-07-17 ("corrected
+vocabulary"), so a ~7 GB download ended in `checksum_failed`. Measured old vs corrected on the
+i9-9900X + RTX 3090: **all 100 §2 answers byte-identical**, peak RSS delta 44 kB, peak VRAM
+identical, every §9.1 leg green — so the owner chose an **in-place** repoint (both `sha256`
+fields + `size_bytes`) over an issue-#196-style successor id, which would have duplicated a
+provably indistinguishable catalog entry. Accepted cost: a drive holding the old bytes reports
+`checksum_failed` until it re-downloads (not bundled, not in the `--with-assets` default set) —
+in `known-limitations.md` and `CHANGELOG.md`. Record: `model-benchmarks.md` §9.6; the in-place
+vs successor precedent is now written into `model-policy.md`'s drift check. Audit ledger B-1
+closed. Raw rows: `eval/results/i9-9900X-gemma4fix-*`.
+
 _2026-08-20 — **Docs / references / comment audit — reported, safe half remediated, two
 measurement items filed.**_ One pass over the living markdown (~49.5k lines) and the code comments
 (309 files, 31,682 comment lines): staleness, reference liveness (internal links, §-citations,

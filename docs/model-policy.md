@@ -417,7 +417,19 @@ committed `download.url`:
    file's SHA-256) against the manifest's `sha256`. A mismatch on a live URL is the quiet failure.
    Repointing the manifest at the new bytes is a **substitution**, and manifest numbers are
    measured, never estimated — so it needs its own measurement wave, exactly like the successor
-   of a withdrawn file (next paragraph).
+   of a withdrawn file (below).
+
+**Repoint in place, or enter a successor id?** The wave decides, and the two precedents differ on
+one fact: whether the pinned file still exists upstream. Issue #196 (deleted files) used
+**successor ids** — the old manifests had to stay valid for drives that still hold those exact
+bytes. Issue #201 (a file **superseded** at the same path, 2026-08-20) repointed **in place**,
+because the wave measured the old and corrected checkpoints as indistinguishable on every shipped
+surface — all 100 §2 answers byte-identical, memory envelope unmoved — so a successor id would
+have put two provably indistinguishable entries in the catalog. The cost of an in-place repoint is
+real and must be stated where users see it: every installed copy of the old bytes reports
+`checksum_failed` until it re-downloads. Weigh that blast radius explicitly
+(`bundled_on_preconfigured_drive`, the `--with-assets` default set, the model's rank) and record
+the decision in the wave's design record. Full reasoning: model-benchmarks.md §9.6.
 
 **The trap that makes step 2 easy to get wrong:** a `HEAD` that *follows* redirects returns the
 CDN's own ETag, which is never the LFS OID — every HuggingFace manifest then reads as a mismatch.

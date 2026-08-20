@@ -2265,7 +2265,18 @@ are decided scope, not oversights; the record's §7 carries the reasoning.
   recommended and unobtainable.
 - **Replacing a weight is a measurement wave, not an edit.** Successors enter as NEW manifest ids
   with their own measured quality/speed/RSS numbers; an in-place URL + hash swap would turn every
-  installed copy into `checksum_failed` overnight (precedent: issue #196, 2026-08-20).
+  installed copy into `checksum_failed` overnight (precedent: issue #196, 2026-08-20). The one
+  exception is the next bullet, and it was still a measurement wave.
+- **An installed copy of the pre-2026-07-17 `gemma4-12b-it-qat-q4` weight now reports
+  `checksum_failed`, and heals by re-downloading** (~7 GB). Google replaced that checkpoint
+  upstream at the same URL ("corrected vocabulary"), so the exact file the old manifest pinned is
+  no longer obtainable. It was re-measured against the corrected one before anything moved, and the
+  two are indistinguishable on every surface the app uses — all 100 grounded-QA answers
+  byte-identical, same memory envelope — so the manifest was repointed **in place** rather than
+  entering a second, provably identical catalog entry (issue #201; model-benchmarks.md §9.6).
+  No shipped drive carries the stale bytes: this model is not bundled on a preconfigured drive and
+  is not in the `--with-assets` default set. If your drive already has it, the AI Model screen shows
+  the checksum failure and Download fetches the corrected file over it.
 
 ## Accessibility (WCAG 2.2 AA sweep — consciously accepted)
 

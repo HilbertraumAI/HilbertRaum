@@ -56,6 +56,15 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Downloading "Gemma 4 12B Instruct QAT Q4" works again** (issue #201). Google replaced that
+  model file on their servers in July with a corrected version, at the same address. The app
+  checks every download against the exact file it expects, so it was transferring the full ~7 GB
+  and only then reporting a checksum failure — with nothing you could do about it. The catalog
+  now points at the corrected file, which was measured against the old one first and answers
+  identically. **If you already downloaded this model, your copy will now report a checksum
+  failure and needs downloading again** (~7 GB) — press Download on the AI Model screen and it
+  replaces itself. No other model in the catalog is affected: all the rest were re-checked
+  against their sources in the same pass.
 - **Deleting a document really deletes its stored copy after a drive changes letter**
   (issue #188). The workspace recorded each imported copy by absolute path, so moving the
   drive between computers — or just getting a different drive letter — left every stored copy
