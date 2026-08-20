@@ -113,11 +113,12 @@ that fits the measured RAM, breaking ties on each manifest's `recommendation_ran
 | < 12 GB | `qwen3.5-4b-ud-q4kxl` |
 | 12–15 GB | `gemma4-e2b-it-qat-q4` |
 | 16–20 GB | `qwen3.5-9b-ud-q4kxl` |
-| 24 GB | `qwen3.8-27b-q4` |
-| ≥ 32 GB | `qwen3.8-27b-q5` |
+| 24 GB | `qwen3.6-27b-q4` |
+| ≥ 32 GB | `qwen3.6-27b-q5` |
 
-(This is the newest-Qwen promotion, owner decision 2026-07-12, handed over to the Qwen3.8 pair
-2026-08-16 — see `model-benchmarks.md` §6.4 and the §9.4 wave record — plus the E2B promotion,
+(This is the newest-Qwen promotion, owner decision 2026-07-12; handed to the Qwen3.8 pair 2026-08-16
+and handed BACK on 2026-08-20 when upstream deleted the Qwen3.8 files — see `model-benchmarks.md`
+§6.4, the §9.4 wave record and §9.5 (issue #196) — plus the E2B promotion,
 owner decision 2026-08-09, issue #153 (the 12–15 GB row; §6.5 "#153 amendment"). The **bundled** default on a preconfigured drive stays `qwen3-4b-instruct-q4` — the
 promotions deliberately did NOT change the bundled model; the tiers above are the RAM-best-fit
 recommendation the picker offers, not the bundled pick.)

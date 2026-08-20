@@ -3304,6 +3304,14 @@ all enforced in MAIN and re-checked per call:**
    or 2 fails the AI Model screen says *why* (policy vs Settings toggle), reusing the
    `PolicyStatus` distinction.
 
+**A fourth refusal, not a gate (issue #196, 2026-08-20):** a manifest whose `download.withdrawn`
+records that the publisher deleted the pinned file is refused BEFORE any request, with copy naming
+the model and the reason — the planner reports `source-withdrawn` ahead of the license gate, the AI
+Model card shows the note instead of a Download button, and the `fetch-models` twins skip such a
+model with a loud line. Nothing about an already-installed weight changes: it verifies and runs as
+before. Schema + rules: model-policy.md "Withdrawn upstream sources"; the case that produced it:
+model-benchmarks.md §9.5.
+
 **Mechanics:** `services/downloads.ts` `DownloadManager` — a job state machine over the
 REUSED `assets.ts` seams (`planModelDownloads` + optional `hashStore`; `downloadToFile`,
 extended additively with `signal`/`headers`/`append`/`onResponse`; `verifyDownloadedFile`).

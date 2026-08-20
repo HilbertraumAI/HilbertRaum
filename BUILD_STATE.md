@@ -19,6 +19,29 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-20 — **Upstream deleted the three Qwen3.8 GGUFs — issue #196, catalog + product fix
+landed, the successor measurement wave stays OPEN.**_ Unsloth restructured
+`unsloth/Qwen3.8-27B-GGUF` for Dynamic 3.0 and removed the static K-quants: all three pinned URLs
+return **404** (re-verified here 2026-08-20 with `HEAD`). Blast radius measured, not assumed —
+**all 28 committed `download.url`s re-checked: only these three are dead**, and the Qwen3.6 pair is
+intact (URL alive AND upstream LFS OIDs still equal the committed hashes). Drives that already
+carry a Qwen3.8 weight are unaffected (local SHA-256 still verifies; MTP unchanged). Shipped: a new
+optional manifest field **`download.withdrawn`** (a dated note) that the planner turns into a
+`source-withdrawn` task ahead of the license gate, so the in-app downloader refuses by name before
+any request, the AI-Model card shows the reason instead of a Download button, and both
+`fetch-models` twins skip with a loud line instead of burning retries on a known-dead link. Catalog:
+`qwen3.8-27b-q4/-q5` **rank 3 → 0** (selectable, never auto-recommended — the existing rank-0
+convention) and the §9.4 generational handover **reverted**: `qwen3.6-27b-q4` retakes 24 GB,
+`qwen3.6-27b-q5` retakes ≥32 GB, both at rank 3. **Not built (deliberate):** the `UD-*` successor
+manifests — numbers are measured, never estimated, so they need the per-quant rig wave (§9.4
+method) **plus** a per-file MTP re-verification, since Dynamic 3.0 publishes the draft head as a
+SEPARATE file while `speculative_decoding: mtp` asserts an in-GGUF head. Verified upstream
+size/OID data for the three candidates is recorded in the §9.5 record so the wave starts from data.
+Records: `model-benchmarks.md` **§9.5**, `model-policy.md` "Withdrawn upstream sources",
+`architecture.md` In-app downloader ("a fourth refusal"). Tests: validator, planner, downloader,
+Models screen and both fetch twins, plus a general catalog invariant — *no committed manifest is
+both recommended and unobtainable*; the planner + renderer guards mutation-checked (5 red / 2 red).
+
 _2026-08-20 — **Single-document re-index/delete now give feedback — issue #194 CLOSED.**_ Found by
 the #190 continuity check on the relocated drive: the operator clicked re-index and got nothing —
 no success signal, no progress, no error — while the re-index had **succeeded** (all 24 rows still

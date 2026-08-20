@@ -652,7 +652,10 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 
 ### Provisioning / asset loader (Phase 12 live)
 ✅ **Schema** — `shared/manifest.ts` `DownloadSpec` + optional `ModelManifest.download` (validated only
-  when present; real `download.sha256` must equal a real top-level `sha256`). `shared/runtime-sources.ts`
+  when present; real `download.sha256` must equal a real top-level `sha256`). Optional
+  `download.withdrawn?: string` (issue #196) — a dated note that the pinned upstream file is GONE;
+  non-empty string or reject, and it applies to `mmproj.download` too (model-policy.md "Withdrawn
+  upstream sources"). `shared/runtime-sources.ts`
   `RuntimeBuild`/`RuntimeSources` + `validateRuntimeSources` (mirror `validateManifest`). The committed
   model manifests (the original six, incl. the later 14B/30B-A3B) carry real upstream URLs + placeholder hashes.
   **(Updated since Phase 12 — see `model-policy.md` for the live catalog and its authoritative
@@ -668,7 +671,9 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 ✅ **`services/assets.ts`** — the canonical, unit-tested asset logic (mirrors `drive.ts`; NO real network):
 - `planModelDownloads(root, manifests, {only?, acceptLicense?}) → ModelDownloadTask[]` — only manifests
   with a `download` block; reads fs to mark `present-verified`/`present-unverified`/`download`/
-  `license-blocked` (license gate ∧ `acceptLicense`); reuses `weightPath`/`verifyChecksum`.
+  `license-blocked` (license gate ∧ `acceptLicense`)/`source-withdrawn` (#196 — `download.withdrawn`
+  is set and the file would have to be fetched; decided BEFORE the license gate, and the task
+  carries the note as `withdrawn`); reuses `weightPath`/`verifyChecksum`.
 - `selectRuntimeBuild(sources, {os, arch, backend?}) → RuntimeBuild | null` (default = first os/arch
   match = the CPU build) · `planRuntimeDownload(root, build, version) → {url, zipDest, extractTo,
   binaryPath, sha256, ...}` (escape-guarded) · `runtimeBinaryName(os)`.
@@ -705,7 +710,9 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 ✅ **Types** (`shared/types.ts`): `DownloadJobStatus = 'queued'|'downloading'|'verifying'|'done'|
   'failed'|'cancelled'`; `DownloadJob { jobId, modelId, status, receivedBytes, totalBytes,
   unverified, error }` (`unverified` = placeholder-hash download, the model stays UNVERIFIED);
-  `ModelInfo.download?: ModelDownloadInfo { url, sizeBytes, licenseUrl, licenseApproved }`.
+  `ModelInfo.download?: ModelDownloadInfo { url, sizeBytes, licenseUrl, licenseApproved,
+  withdrawn? }` (`withdrawn` = the manifest's #196 note; the card shows it INSTEAD of a Download
+  button, and `DownloadManager.start` refuses such a manifest before any request).
 ✅ **`services/downloads.ts`** — `DownloadGates { policyAllows, settingAllows }`,
   `assertDownloadAllowed(gates)` (friendly, cause-specific refusals: policy vs. Settings),
   `partPath(dest)`, `DownloadManager({ fetchImpl?, log? })` with `start({rootPath, manifest,

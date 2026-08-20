@@ -220,6 +220,43 @@ describe('download gates', () => {
     ).rejects.toThrow(/no download source/)
   })
 
+  // Issue #196: the publisher deleted the exact file. The main process refuses BEFORE any
+  // request — the Models screen already hides the button, but a renderer bug must never cost
+  // the user a multi-GB request into a known 404.
+  it('a withdrawn upstream source is refused by NAME and never reaches fetch', async () => {
+    const fetchSpy = vi.fn()
+    const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
+    const gone = manifest({
+      download: {
+        url: 'https://example.test/qwen3-4b.gguf',
+        sha256: 'REPLACE_WITH_REAL_HASH',
+        size_bytes: 1000,
+        license_url: 'https://example.test/license',
+        withdrawn: '2026-08-20: upstream deleted the file'
+      }
+    })
+    await expect(mgr.start({ rootPath: tempRoot(), manifest: gone, gates: OPEN })).rejects.toThrow(
+      /removed this exact file/
+    )
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('the withdrawal message names the model and the reason (not a bare "nothing to fetch")', async () => {
+    const mgr = new DownloadManager({ fetchImpl: vi.fn() as unknown as FetchFn })
+    const gone = manifest({
+      download: {
+        url: 'https://example.test/qwen3-4b.gguf',
+        sha256: 'REPLACE_WITH_REAL_HASH',
+        size_bytes: 1000,
+        license_url: 'https://example.test/license',
+        withdrawn: '2026-08-20: Dynamic 3.0 restructure'
+      }
+    })
+    await expect(
+      mgr.start({ rootPath: tempRoot(), manifest: gone, gates: OPEN })
+    ).rejects.toThrow(/qwen3-4b-instruct-q4[\s\S]*Dynamic 3\.0 restructure/)
+  })
+
   it('a present + verified weight is refused (nothing to download)', async () => {
     const body = 'verified-weights'
     const m = verifiedManifest(body)

@@ -1080,6 +1080,11 @@ export const en = {
   'models.download.titled': 'Download {name} ({size})',
   'models.download.resume': 'Resume download',
   'models.download.start': 'Download',
+  // #196: the publisher removed the exact file this manifest pins. Sentence case, no blame,
+  // and it says what still works — this card is read by someone deciding what to install.
+  'models.download.withdrawn':
+    'No longer available for download: the publisher removed this exact file ({reason}). ' +
+    'Copies already on a drive keep working and stay verifiable.',
   // In-app engine (llama.cpp + whisper.cpp) installer banner — shown when an engine is missing.
   'models.engine.title': 'Install the AI engine',
   'models.engine.explain':
@@ -2080,6 +2085,9 @@ export const en = {
     'downloads and updates” in Settings first.',
   'main.download.alreadyRunning': 'Another download is already running. One model downloads at a time.',
   'main.download.noSource': 'Model "{modelId}" has no download source in its manifest.',
+  'main.download.sourceWithdrawn':
+    'The publisher of "{modelId}" removed this exact file, so it can no longer be ' +
+    'downloaded ({reason}). Models already on this drive keep working.',
   'main.download.alreadyVerified': 'This model is already downloaded and verified.',
   'main.download.presentUnverified':
     'This model’s file is already present. Its manifest carries no real checksum ' +

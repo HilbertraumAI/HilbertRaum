@@ -216,6 +216,11 @@ for mf in "${MANIFEST_FILES[@]}"; do
   license="$(field "$mf" license)"
   license_url="$(field "$mf" license_url)"
   review_status="$(field "$mf" status)"
+  # Optional `download.withdrawn` (issue 196): the publisher deleted the exact file this
+  # manifest pins, so the URL above is known-dead. Mirrors planModelDownloads' 'source-
+  # withdrawn' task status (assets.ts is the source of truth; script-drift.test.ts pins both
+  # twins). Note values must not contain " #" — `field` strips inline YAML comments.
+  withdrawn="$(field "$mf" withdrawn)"
 
   [[ -z "$url" || -z "$local_path" ]] && continue       # no download block → skip
   [[ -n "$ONLY" && "$id" != "$ONLY" ]] && continue
@@ -244,6 +249,15 @@ for mf in "${MANIFEST_FILES[@]}"; do
   needs_fetch=0
   [[ "$gguf_state" == absent || "$gguf_state" == mismatch ]] && needs_fetch=1
   [[ $has_mmproj -eq 1 && ( "$mmproj_state" == absent || "$mmproj_state" == mismatch ) ]] && needs_fetch=1
+
+  # Withdrawn upstream source (issue 196) — only relevant when something WOULD be fetched: a
+  # drive that already carries the weight is unaffected and verifies as usual. Skipped, not
+  # failed: one publisher retiring a file must not break a whole drive build.
+  if [[ $needs_fetch -eq 1 && -n "$withdrawn" ]]; then
+    printf '  SKIP   %s: upstream source withdrawn — %s\n' "$id" "$withdrawn"
+    printf '         Nothing to fetch; copies already on a drive keep verifying.\n'
+    skipped=$((skipped + 1)); continue
+  fi
 
   if [[ $needs_fetch -eq 1 ]]; then
     # License gate (spec §13) — only when something will actually be fetched.

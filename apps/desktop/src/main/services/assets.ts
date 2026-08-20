@@ -38,6 +38,7 @@ export type ModelTaskStatus =
   | 'present-verified' // present + real expected hash matches → skip
   | 'present-unverified' // present but the manifest carries a placeholder hash → skip + warn
   | 'license-blocked' // needs fetch but license not approved and no override → refuse
+  | 'source-withdrawn' // needs fetch but the manifest declares the upstream file gone (#196)
 
 export interface ModelDownloadTask {
   id: string
@@ -56,6 +57,8 @@ export interface ModelDownloadTask {
   license: string
   licenseUrl: string | null
   licenseApproved: boolean
+  /** The manifest's `download.withdrawn` note — set exactly when the source is gone (#196). */
+  withdrawn?: string
   status: ModelTaskStatus
 }
 
@@ -73,7 +76,9 @@ export interface PlanModelOptions {
  * are considered (the rest have no upstream source). Filesystem is read (to skip
  * present+verified weights) but the NETWORK IS NOT touched. The license gate refuses to
  * plan a fetch whose manifest `license_review.status` is not `approved` unless
- * `acceptLicense` is set; a present-but-placeholder weight is skipped with a warning.
+ * `acceptLicense` is set; a present-but-placeholder weight is skipped with a warning; a
+ * manifest whose `download.withdrawn` says the upstream file is gone (#196) plans
+ * `source-withdrawn` instead of `download`, so no caller ever requests a known-dead URL.
  */
 export async function planModelDownloads(
   rootPath: string,
@@ -155,6 +160,12 @@ async function planOneFile(
   } else if (check.exists && check.matched === null) {
     // Present but the manifest hash is a placeholder — can't verify, don't re-fetch.
     status = 'present-unverified'
+  } else if (download.withdrawn) {
+    // Absent (or stale) AND the upstream file is gone (#196). Checked BEFORE the license
+    // gate: "this file can no longer be fetched from anywhere" is the fact the caller acts
+    // on, and accepting a license would not conjure the bytes back. A file already present
+    // + verified never reaches here — a withdrawn source never disturbs an installed drive.
+    status = 'source-withdrawn'
   } else {
     // Absent, or present-but-mismatched → must (re)fetch. Gate on the license first.
     status = licenseApproved || opts.acceptLicense ? 'download' : 'license-blocked'
@@ -172,6 +183,7 @@ async function planOneFile(
     license: manifest.license,
     licenseUrl: download.licenseUrl,
     licenseApproved,
+    ...(download.withdrawn ? { withdrawn: download.withdrawn } : {}),
     status
   }
 }
@@ -783,9 +795,11 @@ export function formatAssetPlan(
           ? 'present (placeholder hash — cannot verify) — skip'
           : t.status === 'license-blocked'
             ? `BLOCKED: license "${t.license}" not approved (use --accept-license)`
-            : t.placeholderHash
-              ? `fetch (⚠ placeholder hash — verify with verify-models --generate)`
-              : 'fetch + verify'
+            : t.status === 'source-withdrawn'
+              ? `SKIP: upstream source withdrawn — ${t.withdrawn ?? ''}`
+                : t.placeholderHash
+                  ? `fetch (⚠ placeholder hash — verify with verify-models --generate)`
+                  : 'fetch + verify'
     lines.push(`  · ${t.id}  [${t.status}]`)
     lines.push(`      url:  ${t.url}`)
     lines.push(`      dest: ${t.relPath}`)

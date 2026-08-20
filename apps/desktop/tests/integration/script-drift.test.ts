@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
@@ -487,6 +487,54 @@ describe('fetch-models — the mismatch re-download deletes only when resume can
         /^"\$[a-z0-9_]*size[a-z0-9_]*"$/i
       )
     }
+  })
+})
+
+describe('fetch-models — a withdrawn upstream source is skipped, never requested (issue #196)', () => {
+  // `assets.ts` (planModelDownloads → 'source-withdrawn') is the source of truth; the two
+  // self-contained scripts re-implement it for machines with no Node. If a twin loses the check,
+  // a drive build spends its retry budget on a URL the manifest already knows is dead — and
+  // reports a download FAILURE for a model nobody can fetch any more.
+  //
+  // Asserted structurally per twin: the `withdrawn` field is read from the manifest, and the
+  // skip branch appears BEFORE the license gate (the planner orders them the same way — no
+  // acknowledgement can bring a deleted file back) and before the download call.
+  it('fetch-models.sh reads download.withdrawn and skips ahead of the license gate', () => {
+    const src = read('scripts/fetch-models.sh')
+    const read_ = src.indexOf('withdrawn="$(field "$mf" withdrawn)"')
+    const skip = src.indexOf('-n "$withdrawn"')
+    const licenseGate = src.indexOf('$ACCEPT_LICENSE -eq 0')
+    const fetchCall = src.indexOf('handle_file "$id" ""')
+    expect(read_, 'fetch-models.sh no longer reads download.withdrawn').toBeGreaterThanOrEqual(0)
+    expect(skip, 'fetch-models.sh no longer branches on a withdrawn source').toBeGreaterThan(read_)
+    expect(skip, 'the withdrawn skip must precede the license gate').toBeLessThan(licenseGate)
+    expect(skip, 'the withdrawn skip must precede the download call').toBeLessThan(fetchCall)
+  })
+
+  it('fetch-models.ps1 reads download.withdrawn and skips ahead of the license gate', () => {
+    const src = read('scripts/fetch-models.ps1')
+    const read_ = src.indexOf("$withdrawn = Get-ManifestField $text 'withdrawn'")
+    const skip = src.indexOf('$needsFetch -and $withdrawn')
+    const licenseGate = src.indexOf('-not $AcceptLicense')
+    const fetchCall = src.indexOf("Invoke-HandleFile $id ''")
+    expect(read_, 'fetch-models.ps1 no longer reads download.withdrawn').toBeGreaterThanOrEqual(0)
+    expect(skip, 'fetch-models.ps1 no longer branches on a withdrawn source').toBeGreaterThan(read_)
+    expect(skip, 'the withdrawn skip must precede the license gate').toBeLessThan(licenseGate)
+    expect(skip, 'the withdrawn skip must precede the download call').toBeLessThan(fetchCall)
+  })
+
+  // Both twins parse flat YAML and strip an inline comment at " #", so a note containing one
+  // would reach the operator truncated mid-sentence. Pinned on the committed manifests because
+  // that is where a maintainer writes the next note.
+  it('no committed manifest hides part of its withdrawal note behind a " #"', () => {
+    const dir = join(REPO_ROOT, 'model-manifests', 'chat')
+    const notes = readdirSync(dir)
+      .filter((f) => f.endsWith('.yaml'))
+      .map((f) => parseYaml(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
+      .map((m) => (m.download as Record<string, unknown> | undefined)?.withdrawn)
+      .filter((n): n is string => typeof n === 'string')
+    expect(notes.length, 'expected the issue-#196 notes').toBeGreaterThan(0)
+    for (const n of notes) expect(n, 'truncated by the scripts\' inline-comment strip').not.toContain(' #')
   })
 })
 
