@@ -43,9 +43,30 @@ row carries a dated **superseded** note, which also promotes the wire shape to *
 documented**: a status/code-mapping or frame-order change is now a breaking change needing a
 CHANGELOG note. Docs-only — no src/test change, `npm test` unaffected.
 
+_2026-08-20 (later) — **#196 successor wave: MEASURED, RATIFIED and LANDED — issue #196 CLOSED
+(PR #199).**_ All three `UD-*` candidates ran the full per-quant rig wave (§9.4 method; §2 quality
+on the b9849 drive runtime offline, §3/§4 on the b10430 basis, §9.1 app-path smokes on the
+b9849 pin, all legs green) and the §9.5 in-GGUF gate passed: the MTP draft head is present in
+every successor file (b9849 spawn, draft acceptance logged). Hard quality profile intact on all three (EM
+.9765, hallucinations 0, abstention 1.0000). Successor manifests added with measured numbers,
+and the ranks are owner-RATIFIED 2026-08-20: the full §9.4 generational handover is restored,
+`qwen3.8-27b-ud-q4km` rank 3 takes 24 GB (F1 .3529; tg 32.4 vs the withdrawn 39.9, a 19
+percent decode regression, recorded and accepted: quality deltas sit inside cross-run
+uncertainty and the newest generation is preferred), `qwen3.8-27b-ud-q5km` rank 3 takes
+>=32 GB (envelope reproduced, tg minus 4 percent, VRAM identical), the Qwen3.6 pair returns to
+rank 1, `qwen3.8-27b-ud-q6k` rank 0 by design (the 24 GB GPU niche got stronger: 21.8 GiB
+peak). The three withdrawn manifests are **kept, not retired** — rank 0 with their dated
+`download.withdrawn` note, so an installed-base drive still verifies, starts and keeps MTP; that
+is this wave's answer to the retire-or-keep question `model-policy.md` defers to the promoting
+wave. Consequence worth stating: the §6.5 stepped pick now steps a crawling ≥32 GB box to
+`qwen3.8-27b-ud-q4km` (32.4 t/s) rather than `qwen3.6-27b-q4` (40.1 t/s) — that follows from the
+ratified rank order and is accepted with it, not a defect of the step-down path. Full record:
+`model-benchmarks.md` §9.5 "Successor wave"; raw rows `eval/results/i9-9900X-qwen38ud-*` + the
+b10430 speed CSV.
+
 _2026-08-20 — **Upstream deleted the three Qwen3.8 GGUFs — issue #196, catalog + product fix
-landed, the successor measurement wave stays OPEN.**_ Unsloth restructured
-`unsloth/Qwen3.8-27B-GGUF` for Dynamic 3.0 and removed the static K-quants: all three pinned URLs
+landed** (the successor measurement wave it opened is CLOSED by the entry above)._ Unsloth
+restructured `unsloth/Qwen3.8-27B-GGUF` for Dynamic 3.0 and removed the static K-quants: all three pinned URLs
 return **404** (re-verified here 2026-08-20 with `HEAD`). Blast radius measured, not assumed —
 **all 28 committed `download.url`s re-checked: only these three are dead**, and the Qwen3.6 pair is
 intact (URL alive AND upstream LFS OIDs still equal the committed hashes). Drives that already
@@ -71,7 +92,9 @@ local-API documentation branch was cut from it by mistake instead of from `maste
 of **PR #197** carried both change sets onto `master` as commit **`0324a55a`**, under a
 `docs(local-api)` title. Nothing was lost or altered — the #196 paths on `master` are
 byte-identical to `a166d511` — and the combined tree passed CI as one unit. Cite this work as
-**PR #197 / `0324a55a`**, not as a #196 PR; issue #196 itself is still open on GitHub.
+**PR #197 / `0324a55a`**, not as a #196 PR. Issue #196 itself stayed open past that squash and is
+closed by **PR #199**, the successor wave above — so this issue has two landing points, one per
+stage.
 
 _2026-08-20 — **Single-document re-index/delete now give feedback — issue #194 CLOSED.**_ Found by
 the #190 continuity check on the relocated drive: the operator clicked re-index and got nothing —

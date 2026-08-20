@@ -13,16 +13,17 @@ size_on_disk_gb: 19.5
 # 2026-07-30 (the §6.4 residual for this model).
 recommended_min_ram_gb: 24
 recommended_ram_gb: 32
-# Rank 3 — the ≥32 GB tier pick again SINCE 2026-08-20 (issue 196; model-benchmarks.md §9.5).
-# The §9.4 handover gave the tier to qwen3.8-27b-q5; upstream then deleted that file, so it can
-# no longer be obtained and dropped to rank 0. This model holds the all-time harness F1 record
-# (.3573) and its source is live (URL + LFS hash re-verified 2026-08-20) — the tier comes back
-# to the best-measured model that can actually be downloaded.
-# HISTORY — rank 3 2026-07-12..2026-08-16: top scorer of the #48 tester eval (F1 .3573,
+# Rank 1, owner RATIFIED 2026-08-20 (issue #196 successor wave): the measured UD-Q5_K_M
+# successor (qwen3.8-27b-ud-q5km) reproduces the withdrawn rank-3 file's envelope with a live
+# URL, which restores the §9.4 generational handover the §9.5 interim reverted for
+# obtainability alone. This model keeps the all-time harness F1 record (.3573), recorded
+# honestly, and stays ranked and selectable.
+# HISTORY. Rank 3 2026-07-12..2026-08-16: top scorer of the #48 tester eval (F1 .3573,
 # EM .9765, zero unanswerable-set hallucinations, b9849 binary). The ~19.5 GB (18.2 GiB)
 # weight needs the 32 GB tier to be comfortable; the Q4 sibling covered 24 GB. Rank 1
-# 2026-08-16..2026-08-20 (the §9.4 generational handover, now reverted).
-recommendation_rank: 3
+# 2026-08-16..2026-08-20 (the §9.4 generational handover). Rank 3 again 2026-08-20, the §9.5
+# interim after upstream deleted the qwen3.8 files (this rank block's previous revision).
+recommendation_rank: 1
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
 supports_thinking_mode: true

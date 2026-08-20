@@ -147,10 +147,12 @@ describe('committed catalog — Qwen3.6 27B pair (2026-07-12 promotion; rank 3 a
       expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
       expect(m.format, `${id} format`).toBe('gguf')
       expect(m.family, `${id} family`).toBe('qwen3.6')
-      // Rank 3 again since 2026-08-20 (issue #196, §9.5): the 2026-08-16 handover to the
-      // Qwen3.8 pair is reverted because those files are gone from upstream. This pair's own
-      // source is live (URL + LFS OID re-verified 2026-08-20), so it holds the two big tiers.
-      expect(m.recommendationRank, `${id} rank`).toBe(3)
+      // Ranks after the #196 successor wave (2026-08-20, measured, owner-ratified; §9.5):
+      // both tiers went back to the Qwen3.8 successors (the full §9.4 generational handover
+      // restored), so the pair returns to rank 1. The q4's measured decode advantage over the
+      // UD successor (40.1 vs 32.4 t/s) is recorded in its manifest; the owner call weighed
+      // the newest generation ahead at quality inside cross-run uncertainty.
+      expect(m.recommendationRank, `${id} rank`).toBe(1)
       // …and its own source must still be fetchable — the whole point of taking the tier back.
       expect(m.download!.withdrawn, `${id} source live`).toBeUndefined()
       expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
@@ -230,7 +232,15 @@ describe('committed catalog — Qwen3.8 wave (2026-08-16 promotion, §9.4)', () 
       .filter((m) => m.speculativeDecoding !== undefined)
       .map((m) => m.id)
       .sort()
-    expect(claiming).toEqual(['qwen3.8-27b-q4', 'qwen3.8-27b-q5'])
+    // #196 successor wave: the UD successors were re-verified to carry the head IN-GGUF
+    // (Dynamic 3.0 ships separate MTP files for its small/legacy quants, so this could not be
+    // assumed): draft acceptance logged on the b9849 pin for both, 2026-08-20.
+    expect(claiming).toEqual([
+      'qwen3.8-27b-q4',
+      'qwen3.8-27b-q5',
+      'qwen3.8-27b-ud-q4km',
+      'qwen3.8-27b-ud-q5km'
+    ])
   })
 
   // Issue #196: upstream deleted all three pinned files. The catalog says so IN THE MANIFEST
@@ -260,15 +270,18 @@ describe('committed catalog — Qwen3.8 wave (2026-08-16 promotion, §9.4)', () 
     expect(offenders).toEqual([])
   })
 
-  it('hands the 24 GB and ≥32 GB tiers back to the Qwen3.6 pair (no-signal mapping)', () => {
+  it('hands both big tiers to the measured UD successors (no-signal mapping)', () => {
     const chat = committedManifests()
-    // #196: with the Qwen3.8 pair at rank 0, the tiers return to their pre-§9.4 holders — the
-    // best-measured models whose upstream source is still live.
-    expect(recommendModelIdByRam(chat, 24, 'chat')).toBe('qwen3.6-27b-q4')
+    // #196 successor wave (2026-08-20, measured, owner-ratified): the full §9.4 generational
+    // handover is restored with the successors. 24 GB goes to qwen3.8-27b-ud-q4km (the
+    // measured 19 percent decode regression vs the withdrawn file is recorded and accepted);
+    // >=32 GB goes to qwen3.8-27b-ud-q5km, which reproduces the withdrawn file's envelope.
+    expect(recommendModelIdByRam(chat, 24, 'chat')).toBe('qwen3.8-27b-ud-q4km')
     for (const ram of [32, 48, 64, 128]) {
-      expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram}`).toBe('qwen3.6-27b-q5')
+      expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram}`).toBe('qwen3.8-27b-ud-q5km')
     }
-    // No Qwen3.8 manifest may be the auto-pick at ANY realistic RAM level any more.
+    // No WITHDRAWN Qwen3.8 manifest may be the auto-pick at ANY realistic RAM level (the UD
+    // successors are separate ids with live sources and may hold tiers).
     for (const ram of [8, 12, 14, 16, 20, 24, 26, 32, 48, 64, 128]) {
       expect(
         Object.keys(QWEN38_WAVE_FACTS),
@@ -445,11 +458,11 @@ describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', (
     expect(recommendModelIdByRam(chat, 20, 'chat', slowOnOwnPick(chat, 20))).toBe('gemma4-e2b-it-qat-q4')
     // 24 GB: 27B Q4 crawling steps to the 16-band winner.
     expect(recommendModelIdByRam(chat, 24, 'chat', slowOnOwnPick(chat, 24))).toBe('qwen3.5-9b-ud-q4kxl')
-    // ≥32 GB: 27B Q5 crawling steps to the 24-band winner (qwen3.6 again since issue #196 —
-    // the §9.4 handover to qwen3.8 was reverted when upstream deleted those files).
-    expect(recommendModelIdByRam(chat, 32, 'chat', slowOnOwnPick(chat, 32))).toBe('qwen3.6-27b-q4')
-    expect(recommendModelIdByRam(chat, 48, 'chat', slowOnOwnPick(chat, 48))).toBe('qwen3.6-27b-q4')
-    expect(recommendModelIdByRam(chat, 128, 'chat', slowOnOwnPick(chat, 128))).toBe('qwen3.6-27b-q4')
+    // ≥32 GB: 27B Q5 crawling steps to the 24-band winner (the UD successor since the #196
+    // successor wave restored the §9.4 handover, owner-ratified 2026-08-20).
+    expect(recommendModelIdByRam(chat, 32, 'chat', slowOnOwnPick(chat, 32))).toBe('qwen3.8-27b-ud-q4km')
+    expect(recommendModelIdByRam(chat, 48, 'chat', slowOnOwnPick(chat, 48))).toBe('qwen3.8-27b-ud-q4km')
+    expect(recommendModelIdByRam(chat, 128, 'chat', slowOnOwnPick(chat, 128))).toBe('qwen3.8-27b-ud-q4km')
   })
 
   it('an oversized crawl never moves the pick (the #52 lesson, real manifests)', () => {
@@ -457,7 +470,7 @@ describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', (
     // 24 GB box, crawl measured on the manually-started 32 GB-tier Q5: pick unchanged.
     expect(
       recommendModelIdByRam(chat, 24, 'chat', { tokensPerSecond: 2.0, measuredModelId: 'qwen3.6-27b-q5' })
-    ).toBe('qwen3.6-27b-q4')
+    ).toBe('qwen3.8-27b-ud-q4km')
     // 16 GB box, crawl on the 24 GB-tier Q4: pick unchanged.
     expect(
       recommendModelIdByRam(chat, 16, 'chat', { tokensPerSecond: 2.0, measuredModelId: 'qwen3.6-27b-q4' })
