@@ -253,6 +253,11 @@ foreach ($mf in $manifestFiles) {
   $license = Get-ManifestField $text 'license'
   $licenseUrl = Get-ManifestField $text 'license_url'
   $reviewStatus = Get-ManifestField $text 'status'
+  # Optional download.withdrawn (issue 196): the publisher deleted the exact file this manifest
+  # pins, so the URL above is known-dead. Mirrors planModelDownloads' 'source-withdrawn' task
+  # status (assets.ts is the source of truth; script-drift.test.ts pins both twins). Note values
+  # must not contain ' #' -- Get-ManifestField strips inline YAML comments.
+  $withdrawn = Get-ManifestField $text 'withdrawn'
 
   if (-not $url -or -not $localPath) { continue }      # no download block -> skip
   if ($Only -and $id -ne $Only) { continue }
@@ -278,6 +283,16 @@ foreach ($mf in $manifestFiles) {
   # skipped WITHOUT a license prompt (the license is only relevant to an actual download).
   $needsFetch = ($ggufState -eq 'absent' -or $ggufState -eq 'mismatch') -or
     ($hasMmproj -and ($mmprojState -eq 'absent' -or $mmprojState -eq 'mismatch'))
+
+  # Withdrawn upstream source (issue 196) -- only relevant when something WOULD be fetched: a
+  # drive that already carries the weight is unaffected and verifies as usual. Skipped, not
+  # failed: one publisher retiring a file must not break a whole drive build.
+  if ($needsFetch -and $withdrawn) {
+    Write-Host ("  SKIP   {0}: upstream source withdrawn -- {1}" -f $id, $withdrawn) -ForegroundColor Yellow
+    Write-Host '         Nothing to fetch; copies already on a drive keep verifying.'
+    $skipped++
+    continue
+  }
 
   if ($needsFetch) {
     # License gate (spec section 13) -- only when something will actually be fetched.

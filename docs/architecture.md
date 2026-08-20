@@ -3304,6 +3304,14 @@ all enforced in MAIN and re-checked per call:**
    or 2 fails the AI Model screen says *why* (policy vs Settings toggle), reusing the
    `PolicyStatus` distinction.
 
+**A fourth refusal, not a gate (issue #196, 2026-08-20):** a manifest whose `download.withdrawn`
+records that the publisher deleted the pinned file is refused BEFORE any request, with copy naming
+the model and the reason — the planner reports `source-withdrawn` ahead of the license gate, the AI
+Model card shows the note instead of a Download button, and the `fetch-models` twins skip such a
+model with a loud line. Nothing about an already-installed weight changes: it verifies and runs as
+before. Schema + rules: model-policy.md "Withdrawn upstream sources"; the case that produced it:
+model-benchmarks.md §9.5.
+
 **Mechanics:** `services/downloads.ts` `DownloadManager` — a job state machine over the
 REUSED `assets.ts` seams (`planModelDownloads` + optional `hashStore`; `downloadToFile`,
 extended additively with `signal`/`headers`/`append`/`onResponse`; `verifyDownloadedFile`).
@@ -10468,6 +10476,16 @@ embeddings, no workspace data, and the endpoint never starts, stops, or switches
 | O4b | Drives whose policy PREDATES the key (added 2026-08-18, after checking a real 2026-06-30 drive) | An **absent** `allow_local_api` inherits the permissive default, not the packaged STRICT base. Without this every drive already in the field would have been silently denied — a posture nobody chose. An explicit `false` still denies; a junk value and a malformed file still fail closed |
 | O5 | Loopback family | **Bind both `127.0.0.1` and `::1`** — Windows resolves `localhost` to `::1` first and many Electron/Node clients do not address-iterate. The UI still prints the unambiguous `127.0.0.1` form |
 | O6 | Citations under squash-merge | PR# + phase prefix + record §, never a branch SHA |
+
+> **O2 superseded 2026-08-20 (owner decision, pre-release documentation pass).** The "ship one
+> release quietly first" hold is lifted: the feature is now documented as a first-class capability
+> — a dedicated user + client-author reference at [`local-api.md`](local-api.md), a README feature
+> bullet and docs-table row, the `PRIVACY.md`/`SECURITY.md` sections deepened, and its accepted
+> scope limits written up in [`known-limitations.md`](known-limitations.md). Nothing about the
+> feature's behaviour, defaults, or policy posture changed with it: still default-off, still
+> loopback-only, still consent-gated. §5's contract is now **externally documented**, so a change
+> to a status/code mapping or the streaming frame order is a breaking change and needs a
+> `CHANGELOG.md` note (`local-api.md` §12).
 
 ### §4 The generation gate (P1)
 

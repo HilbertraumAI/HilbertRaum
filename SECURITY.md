@@ -40,7 +40,13 @@ HilbertRaum is a **local-first, offline** application. Full details live in
   so browser JavaScript is structurally locked out. It serves **chat completions plus a
   one-model listing and nothing else**: there is no route to documents, conversations, or any
   other workspace data. There is no LAN mode and no setting
-  that could produce one.
+  that could produce one. The access key is compared in constant time, is stored in the workspace
+  database (encrypted at rest with everything else, never in renderer state, never crossing IPC in
+  full), and **rotating it aborts every in-flight request the old key admitted** — auth is checked
+  once at admission, so a live stream must not outlive the credential that let it in. Request
+  bodies are capped at 1 MB counted as bytes arrive (`Content-Length` is never trusted) and
+  connections at 16. The full posture, the wire contract, and the accepted residuals are in
+  [`docs/local-api.md`](docs/local-api.md).
 - **The model sidecars authenticate their own requests** — each `llama-server` spawn is given a
   fresh random API key through its **environment** (never argv, so it is not visible in a process
   list), and the key is redacted from captured stderr before that text can reach an error message,

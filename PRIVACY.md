@@ -100,9 +100,9 @@ text to the model you have running and read its answers. It is **off until you t
 turning it on asks you to confirm what it means.
 
 - **It never reaches the internet.** The endpoint listens only on this computer's loopback address
-  (`127.0.0.1` / `::1`). It cannot be reached from your network, and the app has no mode, setting,
-  or policy that would let it be. Web pages are structurally locked out (browser requests are
-  refused and no CORS headers are ever sent).
+  (`127.0.0.1` / `::1`, port 4980 by default). It cannot be reached from your network, and the app
+  has no mode, setting, or policy that would let it be. Web pages are structurally locked out
+  (browser requests are refused and no CORS headers are ever sent).
 - **It is answers only.** Connected apps can ask the model for text. They cannot read your
   documents, your conversations, your search index, or anything else in your workspace — the
   endpoint has no route to any of it.
@@ -110,6 +110,13 @@ turning it on asks you to confirm what it means.
   held in memory for the length of the request and then dropped. They are **never** written to your
   chat history, your documents, or the logs. The app keeps counts only — how many requests were
   answered or refused — so you can see the feature is being used without a record of what was said.
+- **Only the switch itself is recorded.** Turning the feature on or off writes a single entry to
+  your local activity log saying which way you set it (`{ enabled: true }` / `{ enabled: false }`)
+  and nothing else — no port, no caller, no content. That is the same treatment every other
+  privacy-relevant setting gets, and the record never leaves your drive.
+- **It answers with the model you already started.** A connected app cannot start, stop, or switch
+  a model, and it gets no access to embeddings, image analysis, transcription, or translation —
+  only chat completions.
 - **It only exists while your workspace is unlocked**, and it stops the moment you lock or quit.
 - **An access key is required by default**, so another program has to be given the key before it can
   use your model. You can switch that off; the app tells you what that means when you do.
@@ -124,6 +131,9 @@ sync it to its own cloud service as part of its normal behaviour. That would be 
 sending your data somewhere — not HilbertRaum — but the effect on your privacy is the same. Before
 you point a program at your model, check its own logging and sync behaviour, exactly as you would
 before pasting confidential text into it.
+
+The complete description — how to turn it on, what a connected app can and cannot ask for, and
+every control that bounds it — is in [`docs/local-api.md`](docs/local-api.md).
 
 ## Deleting your data
 

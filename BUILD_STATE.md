@@ -19,6 +19,53 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-20 — **Local API documented as a first-class feature for the release — docs-only, O2
+lifted.**_ The local-API wave shipped under owner option **O2 "not promoted"** (one CHANGELOG
+line, no README push, ship one release quietly first). With the release now being prepared, the
+owner lifted that hold; this pass writes the feature up properly **without touching a line of its
+behaviour** (still default-off, loopback-only, consent-gated, policy-restrictable). New:
+**[`docs/local-api.md`](docs/local-api.md)** — §1–§12, a user tutorial (turn-on flow, the exact
+`127.0.0.1` vs `localhost` trap, port conflicts) plus a **client-author contract** (curl /
+PowerShell / Python + Node `openai` SDK / plain `fetch` examples, the supported-ignored-refused
+field table, both response shapes, the full error-code table with `Retry-After` semantics, the
+timeout/limit table, the concurrency + pre-emption rules, the security-control table, and the
+privacy statement). Updated: `README.md` (feature bullet, docs-table row, an inbound-door
+paragraph under Privacy & security), `PRIVACY.md` (port named; the `local_api_toggled` audit entry
+disclosed as the ONE thing recorded — state only; "completions only, no other model features"),
+`SECURITY.md` (constant-time compare, key at rest + rotation aborting in-flight streams, the 1 MB
+counted-byte body cap and 16-connection ceiling), `known-limitations.md` (a new **Local API**
+section: v1 scope, refused capabilities, ignored sampling extras, absent `usage`, single-slot
+concurrency, no per-connection visibility, the same-machine residual, the upstream
+`/health`+`/v1/models` auth exemption), plus cross-pointers from `user-guide.md`,
+`troubleshooting.md`, `security-model.md`, and `data-contracts.md` (whose §"P3 exposed HTTP
+contract" now names `local-api.md` §6 as the twin that must move with it). The design record's O2
+row carries a dated **superseded** note, which also promotes the wire shape to **externally
+documented**: a status/code-mapping or frame-order change is now a breaking change needing a
+CHANGELOG note. Docs-only — no src/test change, `npm test` unaffected.
+
+_2026-08-20 — **Upstream deleted the three Qwen3.8 GGUFs — issue #196, catalog + product fix
+landed, the successor measurement wave stays OPEN.**_ Unsloth restructured
+`unsloth/Qwen3.8-27B-GGUF` for Dynamic 3.0 and removed the static K-quants: all three pinned URLs
+return **404** (re-verified here 2026-08-20 with `HEAD`). Blast radius measured, not assumed —
+**all 28 committed `download.url`s re-checked: only these three are dead**, and the Qwen3.6 pair is
+intact (URL alive AND upstream LFS OIDs still equal the committed hashes). Drives that already
+carry a Qwen3.8 weight are unaffected (local SHA-256 still verifies; MTP unchanged). Shipped: a new
+optional manifest field **`download.withdrawn`** (a dated note) that the planner turns into a
+`source-withdrawn` task ahead of the license gate, so the in-app downloader refuses by name before
+any request, the AI-Model card shows the reason instead of a Download button, and both
+`fetch-models` twins skip with a loud line instead of burning retries on a known-dead link. Catalog:
+`qwen3.8-27b-q4/-q5` **rank 3 → 0** (selectable, never auto-recommended — the existing rank-0
+convention) and the §9.4 generational handover **reverted**: `qwen3.6-27b-q4` retakes 24 GB,
+`qwen3.6-27b-q5` retakes ≥32 GB, both at rank 3. **Not built (deliberate):** the `UD-*` successor
+manifests — numbers are measured, never estimated, so they need the per-quant rig wave (§9.4
+method) **plus** a per-file MTP re-verification, since Dynamic 3.0 publishes the draft head as a
+SEPARATE file while `speculative_decoding: mtp` asserts an in-GGUF head. Verified upstream
+size/OID data for the three candidates is recorded in the §9.5 record so the wave starts from data.
+Records: `model-benchmarks.md` **§9.5**, `model-policy.md` "Withdrawn upstream sources",
+`architecture.md` In-app downloader ("a fourth refusal"). Tests: validator, planner, downloader,
+Models screen and both fetch twins, plus a general catalog invariant — *no committed manifest is
+both recommended and unobtainable*; the planner + renderer guards mutation-checked (5 red / 2 red).
+
 _2026-08-20 — **Single-document re-index/delete now give feedback — issue #194 CLOSED.**_ Found by
 the #190 continuity check on the relocated drive: the operator clicked re-index and got nothing —
 no success signal, no progress, no error — while the re-index had **succeeded** (all 24 rows still

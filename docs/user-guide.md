@@ -875,6 +875,10 @@ See [`PRIVACY.md`](../PRIVACY.md) for the full statement.
 running model and read the answers — an editor plugin, a note-taking app, a script you wrote. It is
 **off until you turn it on**, and turning it on asks you to confirm what that means.
 
+> Setting up a specific client — curl, the Python/Node `openai` SDKs, any "OpenAI-compatible"
+> tool — plus the complete request/response contract for people writing one: see
+> [`local-api.md`](local-api.md).
+
 **Turn it on**
 
 1. Open **Settings → Privacy & data** and find the **Local API** card.

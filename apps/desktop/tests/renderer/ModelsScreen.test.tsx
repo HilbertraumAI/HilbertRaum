@@ -108,6 +108,49 @@ describe('ModelsScreen — download gates (plan §6.1: explain WHY, policy vs Se
     await screen.findByText('Qwen3 4B Instruct')
     expect(screen.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument()
   })
+
+  // Issue #196: unsloth deleted the Qwen3.8 files three manifests pin. A Download button there
+  // could only end in an HTTP 404 that reads like a broken connection — so the card explains
+  // instead, and says what still works.
+  describe('a withdrawn upstream source (#196)', () => {
+    const gone = (over: Partial<ModelInfo> = {}): ModelInfo =>
+      model({
+        download: {
+          url: 'https://example.test/qwen3-4b.gguf',
+          sizeBytes: 2_900_000_000,
+          licenseUrl: 'https://example.test/license',
+          licenseApproved: true,
+          withdrawn: '2026-08-20: upstream deleted the file'
+        },
+        ...over
+      })
+
+    it('replaces the Download button with the reason, naming what still works', async () => {
+      stub({ models: [gone()] })
+      render(<ModelsScreen />)
+      await screen.findByText('Qwen3 4B Instruct')
+      expect(screen.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument()
+      expect(screen.getByText(/No longer available for download/)).toBeInTheDocument()
+      expect(screen.getByText(/2026-08-20: upstream deleted the file/)).toBeInTheDocument()
+      expect(screen.getByText(/Copies already on a drive keep working/)).toBeInTheDocument()
+    })
+
+    it('does not raise the network-gate banner when the only "missing" model is unfetchable', async () => {
+      // Downloads disabled by policy + nothing downloadable ⇒ the banner would blame the drive
+      // policy for a model the policy has nothing to do with.
+      stub({ models: [gone()], policy: policyStatus({ downloadsAllowed: false, settingOn: true }) })
+      render(<ModelsScreen />)
+      await screen.findByText('Qwen3 4B Instruct')
+      expect(screen.queryByText(/disabled by this drive’s policy/)).not.toBeInTheDocument()
+    })
+
+    it('says nothing on a card whose weight is already installed', async () => {
+      stub({ models: [gone({ state: 'installed' })] })
+      render(<ModelsScreen />)
+      await screen.findByText('Qwen3 4B Instruct')
+      expect(screen.queryByText(/No longer available for download/)).not.toBeInTheDocument()
+    })
+  })
 })
 
 describe('ModelsScreen — "AI Model" reframe (Phase 26, guidelines §2)', () => {

@@ -172,6 +172,19 @@ export class DownloadManager {
       if (tasks.length === 0) {
         throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))
       }
+      // #196: the upstream publisher deleted the exact file this manifest pins. Checked BEFORE
+      // the license gate (the planner orders them the same way) because no acknowledgement can
+      // make a deleted file fetchable — and refused HERE, not only in the renderer, so the
+      // known-dead URL is never requested even if a card offers the button.
+      const withdrawn = tasks.find((t) => t.status === 'source-withdrawn')
+      if (withdrawn) {
+        throw new Error(
+          tMain('main.download.sourceWithdrawn', {
+            modelId: opts.manifest.id,
+            reason: withdrawn.withdrawn ?? ''
+          })
+        )
+      }
       // The license gate is the MODEL's (a vision projector inherits its GGUF's review), so a single
       // blocked file blocks the whole model.
       const blocked = tasks.find((t) => t.status === 'license-blocked')

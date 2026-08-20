@@ -408,13 +408,26 @@ export function ModelsScreen(): JSX.Element {
     : !(policy?.allowNetworkSetting ?? false)
       ? t('models.downloads.enableInSettings')
       : null
+  // A withdrawn source (#196) is NOT downloadable — the network-gate banner above the list
+  // must not appear for a screen whose only "missing" models can never be fetched anyway.
   const anyDownloadable = models.some(
-    (m) => m.download && (m.state === 'missing' || m.state === 'checksum_failed')
+    (m) => m.download && !m.download.withdrawn && (m.state === 'missing' || m.state === 'checksum_failed')
   )
 
   function downloadSection(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
     if (m.state !== 'missing' && m.state !== 'checksum_failed') return null
+    // #196: the publisher removed the pinned file. Explain instead of offering a button that
+    // can only end in an HTTP 404 — the main process refuses the start regardless.
+    if (m.download.withdrawn) {
+      return (
+        <div className="download-progress">
+          <Banner tone="info">
+            {t('models.download.withdrawn', { reason: m.download.withdrawn })}
+          </Banner>
+        </div>
+      )
+    }
     const mine = job && job.modelId === m.id ? job : null
     if (mine && JOB_LIVE.has(mine.status)) {
       const pct =

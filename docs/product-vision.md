@@ -106,6 +106,13 @@ Two of the spec's original exclusions were later **reversed by shipping**: local
 (Whisper transcription + dictation, Phase 36/37 — voice *output*/TTS remains out of scope) and
 scanned-PDF OCR ("Make searchable", Phase 38).
 
+**The one boundary the product deliberately opened — inward, not outward.** The opt-in
+[local API](local-api.md) lets other programs *on the user's own machine* use the running model
+(loopback only, off by default, completions only). It widens who may ask the model a question
+from "this app" to "this computer" — and nothing further: it is not a network service, not a
+multi-user surface, and not a step toward serving anyone else's requests. "The space" is the
+user's machine, and that is exactly where the door stops.
+
 ## Growth directions
 
 ### Future editions (spec §19)

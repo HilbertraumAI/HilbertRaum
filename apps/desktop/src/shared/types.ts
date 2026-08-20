@@ -528,6 +528,13 @@ export interface ModelDownloadInfo {
    * in-app mirror of the fetch scripts' `--accept-license`).
    */
   licenseApproved: boolean
+  /**
+   * The manifest's `download.withdrawn` note (issue #196) — present only when the pinned
+   * upstream file is gone. The Models screen then shows the note INSTEAD of a Download
+   * button; the main process refuses the start anyway (a renderer bug can only cost the
+   * user a friendly error, never a doomed multi-GB request).
+   */
+  withdrawn?: string
 }
 
 // ---- In-app model downloader (architecture.md "In-app model downloader") ----

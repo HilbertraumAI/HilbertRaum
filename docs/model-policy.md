@@ -25,11 +25,11 @@
 | Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 3) | **Recommended ≤12 GB since the newest-Qwen promotion (owner decision 2026-07-12, `model-benchmarks.md` §6.4).** unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). §9 eval standing recorded honestly in the manifest (F1 under the Qwen3-4B incumbent, EM comparable); b9849 load observed through the app 2026-07-12. Vision model run text-only. |
 | Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 3) | **Recommended 16–20 GB since the newest-Qwen promotion (2026-07-12, §6.4).** unsloth Dynamic-2.0 quant. §9 eval standing recorded in the manifest (edges Ministral on F1/EM within cross-run tolerance, ranked under it only on the hallucination-trap axis); ran on the b9849 binary in the #48 tester eval; **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 6.57 GiB vulkan). Text-only, not bundled. |
 | Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~17.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger; superseded at its tier by the Qwen3.6 27B pair (below) before ever being promoted. Text-only, opt-in (not bundled). |
-| Chat (Qwen3.6 27B Q4) | Qwen3.6 27B Q4_K_M | ~16.8 GB | 20 GB | — (rank 1) | **Was the recommended 24 GB pick 2026-07-12..2026-08-16 (§6.4); rank 1 since the Qwen3.8 handover (§9.4).** Productized 2026-07-12 from a local-test stub: unsloth Q4_K_M, real HF-LFS hash, apache-2.0 review; hallucinations 0 on the v3 rescore; **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 16.87 GiB vulkan). Still ranked + selectable. Text-only, not bundled. |
-| Chat (Qwen3.6 27B Q5) | Qwen3.6 27B Q5_K_M | ~19.5 GB | 24 GB | — (rank 1) | **Was the recommended ≥32 GB pick 2026-07-12..2026-08-16; rank 1 since the Qwen3.8 handover (§9.4).** Still the all-time top scorer of the grounded-QA harness (F1 .3573, zero unanswerable-set hallucinations) — the handover is the §6.4 generational call, not a quality verdict. **§9.1 smoke PASSED 2026-07-30** (peak RSS 19.38 GiB vulkan). Text-only, not bundled. |
-| Chat (Qwen3.8 27B Q4) | Qwen3.8 27B Q4_K_M | ~17.1 GB | 21 GB | — (rank 3) | **Recommended 24 GB since the Qwen3.8 handover (owner decision 2026-08-16, §6.4 + §9.4).** unsloth Q4_K_M, real HF-LFS hash confirmed on-disk, apache-2.0 review (private/legal addendum 2026-08-16). §9.4 eval: F1 .3500 (ties the 3.6-Q4 inside cross-run noise), EM .9765, ZERO hallucinations, perfect abstention; tg 39.9 t/s vulkan / 2.83 cpu (b10430 basis). Text-only, not bundled. |
-| Chat (Qwen3.8 27B Q5) | Qwen3.8 27B Q5_K_M | ~19.8 GB | 23 GB | — (rank 3) | **Recommended ≥32 GB since the Qwen3.8 handover (2026-08-16, §6.4 + §9.4).** Same productization posture as the Q4. §9.4 eval: F1 .3523, zero hallucinations; tg 35.9 t/s vulkan — out-decodes the smaller UD-Q4_K_XL, which therefore got no manifest. Text-only, not bundled. |
-| Chat (Qwen3.8 27B Q6) | Qwen3.8 27B Q6_K | ~22.9 GB | 26 GB | — (rank 0) | **Qwen3.8 wave (2026-08-16, §9.4): the 24 GB-GPU quality ceiling — rank 0 BY DESIGN** (the q5 sibling wins the ≥32 GB RAM tier; this quant's niche — fully fits a 24 GB GPU at ctx 8192, 22.7 GiB peak VRAM, no spill — is not expressible in the RAM-tier picker; gemma4-31b selectable-ceiling precedent). F1 .3503, zero hallucinations. Text-only, not bundled. |
+| Chat (Qwen3.6 27B Q4) | Qwen3.6 27B Q4_K_M | ~16.8 GB | 20 GB | — (rank 3) | **The recommended 24 GB pick again since 2026-08-20 (issue #196, §9.5): it held the tier 2026-07-12..2026-08-16, lost it to the Qwen3.8 handover (§9.4), and took it back when upstream deleted the Qwen3.8 files — its own URL + LFS hash re-verified live 2026-08-20.** Productized 2026-07-12 from a local-test stub: unsloth Q4_K_M, real HF-LFS hash, apache-2.0 review; hallucinations 0 on the v3 rescore; **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 16.87 GiB vulkan). Still ranked + selectable. Text-only, not bundled. |
+| Chat (Qwen3.6 27B Q5) | Qwen3.6 27B Q5_K_M | ~19.5 GB | 24 GB | — (rank 3) | **The recommended ≥32 GB pick again since 2026-08-20 (issue #196, §9.5) — same story as the Q4 sibling, and it never stopped being the harness top scorer.** Still the all-time top scorer of the grounded-QA harness (F1 .3573, zero unanswerable-set hallucinations) — the handover is the §6.4 generational call, not a quality verdict. **§9.1 smoke PASSED 2026-07-30** (peak RSS 19.38 GiB vulkan). Text-only, not bundled. |
+| Chat (Qwen3.8 27B Q4) | Qwen3.8 27B Q4_K_M | ~17.1 GB | 21 GB | — (rank 0) | **UPSTREAM FILE DELETED 2026-08-20 (issue #196, §9.5): `download.withdrawn`, rank 3 → 0 — installed copies keep working and verifying, but a fresh drive cannot obtain it, so it is never auto-recommended (the 24 GB tier went back to Qwen3.6 Q4). Was the recommended 24 GB pick 2026-08-16..2026-08-20 (§6.4 + §9.4).** unsloth Q4_K_M, real HF-LFS hash confirmed on-disk, apache-2.0 review (private/legal addendum 2026-08-16). §9.4 eval: F1 .3500 (ties the 3.6-Q4 inside cross-run noise), EM .9765, ZERO hallucinations, perfect abstention; tg 39.9 t/s vulkan / 2.83 cpu (b10430 basis). Text-only, not bundled. |
+| Chat (Qwen3.8 27B Q5) | Qwen3.8 27B Q5_K_M | ~19.8 GB | 23 GB | — (rank 0) | **UPSTREAM FILE DELETED 2026-08-20 (issue #196, §9.5): `download.withdrawn`, rank 3 → 0; the ≥32 GB tier went back to Qwen3.6 Q5. Was the recommended ≥32 GB pick 2026-08-16..2026-08-20 (§6.4 + §9.4).** Same productization posture as the Q4. §9.4 eval: F1 .3523, zero hallucinations; tg 35.9 t/s vulkan — out-decodes the smaller UD-Q4_K_XL, which therefore got no manifest. Text-only, not bundled. |
+| Chat (Qwen3.8 27B Q6) | Qwen3.8 27B Q6_K | ~22.9 GB | 26 GB | — (rank 0) | **UPSTREAM FILE DELETED 2026-08-20 (issue #196, §9.5): `download.withdrawn` — selectable only where the weight is already on the drive. Qwen3.8 wave (2026-08-16, §9.4): the 24 GB-GPU quality ceiling — rank 0 BY DESIGN** (the q5 sibling wins the ≥32 GB RAM tier; this quant's niche — fully fits a 24 GB GPU at ctx 8192, 22.7 GiB peak VRAM, no spill — is not expressible in the RAM-tier picker; gemma4-31b selectable-ceiling precedent). F1 .3503, zero hallucinations. Text-only, not bundled. |
 | Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~22.2 GB | 24 GB | — (rank 1) | **Qwen3.5 wave (2026-07-01); rank 1 since the 2026-08-03 ratification (`model-benchmarks.md` §9.3).** ~35B total / ~3B active MoE (256 experts, 8+1 active); beat the incumbent MoE `qwen3-30b-a3b-q4` on hallucinations (0 real vs 2, EM parity) with the speed case confirmed (140.9 t/s vulkan / 12.1 cpu tg). Ranked alternative for ≥32 GB — never the auto-pick (the Qwen3.8 Q5 holds ≥32 since 2026-08-16). Text-only, not bundled; §9.1 in-app smoke PASSED 2026-08-09 (§9.3 smokes record). |
 | Chat (Gemma E2B) | Gemma 4 E2B Instruct QAT Q4_0 | ~3.3 GB | 8 GB | 12–15 GB boxes + the §6.5 step-down landing tier (rank 3) | **Gemma 4 QAT wave (2026-07-23, issue #82); eval ratified 2026-08-03 (§9.3); PROMOTED 2026-08-09 (issue #153).** Official Google QAT; MatFormer effective-2B. Eval: F1 .3373 edges the bundled Qwen3 4B with equal hallucinations (3) and the fastest cpu decode measured (24.3 t/s); the #153 weak-16 GB-box leg confirmed 17.0 tok/s settled vs the prior 12 GB pick's 9.0 (iGPU basis) → rank 3, rec-RAM retuned to 12 (`model-benchmarks.md` §6.5 #153 amendment). Text-only. In-app b9849 smoke PASSED 2026-07-23. |
 | Chat (Gemma E4B) | Gemma 4 E4B Instruct QAT Q4_0 | ~5.2 GB | 12 GB | — (rank 0) | **Gemma 4 QAT wave; eval ratified 2026-08-03 (§9.3): F1 .2999 misses the 8B bar — no promotion.** MatFormer effective-4B. Text-only; thinks by default, `enable_thinking: false` suppression verified per size. In-app b9849 smoke PASSED 2026-07-23. |
@@ -64,11 +64,12 @@ Sizes/RAM come from each manifest
 > (higher = preferred) that the picker now uses as the tiebreak among models that fit the
 > machine's RAM (the **quality-aware recommender** follow-up — `model-benchmarks.md` §6.2, tiers
 > since recalibrated by §6.3). Net effect on real hardware (newest-Qwen promotion, owner decision
-> 2026-07-12, handed to the Qwen3.8 pair 2026-08-16, `model-benchmarks.md` §6.4 + §9.4; asserted
+> 2026-07-12, handed to the Qwen3.8 pair 2026-08-16 and handed BACK 2026-08-20 when upstream
+> deleted the Qwen3.8 files (issue #196), `model-benchmarks.md` §6.4 + §9.4 + §9.5; asserted
 > in `benchmark.test.ts`): **≤12 GB → Qwen3.5 4B, 12–15 GB → Gemma 4 E2B (#153),
-> 16–20 GB → Qwen3.5 9B, 24 GB → Qwen3.8 27B Q4, ≥32 GB → Qwen3.8 27B Q5**; Granite, both MoEs,
-> and the superseded former winners (Ministral, Gemma 4 12B, the Qwen3.6 27B pair — all still
-> ranked and selectable) are never auto-recommended. The "Auto-tier" column above is the declared `recommended_profiles`
+> 16–20 GB → Qwen3.5 9B, 24 GB → Qwen3.6 27B Q4, ≥32 GB → Qwen3.6 27B Q5**; Granite, both MoEs,
+> the withdrawn Qwen3.8 trio, and the superseded former winners (Ministral, Gemma 4 12B — all
+> still ranked and selectable) are never auto-recommended. The "Auto-tier" column above is the declared `recommended_profiles`
 > (kept as-is); the live recommendation is `recommendation_rank` + RAM-best-fit.
 Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
 12–14B: 16→14). Adding a model is
@@ -262,6 +263,9 @@ vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools
   today by `qwen3.8-27b-q4` and `qwen3.8-27b-q5`; deliberately NOT by `qwen3.8-27b-q6`, whose
   22.7 GiB VRAM fit on a 24 GB card is its whole reason to exist. Design record:
   `architecture.md` "MTP speculative decoding"; measured evidence: `model-benchmarks.md` §9.4.
+  **Do not copy the flag onto a Qwen3.8 successor manifest on family resemblance** (issue #196):
+  upstream's Dynamic 3.0 rebuild publishes the MTP module as a SEPARATE file, and this enum member
+  means an in-GGUF head with no second model file — re-verify per file (§9.5).
 
 ## Model states (spec §7.4)
 Computed by `services/models.ts` with this precedence:
@@ -343,6 +347,52 @@ Leave `sha256` as the placeholder until a real drive is built; fetch the weight,
 `verify-models --generate` to capture the real hash **and the exact `size_bytes`** and promote them
 into the manifest. A 64-hex value the code treats as a **verified** hash, so never transcribe a hash
 you have not computed from the actual downloaded file — an unverified guess hard-fails the checksum.
+
+### Withdrawn upstream sources (`download.withdrawn`, issue #196)
+
+Publishers delete and restructure their repos. On 2026-08-20 unsloth removed the static K-quants
+from `Qwen3.8-27B-GGUF` (their Dynamic 3.0 rollout) and the three files our Qwen3.8 manifests pin
+began returning HTTP 404 (model-benchmarks.md §9.5). Hash pinning means we can never be handed
+substituted weights — but everyone downstream rediscovers the dead link the expensive way: a
+multi-GB request that ends in an error reading like a broken connection.
+
+An optional string inside the `download` block records the fact once, in the manifest:
+
+```yaml
+download:
+  url: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_K_M.gguf?download=true
+  sha256: 7e78da5d…
+  size_bytes: 17106775008
+  withdrawn: "2026-08-20: unsloth removed the static K-quants … (HTTP 404 verified 2026-08-20)."
+```
+
+Rules and behaviour:
+- **A non-empty, dated string** — never a bare `true`. The note is shown to the user and read by a
+  maintainer months later; the validator rejects an empty value or a boolean.
+- **The rest of the block stays.** `url`/`sha256`/`size_bytes`/`license_url` remain the provenance
+  record of the file existing drives carry, and that local copy keeps verifying normally. A
+  withdrawn source **never** disturbs an installed weight (the planner still reports
+  `present-verified`).
+- **Planner** (`assets.ts` `planModelDownloads`, the source of truth): a file that would need
+  fetching plans **`source-withdrawn`** instead of `download` — checked *before* the license gate,
+  since no acknowledgement can conjure a deleted file back.
+- **In-app**: the AI Model card shows the reason in place of the Download button, and the main
+  process refuses `downloadModel` for such a manifest anyway (a renderer bug must never cost the
+  user a doomed multi-GB request). The network-gate banner does not fire for a model that is
+  unfetchable for reasons that have nothing to do with the drive's policy.
+- **Fetch scripts**: `fetch-models.{ps1,sh}` print a loud `SKIP … upstream source withdrawn` line
+  and continue — one retired file must not fail a whole drive build. Both twins are pinned against
+  the TS behaviour by `script-drift.test.ts`. Their flat-YAML parser strips inline comments at
+  `" #"`, so **a withdrawal note must not contain `" #"`** (write "issue 196", not "issue #196") —
+  also asserted in CI.
+- **Ranking**: a withdrawn manifest carries `recommendation_rank: 0` — selectable, never
+  auto-recommended. `committed-catalog.test.ts` pins the general invariant ("no committed manifest
+  is both recommended and unobtainable"), so a fresh drive is never pointed at a model it cannot
+  obtain. Hand the tier to the best-measured model whose source is still live.
+
+When a successor file is eventually measured and productized, the withdrawn manifest is retired
+(or kept as an installed-base record) per the wave that promotes the successor — that decision
+belongs to the wave, not to this field.
 
 ### The DIY download flow + license gate (spec §13)
 `scripts/fetch-models.{ps1,sh}` downloads each weight with a `download` block, **resumes** partials,

@@ -18,6 +18,8 @@ recommended_ram_gb: 32
 # the q5 sibling wins the ≥32 GB RAM tier (faster at equal quality: F1 .3523 vs .3503, tg 35.9
 # vs 31.7). Stays selectable as the "24 GB GPU, quality ceiling" option (the gemma4-31b
 # selectable-ceiling precedent) for boxes where VRAM, not RAM, is the binding constraint.
+# SINCE 2026-08-20 (issue 196) rank 0 is also the obtainability answer: upstream deleted this
+# file (download.withdrawn below), so only drives that already carry the weight can select it.
 recommendation_rank: 0
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
@@ -41,6 +43,11 @@ download:
   sha256: 562fbf760503008f118e5df38de5b3e97992d1f693f475815631198547486727
   size_bytes: 22884408288
   license_url: https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE
+  # DEAD URL — kept as the provenance record of the file this manifest pins, never fetched
+  # again (issue 196; model-policy.md "Withdrawn upstream sources"). The url/sha256/size above
+  # still describe the weight already on existing drives, which keeps verifying normally.
+  # No " #" in this value: the fetch scripts' flat-YAML parser strips inline comments.
+  withdrawn: "2026-08-20: unsloth removed the static K-quants from Qwen3.8-27B-GGUF in their Dynamic 3.0 restructure (HTTP 404 verified 2026-08-20). Successor candidate UD-Q6_K awaits the measurement wave of issue 196."
 bundled_on_preconfigured_drive: false
 # TEXT-ONLY USE: upstream Qwen3.8 is a vision-language model, but this chat manifest ships only
 # the language GGUF and no mmproj/projector, which is all our chat pipeline uses.

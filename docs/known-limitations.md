@@ -2133,6 +2133,37 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   error — and the trade (an edge-case refusal vs. a silently mislabelled signed-off pack) is
   deliberate. Recovery: save under a shorter path.
 
+## Local API ([`local-api.md`](local-api.md) · [`architecture.md`](architecture.md) "Local API endpoint — design record")
+
+All of these are decided scope, not oversights; the design record's §7 carries the reasoning.
+
+- **v1 serves chat completions and a one-model listing — nothing else.** No embeddings, vision,
+  transcription, or translation route, and no way to start/stop/switch a model from outside. The
+  endpoint borrows the model the user already started; if none is running, callers get
+  `model_not_loaded` until a human acts.
+- **No tool/function calling, no image or audio content parts, no `n > 1`.** These are refused by
+  name (400 `unsupported_field`) rather than silently ignored, so a client fails loudly at setup
+  instead of quietly getting a degraded answer.
+- **Sampling extras are accepted and ignored** (`top_p`, `stop`, penalties, `seed`, …).
+  `RuntimeChatOptions` carries no such fields; extending the runtime contract mid-wave was
+  rejected in favour of documenting the omission. Honoured today: `max_tokens` (clamped to the
+  context window), `temperature`, and `response_format.json_schema`.
+- **`usage` token counts are absent from responses.** The streaming reader discards them, so
+  surfacing them means extending the runtime contract; documented-as-absent beats fabricated
+  numbers. A post-v1 candidate — clients that require usage accounting will not work.
+- **One outside request generates at a time** (plus one waiter, ~30 s cap), and in-app use
+  pre-empts it. A deeper queue on ~2 tok/s CPU hardware is a silent multi-minute hang, so the
+  refusal is fast and explicit (429 + `Retry-After`) instead.
+- **No per-connection visibility** — the card shows counts only. Naming who connected and what
+  they asked would require keeping exactly the record the feature promises never to keep.
+- **A loopback endpoint cannot distinguish one local program from another.** The access key is a
+  boundary against casual use by other programs, not against code already running with the user's
+  rights; a same-user debugger can read it out of the unlocked workspace. Recorded in
+  [`security-model.md`](security-model.md) and [`../SECURITY.md`](../SECURITY.md).
+- **The pinned sidecar build leaves `/health` and `/v1/models` auth-exempt on its own port**, so a
+  local process can read liveness and the loaded model's file path (metadata, never content) —
+  upstream behaviour, unrelated to the app's own endpoint but part of the same threat surface.
+
 ## Internationalization ([`architecture.md`](architecture.md) i18n record)
 
 - **Task/summary output language follows the model, not the UI (D-L6 — RESOLVED as

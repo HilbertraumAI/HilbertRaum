@@ -911,7 +911,10 @@ function toModelInfo(
         url: manifest.download.url,
         sizeBytes: manifest.download.sizeBytes,
         licenseUrl: manifest.download.licenseUrl,
-        licenseApproved: manifest.licenseReview.status === 'approved'
+        licenseApproved: manifest.licenseReview.status === 'approved',
+        // #196: a known-dead upstream source. Surfaced so the card explains WHY there is no
+        // Download button, instead of offering one that can only end in an HTTP 404.
+        ...(manifest.download.withdrawn ? { withdrawn: manifest.download.withdrawn } : {})
       }
     : undefined
   return {

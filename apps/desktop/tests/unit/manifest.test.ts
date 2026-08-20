@@ -214,6 +214,52 @@ describe('validateManifest — optional download block (Phase 12)', () => {
     expect(res.ok).toBe(true)
     expect(res.manifest?.download?.sha256).toBe(hash)
   })
+
+  // Issue #196: the publisher deleted the exact file a manifest pins. The block stays (it is the
+  // provenance record of the weight existing drives carry); `withdrawn` marks the URL as dead so
+  // no code path requests it.
+  describe('download.withdrawn (issue #196)', () => {
+    it('is absent by default — every existing manifest keeps a live source', () => {
+      const res = validateManifest(rawManifest({ download: downloadBlock() }))
+      expect(res.ok).toBe(true)
+      expect(res.manifest?.download?.withdrawn).toBeUndefined()
+    })
+
+    it('accepts a dated note and trims it', () => {
+      const note = '2026-08-20: upstream deleted the file (Dynamic 3.0 restructure)'
+      const res = validateManifest(rawManifest({ download: downloadBlock({ withdrawn: `  ${note}  ` }) }))
+      expect(res.ok).toBe(true)
+      expect(res.manifest?.download?.withdrawn).toBe(note)
+    })
+
+    it('rejects an empty note — "withdrawn" with no reason is worse than no field', () => {
+      const res = validateManifest(rawManifest({ download: downloadBlock({ withdrawn: '   ' }) }))
+      expect(res.ok).toBe(false)
+      expect(res.errors.some((e) => e.includes('download.withdrawn'))).toBe(true)
+    })
+
+    it('rejects a boolean — the note is shown to the user, not a flag', () => {
+      const res = validateManifest(rawManifest({ download: downloadBlock({ withdrawn: true }) }))
+      expect(res.ok).toBe(false)
+      expect(res.errors.some((e) => e.includes('download.withdrawn'))).toBe(true)
+    })
+
+    it('applies to an mmproj.download block too (one definition, both slots)', () => {
+      const res = validateManifest(
+        rawManifest({
+          download: downloadBlock(),
+          role: 'vision',
+          mmproj: {
+            local_path: 'models/vision/x-mmproj.gguf',
+            sha256: 'REPLACE_WITH_REAL_HASH',
+            download: downloadBlock({ withdrawn: 5 })
+          }
+        })
+      )
+      expect(res.ok).toBe(false)
+      expect(res.errors.some((e) => e.includes('mmproj.download.withdrawn'))).toBe(true)
+    })
+  })
 })
 
 describe('validateManifest — vision role + mmproj projector (image-understanding §8.1)', () => {

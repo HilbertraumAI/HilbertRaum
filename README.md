@@ -41,6 +41,10 @@ leave your device.
 - 🛠️ **Document tasks & skills** — summarize, translate, and compare documents; install reusable
   **skills** for structured extraction (bank statements, invoices, meeting protocols, redaction) —
   see the [skills overview](docs/skills-overview.md) for what each bundled skill can do.
+- 🔌 **Local API (opt-in)** — let other programs *on the same computer* use your running model
+  through an OpenAI-compatible loopback endpoint: point any client at `http://127.0.0.1:4980/v1`.
+  Off by default, never touches the internet, exposes only completions (no documents, no
+  conversations), and keeps no record of what was asked — see **[`docs/local-api.md`](docs/local-api.md)**.
 - 🧳 **Portable & encrypted** — keep models + a password-encrypted workspace on an external drive;
   move between laptops.
 - 🪟 **Cross-platform** — Windows-first, with macOS/Linux supported in the architecture.
@@ -283,6 +287,7 @@ are in **[`docs/model-benchmarks.md`](docs/model-benchmarks.md)**.
 | [`docs/architecture.md`](docs/architecture.md) | System design, services, IPC, runtimes, design records |
 | [`docs/rag-design.md`](docs/rag-design.md) | Retrieval pipeline: ingestion, chunking, hybrid search, rerank |
 | [`docs/security-model.md`](docs/security-model.md) | Threat model, encrypted vault, offline guard, audit log |
+| [`docs/local-api.md`](docs/local-api.md) | The opt-in local API: tutorial, client examples, the full HTTP contract, security & privacy posture |
 | [`docs/design-guidelines.md`](docs/design-guidelines.md) | Design system: tokens, components, UI/UX design records |
 | [`docs/skills-overview.md`](docs/skills-overview.md) | The bundled skills at a glance — what each can do; reviewed on every skill change |
 | [`docs/model-policy.md`](docs/model-policy.md) | Manifest schema, roles, license policy, runtime pinning |
@@ -338,6 +343,13 @@ Nothing you type or import is sent anywhere. The workspace can be **password-enc
 (AES-256-GCM, Argon2id key derivation), an **offline guard** logs (never blocks) any attempt to
 reach a remote host while offline — local `127.0.0.1`/`localhost` connections are exempt — and a
 local audit log records activity **for you** (ids/counts only — never content).
+
+The one inbound door is the **local API**, and it is opt-in: off by default behind a consent
+dialog, loopback-only (`127.0.0.1`/`::1` — no LAN mode exists), alive only while your workspace is
+unlocked, protected by an access key by default, structurally closed to browser JavaScript, and
+limited to chat completions — there is no route to your documents or conversations. A drive policy
+can forbid it outright. Details in [`docs/local-api.md`](docs/local-api.md).
+
 See [`PRIVACY.md`](PRIVACY.md) and [`docs/security-model.md`](docs/security-model.md); report
 vulnerabilities per [`SECURITY.md`](SECURITY.md).
 

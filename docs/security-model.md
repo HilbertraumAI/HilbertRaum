@@ -275,6 +275,9 @@ exposure, not against a same-user debugger reading the child's environment.
 
 #### The fifth threat: same-machine processes (local-api wave)
 
+_User-facing counterpart: [`local-api.md`](local-api.md) — the same controls written for someone
+deciding whether to switch the feature on, plus the wire contract a client author needs._
+
 Loopback binding answers "can the network reach it?" — it says nothing about the **other programs
 running as you**. Two doors exist:
 

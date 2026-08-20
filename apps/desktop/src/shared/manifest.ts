@@ -52,6 +52,22 @@ export interface DownloadSpec {
   sizeBytes: number | null
   /** URL of the model license, shown at the license-acceptance prompt. */
   licenseUrl: string | null
+  /**
+   * WITHDRAWN UPSTREAM SOURCE (issue #196, model-policy.md "Withdrawn upstream sources"):
+   * a short dated note saying the `url` above is known-dead — the publisher deleted or
+   * replaced the exact file this manifest pins. Absent (the normal case) = the source is
+   * live. Present = the app must NOT offer or attempt the fetch: `planModelDownloads`
+   * reports `source-withdrawn` instead of `download`, the in-app downloader refuses to
+   * start with that reason, and the fetch scripts skip the model with a loud line —
+   * instead of everyone rediscovering an HTTP 404 the long way.
+   *
+   * The rest of the block is deliberately KEPT (url, hash, size, license): a manifest whose
+   * weight is already on a drive stays fully usable — the pinned SHA-256 still verifies the
+   * local file — and the dead URL remains the provenance record of what that file is. Such
+   * a manifest also carries `recommendation_rank: 0`, so the picker never recommends a model
+   * a fresh drive can no longer obtain (pinned in `committed-catalog.test.ts`).
+   */
+  withdrawn?: string
 }
 
 /**
@@ -211,11 +227,24 @@ function validateDownloadSubBlock(
   if (licenseUrlRaw !== undefined && licenseUrlRaw !== null && typeof licenseUrlRaw !== 'string') {
     errors.push(`"${label}.license_url" must be a string when present`)
   }
+  // Optional withdrawal note (#196). A non-empty STRING, never a bare `true`: the note is
+  // shown to the user and read by a maintainer months later, so "withdrawn" without a date
+  // and a reason is worse than no field at all.
+  const withdrawnRaw = dl['withdrawn']
+  let withdrawn: string | undefined
+  if (withdrawnRaw !== undefined && withdrawnRaw !== null) {
+    if (typeof withdrawnRaw !== 'string' || withdrawnRaw.trim() === '') {
+      errors.push(`"${label}.withdrawn" must be a non-empty string (a dated reason) when present`)
+    } else {
+      withdrawn = withdrawnRaw.trim()
+    }
+  }
   return {
     url: typeof url === 'string' ? url.trim() : '',
     sha256: dlSha,
     sizeBytes,
-    licenseUrl: typeof licenseUrlRaw === 'string' ? licenseUrlRaw.trim() : null
+    licenseUrl: typeof licenseUrlRaw === 'string' ? licenseUrlRaw.trim() : null,
+    ...(withdrawn ? { withdrawn } : {})
   }
 }
 

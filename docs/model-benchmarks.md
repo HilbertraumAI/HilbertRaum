@@ -1123,6 +1123,61 @@ gate); (4) draft depths n=3/4 neither break nor help (n=4 acceptance falls to 64
 "n=4 emits junk" claim circulating publicly did not reproduce on this stack; n=2 is the pick.
 `-np 1` showed no throughput effect at ctx 8192 (default `n_slots=4`, unified KV).
 
+### 9.5 The Qwen3.8 wave lost its upstream files (2026-08-20, issue #196)
+
+**What happened.** Four days after the §9.4 promotion, unsloth restructured
+`unsloth/Qwen3.8-27B-GGUF` for their Dynamic 3.0 rollout and **deleted the plain static
+K-quants**. All three files the wave pins return HTTP 404 (verified 2026-08-20 with `HEAD`
+requests on the exact manifest URLs); the repo now publishes `UD-*` files plus legacy
+`Q4_0/Q4_1/Q8_0` — different weights, different hashes. Hash pinning did its job: we can never
+silently receive substituted weights. We also cannot fetch these exact files again.
+
+**Blast radius, measured not assumed.** Every committed `download.url` in the catalog was
+re-checked the same day (28 URLs, `HEAD` + redirects): **only the three Qwen3.8 manifests are
+dead.** The Qwen3.6 pair is intact — URL alive AND the upstream LFS OIDs still equal the
+committed hashes (`5ed60d0a…` / `cfecab16…`), so the tier fallback below rests on a live,
+unchanged source. Drives that already carry a Qwen3.8 weight are unaffected in every way: the
+local file still matches the pinned SHA-256, verification passes, the model starts, and MTP
+speculative decoding (§9.4 addendum) still applies.
+
+**Decision (interim, 2026-08-20).** The measurements of §9.4 stand — nothing about the models
+changed, only their obtainability — so the manifests are **kept as installed-base records** with
+the dead URL, hash and size intact (option 2 of issue #196, the posture prior waves used for
+weight changes), plus a new machine-readable `download.withdrawn` note. Two consequences:
+
+1. **Ranks.** `qwen3.8-27b-q4` and `-q5` go **rank 3 → 0** (selectable, never auto-recommended —
+   the existing rank-0 convention, cf. the q6 sibling and gemma4-31b). The §9.4 generational
+   handover is **reverted**: `qwen3.6-27b-q4` retakes 24 GB and `qwen3.6-27b-q5` retakes ≥32 GB
+   at **rank 3**. Rationale: a recommendation the user cannot act on is worse than a
+   slightly-older recommendation they can — and the Qwen3.6 pair is the best-measured pair on
+   this harness whose weights can still be downloaded (q5 still holds the all-time F1 record
+   .3573). The §6.5 stepped picks move with it (≥32 GB crawl now lands on `qwen3.6-27b-q4`).
+2. **No estimated successors.** The `UD-Q4_K_M` / `UD-Q5_K_M` / `UD-Q6_K` candidates are NOT
+   productized here. Manifest numbers are measured, never estimated, and the successor files
+   need the full per-quant wave on the i9-9900X + RTX 3090 rig (§9.4 method): SHA-256 on disk,
+   §2 grounded-QA vs the committed baseline, §3/§4 speed + peak VRAM/RSS at ctx 8192, §9.1
+   in-app smokes on the b9849 pin. **One extra gate for the successors:** Dynamic 3.0 publishes
+   the MTP module as a SEPARATE file (`MTP/mtp-Qwen3.8-27B-Q4_0.gguf`, 1.37 GB), so the
+   `speculative_decoding: mtp` claim — which asserts a draft head *inside the same GGUF*, with
+   no `--model-draft` — must be re-verified per successor file and dropped if the modules are
+   no longer in-GGUF. Verified upstream facts as of 2026-08-20 (HF LFS metadata), so the wave
+   starts from data rather than a re-lookup:
+
+   | successor candidate | size (bytes) | LFS OID (= SHA-256) |
+   |---|---|---|
+   | `Qwen3.8-27B-UD-Q4_K_M.gguf` | 16,464,440,224 | `322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482` |
+   | `Qwen3.8-27B-UD-Q5_K_M.gguf` | 19,771,509,664 | `2de73110cb254cbf09b54b717578dadff12ef1194e7271527e68202f39ba4bfd` |
+   | `Qwen3.8-27B-UD-Q6_K.gguf`   | 21,983,677,344 | `c9c206812fbe4ac7b76a729e25928b63f2ae89d37f69da7a71c20aec763cd436` |
+
+   These are upstream metadata, NOT a promotion: a hash only becomes a manifest pin after the
+   file is downloaded and hashed on disk (model-policy.md's checksum-honesty rule).
+
+**Product change shipped with this record** (so the failure is legible instead of an HTTP 404):
+the manifest field `download.withdrawn` — see model-policy.md "Withdrawn upstream sources
+(`download.withdrawn`)" for the schema, the planner status, the in-app copy and the fetch-script
+behaviour. License posture is unchanged (same upstream repo, apache-2.0); nothing was
+redistributed, so no DRIVE-NOTICES regeneration is implied.
+
 ---
 
 ## 10. Skills extraction & real-model smoke (skills-remediation T1, audit §7)

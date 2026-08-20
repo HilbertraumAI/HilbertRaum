@@ -14,12 +14,18 @@ size_on_disk_gb: 19.8
 # sha256 verify 76 s, VmHWM 19.68 GiB, thinking suppression + Deep verified, clean teardowns).
 recommended_min_ram_gb: 23
 recommended_ram_gb: 32
-# Rank 3 (owner decision 2026-08-16, newest-generation preference; model-benchmarks.md §6.4 +
-# §9.4): F1 .3523 exactly ties the former 24 GB pick qwen3.6-27b-q4; the all-time harness
-# record stays with qwen3.6-27b-q5 (.3573), but the 3.8 wave's zero-hallucination + perfect-
-# abstention profile across ALL quants plus the newest-generation preference takes the ≥32 GB
-# tier; qwen3.6-27b-q5 drops to rank 1 (full generational handover).
-recommendation_rank: 3
+# Rank 0 SINCE 2026-08-20 (issue 196): unsloth deleted this exact file in their Dynamic 3.0
+# restructure, so a drive that does not already carry the weight can no longer obtain it (see
+# download.withdrawn below). Rank 0 = selectable, never auto-recommended, so the picker stops
+# handing the ≥32 GB tier to a model a fresh drive cannot get; the tier goes back to
+# qwen3.6-27b-q5 (rank 3 again, and the all-time harness F1 record holder). §9.5.
+# HISTORY — rank 3 2026-08-16..2026-08-20 (owner decision, newest-generation preference;
+# model-benchmarks.md §6.4 + §9.4): F1 .3523 exactly ties the former 24 GB pick
+# qwen3.6-27b-q4; the all-time harness record stays with qwen3.6-27b-q5 (.3573), but the 3.8
+# wave's zero-hallucination + perfect-abstention profile across ALL quants plus the
+# newest-generation preference took the ≥32 GB tier. The measured verdict is UNCHANGED — only
+# the obtainability is gone.
+recommendation_rank: 0
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
 supports_thinking_mode: true
@@ -48,6 +54,11 @@ download:
   sha256: 07deb7fa91bf751d3000774fe5bb8afae5ffb41255fd19980147468052e07177
   size_bytes: 19834055648
   license_url: https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE
+  # DEAD URL — kept as the provenance record of the file this manifest pins, never fetched
+  # again (issue 196; model-policy.md "Withdrawn upstream sources"). The url/sha256/size above
+  # still describe the weight already on existing drives, which keeps verifying normally.
+  # No " #" in this value: the fetch scripts' flat-YAML parser strips inline comments.
+  withdrawn: "2026-08-20: unsloth removed the static K-quants from Qwen3.8-27B-GGUF in their Dynamic 3.0 restructure (HTTP 404 verified 2026-08-20). Successor candidate UD-Q5_K_M awaits the measurement wave of issue 196."
 bundled_on_preconfigured_drive: false
 # TEXT-ONLY USE: upstream Qwen3.8 is a vision-language model, but this chat manifest ships only
 # the language GGUF and no mmproj/projector, which is all our chat pipeline uses.

@@ -1111,6 +1111,11 @@ export const de: Record<keyof typeof en, string> = {
   'models.download.titled': '{name} herunterladen ({size})',
   'models.download.resume': 'Download fortsetzen',
   'models.download.start': 'Herunterladen',
+  // #196: Der Anbieter hat genau diese Datei entfernt.
+  'models.download.withdrawn':
+    'Nicht mehr zum Download verfügbar: Der Anbieter hat genau diese Datei entfernt ' +
+    '({reason}). Bereits auf einem Laufwerk vorhandene Kopien funktionieren weiterhin und ' +
+    'bleiben verifizierbar.',
   // In-App-Engine-(llama.cpp + whisper.cpp)-Installer-Banner — sichtbar, wenn eine Engine fehlt.
   'models.engine.title': 'KI-Engine installieren',
   'models.engine.explain':
@@ -2135,6 +2140,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.download.alreadyRunning':
     'Es läuft bereits ein Download. Modelle werden einzeln heruntergeladen.',
   'main.download.noSource': 'Das Modell „{modelId}“ hat keine Download-Quelle in seinem Manifest.',
+  'main.download.sourceWithdrawn':
+    'Der Anbieter von „{modelId}“ hat genau diese Datei entfernt, sie kann daher nicht mehr ' +
+    'heruntergeladen werden ({reason}). Bereits auf diesem Laufwerk vorhandene Modelle ' +
+    'funktionieren weiterhin.',
   'main.download.alreadyVerified': 'Dieses Modell ist bereits heruntergeladen und verifiziert.',
   'main.download.presentUnverified':
     'Die Datei dieses Modells ist bereits vorhanden. Ihr Manifest enthält noch keine echte ' +

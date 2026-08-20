@@ -183,6 +183,62 @@ describe('planModelDownloads', () => {
     expect(tasks[0].licenseApproved).toBe(true)
   })
 
+  // Issue #196: unsloth deleted the exact Qwen3.8 files three manifests pinned. The planner is
+  // the ONE place that decides "this file has to come off the network", so the withdrawal is
+  // decided here and every caller (in-app downloader, dry-run report) inherits it.
+  describe('a withdrawn upstream source (issue #196)', () => {
+    const withdrawn = (extra: Record<string, unknown> = {}): ModelManifest =>
+      manifest({
+        license_review: { status: 'approved', reviewed_by: 'me', reviewed_at: '2026-01-01', notes: '' },
+        download: {
+          url: 'https://example.test/qwen3-4b.gguf',
+          sha256: 'REPLACE_WITH_REAL_HASH',
+          size_bytes: 2700000000,
+          license_url: 'https://example.test/license',
+          withdrawn: '2026-08-20: upstream deleted the file'
+        },
+        ...extra
+      })
+
+    it('plans source-withdrawn instead of download when the weight is absent', async () => {
+      const root = tempDir('hilbertraum-assets-')
+      const tasks = await planModelDownloads(root, [withdrawn()], { acceptLicense: true })
+      expect(tasks).toHaveLength(1)
+      expect(tasks[0].status).toBe('source-withdrawn')
+      expect(tasks[0].withdrawn).toContain('2026-08-20')
+    })
+
+    it('outranks the license gate — no acknowledgement can conjure a deleted file back', async () => {
+      const root = tempDir('hilbertraum-assets-')
+      const pending = withdrawn({
+        license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' }
+      })
+      const tasks = await planModelDownloads(root, [pending])
+      expect(tasks[0].status).toBe('source-withdrawn')
+    })
+
+    it('never disturbs a drive that already carries the weight', async () => {
+      const root = tempDir('hilbertraum-assets-')
+      const content = 'real-weights'
+      const hash = sha256(content)
+      const m = manifest({
+        sha256: hash,
+        download: { url: 'https://x/y.gguf', sha256: hash, size_bytes: 1, license_url: null, withdrawn: 'gone' }
+      })
+      writeWeight(root, m, content)
+      const tasks = await planModelDownloads(root, [m], { acceptLicense: true })
+      expect(tasks[0].status).toBe('present-verified')
+    })
+
+    it('says so in the dry-run report instead of promising a fetch', async () => {
+      const root = tempDir('hilbertraum-assets-')
+      const tasks = await planModelDownloads(root, [withdrawn()], { acceptLicense: true })
+      const report = formatAssetPlan(tasks, null)
+      expect(report).toContain('source-withdrawn')
+      expect(report).toContain('upstream source withdrawn')
+    })
+  })
+
   it('skips a present + verified weight (real hash matches)', async () => {
     const root = tempDir('hilbertraum-assets-')
     const content = 'real-weights'

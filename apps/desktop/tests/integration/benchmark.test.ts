@@ -231,8 +231,8 @@ describe('recommendation per profile', () => {
     expect(recommendModelIdByRam(m, 12, 'chat')).toBe('gemma4-e2b-it-qat-q4') // #153 sub-16 band
     expect(recommendModelIdByRam(m, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl') // 8B-class tier
     expect(recommendModelIdByRam(m, 20, 'chat')).toBe('qwen3.5-9b-ud-q4kxl') // 24 GB tier starts at 24
-    expect(recommendModelIdByRam(m, 24, 'chat')).toBe('qwen3.8-27b-q4') // §9.4 handover (Q4)
-    expect(recommendModelIdByRam(m, 32, 'chat')).toBe('qwen3.8-27b-q5') // §9.4 handover (Q5)
+    expect(recommendModelIdByRam(m, 24, 'chat')).toBe('qwen3.6-27b-q4') // §9.5 revert (#196)
+    expect(recommendModelIdByRam(m, 32, 'chat')).toBe('qwen3.6-27b-q5') // §9.5 revert (#196)
   })
 
   it('never auto-recommends the opt-in 30B MoE or the benchmark-loser Granite (real manifests)', () => {
