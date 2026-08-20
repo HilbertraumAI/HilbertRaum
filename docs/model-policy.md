@@ -401,6 +401,37 @@ Rules and behaviour:
   is both recommended and unobtainable"), so a fresh drive is never pointed at a model it cannot
   obtain. Hand the tier to the best-measured model whose source is still live.
 
+### Re-verifying the catalog against upstream (the drift check)
+
+A deleted file is the *loud* upstream failure. The quiet one is a **live URL that now serves
+different bytes** — the publisher re-uploaded the weight, so the download still runs to completion
+and then fails SHA-256 verification, at the end of several GB, with a message the user cannot act
+on. Hash pinning stops us being handed substituted weights silently; it does not tell us the
+substitution happened.
+
+So the periodic catalog check compares the **upstream hash**, not just the status code. For every
+committed `download.url`:
+
+1. **URL alive?** `HEAD`, redirects followed. A 404 means the file is gone → `download.withdrawn`.
+2. **Same bytes?** Compare the upstream git-LFS OID (which, for a HuggingFace LFS object, *is* the
+   file's SHA-256) against the manifest's `sha256`. A mismatch on a live URL is the quiet failure.
+   Repointing the manifest at the new bytes is a **substitution**, and manifest numbers are
+   measured, never estimated — so it needs its own measurement wave, exactly like the successor
+   of a withdrawn file (next paragraph).
+
+**The trap that makes step 2 easy to get wrong:** a `HEAD` that *follows* redirects returns the
+CDN's own ETag, which is never the LFS OID — every HuggingFace manifest then reads as a mismatch.
+Read the OID off the `huggingface.co` 302 itself — `x-linked-etag` / `x-linked-size`, i.e. a
+request with redirects NOT followed — or ask the API
+(`https://huggingface.co/api/models/<repo>/tree/main`) and read the entry's `lfs.oid` and
+`lfs.size`. Cross-checking both ways is cheap and worth it: they are independent paths to the
+same number.
+
+History worth keeping: the issue-#196 blast-radius sweep checked step 1 across the whole catalog
+and step 2 for the Qwen3.6 pair only. That was enough for #196 and left one drifted manifest
+undetected for five weeks (issue #201, found by the 2026-08-20 docs/code audit). Both steps, every
+manifest.
+
 When a successor file is eventually measured and productized, the withdrawn manifest is retired
 (or kept as an installed-base record) per the wave that promotes the successor — that decision
 belongs to the wave, not to this field. **Precedent set by the first such wave** (issue #196,
