@@ -5,7 +5,9 @@ role: chat
 format: gguf
 runtime: llama_cpp
 license: apache-2.0
-size_on_disk_gb: 9.3
+# size_on_disk_gb follows size_bytes (decimal GB, the F-16 catalog convention): both were
+# derived from the same rounded estimate before the 2026-08-20 measured correction (issue 202).
+size_on_disk_gb: 9.0
 # recommended_min_ram_gb recalibrated 16->14 from the Phase-29 measured ~10.6 GiB peak RSS.
 recommended_min_ram_gb: 14
 # recommended_ram_gb recalibrated 32→24 with the tier winner Gemma 4 (issue #48, model-benchmarks.md
@@ -22,7 +24,11 @@ sha256: 500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0
 download:
   url: https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf?download=true
   sha256: 500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0
-  size_bytes: 9300000000
+  # MEASURED 2026-08-20 (issue 202), was the hand-entered 9300000000. Real byte count from the
+  # upstream LFS metadata, confirmed by both methods of the model-policy.md drift check (the HF
+  # tree API lfs.size AND x-linked-size off a redirect-manual HEAD). The sha256 was and stays an
+  # exact match, so only the declared size was ever an estimate.
+  size_bytes: 9001752960
   license_url: https://huggingface.co/Qwen/Qwen3-14B-GGUF/blob/main/LICENSE
 bundled_on_preconfigured_drive: false
 # The spec §7.3 PRO model ("Qwen3 8B or 14B"). A clear quality step up for 32 GB+ laptops;

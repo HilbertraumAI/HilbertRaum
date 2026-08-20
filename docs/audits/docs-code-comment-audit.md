@@ -29,7 +29,7 @@ record of what was true when the pass ran. This table is the ledger.
 | **A-8** five stale manifest rank comments | **fixed** | Phase 4 |
 | **B-1** `gemma4-12b-it-qat-q4` upstream re-upload | **FILED, not fixed — needs a measurement wave** | [#201](https://github.com/HilbertraumAI/HilbertRaum/issues/201) |
 | **B-2** the drift check verified liveness, not byte-identity | **fixed** (the ritual is now written down) | Phase 5 |
-| **B-3** four rounded `size_bytes` | **FILED — owner's call between a measured correction and a policy sentence** | [#202](https://github.com/HilbertraumAI/HilbertRaum/issues/202) |
+| **B-3** four rounded `size_bytes` | **fixed 2026-08-20 — BOTH options, they were never alternatives.** (a) The four values corrected to the measured byte counts (re-derived by both drift-check methods; `size_on_disk_gb` followed on two of them to hold the F-16 decimal-GB invariant). (b) `model-policy.md` now scopes `size_bytes` as drift-TOLERANT where it is consumed and exact where it is declared, tying the tolerance to `assets.ts`'s 25 %/128 MiB headroom and citing #201 as the proof it was right. (a) alone left the headroom looking arbitrary; (b) alone left four wrong numbers | [#202](https://github.com/HilbertraumAI/HilbertRaum/issues/202) |
 | **C-1 … C-5** the Node floor | **fixed** | Phase 1 |
 | **D-1** four unresolvable links in the archive | **fixed** (de-linkified as the 2026-07-12 pass did; header records the completed sweep) | Phase 5 |
 | **D-2 D-3 D-4** | **no action — recorded so a later sweep does not "fix" them** | — |
