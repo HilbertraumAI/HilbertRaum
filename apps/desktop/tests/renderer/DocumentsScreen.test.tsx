@@ -1680,3 +1680,119 @@ describe('DocumentsScreen — export original file (#90)', () => {
     ).not.toBeInTheDocument()
   })
 })
+
+// ---- #194: feedback for the two blocking single-document actions -----------------------------
+// Found on the real relocated drive during the #190 continuity check: the operator clicked
+// "Neu aufbereiten" (Re-index) on one document and got nothing — no success signal, no progress,
+// no error — while the re-index had in fact SUCCEEDED. All three channels are asserted here, on
+// the shared `run()` helper (re-index AND delete), because a silent success is indistinguishable
+// from a no-op and that is the whole defect.
+describe('DocumentsScreen — single-document action feedback (#194)', () => {
+  it('a successful single-document re-index toasts, naming the document', async () => {
+    const user = userEvent.setup()
+    const reindexDocument = vi.fn(async () => doc({}))
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), reindexDocument })
+    render(
+      <ToastProvider>
+        <DocumentsScreen />
+      </ToastProvider>
+    )
+
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Re-index' }))
+    await waitFor(() => expect(reindexDocument).toHaveBeenCalledWith('d1'))
+    // The guard: an already-healthy document redraws an IDENTICAL list, so this toast is the
+    // only thing distinguishing "it worked" from "nothing happened". Deleting the showToast
+    // call in `run()` turns exactly this line red.
+    expect(
+      await screen.findByText('“contract.pdf” re-indexed.', {}, { timeout: 5000 })
+    ).toBeInTheDocument()
+  })
+
+  it('a successful single-document delete toasts too (the shared helper, not a re-index special case)', async () => {
+    const user = userEvent.setup()
+    const deleteDocument = vi.fn(async () => {})
+    const listDocuments = vi
+      .fn<() => Promise<DocumentInfo[]>>()
+      .mockResolvedValueOnce([doc({})])
+      .mockResolvedValue([])
+    stubApi({ listDocuments, deleteDocument })
+    render(
+      <ToastProvider>
+        <DocumentsScreen />
+      </ToastProvider>
+    )
+
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
+    await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith('d1'))
+    expect(
+      await screen.findByText('“contract.pdf” deleted.', {}, { timeout: 5000 })
+    ).toBeInTheDocument()
+  })
+
+  it('while a re-index runs, ONLY that row shows the spinner — not the whole list (gap 2)', async () => {
+    const user = userEvent.setup()
+    // Hold the invoke open so the in-flight state is observable: pre-fix the ONLY signal was
+    // `disabled={busy !== null}` on every row, i.e. nothing said which row was working, or that
+    // anything was working at all.
+    let release: (() => void) | null = null
+    const reindexDocument = vi.fn(
+      () => new Promise<DocumentInfo>((resolve) => { release = () => resolve(doc({})) })
+    )
+    stubApi({
+      listDocuments: vi.fn(async () => [doc({}), doc({ id: 'd2', title: 'terms.docx' })]),
+      reindexDocument
+    })
+    render(
+      <ToastProvider>
+        <DocumentsScreen />
+      </ToastProvider>
+    )
+
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Re-index' }))
+
+    // The clicked row says what is happening; the sibling row keeps its ordinary actions.
+    const busyRow = (await screen.findByText('contract.pdf')).closest('.doc-row') as HTMLElement
+    const otherRow = screen.getByText('terms.docx').closest('.doc-row') as HTMLElement
+    expect(await within(busyRow).findByText('Re-indexing…')).toBeInTheDocument()
+    expect(within(otherRow).queryByText('Re-indexing…')).not.toBeInTheDocument()
+    expect(within(otherRow).getByRole('button', { name: /^preview$/i })).toBeInTheDocument()
+
+    await act(async () => { release?.() })
+    await waitFor(() => expect(screen.queryByText('Re-indexing…')).not.toBeInTheDocument())
+  })
+
+  it('a failed single-document re-index names the document on the banner (#188 D-3, recurring)', async () => {
+    const user = userEvent.setup()
+    const reindexDocument = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'reindexDocument': Error: The document file is no longer present.")
+    })
+    stubApi({
+      listDocuments: vi.fn(async () => [doc({}), doc({ id: 'd2', title: 'terms.docx' })]),
+      reindexDocument
+    })
+    render(
+      <ToastProvider>
+        <DocumentsScreen />
+      </ToastProvider>
+    )
+
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Re-index' }))
+    // The screen-level banner sits above a list the user may have scrolled away from, so the
+    // message has to carry the document itself — the fix #188 made for "Export original file"
+    // and did not sweep onto its neighbours. No success toast on a failure.
+    expect(
+      await screen.findByText('contract.pdf: The document file is no longer present.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText('“contract.pdf” re-indexed.')).not.toBeInTheDocument()
+  })
+})

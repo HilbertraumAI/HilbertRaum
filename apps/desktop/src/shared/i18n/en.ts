@@ -584,7 +584,14 @@ export const en = {
   'docs.reindex': 'Re-index',
   'docs.reindexBusy': 'Re-indexing…',
   'docs.reindexTitle': 'Read and prepare the stored copy again',
+  // #194: the single-document actions confirm themselves, the way the bulk "Re-index all"
+  // has since M-U6. Re-indexing an already-healthy document leaves the refreshed list looking
+  // identical, so without this "it worked" and "nothing happened" are the same event. Both
+  // toasts name the document, because the row they were fired from may have scrolled away.
+  'docs.reindexDone': '“{title}” re-indexed.',
   'docs.delete': 'Delete',
+  'docs.deleteBusy': 'Deleting…',
+  'docs.deleteDone': '“{title}” deleted.',
   // Failed-import row actions (§11.6 follow-up): a failed import never produced text, so
   // Preview is meaningless — the inline pair becomes Remove (clear the failed entry) and,
   // only when re-indexing could help (a transient read/parse error, NOT an unsupported type),

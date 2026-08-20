@@ -48,6 +48,7 @@ export const DocRow = memo(function DocRow({
   ocrAvailable,
   translationAvailable,
   busy,
+  rowBusy,
   previewLoading,
   showCheckbox,
   isProjectSection,
@@ -91,6 +92,10 @@ export const DocRow = memo(function DocRow({
   /** The TranslateGemma sidecar resolved at startup (TG-3) — gates the Translate item. */
   translationAvailable: boolean
   busy: string | null
+  /** #194: the blocking single-document action running on THIS row, narrowed in the parent
+   *  (`null` — Object.is-stable — for every other row, like `rowTask`). `busy` alone only ever
+   *  said "something, somewhere is running"; this says what is happening HERE. */
+  rowBusy: 'reindex' | 'delete' | null
   previewLoading: boolean
   /** Whether the screen offers selection (i.e. `onAskSelected` is set) — gates the checkbox. */
   showCheckbox: boolean
@@ -107,7 +112,7 @@ export const DocRow = memo(function DocRow({
    *  busy/Cancel pair persisted until reload (full-audit 2026-07-11 F2 rider). */
   onDismissTask: () => void
   onPreview: (d: DocumentInfo) => void
-  run: (key: string, fn: () => Promise<unknown>) => void
+  run: (kind: 'reindex' | 'delete', d: DocumentInfo, fn: () => Promise<unknown>) => void
   onSummarize: (d: DocumentInfo) => void
   setTranslateDoc: (d: DocumentInfo | null) => void
   /** Deep link for the translate model-missing state (TG-3) — opens the AI Model screen. */
@@ -274,7 +279,17 @@ export const DocRow = memo(function DocRow({
       {/* Inline action + overflow (Task 1). While a task runs on this row, a busy/cancel
           pair takes their place. */}
       <div className="doc-row-actions">
-        {rowTask && rowTask.stateUnknown ? (
+        {rowBusy ? (
+          // #194 gap 2: a blocking single-document action (re-index / delete) is running on THIS
+          // row. Same treatment as the doc-task busy state above it — a disabled spinner button
+          // that says what is happening — minus a Cancel, because `IPC.reindexDocument` /
+          // `IPC.deleteDocument` are plain blocking invokes with nothing to cancel. Before this the
+          // click produced no visible change anywhere: the ⋯ menu closed, every row's buttons
+          // greyed out, and a slow re-embed read as a frozen UI (the #190 continuity check).
+          <Button size="sm" disabled title={rowBusy === 'reindex' ? t('docs.reindexTitle') : undefined}>
+            <Spinner /> {t(rowBusy === 'reindex' ? 'docs.reindexBusy' : 'docs.deleteBusy')}
+          </Button>
+        ) : rowTask && rowTask.stateUnknown ? (
           // full-audit 2026-07-11 F2 rider (CODE-6 follow-up): the store gave up polling this task
           // after repeated IPC errors — a labelled, dismissable row (the SkillRunBar SKA-40
           // treatment) instead of a busy/Cancel pair stuck until reload. The backend may genuinely
@@ -336,7 +351,7 @@ export const DocRow = memo(function DocRow({
                 size="sm"
                 disabled={busy !== null}
                 title={t('docs.failed.retryTitle')}
-                onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
+                onClick={() => void run('reindex', d, () => window.api.reindexDocument(d.id))}
               >
                 {t('docs.failed.retry')}
               </Button>
@@ -345,7 +360,7 @@ export const DocRow = memo(function DocRow({
               size="sm"
               disabled={busy !== null}
               title={t('docs.failed.removeTitle')}
-              onClick={() => void run(`delete-${d.id}`, () => window.api.deleteDocument(d.id))}
+              onClick={() => void run('delete', d, () => window.api.deleteDocument(d.id))}
             >
               {t('docs.failed.remove')}
             </Button>
@@ -426,7 +441,7 @@ export const DocRow = memo(function DocRow({
                   <DropdownMenu.Item
                     className="menu-item"
                     disabled={ACTIVE_STATUSES.has(d.status) || anyTaskActive}
-                    onSelect={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
+                    onSelect={() => void run('reindex', d, () => window.api.reindexDocument(d.id))}
                   >
                     {t('docs.reindex')}
                   </DropdownMenu.Item>
