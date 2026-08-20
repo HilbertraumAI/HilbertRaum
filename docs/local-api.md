@@ -531,4 +531,5 @@ the honest answer is to leave the feature off. Nothing else in the app depends o
 **Contract stability.** The wire shape above is what external apps code against; treat it as
 public API. Additive changes (a new optional field, a new error `code`) are fine; changing an
 existing status/code mapping or the streaming frame order is a breaking change and needs a note in
-[`../CHANGELOG.md`](../CHANGELOG.md).
+the [`../CHANGELOG.md`](../CHANGELOG.md) section for the release that carries it — which is what
+that release's page publishes, so client authors meet it where they look.

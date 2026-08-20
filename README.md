@@ -300,7 +300,7 @@ are in **[`docs/model-benchmarks.md`](docs/model-benchmarks.md)**.
 | [`docs/data-contracts.md`](docs/data-contracts.md) | Shared cross-module data contracts (IPC surface, DB schema, streaming, …) |
 | [`docs/build-log.md`](docs/build-log.md) | Archive of retired `BUILD_STATE.md` entries (frozen; grep for old citations) |
 | [`BUILD_STATE.md`](BUILD_STATE.md) | Live build state — read first when contributing |
-| [`CHANGELOG.md`](CHANGELOG.md) | Release/version history (pre-1.0; see also `BUILD_STATE.md`) |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed for users, per released version — and the source of each release page's notes |
 
 ## For developers
 
