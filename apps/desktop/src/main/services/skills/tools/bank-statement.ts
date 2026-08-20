@@ -93,79 +93,58 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  * line parser here (`extractTransactions`/`parseLine`/`applySignMarker`) OR the geometry reconstruction
  * (`pdf-layout.ts` `reconstructPage`). A pure refactor that cannot change any output does NOT need a bump.
  *
- * History (each entry = the output-affecting work that warranted the value):
- *   1 — baseline: Phase 32 multi-baseline payee recovery + currency-token class + A3 sign-column fold,
- *       and the Phase 31–33 review's sign-handling correctness fixes (the current parser as built).
- *   2 — audit C-4: `extractStatementBalances` disambiguates the dual-role `Kontostand per` label by date
- *       (earliest = opening, latest = closing; a lone line = closing only) instead of reading it as BOTH
- *       opening and closing, changing the persisted `opening_balance`/`closing_balance` on Raiffeisen
- *       "Mein ELBA"-style statements. Stale v1 statements re-extract via the A9 path on the next reuse.
- *   3 — full-audit-2026-06-29 follow-up Phase 1: FIN-1 (statement currency by majority vote over
- *       figure-adjacent detections, not first-code-anywhere — fixes a wrong-currency total when a memo
- *       carries a stray code), FIN-3 (geometry classifier reads bare-thousands / apostrophe amounts and
- *       no longer mis-reads `2.500` as a date → the reconstructed line carries the real amount), and
- *       FIN-4 (date-order inferred from the LEADING date column only, so a memo date can't day/month-swap
- *       every row). Each can change the persisted currency / amounts / dates, so stale v2 rows re-extract.
- *   4 — skills-remediation R1 (audit §5.3): a shared `normalizeExtractionText` pre-pass runs at the plain-
- *       text extractor entry points (rows + balances), and the geometry path normalizes each token in
- *       `rowTokens` (its private mirror), so a Unicode minus (U+2212 / en dash / non-breaking hyphen), a
- *       no-break-space thousands separator (NBSP / narrow NBSP / figure space), or a Swiss U+2019 apostrophe
- *       group is read correctly — a `−45,90` debit now signs negative and a `1 234,56` (NBSP) no longer
- *       truncates to 234,56. Changes persisted amounts/signs on affected statements, so stale v3 rows re-extract.
- *   5 — skills-remediation R2 (audit §5.4): the dual-role balance label now recognizes `Kontostand am` and
- *       `Kontostand zum` alongside `Kontostand per` (all three prepositions are in use across AT/DE banks),
- *       so an `am`/`zum` statement's opening/closing balances feed the §3.5 completeness gate and those
- *       lines are dropped from the transaction stream instead of double-counting. Changes the persisted
- *       balances (and row set) on affected statements, so stale v4 rows re-extract.
- *   6 — skills-remediation R5 (audit §5.7): date correctness. `parseDate` now completes a 2-digit-year
- *       `dd.mm.yy` or a BARE `dd.mm.` date against the document year anchor (`inferDateAnchor`) — a
- *       plain/CSV statement that prints `dd.mm.yy` dates extracted ZERO rows before; and cross-year
- *       month-rollover assigns a December row on a January-anchored statement to the PREVIOUS year (both the
- *       geometry `toFullDate` and the plain path). Changes the persisted transaction dates (and the row set,
- *       since previously-dropped `dd.mm.yy` rows now parse) on affected statements, so stale v5 rows re-extract.
- *   7 — skills-remediation R6 (audit §5.7): wrapped descriptions. A dateless, money-less line that
- *       DIRECTLY follows a parsed transaction row is appended to that row's description as a bounded
- *       (single-line) continuation — the plain-text mirror of the geometry multi-baseline association
- *       (`pdf-layout.ts`) — so a merchant/payee name that wrapped to the next line (a `SEPA-Lastschrift`
- *       row whose `NETFLIX INTERNATIONAL…` payee printed on the line below) survives instead of being
- *       silently dropped (which degraded the categorizer and the listing). Changes the persisted
- *       description on affected statements (and thus the categorizer's input), so stale v6 rows re-extract.
- *   8 — skills-remediation U1 (audit §2.3): the extractor now records `droppedRowCount` — how many
- *       money-bearing lines it REJECTED (couldn't turn into a row) — so the answer can gate its "whole
- *       statement" claim honestly; and `lastMoneyOnLine` reads a currency-ADJACENT bare integer when
- *       MONEY_RE finds none, so a round `Opening balance 914 $` feeds the §3.5/D56 completeness gate
- *       instead of silently losing it. The new field + the recovered balances change the persisted output
- *       on affected statements, so stale v7 rows re-extract.
- *   9 — skills-audit-2026-07-03 R7 (SKA-1, SKA-2, SKA-13): a mid-line/trailing date can no longer be read
- *       as an amount. `parseLine` scans money via `scanMoneyWithBlankedDates` — a same-length date-BLANKED
- *       copy with each match's trailing sign re-validated against the original bytes (SKA-1) — so a
- *       period line `01.04.2026 bis 30.04.2026` no longer invents a transaction, a trailing date is never
- *       a phantom balance, and a blanked billing-period range never reads as a trailing debit minus; the
- *       shared `DATE_TOKEN_RE` scrub gained a double-guarded 2-digit-year alternative incl. terminal
- *       punctuation (SKA-2), so `Endsaldo 1.234,56 EUR per 31.03.26` reads the balance (not 3103.26) and a
- *       money-less dd.mm.yy period line no longer inflates `droppedRowCount`; `detectDocumentCurrency`
- *       additionally counts a code IMMEDIATELY left of a line's first figure (the per-row currency-cell
- *       layout, whose accidental vote the widened scrub had removed); and the geometry path
- *       (`pdf-layout.ts parseTransactionRow`) re-reads a yearless `d.dd` outside the Datum band as MONEY
- *       under four row-context guards (SKA-13), so a dot-decimal amount (`5.04`) on a CH/UK/US statement
- *       is no longer eaten as a date (balance-as-amount / silent row loss) while dotless Valuta dates and
- *       apostrophe/comma-decimal rows keep their safe legacy reads. Each changes persisted rows/balances
- *       on affected statements, so stale v8 rows re-extract.
- *  10 — invoice-audit-2026-07-06 IA-2 (T-1): the shared `MONEY_RE` reads a leading `-`/`+` sign ONLY when
- *       GLUED to the magnitude or an open paren; a dash separated from the figure by whitespace — a
- *       dash-as-separator layout, or a Word en-dash the R1 pre-pass mapped to `-` — is now TEXT, not a
- *       sign, so `GUTSCHRIFT - 34,39` reads a credit as +34,39 instead of the old −34,39 (and the plain
- *       path now agrees with the geometry path, which already refused a far dash as a sign). Changes the
- *       persisted amounts on any statement with such a row, so stale v9 rows re-extract. (Bumped in IA-2,
- *       the shared-parser fix.)
- *  11 — invoice-audit-2026-07-06 IA-3 (T-6, shared money.ts): `inferDateOrderResult` classifies each line
- *       by the date-SCRUBBED `hasMoneyToken` rather than raw `MONEY_RE`. A money-LESS dotted-date line — a
- *       statement PERIOD header like `Kontoauszug 01.01.2026 - 31.03.2026` whose `01.01`/`31.03` fragments
- *       used to make it look like a (voteless) transaction row — now reaches the header/label branch and
- *       votes on its dates. This can change the inferred date ORDER (and thus persisted transaction dates)
- *       and the `date_order_inferred` provenance on affected statements, so stale v10 rows re-extract. (The
- *       invoice twin bumped 12→13 in the same wave; this bank bump exists solely because T-6 edits the
- *       SHARED parser both extractors consume.)
+ * History — one line per version: the wave that warranted it, its finding ids, and what changed in
+ * the OUTPUT. The reasoning behind each lives in the cited audit record (resolvable through the
+ * `architecture.md` §-anchor legends) and the diff is in git; this index exists so a stored stamp
+ * can be traced to a wave without archaeology.
+ *   1 — Phase 32 + the Phase 31–33 review: multi-baseline payee recovery, the currency-token class,
+ *       the A3 sign-column fold and the review's sign-handling fixes. Legacy rows are NULL → stale.
+ *   2 — audit C-4: `extractStatementBalances` disambiguates the dual-role `Kontostand per` label by
+ *       DATE (earliest = opening, latest = closing; a lone line = closing only) instead of reading one
+ *       line as both — changes opening/closing on Raiffeisen "Mein ELBA"-style statements.
+ *   3 — full-audit-2026-06-29 follow-up P1: FIN-1 statement currency by majority vote over
+ *       figure-adjacent detections (a stray code in a memo no longer wins); FIN-3 the geometry
+ *       classifier reads bare-thousands / apostrophe amounts and stops mis-reading `2.500` as a date;
+ *       FIN-4 date order from the LEADING date column only, so a memo date cannot day/month-swap
+ *       every row.
+ *   4 — skills-remediation R1 (audit §5.3): shared `normalizeExtractionText` pre-pass at both plain
+ *       entry points, mirrored per token in the geometry path's `rowTokens` — a Unicode minus
+ *       (U+2212 / en dash / non-breaking hyphen) now signs `−45,90` negative, an NBSP-class
+ *       thousands separator (NBSP / narrow NBSP / figure space) stops truncating `1 234,56` to
+ *       234,56, and a Swiss U+2019 apostrophe group parses.
+ *   5 — skills-remediation R2 (audit §5.4): the dual-role balance label also recognizes `Kontostand am`
+ *       and `Kontostand zum` (all three prepositions are in use across AT/DE banks), so those
+ *       statements feed the §3.5 completeness gate and the lines leave the transaction stream instead
+ *       of double-counting.
+ *   6 — skills-remediation R5 (audit §5.7): `parseDate` completes a `dd.mm.yy` or BARE `dd.mm.` date
+ *       against `inferDateAnchor` (such statements extracted ZERO rows before), and cross-year
+ *       month-rollover puts a December row on a January-anchored statement in the PREVIOUS year — both
+ *       the geometry `toFullDate` and the plain path.
+ *   7 — skills-remediation R6 (audit §5.7): a dateless, money-less line directly following a parsed row
+ *       is appended as a bounded single-line description continuation (the plain mirror of geometry
+ *       multi-baseline association), so a payee that wrapped — `SEPA-Lastschrift` +
+ *       `NETFLIX INTERNATIONAL…` on the next line — survives instead of degrading the categorizer.
+ *   8 — skills-remediation U1 (audit §2.3): `droppedRowCount` recorded so the answer can gate its
+ *       "whole statement" claim honestly; `lastMoneyOnLine` reads a currency-ADJACENT bare integer when
+ *       MONEY_RE finds none, so a round `Opening balance 914 $` reaches the §3.5/D56 gate.
+ *   9 — skills-audit-2026-07-03 R7 (SKA-1/SKA-2/SKA-13): money scanned over a same-length date-BLANKED
+ *       copy with each trailing sign re-validated against the original bytes (SKA-1) — a period line
+ *       `01.04.2026 bis 30.04.2026` no longer invents a transaction and a blanked range never reads as
+ *       a trailing debit minus; double-guarded 2-digit-year scrubs in `DATE_TOKEN_RE` (SKA-2);
+ *       `detectDocumentCurrency` also counts a code immediately LEFT of a line's first figure (the
+ *       per-row currency-cell layout the widened scrub had silenced); and the geometry
+ *       `parseTransactionRow` re-reads a yearless `d.dd` outside the Datum band as MONEY under four
+ *       row-context guards (SKA-13), so `5.04` on a CH/UK/US statement stops being eaten as a date
+ *       while dotless Valuta dates and apostrophe/comma-decimal rows keep their safe legacy reads.
+ *  10 — invoice-audit-2026-07-06 IA-2 (T-1, shared money.ts): `MONEY_RE` takes a leading sign ONLY when
+ *       glued to the magnitude or an open paren, so `GUTSCHRIFT - 34,39` reads +34,39 rather than
+ *       −34,39 and the plain path agrees with geometry, which already refused a far dash as a sign.
+ *  11 — invoice-audit-2026-07-06 IA-3 (T-6, shared money.ts): `inferDateOrderResult` classifies lines
+ *       by the date-SCRUBBED `hasMoneyToken`, so a money-LESS period header like
+ *       `Kontoauszug 01.01.2026 - 31.03.2026` reaches the header branch and votes on its dates instead
+ *       of looking like a voteless transaction row. Can change the inferred date ORDER, the persisted
+ *       dates and `date_order_inferred`. (The invoice twin bumped 12→13 the same wave; this bump exists
+ *       solely because T-6 edits the SHARED parser both extractors consume.)
  */
 export const BANK_EXTRACTOR_VERSION = 11
 
