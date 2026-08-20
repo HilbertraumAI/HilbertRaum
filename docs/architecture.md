@@ -10784,6 +10784,10 @@ None of this changes D4's refusal to build an automatic sweep. It changes what "
 and it is why the cleanup posture (issue #190 checkbox 2) is an owner decision taken **after** the
 orphan count and the descriptor version are known, not a default.
 
+> **The decision was taken on 2026-08-20: leave them, ship no cleanup.** The evidence it rests on
+> (n=1, 115.2 KiB, v2 — so this rider's expensive v1 branch does not apply) and the revisit trigger
+> are recorded as **D14 in §9.2**.
+
 **D5 — `original_path` demoted to a checked last resort.** On a portable drive it is the *least*
 durable of the two paths — it names a location on the other machine — yet the old ladder tried it
 immediately after a stale `stored_path`. It is also nulled outright for generated documents
@@ -11055,18 +11059,40 @@ cannot be concurrent: the contradiction is **TEMPORAL** — two sessions, with t
 observation predating the drive-letter change — not per-document. Nothing in the fix depends on
 this; it is recorded because the issue's narrative did.
 
-### §9.2 What is still owner-owned
+### §9.2 The cleanup posture — DECIDED (owner, 2026-08-20): leave them
 
-**Deliberately not built (issue #190 phases 3–4).** No cleanup, no sweep, not even an opt-in one:
-the posture is an owner decision, and it needed the orphan count and the descriptor version first
-(D4 rider above) — which §9.1 now supplies, at n=1 on a v2 vault. If it is ever built it must be
-explicit, owner-confirmed, unlocked-only, and refuse to start with an import or a rekey in flight —
-D4's race is the whole problem. The second-laptop continuity check (BUILD_STATE §5 item 1) is
-likewise a human run, but the diagnostic **doubles as its evidence collector**: the §9.1 run is
-already a valid **"before" snapshot**, and re-running it after the relocation gives the
-`stale` / `healable` / `stored_name populated` triple — exactly the "rows self-heal on first read"
-proof that check owes, in a form that can be pasted into the issue (it should read 0 stale and
-24 populated once each document has been read once).
+**D14 — orphaned `.enc` files stay. No cleanup ships: not a sweep, not an opt-in one, not a
+Diagnostics button.** D4 refused an *automatic* sweep on the race; the rider then said "leave them"
+was a decision with a cost that could only be taken once the orphan count and the descriptor
+version were known. §9.1 supplied both — **n=1, 115.2 KiB, v2** — and the owner took the decision on
+that evidence. The reasoning, recorded so a later wave does not relitigate it from scratch:
+
+- **The measured cost of leaving is near zero.** v2 means a password change is the O(1)
+  `rewrapVaultKey`, so the rider's expensive branch — a v1 migration re-encrypting every orphan and
+  transiently needing `.enc.new` space for all of them — does not apply. What remains is retention:
+  115 KiB of ciphertext with no owning row, on a drive already carrying 2.1 MiB of live ciphertext
+  under the same key. Deleting it removes ~5% of the drive's document ciphertext and nothing at all
+  against an attacker without the password.
+- **A one-time named delete really is safer than a sweep — but that safety is not transferable.**
+  It comes from *a human picked the file*, not from guards. Put it in the app and code picks the
+  file again, which reinstates D4's race and the D10 over-count hazard (the phantom-orphan bug the
+  first end-to-end smoke found). The safe version of this operation is a human deleting one named
+  file with the app quit, which needs no product surface at all.
+- **The surface would be disproportionate:** Diagnostics-only, unlock-gated, a count and a byte
+  figure, typed confirmation, a refusal path with an import or rekey in flight, de-AT copy and
+  tests — a permanently-reachable delete path over the encrypted store, shipped for a one-off
+  115 KiB, plus a new support question for a condition #189 already made unreachable.
+- **Revisit trigger, so "leave it" does not decay into "never look again":** re-open if a run ever
+  reports a **v1** descriptor with any orphans, or orphan bytes reaching a material fraction of the
+  store (order of >50 files or >100 MiB). The diagnostic already reports both, so the trigger is
+  observable without new code.
+
+If it is ever built anyway, the constraints stand unchanged: explicit, owner-confirmed,
+unlocked-only, and refusing to start with an import or a rekey in flight — D4's race is the whole
+problem.
+
+**The diagnostic doubles as the continuity check's evidence collector**, and that is no longer
+hypothetical: the §9.1 run served as the "before" snapshot and §9.4 is the "after".
 
 ### §9.3 The password prompt had to bypass `process.stdin` (phase 2)
 

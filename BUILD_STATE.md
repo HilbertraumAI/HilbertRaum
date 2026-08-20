@@ -43,8 +43,26 @@ raw mode via libuv = echo off); no console ⇒ **fail fast** with the copy-paste
 New `tests/helpers/console-password.ts` + `tests/unit/console-password.test.ts` (5 tests — the
 worker's own non-TTY stdin is the witness; the source pin was mutation-checked). The header now
 carries the invocation that actually works here: `..\..\node_modules\.bin\vitest.cmd` — `npx` is
-blocked by this machine's PowerShell execution policy. **Still owner-owned:** checkbox 2 (cleanup
-posture — a recommendation is written, no sweep built).
+blocked by this machine's PowerShell execution policy.
+
+_2026-08-20 — **Cleanup posture DECIDED (owner): leave the orphans, ship nothing — issue #190
+checkbox 2 closed, and with it the last open item of the wave.**_ The decision D4's rider deferred
+until the count and the descriptor version were known was taken on that evidence: **n=1,
+115.2 KiB, v2**. v2 means a password change is the O(1) `rewrapVaultKey`, so the rider's expensive
+branch (a v1 migration re-encrypting every orphan, with the ENOSPC exposure that scales with
+orphaned bytes) never applies here; what remains is 115 KiB of unreferenced ciphertext beside
+2.1 MiB of live ciphertext under the same key — ~5% of the drive's document ciphertext, and nothing
+at all against an attacker without the password. The load-bearing argument against building even
+the *opt-in* version: a one-time named delete IS safer than a sweep, but the safety comes from **a
+human picked the file**, not from guards — put it in the app and code picks the file again, which
+reinstates D4's race and the D10 over-count hazard (the phantom-orphan bug the first end-to-end
+smoke found). The surface would be Diagnostics-only + unlock-gated + typed confirmation + an
+import/rekey refusal + de-AT copy + tests, i.e. a permanently-reachable delete path over the
+encrypted store shipped for a one-off 115 KiB, for a condition #189 already made unreachable.
+**Revisit trigger** (so this does not decay into "never look again"): any run reporting a **v1**
+descriptor with orphans, or orphan bytes at a material fraction of the store (order >50 files or
+>100 MiB) — both already reported by the diagnostic, so no new code is needed to notice. Record:
+`architecture.md` **§9.2 (D14)**, with a pointer from the §3 D4 rider.
 
 _2026-08-20 — **The relocation continuity check RAN — issue #190 checkbox 4 ANSWERED, and #188's
 worst defect is now proven fixed on hardware.**_ The same drive came back under a different letter
