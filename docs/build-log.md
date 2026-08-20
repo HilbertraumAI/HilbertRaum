@@ -19,6 +19,11 @@
 > renders without a wall of dead links and the prose is otherwise byte-identical. Left as live links: the
 > `../BUILD_STATE.md` pointer above and any `http(s)://` targets; a few `](…)` sequences that were only
 > ever inline code (a regex, an `arr[kind](args)` call) are untouched because they never rendered as links.
+> **Sweep completed 2026-08-20** (docs/code audit, finding D-1): four links in the 2026-07-09 block
+> (`packaging.md`, `registerDocsIpc.ts`, `drive.ts`, `styles.css`) survived the scripted pass and still
+> pointed at root-relative targets that resolve nowhere from `docs/`. De-linkified the same way — link
+> text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
+> pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
 _2026-08-20 — **The diagnostic RAN on the real drive (G:\), and it refuted our own leading
 hypothesis — issue #190 checkbox 1 ANSWERED, checkbox 3 re-answered.**_ Measured, drive byte-identical
@@ -9642,21 +9647,21 @@ families.** `runtime-download.ts` now drives
 an `ENGINE_FAMILIES` list — `llama_cpp` (chat, `llama-server`) **and `whisper_cpp` (voice,
 `whisper-cli`)`; one install fetches every missing family for the host (a family with no host build,
 e.g. whisper on mac/linux, is skipped). `EngineStatus` gained `missingFamilies`; the banner copy
-covers chat + voice. Doc: [`packaging.md`](docs/packaging.md) "In-app engine install" — how to add a
+covers chat + voice. Doc: `packaging.md` "In-app engine install" — how to add a
 future family. (2) **Embeddings model card bug.** The document-search (embeddings) card showed
 Select/Start (Start threw — only chat models are activatable) and an inconsistent "Active" badge.
 Embeddings is now treated as **automatic** (like reranker/transcriber): no Select/Start, no Active
 badge — "Used automatically once installed." Safe because retrieval uses `embedder.id` directly
-([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts) already passes it), not the
+(`registerDocsIpc.ts` already passes it), not the
 `activeEmbeddingModelId` setting. (3) **policy.json cleanup.** `allow_telemetry` removed from the
-generated file ([`drive.ts`](apps/desktop/src/main/services/drive.ts) `buildPolicyJson` +
+generated file (`drive.ts` `buildPolicyJson` +
 prepare-drive `.ps1`/`.sh`) — the app has no telemetry and `buildPolicyStatus` hardcodes
 `telemetryAllowed:false`; the runtime parser still tolerates the field. **`encryption_required` was
 KEPT** — it is a deliberate, audited security control: `assertCommercialDrive` reads it from the
 file using the DEFAULT (non-STRICT) base **on purpose** (M-4), so a sold drive must *explicitly*
 declare encryption-required and cannot pass via the fallback. (Flagged to the user.) (4)
 **Responsive screens.** Only Chat adapted below ~1150px (its JS list-collapse); added
-[`styles.css`](apps/desktop/src/renderer/styles.css) `@media (max-width: 760px / 520px)` so Home /
+`styles.css` `@media (max-width: 760px / 520px)` so Home /
 AI Model / Documents / Settings / Diagnostics also reflow — slim nav rail, tighter gutters, stacked
 `.kv` grids, wrapping card heads, scrollable segmented switchers. **Tests:** typecheck clean, build
 OK, `npm test` **1133 passed / 25 skipped** (+2 engine family tests)._

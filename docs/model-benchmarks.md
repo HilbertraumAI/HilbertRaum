@@ -422,6 +422,12 @@ consume it. The rules:
    step's reach grows as RAM lines are retuned from measured RSS (#95 item 3) or lower tiers
    earn ranks (#95 item 2): the rule is structural, not a hardcoded mapping — the #153
    promotion exercised exactly this property (rank edit only, zero picker-code change).
+   *(Amended 2026-08-20 by the #196 successor wave (§9.5) — again a catalog change, not a
+   picker change, and again the structural rule doing its own work: with the `UD-*`
+   successors ranked, a crawling 24 GB box steps `qwen3.8-27b-ud-q4km` →
+   `qwen3.5-9b-ud-q4kxl` (unchanged landing tier) and a crawling ≥32 GB box steps
+   `qwen3.8-27b-ud-q5km` → `qwen3.8-27b-ud-q4km` rather than to `qwen3.6-27b-q4`. Pins in
+   `committed-catalog.test.ts`.)*
 4. **Stateless, single-step.** The stepped pick is derived fresh on every `listModels` call
    from the persisted `settings.lastBenchmark`; a re-benchmark replaces the sample. The base
    pick is always recomputed from RAM alone, so downgrades never compound across runs.
@@ -432,6 +438,10 @@ consume it. The rules:
    `committed-catalog.test.ts` and `benchmark.test.ts`. *(Amended 2026-08-09 by the #153 E2B
    promotion — a catalog change, not a picker change: 12–15 GB → Gemma 4 E2B, the new sub-16
    comfortable band; 8 GB keeps Qwen3.5 4B via the runnable stage. Pins updated in both files.)*
+   *(Amended again 2026-08-20 by the #196 successor wave: the two top rows are now
+   24 → Qwen3.8 27B UD-Q4_K_M and ≥32 → Qwen3.8 27B UD-Q5_K_M, and the 9B band reaches to
+   23 GB. Both files were re-pinned; the "pinned untouched" claim above is the pre-#196
+   reading and is kept for the record, not as current fact.)*
 6. **Consistency across surfaces.** `runBenchmark` (the Diagnostics card's
    `recommendedModelId`) applies the same rule with the just-measured values, and
    `listModels` applies it with the persisted ones, so the two surfaces cannot disagree:

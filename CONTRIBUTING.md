@@ -50,7 +50,7 @@ also CLA §7 for submissions on behalf of third parties.
   updated, and `BUILD_STATE.md` records the change (the mandatory per-phase ritual).
 
 ## Dev setup
-Requires **Node.js ≥ 22.5** (Node 24 recommended), per `package.json` `engines`. For the repo layout
+Requires **Node.js ≥ 22.12** (Node 24 recommended), per `package.json` `engines`. For the repo layout
 and a map of the docs, see the **[README](README.md)** ("For developers" + "Documentation").
 ```bash
 npm ci              # fresh clone AND after every pull — installs exactly per package-lock.json

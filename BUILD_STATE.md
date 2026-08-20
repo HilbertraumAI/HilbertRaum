@@ -19,6 +19,30 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-20 — **Docs / references / comment audit — reported, safe half remediated, two
+measurement items filed.**_ One pass over the living markdown (~49.5k lines) and the code comments
+(309 files, 31,682 comment lines): staleness, reference liveness (internal links, §-citations,
+external URLs, and every committed `download.url` — URL **and** upstream hash) and comment weight.
+Report with stable ids, per-finding evidence, and the negative results:
+[`docs/audits/docs-code-comment-audit.md`](docs/audits/docs-code-comment-audit.md).
+**The theme:** the #196 successor wave (PR #199) reached the manifests, both pinning tests,
+`CHANGELOG.md` and `DRIVE-NOTICES.md` but not the hand-written catalog prose — `README.md`,
+`model-policy.md` and `benchmark.md` still recommended two files whose upstream source was deleted
+the same day, and the three shipped successors had no README row. Swept, with the committed
+manifests + a `recommendModelIdByRam` replay as ground truth. Also: the Node floor (`>=22.12` since
+DEP-4, advertised as `>=22.5` in five places), a dated §6.5 amendment, five stale manifest rank
+comments, four links the 2026-07-12 build-log de-linkification missed, `release-issues-section.sh`
+documented, the last **16 of 140** IPC channels into `data-contracts.md` (now 140/140),
+known-limitations sections for MTP (#182) and catalog withdrawals (#196), and the two
+extractor-version comment histories compressed ~198 → ~101 lines with **no** citation lost
+(35→35, 22→22) and no measured number touched. **Filed, NOT fixed — both need measurement:
+[#201]** `gemma4-12b-it-qat-q4`'s upstream file was re-uploaded 2026-07-17 ("corrected vocabulary"),
+so the live URL serves bytes the pinned SHA-256 does not match — a ~7 GB download ending in a
+checksum failure, unseen for five weeks because the #196 sweep checked liveness catalog-wide and
+hash equality for two manifests; **[#202]** four manifests carry rounded `size_bytes`. Prevention
+landed here: `model-policy.md` "Re-verifying the catalog against upstream" makes the drift check
+compare the upstream LFS OID, not just the status code.
+
 _2026-08-20 — **Local API documented as a first-class feature for the release — docs-only, O2
 lifted.**_ The local-API wave shipped under owner option **O2 "not promoted"** (one CHANGELOG
 line, no README push, ship one release quietly first). With the release now being prepared, the
