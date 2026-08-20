@@ -44,8 +44,30 @@ New `tests/helpers/console-password.ts` + `tests/unit/console-password.test.ts` 
 worker's own non-TTY stdin is the witness; the source pin was mutation-checked). The header now
 carries the invocation that actually works here: `..\..\node_modules\.bin\vitest.cmd` — `npx` is
 blocked by this machine's PowerShell execution policy. **Still owner-owned:** checkbox 2 (cleanup
-posture — a recommendation is written, no sweep built) and checkbox 4 (second-laptop continuity; the
-G:\ run above is a valid "before" snapshot for it).
+posture — a recommendation is written, no sweep built).
+
+_2026-08-20 — **The relocation continuity check RAN — issue #190 checkbox 4 ANSWERED, and #188's
+worst defect is now proven fixed on hardware.**_ The same drive came back under a different letter
+(`G:\` → `K:\`), which is exactly the check BUILD_STATE §5 item 1 has carried as open since wave 188.
+Run as diagnostic → functional walk in the app → diagnostic, with the app **quit cleanly in between**
+— load-bearing, because the healed rows live in the plaintext working DB until `lockEncryptedVault`
+re-encrypts it, so an "after" run against a still-unlocked workspace reads the PRE-walk state and
+looks like nothing healed. Measured: `stored_name` populated **0 → 14 / 24**, stale **24 → 10**,
+resolved-as-recorded **0 → 14**, orphans **1 → 1**, 24 rows all still `indexed`, nothing at rest.
+Per-row tokens moved `EOPSH` → `ENOP` for exactly the 14 documents that were opened. **Four things
+no test could establish:** (1) D3's lazy heal works on a real relocated drive and heals ONLY what is
+read — no startup migration burst, which is what D3 traded a bulk migration away for; (2) **D-1 is
+fixed on hardware** — an import + delete left NO new orphan, where pre-#189 it would have left a
+second one; (3) the pre-walk baseline reproduced the §9.1 report field for field under the new
+letter, same orphan token included, so the canonical-location step is genuinely mount-independent
+rather than accidentally right on one drive; (4) the vault teardown is clean under the new letter.
+**Residual:** the delete leg used a post-#189 throwaway row, so D-1's *original* condition (a legacy
+row whose absolute `stored_path` names the old mount point) is still not exercised directly — 10 such
+rows remain on that drive. **Filed out of scope: #194** — the re-index leg SUCCEEDED but gave the
+operator no feedback of any kind; the single-document path returns silently from the shared `run()`
+helper while bulk "Re-index all" toasts and carries a determinate progress bar, and its failure path
+is the screen-level banner that does not name the document — **D-3 recurring on a neighbouring
+action**, which wave 188 fixed for export and never swept. Record: `architecture.md` §9.4.
 
 _2026-08-20 — **Stored-copy diagnostic REBUILT — issue #190 phase 1 (no hardware, no password, fully
 CI-verified).**_ `architecture.md` §6 said the #188 root-cause diagnostic "was written and
@@ -954,11 +976,22 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    workspace, different drive letter). **⚠️ 2026-08-19, wave 188 — this check has already
    FIRED once, from a real drive, before it was ever run deliberately:** issue #188 was exactly the
    failure it exists to catch (`documents.stored_path` absolute ⇒ every stored copy stale under a
-   different mount point, and "Delete document" silently not deleting). The code is fixed and
-   covered by `stored-copy-portability.test.ts`, but the manual check is **NOT** answered — a
-   moved-directory unit test is not a relocated drive. When it is finally run, cover **export
-   original / preview / re-index / delete** on a workspace populated under a DIFFERENT letter, and
-   confirm the rows self-heal (`documents.stored_name` populated after the first read).
+   different mount point, and "Delete document" silently not deleting). **✅ ANSWERED 2026-08-20 —
+   the continuity half is DONE** (`G:\` → `K:\`, diagnostic → functional walk → diagnostic, app quit
+   cleanly in between because the healed rows sit in the plaintext working DB until the vault
+   teardown re-encrypts it). Export original, preview and re-index all work on the relocated drive;
+   **14 of 24 rows self-healed on first read** (`stored_name` populated 0 → 14, stale 24 → 10, and
+   the 10 still stale are exactly the documents never opened — D3's lazy heal, no migration burst);
+   an import + delete left **no new orphan** (count stayed 1), which is **D-1 proven fixed on
+   hardware**; the teardown left nothing at rest under the new letter. Record:
+   `architecture.md` §9.4. **Residual:** the delete leg used a post-#189 throwaway row, so D-1's
+   *original* condition — a legacy row whose absolute `stored_path` names the old mount point — is
+   still not exercised directly; 10 such rows remain on that drive if it is ever worth one real
+   document. **Filed out of scope: #194** — the re-index leg succeeded but gave NO feedback at all
+   (the single-document path returns silently from `run()` while bulk "Re-index all" toasts and
+   shows progress; its failure path is the unnamed screen banner — D-3 recurring on a neighbouring
+   action). What is still owed on THIS item is the rest of it: certs, a signed/notarized build, and
+   the fresh-laptop Wi-Fi-off demo.
    **✅ The diagnostic half of issue #190 is DISCHARGED (2026-08-20).** The read-only stored-copy
    diagnostic was RUN on the reporting drive (`G:\`) and the drive came back byte-identical:
    **24 rows, 24 stale, 24 healable**, `stored_name` column absent (pre-#189 schema), **1 orphan

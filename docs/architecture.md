@@ -10843,10 +10843,13 @@ copy, and the changed-fallback-original refusal. Each guard was **mutation-check
 the canonical branch, removing the id guard, and putting the shred back on the recorded path each
 turned the corresponding tests red.
 
-**Still owed, and it cannot be CI'd:** the real relocated-drive run — plugging the prepared drive
-in under a different letter and confirming export, preview, delete, and re-index. That is exactly
-**BUILD_STATE §5 item 1's "second-laptop continuity check"**, which remains OPEN: this wave makes
-the code correct, but the check is only *answered* by a real run.
+**What could not be CI'd — the real relocated-drive run — has now been done (2026-08-20).** The
+prepared drive came back under a different letter (`G:\` → `K:\`) and export, preview, re-index and
+delete were all exercised on it, with a read-only diagnostic before and after. That is
+**BUILD_STATE §5 item 1's "second-laptop continuity check"**, and it is answered: 14 of 24 rows
+self-healed on first read (`stored_name` populated 0 → 14, stale 24 → 10, and the 10 that stayed
+stale are exactly the documents never opened), and a delete left **no new orphan**. The measured
+before/after and its one residual gap are in **§9.4**.
 
 **The root-cause diagnostic on the reporting drive — RUN, and its questions ANSWERED (2026-08-20).**
 The fix was correct in either world — D-1 and the resolver stand on their own — but two questions
@@ -11101,6 +11104,56 @@ One more operator-facing correction rides along: `npx` is blocked by the PowerSh
 policy on the maintainer's machine (its shim is a `.ps1`), so the header now documents
 `..\..\node_modules\.bin\vitest.cmd run tests/manual/stored-copy-diagnostic.test.ts` from
 `apps/desktop/`.
+
+### §9.4 The relocation continuity check, measured (2026-08-20, `G:\` → `K:\`)
+
+The drive that produced the §9.1 report came back under a **different letter**, which is the
+relocation BUILD_STATE §5 item 1 exists to exercise. It was run as diagnostic → functional walk →
+diagnostic. The app was quit cleanly between the walk and the second run, and that ordering is
+load-bearing: the healed rows live in the plaintext working DB until `lockEncryptedVault`
+re-encrypts it, so an "after" run against a still-unlocked workspace reads the PRE-walk state and
+looks like nothing healed.
+
+| | Before walk | After walk |
+|---|---|---|
+| `stored_name` column | ABSENT (pre-#189 schema) | **present** (`ensureColumn` ran at open) |
+| `stored_name` populated | **0 / 24** | **14 / 24** |
+| stale `stored_path` | **24** | **10** |
+| of those healable | 24 | 10 |
+| resolved as recorded | **0** | **14** |
+| ORPHAN `.enc` files | 1 (115.2 KiB) | **1 (115.2 KiB)** — unchanged |
+| documents rows | 24, all indexed | 24, all indexed |
+| at rest | all clean | all clean |
+
+Per-row tokens make it unambiguous: 14 rows moved from `EOPSH` (copy found, **S**tale,
+**H**ealable) to `ENOP` (`stored_name` set, no `S`, no `H`), and the 10 still stale are exactly the
+documents never opened. Four things are established that no test could establish:
+
+1. **D3's lazy heal works on a genuinely relocated drive, and only where it should.** Nothing
+   healed that was not read — there is no startup migration burst, which is what D3 traded away a
+   bulk migration for.
+2. **D-1 is fixed on hardware.** A throwaway document was imported and deleted; the orphan count
+   stayed at **1** and `documents/` returned to 25 files. Pre-#189 that delete would have left a
+   **second** orphan — the silent no-op that made "delete" not delete.
+3. **The pre-walk baseline reproduced §9.1 field for field under the new letter**, same orphan
+   token included, so the resolver's canonical-location step is genuinely mount-independent rather
+   than accidentally right on one drive.
+4. **The vault teardown is clean under the new letter** — no plaintext working DB, no `-wal`, no
+   `-shm`, no `.recovery`, no `.enc.new`.
+
+**The residual, stated plainly.** The delete leg used a **post-#189** row, born with `stored_name`
+set, so its shred resolved through the canonical path. It did **not** reproduce D-1's original
+condition — a *legacy* row whose recorded absolute `stored_path` still names the old mount point.
+Ten such rows remain on that drive (the ones still flagged `EOPSH`), so the leg can be run directly
+at the cost of one real document. It is not owed by the check's wording, and it is the one thing
+this run did not settle.
+
+**Also found, and filed out of scope: issue #194.** The re-index leg succeeded but gave the
+operator no feedback of any kind — "it worked" and "nothing happened" were the same event. The
+single-document path returns silently from the shared `run()` helper while the **bulk** "Re-index
+all" toasts and carries a determinate progress bar. Its failure path is the screen-level banner
+that does not name the document — **D-3 recurring on a neighbouring action**, which this wave fixed
+for export and did not sweep.
 
 ## Model occupancy — design record (issues #185/#186, §1–§6)
 
