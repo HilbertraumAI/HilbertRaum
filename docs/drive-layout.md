@@ -268,3 +268,43 @@ carries ONLY the language data under `ocr/`:
 - No hardcoded absolute paths; everything derives from the resolved root (spec rule).
 - Path separators handled via `node:path`; works on Windows/macOS/Linux.
 - The SQLite file is self-contained, so moving the `workspace/` folder moves all data.
+
+## First real-drive bring-up — durable lessons (design record, 2026-06-10)
+
+_Moved here from `BUILD_STATE.md` §9 on 2026-08-20 (doc-lifecycle rule: durable
+provisioning/path/manifest facts belong in the topic doc, not the handoff file). A
+`BUILD_STATE §9` stub keeps the existing citations resolvable; this is the text they name._
+
+The first real-drive provisioning + RAG run surfaced a cluster of provisioning, path,
+manifest-source and embedding bugs — all fixed same-day (the full narrative is in git
+history). What still matters:
+
+- **PowerShell arg forwarding = hashtable splatting, never array splatting.**
+  `@('-Target', $t, '-AcceptLicense')` binds positionally (the `-`-prefixed string is NOT a
+  parameter name), which broke `prepare-drive -WithAssets`. Convention recorded in §3;
+  both call sites use hashtables now.
+- **Bare-drive-root containment false positive:** `resolve('D:\')` keeps the trailing
+  separator, so the `base + sep` prefix check doubled it (`D:\\`) and rejected every
+  legitimate weight — latent because only a real drive-root launch hits it.
+  `weightPath`/`resolveWithinRoot` normalize (`prefix = base.endsWith(sep) ? base : base + sep`);
+  regression-tested with a real root (`parse(process.cwd()).root`).
+- **Hash promotion is durable only in the REPO manifests:** `verify-models --generate` writes
+  `config/checksums.json`, never the manifest `sha256`, and any `prepare-drive` re-run
+  overwrites drive-local manifest edits. Promote real hashes into the repo manifest, then
+  re-sync to the drive.
+- **Broken upstream sources found by the fetch:** `qwen3-1.7b-instruct-q4` → 404 (the official
+  repo ships no Q4_K_M) — manifest **dropped**; the 4B took over TINY/UNKNOWN
+  (`recommended_profiles`). `multilingual-e5-small` quant repo went 401 — switched to the
+  `cstr/` mirror, provenance recorded in the manifest license note.
+- **The E5 embedder GGUF must be F16 on b9585** (the failure mode
+  `tests/manual/rerank-smoke.test.ts` guards against): q8_0 builds either lack
+  `token_type_count` (BERT/XLM-R metadata) or crash warmup
+  (`binary_op: unsupported types: dst f32, src1 q8_0`). Shipped
+  `keisuke-miyako/multilingual-e5-small-gguf-f16` (242 MB, 384-dim, VERIFIED); the `-q8`
+  manifest id is kept as the opaque vector tag.
+- **The first real-drive hallucination was the plain-Chat tab, not the RAG engine** — the
+  question never reached retrieval (the grounded path has a hard empty-corpus guard). This
+  finding motivated Phase 17 (rag-design.md §10). Related: a document ingested under the
+  mock embedder is invisible to E5 retrieval (vectors are scoped by `embedder.id`) —
+  re-upload/re-index after an embedder change.
+
