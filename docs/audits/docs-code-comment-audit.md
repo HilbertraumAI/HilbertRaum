@@ -36,7 +36,7 @@ record of what was true when the pass ran. This table is the ledger.
 | **E-1** 16 of 140 IPC channels undocumented | **fixed** — 140/140, re-verified mechanically | Phase 7 |
 | **E-2** the 2026-08 waves' accepted gaps | **fixed** — new **Speculative decoding (MTP)** and **Model catalog & downloads** sections, plus the two #194 items | Phase 7 |
 | **E-3** `release-issues-section.sh` undocumented | **fixed** | Phase 5 |
-| **E-4** `BUILD_STATE.md` headroom | **OPEN — owner's call.** 1,968 / 2,000 lines after this wave's entry. Nothing is failing; the retention rule's remedy is to archive the oldest closed wave's entries to `build-log.md`, which is a decision about the handoff file's shape, not a defect fix. |
+| **E-4** `BUILD_STATE.md` headroom | **fixed, and the cause with it** — 1,968 → **763** lines. The whole-file cap was draining the dated entries while §3 + §5 (80% of the file) had no drain; replaced by per-section budgets + a "§5 carries no closed round as a narrative" guard, both red-verified. Found en route: items 7, 8, 12, 13 and §8 all held LIVE residuals under complete-sounding headings. |
 | **F-1 F-2** the two extractor-version histories | **fixed** — ~198 → ~101 comment lines, 35→35 and 22→22 citations preserved (verified mechanically), no measured number touched | Phase 6 |
 | **F-3** seven signature-restating JSDoc one-liners | **no action — not worth the churn** | — |
 
