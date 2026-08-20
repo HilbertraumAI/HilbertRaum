@@ -1178,7 +1178,7 @@ the manifest field `download.withdrawn` — see model-policy.md "Withdrawn upstr
 behaviour. License posture is unchanged (same upstream repo, apache-2.0); nothing was
 redistributed, so no DRIVE-NOTICES regeneration is implied.
 
-**Successor wave: MEASURED, ranks PROPOSED (2026-08-20, issue #196, i9-9900X + RTX 3090).**
+**Successor wave: MEASURED, ranks RATIFIED (2026-08-20, issue #196, PR #199; i9-9900X + RTX 3090).**
 All three candidates ran the full per-quant protocol the interim record demanded: SHA-256
 confirmed on disk against the LFS OID, §2 grounded-QA on the b9849 drive runtime (Wi-Fi off,
 cool GPU, own CSV stems `i9-9900X-qwen38ud-*`), §3/§4 on the b10430 basis with the §9.4 method
@@ -1208,7 +1208,14 @@ successors.** `qwen3.8-27b-ud-q4km` rank 3 takes 24 GB and `qwen3.8-27b-ud-q5km`
 these quants sit inside cross-run uncertainty, and the newest generation is preferred on
 overall capability; the q4 successor's measured decode regression is recorded in its manifest
 and accepted knowingly. `qwen3.8-27b-ud-q6k` stays rank 0 by design (the "24 GB GPU quality
-ceiling" selectable, unchanged reasoning from §9.4).
+ceiling" selectable, unchanged reasoning from §9.4). Two consequences of that order, stated here
+rather than left to be rediscovered: the three withdrawn manifests are **kept, not retired** —
+rank 0 with their dated `download.withdrawn` note, so a drive that already holds one still
+verifies, starts and keeps MTP (this wave's answer to the retire-or-keep question model-policy.md
+defers to the promoting wave), and the §6.5 stepped pick now steps a crawling ≥32 GB box down to
+`qwen3.8-27b-ud-q4km` at 32.4 t/s rather than to `qwen3.6-27b-q4` at 40.1 — the step-down path
+follows rank, so it inherits the ratified preference for the newer generation over the faster
+file.
 
 §9.1 smokes on the b9849 pin, through the app's real IPC path (same driver as the wave smokes;
 run with Wi-Fi ON as a recorded deviation, the user needed the link and the offline property was

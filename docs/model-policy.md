@@ -260,12 +260,18 @@ vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools
   above the plain GPU rung, only when a device probe shows one card with the weight's bytes plus
   3.5 GiB free, and falls back to exactly today's behavior otherwise — so setting it on a model
   without the head costs one failed start attempt per session, never a broken model. Carried
-  today by `qwen3.8-27b-q4` and `qwen3.8-27b-q5`; deliberately NOT by `qwen3.8-27b-q6`, whose
-  22.7 GiB VRAM fit on a 24 GB card is its whole reason to exist. Design record:
-  `architecture.md` "MTP speculative decoding"; measured evidence: `model-benchmarks.md` §9.4.
-  **Do not copy the flag onto a Qwen3.8 successor manifest on family resemblance** (issue #196):
-  upstream's Dynamic 3.0 rebuild publishes the MTP module as a SEPARATE file, and this enum member
-  means an in-GGUF head with no second model file — re-verify per file (§9.5).
+  today by four manifests: `qwen3.8-27b-q4` / `qwen3.8-27b-q5` (kept as rank-0 installed-base
+  records after their source was withdrawn — a local file still starts with MTP) and their
+  measured successors `qwen3.8-27b-ud-q4km` / `qwen3.8-27b-ud-q5km`. Deliberately NOT by either
+  Q6 — `qwen3.8-27b-q6` peaks at 22.7 GiB and `qwen3.8-27b-ud-q6k` at 21.8 GiB on a 24 GB card at
+  ctx 8192, and that VRAM fit is their whole reason to exist. Design record: `architecture.md`
+  "MTP speculative decoding"; measured evidence: `model-benchmarks.md` §9.4 and §9.5.
+  **Never copy the flag onto a successor manifest on family resemblance** (issue #196): upstream's
+  Dynamic 3.0 rebuild publishes the MTP module as a SEPARATE file for quants below 8.37 GB, while
+  this enum member means an in-GGUF head with no second model file. Re-verify per file, by
+  spawning it with the flag pair and reading draft acceptance back — done for the two UD
+  successors on 2026-08-20 (acceptance 0.79 / 0.67, head PRESENT; §9.5), which is why they keep
+  the field and why nothing keeps it unverified.
 
 ## Model states (spec §7.4)
 Computed by `services/models.ts` with this precedence:
@@ -392,7 +398,12 @@ Rules and behaviour:
 
 When a successor file is eventually measured and productized, the withdrawn manifest is retired
 (or kept as an installed-base record) per the wave that promotes the successor — that decision
-belongs to the wave, not to this field.
+belongs to the wave, not to this field. **Precedent set by the first such wave** (issue #196,
+2026-08-20): the three withdrawn Qwen3.8 manifests were **kept**, at rank 0 with their dated
+note, and the successors entered as NEW ids (`qwen3.8-27b-ud-*`) rather than as an in-place URL
++ hash swap. Reason: a drive that already carries a withdrawn weight keeps a manifest whose hash
+its file still matches, so it verifies, starts and keeps MTP — an in-place swap would have turned
+every installed copy into `checksum_failed` overnight.
 
 ### The DIY download flow + license gate (spec §13)
 `scripts/fetch-models.{ps1,sh}` downloads each weight with a `download` block, **resumes** partials,
