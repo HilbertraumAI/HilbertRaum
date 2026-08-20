@@ -174,7 +174,9 @@ New audit event `local_api_toggled` (metadata `{ enabled: boolean }` ONLY — th
 writes metadata verbatim to plaintext outside the vault); `localApiEnabled` +
 `localApiTokenRequired` join the `privacyKeys` settings_changed allowlist (booleans only, port
 excluded).
-**Local-api wave P3 — the exposed HTTP contract (what external apps code against):**
+**Local-api wave P3 — the exposed HTTP contract (what external apps code against; the
+client-facing rendering of this same contract is [`local-api.md`](local-api.md) §6, which must be
+updated in the same change whenever anything below moves):**
 `LocalApiServer` (`services/local-api/server.ts` + `handlers.ts`) binds **127.0.0.1 AND ::1**
 (O5; never 0.0.0.0; no-IPv6 machines degrade to v4-only), default port **4980** (O1).
 Every response carries `Server: HilbertRaum/<version>`. Pipeline order (security contract):

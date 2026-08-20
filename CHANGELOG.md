@@ -127,11 +127,14 @@ first public release. Consciously-accepted gaps are tracked in
   for now; bulk export is a possible follow-up.
 - **Local API (optional, off by default)**. Other programs on the same computer
   can be allowed to use the running chat model over a loopback-only,
-  OpenAI-compatible endpoint. It is off until switched on behind a consent
-  dialog, requires an access key by default, never reaches the internet, exposes
-  no documents or conversations, keeps no record of what was asked or answered,
-  exists only while the workspace is unlocked, and can be forbidden by drive
-  policy.
+  OpenAI-compatible endpoint (`http://127.0.0.1:4980/v1` — `GET /v1/models` and
+  `POST /v1/chat/completions`, streaming or not, with JSON-schema-constrained
+  output). It is off until switched on behind a consent dialog, requires an
+  access key by default, never reaches the internet, exposes no documents or
+  conversations, keeps no record of what was asked or answered, exists only
+  while the workspace is unlocked, gives the user's own chat priority over any
+  outside caller, and can be forbidden by drive policy. Full tutorial, client
+  examples, and the wire contract: [`docs/local-api.md`](docs/local-api.md).
 
 ### Changed
 

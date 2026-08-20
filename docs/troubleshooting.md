@@ -433,7 +433,8 @@ What to do:
 ## Connecting another app to HilbertRaum (local API)
 
 These cover the optional **Settings → Privacy & data → Local API** feature. If you have not turned
-it on, none of them apply.
+it on, none of them apply. Setup instructions, client examples, and the full HTTP contract are in
+[`local-api.md`](local-api.md).
 
 ### The app I connected says "connection refused"
 

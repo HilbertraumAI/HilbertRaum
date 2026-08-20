@@ -10477,6 +10477,16 @@ embeddings, no workspace data, and the endpoint never starts, stops, or switches
 | O5 | Loopback family | **Bind both `127.0.0.1` and `::1`** — Windows resolves `localhost` to `::1` first and many Electron/Node clients do not address-iterate. The UI still prints the unambiguous `127.0.0.1` form |
 | O6 | Citations under squash-merge | PR# + phase prefix + record §, never a branch SHA |
 
+> **O2 superseded 2026-08-20 (owner decision, pre-release documentation pass).** The "ship one
+> release quietly first" hold is lifted: the feature is now documented as a first-class capability
+> — a dedicated user + client-author reference at [`local-api.md`](local-api.md), a README feature
+> bullet and docs-table row, the `PRIVACY.md`/`SECURITY.md` sections deepened, and its accepted
+> scope limits written up in [`known-limitations.md`](known-limitations.md). Nothing about the
+> feature's behaviour, defaults, or policy posture changed with it: still default-off, still
+> loopback-only, still consent-gated. §5's contract is now **externally documented**, so a change
+> to a status/code mapping or the streaming frame order is a breaking change and needs a
+> `CHANGELOG.md` note (`local-api.md` §12).
+
 ### §4 The generation gate (P1)
 
 The admission decision needs one true answer to "is the model busy?", and generation reaches the
