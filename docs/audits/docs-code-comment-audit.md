@@ -27,7 +27,7 @@ record of what was true when the pass ran. This table is the ledger.
 | **A-6** `benchmark.md`: the live-recommendation table | **fixed** | Phase 2 |
 | **A-7** `model-benchmarks.md` §6.5 rules 3 + 5 | **fixed** (dated amendments; historical body untouched) | Phase 3 |
 | **A-8** five stale manifest rank comments | **fixed** | Phase 4 |
-| **B-1** `gemma4-12b-it-qat-q4` upstream re-upload | **FILED, not fixed — needs a measurement wave** | [#201](https://github.com/HilbertraumAI/HilbertRaum/issues/201) |
+| **B-1** `gemma4-12b-it-qat-q4` upstream re-upload | **fixed 2026-08-20** — the measurement wave ran (i9-9900X + RTX 3090) and found the corrected checkpoint indistinguishable: all 100 §2 answers byte-identical, RSS delta 44 kB, VRAM identical, §9.1 legs green. Owner decision: repoint **in place** (both `sha256` fields + `size_bytes`), NOT a successor id — the file was superseded, not deleted, so a successor would duplicate a provably identical entry. Accepted cost recorded in `known-limitations.md` + `CHANGELOG.md`. Record: `model-benchmarks.md` §9.6 | [#201](https://github.com/HilbertraumAI/HilbertRaum/issues/201) |
 | **B-2** the drift check verified liveness, not byte-identity | **fixed** (the ritual is now written down) | Phase 5 |
 | **B-3** four rounded `size_bytes` | **FILED — owner's call between a measured correction and a policy sentence** | [#202](https://github.com/HilbertraumAI/HilbertRaum/issues/202) |
 | **C-1 … C-5** the Node floor | **fixed** | Phase 1 |
