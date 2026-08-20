@@ -565,7 +565,9 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Four job
   `HilbertRaum-<version>.AppImage` (community-tested until the GPU-matrix Linux leg runs).
 - **`release`** (tag-gated, needs all three) — asserts **tag == `apps/desktop/package.json`
   version** (fail fast on mismatch), aggregates `SHA256SUMS.txt`, builds the release notes from the
-  CHANGELOG `[Unreleased]` block (prefixed with the "this download is the app only — models are
+  CHANGELOG section for the version being tagged — `## [<version>]`, with `[Unreleased]` as the
+  fallback if the bump PR has not renamed it yet, so a release page shows THAT release instead of
+  an ever-growing block (prefixed with the "this download is the app only — models are
   fetched separately" line, which now also points offline installers at the `llama-runtime-*.zip`
   assets), and creates a **DRAFT** GitHub release (`prerelease: true` while 0.x) with everything
   attached (both runtime zips included). **The notes are fully automated below the curated block**,

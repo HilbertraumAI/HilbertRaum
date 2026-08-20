@@ -157,14 +157,26 @@ jobs:
         with: { path: dist, merge-multiple: true }
       - name: Checksums
         run: (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
-      - name: Release notes from CHANGELOG [Unreleased]
+      - name: Release notes from the CHANGELOG section for this version
+        # Prefer "## [<version>]" — the release ritual is that the version-bump PR renames
+        # [Unreleased] to the version being cut, so by tag time the notes for THIS release
+        # live under their own heading. [Unreleased] is the fallback for a tag pushed
+        # without that rename; without it, forgetting the rename would publish an empty
+        # body. Never both: a version section, once present, wins.
         run: |
           node -e "
             const fs = require('fs');
             const v = require('./apps/desktop/package.json').version;
             const md = fs.readFileSync('CHANGELOG.md', 'utf8');
-            const m = md.match(/## \[Unreleased\]([\s\S]*?)(\n## |$)/);
-            const body = (m ? m[1].trim() : '');
+            const lines = md.split('\n');
+            const section = (heading) => {
+              const i = lines.findIndex((l) => l.startsWith(heading));
+              if (i === -1) return '';
+              const rest = lines.slice(i + 1);
+              const j = rest.findIndex((l) => l.startsWith('## '));
+              return (j === -1 ? rest : rest.slice(0, j)).join('\n').trim();
+            };
+            const body = section('## [' + v + ']') || section('## [Unreleased]');
             fs.writeFileSync('dist/NOTES.md',
               '## Which file do I need?\n\n' +
               'The downloads are at the very bottom of this page, in the **Assets** list' +

@@ -499,3 +499,54 @@ describe('repo hygiene — no string literal ends with the bare word "import" (#
     expect(offenders).toEqual([])
   })
 })
+
+// The CHANGELOG is the body of every GitHub release page: release.yml extracts the section
+// matching the version being tagged and publishes it verbatim. It sat outside the per-phase
+// ritual (CLAUDE.md mandates docs/ + BUILD_STATE, never this file) and outside any test, and
+// drifted until it published "No public release yet" — plus a recommendation for three model
+// files that had been withdrawn upstream — on a public download page. These are the
+// invariants that would have caught that.
+describe('repo hygiene — CHANGELOG is release-page-shaped', () => {
+  const repoRoot = join(process.cwd(), '..', '..')
+  const changelog = readFileSync(join(repoRoot, 'CHANGELOG.md'), 'utf8')
+  const version = JSON.parse(
+    readFileSync(join(process.cwd(), 'package.json'), 'utf8')
+  ).version as string
+
+  // Headings look like "## [0.1.57] — 2026-08-17". The em dash is the committed style; accept
+  // a plain hyphen too so a hand-typed entry fails on substance, not on punctuation.
+  const VERSION_HEADING = /^## \[(\d+\.\d+\.\d+)\][^\n]*$/gm
+
+  it('has a section for the version in package.json', () => {
+    // The release ritual: the version-bump PR renames [Unreleased] to the version it cuts, so
+    // the tag publishes notes for THAT release. Bumping without it would fall back to
+    // [Unreleased] and publish whatever had accumulated there under the new version's name.
+    expect(changelog).toContain(`## [${version}]`)
+  })
+
+  it('keeps an [Unreleased] section for work not yet cut', () => {
+    // release.yml's fallback, and where the next release's entries accumulate.
+    expect(changelog).toContain('## [Unreleased]')
+  })
+
+  it('dates every released version section', () => {
+    const undated = [...changelog.matchAll(VERSION_HEADING)]
+      .map((m) => m[0])
+      .filter((h) => !/\d{4}-\d{2}-\d{2}/.test(h))
+    expect(undated).toEqual([])
+  })
+
+  it('links every version section it declares', () => {
+    // Keep a Changelog's compare links: a section with no link ref renders as literal
+    // brackets on the release page and in every markdown viewer.
+    const missing = [...changelog.matchAll(VERSION_HEADING)]
+      .map((m) => m[1])
+      .filter((v) => !changelog.includes(`\n[${v}]: http`))
+    expect(missing).toEqual([])
+  })
+
+  it('states the public-release posture instead of denying it', () => {
+    // The exact sentence that shipped on seven public release pages.
+    expect(changelog).not.toMatch(/No public release yet/i)
+  })
+})
