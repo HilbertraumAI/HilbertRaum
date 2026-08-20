@@ -80,6 +80,13 @@ Records: `model-benchmarks.md` **§9.5**, `model-policy.md` "Withdrawn upstream 
 `architecture.md` In-app downloader ("a fourth refusal"). Tests: validator, planner, downloader,
 Models screen and both fetch twins, plus a general catalog invariant — *no committed manifest is
 both recommended and unobtainable*; the planner + renderer guards mutation-checked (5 red / 2 red).
+**Where it landed (O6 citation correction, 2026-08-20):** this fix has **no PR of its own**. Its
+branch (`fix/196-withdrawn-upstream-source`, local commit `a166d511`) was never pushed; the
+local-API documentation branch was cut from it by mistake instead of from `master`, so the squash
+of **PR #197** carried both change sets onto `master` as commit **`0324a55a`**, under a
+`docs(local-api)` title. Nothing was lost or altered — the #196 paths on `master` are
+byte-identical to `a166d511` — and the combined tree passed CI as one unit. Cite this work as
+**PR #197 / `0324a55a`**, not as a #196 PR; issue #196 itself is still open on GitHub.
 
 _2026-08-20 — **Single-document re-index/delete now give feedback — issue #194 CLOSED.**_ Found by
 the #190 continuity check on the relocated drive: the operator clicked re-index and got nothing —
