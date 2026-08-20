@@ -145,7 +145,7 @@ describe('validateManifest — optional download block (Phase 12)', () => {
   const downloadBlock = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
     url: 'https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true',
     sha256: 'REPLACE_WITH_REAL_HASH',
-    size_bytes: 2700000000,
+    size_bytes: 2497280256,
     license_url: 'https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/main/LICENSE',
     ...overrides
   })
@@ -161,7 +161,7 @@ describe('validateManifest — optional download block (Phase 12)', () => {
     expect(res.ok).toBe(true)
     expect(res.manifest?.download?.url).toContain('Qwen3-4B-Q4_K_M.gguf')
     expect(res.manifest?.download?.sha256).toBe('replace_with_real_hash')
-    expect(res.manifest?.download?.sizeBytes).toBe(2700000000)
+    expect(res.manifest?.download?.sizeBytes).toBe(2497280256)
     expect(res.manifest?.download?.licenseUrl).toContain('LICENSE')
   })
 

@@ -336,7 +336,7 @@ stay valid, and the validator only checks the sub-fields when the block is prese
 download:
   url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true
   sha256: REPLACE_WITH_REAL_HASH   # when a real hash, MUST equal the top-level sha256 (same file)
-  size_bytes: 2700000000           # optional; progress + a DRIFT-TOLERANT in-app download body cap
+  size_bytes: 2497280256           # optional; progress + a DRIFT-TOLERANT in-app download body cap
   license_url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/main/LICENSE   # optional
 ```
 
@@ -348,11 +348,22 @@ Rules (validated in `shared/manifest.ts`):
 
 `size_bytes` feeds the progress bar AND the in-app downloader's disk-fill body cap
 (`modelWeightMaxBytes`). The cap is **drift-tolerant** — `size_bytes` grown by a comfortable headroom
-(BUG dl-size-cap-2026-07-03) — so a file a little larger than the declared size still downloads; the
-SHA verify is the integrity control. Do **not** understate `size_bytes` by more than the headroom:
-an exact cap keyed to a too-small `size_bytes` previously truncated a legitimate download near ~95%
-and then failed the checksum on resume. It is informational, not a hard integrity gate — the **real**
-trust anchor is `sha256`.
+(25 %, floor 128 MiB; BUG dl-size-cap-2026-07-03) — so a file a little larger than the declared size
+still downloads; the SHA verify is the integrity control.
+
+**Field scope: `size_bytes` is DRIFT-TOLERANT by design — it is the one manifest number the code
+does not assume is exact.** Everywhere else the rule holds without qualification (manifest numbers
+are measured, never estimated), and `size_bytes` should still be the real byte count: capture it with
+`verify-models --generate`, and correct it when a drift check finds it stale — four Qwen3 manifests
+carried hand-rounded values until issue #202 replaced them with measured ones on 2026-08-20. But the
+downloader must survive the case where it is *not* exact, because upstream can change the file's size
+underneath a pinned manifest without our knowing: **issue #201 is the proof** — Google's corrected
+gemma4-12B checkpoint arrived 1,568 bytes larger at the same URL. That is why `assets.ts`'s cap
+carries headroom rather than being keyed exactly to `size_bytes`, and the headroom is not arbitrary:
+an exact cap is what truncated a legitimate download at ~95 % once already. Integrity is enforced by
+`sha256` regardless, so a wrong `size_bytes` costs a wrong progress estimate, never a wrong file.
+Keep the two facing directions straight: **declare it exactly, consume it tolerantly** — and never
+understate it by more than the headroom, which is the failure the cap was widened to end.
 
 Leave `sha256` as the placeholder until a real drive is built; fetch the weight, then run
 `verify-models --generate` to capture the real hash **and the exact `size_bytes`** and promote them

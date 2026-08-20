@@ -65,6 +65,16 @@ hash equality for two manifests; **[#202]** four manifests carry rounded `size_b
 landed here: `model-policy.md` "Re-verifying the catalog against upstream" makes the drift check
 compare the upstream LFS OID, not just the status code.
 
+_2026-08-20 — **Four rounded `size_bytes` replaced with measured ones, and the field scoped —
+issue #202 CLOSED.**_ Both options, which were never alternatives. (a) `qwen3-4b/8b/14b-instruct-q4`
+and `qwen3-30b-a3b-q4` now carry the real byte counts (2497280256 / 5027783488 / 9001752960 /
+18556685824), re-derived by both methods of the `model-policy.md` drift check; `size_on_disk_gb`
+followed on the 4B and 14B to hold the committed F-16 decimal-GB invariant, and the two test
+fixtures carrying the old 4B number moved with them. All four `sha256` values were and remain exact
+matches — only the declared sizes were estimates. (b) `model-policy.md` now scopes the field:
+**declare it exactly, consume it tolerantly**, tying `assets.ts`'s 25 %/128 MiB cap headroom to the
+reason it exists and citing #201 (a checkpoint that arrived 1,568 bytes larger at the same URL) as
+the proof. Audit ledger B-3 closed.
 _2026-08-20 — **Local API documented as a first-class feature for the release — docs-only, O2
 lifted.**_ The local-API wave shipped under owner option **O2 "not promoted"** (one CHANGELOG
 line, no README push, ship one release quietly first). With the release now being prepared, the
