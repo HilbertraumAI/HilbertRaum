@@ -10668,7 +10668,7 @@ The wave's working paper is gone; its anchors resolve here:
 | `plan §7` (audit ledger A1–A10) | §8 above |
 | `plan §8` (six-persona ledger) | §8 above |
 
-## Portable stored copies — design record (wave 188, issue #188, §1–§8)
+## Portable stored copies — design record (wave 188, issues #188/#190, §1–§9)
 
 _Issue **#188** was filed as a UI defect: "Originaldatei exportieren" failed with "Die
 Dokumentdatei ist nicht mehr vorhanden" on a real prepared drive whose `workspace/documents/`
@@ -10763,6 +10763,31 @@ import has its file on disk before/while its row is written, and `stageRekey` st
 `<file>.enc.new`. An orphan sweep would race both. Existing orphans from past silent no-ops stay
 on affected drives; the diagnostic in §6 counts them.
 
+**D4 rider (issue #190, 2026-08-20) — orphans are NOT inert, so "leave them" is a decision with a
+cost, not a no-op.** This record originally framed them as pure retention residue. They are also
+*participants*, because the vault layer addresses sidecars by DIRECTORY WALK, not by row:
+`listEncryptedDocSidecars` filters `workspace/documents/` on `.endsWith('.enc')` and has no idea
+which files a `documents` row owns. Consequences, in blast-radius order:
+
+- On a **v1** vault the first password change is the journaled v1→v2 migration, and `stageRekey`
+  runs the full decrypt → re-encrypt → fsync → shred-old → rename cycle **over every orphan too**.
+  So each orphan costs its own bytes twice in I/O on the slowest medium the product targets, and
+  the migration transiently needs free space for **every** orphan's `.enc.new` at once — an ENOSPC
+  exposure that scales with orphaned bytes, on a stick that is often nearly full.
+- On a **v2** vault a password change is the O(1) key re-wrap (`rewrapVaultKey`), so orphans cost
+  nothing there. That asymmetry is precisely why the diagnostic reports the descriptor version
+  (report item 9): v1 + many orphans is a materially different situation from v2 + many orphans.
+- Either way an orphan is **still encrypted user content on a drive the owner may sell, lend or
+  lose**, carried forward by every migration instead of being retired by one.
+
+None of this changes D4's refusal to build an automatic sweep. It changes what "leave them" means,
+and it is why the cleanup posture (issue #190 checkbox 2) is an owner decision taken **after** the
+orphan count and the descriptor version are known, not a default.
+
+> **The decision was taken on 2026-08-20: leave them, ship no cleanup.** The evidence it rests on
+> (n=1, 115.2 KiB, v2 — so this rider's expensive v1 branch does not apply) and the revisit trigger
+> are recorded as **D14 in §9.2**.
+
 **D5 — `original_path` demoted to a checked last resort.** On a portable drive it is the *least*
 durable of the two paths — it names a location on the other machine — yet the old ladder tried it
 immediately after a stale `stored_path`. It is also nulled outright for generated documents
@@ -10822,20 +10847,41 @@ copy, and the changed-fallback-original refusal. Each guard was **mutation-check
 the canonical branch, removing the id guard, and putting the shred back on the recorded path each
 turned the corresponding tests red.
 
-**Still owed, and it cannot be CI'd:** the real relocated-drive run — plugging the prepared drive
-in under a different letter and confirming export, preview, delete, and re-index. That is exactly
-**BUILD_STATE §5 item 1's "second-laptop continuity check"**, which remains OPEN: this wave makes
-the code correct, but the check is only *answered* by a real run.
+**What could not be CI'd — the real relocated-drive run — has now been done (2026-08-20).** The
+prepared drive came back under a different letter (`G:\` → `K:\`) and export, preview, re-index and
+delete were all exercised on it, with a read-only diagnostic before and after. That is
+**BUILD_STATE §5 item 1's "second-laptop continuity check"**, and it is answered: 14 of 24 rows
+self-healed on first read (`stored_name` populated 0 → 14, stale 24 → 10, and the 10 that stayed
+stale are exactly the documents never opened), and a delete left **no new orphan**. The measured
+before/after and its one residual gap are in **§9.4**.
 
-**Also outstanding: the root-cause diagnostic on the reporting drive was never run.** The fix is
-correct in either world — D-1 and the resolver stand on their own — but two questions are still
-open on that specific drive: whether its rows are in fact stale (the issue reports "Vorschau
-works" alongside an export failure, and preview and export share the same ladder, so those two
-observations cannot both describe the same document), and how many orphaned `.enc` files past
-silent deletes left behind (D4). A read-only diagnostic that copies `config/workspace.json` +
-`hilbertraum.sqlite.enc` to scratch, decrypts the copy, and reports directory histograms with no
-titles or content was written and smoke-tested against a synthetic vault; it needs the owner's
-password to run.
+**The root-cause diagnostic on the reporting drive — RUN, and its questions ANSWERED (2026-08-20).**
+The fix was correct in either world — D-1 and the resolver stand on their own — but two questions
+were open on that specific drive: whether its rows are in fact stale, and how many orphaned `.enc`
+files past silent deletes left behind (D4). Both are now measured, on `G:\`, with the drive coming
+back byte-identical:
+
+- **Stale: yes, all of them — 24 rows, 24 stale, 24 healable, 0 with no copy anywhere.** The
+  relocation took the entire corpus at once and every byte is still at the canonical location, so
+  the #189 resolver heals all 24 on first read. #188 is confirmed outright, not merely plausible.
+- **Orphans: one, 115.2 KiB**, on a **v2** descriptor — so it costs nothing at rekey (D4 rider).
+  The `documents/` directory also held zero parse-transients and zero staged `.enc.new` files.
+- The `stored_name` column was **absent** (pre-#189 schema), which is what D8 exists for.
+
+The "Vorschau works alongside an export failure" contradiction is settled too, and **not** the way
+this record first guessed — see **§9**, which carries the measured report, the refutation, and the
+verification that replaced it.
+
+> **CORRECTION (issue #190, 2026-08-20).** This paragraph previously stated that the read-only
+> diagnostic "was written and smoke-tested against a synthetic vault" and only needed the owner's
+> password. **That was factually wrong.** The tool lived in the git-excluded working paper
+> (`plans/issue-188-stored-path-portability.md`) and went with it at close-out; nothing matching it
+> was ever committed on any branch, so from the repository's point of view it did not exist. The
+> lesson is the doc-lifecycle rule's own: a design record may cite a working paper's *reasoning*,
+> never inherit its *artifacts* — anything a later wave has to run has to be in the tree.
+>
+> It has been rebuilt, in the tree, is CI-proven rather than smoke-tested, and has now been run for
+> real. See **§9** below.
 
 ### §7 §-anchor legend
 
@@ -10873,6 +10919,267 @@ checked — reinstating the old wording turns it red), following the DEP-3 merma
 
 **This is the standing argument for the gate order `typecheck → build → test`.** Neither typecheck
 nor the suite can see this class; only the build can.
+
+### §9 The stored-copy diagnostic, as rebuilt and as run (issue #190 phases 1–2, 2026-08-20)
+
+The read-only diagnostic §6 wrongly claimed to exist now does exist, in the tree, split so that
+everything except the drive itself is proven by CI:
+
+| File | What it is |
+|---|---|
+| `apps/desktop/tests/helpers/stored-copy-audit.ts` | The **pure classifier + report renderer**. Takes rows + a directory listing, returns a report. No fs, no crypto, no I/O. |
+| `apps/desktop/tests/helpers/stored-copy-audit-run.ts` | The **read-only collector**: copy → decrypt the copy → open read-only → probe the schema → query → walk `documents/` → classify → shred the scratch. |
+| `apps/desktop/tests/helpers/read-only-witness.ts` | The **witness**: fingerprints a tree (path + size + mtime of every entry) so "it never writes to the drive" is an assertion, not a claim. |
+| `apps/desktop/tests/manual/stored-copy-diagnostic.test.ts` | The **operator shell**, env-gated on `HILBERTRAUM_STORED_COPY_AUDIT` in the `tests/manual/*-smoke.test.ts` shape. Hidden password prompt read from the console DEVICE (§9.3). |
+| `apps/desktop/tests/helpers/console-password.ts` | The **console password prompt** (§9.3): opens the terminal DEVICE (`\\.\CONIN$` / `/dev/tty`) in raw mode, or fails fast with a recipe. Never `process.stdin`. |
+| `apps/desktop/tests/unit/console-password.test.ts` | CI proof for the non-TTY path: the forked worker’s own piped stdin, the fail-fast text, the no-cooked-fallback refusal, and a source pin on the harness. |
+| `apps/desktop/tests/unit/stored-copy-audit.test.ts` | Classifier fixtures, the mutation guards, the public-safety assertion, and the `node:sqlite` `{ readOnly: true }` floor probe (CI runs both ends of `engines.node`). |
+| `apps/desktop/tests/integration/stored-copy-audit-run.test.ts` | The collector end-to-end against a **synthetic vault** (v2, legacy v1, and `plaintext_dev`) with exact counts, plus the witness on each branch. |
+
+It is **test-tree code on purpose**: it must not ship in the app bundle as dead code, and
+`tsconfig.web.json` already includes `tests/`, so it stays typechecked and cannot rot silently.
+
+**D7 — everything that mutates is forbidden, by name.** `unlockEncryptedVault` is *not* an unlock:
+it runs `recoverPendingRekey` (which commits or discards staged rekeys and can roll a `.recovery`
+forward **over** the `.enc`) and decrypts a plaintext working DB onto the drive. `openDatabase`
+runs `db.exec(SCHEMA)` plus ~20 `ensureColumn` calls, so merely *opening* writes. Neither, nor
+`preserveNewerPlaintext` / `lockEncryptedVault`, is ever called against the drive. The minimal
+unlock is re-composed over the **copy** from the shipped primitives — `readVaultDescriptor`,
+`deriveKey`, `verifyKey`, `decrypt` (the v2 envelope unwrap), `decryptFile` — so there is no
+hand-rolled crypto and no second implementation to drift. Keys are zeroed; the scratch plaintext
+is shredded in a `finally`.
+
+**D8 — the schema is probed, never assumed.** `stored_name` is added by `ensureColumn` **at open**,
+which this tool must not trigger, and the reporting drive predates #189 — so `PRAGMA
+table_info(documents)` decides whether the column is selected at all. A naive `SELECT … stored_name`
+throws on the one machine that matters. "Column absent" and "column present but unpopulated" are
+reported as different findings.
+
+**D9 — the output is safe by construction, not by care.** The report carries counts, histograms
+over two **closed** allowlists (extension classes, file classes), and shape tokens — an 8-char id
+prefix, an extension class, flag letters, and a coarse size bucket for orphans. No titles, no
+content, no paths, no file names, and an off-allowlist extension collapses to `other` (one unusual
+extension on a drive is identifying). `title`, `error_message` and every `*_json` column are never
+selected; `mime_type` is, because it is a class and it keeps the extension histogram complete for a
+row whose copy is gone. A CI test renders a report from a vault full of distinctive secrets and
+asserts none of them survive.
+
+**D10 — ownership is deliberately over-generous, and the id is the final word.** The error
+directions are not symmetric: under-counting orphans is merely uninformative, while over-counting
+invents an orphan out of live user data and would hand a future cleanup a file to destroy. So a
+file is claimed by a row if ANY of four sources says so — the healed `stored_name`, the leaf of the
+recorded `stored_path`, `canonicalLeafFor`, and finally the file's own **leading id**. The fourth
+was added after the first end-to-end operator smoke, which showed the hole the other three leave: a
+row whose recorded strings are corrupt (the safety guard refuses the leaf) names *nothing*, so its
+perfectly healthy `<id><ext>.enc` was reported as an orphan. The store's naming is
+`<documentId><ext>[.enc]` and the id is a never-reused UUID primary key, so a file whose leading id
+is a live row's id belongs to that row whatever the row recorded. When any such row exists the
+report says so on the orphan line, so the count is never read as more certain than it is.
+
+**D11 — the safety contract is witnessed, not asserted.** The integration test fingerprints the
+whole synthetic drive before and after every run and requires it identical; the manual harness does
+the same against the real drive and **fails the run** if a size, an mtime, or an entry moved. Seven
+mutations were run and each turned the intended test red: (a) matching `.enc` loosely so a staged
+`<id><ext>.enc.new` becomes an orphan — the most dangerous misclassification the tool can make,
+since a cleanup built on that count would delete a live document mid-rekey; (b) claiming ownership
+from `stored_path` only, which invents an orphan out of a healed row; (c) counting a row with no
+`stored_path` as stale, inflating the number the cleanup decision reads; (d) a naive `startsWith`
+in the scratch-containment check, which lets `…/driveX` pass as outside `…/drive`; (e) selecting
+`stored_name` unconditionally, which throws on the pre-#189 schema; (f) an `openDatabase` against
+the drive, which the witness caught on both the encrypted and the plaintext branch; (g) dropping
+the id-based ownership of D10, which re-creates the phantom orphan the smoke found.
+
+### §9.1 The measured run (2026-08-20, `G:\`) — and the hypothesis it refuted
+
+The report, verbatim as pasted into #190. The drive was byte-identical afterwards (the §D11
+witness passed), and one row carries no `original_path` — a generated document, which
+`setDocumentOrigin` nulls by design.
+
+```
+workspace mode          encrypted
+vault descriptor        v2
+stored_name column      ABSENT (pre-#189 schema)
+stored_name populated   0 / 24
+
+(1) documents rows      24        all indexed
+(2) stale stored_path   24
+(3)   of those healable 24
+      of those unnamed   0
+(4) no copy anywhere     0
+    never stored a copy  0
+    resolved as recorded 0
+(5) ORPHAN .enc files    1        115.2 KiB   token: 72957f7f pdf <1M
+(6) file classes        stored-copy 25 (2.1 MiB); parse-transient 0; rekey-staged 0;
+                        write-temp 0; unknown 0
+(7) extension classes   pdf 17, docx 6, md 1     -> audio rows 0
+(10) at rest            .recovery no, -wal no, -shm no, db .enc.new no
+```
+
+**#188 confirmed outright.** 24/24 stale, 24/24 healable, 0 with no copy anywhere: the drive-letter
+relocation took the whole corpus stale in one step and every byte is still at the canonical
+location, so the resolver heals all 24 on first read. **Field residue is one orphan, 115.2 KiB, on
+a v2 descriptor** — the cheap side of the D4-rider asymmetry (a v2 rekey is the O(1) key re-wrap,
+so this orphan costs nothing at a password change), and the directory holds no transients and no
+staged rekey files, so nothing is mid-flight. That is the whole input to the checkbox-2 cleanup
+decision, and it is a much smaller number than "leave them" was defended against.
+
+**The extension histogram was the required output for #190 checkbox 3, and it REFUTED this
+record's own leading hypothesis.** §9 previously argued that the issue's "Vorschau works" alongside
+the export failure was explained by **one audio document**, whose preview reads the stored CHUNKS
+via `audioSegmentsFromChunks` and never touches the file. **Audio rows = 0.** There is no audio
+document on that drive, so that explanation is dead — pdf 17 / docx 6 / md 1 is the whole corpus,
+and every one of those classes needs the file.
+
+**What replaced it, verified against the pre-#189 code rather than traced.** The temporal reading
+below rests on the claim that preview and export shared one ladder — the same trace that produced
+the refuted audio hypothesis — so it was re-walked directly against the pre-#189 tree
+(`2151e445`, the commit before the #189 fix), covering every path the Vorschau modal can reach and
+every path "Originaldatei exportieren" can reach:
+
+| Path | Ladder, pre-#189 | Chunk-backed or cached? |
+|---|---|---|
+| `extractDocumentPreview` (non-audio) | `stored_path` → `original_path` → throw `main.docs.previewGone` | no |
+| `extractDocumentPreview` (audio) | stored `chunks` only | **yes — the sole exception** |
+| `extractDocumentPreviewPage` (what the modal actually calls) | thin slice wrapper over the above | no |
+| `readStoredDocumentBytes` ("Originaldatei exportieren") | `stored_path` → `original_path` → throw `main.docs.exportGone` | no |
+| `readStoredDocumentText` (`docs:export`) | same, after a text-extension gate | no |
+| `buildDocumentSegmentReader` (skills / translate / compare) | `extractDocumentPreview` | no |
+
+Three further checks close the fan-in: the modal is opened by `setPreview(await previewDocument(id))`
+in `DocumentsScreen`, so a thrown preview **never opens a modal** (the failure lands in the screen
+banner instead); the modal's own extra sources are the persisted summary and coverage, both
+DB-only, and it is only reachable once the preview resolved; and OCR'd PDFs do **not** qualify as a
+second exception — `ocrPages` feeds the parser, which still needs the file. Even the two German
+strings are near-identical (`main.docs.previewGone` / `main.docs.exportGone` both open "Die
+Dokumentdatei ist nicht mehr vorhanden."), differing only in the trailing infinitive.
+
+So with 24/24 stale under pre-#189 code, **preview failed for every document on that drive**,
+including the generated `.md` row whose `original_path` is null. The two observations therefore
+cannot be concurrent: the contradiction is **TEMPORAL** — two sessions, with the "Vorschau works"
+observation predating the drive-letter change — not per-document. Nothing in the fix depends on
+this; it is recorded because the issue's narrative did.
+
+### §9.2 The cleanup posture — DECIDED (owner, 2026-08-20): leave them
+
+**D14 — orphaned `.enc` files stay. No cleanup ships: not a sweep, not an opt-in one, not a
+Diagnostics button.** D4 refused an *automatic* sweep on the race; the rider then said "leave them"
+was a decision with a cost that could only be taken once the orphan count and the descriptor
+version were known. §9.1 supplied both — **n=1, 115.2 KiB, v2** — and the owner took the decision on
+that evidence. The reasoning, recorded so a later wave does not relitigate it from scratch:
+
+- **The measured cost of leaving is near zero.** v2 means a password change is the O(1)
+  `rewrapVaultKey`, so the rider's expensive branch — a v1 migration re-encrypting every orphan and
+  transiently needing `.enc.new` space for all of them — does not apply. What remains is retention:
+  115 KiB of ciphertext with no owning row, on a drive already carrying 2.1 MiB of live ciphertext
+  under the same key. Deleting it removes ~5% of the drive's document ciphertext and nothing at all
+  against an attacker without the password.
+- **A one-time named delete really is safer than a sweep — but that safety is not transferable.**
+  It comes from *a human picked the file*, not from guards. Put it in the app and code picks the
+  file again, which reinstates D4's race and the D10 over-count hazard (the phantom-orphan bug the
+  first end-to-end smoke found). The safe version of this operation is a human deleting one named
+  file with the app quit, which needs no product surface at all.
+- **The surface would be disproportionate:** Diagnostics-only, unlock-gated, a count and a byte
+  figure, typed confirmation, a refusal path with an import or rekey in flight, de-AT copy and
+  tests — a permanently-reachable delete path over the encrypted store, shipped for a one-off
+  115 KiB, plus a new support question for a condition #189 already made unreachable.
+- **Revisit trigger, so "leave it" does not decay into "never look again":** re-open if a run ever
+  reports a **v1** descriptor with any orphans, or orphan bytes reaching a material fraction of the
+  store (order of >50 files or >100 MiB). The diagnostic already reports both, so the trigger is
+  observable without new code.
+
+If it is ever built anyway, the constraints stand unchanged: explicit, owner-confirmed,
+unlocked-only, and refusing to start with an import or a rekey in flight — D4's race is the whole
+problem.
+
+**The diagnostic doubles as the continuity check's evidence collector**, and that is no longer
+hypothetical: the §9.1 run served as the "before" snapshot and §9.4 is the "after".
+
+### §9.3 The password prompt had to bypass `process.stdin` (phase 2)
+
+The first harness prompted only `if (process.stdin.isTTY)`. **Vitest runs every test file in a
+forked worker whose stdin is a pipe**, so that branch is dead in the only process that ever
+executes it — the hidden prompt could not fire from a fully interactive PowerShell, and the failure
+text told the operator to "re-run from an interactive shell", which cannot help. The §9.1 run
+worked only through the env-var fallback, the variant with the shell-history hazard.
+
+**D12 — talk to the console device, not to the process's streams.** `tests/helpers/console-password.ts`
+opens `\\.\CONIN$` / `\\.\CONOUT$` on Windows and `/dev/tty` on POSIX. Two details are load-bearing
+and each cost a probe: the Windows path must be the **device form** (`//./CONIN$`) because libuv
+makes a bare `CONIN$` absolute against the cwd and turns it into ENOENT, and it must be opened
+**read-write** (`r+`) because `SetConsoleMode` needs `GENERIC_READ | GENERIC_WRITE` — a `'r'` open
+fails `setRawMode` with EPERM. The prompt is written to the console handle too, since vitest
+captures `process.stdout`.
+
+**D13 — echo suppression is delegated, and its absence is fatal rather than degraded.** Node
+exposes no console-mode API, so raw mode comes from `tty.ReadStream.setRawMode(true)` — libuv's
+`uv_tty_set_mode(UV_TTY_MODE_RAW)`, which clears `ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT` on Windows
+and drops ECHO/ICANON on POSIX. Raw mode is probed **as part of opening**; if it is refused the
+opener returns `null` and the harness **fails fast** with a copy-pasteable
+`Read-Host -AsSecureString` / `read -rs` recipe for the env var. There is deliberately no cooked
+fallback: a half-hidden prompt echoes the workspace password onto the screen, which is worse than
+no prompt on a product whose premise is that nothing leaves the space.
+
+CI covers everything except a human typing, and the coverage is the defect's own witness rather
+than a simulation of it: `tests/unit/console-password.test.ts` runs **in that same forked worker**,
+so it asserts `process.stdin.isTTY` is falsy directly, then pins the fail-fast message (the recipe,
+the env var, the history hazard, and the *absence* of the "interactive shell" advice), the refusal
+to resolve from a console that could not be put into raw mode, and a source pin on the harness —
+mutation-checked by reinstating the `isTTY` gate, which turns it red.
+
+One more operator-facing correction rides along: `npx` is blocked by the PowerShell execution
+policy on the maintainer's machine (its shim is a `.ps1`), so the header now documents
+`..\..\node_modules\.bin\vitest.cmd run tests/manual/stored-copy-diagnostic.test.ts` from
+`apps/desktop/`.
+
+### §9.4 The relocation continuity check, measured (2026-08-20, `G:\` → `K:\`)
+
+The drive that produced the §9.1 report came back under a **different letter**, which is the
+relocation BUILD_STATE §5 item 1 exists to exercise. It was run as diagnostic → functional walk →
+diagnostic. The app was quit cleanly between the walk and the second run, and that ordering is
+load-bearing: the healed rows live in the plaintext working DB until `lockEncryptedVault`
+re-encrypts it, so an "after" run against a still-unlocked workspace reads the PRE-walk state and
+looks like nothing healed.
+
+| | Before walk | After walk |
+|---|---|---|
+| `stored_name` column | ABSENT (pre-#189 schema) | **present** (`ensureColumn` ran at open) |
+| `stored_name` populated | **0 / 24** | **14 / 24** |
+| stale `stored_path` | **24** | **10** |
+| of those healable | 24 | 10 |
+| resolved as recorded | **0** | **14** |
+| ORPHAN `.enc` files | 1 (115.2 KiB) | **1 (115.2 KiB)** — unchanged |
+| documents rows | 24, all indexed | 24, all indexed |
+| at rest | all clean | all clean |
+
+Per-row tokens make it unambiguous: 14 rows moved from `EOPSH` (copy found, **S**tale,
+**H**ealable) to `ENOP` (`stored_name` set, no `S`, no `H`), and the 10 still stale are exactly the
+documents never opened. Four things are established that no test could establish:
+
+1. **D3's lazy heal works on a genuinely relocated drive, and only where it should.** Nothing
+   healed that was not read — there is no startup migration burst, which is what D3 traded away a
+   bulk migration for.
+2. **D-1 is fixed on hardware.** A throwaway document was imported and deleted; the orphan count
+   stayed at **1** and `documents/` returned to 25 files. Pre-#189 that delete would have left a
+   **second** orphan — the silent no-op that made "delete" not delete.
+3. **The pre-walk baseline reproduced §9.1 field for field under the new letter**, same orphan
+   token included, so the resolver's canonical-location step is genuinely mount-independent rather
+   than accidentally right on one drive.
+4. **The vault teardown is clean under the new letter** — no plaintext working DB, no `-wal`, no
+   `-shm`, no `.recovery`, no `.enc.new`.
+
+**The residual, stated plainly.** The delete leg used a **post-#189** row, born with `stored_name`
+set, so its shred resolved through the canonical path. It did **not** reproduce D-1's original
+condition — a *legacy* row whose recorded absolute `stored_path` still names the old mount point.
+Ten such rows remain on that drive (the ones still flagged `EOPSH`), so the leg can be run directly
+at the cost of one real document. It is not owed by the check's wording, and it is the one thing
+this run did not settle.
+
+**Also found, and filed out of scope: issue #194.** The re-index leg succeeded but gave the
+operator no feedback of any kind — "it worked" and "nothing happened" were the same event. The
+single-document path returns silently from the shared `run()` helper while the **bulk** "Re-index
+all" toasts and carries a determinate progress bar. Its failure path is the screen-level banner
+that does not name the document — **D-3 recurring on a neighbouring action**, which this wave fixed
+for export and did not sweep.
 
 ## Model occupancy — design record (issues #185/#186, §1–§6)
 
