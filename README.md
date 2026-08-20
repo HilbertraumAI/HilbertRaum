@@ -13,7 +13,7 @@
 [![Platform: Windows · macOS · Linux](https://img.shields.io/badge/Platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-informational.svg)](#what-you-need-diy)
 [![Offline: no cloud · no telemetry](https://img.shields.io/badge/Offline-no%20cloud%20%C2%B7%20no%20telemetry-success.svg)](PRIVACY.md)
 [![Built with: Electron · React · TypeScript](https://img.shields.io/badge/Built%20with-Electron%20%C2%B7%20React%20%C2%B7%20TypeScript-2ea44f.svg)](#for-developers)
-[![Node ≥ 22.5](https://img.shields.io/badge/Node-%E2%89%A5%2022.5-339933.svg)](package.json)
+[![Node ≥ 22.12](https://img.shields.io/badge/Node-%E2%89%A5%2022.12-339933.svg)](package.json)
 
 </div>
 
@@ -96,7 +96,7 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
   size a drive for that if you use it; swapping the 8B chat model for a bigger one takes it to
   ~**14 GB** (14B) or ~**24 GB** (30B-A3B MoE). A **USB-3 SSD**
   is recommended for a portable drive.
-- **To build from source:** **Node.js ≥ 22.5** (24 recommended; 22.15+ enables the
+- **To build from source:** **Node.js ≥ 22.12** (24 recommended; 22.15+ enables the
   `--use-system-ca` corporate-proxy workaround — run `scripts/setup-dev.{ps1,sh}`, which sets it
   automatically so `npm ci` doesn't hang behind a TLS-intercepting proxy) + **Git**.
 - **The AI itself** = a **GGUF model file** *plus* the **`llama.cpp` `llama-server` binary**. Neither

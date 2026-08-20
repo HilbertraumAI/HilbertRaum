@@ -479,7 +479,8 @@ silently stops matching; never mark an individual leg required.
 
 **Why both Node majors, and why the explicit pinned-npm install (AUD-26).** The two versions are the
 two ends of what the repo *claims*, and each was previously an unexercised claim: `22.x` is the
-`engines.node >= 22.5` floor the app promises to run on (`node:sqlite` is a built-in that needs it),
+`engines.node >= 22.12` floor the app promises to run on (raised from 22.5 by Electron 43 — wave
+DEP-4, `architecture.md` "Electron 39 → 43" record; `node:sqlite` itself only needs 22.5),
 and `24.x` is what **every** `release.yml` leg builds under — including the Windows leg that re-runs
 the full suite on the tagged commit. Gating only one leaves the other a declaration nothing tests.
 A `npm install -g npm@11.6.2` step (right after `actions/setup-node`, before `npm ci`) makes the
