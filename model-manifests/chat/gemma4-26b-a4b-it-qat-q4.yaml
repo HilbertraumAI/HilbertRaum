@@ -15,12 +15,14 @@ size_on_disk_gb: 14.4
 recommended_min_ram_gb: 20
 recommended_ram_gb: 32
 # Rank 2 since the wave ratification (owner decision 2026-08-03, model-benchmarks.md §9.3 wave
-# outcome): the §2 eval has it at EM parity with the 24 GB pick qwen3.6-27b-q4 (.9765), ZERO
-# unanswerable-set hallucinations after audit, ~4x its decode speed (155.8 vs 40.1 t/s vulkan
-# tg; 15.6 vs 2.8 cpu) at 2.5 GB less disk — but F1 .3307 vs .3523 keeps the Qwen the tier pick
-# (rank 3; both families share the terse house style, so the gap is not the §9 length
+# outcome): the §2 eval has it at EM parity with the then-24 GB pick qwen3.6-27b-q4 (.9765),
+# ZERO unanswerable-set hallucinations after audit, ~4x its decode speed (155.8 vs 40.1 t/s
+# vulkan tg; 15.6 vs 2.8 cpu) at 2.5 GB less disk — but F1 .3307 vs .3523 kept the Qwen the
+# tier pick (both families share the terse house style, so the gap is not the §9 length
 # confound). Ranked runner-up / MoE speed alternative — never the auto-pick while a rank-3
-# model fits the tier (asserted in committed-catalog.test.ts). Was the wave's HEADLINE
+# model fits the tier (asserted in committed-catalog.test.ts). The 24 GB tier itself has since
+# moved to qwen3.8-27b-ud-q4km (§9.5, 2026-08-20); this rank-2 verdict is unaffected — it was
+# never a claim about which model holds the tier, only about this one not taking it. Was the wave's HEADLINE
 # candidate: MoE with ~3.8B ACTIVE params/token (8 of 128 experts) — the qwen3-30b-a3b /
 # qwen3.5-35b-a3b total-vs-active trade at 4–8 GB less disk/RAM.
 recommendation_rank: 2
