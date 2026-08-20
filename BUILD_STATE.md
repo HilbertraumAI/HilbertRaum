@@ -43,6 +43,21 @@ row carries a dated **superseded** note, which also promotes the wire shape to *
 documented**: a status/code-mapping or frame-order change is now a breaking change needing a
 CHANGELOG note. Docs-only — no src/test change, `npm test` unaffected.
 
+_2026-08-20 (later) — **#196 successor wave: MEASURED and RATIFIED, awaiting PR review.**_ All
+three `UD-*` candidates ran the full per-quant rig wave (§9.4 method; §2 quality on the b9849
+drive runtime offline, §3/§4 on the b10430 basis, §9.1 app-path smokes on the b9849 pin, all
+legs green) and the §9.5 in-GGUF gate passed: the MTP draft head is present in every successor
+file (b9849 spawn, draft acceptance logged). Hard quality profile intact on all three (EM
+.9765, hallucinations 0, abstention 1.0000). Successor manifests added with measured numbers,
+and the ranks are owner-RATIFIED 2026-08-20: the full §9.4 generational handover is restored,
+`qwen3.8-27b-ud-q4km` rank 3 takes 24 GB (F1 .3529; tg 32.4 vs the withdrawn 39.9, a 19
+percent decode regression, recorded and accepted: quality deltas sit inside cross-run
+uncertainty and the newest generation is preferred), `qwen3.8-27b-ud-q5km` rank 3 takes
+>=32 GB (envelope reproduced, tg minus 4 percent, VRAM identical), the Qwen3.6 pair returns to
+rank 1, `qwen3.8-27b-ud-q6k` rank 0 by design (the 24 GB GPU niche got stronger: 21.8 GiB
+peak). Full record: `model-benchmarks.md` §9.5 "Successor wave"; raw rows
+`eval/results/i9-9900X-qwen38ud-*` + the b10430 speed CSV.
+
 _2026-08-20 — **Upstream deleted the three Qwen3.8 GGUFs — issue #196, catalog + product fix
 landed, the successor measurement wave stays OPEN.**_ Unsloth restructured
 `unsloth/Qwen3.8-27B-GGUF` for Dynamic 3.0 and removed the static K-quants: all three pinned URLs

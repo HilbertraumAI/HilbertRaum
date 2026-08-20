@@ -1178,6 +1178,47 @@ the manifest field `download.withdrawn` — see model-policy.md "Withdrawn upstr
 behaviour. License posture is unchanged (same upstream repo, apache-2.0); nothing was
 redistributed, so no DRIVE-NOTICES regeneration is implied.
 
+**Successor wave: MEASURED, ranks PROPOSED (2026-08-20, issue #196, i9-9900X + RTX 3090).**
+All three candidates ran the full per-quant protocol the interim record demanded: SHA-256
+confirmed on disk against the LFS OID, §2 grounded-QA on the b9849 drive runtime (Wi-Fi off,
+cool GPU, own CSV stems `i9-9900X-qwen38ud-*`), §3/§4 on the b10430 basis with the §9.4 method
+notes (per-quant cool starts, warm pp512 median of 3), and the §9.5 in-GGUF gate: the MTP draft
+head is PRESENT in all three files (spawned with the #182 flag pair on the b9849 pin, draft
+acceptance logged, no unused-tensor warnings), so Dynamic 3.0's external-MTP packaging does not
+apply at these sizes.
+
+| successor | mean F1 (vs withdrawn) | tg (vs) | pp512w/2048/8192 | peak VRAM plain / MTP | peak RSS | min RAM |
+|---|---|---|---|---|---|---|
+| `qwen3.8-27b-ud-q4km` | .3529 (.3500) | **32.4 (39.9, −19%)** | 1044/1102/1070 | 16.9 / 18.5 GiB | 16.56 GiB | 21 |
+| `qwen3.8-27b-ud-q5km` | .3511 (.3523) | 34.5 (35.9) | 1039/1096/1062 | 20.0 / 21.3 GiB | 19.64 GiB | 23 |
+| `qwen3.8-27b-ud-q6k` | .3518 (.3503) | 32.6 (31.7) | 978/1093/1061 | 21.8 / not opted in | 21.99 GiB | 26 |
+
+EM .9765, citation-correct .9882, hallucinations 0 and unanswerable-abstention 1.0000 held on
+all three (the §9.4 profile intact). MTP acceptance on the successors: 0.79 (q4km) / 0.67
+(q5km), lower than the withdrawn files' 0.77–0.91 band at the q5 end, still a net decode win.
+Two product findings: the **UD-Q4_K_M decode regression (−19%)** erases the §9.4 speed tie with
+`qwen3.6-27b-q4` (which now out-decodes it 40.1 vs 32.4), and **UD-Q6_K strengthens the
+24 GB-GPU niche** (21.8 GiB peak leaves 2.2 GiB headroom where the withdrawn file left 1.3).
+`qwen3.8-27b-ud-q5km` reproduces the withdrawn file's envelope (quality inside tolerance, VRAM
+identical, −4% tg).
+
+**Ranks RATIFIED (owner, 2026-08-20): the full §9.4 generational handover is restored with the
+successors.** `qwen3.8-27b-ud-q4km` rank 3 takes 24 GB and `qwen3.8-27b-ud-q5km` rank 3 takes
+≥32 GB; the Qwen3.6 pair returns to rank 1. The owner call: the quality differences across
+these quants sit inside cross-run uncertainty, and the newest generation is preferred on
+overall capability; the q4 successor's measured decode regression is recorded in its manifest
+and accepted knowingly. `qwen3.8-27b-ud-q6k` stays rank 0 by design (the "24 GB GPU quality
+ceiling" selectable, unchanged reasoning from §9.4).
+
+§9.1 smokes on the b9849 pin, through the app's real IPC path (same driver as the wave smokes;
+run with Wi-Fi ON as a recorded deviation, the user needed the link and the offline property was
+already established by the §2 legs): per successor (ud-q4km / ud-q5km / ud-q6k), in-app SHA-256
+verify + start via `useModel`, balanced chat zero reasoning frames, Deep surfaces reasoning
+frames, grounded DE ask exact fact + `[S1]`, mid-stream abort ≤5 ms, `stopRuntime` and
+quit-while-running teardowns clean; the MTP successors additionally verified rung 1a selection
+with the code-owned flag pair on the sidecar argv (peak VRAM 19.0 / 21.4 GiB with the head
+live). VmHWM 16.54 / 19.62 / 21.97 GiB, consistent with the §4 numbers above.
+
 ---
 
 ## 10. Skills extraction & real-model smoke (skills-remediation T1, audit §7)

@@ -1,0 +1,55 @@
+id: qwen3.8-27b-ud-q4km
+display_name: Qwen3.8 27B UD-Q4_K_M
+family: qwen3.8
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 16.5
+# MEASURED 2026-08-20 (issue #196 successor wave, i9-9900X + RTX 3090; §2 quality on the b9849
+# drive runtime offline, speed/RSS on b10430 vulkan per the §9.4 method; model-benchmarks.md
+# §9.5): llama-server peak RSS 16.56 GiB at ctx 8192 (formula min 21), peak VRAM 16.9 GiB.
+# Quality F1 .3529 (ABOVE the withdrawn Q4_K_M's .3500; f1_de .3581), EM .9765, zero
+# hallucinations, unanswerable-abstention 1.0000. SPEED CAVEAT, measured: tg 32.4 t/s vs the
+# withdrawn file's 39.9, a 19 percent decode regression (the known Dynamic-quant trade; same
+# reason UD-Q4_K_XL earned no manifest in §9.4). pp512 warm median 1044, pp2048 1102, pp8192
+# 1070. Raw rows: eval/results/i9-9900X-qwen38ud-udq4km-vulkan-*.csv + the b10430 speed CSV.
+recommended_min_ram_gb: 21
+recommended_ram_gb: 24
+# Rank 3, owner RATIFIED 2026-08-20 (issue #196 successor wave): the full §9.4 generational
+# handover is restored with the successors, so this file takes the 24 GB tier back from
+# qwen3.6-27b-q4 (which returns to rank 1). The 19 percent decode regression vs the withdrawn
+# file (tg 32.4 vs 39.9, and vs qwen3.6-27b-q4's 40.1) is measured, recorded and accepted:
+# the quality deltas across these quants sit inside cross-run uncertainty, and the owner call
+# weighs the newest generation ahead on overall capability.
+recommendation_rank: 3
+# Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
+recommended_context_tokens: 8192
+supports_thinking_mode: true
+# MTP speculative decoding, OPT-IN (issue #182 record in architecture.md; §9.4 addendum).
+# Dynamic 3.0 publishes separate MTP module files for its small and legacy quants, so the §9.5
+# successor gate required re-verifying that THIS file still carries the draft head in-GGUF:
+# VERIFIED 2026-08-20 on the b9849 pin, draft acceptance 0.79 logged, no unused-tensor
+# warnings, no --model-draft involved. Peak VRAM with the flag pair on: 18.5 GiB at ctx 8192
+# (24 GB headroom intact; the ladder still requires the weight + 3.5 GiB free before rung 1a).
+speculative_decoding: mtp
+local_path: models/chat/qwen3.8-27b-ud-q4km.gguf
+# Real hash from HuggingFace LFS metadata (git-LFS OID = the file's SHA-256), captured
+# 2026-08-20 and independently confirmed by on-disk SHA-256 of the downloaded file (i9 rig).
+sha256: 322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482
+# Quantization: unsloth UD-Q4_K_M (Dynamic), the closest published successor of the withdrawn
+# static Q4_K_M (issue #196; established-quantizer posture, no official Qwen GGUF for 3.8).
+download:
+  url: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q4_K_M.gguf?download=true
+  sha256: 322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482
+  size_bytes: 16464440224
+  license_url: https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# TEXT-ONLY USE: upstream Qwen3.8 is a vision-language model, but this chat manifest ships only
+# the language GGUF and no mmproj/projector, which is all our chat pipeline uses.
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF card/LFS verification)"
+  reviewed_at: "2026-08-20"
+  notes: "APPROVED 2026-08-20: base model Qwen/Qwen3.8-27B is apache-2.0 (LICENSE blob at download.license_url; unchanged since the 2026-08-16 review). Quantization provenance: unsloth UD-Q4_K_M GGUF from the same unsloth/Qwen3.8-27B-GGUF repo (card tag apache-2.0), a third-party requant of apache-2.0 weights; the established-quantizer posture and the 2026-08-16 addendum (offline-intelligence-private/legal/model-licensing-qwen38-addendum-2026-08-16.md) apply to the successor file as well. Hash is the HF-LFS OID AND confirmed by on-disk SHA-256 after download on the i9 rig."

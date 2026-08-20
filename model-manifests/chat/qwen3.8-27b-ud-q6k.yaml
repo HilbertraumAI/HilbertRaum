@@ -1,0 +1,50 @@
+id: qwen3.8-27b-ud-q6k
+display_name: Qwen3.8 27B UD-Q6_K
+family: qwen3.8
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 22.0
+# MEASURED 2026-08-20 (issue #196 successor wave, i9-9900X + RTX 3090; §2 quality on the b9849
+# drive runtime offline, speed/RSS on b10430 vulkan per the §9.4 method; model-benchmarks.md
+# §9.5): llama-server peak RSS 21.99 GiB at ctx 8192 (formula min 26), peak VRAM 21.8 GiB,
+# 0.9 GiB below the withdrawn Q6_K. Quality F1 .3518 (withdrawn file .3503, inside tolerance;
+# f1_de .3581), EM .9765, zero hallucinations, unanswerable-abstention 1.0000. tg 32.6 t/s vs
+# 31.7 (slightly faster); pp512 warm median 978, pp2048 1093, pp8192 1061. Raw rows:
+# eval/results/i9-9900X-qwen38ud-udq6k-vulkan-*.csv + the b10430 speed CSV.
+recommended_min_ram_gb: 26
+recommended_ram_gb: 32
+# Rank 0 BY DESIGN, same as the withdrawn Q6_K it succeeds (§9.4): the q5 successor wins the
+# >=32 GB RAM tier, and this file's niche, fully fitting a 24 GB GPU at ctx 8192, is not
+# expressible in the RAM-tier picker. It stays the selectable "24 GB GPU quality ceiling"
+# pick, and the niche got STRONGER: 21.8 GiB peak VRAM leaves 2.2 GiB headroom where the
+# withdrawn file left 1.3.
+recommendation_rank: 0
+# Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
+recommended_context_tokens: 8192
+supports_thinking_mode: true
+# NO `speculative_decoding`, deliberate, same §9.4 reasoning as the withdrawn Q6_K: MTP costs
+# about 2 GiB VRAM and this quant's entire reason to exist is the 24 GB VRAM fit. The §9.5
+# in-GGUF check was still run for the record: the draft head IS present in this file
+# (verified 2026-08-20 on the b9849 pin), it just must never be enabled here.
+local_path: models/chat/qwen3.8-27b-ud-q6k.gguf
+# Real hash from HuggingFace LFS metadata (git-LFS OID = the file's SHA-256), captured
+# 2026-08-20 and independently confirmed by on-disk SHA-256 of the downloaded file (i9 rig).
+sha256: c9c206812fbe4ac7b76a729e25928b63f2ae89d37f69da7a71c20aec763cd436
+# Quantization: unsloth UD-Q6_K (Dynamic), the closest published successor of the withdrawn
+# static Q6_K (issue #196; established-quantizer posture, no official Qwen GGUF for 3.8).
+download:
+  url: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q6_K.gguf?download=true
+  sha256: c9c206812fbe4ac7b76a729e25928b63f2ae89d37f69da7a71c20aec763cd436
+  size_bytes: 21983677344
+  license_url: https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# TEXT-ONLY USE: upstream Qwen3.8 is a vision-language model, but this chat manifest ships only
+# the language GGUF and no mmproj/projector, which is all our chat pipeline uses.
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF card/LFS verification)"
+  reviewed_at: "2026-08-20"
+  notes: "APPROVED 2026-08-20: base model Qwen/Qwen3.8-27B is apache-2.0 (LICENSE blob at download.license_url; unchanged since the 2026-08-16 review). Quantization provenance: unsloth UD-Q6_K GGUF from the same unsloth/Qwen3.8-27B-GGUF repo (card tag apache-2.0), a third-party requant of apache-2.0 weights; the established-quantizer posture and the 2026-08-16 addendum (offline-intelligence-private/legal/model-licensing-qwen38-addendum-2026-08-16.md) apply to the successor file as well. Hash is the HF-LFS OID AND confirmed by on-disk SHA-256 after download on the i9 rig."

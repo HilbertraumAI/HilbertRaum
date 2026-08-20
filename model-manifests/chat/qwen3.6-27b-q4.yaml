@@ -17,17 +17,17 @@ recommended_min_ram_gb: 20
 # the 12-14B pair (gemma4-12b / qwen3-14b, both 24), so the §6.2 rank decides the tier winner
 # instead of capacity alone. Weight is ~16.8 GB (15.7 GiB); 24 GB is the honest comfortable floor.
 recommended_ram_gb: 24
-# Rank 3 — the 24 GB tier pick again SINCE 2026-08-20 (issue 196; model-benchmarks.md §9.5).
-# The §9.4 handover gave the tier to qwen3.8-27b-q4 on a quality tie inside cross-run noise;
-# upstream then deleted that file, so it can no longer be obtained and dropped to rank 0. This
-# model's own measurements are untouched and its source is live (URL + LFS hash re-verified
-# 2026-08-20), so it takes the tier back rather than leaving 24 GB boxes to gemma4-12b (rank 2,
-# a 12B) or to an undownloadable pick.
-# HISTORY — rank 3 2026-07-12..2026-08-16: the #48 tester eval (i9-9900X + RTX 3090, b9849
+# Rank 1, owner RATIFIED 2026-08-20 (issue #196 successor wave; model-benchmarks.md §9.5):
+# the measured UD-Q4_K_M successor (qwen3.8-27b-ud-q4km) retakes the 24 GB tier, restoring the
+# §9.4 generational handover the §9.5 interim reverted for obtainability alone. This model
+# stays ranked and selectable; NOTE it out-decodes the successor by a measured margin
+# (tg 40.1 vs 32.4 t/s) at quality inside cross-run uncertainty, recorded honestly here.
+# HISTORY. Rank 3 2026-07-12..2026-08-16: the #48 tester eval (i9-9900X + RTX 3090, b9849
 # binary) put Qwen3.6 27B Q4/Q5 at the top of the quality table (F1 .3523/.3573, EM .9765, zero
 # unanswerable-set hallucinations for Q5), sweeping the 20-24 GB tier; won the 24 GB tier from
-# gemma4-12b. Rank 1 2026-08-16..2026-08-20 (the §9.4 generational handover, now reverted).
-recommendation_rank: 3
+# gemma4-12b. Rank 1 2026-08-16..2026-08-20 (the §9.4 generational handover). Rank 3 again
+# 2026-08-20, the §9.5 interim after upstream deleted the qwen3.8 files.
+recommendation_rank: 1
 # Safe LOCAL runtime budget (catalog convention for the big additions, not the native window).
 # The earlier local-test value 16384 assumed a 24 GB RTX 3090; 8192 is the honest default for
 # a generic 24 GB machine (KV cache + sidecars need headroom). Raise per-machine in Settings.
