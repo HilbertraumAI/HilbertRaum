@@ -46,7 +46,7 @@ function manifest(overrides: Record<string, unknown> = {}): ModelManifest {
     format: 'gguf',
     runtime: 'llama_cpp',
     license: 'apache-2.0',
-    size_on_disk_gb: 2.7,
+    size_on_disk_gb: 2.5,
     recommended_min_ram_gb: 8,
     recommended_ram_gb: 16,
     recommended_context_tokens: 4096,
@@ -57,7 +57,7 @@ function manifest(overrides: Record<string, unknown> = {}): ModelManifest {
     download: {
       url: 'https://example.test/qwen3-4b.gguf',
       sha256: 'REPLACE_WITH_REAL_HASH',
-      size_bytes: 2700000000,
+      size_bytes: 2497280256,
       license_url: 'https://example.test/license'
     },
     ...overrides
@@ -193,7 +193,7 @@ describe('planModelDownloads', () => {
         download: {
           url: 'https://example.test/qwen3-4b.gguf',
           sha256: 'REPLACE_WITH_REAL_HASH',
-          size_bytes: 2700000000,
+          size_bytes: 2497280256,
           license_url: 'https://example.test/license',
           withdrawn: '2026-08-20: upstream deleted the file'
         },

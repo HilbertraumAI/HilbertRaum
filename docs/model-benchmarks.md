@@ -422,6 +422,12 @@ consume it. The rules:
    step's reach grows as RAM lines are retuned from measured RSS (#95 item 3) or lower tiers
    earn ranks (#95 item 2): the rule is structural, not a hardcoded mapping — the #153
    promotion exercised exactly this property (rank edit only, zero picker-code change).
+   *(Amended 2026-08-20 by the #196 successor wave (§9.5) — again a catalog change, not a
+   picker change, and again the structural rule doing its own work: with the `UD-*`
+   successors ranked, a crawling 24 GB box steps `qwen3.8-27b-ud-q4km` →
+   `qwen3.5-9b-ud-q4kxl` (unchanged landing tier) and a crawling ≥32 GB box steps
+   `qwen3.8-27b-ud-q5km` → `qwen3.8-27b-ud-q4km` rather than to `qwen3.6-27b-q4`. Pins in
+   `committed-catalog.test.ts`.)*
 4. **Stateless, single-step.** The stepped pick is derived fresh on every `listModels` call
    from the persisted `settings.lastBenchmark`; a re-benchmark replaces the sample. The base
    pick is always recomputed from RAM alone, so downgrades never compound across runs.
@@ -432,6 +438,10 @@ consume it. The rules:
    `committed-catalog.test.ts` and `benchmark.test.ts`. *(Amended 2026-08-09 by the #153 E2B
    promotion — a catalog change, not a picker change: 12–15 GB → Gemma 4 E2B, the new sub-16
    comfortable band; 8 GB keeps Qwen3.5 4B via the runnable stage. Pins updated in both files.)*
+   *(Amended again 2026-08-20 by the #196 successor wave: the two top rows are now
+   24 → Qwen3.8 27B UD-Q4_K_M and ≥32 → Qwen3.8 27B UD-Q5_K_M, and the 9B band reaches to
+   23 GB. Both files were re-pinned; the "pinned untouched" claim above is the pre-#196
+   reading and is kept for the record, not as current fact.)*
 6. **Consistency across surfaces.** `runBenchmark` (the Diagnostics card's
    `recommendedModelId`) applies the same rule with the just-measured values, and
    `listModels` applies it with the persisted ones, so the two surfaces cannot disagree:
@@ -1225,6 +1235,100 @@ frames, grounded DE ask exact fact + `[S1]`, mid-stream abort ≤5 ms, `stopRunt
 quit-while-running teardowns clean; the MTP successors additionally verified rung 1a selection
 with the code-owned flag pair on the sidecar argv (peak VRAM 19.0 / 21.4 GiB with the head
 live). VmHWM 16.54 / 19.62 / 21.97 GiB, consistent with the §4 numbers above.
+
+### 9.6 The gemma4-12B checkpoint was re-uploaded, not deleted (2026-08-20, issue #201)
+
+**What happened.** `gemma4-12b-it-qat-q4` pins
+`google/gemma-4-12B-it-qat-q4_0-gguf/gemma-4-12b-it-qat-q4_0.gguf`. On 2026-07-17 Google pushed
+repo commit `29d09777` — "Upload validated QAT GGUF checkpoint (280 sequence length, **corrected
+vocabulary**)" — replacing the file's bytes at the same path. The URL therefore stayed alive
+(302 → CDN, no 404) while serving a checkpoint the manifest's `sha256` does not match: the
+in-app downloader and both `fetch-models` twins would pull ~7 GB and *then* fail verification,
+with a message the user cannot act on. Drives already carrying the old weight were unaffected —
+their local file still matched the old pin.
+
+This is the quiet counterpart to §9.5's loud failure, and it is exactly the class the §9.5 sweep
+did not test: it checked liveness catalog-wide and hash equality for the Qwen3.6 pair only, so
+this drift went unseen for five weeks (found by the 2026-08-20 docs/code audit, finding B-1).
+The prevention landed with the finding: `model-policy.md` "Re-verifying the catalog against
+upstream" now makes the periodic check compare the upstream LFS OID, not just the status code —
+and records the trap that makes step 2 easy to get wrong (a redirect-**following** `HEAD` returns
+the CDN's ETag, never the LFS OID, so every HuggingFace manifest reads as a false mismatch; read
+`x-linked-etag` / `x-linked-size` off the `huggingface.co` 302, or the tree API's `lfs.oid` /
+`lfs.size`).
+
+**The upstream numbers, re-derived by both methods 2026-08-20** (they agree, and they agree with
+the on-disk hash of the downloaded file):
+
+| | committed before this wave | corrected checkpoint |
+|---|---|---|
+| `sha256` | `faff1a63667fac17ac5e777f47114688fcefea96e220e211aaa8d62c2c4561f1` | `93567e57a8fe10b23569b9d9ec38cd005deedf71e29477c421a4b83f418a538b` |
+| `size_bytes` | 6975877728 | 6975879296 (+1,568) |
+
+**The wave (i9-9900X + RTX 3090, 2026-08-20).** "Corrected vocabulary" is precisely the kind of
+change that can move tokenization-sensitive scores, and this model's rank-2 standing rests on the
+Phase-29 verdict — so parity was treated as a **result to be measured**, not an assumption. Both
+checkpoints ran back-to-back, same harness, same day, temp 0 (Wi-Fi on, a recorded deviation from
+the §0 convention per the owner's standing instruction for this box). The old pinned file was
+re-hashed the same day and still equalled `faff1a63…`, so the comparison is between exactly the
+two checkpoints in question.
+
+| | old (pinned) | corrected | delta |
+|---|---|---|---|
+| mean F1 | .3399 | .3399 | 0 |
+| EM / citation-correct / grounded | .9765 / .9882 / .9765 | identical | 0 |
+| abstain(unans) / hallucination | .9333 / .0667 | identical | 0 |
+| f1_de / f1_en | .3470 / .3293 | identical | 0 |
+| peak RSS @ ctx 8192 (b10430 basis) | 7,917,560 kB | 7,917,516 kB | −44 kB |
+| peak VRAM @ ctx 8192 | 9,720 MiB | 9,720 MiB | 0 |
+
+**All 100 of the §2 answers are byte-identical between the two checkpoints** — not "within
+tolerance", identical strings. The re-typed vocabulary tokens are provably inert for this model's
+§2 behaviour, so the rank-2 standing carries over on evidence. (Both runs also match the committed
+post-rescore baseline .3399.) The §9.1 in-app legs all pass on the b9849 pin, run against a local,
+temporary, since-reverted manifest pin of the new hash: in-app SHA-256 verify + GPU start in 30 s,
+balanced chat streams with zero reasoning frames, Deep surfaces 221 reasoning frames (the flipped
+`supports_thinking_mode: true` behaviour reproduces on the corrected file), grounded DE ask answers
+with the exact fact and a correct `[S1]` citation, mid-stream abort ends the stream in 4 ms,
+sidecar VmHWM 7.53 GiB, `stopRuntime` and quit-while-running teardowns clean. Raw rows:
+`eval/results/i9-9900X-gemma4fix-{old,new}-vulkan-{items.jsonl,quality.csv}`.
+
+**Two observations kept because they look like defects and are not.**
+
+1. **Loader warnings.** The corrected file emits two control-token override warnings the old file
+   does not (`control-looking token '</s>' was not control-type … will be overridden`, same for
+   `<|tool_response>`; the old file: zero such warnings). This is the vocabulary correction being
+   visible at load — llama.cpp re-types those tokens, and neither plays any part in our
+   chat-template path. Inert, not a regression.
+2. **Template-less `/completion` junk.** A raw `/completion` call with no chat template returns
+   junk on **both** checkpoints identically — pre-existing instruction-tuned Gemma template
+   dependence, unrelated to the correction. The §2 harness and the app both use the chat-template
+   path.
+
+**Memory basis, stated so it is not mistaken for a retune.** The absolute RSS numbers above sit on
+a different measurement basis than the historic ~10.6 GiB the `recommended_min_ram_gb: 14` /
+`recommended_ram_gb: 24` lines derive from. Per the §9.3 Windows-basis standing rule this wave
+implies **no** RAM retune; what it establishes is that the substitution does not move the envelope.
+
+**Decision (owner, 2026-08-20): repoint the manifest IN PLACE — both `sha256` fields and
+`size_bytes` — rather than entering a successor id.** This deliberately departs from the §9.5 /
+issue-#196 precedent, and the reason is that the two situations differ where it matters: there the
+files were **deleted**, so the withdrawn manifests had to stay as installed-base records; here the
+file was **superseded** at the same path, and the wave measured the two checkpoints as
+indistinguishable on every surface we ship. A successor id would therefore put two provably
+indistinguishable entries in the catalog — the cost the #196 posture buys nothing against.
+
+**Accepted cost, stated plainly:** a drive that already holds the old checkpoint now reports
+`checksum_failed` against the new pin and heals by re-downloading ~7 GB. The blast radius is
+small — `bundled_on_preconfigured_drive: false`, and the model is not in the `--with-assets`
+default set — so no preconfigured drive ships the stale bytes. Recorded for users in
+`known-limitations.md` ("Model catalog & downloads") and in `CHANGELOG.md`, since a model that was
+downloadable now needs a re-download for anyone who already had it. No interim
+`download.withdrawn` note was set: the evidence was in, so the fix landed directly.
+
+**License posture unchanged** — same repo, same vendor QAT `Q4_0` quantization, same Apache-2.0
+card tag, text-only use (the repo's mmproj vision file is still deliberately unreferenced). Nothing
+was redistributed, so no DRIVE-NOTICES regeneration is implied.
 
 ---
 

@@ -17,8 +17,10 @@ recommended_ram_gb: 32
 # Rank 0 SINCE 2026-08-20 (issue 196): unsloth deleted this exact file in their Dynamic 3.0
 # restructure, so a drive that does not already carry the weight can no longer obtain it (see
 # download.withdrawn below). Rank 0 = selectable, never auto-recommended, so the picker stops
-# handing the ≥32 GB tier to a model a fresh drive cannot get; the tier goes back to
-# qwen3.6-27b-q5 (rank 3 again, and the all-time harness F1 record holder). §9.5.
+# handing the ≥32 GB tier to a model a fresh drive cannot get; the tier went to
+# qwen3.6-27b-q5 for the interim and, LATER THE SAME DAY, to the measured successor
+# qwen3.8-27b-ud-q5km at the §9.5 successor-wave ratification (rank 3). qwen3.6-27b-q5 sits
+# at rank 1 and keeps the all-time harness F1 record (.3573). §9.5.
 # HISTORY — rank 3 2026-08-16..2026-08-20 (owner decision, newest-generation preference;
 # model-benchmarks.md §6.4 + §9.4): F1 .3523 exactly ties the former 24 GB pick
 # qwen3.6-27b-q4; the all-time harness record stays with qwen3.6-27b-q5 (.3573), but the 3.8

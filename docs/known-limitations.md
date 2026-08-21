@@ -1586,6 +1586,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on
   parallel slots, so this is an app-side product decision (predictable latency, no
   context-memory splitting), not a server constraint; revisit only with evidence.
+- **A failed single-document re-index or delete reports on the shared error banner, not on the
+  row** (issue #194). The clicked row shows a spinner and its own success toast names the document,
+  and a failure banner is prefixed with the title — but there is no per-row error surface.
+  Deliberate: design-guidelines §6 keeps actionable errors off toasts, and a second error channel
+  would race the banner.
+- **A single-document task cannot be cancelled** (issue #194). The bulk twin's determinate progress
+  and the per-row spinner are presentation only; the underlying work is not a main-owned cancellable
+  job, and the screen-global `busy` serialization (DR-5) stays — only its legibility changed.
 - **Re-index clears the summary and nothing regenerates it automatically** — the content
   may have changed, so a stale summary must not survive; the user presses Summarize again.
   Accepted edge, mirrored in the user guide.
@@ -2214,6 +2222,61 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   inference — a driver can enumerate fine and crash on the first compute submit. That case is
   handled by the crash auto-fallback (one CPU restart + a friendly notice); the in-flight reply
   is lost, same as today's crash handling.
+
+## Speculative decoding (MTP — [`architecture.md`](architecture.md) "MTP speculative decoding" record)
+
+The measured speed-up (+38–45 % decode on the reference GPU) is deliberately narrow. All of these
+are decided scope, not oversights; the record's §7 carries the reasoning.
+
+- **GPU only — the runtime drops the flags off-GPU, structurally.** The measured gain is a
+  full-offload result and MTP on CPU is simply unmeasured, so the forced-CPU rungs never carry the
+  flags. Dropping was chosen over proving it harmless on CPU because it is decidable without
+  hardware and cannot regress.
+- **Opt-in per WEIGHT, never inherited by family resemblance.** The draft head is a property of the
+  file, so a manifest opts in by name (`speculative_decoding: mtp`) and each new file is verified to
+  carry the head in-GGUF before keeping the field — Unsloth's Dynamic 3.0 publishes the MTP module
+  as a SEPARATE file for smaller quants, so "same family, same flag" would silently ship a broken
+  start (issue #196 §9.5 gate). A closed enum, not an argument list: manifests are user-editable and
+  `LlamaServer.buildArgs` appends extras LAST, so a hand-edited `--host 0.0.0.0` would win.
+- **Skipped silently when it will not fit, and invisible in the UI by design.** One device must
+  report the weight's bytes plus 3.5 GiB free; free VRAM is never summed across cards (a multi-device
+  split with a draft head is unmeasured). A refusal costs nothing and falls through to exactly the
+  previous behaviour — but there is no user-facing signal, because there is no decision a user could
+  act on. The answer to "is it actually on?" is the log and `perfMark('runtime_speculative')`.
+- **RAM/VRAM lines in the manifests are pre-MTP figures** and stay that way until re-measured with
+  the flag on. Manifest numbers are measured, never estimated.
+- **Watch item, not observed:** `measureTokensPerSecond` counts stream CHUNKS. If a future
+  llama-server batched an accepted draft run into one SSE delta, the probe would under-read on an
+  MTP model and could feed the very-low-tps downgrade. Recorded so the next person who sees a
+  nonsense figure on a fast machine has the thread.
+
+## Model catalog & downloads ([`model-policy.md`](model-policy.md))
+
+- **An upstream publisher can delete or replace a pinned weight, and we cannot prevent it.** Hash
+  pinning means we can never be handed substituted bytes silently — but it also means a file that
+  moved is a file we can no longer fetch. A deleted source is recorded per-manifest
+  (`download.withdrawn`) so the app refuses by name before any request instead of ending a multi-GB
+  download in a 404; a live URL that now serves DIFFERENT bytes is the quieter failure and is found
+  by the periodic drift check (model-policy.md "Re-verifying the catalog against upstream").
+- **A withdrawn model stays selectable on a drive that already has it.** Its manifest is kept at
+  rank 0 with its dated note rather than deleted: the local file still matches the pinned hash, so it
+  verifies, starts and keeps its features. The consequence is a catalog entry a fresh drive can see
+  but never obtain — deliberate, and pinned by the invariant that no committed manifest is both
+  recommended and unobtainable.
+- **Replacing a weight is a measurement wave, not an edit.** Successors enter as NEW manifest ids
+  with their own measured quality/speed/RSS numbers; an in-place URL + hash swap would turn every
+  installed copy into `checksum_failed` overnight (precedent: issue #196, 2026-08-20). The one
+  exception is the next bullet, and it was still a measurement wave.
+- **An installed copy of the pre-2026-07-17 `gemma4-12b-it-qat-q4` weight now reports
+  `checksum_failed`, and heals by re-downloading** (~7 GB). Google replaced that checkpoint
+  upstream at the same URL ("corrected vocabulary"), so the exact file the old manifest pinned is
+  no longer obtainable. It was re-measured against the corrected one before anything moved, and the
+  two are indistinguishable on every surface the app uses — all 100 grounded-QA answers
+  byte-identical, same memory envelope — so the manifest was repointed **in place** rather than
+  entering a second, provably identical catalog entry (issue #201; model-benchmarks.md §9.6).
+  No shipped drive carries the stale bytes: this model is not bundled on a preconfigured drive and
+  is not in the `--with-assets` default set. If your drive already has it, the AI Model screen shows
+  the checksum failure and Download fetches the corrected file over it.
 
 ## Accessibility (WCAG 2.2 AA sweep — consciously accepted)
 

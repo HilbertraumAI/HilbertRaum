@@ -23,7 +23,11 @@ sha256: d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785
 download:
   url: https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf?download=true
   sha256: d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785
-  size_bytes: 5000000000
+  # MEASURED 2026-08-20 (issue 202), was the hand-entered 5000000000. Real byte count from the
+  # upstream LFS metadata, confirmed by both methods of the model-policy.md drift check (the HF
+  # tree API lfs.size AND x-linked-size off a redirect-manual HEAD). The sha256 was and stays an
+  # exact match, so only the declared size was ever an estimate.
+  size_bytes: 5027783488
   license_url: https://huggingface.co/Qwen/Qwen3-8B-GGUF/blob/main/LICENSE
 bundled_on_preconfigured_drive: false
 # Better answers on 16 GB+ machines (spec §7.3 BALANCED). PRO auto-recommends the 14B; the

@@ -124,105 +124,55 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  * parser (`extractInvoice`/`parseLineItem`) or the header/totals readers. A pure refactor that cannot
  * change any output does NOT need a bump.
  *
- * History (each entry = the output-affecting work that warranted the value):
- *   1 — baseline: the invoice parser as built through full-audit-2026-06-29-postmerge Phase 1 (F1 the
- *       statement-context-aware amount-column drop, F3 figure-region currency + single-currency guard,
- *       F6 space-column fusion drop, F8 qty-split corroboration). Pre-versioning rows are NULL → stale.
- *   2 — full-audit-2026-06-29 follow-up Phase 1: FIN-1 (document currency by majority vote over
- *       figure-adjacent detections — a currency word in a line-item description no longer stamps the
- *       net/tax/gross in the wrong code), FIN-2 (the F1 right-side uncaptured-column drop only fires on a
- *       trailing token that is ITSELF a money-shaped-but-rejected bare amount, so a valid item with a
- *       trailing annotation — `(Pos. 3)`, `19% MwSt`, `EUR 2 Stk` — is no longer deleted), and FIN-4 (date
- *       order from the leading date column only). Each can change the persisted output, so v1 rows re-extract.
- *   3 — invoice-totals-2026-07-01: a LABELED totals line now reads a round total printed WITHOUT a
- *       decimal/grouping ("Total (excl. Tax) 914 $", "Tax 0 $") via a currency-ADJACENT bare integer
- *       (`totalsMoney`) — MONEY_RE rejects bare integers, so the whole net/tax/gross block was previously
- *       empty on this extremely common layout; "Total (excl. Tax)" now resolves to the NET (not the
- *       gross) via `EXCL_TAX_RE`; and the abbreviated header label "No.:" no longer leaks its `.:` into
- *       the parsed invoice number. Each changes the persisted output, so v2 rows re-extract.
- *   4 — skills-remediation R1 (audit §5.3 + §5.7-low): a shared `normalizeExtractionText` pre-pass runs
- *       at the extractor entry (`extractInvoice`) so a Unicode minus / no-break-space thousands separator /
- *       Swiss U+2019 apostrophe group is read correctly; and `totalsMoney`'s currency-adjacent bare-integer
- *       fallback is now SIGN-AWARE (a credit-note "Gesamtbetrag -914 EUR" reads −914 instead of +914,
- *       honouring `parseAmount`'s leading/paren/trailing sign rules). Each changes the persisted totals/
- *       amounts on affected invoices, so stale v3 rows re-extract.
- *   5 — skills-remediation R2 (audit §5.2 CRITICAL + §5.4): label matching is now STRUCTURAL — a totals/
- *       header label matches only with a word boundary (`labelBoundaryOk`), so "Steuerberatung Jänner
- *       500,00" is a line item, not a `taxTotal`; a totals label is honoured only when its remainder is
- *       essentially just the figure (`isFillerOnly`), so "Netto-Miete Objekt 3 1.000,00" / "Total hours
- *       consulting 40,00" stay line items; totals are LAST-WINS (a real totals block prints after the
- *       items); the German summary vocabulary is extended (Summe/Gesamtsumme/Rechnungssumme/Endsumme/
- *       Endbetrag) and a summary-line guard (`isSummaryLabelLine`) drops phantom "Summe" items; and header
- *       matching no longer swallows a line that parses as a line item. Each can change the persisted
- *       totals/line items on affected invoices, so stale v4 rows re-extract.
- *   6 — skills-remediation R5 (audit §5.7): date correctness. `parseDate` now completes a 2-digit-year /
- *       bare lead date on a line item against the document year anchor (`inferDateAnchor`) via the shared
- *       `splitLeadingDates` (previously such a date stayed in the description); and the extractor now records
- *       the document-level `dateOrderInferred` provenance (evidence vs day-first default) on the invoice for
- *       the answer caveat. The added output field (and any completed lead date) changes the persisted output,
- *       so stale v5 rows re-extract.
- *   7 — skills-remediation R6 (audit §5.7): row fidelity. (a) A money-less, non-label line that DIRECTLY
- *       follows a line item is appended to that item's description as a bounded (single-line) continuation
- *       — the plain-text mirror of the geometry multi-baseline association — so a wrapped description
- *       survives instead of being dropped. (b) Line-item column debris is cleaned IDENTITY-GATED: a
- *       `<rowIndex> <description> <qty> <rate>%` shape has the leading row index stripped and the trailing
- *       quantity / tax-rate columns split into `quantity` + the new optional `taxRatePercent`, but ONLY
- *       when `quantity × unitPrice ≈ lineTotal` independently confirms the split — otherwise the description
- *       is left exactly as parsed (drop-don't-guess, §22-D1). Changes the persisted descriptions /
- *       quantities on affected invoices, so stale v6 rows re-extract.
- *   8 — skills-remediation U1 (audit §2.3): the extractor now records `droppedRowCount` — how many
- *       money-bearing lines it REJECTED (couldn't turn into a line item / total / header) — so the answer
- *       gates its "the whole invoice" claim honestly instead of asserting exhaustiveness while dropping
- *       figures silently. The new field changes the persisted output, so stale v7 rows re-extract.
- *   9 — skills-audit-2026-07-03 R7 (SKA-1, SKA-2, SKA-14): a date or a header label can no longer swallow
- *       or invent a figure. `parseLineItem` scans money via `scanMoneyWithBlankedDates` — a same-length
- *       date-BLANKED copy with each match's trailing sign re-validated against the original bytes (SKA-1)
- *       — so a mid-line/trailing date is never read as a line total, a trailing date no longer trips the
- *       F1 uncaptured-column drop, and a blanked billing-period range never reads as a trailing debit
- *       minus; the date scrubs gained a double-guarded 2-digit-year alternative incl. terminal punctuation
- *       (SKA-2), so `Gesamtbetrag 390,00 EUR per 30.06.26` reads 390 (not 3006.26), `Datum: 15.03.26` is a
- *       header (not a phantom 1503.26 item), and money-less dd.mm.yy lines no longer inflate
- *       `droppedRowCount`; and the vendor/number header branches fall through on an AMOUNT-shaped line
- *       (`carriesAmountShapedMoney` — a 2-dp figure or currency-adjacent money; a bare grouped header
- *       VALUE like `Rechnung Nr. 26.001` is still consumed, SKA-14), so `From 01.06.2026 to 30.06.2026
- *       Hosting 49,00` / `Rechnung Nr. 2026-14 … über 1.500,00 EUR` stay line items instead of vanishing
- *       into garbage header values. Each changes the persisted items/totals/header on affected invoices,
- *       so stale v8 rows re-extract.
- *  10 — invoice-hardening-2026-07-04 P2: uncorroborated WEAK totals are retracted. A totals figure read
- *       via the bare-integer currency-adjacent fallback (no decimal, no grouping — extractor v3) is now
- *       tracked as a weak read, and `dropUncorroboratedWeakTotals` deletes it when it participates in a
- *       mismatched reconciliation check and in no ok check (one validation snapshot of the assembled
- *       invoice; decimal-shaped reads are never touched). A glyph-soup document can no longer assert a
- *       confident net/tax/gross from stray currency-adjacent digits. Changes the persisted totals on
- *       affected invoices, so stale v9 rows re-extract.
- *  11 — invoice-hardening-2026-07-04 P3: (a) the header gains `recipient` (the bill-to party), read from
- *       a labeled line only ("Bill to:", "Rechnungsempfänger:", "Kunde:") with a reference-noun guard —
- *       the schema gap made "who is the recipient?" structurally unanswerable; (b) the extractor stamps
- *       `textQuality: 'suspect'` when the document's text layer looks glyph-mangled (`looksLikeGlyphSoup`)
- *       so the answer layer can retry via geometry and refuse confident figures over soup. Both change
- *       the persisted output, so stale v10 rows re-extract.
- *  12 — invoice-audit-2026-07-06 IA-2 (T-1): the shared `MONEY_RE` reads a leading `-`/`+` sign ONLY when
- *       it is GLUED to the magnitude or an open paren (`-1.500,00`, `-(45,00)`); a dash separated from the
- *       figure by whitespace — `Beratung - 1.500,00 EUR`, or the `lastCurrencyAdjacentInteger` fallback's
- *       `Gesamtbetrag - 914 EUR` — is now TEXT, not a sign, so it no longer flips a positive figure
- *       negative (the plain path now agrees with the geometry path, which already refused a far dash as a
- *       sign). Changes the persisted amounts/totals on any invoice with a dash-as-separator layout, so
- *       stale v11 rows re-extract. (Bumped in IA-2 — the shared-parser fix — so IA-3's batch does not
- *       re-bump for this.)
- *  13 — invoice-audit-2026-07-06 IA-3 (T-2/T-3/T-4/T-5/T-6/T-8/T-10): a batch of independent parser fixes.
- *       (T-3) a percent-attached RATE (`MwSt 20,00 %`) is blanked before the totals money scan so it is no
- *       longer read as the tax AMOUNT; (T-2) a one-line multi-label totals row (`Netto … MwSt … Brutto …`)
- *       attributes each figure to its own nearest-preceding label instead of the last figure to the first
- *       label; (T-4) `nettosumme` joins NET labels and `steuerbetrag`/`ust` join TAX labels, so a
- *       line-leading `USt 20% 182,80` / `Steuerbetrag 182,80` reads as tax instead of a phantom item; (T-5)
- *       the header DATE branches now fall through on an amount-bearing line, so `Rechnungsdatum: 03.05.2026
- *       Betrag: 1.500,00` no longer swallows the figure; (T-6) date-order inference classifies lines by the
- *       date-scrubbed `hasMoneyToken`, so a money-less dotted-date line votes (and the day-first caveat
- *       fires); (T-8) a bare `(netto)` qualifier flips a gross-labelled total to the net; (T-10) a money-
- *       less date-follower line keeps its wrapped-description continuation. Each can change the persisted
- *       output, so stale v12 rows re-extract. (T-6 is a SHARED money.ts change → BANK_EXTRACTOR_VERSION
- *       also bumped 10→11 in the same wave; T-7 widened `taxMatchesRate`'s tolerance but is a downstream
- *       validation check reading no persisted field differently, so it does not itself warrant the bump.)
+ * History — one line per version: the wave that warranted it, its finding ids, and what changed in
+ * the OUTPUT. The reasoning behind each lives in the cited audit record (resolvable through the
+ * `architecture.md` §-anchor legends) and the diff is in git; this index exists so a stored stamp
+ * can be traced to a wave without archaeology.
+ *   1 — full-audit-2026-06-29-postmerge P1 (F1/F3/F6/F8): the parser as first built. Pre-versioning
+ *       rows are NULL → stale.
+ *   2 — full-audit-2026-06-29 follow-up P1: FIN-1 document currency by majority vote over
+ *       figure-adjacent detections; FIN-2 the F1 uncaptured-column drop fires only on a trailing token
+ *       that is ITSELF money-shaped-but-rejected; FIN-4 date order from the leading date column only.
+ *   3 — invoice-totals-2026-07-01: `totalsMoney` reads a currency-ADJACENT bare integer (MONEY_RE
+ *       rejects bare integers, so the whole net/tax/gross block was empty on a very common layout);
+ *       `EXCL_TAX_RE` resolves "Total (excl. Tax)" to the NET, not the gross; "No.:" stops leaking `.:`.
+ *   4 — skills-remediation R1 (audit §5.3 + §5.7-low): shared `normalizeExtractionText` pre-pass
+ *       (Unicode minus, NBSP thousands, Swiss U+2019); the `totalsMoney` bare-integer fallback becomes
+ *       sign-aware, so a credit note's "Gesamtbetrag -914 EUR" reads −914.
+ *   5 — skills-remediation R2 (audit §5.2 CRITICAL + §5.4): label matching becomes STRUCTURAL —
+ *       `labelBoundaryOk` + `isFillerOnly` keep "Steuerberatung Jänner 500,00" a line item rather than
+ *       a taxTotal; totals are LAST-WINS; German summary vocabulary extended and `isSummaryLabelLine`
+ *       drops phantom "Summe" items.
+ *   6 — skills-remediation R5 (audit §5.7): `parseDate` completes a 2-digit-year / bare lead date
+ *       against `inferDateAnchor` via the shared `splitLeadingDates`; document-level
+ *       `dateOrderInferred` provenance recorded for the answer caveat.
+ *   7 — skills-remediation R6 (audit §5.7): bounded single-line description continuation (the plain
+ *       mirror of geometry multi-baseline association); column debris split into `quantity` +
+ *       `taxRatePercent` ONLY when qty × unitPrice ≈ lineTotal confirms it (drop-don't-guess, §22-D1).
+ *   8 — skills-remediation U1 (audit §2.3): `droppedRowCount` recorded, so the answer cannot assert
+ *       "the whole invoice" while silently dropping figures.
+ *   9 — skills-audit-2026-07-03 R7 (SKA-1/SKA-2/SKA-14): money scanned over a same-length date-BLANKED
+ *       copy with each trailing sign re-validated against the original bytes (SKA-1); double-guarded
+ *       2-digit-year date scrubs incl. terminal punctuation (SKA-2); vendor/number header branches fall
+ *       through on an amount-shaped line via `carriesAmountShapedMoney`, while a bare grouped header
+ *       VALUE like "Rechnung Nr. 26.001" is still consumed (SKA-14).
+ *  10 — invoice-hardening-2026-07-04 P2: `dropUncorroboratedWeakTotals` retracts a bare-integer-fallback
+ *       total that fails a reconciliation check and passes none — glyph soup can no longer assert a
+ *       confident net/tax/gross from stray currency-adjacent digits.
+ *  11 — invoice-hardening-2026-07-04 P3: header gains `recipient` (labeled lines only, reference-noun
+ *       guard) — the schema gap made "who is the recipient?" structurally unanswerable; and
+ *       `textQuality: 'suspect'` via `looksLikeGlyphSoup`, so the answer layer can retry via geometry.
+ *  12 — invoice-audit-2026-07-06 IA-2 (T-1): shared `MONEY_RE` takes a leading sign ONLY when glued to
+ *       the magnitude or an open paren, so a dash-as-separator "Beratung - 1.500,00" no longer flips
+ *       negative and the plain path agrees with geometry. (Bumped here so IA-3's batch need not re-bump.)
+ *  13 — invoice-audit-2026-07-06 IA-3 (T-2/T-3/T-4/T-5/T-6/T-8/T-10): percent-attached RATES blanked
+ *       before the totals scan; a one-line multi-label totals row attributes each figure to its own
+ *       nearest-preceding label; `nettosumme`/`steuerbetrag`/`ust` join the NET/TAX label sets; header
+ *       DATE branches fall through on an amount-bearing line; date-order votes use the date-scrubbed
+ *       `hasMoneyToken`; a bare `(netto)` flips a gross-labelled total; a money-less date-follower keeps
+ *       its wrapped-description continuation. (T-6 edits the SHARED money.ts, so
+ *       `BANK_EXTRACTOR_VERSION` bumped 10→11 in the same wave. T-7 widened `taxMatchesRate`'s tolerance
+ *       but is a downstream validation check reading no persisted field differently — no bump.)
  */
 export const INVOICE_EXTRACTOR_VERSION = 13
 

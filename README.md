@@ -13,7 +13,7 @@
 [![Platform: Windows · macOS · Linux](https://img.shields.io/badge/Platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-informational.svg)](#what-you-need)
 [![Offline: no cloud · no telemetry](https://img.shields.io/badge/Offline-no%20cloud%20%C2%B7%20no%20telemetry-success.svg)](PRIVACY.md)
 [![Built with: Electron · React · TypeScript](https://img.shields.io/badge/Built%20with-Electron%20%C2%B7%20React%20%C2%B7%20TypeScript-2ea44f.svg)](#for-developers)
-[![Node ≥ 22.5](https://img.shields.io/badge/Node-%E2%89%A5%2022.5-339933.svg)](package.json)
+[![Node ≥ 22.12](https://img.shields.io/badge/Node-%E2%89%A5%2022.12-339933.svg)](package.json)
 
 **Quick start:** [download the latest release](../../releases/latest), install it, and the app walks you through adding the AI engine and a model.
 
@@ -93,9 +93,9 @@ polished release is manual release testing: signed installers and a live demo ru
   |---|---|
   | 8-11 GB | Qwen3.5 4B |
   | 12-15 GB | Gemma 4 E2B |
-  | 16-20 GB | Qwen3.5 9B |
-  | 24 GB | Qwen3.8 27B (Q4) |
-  | 32 GB and up | Qwen3.8 27B (Q5) |
+  | 16-23 GB | Qwen3.5 9B |
+  | 24 GB | Qwen3.8 27B (UD-Q4_K_M) |
+  | 32 GB and up | Qwen3.8 27B (UD-Q5_K_M) |
 
   These are best-fit recommendations, not hard minimums. Each model's actual floor is the
   **Min RAM** column in the [model table](#supported-models) below; Qwen3.5 9B, for example,
@@ -106,7 +106,7 @@ polished release is manual release testing: signed installers and a live demo ru
   and the OCR language files) at about 10.4 GB; size a drive for that if you use it. Swapping
   the 8B chat model for a bigger one takes it to roughly 14 GB (14B) or 24 GB (30B-A3B MoE).
   For a portable drive, a USB-3 SSD is recommended.
-- **To build from source:** Node.js 22.5 or newer (24 recommended; 22.15+ enables the
+- **To build from source:** Node.js 22.12 or newer (24 recommended; 22.15+ enables the
   `--use-system-ca` corporate-proxy workaround, and `scripts/setup-dev.{ps1,sh}` sets it
   automatically so `npm ci` doesn't hang behind a TLS-intercepting proxy) plus Git.
 - **The AI itself** is a GGUF model file plus the `llama.cpp` `llama-server` binary. Neither
@@ -256,9 +256,10 @@ of weights fits in RAM.
 | Gemma 4 26B-A4B Instruct QAT Q4_0 | MoE (~3.8B active): the 24 GB tier's ranked runner-up at about four times the pick's speed, never the auto-pick | ~14.4 GB | 20 GB | Apache-2.0 |
 | Qwen3.6 27B Q4_K_M | Former 24 GB pick; still ranked and selectable | ~16.8 GB | 20 GB | Apache-2.0 |
 | Qwen3.6 27B Q5_K_M | Former 32 GB pick; still holds the all-time top score of our grounded-QA eval | ~19.5 GB | 24 GB | Apache-2.0 |
-| Qwen3.8 27B Q4_K_M | **Recommended for 24 GB**: newest generation, zero hallucinations in our quality eval | ~17.1 GB | 21 GB | Apache-2.0 |
-| Qwen3.8 27B Q5_K_M | **Recommended for 32 GB and up**: the same zero-hallucination profile at a richer quant | ~19.8 GB | 23 GB | Apache-2.0 |
-| Qwen3.8 27B Q6_K | Quality ceiling for 24 GB GPUs (selectable, never auto-recommended; fully fits a 24 GB card at 8k context) | ~22.9 GB | 26 GB | Apache-2.0 |
+| Qwen3.8 27B UD-Q4_K_M | **Recommended for 24 GB**: newest generation, zero hallucinations in our quality eval. Decodes about 19 % slower than the withdrawn static Q4_K_M it replaces; measured and accepted | ~16.5 GB | 21 GB | Apache-2.0 |
+| Qwen3.8 27B UD-Q5_K_M | **Recommended for 32 GB and up**: the same zero-hallucination profile at a richer quant; reproduces the withdrawn Q5_K_M's envelope (4 % slower decode, same VRAM) | ~19.8 GB | 23 GB | Apache-2.0 |
+| Qwen3.8 27B UD-Q6_K | Quality ceiling for 24 GB GPUs (selectable, never auto-recommended; fully fits a 24 GB card at 8k context with a 21.8 GiB peak) | ~22.0 GB | 26 GB | Apache-2.0 |
+| Qwen3.8 27B Q4_K_M · Q5_K_M · Q6_K (static) | Upstream deleted these three files on 2026-08-20 ([issue #196](https://github.com/HilbertraumAI/HilbertRaum/issues/196)). Kept so a drive that already has one keeps working: it still verifies and runs, but it can no longer be downloaded, and the app says so instead of offering a Download button. Succeeded by the three UD rows above | ~17.1 / 19.8 / 22.9 GB | 21 / 23 / 26 GB | Apache-2.0 |
 | Qwen3 30B-A3B (MoE) Q4 | Roughly 30B quality at roughly 3B speed (opt-in) | ~18.6 GB | 24 GB | Apache-2.0 |
 | Qwen3.5 27B (UD-Q4_K_XL) | Dense challenger (selectable, not auto-recommended) | ~17.6 GB | 24 GB | Apache-2.0 |
 | Gemma 4 31B Instruct QAT Q4_0 | Dense ceiling (opt-in, selectable; slow on CPU) | ~17.7 GB | 24 GB | Apache-2.0 |
@@ -310,7 +311,7 @@ numbers are in [`docs/model-benchmarks.md`](docs/model-benchmarks.md).
 | [`docs/data-contracts.md`](docs/data-contracts.md) | Shared cross-module data contracts (IPC surface, DB schema, streaming, …) |
 | [`docs/build-log.md`](docs/build-log.md) | Archive of retired `BUILD_STATE.md` entries (frozen; grep for old citations) |
 | [`BUILD_STATE.md`](BUILD_STATE.md) | Live build state; read first when contributing |
-| [`CHANGELOG.md`](CHANGELOG.md) | Release/version history (pre-1.0; see also `BUILD_STATE.md`) |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed for users, per released version, and the source of each release page's notes |
 
 ## For developers
 

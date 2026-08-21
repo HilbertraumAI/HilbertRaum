@@ -18,7 +18,11 @@ sha256: 0d003f6662faee786ed5da3e31b29c978de5ae5d275c8794c606a7f3c01aa8f5
 download:
   url: https://huggingface.co/Qwen/Qwen3-30B-A3B-GGUF/resolve/main/Qwen3-30B-A3B-Q4_K_M.gguf?download=true
   sha256: 0d003f6662faee786ed5da3e31b29c978de5ae5d275c8794c606a7f3c01aa8f5
-  size_bytes: 18600000000
+  # MEASURED 2026-08-20 (issue 202), was the hand-entered 18600000000. Real byte count from the
+  # upstream LFS metadata, confirmed by both methods of the model-policy.md drift check (the HF
+  # tree API lfs.size AND x-linked-size off a redirect-manual HEAD). The sha256 was and stays an
+  # exact match, so only the declared size was ever an estimate.
+  size_bytes: 18556685824
   license_url: https://huggingface.co/Qwen/Qwen3-30B-A3B-GGUF/blob/main/LICENSE
 bundled_on_preconfigured_drive: false
 # Mixture-of-Experts: ~30B total params but only ~3.3B ACTIVE per token (8 of 128 experts),

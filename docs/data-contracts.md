@@ -1363,6 +1363,58 @@ whole renderer-visible surface.
   (filename auto-scope one-shot), `copyToClipboard(text): Promise<boolean>` (main-process
   clipboard — the renderer's `navigator.clipboard` is denied in the `file://` context).
 
+### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
+
+The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
+`shared/ipc.ts` (140 channels) against this file then found **16** that appeared under neither
+their method name nor their channel string — mostly siblings of documented calls that arrived one
+at a time. Listed here so the declared source of truth is complete; each one's behaviour stays
+owned by the design record named beside it.
+
+- **`useModel(modelId): Promise<RuntimeStatus>`** (`runtime:use`) — the MERGED select-and-start
+  action, and the one a UI caller should reach for. It persists the active chat slot, emits
+  `model_selected`, and starts the runtime in one handler so the spec-§7.4 install gate and the RAM
+  gate run once and the audit trail is a single event chain. The separate `selectModel` /
+  `startRuntime` pair still exists; the merge exists because a first-time user could not tell which
+  of two buttons led to chatting (`registerModelIpc.ts`; design-guidelines §11.10).
+- **`copyToClipboard(text): Promise<boolean>`** (`clipboard:write`) — main-side clipboard write,
+  resolving to whether it succeeded. Not a convenience wrapper: `navigator.clipboard` needs a
+  secure context and a focused document, and is unreliable in a `file://`-loaded renderer, where it
+  produced a user-visible copy error.
+- **`setConversationDefaultSkill(conversationId, installId | null): Promise<void>`**
+  (`chat:setDefaultSkill`) — persists a conversation's sticky default skill; `null` clears it
+  (skills plan §10.1).
+- **Whole-document analysis read-backs** — `documentCoverage(documentId): Promise<DocumentCoverage
+  | null>` (`analysis:coverage`) and `listAllExtractions(req: ExtractionListingRequest):
+  Promise<ExtractionListing | null>` (`analysis:listAll`), the read-only "list every X" aggregation
+  over precomputed structured extractions. Zero model calls; `null` for an invalid type
+  (rag-design §14.4/§14.5).
+- **Image-analysis history** — `listImageSessions(): Promise<ImageSessionSummary[]>`
+  (`images:listSessions`, newest first, no image bytes), `getImageSession(id):
+  Promise<ImageSessionDetail | null>` (`images:getSession`, metadata + DECRYPTED bytes + all
+  turns), `deleteImageSession(id): Promise<void>` (`images:deleteSession`, shreds the stored image
+  and cascade-removes its turns). The already-documented `clearImageSessions()` is their bulk twin
+  (architecture.md "Image understanding" record; security-model.md "Encrypted image-analysis
+  history").
+- **`getActiveTranslateJob(): Promise<TranslateJob | null>`** (`translate:getActive`) — the
+  remount-recovery read for the Translate view: the renderer's module store dies with a full
+  reload, so the active job has to be re-fetchable from main (TG-5).
+- **`setCollectionArchived(id, archived): Promise<Collection>`** (`collections:setArchived`) —
+  archive/unarchive a project (rag-design §13).
+- **Skill import/export** — `pickSkillPackage(mode?: 'file' | 'folder'): Promise<string | null>`
+  (`skills:pick`), `previewSkillPackage(source): Promise<SkillPreview>` (`skills:preview`, a full
+  validation that writes NOTHING — the permission-summary preview, skills plan §9.2),
+  `exportSkill(installId): Promise<string | null>` (`skills:export`),
+  `acknowledgeSkillWarning(installId): Promise<SkillInfo>` (`skills:acknowledgeWarning`, the
+  enabled-with-warning DS7 path), and `getSkillReconcileStatus(): Promise<SkillReconcileStatus>`
+  (`skills:reconcileStatus`) — **counts and fixed reason codes only**, never folder names or
+  human-readable lines, because those can carry a validated path (SKA-32 / §22-M1).
+- **`EVENTS.modelVerifyProgress`** (`models:verifyProgress`) — an EVENT, not an invoke:
+  `ModelVerifyProgress` pushed to the calling renderer (`event.sender`) while first-run weight
+  hashing runs, so the first-run gate and the first cold Models visit show a determinate bar
+  instead of an opaque spinner. First-run-only in practice — the checksum cache makes later passes
+  a no-op.
+
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |
 |---|---|

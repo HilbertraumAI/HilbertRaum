@@ -335,10 +335,81 @@ describe('repo hygiene — docs/ markdown links resolve (DOC-1 + AUD-21)', () =>
 // BUILD_STATE's header mechanical instead of human-remembered. If this test fails, MOVE the
 // oldest closed waves' entries to the top of docs/build-log.md — do not raise the numbers.
 describe('repo hygiene — BUILD_STATE.md stays a one-pass handoff file (retention budget)', () => {
-  it('stays under the retention budget (archive closed waves to docs/build-log.md)', () => {
+  /** Split BUILD_STATE into its `## N. …` sections, plus the dated-entry preamble at the top. */
+  const sections = (): Map<string, number> => {
+    const text = readFileSync(join(process.cwd(), '..', '..', 'BUILD_STATE.md'), 'utf8')
+    const lines = text.split('\n')
+    const out = new Map<string, number>()
+    let current = 'preamble'
+    let count = 0
+    for (const line of lines) {
+      const m = /^## (\d+)\. /.exec(line)
+      if (m) {
+        out.set(current, count)
+        current = `§${m[1]}`
+        count = 0
+      }
+      count++
+    }
+    out.set(current, count)
+    return out
+  }
+
+  it('stays under the whole-file retention budget (archive closed waves to docs/build-log.md)', () => {
     const raw = readFileSync(join(process.cwd(), '..', '..', 'BUILD_STATE.md'))
     expect(raw.byteLength).toBeLessThanOrEqual(300 * 1024)
     expect(raw.toString('utf8').split('\n').length).toBeLessThanOrEqual(2000)
+  })
+
+  // The 2026-07-12 whole-file cap drained only the DATED ENTRIES, and the dated entries were
+  // never what grew: by 2026-08-20 §3 (decisions log) and §5 (next actions) were 1,574 of 1,968
+  // lines — 80% — with no drain at all. The visible cost was a section titled "Next actions (do
+  // these next)" holding ~540 lines of finished work, and §5 item 14 sitting headed "REMEDIATION
+  // IN PROGRESS" for a MONTH while its own closing paragraph recorded the wave complete: the file
+  // had grown past the point where anyone re-read it, which is the exact failure the 2026-07-12
+  // restructure existed to end. A whole-file cap cannot catch that — it goes red only once the
+  // damage is total. Per-section budgets make the pressure land on the section that is actually
+  // growing, while it is still cheap to fix.
+  //
+  // If one of these fails: MOVE, don't raise. A closed round's item collapses to outcome +
+  // ledger pointer + genuinely-open residuals, and its narrative goes to docs/build-log.md
+  // (verbatim) and to its durable §-record. Item NUMBERS are never renumbered — "§5 item 12"
+  // citations are load-bearing.
+  const BUDGETS: Record<string, number> = {
+    preamble: 200, // header + retention rule + dated entries for CURRENTLY-OPEN waves
+    '§1': 30, // status: a pointer, not a phase table
+    '§2': 30, // only constraints that change a decision
+    '§3': 20, // retired to build-log; stub only
+    '§4': 20, // retired to data-contracts; stub only
+    '§5': 500, // OPEN work; the one section allowed real size
+    '§6': 60,
+    '§7': 20,
+    '§8': 80, // stub + the still-open 2026-06-13 hardening items
+    '§9': 20 // folded into drive-layout.md; stub only
+  }
+
+  it('keeps every section inside its own budget (§5 holds OPEN work, not an archive)', () => {
+    const actual = sections()
+    // The walk really walked — a renamed/removed heading must not silently empty this test.
+    expect([...actual.keys()].sort()).toEqual(Object.keys(BUDGETS).sort())
+
+    const over = [...actual.entries()]
+      .filter(([name, n]) => n > BUDGETS[name])
+      .map(([name, n]) => `${name}: ${n} lines > ${BUDGETS[name]}`)
+    expect(over).toEqual([])
+  })
+
+  it('§5 does not carry a closed round as a full narrative (the shape the budget protects)', () => {
+    const text = readFileSync(join(process.cwd(), '..', '..', 'BUILD_STATE.md'), 'utf8')
+    const s5 = text.slice(text.indexOf('\n## 5. '), text.indexOf('\n## 6. '))
+    // A collapsed item is a handful of lines; a pasted wave narrative is dozens. Any item that
+    // both declares itself complete AND runs long has been left un-collapsed.
+    const items = s5.split(/\n(?=\d+\. \*\*)/).slice(1)
+    const bloated = items
+      .filter((it) => /ROUND COMPLETE|— CLOSED|REMEDIATION IN PROGRESS/.test(it))
+      .filter((it) => it.split('\n').length > 45)
+      .map((it) => it.split('\n')[0].slice(0, 60))
+    expect(bloated).toEqual([])
   })
 })
 
@@ -497,5 +568,56 @@ describe('repo hygiene — no string literal ends with the bare word "import" (#
     }
     // If this fires: reword the string so it does not END on "import" (e.g. "…was imported").
     expect(offenders).toEqual([])
+  })
+})
+
+// The CHANGELOG is the body of every GitHub release page: release.yml extracts the section
+// matching the version being tagged and publishes it verbatim. It sat outside the per-phase
+// ritual (CLAUDE.md mandates docs/ + BUILD_STATE, never this file) and outside any test, and
+// drifted until it published "No public release yet" — plus a recommendation for three model
+// files that had been withdrawn upstream — on a public download page. These are the
+// invariants that would have caught that.
+describe('repo hygiene — CHANGELOG is release-page-shaped', () => {
+  const repoRoot = join(process.cwd(), '..', '..')
+  const changelog = readFileSync(join(repoRoot, 'CHANGELOG.md'), 'utf8')
+  const version = JSON.parse(
+    readFileSync(join(process.cwd(), 'package.json'), 'utf8')
+  ).version as string
+
+  // Headings look like "## [0.1.57] — 2026-08-17". The em dash is the committed style; accept
+  // a plain hyphen too so a hand-typed entry fails on substance, not on punctuation.
+  const VERSION_HEADING = /^## \[(\d+\.\d+\.\d+)\][^\n]*$/gm
+
+  it('has a section for the version in package.json', () => {
+    // The release ritual: the version-bump PR renames [Unreleased] to the version it cuts, so
+    // the tag publishes notes for THAT release. Bumping without it would fall back to
+    // [Unreleased] and publish whatever had accumulated there under the new version's name.
+    expect(changelog).toContain(`## [${version}]`)
+  })
+
+  it('keeps an [Unreleased] section for work not yet cut', () => {
+    // release.yml's fallback, and where the next release's entries accumulate.
+    expect(changelog).toContain('## [Unreleased]')
+  })
+
+  it('dates every released version section', () => {
+    const undated = [...changelog.matchAll(VERSION_HEADING)]
+      .map((m) => m[0])
+      .filter((h) => !/\d{4}-\d{2}-\d{2}/.test(h))
+    expect(undated).toEqual([])
+  })
+
+  it('links every version section it declares', () => {
+    // Keep a Changelog's compare links: a section with no link ref renders as literal
+    // brackets on the release page and in every markdown viewer.
+    const missing = [...changelog.matchAll(VERSION_HEADING)]
+      .map((m) => m[1])
+      .filter((v) => !changelog.includes(`\n[${v}]: http`))
+    expect(missing).toEqual([])
+  })
+
+  it('states the public-release posture instead of denying it', () => {
+    // The exact sentence that shipped on seven public release pages.
+    expect(changelog).not.toMatch(/No public release yet/i)
   })
 })

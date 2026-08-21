@@ -58,8 +58,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         # BOTH ends of the supported range, because both were previously untested claims
-        # (AUD-26): 22.x is the `engines.node >=22.5` floor the app promises to run on
-        # (node:sqlite is a built-in that needs it), 24.x is what every release leg builds
+        # (AUD-26): 22.x is the `engines.node >=22.12` floor the app promises to run on
+        # (raised from 22.5 by Electron 43, wave DEP-4), 24.x is what every release leg builds
         # AND runs the full suite under. CI gating only one of them leaves the other a
         # declaration nothing exercises.
         node: ['22.x', '24.x']

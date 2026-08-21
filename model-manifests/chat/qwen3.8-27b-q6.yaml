@@ -15,9 +15,11 @@ size_on_disk_gb: 22.9
 recommended_min_ram_gb: 26
 recommended_ram_gb: 32
 # Rank 0 BY DESIGN (owner decision 2026-08-16, §9.4 ratification): never auto-recommended —
-# the q5 sibling wins the ≥32 GB RAM tier (faster at equal quality: F1 .3523 vs .3503, tg 35.9
+# the q5 sibling won the ≥32 GB RAM tier (faster at equal quality: F1 .3523 vs .3503, tg 35.9
 # vs 31.7). Stays selectable as the "24 GB GPU, quality ceiling" option (the gemma4-31b
 # selectable-ceiling precedent) for boxes where VRAM, not RAM, is the binding constraint.
+# Since the §9.5 successor wave (2026-08-20) that ceiling role passes to qwen3.8-27b-ud-q6k,
+# rank 0 by the same reasoning and with MORE VRAM headroom (21.8 vs 22.7 GiB peak).
 # SINCE 2026-08-20 (issue 196) rank 0 is also the obtainability answer: upstream deleted this
 # file (download.withdrawn below), so only drives that already carry the weight can select it.
 recommendation_rank: 0

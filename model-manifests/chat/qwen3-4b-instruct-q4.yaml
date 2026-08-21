@@ -5,7 +5,9 @@ role: chat
 format: gguf
 runtime: llama_cpp
 license: apache-2.0
-size_on_disk_gb: 2.7
+# size_on_disk_gb follows size_bytes (decimal GB, the F-16 catalog convention): both were
+# derived from the same rounded estimate before the 2026-08-20 measured correction (issue 202).
+size_on_disk_gb: 2.5
 recommended_min_ram_gb: 8
 recommended_ram_gb: 16
 recommendation_rank: 2  # Phase-29: the chosen 4B default (preferred over 2507 to keep Deep)
@@ -20,7 +22,11 @@ sha256: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
 download:
   url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true
   sha256: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
-  size_bytes: 2700000000
+  # MEASURED 2026-08-20 (issue 202), was the hand-entered 2700000000. Real byte count from the
+  # upstream LFS metadata, confirmed by both methods of the model-policy.md drift check (the HF
+  # tree API lfs.size AND x-linked-size off a redirect-manual HEAD). The sha256 was and stays an
+  # exact match, so only the declared size was ever an estimate.
+  size_bytes: 2497280256
   license_url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/main/LICENSE
 bundled_on_preconfigured_drive: true
 # Target default; recommended for LITE hardware (spec §7.3). Also covers TINY + UNKNOWN
