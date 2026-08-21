@@ -29,6 +29,23 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-21 — **Encrypted vault destroyed in the field by a concurrent second instance — issue
+#208 root-caused, reproduced, guarded.**_ Mechanism (reproduced; pinned by tests): the 0.1.58
+first run's startup crash-sweep shredded the STILL-OPEN previous session's working DB — on Windows
+the overwrite lands while the unlink fails (SQLite holds no `FILE_SHARE_DELETE`), the live session
+notices nothing — and its lock-on-quit encrypted the noise over the good `.enc` (valid GCM tag
+forever after; every unlock then "wrong password"). No single-instance guard existed; dev + all
+portable builds share one `userData`. Shipped: `app.requestSingleInstanceLock()` + `-dev` userData
+suffix; SQLite-header refusal on EVERY encrypt-over-`.enc` (`lockEncryptedVault` + `stageRekey` —
+only the CODE-1b roll-forward had it); typed `VaultDamagedError` → `{reason:'vault_damaged'}` with
+backup copy (EN+DE); shred-on-failed-open of the decrypted leftover; `openDatabase` closes its
+native handle on a failed open (the leak blocked the shred). Record + full mechanism:
+`security-model.md` "Vault-overwrite guards & single instance"; also `troubleshooting.md`
+(damaged-vault entry), `known-limitations.md` (cross-`userData` residual — a workspace-level lock
+file is deliberately NOT built), `data-contracts.md`, CHANGELOG. Tests:
+`workspace-vault-destruction.test.ts` (two-controller repro, mutation-checked: guard off → 2 red
+on Windows) + `workspace-ipc.test.ts` mapping.
+
 _2026-08-20 — **gemma4-12b checkpoint repointed IN PLACE after the measurement wave — issue #201
 CLOSED.**_ Google superseded the pinned GGUF at the same URL on 2026-07-17 ("corrected
 vocabulary"), so a ~7 GB download ended in `checksum_failed`. Measured old vs corrected on the

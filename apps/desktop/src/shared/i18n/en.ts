@@ -1959,6 +1959,10 @@ export const en = {
   'main.workspace.wrongPassword':
     "That password didn't unlock your workspace. Check it and try again.",
   'main.workspace.openFailed': 'Could not open the workspace.',
+  'main.workspace.vaultDamaged':
+    'Your password is correct, but the workspace data on the drive is damaged and could ' +
+    'not be opened. Retyping the password will not help. Do not create a new workspace — ' +
+    'keep the files as they are and restore the workspace folder from a backup.',
   'main.workspace.createFailed': 'Could not create the workspace.',
   'main.workspace.passwordTooShort': 'Password must be at least {min} characters.',
   'main.workspace.newPasswordTooShort': 'The new password must be at least {min} characters.',

@@ -156,6 +156,35 @@ Encrypted workspaces are protected by your password, which is **never stored**. 
 it, the data **cannot be recovered** — this is by design. Create a new workspace to start over
 (your old encrypted data remains on the drive but unreadable).
 
+Before you do: read the message on the unlock screen carefully. "That password didn't unlock
+your workspace" means the password was wrong. If it instead says the workspace data is
+**damaged**, your password is fine and creating a new workspace is the wrong move — see the
+next section.
+
+---
+
+## "Your password is correct, but the workspace data on the drive is damaged"
+
+This message (issue #208) means the app verified your password and decrypted the workspace,
+but what came out is not a readable database — the encrypted file itself was damaged at some
+earlier point. Retyping the password cannot help, and this is deliberately **not** worded as
+a password problem.
+
+What to do:
+
+- **Do not create a new workspace** and do not delete anything — that overwrites the evidence
+  and any recovery option.
+- Quit the app and copy the whole `workspace/` and `config/` folders somewhere safe.
+- Restore `workspace/hilbertraum.sqlite.enc` (and the rest of the `workspace/` folder) from a
+  backup, then unlock normally with your usual password.
+- If you have no backup, keep the copied files and report the issue — the damaged file still
+  proves what happened, and your imported documents' encrypted copies under
+  `workspace/documents/` may be individually recoverable.
+
+Never run two copies of the app at the same time against the same drive. Current versions
+refuse a second instance on their own; when upgrading, quit the old version **before**
+starting the new one.
+
 ---
 
 ## "Could not lock the workspace"

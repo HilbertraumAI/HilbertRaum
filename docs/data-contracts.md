@@ -579,8 +579,10 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   `lock()` (no-op for plaintext).
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
-  **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|'refused'|
-  'error', message}` — a wrong password / policy refusal is a normal result, not a throw);
+  **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
+  'vault_damaged'|'refused'|'error', message}` — a wrong password / policy refusal is a normal
+  result, not a throw; `vault_damaged` (#208) is the password-verified-but-undecryptable-to-a-
+  database unlock failure, deliberately distinct from `wrong_password`);
   `lockWorkspace` → `WorkspaceStateInfo`. Registered in `initBackend()`; exposed on preload `api` +
   `PreloadApi`.
 - **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),

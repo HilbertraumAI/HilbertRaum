@@ -23,7 +23,28 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Fixed
+
+- **A second running copy of the app can no longer destroy your encrypted workspace
+  (issue #208).** Starting the app while another copy was already running — the natural
+  upgrade flow: launch the new version, then close the old one — could silently and
+  permanently corrupt an encrypted workspace on Windows, and the damage only surfaced at
+  the next unlock, looking like a wrong password. Three fixes ship together: the app now
+  refuses to start a second copy (the running copy's window comes to the front instead);
+  the workspace re-encryption on lock/quit refuses to overwrite the vault with anything
+  that is not actually your database; and a workspace whose encrypted data is damaged now
+  says so plainly at unlock — with backup guidance — instead of implying the password was
+  wrong. See the new troubleshooting entry "Your password is correct, but the workspace
+  data on the drive is damaged".
+- Failing to open the workspace database no longer leaves the decrypted file behind on the
+  drive, and no longer holds an invisible open file handle to it.
+
+### Changed
+
+- **Developer runs (`npm run dev`) now use their own app-data folder** (`…\@hilbertraum\
+  desktop-dev`) instead of sharing the released app's production workspace. A workspace
+  previously created from a dev run stays on disk under the old path; point the dev run at
+  it with `HILBERTRAUM_DRIVE_ROOT` if you still need it.
 
 ## [0.1.58] — 2026-08-20
 

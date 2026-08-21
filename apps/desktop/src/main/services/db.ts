@@ -975,6 +975,27 @@ function seedCollections(db: Db): void {
 /** Open (or create) the database at `path` and run migrations. */
 export function openDatabase(path: string): Db {
   const db = new DatabaseSync(path)
+  // #208: everything below the constructor can throw (the very first PRAGMA does, with
+  // "file is not a database", when the file's bytes are not SQLite — the destroyed-vault
+  // unlock path). Without the close, the native handle LEAKED open: on Windows that open
+  // handle then blocks the caller's cleanup unlink (EPERM, no FILE_SHARE_DELETE), so the
+  // vault code could not even shred the not-a-database file it had just decrypted.
+  try {
+    applyPragmasAndMigrations(db)
+  } catch (err) {
+    try {
+      db.close()
+    } catch {
+      /* the open itself may be broken past closing — the throw below is the story */
+    }
+    throw err
+  }
+  return db
+}
+
+/** The PRAGMA + additive-migration body of {@link openDatabase}. Throws on a file whose
+ *  bytes are not a SQLite database; the caller owns closing the handle on failure. */
+function applyPragmasAndMigrations(db: Db): void {
   db.exec('PRAGMA journal_mode = WAL;')
   db.exec('PRAGMA foreign_keys = ON;')
   // DB-2 — portable-drive performance PRAGMAs (perf audit 2026-06-18). HilbertRaum runs from a
@@ -1203,7 +1224,6 @@ export function openDatabase(path: string): Db {
   ensureMessagesFtsUpdateKindFilter(db)
   ensureFtsRowidSync(db)
   seedCollections(db)
-  return db
 }
 
 /** List of table names — used by tests/diagnostics to confirm migration ran. */

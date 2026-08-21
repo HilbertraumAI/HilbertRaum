@@ -687,6 +687,50 @@ explicitly:
   is chosen over mid-session durability here; the mitigations are the clean quit path
   (lock-on-quit + the `uncaughtException` crash lock) and the safe-eject guidance above.
 
+### Vault-overwrite guards & single instance (issue #208)
+
+A real vault was destroyed in the field by a **concurrent second app instance** — the exact
+upgrade flow the portable product invites (download the new exe, launch it, then close the
+old one). The second instance's startup crash-sweep (`shredStalePlaintext`) treated the
+first instance's **live** working DB as a crash leftover: on Windows the random-overwrite
+goes through (SQLite's open handle shares read+write) while the unlink fails (no
+`FILE_SHARE_DELETE`), so the noise keeps the file's name; the first instance notices
+nothing (reads ride its page cache, the best-effort checkpoint failure is swallowed) and
+its lock-on-quit **encrypted the noise over the good `.enc`** — which then authenticated
+forever after (it is the app's own ciphertext) and presented at every unlock as a wrong
+password. Four guards close this:
+
+- **Single instance (Electron).** `app.requestSingleInstanceLock()` before any workspace
+  path is touched; a second instance exits immediately and the primary's window is
+  focused. The lock is scoped to `userData`, which every portable release build shares —
+  so old-exe + new-exe overlap (the incident) is refused at the door. Dev builds get their
+  own `userData` suffix (`-dev`), so `npm run dev` no longer operates on the production
+  vault at all (mixed dev/release access to one vault is what widened the incident
+  window). Residual: two processes with *different* `userData` pointed at one drive
+  workspace (e.g. a dev run with `HILBERTRAUM_DRIVE_ROOT` beside a portable exe on that
+  drive) bypass the Electron lock — the write guard below bounds the damage there.
+- **Never encrypt a non-database over `.enc`.** The CODE-1b roll-forward has carried a
+  SQLite-header guard since 2026-07-11; the incident proved the **plain lock path** — the
+  most-travelled write to `.enc` — did not. `lockEncryptedVault` (and `stageRekey`, whose
+  staged file replaces `.enc` after the descriptor commit) now refuse to encrypt a working
+  file that does not start with the SQLite header, or that cannot be probed at all. A
+  refused lock keeps the stale `.enc` — a recoverable workspace — instead of replacing it
+  with authenticated garbage; the session delta is already lost either way.
+- **"Vault damaged" is not "wrong password".** An unlock that passes the descriptor
+  verifier and authenticates the `.enc` GCM tag but cannot `openDatabase` the decrypted
+  bytes throws a typed `VaultDamagedError`, surfaced as its own
+  `{ reason: 'vault_damaged' }` result with backup/recovery copy. Structurally it cannot
+  be a password problem, and telling the user to retype the password (or worse, follow
+  the forgotten-password advice to create a fresh workspace) destroys the evidence and
+  any recovery option.
+- **No decrypted leftover after a failed open.** `decryptFile` always shredded its output
+  on a **tag** failure; the incident showed the gap after a *successful* decrypt whose
+  result fails to open — that output stayed on disk while the workspace reported locked
+  (for a merely-corrupt real database it would be authentic plaintext user data at rest).
+  The damaged-vault unlock path now shreds the working file + sidecars before throwing
+  (`openDatabase` also closes its native handle when the open fails, so the shred's
+  unlink is not blocked by the app's own leaked fd).
+
 ### Encrypted document cache (spec §3.5: "database AND document cache")
 Imports copy each file into `workspace/documents/` so the drive is self-contained. In an encrypted
 workspace those copies rest **encrypted** too — encrypting only the DB would leave the raw bytes of

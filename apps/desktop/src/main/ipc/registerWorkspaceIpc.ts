@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import { VaultBusyError, WrongPasswordError, workspaceAdmitsWork } from '../services/workspace-vault'
+import { VaultBusyError, VaultDamagedError, WrongPasswordError, workspaceAdmitsWork } from '../services/workspace-vault'
 import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { maybeStartLocalApi } from '../services/local-api/lifecycle'
@@ -126,6 +126,20 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           ok: false,
           reason: 'wrong_password',
           message: tMain('main.workspace.wrongPassword')
+        }
+      }
+      // #208: the password VERIFIED but `.enc` did not decrypt to an openable database.
+      // This must never wear the wrong-password/openFailed copy: the reporter's vault was
+      // destroyed and three releases' worth of "check your password" pointed them at the
+      // troubleshooting step (create a new workspace) that would have erased the evidence.
+      // instanceof PLUS the name — same bundle-duplication quirk as WrongPasswordError.
+      if (err instanceof VaultDamagedError || (err instanceof Error && err.name === 'VaultDamagedError')) {
+        log.error('Workspace unlock failed: vault damaged (password verified, data unreadable)')
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (vault damaged)')
+        return {
+          ok: false,
+          reason: 'vault_damaged',
+          message: tMain('main.workspace.vaultDamaged')
         }
       }
       log.error('Workspace unlock failed', String(err))

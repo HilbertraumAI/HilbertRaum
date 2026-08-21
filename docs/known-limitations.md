@@ -26,6 +26,18 @@ password recovery — are documented in
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
+- **The single-instance guard is `userData`-scoped, not workspace-scoped (#208).**
+  `app.requestSingleInstanceLock()` refuses a second app instance on the same `userData` —
+  which covers the incident class (two portable release builds, or two runs of the same
+  build), and dev builds keep their own `-dev` suffix. It does NOT cover two processes with
+  *different* `userData` pointed at one drive workspace (e.g. an `npm run dev` with
+  `HILBERTRAUM_DRIVE_ROOT` racing a portable exe launched from that drive). In that corner
+  the second instance's startup sweep can still destroy the live session's **working file**
+  (its delta since the last lock); the lock-path SQLite-header guard then refuses to
+  re-encrypt the garbage, so the at-rest `.enc` — the vault itself — survives and the next
+  unlock recovers the last locked snapshot. A workspace-level cross-process lock file would
+  close the corner fully; not built (stale-lock handling on hard-killed processes needs its
+  own design).
 - **A pre-envelope build cannot open a v2 (envelope) vault.** New vaults — and any vault after
   its first password change — use the descriptor-v2 envelope (`security-model.md`). An older
   app version derives the correct KEK and even passes the verifier, but then tries to decrypt
