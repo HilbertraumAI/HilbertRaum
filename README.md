@@ -26,31 +26,31 @@ small and medium open-weight language models locally, on your laptop's CPU or GP
 models stored on your hard disk or on a USB drive. Your prompts, documents, embeddings, and
 chat history never leave your device.
 
-- **Private by design.** No cloud, no telemetry, no analytics. Nothing you type or import is uploaded.
-- **Local models.** A `llama.cpp` runtime with GGUF models from a curated open-weight catalog
+- 🔒 **Private by design.** No cloud, no telemetry, no analytics. Nothing you type or import is uploaded.
+- 🧠 **Local models.** A `llama.cpp` runtime with GGUF models from a curated open-weight catalog
   (Qwen3, Ministral, Gemma, Granite). The app benchmarks your machine and recommends one.
-- **Document Q&A with citations.** Import PDFs, Word files, or text, ask questions, and get
+- 📄 **Document Q&A with citations.** Import PDFs, Word files, or text, ask questions, and get
   answers grounded in your files. Retrieval combines vector and keyword search with a reranker
   and can be scoped to your library, a project, a section, specific documents, or the files
   attached to a chat.
-- **Image understanding.** Ask questions about a picture with a local vision model. The analysis
+- 🖼️ **Image understanding.** Ask questions about a picture with a local vision model. The analysis
   history is encrypted at rest and can be deleted.
-- **Audio and voice.** Transcribe audio files with Whisper, dictate prompts, and OCR scanned pages.
-- **Translation.** A dedicated screen for text and whole documents (local TranslateGemma sidecar,
+- 🎙️ **Audio and voice.** Transcribe audio files with Whisper, dictate prompts, and OCR scanned pages.
+- 🌐 **Translation.** A dedicated screen for text and whole documents (local TranslateGemma sidecar,
   51 languages). Translated documents land back in your library.
-- **Evidence review.** Turn a document answer into a reviewable record: every statement is checked
+- ✅ **Evidence review.** Turn a document answer into a reviewable record: every statement is checked
   against its frozen source snippets, decisions and notes are saved, and the result exports as an
   HTML or PDF evidence pack.
-- **Document tasks and skills.** Summarize, translate, and compare documents, or install reusable
+- 🛠️ **Document tasks and skills.** Summarize, translate, and compare documents, or install reusable
   skills for structured extraction (bank statements, invoices, meeting protocols, redaction). The
   [skills overview](docs/skills-overview.md) describes each bundled skill.
-- **Local API (opt-in).** Other programs on the same computer can use your running model through
+- 🔌 **Local API (opt-in).** Other programs on the same computer can use your running model through
   an OpenAI-compatible loopback endpoint: point any client at `http://127.0.0.1:4980/v1`. It is
   off by default, never touches the internet, exposes only completions (no documents, no
   conversations), and keeps no record of what was asked. See [`docs/local-api.md`](docs/local-api.md).
-- **Portable and encrypted.** Keep models and a password-encrypted workspace on an external drive
+- 🧳 **Portable and encrypted.** Keep models and a password-encrypted workspace on an external drive
   and move between laptops.
-- **Cross-platform.** Runs on Windows, macOS, and Linux.
+- 🪟 **Cross-platform.** Runs on Windows, macOS, and Linux.
 
 ## Table of contents
 
