@@ -243,12 +243,12 @@ of weights fits in RAM.
 | Qwen3 4B Instruct Q4 | Bundled default on the preconfigured drive and the weak-laptop fallback; smallest ranked model that keeps the **Deep** answer mode | ~2.7 GB | 8 GB | Apache-2.0 |
 | Qwen3 4B Instruct 2507 Q4 | Better 4B quality (no Deep) | ~2.5 GB | 8 GB | Apache-2.0 |
 | Qwen3.5 4B (UD-Q4_K_XL) | **Recommended below 12 GB**: newest-generation 4B | ~2.9 GB | 8 GB | Apache-2.0 |
-| Gemma 4 E2B Instruct QAT Q4_0 | **Recommended for 12-15 GB**: fastest small-tier decode we measured; also where a slow 16-20 GB machine's recommendation steps down to | ~3.3 GB | 8 GB | Apache-2.0 |
+| Gemma 4 E2B Instruct QAT Q4_0 | **Recommended for 12-15 GB**: fastest small-tier decode we measured; also where a slow 16-23 GB machine's recommendation steps down to | ~3.3 GB | 8 GB | Apache-2.0 |
 | Qwen3.5 0.8B Q6_K | Fast tier, selectable but never auto-recommended. Smallest runnable chat model and the fastest CPU decode in the catalog; the surviving fast-tier candidate of our grounded-QA eval ([`docs/model-benchmarks.md`](docs/model-benchmarks.md) §9), with better F1 and unanswerable-question discipline than the 2B below | ~0.6 GB | 8 GB | Apache-2.0 |
 | Qwen3.5 2B (UD-Q4_K_XL) | Fast tier; failed its evaluation bar (scored below the 0.8B on F1 with the worst unanswerable-question discipline of the 13 models tested). Downloadable for completeness only | ~1.3 GB | 8 GB | Apache-2.0 |
 | Qwen3 8B Instruct Q4 | For laptops with 12 GB and more | ~5.0 GB | 12 GB | Apache-2.0 |
-| Ministral 3 8B Instruct (2512) Q4 | 8B benchmark winner and the DIY `--with-assets` default chat model (selectable; the 16-20 GB pick is Qwen3.5 9B) | ~5.2 GB | 12 GB | Apache-2.0 |
-| Qwen3.5 9B (UD-Q4_K_XL) | **Recommended for 16-20 GB**: newest-generation 9B | ~6.0 GB | 12 GB | Apache-2.0 |
+| Ministral 3 8B Instruct (2512) Q4 | 8B benchmark winner and the DIY `--with-assets` default chat model (selectable; the 16-23 GB pick is Qwen3.5 9B) | ~5.2 GB | 12 GB | Apache-2.0 |
+| Qwen3.5 9B (UD-Q4_K_XL) | **Recommended for 16-23 GB**: newest-generation 9B | ~6.0 GB | 12 GB | Apache-2.0 |
 | Granite 4.1 8B Q4 | Challenger (selectable, not auto-recommended) | ~5.3 GB | 12 GB | Apache-2.0 |
 | Gemma 4 E4B Instruct QAT Q4_0 | 8B-tier challenger (selectable, not auto-recommended) | ~5.2 GB | 12 GB | Apache-2.0 |
 | Gemma 4 12B Instruct QAT Q4_0 | 12-14B benchmark winner; has **Deep** (selectable; the 24 GB pick is Qwen3.8 27B) | ~7.0 GB | 14 GB | Apache-2.0 |
