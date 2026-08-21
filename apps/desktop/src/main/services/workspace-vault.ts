@@ -122,6 +122,26 @@ export class VaultLockError extends Error {
 }
 
 /**
+ * Thrown by `unlockEncryptedVault` when the password is CORRECT (verifier passed, GCM tag
+ * on `.enc` authenticated) but the decrypted bytes are not an openable SQLite database —
+ * the vault ciphertext itself is damaged (issue #208: the app had re-encrypted a
+ * shred-survivor of random noise over the good `.enc`, so every layer of crypto verified
+ * and only `openDatabase` could tell). Structurally NOT a password problem: the IPC layer
+ * must surface it as its own `vault_damaged` result (backup/recovery guidance), never as
+ * the wrong-password copy — three releases telling the reporter "check your password" is
+ * what nearly buried the forensic evidence. The decrypted non-database working file is
+ * shredded before this is thrown (the shred-on-failure in `decryptFile` covers only TAG
+ * failures; without this, noise — or, for a merely-corrupt real database, authentic
+ * plaintext user data — stayed on disk while the workspace reported locked).
+ */
+export class VaultDamagedError extends Error {
+  constructor() {
+    super('The workspace decrypted but is not a database — the vault is damaged')
+    this.name = 'VaultDamagedError'
+  }
+}
+
+/**
  * Thrown by a `DocumentCipher` closure invoked AFTER `lock()` zeroed the vault key
  * (full-audit 2026-07-12 SEC-1). The closures re-read the live key per invocation, so a
  * cipher captured by an in-flight import fails CLOSED when "Lock now" lands mid-job —
@@ -717,6 +737,21 @@ function stagedRekeyFiles(vaultPaths: VaultPaths): string[] {
  */
 export function stageRekey(vaultPaths: VaultPaths, db: Db, oldKey: Buffer, dataKey: Buffer): void {
   db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+  // #208 — same guard as the lock path: the staged file replaces `.enc` right after the
+  // descriptor commit, so encrypting a shred-survivor (or anything else that is not the
+  // checkpointed database) here would destroy the vault through the rekey journal instead.
+  let sourceIsDatabase = false
+  try {
+    sourceIsDatabase = fileHasSqliteHeader(vaultPaths.dbPath)
+  } catch {
+    /* unreadable working file → refuse below */
+  }
+  if (!sourceIsDatabase) {
+    throw new Error(
+      'Refusing to stage the password change: the working database file is not a SQLite ' +
+        'database (it may have been overwritten).'
+    )
+  }
   encryptFile(vaultPaths.dbPath, `${vaultPaths.encPath}${REKEY_SUFFIX}`, dataKey)
   fsyncPath(`${vaultPaths.encPath}${REKEY_SUFFIX}`)
   for (const enc of listEncryptedDocSidecars(vaultPaths)) {
@@ -1025,7 +1060,20 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
     decryptMs: perfMs(decryptT0),
     dbBytes: fileSizeOrNull(vaultPaths.dbPath)
   })
-  const db = openDatabase(vaultPaths.dbPath)
+  // #208: the decrypt above verified the GCM tag, so a failure to OPEN what came out means
+  // the vault ciphertext itself is damaged (it authenticates — it is our own ciphertext —
+  // but its plaintext is not a database). Distinguish that from a wrong password, and never
+  // leave the decrypted output at rest: for a damaged-but-real database those bytes are
+  // authentic plaintext user data sitting on disk while the workspace reports locked.
+  let db: Db
+  try {
+    db = openDatabase(vaultPaths.dbPath)
+  } catch {
+    shredFile(vaultPaths.dbPath)
+    cleanSidecars(vaultPaths.dbPath)
+    fileKey.fill(0)
+    throw new VaultDamagedError()
+  }
   seedSettings(db)
   return { db, key: fileKey, descriptor }
 }
@@ -1054,6 +1102,31 @@ export function lockEncryptedVault(
   db.close()
   const checkpointMs = perfMs(checkpointT0)
   const dbBytes = fileSizeOrNull(vaultPaths.dbPath)
+  // #208 — NEVER encrypt a non-database over `.enc`. The CODE-1b roll-forward has carried
+  // this guard since 2026-07-11; the plain lock path did not, and that is exactly how a
+  // real vault died: a second app instance's startup sweep random-overwrote this session's
+  // working file in place (Windows lets the overwrite through SQLite's share modes while
+  // the unlink fails without FILE_SHARE_DELETE, so the noise keeps the original name), the
+  // session noticed nothing (reads ride the page cache), and lock-on-quit encrypted the
+  // noise over the only good snapshot — GCM verifying fine forever after, because it is
+  // our own ciphertext. Whatever put garbage under dbPath, refusing here keeps the stale
+  // `.enc` (a recoverable vault) instead of replacing it with authenticated noise; the
+  // session's unsaved delta is already lost either way. An UNREADABLE source is refused
+  // too — encrypting bytes we cannot even probe over the vault is never the safe branch.
+  // The controller maps the throw like any lock failure (CODE-1a), and the next launch's
+  // sweep shreds the garbage (no SQLite header ⇒ preserveNewerPlaintext ignores it).
+  let sourceIsDatabase = false
+  try {
+    sourceIsDatabase = fileHasSqliteHeader(vaultPaths.dbPath)
+  } catch {
+    /* unreadable/missing working file → refuse the encrypt below */
+  }
+  if (!sourceIsDatabase) {
+    throw new Error(
+      'Refusing to lock: the working database file is not a SQLite database (it may have ' +
+        'been overwritten). Keeping the previous encrypted snapshot.'
+    )
+  }
   const encryptT0 = performance.now()
   encryptFileImpl(vaultPaths.dbPath, vaultPaths.encPath, key)
   const encryptMs = perfMs(encryptT0)

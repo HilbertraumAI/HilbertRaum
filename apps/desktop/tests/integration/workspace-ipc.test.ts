@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -29,7 +29,7 @@ vi.mock('../../src/main/services/embeddings', async (importOriginal) => {
   return { ...actual, purgeResidentVectors: purgeSpy }
 })
 
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { encodeVector, getResidentVectors } from '../../src/main/services/embeddings'
 import { inFlightStreams, streamSettled } from '../../src/main/ipc/inflight'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
@@ -40,6 +40,9 @@ import {
   WorkspaceController,
   vaultPathsFrom,
   createEncryptedVaultOnDisk,
+  unlockEncryptedVault,
+  lockEncryptedVault,
+  encryptFile,
   type VaultPaths
 } from '../../src/main/services/workspace-vault'
 import type { KdfParams } from '../../src/main/services/security/crypto'
@@ -113,6 +116,36 @@ describe('registerWorkspaceIpc', () => {
 
     const { result } = await invoke(handlers, IPC.unlockWorkspace, 'wrong-password')
     expect(result).toMatchObject({ ok: false, reason: 'wrong_password' })
+    expect(ctrl.isUnlocked()).toBe(false)
+  })
+
+  // #208: a vault whose `.enc` authenticates but does not decrypt to a database must NOT
+  // wear the wrong-password (or generic openFailed) copy — the reporter's destroyed vault
+  // looked like a forgotten password across three releases, and the troubleshooting step
+  // that suggests ("create a new workspace") erases the recovery evidence.
+  it('maps a damaged vault to { ok:false, reason:"vault_damaged" }, distinct from wrong_password', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const { db, key } = unlockEncryptedVault(vp, 'right-password')
+    lockEncryptedVault(vp, db, key)
+    // The incident's on-disk state: our own encryption of pure noise, under the real key.
+    const noise = `${vp.dbPath}.noise-src`
+    writeFileSync(noise, randomBytes(64 * 1024))
+    encryptFile(noise, vp.encPath, key)
+
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    registerWorkspaceIpc(ctxWith(ctrl))
+
+    const wrong = await invoke(handlers, IPC.unlockWorkspace, 'wrong-password')
+    expect(wrong.result).toMatchObject({ ok: false, reason: 'wrong_password' })
+
+    const { result } = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
+    expect(result).toMatchObject({ ok: false, reason: 'vault_damaged' })
+    // The copy must carry the damage + backup guidance, not the "check it and try again"
+    // retry framing of the wrong-password copy.
+    expect((result as { message: string }).message).toMatch(/damaged/i)
+    expect((result as { message: string }).message).toMatch(/backup/i)
     expect(ctrl.isUnlocked()).toBe(false)
   })
 

@@ -1999,6 +1999,11 @@ export const de: Record<keyof typeof en, string> = {
     'Dieses Passwort hat deinen Arbeitsbereich nicht entsperrt. Prüf es und versuch es ' +
     'noch einmal.',
   'main.workspace.openFailed': 'Der Arbeitsbereich konnte nicht geöffnet werden.',
+  'main.workspace.vaultDamaged':
+    'Dein Passwort ist richtig, aber die Daten des Arbeitsbereichs auf dem Laufwerk sind ' +
+    'beschädigt und konnten nicht geöffnet werden. Das Passwort erneut einzugeben hilft ' +
+    'nicht. Lege keinen neuen Arbeitsbereich an — lass die Dateien unverändert und stelle ' +
+    'den Ordner „workspace“ aus einem Backup wieder her.',
   'main.workspace.createFailed': 'Der Arbeitsbereich konnte nicht erstellt werden.',
   'main.workspace.passwordTooShort': 'Das Passwort muss mindestens {min} Zeichen lang sein.',
   'main.workspace.newPasswordTooShort':

@@ -76,6 +76,36 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const isDev = !app.isPackaged
 
+// #208: dev runs used to share the packaged app's PRODUCTION workspace — `npm run dev`
+// resolved the same userData fallback as every portable exe, so a dev build and a release
+// operated on one real vault (mixed-version access is exactly the window the destroyed
+// vault of issue #208 sat in). Give dev its own suffix BEFORE anything derives paths from
+// userData. Prepared drives (HILBERTRAUM_DRIVE_ROOT / exe-adjacent drive detection) are
+// unaffected — this only moves the no-drive fallback. Existing dev workspaces stay on
+// disk under the unsuffixed path (CHANGELOG notes the move).
+if (isDev) app.setPath('userData', `${app.getPath('userData')}-dev`)
+
+// #208: refuse to run a second instance on the same userData. Two live instances destroy
+// an encrypted vault: the second one's startup crash-sweep random-overwrites the first
+// one's plaintext working DB in place (on Windows the overwrite passes SQLite's share
+// modes while the unlink fails, so the noise keeps the file's name), the first instance
+// notices nothing, and its lock-on-quit encrypts the noise over the good `.enc`. The lock
+// is scoped to userData, so every portable release build AND dev (with its own suffix)
+// contend correctly; it must be taken BEFORE app-ready, ahead of initBackend()'s
+// workspace.init() sweep. The primary instance surfaces the attempt by focusing its
+// window (the standard single-instance UX).
+const isPrimaryInstance = app.requestSingleInstanceLock()
+if (!isPrimaryInstance) {
+  app.exit(0)
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+}
+
 // Re-hash sidecar binaries before spawn (vuln-scan B): enforce in packaged builds, skip in
 // dev. Set once here so every spawn seam (chat/embedder/reranker/vision sidecars, the GPU
 // probe, whisper-cli) shares one decision.
@@ -645,6 +675,10 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // #208 belt: `app.exit` above is immediate, but if ready ever races it, a secondary
+  // instance must not reach initBackend() — its workspace.init() crash-sweep is the very
+  // thing that shreds the primary's live working DB.
+  if (!isPrimaryInstance) return
   perfMark('app_ready')
   // `app.getLocale()` is only meaningful after whenReady (R-L1: verified on Windows —
   // it returns a BCP-47 tag like "en-US"/"de"). Best guess until settings are readable.
