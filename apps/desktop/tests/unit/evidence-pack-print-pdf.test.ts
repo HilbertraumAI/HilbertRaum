@@ -123,6 +123,16 @@ import { SECURE_WINDOW_WEB_PREFERENCES } from '../../src/main/window-security'
 const HTML = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>pack</body></html>'
 const PACK_ID = '00000000-0000-4000-8000-00000000e9a1'
 
+// Captured at module scope, before any test installs the fake clock: the step-timeout test
+// has to wait for a REAL filesystem write while `setTimeout`/`Date` are faked, and only the
+// originals can buy real wall-clock time. `sleepReal` is the yield; `realNow` the deadline.
+const realSetTimeout = globalThis.setTimeout
+const realNow = Date.now
+const sleepReal = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    realSetTimeout(resolve, ms)
+  })
+
 let root = ''
 let sourceHtmlPath = ''
 
@@ -287,21 +297,42 @@ describe('print flow (hidden window lifecycle)', () => {
     fake.state.loadFile = () => new Promise<void>(() => {}) // never finishes loading
     const printing = printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID, sourceHtmlPath })
     const failed = expect(printing).rejects.toThrow(/load step took too long/)
+    // A print whose SOURCE write fails never reaches the load step at all. Record that
+    // rejection so the wait below ends on it with an honest message instead of spinning to
+    // its deadline and reporting a bare window-count mismatch. Both handlers are attached
+    // up front: `failed` is only awaited at the end, and an early `throw` here must not
+    // leave it as an unhandled rejection.
+    let printError: unknown = null
+    void printing.catch((err: unknown) => {
+      printError = err
+    })
+    void failed.catch(() => {})
     // The print SOURCE is written asynchronously (a multi-MB synchronous write on the main
     // thread used to stall the whole process), so the window — and with it the load step's
-    // timeout timer — only exists once that write has landed. Yield real event-loop turns
-    // until it does; advancing the fake clock before the timer is armed would leave the
-    // step waiting on a deadline that is already in the past. `advanceTimersByTimeAsync(0)`
-    // is the yield: it hands one real turn back before flushing the (empty) fake queue.
-    for (let turns = 0; fake.state.windows.length === 0 && turns < 1000; turns++) {
-      await vi.advanceTimersByTimeAsync(0)
+    // timeout timer — only exists once that write has landed. Wait for it in REAL time, and
+    // never on the fake clock: advancing that before the timer is armed would leave the step
+    // waiting on a deadline that is already in the past.
+    //
+    // A turn COUNT is not a budget (2026-08-22, master CI windows leg: "expected +0 to be
+    // 1"). This loop used to spin 1000 × `advanceTimersByTimeAsync(0)`, whose yield is one
+    // real `setImmediate` — ~4 µs — so the whole budget was ~4 ms of wall clock. Locally the
+    // write lands in a fraction of that; a loaded CI runner (four forks, an antivirus
+    // scanner on a freshly created .html) can take longer, and the test then failed for
+    // reasons that had nothing to do with the print harness. Real sleeps against a real
+    // deadline are the fix: the same fast path when the write is quick, ~10 s of patience
+    // when it is not, and still far inside the 15 s local / 60 s CI test budget.
+    const deadline = realNow() + 10_000
+    while (fake.state.windows.length === 0 && printError === null && realNow() < deadline) {
+      await sleepReal(1)
     }
+    if (printError !== null) throw new Error(`the print source write failed: ${printError}`)
     expect(fake.state.windows.length).toBe(1)
     await vi.advanceTimersByTimeAsync(PRINT_STEP_TIMEOUT_MS + 1)
     await failed
     expect(lastWin().destroyed).toBe(true)
-    // The removal is async too — let it settle before asserting the source file is gone.
-    await vi.advanceTimersByTimeAsync(0)
+    // The removal is awaited inside the harness's `finally`, so the rejection above already
+    // implies it has settled — no extra yield needed (and a fake-clock turn could not buy
+    // one anyway, per the note above).
     expect(existsSync(sourceHtmlPath)).toBe(false)
   })
 })
