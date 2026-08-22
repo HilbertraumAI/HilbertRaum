@@ -29,6 +29,19 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-08-22 — **Master CI flake FIXED (test-only): the evidence-pack print harness's step-timeout
+test waited for a REAL fs write by counting event-loop turns under a FAKE clock.**_ The PR #212
+merge left `master` red on the windows/24.x leg alone (`expected +0 to be 1`, everything else
+green). The wait was `1000 × advanceTimersByTimeAsync(0)`, whose yield is one real `setImmediate`
+— **measured: ~4 ms of wall clock for all 1000 turns** — so any print-source write slower than
+that (loaded runner, four forks, an AV scanner on a freshly created `.html`) failed the test.
+Reproduced deterministically by delaying the write 300 ms: pre-fix red with the exact CI
+assertion, post-fix green. Now a real-timer poll against a real 10 s deadline (both captured
+before the fake clock is installed), plus an honest error when the write itself rejects. The
+harness (`print-pdf.ts`) is unchanged — the wedged-renderer timeout it asserts always worked. Rule
+added to §7; the other `advanceTimersByTimeAsync(0)` loops in the suite drain mocked promise
+chains (no real I/O) and are unaffected.
+
 _2026-08-21 — **Encrypted vault destroyed in the field by a concurrent second instance — issue
 #208 root-caused, reproduced, guarded.**_ Mechanism (reproduced; pinned by tests): the 0.1.58
 first run's startup crash-sweep shredded the STILL-OPEN previous session's working DB — on Windows
@@ -169,23 +182,6 @@ byte-identical to `a166d511` — and the combined tree passed CI as one unit. Ci
 closed by **PR #199**, the successor wave above — so this issue has two landing points, one per
 stage.
 
-_2026-08-20 — **Single-document re-index/delete now give feedback — issue #194 CLOSED.**_ Found by
-the #190 continuity check on the relocated drive: the operator clicked re-index and got nothing —
-no success signal, no progress, no error — while the re-index had **succeeded** (all 24 rows still
-`indexed`). A feedback defect on the renderer's shared `run()` helper, which serves re-index AND
-delete and returned silently after its refresh, while the **bulk** twin has toasted and shown a
-determinate bar since M-U6. All three gaps fixed in that one helper: a **success toast naming the
-document** (`docs.reindexDone` / `docs.deleteDone`), a **per-row spinner** (the parent narrows the
-screen-global `busy` scalar to `rowBusy`, PERF-5-style, so the clicked row reads 'Re-indexing…' /
-'Wird gelöscht…' instead of every row's buttons just greying out), and the failure banner
-**prefixed with the title** — which is **#188's D-3 verbatim**, fixed there for export-original and
-never swept onto its neighbours. `run(key, fn)` → `run(kind, d, fn)`; the global `busy` scalar
-STAYS (DR-5 serialization), only its legibility changed. **Not built:** a per-row error surface
-(design-guidelines §6 keeps actionable errors off toasts and a second channel races the banner) and
-a main-owned cancellable job for one document. Record: `architecture.md` **§10** of the Portable
-stored copies record. Four renderer tests, each guard mutation-checked (drop the toast → 2 red;
-disable the `rowBusy` branch → 1 red; revert the title prefix → 1 red).
-
 _Older dated entries (the closed waves through 2026-08-20) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -193,7 +189,8 @@ retention budget), the 2026-07-11…2026-08-16 closed-wave block on 2026-08-18 (
 ritual), and the four CLOSED waves of 2026-08-18/19 (local API #184, portable stored copies #188,
 MTP speculative decoding #182, model occupancy #185/#186) on 2026-08-20 for the retention budget,
 and the four 2026-08-20 entries of the same now-CLOSED #188/#190 stored-copy wave at the #194
-close-out —
+close-out, and the #194 close-out entry itself on 2026-08-22 (preamble budget, making room for
+the CI-flake entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
@@ -737,6 +734,9 @@ per-phase test inventories) lives in git history.
 - IDs: UUID v4 (`crypto.randomUUID()`). Timestamps: ISO-8601 UTC.
 - No network in core path. No telemetry. Models/workspace/logs are git-ignored.
 - Every service hides behind an interface from spec §9.2 to keep the Tauri/Rust swap open.
+- Tests: under fake timers, never wait for real I/O by counting event-loop turns — a turn is not
+  a unit of time (1000 `advanceTimersByTimeAsync(0)` ≈ 4 ms). Poll a real deadline with a real
+  timer captured before `useFakeTimers()` (2026-08-22 entry).
 
 ---
 ## 8. Post-MVP audits & hardening (2026-06-09 → 2026-06-10)

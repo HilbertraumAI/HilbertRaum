@@ -1309,6 +1309,23 @@ tag triggers the release workflow's draft build).
 
 ---
 
+_2026-08-20 — **Single-document re-index/delete now give feedback — issue #194 CLOSED.**_ Found by
+the #190 continuity check on the relocated drive: the operator clicked re-index and got nothing —
+no success signal, no progress, no error — while the re-index had **succeeded** (all 24 rows still
+`indexed`). A feedback defect on the renderer's shared `run()` helper, which serves re-index AND
+delete and returned silently after its refresh, while the **bulk** twin has toasted and shown a
+determinate bar since M-U6. All three gaps fixed in that one helper: a **success toast naming the
+document** (`docs.reindexDone` / `docs.deleteDone`), a **per-row spinner** (the parent narrows the
+screen-global `busy` scalar to `rowBusy`, PERF-5-style, so the clicked row reads 'Re-indexing…' /
+'Wird gelöscht…' instead of every row's buttons just greying out), and the failure banner
+**prefixed with the title** — which is **#188's D-3 verbatim**, fixed there for export-original and
+never swept onto its neighbours. `run(key, fn)` → `run(kind, d, fn)`; the global `busy` scalar
+STAYS (DR-5 serialization), only its legibility changed. **Not built:** a per-row error surface
+(design-guidelines §6 keeps actionable errors off toasts and a second channel races the banner) and
+a main-owned cancellable job for one document. Record: `architecture.md` **§10** of the Portable
+stored copies record. Four renderer tests, each guard mutation-checked (drop the toast → 2 red;
+disable the `rowBusy` branch → 1 red; revert the title prefix → 1 red).
+
 _2026-08-20 — **The diagnostic RAN on the real drive (G:\), and it refuted our own leading
 hypothesis — issue #190 checkbox 1 ANSWERED, checkbox 3 re-answered.**_ Measured, drive byte-identical
 (the read-only witness passed): encrypted workspace, **v2** descriptor, `stored_name` column ABSENT
