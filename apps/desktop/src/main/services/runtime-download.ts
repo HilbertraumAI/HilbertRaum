@@ -593,8 +593,23 @@ export class EngineDownloadManager {
         job.error = tMain('main.engine.fileMissing')
         return 'failed'
       }
-      // ok (verified) or placeholder (cannot verify): the bytes are complete either way.
-      if (verify.reason === 'placeholder') job.unverified = true
+      // RT-02: fail CLOSED on a placeholder (non-real) hash. This installs EXECUTABLE code —
+      // extract, chmod +x, and a marker that legitimizes later spawns — so an artifact that
+      // cannot be verified must never be installed, independent of the accepted
+      // trust-by-location signing residual (security-model.md S4 / §22-M2). The committed
+      // runtime-sources entries all carry real hashes (guarded by a committed-sources test),
+      // so this only ever fires on a mis-authored or tampered source, which is exactly when it
+      // should. Unlike model-weight downloads, there is no "unverified but usable" state for a
+      // binary we are about to execute.
+      if (verify.reason === 'placeholder') {
+        await rm(plan.zipDest, { force: true })
+        job.status = 'failed'
+        job.error = tMain('main.engine.unverifiablePlaceholder')
+        this.deps.log?.('Engine archive has a placeholder hash — refusing to install unverified executable', {
+          extractTo: plan.extractTo
+        })
+        return 'failed'
+      }
 
       job.status = 'extracting'
       // F-33: thread the job's abort signal into the extractor so a cancel actually kills the
