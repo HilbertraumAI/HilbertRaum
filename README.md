@@ -21,16 +21,11 @@
 
 ---
 
-HilbertRaum is a private AI workspace that runs entirely on your own computer, without any
-internet connection. Chat with a local AI, ask questions about your own documents, and keep
-everything on your device: there is no cloud fallback, no web search, and no telemetry, and
-your prompts, documents, embeddings, and chat history never leave your machine. The workspace
-is encrypted, and because the app, the models, and your data can all live on your hard disk
-or a USB drive, the whole setup moves between machines with you.
+**HilbertRaum is a private AI workspace that runs locally on your computer and can operate entirely offline.** Chat with a local AI, ask questions about your documents, and keep your data under your control. There is no cloud fallback, no web search, and no telemetry. Your prompts, documents, embeddings, and chat history stay on local storage.
 
-It is open source and runs on a CPU, a single GPU, or unified memory. The model catalog is
-small on purpose: we test each model for quality, speed, and hardware fit, and the app picks
-one for your machine, so you don't have to choose models or tune technical settings.
+**The workspace is encrypted and portable.** The app, models, and data can all live on a hard drive or USB drive, allowing you to move the entire setup between machines.
+
+**HilbertRaum is open source and designed to run on a wide range of hardware,** from CPU-only systems to single-GPU and unified-memory machines. The model catalog is intentionally small: we test each model for quality, speed, and hardware compatibility. HilbertRaum then selects an appropriate model for your machine, so you don't need to compare models or tune technical settings.
 
 - 🔒 **Private by design.** No cloud, no telemetry, no analytics. Nothing you type or import is uploaded.
 - 🧳 **Portable and encrypted.** Keep models and a password-encrypted workspace on an external drive
