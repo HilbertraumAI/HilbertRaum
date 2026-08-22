@@ -21,12 +21,15 @@
 
 ---
 
-HilbertRaum is an open-source, offline AI workspace for normal laptop users. It runs
-small and medium open-weight language models locally, on your laptop's CPU or GPU, with the
-models stored on your hard disk or on a USB drive. Your prompts, documents, embeddings, and
-chat history never leave your device.
+**HilbertRaum is a private AI workspace that runs locally on your computer and can operate entirely offline.** Chat with a local AI, ask questions about your documents, and keep your data under your control. There is no cloud fallback, no web search, and no telemetry. Your prompts, documents, embeddings, and chat history stay on local storage.
+
+**The workspace is encrypted and portable.** The app, models, and data can all live on a hard drive or USB drive, allowing you to move the entire setup between machines.
+
+**HilbertRaum is open source and designed to run on a wide range of hardware,** from CPU-only systems to single-GPU and unified-memory machines. The model catalog is intentionally small: we test each model for quality, speed, and hardware compatibility. HilbertRaum then selects an appropriate model for your machine, so you don't need to compare models or tune technical settings.
 
 - 🔒 **Private by design.** No cloud, no telemetry, no analytics. Nothing you type or import is uploaded.
+- 🧳 **Portable and encrypted.** Keep models and a password-encrypted workspace on an external drive
+  and move between computers.
 - 🧠 **Local models.** A `llama.cpp` runtime with GGUF models from a curated open-weight catalog
   (Qwen3, Ministral, Gemma, Granite). The app benchmarks your machine and recommends one.
 - 📄 **Document Q&A with citations.** Import PDFs, Word files, or text, ask questions, and get
@@ -44,13 +47,11 @@ chat history never leave your device.
 - 🛠️ **Document tasks and skills.** Summarize, translate, and compare documents, or install reusable
   skills for structured extraction (bank statements, invoices, meeting protocols, redaction). The
   [skills overview](docs/skills-overview.md) describes each bundled skill.
+- 🪟 **Cross-platform.** Runs on Windows, macOS, and Linux.
 - 🔌 **Local API (opt-in).** Other programs on the same computer can use your running model through
   an OpenAI-compatible loopback endpoint: point any client at `http://127.0.0.1:4980/v1`. It is
   off by default, never touches the internet, exposes only completions (no documents, no
   conversations), and keeps no record of what was asked. See [`docs/local-api.md`](docs/local-api.md).
-- 🧳 **Portable and encrypted.** Keep models and a password-encrypted workspace on an external drive
-  and move between laptops.
-- 🪟 **Cross-platform.** Runs on Windows, macOS, and Linux.
 
 ## Table of contents
 
@@ -351,8 +352,8 @@ updated, `BUILD_STATE.md` updated).
 
 ## Privacy & security
 
-Nothing you type or import is sent anywhere. The workspace can be password-encrypted at rest
-(AES-256-GCM, Argon2id key derivation). An offline guard logs (never blocks) any attempt to
+Nothing you type or import is sent anywhere. The workspace is encrypted at rest (AES-256-GCM,
+Argon2id key derivation); an unencrypted workspace exists only in developer builds. An offline guard logs (never blocks) any attempt to
 reach a remote host while offline, with local `127.0.0.1`/`localhost` connections exempt, and
 a local audit log records activity for you (ids and counts only, never content).
 
