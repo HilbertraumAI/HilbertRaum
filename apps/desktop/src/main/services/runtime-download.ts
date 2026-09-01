@@ -528,8 +528,9 @@ export class EngineDownloadManager {
 
   /**
    * Download → verify → clean → extract → flatten → marker for ONE family. Returns the
-   * outcome; on 'failed' it sets `job.status`/`job.error`. `job.unverified` is sticky (set
-   * if ANY family's hash is a placeholder).
+   * outcome; on 'failed' it sets `job.status`/`job.error`. `job.unverified` stays false for
+   * engines: RT-02 made a placeholder hash a hard FAILURE (the verify branch below), so there
+   * is no "installed but unverified" engine state — unlike model weights.
    */
   private async installOne(
     job: EngineDownloadJob,
