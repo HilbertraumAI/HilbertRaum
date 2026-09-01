@@ -2179,6 +2179,8 @@ export const de: Record<keyof typeof en, string> = {
     'Die heruntergeladene Engine entsprach nicht ihrer erwarteten Prüfsumme und wurde verworfen. ' +
     'Bitte versuche es erneut.',
   'main.engine.fileMissing': 'Die heruntergeladene Engine fehlte, bevor sie geprüft werden konnte.',
+  'main.engine.unverifiablePlaceholder':
+    'Diese KI-Engine-Quelle hat keine echte Prüfsumme, daher konnte der Download nicht verifiziert und nicht installiert werden. Das Laufwerk ist möglicherweise fehlkonfiguriert.',
   'main.engine.binaryMissing':
     'Die Engine wurde heruntergeladen, konnte aber nicht entpackt werden (das Archivformat hat sich evtl. geändert).',
   'main.engine.extractFailed':

@@ -254,13 +254,27 @@ describe('EngineDownloadManager install flow', () => {
     expect(captured as number).toBeLessThan(64 * GiB)
   })
 
-  it('completes but marks UNVERIFIED when the sources hash is a placeholder', async () => {
+  it('FAILS CLOSED on a placeholder hash — nothing extracted, no marker (RT-02)', async () => {
+    // A placeholder (non-real) hash means the archive cannot be verified. This installs
+    // EXECUTABLE code, so it must be refused rather than installed-as-unverified — independent
+    // of the accepted trust-by-location signing residual (security-model.md S4 / §22-M2). The
+    // committed pin never carries a placeholder (guarded by assets.test.ts), so this only fires
+    // on a mis-authored or tampered source, which is exactly when it should.
+    let extracted = false
     const { rootPath, manifestsDir } = makeDrive('REPLACE_WITH_REAL_HASH')
-    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: fakeExtract })
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: async (...args: Parameters<typeof fakeExtract>) => {
+        extracted = true
+        return fakeExtract(...args)
+      }
+    })
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
     const job = await runToEnd(mgr, started.jobId)
-    expect(job.status).toBe('done')
-    expect(job.unverified).toBe(true)
+    expect(job.status).toBe('failed')
+    expect(extracted).toBe(false)
+    expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME))).toBe(false)
+    expect(existsSync(runtimeMarkerPath(join(rootPath, 'runtime', 'llama.cpp', HOST_OS)))).toBe(false)
   })
 
   it('fails and discards the archive on a checksum mismatch', async () => {

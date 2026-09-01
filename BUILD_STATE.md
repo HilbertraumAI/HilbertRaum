@@ -772,11 +772,13 @@ the offline/privacy guarantees:
   `tar`) of an archive whose source list (`runtime-sources.yaml`) lives on the user-writable
   drive. Current in-app posture: the archive's sha256 is verified **before** extraction
   (tampering needs drive write access to both the archive/URL and the matching hash; a
-  placeholder hash extracts flagged `unverified`), and the OS `tar` refuses `..` members by
-  default — containment rests on tar's *implicit* behavior rather than the explicit member
-  check this fix calls for; symlink members are the residual soft spot. (The skills importer
-  does NOT share this gap — it enumerates and validates every member's path/symlink before
-  inflating, arch §22-A2.) Fix: list/extract members with an explicit containment check.
+  placeholder hash extracted flagged `unverified` — RT-02, 2026-09-02, made that a hard
+  FAILURE: an unverifiable engine archive is discarded, never installed), and the OS `tar`
+  refuses `..` members by default — containment rests on tar's *implicit* behavior rather
+  than the explicit member check this fix calls for; symlink members are the residual soft
+  spot. (The skills importer does NOT share this gap — it enumerates and validates every
+  member's path/symlink before inflating, arch §22-A2.) Fix: list/extract members with an
+  explicit containment check.
   **Update (close-out 2026-07-12):** Phase 5 (`032b014`) added the explicit in-app containment
   check L-7's fix called for: `install()` now runs a post-extract symlink/junction containment
   sweep (`assertExtractedSymlinksContained`, over the final post-flatten layout — an escaping

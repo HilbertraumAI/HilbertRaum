@@ -2116,6 +2116,8 @@ export const en = {
   'main.engine.checksumMismatch':
     'The downloaded engine did not match its expected checksum, so it was discarded. Please try again.',
   'main.engine.fileMissing': 'The downloaded engine went missing before it could be verified.',
+  'main.engine.unverifiablePlaceholder':
+    'This AI-engine source has no real checksum, so the download could not be verified and was not installed. The drive may be misconfigured.',
   'main.engine.binaryMissing':
     'The engine downloaded but could not be unpacked (the archive layout may have changed).',
   'main.engine.extractFailed': 'The AI engine downloaded but could not be unpacked. Please try again.',
