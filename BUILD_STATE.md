@@ -38,7 +38,7 @@ MTP speculative decoding #182, model occupancy #185/#186) on 2026-08-20 for the 
 and the four 2026-08-20 entries of the same now-CLOSED #188/#190 stored-copy wave at the #194
 close-out, and the #194 close-out entry itself on 2026-08-22 (preamble budget, making room for
 the CI-flake entry), and the eight closed 2026-08-20…2026-08-22 entries (#196 catalog fix and its
-successor wave #199, local API docs, #202 sizes, the docs/code-comment audit, #201 checkpoint,
+successor wave (PR #199), local API docs, #202 sizes, the docs/code-comment audit, #201 checkpoint,
 #208 second-instance guard, the #212 CI-flake fix) on 2026-09-02 (preamble budget, making room for
 the full-audit 2026-09-02 remediation round — §5 item 19) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
