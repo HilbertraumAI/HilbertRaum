@@ -73,6 +73,9 @@ Even with that setting on, network access is only used if a drive **policy** per
 toggle allows. The effective state is `policy AND your setting`. Telemetry is **always off** and has
 no toggle. A startup self-check logs the offline posture and flags (logs, never sends) any attempt
 to reach a remote host while offline; local-only connections (`127.0.0.1`/`localhost`) are exempt.
+The built-in browser engine's own background fetches are switched off as well: spell-checking is
+disabled, because the engine would otherwise download a spelling dictionary from a Google-operated
+server on Windows and Linux the first time you type.
 
 ## Model downloads — the app's only use of the internet
 

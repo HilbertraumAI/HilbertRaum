@@ -17,6 +17,12 @@ password recovery — are documented in
   app-wide risks breaking loopback IPC and the sidecars). Electron's own `net` module would bypass
   it. The offline guarantee is a property of the code + CSP + deny-by-default policy; the guard is
   a tripwire, not an enforcement layer.
+- **In-app spell-checking is off by design (SEC-1, audit 2026-09-02).** Chromium's spellchecker
+  downloads Hunspell dictionaries from a Google-operated CDN on Windows and Linux on first typing —
+  a browser-process fetch that neither the CSP nor the offline tripwire above can see, and one the
+  offline hard rule forbids — so `spellcheck: false` is pinned for every window and the composer
+  shows no red underlines. Re-enabling needs dictionaries shipped on the drive plus a no-op
+  download URL (owner decision #218; `security-model.md` "Chromium background fetches").
 - **`importDocuments` picker imports are token-bound; drag-drop trusts caller paths (accepted).**
   A PICKER import is bound to a one-time `pickDocuments` capability token (main imports exactly what
   it returned), so a compromised renderer can't forge a picker-origin read of an arbitrary file

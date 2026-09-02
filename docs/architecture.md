@@ -2424,7 +2424,13 @@ Per-finding disposition (F-1…F-8):
   fires with a runtime up. **(#159)** `LlamaServer` gained an opt-in `startAbortSignal`; the
   translation teardown aborts an in-flight cold start (child killed inside the health wait,
   start rejects `AbortError`, never latches `startFailed`, never walks the CPU rung
-  mid-teardown) — lock/quit no longer block up to the 180 s health timeout. **(#160)** the F-2
+  mid-teardown) — lock/quit no longer block up to the 180 s health timeout. *(Audit 2026-09-02
+  REL-10, #244: the E5 embedder, the reranker and the vision runtime now carry the same per-start
+  `AbortController` + `startAbortSignal` + `isStartAbortError` latch bypass, abort-first in their
+  teardowns — every lazily-started llama-server wrapper aborts an in-flight cold start on
+  lock/quit; `tests/integration/sidecar-teardown-abort.test.ts` measures all four at one
+  health-poll under production defaults, where the three used to take the full 180 s and then
+  latch.)* **(#160)** the F-2
   retry classification splits the per-request timeout by tokens-flowed (live-decode timeout =
   deterministic, no retry; wedged = one retry) in BOTH consumers; the view paste is bounded by
   `TRANSLATE_MAX_TEXT_CHARS` (`'tooLong'`); `run()` defers a microtask so no terminal can emit
