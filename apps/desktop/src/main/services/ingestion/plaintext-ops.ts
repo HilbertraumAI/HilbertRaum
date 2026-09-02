@@ -14,7 +14,14 @@ import { shredFile } from '../workspace-vault'
 // text parsers (pdfjs, mammoth, txt/csv/markdown) cannot be cancelled and are bounded by the
 // sweep instead — their transient is shredded under them at the settle bound.
 
-export type PlaintextOpKind = 'preview' | 'reindex' | 'import-prepare' | 'dictation' | 'export'
+export type PlaintextOpKind =
+  | 'preview'
+  | 'reindex'
+  | 'import-prepare'
+  | 'dictation'
+  | 'export'
+  /** A doc-task's own transient (the OCR source PDF, a materialised output's `.parse.md`). */
+  | 'doc-task'
 
 /** One registered operation. Obtained from `PlaintextOpsRegistry.register()`. */
 export interface PlaintextOp {

@@ -735,12 +735,13 @@ export async function prepareDocument(
   // workspace). Always shredded on the way out — success or failure — so no decrypted
   // document content lingers on the drive.
   const transients: string[] = []
-  // #237: registered for the lock/quit teardowns (aborted, settled within a bound, swept); the
-  // op's signal also follows the caller's `deps.signal` (an import job's abort).
-  const op = deps.plaintextOps?.register(deps.plaintextOpKind ?? 'import-prepare', deps.signal)
 
   const limits = deps.limits ?? resolveIngestionLimits()
 
+  // #237: registered for the lock/quit teardowns (aborted, settled within a bound, swept); the
+  // op's signal also follows the caller's `deps.signal` (an import job's abort). Registered
+  // right before the `try` so nothing can throw between the register and the release.
+  const op = deps.plaintextOps?.register(deps.plaintextOpKind ?? 'import-prepare', deps.signal)
   try {
     setStatus(db, documentId, 'extracting')
     // Perf marks identify a document only by its random UUID (perf.ts content rules).

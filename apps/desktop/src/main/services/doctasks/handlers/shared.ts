@@ -127,6 +127,10 @@ export async function materializeDocument(
   const storeDir = ctx.deps.getStoreDir()
   const tempPath = join(storeDir, `${task.status.jobId}.parse.md`)
   let newDocId: string | null = null
+  // #237: the plaintext source lives through the whole import below — registered so a lock/quit
+  // that outlasts the doc-task settle still sweeps it.
+  const op = ctx.deps.getIngestionDeps().plaintextOps?.register('doc-task')
+  op?.track(tempPath)
   try {
     // ING-6 (perf audit 2026-06-18): the in-RAM `markdown` is written to a temp `.parse.md`
     // and re-read/re-parsed/re-chunked by the canonical import path below. This disk round-trip
@@ -175,6 +179,7 @@ export async function materializeDocument(
     throw err
   } finally {
     shredFile(tempPath)
+    op?.release()
     release()
   }
 }

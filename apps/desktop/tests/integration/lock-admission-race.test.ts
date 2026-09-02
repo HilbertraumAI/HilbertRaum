@@ -720,7 +720,8 @@ async function parkedPreview(
   ocr.parkNext()
   const previewP = invoke(handlers, IPC.previewDocument, h.photoId)
   previewP.catch(() => undefined) // asserted later; never an unhandled rejection meanwhile
-  expect(await waitUntil(() => ocr.entered(), 300)).toBe(true)
+  // A real async decrypt + row read precede the park — a generous ceiling for a starved runner.
+  expect(await waitUntil(() => ocr.entered(), 1_000)).toBe(true)
   const during = transientNames(docs)
   expect(during).toHaveLength(1)
   expect(during[0]).toMatch(/\.parse-preview-/)
@@ -753,7 +754,8 @@ describe('plaintext operations across the lock boundary (#237)', () => {
 
   it('lock waits for a parser that ignores the abort until it unwinds — the settle, not merely the bound', async () => {
     const ocr = gatedOcrEngine({ honoursSignal: false })
-    const h = await harness({ ocrEngine: ocr, settleBoundMs: 10_000 })
+    // The production bound (5 s) — the release below must be what lets the lock through.
+    const h = await harness({ ocrEngine: ocr })
     h.releaseSuspend()
     const { previewP, docs } = await parkedPreview(h, ocr)
 
@@ -772,7 +774,8 @@ describe('plaintext operations across the lock boundary (#237)', () => {
     ocr.release()
     const { result } = await lockP
     expect(result).toMatchObject({ state: 'locked' })
-    expect(Date.now() - t0).toBeLessThan(10_000) // released, not timed out
+    // Well inside the 5 s `LOCK_TASK_SETTLE_TIMEOUT_MS`: the release let it through, not the bound.
+    expect(Date.now() - t0).toBeLessThan(5_000)
     expect(transientNames(docs)).toEqual([])
     // The parser finished with text in hand — the handler's admission re-check refuses it.
     await expect(previewP).rejects.toThrow(t('en', 'main.docs.locked'))

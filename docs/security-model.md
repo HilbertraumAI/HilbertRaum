@@ -1019,8 +1019,10 @@ re-encrypts (the bullet below).
   workspace reported locked — and a preview issued before the lock delivered its text across IPC
   after it. Every such operation now registers with the **plaintext-operation registry**
   (`services/ingestion/plaintext-ops.ts`, held as `ctx.plaintextOps`) *before* it writes and
-  releases in its `finally`. Lock and quit **abort** the registry together with the other aborts
-  (before any sidecar stop), **await its settle** after the doc-task settle within the same bound
+  releases in its `finally` (a doc-task's own transients — the OCR source PDF, a materialised
+  output's `.parse.md` — register too, as `doc-task`). Lock and quit **abort** the registry
+  together with the other aborts (before the awaited sidecar stops), **await its settle** after
+  the doc-task settle within the same bound
   (`LOCK_TASK_SETTLE_TIMEOUT_MS` / `SHUTDOWN_TASK_SETTLE_TIMEOUT_MS`, 5 s), then **shred every
   still-registered transient** (and its `.tmp` decrypt stage) — only registered paths, never a
   stored copy — before the vector purge and the lock. On quit the settle sits inside the overall

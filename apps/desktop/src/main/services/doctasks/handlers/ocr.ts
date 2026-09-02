@@ -139,7 +139,8 @@ async function readStoredPdfBytes(documentId: string, ctx: DocTaskCtx): Promise<
       }
     | undefined
   if (!row) throw new Error(tMain('main.task.sourceUnreadable'))
-  const cipher = ctx.deps.getIngestionDeps().cipher ?? null
+  const ingestionDeps = ctx.deps.getIngestionDeps()
+  const cipher = ingestionDeps.cipher ?? null
   const storeDir = ctx.deps.getStoreDir()
   try {
     // ING-8 (perf audit 2026-06-18): read the (potentially huge, up to ~1 GiB) PDF with async
@@ -151,11 +152,15 @@ async function readStoredPdfBytes(documentId: string, ctx: DocTaskCtx): Promise<
       if (stored.encrypted) {
         if (!cipher) throw new Error(tMain('main.task.sourceUnreadable'))
         const transient = join(storeDir, `${documentId}.parse-ocr.pdf`)
+        // #237: registered so a lock/quit that outlasts the doc-task settle still sweeps it.
+        const op = ingestionDeps.plaintextOps?.register('doc-task')
+        op?.track(transient)
         try {
           await cipher.decryptFileAsync(stored.path, transient) // PERF-1: yields between chunks
           return await readFile(transient)
         } finally {
           shredFile(transient)
+          op?.release()
         }
       }
       return await readFile(stored.path)
