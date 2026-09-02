@@ -25,10 +25,11 @@ export interface ShutdownDeps {
 /**
  * Overall bound on the AWAITED MIDDLE of `performShutdown` (#238, #230;
  * owner decision 13 unanswered → this default, #230): the local-API stop, the sidecar stops, the
- * stream settle and the doc-task settle are raced as ONE section against this deadline. The
- * per-step bounds sum to 20.5 s today (local API ≤ 0.5 s; sidecars ≤ 10 s — the transcriber's
- * suspend timeout; streams 5 s; doc tasks 5 s), so 30 s only ever fires on a step that is not
- * honouring its own bound. When it fires, the teardown logs, ABANDONS the parked promises and
+ * stream settle, the doc-task settle and the plaintext-operation settle (#237) are raced as ONE
+ * section against this deadline. The per-step bounds sum to 25.5 s (local API ≤ 0.5 s; sidecars
+ * ≤ 10 s — the transcriber's suspend timeout; streams 5 s; doc tasks 5 s; plaintext operations
+ * 5 s), so 30 s only ever fires on a step that is not honouring its own bound. When it fires,
+ * the teardown logs, ABANDONS the parked promises and
  * goes straight on to the log flush + the vault lock — the lock is never inside the race (a
  * deadline that abandoned the lock would reproduce the hard-kill outcome it exists to prevent).
  * Whatever a parked sidecar stop left behind is reaped synchronously right before `app.exit`
@@ -65,8 +66,8 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
 
   // AUD-02 — arm the WORKSPACE lock latch FIRST, and in its OWN best-effort try (two latches
   // sharing one `catch` would make whichever runs second silently optional). The teardown below
-  // spends up to ~20.5 s in awaited windows (the local-API stop ≤ 0.5 s, the sidecar stops ≤ 10 s,
-  // the stream settle ≤ 5 s, the doc-task settle ≤ 5 s — bounded as a whole by
+  // spends up to ~25.5 s in awaited windows (the local-API stop ≤ 0.5 s, the sidecar stops ≤ 10 s,
+  // the stream settle ≤ 5 s, the doc-task settle ≤ 5 s, the plaintext-operation settle ≤ 5 s — bounded as a whole by
   // `SHUTDOWN_OVERALL_DEADLINE_MS`) during which the DB is still OPEN, so `isUnlocked()` is still true and every
   // content-surface guard still admits. Most sidecars are safe here because QUIT uses the
   // permanently-latching `stop()` where lock uses the non-latching `suspend()` — a translate or
@@ -116,6 +117,15 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   } catch {
     /* best-effort */
   }
+  // #237: abort every plaintext operation in flight (a preview, re-index, import prepare,
+  // dictation or export holding a `.parse*` transient) now, so it has the whole teardown to
+  // unwind; its settle is awaited inside the deadline section below and its transients are
+  // swept right before the lock.
+  try {
+    ctx?.plaintextOps?.abortAll()
+  } catch {
+    /* best-effort */
+  }
   // REL-4: abort in-flight chat/RAG streams so each partial reply persists (see the ordering note
   // above). Best-effort per controller — a misbehaving canceller must not block the rest of teardown.
   try {
@@ -125,7 +135,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   } catch (err) {
     log.error('Error aborting in-flight streams on quit', String(err))
   }
-  // #238 / #230: the four awaited steps below are bounded as a WHOLE by
+  // #238 / #230: the five awaited steps below are bounded as a WHOLE by
   // `SHUTDOWN_OVERALL_DEADLINE_MS` (see the constant). The log flush and the lock stay OUTSIDE.
   await withOverallDeadline(async () => {
     // The local API dies BEFORE the sidecars (local-api wave): stop() aborts active + queued
@@ -168,7 +178,12 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
     // while ctx.db is open; awaiting the settle here makes cleanup-before-close the ORDERING, not a
     // race. Bounded (~5 s) so a wedged handler can never hang quit. Mirrors the stream-settle above.
     await awaitActiveDocTaskSettled(ctx, log)
+    // #237: then the plaintext operations aborted above — same bound. A parser that cannot cancel
+    // (pdfjs, mammoth) outlives it; the sweep below (outside this section, so a deadline that
+    // abandons this settle still reaches it) shreds its transient before the lock.
+    await awaitPlaintextOpsSettled(ctx, log)
   }, log)
+  sweepPlaintextOps(ctx, log)
   // #238: by now no window is left (Windows/Linux quit after window-all-closed), so this line
   // is the only visible state of a quit that is locking — and it lands in the encrypted log
   // because it precedes the flush below.
@@ -328,5 +343,33 @@ async function awaitActiveDocTaskSettled(
     await Promise.race([settle.catch(() => undefined), timeout])
   } finally {
     if (timer) clearTimeout(timer)
+  }
+}
+
+/**
+ * Await the aborted plaintext operations (preview / re-index / import prepare / dictation /
+ * export) within `SHUTDOWN_TASK_SETTLE_TIMEOUT_MS` (#237). Best-effort — never throws.
+ */
+async function awaitPlaintextOpsSettled(
+  ctx: AppContext | null,
+  log: Pick<typeof realLog, 'error' | 'info'>
+): Promise<void> {
+  const ops = ctx?.plaintextOps
+  if (!ops) return
+  try {
+    const settled = await ops.awaitSettled(SHUTDOWN_TASK_SETTLE_TIMEOUT_MS)
+    if (!settled) log.info('quit: plaintext operations still running at the settle bound', { live: ops.size() })
+  } catch (err) {
+    log.error('Error settling plaintext operations on quit', String(err))
+  }
+}
+
+/** Shred every still-registered `.parse*` transient (only registered paths — never a stored copy). */
+function sweepPlaintextOps(ctx: AppContext | null, log: Pick<typeof realLog, 'error' | 'info'>): void {
+  try {
+    const swept = ctx?.plaintextOps?.sweepRegistered() ?? 0
+    if (swept > 0) log.info('quit: swept registered plaintext transients', { swept })
+  } catch (err) {
+    log.error('Error sweeping plaintext transients on quit', String(err))
   }
 }

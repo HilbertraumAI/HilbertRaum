@@ -275,8 +275,25 @@ export function registerDocsIpc(ctx: AppContext): void {
     transcriber: ctx.transcriber,
     ocrEngine: ctx.ocrEngine,
     onTranscribeProgress: (documentId, percent) => transcribing.set(documentId, percent),
-    signal
+    signal,
+    // #237: prepare/re-index register their `.parse` transient so lock/quit can abort + sweep.
+    plaintextOps: ctx.plaintextOps
   })
+
+  // #237: a preview whose parse straddled a lock/quit must REJECT, never hand text across IPC
+  // after the workspace reported locked — re-check admission after the awaits (the parse may
+  // have been aborted by the teardown, or finished on its own with the latch armed since).
+  const previewUnlessLocked = async <T>(work: () => Promise<T>): Promise<T> => {
+    let out: T
+    try {
+      out = await work()
+    } catch (err) {
+      requireUnlocked()
+      throw err
+    }
+    requireUnlocked()
+    return out
+  }
 
   // Offer a deep-index (tree) build for a freshly-(re)indexed document. This is fire-and-forget
   // and MUST NOT throw into the import/reindex path (the document is already indexed — only the
@@ -665,11 +682,14 @@ export function registerDocsIpc(ctx: AppContext): void {
     requireNotProcessing(documentId)
     log.info('Preview document', { documentId })
     // FE-6: return the BOUNDED first page (+ cursor), never the whole document in one payload.
-    return extractDocumentPreviewPage(ctx.db, storeDir, documentId, 0, DEFAULT_PREVIEW_PAGE_SIZE, {
-      cipher: ctx.workspace.documentCipher(),
-      // Photos re-recognize on preview; OCR'd PDFs read their stored pages.
-      ocrEngine: ctx.ocrEngine
-    })
+    return previewUnlessLocked(() =>
+      extractDocumentPreviewPage(ctx.db, storeDir, documentId, 0, DEFAULT_PREVIEW_PAGE_SIZE, {
+        cipher: ctx.workspace.documentCipher(),
+        // Photos re-recognize on preview; OCR'd PDFs read their stored pages.
+        ocrEngine: ctx.ocrEngine,
+        plaintextOps: ctx.plaintextOps
+      })
+    )
   })
 
   // FE-6: a subsequent bounded page of a preview (the modal's "Show more"). Same guards as the
@@ -679,16 +699,12 @@ export function registerDocsIpc(ctx: AppContext): void {
     async (_e, documentId: string, offset: number, limit: number): Promise<DocumentPreview> => {
       requireUnlocked()
       requireNotProcessing(documentId)
-      return extractDocumentPreviewPage(
-        ctx.db,
-        storeDir,
-        documentId,
-        offset ?? 0,
-        limit ?? DEFAULT_PREVIEW_PAGE_SIZE,
-        {
+      return previewUnlessLocked(() =>
+        extractDocumentPreviewPage(ctx.db, storeDir, documentId, offset ?? 0, limit ?? DEFAULT_PREVIEW_PAGE_SIZE, {
           cipher: ctx.workspace.documentCipher(),
-          ocrEngine: ctx.ocrEngine
-        }
+          ocrEngine: ctx.ocrEngine,
+          plaintextOps: ctx.plaintextOps
+        })
       )
     }
   )
@@ -701,7 +717,8 @@ export function registerDocsIpc(ctx: AppContext): void {
     requireUnlocked()
     requireNotProcessing(documentId)
     const { title, text } = await readStoredDocumentText(ctx.db, storeDir, documentId, {
-      cipher: ctx.workspace.documentCipher()
+      cipher: ctx.workspace.documentCipher(),
+      plaintextOps: ctx.plaintextOps
     })
     const dot = title.lastIndexOf('.')
     const baseName = (dot > 0 ? title.slice(0, dot) : title)
@@ -755,7 +772,8 @@ export function registerDocsIpc(ctx: AppContext): void {
       let bytes: Buffer
       try {
         ;({ title, bytes } = await readStoredDocumentBytes(ctx.db, storeDir, documentId, {
-          cipher: ctx.workspace.documentCipher()
+          cipher: ctx.workspace.documentCipher(),
+          plaintextOps: ctx.plaintextOps
         }))
       } finally {
         releaseDocWork()

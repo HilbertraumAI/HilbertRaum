@@ -34,7 +34,7 @@ export function buildDocumentSegmentReader(
       ctx.db,
       storeDir,
       documentId,
-      { cipher: ctx.workspace.documentCipher(), ocrEngine: ctx.ocrEngine },
+      { cipher: ctx.workspace.documentCipher(), ocrEngine: ctx.ocrEngine, plaintextOps: ctx.plaintextOps },
       opts?.layout ? { layout: true, maxPages: resolveIngestionLimits().pdfMaxPages } : {}
     )
     return preview.segments.map((s, index) => ({ text: s.text, page: s.pageNumber, index }))
@@ -60,7 +60,8 @@ export function buildOriginalDocumentReader(ctx: AppContext): (documentId: strin
       | undefined
     if (!row || extname(row.title).toLowerCase() !== '.docx') return { format: 'other' }
     const { bytes } = await readStoredDocumentBytes(ctx.db, storeDir, documentId, {
-      cipher: ctx.workspace.documentCipher()
+      cipher: ctx.workspace.documentCipher(),
+      plaintextOps: ctx.plaintextOps
     })
     return { format: 'docx', bytes }
   }

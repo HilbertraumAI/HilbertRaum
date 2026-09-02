@@ -29,6 +29,19 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-02 — **Audit 2026-09-02 Phase 4 — lock/quit quiescence: a plaintext-operation registry
+(`services/ingestion/plaintext-ops.ts`, `ctx.plaintextOps`) that preview, re-index, import
+prepare, dictation and the two export readers join before writing a `.parse*` transient; "Lock
+now" and quit abort it, await its settle (5 s, the doc-task bound) and shred whatever is still
+registered before the vault re-encrypts (SEC-10 #237 with DOC-4 folded, TQ-1 #258; PR #273).**_
+Photo OCR and audio honour the abort; pdfjs/mammoth/txt cannot and are sweep-bounded. The parse
+wall-clock timeout now aborts the same signal; the preview IPC re-checks admission after its
+awaits. Quit's raced middle is 25.5 s worst case under the 30 s constant (rider 13 default kept).
+B2 inverted in `lock-admission-race.test.ts` (parked photo preview across a real lock and a real
+`performShutdown`, a `readdirSync` name sweep at the "locked" instant, stored copies survive;
+`waitUntil` ticks on `setTimeout`). Docs: `security-model.md` lifecycle bullet + quit bullet, §7
+conventions entry, CHANGELOG. Manual GUI smoke (lock mid-preview) not run — non-interactive session.
+
 _2026-09-02 — **Audit 2026-09-02 Phase 3 — update multiplicity: the three drive launchers refuse
 to start while more than one app artifact sits at the drive root, name what to delete and never
 delete; `--check` / `/check` resolves the app without starting it (REL-7 #235 with DOC-2/DOC-13
@@ -632,6 +645,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     - **3** (2026-09-02, PR #272): REL-7 (DOC-2, DOC-13 folded) + REL-3 — the launchers refuse two
       app versions at the root and take `--check`/`/check`; `set -euo pipefail`; docs mandate deleting
       the prior artifact; decisions 3/8 on defaults (no PR 3-b; REL-4 #247 residual) — dated entry above.
+    - **4** (2026-09-02, PR #273): SEC-10 (DOC-4 folded) + TQ-1 — plaintext-operation registry;
+      lock/quit abort → settle (5 s) → sweep before re-encrypting; parse timeout aborts; rec 8 / rec 2
+      on defaults (one PR, 30 s constant, 25.5 s worst case) — dated entry above.
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
@@ -681,6 +697,12 @@ per-phase test inventories) lives in git history.
 - Tests: under fake timers, never wait for real I/O by counting event-loop turns — a turn is not
   a unit of time (1000 `advanceTimersByTimeAsync(0)` ≈ 4 ms). Poll a real deadline with a real
   timer captured before `useFakeTimers()` (2026-08-22 entry).
+- Tests (audit 2026-09-02, #258 / #242): a helper that waits on real file I/O ticks with a real
+  macrotask — `setTimeout(r, 1)`, never a `setImmediate` loop, which starves the libuv poll phase
+  where fs callbacks land (a real async decrypt never left its `.tmp` stage under it). And for
+  filesystem fault injection use the pass-through `vi.mock('node:fs', async (importOriginal) => …)`
+  wrapper (`workspace-vault-durability.test.ts`), never `vi.spyOn(fs, …)` — it records nothing
+  for an ESM-namespace binder, so the injection is silently never reached.
 
 ---
 ## 8. Post-MVP audits & hardening (2026-06-09 → 2026-06-10)

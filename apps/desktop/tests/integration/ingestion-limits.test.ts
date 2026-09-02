@@ -281,6 +281,50 @@ describe('parseWithLimits (MAINT-4/REL-5)', () => {
     expect(seen?.signal).toBe(ac.signal)
     expect(seen?.workDir).toBe('/w')
   })
+
+  // #237: the wall-clock timeout used to stop only the WAITING — the parser kept running with
+  // its decrypted transient on disk. It now aborts the parse context's signal as well, so a
+  // signal-aware parser stops its work too (text parsers that cannot cancel are bounded by the
+  // lock/quit sweep instead).
+  it('aborts the parse signal when the wall-clock timeout fires, so a signal-aware parser stops', async () => {
+    let seenSignal: AbortSignal | undefined
+    let stopped = false
+    const parser = fakeParser(
+      (_s, ctx) =>
+        new Promise<ParsedDocument>((_resolve, reject) => {
+          seenSignal = ctx?.signal
+          ctx?.signal?.addEventListener(
+            'abort',
+            () => {
+              stopped = true
+              reject(new Error('parser stopped'))
+            },
+            { once: true }
+          )
+        })
+    )
+    await expect(
+      parseWithLimits(parser, 'doc.txt', {}, { ...DEFAULT_INGESTION_LIMITS, parseTimeoutMs: 20 }, 'timed out')
+    ).rejects.toThrow('timed out')
+    expect(seenSignal?.aborted).toBe(true)
+    expect(stopped).toBe(true)
+  })
+
+  it("a caller's abort reaches a non-audio parser through the timeout wrapper", async () => {
+    const ac = new AbortController()
+    let seen: ParseContext | undefined
+    const parser = fakeParser(
+      (_s, ctx) =>
+        new Promise<ParsedDocument>((_resolve, reject) => {
+          seen = ctx
+          ctx?.signal?.addEventListener('abort', () => reject(new Error('parser stopped')), { once: true })
+        })
+    )
+    const p = parseWithLimits(parser, 'doc.txt', { signal: ac.signal }, DEFAULT_INGESTION_LIMITS, 'timed out')
+    ac.abort()
+    await expect(p).rejects.toThrow('parser stopped')
+    expect(seen?.signal?.aborted).toBe(true)
+  })
 })
 
 describe('preview path cap stack (REL-5)', () => {

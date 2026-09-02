@@ -54,6 +54,20 @@ function fakeCtx(order: string[]): AppContext {
     // Local-api wave: the endpoint's stop() (aborts external streams, closes sockets)
     // runs BEFORE the sidecar stops, so no outside caller holds the model mid-teardown.
     localApi: { stop: stop('localApi.stop') },
+    // #237: the plaintext-operation registry (preview / re-index / import / dictation / export)
+    // is aborted with the other aborts, settled after the doc-task settle, swept before lock.
+    plaintextOps: {
+      abortAll: () => order.push('plaintext.abort'),
+      awaitSettled: async () => {
+        order.push('plaintext.settle')
+        return true
+      },
+      sweepRegistered: () => {
+        order.push('plaintext.sweep')
+        return 0
+      },
+      size: () => 0
+    },
     // Issue #51: quit calls workspace.shutdown() (lock + plaintext checkpoint/close). The
     // ordering event keeps its historical 'lock' label — every assertion below pins it.
     workspace: { shutdown: () => order.push('lock') }
@@ -223,6 +237,25 @@ describe('performShutdown ordering (REL-4)', () => {
     expect(order.indexOf('unwound')).toBeGreaterThan(order.indexOf('runtime.stop'))
     expect(order.indexOf('unwound')).toBeLessThan(order.indexOf('lock'))
     expect(order[order.length - 1]).toBe('lock')
+  })
+
+  // #237: a preview / re-index / import-prepare / dictation / export in flight is aborted with
+  // the other aborts (before any sidecar stop), its settle awaited after the doc-task settle, and
+  // its still-registered transients shredded before the log flush + lock.
+  it('aborts, settles and sweeps the plaintext operations — abort before the sidecars, sweep before lock (#237)', async () => {
+    const order: string[] = []
+    await performShutdown(fakeCtx(order), {
+      inFlightStreams: new Map(),
+      detachVaultKey: () => order.push('detach'),
+      log: quietLog
+    })
+    const i = (label: string): number => order.indexOf(label)
+    expect(i('plaintext.abort')).toBeGreaterThanOrEqual(0)
+    expect(i('plaintext.abort')).toBeLessThan(i('runtime.stop'))
+    expect(i('plaintext.settle')).toBeGreaterThan(i('task-settle'))
+    expect(i('plaintext.sweep')).toBeGreaterThan(i('plaintext.settle'))
+    expect(i('plaintext.sweep')).toBeLessThan(i('detach'))
+    expect(i('lock')).toBe(order.length - 1)
   })
 })
 
@@ -404,6 +437,49 @@ describe('overall teardown deadline (#238 / #230)', () => {
       expect(order[order.length - 1]).toBe('lock')
       expect(order.filter((l) => l === 'lock')).toHaveLength(1)
       expect(order.some((l) => /locking workspace/i.test(l))).toBe(true) // the "quit: locking" line
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // #237: the plaintext-operation settle sits INSIDE the raced section (the deadline can abandon
+  // it) but the sweep sits OUTSIDE, beside the lock — so a settle that never resolves still ends
+  // with the registered transients shredded before the vault re-encrypts.
+  it('sweeps the plaintext operations after a deadline abandoned their settle, before the lock', async () => {
+    const realSetTimeout = setTimeout
+    const realClearTimeout = clearTimeout
+    vi.useFakeTimers()
+    try {
+      const order: string[] = []
+      const ctx = fakeCtx(order) as unknown as {
+        plaintextOps: { awaitSettled: () => Promise<boolean> }
+      }
+      ctx.plaintextOps.awaitSettled = () => {
+        order.push('plaintext.settle(parked)')
+        return new Promise<boolean>(() => {}) // never resolves — abandoned by the deadline
+      }
+      const p = performShutdown(ctx as unknown as AppContext, {
+        inFlightStreams: new Map(),
+        detachVaultKey: () => order.push('detach'),
+        log: quietLog
+      })
+      await vi.advanceTimersByTimeAsync(SHUTDOWN_OVERALL_DEADLINE_MS)
+      let bound: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          p,
+          new Promise<never>((_, reject) => {
+            bound = realSetTimeout(() => reject(new Error('the lock did not run after the deadline')), 2_000)
+          })
+        ])
+      } finally {
+        if (bound) realClearTimeout(bound)
+      }
+      const i = (label: string): number => order.indexOf(label)
+      expect(i('plaintext.settle(parked)')).toBeGreaterThan(i('task-settle'))
+      expect(i('plaintext.sweep')).toBeGreaterThan(i('plaintext.settle(parked)'))
+      expect(i('plaintext.sweep')).toBeLessThan(i('detach'))
+      expect(order[order.length - 1]).toBe('lock')
     } finally {
       vi.useRealTimers()
     }
