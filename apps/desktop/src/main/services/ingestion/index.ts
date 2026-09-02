@@ -48,6 +48,7 @@ import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
 import { parseOcrMeta } from './ocr-meta'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import { resolveIngestionLimits, withParseTimeout, type IngestionLimits } from './limits'
+import type { PlaintextOpsRegistry } from './plaintext-ops'
 import {
   canonicalLeafFor,
   locateOriginal,
@@ -114,6 +115,15 @@ export interface IngestionDeps {
    * a wedged whisper child when no signal is supplied.
    */
   signal?: AbortSignal
+  /**
+   * Registry every plaintext-materialising operation joins (#237): prepare, preview and the
+   * export readers register before writing a `.parse*` transient and release in their
+   * `finally`, so the lock/quit teardowns can abort them, await their settle and shred what
+   * is still on disk. Absent (partial test contexts) ⇒ nothing is registered.
+   */
+  plaintextOps?: PlaintextOpsRegistry
+  /** How `prepareDocument` registers itself: an import (default) or a re-index. */
+  plaintextOpKind?: 'import-prepare' | 'reindex'
 }
 
 // Canonical home of the `.enc` suffix is workspace-vault (the password change
@@ -687,7 +697,17 @@ export function parseWithLimits(
     maxInflatedBytes: ctx.maxInflatedBytes ?? limits.docxMaxInflatedBytes
   }
   if (isAudioPath(source)) return parser.parse(source, cappedCtx)
-  return withParseTimeout(parser.parse(source, cappedCtx), limits.parseTimeoutMs, timeoutMessage)
+  // #237: the timed-out parse is also ABORTED, not just abandoned — the parser sees a signal
+  // that fires on the caller's abort OR the timeout, so a signal-aware parser (photo OCR) stops
+  // its work. pdfjs/mammoth/txt ignore it and are bounded by the lock/quit sweep instead.
+  const timeoutAbort = new AbortController()
+  const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeoutAbort.signal]) : timeoutAbort.signal
+  return withParseTimeout(
+    parser.parse(source, { ...cappedCtx, signal }),
+    limits.parseTimeoutMs,
+    timeoutMessage,
+    () => timeoutAbort.abort(new Error(timeoutMessage))
+  )
 }
 
 /**
@@ -715,6 +735,9 @@ export async function prepareDocument(
   // workspace). Always shredded on the way out — success or failure — so no decrypted
   // document content lingers on the drive.
   const transients: string[] = []
+  // #237: registered for the lock/quit teardowns (aborted, settled within a bound, swept); the
+  // op's signal also follows the caller's `deps.signal` (an import job's abort).
+  const op = deps.plaintextOps?.register(deps.plaintextOpKind ?? 'import-prepare', deps.signal)
 
   const limits = deps.limits ?? resolveIngestionLimits()
 
@@ -794,10 +817,12 @@ export async function prepareDocument(
       )
       parseSource = storedPath
       transients.push(storedPath)
+      op?.track(storedPath) // now a derived copy (the `.enc` is the store) — sweepable (#237)
       storedPath = encPath
     } else if (cipher) {
       // Encrypted stored copy: decrypt to a transient working file for the parser.
       parseSource = join(storeDir, `${documentId}.parse${ext}`)
+      op?.track(parseSource) // registered BEFORE the write (#237)
       await cipher.decryptFileAsync(storedPath, parseSource) // PERF-1: yields between chunks
       transients.push(parseSource)
     } else {
@@ -841,8 +866,9 @@ export async function prepareDocument(
       onProgress: (percent) => deps.onTranscribeProgress?.(documentId, percent),
       // REL-1: cancellation for an unbounded audio transcription. Audio stays EXEMPT from
       // the wall-clock parse timeout, so the signal (+ the transcriber's own idle watchdog)
-      // is the only way to stop a wedged/cancelled whisper child.
-      signal: deps.signal
+      // is the only way to stop a wedged/cancelled whisper child. The registered operation's
+      // signal (#237) fires on the caller's abort AND on a workspace lock/quit.
+      signal: op?.signal ?? deps.signal
       // Per-parser caps (M-2/M-3) and the audio-exempt wall-clock timeout are applied by
       // parseWithLimits — the ONE cap-enforcement point shared with the preview path (MAINT-4).
     }
@@ -981,6 +1007,7 @@ export async function prepareDocument(
     // Shred transient decrypted copies whether parse succeeded or failed — the embed phase
     // reads chunk text from the DB, not these files, so they are no longer needed.
     for (const t of transients) shredFile(t)
+    op?.release()
   }
 }
 
@@ -1150,7 +1177,7 @@ export async function extractDocumentPreview(
   db: Db,
   storeDir: string,
   documentId: string,
-  deps: Pick<IngestionDeps, 'cipher' | 'ocrEngine'> = {},
+  deps: Pick<IngestionDeps, 'cipher' | 'ocrEngine' | 'plaintextOps'> = {},
   opts: ExtractPreviewOptions = {}
 ): Promise<DocumentPreview> {
   const row = getRow(db, documentId)
@@ -1178,6 +1205,9 @@ export async function extractDocumentPreview(
 
   const cipher = deps.cipher ?? null
   const transients: string[] = []
+  // #237: registered for the lock/quit teardowns — they abort this signal, await the release
+  // below within a bound, and shred the tracked transient if the parser outlives the bound.
+  const op = deps.plaintextOps?.register('preview')
   try {
     let parseSource: string
     // #188: resolve through the canonical location first, so a drive that came back under a
@@ -1193,6 +1223,7 @@ export async function extractDocumentPreview(
         // the startup crash sweep (`workspace-vault.ts` matches `name.includes('.parse')`) covering
         // a leak. Every caller uses the returned `parseSource` local, so nothing depends on the name.
         parseSource = join(storeDir, `${documentId}.parse-preview-${randomUUID()}${ext}`)
+        op?.track(parseSource) // registered BEFORE the write (#237)
         await cipher.decryptFileAsync(stored.path, parseSource) // PERF-1: yields between chunks
         transients.push(parseSource)
       } else if (!cipher && stored.encrypted) {
@@ -1217,6 +1248,9 @@ export async function extractDocumentPreview(
     const previewCtx: ParseContext = {
       ocrEngine: deps.ocrEngine,
       ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null,
+      // #237: a lock/quit aborts the re-parse (honoured by the photo OCR; text parsers are
+      // bounded by the sweep).
+      signal: op?.signal,
       // Geometry-aware layout reconstruction (plan §3.1, D51) — opt-in, bank-statement-only (D58).
       // In layout mode the caller passes its own page cap; otherwise parseWithLimits injects the
       // default `pdfMaxPages` below — REL-5: the preview path now caps too (it formerly ran uncapped).
@@ -1246,6 +1280,7 @@ export async function extractDocumentPreview(
     }
   } finally {
     for (const t of transients) shredFile(t)
+    op?.release()
   }
 }
 
@@ -1272,7 +1307,7 @@ export async function extractDocumentPreviewPage(
   documentId: string,
   offset: number,
   limit: number,
-  deps: Pick<IngestionDeps, 'cipher' | 'ocrEngine'> = {},
+  deps: Pick<IngestionDeps, 'cipher' | 'ocrEngine' | 'plaintextOps'> = {},
   opts: ExtractPreviewOptions = {}
 ): Promise<DocumentPreview> {
   // REL-5: forward the cap stack so EACH "Show more" page re-parse is bounded (the whole-document
@@ -1353,7 +1388,10 @@ export async function reindexDocument(
   if (!row) throw new Error(`Unknown document: ${documentId}`)
   setDocumentSummary(db, documentId, null)
   setStatus(db, documentId, 'queued')
-  const info = await processDocument(db, storeDir, documentId, deps)
+  const info = await processDocument(db, storeDir, documentId, {
+    ...deps,
+    plaintextOpKind: deps.plaintextOpKind ?? 'reindex'
+  })
   // M1 crash-resume: a crash-interrupted import is re-driven to `indexed` through HERE (the
   // user clicks Re-index on the reconciled `failed` row), NOT through the in-session import
   // loop. So filing-by-pending-destination must happen on this path too, or the doc loses
@@ -1507,7 +1545,7 @@ export async function readStoredDocumentText(
   db: Db,
   storeDir: string,
   documentId: string,
-  deps: Pick<IngestionDeps, 'cipher'> = {}
+  deps: Pick<IngestionDeps, 'cipher' | 'plaintextOps'> = {}
 ): Promise<{ title: string; text: string }> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
@@ -1519,6 +1557,7 @@ export async function readStoredDocumentText(
 
   const cipher = deps.cipher ?? null
   const transients: string[] = []
+  const op = deps.plaintextOps?.register('export') // #237: sweepable by lock/quit
   try {
     let source: string
     // #188: canonical location first — the recorded absolute path goes stale the moment the
@@ -1533,6 +1572,7 @@ export async function readStoredDocumentText(
         // same-doc export/read must not decrypt into and shred a shared path. `.parse` infix keeps
         // the crash sweep covering it.
         source = join(storeDir, `${documentId}.parse-export-${randomUUID()}${ext}`)
+        op?.track(source) // registered BEFORE the write (#237)
         // DB-7: async decrypt (PERF-1) — a large encrypted DOCX/DOC no longer blocks the main
         // process for the whole decrypt+read; the `finally` shred still runs after the await.
         await cipher.decryptFileAsync(stored.path, source)
@@ -1546,6 +1586,7 @@ export async function readStoredDocumentText(
     return { title: row.title, text: await readFile(source, 'utf8') }
   } finally {
     for (const t of transients) shredFile(t)
+    op?.release()
   }
 }
 
@@ -1564,13 +1605,14 @@ export async function readStoredDocumentBytes(
   db: Db,
   storeDir: string,
   documentId: string,
-  deps: Pick<IngestionDeps, 'cipher'> = {}
+  deps: Pick<IngestionDeps, 'cipher' | 'plaintextOps'> = {}
 ): Promise<{ title: string; mimeType: string | null; bytes: Buffer }> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
   const ext = extname(row.title).toLowerCase()
   const cipher = deps.cipher ?? null
   const transients: string[] = []
+  const op = deps.plaintextOps?.register('export') // #237: sweepable by lock/quit
   try {
     let source: string
     // #188: canonical location first — this is the exact reader whose stale-path failure was
@@ -1581,6 +1623,7 @@ export async function readStoredDocumentBytes(
         if (!cipher) throw new Error(tMain('main.docs.exportEncrypted'))
         // Unique per call (DB-2): as above — collision-free transient, `.parse` infix for the sweep.
         source = join(storeDir, `${documentId}.parse-export-bin-${randomUUID()}${ext}`)
+        op?.track(source) // registered BEFORE the write (#237)
         // DB-7: async decrypt (PERF-1) — the §22-M1 content boundary is unchanged; the `finally`
         // shred still runs after the await.
         await cipher.decryptFileAsync(stored.path, source)
@@ -1594,6 +1637,7 @@ export async function readStoredDocumentBytes(
     return { title: row.title, mimeType: row.mime_type, bytes: await readFile(source) }
   } finally {
     for (const t of transients) shredFile(t)
+    op?.release()
   }
 }
 

@@ -67,7 +67,11 @@ export async function runCategorize(
           db,
           storeDir,
           id,
-          { cipher: ingestion.cipher, ocrEngine: ctx.deps.getOcrEngine?.() ?? ingestion.ocrEngine },
+          {
+            cipher: ingestion.cipher,
+            ocrEngine: ctx.deps.getOcrEngine?.() ?? ingestion.ocrEngine,
+            plaintextOps: ingestion.plaintextOps
+          },
           { layout: opts?.layout }
         )
         return preview.segments.map((s, index) => ({ text: s.text, page: s.pageNumber, index }))

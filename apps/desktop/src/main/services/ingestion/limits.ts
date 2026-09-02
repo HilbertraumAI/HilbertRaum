@@ -77,14 +77,30 @@ export function resolveIngestionLimits(env: NodeJS.ProcessEnv = process.env): In
 
 /**
  * Race a parse against a wall-clock timeout, rejecting with `message` (a persist-canonical
- * English string the caller supplies) if the budget elapses first. The underlying work is
- * not cancelled — this only bounds how long the pipeline WAITS, so a wedged parser fails
- * the one document instead of hanging the import loop.
+ * English string the caller supplies) if the budget elapses first. This bounds how long the
+ * pipeline WAITS, so a wedged parser fails the one document instead of hanging the import loop;
+ * `onTimeout` runs when the budget elapses so the caller can also cancel the work (#237 —
+ * `parseWithLimits` aborts the parse signal there). A parser that ignores its signal keeps
+ * running regardless; the lock/quit sweep bounds its transient.
  */
-export function withParseTimeout<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+export function withParseTimeout<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  onTimeout?: () => void
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout>
   const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+    timer = setTimeout(() => {
+      // The timeout rejection first, so the race reports `message` — the cancel hook may make
+      // the work reject synchronously with its own error.
+      reject(new Error(message))
+      try {
+        onTimeout?.()
+      } catch {
+        /* the rejection above is the contract; a cancel hook must not mask it */
+      }
+    }, timeoutMs)
   })
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer))
 }

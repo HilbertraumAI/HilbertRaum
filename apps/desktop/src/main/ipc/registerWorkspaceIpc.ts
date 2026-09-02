@@ -81,6 +81,29 @@ async function awaitActiveDocTaskSettled(ctx: AppContext): Promise<void> {
   }
 }
 
+/**
+ * Await the aborted plaintext operations (preview / re-index / import prepare / dictation /
+ * export) within the same bound as the doc-task settle, then shred whatever transient is still
+ * registered — a parser that cannot cancel (pdfjs, mammoth) is bounded by this sweep, not by
+ * its signal (#237). Runs while `ctx.db` is open, before the vault re-encrypts. Best-effort.
+ */
+async function settleAndSweepPlaintextOps(ctx: AppContext): Promise<void> {
+  const ops = ctx.plaintextOps
+  if (!ops) return
+  try {
+    const settled = await ops.awaitSettled(LOCK_TASK_SETTLE_TIMEOUT_MS)
+    if (!settled) {
+      log.warn('Lock: plaintext operations still running at the settle bound — sweeping', {
+        live: ops.size()
+      })
+    }
+    const swept = ops.sweepRegistered()
+    if (swept > 0) log.info('Lock: swept registered plaintext transients', { swept })
+  } catch (err) {
+    log.error('Error settling plaintext operations on lock', String(err))
+  }
+}
+
 export function registerWorkspaceIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
 
@@ -345,6 +368,15 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   // ~10 GB sidecar with the source text while the vault re-encrypts. stop() also purges the job
   // map so the transient source/translation text does not linger past the lock (vision parity).
   void ctx.translateJobs?.stop()
+  // #237: abort every plaintext operation in flight (a preview, re-index, import prepare,
+  // dictation or export decrypting to / reading a `.parse*` transient) NOW, so it has the whole
+  // teardown to unwind; its settle is awaited (bounded) and its transients swept below, after
+  // the doc-task settle. In-memory; best-effort.
+  try {
+    ctx.plaintextOps?.abortAll()
+  } catch {
+    /* best-effort */
+  }
   // The local API dies FIRST (local-api wave, D7): its stop() aborts active + queued
   // external streams and closes every socket, so no outside caller can reach the model
   // (or hold a stream open) while the sidecars below are torn down and the vault
@@ -400,6 +432,10 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   // synchronously while ctx.db is open) before purge/lock close the DB — bounded so a wedged
   // handler can't hang the lock. Mirrors the in-flight-stream settle await above.
   await awaitActiveDocTaskSettled(ctx)
+  // #237: then the plaintext operations aborted above — settle within the same bound, and shred
+  // whatever `.parse*` transient a parser that cannot cancel still holds. Only registered paths
+  // are touched, never a stored copy.
+  await settleAndSweepPlaintextOps(ctx)
   // RAG-6 (Wave P4) — SECURITY purge: drop the resident decoded-vector cache from main-process
   // RAM. The vectors are derived from chunk text, so like the sidecars' in-memory recent text
   // they must not linger after the vault re-encrypts. The staleness signature does NOT cover

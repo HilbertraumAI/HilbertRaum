@@ -96,13 +96,17 @@ export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptio
     const timer = setTimeout(() => controller.abort(), maxDurationMs)
 
     const tempPath = join(storeDir, `${randomUUID()}.parse-dictation.wav`)
+    // #237: registered (under the timeout above) so a lock/quit aborts the whisper child too and
+    // sweeps the WAV if the transcription outlives the settle bound.
+    const op = ctx.plaintextOps?.register('dictation', controller.signal)
+    op?.track(tempPath)
     try {
       // PERF-2: write the up-to-64 MiB WAV off the main thread (the handler is already async); the
       // existing try/finally still shreds tempPath on any failure, including a write rejection.
       await writeFile(tempPath, audio)
       const segments = await transcriber.transcribe(tempPath, {
         workDir: storeDir,
-        signal: controller.signal
+        signal: op?.signal ?? controller.signal
       })
       return segments
         .map((s) => s.text)
@@ -117,6 +121,7 @@ export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptio
     } finally {
       clearTimeout(timer)
       shredFile(tempPath)
+      op?.release()
       inFlight = false
     }
   })

@@ -47,7 +47,11 @@ export async function extractTranslationSource(
       ctx.deps.getDb(),
       ctx.deps.getStoreDir(),
       documentId,
-      { cipher: ingestionDeps.cipher ?? null, ocrEngine: ingestionDeps.ocrEngine }
+      {
+        cipher: ingestionDeps.cipher ?? null,
+        ocrEngine: ingestionDeps.ocrEngine,
+        plaintextOps: ingestionDeps.plaintextOps
+      }
     )
     source = {
       segments: preview.segments

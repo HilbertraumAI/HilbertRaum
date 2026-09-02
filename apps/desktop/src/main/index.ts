@@ -30,6 +30,7 @@ import { registerBuiltinSkillAnalysisHandlers } from './services/skills/analysis
 import { registerDocTasksIpc } from './ipc/registerDocTasksIpc'
 import { DocTaskManager } from './services/doctasks'
 import { documentsDir } from './services/ingestion'
+import { createPlaintextOps } from './services/ingestion/plaintext-ops'
 import { inFlightStreams } from './ipc/inflight'
 import { registerDictationIpc } from './ipc/registerDictationIpc'
 import { registerImagesIpc } from './ipc/registerImagesIpc'
@@ -398,6 +399,9 @@ function initBackend(): void {
   // vault lease serve the translation materialize step: the new document goes
   // through the normal import path (embedded + `.enc`-encrypted) while holding
   // `beginDocumentWork()` for exactly that step.
+  // #237: the registry of plaintext-materialising operations; the lock/quit teardowns abort,
+  // settle and sweep it (see `shutdown.ts` / `registerWorkspaceIpc.ts`).
+  const plaintextOps = createPlaintextOps()
   const docTasks = new DocTaskManager({
     getDb: () => workspace.requireDb(),
     getRuntime: () => runtime.active(),
@@ -425,7 +429,7 @@ function initBackend(): void {
       return launchContextTokens(s, findManifestById(manifestsDir, s.activeModelId))
     },
     getStoreDir: () => documentsDir(paths.workspacePath),
-    getIngestionDeps: () => ({ embedder, cipher: workspace.documentCipher(), ocrEngine }),
+    getIngestionDeps: () => ({ embedder, cipher: workspace.documentCipher(), ocrEngine, plaintextOps }),
     beginDocumentWork: () => workspace.beginDocumentWork(),
     // The OCR task's engine + the hidden-window PDF rasterizer.
     getOcrEngine: () => ocrEngine,
@@ -491,6 +495,7 @@ function initBackend(): void {
     isDev,
     audit,
     docTasks,
+    plaintextOps,
     skills
   }
   // The vision sidecar orchestrator (image-understanding plan §10). Built here — not inside
