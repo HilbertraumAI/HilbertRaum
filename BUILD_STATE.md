@@ -551,7 +551,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     external-open consent; 5b raw-path hardening; 6 rekey completeness; 7 recovery preservation +
     durability docs; 8 small code items; 9a early docs sweep; 9b round close-out. One line per
     merged phase follows (outcome + PR + pointer; the narrative lives in the PR and the record):
-    - **0-a** (2026-09-02, docs-only, PR #PR0A): the eight closed 2026-08-20…08-22 dated entries
+    - **0-a** (2026-09-02, docs-only, PR #265): the eight closed 2026-08-20…08-22 dated entries
       drained to `docs/build-log.md`; this item opened.
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
