@@ -291,10 +291,10 @@ export class LlamaReranker implements Reranker {
     // not, so this flag gives the lock path the same protection for the duration of the teardown.
     this.tearingDown = true
     try {
-      // A lazy start may be in flight (first rerank() racing app quit). #244: ABORT it rather than wait it out — the abort kills the child inside the
-      // health wait (the normal stop path, no orphan), the start rejects AbortError (never
-      // latches `startFailed`), and the await below settles in about one health-poll interval
-      // instead of the full 180 s health window of a wedged cold start.
+      // A lazy start may be in flight (first rerank() racing app quit). #244: abort it rather
+      // than wait it out — the abort kills the child inside the health wait (the normal stop
+      // path, no orphan), the start rejects AbortError (never latches `startFailed`), and the
+      // await below settles in about one health-poll interval instead of the 180 s window.
       this.startAbort?.abort()
       if (this.starting) {
         await this.starting.catch(() => undefined)
