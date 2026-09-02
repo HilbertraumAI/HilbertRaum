@@ -176,6 +176,19 @@ export function mergePolicyObject(base: PrivacyPolicy, raw: unknown): PrivacyPol
  * `DEFAULT_POLICY`). Malformed JSON → `base` + an `onWarn` note; never throws. A packaged
  * build passes `STRICT_POLICY` as the base so a malformed file fails CLOSED (M-4).
  */
+/**
+ * The commercial posture in one predicate: encryption required, plaintext off, models
+ * must verify. The sell gate (`assertCommercialDrive`) and the pre-spawn binary verifier
+ * key on the same three fields (#234).
+ */
+export function isCommercialPolicy(policy: PrivacyPolicy): boolean {
+  return (
+    policy.workspace.encryptionRequired &&
+    !policy.workspace.allowPlaintextDevMode &&
+    policy.models.requireSha256Match
+  )
+}
+
 export function parsePolicy(
   contents: string,
   onWarn?: (msg: string) => void,

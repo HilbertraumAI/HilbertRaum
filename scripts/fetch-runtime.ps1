@@ -19,10 +19,15 @@
   pure-CPU safety net into <os>/cpu/.
 
   Verify-before-trust: a real-hash MISMATCH deletes the zip and exits non-zero. A
-  placeholder zip hash extracts but reports UNVERIFIED. Idempotent via the MARKER, not
+  placeholder zip hash extracts but reports UNVERIFIED and the marker then records NO
+  binary hash (the sell gate refuses such an install). Idempotent via the MARKER, not
   mere binary presence: a present llama-server[.exe] whose .hilbertraum-runtime.json matches the
   selected version + backend is skipped; a missing/stale marker re-fetches (so upgrading
   a CPU-era drive to the Vulkan default actually replaces the build).
+
+  -Commercial (drive builders, #234): a placeholder hash is REFUSED before any download
+  (exit 1, nothing extracted, no marker) and a hashless (legacy) marker is re-fetched
+  instead of skipped, so a sold drive never carries an unverifiable sidecar.
 
 .PARAMETER Target
   The prepared drive root (e.g. E:\). Required.
@@ -45,14 +50,18 @@
   sha256-verified downloads into ocr/ -- no extraction, no marker; idempotency IS the
   hash).
 
+.PARAMETER Commercial
+  Drive-builder mode: refuse a placeholder hash before any download, re-fetch a hashless
+  (legacy) install marker. build-commercial-drive passes this on every run.
+
 .PARAMETER DryRun
-  Print the plan and download nothing.
+  Print the plan and download nothing (a -Commercial placeholder refusal still applies).
 
 .EXAMPLE
   .\scripts\fetch-runtime.ps1 -Target E:\
   .\scripts\fetch-runtime.ps1 -Target E:\ -Os linux -Arch x64 -DryRun
   .\scripts\fetch-runtime.ps1 -Target E:\ -Family whisper_cpp
-  .\scripts\fetch-runtime.ps1 -Target E:\ -Family ocr
+  .\scripts\fetch-runtime.ps1 -Target E:\ -Family ocr -Commercial
 #>
 [CmdletBinding()]
 param(
@@ -61,6 +70,7 @@ param(
   [string] $Arch,
   [string] $Backend,
   [ValidateSet('llama_cpp', 'whisper_cpp', 'ocr')] [string] $Family = 'llama_cpp',
+  [switch] $Commercial,
   [switch] $DryRun
 )
 
@@ -173,6 +183,14 @@ if ($Family -eq 'ocr') {
   }
   Write-Host "Fetch OCR language files -> $Target (data $ocrVersion)" -ForegroundColor Cyan
   $IsRealShaOcr = { param($h) $h -match '^[a-f0-9]{64}$' }
+  # -Commercial: every file must be verifiable BEFORE the first download (#234).
+  if ($Commercial) {
+    $placeholders = @($files | Where-Object { $_.sha256 -and -not (& $IsRealShaOcr ([string]$_.sha256).ToLower()) } | ForEach-Object { $_.lang })
+    if ($placeholders.Count -gt 0) {
+      Write-Host ("  commercial: placeholder sha256 for ocr file(s) {0} -- refusing to fetch (nothing downloaded)" -f ($placeholders -join ', ')) -ForegroundColor Red
+      exit 1
+    }
+  }
   $failed = 0
   foreach ($f in $files) {
     foreach ($required in @('url', 'sha256', 'dest')) {
@@ -322,25 +340,45 @@ Write-Host "Fetch runtime -> $Target" -ForegroundColor Cyan
 Write-Host ("  build: {0}/{1} {2} @ {3}" -f $build.os, $build.arch, $build.backend, $version)
 Write-Host ("  url:   {0}" -f $build.url)
 Write-Host ("  into:  {0}" -f $extractTo)
-if ($DryRun) { Write-Host '(dry run -- nothing will be downloaded)' -ForegroundColor Yellow; exit 0 }
 
 # Idempotent skip is MARKER-based (Phase 14, mirrors assets.ts runtimeInstallCurrent):
 # "binary exists" alone would silently keep a CPU-era build in place after the default
-# became vulkan. Skip only when .hilbertraum-runtime.json matches the selected version+backend.
+# became vulkan. Skip only when .hilbertraum-runtime.json matches the selected version+backend
+# -- and, under -Commercial, records the binary's hash (a hashless legacy marker is
+# re-fetched, #234).
 if (Test-Path $binaryPath) {
   $skip = $false
+  $why = 'install marker is missing or differs'
   if (Test-Path $markerPath) {
     try {
       $marker = Get-Content -Path $markerPath -Raw | ConvertFrom-Json
-      if ($marker.version -eq $version -and $marker.backend -eq $build.backend) { $skip = $true }
+      if ($marker.version -eq $version -and $marker.backend -eq $build.backend) {
+        $skip = $true
+        if ($Commercial) {
+          $recorded = $null
+          if ($marker.binaries) { $recorded = $marker.binaries.PSObject.Properties[$binaryName].Value }
+          if (-not $recorded -or -not (& $IsRealSha ([string]$recorded).ToLower())) {
+            $skip = $false
+            $why = 'install marker records no binary hash (legacy) -- commercial mode'
+          }
+        }
+      }
     } catch { $skip = $false }
   }
   if ($skip) {
     Write-Host "  skip ($binaryName already installed: $version/$($build.backend) per .hilbertraum-runtime.json)" -ForegroundColor Green
     exit 0
   }
-  Write-Host "  $binaryName present but install marker is missing or differs -- re-fetching $version/$($build.backend)" -ForegroundColor Yellow
+  Write-Host "  $binaryName present but $why -- re-fetching $version/$($build.backend)" -ForegroundColor Yellow
 }
+
+# -Commercial: refuse a placeholder hash BEFORE any download (#234) -- an unverifiable
+# archive must never be extracted onto a sold drive, dry run or not.
+if ($Commercial -and -not (& $IsRealSha $sha)) {
+  Write-Host ("  commercial: placeholder sha256 for {0}/{1} {2} @ {3} -- refusing to fetch (nothing downloaded, no marker written)" -f $build.os, $build.arch, $build.backend, $version) -ForegroundColor Red
+  exit 1
+}
+if ($DryRun) { Write-Host '(dry run -- nothing will be downloaded)' -ForegroundColor Yellow; exit 0 }
 
 New-Item -ItemType Directory -Force -Path $extractTo | Out-Null
 # Archive name from the URL basename so a .tar.gz (the macOS/Linux release format) is
@@ -361,6 +399,7 @@ if ($Curl) {
   Invoke-WebRequest -Uri $build.url -OutFile $archive -UseBasicParsing
 }
 
+$archiveVerified = $false
 if (& $IsRealSha $sha) {
   $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLower()
   if ($actual -ne $sha) {
@@ -369,6 +408,7 @@ if (& $IsRealSha $sha) {
     exit 1
   }
   Write-Host "  archive VERIFIED" -ForegroundColor Green
+  $archiveVerified = $true
 } else {
   Write-Host "  archive UNVERIFIED (placeholder hash) -- verify after a real release bump" -ForegroundColor Yellow
 }
@@ -456,9 +496,17 @@ if (Test-Path $binaryPath) {
   # `binaries` records the extracted binary's own SHA-256 so the app can re-hash it
   # immediately before spawn (vuln-scan B / binary-verifier.ts). The key is the binary's
   # name relative to the extract dir (here it sits at the root after the flatten above).
+  # Only a VERIFIED archive earns that hash (#234): an unverified install must not mint
+  # a marker the sell gate and the spawn verifier would trust.
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-  $binSha = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLower()
-  $markerJson = '{"version":"' + $version + '","backend":"' + $build.backend + '","os":"' + $build.os + '","arch":"' + $build.arch + '","binaries":{"' + $binaryName + '":"' + $binSha + '"}}'
+  $markerHead = '{"version":"' + $version + '","backend":"' + $build.backend + '","os":"' + $build.os + '","arch":"' + $build.arch + '"'
+  if ($archiveVerified) {
+    $binSha = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLower()
+    $markerJson = $markerHead + ',"binaries":{"' + $binaryName + '":"' + $binSha + '"}}'
+  } else {
+    $markerJson = $markerHead + '}'
+    Write-Host "  marker written WITHOUT a binary hash (archive unverified) -- the sell gate refuses this install" -ForegroundColor Yellow
+  }
   [System.IO.File]::WriteAllText($markerPath, $markerJson, $utf8NoBom)
   Write-Host "  extracted $binaryName (+ .hilbertraum-runtime.json install marker)" -ForegroundColor Green
   if ($build.os -ne 'win') {

@@ -8,26 +8,38 @@
 #   4. package + sign + notarize         # MANUAL (secrets never in the repo)
 #   5. copy launcher + portable app + user docs onto the drive root
 #   6. verify-models  --generate         # capture real hashes -> config/checksums.json
-#   7. final check: commercial posture + license reviews APPROVED (spec 13; not
-#      overridable by --accept-license) + verify-models --strict (all weights VERIFIED)
-#      + no user data -- exits 1 unless the drive is actually sellable
+#   7. final check: the CANONICAL gate (assertCommercialDrive, run through the built
+#      apps/desktop/out/tools/assert-commercial-drive.mjs -- needs `npm run build` and
+#      node on PATH) after a native pre-flight -- exits 1 unless the drive is sellable.
+#      SELLABLE is printed only from the canonical verdict (#233, #234). The gate also
+#      requires the app artifact + launcher for every platform in --platforms and a
+#      recorded, matching hash for every sidecar binary.
 #
 # Mirrors apps/desktop/src/main/services/commercial-drive.ts (planCommercialDrive +
 # assertCommercialDrive) -- that TS module is the CANONICAL, unit-tested reference. This
 # script ORCHESTRATES the existing scripts; it does not re-implement them.
 #
-# SIGNING IS MANUAL. The green gate does not sign. Supply a pre-built, signed app via
-# --app-artifact, or use --skip-package. See docs/packaging.md.
+# SIGNING IS MANUAL. The green gate does not sign. Supply the pre-built, signed app(s)
+# via --app-artifact (repeatable, one per platform), or use --skip-package (the drive is
+# NOT SELLABLE until the apps are on it). The script REFUSES to proceed when a differently
+# named HilbertRaum-* artifact (or an extracted .app) already sits at the drive root --
+# delete the old build first (#233). See docs/packaging.md.
 #
 # Usage:
 #   scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license \
-#       [--app-artifact ./release/HilbertRaum-0.1.0.AppImage] [--skip-package] [--dry-run]
+#       [--app-artifact ./release/HilbertRaum-0.1.0.AppImage]... [--platforms win-x64,mac-arm64,linux-x64] \
+#       [--skip-package] [--verify-only] [--dry-run]
+#   --platforms   the platforms this kit is sold for (default all three)
+#   --verify-only skip steps 1-6, run only the final gate against the drive as it is
+#   --dry-run     download and change nothing; the final gate still runs and prints its verdict
 set -euo pipefail
 
 TARGET=""
 ACCEPT_LICENSE=0
-APP_ARTIFACT=""
+APP_ARTIFACTS=()
+PLATFORMS="win-x64,mac-arm64,linux-x64"
 SKIP_PACKAGE=0
+VERIFY_ONLY=0
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -35,9 +47,12 @@ while [[ $# -gt 0 ]]; do
     --target) TARGET="${2:-}"; shift 2 ;;
     --target=*) TARGET="${1#*=}"; shift ;;
     --accept-license) ACCEPT_LICENSE=1; shift ;;
-    --app-artifact) APP_ARTIFACT="${2:-}"; shift 2 ;;
-    --app-artifact=*) APP_ARTIFACT="${1#*=}"; shift ;;
+    --app-artifact) APP_ARTIFACTS+=("${2:-}"); shift 2 ;;
+    --app-artifact=*) APP_ARTIFACTS+=("${1#*=}"); shift ;;
+    --platforms) PLATFORMS="${2:-}"; shift 2 ;;
+    --platforms=*) PLATFORMS="${1#*=}"; shift ;;
     --skip-package) SKIP_PACKAGE=1; shift ;;
+    --verify-only) VERIFY_ONLY=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -52,11 +67,55 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# The platforms a kit can be sold for -- keep in sync with KIT_PLATFORMS in
+# apps/desktop/src/shared/runtime-sources.ts (script-drift test).
+KIT_PLATFORMS=(
+  win-x64
+  mac-arm64
+  linux-x64
+)
+IFS=',' read -r -a PLATFORM_LIST <<< "$PLATFORMS"
+for p in "${PLATFORM_LIST[@]}"; do
+  known=0
+  for k in "${KIT_PLATFORMS[@]}"; do [[ "$p" == "$k" ]] && known=1; done
+  if [[ $known -eq 0 ]]; then
+    echo "Unknown platform '$p' -- known: ${KIT_PLATFORMS[*]}" >&2
+    exit 2
+  fi
+done
+# The version the artifacts must carry = the repo's own (the release workflow names
+# HilbertRaum-<version>-... from it).
+APP_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/package.json" | head -n1)"
+
+# Refuse to proceed when another app artifact already sits at the drive root (#233): the
+# copy in step 4 overwrites only the same basename, so an older build would stay beside
+# the new one and the launchers would find two. Delete it first, on purpose.
+if [[ ${#APP_ARTIFACTS[@]} -gt 0 && $VERIFY_ONLY -eq 0 ]]; then
+  PRIOR=()
+  shopt -s nullglob
+  for existing in "$TARGET"/HilbertRaum-* "$TARGET"/*.app; do
+    name="$(basename "$existing")"
+    incoming=0
+    for a in "${APP_ARTIFACTS[@]}"; do [[ "$(basename "$a")" == "$name" ]] && incoming=1; done
+    [[ $incoming -eq 0 ]] && PRIOR+=("$name")
+  done
+  shopt -u nullglob
+  if [[ ${#PRIOR[@]} -gt 0 ]]; then
+    echo "Refusing to proceed: another app artifact already sits at the drive root:" >&2
+    for p in "${PRIOR[@]}"; do echo "  - $p" >&2; done
+    echo "  Delete it first (a drive must carry exactly one app build), then re-run." >&2
+    exit 1
+  fi
+fi
+
 step() { echo; echo "[$1] $2"; }
 
 echo "Build a COMMERCIAL (sellable) drive at: $TARGET"
-[[ $DRY_RUN -eq 1 ]] && echo "(dry run -- nothing will be changed)"
+echo "  platforms: $PLATFORMS | app version: $APP_VERSION"
+[[ $DRY_RUN -eq 1 ]] && echo "(dry run -- nothing will be changed; the final gate still runs)"
+[[ $VERIFY_ONLY -eq 1 ]] && echo "(verify only -- steps 1-6 skipped)"
 
+if [[ $VERIFY_ONLY -eq 0 ]]; then
 # --- 1. Lay out the drive with the COMMERCIAL policy --------------------------------
 step 1 "Lay out the drive (commercial policy: encryption required, no phone-home)"
 PREP=(--target "$TARGET" --force)
@@ -77,12 +136,15 @@ bash "$SCRIPT_DIR/fetch-models.sh" "${MODELS[@]}"
 # on GPU-less machines) into runtime/llama.cpp/<os>/ plus the pure-CPU safety net into
 # runtime/llama.cpp/<os>/cpu/ (the app's fallback ladder rung 3). mac ships Metal only.
 step 3 "Download + verify the llama.cpp sidecar builds (every shipped OS)"
+# --commercial (#234): a placeholder archive hash is refused before any download, a
+# hashless (legacy) install marker is re-fetched instead of skipped, and the marker
+# records the binary hash only after a verified archive.
 for os_name in win mac linux; do
-  RUNTIME=(--target "$TARGET" --os "$os_name")
+  RUNTIME=(--target "$TARGET" --os "$os_name" --commercial)
   [[ $DRY_RUN -eq 1 ]] && RUNTIME+=(--dry-run)
   bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME[@]}"
   if [[ "$os_name" != "mac" ]]; then
-    CPU_NET=(--target "$TARGET" --os "$os_name" --backend cpu)
+    CPU_NET=(--target "$TARGET" --os "$os_name" --backend cpu --commercial)
     [[ $DRY_RUN -eq 1 ]] && CPU_NET+=(--dry-run)
     bash "$SCRIPT_DIR/fetch-runtime.sh" "${CPU_NET[@]}"
   fi
@@ -91,27 +153,29 @@ done
 # prebuilt WINDOWS build only (R-W1); mac/linux whisper builds are a documented manual
 # source-build step (docs/packaging.md) — audio import degrades to a friendly per-file
 # failure on a drive without one.
-WHISPER=(--target "$TARGET" --os win --family whisper_cpp)
+WHISPER=(--target "$TARGET" --os win --family whisper_cpp --commercial)
 [[ $DRY_RUN -eq 1 ]] && WHISPER+=(--dry-run)
 bash "$SCRIPT_DIR/fetch-runtime.sh" "${WHISPER[@]}"
 # OCR language files (Phase 38, D32): the ocr/ asset class — plain sha256-verified
 # traineddata files, OS-independent (one run covers every shipped OS).
-OCR_ASSETS=(--target "$TARGET" --family ocr)
+OCR_ASSETS=(--target "$TARGET" --family ocr --commercial)
 [[ $DRY_RUN -eq 1 ]] && OCR_ASSETS+=(--dry-run)
 bash "$SCRIPT_DIR/fetch-runtime.sh" "${OCR_ASSETS[@]}"
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
 step 4 "Package + sign the app (MANUAL -- secrets never in the repo)"
 if [[ $SKIP_PACKAGE -eq 1 ]]; then
-  echo "  --skip-package set: skipping packaging. Sign + copy the app yourself."
-elif [[ -n "$APP_ARTIFACT" ]]; then
-  if [[ ! -e "$APP_ARTIFACT" ]]; then echo "AppArtifact not found: $APP_ARTIFACT" >&2; exit 1; fi
-  DST="$TARGET/$(basename "$APP_ARTIFACT")"
-  if [[ $DRY_RUN -eq 1 ]]; then echo "  copy $APP_ARTIFACT -> $DST"
-  else cp -R "$APP_ARTIFACT" "$DST"; echo "  copied signed app -> $DST"; fi
+  echo "  --skip-package set: skipping packaging. Sign + copy the app yourself (NOT SELLABLE until then)."
+elif [[ ${#APP_ARTIFACTS[@]} -gt 0 ]]; then
+  for artifact in "${APP_ARTIFACTS[@]}"; do
+    if [[ ! -e "$artifact" ]]; then echo "AppArtifact not found: $artifact" >&2; exit 1; fi
+    DST="$TARGET/$(basename "$artifact")"
+    if [[ $DRY_RUN -eq 1 ]]; then echo "  copy $artifact -> $DST"
+    else cp -R "$artifact" "$DST"; echo "  copied signed app -> $DST"; fi
+  done
 else
-  echo "  No --app-artifact supplied. Build + sign the app, then re-run with"
-  echo "  --app-artifact <path>, or copy it onto the drive manually. See docs/packaging.md."
+  echo "  No --app-artifact supplied. Build + sign the app for every platform in --platforms, then"
+  echo "  re-run with --app-artifact <path>..., or copy them onto the drive manually. See docs/packaging.md."
 fi
 
 # --- 5. Copy the launcher + user docs onto the drive root --------------------------
@@ -136,11 +200,11 @@ if [[ $DRY_RUN -eq 1 ]]; then
 else
   bash "$SCRIPT_DIR/verify-models.sh" --target "$TARGET" --generate
 fi
+fi # end of steps 1-6 (skipped by --verify-only)
 
 # --- 7. Final check: is this drive sellable? ---------------------------------------
-step 7 "Final check: commercial posture + weights VERIFIED + no user data"
-echo "  The CANONICAL gate is assertCommercialDrive() in commercial-drive.ts (unit-tested)."
-echo "  Native cross-check of the key invariants:"
+step 7 "Final check: native pre-flight, then the canonical gate (assertCommercialDrive)"
+echo "  Native pre-flight of the key invariants (the verdict below comes from the canonical gate):"
 # NOTE: policy.json is MACHINE-GENERATED by prepare-drive (the greps below tolerate
 # arbitrary whitespace after the colon, but not minified/hand-edited JSON — M24).
 PROBLEMS=()
@@ -313,15 +377,27 @@ if [[ $DRY_RUN -eq 0 ]]; then
     PROBLEMS+=("weights: not every weight is VERIFIED (strict verify failed)")
   fi
 fi
-if [[ $DRY_RUN -eq 1 ]]; then
-  echo "  (dry run: posture + weight checks skipped)"
-elif [[ ${#PROBLEMS[@]} -gt 0 ]]; then
+[[ $DRY_RUN -eq 1 ]] && echo "  (dry run: weight verification skipped; the canonical gate still runs)"
+# Canonical gate (#233, #234): the verdict is assertCommercialDrive()'s, run through the
+# built tool — SELLABLE is printed only when it passes AND the pre-flight found nothing.
+# Reads only the drive (no network). Needs `npm run build` and node on PATH.
+GATE_TOOL="$REPO_ROOT/apps/desktop/out/tools/assert-commercial-drive.mjs"
+if [[ ! -f "$GATE_TOOL" ]]; then
+  PROBLEMS+=("canonical gate not built: $GATE_TOOL missing (run npm run build)")
+elif ! command -v node >/dev/null 2>&1; then
+  PROBLEMS+=("canonical gate needs node on PATH")
+else
+  echo "  Canonical gate:"
+  GATE_EXIT=0
+  node "$GATE_TOOL" --target "$TARGET" --platforms "$PLATFORMS" --app-version "$APP_VERSION" || GATE_EXIT=$?
+  [[ $GATE_EXIT -ne 0 ]] && PROBLEMS+=("canonical gate: not sellable (exit $GATE_EXIT, see above)")
+fi
+if [[ ${#PROBLEMS[@]} -gt 0 ]]; then
   echo "  NOT SELLABLE:"
   for p in "${PROBLEMS[@]}"; do echo "    - $p"; done
   exit 1
-else
-  echo "  SELLABLE: posture OK (encrypted, no phone-home, no user data) + all weights VERIFIED."
 fi
+echo "  SELLABLE: canonical gate passed for $PLATFORMS at $APP_VERSION."
 
 echo
 echo "Done. Test the drive on a clean laptop with Wi-Fi OFF (spec section 17 demo)."

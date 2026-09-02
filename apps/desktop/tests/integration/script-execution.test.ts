@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -91,7 +91,8 @@ const LEGS: Leg[] = [
   },
   {
     name: 'bash scripts (.sh)',
-    skip: process.platform === 'win32',
+    // Git Bash on a Windows dev box can run this leg too: HILBERTRAUM_SCRIPT_SH_LEG=1.
+    skip: process.platform === 'win32' && !process.env.HILBERTRAUM_SCRIPT_SH_LEG,
     ext: 'sh',
     flag: (n) => `--${n.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()}`,
     run: (script, args) =>
@@ -100,6 +101,11 @@ const LEGS: Leg[] = [
 ]
 
 const text = (r: SpawnSyncReturns<string>): string => `${r.stdout ?? ''}\n${r.stderr ?? ''}`
+
+// A shell + a node child per case: well under a second on Linux, several seconds under
+// PowerShell or Git Bash on a loaded Windows runner — give every case in this file real headroom.
+const CASE_TIMEOUT_MS = 90_000
+vi.setConfig({ testTimeout: CASE_TIMEOUT_MS })
 
 for (const leg of LEGS) {
   describe.skipIf(leg.skip)(`script execution — ${leg.name}`, () => {

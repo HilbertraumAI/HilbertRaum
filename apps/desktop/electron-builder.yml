@@ -59,6 +59,9 @@ files:
   # after a screenshot run would fold the whole harness into app.asar. Nothing loads it at
   # runtime; keep it out. tests/integration/packaging.test.ts pins this negation.
   - '!out/preview/**'
+  # out/tools/ holds the drive builders' commercial-gate tool (vite.tools.config.ts, #233) —
+  # a build-machine tool run with plain node, not app code.
+  - '!out/tools/**'
   - package.json
   # L18 (audit-2026-06-13): `@napi-rs/canvas` is an OPTIONAL transitive dep of pdfjs-dist
   # — a platform-specific native `.node` (Skia) we never import (the PDF path uses the

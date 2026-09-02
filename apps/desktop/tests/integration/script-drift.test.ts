@@ -616,10 +616,11 @@ describe('one commercial gate — builder + fetch-runtime literals (#233, #234)'
     ['scripts/fetch-runtime.sh', 'ARCHIVE_VERIFIED']
   ])('%s writes the marker binary hash only behind the archive-verified flag', (rel, flag) => {
     const src = read(rel)
-    const markerWrite = src.indexOf('"binaries"')
+    // The LAST `"binaries"` literal is the marker write (earlier ones read a marker).
+    const markerWrite = src.lastIndexOf('"binaries"')
     expect(markerWrite, 'marker write not found').toBeGreaterThan(0)
     // The flag is tested within the 25 lines that precede the marker write.
-    const window = src.slice(src.lastIndexOf('\n', markerWrite) - 2000, markerWrite)
+    const window = src.slice(Math.max(0, markerWrite - 2000), markerWrite)
     expect(window.split('\n').slice(-25).join('\n')).toContain(flag)
   })
 })
