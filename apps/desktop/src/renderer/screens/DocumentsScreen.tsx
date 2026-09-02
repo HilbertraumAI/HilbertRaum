@@ -506,7 +506,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       if (paths.length === 0) return
       // Size-aware audio gate: large recordings cost drive space
       // (the workspace copy) and real transcription time — ask first.
-      const pre = await window.api.importPreflight(paths)
+      // The token lets main count its own vetted paths (no drop cap on a picker selection, #240).
+      const pre = await window.api.importPreflight(paths, token)
       if (pre.audioBytes >= LARGE_AUDIO_CONFIRM_BYTES) {
         setConfirmAudio({ paths, token, audioFileCount: pre.audioFileCount, audioBytes: pre.audioBytes })
         return

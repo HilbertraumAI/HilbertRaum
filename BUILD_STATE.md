@@ -37,7 +37,7 @@ string never reaches the installer's `lstatSync`; `MAX_DROP_PATHS` (512) is refu
 10 s, `expandPathsBounded`); the off-thread walk is #274 (SEC-9 #240 with NEW-2, DOC-11, DOC-12
 folded — partial; PR #275).**_ Decision 5 (#222, the lexical UNC/device rejection = the drop-contract
 change) unanswered → default, that half stays open as 5b-b; §8 L-4/L-5 restated below;
-`architecture.md` SEC-3 rows restated. Suite 368 → 370 files / 5,487 → 5,505 (+18).
+`architecture.md` SEC-3 rows restated. Suite 368 → 370 files / 5,487 → 5,507 (+20).
 
 _2026-09-02 — **Audit 2026-09-02 Phase 4 — lock/quit quiescence: a plaintext-operation registry
 (`services/ingestion/plaintext-ops.ts`, `ctx.plaintextOps`) that preview, re-index, import

@@ -1970,12 +1970,6 @@ export interface SkillInfo {
   updatedAt: string
 }
 
-/**
- * The result of validating an import source (a `.skill.zip` or a folder) FULLY in a transient
- * staging dir BEFORE the user confirms (OQ-2, lean-yes; skills plan §16). NOTHING is persisted to
- * produce this. On `ok: false`, `errors` carries friendly, STRUCTURAL-ONLY reasons (§22-M1: never
- * the attacker's member paths or content). NEW shared contract in S4; S5's import drawer renders it.
- */
 /** Result of `pickSkillPackage` (#240, the `PickDocumentsResult` precedent): the chosen path
  *  (renderer display only) + a one-time capability token that `previewSkillPackage` reads
  *  through and `importSkill` spends. Cancelled ⇒ null. */
@@ -1984,6 +1978,12 @@ export interface SkillPickResult {
   path: string
 }
 
+/**
+ * The result of validating an import source (a `.skill.zip` or a folder) FULLY in a transient
+ * staging dir BEFORE the user confirms (OQ-2, lean-yes; skills plan §16). NOTHING is persisted to
+ * produce this. On `ok: false`, `errors` carries friendly, STRUCTURAL-ONLY reasons (§22-M1: never
+ * the attacker's member paths or content). NEW shared contract in S4; S5's import drawer renders it.
+ */
 export interface SkillPreview {
   ok: boolean
   /** 'zip' (a `.skill.zip`) or 'folder' (a picked directory). */

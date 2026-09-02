@@ -98,7 +98,6 @@ async function writeZip(members: Array<{ name: string; content: string }>): Prom
 /**
  * Mint a picker token for `path` the way the renderer gets one: drive the (mocked) OS dialog
  * through `pickSkillPackage` (#240). Preview and import take that token, never a raw path.
- * Tolerates the pre-fix bare-string return so the pin below is the only red before the fix.
  */
 async function pickToken(path: string, mode: 'file' | 'folder' = 'file'): Promise<string> {
   ipcState.openDialog.canceled = false
@@ -106,7 +105,7 @@ async function pickToken(path: string, mode: 'file' | 'folder' = 'file'): Promis
   const { result } = await invoke(handlers, IPC.pickSkillPackage, mode)
   ipcState.openDialog.canceled = true
   ipcState.openDialog.filePaths = []
-  return typeof result === 'string' ? result : (result as { token: string }).token
+  return (result as { token: string }).token
 }
 
 interface Harness {

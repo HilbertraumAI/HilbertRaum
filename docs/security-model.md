@@ -1686,18 +1686,23 @@ read any supported-type file anywhere on disk (the text is then reachable via
   compromised renderer can still drive this seam with on-disk paths, but the offline guarantee
   means there is **no network sink to exfiltrate** read content, and the dominant picker surface is
   now non-forgeable. `importPreflight` still takes raw paths (counts/sizes only — lower impact).
-- **Skills share the token map (#240, PR #275):** `pickSkillPackage` is unlock-gated and returns
-  `{ token, path }`; `previewSkillPackage` reads through the token without spending it and
+- **Skills use the same token mechanism (#240, PR #275):** `pickSkillPackage` is unlock-gated and
+  returns `{ token, path }`; `previewSkillPackage` reads through the token without spending it and
   `importSkill` spends it, so a renderer string that is not a live token is refused before the
-  installer's first `lstatSync`. The map lives in `src/main/ipc/picker-tokens.ts` (`mint` /
-  `peek` / `consume`, bounded FIFO of 16, no clock — a token dies with the session or on consume).
-- **Bounds on the raw seams (#240, PR #275):** both `hardenDroppedPaths` and `importPreflight`
-  refuse more than `MAX_DROP_PATHS` (512) strings before the first filesystem call, and the
-  directory walk behind a folder drop/pick is cut by an entry cap, a depth cap and a wall-clock
-  budget (`ingestion/limits.ts` `DEFAULT_WALK_BUDGET`: 50 000 entries / depth 64 / 10 s, checked
-  once per directory). A cut walk imports what it reached. The walk still runs on the main thread
-  (#274). What this does NOT do: reject a UNC or device path lexically — that changes the drop
-  contract for network-share users and waits on #222.
+  installer's first `lstatSync`. The mechanism lives in `src/main/ipc/picker-tokens.ts` (`mint` /
+  `peek` / `consume`, a bounded FIFO of 16 per instance, no clock — a token dies with the session
+  or on consume); the documents handler and the skills handler each hold their own instance.
+- **Bounds on the raw seams (#240, PR #275):** `hardenDroppedPaths` and a token-less
+  `importPreflight` refuse more than `MAX_DROP_PATHS` (512) strings before the first filesystem
+  call (a picker selection is exempt: `importPreflight` accepts the `pickDocuments` token and
+  then counts the main-vetted paths, so a large multi-select still imports). The directory walk
+  behind a folder drop/pick is cut by an entry cap, a depth cap and a wall-clock budget
+  (`ingestion/limits.ts` `DEFAULT_WALK_BUDGET`: 50 000 entries / depth 64 / 10 s, checked once
+  per directory). A cut walk imports what it reached; picked FILES are always kept. The preflight
+  count and the import each run their own bounded walk, so on a very slow drive the two can be cut
+  at different points. The walk still runs on the main thread (#274). What this does NOT do:
+  reject a UNC or device path lexically — that changes the drop contract for network-share users
+  and waits on #222.
 
 ### D2 — `imageReadBytes` takes an opaque token, never a renderer path
 `imageChooseImage` now returns `{ token, name, sizeBytes }` — the absolute path stays in main,

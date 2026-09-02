@@ -105,6 +105,12 @@ import { invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
+// The recorder is armed per test; disarm it before every test so a failed one cannot leave it on.
+beforeEach(() => {
+  fsLog.probe = ''
+  fsLog.calls.length = 0
+})
+
 function freshWorkspace(): { db: Db; workspacePath: string } {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-docsipc-'))
   return { db: openDatabase(join(root, 'hilbertraum.sqlite')), workspacePath: root }
@@ -272,7 +278,30 @@ describe('registerDocsIpc', () => {
     const { result } = await invoke(handlers, IPC.importPreflight, atCap)
     expect(result).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
     expect(fsLog.calls.length).toBeGreaterThan(0)
-    fsLog.probe = ''
+  })
+
+  // A PICKER selection is main-vetted, so it is exempt from the cap: preflight with the token
+  // counts main's own paths (the renderer array is ignored), the token stays live for the import.
+  it('importPreflight with the pickDocuments token is not capped and does not spend the token (#240)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const probe = `probe-${randomUUID()}`
+    const picked = Array.from({ length: MAX_DROP_PATHS + 1 }, (_, i) => join(workspacePath, `${probe}-${i}.txt`))
+    dialogState.result = { canceled: false, filePaths: picked }
+    const { result: pick } = await invoke(handlers, IPC.pickDocuments, 'files')
+    const token = (pick as { token: string }).token
+    expect(token).not.toBe('')
+    fsLog.probe = probe
+    // The renderer array is ignored: an EMPTY array + the token still counts the picked paths.
+    const { result: pre } = await invoke(handlers, IPC.importPreflight, [], token)
+    expect(pre).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
+    expect(fsLog.calls.length).toBeGreaterThan(0)
+    // Not spent: the import still redeems it (no drop cap on that branch either).
+    const { result: job } = await invoke(handlers, IPC.importDocuments, [], { pickerToken: token })
+    expect((job as { documentIds: string[] }).documentIds).toEqual([])
+    // A stale token falls back to the raw (capped) seam.
+    await expect(invoke(handlers, IPC.importPreflight, picked, token)).rejects.toThrow()
+    dialogState.result = { canceled: true, filePaths: [] }
   })
 
   it('reconciles a prior-run stuck document and flags a stale-embedding document (M5 + M7)', async () => {

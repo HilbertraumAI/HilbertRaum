@@ -407,8 +407,8 @@ const api = {
   importDocuments: (paths: string[], options?: ImportOptions): Promise<ImportJob> =>
     ipcRenderer.invoke(IPC.importDocuments, paths, options),
   /** What a picked selection contains — drives the audio size confirm. */
-  importPreflight: (paths: string[]): Promise<ImportPreflight> =>
-    ipcRenderer.invoke(IPC.importPreflight, paths),
+  importPreflight: (paths: string[], pickerToken?: string): Promise<ImportPreflight> =>
+    ipcRenderer.invoke(IPC.importPreflight, paths, pickerToken),
   getImportJob: (jobId: string): Promise<ImportJobStatus> =>
     ipcRenderer.invoke(IPC.getImportJob, jobId),
   /** The in-flight import job (or null) — mount-time poll re-attach (DOC-1, #141). */

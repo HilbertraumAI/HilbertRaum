@@ -93,6 +93,28 @@ describe('walk budget — expandPathsBounded', () => {
     expect(bounded.files).toEqual([f])
     expect(bounded.exhausted).toBeNull()
   })
+
+  it('picked files AFTER a stopped walk are still kept; a later picked folder is skipped', () => {
+    const base = root()
+    const big = join(base, 'big')
+    mkdirSync(big)
+    for (let i = 0; i < 50; i++) writeFileSync(join(big, `f${String(i).padStart(2, '0')}.txt`), 'x')
+    const later = join(base, 'later')
+    mkdirSync(later)
+    writeFileSync(join(later, 'l.txt'), 'x')
+    const single = join(base, 'single.txt')
+    writeFileSync(single, 'x')
+    const bounded = expandPathsBounded([big, single, later], { ...DEFAULT_WALK_BUDGET, maxEntries: 10 })
+    expect(bounded.exhausted).toBe('entries')
+    expect(bounded.files.length).toBeLessThanOrEqual(11)
+    expect(bounded.files[bounded.files.length - 1]).toBe(single)
+    expect(bounded.files.some((f) => f.startsWith(later))).toBe(false)
+    // Still a subsequence of the unbounded expansion.
+    const full = expandPaths([big, single, later])
+    const positions = bounded.files.map((f) => full.indexOf(f))
+    expect(positions.every((p) => p >= 0)).toBe(true)
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
+  })
 })
 
 describe('walk budget — defaults, env overrides and the drop cap', () => {
@@ -113,16 +135,11 @@ describe('walk budget — defaults, env overrides and the drop cap', () => {
     )
   })
 
-  it('summarizeImportPaths refuses an array over MAX_DROP_PATHS', () => {
+  it('MAX_DROP_PATHS is 512; the service itself does not cap (the handler caps the raw seams only)', () => {
     expect(MAX_DROP_PATHS).toBe(512)
+    // A main-vetted picker selection may exceed the cap and must still be countable.
     const dir = root()
     const paths = Array.from({ length: MAX_DROP_PATHS + 1 }, (_, i) => join(dir, `missing-${i}.txt`))
-    expect(() => summarizeImportPaths(paths)).toThrow()
-    // Exactly the cap is admitted (the paths do not exist → nothing counted).
-    expect(summarizeImportPaths(paths.slice(0, MAX_DROP_PATHS))).toEqual({
-      fileCount: 0,
-      audioFileCount: 0,
-      audioBytes: 0
-    })
+    expect(summarizeImportPaths(paths)).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
   })
 })

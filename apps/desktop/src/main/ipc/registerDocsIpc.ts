@@ -598,8 +598,13 @@ export function registerDocsIpc(ctx: AppContext): void {
   // L-3: gate + type-filter exactly like importDocuments — a compromised renderer must
   // not drive a recursive statSync/readdirSync walk of arbitrary directories while the
   // workspace is locked, nor pass non-string elements that would crash expandPaths.
-  ipcMain.handle(IPC.importPreflight, (_e, paths: string[]): ImportPreflight => {
+  // #240: with a live picker token the count runs over the main-vetted paths (the renderer's
+  // array is ignored, the token is NOT spent — `importDocuments` spends it); without one this is
+  // the raw seam and the array is capped before any filesystem call.
+  ipcMain.handle(IPC.importPreflight, (_e, paths: string[], pickerToken?: string): ImportPreflight => {
     requireUnlocked()
+    const picked = pickerTokens.peek(pickerToken)
+    if (picked !== undefined) return summarizeImportPaths(picked)
     const safePaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
     requireDropCount(safePaths)
     return summarizeImportPaths(safePaths)

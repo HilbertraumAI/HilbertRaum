@@ -48,7 +48,6 @@ import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
 import { parseOcrMeta } from './ocr-meta'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import {
-  MAX_DROP_PATHS,
   resolveIngestionLimits,
   resolveWalkBudget,
   withParseTimeout,
@@ -1363,9 +1362,8 @@ export interface ImportPreflight {
 }
 
 export function summarizeImportPaths(paths: string[]): ImportPreflight {
-  // #240: cap the array before the first filesystem call (the IPC handler refuses it with a
-  // localized message first; this is the service-level backstop).
-  if (paths.length > MAX_DROP_PATHS) throw new RangeError(`Too many paths (max ${MAX_DROP_PATHS})`)
+  // #240: the array cap (`MAX_DROP_PATHS`) is enforced by the IPC handler on the RAW seams only —
+  // a picker selection is main-vetted and may legitimately exceed it. The walk itself is bounded.
   const files = expandPaths(paths)
   let audioFileCount = 0
   let audioBytes = 0
@@ -2011,9 +2009,10 @@ export type WalkExhausted = 'entries' | 'depth' | 'time' | null
 
 export interface ExpandedPaths {
   /**
-   * The files reached, in walk order: a prefix of the unbounded expansion when the walk was
-   * stopped ('entries' / 'time'), the expansion minus the pruned subtrees when a branch was cut
-   * ('depth'). Never anything the unbounded walk would not have returned.
+   * The files reached, in walk order — always a subsequence of the unbounded expansion: a
+   * stopped walk ('entries' / 'time') keeps what it reached plus every picked FILE that follows
+   * (remaining picked folders are skipped); a depth cut prunes the deep branch and continues.
+   * Never anything the unbounded walk would not have returned.
    */
   files: string[]
   exhausted: WalkExhausted
@@ -2123,15 +2122,18 @@ export function expandPathsBounded(
   }
 
   for (const p of paths) {
-    if (stop) break
     let stat
     try {
       stat = statSync(p)
     } catch {
       continue
     }
-    if (stat.isDirectory()) walk(p, 0)
-    else add(p)
+    // A stopped walk skips the remaining picked FOLDERS; picked files are always kept.
+    if (stat.isDirectory()) {
+      if (!stop) walk(p, 0)
+    } else {
+      add(p)
+    }
   }
   return { files: out, exhausted }
 }

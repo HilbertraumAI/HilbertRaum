@@ -69,8 +69,11 @@ complete; other kinds never set it); `DocumentPreview` gained the additive optio
 page-less formats), feeding that accounting) +
 `exportDocument` (`docs:export`, Phase 34 — save-dialog export of a text document's stored
 content, the `exportConversation` pattern; resolves with the path or null on cancel) +
-`importPreflight` (`docs:importPreflight`, Phase 36 — read-only selection summary driving the
-large-audio import confirm; `DocumentInfo` gained optional `transcriptionProgress`) +
+`importPreflight(paths, pickerToken?)` (`docs:importPreflight`, Phase 36 — read-only selection summary
+driving the large-audio import confirm; `DocumentInfo` gained optional `transcriptionProgress`;
+since PR #275 (#240) a live `pickDocuments` token makes main count its own vetted paths without
+spending the token, while a token-less call is the raw seam, capped at `MAX_DROP_PATHS` = 512
+strings before any filesystem call) +
 `transcribeDictation(audio: Uint8Array): Promise<string>` (`dictation:transcribe`, Phase 37 —
 voice dictation: 16 kHz mono WAV bytes in, plain text out; request/response, nothing persisted,
 no audit; `AppStatus` gained the additive `dictationAvailable: boolean` gate).

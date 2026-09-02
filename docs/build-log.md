@@ -1108,13 +1108,17 @@ since shipped in Phases 19–20).
       §8 L-7 gains the SEC-2 hardlink watch clause; working paper deleted after verifying no
       tracked file references it; final gate green.
 
-### BUILD_STATE §5 item 12 — the round’s executed residual register (retired verbatim 2026-09-03, PR #275)
+### BUILD_STATE §5 item 12 — the round’s residual register (retired verbatim 2026-09-03, PR #275)
 
-> Item 12’s outcome line, ledger pointer and still-open residuals stayed in BUILD_STATE §5 under the
-> same number; the executed / closed entries of its residual register moved here so §5 fits its budget
-> (the audit 2026-09-02 round needed the lines for its item 19). No relative links in the block.
+> Item 12 as it stood in BUILD_STATE §5 before PR #275 collapsed it (outcome line, ledger pointer and
+> the still-open residuals stayed there under the same number; the executed / closed entries of its
+> residual register live here so §5 fits its budget). The two relative links in the header are
+> de-linkified like the rest of this file.
 
-    **Round residuals (register of record):**
+12. **Full-audit 2026-07-12 — ROUND COMPLETE** (close-out 2026-07-12). Durable ledger +
+    §-anchor legend: `docs/architecture.md` **§48**. Six phases, final
+    gate **4190/47**. Wave narrative: `docs/build-log.md`. **Round
+    residuals (register of record):**
 
     - **Owner batch ①–⑥** (the Phase-3 entry, now in `docs/build-log.md`) — **④⑤⑥ EXECUTED 2026-07-12
       post-close-out (owner-directed):** ④ `reviewed_by` normalized to "project maintainer

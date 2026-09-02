@@ -20,8 +20,8 @@ import type { SkillKind, SkillPermissions } from '@shared/skill-manifest'
 import type { AppSettings, SkillInfo, SkillPreview, SkillReconcileStatus } from '@shared/types'
 
 // Settings → Skills (skills plan §15 + §18.1). The one place to see and add skills.
-// Everything destructive/file-touching is resolved MAIN-side (S4): the renderer hands a
-// chosen path to previewSkillPackage/importSkill and otherwise reads SkillInfo. No fs,
+// Everything destructive/file-touching is resolved MAIN-side (S4): the renderer hands the
+// picker token to previewSkillPackage/importSkill (#240) and otherwise reads SkillInfo. No fs,
 // no dialog, no validation here. Copy is calm (guidelines §1), every status is icon+word
 // (never colour-only, §9), and the warning for imported skills is reassuring, not alarming.
 // The import-error/note localization tables live in lib/skillImportI18n.ts (SKA-33/SKA-35).
