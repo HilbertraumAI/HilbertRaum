@@ -3,7 +3,12 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Db } from '../db'
-import { ENCRYPTED_DOC_SUFFIX, shredFileAsync, type DocumentCipher } from '../workspace-vault'
+import {
+  ENCRYPTED_DOC_SUFFIX,
+  IMAGES_DIR_NAME,
+  shredFileAsync,
+  type DocumentCipher
+} from '../workspace-vault'
 import type {
   ImageAnalyzeRequest,
   ImageSessionDetail,
@@ -22,7 +27,7 @@ import type {
 
 /** Directory that holds workspace copies of analyzed images. Created on demand. */
 export function imagesDir(workspacePath: string): string {
-  const dir = join(workspacePath, 'images')
+  const dir = join(workspacePath, IMAGES_DIR_NAME)
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -64,8 +69,28 @@ function getRow(db: Db, id: string): SessionRow | undefined {
  * ASYNC (audit 2026-07-16 F-12): the up-to-~20 MiB file write + AES-GCM encrypt + temp shred run on
  * `fs.promises` + the async cipher/shred twins, yielding between chunks, so storing an image on an
  * encrypted USB workspace no longer freezes the main process at the answer-complete moment.
+ *
+ * `beginWork` is the vault's document-work lease (`WorkspaceController.beginDocumentWork`), taken
+ * synchronously before the first await and released after the row insert, so the encrypted write
+ * can never straddle a password change: the change refuses while the lease is held, and this
+ * throws `VaultBusyError` (nothing written) while a change is running (#241).
  */
 export async function createImageSession(
+  db: Db,
+  dir: string,
+  req: Pick<ImageAnalyzeRequest, 'imageBytes' | 'mimeType' | 'name' | 'width' | 'height'>,
+  cipher: DocumentCipher | null,
+  beginWork?: () => () => void
+): Promise<string> {
+  const release = beginWork?.() ?? null
+  try {
+    return await storeImageSession(db, dir, req, cipher)
+  } finally {
+    release?.()
+  }
+}
+
+async function storeImageSession(
   db: Db,
   dir: string,
   req: Pick<ImageAnalyzeRequest, 'imageBytes' | 'mimeType' | 'name' | 'width' | 'height'>,

@@ -170,7 +170,7 @@ function initBackend(): void {
     refuseHashlessMarkers: REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
   })
   const workspace = new WorkspaceController(
-    vaultPathsFrom({ configPath: paths.configPath, dbPath: paths.dbPath }),
+    vaultPathsFrom({ configPath: paths.configPath, dbPath: paths.dbPath, logsPath: paths.logsPath }),
     policy,
     isDev
   )

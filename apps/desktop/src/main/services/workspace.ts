@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { readdir, stat, statfs } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { DriveStatus } from '../../shared/types'
+import { IMAGES_DIR_NAME } from './workspace-vault'
 
 // Workspace / drive manager (spec §7.2 drive detector + §7.9 workspace manager).
 // Resolves where models + the workspace live, supporting three layouts:
@@ -108,7 +109,7 @@ async function freeBytes(dir: string): Promise<number | null> {
  * is a cheap sum of file sizes. `0` when the dir doesn't exist yet; `null` only when unreadable.
  */
 async function imagesFootprintBytes(workspacePath: string): Promise<number | null> {
-  const dir = join(workspacePath, 'images')
+  const dir = join(workspacePath, IMAGES_DIR_NAME)
   try {
     const entries = await readdir(dir, { withFileTypes: true })
     let total = 0

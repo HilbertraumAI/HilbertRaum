@@ -433,6 +433,7 @@ describe('registerImagesIpc — history persistence', () => {
       isDev: false,
       workspace: {
         isUnlocked: () => unlocked,
+        beginDocumentWork: () => () => {},
         documentCipher: () => ({
           encryptFile: (s: string, d: string) => encryptFile(s, d, key),
           decryptFile: (s: string, d: string) => decryptFile(s, d, key),

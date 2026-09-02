@@ -245,7 +245,10 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
             width: width ?? undefined,
             height: height ?? undefined
           },
-          ctx.workspace.documentCipher()
+          ctx.workspace.documentCipher(),
+          // The document-work lease: the encrypted write cannot straddle a password change,
+          // and a save during one is refused (VaultBusyError, logged content-free) (#241).
+          () => ctx.workspace.beginDocumentWork()
         )
       } catch (err) {
         log.warn('Vision history create failed', { code: errCode(err) })
