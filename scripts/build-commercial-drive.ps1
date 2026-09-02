@@ -84,22 +84,25 @@ $KitPlatforms = @(
   'mac-arm64',
   'linux-x64'
 )
+# Accept both `-Platforms win-x64,mac-arm64` (array binding) and a quoted comma list.
+$Platforms = @($Platforms | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($Platforms.Count -eq 0) { Write-Host '-Platforms must name at least one platform' -ForegroundColor Red; exit 2 }
 foreach ($p in $Platforms) {
   if ($KitPlatforms -notcontains $p) {
     Write-Host "Unknown platform '$p' -- known: $($KitPlatforms -join ', ')" -ForegroundColor Red
     exit 2
   }
 }
-# The version the artifacts must carry = the repo's own (the release workflow names
-# HilbertRaum-<version>-... from it).
-$AppVersion = (Get-Content (Join-Path $RepoRoot 'package.json') -Raw | ConvertFrom-Json).version
+# The version the artifacts must carry = the desktop package's (electron-builder and the
+# release workflow name HilbertRaum-<version>-... from apps/desktop/package.json).
+$AppVersion = (Get-Content (Join-Path $RepoRoot 'apps/desktop/package.json') -Raw | ConvertFrom-Json).version
 
 # Refuse to proceed when another app artifact already sits at the drive root (#233): the
 # copy in step 4 overwrites only the same basename, so an older build would stay beside
 # the new one and the launchers would find two. Delete it first, on purpose.
 if ($AppArtifact -and -not $VerifyOnly) {
   $incoming = @($AppArtifact | ForEach-Object { Split-Path -Leaf $_ })
-  $prior = @(Get-ChildItem -Path $Target -Force -ErrorAction SilentlyContinue |
+  $prior = @(Get-ChildItem -LiteralPath $Target -Force -ErrorAction SilentlyContinue |
     Where-Object { ($_.Name -like 'HilbertRaum-*' -or ($_.PSIsContainer -and $_.Name -like '*.app')) -and ($incoming -notcontains $_.Name) })
   if ($prior.Count -gt 0) {
     Write-Host 'Refusing to proceed: another app artifact already sits at the drive root:' -ForegroundColor Red
@@ -400,7 +403,12 @@ if (-not (Test-Path $gateTool)) {
 } else {
   Write-Host '  Canonical gate:'
   $global:LASTEXITCODE = 0
-  & $nodeCmd.Source $gateTool --target $Target --platforms ($Platforms -join ',') --app-version $AppVersion
+  # Native-arg quoting (PS 5.1): a trailing backslash before the closing quote of a
+  # space-containing path escapes the quote -- hand node the path without it (a bare
+  # drive root like E:\ keeps its backslash).
+  $gateTarget = $Target.TrimEnd('\')
+  if ($gateTarget -match '^[A-Za-z]:$') { $gateTarget += '\' }
+  & $nodeCmd.Source $gateTool --target $gateTarget --platforms ($Platforms -join ',') --app-version $AppVersion
   if ($LASTEXITCODE -ne 0) { $problems += "canonical gate: not sellable (exit $LASTEXITCODE, see above)" }
 }
 if ($problems.Count -gt 0) {

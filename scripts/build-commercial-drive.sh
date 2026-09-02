@@ -74,6 +74,7 @@ KIT_PLATFORMS=(
   mac-arm64
   linux-x64
 )
+[[ -n "$PLATFORMS" ]] || { echo "--platforms must name at least one platform" >&2; exit 2; }
 IFS=',' read -r -a PLATFORM_LIST <<< "$PLATFORMS"
 for p in "${PLATFORM_LIST[@]}"; do
   known=0
@@ -83,9 +84,9 @@ for p in "${PLATFORM_LIST[@]}"; do
     exit 2
   fi
 done
-# The version the artifacts must carry = the repo's own (the release workflow names
-# HilbertRaum-<version>-... from it).
-APP_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/package.json" | head -n1)"
+# The version the artifacts must carry = the desktop package's (electron-builder and the
+# release workflow name HilbertRaum-<version>-... from apps/desktop/package.json).
+APP_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/apps/desktop/package.json" | head -n1)"
 
 # Refuse to proceed when another app artifact already sits at the drive root (#233): the
 # copy in step 4 overwrites only the same basename, so an older build would stay beside

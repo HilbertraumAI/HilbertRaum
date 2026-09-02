@@ -19,6 +19,10 @@ if (!toolBuilt) {
   console.warn(`script-execution: ${GATE_TOOL} is not built (run \`npm run build\`) — the gate cases are skipped`)
 }
 
+// The child is killed before vitest's own budget (below) expires, so a hung script fails
+// with its output attached instead of as a bare test timeout.
+const CHILD_TIMEOUT_MS = 60_000
+
 const PLACEHOLDER = 'REPLACE_WITH_REAL_HASH'
 const REAL_SHA = 'a'.repeat(64)
 
@@ -86,7 +90,7 @@ const LEGS: Leg[] = [
       spawnSync(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(SCRIPTS, script), ...args],
-        { encoding: 'utf8', timeout: 120_000, windowsHide: true }
+        { encoding: 'utf8', timeout: CHILD_TIMEOUT_MS, windowsHide: true }
       )
   },
   {
@@ -96,7 +100,7 @@ const LEGS: Leg[] = [
     ext: 'sh',
     flag: (n) => `--${n.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()}`,
     run: (script, args) =>
-      spawnSync('bash', [join(SCRIPTS, script), ...args], { encoding: 'utf8', timeout: 120_000 })
+      spawnSync('bash', [join(SCRIPTS, script), ...args], { encoding: 'utf8', timeout: CHILD_TIMEOUT_MS })
   }
 ]
 

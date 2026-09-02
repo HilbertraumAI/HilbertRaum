@@ -494,7 +494,7 @@ if (Test-Path $binaryPath) {
   # Record exactly which build is installed (UTF-8 without BOM -- PS 5.1 Set-Content
   # would prepend one and break Node's JSON.parse). Mirrors assets.ts writeRuntimeMarker.
   # `binaries` records the extracted binary's own SHA-256 so the app can re-hash it
-  # immediately before spawn (vuln-scan B / binary-verifier.ts). The key is the binary's
+  # immediately before spawn (binary-verifier.ts, #234). The key is the binary's
   # name relative to the extract dir (here it sits at the root after the flatten above).
   # Only a VERIFIED archive earns that hash (#234): an unverified install must not mint
   # a marker the sell gate and the spawn verifier would trust.

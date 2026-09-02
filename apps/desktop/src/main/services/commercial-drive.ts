@@ -600,7 +600,7 @@ export async function assertCommercialDrive(
         )
       } else {
         // Version + backend match — now require the marker to carry the binary's SHA-256
-        // and to MATCH the on-disk binary (vuln-scan B; #234). A sold drive must ship this
+        // and to MATCH the on-disk binary (#234). A sold drive must ship this
         // hash so the app can re-verify it before spawn; a hashless marker (an older
         // fetch-runtime, or an unverified archive) fails the gate and must be re-fetched.
         const expected = marker.binaries?.[markerBinaryKey(extractTo, binaryPath)]

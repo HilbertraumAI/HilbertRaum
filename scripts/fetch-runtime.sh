@@ -347,7 +347,7 @@ if [[ -f "$BIN_PATH" ]]; then
     if [[ "$m_version" == "$VERSION" && "$m_backend" == "${B_BACKEND[$SEL]}" ]]; then
       SKIP=1
       if [[ $COMMERCIAL -eq 1 ]]; then
-        m_hash="$(sed -n 's/.*"binaries":{[^}]*"'"$BIN_NAME"'":"\([a-f0-9]\{64\}\)".*/\1/p' "$MARKER_PATH")"
+        m_hash="$(sed -n 's/.*"binaries":{[^}]*"'"$BIN_NAME"'":"\([a-fA-F0-9]\{64\}\)".*/\1/p' "$MARKER_PATH" | tr '[:upper:]' '[:lower:]')"
         if ! is_real_sha "$m_hash"; then
           SKIP=0
           WHY="install marker records no binary hash (legacy) — commercial mode"
@@ -484,7 +484,7 @@ if [[ -f "$BIN_PATH" ]]; then
   # Record exactly which build is installed (mirrors assets.ts writeRuntimeMarker). The
   # `binaries` map records the extracted binary's own SHA-256 (keyed by its name relative
   # to the extract dir — it sits at the root after the flatten above) so the app can
-  # re-hash it immediately before spawn (vuln-scan B / binary-verifier.ts). Only a
+  # re-hash it immediately before spawn (binary-verifier.ts, #234). Only a
   # VERIFIED archive earns that hash (#234): an unverified install must not mint a
   # marker the sell gate and the spawn verifier would trust.
   if [[ $ARCHIVE_VERIFIED -eq 1 ]]; then
