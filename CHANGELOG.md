@@ -58,6 +58,13 @@ from its first public `1.0.0` release onward.
   engine binary whose recorded checksum still matches. A leftover older app build, an engine
   downloaded without a verifiable checksum, or an engine with no recorded checksum now stops the
   drive from being cleared (drive builders only; nothing changes for an app already in use).
+- **Updating the app on a drive now means deleting the old one first.** The launchers refuse to
+  start while more than one app version sits on the drive (two portable `.exe` files, two
+  AppImages, or an extracted `HilbertRaum.app` beside a `.app.zip`) and list the files so you can
+  delete the older one — nothing is deleted for you. An older build running beside a newer one
+  could destroy the workspace (the 0.1.59 fix for issue #208 only protects when both copies are
+  0.1.59 or newer). Each launcher also accepts `--check` (`/check` on Windows) to show which app
+  it would start without starting it.
 
 ## [0.1.59] — 2026-08-21
 

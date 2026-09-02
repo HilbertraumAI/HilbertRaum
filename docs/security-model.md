@@ -734,7 +734,11 @@ password. Four guards close this:
 - **Single instance (Electron).** `app.requestSingleInstanceLock()` before any workspace
   path is touched; a second instance exits immediately and the primary's window is
   focused. The lock is scoped to `userData`, which every portable release build shares —
-  so old-exe + new-exe overlap (the incident) is refused at the door. Dev builds get their
+  so old-exe + new-exe overlap (the incident) is refused at the door — when both copies are
+  0.1.59 or newer. A pre-0.1.59 build takes no lock at all, so the drive launchers refuse to
+  start while more than one app artifact sits at the drive root (naming what to delete, never
+  deleting) and the update procedure deletes the prior artifact first (`drive-layout.md`
+  "Updating a drive", #235). Dev builds get their
   own `userData` suffix (`-dev`), so `npm run dev` no longer operates on the production
   vault at all (mixed dev/release access to one vault is what widened the incident
   window). Residual: two processes with *different* `userData` pointed at one drive

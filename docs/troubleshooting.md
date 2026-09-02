@@ -181,9 +181,11 @@ What to do:
   proves what happened, and your imported documents' encrypted copies under
   `workspace/documents/` may be individually recoverable.
 
-Never run two copies of the app at the same time against the same drive. Current versions
-refuse a second instance on their own; when upgrading, quit the old version **before**
-starting the new one.
+Never run two copies of the app at the same time against the same drive. Versions 0.1.59 and
+newer refuse a second instance on their own — but an older copy takes no such lock, so that
+protection only holds when **both** copies are 0.1.59 or newer. When upgrading, quit the old
+version, delete its app file from the drive, and only then start the new one (see "Two app
+versions on the drive" below).
 
 ---
 
@@ -306,6 +308,26 @@ pages (png, jpg, jpeg — needs the OCR files). Other files in the same import s
 - Check that the drive has free space and is writable. The app shows a friendly note on the Home
   screen if the drive is read-only, low on space, or slow (none of these block you).
 - If the drive was just prepared, confirm `config/drive.json` exists at the drive root.
+
+---
+
+## Two app versions on the drive
+
+The launcher stopped with **"More than one HilbertRaum app was found on this drive"** and a
+list of files. An update left the previous app beside the new one — two
+`HilbertRaum-<version>-portable.exe` files, two `.AppImage` files, or an extracted
+`HilbertRaum.app` next to a `.app.zip`. The launcher refuses to start **either**: an older
+build running beside a newer one can destroy the workspace (see "Your password is correct, but
+the workspace data on the drive is damaged" above). It never deletes anything for you.
+
+What to do: keep only the newest version and delete every other HilbertRaum app file at the
+drive root — on macOS also the extracted `HilbertRaum.app` when a `.app.zip` is present (the
+launcher unpacks the zip again on the next start) — then double-click the launcher again.
+
+To see which app the launcher would start **without** starting it, run it with `/check` on
+Windows (`"Start HilbertRaum.cmd" /check` in a Command Prompt opened at the drive root) or
+`--check` on macOS/Linux (`./"Start HilbertRaum.command" --check`, `./start-hilbertraum.sh
+--check`). It prints the drive root and the app it resolved, then "Nothing was started".
 
 ---
 
