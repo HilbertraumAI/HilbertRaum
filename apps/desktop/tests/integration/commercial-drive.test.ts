@@ -11,10 +11,60 @@ import {
 import { buildPolicyJson } from '../../src/main/services/drive'
 import { writeRuntimeMarker } from '../../src/main/services/assets'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
-import { validateRuntimeSources, type RuntimeSources } from '../../src/shared/runtime-sources'
+import {
+  validateRuntimeSources,
+  type KitPlatform,
+  type RuntimeSources
+} from '../../src/shared/runtime-sources'
 
 function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))
+}
+
+// The app artifact + launcher a kit must carry per platform it is sold for (#233). The
+// names are spelled here as literals (not the exported table) so the test stays an
+// independent check of what the launchers look for on the drive root.
+const APP_VERSION = '0.1.59'
+const ALL_PLATFORMS: KitPlatform[] = ['win-x64', 'mac-arm64', 'linux-x64']
+const LAUNCHER: Record<KitPlatform, string> = {
+  'win-x64': 'Start HilbertRaum.cmd',
+  'mac-arm64': 'Start HilbertRaum.command',
+  'linux-x64': 'start-hilbertraum.sh'
+}
+const ARTIFACT: Record<KitPlatform, string> = {
+  'win-x64': `HilbertRaum-${APP_VERSION}-portable.exe`,
+  'mac-arm64': `HilbertRaum-${APP_VERSION}-mac-arm64.app.zip`,
+  'linux-x64': `HilbertRaum-${APP_VERSION}.AppImage`
+}
+
+/** Place one app artifact + one launcher per platform at the drive root. */
+function provisionApp(root: string, platforms: KitPlatform[] = ALL_PLATFORMS): void {
+  for (const p of platforms) {
+    writeFileSync(join(root, ARTIFACT[p]), 'app-bytes')
+    writeFileSync(join(root, LAUNCHER[p]), 'launcher')
+  }
+}
+
+/** The declared platform matrix the gate is asked to check against. */
+function kit(platforms: KitPlatform[] = ALL_PLATFORMS): { platforms: KitPlatform[]; appVersion: string } {
+  return { platforms, appVersion: APP_VERSION }
+}
+
+/** An extracted macOS bundle (what the .command launcher prefers over the zip). */
+function provisionExtractedApp(root: string, version: string): void {
+  const contents = join(root, 'HilbertRaum.app', 'Contents')
+  mkdirSync(join(contents, 'MacOS'), { recursive: true })
+  writeFileSync(
+    join(contents, 'Info.plist'),
+    [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<plist version="1.0"><dict>',
+      '  <key>CFBundleName</key><string>HilbertRaum</string>',
+      '  <key>CFBundleShortVersionString</key>',
+      `  <string>${version}</string>`,
+      '</dict></plist>'
+    ].join('\n')
+  )
 }
 
 function manifestObj(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -138,11 +188,13 @@ describe('assertCommercialDrive', () => {
     provisionLicenseArtifacts(root)
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     const embed = writeVerifiedWeight(root, 'embed', 'models/embeddings/e5.gguf', 'embed-weights')
+    provisionApp(root)
 
-    const res = await assertCommercialDrive(root, [chat, embed])
+    const res = await assertCommercialDrive(root, [chat, embed], null, null, null, kit())
 
     expect(res.ok).toBe(true)
     expect(res.problems).toEqual([])
+    // Exact shape: a new check must be added here on purpose (#233, #234).
     expect(res.checks).toEqual({
       policyCommercial: true,
       networkDenied: true,
@@ -150,10 +202,14 @@ describe('assertCommercialDrive', () => {
       licensesApproved: true,
       noUserData: true,
       runtimeCurrent: true,
+      runtimeHashed: true,
       ocrAssetsVerified: true,
       appSkillsPresent: true,
       userSkillsEmpty: true,
-      licenseArtifactsPresent: true
+      licenseArtifactsPresent: true,
+      platformMatrixDeclared: true,
+      appArtifactsPresent: true,
+      launchersPresent: true
     })
   })
 
@@ -230,7 +286,8 @@ describe('assertCommercialDrive', () => {
     provisionLicenseArtifacts(root)
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     mkdirSync(join(root, 'user-skills'), { recursive: true }) // empty
-    const res = await assertCommercialDrive(root, [chat])
+    provisionApp(root)
+    const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
     expect(res.ok).toBe(true)
     expect(res.checks.userSkillsEmpty).toBe(true)
   })
@@ -411,7 +468,8 @@ describe('assertCommercialDrive', () => {
     provisionLicenseArtifacts(root)
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     mkdirSync(join(root, 'workspace', 'documents'), { recursive: true }) // empty
-    const res = await assertCommercialDrive(root, [chat])
+    provisionApp(root)
+    const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
     expect(res.ok).toBe(true)
     expect(res.checks.noUserData).toBe(true)
   })
@@ -474,9 +532,11 @@ describe('assertCommercialDrive', () => {
       provisionLicenseArtifacts(root)
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
-      const res = await assertCommercialDrive(root, [chat], sources())
+      provisionApp(root)
+      const res = await assertCommercialDrive(root, [chat], sources(), null, null, kit())
       expect(res.ok).toBe(true)
       expect(res.checks.runtimeCurrent).toBe(true)
+      expect(res.checks.runtimeHashed).toBe(true)
     })
 
     it('fails when a pinned build has NO install marker', async () => {
@@ -537,7 +597,9 @@ describe('assertCommercialDrive', () => {
       })
       const res = await assertCommercialDrive(root, [chat], sources())
       expect(res.ok).toBe(false)
-      expect(res.checks.runtimeCurrent).toBe(false)
+      // Presence + version/backend are fine; the missing hash is its own verdict (#234).
+      expect(res.checks.runtimeCurrent).toBe(true)
+      expect(res.checks.runtimeHashed).toBe(false)
       expect(res.problems.some((p) => /records no SHA-256/.test(p))).toBe(true)
     })
 
@@ -551,7 +613,27 @@ describe('assertCommercialDrive', () => {
       writeFileSync(join(root, 'runtime', 'llama.cpp', 'win', 'llama-server.exe'), 'TAMPERED')
       const res = await assertCommercialDrive(root, [chat], sources())
       expect(res.ok).toBe(false)
-      expect(res.checks.runtimeCurrent).toBe(false)
+      expect(res.checks.runtimeCurrent).toBe(true)
+      expect(res.checks.runtimeHashed).toBe(false)
+      expect(res.problems.some((p) => /does not match the SHA-256 recorded/.test(p))).toBe(true)
+    })
+
+    it('fails when the marker HASH was tampered (binary untouched, recorded hash rewritten)', async () => {
+      const root = tempDir('hilbertraum-commercial-rt-marker-tamper-')
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      writeRuntimeMarker(join(root, 'runtime', 'llama.cpp', 'win'), {
+        version: 'b9585',
+        backend: 'vulkan',
+        os: 'win',
+        arch: 'x64',
+        binaries: { 'llama-server.exe': 'e'.repeat(64) }
+      })
+      const res = await assertCommercialDrive(root, [chat], sources())
+      expect(res.ok).toBe(false)
+      expect(res.checks.runtimeHashed).toBe(false)
       expect(res.problems.some((p) => /does not match the SHA-256 recorded/.test(p))).toBe(true)
     })
 
@@ -561,9 +643,11 @@ describe('assertCommercialDrive', () => {
       provisionAppSkill(root)
       provisionLicenseArtifacts(root)
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
-      const res = await assertCommercialDrive(root, [chat])
+      provisionApp(root)
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
       expect(res.ok).toBe(true)
       expect(res.checks.runtimeCurrent).toBe(true)
+      expect(res.checks.runtimeHashed).toBe(true)
     })
 
     // ---- Phase 36: the whisper family rides the same gate (binary = whisper-cli) ----
@@ -622,9 +706,11 @@ describe('assertCommercialDrive', () => {
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
       writeWhisperInstall(root)
-      const res = await assertCommercialDrive(root, [chat], sources(), whisperSources())
+      provisionApp(root)
+      const res = await assertCommercialDrive(root, [chat], sources(), whisperSources(), null, kit())
       expect(res.ok).toBe(true)
       expect(res.checks.runtimeCurrent).toBe(true)
+      expect(res.checks.runtimeHashed).toBe(true)
     })
 
     it('fails when the whisper-cli binary is missing under the whisper pin', async () => {
@@ -657,6 +743,179 @@ describe('assertCommercialDrive', () => {
       expect(res.problems.some((p) => /whisper build .*does not match the pinned v1\.8\.6/.test(p))).toBe(
         true
       )
+    })
+  })
+
+  // #233: the gate requires the app artifact + launcher for every platform the kit is
+  // declared for, exactly one artifact per platform, with the version the builder names.
+  describe('app artifacts + launchers per declared platform (#233)', () => {
+    /** Everything but the app: posture, skill, notices, one weight. */
+    function otherwiseValidDrive(prefix: string): { root: string; chat: ModelManifest } {
+      const root = tempDir(prefix)
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      return { root, chat }
+    }
+
+    it('fails with no app artifact at all (launchers present)', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-noapp-')
+      for (const p of ALL_PLATFORMS) writeFileSync(join(root, LAUNCHER[p]), 'launcher')
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.problems.length).toBeGreaterThan(0)
+      expect(res.checks.appArtifactsPresent).toBe(false)
+      expect(res.checks.launchersPresent).toBe(true)
+      expect(res.checks.platformMatrixDeclared).toBe(true)
+      for (const p of ALL_PLATFORMS) {
+        expect(res.problems.some((m) => m.includes(p) && /no app artifact/i.test(m)), p).toBe(true)
+      }
+    })
+
+    it('fails on a zero-byte app artifact', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-zeroapp-')
+      provisionApp(root)
+      writeFileSync(join(root, ARTIFACT['win-x64']), Buffer.alloc(0))
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.checks.appArtifactsPresent).toBe(false)
+      expect(res.problems.some((m) => m.includes(ARTIFACT['win-x64']) && /zero bytes/i.test(m))).toBe(true)
+    })
+
+    it('fails on a wrong-arch artifact name (not a release artifact of any declared platform)', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-wrongarch-')
+      provisionApp(root, ['win-x64', 'linux-x64'])
+      writeFileSync(join(root, LAUNCHER['mac-arm64']), 'launcher')
+      writeFileSync(join(root, `HilbertRaum-${APP_VERSION}-mac-x64.app.zip`), 'app-bytes')
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.checks.appArtifactsPresent).toBe(false)
+      expect(res.problems.some((m) => m.includes('mac-x64'))).toBe(true)
+      expect(res.problems.some((m) => m.includes('mac-arm64') && /no app artifact/i.test(m))).toBe(true)
+    })
+
+    it('fails when a declared platform has its artifact but no launcher', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-nolauncher-')
+      provisionApp(root)
+      rmSync(join(root, LAUNCHER['linux-x64']))
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.checks.launchersPresent).toBe(false)
+      expect(res.checks.appArtifactsPresent).toBe(true)
+      expect(res.problems.some((m) => m.includes(LAUNCHER['linux-x64']))).toBe(true)
+    })
+
+    it('fails when the declared platform set is only partly provisioned', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-partial-')
+      provisionApp(root, ['win-x64'])
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.checks.appArtifactsPresent).toBe(false)
+      expect(res.checks.launchersPresent).toBe(false)
+      expect(res.problems.some((m) => m.includes('mac-arm64'))).toBe(true)
+      expect(res.problems.some((m) => m.includes('linux-x64'))).toBe(true)
+    })
+
+    it('fails when two app artifacts of one platform sit at the root (an older build beside the new one)', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-twoapps-')
+      provisionApp(root)
+      writeFileSync(join(root, 'HilbertRaum-0.1.58-portable.exe'), 'old-app-bytes')
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.checks.appArtifactsPresent).toBe(false)
+      const dup = res.problems.find((m) => /more than one app artifact/i.test(m))
+      expect(dup).toBeDefined()
+      expect(dup).toContain('HilbertRaum-0.1.58-portable.exe')
+      expect(dup).toContain(ARTIFACT['win-x64'])
+    })
+
+    it('fails when the only artifact carries another version than the one being built', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-oldversion-')
+      provisionApp(root)
+      rmSync(join(root, ARTIFACT['win-x64']))
+      writeFileSync(join(root, 'HilbertRaum-0.1.58-portable.exe'), 'old-app-bytes')
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.checks.appArtifactsPresent).toBe(false)
+      expect(res.problems.some((m) => m.includes('0.1.58') && m.includes(APP_VERSION))).toBe(true)
+    })
+
+    it('fails when the drive carries an artifact for a platform the kit is NOT declared for', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-undeclared-')
+      provisionApp(root)
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit(['win-x64']))
+      expect(res.ok).toBe(false)
+      expect(res.checks.appArtifactsPresent).toBe(false)
+      expect(res.problems.some((m) => m.includes(ARTIFACT['mac-arm64']) && /not declared/i.test(m))).toBe(true)
+      expect(res.problems.some((m) => m.includes(ARTIFACT['linux-x64']) && /not declared/i.test(m))).toBe(true)
+    })
+
+    it('a single-platform kit passes with just that platform declared and provisioned', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-winonly-')
+      provisionApp(root, ['win-x64'])
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit(['win-x64']))
+      expect(res.ok).toBe(true)
+      expect(res.checks.platformMatrixDeclared).toBe(true)
+      expect(res.checks.appArtifactsPresent).toBe(true)
+      expect(res.checks.launchersPresent).toBe(true)
+    })
+
+    it('an extracted .app bundle counts as the mac artifact when its Info.plist carries the version', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-appdir-')
+      provisionApp(root)
+      rmSync(join(root, ARTIFACT['mac-arm64']))
+      provisionExtractedApp(root, APP_VERSION)
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.ok).toBe(true)
+      expect(res.checks.appArtifactsPresent).toBe(true)
+    })
+
+    it('fails on an extracted .app of another version, and on a .app beside a .app.zip', async () => {
+      const stale = otherwiseValidDrive('hilbertraum-commercial-appdir-stale-')
+      provisionApp(stale.root)
+      rmSync(join(stale.root, ARTIFACT['mac-arm64']))
+      provisionExtractedApp(stale.root, '0.1.58')
+      const staleRes = await assertCommercialDrive(stale.root, [stale.chat], null, null, null, kit())
+      expect(staleRes.ok).toBe(false)
+      expect(staleRes.problems.some((m) => m.includes('HilbertRaum.app') && m.includes('0.1.58'))).toBe(true)
+
+      const both = otherwiseValidDrive('hilbertraum-commercial-appdir-both-')
+      provisionApp(both.root)
+      provisionExtractedApp(both.root, APP_VERSION)
+      const bothRes = await assertCommercialDrive(both.root, [both.chat], null, null, null, kit())
+      expect(bothRes.ok).toBe(false)
+      const dup = bothRes.problems.find((m) => /more than one app artifact/i.test(m))
+      expect(dup).toBeDefined()
+      expect(dup).toContain('HilbertRaum.app')
+      expect(dup).toContain(ARTIFACT['mac-arm64'])
+    })
+
+    it('fails closed when no platform matrix is declared (nothing to check the app against)', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-nomatrix-')
+      provisionApp(root)
+      const res = await assertCommercialDrive(root, [chat])
+      expect(res.ok).toBe(false)
+      expect(res.checks.platformMatrixDeclared).toBe(false)
+      expect(res.checks.appArtifactsPresent).toBe(false)
+      expect(res.checks.launchersPresent).toBe(false)
+      expect(res.problems.some((m) => /platform/i.test(m))).toBe(true)
+    })
+
+    it('rejects an empty, duplicated or unknown platform declaration and a missing version', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-badmatrix-')
+      provisionApp(root)
+      const bad = [
+        { platforms: [] as KitPlatform[], appVersion: APP_VERSION },
+        { platforms: ['win-x64', 'win-x64'] as KitPlatform[], appVersion: APP_VERSION },
+        { platforms: ['win-arm64' as KitPlatform], appVersion: APP_VERSION },
+        { platforms: ALL_PLATFORMS, appVersion: '' }
+      ]
+      for (const opts of bad) {
+        const res = await assertCommercialDrive(root, [chat], null, null, null, opts)
+        expect(res.ok, JSON.stringify(opts)).toBe(false)
+        expect(res.checks.platformMatrixDeclared, JSON.stringify(opts)).toBe(false)
+      }
     })
   })
 })

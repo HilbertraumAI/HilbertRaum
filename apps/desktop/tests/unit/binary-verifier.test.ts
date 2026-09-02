@@ -6,6 +6,8 @@ import {
   computeBinaryVerification,
   verifyBinaryBeforeSpawn,
   initBinaryVerification,
+  setBinaryVerificationPosture,
+  REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES,
   _resetBinaryVerificationForTests
 } from '../../src/main/services/binary-verifier'
 import {
@@ -208,5 +210,69 @@ describe('verifyBinaryBeforeSpawn (enforcement gate + session cache)', () => {
     // Even after the file is tampered, the cached decision stands for the rest of the session.
     writeFileSync(bin, 'now-tampered-but-already-verified')
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+})
+
+// #234: a hashless marker on a COMMERCIAL drive can be refused at spawn. The refusal is
+// wired but shipped OFF (the constant) until the owner rules on already-sold kits; DIY
+// drives keep the documented tolerance either way.
+describe('commercial posture: hashless markers (#234)', () => {
+  function hashlessInstall(): string {
+    const dir = tmp()
+    const bin = join(dir, 'llama-server.exe')
+    writeFileSync(bin, 'legacy-binary')
+    writeRuntimeMarker(dir, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
+    return bin
+  }
+
+  it('ships with the spawn-time refusal OFF', () => {
+    expect(REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES).toBe(false)
+  })
+
+  it('DIY posture: a hashless marker stays skip-legacy even with the refusal enabled', async () => {
+    initBinaryVerification(false)
+    setBinaryVerificationPosture({ commercial: false, refuseHashlessMarkers: true })
+    expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-legacy')
+  })
+
+  it('commercial posture + refusal enabled: a hashless marker is REFUSED (mismatch)', async () => {
+    initBinaryVerification(false)
+    setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
+    expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('mismatch')
+  })
+
+  it('commercial posture with the shipped default (refusal off): tolerated as skip-legacy', async () => {
+    initBinaryVerification(false)
+    setBinaryVerificationPosture({ commercial: true })
+    expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-legacy')
+  })
+
+  it('the refusal never touches a binary whose recorded hash matches (ok) or a dev build (skip-dev)', async () => {
+    initBinaryVerification(false)
+    setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
+    const dir = tmp()
+    const bin = join(dir, 'llama-server.exe')
+    writeFileSync(bin, 'hashed-binary')
+    writeRuntimeMarker(dir, {
+      version: 'b9585',
+      backend: 'vulkan',
+      os: 'win',
+      arch: 'x64',
+      binaries: { [markerBinaryKey(dir, bin)]: await sha256File(bin) }
+    })
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+
+    _resetBinaryVerificationForTests()
+    initBinaryVerification(true)
+    setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
+    expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-dev')
+  })
+
+  it('the test reset clears the posture (a later case is not silently commercial)', async () => {
+    initBinaryVerification(false)
+    setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
+    _resetBinaryVerificationForTests()
+    initBinaryVerification(false)
+    expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-legacy')
   })
 })
