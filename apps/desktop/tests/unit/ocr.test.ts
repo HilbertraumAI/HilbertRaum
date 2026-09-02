@@ -2,12 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Worker } from 'node:worker_threads'
 import { PdfParser, PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/parsers/pdf'
 import {
   ImageParser,
   IMAGE_NEEDS_OCR_MESSAGE,
   IMAGE_NO_TEXT_MESSAGE,
-  IMAGE_OCR_FAILED_MESSAGE
+  IMAGE_OCR_FAILED_MESSAGE,
+  IMAGE_OCR_UNAVAILABLE_MESSAGE
 } from '../../src/main/services/ingestion/parsers/image'
 import { isImagePath, isPdfPath, selectParser, supportedExtensions } from '../../src/main/services/ingestion/parsers'
 import {
@@ -15,6 +17,7 @@ import {
   listOcrLanguages,
   ocrAssetsDir,
   TesseractOcrEngine,
+  type OcrAvailability,
   type OcrEngine
 } from '../../src/main/services/ocr'
 import { resolveWorkerScriptPath, type TesseractModule } from '../../src/main/services/ocr/tesseract'
@@ -155,6 +158,62 @@ describe('photo parser (.png/.jpg OCR on import)', () => {
     await expect(ImageParser.parse(p, { ocrEngine: failing })).rejects.toThrow(
       IMAGE_OCR_FAILED_MESSAGE
     )
+  })
+
+  // REL-6 (audit 2026-09-02 Phase 1, owner decision 2 on its default): in a packaged build whose
+  // OCR worker cannot run, a photo is imported WITHOUT recognition and the row carries the
+  // "could not run in this build" note. This is a NEW path — before the fix an engine was either
+  // present (auto-OCR, which crashed the packaged app) or null (`IMAGE_NEEDS_OCR_MESSAGE`, whose
+  // copy says the OCR files are not on the drive — FALSE for a kit that carries them). Watched
+  // fail pre-fix: the parser ignores `availability()` and calls `recognize()`.
+  it('REL-6 interim: an engine that cannot run in this build skips OCR and records the unavailable note', async () => {
+    const dir = tmp()
+    const p = join(dir, 'page.png')
+    writeFileSync(p, TINY_PNG)
+    let recognized = 0
+    const degraded: OcrEngine = {
+      id: 'fake',
+      languages: ['eng'],
+      availability: () => 'unavailable',
+      recognize: async () => {
+        recognized += 1
+        return { text: 'never used', confidence: 90 }
+      }
+    }
+    await expect(ImageParser.parse(p, { ocrEngine: degraded })).rejects.toThrow(
+      IMAGE_OCR_UNAVAILABLE_MESSAGE
+    )
+    expect(recognized).toBe(0)
+    // A distinct message: never the "not on this drive" copy, never the generic retry copy.
+    expect(IMAGE_OCR_UNAVAILABLE_MESSAGE).not.toBe(IMAGE_NEEDS_OCR_MESSAGE)
+    expect(IMAGE_OCR_UNAVAILABLE_MESSAGE).not.toBe(IMAGE_OCR_FAILED_MESSAGE)
+    expect(IMAGE_OCR_UNAVAILABLE_MESSAGE).not.toMatch(/not on this drive/)
+
+    // A recognition that fails WHILE the engine flips to unavailable (the worker died under it)
+    // reports the same note, not "re-index to try again" — a retry would fail identically.
+    let state: OcrAvailability = 'available'
+    const flipping: OcrEngine = {
+      id: 'fake',
+      languages: ['eng'],
+      availability: () => state,
+      recognize: async () => {
+        state = 'unavailable'
+        throw new Error('worker module load failed')
+      }
+    }
+    await expect(ImageParser.parse(p, { ocrEngine: flipping })).rejects.toThrow(
+      IMAGE_OCR_UNAVAILABLE_MESSAGE
+    )
+    // While the startup probe is still running the import attempts recognition (it shares the
+    // in-flight worker start) — only a FAILED probe degrades.
+    const probing: OcrEngine = {
+      id: 'fake',
+      languages: ['eng'],
+      availability: () => 'probing',
+      recognize: async () => ({ text: 'recognized during probe', confidence: 90 })
+    }
+    const parsed = await ImageParser.parse(p, { ocrEngine: probing })
+    expect(parsed.segments[0].text).toBe('recognized during probe')
   })
 })
 
@@ -477,6 +536,217 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     expect(resolveWorkerScriptPath('/dev/checkout/node_modules/t/w.js')).toBe(
       '/dev/checkout/node_modules/t/w.js'
     )
+  })
+})
+
+// REL-6 (audit 2026-09-02 Phase 1, PR 1-a) — the worker boundary. tesseract.js 7.0.0 spawns a
+// `worker_threads.Worker` synchronously inside `createWorker()`, sets the BROWSER idiom
+// `worker.onerror` (inert on a Node Worker — no `on('error')` exists anywhere in the package)
+// and never settles its promise on a load failure (the load chain ends `.catch(() => {})`). A
+// packaged module-load failure inside the worker therefore emits `'error'` with zero listeners,
+// which Node rethrows on the main thread as `uncaughtException` — the app dies while
+// `ocrAvailable` still reports true. The fakes below reproduce the MECHANISM with a real
+// eval-Worker (no mock of `node:worker_threads`): the engine must catch it through Node's
+// `process.on('worker')` hook, reject the pending recognition per document, and report
+// `isAvailable() === false`.
+describe('TesseractOcrEngine — worker boundary (REL-6, audit 2026-09-02 Phase 1)', () => {
+  const base = { langDir: '/ocr', languages: ['eng'] }
+
+  /**
+   * Run `fn` with vitest's own `uncaughtException` handlers parked, capturing what would have
+   * reached them. Before the fix the worker's load failure lands here (the pinned crash); after
+   * it nothing must — the engine's own `'error'` listener consumes the event.
+   */
+  async function withUncaughtCapture<T>(fn: (captured: Error[]) => Promise<T>): Promise<T> {
+    const captured: Error[] = []
+    const previous = process.listeners('uncaughtException')
+    process.removeAllListeners('uncaughtException')
+    const capture = (err: Error): void => {
+      captured.push(err)
+    }
+    process.on('uncaughtException', capture)
+    try {
+      return await fn(captured)
+    } finally {
+      // Let a straggling 'error' event land before the real handlers come back.
+      await new Promise((r) => setTimeout(r, 50))
+      process.removeListener('uncaughtException', capture)
+      for (const l of previous) process.on('uncaughtException', l as NodeJS.UncaughtExceptionListener)
+    }
+  }
+
+  /** A tesseract.js-shaped module whose worker throws while LOADING (the packaged asar gap). */
+  function loadFailingModule(): TesseractModule {
+    return {
+      createWorker: async () => {
+        const worker = new Worker(
+          'throw new Error("worker module load failed: cannot find hoisted dependency")',
+          { eval: true }
+        )
+        // The browser idiom tesseract.js sets — inert on a Node Worker.
+        ;(worker as unknown as { onerror: unknown }).onerror = (): void => undefined
+        return new Promise<never>(() => undefined) // never settles, like createWorker.js:243
+      }
+    }
+  }
+
+  /** A module whose worker starts fine and then dies on its first recognition message. */
+  function crashOnRecognizeModule(): { mod: TesseractModule; spawned: Worker[] } {
+    const spawned: Worker[] = []
+    const mod: TesseractModule = {
+      createWorker: async () => {
+        const raw = new Worker(
+          "const { parentPort } = require('node:worker_threads');" +
+            "parentPort.on('message', () => { throw new Error('worker crashed mid-recognition') });",
+          { eval: true }
+        )
+        spawned.push(raw)
+        return {
+          recognize: () => {
+            raw.postMessage('go')
+            return new Promise<never>(() => undefined) // the job promise never settles either
+          },
+          terminate: async () => {
+            await raw.terminate()
+          }
+        }
+      }
+    }
+    return { mod, spawned }
+  }
+
+  function healthyModule(): {
+    mod: TesseractModule
+    calls: Array<Record<string, unknown>>
+    terminated: { count: number }
+  } {
+    const calls: Array<Record<string, unknown>> = []
+    const terminated = { count: 0 }
+    const mod: TesseractModule = {
+      createWorker: async (_langs, _oem, options) => {
+        calls.push(options)
+        return {
+          recognize: async () => ({ data: { text: 'ok', confidence: 90 } }),
+          terminate: async () => {
+            terminated.count += 1
+          }
+        }
+      }
+    }
+    return { mod, calls, terminated }
+  }
+
+  it('a worker that fails at LOAD rejects recognize() per document, reports unavailable, and never escapes as an uncaught exception', async () => {
+    await withUncaughtCapture(async (captured) => {
+      const engine = new TesseractOcrEngine({
+        ...base,
+        loadTesseract: async () => loadFailingModule(),
+        workerStartTimeoutMs: 5_000
+      })
+      // Pre-fix the recognition HANGS (createWorker never settles) while the load failure
+      // reaches the process as uncaughtException — race it against a short clock so the pin
+      // fails fast instead of at the vitest budget.
+      const outcome = await Promise.race([
+        engine.recognize(Buffer.from('img')).then(
+          () => 'resolved' as const,
+          (err: unknown) => err
+        ),
+        new Promise<'hung'>((r) => setTimeout(() => r('hung'), 2_000))
+      ])
+      expect(outcome).toBeInstanceOf(Error)
+      expect((outcome as Error).message).toMatch(/hoisted dependency/)
+      expect(engine.isAvailable()).toBe(false)
+      expect(engine.availability()).toBe('unavailable')
+      expect(captured.map((e) => e.message)).toEqual([])
+      await engine.stop()
+    })
+  })
+
+  it('a worker failure AT RECOGNIZE TIME after a successful probe flips isAvailable() to false and rejects the in-flight page', async () => {
+    await withUncaughtCapture(async (captured) => {
+      const { mod, spawned } = crashOnRecognizeModule()
+      const engine = new TesseractOcrEngine({
+        ...base,
+        loadTesseract: async () => mod,
+        probeRequired: true
+      })
+      // Packaged posture: unproven until the execution probe passes.
+      expect(engine.availability()).toBe('probing')
+      expect(engine.isAvailable()).toBe(false)
+      expect(await engine.probe()).toBe(true)
+      expect(engine.isAvailable()).toBe(true)
+      // A startup-only probe would leave `ocrAvailable` lying from here on (review 2026-09-02).
+      await expect(engine.recognize(Buffer.from('img'))).rejects.toThrow(/crashed mid-recognition/)
+      expect(engine.isAvailable()).toBe(false)
+      expect(engine.availability()).toBe('unavailable')
+      expect(captured.map((e) => e.message)).toEqual([])
+      expect(spawned.length).toBeGreaterThanOrEqual(1)
+      await engine.stop()
+    })
+  })
+
+  it('probe(): a healthy start proves availability and releases the warm worker; a rejecting or hung start reports unavailable within the bound', async () => {
+    const healthy = healthyModule()
+    const proven = new TesseractOcrEngine({
+      ...base,
+      loadTesseract: async () => healthy.mod,
+      probeRequired: true
+    })
+    expect(proven.availability()).toBe('probing')
+    expect(await proven.probe()).toBe(true)
+    expect(proven.availability()).toBe('available')
+    // The probe holds no warm worker for a feature most sessions never use — released after
+    // the proof, lazily respawned by the first real recognition.
+    expect(healthy.terminated.count).toBe(1)
+    expect(healthy.calls.length).toBe(1)
+    await proven.recognize(Buffer.from('img'))
+    expect(healthy.calls.length).toBe(2)
+    expect(proven.isAvailable()).toBe(true)
+    // A second probe on a proven engine is a cheap no-op (no third worker).
+    expect(await proven.probe()).toBe(true)
+    expect(healthy.calls.length).toBe(2)
+    await proven.stop()
+
+    // tesseract's own `status: 'reject'` load path → createWorker rejects (a corrupt traineddata).
+    const rejecting: TesseractModule = {
+      createWorker: async () => {
+        throw new Error('traineddata unreadable')
+      }
+    }
+    const failed = new TesseractOcrEngine({
+      ...base,
+      loadTesseract: async () => rejecting,
+      probeRequired: true
+    })
+    expect(await failed.probe()).toBe(false)
+    expect(failed.availability()).toBe('unavailable')
+    await expect(failed.recognize(Buffer.from('img'))).rejects.toThrow(/traineddata unreadable/)
+
+    // A start that never settles (and spawns nothing) is bounded by the start timeout.
+    const hung: TesseractModule = { createWorker: () => new Promise<never>(() => undefined) }
+    const timedOut = new TesseractOcrEngine({
+      ...base,
+      loadTesseract: async () => hung,
+      probeRequired: true,
+      workerStartTimeoutMs: 200
+    })
+    const t0 = Date.now()
+    expect(await timedOut.probe()).toBe(false)
+    expect(Date.now() - t0).toBeLessThan(5_000)
+    expect(timedOut.availability()).toBe('unavailable')
+  })
+
+  it('passes tesseract.js’s errorHandler option (a status:reject must never throw from its message handler) and a dev engine needs no probe', async () => {
+    const healthy = healthyModule()
+    const dev = new TesseractOcrEngine({ ...base, loadTesseract: async () => healthy.mod })
+    // No probe required (dev build): available before any worker starts — today's behaviour.
+    expect(dev.availability()).toBe('available')
+    expect(dev.isAvailable()).toBe(true)
+    await dev.recognize(Buffer.from('img'))
+    expect(typeof healthy.calls[0].errorHandler).toBe('function')
+    // The handler itself never throws (tesseract calls it with the rejection payload).
+    expect(() => (healthy.calls[0].errorHandler as (d: unknown) => void)('bad image')).not.toThrow()
+    await dev.stop()
   })
 })
 
