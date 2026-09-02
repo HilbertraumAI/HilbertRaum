@@ -39,8 +39,12 @@ from its first public `1.0.0` release onward.
   photo or running "Make searchable (OCR)" could exit the whole app when the recognizer failed to
   start. Such a failure now affects only that document: the photo is stored without readable text
   and its row says why, and the app checks once at start-up whether recognition can run at all —
-  when it cannot, OCR is not offered and the Documents screen says so. (Packaged text recognition
-  itself is still being repaired; this change makes the failure safe, not the feature work.)
+  when it cannot, OCR is not offered and the Documents screen says so.
+- **Text recognition (OCR) starts again in the packaged app.** The packaged app was missing some
+  of the files the recognizer needs at start-up, which is why it failed (and, before the fix above,
+  closed the app). Those files are now shipped, and a test keeps the list complete. Verified on a
+  Windows build with the German and English language files; if recognition still cannot start on
+  your machine, the app now tells you instead of closing.
 
 ### Changed
 
