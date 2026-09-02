@@ -10,7 +10,9 @@ a portable drive. Your prompts, documents, embeddings, and chat history stay loc
 
 - **The HilbertRaum** — a USB/SSD drive that already has the app **and** the AI models on it.
   Everything is preloaded; you don't download or install anything.
-- **A laptop** running Windows (macOS and Linux also work). No admin rights needed.
+- **A laptop** running a system your kit is made for. The kit's label names them — Windows,
+  macOS (Apple silicon) or Linux; a kit can cover one or several, and it carries the app and the
+  launcher for each one it names. No admin rights needed.
 - **Enough memory (RAM):** about **8 GB** runs the standard model well; **16 GB or more** lets you
   use the larger, more capable model. The app checks your laptop and picks the best fit for you.
 - **A free USB port** — ideally **USB-3** (the blue port) for the best speed.
@@ -27,7 +29,8 @@ type or import ever leaves the drive.
 
 ### From a prepared drive
 1. Plug the drive into your laptop.
-2. Open the drive and **double-click the launcher** at the top level:
+2. Open the drive and **double-click the launcher** at the top level (you will find the one for
+   each system your kit is made for):
    - **Windows:** `Start HilbertRaum`
    - **macOS:** `Start HilbertRaum.command`
    - **Linux:** `start-hilbertraum.sh`

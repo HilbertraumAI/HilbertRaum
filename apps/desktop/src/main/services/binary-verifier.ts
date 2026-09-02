@@ -19,7 +19,9 @@ import { sha256File } from './models'
 //     explicitly UNVERIFIED path — neither should be hash-gated.
 //   - PACKAGED → enforced. A binary WITH a recorded hash is verified (`ok`/`mismatch`); a
 //     binary with NO recorded hash (legacy drive, or one provisioned by an older
-//     fetch-runtime) is TOLERATED ⇒ `skip-legacy` (logged) so it still launches.
+//     fetch-runtime) is TOLERATED ⇒ `skip-legacy` (logged) so it still launches — on a
+//     COMMERCIAL drive that tolerance can be switched to a refusal (#234, see
+//     `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES`).
 //
 // The result is SESSION-CACHED per resolved binary path: the GPU probe and the server
 // start race for the very same path (factory.ts kicks the probe concurrently with the
@@ -43,6 +45,19 @@ type RawVerifyResult = BinaryVerifyResult | 'unreadable'
 /** True only after `initBinaryVerification(false)` (a packaged build). */
 let enforced = false
 
+/**
+ * Whether a COMMERCIAL drive (policy.json in the sold posture) refuses to spawn a binary
+ * whose install marker records no hash (#234). The sell gate and `fetch-runtime
+ * --commercial` already refuse hashless markers at build time; refusing them at spawn
+ * would stop already-sold kits from launching until re-provisioned, which is the owner's
+ * call — shipped OFF until #234 is answered. Flip to true to enable.
+ */
+export const REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false
+
+/** Drive posture, set after policy.json is loaded (`setBinaryVerificationPosture`). */
+let commercialPosture = false
+let refuseHashlessMarkers = false
+
 /** Session cache: one verification (one hash) per resolved binary path. */
 const cache = new Map<string, Promise<BinaryVerifyResult>>()
 
@@ -56,9 +71,25 @@ export function initBinaryVerification(isDev: boolean): void {
   enforced = !isDev
 }
 
-/** Test-only: reset enforcement + drop the session cache between cases. */
+/**
+ * Record the drive posture once policy.json is known (`index.ts`, right after
+ * `loadPolicy`; `initBinaryVerification` runs earlier). On a commercial drive a hashless
+ * marker is refused only when `refuseHashlessMarkers` is set (#234); a DIY drive keeps
+ * the documented `skip-legacy` tolerance.
+ */
+export function setBinaryVerificationPosture(opts: {
+  commercial: boolean
+  refuseHashlessMarkers?: boolean
+}): void {
+  commercialPosture = opts.commercial
+  refuseHashlessMarkers = opts.refuseHashlessMarkers ?? false
+}
+
+/** Test-only: reset enforcement + posture and drop the session cache between cases. */
 export function _resetBinaryVerificationForTests(): void {
   enforced = false
+  commercialPosture = false
+  refuseHashlessMarkers = false
   cache.clear()
 }
 
@@ -169,6 +200,13 @@ export function verifyBinaryBeforeSpawn(
       // next spawn re-hashes. Identity-guard the delete so we never evict a newer entry.
       if (cache.get(binPath) === pending) cache.delete(binPath)
       return 'mismatch'
+    }
+    if (raw === 'skip-legacy' && commercialPosture) {
+      if (refuseHashlessMarkers) {
+        log.warn('Sidecar binary has no recorded hash on a commercial drive — refusing to spawn (re-run fetch-runtime --commercial)')
+        return 'mismatch'
+      }
+      log.warn('Sidecar binary has no recorded hash on a commercial drive — tolerated (spawn-time refusal not enabled)')
     }
     return raw
   })

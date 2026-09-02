@@ -11,7 +11,7 @@ import {
   SUPPORTED_RUNTIME_FORMATS
 } from '../../src/main/services/drive'
 import { isRealSha256 } from '../../src/shared/manifest'
-import { validateRuntimeSources } from '../../src/shared/runtime-sources'
+import { KIT_PLATFORMS, validateRuntimeSources } from '../../src/shared/runtime-sources'
 import { DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
 
 // Drift guard (audit H5 / M-A1). The drive layout, the format version, and the runtime
@@ -566,5 +566,61 @@ describe('fetch-runtime — the OCR re-fetch delete is deliberately UNCONDITIONA
       `${rel}: the OCR delete gained a condition. It is unconditional on purpose — see the ` +
         'comment above it; do not harmonize it with the size-guarded fetch-models delete.'
     ).toEqual([])
+  })
+})
+
+// The commercial gate is ONE function (#233, #234): both builders call the built
+// assert-commercial-drive tool, spell the same platform labels, pass --commercial to
+// every fetch-runtime run, and the fetch scripts record a binary hash only after the
+// archive verified. Text pins; the execution cases live in script-execution.test.ts.
+describe('one commercial gate — builder + fetch-runtime literals (#233, #234)', () => {
+  const GATE_TOOL = 'apps/desktop/out/tools/assert-commercial-drive.mjs'
+
+  it.each([
+    ['scripts/build-commercial-drive.ps1', '$KitPlatforms = @(', ')'],
+    ['scripts/build-commercial-drive.sh', 'KIT_PLATFORMS=(', ')']
+  ])('%s spells exactly the canonical KitPlatform list', (rel, header, close) => {
+    expect(extractArray(read(rel), header, close)).toEqual([...KIT_PLATFORMS])
+  })
+
+  it.each(['scripts/build-commercial-drive.ps1', 'scripts/build-commercial-drive.sh'])(
+    '%s invokes the built canonical gate and prints SELLABLE only from its result',
+    (rel) => {
+      const code = codeLines(rel).map((l) => l.text)
+      expect(code.some((l) => l.includes(GATE_TOOL))).toBe(true)
+      // The word SELLABLE (as a verdict) appears on exactly two code lines: the NOT SELLABLE
+      // branch and the SELLABLE branch — no third place can print a verdict.
+      const verdicts = code.filter((l) => /SELLABLE:/.test(l) && !/NOT SELLABLE/.test(l))
+      expect(verdicts).toHaveLength(1)
+    }
+  )
+
+  it('build-commercial-drive.ps1 passes -Commercial to every fetch-runtime run', () => {
+    const code = codeLines('scripts/build-commercial-drive.ps1').map((l) => l.text)
+    const runs = code.filter((l) => l.includes("Run 'fetch-runtime.ps1'")).length
+    const flagged = code.filter((l) => /Commercial\s*=\s*\$true/.test(l)).length
+    expect(runs).toBeGreaterThan(0)
+    expect(flagged).toBeGreaterThanOrEqual(runs)
+  })
+
+  it('build-commercial-drive.sh passes --commercial to every fetch-runtime run', () => {
+    const code = codeLines('scripts/build-commercial-drive.sh').map((l) => l.text)
+    const runs = code.filter((l) => l.includes('fetch-runtime.sh')).length
+    const flagged = code.filter((l) => l.includes('--commercial')).length
+    expect(runs).toBeGreaterThan(0)
+    expect(flagged).toBeGreaterThanOrEqual(runs)
+  })
+
+  it.each([
+    ['scripts/fetch-runtime.ps1', '$archiveVerified'],
+    ['scripts/fetch-runtime.sh', 'ARCHIVE_VERIFIED']
+  ])('%s writes the marker binary hash only behind the archive-verified flag', (rel, flag) => {
+    const src = read(rel)
+    // The LAST `"binaries"` literal is the marker write (earlier ones read a marker).
+    const markerWrite = src.lastIndexOf('"binaries"')
+    expect(markerWrite, 'marker write not found').toBeGreaterThan(0)
+    // The flag is tested within the 25 lines that precede the marker write.
+    const window = src.slice(Math.max(0, markerWrite - 2000), markerWrite)
+    expect(window.split('\n').slice(-25).join('\n')).toContain(flag)
   })
 })

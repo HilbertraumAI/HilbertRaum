@@ -1802,6 +1802,15 @@ closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before s
    (`skip-legacy`, logged) so it still launches. Before init the verifier is inert, which keeps the
    headless unit suite — which constructs sidecars with fake paths and no marker — unaffected.
 
+4. **Commercial drives (#234, PR #271).** The drive posture is recorded once `policy.json` is loaded
+   (`setBinaryVerificationPosture({ commercial: isCommercialPolicy(policy), refuseHashlessMarkers })`
+   in `index.ts`, right after `loadPolicy`). At build time the sell gate (`assertCommercialDrive`,
+   which both builder scripts now call) refuses a hashless marker and `fetch-runtime --commercial`
+   re-fetches it, so a newly built sold drive never carries one. At spawn time a commercial drive
+   **can** refuse a hashless marker (`mismatch`) — that branch is wired and tested but shipped **off**
+   (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES`) until the owner rules on kits sold before this
+   change; a DIY drive keeps the `skip-legacy` tolerance either way (`known-limitations.md`).
+
 **Behaviour at each spawn seam (a `mismatch` only ever fires in a packaged build):**
 - **`LlamaServer.start()` (`sidecar.ts`)** — throws before allocating a port/child, so the start **ladder
   falls to the next rung / MockRuntime** with a content-free tamper warning to the local log. This one

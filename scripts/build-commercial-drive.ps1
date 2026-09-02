@@ -12,15 +12,18 @@
     4. package + sign + notarize      # MANUAL (secrets never in the repo) -- see below
     5. copy launcher + portable app + user docs onto the drive root
     6. verify-models  -Generate       # capture real hashes -> config/checksums.json
-    7. final check: commercial posture + license reviews APPROVED (spec 13; not
-       overridable by -AcceptLicense) + verify-models -Strict (all weights VERIFIED)
-       + no user data -- exits 1 unless the drive is actually sellable
+    7. final check: the CANONICAL gate (assertCommercialDrive, run through the built
+       apps/desktop/out/tools/assert-commercial-drive.mjs -- needs `npm run build` and
+       node on PATH) after a native pre-flight -- exits 1 unless the drive is sellable.
+       SELLABLE is printed only from the canonical verdict (#233, #234). The gate also
+       requires the app artifact + launcher for every platform in -Platforms and a
+       recorded, matching hash for every sidecar binary.
 
   Mirrors apps/desktop/src/main/services/commercial-drive.ts (planCommercialDrive +
   assertCommercialDrive) -- that TS module is the CANONICAL, unit-tested reference. This
   script orchestrates the existing scripts; it does NOT re-implement them.
 
-  SIGNING IS MANUAL. The green gate does not sign. Supply a pre-built, signed portable app
+  SIGNING IS MANUAL. The green gate does not sign. Supply the pre-built, signed app(s)
   via -AppArtifact, or run with -SkipPackage to assemble everything else and sign/copy the
   app yourself. See docs/packaging.md for how a build machine supplies the certs/creds.
 
@@ -32,24 +35,38 @@
   drive needs a redistribution-permitting license whose review status is approved (spec 13).
 
 .PARAMETER AppArtifact
-  Path to a pre-built, SIGNED portable app to copy onto the drive (e.g. the
-  HilbertRaum-<version>-portable.exe produced + signed on the build machine).
+  Path(s) to the pre-built, SIGNED app artifact(s) to copy onto the drive -- one per
+  platform in -Platforms (e.g. HilbertRaum-<version>-portable.exe, the
+  HilbertRaum-<version>-mac-arm64.app.zip, HilbertRaum-<version>.AppImage). Comma-separated.
+  The script REFUSES to proceed when a differently named HilbertRaum-* artifact (or an
+  extracted .app) already sits at the drive root -- delete the old build first (#233).
+
+.PARAMETER Platforms
+  The platforms this kit is sold for (win-x64, mac-arm64, linux-x64; default all three).
+  The gate requires an app artifact + launcher for each -- and none for any other.
 
 .PARAMETER SkipPackage
   Skip the packaging/signing step entirely (assemble layout + assets + launchers + verify).
+  The drive is NOT SELLABLE until the app artifacts are on it.
+
+.PARAMETER VerifyOnly
+  Skip steps 1-6 and run only the final gate against the drive as it is.
 
 .PARAMETER DryRun
-  Print the plan and change nothing.
+  Print the plan, download and change nothing -- the final gate still runs and prints
+  its verdict for the target as it is.
 
 .EXAMPLE
-  .\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -AppArtifact .\release\HilbertRaum-0.1.0-portable.exe
+  .\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -AppArtifact .\release\HilbertRaum-0.1.0-portable.exe -Platforms win-x64
 #>
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)] [string] $Target,
   [switch] $AcceptLicense,
-  [string] $AppArtifact,
+  [string[]] $AppArtifact,
+  [string[]] $Platforms = @('win-x64', 'mac-arm64', 'linux-x64'),
   [switch] $SkipPackage,
+  [switch] $VerifyOnly,
   [switch] $DryRun
 )
 
@@ -59,6 +76,41 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 # Normalize -Target to a full path before passing it to the child scripts (audit M22).
 if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
 $Target = [System.IO.Path]::GetFullPath($Target)
+
+# The platforms a kit can be sold for -- keep in sync with KIT_PLATFORMS in
+# apps/desktop/src/shared/runtime-sources.ts (script-drift test).
+$KitPlatforms = @(
+  'win-x64',
+  'mac-arm64',
+  'linux-x64'
+)
+# Accept both `-Platforms win-x64,mac-arm64` (array binding) and a quoted comma list.
+$Platforms = @($Platforms | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($Platforms.Count -eq 0) { Write-Host '-Platforms must name at least one platform' -ForegroundColor Red; exit 2 }
+foreach ($p in $Platforms) {
+  if ($KitPlatforms -notcontains $p) {
+    Write-Host "Unknown platform '$p' -- known: $($KitPlatforms -join ', ')" -ForegroundColor Red
+    exit 2
+  }
+}
+# The version the artifacts must carry = the desktop package's (electron-builder and the
+# release workflow name HilbertRaum-<version>-... from apps/desktop/package.json).
+$AppVersion = (Get-Content (Join-Path $RepoRoot 'apps/desktop/package.json') -Raw | ConvertFrom-Json).version
+
+# Refuse to proceed when another app artifact already sits at the drive root (#233): the
+# copy in step 4 overwrites only the same basename, so an older build would stay beside
+# the new one and the launchers would find two. Delete it first, on purpose.
+if ($AppArtifact -and -not $VerifyOnly) {
+  $incoming = @($AppArtifact | ForEach-Object { Split-Path -Leaf $_ })
+  $prior = @(Get-ChildItem -LiteralPath $Target -Force -ErrorAction SilentlyContinue |
+    Where-Object { ($_.Name -like 'HilbertRaum-*' -or ($_.PSIsContainer -and $_.Name -like '*.app')) -and ($incoming -notcontains $_.Name) })
+  if ($prior.Count -gt 0) {
+    Write-Host 'Refusing to proceed: another app artifact already sits at the drive root:' -ForegroundColor Red
+    foreach ($p in $prior) { Write-Host "  - $($p.Name)" -ForegroundColor Red }
+    Write-Host '  Delete it first (a drive must carry exactly one app build), then re-run.' -ForegroundColor Red
+    exit 1
+  }
+}
 
 function Step([int]$n, [string]$msg) { Write-Host "`n[$n] $msg" -ForegroundColor Cyan }
 # Invoke a sibling script with NAMED parameters. Hashtable splatting (not array splatting)
@@ -73,8 +125,11 @@ function Run([string]$script, [hashtable]$params) {
 }
 
 Write-Host "Build a COMMERCIAL (sellable) drive at: $Target" -ForegroundColor Green
-if ($DryRun) { Write-Host '(dry run -- nothing will be changed)' -ForegroundColor Yellow }
+Write-Host "  platforms: $($Platforms -join ', ') | app version: $AppVersion"
+if ($DryRun) { Write-Host '(dry run -- nothing will be changed; the final gate still runs)' -ForegroundColor Yellow }
+if ($VerifyOnly) { Write-Host '(verify only -- steps 1-6 skipped)' -ForegroundColor Yellow }
 
+if (-not $VerifyOnly) {
 # --- 1. Lay out the drive with the COMMERCIAL policy --------------------------------
 Step 1 'Lay out the drive (commercial policy: encryption required, no phone-home)'
 $prep = @{ Target = $Target; Force = $true }
@@ -95,12 +150,15 @@ Run 'fetch-models.ps1' $models
 # on GPU-less machines) into runtime/llama.cpp/<os>/ plus the pure-CPU safety net into
 # runtime/llama.cpp/<os>/cpu/ (the app's fallback ladder rung 3). mac ships Metal only.
 Step 3 'Download + verify the llama.cpp sidecar builds (every shipped OS)'
+# -Commercial (#234): a placeholder archive hash is refused before any download, a
+# hashless (legacy) install marker is re-fetched instead of skipped, and the marker
+# records the binary hash only after a verified archive.
 foreach ($osName in @('win', 'mac', 'linux')) {
-  $runtime = @{ Target = $Target; Os = $osName }
+  $runtime = @{ Target = $Target; Os = $osName; Commercial = $true }
   if ($DryRun) { $runtime.DryRun = $true }
   Run 'fetch-runtime.ps1' $runtime
   if ($osName -ne 'mac') {
-    $cpuNet = @{ Target = $Target; Os = $osName; Backend = 'cpu' }
+    $cpuNet = @{ Target = $Target; Os = $osName; Backend = 'cpu'; Commercial = $true }
     if ($DryRun) { $cpuNet.DryRun = $true }
     Run 'fetch-runtime.ps1' $cpuNet
   }
@@ -109,27 +167,29 @@ foreach ($osName in @('win', 'mac', 'linux')) {
 # prebuilt WINDOWS build only (R-W1); mac/linux whisper builds are a documented manual
 # source-build step (docs/packaging.md) -- audio import degrades to a friendly per-file
 # failure on a drive without one.
-$whisper = @{ Target = $Target; Os = 'win'; Family = 'whisper_cpp' }
+$whisper = @{ Target = $Target; Os = 'win'; Family = 'whisper_cpp'; Commercial = $true }
 if ($DryRun) { $whisper.DryRun = $true }
 Run 'fetch-runtime.ps1' $whisper
 # OCR language files (Phase 38, D32): the ocr/ asset class -- plain sha256-verified
 # traineddata files, OS-independent (one run covers every shipped OS).
-$ocrAssets = @{ Target = $Target; Family = 'ocr' }
+$ocrAssets = @{ Target = $Target; Family = 'ocr'; Commercial = $true }
 if ($DryRun) { $ocrAssets.DryRun = $true }
 Run 'fetch-runtime.ps1' $ocrAssets
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
 Step 4 'Package + sign the portable app (MANUAL -- secrets never in the repo)'
 if ($SkipPackage) {
-  Write-Host '  -SkipPackage set: skipping packaging. Sign + copy the app yourself.' -ForegroundColor Yellow
+  Write-Host '  -SkipPackage set: skipping packaging. Sign + copy the app yourself (NOT SELLABLE until then).' -ForegroundColor Yellow
 } elseif ($AppArtifact) {
-  if (-not (Test-Path $AppArtifact)) { Write-Error "AppArtifact not found: $AppArtifact"; exit 1 }
-  $dst = Join-Path $Target (Split-Path -Leaf $AppArtifact)
-  if ($DryRun) { Write-Host "  copy $AppArtifact -> $dst" }
-  else { Copy-Item -Path $AppArtifact -Destination $dst -Force; Write-Host "  copied signed app -> $dst" }
+  foreach ($artifact in $AppArtifact) {
+    if (-not (Test-Path $artifact)) { Write-Host "AppArtifact not found: $artifact" -ForegroundColor Red; exit 1 }
+    $dst = Join-Path $Target (Split-Path -Leaf $artifact)
+    if ($DryRun) { Write-Host "  copy $artifact -> $dst" }
+    else { Copy-Item -Path $artifact -Destination $dst -Recurse -Force; Write-Host "  copied signed app -> $dst" }
+  }
 } else {
-  Write-Host '  No -AppArtifact supplied. Build + sign the portable .exe, then re-run with' -ForegroundColor Yellow
-  Write-Host '  -AppArtifact <path>, or copy it onto the drive manually. See docs/packaging.md.' -ForegroundColor Yellow
+  Write-Host '  No -AppArtifact supplied. Build + sign the app for every platform in -Platforms, then' -ForegroundColor Yellow
+  Write-Host '  re-run with -AppArtifact <paths>, or copy them onto the drive manually. See docs/packaging.md.' -ForegroundColor Yellow
 }
 
 # --- 5. Copy the launcher + user docs onto the drive root --------------------------
@@ -154,11 +214,11 @@ if ($DryRun) {
 } else {
   Run 'verify-models.ps1' @{ Target = $Target; Generate = $true }
 }
+} # end of steps 1-6 (skipped by -VerifyOnly)
 
 # --- 7. Final check: is this drive sellable? ---------------------------------------
-Step 7 'Final check: commercial posture + weights VERIFIED + no user data'
-Write-Host '  The CANONICAL gate is assertCommercialDrive() in commercial-drive.ts (unit-tested).'
-Write-Host '  Native cross-check of the key invariants:'
+Step 7 'Final check: native pre-flight, then the canonical gate (assertCommercialDrive)'
+Write-Host '  Native pre-flight of the key invariants (the verdict below comes from the canonical gate):'
 $policyPath = Join-Path $Target 'config/policy.json'
 $problems = @()
 if (Test-Path $policyPath) {
@@ -330,14 +390,32 @@ if (-not $DryRun) {
   & (Join-Path $PSScriptRoot 'verify-models.ps1') -Target $Target -Strict
   if ($LASTEXITCODE -ne 0) { $problems += 'weights: not every weight is VERIFIED (strict verify failed)' }
 }
-if ($DryRun) {
-  Write-Host '  (dry run: posture + weight checks skipped)'
-} elseif ($problems.Count -gt 0) {
+if ($DryRun) { Write-Host '  (dry run: weight verification skipped; the canonical gate still runs)' }
+# Canonical gate (#233, #234): the verdict is assertCommercialDrive()'s, run through the
+# built tool -- SELLABLE is printed only when it passes AND the pre-flight found nothing.
+# Reads only the drive (no network). Needs `npm run build` and node on PATH.
+$gateTool = Join-Path $RepoRoot 'apps/desktop/out/tools/assert-commercial-drive.mjs'
+$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+if (-not (Test-Path $gateTool)) {
+  $problems += "canonical gate not built: $gateTool missing (run npm run build)"
+} elseif (-not $nodeCmd) {
+  $problems += 'canonical gate needs node on PATH'
+} else {
+  Write-Host '  Canonical gate:'
+  $global:LASTEXITCODE = 0
+  # Native-arg quoting (PS 5.1): a trailing backslash before the closing quote of a
+  # space-containing path escapes the quote -- hand node the path without it (a bare
+  # drive root like E:\ keeps its backslash).
+  $gateTarget = $Target.TrimEnd('\')
+  if ($gateTarget -match '^[A-Za-z]:$') { $gateTarget += '\' }
+  & $nodeCmd.Source $gateTool --target $gateTarget --platforms ($Platforms -join ',') --app-version $AppVersion
+  if ($LASTEXITCODE -ne 0) { $problems += "canonical gate: not sellable (exit $LASTEXITCODE, see above)" }
+}
+if ($problems.Count -gt 0) {
   Write-Host '  NOT SELLABLE:' -ForegroundColor Red
   foreach ($p in $problems) { Write-Host "    - $p" -ForegroundColor Red }
   exit 1
-} else {
-  Write-Host '  SELLABLE: posture OK (encrypted, no phone-home, no user data) + all weights VERIFIED.' -ForegroundColor Green
 }
+Write-Host "  SELLABLE: canonical gate passed for $($Platforms -join ', ') at $AppVersion." -ForegroundColor Green
 
 Write-Host "`nDone. Test the drive on a clean laptop with Wi-Fi OFF (spec section 17 demo)." -ForegroundColor Green

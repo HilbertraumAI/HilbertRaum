@@ -15,6 +15,19 @@ export type RuntimeOs = 'win' | 'mac' | 'linux'
 
 const OS_KEYS: RuntimeOs[] = ['win', 'mac', 'linux']
 
+/**
+ * The platforms a kit can be sold for — one release artifact + launcher each (#233).
+ * The sell gate takes the platforms a kit is DECLARED for and requires the app for each;
+ * the builder scripts re-spell this list (script-drift.test.ts keeps them in sync).
+ */
+export type KitPlatform = 'win-x64' | 'mac-arm64' | 'linux-x64'
+
+export const KIT_PLATFORMS: readonly KitPlatform[] = ['win-x64', 'mac-arm64', 'linux-x64']
+
+export function isKitPlatform(value: unknown): value is KitPlatform {
+  return typeof value === 'string' && (KIT_PLATFORMS as readonly string[]).includes(value)
+}
+
 /** One prebuilt `llama-server` build for a specific OS/arch/backend. */
 export interface RuntimeBuild {
   os: RuntimeOs

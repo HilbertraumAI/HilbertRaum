@@ -14,6 +14,7 @@ import {
   loadPolicy,
   resolveNetwork,
   buildPolicyStatus,
+  isCommercialPolicy,
   __policyMaterializations,
   __resetPolicyCache
 } from '../../src/main/services/policy'
@@ -526,5 +527,26 @@ describe('local API policy ceiling (local-api P2)', () => {
     // Unprovisioned app-data root => STANDALONE => permitted (setting still default-off).
     const standalone = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi4-'))
     expect(loadPolicy(standalone, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(true)
+  })
+})
+
+// The one commercial-posture predicate the sell gate and the spawn verifier share (#234).
+describe('isCommercialPolicy', () => {
+  it('is true for the strict/commercial posture and false for the dev default', () => {
+    expect(isCommercialPolicy(STRICT_POLICY)).toBe(true)
+    expect(isCommercialPolicy(DEFAULT_POLICY)).toBe(false)
+  })
+
+  it('needs all three: encryption required, plaintext off, sha256 match required', () => {
+    const base = STRICT_POLICY
+    expect(
+      isCommercialPolicy({ ...base, workspace: { ...base.workspace, encryptionRequired: false } })
+    ).toBe(false)
+    expect(
+      isCommercialPolicy({ ...base, workspace: { ...base.workspace, allowPlaintextDevMode: true } })
+    ).toBe(false)
+    expect(isCommercialPolicy({ ...base, models: { ...base.models, requireSha256Match: false } })).toBe(
+      false
+    )
   })
 })

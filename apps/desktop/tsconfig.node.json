@@ -6,5 +6,5 @@
     "composite": true,
     "lib": ["ES2022"]
   },
-  "include": ["src/main", "src/preload", "electron.vite.config.ts", "vitest.config.ts"]
+  "include": ["src/main", "src/preload", "electron.vite.config.ts", "vite.tools.config.ts", "vitest.config.ts"]
 }

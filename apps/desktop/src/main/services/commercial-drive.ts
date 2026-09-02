@@ -1,8 +1,14 @@
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
-import type { OcrSources, RuntimeSources } from '../../shared/runtime-sources'
-import { loadPolicy } from './policy'
+import {
+  isKitPlatform,
+  KIT_PLATFORMS,
+  type KitPlatform,
+  type OcrSources,
+  type RuntimeSources
+} from '../../shared/runtime-sources'
+import { isCommercialPolicy, loadPolicy } from './policy'
 import {
   markerBinaryKey,
   planOcrDownloads,
@@ -17,15 +23,18 @@ import { verifyDriveModels, listSkillFolders, type ModelVerifyResult } from './d
 // Commercial-drive pipeline + final posture assertion (spec §12.2).
 //
 // Mirrors services/drive.ts + services/assets.ts: this module is the CANONICAL,
-// unit-tested reference, and `scripts/build-commercial-drive.{ps1,sh}` re-implement the
-// SAME ordered plan natively (self-contained, no Node/npm). It does NOT re-implement
-// prepare-drive/fetch-*/verify-models — it ORCHESTRATES them. The final automated check
+// unit-tested reference. `scripts/build-commercial-drive.{ps1,sh}` run the SAME ordered
+// plan natively and, for the verdict, CALL this assertion through the built
+// `out/tools/assert-commercial-drive.mjs` (src/main/tools) — SELLABLE is printed only
+// from its result (#233, #234). It does NOT re-implement prepare-drive/fetch-*/
+// verify-models — it ORCHESTRATES them. The final automated check
 // (`assertCommercialDrive`) is the gate that decides "is this drive actually sellable?"
 // and reuses loadPolicy + verifyDriveModels rather than duplicating that logic.
 //
 // A sellable drive MUST ship the commercial posture (encryption required, plaintext off,
-// models must verify, NETWORK DENIED — spec §12.2) and contain NO user data. The assertion
-// FAILS LOUDLY if any of that is violated.
+// models must verify, NETWORK DENIED — spec §12.2), contain NO user data, and carry the
+// app artifact + launcher for every platform it is sold for. The assertion FAILS LOUDLY
+// if any of that is violated.
 
 /**
  * Distribution-level license/attribution artifacts every prepared drive carries at its
@@ -224,6 +233,110 @@ export function formatPlan(steps: CommercialStep[]): string {
 
 // ---- The final "is this drive sellable?" assertion ---------------------------------
 
+/** What a kit must carry at its root per platform it is sold for (#233). */
+export interface KitPlatformSpec {
+  /** The double-click launcher for that OS (`launchers/`). */
+  launcher: string
+  /** The release artifact name for a given app version. */
+  artifact: (version: string) => string
+  /** The version segment of a release artifact name of this platform, else null. */
+  artifactVersion: (name: string) => string | null
+}
+
+const versionOf =
+  (re: RegExp) =>
+  (name: string): string | null =>
+    re.exec(name)?.[1] ?? null
+
+/**
+ * Per-platform artifact + launcher names — the same names the launchers glob for on the
+ * drive root and the release workflow uploads. macOS additionally accepts an extracted
+ * `*.app` bundle (the launcher prefers one), whose version is read from its Info.plist.
+ */
+export const KIT_PLATFORM_SPECS: Record<KitPlatform, KitPlatformSpec> = {
+  'win-x64': {
+    launcher: 'Start HilbertRaum.cmd',
+    artifact: (v) => `HilbertRaum-${v}-portable.exe`,
+    artifactVersion: versionOf(/^HilbertRaum-(.+)-portable\.exe$/)
+  },
+  'mac-arm64': {
+    launcher: 'Start HilbertRaum.command',
+    artifact: (v) => `HilbertRaum-${v}-mac-arm64.app.zip`,
+    artifactVersion: versionOf(/^HilbertRaum-(.+)-mac-arm64\.app\.zip$/)
+  },
+  'linux-x64': {
+    launcher: 'start-hilbertraum.sh',
+    artifact: (v) => `HilbertRaum-${v}.AppImage`,
+    artifactVersion: versionOf(/^HilbertRaum-(.+)\.AppImage$/)
+  }
+}
+
+/** The platform matrix a kit is declared for + the app version being built (#233). */
+export interface CommercialGateOptions {
+  platforms: KitPlatform[]
+  appVersion: string
+}
+
+interface FoundAppArtifact {
+  name: string
+  platform: KitPlatform | null
+  version: string | null
+  size: number
+  isDir: boolean
+}
+
+/** `CFBundleShortVersionString` of an extracted bundle, or null when unreadable. */
+function readBundleVersion(appDir: string): string | null {
+  try {
+    const plist = readFileSync(join(appDir, 'Contents', 'Info.plist'), 'utf8')
+    return /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]?.trim() ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Every app artifact at the drive root: `HilbertRaum-*` files and `*.app` directories. */
+function scanAppArtifacts(rootPath: string): FoundAppArtifact[] {
+  const found: FoundAppArtifact[] = []
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = readdirSync(rootPath, { withFileTypes: true })
+  } catch {
+    return found
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory() && /\.app$/.test(entry.name)) {
+      found.push({
+        name: entry.name,
+        platform: 'mac-arm64',
+        version: readBundleVersion(join(rootPath, entry.name)),
+        size: 1,
+        isDir: true
+      })
+      continue
+    }
+    if (!entry.isFile() || !entry.name.startsWith('HilbertRaum-')) continue
+    let size = 0
+    try {
+      size = statSync(join(rootPath, entry.name)).size
+    } catch {
+      size = 0
+    }
+    let platform: KitPlatform | null = null
+    let version: string | null = null
+    for (const p of KIT_PLATFORMS) {
+      const v = KIT_PLATFORM_SPECS[p].artifactVersion(entry.name)
+      if (v !== null) {
+        platform = p
+        version = v
+        break
+      }
+    }
+    found.push({ name: entry.name, platform, version, size, isDir: false })
+  }
+  return found
+}
+
 export interface CommercialAssertion {
   ok: boolean
   /** Human-readable reasons the drive is NOT sellable (empty when ok). */
@@ -253,6 +366,12 @@ export interface CommercialAssertion {
      */
     runtimeCurrent: boolean
     /**
+     * Every pinned runtime build's marker records the binary's SHA-256 AND the on-disk
+     * bytes still match it (#234). Opt-in like `runtimeCurrent`. A hashless (legacy)
+     * marker fails here, not in `runtimeCurrent`.
+     */
+    runtimeHashed: boolean
+    /**
      * Every pinned OCR language file is present + sha256-verified (opt-in:
      * true when no `ocrSources` were passed).
      */
@@ -275,6 +394,20 @@ export interface CommercialAssertion {
      * in all copies, and the app's own GPL text + source statement ride the same files.
      */
     licenseArtifactsPresent: boolean
+    /**
+     * `opts.platforms` names at least one known platform (no duplicates) and
+     * `opts.appVersion` is set (#233). False when the gate is called without them — the
+     * app cannot be checked against an undeclared kit, so the drive is not sellable.
+     */
+    platformMatrixDeclared: boolean
+    /**
+     * Exactly one non-empty app artifact per declared platform, named for `appVersion`,
+     * none for an undeclared platform, none unrecognised (#233). One extra artifact —
+     * an older build left beside the new one — fails the drive.
+     */
+    appArtifactsPresent: boolean
+    /** The launcher file of every declared platform is present + non-empty at the root. */
+    launchersPresent: boolean
   }
   /** The per-weight verification detail (for surfacing which weight failed). */
   modelResults: ModelVerifyResult[]
@@ -314,16 +447,19 @@ function userDataArtifacts(rootPath: string): string[] {
  * Assert that a prepared drive is actually SELLABLE (spec §12.2). Reuses `loadPolicy`
  * (the commercial posture) + `verifyDriveModels` (all weights VERIFIED) and checks the
  * drive carries no user data. When `runtimeSources` (the yaml pin) is passed, each pinned
- * build's `.hilbertraum-runtime.json` install marker must also match (version + backend).
- * Returns a structured result; never throws. Fails loudly: any violated
- * invariant adds a `problems[]` entry and flips `ok` to false.
+ * build's `.hilbertraum-runtime.json` install marker must also match (version + backend)
+ * and record the binary's hash. `opts` declares the platforms the kit is sold for and the
+ * app version: one artifact + launcher per platform is required (#233); without `opts`
+ * the drive is not sellable. Returns a structured result; never throws. Fails loudly:
+ * any violated invariant adds a `problems[]` entry and flips `ok` to false.
  */
 export async function assertCommercialDrive(
   rootPath: string,
   manifests: ModelManifest[],
   runtimeSources?: RuntimeSources | null,
   whisperSources?: RuntimeSources | null,
-  ocrSources?: OcrSources | null
+  ocrSources?: OcrSources | null,
+  opts?: CommercialGateOptions
 ): Promise<CommercialAssertion> {
   const problems: string[] = []
 
@@ -333,10 +469,7 @@ export async function assertCommercialDrive(
   // missing file would resolve to an encrypted/verified posture and silently pass — here
   // we want a missing/loose policy.json to surface as a problem below.
   const { policy } = loadPolicy(join(rootPath, 'config'))
-  const policyCommercial =
-    policy.workspace.encryptionRequired &&
-    !policy.workspace.allowPlaintextDevMode &&
-    policy.models.requireSha256Match
+  const policyCommercial = isCommercialPolicy(policy)
   // "Network denied" for a sold drive means the app never PHONES HOME on its own: no update
   // checks, no telemetry. Model downloads are an explicit, user-initiated, per-download-confirmed
   // action (the drive ships with them permitted so a buyer can add models), so they do NOT count
@@ -424,6 +557,7 @@ export async function assertCommercialDrive(
   // after the default moved to vulkan) and must be re-provisioned. The same
   // check runs for the whisper family (binary `whisper-cli`) when its pin is passed.
   let runtimeCurrent = true
+  let runtimeHashed = true
   const checkFamily = async (sources: RuntimeSources, family: string, binaryBase: string): Promise<void> => {
     for (const build of sources.builds) {
       const label = `${family} build ${build.os}/${build.arch} ${build.backend}`
@@ -466,21 +600,21 @@ export async function assertCommercialDrive(
         )
       } else {
         // Version + backend match — now require the marker to carry the binary's SHA-256
-        // and to MATCH the on-disk binary (vuln-scan B). A sold drive must ship this hash
-        // so the app can re-verify it before spawn; a drive provisioned by a fetch-runtime
-        // predating that field fails the gate and must be re-run.
+        // and to MATCH the on-disk binary (#234). A sold drive must ship this
+        // hash so the app can re-verify it before spawn; a hashless marker (an older
+        // fetch-runtime, or an unverified archive) fails the gate and must be re-fetched.
         const expected = marker.binaries?.[markerBinaryKey(extractTo, binaryPath)]
         if (!expected) {
-          runtimeCurrent = false
+          runtimeHashed = false
           problems.push(
             `${label}: install marker records no SHA-256 for ${binaryBase} — re-run ` +
-              'fetch-runtime so the binary can be re-verified before spawn'
+              'fetch-runtime --commercial so the binary can be re-verified before spawn'
           )
         } else if ((await sha256File(binaryPath)).toLowerCase() !== expected.toLowerCase()) {
-          runtimeCurrent = false
+          runtimeHashed = false
           problems.push(
             `${label}: ${binaryBase} does not match the SHA-256 recorded in the install ` +
-              'marker — the binary was modified after install; re-run fetch-runtime'
+              'marker — the binary or the marker was modified after install; re-run fetch-runtime --commercial'
           )
         }
       }
@@ -531,6 +665,99 @@ export async function assertCommercialDrive(
     /* unreadable → treat as empty; the policy/weight/app-skill gates still apply */
   }
 
+  // --- App artifact + launcher per declared platform (#233) ---
+  // A kit is sold for a declared set of platforms; each needs exactly one release
+  // artifact of the version being built and its launcher at the drive root. An artifact
+  // of an undeclared platform, an unrecognised name, or a second artifact of one platform
+  // (an older build beside the new one) fails the drive.
+  let platformMatrixDeclared = true
+  const declared: KitPlatform[] = []
+  if (!opts || !Array.isArray(opts.platforms) || opts.platforms.length === 0) {
+    platformMatrixDeclared = false
+    problems.push(
+      `no platform matrix declared — name the platforms this kit is sold for (${KIT_PLATFORMS.join(', ')}); ` +
+        'the app artifacts and launchers cannot be checked without it'
+    )
+  } else {
+    for (const p of opts.platforms) {
+      if (!isKitPlatform(p)) {
+        platformMatrixDeclared = false
+        problems.push(`unknown platform "${String(p)}" (known: ${KIT_PLATFORMS.join(', ')})`)
+      } else if (declared.includes(p)) {
+        platformMatrixDeclared = false
+        problems.push(`platform "${p}" declared more than once`)
+      } else {
+        declared.push(p)
+      }
+    }
+    if (typeof opts.appVersion !== 'string' || opts.appVersion.trim() === '') {
+      platformMatrixDeclared = false
+      problems.push('no app version declared — the app artifacts cannot be checked without it')
+    }
+  }
+  let appArtifactsPresent = false
+  let launchersPresent = false
+  if (platformMatrixDeclared) {
+    appArtifactsPresent = true
+    launchersPresent = true
+    const version = opts!.appVersion.trim()
+    const found = scanAppArtifacts(rootPath)
+    for (const a of found) {
+      if (a.platform === null) {
+        appArtifactsPresent = false
+        problems.push(
+          `app artifact "${a.name}" is not a release artifact of any platform (expected ` +
+            `${KIT_PLATFORMS.map((p) => KIT_PLATFORM_SPECS[p].artifact('<version>')).join(', ')} ` +
+            'or an extracted HilbertRaum.app)'
+        )
+      } else if (!declared.includes(a.platform)) {
+        appArtifactsPresent = false
+        problems.push(
+          `app artifact "${a.name}" is for ${a.platform}, a platform this kit is not declared for ` +
+            `(declared: ${declared.join(', ')}) — remove it or declare the platform`
+        )
+      }
+    }
+    for (const p of declared) {
+      const spec = KIT_PLATFORM_SPECS[p]
+      const mine = found.filter((a) => a.platform === p)
+      if (mine.length === 0) {
+        appArtifactsPresent = false
+        problems.push(`${p}: no app artifact at the drive root (expected ${spec.artifact(version)})`)
+      } else if (mine.length > 1) {
+        appArtifactsPresent = false
+        problems.push(
+          `${p}: more than one app artifact at the drive root (${mine.map((a) => a.name).join(', ')}) — ` +
+            'a drive must carry exactly one; delete the others'
+        )
+      } else {
+        const a = mine[0]
+        if (!a.isDir && a.size === 0) {
+          appArtifactsPresent = false
+          problems.push(`${p}: app artifact "${a.name}" is zero bytes`)
+        }
+        if (a.version === null) {
+          appArtifactsPresent = false
+          problems.push(`${p}: cannot read the version of "${a.name}" (Contents/Info.plist CFBundleShortVersionString)`)
+        } else if (a.version !== version) {
+          appArtifactsPresent = false
+          problems.push(`${p}: app artifact "${a.name}" is version ${a.version}, the kit is being built as ${version}`)
+        }
+      }
+      let launcherOk = false
+      try {
+        const lp = join(rootPath, spec.launcher)
+        launcherOk = existsSync(lp) && statSync(lp).size > 0
+      } catch {
+        launcherOk = false
+      }
+      if (!launcherOk) {
+        launchersPresent = false
+        problems.push(`${p}: launcher "${spec.launcher}" missing or empty at the drive root — re-run build-commercial-drive`)
+      }
+    }
+  }
+
   return {
     ok: problems.length === 0,
     problems,
@@ -541,10 +768,14 @@ export async function assertCommercialDrive(
       licensesApproved,
       noUserData,
       runtimeCurrent,
+      runtimeHashed,
       ocrAssetsVerified,
       appSkillsPresent,
       userSkillsEmpty,
-      licenseArtifactsPresent
+      licenseArtifactsPresent,
+      platformMatrixDeclared,
+      appArtifactsPresent,
+      launchersPresent
     },
     modelResults
   }

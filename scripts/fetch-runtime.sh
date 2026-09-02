@@ -16,10 +16,15 @@
 # pure-CPU safety net into <os>/cpu/.
 #
 # Verify-before-trust: a real-hash MISMATCH deletes the zip and exits non-zero. A
-# placeholder zip hash extracts but reports UNVERIFIED. Idempotent via the MARKER, not
+# placeholder zip hash extracts but reports UNVERIFIED and the marker then records NO
+# binary hash (the sell gate refuses such an install). Idempotent via the MARKER, not
 # mere binary presence: a present llama-server whose .hilbertraum-runtime.json matches the
 # selected version + backend is skipped; a missing/stale marker re-fetches (so upgrading
 # a CPU-era drive to the Vulkan default actually replaces the build).
+#
+# --commercial (drive builders, #234): a placeholder hash is REFUSED before any download
+# (exit 1, nothing extracted, no marker) and a hashless (legacy) marker is re-fetched
+# instead of skipped, so a sold drive never carries an unverifiable sidecar.
 #
 # --family selects the asset family: llama_cpp (default, llama-server), whisper_cpp
 # (the whisper-cli transcriber, runtime/whisper.cpp/<os>/ — same verify + marker
@@ -28,10 +33,10 @@
 #
 # Usage:
 #   scripts/fetch-runtime.sh --target /Volumes/HILBERTRAUM \
-#       [--os linux] [--arch x64] [--backend cpu] [--family whisper_cpp|ocr] [--dry-run]
+#       [--os linux] [--arch x64] [--backend cpu] [--family whisper_cpp|ocr] [--commercial] [--dry-run]
 set -euo pipefail
 
-TARGET=""; OS=""; ARCH=""; BACKEND=""; FAMILY="llama_cpp"; DRY_RUN=0
+TARGET=""; OS=""; ARCH=""; BACKEND=""; FAMILY="llama_cpp"; COMMERCIAL=0; DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) TARGET="${2:-}"; shift 2 ;;
@@ -44,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --backend=*) BACKEND="${1#*=}"; shift ;;
     --family) FAMILY="${2:-}"; shift 2 ;;
     --family=*) FAMILY="${1#*=}"; shift ;;
+    --commercial) COMMERCIAL=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -156,6 +162,18 @@ if [[ "$FAMILY" == "ocr" ]]; then
     echo "runtime-sources.yaml: no ocr block (version + files) found." >&2; exit 2
   fi
   echo "Fetch OCR language files -> $TARGET (data $OCR_VERSION)"
+  # --commercial: every file must be verifiable BEFORE the first download (#234).
+  if [[ $COMMERCIAL -eq 1 ]]; then
+    PLACEHOLDERS=""
+    for i in $(seq 0 $fidx); do
+      sha_i="${F_SHA[$i]:-}"
+      if [[ -n "$sha_i" ]] && ! is_real_sha "$sha_i"; then PLACEHOLDERS="${PLACEHOLDERS:+$PLACEHOLDERS, }${F_LANG[$i]}"; fi
+    done
+    if [[ -n "$PLACEHOLDERS" ]]; then
+      echo "  commercial: placeholder sha256 for ocr file(s) $PLACEHOLDERS — refusing to fetch (nothing downloaded)" >&2
+      exit 1
+    fi
+  fi
   FAILED=0
   for i in $(seq 0 $fidx); do
     for required in url sha256 dest; do
@@ -313,24 +331,43 @@ echo "Fetch runtime -> $TARGET"
 echo "  build: ${B_OS[$SEL]}/${B_ARCH[$SEL]} ${B_BACKEND[$SEL]} @ $VERSION"
 echo "  url:   $URL"
 echo "  into:  $EXTRACT_TO"
-[[ $DRY_RUN -eq 1 ]] && { echo "(dry run — nothing will be downloaded)"; exit 0; }
 
 # Idempotent skip is MARKER-based (Phase 14, mirrors assets.ts runtimeInstallCurrent):
 # "binary exists" alone would silently keep a CPU-era build in place after the default
-# became vulkan. Skip only when .hilbertraum-runtime.json matches the selected version+backend.
+# became vulkan. Skip only when .hilbertraum-runtime.json matches the selected version+backend
+# — and, under --commercial, records the binary's hash (a hashless legacy marker is
+# re-fetched, #234).
 if [[ -f "$BIN_PATH" ]]; then
   SKIP=0
+  WHY="install marker is missing or differs"
   if [[ -f "$MARKER_PATH" ]]; then
     # The marker is written by us as flat single-line JSON — parse with sed (no jq dep).
     m_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
     m_backend="$(sed -n 's/.*"backend":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
-    [[ "$m_version" == "$VERSION" && "$m_backend" == "${B_BACKEND[$SEL]}" ]] && SKIP=1
+    if [[ "$m_version" == "$VERSION" && "$m_backend" == "${B_BACKEND[$SEL]}" ]]; then
+      SKIP=1
+      if [[ $COMMERCIAL -eq 1 ]]; then
+        m_hash="$(sed -n 's/.*"binaries":{[^}]*"'"$BIN_NAME"'":"\([a-fA-F0-9]\{64\}\)".*/\1/p' "$MARKER_PATH" | tr '[:upper:]' '[:lower:]')"
+        if ! is_real_sha "$m_hash"; then
+          SKIP=0
+          WHY="install marker records no binary hash (legacy) — commercial mode"
+        fi
+      fi
+    fi
   fi
   if [[ $SKIP -eq 1 ]]; then
     echo "  skip ($BIN_NAME already installed: $VERSION/${B_BACKEND[$SEL]} per .hilbertraum-runtime.json)"; exit 0
   fi
-  echo "  $BIN_NAME present but install marker is missing or differs — re-fetching $VERSION/${B_BACKEND[$SEL]}"
+  echo "  $BIN_NAME present but $WHY — re-fetching $VERSION/${B_BACKEND[$SEL]}"
 fi
+
+# --commercial: refuse a placeholder hash BEFORE any download (#234) — an unverifiable
+# archive must never be extracted onto a sold drive, dry run or not.
+if [[ $COMMERCIAL -eq 1 ]] && ! is_real_sha "$SHA"; then
+  echo "  commercial: placeholder sha256 for ${B_OS[$SEL]}/${B_ARCH[$SEL]} ${B_BACKEND[$SEL]} @ $VERSION — refusing to fetch (nothing downloaded, no marker written)" >&2
+  exit 1
+fi
+[[ $DRY_RUN -eq 1 ]] && { echo "(dry run — nothing will be downloaded)"; exit 0; }
 
 mkdir -p "$EXTRACT_TO"
 # Archive name from the URL basename so a .tar.gz (the macOS/Linux release format) is
@@ -360,6 +397,7 @@ else
   echo "No downloader found (need curl or wget)." >&2; exit 3
 fi
 
+ARCHIVE_VERIFIED=0
 if is_real_sha "$SHA"; then
   ACTUAL="$(sha256_of "$ARCHIVE")"
   if [[ "$ACTUAL" != "$SHA" ]]; then
@@ -367,6 +405,7 @@ if is_real_sha "$SHA"; then
     rm -f "$ARCHIVE"; exit 1
   fi
   echo "  archive VERIFIED"
+  ARCHIVE_VERIFIED=1
 else
   echo "  archive UNVERIFIED (placeholder hash) — verify after a real release bump"
 fi
@@ -445,10 +484,18 @@ if [[ -f "$BIN_PATH" ]]; then
   # Record exactly which build is installed (mirrors assets.ts writeRuntimeMarker). The
   # `binaries` map records the extracted binary's own SHA-256 (keyed by its name relative
   # to the extract dir — it sits at the root after the flatten above) so the app can
-  # re-hash it immediately before spawn (vuln-scan B / binary-verifier.ts).
-  BIN_SHA="$(sha256_of "$BIN_PATH")"
-  printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s","binaries":{"%s":"%s"}}' \
-    "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" "$BIN_NAME" "$BIN_SHA" > "$MARKER_PATH"
+  # re-hash it immediately before spawn (binary-verifier.ts, #234). Only a
+  # VERIFIED archive earns that hash (#234): an unverified install must not mint a
+  # marker the sell gate and the spawn verifier would trust.
+  if [[ $ARCHIVE_VERIFIED -eq 1 ]]; then
+    BIN_SHA="$(sha256_of "$BIN_PATH")"
+    printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s","binaries":{"%s":"%s"}}' \
+      "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" "$BIN_NAME" "$BIN_SHA" > "$MARKER_PATH"
+  else
+    printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s"}' \
+      "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" > "$MARKER_PATH"
+    echo "  marker written WITHOUT a binary hash (archive unverified) — the sell gate refuses this install"
+  fi
   echo "  extracted + chmod +x $BIN_NAME (+ .hilbertraum-runtime.json install marker)"
   exit 0
 fi

@@ -13,7 +13,7 @@ import {
 } from './window-security'
 import { getSettings, updateSettings } from './services/settings'
 import { effectiveContextWindow } from './services/chat'
-import { loadPolicy, buildPolicyStatus } from './services/policy'
+import { loadPolicy, buildPolicyStatus, isCommercialPolicy } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog, detachVaultKey } from './services/logging'
@@ -62,7 +62,11 @@ import { findManifestById, launchContextTokens, resolveManifestsDir } from './se
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import { composeServices, composeTranslator, shouldReplaceTranslator } from './services/compose-services'
-import { initBinaryVerification } from './services/binary-verifier'
+import {
+  initBinaryVerification,
+  setBinaryVerificationPosture,
+  REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
+} from './services/binary-verifier'
 import { createAppLifecycleHandlers, performShutdown } from './shutdown'
 import type { AppContext } from './services/context'
 
@@ -158,6 +162,12 @@ function initBackend(): void {
     // M-4: a packaged build fails CLOSED (STRICT_POLICY) on a missing/malformed policy.json.
     { isDev }
   )
+  // Drive posture for the pre-spawn binary verifier (#234): a commercial drive may refuse
+  // hashless install markers — behind the shipped-OFF constant until the owner rules.
+  setBinaryVerificationPosture({
+    commercial: isCommercialPolicy(policy),
+    refuseHashlessMarkers: REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
+  })
   const workspace = new WorkspaceController(
     vaultPathsFrom({ configPath: paths.configPath, dbPath: paths.dbPath }),
     policy,

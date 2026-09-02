@@ -29,6 +29,19 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-02 — **Audit 2026-09-02 Phase 2 — one commercial gate: both builder scripts now call
+`assertCommercialDrive`, which requires the app + launcher per declared platform and hashed
+sidecars; `fetch-runtime --commercial` fails closed (GAP-4 #233, SEC-11 #234; PR #271).**_
+`assertCommercialDrive(…, opts: { platforms, appVersion })` gained `platformMatrixDeclared` /
+`appArtifactsPresent` / `launchersPresent` / `runtimeHashed`; a thin Node entry
+(`src/main/tools/assert-commercial-drive.ts` → `out/tools/…mjs`, own `vite.tools.config.ts`, built by
+`npm run build`) is what `build-commercial-drive.{ps1,sh}` run for the verdict — SELLABLE only from
+it; `-DryRun` reaches the verdict, `-VerifyOnly` runs only the gate, a prior `HilbertRaum-*` artifact
+at the root is refused (never deleted). `fetch-runtime -Commercial`: placeholder hash refused before
+any download, hashless marker re-fetched, marker hash only after a verified archive. Verifier:
+`isCommercialPolicy` + `setBinaryVerificationPosture`; the spawn-time refusal of hashless markers on
+commercial drives is wired but OFF (constant; owner call on #234). Decision 12 (#229) on its default.
+
 _2026-09-02 — **Audit 2026-09-02 Phase 1 — packaged OCR: worker failures degrade per document,
 `ocrAvailable` reads execution state, the `asarUnpack` closure is derived by a test (REL-6; PRs
 #268 + #269).**_ tesseract.js sets the inert browser `worker.onerror` on its Node Worker and never
@@ -145,7 +158,10 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    portable `.exe` + a **signed & notarized** macOS `.app`, run `build-commercial-drive`
    end-to-end onto a real drive (`-AppArtifact` the signed build), then do the spec §17 demo on
    a **fresh laptop with Wi-Fi off** + the **second-laptop continuity** check (same encrypted
-   workspace, different drive letter). **⚠️ 2026-08-19, wave 188 — this check has already
+   workspace, different drive letter). **Gate note (2026-09-02, PR #271):** the SELLABLE verdict now
+   comes from `assertCommercialDrive` alone (both builder scripts call it) and requires the app
+   artifact + launcher per declared platform; the demo stays a manual acceptance step, not a recorded
+   gate input — it becomes one only when the gate requires a per-batch smoke record (#233). **⚠️ 2026-08-19, wave 188 — this check has already
    FIRED once, from a real drive, before it was ever run deliberately:** issue #188 was exactly the
    failure it exists to catch (`documents.stored_path` absolute ⇒ every stored copy stale under a
    different mount point, and "Delete document" silently not deleting). **✅ ANSWERED 2026-08-20 —
@@ -596,6 +612,10 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     - **1-b** (2026-09-02, PR #269): `asarUnpack` closure derived by `asar-unpack-closure.test.ts`
       (+5 globs); packaged Windows probe passed (277 ms); interactive recognition leg still open
       (18(c)); #232 closed — Phase 1 complete.
+    - **2** (2026-09-02, PR #271): GAP-4 + SEC-11 — one gate (`assertCommercialDrive` via
+      `out/tools/assert-commercial-drive.mjs`) called by both builders: app + launcher per declared
+      platform, hashed sidecars, `fetch-runtime --commercial` fails closed; spawn-time refusal of
+      hashless markers built but OFF (owner call, #234); decision 12 on its default — dated entry above.
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
@@ -693,7 +713,10 @@ the offline/privacy guarantees:
   member fails the install, no marker written), closing the symlink residual; the
   `--no-same-owner --no-same-permissions -k` tar flags were deliberately dropped (GNU tar `-k`
   hard-errors on the legitimately-retained archive `cpu/` dir). The build-time
-  `scripts/fetch-runtime.*` half of L-7 remains as previously recorded.
+  `scripts/fetch-runtime.*` half of L-7 remains as previously recorded. (2026-09-02, PR #271:
+  `fetch-runtime --commercial` now refuses a placeholder hash before any download and records the
+  marker's binary hash only after a verified archive — the sell-gate side of #234; the
+  member-traversal half of L-7 is unchanged.)
   **Watch-item (full-audit 2026-07-12b SEC-2, owner-declined probe):** the sweep covers
   symlink/junction dirents but not tar HARDLINK members (a hardlink is not a symlink dirent) —
   labeled hypothesis, likely moot (libarchive/bsdtar checks linknames; hardlinks need an
