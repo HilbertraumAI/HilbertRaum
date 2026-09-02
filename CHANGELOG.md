@@ -25,6 +25,14 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Locking or quitting during a document preview, re-index, import, dictation or export no
+  longer leaves a decrypted copy on the drive.** Those operations decrypt the document to a
+  temporary file while they read it. Lock now and Quit used to finish while such a read was still
+  running, so the temporary file stayed on the drive (until the next start cleaned it up) and a
+  preview started before the lock could still show its text afterwards. Both now stop these
+  operations, wait a few seconds for them to finish, and remove any temporary file that is still
+  there before the workspace is re-encrypted; a preview that was cut off reports the workspace as
+  locked instead of showing text.
 - **Quitting can no longer leave your workspace unencrypted.** Pressing Quit a second time while
   the app was still shutting down (for example while it waited on a slow AI-engine start) used to
   let the app exit before the workspace was re-encrypted, and the next start then discarded every

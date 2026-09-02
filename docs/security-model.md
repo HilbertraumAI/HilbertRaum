@@ -976,7 +976,10 @@ The renderer shows the create-password / unlock gate (`WorkspaceGate`) until `wo
 in-flight generations and stops BOTH sidecars (chat runtime + E5 embedder; a llama-server keeps
 recent prompts in its in-memory KV cache), then locks. Unlock restarts the chat runtime in the
 background (the active-model auto-start); the embedder restarts lazily on the next embed.
-`will-quit` likewise locks (re-encrypt + shred) alongside stopping the sidecars.
+`will-quit` likewise locks (re-encrypt + shred) alongside stopping the sidecars. Both also abort,
+settle and sweep the **plaintext operations** in flight — a document **preview**, a **re-index**,
+an import's **prepare** phase, a **dictation** and the two **export** readers — before the vault
+re-encrypts (the bullet below).
 - **Quit re-entry and the overall deadline (SEC-12 with GAP-2 folded in, audit 2026-09-02).** Both
   app-lifecycle handlers are built by `createAppLifecycleHandlers` (`main/shutdown.ts`) over ONE
   `isShuttingDown` closure. *Re-entry rule:* **every** `will-quit` is `preventDefault()`ed — the
@@ -1008,6 +1011,30 @@ background (the active-model auto-start); the embedder restarts lazily on the ne
   **settle** (bounded ~5 s) before `lock()` re-encrypts, so its materialize/shred of any `.parse`
   transient completes while the DB is still open — mirroring the in-flight-stream settle await.
   `cancelAllDocTasks()` holds no permanent latch: the manager is fully usable again after unlock.
+- **Plaintext operations are aborted, settled and swept on lock/quit (#237, PR #273).** A preview
+  or re-index of an encrypted stored copy, an import's prepare phase, a dictation and the two
+  export readers each decrypt to a `.parse*` transient under `workspace/documents/` and shred it
+  only in their own `finally`. The doc-task registry never covered them (`DocTaskKind` has no
+  preview), so a parse that straddled the boundary kept a decrypted file on the drive after the
+  workspace reported locked — and a preview issued before the lock delivered its text across IPC
+  after it. Every such operation now registers with the **plaintext-operation registry**
+  (`services/ingestion/plaintext-ops.ts`, held as `ctx.plaintextOps`) *before* it writes and
+  releases in its `finally`. Lock and quit **abort** the registry together with the other aborts
+  (before any sidecar stop), **await its settle** after the doc-task settle within the same bound
+  (`LOCK_TASK_SETTLE_TIMEOUT_MS` / `SHUTDOWN_TASK_SETTLE_TIMEOUT_MS`, 5 s), then **shred every
+  still-registered transient** (and its `.tmp` decrypt stage) — only registered paths, never a
+  stored copy — before the vector purge and the lock. On quit the settle sits inside the overall
+  deadline section (worst case now 25.5 s under the 30 s constant); the sweep sits outside it,
+  beside the lock, so a deadline that abandons the settle still sweeps. Which parsers honour the
+  abort: the photo OCR (`engine.recognize` takes the signal) and the audio transcription (the
+  whisper child is killed) stop early; **pdfjs, mammoth and the txt/csv/markdown parsers cannot be
+  cancelled** and are **sweep-bounded** — their transient is shredded under them at the bound and
+  their result is discarded. The parse wall-clock timeout now aborts that same signal instead of
+  only abandoning the wait. The preview IPC re-checks admission after its awaits and rejects with
+  the locked copy rather than returning text. Pinned by `tests/integration/lock-admission-race.test.ts`
+  (a parked photo preview across a real lock and a real `performShutdown`, both engine flavours; a
+  `readdirSync` name sweep of `documents/` and `images/` at the "locked" instant; the stored
+  copies beside the transient survive) and `tests/unit/plaintext-ops.test.ts`.
 
 ### The lock latch — admission during the teardown (AUD-02 / AUD-03)
 
@@ -1066,7 +1093,10 @@ respawning. Two do not, and are the reason the latch is armed there:
   `llama-server`, which then **orphans** at `app.exit(0)`.
 - An admitted **import** decrypts a document to a plaintext transient; `app.exit(0)` landing
   between that write and the `finally` that shreds it **strands plaintext on the drive** until the
-  next launch's crash sweep.
+  next launch's crash sweep. The same held for work **already in flight** when quit began — a
+  preview, re-index, prepare, dictation or export whose parse outlived the teardown — which the
+  latch cannot reach; those are aborted, settled and swept by the plaintext-operation registry
+  (the "Plaintext operations" bullet above, #237).
 Nothing on the quit path clears the latch and the process exits, so arming it is terminal by
 construction. (`WorkspaceController.shutdown()` still calls `lock()` directly; it needs no latch of
 its own.)
