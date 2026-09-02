@@ -24,7 +24,7 @@ export HILBERTRAUM_MANIFESTS_DIR="$DIR/model-manifests"
 # Find the AppImage on the drive and count the matches.
 APP=""
 APP_COUNT=0
-for candidate in "$DIR"/*.AppImage; do
+for candidate in "$DIR"/HilbertRaum-*.AppImage; do
   if [ -f "$candidate" ]; then
     APP_COUNT=$((APP_COUNT + 1))
     if [ -z "$APP" ]; then APP="$candidate"; fi
@@ -44,7 +44,7 @@ fi
 if [ "$APP_COUNT" -gt 1 ]; then
   echo
   echo "  More than one HilbertRaum app was found on this drive:"
-  for candidate in "$DIR"/*.AppImage; do
+  for candidate in "$DIR"/HilbertRaum-*.AppImage; do
     if [ -f "$candidate" ]; then echo "    $(basename "$candidate")"; fi
   done
   echo

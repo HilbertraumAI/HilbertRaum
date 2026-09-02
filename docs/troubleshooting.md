@@ -322,7 +322,8 @@ the workspace data on the drive is damaged" above). It never deletes anything fo
 
 What to do: keep only the newest version and delete every other HilbertRaum app file at the
 drive root — on macOS also the extracted `HilbertRaum.app` when a `.app.zip` is present (the
-launcher unpacks the zip again on the next start) — then double-click the launcher again.
+launcher runs the zip's copy from its local cache, unpacking it first if needed) — then
+double-click the launcher again.
 
 To see which app the launcher would start **without** starting it, run it with `/check` on
 Windows (`"Start HilbertRaum.cmd" /check` in a Command Prompt opened at the drive root) or

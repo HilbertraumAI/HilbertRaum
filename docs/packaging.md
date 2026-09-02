@@ -400,8 +400,8 @@ The drive root ships an obvious, double-clickable launcher (spec §6 names). Sou
 All three launchers refuse to start while more than one app artifact of their kind sits at the
 drive root (two portable `.exe`s, two AppImages, two `.app.zip`s, or an extracted `.app` beside a
 zip), naming the files to delete and never deleting anything themselves (#235); `--check`
-(`/check` on Windows) resolves the app and exits without starting it. `tests/integration/
-launcher-execution.test.ts` executes all three in scratch roots.
+(`/check` on Windows) resolves the app and exits without starting it.
+`tests/integration/launcher-execution.test.ts` executes all three in scratch roots.
 
 > ⚠️ **No hardcoded paths — drive letters change per machine.** The launcher derives the root from
 > **its own location every launch** (`%~dp0` / `dirname "$0"`), so the same drive works on a second

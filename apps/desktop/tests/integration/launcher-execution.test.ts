@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterAll, describe, it, expect, vi } from 'vitest'
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,8 +29,14 @@ const NOT_STARTED = /Nothing was started/
 
 const text = (r: SpawnSyncReturns<string>): string => `${r.stdout ?? ''}\n${r.stderr ?? ''}`
 
+const scratchDirs: string[] = []
+afterAll(() => {
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true })
+})
+
 function scratchRoot(launcher: string): string {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-launcher-'))
+  scratchDirs.push(root)
   copyFileSync(join(LAUNCHERS, launcher), join(root, launcher))
   return root
 }
@@ -190,7 +196,9 @@ describe.skipIf(bashSkip)('Start HilbertRaum.command (macOS)', () => {
 
   /** A scratch HOME: the refusal must land before the launcher writes its unpack cache. */
   function scratchHome(): string {
-    return mkdtempSync(join(tmpdir(), 'hilbertraum-launcher-home-'))
+    const home = mkdtempSync(join(tmpdir(), 'hilbertraum-launcher-home-'))
+    scratchDirs.push(home)
+    return home
   }
   const cacheTouched = (home: string): boolean => existsSync(join(home, 'Library'))
 
