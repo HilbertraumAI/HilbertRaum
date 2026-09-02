@@ -29,17 +29,17 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-09-02 — **Audit 2026-09-02 Phase 1, PR 1-a — packaged OCR fails per document instead of
-killing the app; `ocrAvailable` reads execution state (REL-6; PR #268).**_ tesseract.js sets the
-inert browser `worker.onerror` on its Node Worker and never settles `createWorker()` on a load
-failure, so the packaged `asarUnpack` gap surfaced as `uncaughtException`. `ocr/tesseract.ts` now
-captures the raw worker via Node's `process.on('worker')` hook, bounds the start (30 s), passes
-tesseract's `errorHandler`, rejects the pending page and latches `'unavailable'`; packaged builds
-run a startup execution probe (one bounded start, released on success) and report OCR unavailable
-until it passes; `AppStatus.ocrState` (additive) tells the renderer why. Decision 2 (#219) on its
-DEFAULT: a photo imports without text + a NEW per-document note (Q22 copy drafted in the PR body,
-owner review pending). Packaged OCR still does NOT work — the closure is PR 1-b; §5 16(b)/18(b)/18(c)
-stay open. +11 tests (5,424 / 52); tesseract boundary tests use REAL eval-Workers, no module mock.
+_2026-09-02 — **Audit 2026-09-02 Phase 1 — packaged OCR: worker failures degrade per document,
+`ocrAvailable` reads execution state, the `asarUnpack` closure is derived by a test (REL-6; PRs
+#268 + #269).**_ tesseract.js sets the inert browser `worker.onerror` on its Node Worker and never
+settles `createWorker()` on a load failure, so the packaged `asarUnpack` gap surfaced as
+`uncaughtException`. 1-a: `ocr/tesseract.ts` captures the raw worker via `process.on('worker')`,
+bounds the start, passes `errorHandler`, rejects the page, re-arms once after a live death;
+packaged builds run a startup execution probe and report OCR unavailable until it passes
+(`AppStatus.ocrState`); decision 2 (#219) on its DEFAULT — photos import without text + a new
+per-document note (Q22 copy in the PR body, owner review pending). 1-b: `asar-unpack-closure.test.ts`
+walks the worker's require graph (+5 globs); packaged Windows probe `ok` in 277 ms. Open: the
+interactive recognition leg (§5 18(c)). Suite 5,413 → 5,427; boundary tests use REAL eval-Workers.
 
 _2026-09-02 — **Audit 2026-09-02 Phase 0 — quit re-entry prevented, cold-start abort for
 E5/reranker/vision, spellcheck off (SEC-12, GAP-2, REL-10, SEC-1; PR #267; PR 0-a #265 drained the
@@ -513,7 +513,11 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     `asarUnpack` the tesseract.js worker's hoisted deps, add graceful task-failure degradation,
     make `ocrAvailable` honest, and re-check the OCR window's header∩meta `blob:` intersection
     once the packaged path is reachable again (a pre-existing, version-independent crash found
-    by the P4 packaged smoke). (c) **`test:coverage` parallelism cap or a documented RAM floor**
+    by the P4 packaged smoke). **⟶ 2026-09-02 (audit 2026-09-02 Phase 1, PRs #268 + #269): the
+    three code items LANDED — hoisted deps unpacked per the require-graph closure test, worker
+    failures degrade per document, `ocrAvailable` reads execution state; packaged Windows startup
+    probe passed (277 ms). Residual → 18(c): the `blob:` header∩meta re-check + the interactive
+    recognition leg.** (c) **`test:coverage` parallelism cap or a documented RAM floor**
     — full-width coverage starves this 16 GB machine; `--maxWorkers=2` is the current workaround
     (script/CI unchanged). (d) **Recommend `.github/dependabot.yml`** with grouped weekly npm
     updates so the next wave arrives as PRs, not an audit (recommendation only — not
@@ -528,12 +532,18 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     land as its **own PR**; this was the fourth hand-rolled dependency batch. Supersedes item
     16(d).
     (b) **Packaged-OCR fix bundle** — unchanged, still open; see item 16(b). DEP-4 did not touch
-    it (the defect is an `asarUnpack` gap, not a runtime-version effect).
+    it (the defect is an `asarUnpack` gap, not a runtime-version effect). **⟶ LANDED 2026-09-02
+    (audit Phase 1, PRs #268 + #269; see 16(b)); what remains is the 18(c) measurement.**
     (c) **OCR assets on a build machine** — two DEP-4 measurement gaps exist ONLY because this
     machine carries no `*.traineddata`: dev-mode OCR recognize, and the OCR window's RUNTIME
     CSP leg (its baked meta WAS verified byte-exact from the shipped asar; the header is
     page-agnostic, so the mechanism is proven by the main window). Running the packaged
-    measurement on an asset-carrying drive closes both.
+    measurement on an asset-carrying drive closes both. **⟶ 2026-09-02 (audit Phase 1, PR #269):
+    the packaged Windows build's startup OCR execution probe PASSED against a scratch root with
+    `deu`+`eng` files (`ok: true`, 277 ms) — worker script, hoisted deps, WASM core and language
+    init load from `app.asar.unpacked`. STILL OPEN (owner-runnable on the packaged build): the
+    interactive recognition leg (photo import + "Make searchable (OCR)" on a scanned PDF) and the
+    OCR window's runtime CSP leg; record machine/date/outcome here when run.**
     (d) ⚠️ **Electron 44 is a CUSTOMER-FACING decision, not a routine bump** — it removes macOS 12
     support and drops 32-bit Windows (ia32) + Linux armv7l. **E43 is the last series shipping
     prebuilt 32-bit binaries, supported until January 2027.** Decide deliberately with the drive
@@ -583,6 +593,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     - **1-a** (2026-09-02, PR #268): REL-6 worker boundary + packaged execution probe + honest
       `ocrAvailable`/`ocrState`; interim degrade on decision 2's default (Q22 copy pending owner
       review). Closure (`asarUnpack` require-graph test + globs) and the packaged smoke = PR 1-b.
+    - **1-b** (2026-09-02, PR #269): `asarUnpack` closure derived by `asar-unpack-closure.test.ts`
+      (+5 globs); packaged Windows probe passed (277 ms); interactive recognition leg still open
+      (18(c)); #232 closed — Phase 1 complete.
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/

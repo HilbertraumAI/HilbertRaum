@@ -177,31 +177,41 @@ Key config points:
   emit it to `out/preview/` and `electron-vite build` clears only `out/main|preload|renderer`, so a
   local package run after a screenshot run would otherwise fold the harness (incl. staged demo
   chats) into the artifact; `tests/integration/packaging.test.ts` pins the negation.
-- **`tesseract.js` + `tesseract.js-core` are `asarUnpack`ed — and that list is NOT yet
-  sufficient**: the OCR engine spawns its Node worker via `worker_threads`, which loads the
-  worker script (and the WASM core it requires) through real filesystem reads that cannot see
-  inside the asar archive. The engine rewrites `app.asar` → `app.asar.unpacked` in the resolved
-  workerPath. The worker's own **hoisted** dependencies (`regenerator-runtime`, `is-url`, …) are
-  not in the `asarUnpack` list, so they stay packed inside `app.asar` and cannot be resolved from
-  `app.asar.unpacked` (measured 2026-07-19 on a real packaged Windows build; pre-existing and
-  version-independent). **Until audit 2026-09-02 Phase 1 (REL-6, PR 1-a) that load failure
-  killed the whole app** while `ocrAvailable` still reported `true`: tesseract.js sets the
-  browser-only `worker.onerror`, inert on a Node Worker, so the worker's `'error'` event had no
-  listener and Node rethrew it as `uncaughtException`. **Since PR 1-a it is contained**: the
-  engine captures the raw worker through Node's `process.on('worker')` hook, bounds the start,
-  and passes tesseract's `errorHandler`, so a load failure rejects the recognition per document
-  and latches the engine unavailable; a **packaged build runs an execution probe at startup**
-  (one bounded worker start, released on success) and reports OCR unavailable until it passes —
-  photos import without text and carry a per-document note, "Make searchable (OCR)" is not
-  offered, the Documents screen shows a banner. **Packaged OCR still does not WORK**
-  until the `asarUnpack` closure lands (PR 1-b: a test that resolves the worker's `require`
-  graph against the globs, then the missing entries); **do not treat a packaged OCR run as a
-  release-acceptance step before the manual packaged smoke** (BUILD_STATE §5 item 18(c)) passes.
-  Registered as follow-up 2 in [`architecture.md`](architecture.md) "Dependency remediation —
-  design record (wave DEP-1, PR #77)" §5. Dev-mode OCR is unaffected (the raster → IPC →
-  recognize pipeline was proven end to end on Electron 39), so this is a packaging defect, not an
-  OCR-engine one; the other runtime-only-failure smokes above (parsers, encrypted workspace)
-  still apply.
+- **The `asarUnpack` list is the tesseract.js worker's require-graph CLOSURE, derived by a
+  test**: the OCR engine spawns its Node worker via `worker_threads`, which loads the worker
+  script and everything it `require`s through real filesystem reads that cannot see inside the
+  asar archive; the engine rewrites `app.asar` → `app.asar.unpacked` in the resolved workerPath,
+  and every module on the worker's graph must be unpacked too.
+  `tests/integration/asar-unpack-closure.test.ts` resolves the worker entry, walks its literal
+  `require()` graph and asserts every resolved module path matches an `asarUnpack` glob — today
+  `tesseract.js`, `tesseract.js-core`, `regenerator-runtime`, `is-url`, `bmp-js`,
+  `wasm-feature-detect`, `node-fetch` and node-fetch's own deps `whatwg-url`, `tr46`,
+  `webidl-conversions` — nested under node-fetch in the source tree but FLATTENED to top level
+  inside the asar by electron-builder 26's collector, so the test checks every module at both
+  destinations (the PR 1-b review caught a source-path-only check passing while those three sat
+  packed at top level). History (audit 2026-09-02 Phase
+  1, REL-6): with only the two tesseract packages listed, the worker's **hoisted** deps stayed
+  inside `app.asar` (measured 2026-07-19 on a real packaged Windows build) and the load failure
+  **killed the whole app** while `ocrAvailable` still reported `true` — tesseract.js sets the
+  browser-only `worker.onerror`, inert on a Node Worker, so the `'error'` event had no listener
+  and Node rethrew it as `uncaughtException`. PR 1-a **contained** it: the engine captures the
+  raw worker through Node's `process.on('worker')` hook, bounds the start, passes tesseract's
+  `errorHandler`, so a load failure rejects the recognition per document and latches the engine
+  unavailable; a **packaged build runs an execution probe at startup** (one bounded worker start,
+  released on success) and reports OCR unavailable until it passes — photos import without text
+  and carry a per-document note, "Make searchable (OCR)" is not offered, the Documents screen
+  shows a banner. PR 1-b **closed** the gap with the test + globs above; **measured 2026-09-02 on
+  a packaged Windows build** (`HilbertRaum-0.1.59-portable`, `win-unpacked`, scratch drive root
+  with `deu`+`eng` language files): `OCR execution probe {ok: true, ms: 277}` — worker script,
+  hoisted deps, WASM core and both language files load from `app.asar.unpacked`. The
+  **interactive recognition smoke** (photo import + "Make searchable (OCR)" on a packaged build;
+  BUILD_STATE §5 item 18(c)) is still to be recorded per platform before a kit for that platform
+  is certified — the probe proves the load chain, the smoke proves recognition end to end. If the
+  probe ever fails again the app degrades as above instead of crashing. Registered as follow-up
+  2 in [`architecture.md`](architecture.md) "Dependency remediation — design record (wave DEP-1,
+  PR #77)" §5. Dev-mode OCR was never affected (the raster → IPC → recognize pipeline was proven
+  end to end on Electron 39); the other runtime-only-failure smokes above (parsers, encrypted
+  workspace) still apply.
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
   `HILBERTRAUM_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are

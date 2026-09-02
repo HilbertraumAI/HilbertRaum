@@ -115,7 +115,10 @@ files:
   - '!**/node_modules/@upsetjs/**'
 # NOTE: `includeSubNodeModules: true` was REMOVED in electron-builder 26 (it now errors as an
 # unknown property). v26's reworked dependency collector already follows hoisted/nested
-# node_modules trees by default, so mammoth's transitive deps still come along. If a hoisted
+# node_modules trees by default, so mammoth's transitive deps still come along — and it lays
+# a source-NESTED package out at TOP level inside app.asar (measured 2026-09-02: node-fetch's
+# nested whatwg-url/tr46/webidl-conversions became node_modules/<name>), which is why any
+# `asarUnpack` glob must be written against that flattened layout too. If a hoisted
 # externalized dep ever goes missing from app.asar, build from apps/desktop or disable hoisting
 # (see docs/packaging.md "Portable build"). ALWAYS smoke-test a PDF/DOCX/CSV import + encrypted
 # workspace from the produced .exe — a missing dep surfaces only at runtime.
@@ -151,21 +154,37 @@ asar: true
 # see inside the asar archive (Phase 38, R-O2). Unpack both packages; the engine
 # rewrites app.asar → app.asar.unpacked in the resolved workerPath.
 #
-# ⚠️ KNOWN INSUFFICIENT — this list does not cover the worker's require graph (measured
-# 2026-07-19 on a real packaged Windows build, DEP-1 P4; pre-existing and
-# version-independent). The unpacked worker still `require`s HOISTED deps
-# (regenerator-runtime, is-url, …) that are NOT listed here, so they stay inside app.asar
-# and cannot be resolved from app.asar.unpacked. Since audit 2026-09-02 Phase 1 PR 1-a
-# (REL-6) that failure no longer kills the app: the engine catches the worker's load
-# error (`process.on('worker')` hook + bounded start, ocr/tesseract.ts), a packaged
-# build proves the worker at startup (execution probe) and reports OCR unavailable until
-# it passes, photos import without text + a per-document note. Packaged OCR still does
-# NOT WORK until the closure lands (PR 1-b: a require-graph test + the missing globs);
-# the manual packaged smoke (BUILD_STATE §5 item 18(c)) remains the exit criterion.
-# Dev-mode OCR is unaffected. User-facing text: docs/known-limitations.md.
+# The list is the worker's REQUIRE-GRAPH CLOSURE, derived — not guessed — by
+# tests/integration/asar-unpack-closure.test.ts (audit 2026-09-02 Phase 1, PR 1-b, REL-6):
+# the test resolves `tesseract.js/src/worker-script/node/index.js` and walks its literal
+# `require()` graph, and every resolved module path must match a glob below. History: with
+# only the two tesseract packages listed (measured 2026-07-19 on a real packaged Windows
+# build, DEP-1 P4) the worker's HOISTED deps stayed inside app.asar, could not be resolved
+# from app.asar.unpacked, and the load failure killed the whole app while ocrAvailable
+# reported true. PR 1-a (REL-6) contained the failure (the engine catches the worker's
+# load error through the `process.on('worker')` hook + a bounded start, a packaged build
+# proves the worker at startup and reports OCR unavailable until it passes); this list
+# closes the gap. The manual packaged smoke (BUILD_STATE §5 item 18(c)) is the executable
+# proof — a static walk misses computed requires (tesseract.js 7.0.0 has none on the
+# worker path). `node-fetch` is on the graph only behind `global.fetch ||` (never taken on
+# Electron's Node) — unpacked anyway: the static graph is the contract. Dev-mode OCR is
+# unaffected. User-facing text: docs/known-limitations.md.
 asarUnpack:
   - 'node_modules/tesseract.js/**'
   - 'node_modules/tesseract.js-core/**'
+  # the worker's hoisted runtime deps (require-graph closure, PR 1-b):
+  - 'node_modules/regenerator-runtime/**'
+  - 'node_modules/is-url/**'
+  - 'node_modules/bmp-js/**'
+  - 'node_modules/wasm-feature-detect/**'
+  # node-fetch's own deps (tr46, webidl-conversions, whatwg-url) are NESTED under it in the
+  # source tree but the electron-builder 26 collector FLATTENS them to top level inside the
+  # asar (measured on the 2026-09-02 win-unpacked artifact) — the closure test checks both
+  # destinations, so all four are listed.
+  - 'node_modules/node-fetch/**'
+  - 'node_modules/whatwg-url/**'
+  - 'node_modules/tr46/**'
+  - 'node_modules/webidl-conversions/**'
 
 # CODE SIGNING (Phase 13). Signing turns a scary OS gatekeeper dialog into a clean launch
 # for a non-technical buyer; it is the single most important non-code task for the
