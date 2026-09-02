@@ -435,8 +435,9 @@ describe('photo import through the real pipeline', () => {
     expect(info.errorMessage).toBe(IMAGE_OCR_UNAVAILABLE_MESSAGE)
     expect(info.errorMessage).not.toBe(IMAGE_NEEDS_OCR_MESSAGE)
     expect(engine.calls).toBe(0)
-    // The stored copy exists, so "re-index once OCR is available" is a real path.
+    // The row keeps its type and a stored copy (processDocument stores before parsing), so
+    // "re-index once OCR is available" is a real path — no scan offer (PDF-only).
     expect(info.mimeType).toBe('image/png')
-    expect(info.storedName ?? info.id).toBeTruthy()
+    expect(info.scanDetected).toBe(false)
   })
 })
