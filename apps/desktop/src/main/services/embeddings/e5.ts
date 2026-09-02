@@ -1,5 +1,11 @@
 import type { Embedder, EmbedOptions } from './index'
-import { LlamaServer, combineSignals, isBindRaceError, type LlamaServerOptions } from '../runtime/sidecar'
+import {
+  LlamaServer,
+  combineSignals,
+  isBindRaceError,
+  isStartAbortError,
+  type LlamaServerOptions
+} from '../runtime/sidecar'
 import { truncateToContext } from '../runtime/context-budget'
 import { log } from '../logging'
 
@@ -208,6 +214,13 @@ export class E5Embedder implements Embedder {
    * replace the weight file and retry via lock/unlock without restarting the app.
    */
   private startFailed: Error | null = null
+  /**
+   * Aborts the IN-FLIGHT lazy start on lock/quit (REL-10, audit 2026-09-02 — the translation
+   * runtime's #159 / BE-1 pattern, ported): the child is killed inside the health wait and the
+   * start rejects with an AbortError, instead of the teardown awaiting the full health window
+   * (180 s by default) of a wedged cold start it is about to kill anyway. One per start.
+   */
+  private startAbort: AbortController | null = null
 
   constructor(private readonly opts: E5EmbedderOptions) {
     this.id = opts.id
@@ -223,6 +236,8 @@ export class E5Embedder implements Embedder {
     if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
     if (!this.starting) {
+      const abort = new AbortController()
+      this.startAbort = abort
       const ctx = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
       // RT-4: size the physical batch above the context so multiple in-context inputs of a
       // 32-input request co-decode per ubatch instead of the 512 embedding-mode default
@@ -255,7 +270,10 @@ export class E5Embedder implements Embedder {
         threads: this.opts.threads,
         healthTimeoutMs: this.opts.healthTimeoutMs,
         healthIntervalMs: this.opts.healthIntervalMs,
-        host: this.opts.host
+        host: this.opts.host,
+        // REL-10: let a lock/quit teardown abort this start mid-health-wait (the child is killed
+        // via the normal stop path; start() rejects AbortError — never latched below).
+        startAbortSignal: abort.signal
       })
       this.starting = server
         .start()
@@ -264,6 +282,9 @@ export class E5Embedder implements Embedder {
         })
         .catch((err) => {
           const error = err instanceof Error ? err : new Error(String(err))
+          // REL-10 (audit 2026-09-02): a teardown-ABORTED start is not a load fault — never latch
+          // `startFailed`; the next embed() after unlock must attempt a fresh start.
+          if (isStartAbortError(err) || abort.signal.aborted) throw error
           // F4 (post-merge audit): a TRANSIENT port-bind race must NOT arm the failed-start latch.
           // LlamaServer.start retries a bind race only ONCE (REL-1); losing the port twice during
           // the near-simultaneous chat+embedder+reranker+vision startup throws a bind-class error.
@@ -276,6 +297,7 @@ export class E5Embedder implements Embedder {
         })
         .finally(() => {
           this.starting = null
+          if (this.startAbort === abort) this.startAbort = null
         })
     }
     await this.starting
@@ -458,8 +480,12 @@ export class E5Embedder implements Embedder {
     try {
       // A lazy start may be IN FLIGHT (first embed() racing app quit): `this.server` is
       // only assigned after start() resolves, so returning here would let the spawned
-      // child outlive the app as an orphan. Wait for the start to settle, then stop
-      // whatever it produced.
+      // child outlive the app as an orphan. REL-10 (audit 2026-09-02): ABORT it rather than
+      // wait it out — the abort kills the child inside the health wait (the normal stop
+      // path, no orphan), the start rejects AbortError (never latches `startFailed`), and
+      // the await below settles in about one health-poll interval instead of the full
+      // 180 s health window of a wedged cold start.
+      this.startAbort?.abort()
       if (this.starting) {
         await this.starting.catch(() => undefined)
       }

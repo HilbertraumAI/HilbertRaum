@@ -25,7 +25,15 @@ export const SECURE_WINDOW_WEB_PREFERENCES = Object.freeze({
   contextIsolation: true,
   nodeIntegration: false,
   sandbox: true,
-  webSecurity: true
+  webSecurity: true,
+  // SEC-1 (audit 2026-09-02; owner decision 1 unanswered → this default, #218): Electron's
+  // spellchecker is ON by default and, on Windows and Linux, downloads Hunspell dictionaries
+  // from a Google-operated CDN on first typing — a BROWSER-PROCESS fetch that neither the page
+  // CSP nor the Node-socket offline tripwire (`offlineGuard.ts`) can see, and that the offline
+  // hard rule forbids. Off for all three windows; the composer loses red-underline spell-check
+  // (docs/known-limitations.md). If spell-check is wanted later: dictionaries on the drive +
+  // `setSpellCheckerDictionaryDownloadURL` to a no-op + a closed `setSpellCheckerLanguages`.
+  spellcheck: false
 }) satisfies Readonly<WebPreferences>
 
 /**

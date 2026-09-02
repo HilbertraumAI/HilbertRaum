@@ -715,7 +715,7 @@ describe('quit-path lifecycle (full-audit 2026-07-11 CODE-2/CODE-3)', () => {
         inFlightStreams: new Map(),
         streamSettled: new Map(),
         detachVaultKey: () => undefined,
-        log: { error: () => undefined }
+        log: { error: () => undefined, info: () => undefined }
       })
 
       expect(h.child.killed).toBe(true) // the loading child died with the teardown — no orphan

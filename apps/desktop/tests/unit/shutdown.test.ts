@@ -9,6 +9,9 @@ import type { AppContext } from '../../src/main/services/context'
 // ordering unit-testable with a fake ctx. The whole sequence: abort build + abort streams → stop
 // sidecars → detach log → lock.
 
+/** A logger the ordering tests do not care about (`error` + `info` — the quit path logs both). */
+const quietLog = { error: () => undefined, info: () => undefined }
+
 /** A fake AbortController that records when it is aborted, so the test can assert ordering. */
 function recordingController(order: string[], label: string): AbortController {
   const ctl = {
@@ -66,7 +69,7 @@ describe('performShutdown ordering (REL-4)', () => {
     await performShutdown(fakeCtx(order), {
       inFlightStreams: streams,
       detachVaultKey: () => order.push('detach'),
-      log: { error: () => undefined }
+      log: quietLog
     })
 
     // The stream WAS aborted (reds if the REL-4 abort loop is removed).
@@ -115,7 +118,7 @@ describe('performShutdown ordering (REL-4)', () => {
     await performShutdown(fakeCtx(order), {
       inFlightStreams: new Map([['c1', already]]),
       detachVaultKey: () => order.push('detach'),
-      log: { error: () => undefined }
+      log: quietLog
     })
 
     expect(order).not.toContain('should-not-fire') // not re-aborted
@@ -129,7 +132,7 @@ describe('performShutdown ordering (REL-4)', () => {
       performShutdown(null, {
         inFlightStreams: new Map(),
         detachVaultKey: () => order.push('detach'),
-        log: { error: () => undefined }
+        log: quietLog
       })
     ).resolves.toBeUndefined()
     expect(order).toEqual(['detach']) // only the always-runs detach fired; no ctx calls threw
@@ -159,7 +162,7 @@ describe('performShutdown ordering (REL-4)', () => {
       inFlightStreams: new Map([['c1', controller]]),
       streamSettled: settled,
       detachVaultKey: () => order.push('detach'),
-      log: { error: () => undefined }
+      log: quietLog
     })
 
     const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -201,7 +204,7 @@ describe('performShutdown ordering (REL-4)', () => {
     const p = performShutdown(ctx as unknown as AppContext, {
       inFlightStreams: new Map(),
       detachVaultKey: () => order.push('detach'),
-      log: { error: () => undefined }
+      log: quietLog
     })
 
     const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -263,30 +266,37 @@ async function drain(): Promise<void> {
   for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r))
 }
 
-const quietLog = { error: () => undefined, info: () => undefined }
 
 describe('will-quit re-entry during a parked teardown (SEC-12, B1 inverted)', () => {
-  it('prevents the SECOND will-quit too; the lock runs exactly once, after release, then exit', async () => {
+  /** The real `will-quit` handler over the real `performShutdown`, parked on `embedder.stop()`. */
+  function harness() {
     const order: string[] = []
     const exits: number[] = []
     const { ctx, release } = parkedCtx(order)
-    // Characterisation form: the `will-quit` body copied from `main/index.ts` (which cannot be
-    // imported under vitest — it registers app handlers at import time) over an event stub.
-    // The fix commit rewrites this against `createAppLifecycleHandlers`.
-    let isShuttingDown = false
-    const onWillQuit = (event: { preventDefault: () => void }): void => {
-      if (isShuttingDown) return // cleanup already ran → let the real quit proceed
-      event.preventDefault()
-      isShuttingDown = true
-      void performShutdown(ctx, {
-        inFlightStreams: new Map(),
-        detachVaultKey: () => order.push('detach'),
-        log: quietLog
-      }).finally(() => exits.push(0))
-    }
+    const handlers = createAppLifecycleHandlers({
+      performShutdown: () =>
+        performShutdown(ctx, {
+          inFlightStreams: new Map(),
+          detachVaultKey: () => order.push('detach'),
+          log: quietLog
+        }),
+      exit: (code) => {
+        order.push('exit')
+        exits.push(code)
+      },
+      createWindow: () => order.push('createWindow'),
+      windowCount: () => 0,
+      killSidecarChildren: () => order.push('reap'),
+      log: quietLog
+    })
+    return { order, exits, release, handlers }
+  }
+
+  it('prevents the SECOND will-quit too; the lock runs exactly once, after release, then exit', async () => {
+    const { order, exits, release, handlers } = harness()
 
     const first = quitEvent()
-    onWillQuit(first)
+    handlers.onWillQuit(first)
     await drain()
     expect(first.defaultPrevented).toBe(true)
     expect(order).toContain('embedder.stop(parked)') // the teardown is parked mid-sidecar-stop
@@ -294,7 +304,7 @@ describe('will-quit re-entry during a parked teardown (SEC-12, B1 inverted)', ()
     expect(exits).toEqual([])
 
     const second = quitEvent()
-    onWillQuit(second)
+    handlers.onWillQuit(second)
     await drain()
     // INVERTED B1: the re-entry must be prevented as well — nothing but the teardown's own
     // completion may release the quit while the vault is unlocked.
@@ -305,8 +315,21 @@ describe('will-quit re-entry during a parked teardown (SEC-12, B1 inverted)', ()
     release()
     await drain()
     expect(order.filter((l) => l === 'lock')).toHaveLength(1)
-    expect(order[order.length - 1]).toBe('lock')
-    expect(exits).toEqual([0]) // exit exactly once, from the teardown's finally
+    // lock → (reap whatever a deadline-abandoned stop left) → exit, exactly once, from the finally.
+    expect(order.slice(-3)).toEqual(['lock', 'reap', 'exit'])
+    expect(exits).toEqual([0])
+  })
+
+  it('reaches the re-entry branch while the vault is still UNLOCKED and prevents there too (fresh closure)', async () => {
+    const { order, exits, handlers } = harness()
+    handlers.onWillQuit(quitEvent())
+    await drain()
+    expect(handlers.isShuttingDown()).toBe(true)
+    expect(order).not.toContain('lock') // the re-entry below happens with the DB open
+    const reentry = quitEvent()
+    handlers.onWillQuit(reentry)
+    expect(reentry.defaultPrevented).toBe(true)
+    expect(exits).toEqual([]) // never released by the re-entry
   })
 })
 

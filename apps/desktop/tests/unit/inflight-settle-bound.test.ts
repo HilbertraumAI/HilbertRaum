@@ -50,7 +50,7 @@ describe('awaitInFlightStreamsSettled ceiling (full-audit 2026-07-12 REL-4)', ()
       inFlightStreams: new Map(),
       streamSettled: new Map<string, Promise<void>>([['c1', new Promise<void>(() => {})]]),
       detachVaultKey: () => order.push('detach'),
-      log: { error: () => undefined }
+      log: { error: () => undefined, info: () => undefined }
     })
 
     // Before the ceiling the teardown is parked on the wedged settle: lock() has not run.
