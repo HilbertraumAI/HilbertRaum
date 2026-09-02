@@ -29,160 +29,7 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-08-22 — **Master CI flake FIXED (test-only): the evidence-pack print harness's step-timeout
-test waited for a REAL fs write by counting event-loop turns under a FAKE clock.**_ The PR #212
-merge left `master` red on the windows/24.x leg alone (`expected +0 to be 1`, everything else
-green). The wait was `1000 × advanceTimersByTimeAsync(0)`, whose yield is one real `setImmediate`
-— **measured: ~4 ms of wall clock for all 1000 turns** — so any print-source write slower than
-that (loaded runner, four forks, an AV scanner on a freshly created `.html`) failed the test.
-Reproduced deterministically by delaying the write 300 ms: pre-fix red with the exact CI
-assertion, post-fix green. Now a real-timer poll against a real 10 s deadline (both captured
-before the fake clock is installed), plus an honest error when the write itself rejects. The
-harness (`print-pdf.ts`) is unchanged — the wedged-renderer timeout it asserts always worked. Rule
-added to §7; the other `advanceTimersByTimeAsync(0)` loops in the suite drain mocked promise
-chains (no real I/O) and are unaffected.
-
-_2026-08-21 — **Encrypted vault destroyed in the field by a concurrent second instance — issue
-#208 root-caused, reproduced, guarded.**_ Mechanism (reproduced; pinned by tests): the 0.1.58
-first run's startup crash-sweep shredded the STILL-OPEN previous session's working DB — on Windows
-the overwrite lands while the unlink fails (SQLite holds no `FILE_SHARE_DELETE`), the live session
-notices nothing — and its lock-on-quit encrypted the noise over the good `.enc` (valid GCM tag
-forever after; every unlock then "wrong password"). No single-instance guard existed; dev + all
-portable builds share one `userData`. Shipped: `app.requestSingleInstanceLock()` + `-dev` userData
-suffix; SQLite-header refusal on EVERY encrypt-over-`.enc` (`lockEncryptedVault` + `stageRekey` —
-only the CODE-1b roll-forward had it); typed `VaultDamagedError` → `{reason:'vault_damaged'}` with
-backup copy (EN+DE); shred-on-failed-open of the decrypted leftover; `openDatabase` closes its
-native handle on a failed open (the leak blocked the shred). Record + full mechanism:
-`security-model.md` "Vault-overwrite guards & single instance"; also `troubleshooting.md`
-(damaged-vault entry), `known-limitations.md` (cross-`userData` residual — a workspace-level lock
-file is deliberately NOT built), `data-contracts.md`, CHANGELOG. Tests:
-`workspace-vault-destruction.test.ts` (two-controller repro, mutation-checked: guard off → 2 red
-on Windows) + `workspace-ipc.test.ts` mapping.
-
-_2026-08-20 — **gemma4-12b checkpoint repointed IN PLACE after the measurement wave — issue #201
-CLOSED.**_ Google superseded the pinned GGUF at the same URL on 2026-07-17 ("corrected
-vocabulary"), so a ~7 GB download ended in `checksum_failed`. Measured old vs corrected on the
-i9-9900X + RTX 3090: **all 100 §2 answers byte-identical**, peak RSS delta 44 kB, peak VRAM
-identical, every §9.1 leg green — so the owner chose an **in-place** repoint (both `sha256`
-fields + `size_bytes`) over an issue-#196-style successor id, which would have duplicated a
-provably indistinguishable catalog entry. Accepted cost: a drive holding the old bytes reports
-`checksum_failed` until it re-downloads (not bundled, not in the `--with-assets` default set) —
-in `known-limitations.md` and `CHANGELOG.md`. Record: `model-benchmarks.md` §9.6; the in-place
-vs successor precedent is now written into `model-policy.md`'s drift check. Audit ledger B-1
-closed. Raw rows: `eval/results/i9-9900X-gemma4fix-*`.
-
-_2026-08-20 — **Docs / references / comment audit — reported, safe half remediated, two
-measurement items filed.**_ One pass over the living markdown (~49.5k lines) and the code comments
-(309 files, 31,682 comment lines): staleness, reference liveness (internal links, §-citations,
-external URLs, and every committed `download.url` — URL **and** upstream hash) and comment weight.
-Report with stable ids, per-finding evidence, and the negative results:
-[`docs/audits/docs-code-comment-audit.md`](docs/audits/docs-code-comment-audit.md).
-**The theme:** the #196 successor wave (PR #199) reached the manifests, both pinning tests,
-`CHANGELOG.md` and `DRIVE-NOTICES.md` but not the hand-written catalog prose — `README.md`,
-`model-policy.md` and `benchmark.md` still recommended two files whose upstream source was deleted
-the same day, and the three shipped successors had no README row. Swept, with the committed
-manifests + a `recommendModelIdByRam` replay as ground truth. Also: the Node floor (`>=22.12` since
-DEP-4, advertised as `>=22.5` in five places), a dated §6.5 amendment, five stale manifest rank
-comments, four links the 2026-07-12 build-log de-linkification missed, `release-issues-section.sh`
-documented, the last **16 of 140** IPC channels into `data-contracts.md` (now 140/140),
-known-limitations sections for MTP (#182) and catalog withdrawals (#196), and the two
-extractor-version comment histories compressed ~198 → ~101 lines with **no** citation lost
-(35→35, 22→22) and no measured number touched. **Filed, NOT fixed — both need measurement:
-[#201]** `gemma4-12b-it-qat-q4`'s upstream file was re-uploaded 2026-07-17 ("corrected vocabulary"),
-so the live URL serves bytes the pinned SHA-256 does not match — a ~7 GB download ending in a
-checksum failure, unseen for five weeks because the #196 sweep checked liveness catalog-wide and
-hash equality for two manifests; **[#202]** four manifests carry rounded `size_bytes`. Prevention
-landed here: `model-policy.md` "Re-verifying the catalog against upstream" makes the drift check
-compare the upstream LFS OID, not just the status code.
-
-_2026-08-20 — **Four rounded `size_bytes` replaced with measured ones, and the field scoped —
-issue #202 CLOSED.**_ Both options, which were never alternatives. (a) `qwen3-4b/8b/14b-instruct-q4`
-and `qwen3-30b-a3b-q4` now carry the real byte counts (2497280256 / 5027783488 / 9001752960 /
-18556685824), re-derived by both methods of the `model-policy.md` drift check; `size_on_disk_gb`
-followed on the 4B and 14B to hold the committed F-16 decimal-GB invariant, and the two test
-fixtures carrying the old 4B number moved with them. All four `sha256` values were and remain exact
-matches — only the declared sizes were estimates. (b) `model-policy.md` now scopes the field:
-**declare it exactly, consume it tolerantly**, tying `assets.ts`'s 25 %/128 MiB cap headroom to the
-reason it exists and citing #201 (a checkpoint that arrived 1,568 bytes larger at the same URL) as
-the proof. Audit ledger B-3 closed.
-_2026-08-20 — **Local API documented as a first-class feature for the release — docs-only, O2
-lifted.**_ The local-API wave shipped under owner option **O2 "not promoted"** (one CHANGELOG
-line, no README push, ship one release quietly first). With the release now being prepared, the
-owner lifted that hold; this pass writes the feature up properly **without touching a line of its
-behaviour** (still default-off, loopback-only, consent-gated, policy-restrictable). New:
-**[`docs/local-api.md`](docs/local-api.md)** — §1–§12, a user tutorial (turn-on flow, the exact
-`127.0.0.1` vs `localhost` trap, port conflicts) plus a **client-author contract** (curl /
-PowerShell / Python + Node `openai` SDK / plain `fetch` examples, the supported-ignored-refused
-field table, both response shapes, the full error-code table with `Retry-After` semantics, the
-timeout/limit table, the concurrency + pre-emption rules, the security-control table, and the
-privacy statement). Updated: `README.md` (feature bullet, docs-table row, an inbound-door
-paragraph under Privacy & security), `PRIVACY.md` (port named; the `local_api_toggled` audit entry
-disclosed as the ONE thing recorded — state only; "completions only, no other model features"),
-`SECURITY.md` (constant-time compare, key at rest + rotation aborting in-flight streams, the 1 MB
-counted-byte body cap and 16-connection ceiling), `known-limitations.md` (a new **Local API**
-section: v1 scope, refused capabilities, ignored sampling extras, absent `usage`, single-slot
-concurrency, no per-connection visibility, the same-machine residual, the upstream
-`/health`+`/v1/models` auth exemption), plus cross-pointers from `user-guide.md`,
-`troubleshooting.md`, `security-model.md`, and `data-contracts.md` (whose §"P3 exposed HTTP
-contract" now names `local-api.md` §6 as the twin that must move with it). The design record's O2
-row carries a dated **superseded** note, which also promotes the wire shape to **externally
-documented**: a status/code-mapping or frame-order change is now a breaking change needing a
-CHANGELOG note. Docs-only — no src/test change, `npm test` unaffected.
-
-_2026-08-20 (later) — **#196 successor wave: MEASURED, RATIFIED and LANDED — issue #196 CLOSED
-(PR #199).**_ All three `UD-*` candidates ran the full per-quant rig wave (§9.4 method; §2 quality
-on the b9849 drive runtime offline, §3/§4 on the b10430 basis, §9.1 app-path smokes on the
-b9849 pin, all legs green) and the §9.5 in-GGUF gate passed: the MTP draft head is present in
-every successor file (b9849 spawn, draft acceptance logged). Hard quality profile intact on all three (EM
-.9765, hallucinations 0, abstention 1.0000). Successor manifests added with measured numbers,
-and the ranks are owner-RATIFIED 2026-08-20: the full §9.4 generational handover is restored,
-`qwen3.8-27b-ud-q4km` rank 3 takes 24 GB (F1 .3529; tg 32.4 vs the withdrawn 39.9, a 19
-percent decode regression, recorded and accepted: quality deltas sit inside cross-run
-uncertainty and the newest generation is preferred), `qwen3.8-27b-ud-q5km` rank 3 takes
->=32 GB (envelope reproduced, tg minus 4 percent, VRAM identical), the Qwen3.6 pair returns to
-rank 1, `qwen3.8-27b-ud-q6k` rank 0 by design (the 24 GB GPU niche got stronger: 21.8 GiB
-peak). The three withdrawn manifests are **kept, not retired** — rank 0 with their dated
-`download.withdrawn` note, so an installed-base drive still verifies, starts and keeps MTP; that
-is this wave's answer to the retire-or-keep question `model-policy.md` defers to the promoting
-wave. Consequence worth stating: the §6.5 stepped pick now steps a crawling ≥32 GB box to
-`qwen3.8-27b-ud-q4km` (32.4 t/s) rather than `qwen3.6-27b-q4` (40.1 t/s) — that follows from the
-ratified rank order and is accepted with it, not a defect of the step-down path. Full record:
-`model-benchmarks.md` §9.5 "Successor wave"; raw rows `eval/results/i9-9900X-qwen38ud-*` + the
-b10430 speed CSV.
-
-_2026-08-20 — **Upstream deleted the three Qwen3.8 GGUFs — issue #196, catalog + product fix
-landed** (the successor measurement wave it opened is CLOSED by the entry above)._ Unsloth
-restructured `unsloth/Qwen3.8-27B-GGUF` for Dynamic 3.0 and removed the static K-quants: all three pinned URLs
-return **404** (re-verified here 2026-08-20 with `HEAD`). Blast radius measured, not assumed —
-**all 28 committed `download.url`s re-checked: only these three are dead**, and the Qwen3.6 pair is
-intact (URL alive AND upstream LFS OIDs still equal the committed hashes). Drives that already
-carry a Qwen3.8 weight are unaffected (local SHA-256 still verifies; MTP unchanged). Shipped: a new
-optional manifest field **`download.withdrawn`** (a dated note) that the planner turns into a
-`source-withdrawn` task ahead of the license gate, so the in-app downloader refuses by name before
-any request, the AI-Model card shows the reason instead of a Download button, and both
-`fetch-models` twins skip with a loud line instead of burning retries on a known-dead link. Catalog:
-`qwen3.8-27b-q4/-q5` **rank 3 → 0** (selectable, never auto-recommended — the existing rank-0
-convention) and the §9.4 generational handover **reverted**: `qwen3.6-27b-q4` retakes 24 GB,
-`qwen3.6-27b-q5` retakes ≥32 GB, both at rank 3. **Not built (deliberate):** the `UD-*` successor
-manifests — numbers are measured, never estimated, so they need the per-quant rig wave (§9.4
-method) **plus** a per-file MTP re-verification, since Dynamic 3.0 publishes the draft head as a
-SEPARATE file while `speculative_decoding: mtp` asserts an in-GGUF head. Verified upstream
-size/OID data for the three candidates is recorded in the §9.5 record so the wave starts from data.
-Records: `model-benchmarks.md` **§9.5**, `model-policy.md` "Withdrawn upstream sources",
-`architecture.md` In-app downloader ("a fourth refusal"). Tests: validator, planner, downloader,
-Models screen and both fetch twins, plus a general catalog invariant — *no committed manifest is
-both recommended and unobtainable*; the planner + renderer guards mutation-checked (5 red / 2 red).
-**Where it landed (O6 citation correction, 2026-08-20):** this fix has **no PR of its own**. Its
-branch (`fix/196-withdrawn-upstream-source`, local commit `a166d511`) was never pushed; the
-local-API documentation branch was cut from it by mistake instead of from `master`, so the squash
-of **PR #197** carried both change sets onto `master` as commit **`0324a55a`**, under a
-`docs(local-api)` title. Nothing was lost or altered — the #196 paths on `master` are
-byte-identical to `a166d511` — and the combined tree passed CI as one unit. Cite this work as
-**PR #197 / `0324a55a`**, not as a #196 PR. Issue #196 itself stayed open past that squash and is
-closed by **PR #199**, the successor wave above — so this issue has two landing points, one per
-stage.
-
-_Older dated entries (the closed waves through 2026-08-20) and the Skills S2–S12 handoff sections were
+_Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
 retention budget), the 2026-07-11…2026-08-16 closed-wave block on 2026-08-18 (pre-wave archive
@@ -190,7 +37,10 @@ ritual), and the four CLOSED waves of 2026-08-18/19 (local API #184, portable st
 MTP speculative decoding #182, model occupancy #185/#186) on 2026-08-20 for the retention budget,
 and the four 2026-08-20 entries of the same now-CLOSED #188/#190 stored-copy wave at the #194
 close-out, and the #194 close-out entry itself on 2026-08-22 (preamble budget, making room for
-the CI-flake entry) —
+the CI-flake entry), and the eight closed 2026-08-20…2026-08-22 entries (#196 catalog fix and its
+successor wave #199, local API docs, #202 sizes, the docs/code-comment audit, #201 checkpoint,
+#208 second-instance guard, the #212 CI-flake fix) on 2026-09-02 (preamble budget, making room for
+the full-audit 2026-09-02 remediation round — §5 item 19) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
@@ -688,6 +538,21 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     argument validation — never an agent loop; the capability flag lands on the
     currently-ignored `supports_tools` manifest key (model-policy.md). (d) The §5.4
     thinking-checkpoint criterion is folded into item 8's ratify sequence, not a separate action.
+
+19. **Full-audit 2026-09-02 (security/reliability) — REMEDIATION IN PROGRESS** (tracker
+    issue #217; labels `audit-2026-09-02`, `severity:*`, `phase:0`..`phase:9`, `owner-decision`,
+    `follow-up`). The round's working paper, phased plan and STATE ledger live under the
+    git-ignored `tmp/` for the duration of the round; the durable ledger is written once, at
+    close-out, as `docs/architecture.md` "§52 Full audit (2026-09-02) — remediation ledger +
+    close-out" (directly after §51). Fourteen owner decisions are open as issues #218–#231; until
+    answered, each phase runs on the plan's stated default and says so in its PR body (a default
+    is never upgraded to a ruling). Phases: 0 quit path / cold-start abort / spellcheck; 1
+    packaged OCR; 2 one commercial gate; 3 update multiplicity; 4 lock/quit quiescence; 5a
+    external-open consent; 5b raw-path hardening; 6 rekey completeness; 7 recovery preservation +
+    durability docs; 8 small code items; 9a early docs sweep; 9b round close-out. One line per
+    merged phase follows (outcome + PR + pointer; the narrative lives in the PR and the record):
+    - **0-a** (2026-09-02, docs-only, PR #PR0A): the eight closed 2026-08-20…08-22 dated entries
+      drained to `docs/build-log.md`; this item opened.
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
