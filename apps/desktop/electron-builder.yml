@@ -115,7 +115,10 @@ files:
   - '!**/node_modules/@upsetjs/**'
 # NOTE: `includeSubNodeModules: true` was REMOVED in electron-builder 26 (it now errors as an
 # unknown property). v26's reworked dependency collector already follows hoisted/nested
-# node_modules trees by default, so mammoth's transitive deps still come along. If a hoisted
+# node_modules trees by default, so mammoth's transitive deps still come along — and it lays
+# a source-NESTED package out at TOP level inside app.asar (measured 2026-09-02: node-fetch's
+# nested whatwg-url/tr46/webidl-conversions became node_modules/<name>), which is why any
+# `asarUnpack` glob must be written against that flattened layout too. If a hoisted
 # externalized dep ever goes missing from app.asar, build from apps/desktop or disable hoisting
 # (see docs/packaging.md "Portable build"). ALWAYS smoke-test a PDF/DOCX/CSV import + encrypted
 # workspace from the produced .exe — a missing dep surfaces only at runtime.
@@ -174,9 +177,14 @@ asarUnpack:
   - 'node_modules/is-url/**'
   - 'node_modules/bmp-js/**'
   - 'node_modules/wasm-feature-detect/**'
-  # node-fetch carries its own nested node_modules (tr46, webidl-conversions, whatwg-url) —
-  # the recursive glob covers them.
+  # node-fetch's own deps (tr46, webidl-conversions, whatwg-url) are NESTED under it in the
+  # source tree but the electron-builder 26 collector FLATTENS them to top level inside the
+  # asar (measured on the 2026-09-02 win-unpacked artifact) — the closure test checks both
+  # destinations, so all four are listed.
   - 'node_modules/node-fetch/**'
+  - 'node_modules/whatwg-url/**'
+  - 'node_modules/tr46/**'
+  - 'node_modules/webidl-conversions/**'
 
 # CODE SIGNING (Phase 13). Signing turns a scary OS gatekeeper dialog into a clean launch
 # for a non-technical buyer; it is the single most important non-code task for the

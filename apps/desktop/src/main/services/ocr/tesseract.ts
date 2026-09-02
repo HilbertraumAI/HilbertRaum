@@ -65,6 +65,13 @@ function resolveOcrPageTimeoutMs(explicit?: number): number {
   return Number.isFinite(env) && env > 0 ? env : DEFAULT_OCR_PAGE_TIMEOUT_MS
 }
 
+/**
+ * The tesseract.js Node worker entry this engine spawns. Exported so the packaging closure test
+ * (`tests/integration/asar-unpack-closure.test.ts`, REL-6) walks the SAME entry's require graph —
+ * a path change here turns that test's walk red instead of leaving it validating a stale entry.
+ */
+export const TESSERACT_WORKER_ENTRY = 'tesseract.js/src/worker-script/node/index.js'
+
 function toError(err: unknown, fallback: string): Error {
   if (err instanceof Error) return err
   const text = typeof err === 'string' ? err : ''
@@ -238,7 +245,7 @@ export class TesseractOcrEngine implements OcrEngine {
     let workerPath: string | undefined
     try {
       workerPath = resolveWorkerScriptPath(
-        require.resolve('tesseract.js/src/worker-script/node/index.js')
+        require.resolve(TESSERACT_WORKER_ENTRY)
       )
     } catch {
       workerPath = undefined // fake module in tests / exotic layout: use its default

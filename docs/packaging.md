@@ -185,7 +185,11 @@ Key config points:
   `tests/integration/asar-unpack-closure.test.ts` resolves the worker entry, walks its literal
   `require()` graph and asserts every resolved module path matches an `asarUnpack` glob — today
   `tesseract.js`, `tesseract.js-core`, `regenerator-runtime`, `is-url`, `bmp-js`,
-  `wasm-feature-detect` and `node-fetch` (with its nested deps). History (audit 2026-09-02 Phase
+  `wasm-feature-detect`, `node-fetch` and node-fetch's own deps `whatwg-url`, `tr46`,
+  `webidl-conversions` — nested under node-fetch in the source tree but FLATTENED to top level
+  inside the asar by electron-builder 26's collector, so the test checks every module at both
+  destinations (the PR 1-b review caught a source-path-only check passing while those three sat
+  packed at top level). History (audit 2026-09-02 Phase
   1, REL-6): with only the two tesseract packages listed, the worker's **hoisted** deps stayed
   inside `app.asar` (measured 2026-07-19 on a real packaged Windows build) and the load failure
   **killed the whole app** while `ocrAvailable` still reported `true` — tesseract.js sets the

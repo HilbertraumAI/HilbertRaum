@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
+// The glob → RegExp translation is shared with asar-unpack-closure.test.ts (REL-6).
+import { globToRegExp } from '../helpers/globs'
 
 // L18 (audit-2026-06-13): @napi-rs/canvas is an OPTIONAL transitive dep of pdfjs-dist —
 // a platform-specific native `.node` (Skia) the app never imports. With
@@ -30,19 +32,6 @@ interface BuilderConfig {
 
 function loadBuilderConfig(): BuilderConfig {
   return parse(readFileSync(BUILDER_YML, 'utf8')) as BuilderConfig
-}
-
-/** Translate a minimatch-style files glob to a coarse RegExp (same rules as the L18 test below). */
-function globToRegExp(glob: string): RegExp {
-  return new RegExp(
-    '^' +
-      glob
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*\//g, '(?:.*/)?')
-        .replace(/\*\*/g, '.*')
-        .replace(/(?<!\.)\*/g, '[^/]*') +
-      '$'
-  )
 }
 
 interface LockPackage {
