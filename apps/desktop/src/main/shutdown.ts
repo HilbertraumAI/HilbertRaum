@@ -18,9 +18,24 @@ export interface ShutdownDeps {
   streamSettled?: Map<string, Promise<void>>
   /** Flush the encrypted diagnostics log before `lock()` zeroes the vault key. */
   detachVaultKey?: () => void
-  /** Logger (only `error` is used). */
-  log?: Pick<typeof realLog, 'error'>
+  /** Logger (`error`, plus `info` for the two quit-progress lines — SEC-12). */
+  log?: Pick<typeof realLog, 'error' | 'info'>
 }
+
+/**
+ * Overall bound on the AWAITED MIDDLE of `performShutdown` (SEC-12 rider 13, audit 2026-09-02;
+ * owner decision 13 unanswered → this default, #230): the local-API stop, the sidecar stops, the
+ * stream settle and the doc-task settle are raced as ONE section against this deadline. The
+ * per-step bounds sum to 20.5 s today (local API ≤ 0.5 s; sidecars ≤ 10 s — the transcriber's
+ * suspend timeout; streams 5 s; doc tasks 5 s), so 30 s only ever fires on a step that is not
+ * honouring its own bound. When it fires, the teardown logs, ABANDONS the parked promises and
+ * goes straight on to the log flush + the vault lock — the lock is never inside the race (a
+ * deadline that abandoned the lock would reproduce the hard-kill outcome it exists to prevent).
+ * Whatever a parked sidecar stop left behind is reaped synchronously right before `app.exit`
+ * (`killRegisteredSidecarChildren`, the CODE-11 crash-path reaper, now also run by the quit
+ * handler's finally — see `createAppLifecycleHandlers`).
+ */
+export const SHUTDOWN_OVERALL_DEADLINE_MS = 30_000
 
 /**
  * Stop the sidecars and AWAIT their exit so no orphaned `llama-server` survives, then re-encrypt +
@@ -50,8 +65,9 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
 
   // AUD-02 — arm the WORKSPACE lock latch FIRST, and in its OWN best-effort try (two latches
   // sharing one `catch` would make whichever runs second silently optional). The teardown below
-  // spends up to ~10 s in awaited windows (sidecar stops, the stream settles, the doc-task
-  // settle) during which the DB is still OPEN, so `isUnlocked()` is still true and every
+  // spends up to ~20.5 s in awaited windows (the local-API stop ≤ 0.5 s, the sidecar stops ≤ 10 s,
+  // the stream settle ≤ 5 s, the doc-task settle ≤ 5 s — bounded as a whole by
+  // `SHUTDOWN_OVERALL_DEADLINE_MS`) during which the DB is still OPEN, so `isUnlocked()` is still true and every
   // content-surface guard still admits. Most sidecars are safe here because QUIT uses the
   // permanently-latching `stop()` where lock uses the non-latching `suspend()` — a translate or
   // embed admitted now fails at `ensureStarted` instead of respawning. Two are not:
@@ -109,46 +125,54 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   } catch (err) {
     log.error('Error aborting in-flight streams on quit', String(err))
   }
-  // The local API dies BEFORE the sidecars (local-api wave): stop() aborts active + queued
-  // external streams and closes every socket, so no outside caller holds the model while
-  // the children below are killed. In-process (no orphan class) — but awaited so its
-  // sockets are deterministically gone before the vault work.
-  try {
-    await (ctx?.localApi?.stop() ?? Promise.resolve())
-  } catch (err) {
-    log.error('Error stopping the local API on quit', String(err))
-  }
-  try {
-    await Promise.allSettled([
-      ctx?.runtime.stop() ?? Promise.resolve(),
-      ctx?.embedder.stop?.() ?? Promise.resolve(),
-      ctx?.reranker?.stop?.() ?? Promise.resolve(),
-      ctx?.transcriber?.stop?.() ?? Promise.resolve(),
-      ctx?.ocrEngine?.stop?.() ?? Promise.resolve(),
-      // The vision sidecar is a 4th co-resident llama-server (PROD-1) — kill it too so no
-      // child orphans on quit.
-      ctx?.vision?.stop() ?? Promise.resolve(),
-      // The TranslateGemma sidecar (TG wave) is a 5th co-resident llama-server — permanent stop()
-      // so its child + its KV cache of recent source/translation text never orphan on quit.
-      ctx?.translator?.stop?.() ?? Promise.resolve()
-    ])
-  } catch (err) {
-    log.error('Error stopping sidecars on quit', String(err))
-  }
-  // R1 (full-audit-2026-06-30, Phase C): deterministically await each aborted stream's SETTLE
-  // (its partial-reply persistence) before lock() closes the DB — the same guarantee the lock
-  // path now makes. The aborts above unwind each generation as an ABORT so the partial persists
-  // via `appendMessage` while `ctx.db` is open, but that runs in the stream's OWN promise this
-  // teardown never awaited; the REL-4 ordering only ensured the abort fired FIRST, still racing
-  // `runtime.stop()` vs the abort-unwind. Awaiting the settle makes persist-before-close the
-  // ordering. After the sidecar stop so a generation ignoring its signal is unwound by the dead
-  // sidecar (no quit stall). Best-effort (`allSettled`).
-  await awaitInFlightStreamsSettled(streamSettled)
-  // H1 (TA-1): await the cancelled doc-task's abort-unwind before lock() closes the DB. The
-  // translation handler persists/shreds its `.parse` transient synchronously during the unwind
-  // while ctx.db is open; awaiting the settle here makes cleanup-before-close the ORDERING, not a
-  // race. Bounded (~5 s) so a wedged handler can never hang quit. Mirrors the stream-settle above.
-  await awaitActiveDocTaskSettled(ctx, log)
+  // SEC-12 rider 13 (audit 2026-09-02): the four awaited steps below are bounded as a WHOLE by
+  // `SHUTDOWN_OVERALL_DEADLINE_MS` (see the constant). The log flush and the lock stay OUTSIDE.
+  await withOverallDeadline(async () => {
+    // The local API dies BEFORE the sidecars (local-api wave): stop() aborts active + queued
+    // external streams and closes every socket, so no outside caller holds the model while
+    // the children below are killed. In-process (no orphan class) — but awaited so its
+    // sockets are deterministically gone before the vault work.
+    try {
+      await (ctx?.localApi?.stop() ?? Promise.resolve())
+    } catch (err) {
+      log.error('Error stopping the local API on quit', String(err))
+    }
+    try {
+      await Promise.allSettled([
+        ctx?.runtime.stop() ?? Promise.resolve(),
+        ctx?.embedder.stop?.() ?? Promise.resolve(),
+        ctx?.reranker?.stop?.() ?? Promise.resolve(),
+        ctx?.transcriber?.stop?.() ?? Promise.resolve(),
+        ctx?.ocrEngine?.stop?.() ?? Promise.resolve(),
+        // The vision sidecar is a 4th co-resident llama-server (PROD-1) — kill it too so no
+        // child orphans on quit.
+        ctx?.vision?.stop() ?? Promise.resolve(),
+        // The TranslateGemma sidecar (TG wave) is a 5th co-resident llama-server — permanent stop()
+        // so its child + its KV cache of recent source/translation text never orphan on quit.
+        ctx?.translator?.stop?.() ?? Promise.resolve()
+      ])
+    } catch (err) {
+      log.error('Error stopping sidecars on quit', String(err))
+    }
+    // R1 (full-audit-2026-06-30, Phase C): deterministically await each aborted stream's SETTLE
+    // (its partial-reply persistence) before lock() closes the DB — the same guarantee the lock
+    // path now makes. The aborts above unwind each generation as an ABORT so the partial persists
+    // via `appendMessage` while `ctx.db` is open, but that runs in the stream's OWN promise this
+    // teardown never awaited; the REL-4 ordering only ensured the abort fired FIRST, still racing
+    // `runtime.stop()` vs the abort-unwind. Awaiting the settle makes persist-before-close the
+    // ordering. After the sidecar stop so a generation ignoring its signal is unwound by the dead
+    // sidecar (no quit stall). Best-effort (`allSettled`).
+    await awaitInFlightStreamsSettled(streamSettled)
+    // H1 (TA-1): await the cancelled doc-task's abort-unwind before lock() closes the DB. The
+    // translation handler persists/shreds its `.parse` transient synchronously during the unwind
+    // while ctx.db is open; awaiting the settle here makes cleanup-before-close the ORDERING, not a
+    // race. Bounded (~5 s) so a wedged handler can never hang quit. Mirrors the stream-settle above.
+    await awaitActiveDocTaskSettled(ctx, log)
+  }, log)
+  // SEC-12: by now no window is left (Windows/Linux quit after window-all-closed), so this line
+  // is the only visible state of a quit that is locking — and it lands in the encrypted log
+  // because it precedes the flush below.
+  log.info('quit: locking workspace')
   // Flush the encrypted diagnostics log to disk while the vault key is still live (lock() zeroes it).
   // No-op for plaintext_dev (that log is appended in real time).
   detachVaultKey()
@@ -160,6 +184,118 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
     ctx?.workspace.shutdown()
   } catch (err) {
     log.error('Failed to lock workspace on quit', String(err))
+  }
+}
+
+/**
+ * Race `section` against `SHUTDOWN_OVERALL_DEADLINE_MS` (SEC-12 rider 13). On the deadline the
+ * section's promise is abandoned (its rejection, if any, is swallowed so it can never surface as
+ * an unhandled rejection later) and the caller proceeds; on completion the timer is cleared so a
+ * finished teardown never holds a live handle. The timer is unref'd for the same reason.
+ */
+async function withOverallDeadline(
+  section: () => Promise<void>,
+  log: Pick<typeof realLog, 'error'>
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      log.error(
+        'quit: overall teardown deadline reached — abandoning the parked stops and locking the workspace now',
+        { deadlineMs: SHUTDOWN_OVERALL_DEADLINE_MS }
+      )
+      resolve()
+    }, SHUTDOWN_OVERALL_DEADLINE_MS)
+    timer.unref()
+  })
+  // The section cannot reject today (every step is try/caught or `allSettled`); the catch makes
+  // that structural, so neither a pre-deadline rejection nor an abandoned one can skip the lock.
+  const raced = section().catch((err) => log.error('quit: teardown section failed', String(err)))
+  try {
+    await Promise.race([raced, deadline])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+// ---- The Electron app-lifecycle handlers (SEC-12 / GAP-2, audit 2026-09-02) -------------------
+
+/** The subset of Electron's `will-quit` event the handler uses (kept electron-free for tests). */
+export interface WillQuitEventLike {
+  preventDefault(): void
+}
+
+/** The Electron surface the handlers touch — injected so `tests/unit/shutdown.test.ts` drives them. */
+export interface AppLifecycleDeps {
+  /** The graceful teardown; the real caller binds `performShutdown(ctx)`. Never expected to reject. */
+  performShutdown: () => Promise<void>
+  /** `app.exit` — the ONLY way the process leaves once a quit has begun. */
+  exit: (code: number) => void
+  /** `createWindow` (a macOS Dock click fires `activate` with no window open). */
+  createWindow: () => void
+  /** `BrowserWindow.getAllWindows().length`. */
+  windowCount: () => number
+  /**
+   * `killRegisteredSidecarChildren` — reaps, synchronously and right before `exit`, whatever a
+   * deadline-abandoned sidecar stop left behind (the CODE-11 crash-path reaper, reused). A no-op
+   * after a teardown that completed: every stopped child unregistered itself on exit.
+   */
+  killSidecarChildren: () => void
+  log: Pick<typeof realLog, 'error' | 'info'>
+}
+
+export interface AppLifecycleHandlers {
+  onWillQuit: (event: WillQuitEventLike) => void
+  onActivate: () => void
+  /** True from the first `will-quit` on (tests + diagnostics). */
+  isShuttingDown: () => boolean
+}
+
+/**
+ * ONE factory over ONE `isShuttingDown` closure (SEC-12 with GAP-2 folded in, audit 2026-09-02).
+ * Before this, `main/index.ts` held the flag inline: the `will-quit` re-entry branch returned
+ * WITHOUT `preventDefault()` — its comment assumed "cleanup already ran", but the flag is set
+ * BEFORE `performShutdown` starts, so a second quit while the teardown was still awaiting a
+ * sidecar stop (a wedged cold start held it up to 180 s — REL-10) let Electron's default quit
+ * proceed with the working DB still plaintext on the drive: the next launch found a live WAL,
+ * declined to preserve it and shredded it — every change since the last lock lost. On macOS a
+ * second ⌘Q while the app sits windowless in the Dock reaches exactly that branch. And a Dock
+ * click (`activate`) during the parked teardown opened a fresh window against a workspace whose
+ * runtime latch and lock latch were already armed.
+ *
+ * The two handlers must share the closure: a per-handler copy of the flag would freeze the
+ * activate guard at `false` in production while a test constructing it with `true` still passed.
+ * `main/index.ts` cannot be imported under vitest (it takes the single-instance lock and may call
+ * `app.exit` at module scope), so everything Electron is injected via `AppLifecycleDeps`.
+ */
+export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycleHandlers {
+  let shuttingDown = false
+  return {
+    onWillQuit: (event) => {
+      // SEC-12: EVERY will-quit is prevented — the first one starts the teardown, any later one
+      // arrives while it is still running (the DB is plaintext until `performShutdown` locks
+      // it). The teardown's own finally is the only exit; `app.exit` re-emits nothing.
+      event.preventDefault()
+      if (shuttingDown) return
+      shuttingDown = true
+      void deps
+        .performShutdown()
+        .catch((err) => deps.log.error('quit: teardown failed', String(err)))
+        .finally(() => {
+          try {
+            deps.killSidecarChildren()
+          } catch {
+            /* best-effort */
+          }
+          deps.exit(0)
+        })
+    },
+    onActivate: () => {
+      // GAP-2: no fresh window once a quit has begun.
+      if (shuttingDown) return
+      if (deps.windowCount() === 0) deps.createWindow()
+    },
+    isShuttingDown: () => shuttingDown
   }
 }
 

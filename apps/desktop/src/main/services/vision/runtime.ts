@@ -1,4 +1,4 @@
-import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime/sidecar'
+import { LlamaServer, combineSignals, isStartAbortError, type LlamaServerOptions } from '../runtime/sidecar'
 import { readChatSSE } from '../runtime/llama'
 import type { VisionErrorCode } from '../../../shared/types'
 
@@ -195,6 +195,14 @@ export class VisionRuntime {
    *  so the latch is never cleared/reused — `ensureStarted` checks `stopped` first regardless
    *  (corrected from a stale "Cleared by stop()" note — BUG vuln-scan-2026-06-21). */
   private startFailed: Error | null = null
+  /**
+   * Aborts the IN-FLIGHT lazy start on lock/quit (REL-10, audit 2026-09-02 — the translation
+   * runtime's #159 / BE-1 pattern, ported): `stop()` no longer awaits the full health window
+   * (180 s by default) of a wedged cold start it is about to kill anyway — the child is killed
+   * inside the health wait and the start rejects with an AbortError, which never arms the
+   * (permanently sticky) `startFailed` latch above. One per start.
+   */
+  private startAbort: AbortController | null = null
   /** Number of analyses currently using the sidecar. Guards the idle teardown (RUNTIME-4):
    *  while >0 a job is running and the sidecar must NOT be torn down. */
   private inFlight = 0
@@ -220,10 +228,15 @@ export class VisionRuntime {
     if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
     if (!this.starting) {
+      const abort = new AbortController()
+      this.startAbort = abort
       const server = new LlamaServer({
         binPath: this.opts.binPath,
         modelPath: this.opts.modelPath,
         contextTokens: this.opts.contextTokens ?? DEFAULT_VISION_CONTEXT_TOKENS,
+        // REL-10: let a lock/quit teardown abort this start mid-health-wait (the child is killed
+        // via the normal stop path; start() rejects AbortError — never latched below).
+        startAbortSignal: abort.signal,
         // V1-resolved: `--mmproj` loads multimodal; `--device none` CPU-pins. The b9585
         // default-on `--jinja` gives the multimodal chat-template path without inheriting
         // CHAT_SERVER_ARGS; `--reasoning-format` is left at default (non-reasoning VLM).
@@ -256,11 +269,16 @@ export class VisionRuntime {
           this.server = server
         })
         .catch((err) => {
+          // REL-10 (audit 2026-09-02): a teardown-ABORTED start is not a load fault — never latch
+          // `startFailed` (permanently sticky here; `stop()` has already latched `stopped`, and
+          // `isStartFailed()` must keep reporting the truth to the orchestrator).
+          if (isStartAbortError(err) || abort.signal.aborted) throw err
           this.startFailed = err instanceof Error ? err : new Error(String(err))
           throw this.startFailed
         })
         .finally(() => {
           this.starting = null
+          if (this.startAbort === abort) this.startAbort = null
         })
     }
     await this.starting
@@ -378,8 +396,12 @@ export class VisionRuntime {
   async stop(): Promise<void> {
     this.stopped = true
     this.cancelIdleTimer()
-    // Wait out an in-flight lazy start (e5.ts no-orphan precedent) AND an in-flight soft idle
-    // teardown, so neither leaves an orphaned child after the app quits.
+    // An in-flight lazy start is ABORTED (REL-10, audit 2026-09-02 — the #159 pattern): the
+    // child is killed inside the health wait (the normal stop path, no orphan) and the await
+    // settles in about one health-poll interval instead of the full 180 s health window of a
+    // wedged cold start. The in-flight soft idle teardown is still waited out, so neither
+    // leaves an orphaned child after the app quits.
+    this.startAbort?.abort()
     if (this.starting) await this.starting.catch(() => undefined)
     if (this.idleTeardownPromise) await this.idleTeardownPromise.catch(() => undefined)
     const server = this.server

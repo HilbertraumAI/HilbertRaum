@@ -63,7 +63,7 @@ import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import { composeServices, composeTranslator, shouldReplaceTranslator } from './services/compose-services'
 import { initBinaryVerification } from './services/binary-verifier'
-import { performShutdown } from './shutdown'
+import { createAppLifecycleHandlers, performShutdown } from './shutdown'
 import type { AppContext } from './services/context'
 
 // HilbertRaum — Electron main process (the "backend").
@@ -674,6 +674,21 @@ function createWindow(): void {
   }
 }
 
+// The `will-quit` / `activate` handlers live in `./shutdown` over ONE shared `isShuttingDown`
+// closure (SEC-12 + GAP-2, audit 2026-09-02): a second quit during the teardown is prevented
+// (the exit comes only from the teardown's finally), a Dock click during it opens no window, and
+// the teardown's awaited middle is bounded by `SHUTDOWN_OVERALL_DEADLINE_MS`. Its ORDERING is
+// unit-testable there (REL-4: abort in-flight streams BEFORE runtime.stop so a partial reply
+// persists, mirroring the lock path). `ctx` is read at call time, not here.
+const lifecycle = createAppLifecycleHandlers({
+  performShutdown: () => performShutdown(ctx),
+  exit: (code) => app.exit(code),
+  createWindow,
+  windowCount: () => BrowserWindow.getAllWindows().length,
+  killSidecarChildren: killRegisteredSidecarChildren,
+  log
+})
+
 app.whenReady().then(() => {
   // #208 belt: `app.exit` above is immediate, but if ready ever races it, a secondary
   // instance must not reach initBackend() — its workspace.init() crash-sweep is the very
@@ -698,21 +713,10 @@ app.whenReady().then(() => {
   })
   createWindow()
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+  app.on('activate', lifecycle.onActivate)
 })
 
-let isShuttingDown = false
-
-app.on('will-quit', (event) => {
-  if (isShuttingDown) return // cleanup already ran → let the real quit proceed
-  event.preventDefault()
-  isShuttingDown = true
-  // Graceful quit teardown lives in `./shutdown` so its ORDERING is unit-testable (REL-4: abort
-  // in-flight streams BEFORE runtime.stop so a partial reply persists, mirroring the lock path).
-  void performShutdown(ctx).finally(() => app.exit(0))
-})
+app.on('will-quit', lifecycle.onWillQuit)
 
 // Last-resort crash safety: a hard `uncaughtException` skips `will-quit`, so try to lock the
 // vault (re-encrypt + shred the plaintext working DB) before the process dies. Best-effort

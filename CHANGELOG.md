@@ -23,7 +23,25 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Fixed
+
+- **Quitting can no longer leave your workspace unencrypted.** Pressing Quit a second time while
+  the app was still shutting down (for example while it waited on a slow AI-engine start) used to
+  let the app exit before the workspace was re-encrypted, and the next start then discarded every
+  change since the last lock. A second Quit now waits for the shutdown to finish, and the shutdown
+  itself is capped at 30 seconds, after which the workspace is locked regardless.
+- **Lock now and Quit no longer wait up to three minutes on a stuck engine start.** If the
+  embedding, reranking or image-understanding engine was still starting up (a slow USB read of a
+  large model file, say), locking or quitting waited for the whole start-up window and the engine
+  then refused to start again until the app was restarted. Locking now cancels the start and
+  finishes within a few seconds; the engine starts normally after the next unlock.
+
+### Changed
+
+- **Spell-checking in the message box is switched off.** The built-in browser engine would
+  otherwise download a spelling dictionary from a Google server on Windows and Linux the first
+  time you type — against the promise that nothing leaves the space. Shipping dictionaries on the
+  drive instead is under consideration.
 
 ## [0.1.59] — 2026-08-21
 

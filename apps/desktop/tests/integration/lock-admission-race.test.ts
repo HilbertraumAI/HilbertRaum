@@ -510,7 +510,7 @@ describe('admission during the QUIT teardown (AUD-02)', () => {
     inFlightStreams: new Map<string, AbortController>(),
     streamSettled: new Map<string, Promise<void>>(),
     detachVaultKey: (): void => {},
-    log: { error: (): undefined => undefined }
+    log: { error: (): undefined => undefined, info: (): undefined => undefined }
   }
 
   /** Park `performShutdown` inside its awaited sidecar-stop window (wrapped — see `parkedLock`). */

@@ -1,5 +1,11 @@
 import type { Reranker, RerankedHit, RerankOptions } from './index'
-import { LlamaServer, combineSignals, isBindRaceError, type LlamaServerOptions } from '../runtime/sidecar'
+import {
+  LlamaServer,
+  combineSignals,
+  isBindRaceError,
+  isStartAbortError,
+  type LlamaServerOptions
+} from '../runtime/sidecar'
 import { maxInputApproxTokens } from '../runtime/context-budget'
 import { truncateToApproxTokens, CHUNK_DEFAULTS } from '../ingestion/chunker'
 
@@ -100,6 +106,15 @@ export class LlamaReranker implements Reranker {
    * reranking for the whole session — leaving it null lets the next rerank() retry on a fresh port.
    */
   private startFailed: Error | null = null
+  /**
+   * Aborts the IN-FLIGHT lazy start on lock/quit (REL-10, audit 2026-09-02 — the translation
+   * runtime's #159 / BE-1 pattern, ported): the child is killed inside the health wait and the
+   * start rejects with an AbortError, instead of the teardown awaiting the full health window
+   * (180 s by default) of a wedged cold start it is about to kill anyway. Matters doubly here:
+   * the latch SURVIVES `suspend()`, so a timed-out start that latched would refuse every rerank
+   * for the rest of the session. One per start.
+   */
+  private startAbort: AbortController | null = null
 
   constructor(private readonly opts: LlamaRerankerOptions) {
     this.id = opts.id
@@ -122,6 +137,8 @@ export class LlamaReranker implements Reranker {
     if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
     if (!this.starting) {
+      const abort = new AbortController()
+      this.startAbort = abort
       const contextTokens = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
       const server = new LlamaServer({
         binPath: this.opts.binPath,
@@ -159,7 +176,10 @@ export class LlamaReranker implements Reranker {
         threads: this.opts.threads,
         healthTimeoutMs: this.opts.healthTimeoutMs,
         healthIntervalMs: this.opts.healthIntervalMs,
-        host: this.opts.host
+        host: this.opts.host,
+        // REL-10: let a lock/quit teardown abort this start mid-health-wait (the child is killed
+        // via the normal stop path; start() rejects AbortError — never latched below).
+        startAbortSignal: abort.signal
       })
       this.starting = server
         .start()
@@ -168,6 +188,9 @@ export class LlamaReranker implements Reranker {
         })
         .catch((err) => {
           const error = err instanceof Error ? err : new Error(String(err))
+          // REL-10 (audit 2026-09-02): a teardown-ABORTED start is not a load fault — never latch
+          // `startFailed` (it survives suspend(), so it would disable reranking for the session).
+          if (isStartAbortError(err) || abort.signal.aborted) throw error
           // F7 (post-merge audit): a TRANSIENT port-bind race must NOT arm the latch (same fix as
           // the embedder, F4). This latch is more persistent than the embedder's — `suspend()`
           // KEEPS it (a bad GGUF won't load after unlock either) — so arming it for a race killed
@@ -179,6 +202,7 @@ export class LlamaReranker implements Reranker {
         })
         .finally(() => {
           this.starting = null
+          if (this.startAbort === abort) this.startAbort = null
         })
     }
     await this.starting
@@ -267,8 +291,12 @@ export class LlamaReranker implements Reranker {
     // not, so this flag gives the lock path the same protection for the duration of the teardown.
     this.tearingDown = true
     try {
-      // A lazy start may be in flight (first rerank() racing app quit); wait for it to
-      // settle so the spawned child cannot outlive the app as an orphan.
+      // A lazy start may be in flight (first rerank() racing app quit). REL-10 (audit
+      // 2026-09-02): ABORT it rather than wait it out — the abort kills the child inside the
+      // health wait (the normal stop path, no orphan), the start rejects AbortError (never
+      // latches `startFailed`), and the await below settles in about one health-poll interval
+      // instead of the full 180 s health window of a wedged cold start.
+      this.startAbort?.abort()
       if (this.starting) {
         await this.starting.catch(() => undefined)
       }
