@@ -299,8 +299,15 @@ export class DocTaskManager {
     // model-OPTIONAL kind: with no runtime it degrades to the deterministic rule pass, so it must
     // be allowed to start regardless — the runtime is read (possibly null) at run time.
     if (kind === 'ocr') {
-      if (!this.deps.getOcrEngine?.()) {
+      const engine = this.deps.getOcrEngine?.()
+      if (!engine) {
         throw new Error(tMain('main.task.needsOcr'))
+      }
+      // REL-6 (audit 2026-09-02 Phase 1): the files are on the drive but the recognizer cannot
+      // run in this build — the UI hides the offer on `ocrAvailable === false`; this guards the
+      // race with a status read that predates the probe's verdict.
+      if (engine.availability?.() === 'unavailable') {
+        throw new Error(tMain('main.task.ocrUnavailable'))
       }
     } else if (kind === 'translation') {
       if (!this.deps.getTranslator()) {
@@ -746,6 +753,9 @@ const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.task.comparePickTwo',
   'main.task.compareReindex',
   'main.task.needsOcr',
+  // REL-6 (audit 2026-09-02 Phase 1): thrown by the dequeue-time guard in handlers/ocr.ts too,
+  // so it must pass the friendly filter or the user sees the generic failure instead.
+  'main.task.ocrUnavailable',
   'main.task.ocrNotAScan',
   'main.task.ocrNoText',
   'main.task.ocrFailed',

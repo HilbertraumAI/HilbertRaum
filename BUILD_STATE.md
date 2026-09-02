@@ -29,6 +29,18 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-02 — **Audit 2026-09-02 Phase 1, PR 1-a — packaged OCR fails per document instead of
+killing the app; `ocrAvailable` reads execution state (REL-6; PR #268).**_ tesseract.js sets the
+inert browser `worker.onerror` on its Node Worker and never settles `createWorker()` on a load
+failure, so the packaged `asarUnpack` gap surfaced as `uncaughtException`. `ocr/tesseract.ts` now
+captures the raw worker via Node's `process.on('worker')` hook, bounds the start (30 s), passes
+tesseract's `errorHandler`, rejects the pending page and latches `'unavailable'`; packaged builds
+run a startup execution probe (one bounded start, released on success) and report OCR unavailable
+until it passes; `AppStatus.ocrState` (additive) tells the renderer why. Decision 2 (#219) on its
+DEFAULT: a photo imports without text + a NEW per-document note (Q22 copy drafted in the PR body,
+owner review pending). Packaged OCR still does NOT work — the closure is PR 1-b; §5 16(b)/18(b)/18(c)
+stay open. +11 tests (5,424 / 52); tesseract boundary tests use REAL eval-Workers, no module mock.
+
 _2026-09-02 — **Audit 2026-09-02 Phase 0 — quit re-entry prevented, cold-start abort for
 E5/reranker/vision, spellcheck off (SEC-12, GAP-2, REL-10, SEC-1; PR #267; PR 0-a #265 drained the
 preamble).**_ The `will-quit`/`activate` handlers are one factory (`createAppLifecycleHandlers`,
@@ -568,6 +580,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     - **0** (2026-09-02, PR #267): SEC-12 + GAP-2 (quit re-entry prevented, 30 s overall deadline,
       lock outside the race), REL-10 (E5/reranker/vision cold-start abort), SEC-1 (spellcheck
       off); GAP-3 confirmed residual → SEC-14 #266; decisions 1/13 on defaults — dated entry above.
+    - **1-a** (2026-09-02, PR #268): REL-6 worker boundary + packaged execution probe + honest
+      `ocrAvailable`/`ocrState`; interim degrade on decision 2's default (Q22 copy pending owner
+      review). Closure (`asarUnpack` require-graph test + globs) and the packaged smoke = PR 1-b.
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/

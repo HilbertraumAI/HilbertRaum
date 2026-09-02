@@ -1328,7 +1328,13 @@ whole renderer-visible surface.
   `AppStatus` carries the additive gates `translationAvailable: boolean` (issue #40) and
   `translationDevice?: TranslationDeviceStatus` (issue #42 reopen — the Translate screen's
   device hint; recorded here per #164 D-7a, the `dictationAvailable`/`ocrAvailable` siblings'
-  precedent). Doc-task side (#157): `cancelDocTask(jobId)` with a PRESENT id is an exact-id
+  precedent). Audit 2026-09-02 Phase 1 (REL-6, PR #268): `AppStatus.ocrState?: OcrState`
+  (`'available' | 'probing' | 'unavailable' | 'missing'`, additive-optional, same precedent) says
+  WHY `ocrAvailable` is what it is — `ocrAvailable` itself now reads the engine's execution state
+  (false while a packaged build's startup execution probe runs and after any worker failure), no
+  longer mere engine presence; `documents.error_message` gained one persist-canonical English
+  value (`main.ingest.imageOcrUnavailable`, display-map translated) — no schema change. Doc-task
+  side (#157): `cancelDocTask(jobId)` with a PRESENT id is an exact-id
   targeted cancel, running OR queued (stale-safe: a settled id no-ops); NEW
   `listActiveDocTasks(): Promise<DocTaskStatus[]>` (`doctasks:listActive`) returns running +
   queued tasks in lane order — the file-translation reload-adoption read (`getActiveDocTask`

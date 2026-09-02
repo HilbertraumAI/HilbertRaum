@@ -535,6 +535,15 @@ export const en = {
     'Making it searchable needs the OCR files, which are not on this drive. To add them, re-run ' +
     'the drive setup with "--with-assets", or fetch only the OCR files with ' +
     '"fetch-runtime --family ocr".',
+  // REL-6 (audit 2026-09-02 Phase 1; STATE Q22 default copy, owner review pending): the scan-row
+  // explanation and the one-time Documents banner when the OCR files ARE on the drive but the
+  // recognizer cannot run in this build (packaged worker failed to start).
+  'docs.scan.ocrUnavailable':
+    'Making it searchable needs text recognition (OCR), which could not start in this build.',
+  'docs.ocr.unavailableBanner':
+    'Text recognition (OCR) is not available in this build: the OCR files are on this drive, but ' +
+    'the recognizer could not start. Photos are stored without readable text and scanned PDFs ' +
+    'cannot be made searchable until this is fixed.',
   'docs.stale.banner':
     'This document was prepared with a different search model — re-index it so answers ' +
     'can find it.',
@@ -1886,6 +1895,11 @@ export const en = {
   'main.ingest.imageNoText':
     'No readable text was found in this photo. Try a sharper, closer picture of the page.',
   'main.ingest.imageOcrFailed': "This photo couldn't be read. Re-index it to try again.",
+  // REL-6 (audit 2026-09-02 Phase 1, decision 2 default; copy = STATE Q22 default pending owner
+  // review): the OCR files are on the drive but the recognizer cannot run in this build.
+  'main.ingest.imageOcrUnavailable':
+    'Text recognition (OCR) could not run in this build, so this photo was stored without ' +
+    'readable text. Re-index it once OCR is available.',
   'main.ingest.sourceMissing': 'Source file not found on disk.',
   'main.ingest.interrupted': 'Ingestion was interrupted before it finished. Re-index to try again.',
   'main.ingest.fileTooLarge':
@@ -2071,6 +2085,10 @@ export const en = {
   'main.task.needsOcr':
     'Text recognition needs the OCR files, which are not on this drive. To add them, re-run the ' +
     'drive setup with "--with-assets", or fetch only the OCR files with "fetch-runtime --family ocr".',
+  // REL-6 (audit 2026-09-02 Phase 1): the files are present but the recognizer cannot run here.
+  'main.task.ocrUnavailable':
+    'Text recognition (OCR) is not available in this build: the OCR files are on this drive, but ' +
+    'the recognizer could not start.',
   'main.task.ocrNotAScan': 'Only a PDF that was detected as a scan can be made searchable this way.',
   'main.task.ocrNoText':
     'No readable text was found in this scan. The pages may be blank or too blurry.',

@@ -1451,6 +1451,46 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     await screen.findByText('scan.pdf')
     expect(await screen.findByText(/needs the OCR files/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Make searchable (OCR)' })).not.toBeInTheDocument()
+    // No files → no "could not start" banner: that copy is reserved for a recognizer that exists
+    // and cannot run (REL-6), never for a drive that simply lacks the language files.
+    expect(screen.queryByText(/could not start/)).not.toBeInTheDocument()
+  })
+
+  // REL-6 (audit 2026-09-02 Phase 1, decision 2 default): the OCR files ARE on the drive but the
+  // packaged recognizer could not start — `ocrAvailable: false` with `ocrState: 'unavailable'`.
+  // The scan row must not claim the files are missing (`docs.scan.ocrMissing` would be false for
+  // such a kit), the offer stays hidden, and the screen says so once in a banner (Q22 default).
+  it('REL-6: a recognizer that cannot run in this build explains itself (ocrUnavailable + banner), no button, no "files missing" copy', async () => {
+    stubApi({
+      listDocuments: vi.fn(async () => [scanDoc()]),
+      getAppStatus: vi.fn(async () => appStatus({ ocrAvailable: false, ocrState: 'unavailable' }))
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('scan.pdf')
+    expect(await screen.findByText(/which could not start in this build/)).toBeInTheDocument()
+    expect(screen.getByText(/is not available in this build/)).toBeInTheDocument()
+    expect(screen.queryByText(/needs the OCR files/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Make searchable (OCR)' })).not.toBeInTheDocument()
+  })
+
+  it('REL-6: while the packaged probe is still running nothing is offered and nothing is claimed — and the verdict is re-read', async () => {
+    // First read: probe pending. Second read (the screen re-polls while 'probing'): passed.
+    const getAppStatus = vi
+      .fn()
+      .mockResolvedValueOnce(appStatus({ ocrAvailable: false, ocrState: 'probing' }))
+      .mockResolvedValue(appStatus({ ocrAvailable: true, ocrState: 'available' }))
+    stubApi({ listDocuments: vi.fn(async () => [scanDoc()]), getAppStatus })
+    render(<DocumentsScreen />)
+    await screen.findByText('scan.pdf')
+    expect(screen.queryByRole('button', { name: 'Make searchable (OCR)' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/is not available in this build/)).not.toBeInTheDocument()
+    // Pending ≠ missing: the "files are not on this drive" copy must not show either.
+    expect(screen.queryByText(/needs the OCR files/)).not.toBeInTheDocument()
+    // The re-read (1.5 s cadence) lands the verdict without a remount.
+    expect(
+      await screen.findByRole('button', { name: 'Make searchable (OCR)' }, { timeout: 6_000 })
+    ).toBeInTheDocument()
+    expect(getAppStatus.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 
   it('FE-1: the inline OCR button disables while another task is active', async () => {

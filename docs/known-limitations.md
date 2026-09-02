@@ -2012,26 +2012,33 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   step total, and the persisted `ocr_json.pageCount` all report the **clamped** count (so
   they stay truthful), and a truncation is logged locally. A genuine ≤5 000-page scan is
   unaffected; beyond that, the tail of pages is not recognized.
-- **OCR does not work in a PACKAGED build — it crashes the whole app** (measured
-  2026-07-19 on a real packaged Windows build; pre-existing and **version-independent**,
-  it fails the same way on the previously pinned Electron). `worker_threads` cannot load
-  a script from inside `app.asar`, so `electron-builder.yml` unpacks `tesseract.js` +
-  `tesseract.js-core` and the engine rewrites the resolved workerPath to
-  `app.asar.unpacked` — but the worker's own **hoisted** dependencies
+- **OCR does not yet work in a PACKAGED build — since audit 2026-09-02 Phase 1 it degrades
+  instead of crashing the app.** The defect (measured 2026-07-19 on a real packaged Windows
+  build; pre-existing and **version-independent**, it fails the same way on the previously
+  pinned Electron): `worker_threads` cannot load a script from inside `app.asar`, so
+  `electron-builder.yml` unpacks `tesseract.js` + `tesseract.js-core` and the engine rewrites the
+  resolved workerPath to `app.asar.unpacked` — but the worker's own **hoisted** dependencies
   (`regenerator-runtime`, `is-url`, …) are not in that unpack list, stay packed inside
-  `app.asar`, and cannot be resolved from the unpacked directory. The resulting uncaught
-  exception kills the process, and `ocrAvailable` still reports `true` beforehand, so
-  nothing warns the user first. **Dev mode is unaffected** — the full raster → IPC →
-  recognize pipeline was proven end to end on Electron 39 outside packaging, and no other
-  packaged feature is touched. Unchanged by the Electron 43 bump (wave DEP-4): the defect is
-  an `asarUnpack` gap, not a runtime-version effect, so it neither improved nor worsened —
-  and DEP-4 did NOT re-run the recognition leg at all, because that build machine carries no
-  `*.traineddata`. Until the fix bundle lands (unpack the hoisted deps,
-  degrade the task instead of dying, make `ocrAvailable` honest about the packaged mode —
-  registered as follow-up 2 in [`architecture.md`](architecture.md) "Dependency
-  remediation — design record (wave DEP-1, PR #77)" §5), do **not** run "Make searchable
-  (OCR)" from a packaged build, and do not treat a packaged OCR run as a
-  release-acceptance step: it is blocked, not merely unrun.
+  `app.asar`, and cannot be resolved from the unpacked directory. **Before Phase 1** the
+  resulting worker load failure had no listener (tesseract.js sets the browser-only
+  `worker.onerror`, inert on a Node Worker) and reached the process as an uncaught exception
+  that killed it, while `ocrAvailable` still reported `true` beforehand. **Since Phase 1 (REL-6,
+  PR 1-a)** the engine catches the worker's failure and turns it into a per-document error; a
+  packaged build proves the worker once at startup (execution probe, released again on success)
+  and reports OCR **unavailable** until that proof passes: photos import and are stored without
+  readable text, their row says *"Text recognition (OCR) could not run in this build …"*, "Make
+  searchable (OCR)" is not offered, and the Documents screen shows a banner saying the
+  OCR files are on the drive but the recognizer could not start. A re-index recognizes such a
+  photo once OCR runs. **Dev mode is unaffected** — the full raster → IPC → recognize pipeline
+  was proven end to end on Electron 39 outside packaging, and no other packaged feature is
+  touched. Unchanged by the Electron 43 bump (wave DEP-4): the defect is an `asarUnpack` gap,
+  not a runtime-version effect — and DEP-4 did NOT re-run the recognition leg at all, because
+  that build machine carries no `*.traineddata`. The closure itself (a test that resolves the
+  worker's `require` graph against the unpack globs, then the missing entries) is Phase 1's
+  second PR; registered as follow-up 2 in [`architecture.md`](architecture.md) "Dependency
+  remediation — design record (wave DEP-1, PR #77)" §5. Until the manual packaged smoke
+  (BUILD_STATE §5 item 18(c)) has passed on an asset-carrying drive, do not treat a packaged OCR
+  run as a release-acceptance step: the feature is degraded by design, not proven.
 
 ## Image understanding ([`architecture.md`](architecture.md) "Image understanding — design record")
 

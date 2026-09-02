@@ -162,8 +162,12 @@ export function composeServices({
   // Local OCR — tesseract.js over the drive's vendored `ocr/` language files; selected
   // only when those exist (null otherwise; photo imports fail per-file and detected scans
   // show the notice without the "Make searchable" offer).
+  // REL-6 (audit 2026-09-02 Phase 1): a packaged build must PROVE the worker runs from
+  // `app.asar.unpacked` before `ocrAvailable` may say so — the engine starts 'probing' and the
+  // main wiring runs `engine.probe()` once at startup. Dev builds start available (unchanged).
   const ocrEngine = createSelectedOcrEngine({
     rootPath,
+    probeRequired: !isDev,
     onSelect: (kind, reason) => log.info('OCR backend selected', { kind, reason })
   })
   // The TranslateGemma sidecar (TG wave). Selected only when the llama-server binary + the

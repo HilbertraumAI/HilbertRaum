@@ -363,6 +363,27 @@ function initBackend(): void {
     // ladder reads (read per cold start — a Settings flip needs no restart).
     gpu: gpuSignals
   })
+  // REL-6 (audit 2026-09-02 Phase 1): packaged-mode OCR execution probe. The engine starts
+  // 'probing' when `!isDev` (compose-services) and `ocrAvailable` reports false until this proves
+  // the tesseract worker actually loads from `app.asar.unpacked` — one bounded worker start,
+  // released again on success. Fire-and-forget: startup never waits on it, and a failure only
+  // latches the engine unavailable (photo imports store without text + the per-document note,
+  // "Make searchable (OCR)" is not offered). Content-free log: outcome + duration only.
+  if (ocrEngine?.probe) {
+    const probeT0 = performance.now()
+    void ocrEngine.probe().then(
+      (ok) =>
+        log.info('OCR execution probe', {
+          ok,
+          ms: Math.round(performance.now() - probeT0),
+          engine: ocrEngine.id
+        }),
+      (err: unknown) =>
+        log.warn('OCR execution probe threw', {
+          error: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)
+        })
+    )
+  }
 
   // Document task engine: one-at-a-time summary/translation/compare jobs. The
   // chat-streaming guard reads the shared in-flight registry — tasks never put
