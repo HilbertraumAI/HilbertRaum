@@ -1409,9 +1409,13 @@ owned by the design record named beside it.
   reload, so the active job has to be re-fetchable from main (TG-5).
 - **`setCollectionArchived(id, archived): Promise<Collection>`** (`collections:setArchived`) —
   archive/unarchive a project (rag-design §13).
-- **Skill import/export** — `pickSkillPackage(mode?: 'file' | 'folder'): Promise<string | null>`
-  (`skills:pick`), `previewSkillPackage(source): Promise<SkillPreview>` (`skills:preview`, a full
-  validation that writes NOTHING — the permission-summary preview, skills plan §9.2),
+- **Skill import/export** — `pickSkillPackage(mode?: 'file' | 'folder'): Promise<SkillPickResult | null>`
+  (`skills:pick`; `{ token, path }` since PR #275 (#240) — the path is renderer display only, the
+  one-time token is what the next two redeem, the `pickDocuments` D1 shape; the picker is
+  unlock-gated), `previewSkillPackage(token): Promise<SkillPreview>` (`skills:preview`, a full
+  validation that writes NOTHING — the permission-summary preview, skills plan §9.2; reads through
+  the token without spending it), `importSkill(token): Promise<SkillInfo>` (`skills:import`, spends
+  the token; a non-token argument is refused before any filesystem call),
   `exportSkill(installId): Promise<string | null>` (`skills:export`),
   `acknowledgeSkillWarning(installId): Promise<SkillInfo>` (`skills:acknowledgeWarning`, the
   enabled-with-warning DS7 path), and `getSkillReconcileStatus(): Promise<SkillReconcileStatus>`

@@ -1108,6 +1108,50 @@ since shipped in Phases 19–20).
       §8 L-7 gains the SEC-2 hardlink watch clause; working paper deleted after verifying no
       tracked file references it; final gate green.
 
+### BUILD_STATE §5 item 12 — the round’s executed residual register (retired verbatim 2026-09-03, PR #275)
+
+> Item 12’s outcome line, ledger pointer and still-open residuals stayed in BUILD_STATE §5 under the
+> same number; the executed / closed entries of its residual register moved here so §5 fits its budget
+> (the audit 2026-09-02 round needed the lines for its item 19). No relative links in the block.
+
+    **Round residuals (register of record):**
+
+    - **Owner batch ①–⑥** (the Phase-3 entry, now in `docs/build-log.md`) — **④⑤⑥ EXECUTED 2026-07-12
+      post-close-out (owner-directed):** ④ `reviewed_by` normalized to "project maintainer
+      (Claude-assisted review, HF card/LFS verification)" · ⑤ `djuro-agent` restored to
+      cla.yml's allowlist (smoke PR #55 verified green: block → sign → ✅, signature recorded
+      on `cla-signatures`) · ⑥ owner decided **NOT** to publish —
+      `.claude/skills/screenshot-verify/SKILL.md` untracked via `git rm --cached` (file stays
+      on disk for local dev; `.gitignore`'s `.claude` rule, which never applied to the
+      already-tracked file, now covers it). ② PF-2 **EXECUTED 2026-07-12** (owner-approved,
+      while still unpushed): the spec-retirement commit reworded from "docs update" to a
+      message naming the retirement + stamp removal + NUL fix (now `41acc47`; rebase rewrote
+      all 11 unpushed hashes) and the stale-hash sweep applied — 28 citations across
+      BUILD_STATE (§5 item 12, §8 L-7 row) + architecture.md §48 updated to the post-reword
+      hashes; trees byte-identical before/after. Still open: ① GAP-1 push + tag decision
+      ONLY. ③ LIC-2 **EXECUTED 2026-07-12** (owner-approved): committed generated
+      `THIRD-PARTY-NOTICES.md` (226 shipped packages — asar prod closure minus the yml
+      negations; no NOTICE files exist in the set; KaTeX OFL font notice included) +
+      `scripts/generate-third-party-notices.mjs` (+ shared `scripts/lib/shipped-packages.mjs`),
+      shipped via `extraResources`, freshness-gated by
+      `tests/integration/third-party-notices.test.ts` (suite 4190 → 4195/47).
+    - **SEC-1 orphan-`.enc` sweep — deferred (Info):** the startup sweep runs while the DB is
+      LOCKED, so it cannot know which document ids are live; a pre-fix zero-key sidecar
+      self-heals only on re-index (known-limitations note shipped with Phase 1). Same family,
+      also unswept: a hard crash mid-lock-encrypt leaves a partial-CIPHERTEXT `<enc>.tmp`
+      (exposure nil, overwritten next lock; one `rmSync` in the sweep would tidy).
+    - **README default-set vision omission — FIXED 2026-07-12 (full-audit 2026-07-12b DOC-1):**
+      README + packaging.md corrected (default set ≈10.4 GB incl. `qwen2.5-vl-3b-instruct-q4`,
+      vision row + 3 packaging.md spots + model-policy.md "Opt-in only" line), swap figures
+      recomputed on the corrected basis (~14 GB 14B / ~24 GB 30B-A3B).
+    - **Nuance notes (recorded in the §48 rows):** REL-1's in-code "spent or garbage"
+      justification slightly overstates (a REL-2 probe-error corner can leave an
+      unconsumed-FRESH `.recovery`); REL-3's confidentiality window can extend one unlock
+      further under an active probe error; SEC-2 reviewer N1 — the containment sweep removes
+      only the FIRST offender before throwing (the next install's pre-clean removes the rest).
+    - **TS-7 (macOS CI leg)** remains the standing owner call — item 7.
+
+
 14. **Full-audit 2026-07-16 — REMEDIATION IN PROGRESS (wave opened 2026-07-17).** Baseline
     `4e02a48` (v0.1.50); 41 verified findings (F-01…F-41; 0 Critical/High, 14 Medium, 27 Low).
     Report: `git show 886be68:docs/audit-2026-07-16.md` (frozen working paper, deleted at

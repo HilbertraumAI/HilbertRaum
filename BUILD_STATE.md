@@ -29,6 +29,16 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-03 — **Audit 2026-09-02 Phase 5b-a — raw-path hardening, the autonomous half: the skills
+picker is unlock-gated and mints a one-time token (`src/main/ipc/picker-tokens.ts`, extracted from
+the documents handler) that `previewSkillPackage` reads and `importSkill` spends, so a renderer
+string never reaches the installer's `lstatSync`; `MAX_DROP_PATHS` (512) is refused before any
+`lstat` on the drop and preflight seams; the directory walk is bounded (50 000 entries / depth 64 /
+10 s, `expandPathsBounded`); the off-thread walk is #274 (SEC-9 #240 with NEW-2, DOC-11, DOC-12
+folded — partial; PR #275).**_ Decision 5 (#222, the lexical UNC/device rejection = the drop-contract
+change) unanswered → default, that half stays open as 5b-b; §8 L-4/L-5 restated below;
+`architecture.md` SEC-3 rows restated. Suite 368 → 370 files / 5,487 → 5,505 (+18).
+
 _2026-09-02 — **Audit 2026-09-02 Phase 4 — lock/quit quiescence: a plaintext-operation registry
 (`services/ingestion/plaintext-ops.ts`, `ctx.plaintextOps`) that preview, re-index, import
 prepare, dictation and the two export readers join before writing a `.parse*` transient; "Lock
@@ -466,43 +476,12 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       DOC-13 PVR-at-flip → item 10).
 12. **Full-audit 2026-07-12 — ROUND COMPLETE** (close-out 2026-07-12). Durable ledger +
     §-anchor legend: [`docs/architecture.md`](docs/architecture.md) **§48**. Six phases, final
-    gate **4190/47**. Wave narrative: [`docs/build-log.md`](docs/build-log.md). **Round
-    residuals (register of record):**
-
-    - **Owner batch ①–⑥** (the Phase-3 entry, now in `docs/build-log.md`) — **④⑤⑥ EXECUTED 2026-07-12
-      post-close-out (owner-directed):** ④ `reviewed_by` normalized to "project maintainer
-      (Claude-assisted review, HF card/LFS verification)" · ⑤ `djuro-agent` restored to
-      cla.yml's allowlist (smoke PR #55 verified green: block → sign → ✅, signature recorded
-      on `cla-signatures`) · ⑥ owner decided **NOT** to publish —
-      `.claude/skills/screenshot-verify/SKILL.md` untracked via `git rm --cached` (file stays
-      on disk for local dev; `.gitignore`'s `.claude` rule, which never applied to the
-      already-tracked file, now covers it). ② PF-2 **EXECUTED 2026-07-12** (owner-approved,
-      while still unpushed): the spec-retirement commit reworded from "docs update" to a
-      message naming the retirement + stamp removal + NUL fix (now `41acc47`; rebase rewrote
-      all 11 unpushed hashes) and the stale-hash sweep applied — 28 citations across
-      BUILD_STATE (§5 item 12, §8 L-7 row) + architecture.md §48 updated to the post-reword
-      hashes; trees byte-identical before/after. Still open: ① GAP-1 push + tag decision
-      ONLY. ③ LIC-2 **EXECUTED 2026-07-12** (owner-approved): committed generated
-      `THIRD-PARTY-NOTICES.md` (226 shipped packages — asar prod closure minus the yml
-      negations; no NOTICE files exist in the set; KaTeX OFL font notice included) +
-      `scripts/generate-third-party-notices.mjs` (+ shared `scripts/lib/shipped-packages.mjs`),
-      shipped via `extraResources`, freshness-gated by
-      `tests/integration/third-party-notices.test.ts` (suite 4190 → 4195/47).
-    - **SEC-1 orphan-`.enc` sweep — deferred (Info):** the startup sweep runs while the DB is
-      LOCKED, so it cannot know which document ids are live; a pre-fix zero-key sidecar
-      self-heals only on re-index (known-limitations note shipped with Phase 1). Same family,
-      also unswept: a hard crash mid-lock-encrypt leaves a partial-CIPHERTEXT `<enc>.tmp`
-      (exposure nil, overwritten next lock; one `rmSync` in the sweep would tidy).
-    - **README default-set vision omission — FIXED 2026-07-12 (full-audit 2026-07-12b DOC-1):**
-      README + packaging.md corrected (default set ≈10.4 GB incl. `qwen2.5-vl-3b-instruct-q4`,
-      vision row + 3 packaging.md spots + model-policy.md "Opt-in only" line), swap figures
-      recomputed on the corrected basis (~14 GB 14B / ~24 GB 30B-A3B).
-    - **Nuance notes (recorded in the §48 rows):** REL-1's in-code "spent or garbage"
-      justification slightly overstates (a REL-2 probe-error corner can leave an
-      unconsumed-FRESH `.recovery`); REL-3's confidentiality window can extend one unlock
-      further under an active probe error; SEC-2 reviewer N1 — the containment sweep removes
-      only the FIRST offender before throwing (the next install's pre-clean removes the rest).
-    - **TS-7 (macOS CI leg)** remains the standing owner call — item 7.
+    gate **4190/47**. Wave narrative AND the executed residual register (owner batch ①–⑥ with
+    ②③④⑤⑥ executed 2026-07-12, the README default-set fix, the nuance notes):
+    [`docs/build-log.md`](docs/build-log.md) (register moved 2026-09-03, PR #275). **Still
+    open:** the SEC-1 orphan-`.enc` sweep (Info, deferred — the startup sweep runs LOCKED and
+    cannot know live ids; a crash mid-lock-encrypt leaves a partial-CIPHERTEXT `<enc>.tmp`, same
+    family, exposure nil); ① GAP-1 push + tag decision; TS-7 (macOS CI leg) — item 7.
 
 13. **Full-audit 2026-07-12b — ROUND COMPLETE** (close-out 2026-07-12; working paper DELETED,
     never committed, no history copy). Baseline `06920c1`; 24 findings (23 fixed across
@@ -615,18 +594,15 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     currently-ignored `supports_tools` manifest key (model-policy.md). (d) The §5.4
     thinking-checkpoint criterion is folded into item 8's ratify sequence, not a separate action.
 
-19. **Full-audit 2026-09-02 (security/reliability) — REMEDIATION IN PROGRESS** (tracker
-    issue #217; labels `audit-2026-09-02`, `severity:*`, `phase:0`..`phase:9`, `owner-decision`,
-    `follow-up`). The round's working paper, phased plan and STATE ledger live under the
-    git-ignored `tmp/` for the duration of the round; the durable ledger is written once, at
-    close-out, as `docs/architecture.md` "§52 Full audit (2026-09-02) — remediation ledger +
-    close-out" (directly after §51). Fourteen owner decisions are open as issues #218–#231; until
-    answered, each phase runs on the plan's stated default and says so in its PR body (a default
-    is never upgraded to a ruling). Phases: 0 quit path / cold-start abort / spellcheck; 1
-    packaged OCR; 2 one commercial gate; 3 update multiplicity; 4 lock/quit quiescence; 5a
-    external-open consent; 5b raw-path hardening; 6 rekey completeness; 7 recovery preservation +
-    durability docs; 8 small code items; 9a early docs sweep; 9b round close-out. One line per
-    merged phase follows (outcome + PR + pointer; the narrative lives in the PR and the record):
+19. **Full-audit 2026-09-02 (security/reliability) — REMEDIATION IN PROGRESS** (tracker #217;
+    labels `audit-2026-09-02`, `severity:*`, `phase:0`..`phase:9`, `owner-decision`, `follow-up`).
+    Working paper, plan and STATE ledger live under the git-ignored `tmp/` for the round; the
+    durable ledger is written once, at close-out, as `docs/architecture.md` "§52 Full audit
+    (2026-09-02) — remediation ledger + close-out" (after §51). Fourteen owner decisions are open
+    as #218–#231; until answered, each phase runs on the plan's default and says so in its PR body
+    (a default is never upgraded to a ruling). Phases 0–4 as listed below, then 5a external-open
+    consent, 5b raw-path hardening, 6 rekey, 7 recovery + durability docs, 8 small code items,
+    9a docs sweep, 9b close-out. One line per merged phase (outcome + PR + pointer):
     - **0-a** (2026-09-02, docs-only, PR #265): the eight closed 2026-08-20…08-22 dated entries
       drained to `docs/build-log.md`; this item opened.
     - **0** (2026-09-02, PR #267): SEC-12 + GAP-2 (quit re-entry prevented, 30 s overall deadline,
@@ -648,6 +624,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     - **4** (2026-09-02, PR #273): SEC-10 (DOC-4 folded) + TQ-1 — plaintext-operation registry;
       lock/quit abort → settle (5 s) → sweep before re-encrypting; parse timeout aborts; rec 8 / rec 2
       on defaults (one PR, 30 s constant, 25.5 s worst case) — dated entry above.
+    - **5b-a** (2026-09-03, PR #275): SEC-9 partial (NEW-2, DOC-11, DOC-12 folded) — skills picker
+      token + unlock gate, `MAX_DROP_PATHS` 512, bounded walk (#274 for off-thread); the lexical
+      UNC/device half = 5b-b, blocked on decision 5 (#222, default) — dated entry above.
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
@@ -720,16 +699,20 @@ top of this file; the full audit report is in git history at commit `f99bc86`). 
 LOW items were consciously deferred — they are defense-in-depth / build-pipeline, none blocks
 the offline/privacy guarantees:
 
-- **L-4 — `importDocuments` trusts renderer-supplied source paths.** The handler type-filters +
-  unlock-gates, but the path *values* are not constrained to the OS-picker output, so a
-  compromised renderer could ingest any user-readable absolute path (arbitrary local-file *read*,
-  no traversal *write*). Fix: have `pickDocuments` return **opaque tokens** that `importDocuments`
-  redeems, instead of trusting renderer-supplied paths. (Discuss before implementing — it changes
-  the import IPC contract.)
-- **L-5 — `expandPaths` follows directory symlinks.** `walk()` uses `statSync` (follows links) with
-  no cycle guard, so a picked folder with a symlink to e.g. `C:\Windows` traverses outside the
-  selection. Blast radius: "indexes files the user didn't intend" (supported extensions only), not
-  RCE. Fix: `lstatSync` for directory entries (skip symlinks) or a visited-realpath cycle guard.
+- **L-4 — renderer-supplied source paths (restated 2026-09-03, #240 / PR #275).** The PICKER half
+  is done: `pickDocuments` has minted a one-time token that `importDocuments` redeems since D1
+  (vuln-scan 2026-06-21), and `pickSkillPackage` does the same for `previewSkillPackage` /
+  `importSkill` since PR #275 (`src/main/ipc/picker-tokens.ts`). The DROP half still passes raw
+  paths (an OS drop reaches the renderer, untokenizable): each path is `lstat`-checked, symlinks
+  refused, canonicalized, the array capped at `MAX_DROP_PATHS` (512) and the walk bounded — but a
+  UNC/device path still reaches `lstat` before any lexical check. Lexical rejection changes the
+  drop contract for network-share users: **owner decision 5 (#222) pending.**
+- **L-5 — `expandPaths` follows directory symlinks (restated 2026-09-03, #240 / PR #275).** A
+  visited-realpath CYCLE guard exists (backend-audit 2026-06-27 REL-9 `onPath`, `architecture.md`
+  §-ledger) and the walk is now bounded (entries / depth / wall clock, `limits.ts`); the walk still
+  FOLLOWS a symlink to a distinct directory by design, so a picked folder linking to e.g.
+  `C:\Windows` still traverses outside the selection (supported extensions only, not RCE).
+  Off-thread walk: #274.
 - **L-7 — Runtime-archive extraction doesn't prevent member traversal (build-time AND in-app;
   scope corrected 2026-07-12, full-audit SEC-2 — the earlier "build-time only" framing was
   wrong).** `Expand-Archive` / `tar -xzf` in `scripts/fetch-runtime.{ps1,sh}` run on the drive

@@ -25,6 +25,13 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Adding a skill is bound to the file picker, and a huge drop can no longer freeze the app.**
+  The Settings → Skills picker now hands the app a one-time ticket for the file or folder you chose,
+  and the preview and the import only accept that ticket, so nothing but your own pick can be read.
+  Dropping or picking documents is capped at 512 items per action, and scanning a dropped folder
+  stops after a bounded amount of work instead of hanging on an enormous or looped tree (what it
+  reached is imported). Network-share paths are handled as before; a stricter rule for them is
+  still under discussion.
 - **Locking or quitting during a document preview, re-index, import, dictation or export no
   longer leaves a decrypted copy on the drive.** Those operations decrypt the document to a
   temporary file while they read it. Lock now and Quit used to finish while such a read was still
