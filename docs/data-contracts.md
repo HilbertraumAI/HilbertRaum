@@ -567,8 +567,24 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 ✅ **`services/workspace-vault.ts`** (spec §7.9) — the lock/unlock lifecycle.
 - **Descriptor:** `VaultDescriptor { version, mode:'encrypted', kdf, saltB64, verifier }` at
   **`config/workspace.json`** (unencrypted; the only pre-unlock artifact).
-  `readVaultDescriptor`/`writeVaultDescriptor` (atomic). `vaultPathsFrom({configPath,dbPath})` →
-  `VaultPaths { descriptorPath, encPath = <dbPath>.enc, dbPath }`.
+  `readVaultDescriptor`/`writeVaultDescriptor` (atomic). `vaultPathsFrom({configPath,dbPath,logsPath?})` →
+  `VaultPaths { descriptorPath, encPath = <dbPath>.enc, dbPath, logsPath? }` (`logsPath` is optional
+  and additive — older callers omit it; without it the rekey does not account for the rotated log).
+- **Rekey journal (on-disk, #241):** `workspace/rekey-journal.json` — `{ version: 1, staged: string[],
+  remove: string[] }`, absolute paths; written atomically by `stageRekey` BEFORE any `<file>.new` is
+  staged, cleared by `applyPendingRekey`/`discardPendingRekey` once every entry is accounted for
+  (an unreachable entry keeps it; an unparseable or unknown-`version` file is renamed to
+  `rekey-journal.json.corrupt`, never deleted; only `staged` entries ending in `.new` are honoured;
+  staged paths from the scan and the journal are de-duplicated on a folded spelling).
+  `listVaultKeyCiphertexts(vaultPaths, db) → VaultKeyCiphertext[]` = `{ path, kind: 'document' |
+  'image' | 'out-of-store' | 'rotated-log', action: 'rekey' | 'delete' }` is the class registry the
+  stage journals. The descriptor is unchanged. **Downgrade caveat:** a build older than the #241 fix
+  never reads the journal — on a pending migration it rolls only the DB + `documents/` forward and
+  leaves `images/` and out-of-store twins staged (a current build finishes them); a completed
+  migration is a plain v2 vault. Constants: `REKEY_JOURNAL_NAME`, `IMAGES_DIR_NAME`,
+  `DOCUMENTS_DIR_NAME`, `ROTATED_ENCRYPTED_LOG_NAME` (`app.1.log.enc`, deleted at the commit).
+  `createImageSession(db, dir, req, cipher, beginWork?)` — the optional fifth argument is the
+  document-work lease factory (`() => ctl.beginDocumentWork()`), taken before the first await.
 - **File crypto + hygiene:** `encryptFile`/`decryptFile` (atomic temp+rename), `shredFile`
   (overwrite-random + unlink, best-effort), `cleanSidecars` (shred `-wal`/`-shm`).
 - **Lifecycle:** `createEncryptedVaultOnDisk(vaultPaths, password, kdf?)` (writes descriptor + seeds

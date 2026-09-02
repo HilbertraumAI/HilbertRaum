@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import type { PrivacyPolicy } from '../../src/shared/types'
@@ -14,6 +14,8 @@ import {
   stageRekey,
   rewrapVaultKey,
   applyPendingRekey,
+  discardPendingRekey,
+  listVaultKeyCiphertexts,
   shredFile,
   WorkspaceController,
   WrongPasswordError,
@@ -25,10 +27,19 @@ import {
 } from '../../src/main/services/workspace-vault'
 import {
   decrypt,
+  encrypt,
+  serializeBlob,
+  deserializeBlob,
   deriveKey,
   generateDataKey,
   type KdfParams
 } from '../../src/main/services/security/crypto'
+import {
+  createImageSession,
+  getImageSession,
+  imagesDir,
+  listImageSessions
+} from '../../src/main/services/vision/history'
 
 // Phase 32 — vault password change (wave-3 plan §5, decision D24): the v2 envelope
 // descriptor (random data key wrapped by the password-derived KEK), the O(1) re-wrap on
@@ -470,6 +481,394 @@ describe('descriptor/.enc scan — passwords and keys stay memory-only (extended
         expect(artifact.includes(secret)).toBe(false)
       }
     }
+    ctl.lock()
+  })
+})
+
+// ---- every vault-key ciphertext class survives the v1→v2 rekey (#241) --------------------
+//
+// The v1→v2 migration used to stage `documents/*.enc` only. Image-history sidecars under
+// `images/`, legacy stored copies whose `stored_path` lies outside the store, and the rotated
+// diagnostics log all share the vault key, so the first password change of a v1 vault left
+// them under a zeroed key. These tests drive the REAL `changePassword` over a `legacyV1`
+// vault that carries one of each class. They do not prove that any real user holds a v1 vault.
+
+const IMAGE_A = new Uint8Array([0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8])
+const IMAGE_B = new Uint8Array([0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9])
+/** On-disk names this test pins: the rotated diagnostics log and the rekey journal file. */
+const ROTATED_LOG = 'app.1.log.enc'
+const REKEY_JOURNAL = 'rekey-journal.json'
+
+/** A temp workspace layout whose vault paths also know the `logs/` dir (rotated log class). */
+function freshVaultWithLogs(): { vp: VaultPaths; root: string } {
+  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-rekey-classes-'))
+  for (const d of ['config', 'workspace', 'logs']) mkdirSync(join(root, d), { recursive: true })
+  const logsPath = join(root, 'logs')
+  const vp: VaultPaths = {
+    ...vaultPathsFrom({ configPath: join(root, 'config'), dbPath: join(root, 'workspace', 'hilbertraum.sqlite') }),
+    logsPath
+  }
+  return { vp, root }
+}
+
+interface ClassFixture {
+  vp: VaultPaths
+  root: string
+  ctl: WorkspaceController
+  imageA: string
+  imageB: string
+  /** `<images dir>/<stored_name>` of each image session. */
+  imageFiles: Record<string, string>
+  outside: string
+  doc: string
+  rotated: string
+}
+
+function imagesDirOf(root: string): string {
+  return imagesDir(join(root, 'workspace'))
+}
+
+function imageFile(ctl: WorkspaceController, root: string, id: string): string {
+  const row = ctl.requireDb().prepare('SELECT stored_name FROM image_sessions WHERE id = ?').get(id) as
+    | { stored_name: string }
+    | undefined
+  return join(imagesDirOf(root), row!.stored_name)
+}
+
+async function readImage(ctl: WorkspaceController, root: string, id: string): Promise<Uint8Array | null> {
+  const detail = await getImageSession(ctl.requireDb(), imagesDirOf(root), id, ctl.documentCipher())
+  return detail ? detail.imageBytes : null
+}
+
+/** Names under a dir that are rekey staging or transient plaintext leftovers. */
+function transientNames(dir: string): string[] {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter((n) => n.endsWith(REKEY_SUFFIX) || n.endsWith('.tmp'))
+}
+
+/** A legacy v1 vault carrying one of every vault-key ciphertext class, still unlocked. */
+async function v1VaultWithEveryClass(): Promise<ClassFixture> {
+  const { vp, root } = freshVaultWithLogs()
+  const ctl = unlockedController(vp, 'old-password', FAST_SCRYPT, { legacyV1: true })
+  const db = ctl.requireDb()
+  const imgDir = imagesDirOf(root)
+  // Two images through the REAL history writer (encrypt-then-write under the vault cipher).
+  const imageA = await createImageSession(
+    db,
+    imgDir,
+    { imageBytes: IMAGE_A, mimeType: 'image/png', name: 'a', width: 2, height: 2 },
+    ctl.documentCipher()
+  )
+  const imageB = await createImageSession(
+    db,
+    imgDir,
+    { imageBytes: IMAGE_B, mimeType: 'image/jpeg', name: 'b', width: 3, height: 3 },
+    ctl.documentCipher()
+  )
+  // An ordinary document sidecar in the store.
+  const doc = addEncryptedDoc(ctl, vp, 'doc-classes', 'DOCUMENT-SURVIVES')
+  // A legacy out-of-store copy: hand-encrypted under `workspace/legacy-store/` with a row whose
+  // `stored_path` names it (the on-disk shape `locateStoredCopy`'s fallback reads).
+  const legacyDir = join(root, 'workspace', 'legacy-store')
+  mkdirSync(legacyDir, { recursive: true })
+  const plain = join(legacyDir, 'outside.src')
+  writeFileSync(plain, 'OUTSIDE-SURVIVES', 'utf8')
+  const outside = join(legacyDir, 'outside.txt.enc')
+  ctl.documentCipher()!.encryptFile(plain, outside)
+  shredFile(plain)
+  const now = new Date().toISOString()
+  db.prepare(
+    `INSERT INTO documents (id, title, original_path, stored_path, mime_type, size_bytes, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('doc-outside', 'outside', null, outside, 'text/plain', 16, 'indexed', now, now)
+  // The rotated diagnostics log: the logging module's own frame (one AEAD blob under the vault key).
+  const rotated = join(vp.logsPath!, ROTATED_LOG)
+  writeFileSync(rotated, serializeBlob(encrypt(ctl.encryptionKey()!, Buffer.from('ROTATED-LOG', 'utf8'))))
+  return {
+    vp,
+    root,
+    ctl,
+    imageA,
+    imageB,
+    imageFiles: { [imageA]: imageFile(ctl, root, imageA), [imageB]: imageFile(ctl, root, imageB) },
+    outside,
+    doc,
+    rotated
+  }
+}
+
+function reopen(vp: VaultPaths, password: string): WorkspaceController {
+  const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+  ctl.init()
+  ctl.unlock(password)
+  return ctl
+}
+
+function rotatedLogText(ctl: WorkspaceController, rotated: string): string {
+  return decrypt(ctl.encryptionKey()!, deserializeBlob(readFileSync(rotated))).toString('utf8')
+}
+
+/** Every class readable through a controller holding the CURRENT key; nothing staged anywhere. */
+async function expectEveryClassReadable(f: ClassFixture, ctl: WorkspaceController): Promise<void> {
+  expect(await readImage(ctl, f.root, f.imageA)).toEqual(IMAGE_A)
+  expect(await readImage(ctl, f.root, f.imageB)).toEqual(IMAGE_B)
+  expect(readEncryptedDoc(ctl, f.outside)).toBe('OUTSIDE-SURVIVES')
+  expect(readEncryptedDoc(ctl, f.doc)).toBe('DOCUMENT-SURVIVES')
+  expect(transientNames(imagesDirOf(f.root))).toEqual([])
+  expect(transientNames(join(f.root, 'workspace', 'documents'))).toEqual([])
+  expect(transientNames(join(f.root, 'workspace', 'legacy-store'))).toEqual([])
+  expect(existsSync(`${f.vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
+  expect(existsSync(join(f.root, 'workspace', REKEY_JOURNAL))).toBe(false)
+}
+
+describe('changePassword — every vault-key ciphertext class survives the v1→v2 migration (#241)', () => {
+  it('images, an out-of-store copy, a document and the rotated log all decrypt under the new password', async () => {
+    const f = await v1VaultWithEveryClass()
+    expect(readVaultDescriptor(f.vp.descriptorPath)!.version).toBe(VAULT_VERSION)
+    // Byte-exact before the change (the fixture itself is sound).
+    expect(await readImage(f.ctl, f.root, f.imageA)).toEqual(IMAGE_A)
+    expect(await readImage(f.ctl, f.root, f.imageB)).toEqual(IMAGE_B)
+    expect(rotatedLogText(f.ctl, f.rotated)).toBe('ROTATED-LOG')
+
+    expect(f.ctl.changePassword('old-password', 'new-password', FAST_ARGON).state).toBe('unlocked')
+    f.ctl.lock()
+
+    const ctl = reopen(f.vp, 'new-password')
+    expect(readVaultDescriptor(f.vp.descriptorPath)!.version).toBe(VAULT_VERSION_ENVELOPE)
+    // The session rows survive and both images decrypt byte-exact under the NEW key.
+    expect(listImageSessions(ctl.requireDb()).map((s) => s.id).sort()).toEqual([f.imageA, f.imageB].sort())
+    await expectEveryClassReadable(f, ctl)
+    // The rotated log is either gone or readable under the new key — never stranded.
+    if (existsSync(f.rotated)) expect(rotatedLogText(ctl, f.rotated)).toBe('ROTATED-LOG')
+    ctl.lock()
+  })
+
+  it('the rotated log is deleted by the v1→v2 change (nothing reads it) and untouched by a v2 re-wrap', async () => {
+    const f = await v1VaultWithEveryClass()
+    f.ctl.changePassword('old-password', 'new-password', FAST_ARGON)
+    expect(existsSync(f.rotated)).toBe(false)
+    // A v2→v2 change keeps the data key, so a rotated generation written afterwards stays.
+    writeFileSync(f.rotated, serializeBlob(encrypt(f.ctl.encryptionKey()!, Buffer.from('AGAIN', 'utf8'))))
+    f.ctl.changePassword('new-password', 'third-password', FAST_ARGON)
+    expect(rotatedLogText(f.ctl, f.rotated)).toBe('AGAIN')
+    f.ctl.lock()
+  })
+
+  it('listVaultKeyCiphertexts enumerates the four classes; stageRekey journals every staged path', async () => {
+    const f = await v1VaultWithEveryClass()
+    const db = f.ctl.requireDb()
+    const listed = listVaultKeyCiphertexts(f.vp, db)
+    const byKind = (kind: string): string[] =>
+      listed
+        .filter((c) => c.kind === kind)
+        .map((c) => c.path)
+        .sort()
+    expect(byKind('document')).toEqual([f.doc])
+    expect(byKind('image')).toEqual(Object.values(f.imageFiles).sort())
+    expect(byKind('out-of-store')).toEqual([f.outside])
+    expect(byKind('rotated-log')).toEqual([f.rotated])
+    expect(listed.filter((c) => c.action === 'delete').map((c) => c.path)).toEqual([f.rotated])
+    f.ctl.lock()
+
+    const { db: db2, key } = unlockEncryptedVault(f.vp, 'old-password')
+    stageRekey(f.vp, db2, key, generateDataKey())
+    db2.close()
+    const journalPath = join(f.root, 'workspace', REKEY_JOURNAL)
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { staged: string[]; remove: string[] }
+    const expectedStaged = [f.vp.encPath, f.doc, f.outside, ...Object.values(f.imageFiles)]
+      .map((p) => `${p}${REKEY_SUFFIX}`)
+      .sort()
+    expect([...journal.staged].sort()).toEqual(expectedStaged)
+    for (const staged of expectedStaged) expect(existsSync(staged)).toBe(true)
+    expect(journal.remove).toEqual([f.rotated])
+    // The rotated log is still there: nothing is deleted before the commit point.
+    expect(existsSync(f.rotated)).toBe(true)
+
+    discardPendingRekey(f.vp)
+    expect(existsSync(journalPath)).toBe(false)
+    for (const staged of expectedStaged) expect(existsSync(staged)).toBe(false)
+    expect(existsSync(f.rotated)).toBe(true)
+  })
+})
+
+// Crash at every cut of the journal, over every class. Before the commit the OLD password and
+// files win (rollback); from the commit on the NEW ones do (roll-forward), whichever files a
+// crash left swapped or staged.
+type SwapClass = 'db' | 'document' | 'image' | 'outside'
+const CUTS: Array<{ cut: string; committed: boolean; swapped: SwapClass[] }> = [
+  { cut: 'after staging, before the commit', committed: false, swapped: [] },
+  { cut: 'after the commit, before any swap', committed: true, swapped: [] },
+  { cut: 'mid-swap: only the DB swapped', committed: true, swapped: ['db'] },
+  { cut: 'mid-swap: only the document swapped', committed: true, swapped: ['document'] },
+  { cut: 'mid-swap: only one image swapped', committed: true, swapped: ['image'] },
+  { cut: 'mid-swap: only the out-of-store copy swapped', committed: true, swapped: ['outside'] },
+  { cut: 'after every swap, before the journal is cleared', committed: true, swapped: ['db', 'document', 'image', 'outside'] }
+]
+
+describe('changePassword — crash at every journal cut, every ciphertext class (#241)', () => {
+  it.each(CUTS)('$cut', async ({ committed, swapped }) => {
+    const f = await v1VaultWithEveryClass()
+    f.ctl.lock()
+    const { db, key } = unlockEncryptedVault(f.vp, 'old-password')
+    const dataKey = generateDataKey()
+    stageRekey(f.vp, db, key, dataKey)
+    if (committed) rewrapVaultKey(f.vp, dataKey, 'new-password', FAST_ARGON) // COMMIT
+    db.close()
+    const targetFor: Record<SwapClass, string> = {
+      db: f.vp.encPath,
+      document: f.doc,
+      image: f.imageFiles[f.imageA],
+      outside: f.outside
+    }
+    for (const cls of swapped) {
+      shredFile(targetFor[cls])
+      renameSync(`${targetFor[cls]}${REKEY_SUFFIX}`, targetFor[cls])
+    }
+    // The rotated log is only ever removed by the roll-forward, never by a stage or a rollback.
+    expect(existsSync(f.rotated)).toBe(true)
+
+    if (committed) {
+      const ctl = reopen(f.vp, 'new-password') // recovery rolls FORWARD before the unlock decrypt
+      await expectEveryClassReadable(f, ctl)
+      expect(existsSync(f.rotated)).toBe(false)
+      ctl.lock()
+      expect(() => ctl.unlock('old-password')).toThrow(WrongPasswordError)
+    } else {
+      const ctl = reopen(f.vp, 'old-password') // recovery rolls BACK: staged files discarded
+      await expectEveryClassReadable(f, ctl)
+      expect(rotatedLogText(ctl, f.rotated)).toBe('ROTATED-LOG')
+      ctl.lock()
+    }
+  })
+})
+
+// An image save cannot straddle the swap: the write holds the document-work lease, so a
+// password change refuses while a save is in flight, and a save refuses while a change runs.
+describe('image writes vs the password change — the document-work lease (#241)', () => {
+  it('a password change is refused while an image save is in flight; the save completes and later rekeys cleanly', async () => {
+    const { vp, root } = freshVaultWithLogs()
+    const ctl = unlockedController(vp, 'old-password', FAST_SCRYPT, { legacyV1: true })
+    const imgDir = imagesDirOf(root)
+    const saving = createImageSession(
+      ctl.requireDb(),
+      imgDir,
+      { imageBytes: IMAGE_A, mimeType: 'image/png', name: 'a', width: 2, height: 2 },
+      ctl.documentCipher(),
+      () => ctl.beginDocumentWork()
+    )
+    expect(() => ctl.changePassword('old-password', 'new-password', FAST_ARGON)).toThrow(VaultBusyError)
+    const id = await saving
+    expect(await readImage(ctl, root, id)).toEqual(IMAGE_A)
+    expect(transientNames(imgDir)).toEqual([])
+    // Lease released with the save → the change goes through and the image follows the key.
+    expect(ctl.changePassword('old-password', 'new-password', FAST_ARGON).state).toBe('unlocked')
+    expect(await readImage(ctl, root, id)).toEqual(IMAGE_A)
+    ctl.lock()
+    const again = reopen(vp, 'new-password')
+    expect(await readImage(again, root, id)).toEqual(IMAGE_A)
+    again.lock()
+  })
+
+  it('an image save admitted while a REAL password change runs is refused with VaultBusyError and writes nothing', async () => {
+    const { vp, root } = freshVaultWithLogs()
+    const ctl = unlockedController(vp, 'pw-one', FAST_SCRYPT)
+    const imgDir = imagesDirOf(root)
+    // Trap the private flag (the idiom of the race-guard test above): at the instant the REAL
+    // changePassword flips it true, start a save that takes the lease.
+    let backing = false
+    let attempted: Promise<string> | null = null
+    Object.defineProperty(ctl, 'changingPassword', {
+      configurable: true,
+      get: () => backing,
+      set: (v: boolean) => {
+        backing = v
+        if (v && !attempted) {
+          attempted = createImageSession(
+            ctl.requireDb(),
+            imgDir,
+            { imageBytes: IMAGE_B, mimeType: 'image/png', name: 'b', width: 3, height: 3 },
+            ctl.documentCipher(),
+            () => ctl.beginDocumentWork()
+          )
+          attempted.catch(() => undefined) // asserted below; keep the rejection from going unhandled
+        }
+      }
+    })
+    expect(ctl.changePassword('pw-one', 'pw-two', FAST_ARGON).state).toBe('unlocked')
+    expect(attempted).not.toBeNull()
+    await expect(attempted!).rejects.toBeInstanceOf(VaultBusyError)
+    // Nothing partial: no session row, no `.enc`, no `<id>.tmp`.
+    expect(listImageSessions(ctl.requireDb())).toEqual([])
+    expect(existsSync(imgDir) ? readdirSync(imgDir) : []).toEqual([])
+    ctl.lock()
+  })
+})
+
+// Journal edge cases from the #241 review: one physical file listed twice, an entry whose
+// location is unreachable at recovery, and a journal that cannot be parsed.
+describe('rekey journal — aliases, unreachable entries, corruption (#241)', () => {
+  /** Stage + commit a full-class v1 vault and hand back the journal path. */
+  async function committedStage(): Promise<ClassFixture & { journalPath: string }> {
+    const f = await v1VaultWithEveryClass()
+    f.ctl.lock()
+    const { db, key } = unlockEncryptedVault(f.vp, 'old-password')
+    const dataKey = generateDataKey()
+    stageRekey(f.vp, db, key, dataKey)
+    rewrapVaultKey(f.vp, dataKey, 'new-password', FAST_ARGON) // COMMIT
+    db.close()
+    return { ...f, journalPath: join(f.root, 'workspace', REKEY_JOURNAL) }
+  }
+
+  it('a journal entry that spells a staged file differently is swapped once, never shredded by its twin', async () => {
+    const f = await committedStage()
+    const journal = JSON.parse(readFileSync(f.journalPath, 'utf8')) as { staged: string[]; remove: string[] }
+    // The same physical files through a `..` segment (and, on Windows, a different case).
+    const alias = (p: string): string => {
+      const viaParent = join(dirname(p), '..', basename(dirname(p)), basename(p))
+      return process.platform === 'win32' ? viaParent.toUpperCase() : viaParent
+    }
+    journal.staged.push(alias(`${f.vp.encPath}${REKEY_SUFFIX}`), alias(`${f.imageFiles[f.imageA]}${REKEY_SUFFIX}`))
+    writeFileSync(f.journalPath, JSON.stringify(journal), 'utf8')
+
+    const ctl = reopen(f.vp, 'new-password') // a double swap would have shredded the DB itself
+    await expectEveryClassReadable(f, ctl)
+    ctl.lock()
+  })
+
+  it('an out-of-store copy on an unreachable location keeps the journal; a later recovery finishes the swap', async () => {
+    const f = await committedStage()
+    const legacyDir = dirname(f.outside)
+    const away = `${legacyDir}.away`
+    renameSync(legacyDir, away) // the legacy location is "detached" at recovery time
+
+    const ctl = reopen(f.vp, 'new-password')
+    expect(await readImage(ctl, f.root, f.imageA)).toEqual(IMAGE_A)
+    expect(readEncryptedDoc(ctl, f.doc)).toBe('DOCUMENT-SURVIVES')
+    expect(existsSync(f.rotated)).toBe(false)
+    expect(existsSync(f.journalPath)).toBe(true) // kept: one entry could not be accounted for
+    expect(existsSync(join(away, `outside.txt.enc${REKEY_SUFFIX}`))).toBe(true) // twin intact
+    ctl.lock()
+
+    renameSync(away, legacyDir) // the location returns → the next recovery completes it
+    const again = reopen(f.vp, 'new-password')
+    await expectEveryClassReadable(f, again)
+    again.lock()
+  })
+
+  it('a journal that cannot be parsed is quarantined as .corrupt, never deleted; in-store classes still roll forward', async () => {
+    const f = await committedStage()
+    writeFileSync(f.journalPath, '{ not json', 'utf8')
+
+    const ctl = reopen(f.vp, 'new-password')
+    expect(await readImage(ctl, f.root, f.imageA)).toEqual(IMAGE_A)
+    expect(await readImage(ctl, f.root, f.imageB)).toEqual(IMAGE_B)
+    expect(readEncryptedDoc(ctl, f.doc)).toBe('DOCUMENT-SURVIVES')
+    expect(existsSync(f.journalPath)).toBe(false)
+    expect(readFileSync(`${f.journalPath}.corrupt`, 'utf8')).toBe('{ not json')
+    // The out-of-store twin was only ever named by the journal: it stays staged beside the
+    // original (nothing lost) until someone acts on the quarantined file.
+    expect(existsSync(`${f.outside}${REKEY_SUFFIX}`)).toBe(true)
+    expect(existsSync(f.outside)).toBe(true)
     ctl.lock()
   })
 })

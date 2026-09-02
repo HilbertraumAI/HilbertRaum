@@ -3,6 +3,7 @@ import {
   writeFileSync,
   existsSync,
   readdirSync,
+  mkdirSync,
   rmSync,
   renameSync,
   statSync,
@@ -14,8 +15,9 @@ import {
 } from 'node:fs'
 import { open as openFileAsync, rename as renameAsync, rm as rmAsync, stat as statAsync } from 'node:fs/promises'
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { tMain } from './i18n'
+import { canonicalLeafFor } from './ingestion/stored-copy-leaf'
 import { perfMark, perfMs } from './perf'
 import type { Db } from './db'
 import { openDatabase } from './db'
@@ -54,8 +56,9 @@ import {
 /** Legacy descriptor format: data encrypted directly under the password-derived key. */
 export const VAULT_VERSION = 1
 /**
- * Envelope format: a random 32-byte DATA key encrypts the DB +
- * document sidecars; the password-derived key (KEK) only WRAPS it in the descriptor.
+ * Envelope format: a random 32-byte DATA key encrypts the DB + every sidecar class
+ * (documents, image history, legacy out-of-store copies, the rotated log — see
+ * `listVaultKeyCiphertexts`); the password-derived key (KEK) only WRAPS it in the descriptor.
  * A password change then re-wraps one blob (O(1)) instead of re-encrypting the corpus.
  * New vaults are created v2; v1 vaults migrate on their FIRST password change (never on
  * unlock — a vault that never changes its password is never touched).
@@ -95,6 +98,9 @@ export interface VaultPaths {
   encPath: string
   /** `workspace/hilbertraum.sqlite` — the decrypted working file (present only while unlocked). */
   dbPath: string
+  /** `logs/` — where the encrypted diagnostics log rotates its previous generation; optional
+   *  so the v1→v2 rekey can account for that ciphertext too (#241). Absent in older callers. */
+  logsPath?: string
 }
 
 /** Thrown by `unlockEncryptedVault` when the password fails the verifier. */
@@ -171,11 +177,12 @@ export class VaultBusyError extends Error {
 }
 
 /** Derive the vault file locations from the resolved workspace paths. */
-export function vaultPathsFrom(paths: { configPath: string; dbPath: string }): VaultPaths {
+export function vaultPathsFrom(paths: { configPath: string; dbPath: string; logsPath?: string }): VaultPaths {
   return {
     descriptorPath: join(paths.configPath, 'workspace.json'),
     encPath: `${paths.dbPath}.enc`,
-    dbPath: paths.dbPath
+    dbPath: paths.dbPath,
+    ...(paths.logsPath ? { logsPath: paths.logsPath } : {})
   }
 }
 
@@ -601,7 +608,7 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
   // the stored copies themselves — only the clearly-transient `.parse`/`.tmp` names (the
   // stored image is `<id><ext>.enc`, which matches neither).
   const workspaceDir = dirname(vaultPaths.dbPath)
-  for (const sub of ['documents', 'images']) {
+  for (const sub of [DOCUMENTS_DIR_NAME, IMAGES_DIR_NAME]) {
     const dir = join(workspaceDir, sub)
     try {
       for (const name of readdirSync(dir)) {
@@ -680,6 +687,14 @@ export function preserveNewerPlaintext(vaultPaths: VaultPaths): void {
 // consistent vault: descriptor still v1 → the staged files are discarded and the OLD
 // password+files win; descriptor already v2 → the staged files are rolled forward and
 // the NEW password wins. Never a mix.
+//
+// What is staged (#241): every file encrypted under the vault data key outside the DB —
+// `listVaultKeyCiphertexts` enumerates the four classes (document sidecars, image-history
+// sidecars, legacy out-of-store stored copies, the rotated diagnostics log). The staged
+// paths are written to `workspace/rekey-journal.json` BEFORE staging, because an
+// out-of-store copy lies where no directory scan finds it at recovery time (the DB is
+// closed then). A build older than #241 does not read the journal: it rolls the DB and
+// `documents/` forward and leaves the other classes staged — see security-model.md.
 
 /** Suffix of a staged (re-encrypted, not yet swapped-in) file during a rekey. */
 export const REKEY_SUFFIX = '.new'
@@ -698,42 +713,218 @@ function fsyncPath(path: string): void {
   }
 }
 
-/** Every encrypted document sidecar (`<id><ext>.enc`) under `workspace/documents/`. */
-function listEncryptedDocSidecars(vaultPaths: VaultPaths): string[] {
-  const docsDir = join(dirname(vaultPaths.dbPath), 'documents')
+/** Directory name of the document store under `workspace/`. */
+export const DOCUMENTS_DIR_NAME = 'documents'
+/** Directory name of the image-history store under `workspace/` (vision/history.ts writes
+ *  there; the drive-status footprint and the rekey read it — one constant, #241). */
+export const IMAGES_DIR_NAME = 'images'
+/** The rotated (previous-generation) encrypted diagnostics log under `logs/`, written by
+ *  logging.ts and sealed under the vault data key. Deleted by the v1→v2 rekey: nothing reads
+ *  it, and it would otherwise stay under the retired key (#241). */
+export const ROTATED_ENCRYPTED_LOG_NAME = 'app.1.log.enc'
+/** The rekey journal under `workspace/`: every `<file>.new` a v1→v2 migration stages plus
+ *  the files it removes at commit. Needed because a legacy stored copy can lie OUTSIDE the
+ *  store, where no directory scan finds its staged twin at recovery (#241). */
+export const REKEY_JOURNAL_NAME = 'rekey-journal.json'
+
+/** The classes of file encrypted under the vault data key, outside the database itself. */
+export type VaultKeyCiphertextKind = 'document' | 'image' | 'out-of-store' | 'rotated-log'
+
+export interface VaultKeyCiphertext {
+  path: string
+  kind: VaultKeyCiphertextKind
+  /** `rekey`: re-encrypt under the new key (staged, then swapped in). `delete`: removed once
+   *  the descriptor commit has happened. */
+  action: 'rekey' | 'delete'
+}
+
+interface RekeyJournal {
+  version: 1
+  /** Absolute `<file>.new` paths the stage writes (in-store and out-of-store). */
+  staged: string[]
+  /** Absolute paths deleted after the commit point. */
+  remove: string[]
+}
+
+function workspaceDirOf(vaultPaths: VaultPaths): string {
+  return dirname(vaultPaths.dbPath)
+}
+
+function rekeyJournalPath(vaultPaths: VaultPaths): string {
+  return join(workspaceDirOf(vaultPaths), REKEY_JOURNAL_NAME)
+}
+
+/** Every `<name>.enc` directly under `dir` (`[]` when the dir does not exist yet). */
+function listEncryptedSidecars(dir: string): string[] {
   try {
-    return readdirSync(docsDir)
+    return readdirSync(dir)
       .filter((n) => n.endsWith(ENCRYPTED_DOC_SUFFIX))
-      .map((n) => join(docsDir, n))
+      .map((n) => join(dir, n))
   } catch {
-    return [] // no documents dir yet
+    return []
   }
 }
 
-/** Every staged `<file>.new` of an (interrupted or in-progress) rekey: DB + documents. */
-function stagedRekeyFiles(vaultPaths: VaultPaths): string[] {
-  const out: string[] = []
-  if (existsSync(`${vaultPaths.encPath}${REKEY_SUFFIX}`)) {
-    out.push(`${vaultPaths.encPath}${REKEY_SUFFIX}`)
-  }
-  const docsDir = join(dirname(vaultPaths.dbPath), 'documents')
-  try {
-    for (const n of readdirSync(docsDir)) {
-      if (n.endsWith(`${ENCRYPTED_DOC_SUFFIX}${REKEY_SUFFIX}`)) out.push(join(docsDir, n))
+/** True when `path` lies strictly inside `dir` (both absolute). */
+function isInsideDir(dir: string, path: string): boolean {
+  const rel = relative(dir, path)
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+/**
+ * Legacy stored copies that resolve OUTSIDE `workspace/documents/` (issue #188 rows keep an
+ * absolute `stored_path`). The rule is `locateStoredCopy`'s fallback order (ingestion/
+ * stored-copy.ts): a row counts only when its canonical `documents/<leaf>` (the shared
+ * `canonicalLeafFor` rule) is absent and `stored_path` names an existing regular file
+ * outside the store — i.e. exactly the file the read paths would decrypt at this moment.
+ * Limits: a copy on a drive that is detached NOW is not seen and stays under the old key if
+ * it returns later; the guard is name presence, not ownership — a row pointing into another
+ * vault's store is rekeyed like any other file it names.
+ */
+function listOutOfStoreCopies(vaultPaths: VaultPaths, db: Db): string[] {
+  const docsDir = join(workspaceDirOf(vaultPaths), DOCUMENTS_DIR_NAME)
+  const rows = db
+    .prepare('SELECT id, stored_path, stored_name FROM documents WHERE stored_path IS NOT NULL')
+    .all() as Array<{ id: string; stored_path: string; stored_name: string | null }>
+  const out = new Set<string>()
+  for (const row of rows) {
+    const path = row.stored_path
+    if (typeof path !== 'string' || !path.endsWith(ENCRYPTED_DOC_SUFFIX) || out.has(path)) continue
+    const leaf = canonicalLeafFor(row)
+    if (leaf && existsSync(join(docsDir, leaf))) continue // the canonical copy wins
+    if (isInsideDir(docsDir, path)) continue
+    let isFile = false
+    try {
+      isFile = statSync(path).isFile()
+    } catch {
+      /* gone or unreachable → nothing to rekey */
     }
-  } catch {
-    /* no documents dir yet */
+    if (isFile) out.add(path)
+  }
+  return [...out]
+}
+
+/**
+ * Every file outside the database that is encrypted under the vault data key — what a
+ * v1→v2 password change must carry to the new key (#241). Four classes: document sidecars,
+ * image-history sidecars, legacy out-of-store stored copies (read from the open DB) and the
+ * rotated diagnostics log (action `delete` — nothing reads it). `db` must be open.
+ */
+export function listVaultKeyCiphertexts(vaultPaths: VaultPaths, db: Db): VaultKeyCiphertext[] {
+  const ws = workspaceDirOf(vaultPaths)
+  const out: VaultKeyCiphertext[] = []
+  for (const path of listEncryptedSidecars(join(ws, DOCUMENTS_DIR_NAME))) {
+    out.push({ path, kind: 'document', action: 'rekey' })
+  }
+  for (const path of listEncryptedSidecars(join(ws, IMAGES_DIR_NAME))) {
+    out.push({ path, kind: 'image', action: 'rekey' })
+  }
+  for (const path of listOutOfStoreCopies(vaultPaths, db)) {
+    out.push({ path, kind: 'out-of-store', action: 'rekey' })
+  }
+  if (vaultPaths.logsPath) {
+    const rotated = join(vaultPaths.logsPath, ROTATED_ENCRYPTED_LOG_NAME)
+    if (existsSync(rotated)) out.push({ path: rotated, kind: 'rotated-log', action: 'delete' })
   }
   return out
 }
 
+/** A journal read back from disk; `corrupt` = unparseable or an unknown version. */
+type RekeyJournalRead = RekeyJournal & { corrupt: boolean }
+
+function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
+  const path = rekeyJournalPath(vaultPaths)
+  if (!existsSync(path)) return null
+  const strings = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<RekeyJournal>
+    if (parsed.version !== 1) return { version: 1, staged: [], remove: [], corrupt: true }
+    return {
+      version: 1,
+      // Only `<file>.new` entries can be swapped; anything else would be shredded by name.
+      staged: strings(parsed.staged).filter((s) => s.endsWith(REKEY_SUFFIX)),
+      remove: strings(parsed.remove),
+      corrupt: false
+    }
+  } catch {
+    // Unreadable: the directory scans still resolve the in-store classes; the file itself is
+    // quarantined (never deleted) by clearRekeyJournal so its out-of-store entries are not lost.
+    return { version: 1, staged: [], remove: [], corrupt: true }
+  }
+}
+
+/** A path key that folds spelling differences (`..` segments, drive-letter case on Windows)
+ *  so one physical staged file is never listed — and swapped — twice (#241). */
+function pathKey(path: string): string {
+  const resolved = resolve(path)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+/** Atomic (temp + fsync + rename), like the descriptor: recovery must never read half a journal. */
+function writeRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournal): void {
+  const path = rekeyJournalPath(vaultPaths)
+  const tmp = `${path}.tmp`
+  const fd = openSync(tmp, 'w')
+  try {
+    writeSync(fd, Buffer.from(JSON.stringify(journal, null, 2), 'utf8'))
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+  renameSync(tmp, path)
+}
+
+/** Remove the journal — or, when it could not be parsed, quarantine it as `.corrupt` beside
+ *  the vault so the out-of-store paths it may name are never destroyed with it. */
+function clearRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | null): void {
+  const path = rekeyJournalPath(vaultPaths)
+  rmSync(`${path}.tmp`, { force: true })
+  if (journal?.corrupt && existsSync(path)) {
+    rmSync(`${path}.corrupt`, { force: true })
+    renameSync(path, `${path}.corrupt`)
+    return
+  }
+  rmSync(path, { force: true })
+}
+
+/** Every staged `<file>.new` of an (interrupted or in-progress) rekey: the DB, the in-store
+ *  sidecars (`documents/`, `images/` — by scan, so a journal-less stage still resolves) and
+ *  the journal's entries (the only way to find an out-of-store one). */
+function stagedRekeyFiles(vaultPaths: VaultPaths, journal = readRekeyJournal(vaultPaths)): string[] {
+  const ws = workspaceDirOf(vaultPaths)
+  // Keyed on the folded path: the scan and the journal may spell one file two ways, and a
+  // file listed twice would be shredded by its own second swap.
+  const out = new Map<string, string>()
+  const add = (p: string): void => {
+    if (!out.has(pathKey(p))) out.set(pathKey(p), p)
+  }
+  if (existsSync(`${vaultPaths.encPath}${REKEY_SUFFIX}`)) add(`${vaultPaths.encPath}${REKEY_SUFFIX}`)
+  for (const sub of [DOCUMENTS_DIR_NAME, IMAGES_DIR_NAME]) {
+    const dir = join(ws, sub)
+    try {
+      for (const n of readdirSync(dir)) {
+        if (n.endsWith(`${ENCRYPTED_DOC_SUFFIX}${REKEY_SUFFIX}`)) add(join(dir, n))
+      }
+    } catch {
+      /* dir not created yet */
+    }
+  }
+  for (const staged of journal?.staged ?? []) {
+    if (existsSync(staged)) add(staged)
+  }
+  return [...out.values()]
+}
+
 /**
- * Phase 1 of the v1→v2 migration: re-encrypt the database + every document sidecar
- * under `dataKey`, STAGED next to the originals as `<file>.new`, fsynced. Nothing the
- * current password unlocks is touched. The DB snapshot comes from the live working file
- * (WAL checkpointed first), so it is CURRENT — fresher than the at-rest `.enc` from the
- * last lock. Document sidecars round-trip through a transient plaintext file that is
- * shredded immediately (and covered by the startup sweep on a crash).
+ * Phase 1 of the v1→v2 migration: re-encrypt the database + every vault-key ciphertext
+ * (`listVaultKeyCiphertexts`) under `dataKey`, STAGED next to the originals as `<file>.new`,
+ * fsynced. Nothing the current password unlocks is touched. The DB snapshot comes from the
+ * live working file (WAL checkpointed first), so it is CURRENT — fresher than the at-rest
+ * `.enc` from the last lock. Sidecars round-trip through a transient plaintext file that is
+ * shredded immediately; it always lands under the store (`documents/` for an out-of-store
+ * copy) and ends in `.tmp`, so the startup sweep covers a crash. The journal is written
+ * FIRST — recovery must know every staged path before any of them exists.
  */
 export function stageRekey(vaultPaths: VaultPaths, db: Db, oldKey: Buffer, dataKey: Buffer): void {
   db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
@@ -752,14 +943,27 @@ export function stageRekey(vaultPaths: VaultPaths, db: Db, oldKey: Buffer, dataK
         'database (it may have been overwritten).'
     )
   }
-  encryptFile(vaultPaths.dbPath, `${vaultPaths.encPath}${REKEY_SUFFIX}`, dataKey)
-  fsyncPath(`${vaultPaths.encPath}${REKEY_SUFFIX}`)
-  for (const enc of listEncryptedDocSidecars(vaultPaths)) {
-    const plain = `${enc}${REKEY_PLAINTEXT_SUFFIX}`
+  const targets = listVaultKeyCiphertexts(vaultPaths, db)
+  const stagedDb = `${vaultPaths.encPath}${REKEY_SUFFIX}`
+  writeRekeyJournal(vaultPaths, {
+    version: 1,
+    staged: [stagedDb, ...targets.filter((t) => t.action === 'rekey').map((t) => `${t.path}${REKEY_SUFFIX}`)],
+    remove: targets.filter((t) => t.action === 'delete').map((t) => t.path)
+  })
+  encryptFile(vaultPaths.dbPath, stagedDb, dataKey)
+  fsyncPath(stagedDb)
+  const docsDir = join(workspaceDirOf(vaultPaths), DOCUMENTS_DIR_NAME)
+  for (const target of targets) {
+    if (target.action !== 'rekey') continue
+    let plain = `${target.path}${REKEY_PLAINTEXT_SUFFIX}`
+    if (target.kind === 'out-of-store') {
+      mkdirSync(docsDir, { recursive: true })
+      plain = join(docsDir, `${basename(target.path)}${REKEY_PLAINTEXT_SUFFIX}`)
+    }
     try {
-      decryptFile(enc, plain, oldKey)
-      encryptFile(plain, `${enc}${REKEY_SUFFIX}`, dataKey)
-      fsyncPath(`${enc}${REKEY_SUFFIX}`)
+      decryptFile(target.path, plain, oldKey)
+      encryptFile(plain, `${target.path}${REKEY_SUFFIX}`, dataKey)
+      fsyncPath(`${target.path}${REKEY_SUFFIX}`)
     } finally {
       shredFile(plain)
     }
@@ -780,12 +984,27 @@ export function stageRekey(vaultPaths: VaultPaths, db: Db, oldKey: Buffer, dataK
  * most a genuinely-stuck file is deferred to recovery, never the whole tail of the list.
  */
 export function applyPendingRekey(vaultPaths: VaultPaths): void {
+  const journal = readRekeyJournal(vaultPaths)
+  // Committed, so the files the migration retires go first (idempotent, best-effort): a
+  // later crash can then never skip them. Today that is the rotated log (#241).
+  for (const doomed of journal?.remove ?? []) {
+    try {
+      rmSync(doomed, { force: true })
+    } catch {
+      /* locked: stays under the retired key; nothing reads it */
+    }
+  }
+  // encryptFile's write temp beside an out-of-store target (the in-store ones are swept).
+  for (const staged of journal?.staged ?? []) rmSync(`${staged}.tmp`, { force: true })
   const swapOne = (staged: string): void => {
+    // Already swapped (or listed under two spellings): shredding the target now would
+    // destroy the NEW ciphertext.
+    if (!existsSync(staged)) return
     const target = staged.slice(0, -REKEY_SUFFIX.length)
     shredFile(target)
     renameSync(staged, target)
   }
-  let pending = stagedRekeyFiles(vaultPaths)
+  let pending = stagedRekeyFiles(vaultPaths, journal)
   let lastErr: unknown = null
   for (let attempt = 0; attempt < 2 && pending.length > 0; attempt++) {
     const failed: string[] = []
@@ -801,18 +1020,28 @@ export function applyPendingRekey(vaultPaths: VaultPaths): void {
   }
   // Anything still unswapped (a persistently locked file) is left staged for recoverPendingRekey
   // on the next unlock; surface the failure so the caller logs it (the swap is old-or-new per
-  // file, never mixed within a file).
+  // file, never mixed within a file). The journal stays with it.
   if (pending.length > 0) {
     throw lastErr instanceof Error ? lastErr : new Error('applyPendingRekey: incomplete swap')
   }
+  // A journal entry with neither its `.new` nor its target on disk sits on a location that
+  // is unreachable right now (a detached legacy drive) — keep the journal so a later
+  // recovery can still finish that swap; clear it once every entry is accounted for.
+  const unreachable = (journal?.staged ?? []).some(
+    (staged) => !existsSync(staged) && !existsSync(staged.slice(0, -REKEY_SUFFIX.length))
+  )
+  if (!unreachable) clearRekeyJournal(vaultPaths, journal)
 }
 
-/** Roll back an uncommitted rekey: delete the staged files. Plain delete is enough —
- *  they are ciphertext under a data key that was never persisted anywhere. */
+/** Roll back an uncommitted rekey: delete the staged files and the journal. Plain delete
+ *  is enough — they are ciphertext under a data key that was never persisted anywhere. */
 export function discardPendingRekey(vaultPaths: VaultPaths): void {
-  for (const staged of stagedRekeyFiles(vaultPaths)) {
+  const journal = readRekeyJournal(vaultPaths)
+  for (const staged of stagedRekeyFiles(vaultPaths, journal)) {
     rmSync(staged, { force: true })
   }
+  for (const staged of journal?.staged ?? []) rmSync(`${staged}.tmp`, { force: true })
+  clearRekeyJournal(vaultPaths, journal)
 }
 
 /**
@@ -820,12 +1049,15 @@ export function discardPendingRekey(vaultPaths: VaultPaths): void {
  * the descriptor decides which side of the commit point the crash landed on. v2
  * descriptor + staged files ⇒ committed ⇒ roll FORWARD (the new password's files win);
  * v1 descriptor ⇒ uncommitted ⇒ roll BACK (the old password + old files stay intact).
+ * A journal with nothing left staged still needs the roll-forward's deletions (#241).
  */
 export function recoverPendingRekey(vaultPaths: VaultPaths, descriptor: VaultDescriptor | null): void {
   // encryptFile's own atomic-write temp for the staged DB (a crash mid-stage leaves it;
-  // the document-dir equivalents end in `.tmp` and are swept by shredStalePlaintext).
+  // the document-dir equivalents end in `.tmp` and are swept by shredStalePlaintext), and
+  // the journal's own write temp.
   rmSync(`${vaultPaths.encPath}${REKEY_SUFFIX}.tmp`, { force: true })
-  if (stagedRekeyFiles(vaultPaths).length === 0) return
+  rmSync(`${rekeyJournalPath(vaultPaths)}.tmp`, { force: true })
+  if (stagedRekeyFiles(vaultPaths).length === 0 && !existsSync(rekeyJournalPath(vaultPaths))) return
   if (descriptor && descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
     applyPendingRekey(vaultPaths)
   } else {

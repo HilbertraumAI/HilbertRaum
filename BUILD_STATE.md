@@ -29,6 +29,18 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-03 — **Audit 2026-09-02 Phase 6 — rekey completeness: the v1→v2 password change now
+carries every vault-key ciphertext class — `listVaultKeyCiphertexts(vaultPaths, db)` enumerates
+`documents/*.enc`, `images/*.enc`, legacy out-of-store stored copies and the rotated log
+(deleted at commit; Q18 default); a `workspace/rekey-journal.json` written before staging lets
+recovery find out-of-store twins; image saves hold the document-work lease (REL-5 #241 with
+DOC-5, DOC-14 folded; PR #276).**_ Record: `security-model.md` "Password change" (classes, journal,
+downgrade caveat) + the image-history cross-ref; `data-contracts.md` journal shape; CHANGELOG's
+pre-1.0 note reconciled (v0.1.46 was a tester pre-release, page since removed). Crash cuts are
+parametrised over every class in both directions; B3 inverted. Owner lines blank → defaults
+(delete the rotated log; proceed with the journal shape; refuse a save mid-change). Suite 370 → 370
+files / 5,507 → 5,522 (+15).
+
 _2026-09-03 — **Audit 2026-09-02 Phase 5b-a — raw-path hardening, the autonomous half: the skills
 picker is unlock-gated and mints a one-time token (`src/main/ipc/picker-tokens.ts`, extracted from
 the documents handler) that `previewSkillPackage` reads and `importSkill` spends, so a renderer
@@ -594,6 +606,15 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     currently-ignored `supports_tools` manifest key (model-policy.md). (d) The §5.4
     thinking-checkpoint criterion is folded into item 8's ratify sequence, not a separate action.
 
+**Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
+the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
+bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
+real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2
+timeout flakes were retired by the fixed-sleep sweep (full-audit 2026-07-10 TS-1; three
+consecutive full runs, zero flakes).** Per-phase gate history (test counts, bundle sizes,
+per-phase test inventories) lives in git history. (This gate paragraph sits above item 19 so the
+open round's item stays the last block of §5.)
+
 19. **Full-audit 2026-09-02 (security/reliability) — REMEDIATION IN PROGRESS** (tracker #217;
     labels `audit-2026-09-02`, `severity:*`, `phase:0`..`phase:9`, `owner-decision`, `follow-up`).
     Working paper, plan and STATE ledger live under the git-ignored `tmp/` for the round; the
@@ -627,14 +648,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     - **5b-a** (2026-09-03, PR #275): SEC-9 partial (NEW-2, DOC-11, DOC-12 folded) — skills picker
       token + unlock gate, `MAX_DROP_PATHS` 512, bounded walk (#274 for off-thread); the lexical
       UNC/device half = 5b-b, blocked on decision 5 (#222, default) — dated entry above.
-
-**Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
-the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
-bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
-real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2
-timeout flakes were retired by the fixed-sleep sweep (full-audit 2026-07-10 TS-1; three
-consecutive full runs, zero flakes).** Per-phase gate history (test counts, bundle sizes,
-per-phase test inventories) lives in git history.
+    - **6** (2026-09-03, PR #276): REL-5 (DOC-5, DOC-14 folded) — the v1→v2 rekey stages every
+      vault-key ciphertext class via `listVaultKeyCiphertexts` + a `rekey-journal.json`; rotated log
+      deleted (Q18 default); image saves take the document-work lease — dated entry above.
 
 
 ---

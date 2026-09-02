@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { encrypt, decrypt, serializeBlob, deserializeBlob } from './security/crypto'
-import { shredFile } from './workspace-vault'
+import { ROTATED_ENCRYPTED_LOG_NAME, shredFile } from './workspace-vault'
 
 // Local-only rotating logger (spec §7.11 — diagnostics logs stay on device, never uploaded).
 //
@@ -47,6 +47,7 @@ import { shredFile } from './workspace-vault'
 // and the live buffer/`app.log.enc` reset. `app.1.log.enc` is recovery-only — readLogTail and
 // loadEncrypted read only the live `.enc`/buffer, so the Diagnostics tail shows the current
 // generation. This mirrors the plaintext rotation (the tail reads only `app.log`).
+// A v1→v2 password change deletes the rotated generation instead of re-keying it (#241).
 
 type Level = 'info' | 'warn' | 'error'
 
@@ -249,7 +250,7 @@ function rotateEncryptedIfNeeded(): void {
   try {
     const blob = serializeBlob(encrypt(vaultKey, Buffer.from(buffer, 'utf8')))
     // Atomic, like persistEncrypted — a crash mid-write must not corrupt the rotated copy.
-    writeFileAtomicSync(join(logDir, 'app.1.log.enc'), blob)
+    writeFileAtomicSync(join(logDir, ROTATED_ENCRYPTED_LOG_NAME), blob)
     buffer = ''
     // Drop the live `.enc`; the next persistEncrypted re-creates it from the empty buffer.
     if (existsSync(encLogFile)) rmSync(encLogFile, { force: true })

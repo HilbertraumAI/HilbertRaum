@@ -23,8 +23,9 @@ import type { Db } from '../db'
 // This mirrors what the rest of the drive already does — `image_sessions.stored_name` (relative
 // by design), `skills.path` (folder basename), the model checksum cache (`driveRelKey`, CODE-15),
 // the runtime install marker (`markerBinaryKey`), `documents.source_relative_path` (CODE-1) — and
-// what the vault layer already assumed: password-change re-encryption enumerates
-// `workspace/documents/` by DIRECTORY WALK, never by `stored_path`.
+// what the vault layer assumes: password-change re-encryption enumerates `workspace/documents/`
+// by DIRECTORY WALK, plus (since #241) the out-of-store rows this resolver would read from
+// `stored_path` — the same fallback order as `locateStoredCopy`.
 
 /** The columns this module needs. Every reader's row shape is a superset. */
 export interface StoredCopyRow {
@@ -57,41 +58,10 @@ export interface LocatedOriginal {
   contentMatchesImport: boolean | null
 }
 
-/**
- * Leaf name of `p`, split on BOTH separators.
- *
- * NOT `basename`: a legacy row can carry a path written on ANOTHER OS (a Windows
- * `Z:\old\documents\<id>.pdf.enc` row read on macOS/Linux, or the reverse), and the host
- * `basename` only understands the host separator — on posix it would return the whole
- * Windows string. Same scar as `markerBinaryKey` / `resolveTarBinary` (the cross-platform
- * path bugs that failed the Ubuntu CI leg): never use host path helpers on a stored string
- * that may have been written by a different host.
- */
-export function storedCopyLeaf(p: string): string {
-  const cut = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
-  return cut >= 0 ? p.slice(cut + 1) : p
-}
-
-/**
- * The canonical leaf for a row, or null when it cannot be trusted.
- *
- * SAFETY (this is the guard the shred rests on): the leaf is used to build a path INSIDE the
- * store dir that `deleteDocument` will overwrite-and-unlink. So it must be a bare file name
- * belonging to THIS document — it must start with the row's own id, which is a UUID primary
- * key that is never reused. A name failing any check yields null, and the caller falls back to
- * the recorded absolute path verbatim (today's behaviour), never to a guess. Without this
- * guard a malformed/foreign `stored_name` could make the shred destroy ANOTHER document's copy.
- */
-export function canonicalLeafFor(row: StoredCopyRow): string | null {
-  const raw = row.stored_name ?? (row.stored_path ? storedCopyLeaf(row.stored_path) : null)
-  if (!raw) return null
-  // Bare name only: no separators (a stored_name from a corrupted row), no traversal.
-  if (raw !== storedCopyLeaf(raw)) return null
-  if (raw === '.' || raw === '..' || raw.length === 0) return null
-  // Belongs to THIS document. `<id>` is a UUID; the rest is `<ext>[.enc]`.
-  if (!raw.startsWith(row.id)) return null
-  return raw
-}
+// The leaf rule lives in stored-copy-leaf.ts (dependency-free) so the vault rekey can share it
+// without an import cycle (#241); re-exported here for the existing callers.
+import { storedCopyLeaf, canonicalLeafFor } from './stored-copy-leaf'
+export { storedCopyLeaf, canonicalLeafFor }
 
 /**
  * Locate a document's workspace copy, or null when there is none on disk.
