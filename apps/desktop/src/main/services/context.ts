@@ -14,6 +14,7 @@ import type { SkillRegistry } from './skills/registry'
 import type { VisionService } from './vision'
 import type { TranslateJobService } from './translation/jobs'
 import type { LocalApiServer } from './local-api/server'
+import type { PlaintextOpsRegistry } from './ingestion/plaintext-ops'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 export interface AppContext {
@@ -86,6 +87,13 @@ export interface AppContext {
    * handlers guard with `ctx.docTasks?.hasActiveTask()`.
    */
   docTasks?: DocTaskManager
+  /**
+   * Registry of the operations that materialise decrypted document content (preview, re-index,
+   * import prepare, dictation, export) — the lock/quit teardowns abort it, await its settle and
+   * shred whatever is still registered before the vault re-encrypts (#237). Optional so partial
+   * test contexts stay valid; absent ⇒ nothing is registered and the teardowns skip the step.
+   */
+  plaintextOps?: PlaintextOpsRegistry
   /**
    * In-flight skill-run probe (GAP-5, full-audit 2026-07-11): true while the SkillRunController —
    * module-local to registerSkillsIpc, which assigns this at registration time — has a

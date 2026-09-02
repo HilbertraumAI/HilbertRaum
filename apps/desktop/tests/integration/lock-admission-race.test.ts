@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -59,7 +59,9 @@ import { TranslateJobService } from '../../src/main/services/translation/jobs'
 import { VisionService, type VisionAnalyzer } from '../../src/main/services/vision'
 import type { Translator, TranslateOptions } from '../../src/main/services/translation'
 import type { Embedder } from '../../src/main/services/embeddings'
+import type { OcrEngine } from '../../src/main/services/ocr'
 import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
+import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
 import { performShutdown } from '../../src/main/shutdown'
 import { t } from '../../src/shared/i18n'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
@@ -71,10 +73,14 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
   workspace: { encryptionRequired: true, allowPlaintextDevMode: false }
 }
 
-/** One event-loop turn. Used only as a bounded CEILING for "nothing else happened". */
-const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+/**
+ * One real macrotask (≥ 1 ms). Used only as a bounded CEILING for "nothing else happened".
+ * A `setImmediate` loop would starve the libuv poll phase where fs callbacks land, so a helper
+ * waiting on real file I/O (the async decrypt of a preview) would never see it progress (#258).
+ */
+const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 1))
 
-/** Drain up to `ceiling` turns, resolving as soon as `pred` holds. Never a fixed sleep. */
+/** Drain up to `ceiling` ticks, resolving as soon as `pred` holds. Never a fixed sleep. */
 async function waitUntil(pred: () => boolean, ceiling = 200): Promise<boolean> {
   for (let i = 0; i < ceiling; i++) {
     if (pred()) return true
@@ -108,6 +114,8 @@ interface Harness {
   ctrl: WorkspaceController
   ctx: AppContext
   documentId: string
+  /** The imported photo (an encrypted stored copy) when an `ocrEngine` was supplied. */
+  photoId: string | null
   translator: Translator & { translate: ReturnType<typeof vi.fn> }
   createRuntime: ReturnType<typeof vi.fn>
   /** Resolves once the lock handler has entered the gated sidecar suspend. */
@@ -130,6 +138,17 @@ interface HarnessOptions {
    * over a still-open workspace without a structural disarm.
    */
   suspendThrowsSync?: boolean
+  /**
+   * An OCR engine for the photo the harness then also imports — the park seam for the
+   * plaintext-operation cases (#237): a photo preview re-recognizes its decrypted stored copy,
+   * so a gated `recognize()` parks the preview with its `.parse-preview-*` transient on disk.
+   */
+  ocrEngine?: OcrEngine
+  /**
+   * Shorten the lock/quit plaintext-operation settle bound (5 s in production) through the
+   * registry seam on ctx, so the sweep-bounded cases do not wait out the real constant.
+   */
+  settleBoundMs?: number
 }
 
 async function harness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -166,6 +185,24 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     cipher: ctrl.documentCipher()
   })
   expect(imported.status).toBe('indexed')
+
+  // The photo for the plaintext-operation cases: imported (and OCR'd once, unparked) so its
+  // stored copy is an `.enc` whose preview must decrypt to a transient. `images/` exists so the
+  // name sweeps below can read it.
+  mkdirSync(join(workspacePath, 'images'), { recursive: true })
+  let photoId: string | null = null
+  if (opts.ocrEngine) {
+    const photoPath = join(root, 'photo.png')
+    writeFileSync(photoPath, validPngBytes())
+    const photo = createQueuedDocument(ctrl.requireDb(), photoPath)
+    const indexed = await processDocument(ctrl.requireDb(), storeDir, photo.id, {
+      embedder: fakeEmbedder,
+      cipher: ctrl.documentCipher(),
+      ocrEngine: opts.ocrEngine
+    })
+    expect(indexed.status).toBe('indexed')
+    photoId = photo.id
+  }
 
   const translate = vi.fn(async (opts: TranslateOptions) => opts.text)
   const translator = {
@@ -215,9 +252,17 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
       }
     },
     translator,
+    ocrEngine: opts.ocrEngine ?? null,
     manifestsDir: null,
     isDev: false
   } as unknown as AppContext
+
+  // The plaintext-operation registry (#237), as `main/index.ts` wires it; optionally with the
+  // settle bound shortened through the seam (the constant itself stays the production value).
+  const ops = createPlaintextOps()
+  const bound = opts.settleBoundMs
+  ctx.plaintextOps =
+    bound === undefined ? ops : { ...ops, awaitSettled: (ms) => ops.awaitSettled(Math.min(ms, bound)) }
 
   ctx.docTasks = new DocTaskManager({
     getDb: () => ctrl.requireDb(),
@@ -253,6 +298,7 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     ctrl,
     ctx,
     documentId: queued.id,
+    photoId,
     translator,
     createRuntime,
     suspendEntered: () => entered,
@@ -566,5 +612,234 @@ describe('admission during the QUIT teardown (AUD-02)', () => {
     h.releaseSuspend()
     await quitP
     expect(h.ctrl.isUnlocked()).toBe(false)
+  })
+})
+
+// ---- #237 — plaintext operations already IN FLIGHT at lock/quit ------------------
+//
+// A preview of an encrypted stored copy decrypts it to a `.parse-preview-<uuid><ext>` transient
+// and shreds it only in its own `finally`. Lock and quit awaited chat streams, doc tasks and the
+// sidecar stops but held no handle on that work: they reported `locked` / resolved (with
+// `app.exit(0)` next) while the parse was still running and the decrypted file sat on the drive,
+// and the preview then delivered its text across IPC after the lock. Now every such operation
+// registers with `ctx.plaintextOps`; lock and quit abort the registry, await its settle within
+// the task-settle bound, and shred whatever is still registered before the vault re-encrypts.
+//
+// The parked document is a photo with a gated OCR engine — there is no parser-injection seam for
+// pdf/docx. Two engine flavours: one that honours the abort signal (the photo and audio parsers
+// forward it) and one that ignores it, modelling pdfjs/mammoth. For the latter the transient is
+// shredded under the parser at the settle bound (sweep-bounded) and the preview handler's
+// admission re-check refuses the text afterwards. The real tesseract `suspend()` would also
+// terminate its worker mid-recognition; the fake's no-op `suspend()`/`stop()` remove that partial
+// mitigation so the photo stands in for the parsers that have none.
+//
+// Does not prove: that quit residue survives a real process exit (asserted at `performShutdown`
+// resolution, the instant `app.exit(0)` would run), nor pdf/docx parses themselves.
+
+interface GatedOcrEngine extends OcrEngine {
+  /** Park the NEXT recognition until `release()` (or its abort signal, when honoured). */
+  parkNext(): void
+  release(): void
+  entered(): boolean
+  abortSeen(): boolean
+}
+
+function gatedOcrEngine(opts: { honoursSignal: boolean }): GatedOcrEngine {
+  let park = false
+  let entered = false
+  let abortSeen = false
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  return {
+    id: 'gated-ocr',
+    languages: ['eng'],
+    recognize: async (_image, o) => {
+      if (!park) return { text: 'SECRET PLAINTEXT', confidence: 90 }
+      park = false
+      entered = true
+      if (opts.honoursSignal) {
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = (): void => {
+            abortSeen = true
+            reject(new Error('recognition aborted'))
+          }
+          if (o?.signal?.aborted) {
+            onAbort()
+            return
+          }
+          o?.signal?.addEventListener('abort', onAbort, { once: true })
+          void gate.then(() => {
+            o?.signal?.removeEventListener('abort', onAbort)
+            resolve()
+          })
+        })
+      } else {
+        o?.signal?.addEventListener(
+          'abort',
+          () => {
+            abortSeen = true
+          },
+          { once: true }
+        )
+        await gate
+      }
+      return { text: 'SECRET PLAINTEXT', confidence: 90 }
+    },
+    suspend: async () => {},
+    stop: async () => {},
+    parkNext: () => {
+      park = true
+    },
+    release: () => release(),
+    entered: () => entered,
+    abortSeen: () => abortSeen
+  }
+}
+
+/** Every decrypted-transient name under `dir` — the same patterns the startup crash sweep uses. */
+function transientNames(dir: string): string[] {
+  return readdirSync(dir)
+    .filter((n) => n.includes('.parse') || n.endsWith('.tmp'))
+    .sort()
+}
+
+/** The encrypted stored copies under `dir` — what the sweep must never touch. */
+function storedCopies(dir: string): string[] {
+  return readdirSync(dir)
+    .filter((n) => n.endsWith('.enc'))
+    .sort()
+}
+
+/** Park a preview of the harness photo on the gated engine, transient on disk. */
+async function parkedPreview(
+  h: Harness,
+  ocr: GatedOcrEngine
+): Promise<{ previewP: Promise<{ result: unknown }>; docs: string; images: string }> {
+  const docs = documentsDir(h.ctx.paths.workspacePath)
+  const images = join(h.ctx.paths.workspacePath, 'images')
+  ocr.parkNext()
+  const previewP = invoke(handlers, IPC.previewDocument, h.photoId)
+  previewP.catch(() => undefined) // asserted later; never an unhandled rejection meanwhile
+  expect(await waitUntil(() => ocr.entered(), 300)).toBe(true)
+  const during = transientNames(docs)
+  expect(during).toHaveLength(1)
+  expect(during[0]).toMatch(/\.parse-preview-/)
+  return { previewP, docs, images }
+}
+
+describe('plaintext operations across the lock boundary (#237)', () => {
+  it('lock aborts a parked preview, waits for it to unwind, and reports locked with no transient on the drive', async () => {
+    const ocr = gatedOcrEngine({ honoursSignal: true })
+    const h = await harness({ ocrEngine: ocr })
+    h.releaseSuspend() // the sidecar gate is not the subject here
+    const { previewP, docs, images } = await parkedPreview(h, ocr)
+    const storedBefore = storedCopies(docs)
+    expect(storedBefore).toHaveLength(2) // the text document + the photo
+
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked' })
+    expect(h.ctrl.isUnlocked()).toBe(false)
+    // At the instant lock reported locked: nothing decrypted is left under documents/ or images/
+    // (a name sweep, not the registry's view of itself).
+    expect(transientNames(docs)).toEqual([])
+    expect(transientNames(images)).toEqual([])
+    // …and the stored copies beside the transient were never touched.
+    expect(storedCopies(docs)).toEqual(storedBefore)
+    // The abort reached the parser — nothing had to release it.
+    expect(ocr.abortSeen()).toBe(true)
+    // The preview REJECTS with the locked copy; it never delivers text after the lock.
+    await expect(previewP).rejects.toThrow(t('en', 'main.docs.locked'))
+  })
+
+  it('lock waits for a parser that ignores the abort until it unwinds — the settle, not merely the bound', async () => {
+    const ocr = gatedOcrEngine({ honoursSignal: false })
+    const h = await harness({ ocrEngine: ocr, settleBoundMs: 10_000 })
+    h.releaseSuspend()
+    const { previewP, docs } = await parkedPreview(h, ocr)
+
+    let lockSettled = false
+    const t0 = Date.now()
+    const lockP = invoke(handlers, IPC.lockWorkspace).finally(() => {
+      lockSettled = true
+    })
+    lockP.catch(() => undefined)
+    // Parser parked, bound not elapsed: the lock is WAITING and the vault is still open.
+    for (let i = 0; i < 50; i++) await tick()
+    expect(lockSettled).toBe(false)
+    expect(h.ctrl.isUnlocked()).toBe(true)
+    expect(ocr.abortSeen()).toBe(true) // it was asked to stop; it just cannot
+
+    ocr.release()
+    const { result } = await lockP
+    expect(result).toMatchObject({ state: 'locked' })
+    expect(Date.now() - t0).toBeLessThan(10_000) // released, not timed out
+    expect(transientNames(docs)).toEqual([])
+    // The parser finished with text in hand — the handler's admission re-check refuses it.
+    await expect(previewP).rejects.toThrow(t('en', 'main.docs.locked'))
+  })
+
+  it('a parser that ignores the abort is sweep-bounded: locked at the bound, its transient shredded under it', async () => {
+    const ocr = gatedOcrEngine({ honoursSignal: false })
+    const h = await harness({ ocrEngine: ocr, settleBoundMs: 100 })
+    h.releaseSuspend()
+    const { previewP, docs, images } = await parkedPreview(h, ocr)
+    const storedBefore = storedCopies(docs)
+
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked' })
+    expect(h.ctrl.isUnlocked()).toBe(false)
+    expect(transientNames(docs)).toEqual([])
+    expect(transientNames(images)).toEqual([])
+    expect(storedCopies(docs)).toEqual(storedBefore)
+
+    // Nothing released the parser: the lock went on at the bound. Let it finish now.
+    ocr.release()
+    await expect(previewP).rejects.toThrow(t('en', 'main.docs.locked'))
+    expect(transientNames(docs)).toEqual([]) // its own finally found nothing left to shred
+  })
+})
+
+describe('plaintext operations across the QUIT boundary (#237)', () => {
+  const quitDeps = {
+    inFlightStreams: new Map<string, AbortController>(),
+    streamSettled: new Map<string, Promise<void>>(),
+    detachVaultKey: (): void => {},
+    log: { error: (): undefined => undefined, info: (): undefined => undefined }
+  }
+
+  it('performShutdown resolves only after the parked preview unwound — no transient left for app.exit', async () => {
+    const ocr = gatedOcrEngine({ honoursSignal: true })
+    const h = await harness({ ocrEngine: ocr })
+    h.releaseSuspend()
+    const { previewP, docs, images } = await parkedPreview(h, ocr)
+    const storedBefore = storedCopies(docs)
+
+    await performShutdown(h.ctx, quitDeps)
+    // The instant `app.exit(0)` would run:
+    expect(h.ctrl.isUnlocked()).toBe(false)
+    expect(transientNames(docs)).toEqual([])
+    expect(transientNames(images)).toEqual([])
+    expect(storedCopies(docs)).toEqual(storedBefore)
+    expect(ocr.abortSeen()).toBe(true)
+    await expect(previewP).rejects.toThrow(t('en', 'main.docs.locked'))
+  })
+
+  it('a parser that ignores the abort is sweep-bounded on quit too', async () => {
+    const ocr = gatedOcrEngine({ honoursSignal: false })
+    const h = await harness({ ocrEngine: ocr, settleBoundMs: 100 })
+    h.releaseSuspend()
+    const { previewP, docs, images } = await parkedPreview(h, ocr)
+    const storedBefore = storedCopies(docs)
+
+    await performShutdown(h.ctx, quitDeps)
+    expect(h.ctrl.isUnlocked()).toBe(false)
+    expect(transientNames(docs)).toEqual([])
+    expect(transientNames(images)).toEqual([])
+    expect(storedCopies(docs)).toEqual(storedBefore)
+
+    ocr.release()
+    await expect(previewP).rejects.toThrow(t('en', 'main.docs.locked'))
+    // The reproduction's post-quit self-heal check, carried: the parser's own shred finds nothing.
+    expect(await waitUntil(() => transientNames(docs).length === 0, 300)).toBe(true)
   })
 })
