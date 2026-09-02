@@ -444,28 +444,46 @@ fetch-runtime                     # verified llama.cpp sidecar builds: per OS th
 package + sign + notarize         # MANUAL — secrets never in the repo (pass --app-artifact / --skip-package)
 copy launcher + portable app + user docs -> drive root
 verify-models  --generate         # capture real hashes -> config/checksums.json
-final check: commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied) + all weights VERIFIED
-             + runtime install markers match the pin + no user data
+final check: THE canonical gate — node apps/desktop/out/tools/assert-commercial-drive.mjs (built by npm run build)
+             commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied) + all weights VERIFIED
+             + runtime install markers match the pin AND record a matching binary hash (#234)
+             + exactly one app artifact + the launcher per declared platform (--platforms; #233)
+             + no user data
              + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
              + root license/attribution artifacts present + non-empty (LIC-1)
 ```
 
 ```powershell
-# Windows (supply a pre-built, signed .exe; or --skip-package to assemble + sign yourself)
-.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe
-.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -DryRun        # print the plan
+# Windows (supply the pre-built, signed artifact(s); or -SkipPackage to assemble + sign yourself — NOT SELLABLE until the apps are on the drive)
+.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -Platforms win-x64 -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe
+.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -DryRun        # print the plan; the gate still runs and prints its verdict
+.\scripts\build-commercial-drive.ps1 -Target E:\ -VerifyOnly                    # only the gate, against the drive as it is
 ```
 ```bash
-# macOS / Linux
-scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --app-artifact ./apps/desktop/release/HilbertRaum.app
+# macOS / Linux (--app-artifact repeats, one per platform in --platforms)
+scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --platforms mac-arm64,linux-x64 \
+    --app-artifact ./apps/desktop/release/HilbertRaum-0.1.0-mac-arm64.app.zip --app-artifact ./apps/desktop/release/HilbertRaum-0.1.0.AppImage
 ```
+
+The builders **refuse to proceed** when a differently named `HilbertRaum-*` artifact (or an extracted
+`.app`) already sits at the drive root — delete the old build first (#233; the launchers must never
+find two). `--platforms` declares the platforms the kit is sold for (default all three: `win-x64`,
+`mac-arm64`, `linux-x64` — decision #229 on its default); the kit's label names them and the gate
+requires the artifact + launcher for each and none for any other. Every `fetch-runtime` run gets
+`--commercial` (#234): a placeholder hash is refused **before** any download, a hashless install marker
+is re-fetched instead of skipped, and the marker records the binary hash only after a verified archive.
 
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
 plaintext off, models must verify, **no phone-home** — model downloads are a permitted user action,
 but update-checks + telemetry are denied) **and** that **every weight is VERIFIED** **and**
 that **no user data is present** (spec §12.2) **and** that **at least one trusted product skill is
-provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) — the canonical gate is
-`assertCommercialDrive(...)`; the scripts add a native cross-check of the same invariants. **"Every
+provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) **and** that **every
+declared platform has exactly one app artifact of the version being built plus its launcher** (#233)
+**and** that **every sidecar binary matches the SHA-256 its install marker records** (#234) — the
+canonical gate is `assertCommercialDrive(...)`, and since PR #271 both scripts **call it** (through the
+built `apps/desktop/out/tools/assert-commercial-drive.mjs`; `npm run build` produces it, `node` runs it):
+`SELLABLE` is printed only from its verdict, the scripts' own native checks are a pre-flight, not a
+second gate. **"Every
 weight VERIFIED" spans every shipped runtime family (2026-07-01):** the verifier + `verify-models.{ps1,sh}`
 gate on the canonical `(runtime → format)` support table (`models.ts` `SUPPORTED_RUNTIME_FORMATS`), so the
 bundled **ggml / whisper_cpp** transcriber verifies by SHA-256 like any GGUF — previously it was reported
@@ -476,8 +494,9 @@ packages), and `DRIVE-NOTICES.md` (GENERATED — runtime-binary + model-weight a
 from `model-manifests/**` and the pinned texts under `licenses/`, plus the GPLv3 source-availability
 statement; regenerate with `node scripts/generate-drive-notices.mjs`). `prepare-drive` copies them
 to the drive root in step 1; a missing or empty artifact fails the SELLABLE verdict
-(`assertCommercialDrive` + both scripts' native cross-check; freshness/coverage enforced by
-`tests/integration/drive-notices.test.ts`, list parity by `script-drift.test.ts`).
+(`assertCommercialDrive`, which both scripts call; freshness/coverage enforced by
+`tests/integration/drive-notices.test.ts`, list parity by `script-drift.test.ts`, the scripts' behaviour
+by `script-execution.test.ts`).
 **Remaining manual acceptance (R5/R7):** a
 real signed build + notarization + a USB-drive §17 demo on a fresh laptop with Wi-Fi off, and the
 second-laptop continuity check.

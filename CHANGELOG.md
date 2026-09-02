@@ -52,6 +52,12 @@ from its first public `1.0.0` release onward.
   otherwise download a spelling dictionary from a Google server on Windows and Linux the first
   time you type — against the promise that nothing leaves the space. Shipping dictionaries on the
   drive instead is under consideration.
+- **A kit is only called sellable when it really carries the app.** The check that clears a
+  prepared drive for sale now runs as one program for every builder and requires, for each system
+  the kit is sold for, exactly one app of the version being built plus its launcher, and an
+  engine binary whose recorded checksum still matches. A leftover older app build, an engine
+  downloaded without a verifiable checksum, or an engine with no recorded checksum now stops the
+  drive from being cleared (drive builders only; nothing changes for an app already in use).
 
 ## [0.1.59] — 2026-08-21
 

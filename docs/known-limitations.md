@@ -88,8 +88,12 @@ password recovery — are documented in
   sidecar binaries before spawn") re-verifies `llama-server` / `whisper-cli` against a SHA-256 the
   install marker now records. A drive provisioned by a `fetch-runtime.{ps1,sh}` predating that change
   has no recorded hash, so the verifier **tolerates** the binary (`skip-legacy`) rather than refusing to
-  start — it stays unprotected until the runtime is re-fetched (the commercial sell-gate forces this for
-  sold drives, but a self-built DIY drive does not). Trust there still rests on drive provisioning +
+  start — it stays unprotected until the runtime is re-fetched. Since PR #271 (#234) the sell gate
+  (`assertCommercialDrive`, which both builder scripts now call) refuses a hashless marker and
+  `fetch-runtime --commercial` re-fetches it, so a newly built sold drive cannot carry one; a
+  self-built DIY drive keeps the tolerance. A spawn-time refusal on commercial drives is wired but
+  switched **off** (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES` in `binary-verifier.ts`) until the
+  owner rules on kits sold before this change (#234). Trust there still rests on drive provisioning +
   filesystem integrity, the same residual already accepted for on-drive sidecars and app skills.
 - **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
   shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
