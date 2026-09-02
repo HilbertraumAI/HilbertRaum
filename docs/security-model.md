@@ -422,7 +422,10 @@ the same data key). After a *successful* change the IPC handler calls `rekeyVaul
 re-seals the **same in-memory buffer** under the now-current key **without re-loading from disk** —
 the buffer already holds the full session-plus-history log, so a re-load would discard history under
 a rotated key, or **double** it under an unchanged one. On a *failed* change the key never moved, so
-the log is left untouched (it keeps writing under the unchanged live key).
+the log is left untouched (it keeps writing under the unchanged live key). The rotated generation
+`app.1.log.enc` is **deleted** by a v1→v2 migration (at its commit, journaled — see "Password
+change"): nothing reads it, and re-sealing the live buffer cannot reach it (#241). A v2→v2 change
+keeps the data key, so the rotated file stays readable and is left alone.
 
 **Migration:** an older (pre-encryption) build, or a crash before this build's first lock, can leave
 a plaintext `app.log`/`app.1.log` on an encrypted drive. `attachVaultKey` **shreds** them on the
@@ -813,6 +816,11 @@ sidecar and writes no temp; only the history copy lands on disk).
   `imageGetJob`/`imageCancel` are gated on unlock like the other vision handlers.
 - **Crash recovery:** both temps end in `.tmp`, so the startup `shredStalePlaintext` sweep of
   `workspace/images/` removes any leftover from a process killed mid-write or mid-read.
+- **Password change:** the sidecars share the vault data key, so the v1→v2 migration stages and
+  swaps `images/*.enc` exactly like the document sidecars — one of the four ciphertext classes
+  the "Password change" section below enumerates (#241; before that fix a v1 vault's images were
+  stranded under the retired key on its first change). The write holds the document-work lease,
+  so a save never straddles the swap.
 - **Delete:** removing a history entry **shreds** the stored image and cascade-removes its turns
   (`image_turns.session_id` FK `ON DELETE CASCADE`); shredding is best-effort (a missing/locked copy
   never blocks the DB cleanup), matching `deleteDocument`.
@@ -942,19 +950,45 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   fsync, rename). No data file is touched; the in-memory key is unchanged; no re-lock needed.
 - **v1 vault → one-time journaled migration to v2:** composed from the existing primitives
   (`encryptFile`'s `.tmp`-then-rename, `shredFile`, the startup sweep):
-  1. **Stage:** checkpoint the WAL, re-encrypt the live DB and every `<id><ext>.enc` document
-     sidecar under a fresh random data key, each written as `<file>.new` and fsynced. The
-     transient plaintext per sidecar ends in `.tmp`, so `shredStalePlaintext` covers a crash.
+  1. **Stage:** checkpoint the WAL, then re-encrypt the live DB and **every vault-key
+     ciphertext class** under a fresh random data key, each written as `<file>.new` and
+     fsynced. `listVaultKeyCiphertexts(vaultPaths, db)` enumerates the classes (#241; before
+     the #241 fix only the first was staged, so the other three were left under a zeroed key):
+     `documents/<id><ext>.enc` sidecars; `images/<id><ext>.enc` image-history sidecars (the
+     section above); legacy stored copies whose `documents.stored_path` resolves **outside**
+     the store (issue #188 rows — only those the resolver would actually read, i.e. with no
+     canonical `documents/<leaf>` present); and the rotated diagnostics log
+     `logs/app.1.log.enc`, which is **deleted at commit** rather than re-keyed (nothing reads
+     it — the Diagnostics tail reads the live generation only; a v2→v2 change keeps the data
+     key and leaves it alone). The transient plaintext per sidecar always lands under the
+     store and ends in `.tmp`, so `shredStalePlaintext` covers a crash. Before any file is
+     staged the **journal file** `workspace/rekey-journal.json` is written atomically: every
+     `<file>.new` path plus the files to remove at commit. It exists because an out-of-store
+     copy lies where no directory scan finds its staged twin at recovery (the DB is closed
+     then); the in-store classes are still found by scan, so a journal-less stage resolves too.
   2. **Commit:** the atomic v2-descriptor replace — the *single* commit point.
-  3. **Swap:** shred each old file, rename `<file>.new` into place.
+  3. **Swap:** delete the journal's remove-list (the rotated log; best-effort, idempotent),
+     then shred each old file and rename `<file>.new` into place; clear the journal once every
+     entry is accounted for (an entry whose location is unreachable — a detached legacy
+     drive — keeps the journal so a later recovery finishes that swap).
   **Crash recovery** (`recoverPendingRekey`, run at startup and before every unlock decrypt):
-  staged `.new` files with a **v1** descriptor mean the crash was pre-commit → discard them,
-  the old password + old files win; with a **v2** descriptor the commit happened → roll the
-  staged files forward, the new password wins. Old-or-new, never a mix — tests cut the journal
-  at every step and prove both directions.
+  staged `.new` files (or a journal) with a **v1** descriptor mean the crash was pre-commit →
+  discard them and the journal, the old password + old files win; with a **v2** descriptor the
+  commit happened → roll the staged files forward and apply the deletions, the new password
+  wins. Old-or-new, never a mix — tests cut the journal at every step, over every class, and
+  prove both directions (`password-change.test.ts`).
+  **Downgrade caveat (on-disk format, #241):** the journal file and the staged `images/` and
+  out-of-store twins are new on-disk shapes. A build older than the #241 fix that starts on a
+  vault with a *pending* migration rolls the DB and `documents/` forward but never reads the
+  journal, so it leaves the other classes staged under the retired key (their `.new` twins
+  intact beside them) and the journal file in place; running a current build again finishes
+  the swap. A *completed* migration is a plain v2 vault to any build since Phase 32.
 - **Race guard:** an import/re-index job writes `.enc` sidecars, so `changePassword` refuses
   to start while document work holds a lease (`beginDocumentWork`), and document work refuses
-  to start mid-change — both with friendly copy (`VaultBusyError`), never corruption.
+  to start mid-change — both with friendly copy (`VaultBusyError`), never corruption. Image
+  saves (`createImageSession`) hold the same lease across their encrypted write (#241): a
+  save in flight makes the change refuse, and a save started while a change runs is refused
+  and writes nothing — the analysis still answers; only the history entry is skipped.
 - **Audit:** success records the additive `workspace_password_changed` — id-free and
   content-free; passwords never appear in any log or audit row.
 - **Compatibility note:** a pre-Phase-32 build cannot open a v2 vault (the unlock fails with a

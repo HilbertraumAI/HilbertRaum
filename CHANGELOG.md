@@ -9,8 +9,10 @@ from its first public `1.0.0` release onward.
 > **Pre-1.0.** HilbertRaum has been public since **2026-07-12** and has shipped releases
 > since that day: **v0.1.50** was the first, **v0.1.59** is current. Versions stay in the
 > `0.1.x` line and SemVer applies from `1.0.0` on — a `0.1.x` bump is a release checkpoint,
-> not a compatibility promise. Tags below `v0.1.50` (and `v0.1.51`) are internal development
-> checkpoints with no GitHub release and no notes.
+> not a compatibility promise. Tags below `v0.1.50` (and `v0.1.51`) have no GitHub release
+> page today and no notes here; one of them, `v0.1.46` (2026-07-10), was a pre-release
+> handed to testers while the repository was still private, and its release page was removed
+> before the public launch (#241).
 
 > **What belongs in this file:** what changed **for the person using the app**, one section
 > per released version. **What does not:** the product's overall feature list (see the
@@ -25,6 +27,15 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Changing the password of an older encrypted workspace no longer strands its image history.**
+  Workspaces created before June 2026 (the older vault format) are migrated to the current
+  format on their first password change. That migration re-encrypted the database and the
+  document files, but not the saved images of the image-analysis history, nor document copies
+  kept at an older location, so those became unreadable after the change. All of them are now
+  re-encrypted together, a crash at any point still leaves everything on either the old or the
+  new password, and an image being saved while the password changes is refused instead of being
+  written half-way. The previous generation of the encrypted diagnostics log is deleted by that
+  migration (nothing reads it). Workspaces created since June 2026 were never affected.
 - **Adding a skill is bound to the file picker, and a huge drop can no longer freeze the app.**
   The Settings → Skills picker now hands the app a one-time ticket for the file or folder you chose,
   and the preview and the import only accept that ticket, so nothing but your own pick can be read.
