@@ -50,7 +50,7 @@ function kit(platforms: KitPlatform[] = ALL_PLATFORMS): { platforms: KitPlatform
   return { platforms, appVersion: APP_VERSION }
 }
 
-/** An extracted macOS bundle (what the .command launcher prefers over the zip). */
+/** An extracted macOS bundle (accepted alone; beside a zip the .command launcher refuses, #235). */
 function provisionExtractedApp(root: string, version: string): void {
   const contents = join(root, 'HilbertRaum.app', 'Contents')
   mkdirSync(join(contents, 'MacOS'), { recursive: true })

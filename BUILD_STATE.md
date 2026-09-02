@@ -29,6 +29,19 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-02 — **Audit 2026-09-02 Phase 3 — update multiplicity: the three drive launchers refuse
+to start while more than one app artifact sits at the drive root, name what to delete and never
+delete; `--check` / `/check` resolves the app without starting it (REL-7 #235 with DOC-2/DOC-13
+folded, REL-3 #257; PR #272).**_
+`Start HilbertRaum.cmd` counts `HilbertRaum-*-portable.exe`, `start-hilbertraum.sh` the AppImages,
+`Start HilbertRaum.command` extracted `.app` bundles + `.app.zip`s (any `.app` beside any zip = two;
+refused before the `$HOME/Library/Caches` write); both shell launchers run under `set -euo pipefail`.
+New `tests/integration/launcher-execution.test.ts` executes all three in scratch roots (16 cases;
+`.cmd` on Windows, bash legs elsewhere or `HILBERTRAUM_SCRIPT_SH_LEG=1`). Docs: `drive-layout.md`
+update step ("delete the prior artifact first"), `troubleshooting.md` "Two app versions on the
+drive" + version floor, `security-model.md`, `known-limitations.md`, `packaging.md`, CHANGELOG.
+Decisions 3 (#220, interim) and 8 (#225, not ratified — no `user_version`, REL-4 #247 stays a residual) on their defaults.
+
 _2026-09-02 — **Audit 2026-09-02 Phase 2 — one commercial gate: both builder scripts now call
 `assertCommercialDrive`, which requires the app + launcher per declared platform and hashed
 sidecars; `fetch-runtime --commercial` fails closed (GAP-4 #233, SEC-11 #234; PR #271).**_
@@ -616,6 +629,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       `out/tools/assert-commercial-drive.mjs`) called by both builders: app + launcher per declared
       platform, hashed sidecars, `fetch-runtime --commercial` fails closed; spawn-time refusal of
       hashless markers built but OFF (owner call, #234); decision 12 on its default — dated entry above.
+    - **3** (2026-09-02, PR #272): REL-7 (DOC-2, DOC-13 folded) + REL-3 — the launchers refuse two
+      app versions at the root and take `--check`/`/check`; `set -euo pipefail`; docs mandate deleting
+      the prior artifact; decisions 3/8 on defaults (no PR 3-b; REL-4 #247 residual) — dated entry above.
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/

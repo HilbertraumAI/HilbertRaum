@@ -14,9 +14,15 @@
 #  on the drive -- only the app binary is unpacked locally.
 #  See docs/packaging.md "The release workflow".
 #
+#  "Start HilbertRaum.command" --check  names the app it would start and starts
+#  nothing (a support tool -- see docs/troubleshooting.md).
+#
 #  Mirrors apps/desktop/src/main/services/launcher.ts resolveDriveRootFromLauncher.
 # ============================================================================
-set -e
+set -euo pipefail
+
+CHECK=0
+if [ "${1:-}" = "--check" ]; then CHECK=1; fi
 
 # The directory this script sits in = the drive root.
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,24 +30,73 @@ export HILBERTRAUM_DRIVE_ROOT="$DIR"
 # One source of truth: the app reads the SAME manifests the drive scripts verified.
 export HILBERTRAUM_MANIFESTS_DIR="$DIR/model-manifests"
 
-# --- 1. An already-extracted bundle on the drive wins (non-exFAT drives can hold one).
+# --- 1. Take stock: extracted bundles (non-exFAT drives can hold one) and ditto-zips.
 APP=""
+APP_COUNT=0
 for candidate in "$DIR"/*.app; do
-  if [ -d "$candidate" ]; then APP="$candidate"; break; fi
+  if [ -d "$candidate" ]; then
+    APP_COUNT=$((APP_COUNT + 1))
+    if [ -z "$APP" ]; then APP="$candidate"; fi
+  fi
+done
+ZIP=""
+ZIP_COUNT=0
+for candidate in "$DIR"/HilbertRaum-*-mac-arm64.app.zip; do
+  if [ -f "$candidate" ]; then
+    ZIP_COUNT=$((ZIP_COUNT + 1))
+    if [ -z "$ZIP" ]; then ZIP="$candidate"; fi
+  fi
 done
 
-# --- 2. Otherwise extract the ditto-zip into a local cache, keyed by zip name so a
-#        new version on the drive re-extracts instead of running the stale one.
-if [ -z "$APP" ]; then
-  ZIP=""
-  for candidate in "$DIR"/HilbertRaum-*-mac-arm64.app.zip; do
-    if [ -f "$candidate" ]; then ZIP="$candidate"; break; fi
-  done
+if [ "$APP_COUNT" -eq 0 ] && [ "$ZIP_COUNT" -eq 0 ]; then
+  echo
+  echo "  Could not find the HilbertRaum app on this drive."
+  echo "  Expected 'HilbertRaum.app' or 'HilbertRaum-<version>-mac-arm64.app.zip' in this folder."
+  echo "  See docs/troubleshooting.md for help."
+  echo
+  exit 1
+fi
 
-  if [ -z "$ZIP" ]; then
+# Two app versions on one drive must never run: an older build beside a newer
+# one can destroy the workspace (#235). An extracted bundle carries no version in
+# its name, so ANY .app beside ANY zip counts as two. Refuse before the cache
+# below is touched, say what to delete, never delete.
+if [ $((APP_COUNT + ZIP_COUNT)) -gt 1 ]; then
+  echo
+  echo "  More than one HilbertRaum app was found on this drive:"
+  for candidate in "$DIR"/*.app "$DIR"/HilbertRaum-*-mac-arm64.app.zip; do
+    if [ -e "$candidate" ]; then echo "    $(basename "$candidate")"; fi
+  done
+  echo
+  echo "  Two versions must never run from one drive. Keep only the newest"
+  echo "  HilbertRaum-<version>-mac-arm64.app.zip, delete the older ones and any"
+  echo "  extracted HilbertRaum.app next to it, then start again."
+  echo "  See docs/troubleshooting.md, \"Two app versions on the drive\"."
+  echo
+  exit 1
+fi
+
+if [ "$CHECK" = 1 ]; then
+  echo
+  echo "  HilbertRaum launcher check"
+  echo "  Drive root : $DIR"
+  if [ -n "$APP" ]; then
+    echo "  App        : $APP"
+  else
+    echo "  App        : $ZIP (unpacked into a local cache on start)"
+  fi
+  echo "  Nothing was started."
+  echo
+  exit 0
+fi
+
+# --- 2. No extracted bundle: extract the ditto-zip into a local cache, keyed by
+#        zip name so a new version on the drive re-extracts instead of running the
+#        stale one.
+if [ -z "$APP" ]; then
+  if [ -z "${HOME:-}" ]; then
     echo
-    echo "  Could not find the HilbertRaum app on this drive."
-    echo "  Expected 'HilbertRaum.app' or 'HilbertRaum-<version>-mac-arm64.app.zip' in this folder."
+    echo "  HOME is not set, so there is nowhere to unpack the app."
     echo "  See docs/troubleshooting.md for help."
     echo
     exit 1

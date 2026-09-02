@@ -250,8 +250,9 @@ const versionOf =
 
 /**
  * Per-platform artifact + launcher names — the same names the launchers glob for on the
- * drive root and the release workflow uploads. macOS additionally accepts an extracted
- * `*.app` bundle (the launcher prefers one), whose version is read from its Info.plist.
+ * drive root and the release workflow uploads. macOS additionally accepts a lone extracted
+ * `*.app` bundle, whose version is read from its Info.plist; beside a zip the launcher
+ * refuses to start (#235), and so does this gate.
  */
 export const KIT_PLATFORM_SPECS: Record<KitPlatform, KitPlatformSpec> = {
   'win-x64': {

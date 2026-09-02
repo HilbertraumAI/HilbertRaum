@@ -43,7 +43,10 @@ password recovery — are documented in
   re-encrypt the garbage, so the at-rest `.enc` — the vault itself — survives and the next
   unlock recovers the last locked snapshot. A workspace-level cross-process lock file would
   close the corner fully; not built (stale-lock handling on hard-killed processes needs its
-  own design).
+  own design). A pre-0.1.59 build takes no lock at all: the drive launchers refuse to start
+  while two app versions sit at the drive root (#235), but starting an artifact directly
+  bypasses the launcher, and a signed current-release manifest at the root is an open owner
+  decision (#220).
 - **A pre-envelope build cannot open a v2 (envelope) vault.** New vaults — and any vault after
   its first password change — use the descriptor-v2 envelope (`security-model.md`). An older
   app version derives the correct KEK and even passes the verifier, but then tries to decrypt
