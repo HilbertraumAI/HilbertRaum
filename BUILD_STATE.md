@@ -39,7 +39,7 @@ downgrade caveat) + the image-history cross-ref; `data-contracts.md` journal sha
 pre-1.0 note reconciled (v0.1.46 was a tester pre-release, page since removed). Crash cuts are
 parametrised over every class in both directions; B3 inverted. Owner lines blank → defaults
 (delete the rotated log; proceed with the journal shape; refuse a save mid-change). Suite 370 → 370
-files / 5,507 → 5,519 (+12).
+files / 5,507 → 5,522 (+15).
 
 _2026-09-03 — **Audit 2026-09-02 Phase 5b-a — raw-path hardening, the autonomous half: the skills
 picker is unlock-gated and mints a one-time token (`src/main/ipc/picker-tokens.ts`, extracted from

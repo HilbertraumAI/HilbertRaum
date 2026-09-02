@@ -15,8 +15,9 @@ import {
 } from 'node:fs'
 import { open as openFileAsync, rename as renameAsync, rm as rmAsync, stat as statAsync } from 'node:fs/promises'
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
-import { basename, dirname, isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { tMain } from './i18n'
+import { canonicalLeafFor } from './ingestion/stored-copy-leaf'
 import { perfMark, perfMs } from './perf'
 import type { Db } from './db'
 import { openDatabase } from './db'
@@ -55,8 +56,9 @@ import {
 /** Legacy descriptor format: data encrypted directly under the password-derived key. */
 export const VAULT_VERSION = 1
 /**
- * Envelope format: a random 32-byte DATA key encrypts the DB +
- * document sidecars; the password-derived key (KEK) only WRAPS it in the descriptor.
+ * Envelope format: a random 32-byte DATA key encrypts the DB + every sidecar class
+ * (documents, image history, legacy out-of-store copies, the rotated log — see
+ * `listVaultKeyCiphertexts`); the password-derived key (KEK) only WRAPS it in the descriptor.
  * A password change then re-wraps one blob (O(1)) instead of re-encrypting the corpus.
  * New vaults are created v2; v1 vaults migrate on their FIRST password change (never on
  * unlock — a vault that never changes its password is never touched).
@@ -771,20 +773,25 @@ function isInsideDir(dir: string, path: string): boolean {
 
 /**
  * Legacy stored copies that resolve OUTSIDE `workspace/documents/` (issue #188 rows keep an
- * absolute `stored_path`). A row counts only when no canonical `documents/<leaf>` exists —
- * the fallback order of `locateStoredCopy` (ingestion/stored-copy.ts), so exactly the files
- * the read paths would decrypt are rekeyed, and nothing a sibling workspace owns.
+ * absolute `stored_path`). The rule is `locateStoredCopy`'s fallback order (ingestion/
+ * stored-copy.ts): a row counts only when its canonical `documents/<leaf>` (the shared
+ * `canonicalLeafFor` rule) is absent and `stored_path` names an existing regular file
+ * outside the store — i.e. exactly the file the read paths would decrypt at this moment.
+ * Limits: a copy on a drive that is detached NOW is not seen and stays under the old key if
+ * it returns later; the guard is name presence, not ownership — a row pointing into another
+ * vault's store is rekeyed like any other file it names.
  */
 function listOutOfStoreCopies(vaultPaths: VaultPaths, db: Db): string[] {
   const docsDir = join(workspaceDirOf(vaultPaths), DOCUMENTS_DIR_NAME)
   const rows = db
-    .prepare('SELECT stored_path, stored_name FROM documents WHERE stored_path IS NOT NULL')
-    .all() as Array<{ stored_path: string; stored_name: string | null }>
-  const out: string[] = []
+    .prepare('SELECT id, stored_path, stored_name FROM documents WHERE stored_path IS NOT NULL')
+    .all() as Array<{ id: string; stored_path: string; stored_name: string | null }>
+  const out = new Set<string>()
   for (const row of rows) {
     const path = row.stored_path
-    if (typeof path !== 'string' || !path.endsWith(ENCRYPTED_DOC_SUFFIX) || out.includes(path)) continue
-    if (existsSync(join(docsDir, row.stored_name ?? basename(path)))) continue // canonical copy wins
+    if (typeof path !== 'string' || !path.endsWith(ENCRYPTED_DOC_SUFFIX) || out.has(path)) continue
+    const leaf = canonicalLeafFor(row)
+    if (leaf && existsSync(join(docsDir, leaf))) continue // the canonical copy wins
     if (isInsideDir(docsDir, path)) continue
     let isFile = false
     try {
@@ -792,9 +799,9 @@ function listOutOfStoreCopies(vaultPaths: VaultPaths, db: Db): string[] {
     } catch {
       /* gone or unreachable → nothing to rekey */
     }
-    if (isFile) out.push(path)
+    if (isFile) out.add(path)
   }
-  return out
+  return [...out]
 }
 
 /**
@@ -822,17 +829,36 @@ export function listVaultKeyCiphertexts(vaultPaths: VaultPaths, db: Db): VaultKe
   return out
 }
 
-function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournal | null {
+/** A journal read back from disk; `corrupt` = unparseable or an unknown version. */
+type RekeyJournalRead = RekeyJournal & { corrupt: boolean }
+
+function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
   const path = rekeyJournalPath(vaultPaths)
   if (!existsSync(path)) return null
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<RekeyJournal>
-    return { version: 1, staged: strings(parsed.staged), remove: strings(parsed.remove) }
+    if (parsed.version !== 1) return { version: 1, staged: [], remove: [], corrupt: true }
+    return {
+      version: 1,
+      // Only `<file>.new` entries can be swapped; anything else would be shredded by name.
+      staged: strings(parsed.staged).filter((s) => s.endsWith(REKEY_SUFFIX)),
+      remove: strings(parsed.remove),
+      corrupt: false
+    }
   } catch {
-    return { version: 1, staged: [], remove: [] } // unreadable: the directory scans still apply
+    // Unreadable: the directory scans still resolve the in-store classes; the file itself is
+    // quarantined (never deleted) by clearRekeyJournal so its out-of-store entries are not lost.
+    return { version: 1, staged: [], remove: [], corrupt: true }
   }
+}
+
+/** A path key that folds spelling differences (`..` segments, drive-letter case on Windows)
+ *  so one physical staged file is never listed — and swapped — twice (#241). */
+function pathKey(path: string): string {
+  const resolved = resolve(path)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
 }
 
 /** Atomic (temp + fsync + rename), like the descriptor: recovery must never read half a journal. */
@@ -849,34 +875,45 @@ function writeRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournal): void 
   renameSync(tmp, path)
 }
 
-function clearRekeyJournal(vaultPaths: VaultPaths): void {
-  rmSync(`${rekeyJournalPath(vaultPaths)}.tmp`, { force: true })
-  rmSync(rekeyJournalPath(vaultPaths), { force: true })
+/** Remove the journal — or, when it could not be parsed, quarantine it as `.corrupt` beside
+ *  the vault so the out-of-store paths it may name are never destroyed with it. */
+function clearRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | null): void {
+  const path = rekeyJournalPath(vaultPaths)
+  rmSync(`${path}.tmp`, { force: true })
+  if (journal?.corrupt && existsSync(path)) {
+    rmSync(`${path}.corrupt`, { force: true })
+    renameSync(path, `${path}.corrupt`)
+    return
+  }
+  rmSync(path, { force: true })
 }
 
 /** Every staged `<file>.new` of an (interrupted or in-progress) rekey: the DB, the in-store
  *  sidecars (`documents/`, `images/` — by scan, so a journal-less stage still resolves) and
  *  the journal's entries (the only way to find an out-of-store one). */
-function stagedRekeyFiles(vaultPaths: VaultPaths): string[] {
+function stagedRekeyFiles(vaultPaths: VaultPaths, journal = readRekeyJournal(vaultPaths)): string[] {
   const ws = workspaceDirOf(vaultPaths)
-  const out = new Set<string>()
-  if (existsSync(`${vaultPaths.encPath}${REKEY_SUFFIX}`)) {
-    out.add(`${vaultPaths.encPath}${REKEY_SUFFIX}`)
+  // Keyed on the folded path: the scan and the journal may spell one file two ways, and a
+  // file listed twice would be shredded by its own second swap.
+  const out = new Map<string, string>()
+  const add = (p: string): void => {
+    if (!out.has(pathKey(p))) out.set(pathKey(p), p)
   }
+  if (existsSync(`${vaultPaths.encPath}${REKEY_SUFFIX}`)) add(`${vaultPaths.encPath}${REKEY_SUFFIX}`)
   for (const sub of [DOCUMENTS_DIR_NAME, IMAGES_DIR_NAME]) {
     const dir = join(ws, sub)
     try {
       for (const n of readdirSync(dir)) {
-        if (n.endsWith(`${ENCRYPTED_DOC_SUFFIX}${REKEY_SUFFIX}`)) out.add(join(dir, n))
+        if (n.endsWith(`${ENCRYPTED_DOC_SUFFIX}${REKEY_SUFFIX}`)) add(join(dir, n))
       }
     } catch {
       /* dir not created yet */
     }
   }
-  for (const staged of readRekeyJournal(vaultPaths)?.staged ?? []) {
-    if (existsSync(staged)) out.add(staged)
+  for (const staged of journal?.staged ?? []) {
+    if (existsSync(staged)) add(staged)
   }
-  return [...out]
+  return [...out.values()]
 }
 
 /**
@@ -957,12 +994,17 @@ export function applyPendingRekey(vaultPaths: VaultPaths): void {
       /* locked: stays under the retired key; nothing reads it */
     }
   }
+  // encryptFile's write temp beside an out-of-store target (the in-store ones are swept).
+  for (const staged of journal?.staged ?? []) rmSync(`${staged}.tmp`, { force: true })
   const swapOne = (staged: string): void => {
+    // Already swapped (or listed under two spellings): shredding the target now would
+    // destroy the NEW ciphertext.
+    if (!existsSync(staged)) return
     const target = staged.slice(0, -REKEY_SUFFIX.length)
     shredFile(target)
     renameSync(staged, target)
   }
-  let pending = stagedRekeyFiles(vaultPaths)
+  let pending = stagedRekeyFiles(vaultPaths, journal)
   let lastErr: unknown = null
   for (let attempt = 0; attempt < 2 && pending.length > 0; attempt++) {
     const failed: string[] = []
@@ -988,16 +1030,18 @@ export function applyPendingRekey(vaultPaths: VaultPaths): void {
   const unreachable = (journal?.staged ?? []).some(
     (staged) => !existsSync(staged) && !existsSync(staged.slice(0, -REKEY_SUFFIX.length))
   )
-  if (!unreachable) clearRekeyJournal(vaultPaths)
+  if (!unreachable) clearRekeyJournal(vaultPaths, journal)
 }
 
 /** Roll back an uncommitted rekey: delete the staged files and the journal. Plain delete
  *  is enough — they are ciphertext under a data key that was never persisted anywhere. */
 export function discardPendingRekey(vaultPaths: VaultPaths): void {
-  for (const staged of stagedRekeyFiles(vaultPaths)) {
+  const journal = readRekeyJournal(vaultPaths)
+  for (const staged of stagedRekeyFiles(vaultPaths, journal)) {
     rmSync(staged, { force: true })
   }
-  clearRekeyJournal(vaultPaths)
+  for (const staged of journal?.staged ?? []) rmSync(`${staged}.tmp`, { force: true })
+  clearRekeyJournal(vaultPaths, journal)
 }
 
 /**

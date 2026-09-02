@@ -572,7 +572,10 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   and additive — older callers omit it; without it the rekey does not account for the rotated log).
 - **Rekey journal (on-disk, #241):** `workspace/rekey-journal.json` — `{ version: 1, staged: string[],
   remove: string[] }`, absolute paths; written atomically by `stageRekey` BEFORE any `<file>.new` is
-  staged, cleared by `applyPendingRekey`/`discardPendingRekey` once every entry is accounted for.
+  staged, cleared by `applyPendingRekey`/`discardPendingRekey` once every entry is accounted for
+  (an unreachable entry keeps it; an unparseable or unknown-`version` file is renamed to
+  `rekey-journal.json.corrupt`, never deleted; only `staged` entries ending in `.new` are honoured;
+  staged paths from the scan and the journal are de-duplicated on a folded spelling).
   `listVaultKeyCiphertexts(vaultPaths, db) → VaultKeyCiphertext[]` = `{ path, kind: 'document' |
   'image' | 'out-of-store' | 'rotated-log', action: 'rekey' | 'delete' }` is the class registry the
   stage journals. The descriptor is unchanged. **Downgrade caveat:** a build older than the #241 fix

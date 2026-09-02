@@ -294,7 +294,7 @@ export async function deleteImageSession(db: Db, dir: string, id: string): Promi
  * Clear the WHOLE image history (#122): delete every session row in ONE transaction (turns
  * cascade), then best-effort shred each stored image. Returns the number of sessions removed.
  *
- * Same REL-5 ordering as {@link deleteImageSession} — rows first, shreds only after the commit —
+ * Same row-first ordering as {@link deleteImageSession} — rows first, shreds only after the commit —
  * so a failed transaction destroys nothing (no ghost sessions whose image is already gone), and
  * a file that fails to shred can never resurrect its already-deleted row. The shreds run on
  * `shredFileAsync` (off the main thread, the F-12 posture) sequentially — dozens of ~MB files,

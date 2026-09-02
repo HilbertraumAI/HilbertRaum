@@ -956,8 +956,10 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
      the #241 fix only the first was staged, so the other three were left under a zeroed key):
      `documents/<id><ext>.enc` sidecars; `images/<id><ext>.enc` image-history sidecars (the
      section above); legacy stored copies whose `documents.stored_path` resolves **outside**
-     the store (issue #188 rows — only those the resolver would actually read, i.e. with no
-     canonical `documents/<leaf>` present); and the rotated diagnostics log
+     the store (issue #188 rows — only those the resolver would read *at that moment*, i.e.
+     with no canonical `documents/<leaf>` present and the file reachable; a copy on a drive
+     that is detached while the password changes is not seen and stays under the old key if
+     it returns — the guard is name presence, not ownership); and the rotated diagnostics log
      `logs/app.1.log.enc`, which is **deleted at commit** rather than re-keyed (nothing reads
      it — the Diagnostics tail reads the live generation only; a v2→v2 change keeps the data
      key and leaves it alone). The transient plaintext per sidecar always lands under the
@@ -970,7 +972,10 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   3. **Swap:** delete the journal's remove-list (the rotated log; best-effort, idempotent),
      then shred each old file and rename `<file>.new` into place; clear the journal once every
      entry is accounted for (an entry whose location is unreachable — a detached legacy
-     drive — keeps the journal so a later recovery finishes that swap).
+     drive — keeps the journal so a later recovery finishes that swap; a journal that cannot
+     be parsed is quarantined as `rekey-journal.json.corrupt`, never deleted, and the in-store
+     classes still resolve by scan). Staged paths are de-duplicated on a folded spelling so a
+     file the scan and the journal name differently is never swapped twice.
   **Crash recovery** (`recoverPendingRekey`, run at startup and before every unlock decrypt):
   staged `.new` files (or a journal) with a **v1** descriptor mean the crash was pre-commit →
   discard them and the journal, the old password + old files win; with a **v2** descriptor the

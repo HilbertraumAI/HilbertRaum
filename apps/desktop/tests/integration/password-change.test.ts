@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import type { PrivacyPolicy } from '../../src/shared/types'
@@ -800,6 +800,75 @@ describe('image writes vs the password change — the document-work lease (#241)
     // Nothing partial: no session row, no `.enc`, no `<id>.tmp`.
     expect(listImageSessions(ctl.requireDb())).toEqual([])
     expect(existsSync(imgDir) ? readdirSync(imgDir) : []).toEqual([])
+    ctl.lock()
+  })
+})
+
+// Journal edge cases from the #241 review: one physical file listed twice, an entry whose
+// location is unreachable at recovery, and a journal that cannot be parsed.
+describe('rekey journal — aliases, unreachable entries, corruption (#241)', () => {
+  /** Stage + commit a full-class v1 vault and hand back the journal path. */
+  async function committedStage(): Promise<ClassFixture & { journalPath: string }> {
+    const f = await v1VaultWithEveryClass()
+    f.ctl.lock()
+    const { db, key } = unlockEncryptedVault(f.vp, 'old-password')
+    const dataKey = generateDataKey()
+    stageRekey(f.vp, db, key, dataKey)
+    rewrapVaultKey(f.vp, dataKey, 'new-password', FAST_ARGON) // COMMIT
+    db.close()
+    return { ...f, journalPath: join(f.root, 'workspace', REKEY_JOURNAL) }
+  }
+
+  it('a journal entry that spells a staged file differently is swapped once, never shredded by its twin', async () => {
+    const f = await committedStage()
+    const journal = JSON.parse(readFileSync(f.journalPath, 'utf8')) as { staged: string[]; remove: string[] }
+    // The same physical files through a `..` segment (and, on Windows, a different case).
+    const alias = (p: string): string => {
+      const viaParent = join(dirname(p), '..', basename(dirname(p)), basename(p))
+      return process.platform === 'win32' ? viaParent.toUpperCase() : viaParent
+    }
+    journal.staged.push(alias(`${f.vp.encPath}${REKEY_SUFFIX}`), alias(`${f.imageFiles[f.imageA]}${REKEY_SUFFIX}`))
+    writeFileSync(f.journalPath, JSON.stringify(journal), 'utf8')
+
+    const ctl = reopen(f.vp, 'new-password') // a double swap would have shredded the DB itself
+    await expectEveryClassReadable(f, ctl)
+    ctl.lock()
+  })
+
+  it('an out-of-store copy on an unreachable location keeps the journal; a later recovery finishes the swap', async () => {
+    const f = await committedStage()
+    const legacyDir = dirname(f.outside)
+    const away = `${legacyDir}.away`
+    renameSync(legacyDir, away) // the legacy location is "detached" at recovery time
+
+    const ctl = reopen(f.vp, 'new-password')
+    expect(await readImage(ctl, f.root, f.imageA)).toEqual(IMAGE_A)
+    expect(readEncryptedDoc(ctl, f.doc)).toBe('DOCUMENT-SURVIVES')
+    expect(existsSync(f.rotated)).toBe(false)
+    expect(existsSync(f.journalPath)).toBe(true) // kept: one entry could not be accounted for
+    expect(existsSync(join(away, `outside.txt.enc${REKEY_SUFFIX}`))).toBe(true) // twin intact
+    ctl.lock()
+
+    renameSync(away, legacyDir) // the location returns → the next recovery completes it
+    const again = reopen(f.vp, 'new-password')
+    await expectEveryClassReadable(f, again)
+    again.lock()
+  })
+
+  it('a journal that cannot be parsed is quarantined as .corrupt, never deleted; in-store classes still roll forward', async () => {
+    const f = await committedStage()
+    writeFileSync(f.journalPath, '{ not json', 'utf8')
+
+    const ctl = reopen(f.vp, 'new-password')
+    expect(await readImage(ctl, f.root, f.imageA)).toEqual(IMAGE_A)
+    expect(await readImage(ctl, f.root, f.imageB)).toEqual(IMAGE_B)
+    expect(readEncryptedDoc(ctl, f.doc)).toBe('DOCUMENT-SURVIVES')
+    expect(existsSync(f.journalPath)).toBe(false)
+    expect(readFileSync(`${f.journalPath}.corrupt`, 'utf8')).toBe('{ not json')
+    // The out-of-store twin was only ever named by the journal: it stays staged beside the
+    // original (nothing lost) until someone acts on the quarantined file.
+    expect(existsSync(`${f.outside}${REKEY_SUFFIX}`)).toBe(true)
+    expect(existsSync(f.outside)).toBe(true)
     ctl.lock()
   })
 })
