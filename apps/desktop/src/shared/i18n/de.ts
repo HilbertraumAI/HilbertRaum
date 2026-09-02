@@ -2219,6 +2219,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.docs.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Dokumente zu verwalten.',
   'main.docs.processing':
     'Dieses Dokument wird noch verarbeitet. Warte, bis der Import fertig ist.',
+  'main.docs.tooManyPaths': 'Es wurden zu viele Dateien auf einmal ausgewählt. Wähle stattdessen einen Ordner.',
   'main.docs.taskRunning':
     'Für dieses Dokument läuft eine Aufgabe. Brich sie ab oder warte, bis sie fertig ist.',
   // GAP-5 (full-audit 2026-07-11): das requireNoActiveTask-Pendant für laufende SKILL-Läufe.
@@ -2314,6 +2315,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.collections.builtinUndeletable':
     'Die integrierte Bibliothek und „Temporär“ können nicht gelöscht werden.',
   'main.skills.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Skills zu verwalten.',
+  'main.skills.notPicked': 'Wähle das Skill-Paket zuerst über den Dateidialog aus.',
   'main.skills.incompatible': 'Dieser Skill benötigt eine neuere Version der App. Aktualisiere sie, um ihn zu nutzen.',
   // Tier-2-Tool-Läufe (skills plan §12.2, S11b) – freundlich, ohne Inhalte.
   'main.skills.run.unavailable': 'Das Tool dieses Skills ist gerade nicht verfügbar.',

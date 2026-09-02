@@ -1976,6 +1976,14 @@ export interface SkillInfo {
  * produce this. On `ok: false`, `errors` carries friendly, STRUCTURAL-ONLY reasons (§22-M1: never
  * the attacker's member paths or content). NEW shared contract in S4; S5's import drawer renders it.
  */
+/** Result of `pickSkillPackage` (#240, the `PickDocumentsResult` precedent): the chosen path
+ *  (renderer display only) + a one-time capability token that `previewSkillPackage` reads
+ *  through and `importSkill` spends. Cancelled ⇒ null. */
+export interface SkillPickResult {
+  token: string
+  path: string
+}
+
 export interface SkillPreview {
   ok: boolean
   /** 'zip' (a `.skill.zip`) or 'folder' (a picked directory). */

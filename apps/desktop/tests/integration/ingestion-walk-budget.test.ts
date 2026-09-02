@@ -11,9 +11,10 @@ import {
 
 // #240: the drop/preflight directory walk runs synchronously on the main thread, so it is
 // bounded — an entry cap, a depth cap and a wall-clock budget checked once per directory — and
-// the incoming path array is capped. A bounded walk returns a PREFIX of the unbounded expansion
-// (same order, nothing invented) plus the reason it stopped; an unexhausted walk is byte-identical
-// to `expandPaths`. Moving the walk off the main thread is #274.
+// the incoming path array is capped. A bounded walk returns a subset of the unbounded expansion
+// in walk order (a prefix when the walk was stopped, the expansion minus pruned subtrees when a
+// branch was cut — nothing invented) plus the reason it stopped; an unexhausted walk is
+// byte-identical to `expandPaths`. Moving the walk off the main thread is #274.
 
 function root(): string {
   return mkdtempSync(join(tmpdir(), 'hilbertraum-walk-budget-'))
@@ -44,10 +45,14 @@ describe('walk budget — expandPathsBounded', () => {
     expect(full.length).toBe(40)
     const bounded = expandPathsBounded([dir], { ...DEFAULT_WALK_BUDGET, maxDepth: 8 })
     expect(bounded.exhausted).toBe('depth')
-    // The picked root is depth 0; directories deeper than the cap are not entered.
+    // The picked root is depth 0; directories deeper than the cap are not entered. A depth cut
+    // prunes subtrees and keeps walking siblings, so the result is a SUBSEQUENCE of the full
+    // expansion (same relative order), not necessarily a prefix.
     expect(bounded.files.length).toBeLessThanOrEqual(8)
     expect(bounded.files.length).toBeLessThan(full.length)
-    expect(bounded.files).toEqual(full.slice(0, bounded.files.length))
+    const positions = bounded.files.map((f) => full.indexOf(f))
+    expect(positions.every((p) => p >= 0)).toBe(true)
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
   })
 
   it('a wide tree is cut at the entry cap: no more files than entries admitted', () => {
