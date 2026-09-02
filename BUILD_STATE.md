@@ -39,7 +39,7 @@ run a startup execution probe (one bounded start, released on success) and repor
 until it passes; `AppStatus.ocrState` (additive) tells the renderer why. Decision 2 (#219) on its
 DEFAULT: a photo imports without text + a NEW per-document note (Q22 copy drafted in the PR body,
 owner review pending). Packaged OCR still does NOT work — the closure is PR 1-b; §5 16(b)/18(b)/18(c)
-stay open. +9 tests (5,422 / 52); tesseract boundary tests use REAL eval-Workers, no module mock.
+stay open. +11 tests (5,424 / 52); tesseract boundary tests use REAL eval-Workers, no module mock.
 
 _2026-09-02 — **Audit 2026-09-02 Phase 0 — quit re-entry prevented, cold-start abort for
 E5/reranker/vision, spellcheck off (SEC-12, GAP-2, REL-10, SEC-1; PR #267; PR 0-a #265 drained the
