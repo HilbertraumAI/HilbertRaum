@@ -363,6 +363,7 @@ describe('overall teardown deadline (SEC-12 rider 13)', () => {
     // §1.4: a REAL timer captured before the fake clock bounds the await below — never count
     // event-loop turns as a time budget.
     const realSetTimeout = setTimeout
+    const realClearTimeout = clearTimeout
     vi.useFakeTimers()
     try {
       const order: string[] = []
@@ -383,12 +384,17 @@ describe('overall teardown deadline (SEC-12 rider 13)', () => {
       expect(resolved).toBe(false)
 
       await vi.advanceTimersByTimeAsync(1)
-      await Promise.race([
-        p,
-        new Promise<never>((_, reject) =>
-          realSetTimeout(() => reject(new Error('the lock did not run after the deadline')), 2_000)
-        )
-      ])
+      let bound: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          p,
+          new Promise<never>((_, reject) => {
+            bound = realSetTimeout(() => reject(new Error('the lock did not run after the deadline')), 2_000)
+          })
+        ])
+      } finally {
+        if (bound) realClearTimeout(bound)
+      }
       // The lock and the log flush sit OUTSIDE the raced section: they ran after the deadline
       // fired, although the parked stop never resolved. (A fix that raced the whole tail would
       // resolve on time while abandoning the lock — this ordering is what catches it.)

@@ -34,7 +34,7 @@ from its first public `1.0.0` release onward.
   embedding, reranking or image-understanding engine was still starting up (a slow USB read of a
   large model file, say), locking or quitting waited for the whole start-up window and the engine
   then refused to start again until the app was restarted. Locking now cancels the start and
-  finishes within a second; the engine starts normally after the next unlock.
+  finishes within a few seconds; the engine starts normally after the next unlock.
 
 ### Changed
 

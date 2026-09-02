@@ -208,8 +208,9 @@ async function withOverallDeadline(
     }, SHUTDOWN_OVERALL_DEADLINE_MS)
     timer.unref()
   })
-  const raced = section()
-  raced.catch(() => undefined)
+  // The section cannot reject today (every step is try/caught or `allSettled`); the catch makes
+  // that structural, so neither a pre-deadline rejection nor an abandoned one can skip the lock.
+  const raced = section().catch((err) => log.error('quit: teardown section failed', String(err)))
   try {
     await Promise.race([raced, deadline])
   } finally {
