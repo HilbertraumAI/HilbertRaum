@@ -248,7 +248,9 @@ export const DocRow = memo(function DocRow({
                   ? t('docs.scan.ocrOffer')
                   : ocrState === 'unavailable'
                     ? t('docs.scan.ocrUnavailable')
-                    : t('docs.scan.ocrMissing')}
+                    : ocrState === 'probing'
+                      ? null // verdict pending (seconds) — claim nothing either way
+                      : t('docs.scan.ocrMissing')}
               </>
             )}
           </Banner>

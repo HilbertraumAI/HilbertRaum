@@ -753,6 +753,9 @@ const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.task.comparePickTwo',
   'main.task.compareReindex',
   'main.task.needsOcr',
+  // REL-6 (audit 2026-09-02 Phase 1): thrown by the dequeue-time guard in handlers/ocr.ts too,
+  // so it must pass the friendly filter or the user sees the generic failure instead.
+  'main.task.ocrUnavailable',
   'main.task.ocrNotAScan',
   'main.task.ocrNoText',
   'main.task.ocrFailed',

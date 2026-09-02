@@ -2027,7 +2027,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   packaged build proves the worker once at startup (execution probe, released again on success)
   and reports OCR **unavailable** until that proof passes: photos import and are stored without
   readable text, their row says *"Text recognition (OCR) could not run in this build …"*, "Make
-  searchable (OCR)" is not offered, and the Documents screen shows a one-time banner saying the
+  searchable (OCR)" is not offered, and the Documents screen shows a banner saying the
   OCR files are on the drive but the recognizer could not start. A re-index recognizes such a
   photo once OCR runs. **Dev mode is unaffected** — the full raster → IPC → recognize pipeline
   was proven end to end on Electron 39 outside packaging, and no other packaged feature is

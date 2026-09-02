@@ -70,6 +70,8 @@ export { RAIL_COLLAPSED_KEY, VIEWS_MORE_KEY } from './documents/types'
 // stale. The throttle piggybacks on the existing poll ticks (no nested timer), so it stays deterministic
 // under fake timers and composes cleanly with the DR-2 refreshSeq choke point.
 const REFRESH_THROTTLE_MS = 1500
+/** REL-6: how often the OCR verdict is re-read while a packaged build's startup probe is pending. */
+const OCR_PROBE_RECHECK_MS = 1500
 
 /** A trailing-edge throttle over completion-triggered refreshes (F-31). One coalescer per live job. */
 function makeRefreshCoalescer(
@@ -192,8 +194,9 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   // gates OCR — read once with it below.
   const [translationAvailable, setTranslationAvailable] = useState(false)
   // OCR availability (availability-driven, no settings key): gates "Make searchable
-  // (OCR)" and the photo-import mention. Read once — the language files don't appear
-  // mid-session.
+  // (OCR)" and the photo-import mention. Read once per mount — the language files don't appear
+  // mid-session; the one thing that CAN change is a packaged build's startup probe verdict
+  // (REL-6), which the status effect below re-reads while it is still 'probing'.
   const [ocrAvailable, setOcrAvailable] = useState(false)
   // REL-6 (audit 2026-09-02 Phase 1): WHY it is off — 'missing' (no files: the fetch-runtime copy)
   // vs 'unavailable' (files present, the recognizer cannot run in this build: the banner below +
@@ -293,18 +296,29 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
 
   useEffect(() => {
     refresh().catch((e) => setError(friendlyIpcError(e)))
-    void (async () => {
+    // REL-6: a packaged build's OCR verdict is 'probing' for the first seconds after launch — a
+    // mount inside that window would otherwise pin "no OCR" for the whole visit. Re-read the
+    // status while the verdict is pending (bounded by the engine's own 30 s start timeout).
+    let cancelled = false
+    let recheck: ReturnType<typeof setTimeout> | null = null
+    const readStatus = async (): Promise<void> => {
       try {
         const status = await window.api.getAppStatus()
+        if (cancelled) return
+        const state = status.ocrState ?? (status.ocrAvailable ? 'available' : 'missing')
         setOcrAvailable(status.ocrAvailable)
-        setOcrState(status.ocrState ?? (status.ocrAvailable ? 'available' : 'missing'))
+        setOcrState(state)
         setTranslationAvailable(status.translationAvailable)
+        if (state === 'probing') recheck = setTimeout(() => void readStatus(), OCR_PROBE_RECHECK_MS)
       } catch {
         // No status (partial test bridge) → keep the safe defaults: no OCR offer, no
         // Translate (the install hint shows instead).
       }
-    })()
+    }
+    void readStatus()
     return () => {
+      cancelled = true
+      if (recheck) clearTimeout(recheck)
       if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [refresh])

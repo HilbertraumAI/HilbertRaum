@@ -193,7 +193,7 @@ Key config points:
   and latches the engine unavailable; a **packaged build runs an execution probe at startup**
   (one bounded worker start, released on success) and reports OCR unavailable until it passes —
   photos import without text and carry a per-document note, "Make searchable (OCR)" is not
-  offered, the Documents screen shows a one-time banner. **Packaged OCR still does not WORK**
+  offered, the Documents screen shows a banner. **Packaged OCR still does not WORK**
   until the `asarUnpack` closure lands (PR 1-b: a test that resolves the worker's `require`
   graph against the globs, then the missing entries); **do not treat a packaged OCR run as a
   release-acceptance step before the manual packaged smoke** (BUILD_STATE §5 item 18(c)) passes.

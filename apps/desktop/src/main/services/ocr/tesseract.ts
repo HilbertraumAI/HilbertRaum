@@ -50,6 +50,15 @@ export const DEFAULT_OCR_PAGE_TIMEOUT_MS = 2 * 60 * 1000
  */
 export const DEFAULT_OCR_WORKER_START_TIMEOUT_MS = 30_000
 
+/**
+ * Delay before a proved-then-died engine re-proves itself (REL-6). A LIVE worker death (one WASM
+ * abort on one page) is not evidence that the build cannot run OCR — the startup probe already
+ * proved it can — so the engine returns to `'probing'` and starts one bounded re-probe after this
+ * delay: success restores `'available'`, a start failure latches `'unavailable'`. Without this a
+ * single transient death would disable OCR for the rest of the session (reviewer finding, PR 1-a).
+ */
+export const DEFAULT_OCR_REPROBE_DELAY_MS = 1_000
+
 function resolveOcrPageTimeoutMs(explicit?: number): number {
   if (typeof explicit === 'number' && explicit > 0) return explicit
   const env = Number(process.env.HILBERTRAUM_OCR_PAGE_TIMEOUT_MS)
@@ -90,6 +99,8 @@ export interface TesseractOcrEngineOptions {
   probeRequired?: boolean
   /** REL-6: bound on one worker start. Default `DEFAULT_OCR_WORKER_START_TIMEOUT_MS`. */
   workerStartTimeoutMs?: number
+  /** REL-6: delay before the re-probe after a live worker death. Default `DEFAULT_OCR_REPROBE_DELAY_MS`. */
+  reprobeDelayMs?: number
 }
 
 /**
@@ -167,6 +178,8 @@ export class TesseractOcrEngine implements OcrEngine {
   private readonly liveRaw = new Set<Worker>()
   /** Rejecters of the recognitions in flight on the live worker — a worker death rejects them. */
   private readonly inflight = new Set<(err: Error) => void>()
+  private readonly reprobeDelayMs: number
+  private reprobeTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(opts: TesseractOcrEngineOptions) {
     this.opts = opts
@@ -175,6 +188,10 @@ export class TesseractOcrEngine implements OcrEngine {
       typeof opts.workerStartTimeoutMs === 'number' && opts.workerStartTimeoutMs > 0
         ? opts.workerStartTimeoutMs
         : DEFAULT_OCR_WORKER_START_TIMEOUT_MS
+    this.reprobeDelayMs =
+      typeof opts.reprobeDelayMs === 'number' && opts.reprobeDelayMs >= 0
+        ? opts.reprobeDelayMs
+        : DEFAULT_OCR_REPROBE_DELAY_MS
     this.state = opts.probeRequired ? 'probing' : 'available'
     this.languages = [...opts.languages]
     // BE-9: derived from the installed package version, never a hardcoded literal.
@@ -252,7 +269,11 @@ export class TesseractOcrEngine implements OcrEngine {
         langPath: this.opts.langDir,
         gzip: true,
         cacheMethod: 'none',
-        // (1c) — see above; the payload is content-free (tesseract's own status text).
+        // (1c) — see above. A no-op is enough: for `action === 'load'` tesseract rejects
+        // `createWorker()` itself (createWorker.js:213); a reject on `loadLanguage`/`initialize`
+        // (corrupt traineddata) is swallowed by its `.catch(() => {})` and only the start timeout
+        // below settles it; a job reject already rejects that job's promise. The handler's one
+        // job is to replace the `throw Error(data)` that would be a second uncaughtException.
         errorHandler: (): void => undefined,
         ...(workerPath ? { workerPath } : {})
       }))()
@@ -278,11 +299,18 @@ export class TesseractOcrEngine implements OcrEngine {
           ;(timer as { unref?: () => void }).unref?.()
         })
       ])
-      // Healthy: the raw workers become the LIVE set; a later death rejects the in-flight page
-      // and latches unavailable instead of surfacing as an uncaught exception.
+      // Healthy: OUR raw worker becomes the LIVE set; a later death rejects the in-flight page
+      // and re-arms (see `onLiveWorkerFailure`) instead of surfacing as an uncaught exception.
+      // tesseract.js exposes the raw Worker on its resolved object (createWorker.js `resolveObj.
+      // worker`) — adopt only that one, so a foreign Worker constructed in the same tick (none
+      // exists in this app today) is never mistaken for ours; a fake without the field is adopted
+      // as-is. (On the FAILURE path below every captured raw is reaped — createWorker never
+      // resolved, so ours cannot be told apart; the same latent caveat, accepted.)
+      const own = (worker as unknown as { worker?: unknown }).worker
       for (const raw of raws) {
         raw.off('error', onRawError)
         raw.off('exit', onRawExit)
+        if (own != null && raw !== own) continue
         this.liveRaw.add(raw)
         raw.on('error', (err) => this.onLiveWorkerFailure(raw, toError(err, 'OCR worker error')))
         raw.on('exit', (code) =>
@@ -308,17 +336,31 @@ export class TesseractOcrEngine implements OcrEngine {
     }
   }
 
-  /** A LIVE worker died (error or unexpected exit): fail the pages in flight, latch, clear. */
+  /**
+   * A LIVE worker died (error or unexpected exit): fail the pages in flight, drop the worker,
+   * and RE-ARM — back to `'probing'` with one bounded re-probe scheduled. A live worker exists
+   * only after a healthy start, so this death is "proved, then died": one page's WASM abort must
+   * not disable OCR for the session. The re-probe decides: healthy → `'available'`; a start
+   * failure → `'unavailable'` (latched by `startWorker`). Until it settles the engine reports
+   * unavailable (`isAvailable() === false`) and the UI offers nothing.
+   */
   private onLiveWorkerFailure(raw: Worker, err: Error): void {
     if (!this.liveRaw.has(raw)) return // our own terminate — expected
     this.liveRaw.delete(raw)
-    this.state = 'unavailable'
+    this.state = 'probing'
     const dead = this.worker
     this.worker = null
     if (this.starting) this.starting = null
     if (dead) void dead.terminate().catch(() => undefined)
     for (const reject of this.inflight) reject(err)
     this.inflight.clear()
+    if (!this.stopped && !this.reprobeTimer) {
+      this.reprobeTimer = setTimeout(() => {
+        this.reprobeTimer = null
+        void this.probe()
+      }, this.reprobeDelayMs)
+      ;(this.reprobeTimer as { unref?: () => void }).unref?.()
+    }
   }
 
   async recognize(image: Buffer, opts: OcrRecognizeOptions = {}): Promise<OcrResult> {
@@ -430,6 +472,10 @@ export class TesseractOcrEngine implements OcrEngine {
 
   async stop(): Promise<void> {
     this.stopped = true
+    if (this.reprobeTimer) {
+      clearTimeout(this.reprobeTimer)
+      this.reprobeTimer = null
+    }
     await this.terminateWorker()
   }
 
@@ -448,7 +494,11 @@ export class TesseractOcrEngine implements OcrEngine {
     return this.stopped ? 'unavailable' : this.state
   }
 
-  /** `availability() === 'available'` — what `ocrAvailable` in the app status reports. */
+  /**
+   * `availability() === 'available'` — the same predicate `ocrAvailable` in the app status applies
+   * (the IPC reads the optional interface method `availability()` directly; this is the engine's
+   * own convenience form, used by the tests).
+   */
   isAvailable(): boolean {
     return this.availability() === 'available'
   }
@@ -469,6 +519,9 @@ export class TesseractOcrEngine implements OcrEngine {
     } catch {
       return false // `startWorker` has latched 'unavailable'
     }
+    // Narrow race, accepted: a recognize() enqueued after this check and before terminateWorker()
+    // takes the worker would run against a worker being torn down and fail that ONE page (the
+    // worker respawns for the next); it can only happen in the seconds around startup/re-probe.
     if (this.queued === 0) await this.terminateWorker()
     return true
   }

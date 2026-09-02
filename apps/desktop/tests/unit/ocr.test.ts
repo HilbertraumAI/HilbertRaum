@@ -662,13 +662,27 @@ describe('TesseractOcrEngine — worker boundary (REL-6, audit 2026-09-02 Phase 
     })
   })
 
-  it('a worker failure AT RECOGNIZE TIME after a successful probe flips isAvailable() to false and rejects the in-flight page', async () => {
+  /** Poll a real deadline for an engine state (real timers — the re-probe is a real setTimeout). */
+  async function waitForState(
+    engine: TesseractOcrEngine,
+    want: OcrAvailability,
+    timeoutMs = 3_000
+  ): Promise<void> {
+    const t0 = Date.now()
+    while (engine.availability() !== want) {
+      if (Date.now() - t0 > timeoutMs) throw new Error(`state stayed ${engine.availability()}`)
+      await new Promise((r) => setTimeout(r, 10))
+    }
+  }
+
+  it('a worker failure AT RECOGNIZE TIME after a successful probe flips isAvailable() to false, rejects the in-flight page, and re-arms with one re-probe', async () => {
     await withUncaughtCapture(async (captured) => {
       const { mod, spawned } = crashOnRecognizeModule()
       const engine = new TesseractOcrEngine({
         ...base,
         loadTesseract: async () => mod,
-        probeRequired: true
+        probeRequired: true,
+        reprobeDelayMs: 20
       })
       // Packaged posture: unproven until the execution probe passes.
       expect(engine.availability()).toBe('probing')
@@ -678,9 +692,43 @@ describe('TesseractOcrEngine — worker boundary (REL-6, audit 2026-09-02 Phase 
       // A startup-only probe would leave `ocrAvailable` lying from here on (review 2026-09-02).
       await expect(engine.recognize(Buffer.from('img'))).rejects.toThrow(/crashed mid-recognition/)
       expect(engine.isAvailable()).toBe(false)
-      expect(engine.availability()).toBe('unavailable')
+      // "Proved, then died" re-arms rather than latching: one page's WASM abort must not disable
+      // OCR for the session (reviewer finding, PR 1-a). The re-probe's fresh worker is healthy
+      // until its first message, so availability comes back.
+      expect(engine.availability()).toBe('probing')
+      await waitForState(engine, 'available')
+      expect(spawned.length).toBe(3) // probe worker, the one that died, the re-probe worker
       expect(captured.map((e) => e.message)).toEqual([])
-      expect(spawned.length).toBeGreaterThanOrEqual(1)
+      await engine.stop()
+    })
+  })
+
+  it('a re-probe whose start FAILS latches unavailable (a transient death is retried once, a broken build is not)', async () => {
+    await withUncaughtCapture(async (captured) => {
+      const { mod } = crashOnRecognizeModule()
+      let starts = 0
+      const brokenAfterDeath: TesseractModule = {
+        createWorker: async (langs, oem, options) => {
+          starts += 1
+          if (starts >= 3) throw new Error('worker module load failed on respawn')
+          return mod.createWorker(langs, oem, options)
+        }
+      }
+      const engine = new TesseractOcrEngine({
+        ...base,
+        loadTesseract: async () => brokenAfterDeath,
+        probeRequired: true,
+        reprobeDelayMs: 20
+      })
+      expect(await engine.probe()).toBe(true) // start 1
+      await expect(engine.recognize(Buffer.from('img'))).rejects.toThrow(/crashed/) // start 2, dies
+      expect(engine.availability()).toBe('probing')
+      await waitForState(engine, 'unavailable') // start 3 rejects → latched
+      expect(starts).toBe(3)
+      // Latched: the parser skips (`availability() === 'unavailable'`), nothing respawns by itself.
+      await new Promise((r) => setTimeout(r, 60))
+      expect(starts).toBe(3)
+      expect(captured.map((e) => e.message)).toEqual([])
       await engine.stop()
     })
   })
