@@ -6,39 +6,23 @@ import { parse } from 'yaml'
 import { globToRegExp } from '../helpers/globs'
 import { TESSERACT_WORKER_ENTRY } from '../../src/main/services/ocr/tesseract'
 
-// REL-6 (audit 2026-09-02 Phase 1, PR 1-b) — the `asarUnpack` CLOSURE, derived instead of
-// guessed. `worker_threads` loads the tesseract.js worker script and everything it `require`s
-// through real filesystem reads, which cannot see inside `app.asar`; electron-builder copies
-// the unpacked globs to `app.asar.unpacked` and the engine rewrites the workerPath there. A
-// module the worker requires that is NOT covered by an unpack glob stays inside the archive and
-// cannot be resolved from the unpacked directory — measured 2026-07-19 on a real packaged
-// Windows build: only `tesseract.js/**` and `tesseract.js-core/**` were listed, the worker's
-// hoisted deps (`regenerator-runtime`, `is-url`, …) were not, and the load failure killed the
-// app (PR 1-a made that failure a per-document error; this test + the globs make OCR WORK).
+// #232 — the `asarUnpack` closure, derived instead of guessed. `worker_threads` loads the
+// tesseract.js worker script and everything it `require`s through real filesystem reads, which
+// cannot see inside `app.asar`. Any module on the worker's graph that no unpack glob covers stays
+// packed and the worker fails to load (with only the two tesseract packages listed, that killed
+// the app — measured 2026-07-19 on a packaged Windows build).
 //
-// Method: resolve the worker entry (the engine's own `TESSERACT_WORKER_ENTRY`) from the app
-// package exactly as Node would, walk its STATIC `require('<literal>')` graph with
-// `createRequire(file).resolve`, and assert every resolved module is covered at EVERY
-// destination electron-builder may give it inside the asar:
-//   - the source-tree path from the first `node_modules/` segment
-//     (`node_modules/node-fetch/node_modules/whatwg-url/lib/URL.js`), and
-//   - the FLATTENED path (`node_modules/whatwg-url/lib/URL.js`): electron-builder derives the
-//     in-asar location from the dependency tree, and in this npm workspace its collector
-//     flattens a source-nested package to top level (reviewer measurement on the 2026-09-02
-//     `win-unpacked` artifact: `node-fetch` had no nested `node_modules` inside `app.asar`,
-//     `whatwg-url`/`tr46`/`webidl-conversions` sat at top level, packed).
-// Requiring both keeps the pin true whichever layout a builder version produces.
-// Specifiers that do not resolve in this tree (an optional dep such as node-fetch's `encoding`,
-// required inside a try/catch) are tolerated only from the exact `file -> spec` allow-list: a
-// package that is not installed cannot be packed either, so it cannot be missing from the
-// unpacked copy — but a NEW unresolvable specifier fails the walk.
+// Method: resolve the engine's `TESSERACT_WORKER_ENTRY`, walk its static `require('…')` graph,
+// and assert every resolved module is covered at BOTH places electron-builder may put it in the
+// asar: the source path (`node_modules/node-fetch/node_modules/whatwg-url/…`) and the flattened
+// path (`node_modules/whatwg-url/…`) — electron-builder 26 flattens nested packages (measured on
+// the 2026-09-02 artifact). Unresolvable specifiers are tolerated only from an exact `file ->
+// spec` allow-list (optional try/catch deps that are not installed cannot be packed either).
 //
-// watch-item: a static walk misses computed `require(expr)`, `import()`, `require.resolve` and
-// ESM `import` legs (an `.mjs`/`.node`/`.wasm` file that resolves is coverage-checked but not
-// walked); tesseract.js 7.0.0 has none of these on the worker path (grep-verified by the PR 1-b
-// review), and `tesseract.js-core` reads its `.wasm` beside its `.js` via `fs` — covered because
-// the glob is package-wide. The manual packaged smoke (BUILD_STATE §5 item 18(c)) remains the
-// executable exit criterion for the closure.
+// watch-item: a static walk misses computed requires, `import()` and ESM legs; tesseract.js 7.0.0
+// has none on the worker path, and `tesseract.js-core` reads its `.wasm` via `fs` beside its `.js`
+// (covered by the package-wide glob). The manual packaged smoke (BUILD_STATE §5 item 18(c))
+// remains the executable exit criterion.
 
 const APP_DIR = join(__dirname, '..', '..')
 const BUILDER_YML = join(APP_DIR, 'electron-builder.yml')
@@ -98,7 +82,7 @@ function packageOf(asarPath: string): string {
   return m ? m[1] : asarPath
 }
 
-describe('asarUnpack closure — the tesseract.js worker require graph (REL-6, PR 1-b)', () => {
+describe('asarUnpack closure — the tesseract.js worker require graph (#232)', () => {
   const config = parse(readFileSync(BUILDER_YML, 'utf8')) as BuilderConfig
   const globs = config.asarUnpack ?? []
   const matchers = globs.map(globToRegExp)

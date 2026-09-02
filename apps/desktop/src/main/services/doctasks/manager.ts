@@ -303,9 +303,8 @@ export class DocTaskManager {
       if (!engine) {
         throw new Error(tMain('main.task.needsOcr'))
       }
-      // REL-6 (audit 2026-09-02 Phase 1): the files are on the drive but the recognizer cannot
-      // run in this build — the UI hides the offer on `ocrAvailable === false`; this guards the
-      // race with a status read that predates the probe's verdict.
+      // Files present but the recognizer cannot run in this build (#232). The UI hides the offer
+      // on `ocrAvailable === false`; this guards a status read that predates the probe's verdict.
       if (engine.availability?.() === 'unavailable') {
         throw new Error(tMain('main.task.ocrUnavailable'))
       }
@@ -753,8 +752,8 @@ const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.task.comparePickTwo',
   'main.task.compareReindex',
   'main.task.needsOcr',
-  // REL-6 (audit 2026-09-02 Phase 1): thrown by the dequeue-time guard in handlers/ocr.ts too,
-  // so it must pass the friendly filter or the user sees the generic failure instead.
+  // Also thrown by the dequeue-time guard in handlers/ocr.ts — must pass the friendly filter
+  // or the user sees the generic failure (#232).
   'main.task.ocrUnavailable',
   'main.task.ocrNotAScan',
   'main.task.ocrNoText',

@@ -2012,8 +2012,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   step total, and the persisted `ocr_json.pageCount` all report the **clamped** count (so
   they stay truthful), and a truncation is logged locally. A genuine ≤5 000-page scan is
   unaffected; beyond that, the tail of pages is not recognized.
-- **OCR in a PACKAGED build: the crash is fixed and the packaging gap is closed (audit
-  2026-09-02 Phase 1); the end-to-end recognition smoke on a packaged build is still to be
+- **OCR in a PACKAGED build: the crash is fixed and the packaging gap is closed (#232,
+  PRs #268 and #269); the end-to-end recognition smoke on a packaged build is still to be
   recorded per platform.** The defect (measured 2026-07-19 on a real packaged Windows build;
   pre-existing and **version-independent**): `worker_threads` cannot load a script from inside
   `app.asar`, so `electron-builder.yml` unpacks the tesseract packages and the engine rewrites
@@ -2022,13 +2022,13 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   `app.asar`, and could not be resolved from the unpacked directory. **Before Phase 1** the
   resulting worker load failure had no listener (tesseract.js sets the browser-only
   `worker.onerror`, inert on a Node Worker) and reached the process as an uncaught exception
-  that killed it, while `ocrAvailable` still reported `true` beforehand. **Phase 1 PR 1-a
-  (REL-6)** made any such failure a per-document error: a packaged build proves the worker once
+  that killed it, while `ocrAvailable` still reported `true` beforehand. **PR #268
+  (#232)** made any such failure a per-document error: a packaged build proves the worker once
   at startup (execution probe, released again on success) and reports OCR **unavailable** until
   that proof passes — photos import and are stored without readable text, their row says *"Text
   recognition (OCR) could not run in this build …"*, "Make searchable (OCR)" is not offered, and
   the Documents screen shows a banner saying the OCR files are on the drive but the recognizer
-  could not start; a re-index recognizes such a photo once OCR runs. **Phase 1 PR 1-b** closed
+  could not start; a re-index recognizes such a photo once OCR runs. **PR #269** closed
   the gap: `tests/integration/asar-unpack-closure.test.ts` derives the worker's `require` graph
   and pins every module to an `asarUnpack` glob, and the missing packages are unpacked.
   **Measured 2026-09-02 on a packaged Windows build** with the `deu`+`eng` language files: the

@@ -31,12 +31,9 @@ export const IMAGE_NO_TEXT_MESSAGE = t('en', 'main.ingest.imageNoText')
 export const IMAGE_OCR_FAILED_MESSAGE = t('en', 'main.ingest.imageOcrFailed')
 
 /**
- * REL-6 (audit 2026-09-02 Phase 1, owner decision 2 on its default): the OCR files ARE on the
- * drive but the recognizer cannot run in this build (the packaged worker failed to load / died /
- * timed out — `engine.availability() === 'unavailable'`). The photo is stored and its row carries
- * this note instead of the "not on this drive" copy, which would be false for such a kit; a
- * re-index once OCR runs recognizes it. Distinct from `IMAGE_OCR_FAILED_MESSAGE` ("re-index to try
- * again"): a retry against an unavailable engine would fail identically.
+ * The OCR files are on the drive but the recognizer cannot run in this build
+ * (`engine.availability() === 'unavailable'`, #232 / #219). The photo is stored with this note
+ * instead of the "not on this drive" copy; a re-index once OCR runs recognizes it.
  */
 export const IMAGE_OCR_UNAVAILABLE_MESSAGE = t('en', 'main.ingest.imageOcrUnavailable')
 
@@ -53,9 +50,9 @@ export const ImageParser: DocumentParser = {
       // this onto the document row as `failed` + error_message.
       throw new Error(IMAGE_NEEDS_OCR_MESSAGE)
     }
-    // REL-6 interim degrade: an engine that has proven it CANNOT run here is not asked again —
-    // the import stores the photo without recognition and records the note. While the startup
-    // probe is still running ('probing') the recognition below simply shares its worker start.
+    // An engine that has proven it cannot run here is not asked again: store the photo without
+    // recognition and record the note (#232). While 'probing', the recognition below simply
+    // shares the in-flight worker start.
     if (engine.availability?.() === 'unavailable') {
       throw new Error(IMAGE_OCR_UNAVAILABLE_MESSAGE)
     }

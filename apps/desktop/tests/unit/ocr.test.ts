@@ -160,13 +160,13 @@ describe('photo parser (.png/.jpg OCR on import)', () => {
     )
   })
 
-  // REL-6 (audit 2026-09-02 Phase 1, owner decision 2 on its default): in a packaged build whose
+  // #232 / #219: in a packaged build whose
   // OCR worker cannot run, a photo is imported WITHOUT recognition and the row carries the
   // "could not run in this build" note. This is a NEW path — before the fix an engine was either
   // present (auto-OCR, which crashed the packaged app) or null (`IMAGE_NEEDS_OCR_MESSAGE`, whose
   // copy says the OCR files are not on the drive — FALSE for a kit that carries them). Watched
   // fail pre-fix: the parser ignores `availability()` and calls `recognize()`.
-  it('REL-6 interim: an engine that cannot run in this build skips OCR and records the unavailable note', async () => {
+  it('#232 interim: an engine that cannot run in this build skips OCR and records the unavailable note', async () => {
     const dir = tmp()
     const p = join(dir, 'page.png')
     writeFileSync(p, TINY_PNG)
@@ -539,17 +539,12 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
   })
 })
 
-// REL-6 (audit 2026-09-02 Phase 1, PR 1-a) — the worker boundary. tesseract.js 7.0.0 spawns a
-// `worker_threads.Worker` synchronously inside `createWorker()`, sets the BROWSER idiom
-// `worker.onerror` (inert on a Node Worker — no `on('error')` exists anywhere in the package)
-// and never settles its promise on a load failure (the load chain ends `.catch(() => {})`). A
-// packaged module-load failure inside the worker therefore emits `'error'` with zero listeners,
-// which Node rethrows on the main thread as `uncaughtException` — the app dies while
-// `ocrAvailable` still reports true. The fakes below reproduce the MECHANISM with a real
-// eval-Worker (no mock of `node:worker_threads`): the engine must catch it through Node's
-// `process.on('worker')` hook, reject the pending recognition per document, and report
-// `isAvailable() === false`.
-describe('TesseractOcrEngine — worker boundary (REL-6, audit 2026-09-02 Phase 1)', () => {
+// #232 — the worker boundary. tesseract.js sets the browser-only `worker.onerror` on its Node
+// Worker and never settles `createWorker()` on a load failure, so a worker that died while
+// loading surfaced as `uncaughtException` and killed the app. The fakes below reproduce that
+// with a REAL eval-Worker (no mock of `node:worker_threads`): the engine must catch it, reject
+// the pending recognition per document, and report `isAvailable() === false`.
+describe('TesseractOcrEngine — worker boundary (#232)', () => {
   const base = { langDir: '/ocr', languages: ['eng'] }
 
   /**
@@ -689,11 +684,11 @@ describe('TesseractOcrEngine — worker boundary (REL-6, audit 2026-09-02 Phase 
       expect(engine.isAvailable()).toBe(false)
       expect(await engine.probe()).toBe(true)
       expect(engine.isAvailable()).toBe(true)
-      // A startup-only probe would leave `ocrAvailable` lying from here on (review 2026-09-02).
+      // A startup-only probe would leave `ocrAvailable` lying from here on (PR #268 review).
       await expect(engine.recognize(Buffer.from('img'))).rejects.toThrow(/crashed mid-recognition/)
       expect(engine.isAvailable()).toBe(false)
       // "Proved, then died" re-arms rather than latching: one page's WASM abort must not disable
-      // OCR for the session (reviewer finding, PR 1-a). The re-probe's fresh worker is healthy
+      // OCR for the session (PR #268 review). The re-probe's fresh worker is healthy
       // until its first message, so availability comes back.
       expect(engine.availability()).toBe('probing')
       await waitForState(engine, 'available')

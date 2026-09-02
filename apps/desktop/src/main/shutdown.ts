@@ -18,12 +18,12 @@ export interface ShutdownDeps {
   streamSettled?: Map<string, Promise<void>>
   /** Flush the encrypted diagnostics log before `lock()` zeroes the vault key. */
   detachVaultKey?: () => void
-  /** Logger (`error`, plus `info` for the two quit-progress lines — SEC-12). */
+  /** Logger (`error`, plus `info` for the two quit-progress lines. (#238) */
   log?: Pick<typeof realLog, 'error' | 'info'>
 }
 
 /**
- * Overall bound on the AWAITED MIDDLE of `performShutdown` (SEC-12 rider 13, audit 2026-09-02;
+ * Overall bound on the AWAITED MIDDLE of `performShutdown` (#238, #230;
  * owner decision 13 unanswered → this default, #230): the local-API stop, the sidecar stops, the
  * stream settle and the doc-task settle are raced as ONE section against this deadline. The
  * per-step bounds sum to 20.5 s today (local API ≤ 0.5 s; sidecars ≤ 10 s — the transcriber's
@@ -125,7 +125,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   } catch (err) {
     log.error('Error aborting in-flight streams on quit', String(err))
   }
-  // SEC-12 rider 13 (audit 2026-09-02): the four awaited steps below are bounded as a WHOLE by
+  // #238 / #230: the four awaited steps below are bounded as a WHOLE by
   // `SHUTDOWN_OVERALL_DEADLINE_MS` (see the constant). The log flush and the lock stay OUTSIDE.
   await withOverallDeadline(async () => {
     // The local API dies BEFORE the sidecars (local-api wave): stop() aborts active + queued
@@ -169,7 +169,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
     // race. Bounded (~5 s) so a wedged handler can never hang quit. Mirrors the stream-settle above.
     await awaitActiveDocTaskSettled(ctx, log)
   }, log)
-  // SEC-12: by now no window is left (Windows/Linux quit after window-all-closed), so this line
+  // #238: by now no window is left (Windows/Linux quit after window-all-closed), so this line
   // is the only visible state of a quit that is locking — and it lands in the encrypted log
   // because it precedes the flush below.
   log.info('quit: locking workspace')
@@ -188,7 +188,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
 }
 
 /**
- * Race `section` against `SHUTDOWN_OVERALL_DEADLINE_MS` (SEC-12 rider 13). On the deadline the
+ * Race `section` against `SHUTDOWN_OVERALL_DEADLINE_MS` (#238 / #230). On the deadline the
  * section's promise is abandoned (its rejection, if any, is swallowed so it can never surface as
  * an unhandled rejection later) and the caller proceeds; on completion the timer is cleared so a
  * finished teardown never holds a live handle. The timer is unref'd for the same reason.
@@ -218,7 +218,7 @@ async function withOverallDeadline(
   }
 }
 
-// ---- The Electron app-lifecycle handlers (SEC-12 / GAP-2, audit 2026-09-02) -------------------
+// ---- The Electron app-lifecycle handlers (#238) -------------------
 
 /** The subset of Electron's `will-quit` event the handler uses (kept electron-free for tests). */
 export interface WillQuitEventLike {
@@ -252,11 +252,11 @@ export interface AppLifecycleHandlers {
 }
 
 /**
- * ONE factory over ONE `isShuttingDown` closure (SEC-12 with GAP-2 folded in, audit 2026-09-02).
+ * ONE factory over ONE `isShuttingDown` closure (#238).
  * Before this, `main/index.ts` held the flag inline: the `will-quit` re-entry branch returned
  * WITHOUT `preventDefault()` — its comment assumed "cleanup already ran", but the flag is set
  * BEFORE `performShutdown` starts, so a second quit while the teardown was still awaiting a
- * sidecar stop (a wedged cold start held it up to 180 s — REL-10) let Electron's default quit
+ * sidecar stop (a wedged cold start held it up to 180 s — #244) let Electron's default quit
  * proceed with the working DB still plaintext on the drive: the next launch found a live WAL,
  * declined to preserve it and shredded it — every change since the last lock lost. On macOS a
  * second ⌘Q while the app sits windowless in the Dock reaches exactly that branch. And a Dock
@@ -272,7 +272,7 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
   let shuttingDown = false
   return {
     onWillQuit: (event) => {
-      // SEC-12: EVERY will-quit is prevented — the first one starts the teardown, any later one
+      // #238: EVERY will-quit is prevented — the first one starts the teardown, any later one
       // arrives while it is still running (the DB is plaintext until `performShutdown` locks
       // it). The teardown's own finally is the only exit; `app.exit` re-emits nothing.
       event.preventDefault()
@@ -291,7 +291,7 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
         })
     },
     onActivate: () => {
-      // GAP-2: no fresh window once a quit has begun.
+      // #238: no fresh window once a quit has begun.
       if (shuttingDown) return
       if (deps.windowCount() === 0) deps.createWindow()
     },

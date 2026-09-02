@@ -154,25 +154,18 @@ asar: true
 # see inside the asar archive (Phase 38, R-O2). Unpack both packages; the engine
 # rewrites app.asar → app.asar.unpacked in the resolved workerPath.
 #
-# The list is the worker's REQUIRE-GRAPH CLOSURE, derived — not guessed — by
-# tests/integration/asar-unpack-closure.test.ts (audit 2026-09-02 Phase 1, PR 1-b, REL-6):
-# the test resolves `tesseract.js/src/worker-script/node/index.js` and walks its literal
-# `require()` graph, and every resolved module path must match a glob below. History: with
-# only the two tesseract packages listed (measured 2026-07-19 on a real packaged Windows
-# build, DEP-1 P4) the worker's HOISTED deps stayed inside app.asar, could not be resolved
-# from app.asar.unpacked, and the load failure killed the whole app while ocrAvailable
-# reported true. PR 1-a (REL-6) contained the failure (the engine catches the worker's
-# load error through the `process.on('worker')` hook + a bounded start, a packaged build
-# proves the worker at startup and reports OCR unavailable until it passes); this list
-# closes the gap. The manual packaged smoke (BUILD_STATE §5 item 18(c)) is the executable
-# proof — a static walk misses computed requires (tesseract.js 7.0.0 has none on the
-# worker path). `node-fetch` is on the graph only behind `global.fetch ||` (never taken on
-# Electron's Node) — unpacked anyway: the static graph is the contract. Dev-mode OCR is
-# unaffected. User-facing text: docs/known-limitations.md.
+# This list is the worker's require-graph closure, derived by
+# tests/integration/asar-unpack-closure.test.ts (#232): every module the worker script can
+# `require` must match a glob here, at every location electron-builder may place it in the
+# asar. With only the two tesseract packages listed, the worker's hoisted deps stayed inside
+# app.asar and the load failure killed the app (measured 2026-07-19). The manual packaged
+# smoke (BUILD_STATE §5 item 18(c)) remains the executable proof. `node-fetch` is only
+# reached behind `global.fetch ||` (never on Electron's Node) but is unpacked anyway.
+# Dev-mode OCR is unaffected. User-facing text: docs/known-limitations.md.
 asarUnpack:
   - 'node_modules/tesseract.js/**'
   - 'node_modules/tesseract.js-core/**'
-  # the worker's hoisted runtime deps (require-graph closure, PR 1-b):
+  # the worker's hoisted runtime deps (#232):
   - 'node_modules/regenerator-runtime/**'
   - 'node_modules/is-url/**'
   - 'node_modules/bmp-js/**'

@@ -1452,15 +1452,14 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     expect(await screen.findByText(/needs the OCR files/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Make searchable (OCR)' })).not.toBeInTheDocument()
     // No files → no "could not start" banner: that copy is reserved for a recognizer that exists
-    // and cannot run (REL-6), never for a drive that simply lacks the language files.
+    // and cannot run (#232), never for a drive that simply lacks the language files.
     expect(screen.queryByText(/could not start/)).not.toBeInTheDocument()
   })
 
-  // REL-6 (audit 2026-09-02 Phase 1, decision 2 default): the OCR files ARE on the drive but the
-  // packaged recognizer could not start — `ocrAvailable: false` with `ocrState: 'unavailable'`.
-  // The scan row must not claim the files are missing (`docs.scan.ocrMissing` would be false for
-  // such a kit), the offer stays hidden, and the screen says so once in a banner (Q22 default).
-  it('REL-6: a recognizer that cannot run in this build explains itself (ocrUnavailable + banner), no button, no "files missing" copy', async () => {
+  // #232 / #219: the OCR files are on the drive but the packaged recognizer could not start
+  // (`ocrAvailable: false`, `ocrState: 'unavailable'`). The scan row must not claim the files are
+  // missing, the offer stays hidden, and the screen says so in a banner.
+  it('#232: a recognizer that cannot run in this build explains itself (ocrUnavailable + banner), no button, no "files missing" copy', async () => {
     stubApi({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatus({ ocrAvailable: false, ocrState: 'unavailable' }))
@@ -1473,7 +1472,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     expect(screen.queryByRole('button', { name: 'Make searchable (OCR)' })).not.toBeInTheDocument()
   })
 
-  it('REL-6: while the packaged probe is still running nothing is offered and nothing is claimed — and the verdict is re-read', async () => {
+  it('#232: while the packaged probe is still running nothing is offered and nothing is claimed — and the verdict is re-read', async () => {
     // First read: probe pending. Second read (the screen re-polls while 'probing'): passed.
     const getAppStatus = vi
       .fn()

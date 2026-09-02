@@ -103,15 +103,15 @@ describe('registerCoreIpc', () => {
     expect(status.hardwareProfile).toBe('UNKNOWN')
     // No translator composed → no device outcome (issue #42 reopen), never a crash.
     expect(status.translationDevice).toBeNull()
-    // No OCR engine composed → the language files are missing (REL-6 `ocrState`).
+    // No OCR engine composed → the language files are missing (#232 `ocrState`).
     expect(status.ocrAvailable).toBe(false)
     expect(status.ocrState).toBe('missing')
   })
 
-  // REL-6 (audit 2026-09-02 Phase 1): `ocrAvailable` was `ctx.ocrEngine != null` — a nullness
+  // #232: `ocrAvailable` was `ctx.ocrEngine != null` — a nullness
   // check on a stable object, so a packaged engine whose worker could not load (or died after a
   // passing probe) kept reporting true. The flag now reads the engine's execution state.
-  it('getAppStatus reports ocrAvailable from the engine’s execution state, not its presence (REL-6)', async () => {
+  it('getAppStatus reports ocrAvailable from the engine’s execution state, not its presence (#232)', async () => {
     const lockedWorkspace = {
       isUnlocked: () => false,
       getState: (): WorkspaceStateInfo => ({

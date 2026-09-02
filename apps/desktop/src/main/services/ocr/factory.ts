@@ -42,10 +42,9 @@ export interface OcrSelectionDeps {
   makeEngine?: (langDir: string, languages: string[]) => OcrEngine
   onSelect?: (kind: 'tesseract' | 'none', reason: string) => void
   /**
-   * REL-6 (audit 2026-09-02 Phase 1): a PACKAGED build starts the engine in the `'probing'`
-   * state — `ocrAvailable` stays false until the startup execution probe (`engine.probe()`,
-   * kicked off by the main wiring) proves the worker can load from `app.asar.unpacked`. A dev
-   * build (false/absent) starts `'available'` as before. Presence still decides null-vs-engine.
+   * Packaged builds start the engine `'probing'`: `ocrAvailable` stays false until the startup
+   * probe (`engine.probe()`, run by the main wiring) proves the worker loads. Dev builds start
+   * `'available'`. Presence still decides null-vs-engine. (#232)
    */
   probeRequired?: boolean
 }

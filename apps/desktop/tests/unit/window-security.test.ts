@@ -18,7 +18,7 @@ import {
 describe('SECURE_WINDOW_WEB_PREFERENCES (both windows: main + OCR rasterizer)', () => {
   it('pins every hardening flag by name and value — and nothing else', () => {
     // toEqual is exact: a dropped flag, a flipped value, or a smuggled extra key fails.
-    // SEC-1 (audit 2026-09-02): `spellcheck: false` is the fifth flag — Chromium's spellchecker
+    // #239: `spellcheck: false` is the fifth flag — Chromium's spellchecker
     // downloads Hunspell dictionaries from a Google CDN on Windows/Linux (a browser-process
     // fetch that neither the CSP nor the Node-socket tripwire can see), and the offline hard
     // rule forbids it. Closed by construction: this pin + the wiring pins below are the evidence.

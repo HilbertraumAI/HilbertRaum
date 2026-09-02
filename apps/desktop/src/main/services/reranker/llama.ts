@@ -107,7 +107,7 @@ export class LlamaReranker implements Reranker {
    */
   private startFailed: Error | null = null
   /**
-   * Aborts the IN-FLIGHT lazy start on lock/quit (REL-10, audit 2026-09-02 — the translation
+   * Aborts the IN-FLIGHT lazy start on lock/quit (#244 — the translation
    * runtime's #159 / BE-1 pattern, ported): the child is killed inside the health wait and the
    * start rejects with an AbortError, instead of the teardown awaiting the full health window
    * (180 s by default) of a wedged cold start it is about to kill anyway. Matters doubly here:
@@ -177,7 +177,7 @@ export class LlamaReranker implements Reranker {
         healthTimeoutMs: this.opts.healthTimeoutMs,
         healthIntervalMs: this.opts.healthIntervalMs,
         host: this.opts.host,
-        // REL-10: let a lock/quit teardown abort this start mid-health-wait (the child is killed
+        // #244: let a lock/quit teardown abort this start mid-health-wait (the child is killed
         // via the normal stop path; start() rejects AbortError — never latched below).
         startAbortSignal: abort.signal
       })
@@ -188,7 +188,7 @@ export class LlamaReranker implements Reranker {
         })
         .catch((err) => {
           const error = err instanceof Error ? err : new Error(String(err))
-          // REL-10 (audit 2026-09-02): a teardown-ABORTED start is not a load fault — never latch
+          // #244: a teardown-ABORTED start is not a load fault — never latch
           // `startFailed` (it survives suspend(), so it would disable reranking for the session).
           if (isStartAbortError(err) || abort.signal.aborted) throw error
           // F7 (post-merge audit): a TRANSIENT port-bind race must NOT arm the latch (same fix as
@@ -291,8 +291,7 @@ export class LlamaReranker implements Reranker {
     // not, so this flag gives the lock path the same protection for the duration of the teardown.
     this.tearingDown = true
     try {
-      // A lazy start may be in flight (first rerank() racing app quit). REL-10 (audit
-      // 2026-09-02): ABORT it rather than wait it out — the abort kills the child inside the
+      // A lazy start may be in flight (first rerank() racing app quit). #244: ABORT it rather than wait it out — the abort kills the child inside the
       // health wait (the normal stop path, no orphan), the start rejects AbortError (never
       // latches `startFailed`), and the await below settles in about one health-poll interval
       // instead of the full 180 s health window of a wedged cold start.

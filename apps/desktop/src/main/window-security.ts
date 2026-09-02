@@ -26,7 +26,7 @@ export const SECURE_WINDOW_WEB_PREFERENCES = Object.freeze({
   nodeIntegration: false,
   sandbox: true,
   webSecurity: true,
-  // SEC-1 (audit 2026-09-02; owner decision 1 unanswered → this default, #218): Electron's
+  // #239 (owner decision #218 unanswered → this default): Electron's
   // spellchecker is ON by default and, on Windows and Linux, downloads Hunspell dictionaries
   // from a Google-operated CDN on first typing — a BROWSER-PROCESS fetch that neither the page
   // CSP nor the Node-socket offline tripwire (`offlineGuard.ts`) can see, and that the offline

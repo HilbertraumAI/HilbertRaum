@@ -162,9 +162,8 @@ export function composeServices({
   // Local OCR — tesseract.js over the drive's vendored `ocr/` language files; selected
   // only when those exist (null otherwise; photo imports fail per-file and detected scans
   // show the notice without the "Make searchable" offer).
-  // REL-6 (audit 2026-09-02 Phase 1): a packaged build must PROVE the worker runs from
-  // `app.asar.unpacked` before `ocrAvailable` may say so — the engine starts 'probing' and the
-  // main wiring runs `engine.probe()` once at startup. Dev builds start available (unchanged).
+  // A packaged build must prove the worker runs before `ocrAvailable` may say so: the engine
+  // starts 'probing' and the main wiring runs `engine.probe()` once at startup (#232).
   const ocrEngine = createSelectedOcrEngine({
     rootPath,
     probeRequired: !isDev,

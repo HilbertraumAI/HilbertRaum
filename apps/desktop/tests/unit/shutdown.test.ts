@@ -226,12 +226,12 @@ describe('performShutdown ordering (REL-4)', () => {
   })
 })
 
-// ---- SEC-12 / GAP-2 / rider 13 (audit 2026-09-02) — the quit handler itself ------------------
+// ---- #238 / #230 — the quit handler itself ------------------
 //
 // B1 (the review's `o1-double-quit` reproduction, ported and INVERTED): `isShuttingDown` is set
 // before `performShutdown` starts, and the re-entry branch of the `will-quit` handler returned
 // WITHOUT `event.preventDefault()`, so a second quit while the teardown was parked (a wedged
-// sidecar stop — REL-10's 180 s) let Electron's default quit proceed with the working DB still
+// sidecar stop — the 180 s health window (#244)) let Electron's default quit proceed with the working DB still
 // plaintext on the drive. The one parked point is `embedder.stop()`.
 //
 // Does not prove: that Electron re-emits `will-quit` after a prevented one (documentation-derived;
@@ -267,7 +267,7 @@ async function drain(): Promise<void> {
 }
 
 
-describe('will-quit re-entry during a parked teardown (SEC-12, B1 inverted)', () => {
+describe('will-quit re-entry during a parked teardown (#238, B1 inverted)', () => {
   /** The real `will-quit` handler over the real `performShutdown`, parked on `embedder.stop()`. */
   function harness() {
     const order: string[] = []
@@ -333,7 +333,7 @@ describe('will-quit re-entry during a parked teardown (SEC-12, B1 inverted)', ()
   })
 })
 
-describe('activate during a parked teardown (GAP-2)', () => {
+describe('activate during a parked teardown (#238)', () => {
   it('does not create a window once a quit began (Dock click while the teardown is parked)', async () => {
     let windows = 0
     let created = 0
@@ -358,7 +358,7 @@ describe('activate during a parked teardown (GAP-2)', () => {
   })
 })
 
-describe('overall teardown deadline (SEC-12 rider 13)', () => {
+describe('overall teardown deadline (#238 / #230)', () => {
   it('bounds the awaited middle at SHUTDOWN_OVERALL_DEADLINE_MS and still locks AFTER it', async () => {
     // §1.4: a REAL timer captured before the fake clock bounds the await below — never count
     // event-loop turns as a time budget.

@@ -27,16 +27,13 @@ export interface OcrRecognizeOptions {
 }
 
 /**
- * Whether the engine can actually RUN in this build (REL-6, audit 2026-09-02 Phase 1). Asset
- * presence decides whether an engine exists at all (the factory's null rule); this decides
- * whether the engine that exists is honest to offer:
- *   - `'available'`   — the last worker lifecycle event was healthy (a dev build starts here;
- *                       a packaged build reaches it when the startup execution probe passes);
- *   - `'probing'`     — a packaged build before its execution probe has settled (recognitions
- *                       still attempt — they share the in-flight worker start);
- *   - `'unavailable'` — the worker failed to load, died, or the start timed out (the packaged
- *                       `asarUnpack` gap): recognitions are skipped with the per-document
- *                       "could not run in this build" note; a later healthy start clears it.
+ * Whether the engine can actually run in this build (#232). Asset presence decides whether an
+ * engine exists (the factory's null rule); this decides whether it is honest to offer:
+ *   - `'available'`   — last worker start was healthy (dev builds start here; packaged builds
+ *                       reach it when the startup probe passes);
+ *   - `'probing'`     — packaged build, probe not settled yet (recognitions still attempt);
+ *   - `'unavailable'` — the worker failed to load, died or timed out: recognitions are skipped
+ *                       with the per-document "could not run in this build" note.
  */
 export type OcrAvailability = 'available' | 'probing' | 'unavailable'
 
@@ -49,15 +46,13 @@ export interface OcrEngine {
   /** Recognize one image (PNG/JPEG file bytes). Reuses one warm worker across calls. */
   recognize(image: Buffer, opts?: OcrRecognizeOptions): Promise<OcrResult>
   /**
-   * Execution state (REL-6). Optional so the fakes in tests stay minimal — absent means
-   * `'available'` (an engine with no worker lifecycle to fail). `ocrAvailable` in the app
-   * status and the image parser's interim skip both read THIS, never mere presence.
+   * Execution state (#232). Optional so test fakes stay minimal — absent means `'available'`.
+   * `ocrAvailable` in the app status and the image parser read this, never mere presence.
    */
   availability?(): OcrAvailability
   /**
-   * Packaged-mode execution probe (REL-6): start the worker once, bounded, and settle the
-   * availability. Resolves `true` when the engine proved it can run. Optional — only the
-   * tesseract engine has a worker to prove; the startup wiring calls it when present.
+   * Packaged-mode execution probe (#232): start the worker once, bounded, and settle the
+   * availability. Resolves `true` when the engine proved it can run. The startup wiring calls it.
    */
   probe?(): Promise<boolean>
   /** Release the backend permanently (terminates the worker). On `will-quit`. */

@@ -35,8 +35,8 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
   const engine = ctx.deps.getOcrEngine?.()
   const rasterize = ctx.deps.rasterizePdf
   if (!engine || !rasterize) throw new Error(tMain('main.task.needsOcr'))
-  // REL-6 (audit 2026-09-02 Phase 1): mirrors the manager's admission guard for a task that was
-  // queued before the recognizer proved it cannot run in this build.
+  // Mirrors the manager's admission guard for a task queued before the recognizer proved it
+  // cannot run in this build (#232).
   if (engine.availability?.() === 'unavailable') throw new Error(tMain('main.task.ocrUnavailable'))
   const db = ctx.deps.getDb()
   const documentId = task.status.documentIds[0]
