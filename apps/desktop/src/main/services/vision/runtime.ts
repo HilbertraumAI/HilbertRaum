@@ -196,7 +196,7 @@ export class VisionRuntime {
    *  (corrected from a stale "Cleared by stop()" note — BUG vuln-scan-2026-06-21). */
   private startFailed: Error | null = null
   /**
-   * Aborts the IN-FLIGHT lazy start on lock/quit (REL-10, audit 2026-09-02 — the translation
+   * Aborts the IN-FLIGHT lazy start on lock/quit (#244 — the translation
    * runtime's #159 / BE-1 pattern, ported): `stop()` no longer awaits the full health window
    * (180 s by default) of a wedged cold start it is about to kill anyway — the child is killed
    * inside the health wait and the start rejects with an AbortError, which never arms the
@@ -234,7 +234,7 @@ export class VisionRuntime {
         binPath: this.opts.binPath,
         modelPath: this.opts.modelPath,
         contextTokens: this.opts.contextTokens ?? DEFAULT_VISION_CONTEXT_TOKENS,
-        // REL-10: let a lock/quit teardown abort this start mid-health-wait (the child is killed
+        // #244: let a lock/quit teardown abort this start mid-health-wait (the child is killed
         // via the normal stop path; start() rejects AbortError — never latched below).
         startAbortSignal: abort.signal,
         // V1-resolved: `--mmproj` loads multimodal; `--device none` CPU-pins. The b9585
@@ -269,7 +269,7 @@ export class VisionRuntime {
           this.server = server
         })
         .catch((err) => {
-          // REL-10 (audit 2026-09-02): a teardown-ABORTED start is not a load fault — never latch
+          // #244: a teardown-ABORTED start is not a load fault — never latch
           // `startFailed` (permanently sticky here; `stop()` has already latched `stopped`, and
           // `isStartFailed()` must keep reporting the truth to the orchestrator).
           if (isStartAbortError(err) || abort.signal.aborted) throw err
@@ -396,7 +396,7 @@ export class VisionRuntime {
   async stop(): Promise<void> {
     this.stopped = true
     this.cancelIdleTimer()
-    // An in-flight lazy start is ABORTED (REL-10, audit 2026-09-02 — the #159 pattern): the
+    // An in-flight lazy start is ABORTED (#244 — the #159 pattern): the
     // child is killed inside the health wait (the normal stop path, no orphan) and the await
     // settles in about one health-poll interval instead of the full 180 s health window of a
     // wedged cold start. The in-flight soft idle teardown is still waited out, so neither

@@ -40,22 +40,17 @@ const OEM_LSTM_ONLY = 1
 export const DEFAULT_OCR_PAGE_TIMEOUT_MS = 2 * 60 * 1000
 
 /**
- * Bound on ONE worker start — module load + WASM core + language init (REL-6, audit 2026-09-02
- * Phase 1). tesseract.js's `createWorker()` never settles when its worker dies while loading (its
- * load chain ends `.catch(() => {})`), so without a bound a hung start would park every later
- * recognition behind `starting` forever. 30 s covers a cold USB read of the ~4 MB language files
- * plus the WASM core on slow hardware; the packaged load failure this guards against fails in
- * well under a second (the worker's `'error'` event, caught through the `process.on('worker')`
- * hook below, rejects long before the timer). Injectable small in tests.
+ * Bound on one worker start (module load + WASM core + language init). tesseract.js never
+ * settles `createWorker()` when its worker dies while loading, so without a bound a hung start
+ * would block every later recognition. 30 s covers a cold USB read; a real load failure rejects
+ * in well under a second via the worker hook below. Injectable in tests. (#232)
  */
 export const DEFAULT_OCR_WORKER_START_TIMEOUT_MS = 30_000
 
 /**
- * Delay before a proved-then-died engine re-proves itself (REL-6). A LIVE worker death (one WASM
- * abort on one page) is not evidence that the build cannot run OCR — the startup probe already
- * proved it can — so the engine returns to `'probing'` and starts one bounded re-probe after this
- * delay: success restores `'available'`, a start failure latches `'unavailable'`. Without this a
- * single transient death would disable OCR for the rest of the session (reviewer finding, PR 1-a).
+ * Delay before a re-probe after a LIVE worker death. One page's WASM abort is not proof that the
+ * build cannot run OCR, so the engine goes back to `'probing'` and re-proves itself once:
+ * success → `'available'`, a failed start → `'unavailable'`. (#232)
  */
 export const DEFAULT_OCR_REPROBE_DELAY_MS = 1_000
 
@@ -66,9 +61,8 @@ function resolveOcrPageTimeoutMs(explicit?: number): number {
 }
 
 /**
- * The tesseract.js Node worker entry this engine spawns. Exported so the packaging closure test
- * (`tests/integration/asar-unpack-closure.test.ts`, REL-6) walks the SAME entry's require graph —
- * a path change here turns that test's walk red instead of leaving it validating a stale entry.
+ * The tesseract.js Node worker entry this engine spawns. Exported so the asar closure test
+ * (`tests/integration/asar-unpack-closure.test.ts`) walks the same entry. (#232)
  */
 export const TESSERACT_WORKER_ENTRY = 'tesseract.js/src/worker-script/node/index.js'
 
@@ -99,14 +93,14 @@ export interface TesseractOcrEngineOptions {
    */
   resolveVersion?: () => string
   /**
-   * REL-6: start in the `'probing'` state — the engine reports unavailable until `probe()` (or a
-   * first recognition) proves the worker can run in this build. Set for PACKAGED builds, where
-   * the `asarUnpack` closure is the thing being proven; a dev build starts `'available'`.
+   * Start in the `'probing'` state: the engine reports unavailable until `probe()` (or a first
+   * recognition) proves the worker runs in this build. Set for packaged builds; dev builds start
+   * `'available'`. (#232)
    */
   probeRequired?: boolean
-  /** REL-6: bound on one worker start. Default `DEFAULT_OCR_WORKER_START_TIMEOUT_MS`. */
+  /** Bound on one worker start. Default `DEFAULT_OCR_WORKER_START_TIMEOUT_MS`. */
   workerStartTimeoutMs?: number
-  /** REL-6: delay before the re-probe after a live worker death. Default `DEFAULT_OCR_REPROBE_DELAY_MS`. */
+  /** Delay before the re-probe after a live worker death. Default `DEFAULT_OCR_REPROBE_DELAY_MS`. */
   reprobeDelayMs?: number
 }
 
@@ -173,14 +167,12 @@ export class TesseractOcrEngine implements OcrEngine {
   /** Recognitions enqueued and not yet settled (the probe releases the worker only at 0). */
   private queued = 0
   private stopped = false
-  /** REL-6 execution state — see `OcrAvailability`. */
+  /** Execution state — see `OcrAvailability`. (#232) */
   private state: OcrAvailability
   /**
-   * The raw `worker_threads.Worker`(s) behind the LIVE tesseract worker, captured through Node's
-   * `process.on('worker')` hook at start (tesseract.js exposes the raw Worker only on its
-   * resolved object — too late for a load failure). Membership means "ours and expected alive":
-   * `terminateWorker()` clears the set BEFORE terminating, so the exit our own teardown causes
-   * is never mistaken for a death.
+   * The raw `worker_threads.Worker` behind the live tesseract worker, captured via Node's
+   * `process.on('worker')` hook at start. Membership means "ours and expected alive":
+   * `terminateWorker()` clears the set before terminating, so our own teardown is not a death.
    */
   private readonly liveRaw = new Set<Worker>()
   /** Rejecters of the recognitions in flight on the live worker — a worker death rejects them. */
@@ -222,23 +214,15 @@ export class TesseractOcrEngine implements OcrEngine {
   }
 
   /**
-   * One bounded worker start (REL-6, audit 2026-09-02 Phase 1). The mechanism this contains:
-   * tesseract.js 7.0.0 spawns a `worker_threads.Worker` synchronously inside `createWorker()`
-   * (`src/worker/node/spawnWorker.js`) and sets `worker.onerror` — the BROWSER idiom, inert on a
-   * Node Worker; no `on('error')` exists anywhere in the package. A module-load failure inside the
-   * worker (the packaged `asarUnpack` gap: `src/worker-script/node/index.js` top-level `require`s)
-   * therefore emits `'error'` with zero listeners, which Node rethrows on the main thread as
-   * `uncaughtException` → the crash lock → `process.exit(1)`, while `createWorker()`'s own promise
-   * never settles (its load chain ends `.catch(() => {})`). Three guards, all needed:
-   *   (1a) `process.on('worker')` — Node emits it (on the tick after construction) for EVERY new
-   *        Worker, so subscribing around the `createWorker` call captures the raw worker before
-   *        tesseract exposes it, and attaching `'error'`/`'exit'` there turns the death into a
-   *        rejection of `starting` (and, once live, of the recognitions in flight);
-   *   (1b) a start timeout, so a hung load rejects instead of parking every later page;
-   *   (1c) tesseract's `errorHandler` option — without it a `status: 'reject'` message makes its
-   *        `onMessage` handler `throw`, another `uncaughtException` (the load/job promises already
-   *        reject on their own, so the handler has nothing left to do).
-   * Any of these latches `'unavailable'`; a healthy start sets `'available'`.
+   * One bounded worker start (#232). tesseract.js sets the browser-only `worker.onerror` on its
+   * Node Worker (inert) and never settles `createWorker()` on a load failure, so a worker that
+   * dies while loading used to surface as `uncaughtException` and kill the app. Three guards:
+   *   (a) `process.on('worker')` captures the raw Worker as tesseract spawns it, so `'error'` /
+   *       `'exit'` reject `starting` (and, once live, the recognition in flight);
+   *   (b) a start timeout, so a hung load rejects instead of blocking every later page;
+   *   (c) tesseract's `errorHandler` option, so a `status: 'reject'` never throws from its
+   *       message handler.
+   * Any failure latches `'unavailable'`; a healthy start sets `'available'`.
    */
   private async startWorker(): Promise<TesseractWorker> {
     const tesseract = await (this.opts.loadTesseract ?? loadRealTesseract)()
@@ -260,7 +244,7 @@ export class TesseractOcrEngine implements OcrEngine {
       rejectStart(toError(err, 'OCR worker failed while starting'))
     const onRawExit = (code: number): void =>
       rejectStart(new Error(`OCR worker exited while starting (code ${code})`))
-    // (1a) Attach INSIDE the hook: the event arrives on the tick after construction, before the
+    // (a) Attach inside the hook: Node emits 'worker' on the tick after construction, before the
     // thread can post anything back, so the listeners are in place ahead of any 'error'.
     const onWorker = (raw: Worker): void => {
       raws.push(raw)
@@ -276,11 +260,9 @@ export class TesseractOcrEngine implements OcrEngine {
         langPath: this.opts.langDir,
         gzip: true,
         cacheMethod: 'none',
-        // (1c) — see above. A no-op is enough: for `action === 'load'` tesseract rejects
-        // `createWorker()` itself (createWorker.js:213); a reject on `loadLanguage`/`initialize`
-        // (corrupt traineddata) is swallowed by its `.catch(() => {})` and only the start timeout
-        // below settles it; a job reject already rejects that job's promise. The handler's one
-        // job is to replace the `throw Error(data)` that would be a second uncaughtException.
+        // (c) A no-op is enough: a load reject already rejects createWorker(), a job reject
+        // rejects that job, and a loadLanguage/initialize reject is settled by the start timeout.
+        // The handler only replaces the `throw` tesseract would otherwise do.
         errorHandler: (): void => undefined,
         ...(workerPath ? { workerPath } : {})
       }))()
@@ -306,13 +288,9 @@ export class TesseractOcrEngine implements OcrEngine {
           ;(timer as { unref?: () => void }).unref?.()
         })
       ])
-      // Healthy: OUR raw worker becomes the LIVE set; a later death rejects the in-flight page
-      // and re-arms (see `onLiveWorkerFailure`) instead of surfacing as an uncaught exception.
-      // tesseract.js exposes the raw Worker on its resolved object (createWorker.js `resolveObj.
-      // worker`) — adopt only that one, so a foreign Worker constructed in the same tick (none
-      // exists in this app today) is never mistaken for ours; a fake without the field is adopted
-      // as-is. (On the FAILURE path below every captured raw is reaped — createWorker never
-      // resolved, so ours cannot be told apart; the same latent caveat, accepted.)
+      // Healthy: adopt OUR raw worker into the live set (tesseract exposes it as `.worker` on the
+      // resolved object; a fake without the field is adopted as-is). A later death then rejects
+      // the in-flight page and re-arms (`onLiveWorkerFailure`) instead of crashing the app.
       const own = (worker as unknown as { worker?: unknown }).worker
       for (const raw of raws) {
         raw.off('error', onRawError)
@@ -344,12 +322,9 @@ export class TesseractOcrEngine implements OcrEngine {
   }
 
   /**
-   * A LIVE worker died (error or unexpected exit): fail the pages in flight, drop the worker,
-   * and RE-ARM — back to `'probing'` with one bounded re-probe scheduled. A live worker exists
-   * only after a healthy start, so this death is "proved, then died": one page's WASM abort must
-   * not disable OCR for the session. The re-probe decides: healthy → `'available'`; a start
-   * failure → `'unavailable'` (latched by `startWorker`). Until it settles the engine reports
-   * unavailable (`isAvailable() === false`) and the UI offers nothing.
+   * A live worker died: fail the pages in flight, drop the worker, go back to `'probing'` and
+   * schedule one re-probe (healthy → `'available'`, failed start → `'unavailable'`). Until it
+   * settles the engine reports unavailable and the UI offers nothing.
    */
   private onLiveWorkerFailure(raw: Worker, err: Error): void {
     if (!this.liveRaw.has(raw)) return // our own terminate — expected
@@ -416,8 +391,8 @@ export class TesseractOcrEngine implements OcrEngine {
           }
           if (signal?.aborted) onAbort()
           else signal?.addEventListener('abort', onAbort, { once: true })
-          // REL-6: a worker death mid-page rejects THIS page now (tesseract's job promise would
-          // never settle) — `onLiveWorkerFailure` has already dropped the dead worker.
+          // A worker death mid-page rejects this page now (tesseract's job promise would never
+          // settle); `onLiveWorkerFailure` has already dropped the dead worker. (#232)
           onWorkerDeath = reject
           this.inflight.add(onWorkerDeath)
           // The WASM job keeps running after a timeout/abort win; terminate() (below)
@@ -461,8 +436,8 @@ export class TesseractOcrEngine implements OcrEngine {
     }
     const worker = this.worker
     this.worker = null
-    // REL-6: the exit this teardown causes is expected — forget the raw workers FIRST so
-    // `onLiveWorkerFailure` ignores it (membership means "expected alive").
+    // The exit this teardown causes is expected: forget the raw workers first so
+    // `onLiveWorkerFailure` ignores it.
     this.liveRaw.clear()
     // Only clear the latch if it is STILL the init we awaited — a concurrent ensureWorker() may have
     // replaced it with a newer attempt during the await, which must be allowed to proceed (not orphaned).
@@ -496,27 +471,21 @@ export class TesseractOcrEngine implements OcrEngine {
     await this.terminateWorker()
   }
 
-  /** REL-6 execution state (see `OcrAvailability`); a stopped engine is unavailable. */
+  /** Execution state (see `OcrAvailability`); a stopped engine is unavailable. */
   availability(): OcrAvailability {
     return this.stopped ? 'unavailable' : this.state
   }
 
-  /**
-   * `availability() === 'available'` — the same predicate `ocrAvailable` in the app status applies
-   * (the IPC reads the optional interface method `availability()` directly; this is the engine's
-   * own convenience form, used by the tests).
-   */
+  /** `availability() === 'available'` — the predicate `ocrAvailable` in the app status uses. */
   isAvailable(): boolean {
     return this.availability() === 'available'
   }
 
   /**
-   * Packaged-mode execution probe (REL-6): prove the worker can run in THIS build by starting it
-   * once under the bounded start (module load + WASM core + language init — exactly the chain the
-   * `asarUnpack` gap breaks), then release it again so a feature most sessions never use holds no
-   * warm WASM worker; the first real recognition respawns lazily (~0.3 s). No image fixture: a
-   * successful `createWorker()` already covers every step the packaged failure class can break
-   * (recognition itself is pure WASM compute). Cheap no-op once proven. Never throws.
+   * Packaged-mode execution probe (#232): start the worker once under the bounded start (module
+   * load + WASM core + language init — the chain a packaging gap breaks), then release it so no
+   * warm worker is held; the first real recognition respawns lazily. No-op once proven. Never
+   * throws.
    */
   async probe(): Promise<boolean> {
     if (this.stopped) return false
@@ -526,9 +495,8 @@ export class TesseractOcrEngine implements OcrEngine {
     } catch {
       return false // `startWorker` has latched 'unavailable'
     }
-    // Narrow race, accepted: a recognize() enqueued after this check and before terminateWorker()
-    // takes the worker would run against a worker being torn down and fail that ONE page (the
-    // worker respawns for the next); it can only happen in the seconds around startup/re-probe.
+    // Narrow race, accepted: a recognize() enqueued between this check and the terminate fails
+    // that one page (the worker respawns for the next). Only possible around startup/re-probe.
     if (this.queued === 0) await this.terminateWorker()
     return true
   }

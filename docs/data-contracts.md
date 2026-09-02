@@ -1328,7 +1328,7 @@ whole renderer-visible surface.
   `AppStatus` carries the additive gates `translationAvailable: boolean` (issue #40) and
   `translationDevice?: TranslationDeviceStatus` (issue #42 reopen — the Translate screen's
   device hint; recorded here per #164 D-7a, the `dictationAvailable`/`ocrAvailable` siblings'
-  precedent). Audit 2026-09-02 Phase 1 (REL-6, PR #268): `AppStatus.ocrState?: OcrState`
+  precedent). PR #268 (#232): `AppStatus.ocrState?: OcrState`
   (`'available' | 'probing' | 'unavailable' | 'missing'`, additive-optional, same precedent) says
   WHY `ocrAvailable` is what it is — `ocrAvailable` itself now reads the engine's execution state
   (false while a packaged build's startup execution probe runs and after any worker failure), no

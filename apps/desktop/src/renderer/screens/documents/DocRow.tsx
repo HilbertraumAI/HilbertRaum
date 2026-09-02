@@ -91,9 +91,8 @@ export const DocRow = memo(function DocRow({
   sourcesById: ReadonlyMap<string, DocumentInfo>
   ocrAvailable: boolean
   /**
-   * REL-6 (audit 2026-09-02 Phase 1): why OCR is off, for the scan-row explanation — `'missing'`
-   * keeps the "add the OCR files" copy; `'unavailable'` (files present, recognizer cannot run in
-   * this build) must not claim the files are missing. Optional: older callers/fixtures omit it.
+   * Why OCR is off, for the scan-row explanation (#232): `'missing'` keeps the "add the OCR
+   * files" copy; `'unavailable'` must not claim the files are missing. Optional for older callers.
    */
   ocrState?: OcrState
   /** The TranslateGemma sidecar resolved at startup (TG-3) — gates the Translate item. */

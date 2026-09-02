@@ -70,7 +70,7 @@ export { RAIL_COLLAPSED_KEY, VIEWS_MORE_KEY } from './documents/types'
 // stale. The throttle piggybacks on the existing poll ticks (no nested timer), so it stays deterministic
 // under fake timers and composes cleanly with the DR-2 refreshSeq choke point.
 const REFRESH_THROTTLE_MS = 1500
-/** REL-6: how often the OCR verdict is re-read while a packaged build's startup probe is pending. */
+/** How often the OCR verdict is re-read while a packaged build's startup probe is pending (#232). */
 const OCR_PROBE_RECHECK_MS = 1500
 
 /** A trailing-edge throttle over completion-triggered refreshes (F-31). One coalescer per live job. */
@@ -195,12 +195,11 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   const [translationAvailable, setTranslationAvailable] = useState(false)
   // OCR availability (availability-driven, no settings key): gates "Make searchable
   // (OCR)" and the photo-import mention. Read once per mount — the language files don't appear
-  // mid-session; the one thing that CAN change is a packaged build's startup probe verdict
-  // (REL-6), which the status effect below re-reads while it is still 'probing'.
+  // mid-session; only a packaged build's startup probe verdict can change, and the status effect
+  // below re-reads while it is still 'probing' (#232).
   const [ocrAvailable, setOcrAvailable] = useState(false)
-  // REL-6 (audit 2026-09-02 Phase 1): WHY it is off — 'missing' (no files: the fetch-runtime copy)
-  // vs 'unavailable' (files present, the recognizer cannot run in this build: the banner below +
-  // the scan-row copy that does not claim the files are missing).
+  // Why it is off (#232): 'missing' (no files) vs 'unavailable' (files present, recognizer cannot
+  // run in this build → the banner below + a scan-row copy that does not claim the files are missing).
   const [ocrState, setOcrState] = useState<OcrState>('missing')
   // "Ask these documents" selection (indexed documents only).
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
@@ -296,9 +295,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
 
   useEffect(() => {
     refresh().catch((e) => setError(friendlyIpcError(e)))
-    // REL-6: a packaged build's OCR verdict is 'probing' for the first seconds after launch — a
-    // mount inside that window would otherwise pin "no OCR" for the whole visit. Re-read the
-    // status while the verdict is pending (bounded by the engine's own 30 s start timeout).
+    // A packaged build's OCR verdict is 'probing' for the first seconds after launch; re-read the
+    // status while it is pending so a mount in that window does not pin "no OCR" (#232).
     let cancelled = false
     let recheck: ReturnType<typeof setTimeout> | null = null
     const readStatus = async (): Promise<void> => {
@@ -1299,9 +1297,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
 
       {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}
       <ErrorBanner message={error} t={t} />
-      {/* REL-6 (audit 2026-09-02 Phase 1, decision 2 default): the OCR files are on the drive but
-          the recognizer could not start in this build — say so once, here, instead of offering
-          OCR that would fail (or, before the fix, kill the app). Q22 default copy. */}
+      {/* The OCR files are on the drive but the recognizer could not start in this build — say so
+          here instead of offering OCR that would fail (#232). */}
       {ocrState === 'unavailable' && <Banner tone="warning">{t('docs.ocr.unavailableBanner')}</Banner>}
 
       {/* DR-8: first-mount loading state. With `docs === null` (the initial `listDocuments` still

@@ -188,19 +188,19 @@ Key config points:
   `wasm-feature-detect`, `node-fetch` and node-fetch's own deps `whatwg-url`, `tr46`,
   `webidl-conversions` — nested under node-fetch in the source tree but FLATTENED to top level
   inside the asar by electron-builder 26's collector, so the test checks every module at both
-  destinations (the PR 1-b review caught a source-path-only check passing while those three sat
-  packed at top level). History (audit 2026-09-02 Phase
-  1, REL-6): with only the two tesseract packages listed, the worker's **hoisted** deps stayed
+  destinations (the PR #269 review caught a source-path-only check passing while those three sat
+  packed at top level). History (#232, PRs #268/#269;
+  merged 2026-09-02): with only the two tesseract packages listed, the worker's **hoisted** deps stayed
   inside `app.asar` (measured 2026-07-19 on a real packaged Windows build) and the load failure
   **killed the whole app** while `ocrAvailable` still reported `true` — tesseract.js sets the
   browser-only `worker.onerror`, inert on a Node Worker, so the `'error'` event had no listener
-  and Node rethrew it as `uncaughtException`. PR 1-a **contained** it: the engine captures the
+  and Node rethrew it as `uncaughtException`. PR #268 **contained** it: the engine captures the
   raw worker through Node's `process.on('worker')` hook, bounds the start, passes tesseract's
   `errorHandler`, so a load failure rejects the recognition per document and latches the engine
   unavailable; a **packaged build runs an execution probe at startup** (one bounded worker start,
   released on success) and reports OCR unavailable until it passes — photos import without text
   and carry a per-document note, "Make searchable (OCR)" is not offered, the Documents screen
-  shows a banner. PR 1-b **closed** the gap with the test + globs above; **measured 2026-09-02 on
+  shows a banner. PR #269 **closed** the gap with the test + globs above; **measured 2026-09-02 on
   a packaged Windows build** (`HilbertRaum-0.1.59-portable`, `win-unpacked`, scratch drive root
   with `deu`+`eng` language files): `OCR execution probe {ok: true, ms: 277}` — worker script,
   hoisted deps, WASM core and both language files load from `app.asar.unpacked`. The

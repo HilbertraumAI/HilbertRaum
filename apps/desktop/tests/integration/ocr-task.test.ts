@@ -335,7 +335,7 @@ describe('Make searchable (OCR) end to end', () => {
     expect(() => busy.startDocTask({ kind: 'ocr', documentIds: [docId] })).toThrow(
       TASK_REFUSED_CHAT_STREAMING_MESSAGE
     )
-    // REL-6 (audit 2026-09-02 Phase 1): an engine that exists but cannot run in this build is
+    // #232: an engine that exists but cannot run in this build is
     // refused at admission with the "could not start" copy — not the "files missing" copy, and
     // never a worker spawn attempt.
     const unavailable = makeManager({
@@ -417,11 +417,11 @@ describe('photo import through the real pipeline', () => {
     expect(failed.scanDetected).toBe(false) // the OCR offer is PDF-only
   })
 
-  // REL-6 (audit 2026-09-02 Phase 1, decision 2 default): the OCR files are on the drive but the
+  // #232 / #219: the OCR files are on the drive but the
   // packaged recognizer cannot run — the photo is stored (a re-index recognizes it later) and
   // its row carries the "could not run in this build" note, never the "files missing" copy and
   // never a crash. The engine is not even asked.
-  it('REL-6 interim: a recognizer that cannot run in this build stores the photo with the unavailable note', async () => {
+  it('#232 interim: a recognizer that cannot run in this build stores the photo with the unavailable note', async () => {
     const p = join(tmp, 'photo.png')
     writeFileSync(p, TINY_PNG)
     const engine = fakeEngine(() => 'must not be recognized')
@@ -443,11 +443,11 @@ describe('photo import through the real pipeline', () => {
   })
 })
 
-describe('REL-6 dequeue-time guard (audit 2026-09-02 Phase 1)', () => {
+describe('#232 dequeue-time guard (#232)', () => {
   // The engine was available at admission and became unavailable before the queued task ran
   // (the worker died under a photo import in between). The handler's guard must surface the
   // "could not start" copy — which therefore has to pass the manager's friendly-error filter,
-  // not be swallowed into `main.task.genericFailure` (reviewer finding, PR 1-a).
+  // not be swallowed into `main.task.genericFailure` (PR #268 review).
   it('a task admitted before the recognizer became unavailable fails with the ocrUnavailable copy, not the generic one', async () => {
     const docId = await importScan()
     // Available for the admission check (first read), unavailable for every later read — the

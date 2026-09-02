@@ -215,7 +215,7 @@ export class E5Embedder implements Embedder {
    */
   private startFailed: Error | null = null
   /**
-   * Aborts the IN-FLIGHT lazy start on lock/quit (REL-10, audit 2026-09-02 — the translation
+   * Aborts the IN-FLIGHT lazy start on lock/quit (#244 — the translation
    * runtime's #159 / BE-1 pattern, ported): the child is killed inside the health wait and the
    * start rejects with an AbortError, instead of the teardown awaiting the full health window
    * (180 s by default) of a wedged cold start it is about to kill anyway. One per start.
@@ -271,7 +271,7 @@ export class E5Embedder implements Embedder {
         healthTimeoutMs: this.opts.healthTimeoutMs,
         healthIntervalMs: this.opts.healthIntervalMs,
         host: this.opts.host,
-        // REL-10: let a lock/quit teardown abort this start mid-health-wait (the child is killed
+        // #244: let a lock/quit teardown abort this start mid-health-wait (the child is killed
         // via the normal stop path; start() rejects AbortError — never latched below).
         startAbortSignal: abort.signal
       })
@@ -282,7 +282,7 @@ export class E5Embedder implements Embedder {
         })
         .catch((err) => {
           const error = err instanceof Error ? err : new Error(String(err))
-          // REL-10 (audit 2026-09-02): a teardown-ABORTED start is not a load fault — never latch
+          // #244: a teardown-ABORTED start is not a load fault — never latch
           // `startFailed`; the next embed() after unlock must attempt a fresh start.
           if (isStartAbortError(err) || abort.signal.aborted) throw error
           // F4 (post-merge audit): a TRANSIENT port-bind race must NOT arm the failed-start latch.
@@ -480,7 +480,7 @@ export class E5Embedder implements Embedder {
     try {
       // A lazy start may be IN FLIGHT (first embed() racing app quit): `this.server` is
       // only assigned after start() resolves, so returning here would let the spawned
-      // child outlive the app as an orphan. REL-10 (audit 2026-09-02): ABORT it rather than
+      // child outlive the app as an orphan. #244: ABORT it rather than
       // wait it out — the abort kills the child inside the health wait (the normal stop
       // path, no orphan), the start rejects AbortError (never latches `startFailed`), and
       // the await below settles in about one health-poll interval instead of the full

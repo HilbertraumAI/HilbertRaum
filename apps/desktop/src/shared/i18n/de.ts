@@ -562,7 +562,8 @@ export const de: Record<keyof typeof en, string> = {
     'Zum Durchsuchbar-Machen fehlen die OCR-Dateien auf diesem Laufwerk. Um sie zu ergänzen, ' +
     'die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur die OCR-Dateien ' +
     'mit „fetch-runtime --family ocr“ holen.',
-  // REL-6 (audit 2026-09-02 Phase 1; Q22-Standardtext, Freigabe durch den Owner offen).
+  // Scan-Zeile + Banner, wenn die OCR-Dateien da sind, aber die Erkennung nicht startet (#232;
+  // Standardtext aus #219, Freigabe durch den Owner offen).
   'docs.scan.ocrUnavailable':
     'Zum Durchsuchbar-Machen wird die Texterkennung (OCR) benötigt, die in dieser Version nicht ' +
     'gestartet werden konnte.',
@@ -1942,8 +1943,8 @@ export const de: Record<keyof typeof en, string> = {
     'näheren Bild der Seite.',
   'main.ingest.imageOcrFailed':
     'Dieses Foto konnte nicht gelesen werden. Indexiere es neu, um es noch einmal zu versuchen.',
-  // REL-6 (audit 2026-09-02 Phase 1): die OCR-Dateien liegen auf dem Laufwerk, aber die
-  // Erkennung kann in dieser Version nicht laufen (Q22-Standardtext, Freigabe durch den Owner).
+  // OCR-Dateien vorhanden, aber die Erkennung läuft in dieser Version nicht (#232; Standardtext
+  // aus #219, Freigabe durch den Owner offen).
   'main.ingest.imageOcrUnavailable':
     'Die Texterkennung (OCR) konnte in dieser Version nicht ausgeführt werden, deshalb wurde ' +
     'dieses Foto ohne lesbaren Text gespeichert. Indexiere es neu, sobald OCR verfügbar ist.',
@@ -2133,7 +2134,7 @@ export const de: Record<keyof typeof en, string> = {
     'Für die Texterkennung werden die OCR-Dateien benötigt, die auf diesem Laufwerk fehlen. ' +
     'Um sie zu ergänzen, die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur ' +
     'die OCR-Dateien mit „fetch-runtime --family ocr“ holen.',
-  // REL-6 (audit 2026-09-02 Phase 1): Dateien vorhanden, aber die Erkennung startet hier nicht.
+  // Dateien vorhanden, aber die Erkennung startet in dieser Version nicht (#232).
   'main.task.ocrUnavailable':
     'Die Texterkennung (OCR) ist in dieser Version nicht verfügbar: Die OCR-Dateien liegen auf ' +
     'diesem Laufwerk, aber die Erkennung konnte nicht gestartet werden.',

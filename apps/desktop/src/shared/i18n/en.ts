@@ -535,9 +535,8 @@ export const en = {
     'Making it searchable needs the OCR files, which are not on this drive. To add them, re-run ' +
     'the drive setup with "--with-assets", or fetch only the OCR files with ' +
     '"fetch-runtime --family ocr".',
-  // REL-6 (audit 2026-09-02 Phase 1; STATE Q22 default copy, owner review pending): the scan-row
-  // explanation and the one-time Documents banner when the OCR files ARE on the drive but the
-  // recognizer cannot run in this build (packaged worker failed to start).
+  // Scan-row explanation + Documents banner when the OCR files are on the drive but the
+  // recognizer cannot run in this build (#232; default wording from #219, owner review pending).
   'docs.scan.ocrUnavailable':
     'Making it searchable needs text recognition (OCR), which could not start in this build.',
   'docs.ocr.unavailableBanner':
@@ -1895,8 +1894,8 @@ export const en = {
   'main.ingest.imageNoText':
     'No readable text was found in this photo. Try a sharper, closer picture of the page.',
   'main.ingest.imageOcrFailed': "This photo couldn't be read. Re-index it to try again.",
-  // REL-6 (audit 2026-09-02 Phase 1, decision 2 default; copy = STATE Q22 default pending owner
-  // review): the OCR files are on the drive but the recognizer cannot run in this build.
+  // The OCR files are on the drive but the recognizer cannot run in this build (#232; wording
+  // is the default from #219, owner review pending).
   'main.ingest.imageOcrUnavailable':
     'Text recognition (OCR) could not run in this build, so this photo was stored without ' +
     'readable text. Re-index it once OCR is available.',
@@ -2085,7 +2084,7 @@ export const en = {
   'main.task.needsOcr':
     'Text recognition needs the OCR files, which are not on this drive. To add them, re-run the ' +
     'drive setup with "--with-assets", or fetch only the OCR files with "fetch-runtime --family ocr".',
-  // REL-6 (audit 2026-09-02 Phase 1): the files are present but the recognizer cannot run here.
+  // Files present but the recognizer cannot run in this build (#232).
   'main.task.ocrUnavailable':
     'Text recognition (OCR) is not available in this build: the OCR files are on this drive, but ' +
     'the recognizer could not start.',

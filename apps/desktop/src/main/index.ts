@@ -363,12 +363,9 @@ function initBackend(): void {
     // ladder reads (read per cold start — a Settings flip needs no restart).
     gpu: gpuSignals
   })
-  // REL-6 (audit 2026-09-02 Phase 1): packaged-mode OCR execution probe. The engine starts
-  // 'probing' when `!isDev` (compose-services) and `ocrAvailable` reports false until this proves
-  // the tesseract worker actually loads from `app.asar.unpacked` — one bounded worker start,
-  // released again on success. Fire-and-forget: startup never waits on it, and a failure only
-  // latches the engine unavailable (photo imports store without text + the per-document note,
-  // "Make searchable (OCR)" is not offered). Content-free log: outcome + duration only.
+  // Packaged-mode OCR execution probe (#232): one bounded worker start, released on success.
+  // Fire-and-forget — startup never waits on it; a failure only latches the engine unavailable.
+  // Content-free log: outcome + duration.
   if (ocrEngine?.probe) {
     const probeT0 = performance.now()
     void ocrEngine.probe().then(
@@ -696,7 +693,7 @@ function createWindow(): void {
 }
 
 // The `will-quit` / `activate` handlers live in `./shutdown` over ONE shared `isShuttingDown`
-// closure (SEC-12 + GAP-2, audit 2026-09-02): a second quit during the teardown is prevented
+// closure (#238): a second quit during the teardown is prevented
 // (the exit comes only from the teardown's finally), a Dock click during it opens no window, and
 // the teardown's awaited middle is bounded by `SHUTDOWN_OVERALL_DEADLINE_MS`. Its ORDERING is
 // unit-testable there (REL-4: abort in-flight streams BEFORE runtime.stop so a partial reply

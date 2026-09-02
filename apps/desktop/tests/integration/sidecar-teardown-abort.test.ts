@@ -6,7 +6,7 @@ import { VisionRuntime } from '../../src/main/services/vision/runtime'
 import { TranslationRuntime } from '../../src/main/services/translation/runtime'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
-// REL-10 (audit 2026-09-02, port of the review's B8 reproduction): a lock or quit that lands
+// #244 (port of the review's B8 reproduction): a lock or quit that lands
 // during a NEVER-HEALTHY cold start of a lazily-started llama-server must settle in about one
 // health-poll interval, not the full 180 s health window. Before the fix, only the translation
 // runtime (#159 / BE-1) aborted an in-flight start; the E5 embedder, the reranker and the vision
@@ -172,7 +172,7 @@ const cases: WrapperCase[] = [
 /** One health poll is ≤ 250 ms; anything near the 180 s health window is the finding. */
 const SETTLE_BOUND_MS = 5_000
 
-describe('REL-10 — lock/quit teardown during a never-healthy cold start (B8)', () => {
+describe('#244 — lock/quit teardown during a never-healthy cold start (B8)', () => {
   afterEach(() => {
     vi.useRealTimers()
   })
