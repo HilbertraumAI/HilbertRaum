@@ -2,9 +2,11 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
+import { createPickerTokens } from './picker-tokens'
 import type {
   RunnableToolSet,
   SkillInfo,
+  SkillPickResult,
   SkillPreview,
   SkillRunState,
   SkillSuggestion,
@@ -190,10 +192,24 @@ export function registerSkillsIpc(ctx: AppContext): void {
     }
   )
 
+  // #240: the picker binds its result to a one-time token (the pickDocuments D1 precedent).
+  // `previewSkillPackage` reads through the token without spending it (the renderer previews,
+  // then confirms); `importSkill` spends it. A renderer string that is not a live token never
+  // reaches the filesystem — the installer's `lstatSync(source)` used to be the first thing a
+  // forged path hit.
+  const skillTokens = createPickerTokens<string>()
+  const requirePickedSource = (token: unknown, spend: boolean): string => {
+    const source = spend ? skillTokens.consume(token) : skillTokens.peek(token)
+    if (source === undefined) throw new Error(tMain('main.skills.notPicked'))
+    return source
+  }
+
   // Open the OS picker for a `.skill.zip` file OR a folder containing SKILL.md (the pickDocuments
   // precedent; renderer has no dialog access). Windows can't mix file+dir in one dialog, so the
-  // caller chooses a mode. Returns the chosen path or null (cancelled).
-  ipcMain.handle(IPC.pickSkillPackage, async (_e, mode?: 'file' | 'folder'): Promise<string | null> => {
+  // caller chooses a mode. Returns `{ token, path }` (the path is renderer display only) or null
+  // (cancelled). Unlock-gated like every consumer: no dialog opens while locked (#240).
+  ipcMain.handle(IPC.pickSkillPackage, async (_e, mode?: 'file' | 'folder'): Promise<SkillPickResult | null> => {
+    requireUnlocked()
     const options =
       mode === 'folder'
         ? { title: tMain('main.dialog.importSkillFolder'), properties: ['openDirectory'] as Array<'openDirectory'> }
@@ -207,20 +223,25 @@ export function registerSkillsIpc(ctx: AppContext): void {
           }
     const win = BrowserWindow.getFocusedWindow()
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
-    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
+    if (result.canceled || result.filePaths.length === 0) return null
+    const path = result.filePaths[0]
+    return { token: skillTokens.mint(path), path }
   })
 
   // Validate an import source FULLY in a transient dir, WITHOUT writing (OQ-2). Never throws on a
-  // bad package — returns `ok: false` with structural reasons so the renderer can show them.
-  ipcMain.handle(IPC.previewSkillPackage, (_e, source: string): SkillPreview => {
+  // bad package — returns `ok: false` with structural reasons so the renderer can show them. The
+  // one throw is a non-token argument (#240): that is not a package problem, so it is refused.
+  ipcMain.handle(IPC.previewSkillPackage, (_e, token: string): SkillPreview => {
     requireUnlocked()
+    const source = requirePickedSource(token, /* spend */ false)
     return previewSkillPackage(ctx.db, source, installerDeps(), { developerMode: developerMode() })
   })
 
   // Validate → unzip/copy into user-skills/<id>/ → install enabled-with-warning (DS7). A failed
   // import persists nothing (the staging dir is deleted). Throws a friendly structural reason.
-  ipcMain.handle(IPC.importSkill, (_e, source: string): SkillInfo => {
+  ipcMain.handle(IPC.importSkill, (_e, token: string): SkillInfo => {
     requireUnlocked()
+    const source = requirePickedSource(token, /* spend */ true)
     try {
       const { info, fileCount } = importSkill(ctx.db, source, installerDeps(), {
         developerMode: developerMode()

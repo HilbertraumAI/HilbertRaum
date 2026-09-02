@@ -295,7 +295,7 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     const user = userEvent.setup()
     stubApi({
       listSkills: vi.fn(async () => []),
-      pickSkillPackage: vi.fn(async () => '/tmp/new.skill.zip'),
+      pickSkillPackage: vi.fn(async () => ({ token: 'tok-new', path: '/tmp/new.skill.zip' })),
       previewSkillPackage: vi.fn(async () => preview()),
       importSkill
     })
@@ -308,7 +308,8 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     expect(dialog.getByText('Add this skill?')).toBeInTheDocument()
     expect(dialog.getByText('This skill can:')).toBeInTheDocument()
     await user.click(dialog.getByRole('button', { name: 'Add skill' }))
-    expect(importSkill).toHaveBeenCalledWith('/tmp/new.skill.zip')
+    // The token, never the path, crosses the IPC (#240).
+    expect(importSkill).toHaveBeenCalledWith('tok-new')
   })
 
   // FE-2: pickSkillPackage now sits INSIDE pick()'s try, so a rejecting picker surfaces a
@@ -331,7 +332,7 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     const user = userEvent.setup()
     stubApi({
       listSkills: vi.fn(async () => []),
-      pickSkillPackage: vi.fn(async () => '/tmp/old.skill.zip'),
+      pickSkillPackage: vi.fn(async () => ({ token: 'tok-old', path: '/tmp/old.skill.zip' })),
       previewSkillPackage: vi.fn(async () =>
         preview({ collision: true, isDowngrade: true, downgradeBlocked: true, installedVersion: '2.0.0', version: '1.0.0' })
       ),
@@ -361,7 +362,7 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     })
     stubApi({
       listSkills: vi.fn(async () => []),
-      pickSkillPackage: vi.fn(async () => '/tmp/race.skill.zip'),
+      pickSkillPackage: vi.fn(async () => ({ token: 'tok-race', path: '/tmp/race.skill.zip' })),
       previewSkillPackage: vi.fn(async () => preview()),
       importSkill: importSkill
     })
@@ -382,7 +383,7 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     })
     stubApi({
       listSkills: vi.fn(async () => []),
-      pickSkillPackage: vi.fn(async () => '/tmp/new.skill.zip'),
+      pickSkillPackage: vi.fn(async () => ({ token: 'tok-new', path: '/tmp/new.skill.zip' })),
       previewSkillPackage: vi.fn(async () => preview()),
       importSkill: importSkill
     })
@@ -398,7 +399,7 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     const user = userEvent.setup()
     stubApi({
       listSkills: vi.fn(async () => []),
-      pickSkillPackage: vi.fn(async () => '/tmp/bad.skill.zip'),
+      pickSkillPackage: vi.fn(async () => ({ token: 'tok-bad', path: '/tmp/bad.skill.zip' })),
       previewSkillPackage: vi.fn(async () =>
         preview({ ok: false, errors: ['This skill package is missing its SKILL.md.'] })
       )
@@ -484,7 +485,7 @@ describe('SkillsTab — import preview notes localized by code (SKA-35)', () => 
     const user = userEvent.setup()
     stubApi({
       listSkills: vi.fn(async () => []),
-      pickSkillPackage: vi.fn(async () => '/tmp/new.skill.zip'),
+      pickSkillPackage: vi.fn(async () => ({ token: 'tok-new', path: '/tmp/new.skill.zip' })),
       previewSkillPackage: vi.fn(async () =>
         preview({
           notes: ['"permissions.documents" requested more than v1 allows; clamped to "selected_only" (DS6)'],

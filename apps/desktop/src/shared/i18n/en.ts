@@ -2151,6 +2151,7 @@ export const en = {
     "The voice engine can't be replaced while audio is being transcribed. Wait for it to finish, then try again.",
   'main.docs.locked': 'Workspace is locked. Unlock it to manage documents.',
   'main.docs.processing': 'This document is still being processed. Wait for the import to finish.',
+  'main.docs.tooManyPaths': 'Too many files were selected at once. Choose a folder instead.',
   'main.docs.taskRunning': 'A task is running for this document. Cancel it or wait for it to finish.',
   // GAP-5 (full-audit 2026-07-11): the requireNoActiveTask mirror for in-flight SKILL runs.
   'main.docs.skillRunning': 'A skill is working on this document. Cancel it or wait for it to finish.',
@@ -2240,6 +2241,7 @@ export const en = {
   'main.dialog.filterDocx': 'Word document',
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
   'main.skills.locked': 'Workspace is locked. Unlock it to manage skills.',
+  'main.skills.notPicked': 'Choose the skill package with the file picker first.',
   'main.skills.incompatible': 'This skill needs a newer version of the app. Update to use it.',
   // Tier-2 tool runs (skills plan §12.2, S11b) — friendly, content-free.
   'main.skills.run.unavailable': "This skill's tool isn't available right now.",

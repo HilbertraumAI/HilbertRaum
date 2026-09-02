@@ -47,7 +47,13 @@ import {
 import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
 import { parseOcrMeta } from './ocr-meta'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
-import { resolveIngestionLimits, withParseTimeout, type IngestionLimits } from './limits'
+import {
+  resolveIngestionLimits,
+  resolveWalkBudget,
+  withParseTimeout,
+  type IngestionLimits,
+  type WalkBudget
+} from './limits'
 import type { PlaintextOpsRegistry } from './plaintext-ops'
 import {
   canonicalLeafFor,
@@ -1356,6 +1362,8 @@ export interface ImportPreflight {
 }
 
 export function summarizeImportPaths(paths: string[]): ImportPreflight {
+  // #240: the array cap (`MAX_DROP_PATHS`) is enforced by the IPC handler on the RAW seams only —
+  // a picker selection is main-vetted and may legitimately exceed it. The walk itself is bounded.
   const files = expandPaths(paths)
   let audioFileCount = 0
   let audioBytes = 0
@@ -1993,9 +2001,43 @@ export function deleteDocument(db: Db, storeDir: string, id: string): void {
  * files are always included (an unsupported one surfaces later as a `failed` document).
  */
 export function expandPaths(paths: string[]): string[] {
+  return expandPathsBounded(paths).files
+}
+
+/** Why a bounded walk stopped early, or `null` when it completed. */
+export type WalkExhausted = 'entries' | 'depth' | 'time' | null
+
+export interface ExpandedPaths {
+  /**
+   * The files reached, in walk order — always a subsequence of the unbounded expansion: a
+   * stopped walk ('entries' / 'time') keeps what it reached plus every picked FILE that follows
+   * (remaining picked folders are skipped); a depth cut prunes the deep branch and continues.
+   * Never anything the unbounded walk would not have returned.
+   */
+  files: string[]
+  exhausted: WalkExhausted
+}
+
+/**
+ * `expandPaths` with the walk budget (#240): the walk is synchronous on the main thread, so it
+ * is cut — never hung — by an entry cap, a depth cap (the picked folder is depth 0; deeper
+ * directories are skipped, siblings continue) and a wall-clock budget checked once per
+ * directory. A picked FILE is never subject to it. `now` is injectable for a deterministic
+ * clock in tests. Moving the walk off the main thread is #274.
+ */
+export function expandPathsBounded(
+  paths: string[],
+  budget: WalkBudget = resolveWalkBudget(),
+  now: () => number = Date.now
+): ExpandedPaths {
   const supported = new Set(supportedExtensions())
   const out: string[] = []
   const seen = new Set<string>()
+  const started = now()
+  let entriesSeen = 0
+  let exhausted: WalkExhausted = null
+  // 'entries' and 'time' stop the whole walk; 'depth' only prunes the branch it hit.
+  let stop = false
 
   const add = (p: string): void => {
     if (!seen.has(p)) {
@@ -2021,7 +2063,17 @@ export function expandPaths(paths: string[]): string[] {
   // terminating (acyclic) walk's expansion set byte-identical: a symlink to a DISTINCT directory
   // is not an ancestor, so it is still followed (the intended ING-4 link-following behaviour).
   const onPath = new Set<string>()
-  const walk = (dir: string): void => {
+  const walk = (dir: string, depth: number): void => {
+    if (stop) return
+    if (depth > budget.maxDepth) {
+      exhausted ??= 'depth'
+      return
+    }
+    if (now() - started > budget.maxMillis) {
+      exhausted = 'time'
+      stop = true
+      return
+    }
     // realpathSync collapses the link chain to the cycle's identity; a failure (race/permission)
     // falls back to the literal path so a normal dir is still walked.
     let real: string
@@ -2040,9 +2092,15 @@ export function expandPaths(paths: string[]): string[] {
         return
       }
       for (const entry of entries) {
+        if (stop) return
+        if (++entriesSeen > budget.maxEntries) {
+          exhausted = 'entries'
+          stop = true
+          return
+        }
         const full = join(dir, entry.name)
         if (entry.isDirectory()) {
-          walk(full)
+          walk(full, depth + 1)
         } else if (entry.isFile()) {
           if (supported.has(extname(full).toLowerCase())) add(full)
         } else {
@@ -2054,7 +2112,7 @@ export function expandPaths(paths: string[]): string[] {
           } catch {
             continue
           }
-          if (stat.isDirectory()) walk(full)
+          if (stat.isDirectory()) walk(full, depth + 1)
           else if (supported.has(extname(full).toLowerCase())) add(full)
         }
       }
@@ -2070,10 +2128,14 @@ export function expandPaths(paths: string[]): string[] {
     } catch {
       continue
     }
-    if (stat.isDirectory()) walk(p)
-    else add(p)
+    // A stopped walk skips the remaining picked FOLDERS; picked files are always kept.
+    if (stat.isDirectory()) {
+      if (!stop) walk(p, 0)
+    } else {
+      add(p)
+    }
   }
-  return out
+  return { files: out, exhausted }
 }
 
 /** An expanded file with its folder-import display metadata (plan §11.2, N12). */

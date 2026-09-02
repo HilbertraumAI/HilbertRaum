@@ -1970,6 +1970,14 @@ export interface SkillInfo {
   updatedAt: string
 }
 
+/** Result of `pickSkillPackage` (#240, the `PickDocumentsResult` precedent): the chosen path
+ *  (renderer display only) + a one-time capability token that `previewSkillPackage` reads
+ *  through and `importSkill` spends. Cancelled ⇒ null. */
+export interface SkillPickResult {
+  token: string
+  path: string
+}
+
 /**
  * The result of validating an import source (a `.skill.zip` or a folder) FULLY in a transient
  * staging dir BEFORE the user confirms (OQ-2, lean-yes; skills plan §16). NOTHING is persisted to

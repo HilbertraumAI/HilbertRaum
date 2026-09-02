@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
+import { createPickerTokens } from './picker-tokens'
+import { MAX_DROP_PATHS } from '../services/ingestion/limits'
 import { lstatSync, realpathSync, statSync } from 'node:fs'
 import { extname } from 'node:path'
 import type {
@@ -182,35 +184,26 @@ export function registerDocsIpc(ctx: AppContext): void {
   // resolve picker imports from it — the renderer can't name a path it didn't pick. (Drag-drop
   // can't be tokenized — the OS hands the drop to the renderer — so that seam is hardened
   // instead; see `hardenDroppedPaths`. Residual documented in security-model.md.)
-  const PICKER_TOKEN_CAP = 16
-  const pickerTokens = new Map<string, string[]>()
-  const mintPickerToken = (paths: string[]): string => {
-    const token = randomUUID()
-    pickerTokens.set(token, paths)
-    while (pickerTokens.size > PICKER_TOKEN_CAP) {
-      const oldest = pickerTokens.keys().next().value
-      if (oldest === undefined) break
-      pickerTokens.delete(oldest)
-    }
-    return token
-  }
+  // The token map itself lives in `picker-tokens.ts` (shared with the skills picker, #240).
+  const pickerTokens = createPickerTokens<string[]>()
+  const mintPickerToken = (paths: string[]): string => pickerTokens.mint(paths)
   /** Resolve+consume a picker token to the exact paths main returned; [] for unknown/stale. */
-  const consumePickerToken = (token: unknown): string[] => {
-    if (typeof token !== 'string' || token === '') return []
-    const paths = pickerTokens.get(token)
-    if (paths === undefined) return []
-    pickerTokens.delete(token)
-    return paths
+  const consumePickerToken = (token: unknown): string[] => pickerTokens.consume(token) ?? []
+  /** #240: refuse an oversized renderer array before the first filesystem call. */
+  const requireDropCount = (arr: string[]): void => {
+    if (arr.length > MAX_DROP_PATHS) throw new Error(tMain('main.docs.tooManyPaths'))
   }
   /**
    * Harden the DRAG-DROP seam (D1): the OS delivers a native drop to the renderer, so main can't
    * vouch for these paths via a token. Keep only existing, non-symlink entries and canonicalize
    * them — a renderer can't use a `.pdf`-named symlink to read a sensitive target through the
    * importer, and a deleted/garbage entry simply drops. (A directory is still walked downstream
-   * by `expandPaths`, whose internal link-following is intentional per audit L3/L5.)
+   * by `expandPaths`, whose internal link-following is intentional per audit L3/L5; the walk
+   * itself is budget-bounded, #240.)
    */
   const hardenDroppedPaths = (paths: unknown): string[] => {
     const arr = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
+    requireDropCount(arr)
     const out: string[] = []
     for (const p of arr) {
       try {
@@ -605,9 +598,15 @@ export function registerDocsIpc(ctx: AppContext): void {
   // L-3: gate + type-filter exactly like importDocuments — a compromised renderer must
   // not drive a recursive statSync/readdirSync walk of arbitrary directories while the
   // workspace is locked, nor pass non-string elements that would crash expandPaths.
-  ipcMain.handle(IPC.importPreflight, (_e, paths: string[]): ImportPreflight => {
+  // #240: with a live picker token the count runs over the main-vetted paths (the renderer's
+  // array is ignored, the token is NOT spent — `importDocuments` spends it); without one this is
+  // the raw seam and the array is capped before any filesystem call.
+  ipcMain.handle(IPC.importPreflight, (_e, paths: string[], pickerToken?: string): ImportPreflight => {
     requireUnlocked()
+    const picked = pickerTokens.peek(pickerToken)
+    if (picked !== undefined) return summarizeImportPaths(picked)
     const safePaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
+    requireDropCount(safePaths)
     return summarizeImportPaths(safePaths)
   })
 

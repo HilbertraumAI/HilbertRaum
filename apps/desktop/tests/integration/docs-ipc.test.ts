@@ -1,8 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+// Recording pass-through wrapper over `node:fs` (#240): every call still reaches the real
+// filesystem; the mock only RECORDS `(fn, path)` for paths carrying the per-test probe token, so
+// a test can prove a renderer-supplied array was refused BEFORE the first `lstat`/`stat`/
+// `realpath`. Hoisted above the imports (the workspace-vault-durability.test.ts idiom).
+const fsLog = vi.hoisted(() => ({
+  probe: '',
+  calls: [] as Array<{ fn: string; path: string }>
+}))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const record = <F extends (...args: never[]) => unknown>(fn: string, real: F): F =>
+    ((...args: unknown[]) => {
+      const p = typeof args[0] === 'string' ? args[0] : String(args[0])
+      if (fsLog.probe !== '' && p.includes(fsLog.probe)) fsLog.calls.push({ fn, path: p })
+      return (real as unknown as (...a: unknown[]) => unknown)(...args)
+    }) as unknown as F
+  const mocked = {
+    ...actual,
+    lstatSync: record('lstatSync', actual.lstatSync),
+    statSync: record('statSync', actual.statSync),
+    realpathSync: record('realpathSync', actual.realpathSync),
+    readdirSync: record('readdirSync', actual.readdirSync)
+  }
+  return { ...mocked, default: mocked }
+})
 
 // IPC-layer tests for registerDocsIpc — the handler glue: the `requireUnlocked` guard on
 // DB-backed handlers (M6), the one-shot startup reconcile of documents stuck mid-ingestion
@@ -66,6 +92,7 @@ import type {
   ReindexJobStatus
 } from '../../src/shared/types'
 import { LARGE_FILE_BYTES } from '../../src/shared/types'
+import { MAX_DROP_PATHS } from '../../src/main/services/ingestion/limits'
 import type { AppContext } from '../../src/main/services/context'
 import {
   DocTaskManager,
@@ -77,6 +104,12 @@ import { makeScanOnlyPdf } from '../helpers/fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
+
+// The recorder is armed per test; disarm it before every test so a failed one cannot leave it on.
+beforeEach(() => {
+  fsLog.probe = ''
+  fsLog.calls.length = 0
+})
 
 function freshWorkspace(): { db: Db; workspacePath: string } {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-docsipc-'))
@@ -221,6 +254,54 @@ describe('registerDocsIpc', () => {
     expect(bogus.result).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
     const mixed = await invoke(handlers, IPC.importPreflight, [42, null] as unknown as string[])
     expect(mixed.result).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
+  })
+
+  // #240: the renderer-supplied array is capped BEFORE any filesystem call — an unbounded array of
+  // unreachable paths used to drive one `lstat`/`stat` per element on the main thread. Strings only:
+  // every path here sits under a local temp root; no UNC/device form is ever handed to the real
+  // filesystem in any test. (The lexical UNC/device rejection is #222; mapped network drives cannot
+  // be told apart lexically at all — that stays a documented residual there.)
+  it('refuses more than MAX_DROP_PATHS strings on the drop and preflight seams before any lstat/stat/realpath (#240)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const probe = `probe-${randomUUID()}`
+    const paths = Array.from({ length: MAX_DROP_PATHS + 1 }, (_, i) => join(workspacePath, `${probe}-${i}.txt`))
+    fsLog.probe = probe
+    fsLog.calls.length = 0
+    await expect(invoke(handlers, IPC.importPreflight, paths)).rejects.toThrow()
+    expect(fsLog.calls).toEqual([])
+    // The drop seam (no picker token) is the same cap.
+    await expect(invoke(handlers, IPC.importDocuments, paths)).rejects.toThrow()
+    expect(fsLog.calls).toEqual([])
+    // Exactly the cap is admitted and does reach the filesystem (the paths do not exist → empty).
+    const atCap = paths.slice(0, MAX_DROP_PATHS)
+    const { result } = await invoke(handlers, IPC.importPreflight, atCap)
+    expect(result).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
+    expect(fsLog.calls.length).toBeGreaterThan(0)
+  })
+
+  // A PICKER selection is main-vetted, so it is exempt from the cap: preflight with the token
+  // counts main's own paths (the renderer array is ignored), the token stays live for the import.
+  it('importPreflight with the pickDocuments token is not capped and does not spend the token (#240)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const probe = `probe-${randomUUID()}`
+    const picked = Array.from({ length: MAX_DROP_PATHS + 1 }, (_, i) => join(workspacePath, `${probe}-${i}.txt`))
+    dialogState.result = { canceled: false, filePaths: picked }
+    const { result: pick } = await invoke(handlers, IPC.pickDocuments, 'files')
+    const token = (pick as { token: string }).token
+    expect(token).not.toBe('')
+    fsLog.probe = probe
+    // The renderer array is ignored: an EMPTY array + the token still counts the picked paths.
+    const { result: pre } = await invoke(handlers, IPC.importPreflight, [], token)
+    expect(pre).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
+    expect(fsLog.calls.length).toBeGreaterThan(0)
+    // Not spent: the import still redeems it (no drop cap on that branch either).
+    const { result: job } = await invoke(handlers, IPC.importDocuments, [], { pickerToken: token })
+    expect((job as { documentIds: string[] }).documentIds).toEqual([])
+    // A stale token falls back to the raw (capped) seam.
+    await expect(invoke(handlers, IPC.importPreflight, picked, token)).rejects.toThrow()
+    dialogState.result = { canceled: true, filePaths: [] }
   })
 
   it('reconciles a prior-run stuck document and flags a stale-embedding document (M5 + M7)', async () => {

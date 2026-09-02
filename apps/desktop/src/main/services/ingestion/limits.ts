@@ -76,6 +76,49 @@ export function resolveIngestionLimits(env: NodeJS.ProcessEnv = process.env): In
 }
 
 /**
+ * Most paths one renderer call may hand to the drop / preflight seams (#240). A cap on the
+ * array, checked before the first filesystem call — an unbounded list of unreachable paths
+ * used to cost one `lstat`/`stat` each on the main thread. Far above any real selection
+ * (a folder pick is ONE path; the walk inside it is bounded separately by the walk budget).
+ */
+export const MAX_DROP_PATHS = 512
+
+/** Bounds on the synchronous directory walk behind a folder drop / pick (#240). */
+export interface WalkBudget {
+  /** Max directory entries the walk will look at across the whole selection. */
+  maxEntries: number
+  /** Max directory depth below a picked folder (the picked folder is depth 0). */
+  maxDepth: number
+  /** Wall-clock budget for the whole walk, checked once per directory. */
+  maxMillis: number
+}
+
+/**
+ * Defaults: 50 000 entries covers any realistic document archive on a portable drive; 64
+ * levels is beyond any hand-made tree; 10 s is the longest the main thread may stay busy on a
+ * slow USB walk before the selection is cut. A cut walk imports what it reached and stops —
+ * bounded, not perfect (the off-thread rewrite is #274). Each is env-overridable like the
+ * parser caps above.
+ */
+export const DEFAULT_WALK_BUDGET: WalkBudget = {
+  maxEntries: 50_000,
+  maxDepth: 64,
+  maxMillis: 10_000
+}
+
+/**
+ * Resolve the walk budget with env overrides: `HILBERTRAUM_WALK_MAX_ENTRIES`,
+ * `HILBERTRAUM_WALK_MAX_DEPTH`, `HILBERTRAUM_WALK_BUDGET_MS`.
+ */
+export function resolveWalkBudget(env: NodeJS.ProcessEnv = process.env): WalkBudget {
+  return {
+    maxEntries: envInt(env, 'HILBERTRAUM_WALK_MAX_ENTRIES', DEFAULT_WALK_BUDGET.maxEntries),
+    maxDepth: envInt(env, 'HILBERTRAUM_WALK_MAX_DEPTH', DEFAULT_WALK_BUDGET.maxDepth),
+    maxMillis: envInt(env, 'HILBERTRAUM_WALK_BUDGET_MS', DEFAULT_WALK_BUDGET.maxMillis)
+  }
+}
+
+/**
  * Race a parse against a wall-clock timeout, rejecting with `message` (a persist-canonical
  * English string the caller supplies) if the budget elapses first. This bounds how long the
  * pipeline WAITS, so a wedged parser fails the one document instead of hanging the import loop;

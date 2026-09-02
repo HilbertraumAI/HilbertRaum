@@ -20,13 +20,15 @@ import type { SkillKind, SkillPermissions } from '@shared/skill-manifest'
 import type { AppSettings, SkillInfo, SkillPreview, SkillReconcileStatus } from '@shared/types'
 
 // Settings → Skills (skills plan §15 + §18.1). The one place to see and add skills.
-// Everything destructive/file-touching is resolved MAIN-side (S4): the renderer hands a
-// chosen path to previewSkillPackage/importSkill and otherwise reads SkillInfo. No fs,
+// Everything destructive/file-touching is resolved MAIN-side (S4): the renderer hands the
+// picker token to previewSkillPackage/importSkill (#240) and otherwise reads SkillInfo. No fs,
 // no dialog, no validation here. Copy is calm (guidelines §1), every status is icon+word
 // (never colour-only, §9), and the warning for imported skills is reassuring, not alarming.
 // The import-error/note localization tables live in lib/skillImportI18n.ts (SKA-33/SKA-35).
 
-type ImportState = { path: string; preview: SkillPreview } | null
+// `token` is the picker capability from `pickSkillPackage` (#240): preview and import take it,
+// never the path (kept for display only).
+type ImportState = { token: string; path: string; preview: SkillPreview } | null
 
 export function SkillsTab(): JSX.Element {
   const { t, tCount } = useT()
@@ -141,10 +143,10 @@ export function SkillsTab(): JSX.Element {
     // friendly toast instead of an unhandled promise rejection. A user cancel resolves to a
     // falsy path and simply returns.
     try {
-      const path = await window.api.pickSkillPackage(mode)
-      if (!path) return
-      const preview = await window.api.previewSkillPackage(path)
-      setPending({ path, preview })
+      const picked = await window.api.pickSkillPackage(mode)
+      if (!picked) return
+      const preview = await window.api.previewSkillPackage(picked.token)
+      setPending({ token: picked.token, path: picked.path, preview })
     } catch {
       toast(t('skills.import.failed'))
     }
@@ -152,10 +154,10 @@ export function SkillsTab(): JSX.Element {
 
   async function doImport(): Promise<void> {
     if (!pending) return
-    const { path } = pending
+    const { token } = pending
     setPending(null)
     try {
-      await window.api.importSkill(path)
+      await window.api.importSkill(token)
       await refresh()
       toast(t('skills.import.added'))
     } catch (e) {

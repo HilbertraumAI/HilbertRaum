@@ -60,6 +60,7 @@ import type {
   RuntimeStatus,
   VisionStatus,
   SkillInfo,
+  SkillPickResult,
   SkillPreview,
   SkillReconcileStatus,
   SkillRunState,
@@ -406,8 +407,8 @@ const api = {
   importDocuments: (paths: string[], options?: ImportOptions): Promise<ImportJob> =>
     ipcRenderer.invoke(IPC.importDocuments, paths, options),
   /** What a picked selection contains — drives the audio size confirm. */
-  importPreflight: (paths: string[]): Promise<ImportPreflight> =>
-    ipcRenderer.invoke(IPC.importPreflight, paths),
+  importPreflight: (paths: string[], pickerToken?: string): Promise<ImportPreflight> =>
+    ipcRenderer.invoke(IPC.importPreflight, paths, pickerToken),
   getImportJob: (jobId: string): Promise<ImportJobStatus> =>
     ipcRenderer.invoke(IPC.getImportJob, jobId),
   /** The in-flight import job (or null) — mount-time poll re-attach (DOC-1, #141). */
@@ -644,14 +645,15 @@ const api = {
   listSkills: (): Promise<SkillInfo[]> => ipcRenderer.invoke(IPC.listSkills),
   /** One skill by install id, or null. */
   getSkill: (installId: string): Promise<SkillInfo | null> => ipcRenderer.invoke(IPC.getSkill, installId),
-  /** Open the OS picker for a `.skill.zip` file or a skill folder; returns the path or null. */
-  pickSkillPackage: (mode?: 'file' | 'folder'): Promise<string | null> =>
+  /** Open the OS picker for a `.skill.zip` file or a skill folder; returns `{ token, path }` (the
+   *  path is display only — preview/import take the token, #240) or null when cancelled. */
+  pickSkillPackage: (mode?: 'file' | 'folder'): Promise<SkillPickResult | null> =>
     ipcRenderer.invoke(IPC.pickSkillPackage, mode),
-  /** Validate an import source fully, without writing — the permission-summary preview (§9.2). */
-  previewSkillPackage: (source: string): Promise<SkillPreview> =>
-    ipcRenderer.invoke(IPC.previewSkillPackage, source),
-  /** Install a validated skill (enabled-with-warning, DS7); rejects friendly on a bad package. */
-  importSkill: (source: string): Promise<SkillInfo> => ipcRenderer.invoke(IPC.importSkill, source),
+  /** Validate a picked source fully, without writing — the permission-summary preview (§9.2). */
+  previewSkillPackage: (token: string): Promise<SkillPreview> =>
+    ipcRenderer.invoke(IPC.previewSkillPackage, token),
+  /** Install a picked skill (enabled-with-warning, DS7); rejects friendly on a bad package. */
+  importSkill: (token: string): Promise<SkillInfo> => ipcRenderer.invoke(IPC.importSkill, token),
   /** Export a skill to a user-chosen `.skill.zip` (package tree only); null if cancelled. */
   exportSkill: (installId: string): Promise<string | null> => ipcRenderer.invoke(IPC.exportSkill, installId),
   /** Delete a user skill (app skills refuse). */
