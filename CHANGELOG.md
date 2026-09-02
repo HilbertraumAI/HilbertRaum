@@ -35,6 +35,12 @@ from its first public `1.0.0` release onward.
   large model file, say), locking or quitting waited for the whole start-up window and the engine
   then refused to start again until the app was restarted. Locking now cancels the start and
   finishes within a few seconds; the engine starts normally after the next unlock.
+- **A text-recognition (OCR) failure no longer closes the app.** In the packaged app, importing a
+  photo or running "Make searchable (OCR)" could exit the whole app when the recognizer failed to
+  start. Such a failure now affects only that document: the photo is stored without readable text
+  and its row says why, and the app checks once at start-up whether recognition can run at all —
+  when it cannot, OCR is not offered and the Documents screen says so. (Packaged text recognition
+  itself is still being repaired; this change makes the failure safe, not the feature work.)
 
 ### Changed
 

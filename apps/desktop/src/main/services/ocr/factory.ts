@@ -41,6 +41,13 @@ export interface OcrSelectionDeps {
   listLanguages?: (assetsDir: string) => string[]
   makeEngine?: (langDir: string, languages: string[]) => OcrEngine
   onSelect?: (kind: 'tesseract' | 'none', reason: string) => void
+  /**
+   * REL-6 (audit 2026-09-02 Phase 1): a PACKAGED build starts the engine in the `'probing'`
+   * state — `ocrAvailable` stays false until the startup execution probe (`engine.probe()`,
+   * kicked off by the main wiring) proves the worker can load from `app.asar.unpacked`. A dev
+   * build (false/absent) starts `'available'` as before. Presence still decides null-vs-engine.
+   */
+  probeRequired?: boolean
 }
 
 /**
@@ -54,7 +61,7 @@ export function createSelectedOcrEngine(deps: OcrSelectionDeps): OcrEngine | nul
   const makeEngine =
     deps.makeEngine ??
     ((langDir: string, languages: string[]) =>
-      createTesseractOcrEngine({ langDir, languages }))
+      createTesseractOcrEngine({ langDir, languages, probeRequired: deps.probeRequired === true }))
 
   const languages = listLanguages(dir)
   if (languages.length === 0) {

@@ -60,9 +60,14 @@ export function registerCoreIpc(ctx: AppContext): void {
       // Dictation is availability-driven (transcriber selected at startup iff
       // whisper binary + weights exist) — the composer mic gates on this flag.
       dictationAvailable: ctx.transcriber != null,
-      // OCR is availability-driven too (engine selected iff the drive's ocr/
-      // language files exist) — gates "Make searchable (OCR)" + the photo hint.
-      ocrAvailable: ctx.ocrEngine != null,
+      // OCR is availability-driven too (engine selected iff the drive's ocr/ language files
+      // exist) — gates "Make searchable (OCR)" + the photo hint. REL-6 (audit 2026-09-02
+      // Phase 1): presence alone lied in packaged builds (the worker could not load from the
+      // asar), so the flag now reads the engine's EXECUTION state — false while a packaged
+      // build's startup probe runs and after any worker failure; `ocrState` tells the
+      // renderer WHY (missing files vs. a recognizer that cannot run in this build).
+      ocrAvailable: ctx.ocrEngine != null && (ctx.ocrEngine.availability?.() ?? 'available') === 'available',
+      ocrState: ctx.ocrEngine == null ? 'missing' : (ctx.ocrEngine.availability?.() ?? 'available'),
       // Translation is availability-driven the same way (TG-3: the TranslateGemma
       // sidecar is selected at startup iff llama-server + the translation GGUF exist) —
       // gates the Documents "Translate" action. Reading the composed handle keeps this

@@ -103,6 +103,53 @@ describe('registerCoreIpc', () => {
     expect(status.hardwareProfile).toBe('UNKNOWN')
     // No translator composed → no device outcome (issue #42 reopen), never a crash.
     expect(status.translationDevice).toBeNull()
+    // No OCR engine composed → the language files are missing (REL-6 `ocrState`).
+    expect(status.ocrAvailable).toBe(false)
+    expect(status.ocrState).toBe('missing')
+  })
+
+  // REL-6 (audit 2026-09-02 Phase 1): `ocrAvailable` was `ctx.ocrEngine != null` — a nullness
+  // check on a stable object, so a packaged engine whose worker could not load (or died after a
+  // passing probe) kept reporting true. The flag now reads the engine's execution state.
+  it('getAppStatus reports ocrAvailable from the engine’s execution state, not its presence (REL-6)', async () => {
+    const lockedWorkspace = {
+      isUnlocked: () => false,
+      getState: (): WorkspaceStateInfo => ({
+        state: 'locked',
+        mode: null,
+        plaintextAllowed: false,
+        encryptionRequired: true
+      })
+    }
+    const statusWith = async (ocrEngine: unknown): Promise<AppStatus> => {
+      const ctx = {
+        paths: { configPath: bogusConfigDir() },
+        workspace: lockedWorkspace,
+        ocrEngine
+      } as unknown as AppContext
+      registerCoreIpc(ctx)
+      const { result } = await invoke(handlers, IPC.getAppStatus)
+      return result as AppStatus
+    }
+    const engine = (state: string) => ({
+      id: 'fake',
+      languages: ['eng'],
+      availability: () => state,
+      recognize: async () => ({ text: '', confidence: null })
+    })
+    const unavailable = await statusWith(engine('unavailable'))
+    expect(unavailable.ocrAvailable).toBe(false)
+    expect(unavailable.ocrState).toBe('unavailable')
+    const probing = await statusWith(engine('probing'))
+    expect(probing.ocrAvailable).toBe(false)
+    expect(probing.ocrState).toBe('probing')
+    const available = await statusWith(engine('available'))
+    expect(available.ocrAvailable).toBe(true)
+    expect(available.ocrState).toBe('available')
+    // An engine without the optional method (the test fakes) is available by construction.
+    const minimal = await statusWith({ id: 'fake', languages: ['eng'], recognize: async () => ({ text: '', confidence: null }) })
+    expect(minimal.ocrAvailable).toBe(true)
+    expect(minimal.ocrState).toBe('available')
   })
 
   it('getAppStatus forwards the translation device outcome (issue #42 reopen — the Translate hint feed)', async () => {

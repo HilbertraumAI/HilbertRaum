@@ -562,6 +562,15 @@ export const de: Record<keyof typeof en, string> = {
     'Zum Durchsuchbar-Machen fehlen die OCR-Dateien auf diesem Laufwerk. Um sie zu ergänzen, ' +
     'die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur die OCR-Dateien ' +
     'mit „fetch-runtime --family ocr“ holen.',
+  // REL-6 (audit 2026-09-02 Phase 1; Q22-Standardtext, Freigabe durch den Owner offen).
+  'docs.scan.ocrUnavailable':
+    'Zum Durchsuchbar-Machen wird die Texterkennung (OCR) benötigt, die in dieser Version nicht ' +
+    'gestartet werden konnte.',
+  'docs.ocr.unavailableBanner':
+    'Die Texterkennung (OCR) ist in dieser Version nicht verfügbar: Die OCR-Dateien liegen auf ' +
+    'diesem Laufwerk, aber die Erkennung konnte nicht gestartet werden. Fotos werden ohne ' +
+    'lesbaren Text gespeichert und gescannte PDFs können nicht durchsuchbar gemacht werden, ' +
+    'bis das behoben ist.',
   'docs.stale.banner':
     'Dieses Dokument wurde mit einem anderen Suchmodell vorbereitet — indexiere es neu, ' +
     'damit Antworten es finden können.',
@@ -1933,6 +1942,11 @@ export const de: Record<keyof typeof en, string> = {
     'näheren Bild der Seite.',
   'main.ingest.imageOcrFailed':
     'Dieses Foto konnte nicht gelesen werden. Indexiere es neu, um es noch einmal zu versuchen.',
+  // REL-6 (audit 2026-09-02 Phase 1): die OCR-Dateien liegen auf dem Laufwerk, aber die
+  // Erkennung kann in dieser Version nicht laufen (Q22-Standardtext, Freigabe durch den Owner).
+  'main.ingest.imageOcrUnavailable':
+    'Die Texterkennung (OCR) konnte in dieser Version nicht ausgeführt werden, deshalb wurde ' +
+    'dieses Foto ohne lesbaren Text gespeichert. Indexiere es neu, sobald OCR verfügbar ist.',
   'main.ingest.sourceMissing': 'Die Quelldatei wurde nicht gefunden.',
   'main.ingest.interrupted':
     'Die Indexierung wurde unterbrochen, bevor sie fertig war. Indexiere neu, um es noch ' +
@@ -2119,6 +2133,10 @@ export const de: Record<keyof typeof en, string> = {
     'Für die Texterkennung werden die OCR-Dateien benötigt, die auf diesem Laufwerk fehlen. ' +
     'Um sie zu ergänzen, die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur ' +
     'die OCR-Dateien mit „fetch-runtime --family ocr“ holen.',
+  // REL-6 (audit 2026-09-02 Phase 1): Dateien vorhanden, aber die Erkennung startet hier nicht.
+  'main.task.ocrUnavailable':
+    'Die Texterkennung (OCR) ist in dieser Version nicht verfügbar: Die OCR-Dateien liegen auf ' +
+    'diesem Laufwerk, aber die Erkennung konnte nicht gestartet werden.',
   'main.task.ocrNotAScan':
     'Nur ein PDF, das als Scan erkannt wurde, kann auf diesem Weg durchsuchbar gemacht werden.',
   'main.task.ocrNoText':

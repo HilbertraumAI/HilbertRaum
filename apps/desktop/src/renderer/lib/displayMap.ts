@@ -25,6 +25,9 @@ export const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
   'main.ingest.imageNeedsOcr',
   'main.ingest.imageNoText',
   'main.ingest.imageOcrFailed',
+  // REL-6 (audit 2026-09-02 Phase 1): the photo was stored without recognition because the
+  // recognizer cannot run in this build — persisted like its three siblings above.
+  'main.ingest.imageOcrUnavailable',
   'main.ingest.sourceMissing',
   'main.ingest.interrupted',
   'main.ingest.fileTooLarge',

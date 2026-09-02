@@ -10,6 +10,14 @@ export type HardwareProfile = 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'
 
 export type WorkspaceMode = 'encrypted' | 'plaintext_dev'
 
+/**
+ * Why OCR is or is not on offer (REL-6, audit 2026-09-02 Phase 1). `'missing'` = no language
+ * files on the drive; the other three are the engine's execution state (`OcrAvailability` in
+ * `main/services/ocr`): `'probing'` = packaged build, startup proof still running;
+ * `'unavailable'` = files present, recognizer cannot run in this build; `'available'`.
+ */
+export type OcrState = 'available' | 'probing' | 'unavailable' | 'missing'
+
 export interface AppStatus {
   appName: string
   appVersion: string
@@ -32,11 +40,21 @@ export interface AppStatus {
    */
   dictationAvailable: boolean
   /**
-   * Local text recognition (OCR) is available: the language files exist in the
-   * drive's `ocr/` dir. Gates the "Make searchable (OCR)" offer and photo imports —
+   * Local text recognition (OCR) is available: the language files exist in the drive's `ocr/`
+   * dir AND the recognizer has (or needs) no proof it cannot run in this build (REL-6, audit
+   * 2026-09-02 Phase 1: false while a packaged build's startup execution probe runs and after
+   * any worker failure). Gates the "Make searchable (OCR)" offer and photo imports —
    * availability-driven, no settings key.
    */
   ocrAvailable: boolean
+  /**
+   * WHY `ocrAvailable` is what it is (REL-6): `'missing'` — no language files on the drive (the
+   * "add them with fetch-runtime" copy); `'probing'` — packaged build, execution probe still
+   * running; `'unavailable'` — the files are present but the recognizer could not run in this
+   * build (the "could not start" copy + the Documents banner); `'available'`. Additive + optional
+   * so older status fixtures stay valid (the `translationDevice` shape).
+   */
+  ocrState?: OcrState
   /**
    * The TranslateGemma translation sidecar is available (llama-server binary + the
    * translation-role GGUF present at startup). Gates the Documents "Translate" action —

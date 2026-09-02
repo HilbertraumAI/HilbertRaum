@@ -30,6 +30,16 @@ export const IMAGE_NO_TEXT_MESSAGE = t('en', 'main.ingest.imageNoText')
 /** Friendly copy for any other recognition failure (spec §11.4 — never raw errors). */
 export const IMAGE_OCR_FAILED_MESSAGE = t('en', 'main.ingest.imageOcrFailed')
 
+/**
+ * REL-6 (audit 2026-09-02 Phase 1, owner decision 2 on its default): the OCR files ARE on the
+ * drive but the recognizer cannot run in this build (the packaged worker failed to load / died /
+ * timed out — `engine.availability() === 'unavailable'`). The photo is stored and its row carries
+ * this note instead of the "not on this drive" copy, which would be false for such a kit; a
+ * re-index once OCR runs recognizes it. Distinct from `IMAGE_OCR_FAILED_MESSAGE` ("re-index to try
+ * again"): a retry against an unavailable engine would fail identically.
+ */
+export const IMAGE_OCR_UNAVAILABLE_MESSAGE = t('en', 'main.ingest.imageOcrUnavailable')
+
 export const ImageParser: DocumentParser = {
   name: 'image',
   extensions: IMAGE_EXTENSIONS,
@@ -43,6 +53,12 @@ export const ImageParser: DocumentParser = {
       // this onto the document row as `failed` + error_message.
       throw new Error(IMAGE_NEEDS_OCR_MESSAGE)
     }
+    // REL-6 interim degrade: an engine that has proven it CANNOT run here is not asked again —
+    // the import stores the photo without recognition and records the note. While the startup
+    // probe is still running ('probing') the recognition below simply shares its worker start.
+    if (engine.availability?.() === 'unavailable') {
+      throw new Error(IMAGE_OCR_UNAVAILABLE_MESSAGE)
+    }
     let text: string
     try {
       const image = await readFile(filePath)
@@ -55,6 +71,10 @@ export const ImageParser: DocumentParser = {
       // the LOCAL log only. Engine errors carry no recognized text (content-safe).
       const message = err instanceof Error ? err.message : String(err)
       log.warn('Photo OCR failed', { error: message.slice(0, 600) })
+      // The failure took the engine down (worker load failure / death): say so, not "retry".
+      if (engine.availability?.() === 'unavailable') {
+        throw new Error(IMAGE_OCR_UNAVAILABLE_MESSAGE)
+      }
       throw new Error(IMAGE_OCR_FAILED_MESSAGE)
     }
     if (text.length === 0) {

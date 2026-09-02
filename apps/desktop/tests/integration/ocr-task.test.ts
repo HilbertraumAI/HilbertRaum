@@ -29,7 +29,10 @@ import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
 import type { AuditEventType } from '../../src/shared/types'
 import { makeScanOnlyPdf, TINY_PNG } from '../helpers/fixtures'
 import { PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/parsers/pdf'
-import { IMAGE_NEEDS_OCR_MESSAGE } from '../../src/main/services/ingestion/parsers/image'
+import {
+  IMAGE_NEEDS_OCR_MESSAGE,
+  IMAGE_OCR_UNAVAILABLE_MESSAGE
+} from '../../src/main/services/ingestion/parsers/image'
 
 // Phase 38 — the OCR document task end to end on the CI posture (zero network, zero
 // models, zero Electron): a FAKE engine + FAKE rasterizer behind the same seams the
@@ -332,6 +335,16 @@ describe('Make searchable (OCR) end to end', () => {
     expect(() => busy.startDocTask({ kind: 'ocr', documentIds: [docId] })).toThrow(
       TASK_REFUSED_CHAT_STREAMING_MESSAGE
     )
+    // REL-6 (audit 2026-09-02 Phase 1): an engine that exists but cannot run in this build is
+    // refused at admission with the "could not start" copy — not the "files missing" copy, and
+    // never a worker spawn attempt.
+    const unavailable = makeManager({
+      engine: { ...fakeEngine(() => 'x'), availability: () => 'unavailable' },
+      rasterize: fakeRasterizer(1)
+    })
+    expect(() => unavailable.startDocTask({ kind: 'ocr', documentIds: [docId] })).toThrow(
+      /could not start/
+    )
   })
 
   // OCR-R P1 (BE-1, ocr-audit 2026-07-18): task admission must mirror the docs IPC
@@ -402,5 +415,28 @@ describe('photo import through the real pipeline', () => {
     expect(failed.status).toBe('failed')
     expect(failed.errorMessage).toBe(IMAGE_NEEDS_OCR_MESSAGE)
     expect(failed.scanDetected).toBe(false) // the OCR offer is PDF-only
+  })
+
+  // REL-6 (audit 2026-09-02 Phase 1, decision 2 default): the OCR files are on the drive but the
+  // packaged recognizer cannot run — the photo is stored (a re-index recognizes it later) and
+  // its row carries the "could not run in this build" note, never the "files missing" copy and
+  // never a crash. The engine is not even asked.
+  it('REL-6 interim: a recognizer that cannot run in this build stores the photo with the unavailable note', async () => {
+    const p = join(tmp, 'photo.png')
+    writeFileSync(p, TINY_PNG)
+    const engine = fakeEngine(() => 'must not be recognized')
+    const degraded: OcrEngine = { ...engine, availability: () => 'unavailable' }
+    const queued = createQueuedDocument(db, p)
+    const info = await processDocument(db, storeDir, queued.id, {
+      embedder: createMockEmbedder(),
+      ocrEngine: degraded
+    })
+    expect(info.status).toBe('failed')
+    expect(info.errorMessage).toBe(IMAGE_OCR_UNAVAILABLE_MESSAGE)
+    expect(info.errorMessage).not.toBe(IMAGE_NEEDS_OCR_MESSAGE)
+    expect(engine.calls).toBe(0)
+    // The stored copy exists, so "re-index once OCR is available" is a real path.
+    expect(info.mimeType).toBe('image/png')
+    expect(info.storedName ?? info.id).toBeTruthy()
   })
 })

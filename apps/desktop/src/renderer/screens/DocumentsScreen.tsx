@@ -14,6 +14,7 @@ import type {
   DocumentPreview,
   DocumentSummary,
   IngestionStatus,
+  OcrState,
   TranslationSourceLang,
   TranslationTargetLang
 } from '@shared/types'
@@ -194,6 +195,10 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   // (OCR)" and the photo-import mention. Read once — the language files don't appear
   // mid-session.
   const [ocrAvailable, setOcrAvailable] = useState(false)
+  // REL-6 (audit 2026-09-02 Phase 1): WHY it is off — 'missing' (no files: the fetch-runtime copy)
+  // vs 'unavailable' (files present, the recognizer cannot run in this build: the banner below +
+  // the scan-row copy that does not claim the files are missing).
+  const [ocrState, setOcrState] = useState<OcrState>('missing')
   // "Ask these documents" selection (indexed documents only).
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   // Document-organization (plan §12): the section rail selection + the collections list.
@@ -292,6 +297,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       try {
         const status = await window.api.getAppStatus()
         setOcrAvailable(status.ocrAvailable)
+        setOcrState(status.ocrState ?? (status.ocrAvailable ? 'available' : 'missing'))
         setTranslationAvailable(status.translationAvailable)
       } catch {
         // No status (partial test bridge) → keep the safe defaults: no OCR offer, no
@@ -1058,6 +1064,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         lang={lang}
         sourcesById={sourcesById}
         ocrAvailable={ocrAvailable}
+        ocrState={ocrState}
         translationAvailable={translationAvailable}
         busy={busy}
         rowBusy={rowBusy}
@@ -1278,6 +1285,10 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
 
       {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}
       <ErrorBanner message={error} t={t} />
+      {/* REL-6 (audit 2026-09-02 Phase 1, decision 2 default): the OCR files are on the drive but
+          the recognizer could not start in this build — say so once, here, instead of offering
+          OCR that would fail (or, before the fix, kill the app). Q22 default copy. */}
+      {ocrState === 'unavailable' && <Banner tone="warning">{t('docs.ocr.unavailableBanner')}</Banner>}
 
       {/* DR-8: first-mount loading state. With `docs === null` (the initial `listDocuments` still
           in flight) `empty` is false and the list area was simply blank — on a large/slow encrypted

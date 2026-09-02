@@ -98,6 +98,8 @@ describe('localizeServerCopy (D-L4)', () => {
       'main.ingest.imageNeedsOcr',
       'main.ingest.imageNoText',
       'main.ingest.imageOcrFailed',
+      // REL-6 (audit 2026-09-02 Phase 1): the interim "stored without recognition" note.
+      'main.ingest.imageOcrUnavailable',
       'main.ingest.sourceMissing',
       'main.ingest.interrupted',
       'main.ingest.fileTooLarge',

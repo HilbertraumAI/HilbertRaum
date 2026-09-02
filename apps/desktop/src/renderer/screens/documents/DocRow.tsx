@@ -6,7 +6,7 @@
 import { memo } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Badge, Banner, Button, Chip, Icon, Spinner } from '../../components'
-import type { DocumentInfo, DocumentLifecycle } from '@shared/types'
+import type { DocumentInfo, DocumentLifecycle, OcrState } from '@shared/types'
 import { generatedStaleness } from '@shared/types'
 import { markDocTaskCancelRequested, type ActiveDocTask } from '../../lib/doctasks'
 import { localizeServerCopy } from '../../lib/displayMap'
@@ -46,6 +46,7 @@ export const DocRow = memo(function DocRow({
   lang,
   sourcesById,
   ocrAvailable,
+  ocrState,
   translationAvailable,
   busy,
   rowBusy,
@@ -89,6 +90,12 @@ export const DocRow = memo(function DocRow({
   lang: UiLanguage
   sourcesById: ReadonlyMap<string, DocumentInfo>
   ocrAvailable: boolean
+  /**
+   * REL-6 (audit 2026-09-02 Phase 1): why OCR is off, for the scan-row explanation — `'missing'`
+   * keeps the "add the OCR files" copy; `'unavailable'` (files present, recognizer cannot run in
+   * this build) must not claim the files are missing. Optional: older callers/fixtures omit it.
+   */
+  ocrState?: OcrState
   /** The TranslateGemma sidecar resolved at startup (TG-3) — gates the Translate item. */
   translationAvailable: boolean
   busy: string | null
@@ -235,7 +242,14 @@ export const DocRow = memo(function DocRow({
                 translates the known constants — unknown strings render as-is. */}
             {localizeServerCopy(t, d.errorMessage)}
             {d.scanDetected && (
-              <> {ocrAvailable ? t('docs.scan.ocrOffer') : t('docs.scan.ocrMissing')}</>
+              <>
+                {' '}
+                {ocrAvailable
+                  ? t('docs.scan.ocrOffer')
+                  : ocrState === 'unavailable'
+                    ? t('docs.scan.ocrUnavailable')
+                    : t('docs.scan.ocrMissing')}
+              </>
             )}
           </Banner>
         )}

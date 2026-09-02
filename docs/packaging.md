@@ -181,19 +181,27 @@ Key config points:
   sufficient**: the OCR engine spawns its Node worker via `worker_threads`, which loads the
   worker script (and the WASM core it requires) through real filesystem reads that cannot see
   inside the asar archive. The engine rewrites `app.asar` → `app.asar.unpacked` in the resolved
-  workerPath. ⚠️ **Packaged OCR currently CRASHES the whole app** (measured 2026-07-19 on a real
-  packaged Windows build; pre-existing and version-independent — it fails identically on the
-  previously pinned Electron): the worker's own **hoisted** dependencies
-  (`regenerator-runtime`, `is-url`, …) are not in the `asarUnpack` list, so they stay packed
-  inside `app.asar` and cannot be resolved from `app.asar.unpacked`; the uncaught exception
-  kills the process while `ocrAvailable` still reports `true`. **Do not smoke-test "Make
-  searchable (OCR)" from the produced `.exe` as an acceptance step until the fix bundle
-  lands** — unpack the hoisted deps, degrade the task instead of dying, make `ocrAvailable`
-  honest about the packaged mode; registered as follow-up 2 in
-  [`architecture.md`](architecture.md) "Dependency remediation — design record (wave DEP-1,
-  PR #77)" §5. Dev-mode OCR is unaffected (the raster → IPC → recognize pipeline was proven end
-  to end on Electron 39), so this is a packaging defect, not an OCR-engine one; the other
-  runtime-only-failure smokes above (parsers, encrypted workspace) still apply.
+  workerPath. The worker's own **hoisted** dependencies (`regenerator-runtime`, `is-url`, …) are
+  not in the `asarUnpack` list, so they stay packed inside `app.asar` and cannot be resolved from
+  `app.asar.unpacked` (measured 2026-07-19 on a real packaged Windows build; pre-existing and
+  version-independent). **Until audit 2026-09-02 Phase 1 (REL-6, PR 1-a) that load failure
+  killed the whole app** while `ocrAvailable` still reported `true`: tesseract.js sets the
+  browser-only `worker.onerror`, inert on a Node Worker, so the worker's `'error'` event had no
+  listener and Node rethrew it as `uncaughtException`. **Since PR 1-a it is contained**: the
+  engine captures the raw worker through Node's `process.on('worker')` hook, bounds the start,
+  and passes tesseract's `errorHandler`, so a load failure rejects the recognition per document
+  and latches the engine unavailable; a **packaged build runs an execution probe at startup**
+  (one bounded worker start, released on success) and reports OCR unavailable until it passes —
+  photos import without text and carry a per-document note, "Make searchable (OCR)" is not
+  offered, the Documents screen shows a one-time banner. **Packaged OCR still does not WORK**
+  until the `asarUnpack` closure lands (PR 1-b: a test that resolves the worker's `require`
+  graph against the globs, then the missing entries); **do not treat a packaged OCR run as a
+  release-acceptance step before the manual packaged smoke** (BUILD_STATE §5 item 18(c)) passes.
+  Registered as follow-up 2 in [`architecture.md`](architecture.md) "Dependency remediation —
+  design record (wave DEP-1, PR #77)" §5. Dev-mode OCR is unaffected (the raster → IPC →
+  recognize pipeline was proven end to end on Electron 39), so this is a packaging defect, not an
+  OCR-engine one; the other runtime-only-failure smokes above (parsers, encrypted workspace)
+  still apply.
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
   `HILBERTRAUM_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are
