@@ -29,6 +29,18 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-02 — **Audit 2026-09-02 Phase 0 — quit re-entry prevented, cold-start abort for
+E5/reranker/vision, spellcheck off (SEC-12, GAP-2, REL-10, SEC-1; PR #267; PR 0-a #265 drained the
+preamble).**_ The `will-quit`/`activate` handlers are one factory (`createAppLifecycleHandlers`,
+`main/shutdown.ts`) over one closure: every `will-quit` is prevented, the exit comes only from the
+teardown's finally (which now reaps registered sidecar children), `activate` is a no-op during a
+quit, and the awaited middle is bounded by `SHUTDOWN_OVERALL_DEADLINE_MS = 30_000` with the lock
+outside the race (record: `security-model.md` "App-shell gate & lifecycle"). E5/reranker/vision
+abort an in-flight cold start on lock/quit like translation (#159; `architecture.md` #159 note).
+`spellcheck: false` on every window (`security-model.md` "Chromium background fetches", which also
+records GAP-3 as a confirmed residual → follow-up SEC-14 #266). Decisions 1 and 13 ran on their
+plan defaults (#218, #230 unanswered). Tests: B1 (inverted) and B8 ported; suite 5,403 → 5,413.
+
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -553,6 +565,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     merged phase follows (outcome + PR + pointer; the narrative lives in the PR and the record):
     - **0-a** (2026-09-02, docs-only, PR #265): the eight closed 2026-08-20…08-22 dated entries
       drained to `docs/build-log.md`; this item opened.
+    - **0** (2026-09-02, PR #267): SEC-12 + GAP-2 (quit re-entry prevented, 30 s overall deadline,
+      lock outside the race), REL-10 (E5/reranker/vision cold-start abort), SEC-1 (spellcheck
+      off); GAP-3 confirmed residual → SEC-14 #266; decisions 1/13 on defaults — dated entry above.
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
