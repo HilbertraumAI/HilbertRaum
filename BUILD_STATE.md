@@ -29,140 +29,17 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-09-03 — **Audit 2026-09-02 Phase 9a — early docs sweep (PR #280): the user guide §13 now says
-what an unclean stop loses (a hard pull, a crash, shutdown or logoff with the app open — every
-change since the last lock; the encrypted snapshot survives); `security-model.md` gained "What
-lives or passes outside the drive" (host Chromium profile — four `localStorage` keys, caches, no
-`Dictionaries/`, not cleared on lock; the OS clipboard — 8 Copy sites, only the local-API key copy
-self-clears) and "Residual egress channels" (i)–(iv) with the pending markers #236/#221 and
-#240/#222; OS session end documented as a hard kill (#248); `data-contracts.md` 138 IPC channels +
-`npm ci`; §8 L-8 closed; `renderer-storage-keys.test.ts` pins the key set. Decisions 9/10/14
-(#226/#227/#231) unanswered → the plan defaults (document). DOC-16 #261: confirmed at the
-component (the confirm bound to the live target list), fixed in PR #281 (snapshot + named target).**_
-Docs-only, no launch smoke needed. Suite: 371 / 5,568 / 74 excluding the Electron smoke (which passed this run; raw 372 / 5,574 / 74).
-
-_2026-09-03 — **Audit 2026-09-02 Phase 8 (PR 8-b) — SEC-6 #252: every `ipcMain.handle` in the
-main process goes through `guardedHandle(channel, handler, { trustedSenders, log })`
-(`src/main/ipc/guarded-handle.ts`): the body runs only when `event.sender.id` is in
-`ctx.trustedSenders`, which `createWindow` fills with the main window's `webContents.id` (the
-OCR window only `send`s, the print window has no preload); a refused invoke rejects with a
-content-free `UntrustedSenderError`. 18 registrars converted by codemod (`const ipcHandle =
-guardedHandleFor(ctx)`, 137 registrations, no `ipcMain` import left); `repo-hygiene.test.ts` bans
-a bare `ipcMain.handle(` under `src/main/ipc/**`; the two `ipcMain.on` sites stay. Tests:
-`guarded-handle.test.ts` (foreign id refused, main id passes, a real registrar through a
-non-permissive set); harness `makeEvent(senderId?)` + `ANY_SENDER` in 36 fake contexts (PR #279).**_
-Launch smoke NOT run: this machine's application-control policy blocks the dev `electron.exe`
-(substitute proof in the PR body; the smoke joins the owner list). Phase 8 suite: 370 / 5,561 / 74.
-
-_2026-09-03 — **Audit 2026-09-02 Phase 8 (PR 8-a) — small code items: SEC-2 #245 the engine
-archive's on-disk name is `archiveNameFromUrl` (last URL path segment, percent-decoded, must match
-`^[A-Za-z0-9._-]{1,128}$`, else `<binary>-<version>-<os>-<arch>.zip`) and `zipDest` goes through
-`resolveWithinRoot`; `runtime-sources.yaml` urls must be https at parse time; SEC-5 #251
-`Object.hasOwn` key gate + the 256 KB cap on every non-primitive settings write; SEC-7 #253
-`default-src 'none'; style-src 'unsafe-inline'` meta in the pack head; REL-1 #255
-`BODY_TOTAL_TIMEOUT_MS = 120_000` beside the idle timer (seam `bodyTotalTimeoutMs`); REL-2 #256
-`saveTextExport` shares the async atomic `writeAtomic` tail; SEC-14 #266 `form-action 'none'` in
-both headers + the four-directive tail in every baked meta; GAP-3 #254 recorded as a confirmed
-residual (no code) and closed (PR #278).**_ Record: `security-model.md` CSP section + manifest
-section (3); `local-api.md` §6.1 bounds table (+ Host wording); §8 L-7 clause. Suite: see the
-Phase 8 (PR 8-b) entry for the combined count.
-
-_2026-09-03 — **Audit 2026-09-02 Phase 7 — recovery preservation + durability docs: a held
-`.recovery` no longer costs the last session's newest data after a failed lock —
-`preserveNewerPlaintext` now returns `preserved`/`not-needed`/`failed`; on `failed` `init()`
-skips the crash sweep and the pending-rekey recovery and marks the controller recovery-blocked,
-and unlock re-runs the salvage then refuses with `VaultRecoveryBlockedError` → IPC reason
-`vault_recovery_blocked` + EN/DE copy, retry = the next unlock (REL-8 #242; PR #277).**_ Record:
-`security-model.md` "Lock failure & durability" (the refuse path) + the exFAT pointer;
-`drive-layout.md` **Filesystem** paragraph and `troubleshooting.md` held-recovery entry document
-exFAT non-durability on decision 6's default (REL-9 #243, DOC-15 folded; #243 stays open);
-`data-contracts.md` reason union. No format change; single `.recovery` name (Q20 default); Q24
-copy in the PR body. Suite +4 (guards file 2 → 6): 370 → 370 / 5,522 → 5,526 / 74.
-
-_2026-09-03 — **Audit 2026-09-02 Phase 6 — rekey completeness: the v1→v2 password change now
-carries every vault-key ciphertext class — `listVaultKeyCiphertexts(vaultPaths, db)` enumerates
-`documents/*.enc`, `images/*.enc`, legacy out-of-store stored copies and the rotated log
-(deleted at commit; Q18 default); a `workspace/rekey-journal.json` written before staging lets
-recovery find out-of-store twins; image saves hold the document-work lease (REL-5 #241 with
-DOC-5, DOC-14 folded; PR #276).**_ Record: `security-model.md` "Password change" (classes, journal,
-downgrade caveat) + the image-history cross-ref; `data-contracts.md` journal shape; CHANGELOG's
-pre-1.0 note reconciled (v0.1.46 was a tester pre-release, page since removed). Crash cuts are
-parametrised over every class in both directions; B3 inverted. Owner lines blank → defaults
-(delete the rotated log; proceed with the journal shape; refuse a save mid-change). Suite 370 → 370
-files / 5,507 → 5,522 (+15).
-
-_2026-09-03 — **Audit 2026-09-02 Phase 5b-a — raw-path hardening, the autonomous half: the skills
-picker is unlock-gated and mints a one-time token (`src/main/ipc/picker-tokens.ts`, extracted from
-the documents handler) that `previewSkillPackage` reads and `importSkill` spends, so a renderer
-string never reaches the installer's `lstatSync`; `MAX_DROP_PATHS` (512) is refused before any
-`lstat` on the drop and preflight seams; the directory walk is bounded (50 000 entries / depth 64 /
-10 s, `expandPathsBounded`); the off-thread walk is #274 (SEC-9 #240 with NEW-2, DOC-11, DOC-12
-folded — partial; PR #275).**_ Decision 5 (#222, the lexical UNC/device rejection = the drop-contract
-change) unanswered → default, that half stays open as 5b-b; §8 L-4/L-5 restated below;
-`architecture.md` SEC-3 rows restated. Suite 368 → 370 files / 5,487 → 5,507 (+20).
-
-_2026-09-02 — **Audit 2026-09-02 Phase 4 — lock/quit quiescence: a plaintext-operation registry
-(`services/ingestion/plaintext-ops.ts`, `ctx.plaintextOps`) that preview, re-index, import
-prepare, dictation and the two export readers join before writing a `.parse*` transient; "Lock
-now" and quit abort it, await its settle (5 s, the doc-task bound) and shred whatever is still
-registered before the vault re-encrypts (SEC-10 #237 with DOC-4 folded, TQ-1 #258; PR #273).**_
-Photo OCR and audio honour the abort; pdfjs/mammoth/txt cannot and are sweep-bounded. The parse
-wall-clock timeout now aborts the same signal; the preview IPC re-checks admission after its
-awaits. Quit's raced middle is 25.5 s worst case under the 30 s constant (rider 13 default kept).
-B2 inverted in `lock-admission-race.test.ts` (parked photo preview across a real lock and a real
-`performShutdown`, a `readdirSync` name sweep at the "locked" instant, stored copies survive;
-`waitUntil` ticks on `setTimeout`). Docs: `security-model.md` lifecycle bullet + quit bullet, §7
-conventions entry, CHANGELOG. Manual GUI smoke (lock mid-preview) not run — non-interactive session.
-
-_2026-09-02 — **Audit 2026-09-02 Phase 3 — update multiplicity: the three drive launchers refuse
-to start while more than one app artifact sits at the drive root, name what to delete and never
-delete; `--check` / `/check` resolves the app without starting it (REL-7 #235 with DOC-2/DOC-13
-folded, REL-3 #257; PR #272).**_
-`Start HilbertRaum.cmd` counts `HilbertRaum-*-portable.exe`, `start-hilbertraum.sh` the AppImages,
-`Start HilbertRaum.command` extracted `.app` bundles + `.app.zip`s (any `.app` beside any zip = two;
-refused before the `$HOME/Library/Caches` write); both shell launchers run under `set -euo pipefail`.
-New `tests/integration/launcher-execution.test.ts` executes all three in scratch roots (16 cases;
-`.cmd` on Windows, bash legs elsewhere or `HILBERTRAUM_SCRIPT_SH_LEG=1`). Docs: `drive-layout.md`
-update step ("delete the prior artifact first"), `troubleshooting.md` "Two app versions on the
-drive" + version floor, `security-model.md`, `known-limitations.md`, `packaging.md`, CHANGELOG.
-Decisions 3 (#220, interim) and 8 (#225, not ratified — no `user_version`, REL-4 #247 stays a residual) on their defaults.
-
-_2026-09-02 — **Audit 2026-09-02 Phase 2 — one commercial gate: both builder scripts now call
-`assertCommercialDrive`, which requires the app + launcher per declared platform and hashed
-sidecars; `fetch-runtime --commercial` fails closed (GAP-4 #233, SEC-11 #234; PR #271).**_
-`assertCommercialDrive(…, opts: { platforms, appVersion })` gained `platformMatrixDeclared` /
-`appArtifactsPresent` / `launchersPresent` / `runtimeHashed`; a thin Node entry
-(`src/main/tools/assert-commercial-drive.ts` → `out/tools/…mjs`, own `vite.tools.config.ts`, built by
-`npm run build`) is what `build-commercial-drive.{ps1,sh}` run for the verdict — SELLABLE only from
-it; `-DryRun` reaches the verdict, `-VerifyOnly` runs only the gate, a prior `HilbertRaum-*` artifact
-at the root is refused (never deleted). `fetch-runtime -Commercial`: placeholder hash refused before
-any download, hashless marker re-fetched, marker hash only after a verified archive. Verifier:
-`isCommercialPolicy` + `setBinaryVerificationPosture`; the spawn-time refusal of hashless markers on
-commercial drives is wired but OFF (constant; owner call on #234). Decision 12 (#229) on its default.
-
-_2026-09-02 — **Audit 2026-09-02 Phase 1 — packaged OCR: worker failures degrade per document,
-`ocrAvailable` reads execution state, the `asarUnpack` closure is derived by a test (REL-6; PRs
-#268 + #269).**_ tesseract.js sets the inert browser `worker.onerror` on its Node Worker and never
-settles `createWorker()` on a load failure, so the packaged `asarUnpack` gap surfaced as
-`uncaughtException`. 1-a: `ocr/tesseract.ts` captures the raw worker via `process.on('worker')`,
-bounds the start, passes `errorHandler`, rejects the page, re-arms once after a live death;
-packaged builds run a startup execution probe and report OCR unavailable until it passes
-(`AppStatus.ocrState`); decision 2 (#219) on its DEFAULT — photos import without text + a new
-per-document note (Q22 copy in the PR body, owner review pending). 1-b: `asar-unpack-closure.test.ts`
-walks the worker's require graph (+5 globs); packaged Windows probe `ok` in 277 ms. Open: the
-interactive recognition leg (§5 18(c)). Suite 5,413 → 5,427; boundary tests use REAL eval-Workers.
-
-_2026-09-02 — **Audit 2026-09-02 Phase 0 — quit re-entry prevented, cold-start abort for
-E5/reranker/vision, spellcheck off (SEC-12, GAP-2, REL-10, SEC-1; PR #267; PR 0-a #265 drained the
-preamble).**_ The `will-quit`/`activate` handlers are one factory (`createAppLifecycleHandlers`,
-`main/shutdown.ts`) over one closure: every `will-quit` is prevented, the exit comes only from the
-teardown's finally (which now reaps registered sidecar children), `activate` is a no-op during a
-quit, and the awaited middle is bounded by `SHUTDOWN_OVERALL_DEADLINE_MS = 30_000` with the lock
-outside the race (record: `security-model.md` "App-shell gate & lifecycle"). E5/reranker/vision
-abort an in-flight cold start on lock/quit like translation (#159; `architecture.md` #159 note).
-`spellcheck: false` on every window (`security-model.md` "Chromium background fetches", which also
-records GAP-3 as a confirmed residual → follow-up SEC-14 #266). Decisions 1 and 13 ran on their
-plan defaults (#218, #230 unanswered). Tests: B1 (inverted) and B8 ported; suite 5,403 → 5,413.
+_2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the durable ledger
+`docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46
+non-findings; containment items 1–8; the 14 decisions on their defaults; B1..B9 ports; a §-anchor
+legend for the deleted working papers); §5 item 19 → ROUND COMPLETE with the open residuals; the
+round's twelve dated entries archived verbatim to `docs/build-log.md`; containment items 4 and 7
+promoted verbatim to `known-limitations.md` (decisions #221/#222/#226 still unanswered); the three
+Phase 0 doc lines that still carried audit IDs now cite issues; decision issues #218–#231 and
+#262/#263/#264 closed "default stands — re-open on request" / "accepted — §52"; #217 closed after the
+merge; the five `tmp/` working papers deleted after the merge.**_ Open Phase F: #236, #240, #243, #247,
+#248, #250, #274 (each self-sufficient — its plan detail was copied to the issue). Docs-only, no launch
+smoke. Suite: 371 / 5,570 / 74 excluding the Electron smoke (raw 372 / 5,576 / 74; the smoke ran).
 
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
@@ -175,7 +52,9 @@ close-out, and the #194 close-out entry itself on 2026-08-22 (preamble budget, m
 the CI-flake entry), and the eight closed 2026-08-20…2026-08-22 entries (#196 catalog fix and its
 successor wave (PR #199), local API docs, #202 sizes, the docs/code-comment audit, #201 checkpoint,
 #208 second-instance guard, the #212 CI-flake fix) on 2026-09-02 (preamble budget, making room for
-the full-audit 2026-09-02 remediation round — §5 item 19) —
+the full-audit 2026-09-02 remediation round — §5 item 19), and the twelve entries of that round
+(2026-09-02 Phase 0 … 2026-09-03 Phase 9a, PRs #265–#281) on 2026-09-03 at its close-out (Phase 9b;
+ledger `docs/architecture.md` §52) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
@@ -665,48 +544,44 @@ consecutive full runs, zero flakes).** Per-phase gate history (test counts, bund
 per-phase test inventories) lives in git history. (This gate paragraph sits above item 19 so the
 open round's item stays the last block of §5.)
 
-19. **Full-audit 2026-09-02 (security/reliability) — REMEDIATION IN PROGRESS** (tracker #217;
-    labels `audit-2026-09-02`, `severity:*`, `phase:0`..`phase:9`, `owner-decision`, `follow-up`).
-    Working paper, plan and STATE ledger live under the git-ignored `tmp/`; the durable ledger is
-    written once, at close-out, as `docs/architecture.md` "§52 Full audit (2026-09-02) —
-    remediation ledger + close-out" (after §51). Owner decisions #218–#231: each phase runs on the
-    plan's default until answered and says so in its PR body. One line per merged phase:
-    - **0-a** (2026-09-02, docs-only, PR #265): the eight closed 2026-08-20…08-22 dated entries
-      drained to `docs/build-log.md`; this item opened.
-    - **0** (2026-09-02, PR #267): SEC-12 + GAP-2 (quit re-entry prevented, 30 s overall deadline,
-      lock outside the race), REL-10 (E5/reranker/vision cold-start abort), SEC-1 (spellcheck
-      off); GAP-3 confirmed residual → SEC-14 #266; decisions 1/13 on defaults — dated entry above.
-    - **1-a** (2026-09-02, PR #268): REL-6 worker boundary + packaged execution probe + honest
-      `ocrAvailable`/`ocrState`; interim degrade on decision 2's default (Q22 copy pending owner
-      review). Closure (`asarUnpack` require-graph test + globs) and the packaged smoke = PR 1-b.
-    - **1-b** (2026-09-02, PR #269): `asarUnpack` closure derived by `asar-unpack-closure.test.ts`
-      (+5 globs); packaged Windows probe passed (277 ms); interactive recognition leg still open
-      (18(c)); #232 closed — Phase 1 complete.
-    - **2** (2026-09-02, PR #271): GAP-4 + SEC-11 — one gate (`assertCommercialDrive` via
-      `out/tools/assert-commercial-drive.mjs`) called by both builders: app + launcher per declared
-      platform, hashed sidecars, `fetch-runtime --commercial` fails closed; spawn-time refusal of
-      hashless markers built but OFF (owner call, #234); decision 12 on its default — dated entry above.
-    - **3** (2026-09-02, PR #272): REL-7 (DOC-2, DOC-13 folded) + REL-3 — the launchers refuse two
-      app versions at the root and take `--check`/`/check`; `set -euo pipefail`; docs mandate deleting
-      the prior artifact; decisions 3/8 on defaults (no PR 3-b; REL-4 #247 residual) — dated entry above.
-    - **4** (2026-09-02, PR #273): SEC-10 (DOC-4 folded) + TQ-1 — plaintext-operation registry;
-      lock/quit abort → settle (5 s) → sweep before re-encrypting; parse timeout aborts; rec 8 / rec 2
-      on defaults (one PR, 30 s constant, 25.5 s worst case) — dated entry above.
-    - **5b-a** (2026-09-03, PR #275): SEC-9 partial (NEW-2, DOC-11, DOC-12 folded) — skills picker
-      token + unlock gate, `MAX_DROP_PATHS` 512, bounded walk (#274 for off-thread); the lexical
-      UNC/device half = 5b-b, blocked on decision 5 (#222, default) — dated entry above.
-    - **6** (2026-09-03, PR #276): REL-5 (DOC-5, DOC-14 folded) — the v1→v2 rekey stages every
-      vault-key ciphertext class via `listVaultKeyCiphertexts` + a `rekey-journal.json`; rotated log
-      deleted (Q18 default); image saves take the document-work lease — dated entry above.
-    - **7** (2026-09-03, PR #277): REL-8 (TQ-2 folded) — a held `.recovery` no longer costs a
-      failed lock's fresh copy (tri-state `preserveNewerPlaintext`; `init()` refuses to sweep/open;
-      unlock reason `vault_recovery_blocked`) + REL-9/DOC-15 exFAT durability docs — dated entry above.
-    - **8** (2026-09-03, PRs #278 + #279): SEC-2, SEC-5, SEC-7, REL-1, REL-2, SEC-14 fixed, GAP-3 a
-      confirmed residual (8-a); SEC-6 `guardedHandle` over all 137 registrations + the hygiene ban (8-b) — dated entries above.
-    - **9a** (2026-09-03, PR #280): DOC-6, DOC-9, DOC-10, SEC-3 closed by the docs; GAP-1 + SEC-4 documented on
-      defaults (#248, #250 open on #226/#227); residual-egress list (i)–(iv) pending #236/#221 and #240/#222;
-      5a (#236) and 5b-b (#240) stay blocked on #221/#228 and #222; DOC-16 #261 fixed in PR #281 — dated entry above.
-
+19. **Full-audit 2026-09-02 (security/reliability) — ROUND COMPLETE** (close-out 2026-09-03; ledger
+    `docs/architecture.md` §52 — the ONLY durable copy: the working papers lived under the
+    git-ignored `tmp/` and were deleted after the ledger merged; tracker #217 closed). Phases 0-a…9b
+    = PRs #265, #267 (0), #268 + #269 (1), #270 (comment sweep), #271 (2), #272 (3), #273 (4), #275
+    (5b-a), #276 (6), #277 (7), #278 + #279 (8), #280 + #281 (9a), #282 (9b). Every owner decision
+    #218–#231 ran on its plan default — a default is never upgraded to a ruling — and each decision
+    issue was closed "default stands — re-open on request". Still open (Phase F; §52 "Residuals"):
+    - **External-open consent (#236; decisions #221, #228):** a renderer http(s) `window.open`
+      still reaches `shell.openExternal` unconfirmed; the residual wording landed (9a), no code —
+      5a never opened. Its containment sentence is promoted verbatim to `known-limitations.md`.
+    - **Raw-path lexical rejection + the NTLM credential exposure (#240; decision #222):** a
+      UNC/device path dropped into the app still reaches `lstat` before any lexical check (Windows
+      SMB → a possible NTLM exchange where 445/WebDAV egress is open) — 5b-b never opened; the
+      skills token, the 512-path cap and the bounded walk landed (5b-a); off-thread walk #274. Its
+      containment sentence is promoted verbatim to `known-limitations.md`.
+    - **OS session end is a hard kill (#248; decision #226):** documented (9a), no handler; "quit
+      before shutdown/logoff" promoted verbatim to `known-limitations.md`.
+    - **Chromium egress outside CSP (#254, closed as a confirmed residual):** WebRTC and
+      dns-prefetch/preconnect are unused by the renderer and reachable only after a renderer
+      compromise; no flag added (unverifiable offline).
+    - **Directory durability after renames (#243; decision #223):** exFAT non-durability documented
+      (`drive-layout.md` **Filesystem**); the write-through + crash-cut spike only if ratified.
+    - **No `PRAGMA user_version` (#247; decision #225):** not ratified — an old build cannot tell it
+      opened a newer DB (the launcher refusal, PR #272, closes the trigger).
+    - **OS-backed workspace lock (#263, accepted; decision #224):** not built. **Clipboard timer
+      (#250; decision #227)** and **`clearStorageData()` on lock (#231 rider; #249)**: documented only.
+    - **Spawn-time refusal of hashless runtime markers on sold kits:** wired but OFF
+      (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false`, `binary-verifier.ts`; owner call).
+    - **Nine owner-runnable manual smokes never run** (recipes in §52): packaged OCR recognition
+      (18(c)), double quit, the Windows update-walk GUI leg, lock mid-preview, skills pick/import,
+      image + password change, evidence-pack PDF export, one IPC action after the sender guard;
+      plus the macOS/Linux packaged-OCR and update-walk legs before those kits ship.
+    - **Test-suite watch (no ID):** source-text wiring pins (`window-security`, `packaging`,
+      `skills-installer`, `third-party-notices`, `ocr`, `rail-labels` tests), the katex hoist
+      compare, `as unknown as` private-field injection — convert to behavioural assertions when
+      touched; `FullSuiteGuard` cannot see dropped individual tests.
+    - **Phase F register:** the one remaining audit-ID comment (`tests/unit/window-security.test.ts`,
+      `// SEC-1:`); #274; the "answered the other way" designs recorded on #218–#231 and in §52.
 
 ---
 

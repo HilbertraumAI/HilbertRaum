@@ -437,8 +437,9 @@ green gate does not sign** (it never invokes electron-builder).
 ### The `build-commercial-drive` master pipeline
 
 One self-contained, dual-shell script (`scripts/build-commercial-drive.{ps1,sh}`) runs the ordered
-steps. Its plan + the final "is this sellable?" assertion are mirrored from the canonical, unit-tested
-`apps/desktop/src/main/services/commercial-drive.ts` (`planCommercialDrive` + `assertCommercialDrive`).
+steps. Its step plan mirrors the canonical, unit-tested `planCommercialDrive`; the final "is this
+sellable?" verdict comes from **calling** `assertCommercialDrive` itself (both in
+`apps/desktop/src/main/services/commercial-drive.ts`; see "The builders **refuse to proceed**" below, #233).
 
 ```
 prepare-drive  --force            # commercial policy (encrypted, plaintext off, no phone-home)
