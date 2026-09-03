@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, powerMonitor, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -69,7 +69,7 @@ import {
   setBinaryVerificationPosture,
   REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
 } from './services/binary-verifier'
-import { createAppLifecycleHandlers, performShutdown } from './shutdown'
+import { createAppLifecycleHandlers, emergencyLock, performShutdown } from './shutdown'
 import type { AppContext } from './services/context'
 
 // HilbertRaum — Electron main process (the "backend").
@@ -695,6 +695,13 @@ function createWindow(): void {
     mainWindow?.show()
   })
 
+  // #248: a Windows shutdown, restart or log-off with the app open never emits `will-quit`
+  // (Electron's `app` docs) — it is a WINDOW event, `session-end`, after which the process is
+  // killed. Lock the workspace synchronously in the handler (the crash path's `emergencyLock`,
+  // shared closure with the quit handlers so it can never run beside a quit teardown). The
+  // window exists for the whole unlocked session on Windows (`window-all-closed` quits).
+  if (process.platform === 'win32') mainWindow.on('session-end', lifecycle.onSessionEnd)
+
   // Open external links in the OS browser, never inside the app window — policy in
   // window-security.ts (only http(s) reaches the OS handler; the in-app open is always
   // denied), pinned by tests/unit/window-security.test.ts.
@@ -726,6 +733,7 @@ function createWindow(): void {
 // persists, mirroring the lock path). `ctx` is read at call time, not here.
 const lifecycle = createAppLifecycleHandlers({
   performShutdown: () => performShutdown(ctx),
+  emergencyLock: () => emergencyLock(ctx),
   exit: (code) => app.exit(code),
   createWindow,
   windowCount: () => BrowserWindow.getAllWindows().length,
@@ -758,36 +766,27 @@ app.whenReady().then(() => {
   createWindow()
 
   app.on('activate', lifecycle.onActivate)
+
+  // #248: the macOS leg — a system shutdown/restart is a `powerMonitor` event there (usable only
+  // after `ready`). UNVERIFIED on a Mac — owner live check pending (#226): whether the event
+  // fires before or after `will-quit` on a macOS shutdown, and whether the app is given the
+  // time. Either ordering is safe by the shared closure (see `createAppLifecycleHandlers`).
+  if (process.platform === 'darwin') powerMonitor.on('shutdown', () => lifecycle.onSessionEnd())
 })
 
 app.on('will-quit', lifecycle.onWillQuit)
 
-// Last-resort crash safety: a hard `uncaughtException` skips `will-quit`, so try to lock the
-// vault (re-encrypt + shred the plaintext working DB) before the process dies. Best-effort
+// Last-resort crash safety: a hard `uncaughtException` skips `will-quit`, so lock the vault
+// (re-encrypt + shred the plaintext working DB) and reap the sidecar children before the process
+// dies — `emergencyLock` (`./shutdown`, shared with the OS session-end handler, #248): best-effort
 // and synchronous; the startup crash-recovery shred is the robust backstop on next launch.
-// shutdown() additionally closes a plaintext_dev DB so no -wal/-shm outlive the process (#51).
 process.on('uncaughtException', (err) => {
   try {
     log.error('Uncaught exception', String(err))
-    // Local API: the listener is IN-PROCESS (no orphan risk — it dies with exit(1)); the
-    // fire-and-forget stop is only so live external sockets abort instead of dangling
-    // until the OS reaps them. Never awaited on a crash path.
-    void ctx?.localApi?.stop().catch(() => {})
-    detachVaultKey() // flush the encrypted log before lock() zeroes the key
-    ctx?.workspace.shutdown()
   } catch {
     /* best-effort */
   }
-  // CODE-11 (full-audit 2026-07-11): a crash exit skips will-quit's awaited sidecar stops,
-  // and on Windows the children survive the parent — reap every registered sidecar child
-  // (best-effort, synchronous, throw-safe per PID) so no llama-server/whisper-cli orphans
-  // holding GBs of RAM + loopback ports outlive the crash. After the vault lock: the lock
-  // is the data-safety half, the reap is hygiene. Own try so a lock throw can't skip it.
-  try {
-    killRegisteredSidecarChildren()
-  } catch {
-    /* best-effort */
-  }
+  emergencyLock(ctx)
   process.exit(1)
 })
 // An unhandled rejection is usually NOT fatal (e.g. a stray `void promise()`), so only log
