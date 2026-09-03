@@ -17,7 +17,7 @@ password recovery — are documented in
   app-wide risks breaking loopback IPC and the sidecars). Electron's own `net` module would bypass
   it. The offline guarantee is a property of the code + CSP + deny-by-default policy; the guard is
   a tripwire, not an enforcement layer.
-- **In-app spell-checking is off by design (SEC-1, audit 2026-09-02).** Chromium's spellchecker
+- **In-app spell-checking is off by design (#239).** Chromium's spellchecker
   downloads Hunspell dictionaries from a Google-operated CDN on Windows and Linux on first typing —
   a browser-process fetch that neither the CSP nor the offline tripwire above can see, and one the
   offline hard rule forbids — so `spellcheck: false` is pinned for every window and the composer
@@ -39,6 +39,16 @@ password recovery — are documented in
   text; a link opened from an answer or a model manifest opens in the OS browser. See
   `security-model.md` "What lives or passes outside the drive" and "Residual egress channels"
   (#249, #250).
+- **Two interim precautions stand as limitations until their owner decisions are answered (#236 /
+  owner decision #221; #240 / owner decision #222; promoted from the time-boxed containment list
+  at the round's close-out — `architecture.md` §52 — so it does not become permanent silently):**
+  treat every model-emitted or manifest-sourced link (including `licenseUrl` in the download
+  dialog) as untrusted and do not open it from inside the app; do not drop network-share paths
+  into the app; managed Windows fleets can block outbound 445/WebDAV at the host firewall.
+- **Quit the app before shutting down or logging off (#248; owner decision #226 pending).** OS
+  session end is a hard kill — nothing locks the workspace, so every change since the last
+  **Lock now** or normal quit is lost (user-guide §13; `security-model.md` "OS session end is a
+  hard kill"). Wait for the window to close before you shut down, log off or eject.
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.

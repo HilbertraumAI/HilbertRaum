@@ -344,14 +344,14 @@ OS-level network blocking remains explicitly **out of scope** (see "Out of scope
 offline is by design + policy/UX, not a kernel-level block. If a hard block is ever wanted, the
 right layer is the OS firewall / a sandbox profile, not an in-process `connect` shim.
 
-### 3. Chromium background fetches (`window-security.ts`; SEC-1 / GAP-3, audit 2026-09-02)
+### 3. Chromium background fetches (`window-security.ts`; #239 / #254)
 The two layers above see **Node-side** sockets and **page-governed** loads. A third class exists:
 fetches the **browser process itself** makes, which neither the CSP (it governs what the page
 loads) nor the socket tripwire (it patches Node's `net.Socket`, not Chromium's network service)
 can observe. Both earlier audit rounds enumerated Node sinks and the renderer CSP; neither
 enumerated this class.
 
-- **Spell-check dictionaries (SEC-1) — closed by construction.** Electron's spellchecker is on by
+- **Spell-check dictionaries (#239) — closed by construction.** Electron's spellchecker is on by
   default and, on Windows and Linux, downloads a Hunspell `.bdic` for the current locale from a
   Google-operated CDN on first typing (macOS uses the OS spellchecker). No policy, setting or CSP
   gated it. `SECURE_WINDOW_WEB_PREFERENCES` now carries `spellcheck: false` for all three windows,
@@ -362,7 +362,7 @@ enumerated this class.
   The composer loses red-underline spell-check (`docs/known-limitations.md`). Owner decision 1
   (#218) can reverse this: dictionaries shipped on the drive + `setSpellCheckerDictionaryDownloadURL`
   pointed at a no-op + a closed `setSpellCheckerLanguages`.
-- **Channels the CSP does not govern (GAP-3) — confirmed residual, documented.** Investigated
+- **Channels the CSP does not govern (#254) — confirmed residual, documented.** Investigated
   (documentation-based, no probing): (i) **WebRTC** is outside CSP; the renderer never calls
   `RTCPeerConnection`, but a compromised renderer could — the candidate switches
   (`disableBlinkFeatures`, `disable-features`, `setWebRTCIPHandlingPolicy`) need a verification the
@@ -1044,7 +1044,7 @@ background (the active-model auto-start); the embedder restarts lazily on the ne
 settle and sweep the **plaintext operations** in flight — a document **preview**, a **re-index**,
 an import's **prepare** phase, a **dictation** and the two **export** readers — before the vault
 re-encrypts (the bullet below).
-- **Quit re-entry and the overall deadline (SEC-12 with GAP-2 folded in, audit 2026-09-02).** Both
+- **Quit re-entry and the overall deadline (#238).** Both
   app-lifecycle handlers are built by `createAppLifecycleHandlers` (`main/shutdown.ts`) over ONE
   `isShuttingDown` closure. *Re-entry rule:* **every** `will-quit` is `preventDefault()`ed — the
   first starts `performShutdown`; any later one (a second ⌘Q while the app sits windowless in the
@@ -1053,8 +1053,9 @@ re-encrypts (the bullet below).
   quit. The process leaves only through the teardown's own `finally` (`app.exit(0)`, which
   re-emits nothing). Before this rule the re-entry branch returned unprevented: a second quit
   during a parked sidecar stop exited with the DB unencrypted on the drive, and the next launch
-  found a live WAL and shredded it — REL-11's loss, produced by the app's own quit path. A Dock
-  click (`activate`) during the teardown opens no window. *Overall deadline:* the teardown's
+  found a live WAL and shredded it — the accepted session loss (#262),
+  produced by the app's own quit path. A Dock click (`activate`) during the teardown opens no
+  window. *Overall deadline:* the teardown's
   awaited middle — the local-API stop (≤ 0.5 s), the sidecar stops (≤ 10 s, the transcriber's
   suspend timeout), the stream settle (≤ 5 s) and the doc-task settle (≤ 5 s) — is raced as one
   section against `SHUTDOWN_OVERALL_DEADLINE_MS` (30 s; owner decision 13's default, #230). When
