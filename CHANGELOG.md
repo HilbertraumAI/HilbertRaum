@@ -99,6 +99,11 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Every request from the app window to the main process now checks where it came from.**
+  Only the app's own window can invoke the internal commands (opening documents, reading
+  settings, running the models); a request from anywhere else is refused before it runs. Nothing
+  else can send such requests today, so nothing changes in use — this closes the door before it
+  is ever needed.
 - **Two small hardening steps with no visible effect.** The app window's content policy now
   also forbids form submissions, plugins, base-address changes and framing in its built-in
   fallback layer, and the settings store ignores inherited object names and caps the size of

@@ -28,6 +28,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 |---|---|
 | Context isolation, no node integration, sandboxed renderer | `main/index.ts` `webPreferences` |
 | Renderer talks only to a typed `contextBridge` (`window.api`) | `preload/index.ts` |
+| **Every `ipcMain.handle` checks the sender** — the handler body runs only for the main window's `webContents.id` (#252); a bare registration under `src/main/ipc/**` is banned by `repo-hygiene.test.ts` | `main/ipc/guarded-handle.ts`, set populated in `main/index.ts` `createWindow` |
 | `will-navigate` **and `will-redirect`** block remote origins (SEC-3) | `services/navigation-guard.ts`, installed in `main/index.ts` + OCR window |
 | `setWindowOpenHandler` opens external links in the OS browser, denies in-app | `main/index.ts` |
 | **Content-Security-Policy** (response header + build-time-generated meta tag) | `main/window-security.ts` (both policies), applied in `main/index.ts` + `electron.vite.config.ts` |
@@ -1738,6 +1739,17 @@ The renderer is the **untrusted** boundary (M-S2) and threat #1 is a hostile imp
 achieving code-exec in the context-isolated renderer. Four main-side IPC seams trusted renderer
 input more than that model allows; all four are now tightened (`registerDocsIpc.ts`,
 `registerImagesIpc.ts`, `services/assets.ts`, `services/vision/limits.ts`).
+
+**Sender check on every `handle` channel (#252).** All 137 `ipcMain.handle` registrations go
+through `guardedHandle` (`main/ipc/guarded-handle.ts`): the handler body runs only when
+`event.sender.id` is in the context's trusted set, which `createWindow` fills with the main
+window's `webContents.id` — the OCR rasterizer window's preload only `send`s (its replies are
+`ipcMain.on` listeners that compare `event.sender` themselves) and the print window has no
+preload, so neither is trusted for `handle` channels. A refused invoke rejects the renderer's
+promise with a content-free error and logs the channel name only. Today no other WebContents
+can invoke; the check is load-bearing the moment a webview or a second window exists, and
+`repo-hygiene.test.ts` bans a bare `ipcMain.handle(` or an `ipcMain` import in any registrar so
+the guard cannot become partial.
 
 ### D1 — `importDocuments` is bound to a picker capability token (not raw renderer paths)
 `importDocuments(paths)` accepted arbitrary renderer-controlled absolute paths and `expandPaths`
