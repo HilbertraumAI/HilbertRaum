@@ -29,6 +29,18 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-03 — **Audit 2026-09-02 Phase 7 — recovery preservation + durability docs: a held
+`.recovery` no longer costs the last session's newest data after a failed lock —
+`preserveNewerPlaintext` now returns `preserved`/`not-needed`/`failed`; on `failed` `init()`
+skips the crash sweep and the pending-rekey recovery and marks the controller recovery-blocked,
+and unlock re-runs the salvage then refuses with `VaultRecoveryBlockedError` → IPC reason
+`vault_recovery_blocked` + EN/DE copy, retry = the next unlock (REL-8 #242; PR #277).**_ Record:
+`security-model.md` "Lock failure & durability" (the refuse path) + the exFAT pointer;
+`drive-layout.md` **Filesystem** paragraph and `troubleshooting.md` held-recovery entry document
+exFAT non-durability on decision 6's default (REL-9 #243, DOC-15 folded; #243 stays open);
+`data-contracts.md` reason union. No format change; single `.recovery` name (Q20 default); Q24
+copy in the PR body. Suite +3 (guards file 2 → 5): 370 → 370 / 5,522 → 5,525 / 74.
+
 _2026-09-03 — **Audit 2026-09-02 Phase 6 — rekey completeness: the v1→v2 password change now
 carries every vault-key ciphertext class — `listVaultKeyCiphertexts(vaultPaths, db)` enumerates
 `documents/*.enc`, `images/*.enc`, legacy out-of-store stored copies and the rotated log
@@ -651,6 +663,9 @@ open round's item stays the last block of §5.)
     - **6** (2026-09-03, PR #276): REL-5 (DOC-5, DOC-14 folded) — the v1→v2 rekey stages every
       vault-key ciphertext class via `listVaultKeyCiphertexts` + a `rekey-journal.json`; rotated log
       deleted (Q18 default); image saves take the document-work lease — dated entry above.
+    - **7** (2026-09-03, PR #277): REL-8 (TQ-2 folded) — a held `.recovery` no longer costs a
+      failed lock's fresh copy (tri-state `preserveNewerPlaintext`; `init()` refuses to sweep/open;
+      unlock reason `vault_recovery_blocked`) + REL-9/DOC-15 exFAT durability docs — dated entry above.
 
 
 ---
