@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { parse } from 'yaml'
 import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 
 function build(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -195,6 +198,38 @@ describe('validateRuntimeSources', () => {
       llama_cpp: { version: 'b9196', builds: [build({ backend: 'cpu' })] },
       whisper_cpp: { version: 'v1.8.6', builds: [whisperBuild()] }
     })
+    expect(res.ok).toBe(true)
+  })
+
+  // The download layer already refuses cleartext at fetch time; the parser now refuses it at
+  // validation time too, so a tampered manifest never reaches the planner (#245).
+  it('rejects a non-https url in every family (#245)', () => {
+    const llama = validateRuntimeSources(sources({ builds: [build({ url: 'http://example.test/llama.zip' })] }))
+    expect(llama.ok).toBe(false)
+    expect(llama.errors.some((e) => e.includes('builds[0].url') && e.includes('https'))).toBe(true)
+
+    const whisper = validateRuntimeSources({
+      ...sources(),
+      whisper_cpp: { version: 'v1', builds: [build({ url: 'ftp://example.test/w.zip' })] }
+    })
+    expect(whisper.ok).toBe(false)
+    expect(whisper.errors.some((e) => e.includes('whisper_cpp.builds[0].url'))).toBe(true)
+
+    const ocr = validateRuntimeSources({
+      ...sources(),
+      ocr: {
+        version: '4',
+        files: [{ lang: 'deu', url: 'http://example.test/deu.traineddata.gz', sha256: 'x', dest: 'ocr/deu.traineddata' }]
+      }
+    })
+    expect(ocr.ok).toBe(false)
+    expect(ocr.errors.some((e) => e.includes('ocr.files[0].url'))).toBe(true)
+  })
+
+  it('every entry of the shipped runtime-sources.yaml still validates', () => {
+    const file = join(__dirname, '..', '..', '..', '..', 'model-manifests', 'runtime-sources.yaml')
+    const res = validateRuntimeSources(parse(readFileSync(file, 'utf8')))
+    expect(res.errors).toEqual([])
     expect(res.ok).toBe(true)
   })
 })

@@ -57,14 +57,20 @@ export const SECURE_WINDOW_WEB_PREFERENCES = Object.freeze({
  * meta tags must move in lockstep (the effective policy is the intersection of all of them).
  */
 export function buildCsp(isDev: boolean): string {
+  // `form-action 'none'` (#266): a form submit is a navigation the guard below already
+  // refuses; the directive is the second, independent layer. Both header variants carry it.
   return isDev
     ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
         "style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:* http://localhost:*; " +
-        "img-src 'self' data:; font-src 'self'"
+        "img-src 'self' data:; font-src 'self'; form-action 'none'"
     : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
         "connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; " +
-        "base-uri 'none'; frame-ancestors 'none'"
+        "base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
 }
+
+/** The hardening tail every baked meta carries, dev and prod (#266): the meta is the
+ *  fallback layer if the header wiring ever regresses, so it denies the same things. */
+const META_CSP_TAIL = "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
 
 /**
  * The CSP that ships INSIDE the HTML (`<meta http-equiv="Content-Security-Policy">`) of
@@ -97,9 +103,9 @@ export function buildMetaCsp(isDev: boolean, page: 'index' | 'ocr'): string {
   const connectSrc = isDev ? "'self' ws://localhost:* http://localhost:*" : "'self'"
   return page === 'index'
     ? `default-src 'self'; script-src 'self'; connect-src ${connectSrc}; ` +
-        "img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'"
+        `img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; ${META_CSP_TAIL}`
     : `default-src 'self'; script-src 'self'; connect-src ${connectSrc}; ` +
-        "img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'"
+        `img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; ${META_CSP_TAIL}`
 }
 
 /**

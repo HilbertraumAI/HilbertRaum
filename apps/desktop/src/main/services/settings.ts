@@ -57,6 +57,9 @@ export function getSettings(db: Db): AppSettings {
   }>
   const stored: Record<string, unknown> = {}
   for (const r of rows) {
+    // Own settings keys only (#251): a `__proto__` row written by an older build would
+    // otherwise set `stored`'s prototype here and be parsed on every unlock.
+    if (!Object.hasOwn(DEFAULT_SETTINGS, r.key)) continue
     try {
       stored[r.key] = JSON.parse(r.value_json)
     } catch {
@@ -82,8 +85,9 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // Non-null values must match the default's primitive type; the null-default keys carry
     // no type information in DEFAULT_SETTINGS, so each gets an explicit shape check
     // (bounded string / plain object; `contextTokensOverride` has its own clamp below).
-    // Unknown/mistyped entries are dropped.
-    if (!(key in DEFAULT_SETTINGS)) continue
+    // Unknown/mistyped entries are dropped. OWN keys only (#251): `in` also matched
+    // inherited names, so a JSON.parse-built `{"__proto__": …}` patch persisted a junk row.
+    if (!Object.hasOwn(DEFAULT_SETTINGS, key)) continue
     const def = (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[key]
     if (value === null) {
       if (def !== null) continue
@@ -99,13 +103,13 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // Bound the object-valued settings (CODE-16, full-audit 2026-07-11). `checksumCache` has a
     // non-null object default, so an ARRAY slips through the generic `typeof value !== typeof def`
     // gate above (arrays report `object`) — reject it here; the null-default `lastBenchmark`/
-    // `gpuProbe` pair reject arrays above, so this re-check is harmless for them. Then cap the
-    // SERIALIZED size of all three (SEC-1 bounding style) so a renderer can't bloat the encrypted
-    // blob these start-hot readers touch. `value === null` (a legitimate clear of the null-default
-    // pair) is accepted upstream and never reaches here.
+    // `gpuProbe` pair reject arrays above, so this re-check is harmless for them. The SERIALIZED
+    // size cap (SEC-1 bounding style, so a renderer can't bloat the encrypted blob these
+    // start-hot readers touch) is applied once, below, to every non-primitive write (#251).
+    // `value === null` (a legitimate clear of the null-default pair) is accepted upstream and
+    // never reaches here.
     if ((key === 'lastBenchmark' || key === 'gpuProbe' || key === 'checksumCache') && value !== null) {
       if (typeof value !== 'object' || Array.isArray(value)) continue
-      if (JSON.stringify(value).length > MAX_SETTINGS_OBJECT_BYTES) continue
     }
     // Array-typed defaults (any future `string[]` setting) pass the
     // `typeof === 'object'` check above, so validate them element-wise: require an actual
@@ -116,6 +120,11 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     if (Array.isArray(def)) {
       if (!Array.isArray(value)) continue
       toStore = (value as unknown[]).filter((x) => typeof x === 'string').slice(0, MAX_SETTINGS_ARRAY)
+    }
+    // The same serialized-size cap for EVERY non-primitive write (#251) — an array of long
+    // strings, or any future object-valued setting, must not bloat the blob either.
+    if (typeof toStore === 'object' && toStore !== null) {
+      if (JSON.stringify(toStore).length > MAX_SETTINGS_OBJECT_BYTES) continue
     }
     // Enum-valued keys get an exact-value check (a renderer bug must not persist junk
     // like `gpuMode: 'banana'` — readers treat anything !== 'auto' as off, which fails

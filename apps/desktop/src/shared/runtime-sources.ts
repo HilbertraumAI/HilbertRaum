@@ -8,7 +8,7 @@
 // Parsed with the pure-JS `yaml` package (like the model manifests). The validator is
 // hand-written + pure (no I/O) so it is shared + unit-tested without the filesystem.
 
-import { isRealSha256 } from './manifest'
+import { isHttpsUrl, isRealSha256 } from './manifest'
 
 /** Sidecar OS keys — must match `services/runtime/sidecar.ts` `llamaOsDir`. */
 export type RuntimeOs = 'win' | 'mac' | 'linux'
@@ -131,8 +131,9 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
         errors.push(`${where}.backend is required and must be a non-empty string`)
       }
       const url = b['url']
-      if (typeof url !== 'string' || url.trim() === '') {
-        errors.push(`${where}.url is required and must be a non-empty string`)
+      if (typeof url !== 'string' || !isHttpsUrl(url)) {
+        // https-only at PARSE time (#245): the downloader refuses cleartext again at fetch time.
+        errors.push(`${where}.url is required and must be an https:// URL`)
       }
       const shaRaw = b['sha256']
       if (typeof shaRaw !== 'string' || shaRaw.trim() === '') {
@@ -207,8 +208,8 @@ function validateOcrFamily(
         errors.push(`${where}.lang must be a traineddata language code (e.g. deu)`)
       }
       const url = f['url']
-      if (typeof url !== 'string' || url.trim() === '') {
-        errors.push(`${where}.url is required and must be a non-empty string`)
+      if (typeof url !== 'string' || !isHttpsUrl(url)) {
+        errors.push(`${where}.url is required and must be an https:// URL`)
       }
       const sha = f['sha256']
       if (typeof sha !== 'string' || sha.trim() === '') {

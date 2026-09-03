@@ -27,6 +27,20 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A tampered engine list can no longer write outside the engine folder.** The file that
+  names where to download the AI engine from lives on the drive. If it had been edited to
+  carry a download address whose file name walked up the folder tree, the downloaded archive
+  could land anywhere on that disk on Windows. The archive is now always saved under its own
+  engine folder, and the list only accepts secure `https://` addresses.
+- **Exported evidence packs carry a content-security policy.** An exported pack opened in a
+  web browser now tells the browser to load and run nothing beyond the pack's own embedded
+  styling, as a second safeguard on top of the escaping the pack already applies.
+- **A slow upload to the local API is cut off.** A client that sent a request body one byte at a
+  time could hold one of the sixteen connection slots for as long as it liked. Uploads now have a
+  two-minute total limit in addition to the existing thirty-second inactivity limit.
+- **Large exports no longer stall the window.** Saving a big chat transcript, audit log or
+  document export to a slow USB drive used to freeze the app for the duration of the write. The
+  write now runs in the background and the file appears only once it is complete.
 - **A held file can no longer make the app lose your newest data after a failed lock.** When
   locking the workspace fails (for example on a nearly-full drive), the app keeps that
   session's newest data as a recovery file and secures it at the next unlock. If another
@@ -85,6 +99,10 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Two small hardening steps with no visible effect.** The app window's content policy now
+  also forbids form submissions, plugins, base-address changes and framing in its built-in
+  fallback layer, and the settings store ignores inherited object names and caps the size of
+  every stored object or list rather than only three of them.
 - **Spell-checking in the message box is switched off.** The built-in browser engine would
   otherwise download a spelling dictionary from a Google server on Windows and Linux the first
   time you type — against the promise that nothing leaves the space. Shipping dictionaries on the

@@ -191,6 +191,10 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   push(`<html lang="${lang}">`)
   push('<head>')
   push('<meta charset="utf-8">')
+  // Self-containment made structural (#253): a pack opened in a browser outside the app can
+  // load or run nothing but its own embedded stylesheet. The print window renders the same
+  // string under this policy.
+  push(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">`)
   push('<meta name="viewport" content="width=device-width, initial-scale=1">')
   push(`<title>${esc(model.title)} — ${s('packExport.docTitle')}</title>`)
   push(`<style>${PACK_CSS}</style>`)

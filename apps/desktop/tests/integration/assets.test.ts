@@ -2,9 +2,10 @@ import { describe, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { parse } from 'yaml'
 import {
+  archiveNameFromUrl,
   planModelDownloads,
   selectRuntimeBuild,
   selectRuntimeBuilds,
@@ -1026,5 +1027,95 @@ describe('formatAssetPlan', () => {
   it('notes when no runtime build matched', () => {
     const report = formatAssetPlan([], null)
     expect(report).toContain('no matching build')
+  })
+})
+
+// The archive's on-disk name comes from the URL (#245). A hostile `runtime-sources.yaml`
+// used to put a raw basename with `..\` segments under the guarded extraction root and walk
+// out of it on Windows. The name is now the URL's last path segment ONLY when it is a plain
+// filename; anything else gets the synthetic fallback, and `planRuntimeDownload` passes the
+// result through the same root guard as `extract_to`.
+describe('archiveNameFromUrl (#245)', () => {
+  const FALLBACK = 'llama-server-b1234-win-x64.zip'
+  // A Windows extraction root as a STRING only: the name rule is checked with `path.win32`
+  // on every platform, and no filesystem call is ever made with it.
+  const WIN_ROOT = 'C:\\Users\\u\\AppData\\Roaming\\hilbertraum\\runtime\\llama.cpp\\win'
+  const NAME_RULE = /^[A-Za-z0-9._-]{1,128}$/
+
+  function staysInside(name: string): boolean {
+    const full = win32.resolve(WIN_ROOT, name)
+    return win32.dirname(full) === WIN_ROOT && win32.basename(full) === name
+  }
+
+  it('control: a release-asset URL with a query string yields exactly its basename', () => {
+    const name = archiveNameFromUrl(
+      'https://github.com/ggml-org/llama.cpp/releases/download/b1234/llama-b1234-win-x64.zip?download=true',
+      FALLBACK
+    )
+    expect(name).toBe('llama-b1234-win-x64.zip')
+    expect(staysInside(name)).toBe(true)
+  })
+
+  const hostile: Array<[string, string]> = [
+    ['percent-encoded backslash traversal', 'https://example.test/dl/..%5C..%5C..%5Cevil.exe'],
+    ['bare ..', 'https://example.test/dl/..'],
+    ['empty basename', 'https://example.test/dl/?download=true'],
+    ['percent-encoded ..', 'https://example.test/dl/%2e%2e%5cevil.exe'],
+    ['drive-letter basename', 'https://example.test/dl/C:evil.exe'],
+    ['UNC-looking basename', 'https://example.test/dl/%5C%5Chost%5Cshare%5Cevil.exe']
+  ]
+  for (const [label, url] of hostile) {
+    it(`${label}: the synthetic fallback, never a name that leaves the root`, () => {
+      const name = archiveNameFromUrl(url, FALLBACK)
+      expect(name).toBe(FALLBACK)
+      expect(name).toMatch(NAME_RULE)
+      expect(staysInside(name)).toBe(true)
+    })
+  }
+
+  it('a raw backslash basename is normalised by the URL parser and still ends as a plain filename', () => {
+    // This is the form that escaped before the fix: the raw `split('/').pop()` kept
+    // `..\..\..\evil.exe` verbatim and `path.join` walked up from the root on Windows.
+    // `new URL` treats `\` as `/` in an https path and resolves the `..` segments itself.
+    const name = archiveNameFromUrl('https://example.test/dl/..\\..\\..\\evil.exe', FALLBACK)
+    expect(name).toBe('evil.exe')
+    expect(staysInside(name)).toBe(true)
+  })
+
+  it('every shipped runtime-sources.yaml build keeps its real basename (no silent fallback)', () => {
+    const file = join(__dirname, '..', '..', '..', '..', 'model-manifests', 'runtime-sources.yaml')
+    const res = validateRuntimeSources(parse(readFileSync(file, 'utf8')))
+    expect(res.ok).toBe(true)
+    const builds = [...(res.sources?.builds ?? []), ...(res.whisper?.builds ?? [])]
+    expect(builds.length).toBeGreaterThan(0)
+    for (const b of builds) {
+      const name = archiveNameFromUrl(b.url, 'FALLBACK')
+      expect(name, b.url).not.toBe('FALLBACK')
+      expect(b.url.endsWith(`/${name}`)).toBe(true)
+    }
+  })
+
+  it('an unparseable URL and an over-long basename fall back too', () => {
+    expect(archiveNameFromUrl('not a url', FALLBACK)).toBe(FALLBACK)
+    expect(archiveNameFromUrl(`https://example.test/${'a'.repeat(125)}.zip`, FALLBACK)).toBe(FALLBACK)
+    expect(archiveNameFromUrl(`https://example.test/${'a'.repeat(124)}.zip`, FALLBACK)).toBe(
+      `${'a'.repeat(124)}.zip`
+    )
+  })
+
+  it('planRuntimeDownload guards the archive path like extract_to (a hostile fallback cannot escape either)', () => {
+    const root = tempDir('hilbertraum-rt-')
+    const build = {
+      os: 'win' as const,
+      arch: 'x64',
+      backend: 'cpu',
+      url: 'https://example.test/dl/',
+      sha256: 'x',
+      extractTo: 'runtime/llama.cpp/win'
+    }
+    // The fallback embeds the manifest's `version`, which is attacker-writable as well.
+    expect(() => planRuntimeDownload(root, build, '../../../../x')).toThrow(/escapes the drive root/)
+    const plan = planRuntimeDownload(root, build, 'b1')
+    expect(plan.zipDest).toBe(join(root, 'runtime', 'llama.cpp', 'win', 'llama-server-b1-win-x64.zip'))
   })
 })

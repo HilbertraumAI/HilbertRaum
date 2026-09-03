@@ -61,6 +61,7 @@ export interface LocalApiServerDeps {
   queueWaitMs?: number
   drainTimeoutMs?: number
   headersTimeoutMs?: number
+  bodyTotalTimeoutMs?: number
   /** Node only SWEEPS for expired header phases every connectionsCheckingInterval (30 s by
    *  default), so a test that shortens headersTimeoutMs must shorten this too or it would wait
    *  out the sweep. Test-only: production keeps Node's default. */
@@ -71,6 +72,10 @@ const HEADERS_TIMEOUT_MS = 10_000
 /** Idle bound on the BODY phase only — cleared once the body arrived, because a CPU
  *  prefill legitimately produces no bytes for minutes (PERF-H1). */
 const BODY_IDLE_TIMEOUT_MS = 30_000
+/** Total bound on the BODY phase (#255): the idle timer resets on every byte, so a 1 B /
+ *  25 s trickle held a socket forever and sixteen of them exhausted the listener. Counted
+ *  from the end of the header phase; the 1 MiB body cap ends a fast body long before. */
+export const BODY_TOTAL_TIMEOUT_MS = 120_000
 /** A stalled SSE reader disarms the per-read watchdogs (PERF-H3/SEC-F2): awaiting drain
  *  is bounded, and expiry aborts the generation + frees the admission slot. */
 const DRAIN_TIMEOUT_MS = 15_000
@@ -316,9 +321,20 @@ export class LocalApiServer {
     try {
       res.setHeader('server', `HilbertRaum/${this.deps.appVersion}`)
 
-      // Bound the BODY phase only; the generation phase may be silent for minutes.
+      // Bound the BODY phase only; the generation phase may be silent for minutes. Two
+      // timers: idle (reset by every byte) and total (#255, never reset); both are cleared
+      // once the body has arrived.
       req.setTimeout(BODY_IDLE_TIMEOUT_MS, () => req.destroy())
-      req.once('end', () => req.setTimeout(0))
+      const bodyDeadline = setTimeout(
+        () => req.destroy(),
+        this.deps.bodyTotalTimeoutMs ?? BODY_TOTAL_TIMEOUT_MS
+      )
+      bodyDeadline.unref()
+      req.once('end', () => {
+        req.setTimeout(0)
+        clearTimeout(bodyDeadline)
+      })
+      req.once('close', () => clearTimeout(bodyDeadline))
 
       // `this.port` is set the moment the v4 listener binds, so it is never null while a
       // request can arrive; the fallback only satisfies the type.
