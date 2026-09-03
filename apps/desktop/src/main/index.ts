@@ -18,6 +18,7 @@ import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './serv
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog, detachVaultKey } from './services/logging'
 import { initPerf, perfMark, perfMs } from './services/perf'
+import { createTrustedSenders } from './ipc/guarded-handle'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModelIpc'
@@ -117,6 +118,9 @@ if (!isPrimaryInstance) {
 initBinaryVerification(isDev)
 
 let mainWindow: BrowserWindow | null = null
+// WebContents ids allowed to invoke `handle` channels (#252): the main window's, added in
+// createWindow. The OCR rasterizer window only `send`s and the print window has no preload.
+const trustedSenders = createTrustedSenders()
 let ctx: AppContext | null = null
 
 // The three model resolvers + the four availability-driven service selectors that used to
@@ -482,6 +486,7 @@ function initBackend(): void {
   // reachable after the renderer's unlock gate reports the workspace ready.
   ctx = {
     paths,
+    trustedSenders,
     get db() {
       return workspace.requireDb()
     },
@@ -660,6 +665,7 @@ function createWindow(): void {
   // index.html meta tag, spec §3.5). The strings live in window-security.ts (TS-2),
   // pinned by tests/unit/window-security.test.ts — edit them THERE.
   const csp = buildCsp(isDev)
+  trustedSenders.add(mainWindow.webContents.id)
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {

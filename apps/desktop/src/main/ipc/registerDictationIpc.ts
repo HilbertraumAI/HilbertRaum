@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ipcMain } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { documentsDir } from '../services/ingestion'
@@ -66,6 +66,7 @@ export interface DictationIpcOptions {
 }
 
 export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptions = {}): void {
+  const ipcHandle = guardedHandleFor(ctx)
   const storeDir = documentsDir(ctx.paths.workspacePath)
   const maxDurationMs = resolveDictationTimeoutMs(options.maxDurationMs)
   // Single-flight guard: whisper is NOT internally serialized, so without this a second
@@ -73,7 +74,7 @@ export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptio
   // than queue it — dictation is interactive, a stale queued result would surprise the user.
   let inFlight = false
 
-  ipcMain.handle(IPC.transcribeDictation, async (_e, audio: unknown): Promise<string> => {
+  ipcHandle(IPC.transcribeDictation, async (_e, audio: unknown): Promise<string> => {
     // S3: refuse on a locked vault BEFORE any disk write — a transient plaintext WAV must
     // never land in the workspace documents dir while it holds only `.enc` sidecars. AUD-02:
     // `workspaceAdmitsWork`, not a bare `isUnlocked()` — the DB stays open for the whole

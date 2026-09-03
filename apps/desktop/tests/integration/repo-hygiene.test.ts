@@ -651,6 +651,7 @@ describe('repo hygiene — every ipcMain.handle under src/main/ipc goes through 
 
   it('the guard module itself is the one place that calls ipcMain.handle', () => {
     const guard = readFileSync(join(ipcDir, 'guarded-handle.ts'), 'utf8')
-    expect((guard.match(/ipcMain\.handle\(/g) ?? []).length).toBe(1)
+    const code = guard.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '') // its comments name the call too
+    expect((code.match(/ipcMain\.handle\(/g) ?? []).length).toBe(1)
   })
 })

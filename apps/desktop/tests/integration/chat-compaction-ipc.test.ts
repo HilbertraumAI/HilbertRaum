@@ -25,7 +25,7 @@ import { appendMessage, createConversation } from '../../src/main/services/chat'
 import { selfSummaryPrompt } from '../../src/main/services/chat/compaction'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -49,6 +49,7 @@ function compactingRuntime(window: number): ModelRuntime {
 
 function makeCtx(db: Db, runtime: ModelRuntime): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     db,
     workspace: { isUnlocked: () => true },
     runtime: { active: () => runtime, activeModelId: () => runtime.modelId }

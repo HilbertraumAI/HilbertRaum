@@ -55,7 +55,7 @@ import { getSettings, seedSettings, updateSettings } from '../../src/main/servic
 import type { AppSettings, AppStatus, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { t } from '../../src/shared/i18n'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const REPO_MANIFESTS = join(process.cwd(), '..', '..', 'model-manifests')
@@ -88,6 +88,7 @@ describe('registerCoreIpc', () => {
       })
     }
     const ctx = {
+      trustedSenders: ANY_SENDER,
       paths: { configPath: bogusConfigDir() },
       workspace: lockedWorkspace
     } as unknown as AppContext
@@ -123,6 +124,7 @@ describe('registerCoreIpc', () => {
     }
     const statusWith = async (ocrEngine: unknown): Promise<AppStatus> => {
       const ctx = {
+        trustedSenders: ANY_SENDER,
         paths: { configPath: bogusConfigDir() },
         workspace: lockedWorkspace,
         ocrEngine
@@ -163,6 +165,7 @@ describe('registerCoreIpc', () => {
       })
     }
     const ctx = {
+      trustedSenders: ANY_SENDER,
       paths: { configPath: bogusConfigDir() },
       workspace: lockedWorkspace,
       // The Translator seam's OPTIONAL deviceStatus (a fake without it reads as null via `?.`).
@@ -180,7 +183,11 @@ describe('registerCoreIpc', () => {
   })
 
   it('writeClipboard writes text via the MAIN clipboard module and reports success', async () => {
-    const ctx = { paths: {}, workspace: { isUnlocked: () => false } } as unknown as AppContext
+    const ctx = {
+      trustedSenders: ANY_SENDER,
+      paths: {},
+      workspace: { isUnlocked: () => false }
+    } as unknown as AppContext
     registerCoreIpc(ctx)
 
     const { result } = await invoke(handlers, IPC.writeClipboard, 'copy me')
@@ -189,7 +196,11 @@ describe('registerCoreIpc', () => {
   })
 
   it('writeClipboard returns false (never throws) when the clipboard write fails', async () => {
-    const ctx = { paths: {}, workspace: { isUnlocked: () => false } } as unknown as AppContext
+    const ctx = {
+      trustedSenders: ANY_SENDER,
+      paths: {},
+      workspace: { isUnlocked: () => false }
+    } as unknown as AppContext
     registerCoreIpc(ctx)
     ipcState.clipboardThrows = true
 
@@ -202,6 +213,7 @@ describe('registerCoreIpc', () => {
   // shapes silently no-oped. All must reject with the friendly localized copy.
   it('updateSettings rejects a null/non-object patch with the friendly copy (BE-1)', async () => {
     const ctx = {
+      trustedSenders: ANY_SENDER,
       paths: { configPath: bogusConfigDir() },
       db: seededDb(),
       workspace: { isUnlocked: () => true }
@@ -224,7 +236,11 @@ describe('registerModelIpc', () => {
   // workspace. These fixtures predate that guard and omit `workspace`; default them to unlocked
   // (the locked-refusal behaviour is enumerated separately in ipc-lock-coverage.test.ts).
   const reg = (ctx: AppContext): void =>
-    registerModelIpc({ workspace: { isUnlocked: () => true }, ...(ctx as object) } as AppContext)
+    registerModelIpc({
+      trustedSenders: ANY_SENDER,
+      workspace: { isUnlocked: () => true },
+      ...(ctx as object)
+    } as AppContext)
 
   // Model handlers resolve the drive policy from `paths.configPath` (M10); a missing
   // config dir means "no policy file" → developer-friendly defaults.

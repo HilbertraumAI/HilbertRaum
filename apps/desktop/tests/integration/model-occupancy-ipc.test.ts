@@ -46,7 +46,7 @@ import { IPC } from '../../src/shared/ipc'
 import { t } from '../../src/shared/i18n'
 import type { AppContext } from '../../src/main/services/context'
 import type { SkillRunState, StartSkillRunResult } from '../../src/shared/types'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -135,6 +135,7 @@ async function makeHarness(
   seedSettings(db)
   const runtime = await startedManager()
   const ctx = {
+    trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath: root, rootPath: root },
     workspace: { isUnlocked: () => true, documentCipher: () => null },

@@ -32,7 +32,7 @@ import { log } from '../../src/main/services/logging'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -90,6 +90,7 @@ function ctxFor(
 ): AppContext {
   const key = randomBytes(32)
   return {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath, workspacePath: rootPath },
     db: openDatabase(join(rootPath, 'hilbertraum.sqlite')),
     manifestsDir: null,

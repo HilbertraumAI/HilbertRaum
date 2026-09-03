@@ -56,7 +56,7 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import type { Message } from '../../src/shared/types'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -165,6 +165,7 @@ function freshDb(): { db: Db; workspacePath: string } {
 
 function makeCtx(db: Db, workspacePath: string, runtime: ModelRuntime): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath: workspacePath, workspacePath },
     get db() {
       return db

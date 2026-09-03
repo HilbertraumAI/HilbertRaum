@@ -73,7 +73,7 @@ import type {
   Message,
   WorkspaceActionResult
 } from '../../src/shared/types'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -189,6 +189,7 @@ function makeHarness(): Harness {
   const audit = createAuditRecorder(() => db)
   const runtime = echoRuntime()
   const ctx = {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath, workspacePath, configPath },
     db,
     workspace: {
@@ -683,6 +684,7 @@ describe('workspace audit events (buffered while locked, flushed after unlock)',
     ctrl.init()
 
     const ctx = {
+      trustedSenders: ANY_SENDER,
       workspace: ctrl,
       runtime: { stop: async () => {}, active: () => null, activeModelId: () => null },
       embedder: { stop: async () => {} },
@@ -718,6 +720,7 @@ describe('workspace audit events (buffered while locked, flushed after unlock)',
     const ctrl = new WorkspaceController(vault, DEFAULT_POLICY, false)
     ctrl.init()
     const ctx = {
+      trustedSenders: ANY_SENDER,
       workspace: ctrl,
       runtime: { stop: async () => {}, active: () => null, activeModelId: () => null },
       embedder: { stop: async () => {} },

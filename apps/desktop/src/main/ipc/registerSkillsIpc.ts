@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { writeFile } from 'node:fs/promises'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
@@ -59,6 +60,7 @@ import {
 // payload. Both invariants are covered by the sentinel-grep test.
 
 export function registerSkillsIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   const requireUnlocked = (): void => {
     // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
     // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
@@ -156,7 +158,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
     appVersion
   })
 
-  ipcMain.handle(IPC.listSkills, (): SkillInfo[] => {
+  ipcHandle(IPC.listSkills, (): SkillInfo[] => {
     requireUnlocked()
     // ctx.skills.list() reconciles disk→DB once per session on first read (the ratified
     // post-unlock lazy reconcile); project each row to SkillInfo with its duplicate-id flag.
@@ -167,7 +169,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
     return records.map((r) => recordToInfo(r, (idCounts.get(r.id) ?? 0) > 1, appVersion))
   })
 
-  ipcMain.handle(IPC.getSkill, (_e, installId: string): SkillInfo | null => {
+  ipcHandle(IPC.getSkill, (_e, installId: string): SkillInfo | null => {
     requireUnlocked()
     const record = ctx.skills!.get(installId)
     return record ? skillInfo(ctx.db, record, appVersion) : null
@@ -177,7 +179,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // resolved MAIN-side from the conversationId (§22-C4); the draft `question` is content and is
   // scored but NEVER logged or audited (reads aren't audited). Returns at most one OFFER — the
   // picker pins it and the user taps to accept; nothing is applied here.
-  ipcMain.handle(
+  ipcHandle(
     IPC.suggestSkills,
     (_e, conversationId: string, question?: string): SkillSuggestion[] => {
       requireUnlocked()
@@ -208,7 +210,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // precedent; renderer has no dialog access). Windows can't mix file+dir in one dialog, so the
   // caller chooses a mode. Returns `{ token, path }` (the path is renderer display only) or null
   // (cancelled). Unlock-gated like every consumer: no dialog opens while locked (#240).
-  ipcMain.handle(IPC.pickSkillPackage, async (_e, mode?: 'file' | 'folder'): Promise<SkillPickResult | null> => {
+  ipcHandle(IPC.pickSkillPackage, async (_e, mode?: 'file' | 'folder'): Promise<SkillPickResult | null> => {
     requireUnlocked()
     const options =
       mode === 'folder'
@@ -231,7 +233,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // Validate an import source FULLY in a transient dir, WITHOUT writing (OQ-2). Never throws on a
   // bad package — returns `ok: false` with structural reasons so the renderer can show them. The
   // one throw is a non-token argument (#240): that is not a package problem, so it is refused.
-  ipcMain.handle(IPC.previewSkillPackage, (_e, token: string): SkillPreview => {
+  ipcHandle(IPC.previewSkillPackage, (_e, token: string): SkillPreview => {
     requireUnlocked()
     const source = requirePickedSource(token, /* spend */ false)
     return previewSkillPackage(ctx.db, source, installerDeps(), { developerMode: developerMode() })
@@ -239,7 +241,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
 
   // Validate → unzip/copy into user-skills/<id>/ → install enabled-with-warning (DS7). A failed
   // import persists nothing (the staging dir is deleted). Throws a friendly structural reason.
-  ipcMain.handle(IPC.importSkill, (_e, token: string): SkillInfo => {
+  ipcHandle(IPC.importSkill, (_e, token: string): SkillInfo => {
     requireUnlocked()
     const source = requirePickedSource(token, /* spend */ true)
     try {
@@ -271,7 +273,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
   })
 
   // Export a skill as a `.skill.zip` (package tree only — §9.5). Save dialog runs in MAIN.
-  ipcMain.handle(IPC.exportSkill, async (_e, installId: string): Promise<string | null> => {
+  ipcHandle(IPC.exportSkill, async (_e, installId: string): Promise<string | null> => {
     requireUnlocked()
     const record = ctx.skills!.get(installId)
     if (!record) throw new Error(SKILL_IMPORT_ERRORS.notFound)
@@ -290,7 +292,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
     return result.filePath
   })
 
-  ipcMain.handle(IPC.deleteSkill, (_e, installId: string): void => {
+  ipcHandle(IPC.deleteSkill, (_e, installId: string): void => {
     requireUnlocked()
     const record = ctx.skills!.get(installId)
     if (!record) return
@@ -305,7 +307,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // Enable a skill, enforcing one-active-per-id (DS12): enabling X disables every other installed
   // skill sharing its declared id. Deterministic + server-guaranteed (the S5 UI surfaces it as an
   // "offer to disable the other"). Returns the updated SkillInfo.
-  ipcMain.handle(IPC.enableSkill, (_e, installId: string): SkillInfo => {
+  ipcHandle(IPC.enableSkill, (_e, installId: string): SkillInfo => {
     requireUnlocked()
     const record = getSkill(ctx.db, installId)
     if (!record) throw new Error(SKILL_IMPORT_ERRORS.notFound)
@@ -323,7 +325,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
     return skillInfo(ctx.db, updated, appVersion)
   })
 
-  ipcMain.handle(IPC.disableSkill, (_e, installId: string): SkillInfo => {
+  ipcHandle(IPC.disableSkill, (_e, installId: string): SkillInfo => {
     requireUnlocked()
     const record = getSkill(ctx.db, installId)
     if (!record) throw new Error(SKILL_IMPORT_ERRORS.notFound)
@@ -338,7 +340,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // simply never appeared (no toast, no log, no badge). COUNTS + fixed reason codes only, NEVER a
   // folder name or package content (§22-M1; an invalid folder name is arbitrary user text). The
   // `list()` call first ensures the lazy post-unlock reconcile has actually run this session.
-  ipcMain.handle(IPC.skillReconcileStatus, () => {
+  ipcHandle(IPC.skillReconcileStatus, () => {
     requireUnlocked()
     ctx.skills!.list()
     return ctx.skills!.reconcileStatus()
@@ -346,7 +348,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
 
   // Acknowledge a user skill's import warning (DS7) — clears the persistent "review what it can do"
   // state. App skills are pre-acknowledged; this is a no-op for them.
-  ipcMain.handle(IPC.acknowledgeSkillWarning, (_e, installId: string): SkillInfo => {
+  ipcHandle(IPC.acknowledgeSkillWarning, (_e, installId: string): SkillInfo => {
     requireUnlocked()
     const record = getSkill(ctx.db, installId)
     if (!record) throw new Error(SKILL_IMPORT_ERRORS.notFound)
@@ -368,7 +370,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // tools). Drives the calm transcript run affordance + its target name/chooser. The ids are
   // content-free (the §6 ids/counts posture); the renderer maps them to NAMES from its own loaded
   // document list, so a title never crosses this boundary.
-  ipcMain.handle(
+  ipcHandle(
     IPC.listRunnableTools,
     (_e, skillInstallId: string, conversationId: string): RunnableToolSet => {
       requireUnlocked()
@@ -388,7 +390,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
 
   // Start a run. Resolves the document scope MAIN-side, confirm-gates write/export tools, and hands a
   // content-free runner to the controller. Returns ids/counts only (never the extracted rows).
-  ipcMain.handle(IPC.startSkillRun, (_e, req: StartSkillRunRequest): StartSkillRunResult => {
+  ipcHandle(IPC.startSkillRun, (_e, req: StartSkillRunRequest): StartSkillRunResult => {
     requireUnlocked()
     const skillInstallId = typeof req?.skillInstallId === 'string' ? req.skillInstallId : ''
     const toolName = typeof req?.toolName === 'string' ? req.toolName : ''
@@ -530,7 +532,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
     }
   })
 
-  ipcMain.handle(IPC.getSkillRun, (_e, runHandle: string): SkillRunState | null => {
+  ipcHandle(IPC.getSkillRun, (_e, runHandle: string): SkillRunState | null => {
     requireUnlocked()
     return runController.get(typeof runHandle === 'string' ? runHandle : '')
   })
@@ -538,7 +540,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // All runs main currently holds (running + terminal-unacknowledged), ids/counts only — a freshly
   // reloaded renderer re-adopts them so an in-flight run keeps its bar and a finished run's outcome is
   // still shown/acknowledgeable (SKA-17; the `listActiveStreamConversations` precedent for skill runs).
-  ipcMain.handle(IPC.listSkillRuns, (): SkillRunState[] => {
+  ipcHandle(IPC.listSkillRuns, (): SkillRunState[] => {
     requireUnlocked()
     return runController.list()
   })
@@ -546,7 +548,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // Cancel a run by handle. SKA-25: a NON-EMPTY handle is REQUIRED at the IPC boundary — the no-arg
   // cancel-all (a pre-A2 relic that aborted every in-flight run across all documents/windows) is now
   // internal/test-only. An empty/absent handle is refused (no-op) rather than blasting every run.
-  ipcMain.handle(IPC.cancelSkillRun, (_e, runHandle?: string | null): void => {
+  ipcHandle(IPC.cancelSkillRun, (_e, runHandle?: string | null): void => {
     requireUnlocked()
     if (typeof runHandle !== 'string' || runHandle.length === 0) return
     runController.cancel(runHandle)
@@ -555,7 +557,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // Drop a terminal run once the renderer has shown its outcome (the acknowledge handshake — the
   // controller keeps a terminal run readable until this clears it). No-op on a still-running handle.
   // SKA-25: a non-empty handle is required here too (the no-arg clear-all stays internal/test-only).
-  ipcMain.handle(IPC.clearSkillRun, (_e, runHandle?: string | null): void => {
+  ipcHandle(IPC.clearSkillRun, (_e, runHandle?: string | null): void => {
     requireUnlocked()
     if (typeof runHandle !== 'string' || runHandle.length === 0) return
     runController.clear(runHandle)

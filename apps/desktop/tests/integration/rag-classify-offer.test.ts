@@ -42,7 +42,7 @@ import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { AppContext } from '../../src/main/services/context'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import type { Message } from '../../src/shared/types'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
@@ -138,6 +138,7 @@ function makeCtx(
   skillsDirs: { appSkillsDir: string; userSkillsDir: string }
 ): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath: workspacePath, workspacePath },
     get db() {
       return db

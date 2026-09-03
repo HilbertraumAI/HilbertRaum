@@ -25,7 +25,7 @@ import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { IPC } from '../../src/shared/ipc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import type { PrivacyPolicy } from '../../src/shared/types'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import type { AppContext } from '../../src/main/services/context'
@@ -169,6 +169,7 @@ function freshVault(): VaultPaths {
 /** The minimal AppContext the unlock handler's failure path reads. */
 function ctxWith(ctrl: WorkspaceController): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     workspace: ctrl,
     runtime: { stop: async () => {}, activeModelId: () => null },
     embedder: { stop: async () => {} }

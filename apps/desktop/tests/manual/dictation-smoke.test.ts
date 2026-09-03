@@ -35,7 +35,7 @@ import {
   resolveWhisperCliPath
 } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const ROOT = process.env.HILBERTRAUM_DICTATION_SMOKE?.trim() ?? ''
 const AUDIO_DIR = process.env.HILBERTRAUM_WHISPER_AUDIO?.trim() ?? ''
@@ -66,6 +66,7 @@ describe.skipIf(!enabled)('Dictation smoke (manual, real whisper-cli over the di
 
       const workspacePath = mkdtempSync(join(tmpdir(), 'hilbertraum-dictation-smoke-'))
       const ctx = {
+        trustedSenders: ANY_SENDER,
         paths: { workspacePath },
         transcriber: createWhisperCliTranscriber({
           id: 'smoke-whisper',

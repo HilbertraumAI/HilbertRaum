@@ -54,12 +54,13 @@ import type {
 import type { AppContext } from '../../src/main/services/context'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { encryptFile, decryptFile, encryptFileAsync, decryptFileAsync } from '../../src/main/services/workspace-vault'
-import { invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
 function ctxFor(rootPath: string, unlocked = true): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath },
     manifestsDir: null,
     isDev: false,
@@ -427,6 +428,7 @@ describe('registerImagesIpc — history persistence', () => {
     const db = openDatabase(join(workspacePath, 'hilbertraum.sqlite'))
     const key = randomBytes(32)
     const ctx = {
+      trustedSenders: ANY_SENDER,
       paths: { rootPath: workspacePath, workspacePath },
       db,
       manifestsDir: null,

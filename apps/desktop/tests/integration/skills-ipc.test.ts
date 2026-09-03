@@ -72,7 +72,7 @@ import { createAuditRecorder, listAuditEvents } from '../../src/main/services/au
 import { createSkillRegistry } from '../../src/main/services/skills/registry'
 import type { AppContext } from '../../src/main/services/context'
 import type { SkillInfo, SkillPreview } from '../../src/shared/types'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -124,6 +124,7 @@ function makeHarness(): Harness {
   const audit = createAuditRecorder(() => db)
   const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
   const ctx = {
+    trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath: root },
     workspace: { isUnlocked: () => true, documentCipher: () => null },
@@ -232,6 +233,7 @@ describe('skills IPC — round-trip lifecycle', () => {
       userSkillsDir: join(root, 'user-skills')
     })
     const ctx = {
+      trustedSenders: ANY_SENDER,
       db,
       paths: { workspacePath: root },
       workspace: { isUnlocked: () => false, documentCipher: () => null },

@@ -62,7 +62,7 @@ import { createSkillRegistry, getSkill } from '../../src/main/services/skills/re
 import { createConversation } from '../../src/main/services/chat'
 import type { AppContext } from '../../src/main/services/context'
 import type { RunnableTool, RunnableToolSet, SkillRunState, StartSkillRunResult } from '../../src/shared/types'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const SENTINEL = 'XTOOLRUN_SENTINEL_secret_payee_77777'
@@ -193,6 +193,7 @@ function makeMultiDocHarness(texts: string[]): Harness & { docIds: string[] } {
   const audit = createAuditRecorder(() => db)
   const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
   const ctx = {
+    trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath: root },
     workspace: { isUnlocked: () => true, documentCipher: () => null },
@@ -227,6 +228,7 @@ function makeHarness(statementText: string, opts: { title?: string } = {}): Harn
   const audit = createAuditRecorder(() => db)
   const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
   const ctx = {
+    trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath: root },
     workspace: { isUnlocked: () => true, documentCipher: () => null },
@@ -253,6 +255,7 @@ function makeRedactionHarness(docText: string): Harness {
   const audit = createAuditRecorder(() => db)
   const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
   const ctx = {
+    trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath: root },
     workspace: { isUnlocked: () => true, documentCipher: () => null },
@@ -279,6 +282,7 @@ function makeInvoiceHarness(invoiceText: string): Harness {
   const audit = createAuditRecorder(() => db)
   const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
   const ctx = {
+    trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath: root },
     workspace: { isUnlocked: () => true, documentCipher: () => null },
@@ -308,6 +312,7 @@ function makeUserSkillHarness(statementText: string): Harness {
   const audit = createAuditRecorder(() => db)
   const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
   const ctx = {
+    trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath: root },
     workspace: { isUnlocked: () => true, documentCipher: () => null },
@@ -416,6 +421,7 @@ describe('skills tool-run IPC (S11b)', () => {
     const audit = createAuditRecorder(() => db)
     const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
     const ctx = {
+      trustedSenders: ANY_SENDER,
       db,
       paths: { workspacePath: root },
       workspace: { isUnlocked: () => true, documentCipher: () => null },

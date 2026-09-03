@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
@@ -159,6 +160,7 @@ function sanitizeLinkInput(value: unknown): EvidenceLinkInput {
 }
 
 export function registerEvidenceReviewsIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // Every handler is DB-backed; refuse with the friendly localized copy while locked
   // (ipc-lock-coverage.test.ts drives every channel here against a locked ctx).
   const requireUnlocked = (): void => {
@@ -170,7 +172,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
   }
 
-  ipcMain.handle(IPC.createEvidenceReview, (_e, messageId: unknown): EvidenceReviewDetail => {
+  ipcHandle(IPC.createEvidenceReview, (_e, messageId: unknown): EvidenceReviewDetail => {
     requireUnlocked()
     const id = safeId(messageId)
     if (!id) throw new Error(tMain('main.evidenceReviews.invalidRequest'))
@@ -211,14 +213,14 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   const outdatedOverlay = (reviewId: string): boolean =>
     computeEvidenceReviewFreshness(ctx.db, reviewId)?.outdated === true
 
-  ipcMain.handle(IPC.getEvidenceReview, (_e, reviewId: unknown): EvidenceReviewDetail | null => {
+  ipcHandle(IPC.getEvidenceReview, (_e, reviewId: unknown): EvidenceReviewDetail | null => {
     requireUnlocked()
     const id = safeId(reviewId)
     const detail = id ? getEvidenceReview(ctx.db, id) : null
     return detail ? { ...detail, outdated: outdatedOverlay(detail.id) } : null
   })
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.getEvidenceReviewForMessage,
     (_e, messageId: unknown): EvidenceReviewSummary | null => {
       requireUnlocked()
@@ -234,7 +236,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   // a full item-row load plus a freshness recompute, so opening a long documents-mode
   // conversation paid a serial cost proportional to its history. The derived overlay is
   // applied per review here, exactly as the single-message read does.
-  ipcMain.handle(
+  ipcHandle(
     IPC.getEvidenceReviewSummariesForConversation,
     (_e, conversationId: unknown): EvidenceReviewSummary[] => {
       requireUnlocked()
@@ -247,7 +249,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.updateEvidenceReview,
     (_e, reviewId: unknown, patch: unknown): EvidenceReview | null => {
       requireUnlocked()
@@ -256,7 +258,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.updateEvidenceReviewItem,
     (_e, itemId: unknown, patch: unknown): EvidenceReviewItem | null => {
       requireUnlocked()
@@ -270,7 +272,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   // failing write) part-way through left the review HALF-swept — a state no user action can
   // produce and none can explain. Refuses (null) on an unknown id, an unrecognized action,
   // and on a READY review, matching the per-item write guard.
-  ipcMain.handle(
+  ipcHandle(
     IPC.applyEvidenceReviewBulkAction,
     (_e, reviewId: unknown, action: unknown): EvidenceReviewItem[] | null => {
       requireUnlocked()
@@ -280,7 +282,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.createEvidenceSelection,
     (_e, reviewId: unknown, input: unknown): EvidenceReviewItem | null => {
       requireUnlocked()
@@ -290,13 +292,13 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.deleteEvidenceSelection, (_e, itemId: unknown): boolean => {
+  ipcHandle(IPC.deleteEvidenceSelection, (_e, itemId: unknown): boolean => {
     requireUnlocked()
     const id = safeId(itemId)
     return id ? deleteEvidenceSelection(ctx.db, id) : false
   })
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.setEvidenceLink,
     (_e, itemId: unknown, evidenceKey: unknown, input: unknown): EvidenceReviewItem | null => {
       requireUnlocked()
@@ -306,7 +308,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.removeEvidenceLink,
     (_e, itemId: unknown, evidenceKey: unknown): boolean => {
       requireUnlocked()
@@ -316,7 +318,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.markEvidenceReviewReady,
     (_e, reviewId: unknown): { review: EvidenceReview; gate: EvidenceReadyGate } | null => {
       requireUnlocked()
@@ -337,7 +339,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.reopenEvidenceReview, (_e, reviewId: unknown): EvidenceReview | null => {
+  ipcHandle(IPC.reopenEvidenceReview, (_e, reviewId: unknown): EvidenceReview | null => {
     requireUnlocked()
     const id = safeId(reviewId)
     return id ? reopenEvidenceReview(ctx.db, id) : null
@@ -346,7 +348,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   // The REAL freshness engine (Phase 4, spec §21.2): snapshot vs workspace from STORED
   // facts only — never re-hashes, never reads source files, never touches the model
   // runtime or network. Unresolved-identity sources stay 'unverifiable' (never 'changed').
-  ipcMain.handle(
+  ipcHandle(
     IPC.refreshEvidenceReviewState,
     (_e, reviewId: unknown): EvidenceReviewFreshness | null => {
       requireUnlocked()
@@ -360,7 +362,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   // unchanged. Never rewrites status/completed_at/updated_at (§18.4) — deliberately NOT
   // subject to the ready-state write-guard (it is lifecycle metadata, not a decision
   // edit). No audit event: reads/acknowledge carry no spec §22 audit type.
-  ipcMain.handle(
+  ipcHandle(
     IPC.acknowledgeEvidenceReviewFreshness,
     (_e, reviewId: unknown): EvidenceReviewFreshness | null => {
       requireUnlocked()
@@ -374,7 +376,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   // reads the STORED extraction (chunks table) around the persisted excerpt — no
   // renderer-supplied document ids, no paths, no source-file reads. Unknown review/key and
   // unresolved-identity sources read as null.
-  ipcMain.handle(
+  ipcHandle(
     IPC.getEvidenceSourceContext,
     (_e, reviewId: unknown, sourceKey: unknown): EvidenceSourceContext | null => {
       requireUnlocked()
@@ -384,7 +386,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.deleteEvidenceReview, (_e, reviewId: unknown): boolean => {
+  ipcHandle(IPC.deleteEvidenceReview, (_e, reviewId: unknown): boolean => {
     requireUnlocked()
     const id = safeId(reviewId)
     if (!id) return false
@@ -398,7 +400,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   // D-2 (spec §25.4, plan §7.6): the conversation-delete confirm names how many reviews the
   // cascade will remove. A pure COUNT — no titles, notes, or content ever cross this channel;
   // a malformed id reads as "no reviews" (0), matching the other unknown-id results.
-  ipcMain.handle(
+  ipcHandle(
     IPC.countEvidenceReviewsForConversation,
     (_e, conversationId: unknown): number => {
       requireUnlocked()
@@ -421,7 +423,7 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   // the chosen extension decides the effective one (`packFormatForDestination`). Audit
   // is {reviewId, format} ONLY: the chosen path and the review TITLE (which seeds the
   // suggested file name) are content and never recorded (sentinel-tested).
-  ipcMain.handle(
+  ipcHandle(
     IPC.exportEvidencePack,
     async (_e, reviewId: unknown, options: unknown): Promise<EvidenceExportRecord | null> => {
       requireUnlocked()

@@ -9,6 +9,11 @@ import { EventEmitter } from 'node:events'
 // exercises the REAL handler glue (guards, the in-flight concurrency map, error→result
 // mapping, the streaming sender) without Electron — only the IPC transport is faked.
 
+// Every registrar registers through `guardedHandle` (#252), which checks `event.sender.id`
+// against the context's trusted set; fake contexts pass `ANY_SENDER` so the harness stays
+// permissive, and `makeEvent(senderId)` builds a sender with an id for the guard's own tests.
+export { ANY_SENDER } from '../../src/main/ipc/guarded-handle'
+
 export type IpcHandler = (event: FakeIpcEvent, ...args: unknown[]) => unknown
 export type IpcHandlers = Map<string, IpcHandler>
 
@@ -16,6 +21,8 @@ export type IpcHandlers = Map<string, IpcHandler>
  *  is EventEmitter-backed so handlers can wire the WebContents `'destroyed'` lifecycle (L3). */
 export interface FakeIpcEvent {
   sender: {
+    /** WebContents id; absent by default (the permissive harness never reads it). */
+    id?: number
     send: ReturnType<typeof vi.fn>
     isDestroyed: () => boolean
     once: (event: string, listener: (...args: unknown[]) => void) => void
@@ -27,10 +34,11 @@ export interface FakeIpcEvent {
   }
 }
 
-export function makeEvent(): FakeIpcEvent {
+export function makeEvent(senderId?: number): FakeIpcEvent {
   const emitter = new EventEmitter()
   let destroyed = false
   const sender = {
+    ...(senderId === undefined ? {} : { id: senderId }),
     send: vi.fn(),
     isDestroyed: () => destroyed,
     once: (event: string, listener: (...args: unknown[]) => void): void => {

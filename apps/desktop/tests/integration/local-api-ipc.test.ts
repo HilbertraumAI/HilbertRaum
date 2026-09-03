@@ -38,7 +38,7 @@ import { seedSettings, updateSettings } from '../../src/main/services/settings'
 import { readToken } from '../../src/main/services/local-api/token'
 import type { AppContext } from '../../src/main/services/context'
 import type { AppStatus, LocalApiConnectionInfo, LocalApiStatus } from '../../src/shared/types'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -75,6 +75,7 @@ function makeHarness(opts: { unlocked?: boolean; localApi?: boolean } = {}): Har
   const status = localApiStatus()
   const unlocked = opts.unlocked ?? true
   const ctx = {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath, workspacePath, configPath },
     db,
     isDev: true,

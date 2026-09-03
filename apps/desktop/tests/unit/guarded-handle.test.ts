@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import type { IpcMainInvokeEvent } from 'electron'
 
 // #252: every `ipcMain.handle` in the main process is registered through `guardedHandle`,
 // which runs the handler body only for a sender in the trusted set (the main window's
@@ -25,7 +26,8 @@ import {
   UntrustedSenderError,
   createTrustedSenders,
   guardedHandle,
-  guardedHandleFor
+  guardedHandleFor,
+  type TrustedSenders
 } from '../../src/main/ipc/guarded-handle'
 import { registerAuditIpc } from '../../src/main/ipc/registerAuditIpc'
 import { openDatabase } from '../../src/main/services/db'
@@ -65,8 +67,8 @@ describe('guardedHandle (#252)', () => {
     handlers.clear()
     const trusted = createTrustedSenders()
     trusted.add(7)
-    const body = vi.fn((_e: unknown, a: string) => `ok:${a}`)
-    guardedHandle('t:pass', body as never, { trustedSenders: trusted })
+    const body = vi.fn((_e: IpcMainInvokeEvent, a: string) => `ok:${a}`)
+    guardedHandle('t:pass', body, { trustedSenders: trusted })
     const event = makeEvent(7)
     expect(await handlers.get('t:pass')!(event, 'x')).toBe('ok:x')
     expect(body).toHaveBeenCalledWith(event, 'x')
@@ -102,9 +104,8 @@ describe('guardedHandle (#252)', () => {
 
   it('registration without a trusted set fails loudly instead of refusing every call later', () => {
     handlers.clear()
-    expect(() =>
-      guardedHandle('t:missing', () => 'ran', { trustedSenders: undefined as never })
-    ).toThrow(/no trustedSenders/)
+    const noSet = { trustedSenders: undefined } as unknown as { trustedSenders: TrustedSenders }
+    expect(() => guardedHandle('t:missing', () => 'ran', noSet)).toThrow(/no trustedSenders/)
     expect(handlers.has('t:missing')).toBe(false)
   })
 

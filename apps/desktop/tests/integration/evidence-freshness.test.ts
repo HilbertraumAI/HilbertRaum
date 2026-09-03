@@ -69,7 +69,7 @@ import type {
   EvidenceReviewSummary,
   EvidenceSourceContext
 } from '../../src/shared/types'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -590,6 +590,7 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
 describe('IPC surface (new P4 channels + real overlay)', () => {
   function makeCtx(db: Db, root: string): AppContext {
     return {
+      trustedSenders: ANY_SENDER,
       db,
       paths: { workspacePath: root, rootPath: root, configPath: join(root, 'config.json') },
       workspace: { isUnlocked: () => true },

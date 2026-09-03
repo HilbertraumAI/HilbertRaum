@@ -33,7 +33,7 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import { t } from '../../src/shared/i18n'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const WHAT_CHANGED_INSTALL_ID = 'app:what-changed'
@@ -113,6 +113,7 @@ async function makeHarness(opts: { bothFullyChunked?: boolean } = {}): Promise<H
   } as unknown as ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
 
   const ctx = {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath: root, workspacePath },
     get db() {
       return db

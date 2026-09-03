@@ -55,7 +55,7 @@ import {
 } from '../../src/main/services/evidence-reviews'
 import type { AppContext } from '../../src/main/services/context'
 import type { Citation, EvidenceReviewItem, EvidenceReviewSummary } from '../../src/shared/types'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -159,6 +159,7 @@ function seedConversation(
 
 function ctxFor(db: Db): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     db,
     workspace: { isUnlocked: () => true, isLocking: () => false },
     paths: { workspacePath: '/tmp', rootPath: '/tmp', configPath: '/tmp/config.json' },

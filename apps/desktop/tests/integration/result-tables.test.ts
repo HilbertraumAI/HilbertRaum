@@ -44,7 +44,7 @@ import {
 } from '../../src/main/services/tables/store'
 import type { TableSpec } from '../../src/main/services/tables'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -54,6 +54,7 @@ function freshDb(): Db {
 
 function makeCtx(db: Db, audit?: (type: string, msg: string, meta?: Record<string, unknown>) => void): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     db,
     workspace: { isUnlocked: () => true },
     runtime: { active: () => null, activeModelId: () => null },

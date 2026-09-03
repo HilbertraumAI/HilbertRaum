@@ -12,6 +12,7 @@ import type { AuditRecorder } from './audit'
 import type { DocTaskManager } from './doctasks'
 import type { SkillRegistry } from './skills/registry'
 import type { VisionService } from './vision'
+import type { TrustedSenders } from '../ipc/guarded-handle'
 import type { TranslateJobService } from './translation/jobs'
 import type { LocalApiServer } from './local-api/server'
 import type { PlaintextOpsRegistry } from './ingestion/plaintext-ops'
@@ -19,6 +20,12 @@ import type { PlaintextOpsRegistry } from './ingestion/plaintext-ops'
 // Shared application context assembled at startup and passed to IPC handlers.
 export interface AppContext {
   paths: ResolvedPaths
+  /**
+   * WebContents ids allowed to invoke `ipcMain.handle` channels (#252): the main window's,
+   * added in `createWindow`. Every registrar registers through `guardedHandleFor(ctx)`;
+   * the fake test harness passes the permissive `ANY_SENDER`.
+   */
+  trustedSenders: TrustedSenders
   /**
    * The live workspace database. Backed by a getter over `workspace`: in
    * `plaintext_dev` mode it is open from startup; in `encrypted` mode it throws until
