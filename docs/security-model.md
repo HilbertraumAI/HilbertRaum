@@ -1828,9 +1828,15 @@ read any supported-type file anywhere on disk (the text is then reachable via
   (`ingestion/limits.ts` `DEFAULT_WALK_BUDGET`: 50 000 entries / depth 64 / 10 s, checked once
   per directory). A cut walk imports what it reached; picked FILES are always kept. The preflight
   count and the import each run their own bounded walk, so on a very slow drive the two can be cut
-  at different points. The walk still runs on the main thread (#274). What this does NOT do:
-  reject a UNC or device path lexically — that changes the drop contract for network-share users
-  and waits on #222.
+  at different points. Since PR #283 (#274) the walk is asynchronous (`fs/promises`,
+  `expandPathsBoundedAsync`): it yields at every directory, so a large or slow tree no longer
+  freezes the main thread and the budget bounds how long the user waits, not a freeze; a walk cut
+  by its budget is reported (`exhausted` on the preflight result and on the import job, a warn log
+  with counts only, and the Documents screen's "too large to scan completely" notice), so a partial
+  import never looks complete. `importDocuments` re-checks the unlock gate after the walk and takes
+  the document-work lease only then — a lock landing mid-walk queues nothing. What this does NOT
+  do: reject a UNC or device path lexically — that changes the drop contract for network-share
+  users and waits on #222.
 
 ### D2 — `imageReadBytes` takes an opaque token, never a renderer path
 `imageChooseImage` now returns `{ token, name, sizeBytes }` — the absolute path stays in main,

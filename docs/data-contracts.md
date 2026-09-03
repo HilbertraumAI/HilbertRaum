@@ -73,7 +73,12 @@ content, the `exportConversation` pattern; resolves with the path or null on can
 driving the large-audio import confirm; `DocumentInfo` gained optional `transcriptionProgress`;
 since PR #275 (#240) a live `pickDocuments` token makes main count its own vetted paths without
 spending the token, while a token-less call is the raw seam, capped at `MAX_DROP_PATHS` = 512
-strings before any filesystem call) +
+strings before any filesystem call; since PR #283 (#274) the walk behind it is asynchronous and
+`ImportPreflight` gained the additive optional `exhausted?: 'entries' | 'depth' | 'time'`
+(`WalkExhausted`, declared once in `shared/types.ts`) — present only when the walk was cut by its
+budget, so `fileCount` is then a lower bound; `ImportJob` (the `importDocuments` result, still
+`{ jobId, documentIds }` complete at resolution) and `ImportJobStatus` (`getImportJob` /
+`getActiveImportJob`) carry the same field for the import's own walk) +
 `transcribeDictation(audio: Uint8Array): Promise<string>` (`dictation:transcribe`, Phase 37 —
 voice dictation: 16 kHz mono WAV bytes in, plain text out; request/response, nothing persisted,
 no audit; `AppStatus` gained the additive `dictationAvailable: boolean` gate).
