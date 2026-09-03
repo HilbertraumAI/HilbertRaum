@@ -202,6 +202,29 @@ kept safely on the drive and secured at the next unlock — you don't lose the s
 
 ---
 
+## "Could not open the workspace yet: another program is holding a recovery file"
+
+You see this on the unlock screen when a previous session's lock did not finish (see "Could
+not lock the workspace" above) and the app kept your newest data as a recovery file to secure
+at the next unlock — but another program on your computer is holding that file open, so the app
+cannot move it into place. Opening the workspace anyway would fall back to the older,
+already-secured copy and lose the newest changes, so the app **refuses to open until the hold
+clears**. Your data is safe; nothing is deleted.
+
+This is almost always antivirus or a search indexer scanning the drive, or a file-manager
+window left open on the `workspace` folder — most common on Windows.
+
+What to do:
+
+- Close anything that might be scanning or reading the drive: antivirus, the search indexer,
+  and any Explorer / Finder window showing the `workspace` folder.
+- Wait a few seconds and press **Unlock** again with your usual password. Each unlock retries
+  the recovery, so once the hold is gone it succeeds and your newest data is restored.
+- If it keeps happening, quit the app, safely eject and re-attach the drive (which releases any
+  lingering handle), then start the app and unlock.
+
+---
+
 ## "The model is busy" — one job at a time
 
 HilbertRaum runs **one** local model, and it does **one job at a time**. When you start something
@@ -479,6 +502,12 @@ What to do:
   hard unplug interrupted a write. Start the app and check your documents are present. Model
   weight files can always be re-downloaded or re-provisioned if one was damaged; your workspace
   data cannot — which is exactly why the quit-then-eject habit is worth it.
+- exFAT has a narrow durability limit that makes the habit matter: a hard power cut immediately
+  after the app saves can, on rare occasions, roll that one save back to the previous one. The
+  app is built so the **last cleanly locked version of your workspace always survives** such a
+  rollback (you never get a corrupt mix), so at worst you lose the changes since that lock —
+  the same window a mid-session crash carries. See [`drive-layout.md`](drive-layout.md) under
+  **Filesystem** for the detail.
 
 ---
 

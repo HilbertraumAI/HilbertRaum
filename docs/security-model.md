@@ -678,6 +678,13 @@ explicitly:
   shred can leave a spent `.recovery` behind, e.g. a Windows AV/indexer holding the file —
   it must never roll the vault back to a stale snapshot or encrypt shred-garbage over the
   good `.enc`). Anything not matching that narrow signature is shredded as before.
+  When the move-aside itself cannot land — another program holds the spent `.recovery`
+  already on that name through the overwrite, the unlink **and** the rename (a Windows
+  AV/indexer without delete sharing) — the startup salvage reports failure: `init()` skips
+  the sweep (the working file is still the only fresh copy) and an unlock is **refused**
+  with `vault_recovery_blocked` rather than decrypting the stale `.enc` on top of it. The
+  retry is simply the next unlock, which re-runs the salvage; it clears once the hold is
+  gone and nothing is lost (#242).
   **Part of this decision is a confidentiality trade:** after a failed lock + quit, the
   session's data rests on the drive **in plaintext** as `<db>.recovery` until the next
   successful unlock secures it — previously that leftover was shredded at the next launch
@@ -720,6 +727,11 @@ explicitly:
   intact stale `.enc` with garbage, so it is deliberately shredded instead. Confidentiality
   is chosen over mid-session durability here; the mitigations are the clean quit path
   (lock-on-quit + the `uncaughtException` crash lock) and the safe-eject guidance above.
+  A separate, filesystem-level durability limit — a rename that has not yet reached the
+  directory metadata can roll back after a power cut on exFAT/FAT32, and no directory-flush
+  primitive is exposed through Node on Windows — is covered in
+  [`drive-layout.md`](drive-layout.md) under **Filesystem** (the last successfully locked
+  snapshot always survives) (#243).
 
 ### Vault-overwrite guards & single instance (issue #208)
 
