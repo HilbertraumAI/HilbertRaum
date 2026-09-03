@@ -29,7 +29,7 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-09-04 — **Phase F PR 2 (#PR2, closes #240 / #243 / #250 — docs only): the three defaults the
+_2026-09-04 — **Phase F PR 2 (#284, closes #240 / #243 / #250 — docs only): the three defaults the
 owner confirmed as rulings on 2026-09-03 are now accepted wording — #222 decline (the NTLM leg is
 a permanent `known-limitations.md` line; `security-model.md` residual egress (ii), the D1/L-3
 pointers, BUILD_STATE §8 L-4), #223 document + one manual exFAT crash-cut before the first kit
@@ -571,7 +571,7 @@ open round's item stays the last block of §5.)
     - **External-open consent (#236; decisions #221, #228):** a renderer http(s) `window.open`
       still reaches `shell.openExternal` unconfirmed; the residual wording landed (9a), no code —
       5a never opened. Its containment sentence is promoted verbatim to `known-limitations.md`.
-    - **Ruled 2026-09-03, recorded 2026-09-04 (Phase F PR 2, #PR2 — §52 addendum rows):** #240
+    - **Ruled 2026-09-03, recorded 2026-09-04 (Phase F PR 2, #284 — §52 addendum rows):** #240
       lexical rejection **declined** (#222; the NTLM leg is the accepted residual, a permanent
       `known-limitations.md` line); #243 exFAT durability **documented** (#223) plus one manual
       crash-cut on an exFAT kit before the first kit ships (`packaging.md` checklist item 9);
@@ -598,7 +598,7 @@ open round's item stays the last block of §5.)
     - **Phase F register:** the one remaining audit-ID comment (`tests/unit/window-security.test.ts`,
       `// SEC-1:`); #274; the "answered the other way" designs recorded on #218–#231 and in §52.
     - **Phase F, 2026-09-04 — PR 1 (#283) closed #274** (async walk, `exhausted` surfaced; §52
-      addendum row) and swept the last audit-ID comment above; **PR 2 (#PR2) closed #240/#243/#250**
+      addendum row) and swept the last audit-ID comment above; **PR 2 (#284) closed #240/#243/#250**
       (the rulings above); the owner answered decisions #221/#222/#223/#225/#226/#227/#228 on
       2026-09-03 (`**DECISION:**`) — PRs 3 (#248 handler), 4 (#236 consent + eval-gated RAG
       framing) and 5 (#247 `user_version`) follow in order.
