@@ -603,4 +603,57 @@ describe('SkillRunBar (S11b)', () => {
     expect(screen.queryByText(/plain text \(\.txt\)/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Word format/)).not.toBeInTheDocument()
   })
+
+  it('CONFIRM (#261): the run targets the document that was shown when the dialog opened, even if the list changes underneath', async () => {
+    // The confirm is the last checkpoint before a write/export. If the target list changes while
+    // the dialog is open (a background scope refresh), the run must still go to the document the
+    // user saw and confirmed — never to whatever is first in the NEW list.
+    const onRun = vi.fn()
+    const user = userEvent.setup()
+    const shared = { run: null, onRun, onCancel: vi.fn(), onDismiss: vi.fn(), runnableTools: [writeTool] }
+    const { rerender } = render(
+      withI18n(
+        <SkillRunBar
+          {...shared}
+          targetDocuments={[
+            { id: 'd1', name: 'first.pdf' },
+            { id: 'd2', name: 'second.pdf' }
+          ]}
+        />
+      )
+    )
+    await user.click(screen.getByRole('button', { name: 'synthetic_write' }))
+    expect(screen.getByText('Run this tool?')).toBeInTheDocument()
+
+    // The list changes under the open dialog: d1 is gone, d2 is now first.
+    rerender(withI18n(<SkillRunBar {...shared} targetDocuments={[{ id: 'd2', name: 'second.pdf' }]} />))
+    await user.click(screen.getByRole('button', { name: 'Run' }))
+    expect(onRun).toHaveBeenCalledWith('synthetic_write', true, 'd1')
+  })
+
+  it('CONFIRM (#261): the dialog names the target document', async () => {
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillRunBar
+          run={null}
+          runnableTools={[writeTool]}
+          targetDocuments={[
+            { id: 'd1', name: 'first.pdf' },
+            { id: 'd2', name: 'second.pdf' }
+          ]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    // Pick the second document, then open the confirm: the dialog must say which one it will run on.
+    await user.click(screen.getByRole('button', { name: /choose target document/i }))
+    await user.click(await screen.findByRole('menuitemradio', { name: /second.pdf/i }))
+    await user.click(screen.getByRole('button', { name: 'synthetic_write' }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent('Document: second.pdf')
+    expect(dialog).not.toHaveTextContent('first.pdf')
+  })
 })
