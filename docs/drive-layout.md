@@ -293,10 +293,12 @@ lock, the same window a mid-session crash already carries (see
 mitigation is the ordinary one: quit the app and eject the drive safely before unplugging
 (see [`troubleshooting.md`](troubleshooting.md) "Windows asks to scan and fix the drive").
 Owner decision #223 (2026-09-03) ruled this caveat **documented, not engineered around** — no
-directory flush or write-through is added — with **one manual crash-cut on an exFAT kit per
-shipping platform before the first kit ships** (a hard unplug during a lock, then re-plug,
-unlock and confirm the last locked snapshot opens; machine/date/outcome recorded):
-[`packaging.md`](packaging.md) "Manual pre-ship checklist" item 9 (#243).
+directory flush or write-through is added — with **one manual crash-cut on an exFAT kit before
+the first kit ships** (a hard unplug during a lock on a scratch kit; after re-plug the
+workspace must open cleanly — either at the last locked snapshot or, when the cut landed in
+the encrypt phase, with the session rolled forward through `.recovery`; machine, OS, date and
+outcome recorded): [`packaging.md`](packaging.md) "Manual pre-ship checklist" item 9 (#243).
+Repeating it once per shipping platform is recommended, not part of the ruling.
 
 ## First real-drive bring-up — durable lessons (design record, 2026-06-10)
 

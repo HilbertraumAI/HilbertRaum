@@ -579,8 +579,7 @@ open round's item stays the last block of §5.)
     - **OS session end is a hard kill (#248; decision #226):** documented (9a), no handler; "quit
       before shutdown/logoff" promoted verbatim to `known-limitations.md`.
     - **Chromium egress outside CSP (#254, closed as a confirmed residual):** WebRTC and
-      dns-prefetch/preconnect are unused by the renderer and reachable only after a renderer
-      compromise; no flag added (unverifiable offline).
+      dns-prefetch/preconnect unused by the renderer, reachable only after a compromise; no flag.
     - **No `PRAGMA user_version` (#247; decision #225):** not ratified — an old build cannot tell it
       opened a newer DB (the launcher refusal, PR #272, closes the trigger).
     - **OS-backed workspace lock (#263, accepted; decision #224):** not built.
@@ -595,13 +594,10 @@ open round's item stays the last block of §5.)
       `skills-installer`, `third-party-notices`, `ocr`, `rail-labels` tests), the katex hoist
       compare, `as unknown as` private-field injection — convert to behavioural assertions when
       touched; `FullSuiteGuard` cannot see dropped individual tests.
-    - **Phase F register:** the one remaining audit-ID comment (`tests/unit/window-security.test.ts`,
-      `// SEC-1:`); #274; the "answered the other way" designs recorded on #218–#231 and in §52.
-    - **Phase F, 2026-09-04 — PR 1 (#283) closed #274** (async walk, `exhausted` surfaced; §52
-      addendum row) and swept the last audit-ID comment above; **PR 2 (#284) closed #240/#243/#250**
-      (the rulings above); the owner answered decisions #221/#222/#223/#225/#226/#227/#228 on
-      2026-09-03 (`**DECISION:**`) — PRs 3 (#248 handler), 4 (#236 consent + eval-gated RAG
-      framing) and 5 (#247 `user_version`) follow in order.
+    - **Phase F (rulings 2026-09-03 on #221/#222/#223/#225/#226/#227/#228; "other way" designs on
+      #218–#231 and in §52):** PR 1 (#283) closed #274 (async walk, `exhausted` surfaced) and swept
+      the last audit-ID comment; PR 2 (#284) closed #240/#243/#250 (above). Next, in order: PR 3
+      (#248 handler), PR 4 (#236 consent + eval-gated RAG framing), PR 5 (#247 `user_version`).
 
 ---
 

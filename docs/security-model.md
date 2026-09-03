@@ -746,7 +746,9 @@ explicitly:
   [`drive-layout.md`](drive-layout.md) under **Filesystem** (the last successfully locked
   snapshot always survives). Owner decision #223 (2026-09-03) ruled it documented, with one
   manual crash-cut on an exFAT kit before the first kit ships — `packaging.md` "Manual pre-ship
-  checklist" item 9 (#243 closed).
+  checklist" item 9 (#243 closed). Note that a cut landing during the lock's encrypt phase is
+  the failed-lock signature above, so the next unlock rolls the session **forward** — both
+  outcomes are the design working.
 
 ### Vault-overwrite guards & single instance (issue #208)
 
@@ -1816,8 +1818,8 @@ read any supported-type file anywhere on disk (the text is then reachable via
   compromised renderer can still drive this seam with on-disk paths, but the offline guarantee
   means there is **no network sink to exfiltrate** read content (the *path* itself is one on
   Windows — "Residual egress channels" (ii) below, an accepted residual since the 2026-09-03
-  ruling on #222, #240), and the dominant picker surface
-  is now non-forgeable. `importPreflight` still takes raw paths (counts/sizes only — lower impact).
+  ruling on #222, #240), and the dominant picker surface is now non-forgeable.
+  `importPreflight` still takes raw paths (counts/sizes only — lower impact).
 - **Skills use the same token mechanism (#240, PR #275):** `pickSkillPackage` is unlock-gated and
   returns `{ token, path }`; `previewSkillPackage` reads through the token without spending it and
   `importSkill` spends it, so a renderer string that is not a live token is refused before the
