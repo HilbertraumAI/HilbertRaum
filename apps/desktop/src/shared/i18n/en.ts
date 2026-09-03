@@ -1976,6 +1976,12 @@ export const en = {
     'Your password is correct, but the workspace data on the drive is damaged and could ' +
     'not be opened. Retyping the password will not help. Do not create a new workspace — ' +
     'keep the files as they are and restore the workspace folder from a backup.',
+  // #242: the start-up salvage could not move the last session's newest data aside because
+  // another program holds the recovery file on that name; opening now would lose that data.
+  'main.workspace.recoveryBlocked':
+    'Could not open the workspace yet: another program is holding a recovery file with your ' +
+    'newest data. Close anything that may be scanning the drive (antivirus, search indexing, ' +
+    'a file window on the workspace folder), wait a moment, then try again. Nothing is lost.',
   'main.workspace.createFailed': 'Could not create the workspace.',
   'main.workspace.passwordTooShort': 'Password must be at least {min} characters.',
   'main.workspace.newPasswordTooShort': 'The new password must be at least {min} characters.',

@@ -2019,6 +2019,12 @@ export const de: Record<keyof typeof en, string> = {
     'beschädigt und konnten nicht geöffnet werden. Das Passwort erneut einzugeben hilft ' +
     'nicht. Lege keinen neuen Arbeitsbereich an — lass die Dateien unverändert und stelle ' +
     'den Ordner „workspace“ aus einem Backup wieder her.',
+  // #242: see en.ts — the recovery file is held by another program; nothing is lost.
+  'main.workspace.recoveryBlocked':
+    'Der Arbeitsbereich konnte noch nicht geöffnet werden: Ein anderes Programm hält eine ' +
+    'Wiederherstellungsdatei mit deinen neuesten Daten fest. Schließe alles, was das Laufwerk ' +
+    'gerade prüft (Virenscanner, Suchindex, ein Dateifenster mit dem Ordner „workspace“), ' +
+    'warte kurz und versuch es dann noch einmal. Es ist nichts verloren.',
   'main.workspace.createFailed': 'Der Arbeitsbereich konnte nicht erstellt werden.',
   'main.workspace.passwordTooShort': 'Das Passwort muss mindestens {min} Zeichen lang sein.',
   'main.workspace.newPasswordTooShort':

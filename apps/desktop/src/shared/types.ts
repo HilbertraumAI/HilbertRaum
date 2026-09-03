@@ -206,10 +206,18 @@ export interface WorkspaceStateInfo {
 /** Result of an unlock/create action (a wrong password is a normal, non-throwing result).
  *  `vault_damaged` (#208): the password verified but the vault ciphertext did not decrypt
  *  to an openable database — structurally NOT a password problem, and the copy must say so
- *  (retyping the password cannot help; restoring from a backup can). */
+ *  (retyping the password cannot help; restoring from a backup can).
+ *  `vault_recovery_blocked` (#242): the last session's newest data still waits to be salvaged
+ *  and another program holds the recovery file it must be moved onto — the unlock is refused
+ *  (opening would decrypt the stale snapshot over it); close that program and retry, nothing
+ *  is lost. */
 export type WorkspaceActionResult =
   | { ok: true; state: WorkspaceStateInfo }
-  | { ok: false; reason: 'wrong_password' | 'vault_damaged' | 'refused' | 'error'; message: string }
+  | {
+      ok: false
+      reason: 'wrong_password' | 'vault_damaged' | 'vault_recovery_blocked' | 'refused' | 'error'
+      message: string
+    }
 
 export interface DriveStatus {
   /** Root directory that holds models + workspace (drive root or app-data fallback). */

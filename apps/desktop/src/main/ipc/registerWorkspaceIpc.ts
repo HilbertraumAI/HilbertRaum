@@ -1,7 +1,13 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import { VaultBusyError, VaultDamagedError, WrongPasswordError, workspaceAdmitsWork } from '../services/workspace-vault'
+import {
+  VaultBusyError,
+  VaultDamagedError,
+  VaultRecoveryBlockedError,
+  WrongPasswordError,
+  workspaceAdmitsWork
+} from '../services/workspace-vault'
 import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { maybeStartLocalApi } from '../services/local-api/lifecycle'
@@ -163,6 +169,22 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           ok: false,
           reason: 'vault_damaged',
           message: tMain('main.workspace.vaultDamaged')
+        }
+      }
+      // #242: the startup salvage is blocked — another program holds the recovery file the
+      // last session's newest data must be moved onto, so opening now would decrypt the
+      // stale snapshot over it. Its own reason + copy (close the holder, retry; nothing is
+      // lost). instanceof PLUS the name — the bundle-duplication quirk again.
+      if (
+        err instanceof VaultRecoveryBlockedError ||
+        (err instanceof Error && err.name === 'VaultRecoveryBlockedError')
+      ) {
+        log.warn('Workspace unlock refused: a recovery file is held by another program')
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (recovery blocked)')
+        return {
+          ok: false,
+          reason: 'vault_recovery_blocked',
+          message: tMain('main.workspace.recoveryBlocked')
         }
       }
       log.error('Workspace unlock failed', String(err))
