@@ -29,6 +29,19 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-03 — **Audit 2026-09-02 Phase 8 (PR 8-a) — small code items: SEC-2 #245 the engine
+archive's on-disk name is `archiveNameFromUrl` (last URL path segment, percent-decoded, must match
+`^[A-Za-z0-9._-]{1,128}$`, else `<binary>-<version>-<os>-<arch>.zip`) and `zipDest` goes through
+`resolveWithinRoot`; `runtime-sources.yaml` urls must be https at parse time; SEC-5 #251
+`Object.hasOwn` key gate + the 256 KB cap on every non-primitive settings write; SEC-7 #253
+`default-src 'none'; style-src 'unsafe-inline'` meta in the pack head; REL-1 #255
+`BODY_TOTAL_TIMEOUT_MS = 120_000` beside the idle timer (seam `bodyTotalTimeoutMs`); REL-2 #256
+`saveTextExport` shares the async atomic `writeAtomic` tail; SEC-14 #266 `form-action 'none'` in
+both headers + the four-directive tail in every baked meta; GAP-3 #254 recorded as a confirmed
+residual (no code) and closed (PR #278).**_ Record: `security-model.md` CSP section + manifest
+section (3); `local-api.md` §6.1 bounds table (+ Host wording); §8 L-7 clause. Suite: see the
+Phase 8 (PR 8-b) entry for the combined count.
+
 _2026-09-03 — **Audit 2026-09-02 Phase 7 — recovery preservation + durability docs: a held
 `.recovery` no longer costs the last session's newest data after a failed lock —
 `preserveNewerPlaintext` now returns `preserved`/`not-needed`/`failed`; on `failed` `init()`
@@ -756,7 +769,8 @@ the offline/privacy guarantees:
   FAILURE: an unverifiable engine archive is discarded, never installed), and the OS `tar`
   refuses `..` members by default — containment rests on tar's *implicit* behavior rather
   than the explicit member check this fix calls for; symlink members are the residual soft
-  spot. (The skills importer does NOT share this gap — it enumerates and validates every
+  spot; the archive's own *name* is guarded since #245 (audit 2026-09-02 SEC-2, Phase 8).
+  (The skills importer does NOT share this gap — it enumerates and validates every
   member's path/symlink before inflating, arch §22-A2.) Fix: list/extract members with an
   explicit containment check.
   **Update (close-out 2026-07-12):** Phase 5 (`032b014`) added the explicit in-app containment

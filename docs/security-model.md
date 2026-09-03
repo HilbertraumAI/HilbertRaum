@@ -84,11 +84,15 @@ the intersection of both**. All four policy strings live in `main/window-securit
 
 - **Production header** (strict): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
   connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none';
-  frame-ancestors 'none'`. No remote origins are reachable from the renderer. The production
+  frame-ancestors 'none'; form-action 'none'`. No remote origins are reachable from the renderer. The production
   **meta** policies match the checked-in page metas minus the localhost entries (the `ocr` page
   keeps `worker-src 'self' blob:` / `img-src 'self' data: blob:` — the bundled pdfjs allowances;
   its worker itself resolves as a plain same-origin asset, and a packaged-build rasterization
-  was verified under the stricter header intersection).
+  was verified under the stricter header intersection). **Header/meta parity (#266):** every
+  baked meta, dev and prod, carries the same hardening tail as the header — `object-src 'none';
+  base-uri 'none'; frame-ancestors 'none'; form-action 'none'` — so the fallback layer denies
+  the same things if the header wiring ever regresses; `form-action 'none'` is the second,
+  independent refusal of a form submit (the navigation guard is the first).
   **Why prod keeps `style-src 'unsafe-inline'` (audit 2026-07-16 F-39 — investigated, kept):** it is
   load-bearing for **KaTeX** math. `katex.renderToString` (used via `@streamdown/math` → rehype-katex
   in `AssistantMarkdown`) emits many per-expression inline `style="height:…;vertical-align:…"`
@@ -104,7 +108,8 @@ the intersection of both**. All four policy strings live in `main/window-securit
 - **Development** (HMR-compatible): both layers relax `connect-src` to allow `ws://localhost:*` /
   `http://localhost:*`, and the header additionally adds `'unsafe-inline'`/`'unsafe-eval'` to
   `script-src` for Vite hot-reload (and omits the prod hardening tail `object-src`/`base-uri`/
-  `frame-ancestors`). Without this split, `npm run dev` would break. The localhost `connect-src`
+  `frame-ancestors`, keeping only `form-action 'none'`; the dev META carries the whole tail,
+  #266). Without this split, `npm run dev` would break. The localhost `connect-src`
   relaxation is the ONLY dev/prod difference in the meta layer, and no policy in either layer
   ever names a non-localhost origin (test-pinned).
 
@@ -363,9 +368,9 @@ enumerated this class.
   offline posture cannot give this round, so no flag was added; (ii) `<link rel="dns-prefetch">` /
   `preconnect` hints are outside CSP3 (`prefetch-src` was withdrawn) — metadata egress only if
   injected, and no CSP mitigation exists; (iii) found on the way: the production header carries
-  `object-src 'none'`, `base-uri 'none'` and `frame-ancestors 'none'` while the baked meta does
-  not, and neither carries `form-action` — that parity + `form-action 'none'` hardening is
-  follow-up SEC-14 (#266). Both channels require a compromised renderer first (`script-src
+  `object-src 'none'`, `base-uri 'none'` and `frame-ancestors 'none'` while the baked meta did
+  not, and neither carried `form-action` — that parity + `form-action 'none'` hardening landed
+  as #266 (see "Content-Security-Policy (dev vs prod)" above). Both channels require a compromised renderer first (`script-src
   'self'`, sandbox, context isolation, no `window.open` into the app), which is the boundary the
   rest of this section rests on.
 
@@ -1719,6 +1724,13 @@ a `C:`-style drive letter, a UNC root) or contains a `..` segment, so `discoverM
 loop wraps `computeInstallState` in try/catch, so any manifest that still throws becomes an errored
 entry rather than failing the whole list — mirroring the existing `pendingHashBytes` pre-pass.
 `weightPath`/`safeDrivePath` keep their own runtime escape guard (defense in depth).
+**(3)** The runtime list `runtime-sources.yaml` in the same folder (#245): the downloaded engine
+archive's on-disk name is taken from the URL's last path segment only when it is a plain filename
+(`^[A-Za-z0-9._-]{1,128}$` after percent-decoding, never `.`/`..`); anything else gets a synthetic
+`<binary>-<version>-<os>-<arch>.zip` name, and the archive path goes through the same drive-root
+guard as `extract_to` — a raw basename with `..\` segments used to walk out of the extraction
+folder on Windows. Every `url` must be `https://` at parse time as well as at fetch time. The
+archive's *members* are BUILD_STATE §8 L-7's separate question.
 
 ## Least-privilege hardening of the renderer↔main file/network seams (vuln-scan 2026-06-21, option D)
 

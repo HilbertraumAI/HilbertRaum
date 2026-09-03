@@ -272,8 +272,9 @@ section is the same thing written for a client author.
   is on (the default). The comparison is constant-time. With the requirement off, a present
   `Authorization` header is ignored rather than validated (SDKs always send one).
 - `Content-Type: application/json` is required on POST; a `; charset=utf-8` suffix is fine.
-- The `Host` header must name a loopback address **and the port actually bound**; an absent or
-  empty `Host` is refused. Send the URL as printed and any normal HTTP client does this for you.
+- The `Host` header must name a loopback address, and **when it carries a port, that port must be
+  the one actually bound**; an absent or empty `Host` is refused. Send the URL as printed and any
+  normal HTTP client does this for you.
 
 ### 6.2 `GET /v1/models`
 
@@ -385,7 +386,8 @@ it is clamped to 5–180 s.
 |---|---|---|
 | Request body | **1 MB**, counted as bytes arrive (`Content-Length` is never trusted) | A chunked body makes a header check meaningless |
 | Header phase | 10 s | Slow-loris |
-| Body idle | 30 s (body phase only) | A stalled upload should not hold a socket |
+| Body idle | 30 s of **inactivity** (body phase only; reset by every byte) | A stalled upload should not hold a socket |
+| Body total | **120 s** from the end of the header phase (#255) | A slow but steady trickle resets the idle timer forever; sixteen of them would exhaust the listener. The 1 MB body cap ends a fast body long before |
 | Generation | **no timeout** | A legitimate CPU generation can run for minutes; Node's 300 s default would kill it. Wedge detection is done app-side instead |
 | SSE reader stall | 15 s of unrelieved backpressure → the request is aborted and the slot reclaimed | One stalled reader must not wedge the model |
 | Concurrent connections | 16 | Cheap flood ceiling |
