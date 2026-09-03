@@ -36,6 +36,13 @@ export interface SkillRunTarget {
   name: string | null
 }
 
+// The write/export confirm, snapshotted when the dialog opens (#261).
+interface PendingConfirm {
+  tool: RunnableTool
+  documentId: string
+  documentName: string | null
+}
+
 // The tool's display label, done copy and result-shape all come from the self-describing tool
 // registry (`@shared/skill-tools`, audit §6.2) — the renderer no longer keeps parallel label/done
 // maps that drift from the wired set. A tool with no descriptor (should not happen for an offered
@@ -178,13 +185,16 @@ export function SkillRunBar({
   offerRoutedFollowups = true
 }: SkillRunBarProps): JSX.Element {
   const { t, tCount } = useT()
-  const [confirmTool, setConfirmTool] = useState<RunnableTool | null>(null)
+  // The pending write/export confirm. It SNAPSHOTS the target at open (#261): the dialog is the
+  // last checkpoint before a file is written, so it names the document it will run on and the run
+  // goes to that document even if the target list changes underneath the open dialog.
+  const [confirmTool, setConfirmTool] = useState<PendingConfirm | null>(null)
   // RD-6 (full-audit 2026-07-10): a pending confirm must not outlive its offer. `confirmTool` is
   // state, so it survives the offer row unmounting (tools emptied by a scope change / a run
   // starting elsewhere) and would silently RE-OPEN the dialog the moment the offer returns —
   // unreachable today only by accident of modality. Clear it once the tool is no longer offered.
   useEffect(() => {
-    if (confirmTool && !runnableTools.some((tool) => tool.name === confirmTool.name)) {
+    if (confirmTool && !runnableTools.some((tool) => tool.name === confirmTool.tool.name)) {
       setConfirmTool(null)
     }
   }, [confirmTool, runnableTools])
@@ -265,9 +275,9 @@ export function SkillRunBar({
   // discoverable in the save dialog / result file. An UNRESOLVED target name (null, RD-2 — e.g. the
   // document list not yet loaded) falls back to the full matrix line rather than guessing ".txt".
   const confirmFormatKey: MessageKey | null =
-    confirmTool && getToolDescriptor(confirmTool.name)?.docxDialog
+    confirmTool && getToolDescriptor(confirmTool.tool.name)?.docxDialog
       ? (() => {
-          const name = targets.find((d) => d.id === selectedId)?.name
+          const name = confirmTool.documentName
           if (!name) return 'chat.skill.confirm.outputMatrix' as const
           return name.toLowerCase().endsWith('.docx')
             ? ('chat.skill.confirm.outputDocx' as const)
@@ -279,11 +289,16 @@ export function SkillRunBar({
   // reach (pictures/scanned pages, embedded objects) — so the same-format export never implies
   // whole-file redaction. Text parts + metadata ARE covered since #129; this names the residuals.
   const confirmScopeKey: MessageKey | null =
-    confirmTool && confirmTool.name === 'redact_document' ? 'chat.skill.confirm.redactionScope' : null
+    confirmTool && confirmTool.tool.name === 'redact_document' ? 'chat.skill.confirm.redactionScope' : null
 
   const onClickTool = (tool: RunnableTool): void => {
-    if (tool.requiresConfirmation) setConfirmTool(tool)
-    else runTool(tool)
+    if (tool.requiresConfirmation) {
+      setConfirmTool({
+        tool,
+        documentId: selectedId,
+        documentName: targets.find((d) => d.id === selectedId)?.name ?? null
+      })
+    } else runTool(tool)
   }
 
   // The RUN row (running / result / state-unknown) renders INSIDE the always-mounted live region below
@@ -387,13 +402,18 @@ export function SkillRunBar({
           title={t('chat.skill.confirm.title')}
           confirmLabel={t('chat.skill.confirm.ok')}
           onConfirm={() => {
-            if (confirmTool) onRun(confirmTool.name, true, selectedId || undefined)
+            if (confirmTool) onRun(confirmTool.tool.name, true, confirmTool.documentId || undefined)
             setConfirmTool(null)
           }}
           onCancel={() => setConfirmTool(null)}
           t={t}
         >
           {t('chat.skill.confirm.body')}
+          {confirmTool?.documentName && (
+            <p className="hint skill-confirm-format">
+              {t('chat.skill.confirm.target', { document: confirmTool.documentName })}
+            </p>
+          )}
           {confirmFormatKey && <p className="hint skill-confirm-format">{t(confirmFormatKey)}</p>}
           {confirmScopeKey && <p className="hint skill-confirm-format">{t(confirmScopeKey)}</p>}
         </ConfirmDialog>

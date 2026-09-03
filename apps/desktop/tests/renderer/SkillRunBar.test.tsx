@@ -650,7 +650,7 @@ describe('SkillRunBar (S11b)', () => {
     )
     // Pick the second document, then open the confirm: the dialog must say which one it will run on.
     await user.click(screen.getByRole('button', { name: /choose target document/i }))
-    await user.click(await screen.findByRole('menuitemradio', { name: /second.pdf/i }))
+    await user.click(await screen.findByRole('menuitemradio', { name: /second\.pdf/i }))
     await user.click(screen.getByRole('button', { name: 'synthetic_write' }))
     const dialog = screen.getByRole('dialog')
     expect(dialog).toHaveTextContent('Document: second.pdf')

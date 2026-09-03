@@ -27,6 +27,10 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The confirmation before a skill writes or exports a file now names the document.** The
+  dialog says which document the tool will run on, and the run goes to that document even if the
+  document list refreshed while the dialog was open — before, it silently used whichever document
+  was first in the list at the moment you pressed Run.
 - **A tampered engine list can no longer write outside the engine folder.** The file that
   names where to download the AI engine from lives on the drive. If it had been edited to
   carry a download address whose file name walked up the folder tree, the downloaded archive
