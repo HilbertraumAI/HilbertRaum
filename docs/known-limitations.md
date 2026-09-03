@@ -28,10 +28,11 @@ password recovery — are documented in
   it returned), so a compromised renderer can't forge a picker-origin read of an arbitrary file
   (`security-model.md` D1). A native OS drag-drop is delivered to the
   *renderer*, so main can't tokenize it — that seam still accepts raw paths but rejects symlinks and
-  canonicalizes them; the read *content* has no network sink (offline), but the *path* is one on
-  Windows — a UNC path reaches `lstat` before any lexical check, opening an SMB connection and an
-  NTLM/Kerberos credential exchange to the named host (pending #240 / owner decision #222; see
-  `security-model.md` "Residual egress channels").
+  canonicalizes them; the read *content* has no network sink (offline), but the *path* can be one
+  on Windows — a UNC path reaches `lstat` before any lexical check, which makes Windows attempt an
+  SMB connection to the named host and, where that host is reachable and outgoing NTLM is not
+  restricted, a credential exchange (documented behaviour, not probed; pending #240 / owner
+  decision #222; see `security-model.md` "Residual egress channels").
 - **Some things live or pass outside the drive by design.** Display preferences (the language, a
   few collapsed-panel states) sit in the host browser profile under the app's OS app-data folder,
   not in the workspace; text copied with a Copy button goes to the OS clipboard like any copied

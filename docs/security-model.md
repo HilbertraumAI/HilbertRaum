@@ -1068,12 +1068,12 @@ re-encrypts (the bullet below).
   `src/main` handles Windows `session-end` or macOS `shutdown` — the awaited teardown above
   (`will-quit`: sidecar stops, settle, then lock = re-encrypt + shred) never runs on logoff or
   shutdown, so the process is killed with the working DB still plaintext on the drive. The only
-  lock outside that awaited teardown is the synchronous `uncaughtException` crash path in
+  unattended lock outside that awaited teardown is the synchronous `uncaughtException` crash path in
   `main/index.ts` (`detachVaultKey()` + `workspace.shutdown()`), and it is not wired to session
   end either. On the next start the crash-recovery sweep finds the live working copy, shreds it
   and restores the last locked encrypted snapshot — the session delta since that lock is lost.
-  `docs/user-guide.md` §13 names this loss for users; a best-effort synchronous lock on those two
-  events is the alternative recorded on #226.
+  `docs/user-guide.md` §13 names this loss for users; a best-effort synchronous lock on Windows
+  `session-end` (and the macOS equivalent, unverified) is the alternative recorded on #226.
 - **Doc-task pipeline is flushed on lock/quit (TA-1).** The lock/quit handlers call
   `ctx.docTasks.cancelAllDocTasks()` — cancelling the running task **and every queued task** —
   not just the active one. The DB stays *open* while the handler awaits the sidecar suspends, so
@@ -1720,8 +1720,9 @@ are tracked under "Open hardening items" in `BUILD_STATE.md`.)
   and drops non-string path elements exactly like `importDocuments`, so a compromised renderer
   can neither drive a recursive directory walk of arbitrary paths while the workspace is locked
   nor crash `expandPaths` with junk elements. It is still a token-less probe, though: after the
-  path cap (PR #275) it `lstat`s the raw paths it is given, so a UNC or device path reaches the
-  filesystem before any lexical check — residual egress channel (ii) below, pending #222.
+  path cap (PR #275) it `stat`s the raw paths it is given (following symlinks — unlike the drop
+  seam, it rejects none), so a UNC or device path reaches the filesystem before any lexical
+  check — residual egress channel (ii) below, pending #240 (owner decision #222).
 
 ## Parsing-DoS hardening — the content tools' regexes are now linear (vuln-scan 2026-06-21)
 
@@ -1810,7 +1811,7 @@ read any supported-type file anywhere on disk (the text is then reachable via
   canonicalized (a `.pdf`-named symlink can't reach a sensitive target through the importer). A
   compromised renderer can still drive this seam with on-disk paths, but the offline guarantee
   means there is **no network sink to exfiltrate** read content (the *path* itself is one on
-  Windows — "Residual egress channels" (ii) below, pending #222), and the dominant picker surface
+  Windows — "Residual egress channels" (ii) below, pending #240 / #222), and the dominant picker surface
   is now non-forgeable. `importPreflight` still takes raw paths (counts/sizes only — lower impact).
 - **Skills use the same token mechanism (#240, PR #275):** `pickSkillPackage` is unlock-gated and
   returns `{ token, path }`; `previewSkillPackage` reads through the token without spending it and
@@ -2054,12 +2055,14 @@ it.
   link, goes straight from `window.open` to `shell.openExternal` with no confirmation or throttle:
   the OS browser opens it, and the link's host learns the machine's IP address and user agent.
   Pending #236 (owner decision #221).
-- **(ii) A UNC or device path on the raw path seams.** A native drag-drop and a token-less import
-  preflight `lstat` each path before any lexical rejection, so a `\\host\share\...` path opens an
-  SMB connection — on Windows with an NTLM/Kerberos credential exchange — to the named host before
-  any file is read. The machine's credentials, not document content, are what can leave. Mapped
-  network drives cannot be told apart lexically at all. Rejecting such paths changes the drop
-  contract for network-share users: pending #240 (owner decision #222).
+- **(ii) A UNC or device path on the raw path seams.** A native drag-drop `lstat`s and a token-less
+  import preflight `stat`s each path before any lexical rejection, so a `\\host\share\...` path
+  makes Windows attempt an SMB connection to the named host before any file is read — and, where
+  outbound 445/WebDAV is reachable and outgoing NTLM is not restricted, an NTLM/Kerberos
+  credential exchange (documented Windows behaviour, not probed here). What can leave is the
+  machine's credentials, not document content. Mapped network drives cannot be told apart
+  lexically at all. Rejecting such paths changes the drop contract for network-share users:
+  pending #240 (owner decision #222).
 - **(iii) Chromium's own background fetches and form submits — landed.** The spell-check
   dictionary download is closed by construction (`spellcheck: false`, #239), the CSP carries
   `form-action 'none'` with header/meta parity (#266), and every `ipcMain.handle` channel checks

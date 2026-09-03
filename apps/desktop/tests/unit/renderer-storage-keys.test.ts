@@ -43,15 +43,17 @@ describe('renderer localStorage keys are the documented set (#249)', () => {
 
   // Every read/write/remove call: `localStorage.getItem(X)` with X a literal or an identifier.
   const uses: Array<{ file: string; key: string }> = []
+  const unresolved: string[] = []
   for (const [file, src] of sources) {
     for (const m of src.matchAll(/localStorage\.(?:getItem|setItem|removeItem)\(\s*(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_]*))/g)) {
       const key = m[1] ?? constants.get(m[2])
-      expect(key, `${rel(file)}: unresolvable localStorage key argument \`${m[2]}\``).toBeDefined()
-      uses.push({ file: rel(file), key: key as string })
+      if (key === undefined) unresolved.push(`${rel(file)}: ${m[2]}`)
+      else uses.push({ file: rel(file), key })
     }
   }
 
-  it('finds the calls at all (the scan is not vacuous)', () => {
+  it('finds the calls at all, and every key argument resolves to a string constant', () => {
+    expect(unresolved).toEqual([])
     expect(uses.length).toBeGreaterThanOrEqual(Object.keys(PRODUCT_KEYS).length + DEV_HARNESS_KEYS.length)
   })
 
