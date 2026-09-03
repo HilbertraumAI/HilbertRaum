@@ -54,6 +54,11 @@ folder):
 - Local debug/audit logs
 - App settings
 
+Two small things live outside the workspace: the app remembers display preferences (such as your
+chosen language) in the app-data folder that the built-in browser engine keeps on this computer,
+and anything you copy with a **Copy** button is placed on this computer's clipboard, just like
+copying text anywhere else.
+
 ## Offline mode
 
 The app's **core path — chat, documents, indexing, search — always stays local** and makes no

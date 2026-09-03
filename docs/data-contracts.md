@@ -666,7 +666,7 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 - `verify-models.{ps1,sh}` — `-Target`/`--target`, `-Generate`/`--generate`. Flat-YAML line-parses the
   manifests, SHA-256s present weights, prints `VERIFIED/UNVERIFIED/MISMATCH/MISSING/UNSUPPORTED`,
   **exit 1 on a real-hash mismatch**; `--generate` writes `config/checksums.json`.
-- `setup-dev.{ps1,sh}` — `NODE_OPTIONS=--use-system-ca npm install` (R6) + build + test smoke.
+- `setup-dev.{ps1,sh}` — `NODE_OPTIONS=--use-system-ca npm ci` (R6; lockfile-exact, issue #49) + build + test smoke.
 ✅ **Packaging** — `apps/desktop/electron-builder.yml` (portable Windows + mac/linux parity;
   `model-manifests/` as `extraResources`; asar; Electron ≥37). `npm run package` / `package:win`
   (root + workspace). New dev dep **`electron-builder ^26.15.2`**. Output → `apps/desktop/release/`
@@ -1395,10 +1395,11 @@ whole renderer-visible surface.
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
 The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
-`shared/ipc.ts` (140 channels) against this file then found **16** that appeared under neither
-their method name nor their channel string — mostly siblings of documented calls that arrived one
-at a time. Listed here so the declared source of truth is complete; each one's behaviour stays
-owned by the design record named beside it.
+`shared/ipc.ts` (138 channels — the keys of its `IPC` constant; the `STREAM` builders,
+`OCR_RASTER` and `EVENTS` are separate constants, #259) against this file then found **16** that
+appeared under neither their method name nor their channel string — mostly siblings of documented
+calls that arrived one at a time. Listed here so the declared source of truth is complete; each
+one's behaviour stays owned by the design record named beside it.
 
 - **`useModel(modelId): Promise<RuntimeStatus>`** (`runtime:use`) — the MERGED select-and-start
   action, and the one a UI caller should reach for. It persists the active chat slot, emits

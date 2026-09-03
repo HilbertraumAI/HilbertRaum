@@ -29,6 +29,18 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-03 — **Audit 2026-09-02 Phase 9a — early docs sweep (PR #280): the user guide §13 now says
+what an unclean stop loses (a hard pull, a crash, shutdown or logoff with the app open — every
+change since the last lock; the encrypted snapshot survives); `security-model.md` gained "What
+lives or passes outside the drive" (host Chromium profile — four `localStorage` keys, caches, no
+`Dictionaries/`, not cleared on lock; the OS clipboard — 8 Copy sites, only the local-API key copy
+self-clears) and "Residual egress channels" (i)–(iv) with the pending markers #236/#221 and
+#240/#222; OS session end documented as a hard kill (#248); `data-contracts.md` 138 IPC channels +
+`npm ci`; §8 L-8 closed; `renderer-storage-keys.test.ts` pins the key set. Decisions 9/10/14
+(#226/#227/#231) unanswered → the plan defaults (document). DOC-16 #261: confirmed at the
+component (the confirm bound to the live target list), fixed in PR #281 (snapshot + named target).**_
+Docs-only, no launch smoke needed. Suite: 371 / 5,568 / 74 excluding the Electron smoke (which passed this run; raw 372 / 5,574 / 74).
+
 _2026-09-03 — **Audit 2026-09-02 Phase 8 (PR 8-b) — SEC-6 #252: every `ipcMain.handle` in the
 main process goes through `guardedHandle(channel, handler, { trustedSenders, log })`
 (`src/main/ipc/guarded-handle.ts`): the body runs only when `event.sender.id` is in
@@ -655,13 +667,10 @@ open round's item stays the last block of §5.)
 
 19. **Full-audit 2026-09-02 (security/reliability) — REMEDIATION IN PROGRESS** (tracker #217;
     labels `audit-2026-09-02`, `severity:*`, `phase:0`..`phase:9`, `owner-decision`, `follow-up`).
-    Working paper, plan and STATE ledger live under the git-ignored `tmp/` for the round; the
-    durable ledger is written once, at close-out, as `docs/architecture.md` "§52 Full audit
-    (2026-09-02) — remediation ledger + close-out" (after §51). Fourteen owner decisions are open
-    as #218–#231; until answered, each phase runs on the plan's default and says so in its PR body
-    (a default is never upgraded to a ruling). Phases 0–4 as listed below, then 5a external-open
-    consent, 5b raw-path hardening, 6 rekey, 7 recovery + durability docs, 8 small code items,
-    9a docs sweep, 9b close-out. One line per merged phase (outcome + PR + pointer):
+    Working paper, plan and STATE ledger live under the git-ignored `tmp/`; the durable ledger is
+    written once, at close-out, as `docs/architecture.md` "§52 Full audit (2026-09-02) —
+    remediation ledger + close-out" (after §51). Owner decisions #218–#231: each phase runs on the
+    plan's default until answered and says so in its PR body. One line per merged phase:
     - **0-a** (2026-09-02, docs-only, PR #265): the eight closed 2026-08-20…08-22 dated entries
       drained to `docs/build-log.md`; this item opened.
     - **0** (2026-09-02, PR #267): SEC-12 + GAP-2 (quit re-entry prevented, 30 s overall deadline,
@@ -694,6 +703,9 @@ open round's item stays the last block of §5.)
       unlock reason `vault_recovery_blocked`) + REL-9/DOC-15 exFAT durability docs — dated entry above.
     - **8** (2026-09-03, PRs #278 + #279): SEC-2, SEC-5, SEC-7, REL-1, REL-2, SEC-14 fixed, GAP-3 a
       confirmed residual (8-a); SEC-6 `guardedHandle` over all 137 registrations + the hygiene ban (8-b) — dated entries above.
+    - **9a** (2026-09-03, PR #280): DOC-6, DOC-9, DOC-10, SEC-3 closed by the docs; GAP-1 + SEC-4 documented on
+      defaults (#248, #250 open on #226/#227); residual-egress list (i)–(iv) pending #236/#221 and #240/#222;
+      5a (#236) and 5b-b (#240) stay blocked on #221/#228 and #222; DOC-16 #261 fixed in PR #281 — dated entry above.
 
 
 ---
@@ -803,9 +815,9 @@ the offline/privacy guarantees:
   labeled hypothesis, likely moot (libarchive/bsdtar checks linknames; hardlinks need an
   existing same-volume target; the archive hash is owner-pinned). Owner ratified 2026-07-12:
   skip the one-time fixture probe; re-open only if the extraction path or tar binary changes.
-- **L-8 — Lockfile / `npm ci` discipline.** Confirm `package-lock.json` is committed and the
-  provisioning/build scripts use `npm ci` (not `npm install`) so a build can't float a caret range
-  to a newer minor. Integrity anchor = the committed lockfile.
+- **L-8 — Lockfile / `npm ci` discipline — CLOSED 2026-09-03 (#260).** `package-lock.json` is
+  committed; `setup-dev.{ps1,sh}`, CI and the release workflow run `npm ci` (issue #49); the one
+  stale `npm install` instruction (`data-contracts.md`) was corrected. Anchor = the lockfile.
 
 ---
 ## 9. First real Windows `D:\` drive bring-up — durable lessons (2026-06-10)

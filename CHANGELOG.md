@@ -125,6 +125,12 @@ from its first public `1.0.0` release onward.
   could destroy the workspace (the 0.1.59 fix for issue #208 only protects when both copies are
   0.1.59 or newer). Each launcher also accepts `--check` (`/check` on Windows) to show which app
   it would start without starting it.
+- **The user guide now says what an unclean stop costs.** Pulling the drive without quitting, a
+  crash, or shutting down or logging off the computer with the app open loses the changes made
+  since the workspace last locked or quit; the workspace itself reopens fine from that point. The
+  privacy notice and the security documentation now also say which small things live outside the
+  drive: display preferences in the computer's browser profile, and anything you copy on its
+  clipboard.
 
 ## [0.1.59] — 2026-08-21
 
