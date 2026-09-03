@@ -293,11 +293,8 @@ export function SkillRunBar({
 
   const onClickTool = (tool: RunnableTool): void => {
     if (tool.requiresConfirmation) {
-      setConfirmTool({
-        tool,
-        documentId: selectedId,
-        documentName: targets.find((d) => d.id === selectedId)?.name ?? null
-      })
+      const target = targets.find((d) => d.id === selectedId)
+      setConfirmTool({ tool, documentId: selectedId, documentName: target?.name ?? null })
     } else runTool(tool)
   }
 
@@ -410,7 +407,7 @@ export function SkillRunBar({
         >
           {t('chat.skill.confirm.body')}
           {confirmTool?.documentName && (
-            <p className="hint skill-confirm-format">
+            <p className="hint skill-confirm-target">
               {t('chat.skill.confirm.target', { document: confirmTool.documentName })}
             </p>
           )}

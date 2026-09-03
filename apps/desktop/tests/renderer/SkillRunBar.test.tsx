@@ -627,6 +627,9 @@ describe('SkillRunBar (S11b)', () => {
 
     // The list changes under the open dialog: d1 is gone, d2 is now first.
     rerender(withI18n(<SkillRunBar {...shared} targetDocuments={[{ id: 'd2', name: 'second.pdf' }]} />))
+    // The dialog still names the document it opened on…
+    expect(screen.getByRole('dialog')).toHaveTextContent('Document: first.pdf')
+    // …and the run goes to it.
     await user.click(screen.getByRole('button', { name: 'Run' }))
     expect(onRun).toHaveBeenCalledWith('synthetic_write', true, 'd1')
   })
