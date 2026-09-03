@@ -346,6 +346,8 @@ export const en = {
   'chat.skill.run.dismiss': 'Dismiss',
   'chat.skill.confirm.title': 'Run this tool?',
   'chat.skill.confirm.body': 'This creates or exports a file from the documents on this drive.',
+  // #261: the confirm names the document it will run on (snapshotted when the dialog opened).
+  'chat.skill.confirm.target': 'Document: {document}',
   // #45: the document-transform confirms (redact/edit) state the OUTPUT format BEFORE the run — the
   // .docx-keeps-format / everything-else-becomes-.txt cliff was previously only discoverable in the
   // save dialog. Derived from the selected target's extension (mirrors main's source-format probe);

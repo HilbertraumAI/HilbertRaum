@@ -381,6 +381,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.dismiss': 'Schließen',
   'chat.skill.confirm.title': 'Dieses Tool ausführen?',
   'chat.skill.confirm.body': 'Dabei wird aus den Dokumenten auf diesem Laufwerk eine Datei erstellt oder exportiert.',
+  // #261: Die Bestätigung nennt das Dokument, für das sie ausgeführt wird.
+  'chat.skill.confirm.target': 'Dokument: {document}',
   // #45: Die Bestätigung der Dokument-Werkzeuge (Schwärzen/Bearbeiten) nennt das AUSGABE-Format
   // VOR dem Lauf — vorher war die .docx-behält-Format / alles-andere-wird-.txt-Klippe erst im
   // Speichern-Dialog sichtbar.
