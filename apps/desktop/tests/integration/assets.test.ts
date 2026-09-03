@@ -1057,7 +1057,7 @@ describe('archiveNameFromUrl (#245)', () => {
   })
 
   const hostile: Array<[string, string]> = [
-    ['backslash traversal', 'https://example.test/dl/..%5C..%5C..%5Cevil.exe'],
+    ['percent-encoded backslash traversal', 'https://example.test/dl/..%5C..%5C..%5Cevil.exe'],
     ['bare ..', 'https://example.test/dl/..'],
     ['empty basename', 'https://example.test/dl/?download=true'],
     ['percent-encoded ..', 'https://example.test/dl/%2e%2e%5cevil.exe'],
@@ -1074,10 +1074,25 @@ describe('archiveNameFromUrl (#245)', () => {
   }
 
   it('a raw backslash basename is normalised by the URL parser and still ends as a plain filename', () => {
+    // This is the form that escaped before the fix: the raw `split('/').pop()` kept
+    // `..\..\..\evil.exe` verbatim and `path.join` walked up from the root on Windows.
     // `new URL` treats `\` as `/` in an https path and resolves the `..` segments itself.
     const name = archiveNameFromUrl('https://example.test/dl/..\\..\\..\\evil.exe', FALLBACK)
-    expect(name).toMatch(NAME_RULE)
+    expect(name).toBe('evil.exe')
     expect(staysInside(name)).toBe(true)
+  })
+
+  it('every shipped runtime-sources.yaml build keeps its real basename (no silent fallback)', () => {
+    const file = join(__dirname, '..', '..', '..', '..', 'model-manifests', 'runtime-sources.yaml')
+    const res = validateRuntimeSources(parse(readFileSync(file, 'utf8')))
+    expect(res.ok).toBe(true)
+    const builds = [...(res.sources?.builds ?? []), ...(res.whisper?.builds ?? [])]
+    expect(builds.length).toBeGreaterThan(0)
+    for (const b of builds) {
+      const name = archiveNameFromUrl(b.url, 'FALLBACK')
+      expect(name, b.url).not.toBe('FALLBACK')
+      expect(b.url.endsWith(`/${name}`)).toBe(true)
+    }
   })
 
   it('an unparseable URL and an over-long basename fall back too', () => {

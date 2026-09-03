@@ -263,6 +263,19 @@ describe('settings write gate — inherited keys are not settings (#251)', () =>
     expect(rowFor(db, '__proto__')).toBeUndefined()
   })
 
+  it('a `__proto__` row left by an older build is ignored on read and sets no prototype', () => {
+    const db = freshDb()
+    db.prepare('INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)').run(
+      '__proto__',
+      '{"theme":"PWNED","polluted":1}',
+      new Date().toISOString()
+    )
+    const s = getSettings(db)
+    expect(s.theme).toBe(DEFAULT_SETTINGS.theme)
+    expect((s as unknown as Record<string, unknown>).polluted).toBeUndefined()
+    expect(Object.getPrototypeOf(s)).toBe(Object.prototype)
+  })
+
   it('F: the settings still read back after all of that (smoke)', () => {
     const db = freshDb()
     updateSettings(db, protoPatch('{"__proto__": {"polluted": 1}}'))

@@ -57,6 +57,9 @@ export function getSettings(db: Db): AppSettings {
   }>
   const stored: Record<string, unknown> = {}
   for (const r of rows) {
+    // Own settings keys only (#251): a `__proto__` row written by an older build would
+    // otherwise set `stored`'s prototype here and be parsed on every unlock.
+    if (!Object.hasOwn(DEFAULT_SETTINGS, r.key)) continue
     try {
       stored[r.key] = JSON.parse(r.value_json)
     } catch {
@@ -100,13 +103,13 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // Bound the object-valued settings (CODE-16, full-audit 2026-07-11). `checksumCache` has a
     // non-null object default, so an ARRAY slips through the generic `typeof value !== typeof def`
     // gate above (arrays report `object`) — reject it here; the null-default `lastBenchmark`/
-    // `gpuProbe` pair reject arrays above, so this re-check is harmless for them. Then cap the
-    // SERIALIZED size of all three (SEC-1 bounding style) so a renderer can't bloat the encrypted
-    // blob these start-hot readers touch. `value === null` (a legitimate clear of the null-default
-    // pair) is accepted upstream and never reaches here.
+    // `gpuProbe` pair reject arrays above, so this re-check is harmless for them. The SERIALIZED
+    // size cap (SEC-1 bounding style, so a renderer can't bloat the encrypted blob these
+    // start-hot readers touch) is applied once, below, to every non-primitive write (#251).
+    // `value === null` (a legitimate clear of the null-default pair) is accepted upstream and
+    // never reaches here.
     if ((key === 'lastBenchmark' || key === 'gpuProbe' || key === 'checksumCache') && value !== null) {
       if (typeof value !== 'object' || Array.isArray(value)) continue
-      if (JSON.stringify(value).length > MAX_SETTINGS_OBJECT_BYTES) continue
     }
     // Array-typed defaults (any future `string[]` setting) pass the
     // `typeof === 'object'` check above, so validate them element-wise: require an actual

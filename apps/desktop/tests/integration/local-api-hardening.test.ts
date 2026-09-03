@@ -313,9 +313,12 @@ describe('local API hardening — hostile wire input is bounded', () => {
     }, 25)
     const startedAt = Date.now()
     const closedByServer = await new Promise<boolean>((resolve) => {
-      socket.once('close', () => resolve(true))
       const timer = setTimeout(() => resolve(false), 5000)
       timer.unref?.()
+      socket.once('close', () => {
+        clearTimeout(timer)
+        resolve(true)
+      })
     })
     clearInterval(trickle)
     socket.destroy()

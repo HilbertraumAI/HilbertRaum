@@ -89,7 +89,7 @@ the intersection of both**. All four policy strings live in `main/window-securit
   keeps `worker-src 'self' blob:` / `img-src 'self' data: blob:` — the bundled pdfjs allowances;
   its worker itself resolves as a plain same-origin asset, and a packaged-build rasterization
   was verified under the stricter header intersection). **Header/meta parity (#266):** every
-  baked meta, dev and prod, carries the same hardening tail as the header — `object-src 'none';
+  baked meta, dev and prod, carries the same hardening tail as the production header — `object-src 'none';
   base-uri 'none'; frame-ancestors 'none'; form-action 'none'` — so the fallback layer denies
   the same things if the header wiring ever regresses; `form-action 'none'` is the second,
   independent refusal of a form submit (the navigation guard is the first).
