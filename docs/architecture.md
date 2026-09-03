@@ -7972,7 +7972,8 @@ and the swept docs themselves (AUD-07/21/22/23).
 ### §52 Full audit (2026-09-02) — remediation ledger + close-out
 
 A three-pass security/reliability audit of v0.1.59, consolidated into one working paper and
-remediated in twelve PRs between 2026-09-02 and 2026-09-03. The inputs: **the audit** (baseline
+remediated in fifteen PRs (#265–#281; sixteen with this ledger's #282) between 2026-09-02 and
+2026-09-03. The inputs: **the audit** (baseline
 `ceb915b4`, the RT-02 branch's own docs follow-up; H-01…H-08, A-01…A-03, C-01/C-02, M-01), **the
 evaluation** (HEAD `2f2630bb`; re-ratings, NEW-1…NEW-7, DOC-1…DOC-9 — eight read-only sub-agents
 re-deriving every claim as sceptics, the coordinating session spot-checking every headline), and
@@ -8028,10 +8029,10 @@ feature branch from fresh `origin/master`: the characterisation test committed r
 where one existed, ported in its ASSERTED form only), the fix, the inverted test plus regression
 cases, the full local gate (`npm test`, typecheck, build, a dev launch where the machine allowed it),
 byte checks on every touched doc, an **independent reviewer pass on the whole diff before merge**
-(Fable on 0/2/3/4/6/7/9b, Opus on 1/5b/8/9a — eight of the eleven phases needed a repair after
-review, and every catch was real: two were BLOCKING, the double-swap in Phase 6 and the typecheck
-miss in 1-a; two widened a fix onto a leg the plan had not scoped, the REL-8 unlock leg and the SEC-5
-read side), `ci-success` on ubuntu/windows × Node 22/24 (no macOS leg — macOS behaviour is manual),
+(Fable on 0/2/3/4/6/7/9b, Opus on 1/5b/8/9a — every reviewed phase took at least one repair
+commit after review, and every catch was real: two were BLOCKING, the double-swap in Phase 6 and
+the typecheck miss in 1-a; two widened a fix onto a leg the plan had not scoped, the REL-8 unlock
+leg and the SEC-5 read side), `ci-success` on ubuntu/windows × Node 22/24 (no macOS leg — macOS behaviour is manual),
 and a merge commit. Coordinator: Claude Fable 5.1, with read-only Sonnet/Opus/Fable sub-agents at the
 tier the plan named per task; the coordinator applied every edit. Owner decisions were read at every
 kickoff by the `**DECISION:**` convention (the owner and the planning session share one GitHub
@@ -8396,7 +8397,7 @@ the papers by section; each resolves here:
 - *Kickoff prompts* — each phase's prompt carried "owner lines"; every one was blank; "kickoff
   default" = the plan default. *B-row* = the review's reproductions (the B table). *"Phase 0
   sitting"* = the GAP-3 investigation ran during Phase 0 and was recorded under Phase 8.
-- The four-digit `§N` numbers of THIS file collide across records by standing decision; "§52" means
+- The `§N` numbers of THIS file collide across records by standing decision; "§52" means
   this section, the 2026-09-02 ledger directly following §51.
 
 ### §20 Span-transform engine (beta-feedback-2026-07 Phase 6, decision D74)

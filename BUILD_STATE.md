@@ -33,7 +33,7 @@ _2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the d
 `docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46
 non-findings; containment items 1–8; the 14 decisions on their defaults; B1..B9 ports; a §-anchor
 legend for the deleted working papers); §5 item 19 → ROUND COMPLETE with the open residuals; the
-round's twelve dated entries archived verbatim to `docs/build-log.md`; containment items 4 and 7
+round's eleven dated entries archived verbatim to `docs/build-log.md`; containment items 4 and 7
 promoted verbatim to `known-limitations.md` (decisions #221/#222/#226 still unanswered); the three
 Phase 0 doc lines that still carried audit IDs now cite issues; decision issues #218–#231 and
 #262/#263/#264 closed "default stands — re-open on request" / "accepted — §52"; #217 closed after the
@@ -52,7 +52,7 @@ close-out, and the #194 close-out entry itself on 2026-08-22 (preamble budget, m
 the CI-flake entry), and the eight closed 2026-08-20…2026-08-22 entries (#196 catalog fix and its
 successor wave (PR #199), local API docs, #202 sizes, the docs/code-comment audit, #201 checkpoint,
 #208 second-instance guard, the #212 CI-flake fix) on 2026-09-02 (preamble budget, making room for
-the full-audit 2026-09-02 remediation round — §5 item 19), and the twelve entries of that round
+the full-audit 2026-09-02 remediation round — §5 item 19), and the eleven entries of that round
 (2026-09-02 Phase 0 … 2026-09-03 Phase 9a, PRs #265–#281) on 2026-09-03 at its close-out (Phase 9b;
 ledger `docs/architecture.md` §52) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
