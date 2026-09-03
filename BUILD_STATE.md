@@ -39,7 +39,7 @@ and unlock re-runs the salvage then refuses with `VaultRecoveryBlockedError` →
 `drive-layout.md` **Filesystem** paragraph and `troubleshooting.md` held-recovery entry document
 exFAT non-durability on decision 6's default (REL-9 #243, DOC-15 folded; #243 stays open);
 `data-contracts.md` reason union. No format change; single `.recovery` name (Q20 default); Q24
-copy in the PR body. Suite +3 (guards file 2 → 5): 370 → 370 / 5,522 → 5,525 / 74.
+copy in the PR body. Suite +4 (guards file 2 → 6): 370 → 370 / 5,522 → 5,526 / 74.
 
 _2026-09-03 — **Audit 2026-09-02 Phase 6 — rekey completeness: the v1→v2 password change now
 carries every vault-key ciphertext class — `listVaultKeyCiphertexts(vaultPaths, db)` enumerates
