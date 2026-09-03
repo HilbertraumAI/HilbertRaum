@@ -135,6 +135,28 @@ describe('walk budget — defaults, env overrides and the drop cap', () => {
     )
   })
 
+  // #274: the preflight summary carries the cut — a walk stopped by its budget used to count a
+  // silent subset. Additive: absent when the walk completed.
+  it('summarizeImportPaths reports a walk cut at the entry cap; absent when complete (#274)', async () => {
+    const dir = root()
+    for (let i = 0; i < 40; i++) writeFileSync(join(dir, `f${String(i).padStart(2, '0')}.txt`), 'x')
+    const prior = process.env.HILBERTRAUM_WALK_MAX_ENTRIES
+    process.env.HILBERTRAUM_WALK_MAX_ENTRIES = '10'
+    try {
+      const cut = await summarizeImportPaths([dir])
+      expect(cut.exhausted).toBe('entries')
+      expect(cut.fileCount).toBeLessThanOrEqual(10)
+      expect(cut.fileCount).toBeGreaterThan(0)
+    } finally {
+      if (prior === undefined) delete process.env.HILBERTRAUM_WALK_MAX_ENTRIES
+      else process.env.HILBERTRAUM_WALK_MAX_ENTRIES = prior
+    }
+    const full = await summarizeImportPaths([dir])
+    expect(full.fileCount).toBe(40)
+    expect(full.exhausted).toBeUndefined()
+    expect('exhausted' in full).toBe(false)
+  })
+
   it('MAX_DROP_PATHS is 512; the service itself does not cap (the handler caps the raw seams only)', () => {
     expect(MAX_DROP_PATHS).toBe(512)
     // A main-vetted picker selection may exceed the cap and must still be countable.
