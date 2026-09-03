@@ -682,6 +682,13 @@ run one real-model session covering:
 8. **(If a vision model ships)** open **Images**, analyze a **PNG** and a **JPEG** from the
    produced `.exe` (the `vision-smoke` harness covers the runtime mechanics; this is the
    packaged-app pass) and confirm the calm unavailable state on a drive with **no** vision model.
+9. **exFAT crash-cut, once per shipping platform before the first kit ships (#243; owner decision
+   #223, 2026-09-03):** on an exFAT-formatted kit, unlock an encrypted workspace with a few
+   imported documents, start **Lock now** and hard-unplug the drive during the lock (no safe
+   eject); re-plug, let the OS scan if it asks, unlock and confirm the last successfully locked
+   snapshot opens cleanly (the changes of the cut session may be lost — that is the documented
+   window, `drive-layout.md` **Filesystem**). Record machine, OS, date and outcome in the release
+   notes. This is the manual measurement the ruling substituted for a write-through spike.
 
 ### The canonical USB demo (original spec §17)
 
