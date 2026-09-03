@@ -1292,11 +1292,9 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
     // full-audit 2026-07-12 REL-2 — the freshness PROBE is exception-guarded: a Windows
     // AV/indexer hold without FILE_SHARE_READ (or the file vanishing between existsSync and
     // openSync) throws EBUSY/EPERM/ENOENT here, which used to fail the whole unlock raw
-    // (generic openFailed) until the hold cleared. A probe error means "can't decide" —
-    // `fresher` stays null, `.recovery` is left IN PLACE (never shredded on a probe error,
-    // never rolled forward unverified), and the unlock proceeds normally; the next unlock
-    // retries the probe. Only the probe is wrapped: a roll-forward encryptFile failure
-    // (e.g. disk still full) keeps failing the unlock so the snapshot survives untouched.
+    // (generic openFailed) until the hold cleared. Only the probe is wrapped: a roll-forward
+    // encryptFile failure (e.g. disk still full) keeps failing the unlock so the snapshot
+    // survives untouched.
     let fresher: boolean | null = null
     try {
       fresher =
@@ -1304,7 +1302,25 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
         (!existsSync(vaultPaths.encPath) ||
           statSync(recoveryPath).mtimeMs > statSync(vaultPaths.encPath).mtimeMs)
     } catch {
-      /* probe error → can't decide → don't touch `.recovery`; unlock normally */
+      // #242 — a probe error means we cannot read the header. If `.recovery` could still be
+      // the fresh failed-lock delta — newer than `.enc`, `.enc` missing, or the mtime
+      // unreadable too — we must NOT unlock into the stale `.enc` and leave the snapshot to
+      // be shredded once a later lock makes `.enc` newer: refuse exactly as the init()
+      // salvage does, and let the next unlock retry once the hold clears. Only when `.enc`
+      // is demonstrably newer (a spent leftover) is it safe to proceed and unlock normally.
+      let encStrictlyNewer = false
+      try {
+        encStrictlyNewer =
+          existsSync(vaultPaths.encPath) &&
+          statSync(vaultPaths.encPath).mtimeMs > statSync(recoveryPath).mtimeMs
+      } catch {
+        /* even the stat failed → treat as possibly fresh → refuse */
+      }
+      if (!encStrictlyNewer) {
+        fileKey.fill(0)
+        throw new VaultRecoveryBlockedError()
+      }
+      /* `.enc` newer → spent leftover → leave it in place, unlock normally */
     }
     if (fresher !== null) {
       if (fresher) encryptFile(recoveryPath, vaultPaths.encPath, fileKey)

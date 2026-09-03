@@ -244,23 +244,28 @@ describe('`.recovery` guards (full-audit 2026-07-12 REL-1/REL-2)', () => {
     }
   })
 
-  it('REL-2: a probe error on .recovery no longer fails the unlock; the snapshot is preserved for retry', () => {
+  it('REL-2: a probe error on a SPENT (older) .recovery no longer fails the unlock; the snapshot is preserved for retry', () => {
     const vp = freshVault()
     createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
     const { db, key } = unlockEncryptedVault(vp, 'pw')
     updateSettings(db, { contextTokens: 6161 })
-    lockEncryptedVault(vp, db, key) // `.enc` holds 6161
+    lockEncryptedVault(vp, db, key) // `.enc` holds 6161 (mtime ~now)
 
-    // A `.recovery` leftover exists; the AV hold means the probe cannot even OPEN it.
+    // A SPENT `.recovery` leftover, OLDER than `.enc` (a consumed roll-forward whose unlink
+    // failed); the AV hold means the probe cannot even OPEN it. `.enc` is demonstrably newer,
+    // so unlocking into it loses nothing — the leftover is left for a later probe to shred.
     const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
     writeFileSync(recoveryPath, 'held leftover the probe cannot read')
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(recoveryPath, past, past)
 
     failures.openThrowOnRecoveryPath = true
     try {
       const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
       ctl.init()
       // Pre-fix: fileHasSqliteHeader's openSync threw EBUSY raw out of unlockEncryptedVault
-      // → generic openFailed; the user could not unlock until the hold cleared.
+      // → generic openFailed; the user could not unlock until the hold cleared. Now: `.enc`
+      // is strictly newer, so the probe error is safe to ignore and the unlock proceeds.
       const state = ctl.unlock('pw')
       expect(state.state).toBe('unlocked')
       expect(getSettings(ctl.requireDb()).contextTokens).toBe(6161)
@@ -279,6 +284,42 @@ describe('`.recovery` guards (full-audit 2026-07-12 REL-1/REL-2)', () => {
     expect(getSettings(ctl2.requireDb()).contextTokens).toBe(6161)
     expect(existsSync(recoveryPath)).toBe(false)
     ctl2.lock()
+  })
+
+  it('a hold on a FRESH .recovery at unlock refuses instead of opening the stale snapshot and later shredding the fresh copy (#242)', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    failedLockState(vp, 4242) // working file (4242) newer than the stale `.enc` (3072)
+
+    // No hold at init → the working file is preserved as `.recovery` (newer than `.enc`).
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    expect(existsSync(recoveryPath)).toBe(true)
+    expect(existsSync(vp.dbPath)).toBe(false)
+    const recoveryBytes = readFileSync(recoveryPath)
+    const encBefore = readFileSync(vp.encPath)
+
+    // Now a hold denies the header read at unlock. Before #242 the unlock proceeded into the
+    // stale `.enc`, and the user's next lock made `.enc` newer, so the following unlock
+    // shredded this never-rolled-forward fresh copy — 4242 silently lost. Now the unlock is
+    // REFUSED (the snapshot could be fresh and cannot be judged) and the copy stays intact.
+    failures.openThrowOnRecoveryPath = true
+    try {
+      expect(() => ctl.unlock('pw')).toThrow(VaultRecoveryBlockedError)
+      expect(readFileSync(recoveryPath).equals(recoveryBytes)).toBe(true)
+      expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+      expect(ctl.isUnlocked()).toBe(false)
+    } finally {
+      failures.openThrowOnRecoveryPath = false
+    }
+
+    // Hold cleared → the probe reads the header, sees a fresh newer snapshot, rolls it
+    // forward, and the unlock yields 4242. Nothing lost.
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(4242)
+    expect(existsSync(recoveryPath)).toBe(false)
+    ctl.lock()
   })
 })
 

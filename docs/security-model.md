@@ -678,13 +678,20 @@ explicitly:
   shred can leave a spent `.recovery` behind, e.g. a Windows AV/indexer holding the file —
   it must never roll the vault back to a stale snapshot or encrypt shred-garbage over the
   good `.enc`). Anything not matching that narrow signature is shredded as before.
-  When the move-aside itself cannot land — another program holds the spent `.recovery`
+  When the salvage cannot judge or move the fresh copy safely because a program holds the
+  `.recovery` file, the app **refuses to open** rather than losing it (#242). Two legs: at
+  startup, if the move-aside cannot land — another program holds the spent `.recovery`
   already on that name through the overwrite, the unlink **and** the rename (a Windows
-  AV/indexer without delete sharing) — the startup salvage reports failure: `init()` skips
-  the sweep (the working file is still the only fresh copy) and an unlock is **refused**
-  with `vault_recovery_blocked` rather than decrypting the stale `.enc` on top of it. The
-  retry is simply the next unlock, which re-runs the salvage; it clears once the hold is
-  gone and nothing is lost (#242).
+  AV/indexer without delete sharing) — `init()` skips the sweep (the working file is still
+  the only fresh copy); and at unlock, if a hold denies reading the `.recovery` header while
+  the file could still be the fresh snapshot (newer than `.enc`, or `.enc` missing), the
+  unlock refuses instead of decrypting the stale `.enc` and letting a later lock make `.enc`
+  newer so the next probe shreds the never-rolled-forward copy. Both surface
+  `vault_recovery_blocked`; the retry is simply the next unlock, and it clears once the hold
+  is gone — nothing is lost. Only a `.recovery` demonstrably OLDER than `.enc` (a spent
+  leftover) is treated as safe to ignore. While a startup salvage is blocked the crash sweep
+  does not run, so the ordinary transient plaintext it clears (`<db>.tmp`, `documents/*.parse*`,
+  `images/*.tmp`) can linger until the retry succeeds.
   **Part of this decision is a confidentiality trade:** after a failed lock + quit, the
   session's data rests on the drive **in plaintext** as `<db>.recovery` until the next
   successful unlock secures it — previously that leftover was shredded at the next launch
