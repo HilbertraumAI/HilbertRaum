@@ -346,10 +346,16 @@ describe('registerDocsIpc', () => {
   })
 
   // #274: the directory walk behind a folder drop/pick must not hold the main thread. With the
-  // walk parked on one slow directory, a concurrent cheap invoke must still resolve at once. Red
-  // under the synchronous walk: the whole spin ran INSIDE the first invoke, so the cheap one could
-  // not even start until the walk returned. Real timers throughout — never a count of event-loop
-  // turns (BUILD_STATE §7).
+  // walk parked on one slow directory, the invoke must hand back its promise at once and a
+  // concurrent cheap invoke must resolve while the walk is still pending. Red under the
+  // synchronous walk: the whole spin ran INSIDE the invoke's synchronous segment, so the call
+  // itself took the spin's length before it could even return a promise. The clock brackets ONLY
+  // that synchronous segment — two adjacent reads with no promise, timer or I/O in between, which a
+  // starved CI runner cannot stretch past a 2 s bound (BUILD_STATE §7: no event-loop-turn counting);
+  // a settled-order check was tried and is NOT a discriminator (both handlers are async, so the
+  // walk's promise settles after the cheap invoke resumes even when the walk ran inline). The spin
+  // parks a synchronous walk (never reached by the async one, so the green path costs nothing);
+  // the gate parks the async walk.
   it('a parked walk does not block a concurrent invoke (#274)', async () => {
     const { db, workspacePath } = freshWorkspace()
     registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
@@ -358,15 +364,21 @@ describe('registerDocsIpc', () => {
     mkdirSync(dir)
     writeFileSync(join(dir, 'a.txt'), 'x')
     writeFileSync(join(dir, 'b.md'), 'x')
-    const SPIN_MS = 400
+    const SPIN_MS = 2000
     let release!: () => void
     fsLog.slow = { probe, spinMs: SPIN_MS, gate: new Promise<void>((r) => (release = r)) }
 
     const t0 = Date.now()
     const walk = invoke(handlers, IPC.importPreflight, [dir])
+    const admitMs = Date.now() - t0
+    expect(admitMs).toBeLessThan(SPIN_MS)
     // `getImportJob` needs no unlock and touches no filesystem — the cheapest handler there is.
-    const cheapMs = await invoke(handlers, IPC.getImportJob, 'no-such-job').then(() => Date.now() - t0)
-    expect(cheapMs).toBeLessThan(SPIN_MS)
+    let walkSettled = false
+    void walk.finally(() => {
+      walkSettled = true
+    })
+    await invoke(handlers, IPC.getImportJob, 'no-such-job')
+    expect(walkSettled).toBe(false) // the walk is still parked on the gate
     release()
     const { result } = await walk
     expect((result as ImportPreflight).fileCount).toBe(2)
@@ -408,9 +420,11 @@ describe('registerDocsIpc', () => {
   })
 
   // #274: the walk is asynchronous, so a lock can land WHILE a folder is being walked. The
-  // import must then fail before it touches the workspace: no row queued, and the document-work
-  // lease never taken (it is acquired only after the walk, so nothing is held across the await).
-  it('a lock landing mid-walk fails the import before any row or lease (#274)', async () => {
+  // import must then fail before it touches the workspace: no row queued, the document-work
+  // lease never taken (it is acquired only after the walk, so nothing is held across the await),
+  // and a picker token NOT spent — it is peeked before the walk and consumed after the gate, so
+  // the retry after the re-unlock imports without a second trip through the OS picker.
+  it('a lock landing mid-walk fails the import before any row, lease or token spend (#274)', async () => {
     const { db, workspacePath } = freshWorkspace()
     let unlocked = true
     let held = 0
@@ -434,17 +448,66 @@ describe('registerDocsIpc', () => {
     const dir = join(workspacePath, `${probe}-folder`)
     mkdirSync(dir)
     writeFileSync(join(dir, 'dropped.txt'), 'a dropped note with enough words to index here please')
+    dialogState.result = { canceled: false, filePaths: [dir] }
+    const token = ((await invoke(handlers, IPC.pickDocuments, 'folder')).result as { token: string }).token
+    dialogState.result = { canceled: true, filePaths: [] }
+    let release!: () => void
+    fsLog.slow = { probe, spinMs: 0, gate: new Promise<void>((r) => (release = r)) }
+
+    const importP = invoke(handlers, IPC.importDocuments, [], { pickerToken: token })
+    // Let the walk reach the folder's gated readdir (its first awaits are the picked path's own
+    // stat/realpath), then lock the workspace underneath it and let the walk finish.
+    await new Promise((r) => setTimeout(r, 1))
+    unlocked = false
+    release()
+    await expect(importP).rejects.toThrow(/Workspace is locked\./)
+    expect(peak).toBe(0)
+    expect(held).toBe(0)
+    expect((db.prepare('SELECT COUNT(*) AS n FROM documents').get() as { n: number }).n).toBe(0)
+    // The token survived: the retry after the re-unlock imports the picked folder.
+    unlocked = true
+    const retry = await runImport([], { pickerToken: token })
+    expect(retry.documentIds).toHaveLength(1)
+  })
+
+  // #274 (AUD-03): a lock AND a re-unlock can both complete inside the walk, after which the
+  // unlock gate looks exactly as it did at admission — only the session epoch tells the stale
+  // import apart. It is abandoned, not queued into the new session.
+  it('a lock + re-unlock inside the walk abandons the import (unlock epoch) (#274)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    let epoch = 1
+    let held = 0
+    const ctx = {
+      ...ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true),
+      workspace: {
+        isUnlocked: () => true,
+        unlockEpoch: () => epoch,
+        beginDocumentWork: () => {
+          held += 1
+          return () => {
+            held -= 1
+          }
+        },
+        documentCipher: () => null
+      }
+    } as unknown as AppContext
+    registerDocsIpc(ctx)
+    const probe = `probe-${randomUUID()}`
+    const dir = join(workspacePath, `${probe}-folder`)
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'note.txt'), 'a note with enough words to index here please now')
     let release!: () => void
     fsLog.slow = { probe, spinMs: 0, gate: new Promise<void>((r) => (release = r)) }
 
     const importP = invoke(handlers, IPC.importDocuments, [dir])
-    // The walk is parked inside the folder's readdir; the workspace locks underneath it.
-    unlocked = false
+    await new Promise((r) => setTimeout(r, 1))
+    epoch += 1 // the session this import was admitted into is gone
     release()
-    await expect(importP).rejects.toThrow(/Workspace is locked/)
-    expect(peak).toBe(0)
+    await expect(importP).rejects.toThrow(/Workspace is locked\./)
     expect(held).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS n FROM documents').get() as { n: number }).n).toBe(0)
+    // Control: the same import with a stable epoch queues the row.
+    expect((await runImport([dir])).documentIds).toHaveLength(1)
   })
 
   it('reconciles a prior-run stuck document and flags a stale-embedding document (M5 + M7)', async () => {

@@ -5,7 +5,7 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { createPickerTokens } from './picker-tokens'
 import { MAX_DROP_PATHS } from '../services/ingestion/limits'
-import { lstatSync, realpathSync, statSync } from 'node:fs'
+import { lstatSync, realpathSync } from 'node:fs'
 import { extname } from 'node:path'
 import type {
   DocumentInfo,
@@ -22,7 +22,7 @@ import type {
 } from '../../shared/types'
 import { matchesSmartView } from '../../shared/types'
 import {
-  createQueuedDocument,
+  createQueuedDocuments,
   deleteDocument,
   documentsDir,
   expandPathsWithSource,
@@ -189,8 +189,6 @@ export function registerDocsIpc(ctx: AppContext): void {
   // The token map itself lives in `picker-tokens.ts` (shared with the skills picker, #240).
   const pickerTokens = createPickerTokens<string[]>()
   const mintPickerToken = (paths: string[]): string => pickerTokens.mint(paths)
-  /** Resolve+consume a picker token to the exact paths main returned; [] for unknown/stale. */
-  const consumePickerToken = (token: unknown): string[] => pickerTokens.consume(token) ?? []
   /** #240: refuse an oversized renderer array before the first filesystem call. */
   const requireDropCount = (arr: string[]): void => {
     if (arr.length > MAX_DROP_PATHS) throw new Error(tMain('main.docs.tooManyPaths'))
@@ -338,55 +336,66 @@ export function registerDocsIpc(ctx: AppContext): void {
 
   ipcHandle(IPC.importDocuments, async (_e, paths: string[], options?: ImportOptions): Promise<ImportJob> => {
     requireUnlocked()
+    // AUD-03: the session this import was admitted into. The walk below can take seconds (its
+    // budget is 10 s); a lock AND a re-unlock can both complete inside that window, after which
+    // `isUnlocked()` is true and `isLocking()` false again — only the epoch tells the stale import
+    // apart (the `startModelRuntime` precedent). Undefined on a stand-in workspace ⇒ skipped.
+    const startEpoch = ctx.workspace.unlockEpoch?.()
     // M-S2 / D1: the renderer is the untrusted boundary. A PICKER import carries
     // `options.pickerToken`; main resolves it to the exact paths the OS dialog returned and
     // IGNORES the renderer-supplied `paths`, so a code-exec'd renderer can't forge a
     // picker-origin import of an arbitrary file. With NO token this is the drag-drop seam
     // (the OS hands the drop to the renderer, untokenizable) — keep only existing, non-symlink
     // canonicalized paths. Either way, strings are still server-validated downstream
-    // (expandPathsWithSource filters to existing, supported files).
-    const safePaths =
-      typeof options?.pickerToken === 'string' && options.pickerToken
-        ? consumePickerToken(options.pickerToken)
-        : hardenDroppedPaths(paths)
+    // (expandPathsWithSource filters to existing, supported files). The token is only PEEKED
+    // here and spent after the walk (#274): a lock landing mid-walk must not burn it, or the
+    // user would have to re-open the OS picker to retry.
+    const token =
+      typeof options?.pickerToken === 'string' && options.pickerToken ? options.pickerToken : null
+    const safePaths = token !== null ? (pickerTokens.peek(token) ?? []) : hardenDroppedPaths(paths)
     // Destination (plan §11.3): persisted per queued doc and applied on indexing success.
     // No options ⇒ Library default, byte-for-byte with the pre-Phase-C behaviour.
     const destination: ImportDestination = sanitizeDestination(options?.destination)
-    // preserveRelativePaths (N12): explicit when given, else default true for a folder
-    // import (any picked path is a directory), false otherwise. Display-only metadata.
-    const hasDir = safePaths.some((p) => {
-      try {
-        return statSync(p).isDirectory()
-      } catch {
-        return false
-      }
-    })
-    const preserve = options?.preserveRelativePaths ?? hasDir
     // #274: the walk is asynchronous — the handler yields here, so an IPC call, the lock and
     // the quit path all run between directories instead of waiting out a frozen thread. It
     // touches nothing workspace-side, so the document-work lease is taken only AFTER it (no
     // lease is ever held across an await, and a password change is not refused for the length
-    // of a slow walk), and the unlock gate is re-checked because the workspace may have locked
-    // while the walk ran — the rows below must never be queued into a closing DB.
-    const { files, exhausted } = await expandPathsWithSource(safePaths)
+    // of a slow walk), and the unlock gate + epoch are re-checked because the workspace may
+    // have locked (and re-opened) while the walk ran — the rows below must never be queued into
+    // a closing DB or into a session the import was not admitted to.
+    const { files: walked, exhausted, hasDir } = await expandPathsWithSource(safePaths)
     requireUnlocked()
+    if (startEpoch !== undefined && ctx.workspace.unlockEpoch?.() !== startEpoch) {
+      throw new Error(tMain('main.docs.locked'))
+    }
+    // Spend the token only now. A concurrent import that spent it first wins — this one imports
+    // nothing, the single-use contract (`consume` is undefined for a spent/unknown token).
+    const files = token !== null && pickerTokens.consume(token) === undefined ? [] : walked
+    // preserveRelativePaths (N12): explicit when given, else default true for a folder
+    // import (any picked path is a directory — the walk already stat'ed them), false otherwise.
+    // Display-only metadata.
+    const preserve = options?.preserveRelativePaths ?? hasDir
     // Race guard: the whole import job holds a document-work lease so a vault
     // password change (which re-encrypts `.enc` sidecars) refuses to start while we
     // write them — and vice versa, this throws a friendly VaultBusyError mid-change.
     const releaseDocWork = ctx.workspace.beginDocumentWork()
     // The lease is held until the background loop's `finally`. Anything that can throw
-    // synchronously between here and that loop (a failed INSERT) must release the lease first,
-    // or a vault password change is wedged for the whole session with no import in flight to
-    // explain it.
+    // synchronously between here and that loop (a failed INSERT — the batch ROLLBACKs and
+    // rethrows) must release the lease first, or a vault password change is wedged for the whole
+    // session with no import in flight to explain it.
     let documentIds: string[]
     try {
-      documentIds = files.map(
-        (f) =>
-          createQueuedDocument(ctx.db, f.path, {
+      // DB-4: one BEGIN…COMMIT for all N rows (`createQueuedDocuments`), not N auto-commits.
+      documentIds = createQueuedDocuments(
+        ctx.db,
+        files.map((f) => ({
+          filePath: f.path,
+          opts: {
             destination,
             sourceRelativePath: preserve ? f.sourceRelativePath : null,
             sourceFolderLabel: preserve ? f.sourceFolderLabel : null
-          }).id
+          }
+        }))
       )
     } catch (err) {
       releaseDocWork()

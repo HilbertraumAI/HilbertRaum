@@ -2108,13 +2108,13 @@ export function expandPathsBounded(
         } else {
           // Symlink or special entry — resolve it the old (link-following) way so the expanded
           // set is byte-identical to the pre-ING-4 statSync walk.
-          let stat
+          let st
           try {
-            stat = statSync(full)
+            st = statSync(full)
           } catch {
             continue
           }
-          if (stat.isDirectory()) walk(full, depth + 1)
+          if (st.isDirectory()) walk(full, depth + 1)
           else if (supported.has(extname(full).toLowerCase())) add(full)
         }
       }
@@ -2124,14 +2124,14 @@ export function expandPathsBounded(
   }
 
   for (const p of paths) {
-    let stat
+    let st
     try {
-      stat = statSync(p)
+      st = statSync(p)
     } catch {
       continue
     }
     // A stopped walk skips the remaining picked FOLDERS; picked files are always kept.
-    if (stat.isDirectory()) {
+    if (st.isDirectory()) {
       if (!stop) walk(p, 0)
     } else {
       add(p)
@@ -2254,6 +2254,8 @@ export interface ExpandedFile {
 export interface ExpandedSelection {
   files: ExpandedFile[]
   exhausted: WalkExhausted | null
+  /** Whether any PICKED path is a directory (a folder import) — computed by the walk's own stats. */
+  hasDir: boolean
 }
 
 /**
@@ -2301,5 +2303,5 @@ export async function expandPathsWithSource(paths: string[]): Promise<ExpandedSe
       ? { path, sourceRelativePath: cleanRelative(root.dir, path), sourceFolderLabel: root.label }
       : { path, sourceRelativePath: null, sourceFolderLabel: null }
   })
-  return { files, exhausted }
+  return { files, exhausted, hasDir: roots.length > 0 }
 }

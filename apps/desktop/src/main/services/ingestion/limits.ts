@@ -99,7 +99,10 @@ export interface WalkBudget {
  * selection is cut — since #274 the walk is asynchronous, so the budget bounds how long the
  * user waits, not a main-thread freeze. A cut walk imports what it reached, stops, and reports
  * the cut (`exhausted` on the preflight result and the import job). Each is env-overridable
- * like the parser caps above.
+ * like the parser caps above. The 10 s value was deliberately HELD at the #274 switch: the
+ * async walk pays an event-loop round trip per directory and shares the wall clock with
+ * whatever else runs in between, so a tree near the edge can now report `'time'` where it once
+ * squeaked through — it degrades to a reported cut, and the override is the retune.
  */
 export const DEFAULT_WALK_BUDGET: WalkBudget = {
   maxEntries: 50_000,

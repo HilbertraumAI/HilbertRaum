@@ -1833,8 +1833,10 @@ read any supported-type file anywhere on disk (the text is then reachable via
   freezes the main thread and the budget bounds how long the user waits, not a freeze; a walk cut
   by its budget is reported (`exhausted` on the preflight result and on the import job, a warn log
   with counts only, and the Documents screen's "too large to scan completely" notice), so a partial
-  import never looks complete. `importDocuments` re-checks the unlock gate after the walk and takes
-  the document-work lease only then — a lock landing mid-walk queues nothing. What this does NOT
+  import never looks complete. `importDocuments` re-checks the unlock gate and the unlock epoch
+  after the walk and only then spends the picker token, takes the document-work lease and queues
+  the rows in one transaction — a lock landing mid-walk queues nothing and keeps the token for the
+  retry; a lock plus re-unlock inside the walk abandons the import. What this does NOT
   do: reject a UNC or device path lexically — that changes the drop contract for network-share
   users and waits on #222.
 

@@ -1582,7 +1582,11 @@ export interface DocumentOcrInfo {
 export interface ImportJob {
   jobId: string
   documentIds: string[]
-  /** #274: set when the folder walk behind this job was cut by its budget (absent = complete). */
+  /**
+   * #274: set when the folder walk behind this job was cut by its budget (absent = complete).
+   * Surfaced by the Documents screen; the chat attach path (`ChatScreen` drag-drop, which can
+   * carry a folder) and the single-file translate path do not read it yet.
+   */
   exhausted?: WalkExhausted
 }
 

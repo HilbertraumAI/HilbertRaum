@@ -379,7 +379,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         }
       }, 400)
     },
-    [refresh]
+    [refresh, showToast, tCount]
   )
 
   // Poll the MAIN-owned bulk re-index job until it settles. Mirrors `watchJob`: a 400 ms tick reads
@@ -500,6 +500,12 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       await refresh()
       if (job.documentIds.length === 0) {
         setBusy(null)
+        // #274: a walk cut before it reached a single supported file is still a cut walk, not an
+        // unsupported selection — say so (once) beside the empty-import error.
+        if (job.exhausted && !walkCutNoticedRef.current) {
+          walkCutNoticedRef.current = true
+          showToast(tCount('docs.import.walkCut', 0))
+        }
         setError(t('docs.error.noSupported'))
         return
       }
