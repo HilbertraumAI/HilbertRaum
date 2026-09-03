@@ -13,6 +13,7 @@ import {
   listDocuments,
   reconcileStuckDocuments,
   expandPaths,
+  expandPathsBoundedAsync,
   documentsDir
 } from '../../src/main/services/ingestion'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
@@ -598,7 +599,9 @@ describe('expandPaths', () => {
     }
   })
 
-  it.skipIf(!symlinkOk)('follows a symlink to a supported file during the walk', () => {
+  // #274: every link-following case is asserted on BOTH walks — the synchronous reference and
+  // the asynchronous production walk must follow (and refuse) exactly the same links.
+  it.skipIf(!symlinkOk)('follows a symlink to a supported file during the walk', async () => {
     const root = join(dir(), 'root')
     mkdirSync(root)
     const target = write('target.md', '# hi') // lives OUTSIDE root
@@ -606,9 +609,10 @@ describe('expandPaths', () => {
     const files = expandPaths([root])
     // linked.md is only reachable by following the symlink → proves the link is followed + added.
     expect(files.some((f) => f.endsWith('linked.md'))).toBe(true)
+    expect((await expandPathsBoundedAsync([root])).files).toEqual(files)
   })
 
-  it.skipIf(!symlinkOk)('follows a symlink to a directory during the walk', () => {
+  it.skipIf(!symlinkOk)('follows a symlink to a directory during the walk', async () => {
     const root = join(dir(), 'root')
     mkdirSync(root)
     const realDir = join(dir(), 'realdir') // OUTSIDE root
@@ -618,12 +622,13 @@ describe('expandPaths', () => {
     const files = expandPaths([root])
     // inside.txt is only reachable by walking through the directory symlink.
     expect(files.some((f) => f.endsWith('inside.txt'))).toBe(true)
+    expect((await expandPathsBoundedAsync([root])).files).toEqual(files)
   })
 
   // REL-9: a symlinked directory pointing back into one of its own ancestors (`a/loop -> root`)
   // is a cycle the link-following fallback would recurse on forever → stack overflow. The
   // recursion-path realpath guard must TERMINATE the walk (and still find the real file once).
-  it.skipIf(!symlinkOk)('terminates on a symlink cycle without a stack overflow (REL-9)', () => {
+  it.skipIf(!symlinkOk)('terminates on a symlink cycle without a stack overflow (REL-9)', async () => {
     const root = join(dir(), 'cycleroot')
     mkdirSync(root)
     const a = join(root, 'a')
@@ -635,5 +640,8 @@ describe('expandPaths', () => {
     // depending on the OS path/symlink limit, recursing until ENAMETOOLONG/ELOOP/stack overflow).
     const files = expandPaths([root])
     expect(files.filter((f) => f.endsWith('real.txt'))).toHaveLength(1)
+    const async = await expandPathsBoundedAsync([root])
+    expect(async.files.filter((f) => f.endsWith('real.txt'))).toHaveLength(1)
+    expect(async.exhausted).toBeNull()
   })
 })

@@ -282,16 +282,16 @@ describe('audio ingestion (Phase 36)', () => {
     expect(readdirSync(store).some((n) => n.includes('.parse-transcript'))).toBe(false)
   })
 
-  it('summarizeImportPaths counts audio files + bytes for the D35 size confirm', () => {
+  it('summarizeImportPaths counts audio files + bytes for the D35 size confirm', async () => {
     const audio = writeAudioSource('big.wav')
     const txt = join(srcDir, 'note.txt')
     writeFileSync(txt, 'text')
-    const pre = summarizeImportPaths([audio, txt])
+    const pre = await summarizeImportPaths([audio, txt])
     expect(pre.fileCount).toBe(2)
     expect(pre.audioFileCount).toBe(1)
     expect(pre.audioBytes).toBe(2048)
     // Unsupported/missing paths do not blow up the preflight.
-    expect(summarizeImportPaths([join(srcDir, 'missing.mp3')])).toEqual({
+    expect(await summarizeImportPaths([join(srcDir, 'missing.mp3')])).toEqual({
       fileCount: 0,
       audioFileCount: 0,
       audioBytes: 0

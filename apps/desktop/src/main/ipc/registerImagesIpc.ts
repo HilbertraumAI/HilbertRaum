@@ -1,9 +1,9 @@
 import { statSync } from 'node:fs'
 import { open, type FileHandle } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { BrowserWindow, dialog } from 'electron'
 import { guardedHandleFor } from './guarded-handle'
+import { createPickerTokens } from './picker-tokens'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
@@ -91,26 +91,13 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
   // records the OS-vetted absolute path under an unguessable token and hands ONLY the token to
   // the renderer; readBytes resolves+consumes it. The renderer can never name a path, so a
   // code-exec'd renderer cannot turn main into a confused deputy that reads an arbitrary file.
-  // Bounded (a stray choose-without-read can't grow it without bound) and single-use.
+  // Bounded (a stray choose-without-read can't grow it without bound) and single-use. The map is
+  // the shared `picker-tokens.ts` mechanism (the documents and skills pickers use the same one;
+  // this handler kept an older private copy until #274) with its own, smaller cap.
   const PICKED_IMAGE_TOKEN_CAP = 8
-  const pickedImageTokens = new Map<string, string>()
-  const mintImageToken = (path: string): string => {
-    const token = randomUUID()
-    pickedImageTokens.set(token, path)
-    while (pickedImageTokens.size > PICKED_IMAGE_TOKEN_CAP) {
-      const oldest = pickedImageTokens.keys().next().value
-      if (oldest === undefined) break
-      pickedImageTokens.delete(oldest)
-    }
-    return token
-  }
-  const consumeImageToken = (token: unknown): string | null => {
-    if (typeof token !== 'string' || token === '') return null
-    const path = pickedImageTokens.get(token)
-    if (path === undefined) return null
-    pickedImageTokens.delete(token)
-    return path
-  }
+  const pickedImageTokens = createPickerTokens<string>(PICKED_IMAGE_TOKEN_CAP)
+  const mintImageToken = (path: string): string => pickedImageTokens.mint(path)
+  const consumeImageToken = (token: unknown): string | null => pickedImageTokens.consume(token) ?? null
 
   // Build a per-renderer streaming emitter, isDestroyed-guarded (the chat-stream precedent).
   const emitterFor = (event: { sender: { send: (ch: string, p: unknown) => void; isDestroyed: () => boolean } }): VisionStreamEmitter => {

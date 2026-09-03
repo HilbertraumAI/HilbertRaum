@@ -29,6 +29,15 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-04 — **Phase F PR 1 (#283, closes #274): the drop/preflight directory walk is asynchronous
+(`expandPathsBoundedAsync`, same budget/cycle guard/order, pinned to the synchronous reference), both
+import handlers are async, a lock mid-walk queues nothing, and a cut walk is reported (`exhausted` on
+`ImportPreflight`/`ImportJob`/`ImportJobStatus`, a warn log, the EN/DE "too large to scan completely"
+notice); riders: images picker tokens on `createPickerTokens`, the last audit-ID test comment swept.**_
+Ledger: §52 addendum row. Owner rulings of 2026-09-03 on #221/#222/#223/#225/#226/#227/#228 drive
+PRs 2–5 (docs confirmation; session-end handler; external-open consent + eval-gated RAG framing;
+`PRAGMA user_version`). Suite: see the PR body.
+
 _2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the durable ledger
 `docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46
 non-findings; containment items 1–8; the 14 decisions on their defaults; B1..B9 ports; a §-anchor
@@ -582,6 +591,9 @@ open round's item stays the last block of §5.)
       touched; `FullSuiteGuard` cannot see dropped individual tests.
     - **Phase F register:** the one remaining audit-ID comment (`tests/unit/window-security.test.ts`,
       `// SEC-1:`); #274; the "answered the other way" designs recorded on #218–#231 and in §52.
+    - **Phase F, 2026-09-04 — PR 1 (#283) closed #274** (async walk, `exhausted` surfaced; §52
+      addendum row) and swept the last audit-ID comment above; the owner answered decisions
+      #221/#222/#223/#225/#226/#227/#228 on 2026-09-03 (`**DECISION:**`) — PRs 2–5 follow in order.
 
 ---
 

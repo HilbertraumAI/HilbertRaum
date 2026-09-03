@@ -1582,13 +1582,28 @@ export interface DocumentOcrInfo {
 export interface ImportJob {
   jobId: string
   documentIds: string[]
+  /**
+   * #274: set when the folder walk behind this job was cut by its budget (absent = complete).
+   * Surfaced by the Documents screen; the chat attach path (`ChatScreen` drag-drop, which can
+   * carry a folder) and the single-file translate path do not read it yet.
+   */
+  exhausted?: WalkExhausted
 }
+
+/**
+ * Why a bounded folder walk stopped early (#274): the entry cap, the depth cap or the wall-clock
+ * budget (`ingestion/limits.ts` `DEFAULT_WALK_BUDGET`). Carried as an ADDITIVE optional field on
+ * the preflight result and the import job — absent whenever the walk completed.
+ */
+export type WalkExhausted = 'entries' | 'depth' | 'time'
 
 /** What a picked selection contains — drives the size-aware audio import confirm. */
 export interface ImportPreflight {
   fileCount: number
   audioFileCount: number
   audioBytes: number
+  /** #274: set when the walk behind the count was cut — `fileCount` is then a lower bound. */
+  exhausted?: WalkExhausted
 }
 
 export interface ImportJobStatus {
@@ -1597,6 +1612,8 @@ export interface ImportJobStatus {
   completed: number
   failed: number
   done: boolean
+  /** #274: mirrors `ImportJob.exhausted` so a poll (or the reload recovery) sees the cut too. */
+  exhausted?: WalkExhausted
 }
 
 /**

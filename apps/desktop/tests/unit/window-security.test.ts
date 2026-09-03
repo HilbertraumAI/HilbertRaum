@@ -243,7 +243,7 @@ describe('call-site wiring (the flags cannot be re-inlined)', () => {
       expect(src).not.toMatch(/nodeIntegration\s*:/)
       expect(src).not.toMatch(/\bsandbox\s*:/)
       expect(src).not.toMatch(/webSecurity\s*:/)
-      expect(src).not.toMatch(/spellcheck\s*:/i) // SEC-1: the flag lives ONLY in the shared constant
+      expect(src).not.toMatch(/spellcheck\s*:/i) // #239: the flag lives ONLY in the shared constant
       expect(src).not.toContain('default-src') // the CSP is not re-inlined either
     }
   })

@@ -8,7 +8,7 @@ import {
   realpathSync,
   statSync
 } from 'node:fs'
-import { copyFile, readFile } from 'node:fs/promises'
+import { copyFile, readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
@@ -22,9 +22,11 @@ import type {
   DocumentSummary,
   GeneratedProvenance,
   ImportDestination,
+  ImportPreflight,
   IngestionStatus,
   ExtractStatus,
-  TreeBuildStatus
+  TreeBuildStatus,
+  WalkExhausted
 } from '../../../shared/types'
 import { sha256File } from '../models'
 import { perfMark, perfMs } from '../perf'
@@ -606,10 +608,9 @@ function insertQueuedRow(
  * (ING-3 in-order push preserved); mirrors `createQueuedDocument`'s insert-regardless behaviour, so
  * an unstatable path still queues a row with a null size — no row is silently dropped.
  *
- * DEFERRED (walk stays sync): the recursive directory walk (`expandPathsWithSource`) is still
- * synchronous in the handler — `importDocuments` returns `{jobId, documentIds}` synchronously and
- * tests/renderer depend on the ids being present at return. Moving the walk off the hot path would
- * change that contract; left for a later pass.
+ * The recursive directory walk (`expandPathsWithSource`) is asynchronous since #274; the handler
+ * awaits it BEFORE this batch, so `{ jobId, documentIds }` is still complete when the invoke
+ * resolves (the renderer only ever saw a promise).
  */
 export function createQueuedDocuments(
   db: Db,
@@ -1351,32 +1352,30 @@ function audioSegmentsFromChunks(
 
 /**
  * Per-path summary of a pending import for the renderer's size-aware audio
- * confirmation: how many supported files the selection expands to,
- * how many are audio, and the audio bytes (a stored copy + a full transcription are
- * real costs the user should consciously accept for large recordings).
+ * confirmation (`ImportPreflight`, `shared/types.ts`): how many supported files the selection
+ * expands to, how many are audio, and the audio bytes (a stored copy + a full transcription are
+ * real costs the user should consciously accept for large recordings). #274: runs the
+ * asynchronous bounded walk; `exhausted` is set only when that walk was cut, so `fileCount` is
+ * then a lower bound — absent (not null) when it completed, so the field is purely additive.
  */
-export interface ImportPreflight {
-  fileCount: number
-  audioFileCount: number
-  audioBytes: number
-}
-
-export function summarizeImportPaths(paths: string[]): ImportPreflight {
+export async function summarizeImportPaths(paths: string[]): Promise<ImportPreflight> {
   // #240: the array cap (`MAX_DROP_PATHS`) is enforced by the IPC handler on the RAW seams only —
   // a picker selection is main-vetted and may legitimately exceed it. The walk itself is bounded.
-  const files = expandPaths(paths)
+  const { files, exhausted } = await expandPathsBoundedAsync(paths)
   let audioFileCount = 0
   let audioBytes = 0
   for (const f of files) {
     if (!isAudioPath(f)) continue
     audioFileCount += 1
     try {
-      audioBytes += statSync(f).size
+      audioBytes += (await stat(f)).size
     } catch {
       // Unreadable file: it will fail per-file during import; size 0 here.
     }
   }
-  return { fileCount: files.length, audioFileCount, audioBytes }
+  const summary: ImportPreflight = { fileCount: files.length, audioFileCount, audioBytes }
+  if (exhausted !== null) summary.exhausted = exhausted
+  return summary
 }
 
 /**
@@ -1999,13 +1998,15 @@ export function deleteDocument(db: Db, storeDir: string, id: string): void {
  * Expand a user selection (files and/or folders) into a flat list of files to import.
  * Folders are walked recursively, keeping only supported extensions; explicitly-picked
  * files are always included (an unsupported one surfaces later as a `failed` document).
+ *
+ * The SYNCHRONOUS reference walk. Production goes through `expandPathsBoundedAsync` (#274);
+ * this one stays as the executable specification the walk-budget tests pin the async walk
+ * against (same files, same order, same `exhausted`), so a change to either walk that the other
+ * does not mirror fails a test instead of drifting silently.
  */
 export function expandPaths(paths: string[]): string[] {
   return expandPathsBounded(paths).files
 }
-
-/** Why a bounded walk stopped early, or `null` when it completed. */
-export type WalkExhausted = 'entries' | 'depth' | 'time' | null
 
 export interface ExpandedPaths {
   /**
@@ -2015,15 +2016,16 @@ export interface ExpandedPaths {
    * Never anything the unbounded walk would not have returned.
    */
   files: string[]
-  exhausted: WalkExhausted
+  /** Why the walk stopped early (`WalkExhausted`, `shared/types.ts`), or `null` when it completed. */
+  exhausted: WalkExhausted | null
 }
 
 /**
- * `expandPaths` with the walk budget (#240): the walk is synchronous on the main thread, so it
- * is cut — never hung — by an entry cap, a depth cap (the picked folder is depth 0; deeper
- * directories are skipped, siblings continue) and a wall-clock budget checked once per
- * directory. A picked FILE is never subject to it. `now` is injectable for a deterministic
- * clock in tests. Moving the walk off the main thread is #274.
+ * `expandPaths` with the walk budget (#240): the walk is cut — never hung — by an entry cap, a
+ * depth cap (the picked folder is depth 0; deeper directories are skipped, siblings continue)
+ * and a wall-clock budget checked once per directory. A picked FILE is never subject to it.
+ * `now` is injectable for a deterministic clock in tests. Synchronous — the reference
+ * implementation (see `expandPaths`); production calls `expandPathsBoundedAsync` (#274).
  */
 export function expandPathsBounded(
   paths: string[],
@@ -2035,7 +2037,7 @@ export function expandPathsBounded(
   const seen = new Set<string>()
   const started = now()
   let entriesSeen = 0
-  let exhausted: WalkExhausted = null
+  let exhausted: WalkExhausted | null = null
   // 'entries' and 'time' stop the whole walk; 'depth' only prunes the branch it hit.
   let stop = false
 
@@ -2106,13 +2108,13 @@ export function expandPathsBounded(
         } else {
           // Symlink or special entry — resolve it the old (link-following) way so the expanded
           // set is byte-identical to the pre-ING-4 statSync walk.
-          let stat
+          let st
           try {
-            stat = statSync(full)
+            st = statSync(full)
           } catch {
             continue
           }
-          if (stat.isDirectory()) walk(full, depth + 1)
+          if (st.isDirectory()) walk(full, depth + 1)
           else if (supported.has(extname(full).toLowerCase())) add(full)
         }
       }
@@ -2122,15 +2124,116 @@ export function expandPathsBounded(
   }
 
   for (const p of paths) {
-    let stat
+    let st
     try {
-      stat = statSync(p)
+      st = statSync(p)
     } catch {
       continue
     }
     // A stopped walk skips the remaining picked FOLDERS; picked files are always kept.
-    if (stat.isDirectory()) {
+    if (st.isDirectory()) {
       if (!stop) walk(p, 0)
+    } else {
+      add(p)
+    }
+  }
+  return { files: out, exhausted }
+}
+
+/**
+ * The production walk (#274): `expandPathsBounded` over `fs/promises`, so a large or slow tree
+ * never occupies the main thread — every directory read (and every symlink fallback stat) is an
+ * awaited syscall on the libuv pool, and an IPC call, the lock and the quit path all run in
+ * between. Same budget, same `onPath` cycle guard, same link following and the same expansion
+ * ORDER as the synchronous walk: directories are read one at a time, never in parallel, so the
+ * result is byte-identical for an acyclic tree (pinned by the walk-budget tests). The wall-clock
+ * budget now bounds how long the renderer WAITS, not how long the thread is frozen. Keep the two
+ * bodies in lockstep — the comments explaining each step live on the synchronous one.
+ */
+export async function expandPathsBoundedAsync(
+  paths: string[],
+  budget: WalkBudget = resolveWalkBudget(),
+  now: () => number = Date.now
+): Promise<ExpandedPaths> {
+  const supported = new Set(supportedExtensions())
+  const out: string[] = []
+  const seen = new Set<string>()
+  const started = now()
+  let entriesSeen = 0
+  let exhausted: WalkExhausted | null = null
+  let stop = false
+
+  const add = (p: string): void => {
+    if (!seen.has(p)) {
+      seen.add(p)
+      out.push(p)
+    }
+  }
+
+  const onPath = new Set<string>()
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (stop) return
+    if (depth > budget.maxDepth) {
+      exhausted ??= 'depth'
+      return
+    }
+    if (now() - started > budget.maxMillis) {
+      exhausted = 'time'
+      stop = true
+      return
+    }
+    let real: string
+    try {
+      real = await realpath(dir)
+    } catch {
+      real = dir
+    }
+    if (onPath.has(real)) return
+    onPath.add(real)
+    try {
+      let entries: Dirent[]
+      try {
+        entries = await readdir(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const entry of entries) {
+        if (stop) return
+        if (++entriesSeen > budget.maxEntries) {
+          exhausted = 'entries'
+          stop = true
+          return
+        }
+        const full = join(dir, entry.name)
+        if (entry.isDirectory()) {
+          await walk(full, depth + 1)
+        } else if (entry.isFile()) {
+          if (supported.has(extname(full).toLowerCase())) add(full)
+        } else {
+          let st
+          try {
+            st = await stat(full)
+          } catch {
+            continue
+          }
+          if (st.isDirectory()) await walk(full, depth + 1)
+          else if (supported.has(extname(full).toLowerCase())) add(full)
+        }
+      }
+    } finally {
+      onPath.delete(real)
+    }
+  }
+
+  for (const p of paths) {
+    let st
+    try {
+      st = await stat(p)
+    } catch {
+      continue
+    }
+    if (st.isDirectory()) {
+      if (!stop) await walk(p, 0)
     } else {
       add(p)
     }
@@ -2147,25 +2250,34 @@ export interface ExpandedFile {
   sourceFolderLabel: string | null
 }
 
+/** `expandPathsWithSource`'s result: the expanded files plus why the walk stopped, if it did. */
+export interface ExpandedSelection {
+  files: ExpandedFile[]
+  exhausted: WalkExhausted | null
+  /** Whether any PICKED path is a directory (a folder import) — computed by the walk's own stats. */
+  hasDir: boolean
+}
+
 /**
  * Expand a selection like `expandPaths`, additionally capturing folder-import display
  * metadata (plan §11.2): for a picked DIRECTORY, `sourceFolderLabel` is that directory's
  * name and `sourceRelativePath` is each walked file's path relative to it; a picked FILE
  * carries no metadata. **Display-only** (the stored copy is always
- * `workspace/documents/<id><ext>`); never used for any file I/O.
+ * `workspace/documents/<id><ext>`); never used for any file I/O. Asynchronous since #274
+ * (`expandPathsBoundedAsync`); `exhausted` rides along so the import job can report a cut walk.
  *
- * L3 symlink/basename fallback: `expandPaths`/`statSync` follow symlinks, so a symlinked
+ * L3 symlink/basename fallback: the walk and `stat` follow symlinks, so a symlinked
  * entry can resolve outside the picked root and produce a relative path with `..` or a
  * different drive root. When the relative path can't be cleanly computed, fall back to the
  * bare basename. The order matches `expandPaths` (dedup by absolute path; first wins).
  */
-export function expandPathsWithSource(paths: string[]): ExpandedFile[] {
-  const flat = expandPaths(paths)
+export async function expandPathsWithSource(paths: string[]): Promise<ExpandedSelection> {
+  const { files: flat, exhausted } = await expandPathsBoundedAsync(paths)
   // Map each picked DIRECTORY to its label, longest-prefix-first so a nested pick wins.
   const roots: Array<{ dir: string; label: string }> = []
   for (const p of paths) {
     try {
-      if (statSync(p).isDirectory()) roots.push({ dir: p, label: basename(p) || p })
+      if ((await stat(p)).isDirectory()) roots.push({ dir: p, label: basename(p) || p })
     } catch {
       // Unreadable pick — its files never made it into `flat` anyway.
     }
@@ -2183,7 +2295,7 @@ export function expandPathsWithSource(paths: string[]): ExpandedFile[] {
     return rel.split(sep).join('/')
   }
 
-  return flat.map((path) => {
+  const files = flat.map((path) => {
     // Match on a separator boundary, not a raw string prefix, so a file under `…\taxes`
     // can't false-attribute its folder label to a sibling picked root `…\tax` (DM-3).
     const root = roots.find((r) => path === r.dir || path.startsWith(r.dir + sep))
@@ -2191,4 +2303,5 @@ export function expandPathsWithSource(paths: string[]): ExpandedFile[] {
       ? { path, sourceRelativePath: cleanRelative(root.dir, path), sourceFolderLabel: root.label }
       : { path, sourceRelativePath: null, sourceFolderLabel: null }
   })
+  return { files, exhausted, hasDir: roots.length > 0 }
 }
