@@ -82,8 +82,9 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // Non-null values must match the default's primitive type; the null-default keys carry
     // no type information in DEFAULT_SETTINGS, so each gets an explicit shape check
     // (bounded string / plain object; `contextTokensOverride` has its own clamp below).
-    // Unknown/mistyped entries are dropped.
-    if (!(key in DEFAULT_SETTINGS)) continue
+    // Unknown/mistyped entries are dropped. OWN keys only (#251): `in` also matched
+    // inherited names, so a JSON.parse-built `{"__proto__": …}` patch persisted a junk row.
+    if (!Object.hasOwn(DEFAULT_SETTINGS, key)) continue
     const def = (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[key]
     if (value === null) {
       if (def !== null) continue
@@ -116,6 +117,11 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     if (Array.isArray(def)) {
       if (!Array.isArray(value)) continue
       toStore = (value as unknown[]).filter((x) => typeof x === 'string').slice(0, MAX_SETTINGS_ARRAY)
+    }
+    // The same serialized-size cap for EVERY non-primitive write (#251) — an array of long
+    // strings, or any future object-valued setting, must not bloat the blob either.
+    if (typeof toStore === 'object' && toStore !== null) {
+      if (JSON.stringify(toStore).length > MAX_SETTINGS_OBJECT_BYTES) continue
     }
     // Enum-valued keys get an exact-value check (a renderer bug must not persist junk
     // like `gpuMode: 'banana'` — readers treat anything !== 'auto' as off, which fails

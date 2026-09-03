@@ -277,6 +277,28 @@ function resolveWithinRoot(rootPath: string, relPath: string): string {
   return full
 }
 
+/** A plain archive filename: one path segment, no separators, no drive/UNC syntax (#245). */
+const ARCHIVE_NAME_RULE = /^[A-Za-z0-9._-]{1,128}$/
+
+/**
+ * The on-disk name for a runtime archive, derived from the download URL (#245). The last
+ * path segment (query stripped, percent-decoded) is used ONLY when it is a plain filename
+ * per `ARCHIVE_NAME_RULE`; anything else — traversal, separators, a drive letter, an empty
+ * or over-long segment, an unparseable URL — yields `fallback`. `runtime-sources.yaml` is
+ * user-writable, and a raw basename with `..\` segments used to walk out of the guarded
+ * extraction root on Windows. Pure (no I/O).
+ */
+export function archiveNameFromUrl(url: string, fallback: string): string {
+  let segment: string
+  try {
+    segment = decodeURIComponent(new URL(url).pathname.split('/').pop() ?? '')
+  } catch {
+    return fallback
+  }
+  if (!ARCHIVE_NAME_RULE.test(segment) || segment === '.' || segment === '..') return fallback
+  return segment
+}
+
 /**
  * Plan the runtime (sidecar) download for a selected build. Resolves the extraction dir
  * + the final binary path under the drive root (escape-guarded). No network or I/O.
@@ -293,8 +315,13 @@ export function planRuntimeDownload(
   // Name the downloaded archive after the URL's basename so a .tar.gz (the format the
   // macOS/Linux release assets use in current llama.cpp releases) is not saved — and
   // mis-extracted — as a .zip. Synthetic fallback for URLs without a usable basename.
-  const urlBase = build.url.split('/').pop()?.split('?')[0]?.trim()
-  const zipDest = join(extractTo, urlBase || `${binaryBase}-${version}-${build.os}-${build.arch}.zip`)
+  // The archive path is root-guarded like `extract_to` (#245): the fallback embeds the
+  // manifest's `version`, which is user-writable too.
+  const archiveName = archiveNameFromUrl(
+    build.url,
+    `${binaryBase}-${version}-${build.os}-${build.arch}.zip`
+  )
+  const zipDest = resolveWithinRoot(extractTo, archiveName)
   const binaryPath = join(extractTo, sidecarBinaryName(binaryBase, build.os))
   return {
     version,
