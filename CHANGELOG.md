@@ -27,6 +27,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Shutting down or logging off Windows with the app open no longer loses the session.** The
+  app now locks the workspace itself as the Windows session ends, so the changes since the last
+  lock survive. It is a best-effort safety net — a very large workspace may not finish locking in
+  the time Windows allows — so quitting the app first is still the sure way. On a Mac the same
+  hook is in place but not yet verified; quit the app before shutting down there, as before.
 - **The confirmation before a skill writes or exports a file now names the document.** You can
   see which document the tool will run on before you confirm, and the run is pinned to that
   document — if it is no longer in the chat by the time you press Run, the app says so instead of
@@ -130,9 +135,8 @@ from its first public `1.0.0` release onward.
   0.1.59 or newer). Each launcher also accepts `--check` (`/check` on Windows) to show which app
   it would start without starting it.
 - **The user guide now says what an unclean stop costs.** Pulling the drive without quitting, a
-  power cut or a forced kill, or shutting down or logging off the computer with the app open loses
-  the changes made since the workspace last locked or quit; the workspace itself reopens fine from
-  that point. The
+  power cut or a forced kill loses the changes made since the workspace last locked or quit; the
+  workspace itself reopens fine from that point. The
   privacy notice and the security documentation now also say which small things live outside the
   drive: display preferences in the computer's browser profile, and anything you copy on its
   clipboard.

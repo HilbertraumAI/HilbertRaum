@@ -739,7 +739,8 @@ explicitly:
   whose main file can be mid-checkpoint (torn) — rolling *that* forward could replace the
   intact stale `.enc` with garbage, so it is deliberately shredded instead. Confidentiality
   is chosen over mid-session durability here; the mitigations are the clean quit path
-  (lock-on-quit + the `uncaughtException` crash lock) and the safe-eject guidance above.
+  (lock-on-quit, the `uncaughtException` crash lock and the Windows session-end lock, #248) and
+  the safe-eject guidance above.
   A separate, filesystem-level durability limit — a rename that has not yet reached the
   directory metadata can roll back after a power cut on exFAT/FAT32, and no directory-flush
   primitive is exposed through Node on Windows — is covered in
@@ -1069,16 +1070,32 @@ re-encrypts (the bullet below).
   reaper). A `quit: locking workspace` log line precedes the lock — with no window left, it is the
   only visible state of a quit. Pinned by `tests/unit/shutdown.test.ts` (B1 inverted, the
   activate guard, the deadline with the lock outside it).
-- **OS session end is a hard kill (#248; owner decision #226, default = document).** Nothing in
-  `src/main` handles Windows `session-end` or macOS `shutdown` — the awaited teardown above
-  (`will-quit`: sidecar stops, settle, then lock = re-encrypt + shred) never runs on logoff or
-  shutdown, so the process is killed with the working DB still plaintext on the drive. The only
-  unattended lock outside that awaited teardown is the synchronous `uncaughtException` crash path in
-  `main/index.ts` (`detachVaultKey()` + `workspace.shutdown()`), and it is not wired to session
-  end either. On the next start the crash-recovery sweep finds the live working copy, shreds it
-  and restores the last locked encrypted snapshot — the session delta since that lock is lost.
-  `docs/user-guide.md` §13 names this loss for users; a best-effort synchronous lock on Windows
-  `session-end` (and the macOS equivalent, unverified) is the alternative recorded on #226.
+- **OS session end locks the workspace — Windows handled, macOS registered but unverified (#248;
+  owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown, restart or log-off
+  with the app open never emits `will-quit` (Electron's `app` docs), so the awaited teardown above
+  never ran and the process was killed with the working DB still plaintext on the drive — the next
+  launch shredded the live working copy and the session delta was lost. The event Electron does
+  emit is a WINDOW event, `session-end` (after which the process is killed): `main/index.ts`
+  registers it on the main window (win32) → `onSessionEnd` on the lifecycle factory
+  (`main/shutdown.ts`), which runs `emergencyLock` — the `uncaughtException` crash path's
+  synchronous best-effort lock, extracted and now shared: arm the lock latch, fire-and-forget the
+  local-API stop, flush the encrypted log, `workspace.shutdown()` (re-encrypt + shred; a
+  `plaintext_dev` DB is checkpointed + closed), then reap the registered sidecar children in its
+  own try. It runs exactly once, over the SAME closure as `will-quit`/`activate`: a session end
+  during a running quit teardown defers to that teardown (on Windows the ordering cannot occur —
+  the quit closed every window before `will-quit`), and a `will-quit` after the session-end lock
+  exits at once (a prevented quit that never exited would make macOS report the app as
+  cancelling the shutdown). `session-end: locking workspace` (with the OS reasons) is logged
+  before the lock so it lands in the encrypted log. Best-effort: the lock is synchronous but not
+  instantaneous, and the OS grants a bounded grace — a session cut mid-lock is left to the next
+  launch's recovery (a bare, closed working file newer than `.enc` is rolled forward; a live
+  `-wal` is still shredded). **macOS:** a system shutdown is a `powerMonitor` event there,
+  `shutdown` (usable after `ready`); it is registered (darwin) to the same handler but
+  UNVERIFIED on a Mac — whether it fires before or after `will-quit` and how much time the app
+  gets — owner live check pending (#226); until then quit before shutting down. **Linux:**
+  nothing registered (the `powerMonitor` event exists there too; not ruled). Pinned by
+  `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings against
+  `will-quit`, the reap on the exit path, throw-safety, and the `index.ts` wiring (source text).
 - **Doc-task pipeline is flushed on lock/quit (TA-1).** The lock/quit handlers call
   `ctx.docTasks.cancelAllDocTasks()` — cancelling the running task **and every queued task** —
   not just the active one. The DB stays *open* while the handler awaits the sidecar suspends, so

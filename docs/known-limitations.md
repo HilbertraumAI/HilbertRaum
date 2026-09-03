@@ -51,10 +51,13 @@ password recovery — are documented in
   silently):** treat every model-emitted or manifest-sourced link (including `licenseUrl` in the
   download dialog) as untrusted and do not open it from inside the app, until the consenting
   opener lands (#236).
-- **Quit the app before shutting down or logging off (#248; owner decision #226 pending).** OS
-  session end is a hard kill — nothing locks the workspace, so every change since the last
-  **Lock now** or normal quit is lost (user-guide §13; `security-model.md` "OS session end is a
-  hard kill"). Wait for the window to close before you shut down, log off or eject.
+- **On macOS and Linux, quit the app before shutting down or logging off (#248).** On Windows
+  the app locks the workspace itself as the session ends (PR #285; best effort — a very large
+  workspace may not finish in the time Windows allows, so quitting first is still the sure way).
+  The macOS `shutdown` leg is registered but not yet verified on a Mac (owner live check, #226),
+  and nothing is registered on Linux: there, every change since the last **Lock now** or normal
+  quit is lost if the session ends with the app open (user-guide §13; `security-model.md` "OS
+  session end locks the workspace"). Wait for the window to close before you eject.
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
