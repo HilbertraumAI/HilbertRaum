@@ -301,7 +301,7 @@ export interface WillQuitEventLike {
 
 /**
  * The subset of Electron's `WindowSessionEndEvent` (Windows `session-end`) the handler reads;
- * the macOS `powerMonitor` `shutdown` listener receives no event at all.
+ * the macOS `powerMonitor` `shutdown` listener is typed without an event.
  */
 export interface SessionEndEventLike {
   reasons?: ReadonlyArray<string>
@@ -382,6 +382,14 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       if (shuttingDown) {
         if (sessionEndLocked) {
           sessionEndLocked = false // exit once; `app.exit` returns nothing to re-enter with
+          // Reap again right before the exit: on macOS a cancelled system shutdown leaves the
+          // app alive after the lock, and a background model auto-start could have spawned a
+          // child since (`emergencyLock` arms the workspace latch, not the runtime latch).
+          try {
+            deps.killSidecarChildren()
+          } catch {
+            /* best-effort */
+          }
           deps.exit(0)
         }
         return

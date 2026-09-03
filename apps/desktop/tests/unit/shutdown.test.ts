@@ -412,6 +412,7 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
   function sessionHarness() {
     const order: string[] = []
     const exits: number[] = []
+    let windows = 1
     const { ctx, release } = parkedCtx(order)
     const handlers = createAppLifecycleHandlers({
       performShutdown: () =>
@@ -430,12 +431,15 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
         order.push('exit')
         exits.push(code)
       },
-      createWindow: () => order.push('createWindow'),
-      windowCount: () => 1,
+      createWindow: () => {
+        order.push('createWindow')
+        windows++
+      },
+      windowCount: () => windows,
       killSidecarChildren: () => order.push('reap'),
       log: quietLog
     })
-    return { order, exits, release, handlers }
+    return { order, exits, release, handlers, setWindows: (n: number) => void (windows = n) }
   }
 
   it('locks the unlocked workspace SYNCHRONOUSLY on session end — flush, lock, reap — exactly once', () => {
@@ -466,6 +470,7 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     expect(ev.defaultPrevented).toBe(true)
     expect(order).not.toContain('embedder.stop(parked)') // the awaited teardown never started
     expect(order.filter((l) => l === 'lock')).toHaveLength(1)
+    expect(order.slice(-2)).toEqual(['reap', 'exit']) // reaped again right before the exit
     expect(exits).toEqual([0])
     // …and a will-quit re-entry after that exit is inert too.
     handlers.onWillQuit(quitEvent())
@@ -488,10 +493,14 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
   })
 
   it('no fresh window after a session-end lock (the activate guard shares the closure)', () => {
-    const { order, handlers } = sessionHarness()
+    const { order, handlers, setWindows } = sessionHarness()
+    setWindows(0)
+    handlers.onActivate()
+    expect(order.filter((l) => l === 'createWindow')).toHaveLength(1) // a normal Dock click creates one
+    setWindows(0)
     handlers.onSessionEnd()
     handlers.onActivate()
-    expect(order).not.toContain('createWindow')
+    expect(order.filter((l) => l === 'createWindow')).toHaveLength(1) // …but none against the locked vault
   })
 
   it('emergencyLock is throw-safe: a lock that throws still reaps the sidecar children', () => {
@@ -524,7 +533,8 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     const indexSrc = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8')
     expect(indexSrc).toContain("on('session-end', lifecycle.onSessionEnd)")
     expect(indexSrc).toContain("powerMonitor.on('shutdown'")
-    expect(indexSrc).toContain('emergencyLock(ctx')
+    // The crash path itself (not the lifecycle deps binding) calls the lock before exit(1).
+    expect(indexSrc).toMatch(/process\.on\('uncaughtException'[\s\S]*?\bemergencyLock\(ctx\)[\s\S]*?process\.exit\(1\)/)
   })
 })
 

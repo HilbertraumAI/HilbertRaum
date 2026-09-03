@@ -16,7 +16,7 @@ import { effectiveContextWindow } from './services/chat'
 import { loadPolicy, buildPolicyStatus, isCommercialPolicy } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
-import { initLogging, log, usesPlaintextLog, detachVaultKey } from './services/logging'
+import { initLogging, log, usesPlaintextLog } from './services/logging'
 import { initPerf, perfMark, perfMs } from './services/perf'
 import { createTrustedSenders } from './ipc/guarded-handle'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
@@ -783,10 +783,10 @@ app.on('will-quit', lifecycle.onWillQuit)
 process.on('uncaughtException', (err) => {
   try {
     log.error('Uncaught exception', String(err))
+    emergencyLock(ctx)
   } catch {
-    /* best-effort */
+    /* best-effort — the lock is throw-safe inside; this keeps exit(1) the exit code regardless */
   }
-  emergencyLock(ctx)
   process.exit(1)
 })
 // An unhandled rejection is usually NOT fatal (e.g. a stray `void promise()`), so only log

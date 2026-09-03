@@ -1092,7 +1092,11 @@ re-encrypts (the bullet below).
   `-wal` is still shredded). **macOS:** a system shutdown is a `powerMonitor` event there,
   `shutdown` (usable after `ready`); it is registered (darwin) to the same handler but
   UNVERIFIED on a Mac — whether it fires before or after `will-quit` and how much time the app
-  gets — owner live check pending (#226); until then quit before shutting down. **Linux:**
+  gets (Electron's own docs say the handler may delay the shutdown and should then quit, which
+  reads as `shutdown` first), whether a Dock-menu Quit also reaches it, and what a shutdown the
+  system then CANCELS leaves behind (the app alive with the workspace locked and no window
+  recreated on a Dock click — quit and relaunch) — owner live check pending (#226); until then
+  quit before shutting down. **Linux:**
   nothing registered (the `powerMonitor` event exists there too; not ruled). Pinned by
   `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings against
   `will-quit`, the reap on the exit path, throw-safety, and the `index.ts` wiring (source text).
