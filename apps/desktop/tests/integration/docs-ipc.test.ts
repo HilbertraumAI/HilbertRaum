@@ -101,7 +101,7 @@ import {
 import type { OcrEngine } from '../../src/main/services/ocr'
 import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
 import { makeScanOnlyPdf } from '../helpers/fixtures'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -125,6 +125,7 @@ function ctxWith(
   cipher: DocumentCipher | null = null
 ): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath },
     embedder,

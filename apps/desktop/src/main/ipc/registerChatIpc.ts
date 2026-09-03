@@ -1,4 +1,5 @@
-import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { type IpcMainInvokeEvent } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import {
@@ -61,6 +62,7 @@ import { loadResultTable } from '../services/tables/store'
 // service boundary clean.
 
 export function registerChatIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // Active stream cancellers (shared with the RAG path so stopGeneration cancels either).
   const inFlight = inFlightStreams
 
@@ -78,7 +80,7 @@ export function registerChatIpc(ctx: AppContext): void {
     }
   }
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.createConversation,
     (
       _e,
@@ -113,7 +115,7 @@ export function registerChatIpc(ctx: AppContext): void {
 
   // Persist a conversation's composite source scope (plan D1 — the multi-select picker).
   // Null clears it; an empty DocumentScope is the explicit "All documents" choice.
-  ipcMain.handle(
+  ipcHandle(
     IPC.setConversationScope,
     (_e, conversationId: string, scope: DocumentScope | null): Conversation => {
       requireUnlocked()
@@ -128,7 +130,7 @@ export function registerChatIpc(ctx: AppContext): void {
   )
 
   // Persist a conversation's creation-anchor project (plan §13.4).
-  ipcMain.handle(
+  ipcHandle(
     IPC.setConversationCollection,
     (_e, conversationId: string, collectionId: string | null): Conversation => {
       requireUnlocked()
@@ -138,7 +140,7 @@ export function registerChatIpc(ctx: AppContext): void {
 
   // Replace the "ask selected documents" scope (spec §10.4) — chip removal
   // in the UI. Null/empty clears back to whole-corpus retrieval.
-  ipcMain.handle(
+  ipcHandle(
     IPC.updateConversationScope,
     (_e, conversationId: string, documentIds: string[] | null): Conversation => {
       requireUnlocked()
@@ -155,7 +157,7 @@ export function registerChatIpc(ctx: AppContext): void {
   // clears it. Validated against the registry: an unknown/disabled/unavailable id is rejected to
   // null so a stale pick never becomes the default (the resolver also skips it, but keep the
   // persisted value honest). App + user skills are both selectable.
-  ipcMain.handle(
+  ipcHandle(
     IPC.setConversationDefaultSkill,
     (_e, conversationId: string, installId: string | null): void => {
       requireUnlocked()
@@ -168,7 +170,7 @@ export function registerChatIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.listConversations, (): Conversation[] => {
+  ipcHandle(IPC.listConversations, (): Conversation[] => {
     requireUnlocked()
     return listConversations(ctx.db)
   })
@@ -180,7 +182,7 @@ export function registerChatIpc(ctx: AppContext): void {
   // still-processing attachment is surfaced by the renderer's pending chip (import polling).
   // CODE-21 (full audit 2026-07-11): id-targeted — this used to materialize the whole library
   // (the PF-5 load-all) per conversation switch to return a handful of linked docs.
-  ipcMain.handle(IPC.listAttachments, (_e, conversationId: string): DocumentInfo[] => {
+  ipcHandle(IPC.listAttachments, (_e, conversationId: string): DocumentInfo[] => {
     requireUnlocked()
     const ids = conversationAttachmentIds(ctx.db, conversationId)
     if (ids.length === 0) return []
@@ -190,12 +192,12 @@ export function registerChatIpc(ctx: AppContext): void {
   // Full-text search across conversations. The query and the returned snippets are
   // chat CONTENT: this handler must never log them and never writes an audit event
   // (reads are not audited — the audit privacy rule).
-  ipcMain.handle(IPC.searchConversations, (_e, query: string): ConversationSearchResult[] => {
+  ipcHandle(IPC.searchConversations, (_e, query: string): ConversationSearchResult[] => {
     requireUnlocked()
     return searchMessages(ctx.db, typeof query === 'string' ? query : '')
   })
 
-  ipcMain.handle(IPC.listMessages, (_e, conversationId: string): Message[] => {
+  ipcHandle(IPC.listMessages, (_e, conversationId: string): Message[] => {
     requireUnlocked()
     return listMessages(ctx.db, conversationId)
   })
@@ -204,7 +206,7 @@ export function registerChatIpc(ctx: AppContext): void {
   // Read-only, no model call: the assembled-prompt estimate over the launched window. Falls back to
   // settings.contextTokens when no runtime is up. Returns null for an unknown conversation so the
   // renderer hides the meter rather than showing a system-prompt-only sliver for a vanished chat.
-  ipcMain.handle(
+  ipcHandle(
     IPC.getConversationContextUsage,
     (_e, conversationId: string): ContextUsage | null => {
       requireUnlocked()
@@ -216,7 +218,7 @@ export function registerChatIpc(ctx: AppContext): void {
   // The transcript summary marker (context-compaction plan §5.3, D-b): the latest checkpoint's
   // summary + where the divider sits, or null when none / compaction is disabled. The summary is
   // local context — this read is never logged or audited (chat content, like listMessages).
-  ipcMain.handle(
+  ipcHandle(
     IPC.getConversationSummary,
     (_e, conversationId: string): ConversationSummaryMarker | null => {
       requireUnlocked()
@@ -224,7 +226,7 @@ export function registerChatIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.sendChatMessage,
     async (
       event: IpcMainInvokeEvent,
@@ -312,7 +314,7 @@ export function registerChatIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.deleteConversation, (_e, conversationId: string): void => {
+  ipcHandle(IPC.deleteConversation, (_e, conversationId: string): void => {
     requireUnlocked()
     // A stream writing into this conversation would persist its assistant turn after
     // the delete (FK violation / resurrection) — refuse while one is in flight; the
@@ -325,7 +327,7 @@ export function registerChatIpc(ctx: AppContext): void {
     ctx.audit?.('conversation_deleted', 'Conversation deleted', { conversationId })
   })
 
-  ipcMain.handle(IPC.stopGeneration, (_e, conversationId: string): void => {
+  ipcHandle(IPC.stopGeneration, (_e, conversationId: string): void => {
     const controller = inFlight.get(conversationId)
     if (controller) {
       log.info('Generation stop requested', { conversationId })
@@ -336,7 +338,7 @@ export function registerChatIpc(ctx: AppContext): void {
   // Recover an in-flight generation after the Chat screen was unmounted (the user
   // navigated away and back). Returns the live accumulated answer/reasoning snapshot, or
   // null when nothing is generating for this conversation. Read-only; never mutates.
-  ipcMain.handle(
+  ipcHandle(
     IPC.getActiveStream,
     (_e, conversationId: string): ActiveStreamSnapshot | null => {
       const buf = streamBuffers.get(conversationId)
@@ -350,12 +352,12 @@ export function registerChatIpc(ctx: AppContext): void {
   // reply streams invisibly. In-memory only + workspace-agnostic, so it intentionally skips
   // requireUnlocked (like stopGeneration/getActiveStream). Insertion-ordered: the LAST id is the
   // most recently started stream. Returns [] when nothing is generating.
-  ipcMain.handle(IPC.listActiveStreamConversations, (): string[] => [...inFlight.keys()])
+  ipcHandle(IPC.listActiveStreamConversations, (): string[] => [...inFlight.keys()])
 
   // Export a transcript to a user-chosen file (spec §7.6). The save dialog
   // runs in MAIN (the renderer has no fs/dialog access); returns the saved path, or
   // null when the user cancelled.
-  ipcMain.handle(IPC.exportConversation, async (_e, conversationId: string): Promise<string | null> => {
+  ipcHandle(IPC.exportConversation, async (_e, conversationId: string): Promise<string | null> => {
     requireUnlocked()
     const { title, markdown } = exportTranscript(ctx.db, conversationId)
     const safeName = title.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 60) || 'chat'
@@ -386,7 +388,7 @@ export function registerChatIpc(ctx: AppContext): void {
   // CSV path (tableToCsv, incl. formula-injection neutralization) and the save dialog is the
   // consent, exactly like the transcript export above. Returns the saved path, or null when the
   // user cancelled or the message carries no (readable) table.
-  ipcMain.handle(IPC.exportMessageTable, async (_e, messageId: string): Promise<string | null> => {
+  ipcHandle(IPC.exportMessageTable, async (_e, messageId: string): Promise<string | null> => {
     requireUnlocked()
     if (typeof messageId !== 'string' || messageId.length === 0) return null
     const table = loadResultTable(ctx.db, messageId)

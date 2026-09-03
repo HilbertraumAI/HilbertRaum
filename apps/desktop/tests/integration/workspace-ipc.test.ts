@@ -47,7 +47,7 @@ import {
 } from '../../src/main/services/workspace-vault'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
@@ -72,6 +72,7 @@ function ctxWith(
   }
 ): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     workspace: ctrl,
     runtime: { stop: sidecars?.stopRuntime ?? (async () => {}), activeModelId: () => null },
     embedder: { stop: sidecars?.stopEmbedder ?? (async () => {}) },

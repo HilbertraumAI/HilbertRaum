@@ -28,7 +28,7 @@ import {
 import { documentsDir } from '../../src/main/services/ingestion'
 import type { Transcriber, TranscribeOptions } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -66,6 +66,7 @@ function ctxWith(workspacePath: string, transcriber: Transcriber | null): {
 } {
   const audit = vi.fn()
   const ctx = {
+    trustedSenders: ANY_SENDER,
     paths: { workspacePath },
     transcriber,
     audit,
@@ -172,6 +173,7 @@ describe('registerDictationIpc', () => {
     const workspacePath = freshWorkspacePath()
     const { transcriber, seen } = fakeTranscriber()
     const lockedCtx = {
+      trustedSenders: ANY_SENDER,
       paths: { workspacePath },
       transcriber,
       audit: vi.fn(),

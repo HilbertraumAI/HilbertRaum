@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { clearSpeculativeSuppression } from '../services/runtime/factory'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
@@ -161,6 +161,7 @@ export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
 }
 
 export function registerBenchmarkIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // SEC-N2: both handlers touch ctx.db (via updateSettings/getSettings). The ctx.db getter already
   // fail-closes when the workspace is locked, but it throws a raw English string; mirror every other
   // DB-touching handler with an explicit requireUnlocked() so a locked call surfaces the localized
@@ -171,11 +172,11 @@ export function registerBenchmarkIpc(ctx: AppContext): void {
     // lazily respawns the sidecars that teardown just killed. This module's copy is unchanged.
     if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.benchmark.locked'))
   }
-  ipcMain.handle(IPC.runBenchmark, (): Promise<BenchmarkResult> => {
+  ipcHandle(IPC.runBenchmark, (): Promise<BenchmarkResult> => {
     requireUnlocked()
     return runAndPersistBenchmark(ctx)
   })
-  ipcMain.handle(IPC.tryGpuAgain, (): Promise<AppSettings> => {
+  ipcHandle(IPC.tryGpuAgain, (): Promise<AppSettings> => {
     requireUnlocked()
     return tryGpuAgain(ctx)
   })

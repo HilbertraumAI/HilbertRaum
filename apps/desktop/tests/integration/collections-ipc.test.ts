@@ -32,7 +32,7 @@ import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import type { Collection, Conversation, DocumentInfo, ImportJob, ImportJobStatus, Message } from '../../src/shared/types'
-import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -63,6 +63,7 @@ function makeHarness(): Harness {
   seedSettings(db)
   const runtime = echoRuntime()
   const ctx = {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath, workspacePath },
     db,
     workspace: {

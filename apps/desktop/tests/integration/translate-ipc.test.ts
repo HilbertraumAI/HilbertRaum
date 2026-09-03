@@ -24,7 +24,7 @@ import { IPC, STREAM } from '../../src/shared/ipc'
 import { TRANSLATE_MAX_TEXT_CHARS } from '../../src/shared/types'
 import type { TranslateJob, TranslateRequest } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -33,6 +33,7 @@ function ctxFor(unlocked = true, locking = false): AppContext {
   // `isUnlocked() && isLocking?.() !== true` (AUD-02), and stubbing only `isUnlocked` left a
   // regression back to a bare isUnlocked() check green across the whole suite.
   return {
+    trustedSenders: ANY_SENDER,
     workspace: { isUnlocked: () => unlocked, isLocking: () => locking }
   } as unknown as AppContext
 }

@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { Collection } from '../../shared/types'
@@ -24,6 +24,7 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
 // test in tests/integration/audit-ipc.test.ts.
 
 export function registerCollectionsIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // DB-backed handlers require an unlocked workspace; surface a clean message instead of
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.
   const requireUnlocked = (): void => {
@@ -35,12 +36,12 @@ export function registerCollectionsIpc(ctx: AppContext): void {
     }
   }
 
-  ipcMain.handle(IPC.listCollections, (): Collection[] => {
+  ipcHandle(IPC.listCollections, (): Collection[] => {
     requireUnlocked()
     return listCollections(ctx.db)
   })
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.createCollection,
     (_e, name: string, opts?: { description?: string | null; color?: string | null }): Collection => {
       requireUnlocked()
@@ -54,14 +55,14 @@ export function registerCollectionsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.renameCollection, (_e, id: string, name: string): Collection => {
+  ipcHandle(IPC.renameCollection, (_e, id: string, name: string): Collection => {
     requireUnlocked()
     const coll = renameCollection(ctx.db, id, name)
     ctx.audit?.('collection_renamed', 'Project renamed', { collectionId: coll.id, type: coll.type })
     return coll
   })
 
-  ipcMain.handle(IPC.setCollectionArchived, (_e, id: string, archived: boolean): Collection => {
+  ipcHandle(IPC.setCollectionArchived, (_e, id: string, archived: boolean): Collection => {
     requireUnlocked()
     const coll = setCollectionArchived(ctx.db, id, archived)
     ctx.audit?.('collection_archived', 'Project archive state changed', {
@@ -76,7 +77,7 @@ export function registerCollectionsIpc(ctx: AppContext): void {
   //  - 'membershipOnly': drop the collection + its memberships (CASCADE); keep every doc.
   //  - 'withDocuments':  additionally delete ONLY genuinely project-only docs (C2 predicate
   //    — never a Library member). The actual shred reuses ingestion `deleteDocument`.
-  ipcMain.handle(
+  ipcHandle(
     IPC.deleteCollection,
     (_e, id: string, mode: 'membershipOnly' | 'withDocuments'): void => {
       requireUnlocked()

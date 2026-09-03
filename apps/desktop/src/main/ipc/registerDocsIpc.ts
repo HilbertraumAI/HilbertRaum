@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { BrowserWindow, dialog } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { createPickerTokens } from './picker-tokens'
@@ -135,6 +136,7 @@ function filterDocuments(docs: DocumentInfo[], filter?: DocumentListFilter): Doc
 }
 
 export function registerDocsIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   const storeDir = documentsDir(ctx.paths.workspacePath)
   // Surface the dev force-reindex escape hatch once at startup so it's obvious WHY every document
   // suddenly reports "needs re-index" (listDocuments forces `staleEmbeddings` while it's set).
@@ -305,7 +307,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // Open the OS file/folder picker in the main process (renderer has no dialog access).
   // Windows cannot mix file + directory selection in one dialog, so the caller chooses a
   // mode: 'files' (default) or 'folder'.
-  ipcMain.handle(
+  ipcHandle(
     IPC.pickDocuments,
     async (_e, mode?: 'files' | 'folder'): Promise<PickDocumentsResult> => {
       const exts = supportedExtensions().map((e) => e.replace(/^\./, ''))
@@ -334,7 +336,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.importDocuments, (_e, paths: string[], options?: ImportOptions): ImportJob => {
+  ipcHandle(IPC.importDocuments, (_e, paths: string[], options?: ImportOptions): ImportJob => {
     requireUnlocked()
     // Race guard: the whole import job holds a document-work lease so a vault
     // password change (which re-encrypts `.enc` sidecars) refuses to start while we
@@ -524,7 +526,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     return { jobId, documentIds }
   })
 
-  ipcMain.handle(IPC.getImportJob, (_e, jobId: string): ImportJobStatus => {
+  ipcHandle(IPC.getImportJob, (_e, jobId: string): ImportJobStatus => {
     const status = jobs.get(jobId)
     if (status) return status
     // Unknown/expired job — report it as done so pollers stop gracefully.
@@ -534,11 +536,11 @@ export function registerDocsIpc(ctx: AppContext): void {
   // DOC-1 (#141): the in-flight import (or null), parameterless — the Documents screen's mount
   // effect re-attaches its progress poll with this, mirroring getReindexAllJob. At most one
   // import runs at a time (beginDocumentWork serialises them), so "first not-done" is THE job.
-  ipcMain.handle(IPC.getActiveImportJob, (): ImportJobStatus | null => {
+  ipcHandle(IPC.getActiveImportJob, (): ImportJobStatus | null => {
     return [...jobs.values()].find((j) => !j.done) ?? null
   })
 
-  ipcMain.handle(IPC.listDocuments, (_e, filter?: DocumentListFilter): DocumentInfo[] => {
+  ipcHandle(IPC.listDocuments, (_e, filter?: DocumentListFilter): DocumentInfo[] => {
     requireUnlocked()
     // Reconcile stuck rows whenever NOTHING is actually running: a row left in an
     // active status (queued/extracting/…) with no live job/re-index belongs to a killed
@@ -601,7 +603,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // #240: with a live picker token the count runs over the main-vetted paths (the renderer's
   // array is ignored, the token is NOT spent — `importDocuments` spends it); without one this is
   // the raw seam and the array is capped before any filesystem call.
-  ipcMain.handle(IPC.importPreflight, (_e, paths: string[], pickerToken?: string): ImportPreflight => {
+  ipcHandle(IPC.importPreflight, (_e, paths: string[], pickerToken?: string): ImportPreflight => {
     requireUnlocked()
     const picked = pickerTokens.peek(pickerToken)
     if (picked !== undefined) return summarizeImportPaths(picked)
@@ -610,7 +612,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     return summarizeImportPaths(safePaths)
   })
 
-  ipcMain.handle(IPC.deleteDocument, (_e, documentId: string): void => {
+  ipcHandle(IPC.deleteDocument, (_e, documentId: string): void => {
     requireUnlocked()
     requireNotProcessing(documentId)
     requireNoActiveTask(documentId)
@@ -624,7 +626,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // "Move" is composed renderer-side as add + remove (no separate channel). Audit records
   // ids + counts ONLY — never the collection/project name (plan §17).
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.addToCollection,
     (_e, documentIds: string[], collectionId: string): void => {
       requireUnlocked()
@@ -638,7 +640,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.removeFromCollection,
     (_e, documentIds: string[], collectionId: string): void => {
       requireUnlocked()
@@ -652,7 +654,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.setDocumentLifecycle,
     (_e, documentIds: string[], lifecycle: DocumentLifecycle): DocumentInfo[] => {
       requireUnlocked()
@@ -676,7 +678,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // against racing an in-flight ingestion of the same document (it rewrites the stored
   // copy); in an encrypted workspace the transient decrypted file is shredded inside
   // the service. Nothing is written to the DB and no external viewer ever sees bytes.
-  ipcMain.handle(IPC.previewDocument, async (_e, documentId: string): Promise<DocumentPreview> => {
+  ipcHandle(IPC.previewDocument, async (_e, documentId: string): Promise<DocumentPreview> => {
     requireUnlocked()
     requireNotProcessing(documentId)
     log.info('Preview document', { documentId })
@@ -693,7 +695,7 @@ export function registerDocsIpc(ctx: AppContext): void {
 
   // FE-6: a subsequent bounded page of a preview (the modal's "Show more"). Same guards as the
   // first page; returns the slice at [offset, offset+limit) plus the next cursor.
-  ipcMain.handle(
+  ipcHandle(
     IPC.previewDocumentPage,
     async (_e, documentId: string, offset: number, limit: number): Promise<DocumentPreview> => {
       requireUnlocked()
@@ -712,7 +714,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // exportConversation pattern: dialog + fs in MAIN, never the renderer). Built for
   // materialized translations (always Markdown); any plain-text document qualifies.
   // Resolves with the saved path, or null when the user cancelled.
-  ipcMain.handle(IPC.exportDocument, async (_e, documentId: string): Promise<string | null> => {
+  ipcHandle(IPC.exportDocument, async (_e, documentId: string): Promise<string | null> => {
     requireUnlocked()
     requireNotProcessing(documentId)
     const { title, text } = await readStoredDocumentText(ctx.db, storeDir, documentId, {
@@ -755,7 +757,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // password-change re-key of the `.enc` sidecar (the import-job posture); the lease is
   // released BEFORE the dialog opens — the unbounded dialog wait must not wedge a
   // password change, and the decrypted bytes are already in memory by then.
-  ipcMain.handle(
+  ipcHandle(
     IPC.exportDocumentOriginal,
     async (_e, documentId: string): Promise<string | null> => {
       requireUnlocked()
@@ -814,7 +816,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // exportDocument pattern: dialog + fs in MAIN, never the renderer). The summary is
   // CONTENT — only the id is audited, never the text or the chosen path. Resolves with
   // the saved path, or null when the user cancelled or there is no summary.
-  ipcMain.handle(IPC.exportSummary, async (_e, documentId: string): Promise<string | null> => {
+  ipcHandle(IPC.exportSummary, async (_e, documentId: string): Promise<string | null> => {
     requireUnlocked()
     requireNotProcessing(documentId)
     const summary = getDocumentSummary(ctx.db, documentId)
@@ -873,7 +875,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     return info
   }
 
-  ipcMain.handle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {
+  ipcHandle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {
     requireUnlocked()
     requireNotProcessing(documentId)
     requireNoActiveTask(documentId)
@@ -896,7 +898,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // running job rather than launching a second loop. The work is sequential (multi-document
   // re-embedding contends on the single embedder), so it reuses the same one-at-a-time discipline
   // as the import loop, holding ONE beginDocumentWork lease for the whole batch.
-  ipcMain.handle(IPC.startReindexAll, (_e, documentIds: string[]): ReindexJobStatus => {
+  ipcHandle(IPC.startReindexAll, (_e, documentIds: string[]): ReindexJobStatus => {
     requireUnlocked()
     if (reindexJob && !reindexJob.done) return reindexJob // idempotent while running
     const ids = safeIdArray(documentIds)
@@ -955,11 +957,11 @@ export function registerDocsIpc(ctx: AppContext): void {
     return reindexJob
   })
 
-  ipcMain.handle(IPC.getReindexAllJob, (): ReindexJobStatus | null => reindexJob)
+  ipcHandle(IPC.getReindexAllJob, (): ReindexJobStatus | null => reindexJob)
 
   // Stop the in-flight bulk re-index. Aborts at the next iteration boundary (the current document
   // finishes); no-op when nothing is running. The job then settles with `cancelled: true`.
-  ipcMain.handle(IPC.cancelReindexAll, (): void => {
+  ipcHandle(IPC.cancelReindexAll, (): void => {
     if (reindexJob && !reindexJob.done) {
       log.info('Re-index all cancel requested', { jobId: reindexJob.jobId })
       reindexAbort?.abort()

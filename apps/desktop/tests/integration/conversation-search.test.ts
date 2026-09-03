@@ -32,7 +32,7 @@ import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { IPC } from '../../src/shared/ipc'
 import { SEARCH_MARK_END, SEARCH_MARK_START } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -344,6 +344,7 @@ describe('chat:search IPC', () => {
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'what is the liability cap?' })
     const audit = createAuditRecorder(() => db)
     const ctx = {
+      trustedSenders: ANY_SENDER,
       db,
       workspace: { isUnlocked: () => true },
       runtime: { active: () => null, activeModelId: () => null },

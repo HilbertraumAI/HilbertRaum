@@ -29,6 +29,19 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-03 — **Audit 2026-09-02 Phase 8 (PR 8-b) — SEC-6 #252: every `ipcMain.handle` in the
+main process goes through `guardedHandle(channel, handler, { trustedSenders, log })`
+(`src/main/ipc/guarded-handle.ts`): the body runs only when `event.sender.id` is in
+`ctx.trustedSenders`, which `createWindow` fills with the main window's `webContents.id` (the
+OCR window only `send`s, the print window has no preload); a refused invoke rejects with a
+content-free `UntrustedSenderError`. 18 registrars converted by codemod (`const ipcHandle =
+guardedHandleFor(ctx)`, 137 registrations, no `ipcMain` import left); `repo-hygiene.test.ts` bans
+a bare `ipcMain.handle(` under `src/main/ipc/**`; the two `ipcMain.on` sites stay. Tests:
+`guarded-handle.test.ts` (foreign id refused, main id passes, a real registrar through a
+non-permissive set); harness `makeEvent(senderId?)` + `ANY_SENDER` in 36 fake contexts (PR #279).**_
+Launch smoke NOT run: this machine's application-control policy blocks the dev `electron.exe`
+(substitute proof in the PR body; the smoke joins the owner list). Phase 8 suite: 370 / 5,561 / 74.
+
 _2026-09-03 — **Audit 2026-09-02 Phase 8 (PR 8-a) — small code items: SEC-2 #245 the engine
 archive's on-disk name is `archiveNameFromUrl` (last URL path segment, percent-decoded, must match
 `^[A-Za-z0-9._-]{1,128}$`, else `<binary>-<version>-<os>-<arch>.zip`) and `zipDest` goes through
@@ -679,6 +692,8 @@ open round's item stays the last block of §5.)
     - **7** (2026-09-03, PR #277): REL-8 (TQ-2 folded) — a held `.recovery` no longer costs a
       failed lock's fresh copy (tri-state `preserveNewerPlaintext`; `init()` refuses to sweep/open;
       unlock reason `vault_recovery_blocked`) + REL-9/DOC-15 exFAT durability docs — dated entry above.
+    - **8** (2026-09-03, PRs #278 + #279): SEC-2, SEC-5, SEC-7, REL-1, REL-2, SEC-14 fixed, GAP-3 a
+      confirmed residual (8-a); SEC-6 `guardedHandle` over all 137 registrations + the hygiene ban (8-b) — dated entries above.
 
 
 ---

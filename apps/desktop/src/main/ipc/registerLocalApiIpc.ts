@@ -1,4 +1,5 @@
-import { ipcMain, clipboard } from 'electron'
+import { clipboard } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -20,6 +21,7 @@ import { getSettings } from '../services/settings'
 const CLIPBOARD_CLEAR_MS = 60_000
 
 export function registerLocalApiIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // AUD-02: the token store lives in the workspace DB, so every handler here needs the
   // admits-work predicate (unlocked ∧ not locking), never a bare isUnlocked().
   const requireUnlocked = (): void => {
@@ -34,7 +36,7 @@ export function registerLocalApiIpc(ctx: AppContext): void {
     return getSettings(ctx.db).localApiPort ?? DEFAULT_SETTINGS.localApiPort
   }
 
-  ipcMain.handle(IPC.localApiConnectionInfo, (): LocalApiConnectionInfo => {
+  ipcHandle(IPC.localApiConnectionInfo, (): LocalApiConnectionInfo => {
     requireUnlocked()
     const settings = getSettings(ctx.db)
     // Mint on demand only when a key is actually required; with auth off we show the
@@ -46,7 +48,7 @@ export function registerLocalApiIpc(ctx: AppContext): void {
     }
   })
 
-  ipcMain.handle(IPC.localApiCopyKey, (): boolean => {
+  ipcHandle(IPC.localApiCopyKey, (): boolean => {
     requireUnlocked()
     try {
       const token = getOrCreateToken(ctx.db)
@@ -66,7 +68,7 @@ export function registerLocalApiIpc(ctx: AppContext): void {
     }
   })
 
-  ipcMain.handle(IPC.localApiRegenerateToken, (): LocalApiConnectionInfo => {
+  ipcHandle(IPC.localApiRegenerateToken, (): LocalApiConnectionInfo => {
     requireUnlocked()
     const token = rotateToken(ctx.db)
     // The old key is dead the instant rotateToken returns — but auth is checked ONCE at

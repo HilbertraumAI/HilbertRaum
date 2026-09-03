@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { TranslateJob, TranslateRequest } from '../../shared/types'
@@ -15,6 +15,7 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
 // service logs ids/kinds only.
 
 export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobService): void {
+  const ipcHandle = guardedHandleFor(ctx)
   const jobs =
     service ??
     new TranslateJobService({
@@ -64,7 +65,7 @@ export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobServ
     }
   }
 
-  ipcMain.handle(IPC.translateStart, (event, req: TranslateRequest): TranslateJob => {
+  ipcHandle(IPC.translateStart, (event, req: TranslateRequest): TranslateJob => {
     requireUnlocked()
     // L3: the stream events (trToken/trDone/trError) are bound to THIS sender for the job's life.
     // The app is multi-window: if the starting window is destroyed, those events would drop
@@ -118,7 +119,7 @@ export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobServ
     return job
   })
 
-  ipcMain.handle(IPC.translateCancel, (_e, jobId: unknown): TranslateJob => {
+  ipcHandle(IPC.translateCancel, (_e, jobId: unknown): TranslateJob => {
     const id = typeof jobId === 'string' ? jobId : ''
     const result = jobs.cancel(id)
     // The cancel terminal emits nothing, so detach the destroyed listener here (F-4).
@@ -129,5 +130,5 @@ export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobServ
   // Remount recovery (the chat `getActiveStream` precedent): a Translate screen that mounts fresh
   // after a full renderer reload has lost its module store — this returns the still-running job
   // (accumulated text + window progress) so it can re-adopt and re-subscribe. Null when idle.
-  ipcMain.handle(IPC.translateGetActive, (): TranslateJob | null => jobs.getActiveJob())
+  ipcHandle(IPC.translateGetActive, (): TranslateJob | null => jobs.getActiveJob())
 }

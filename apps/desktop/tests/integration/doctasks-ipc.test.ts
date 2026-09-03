@@ -36,7 +36,7 @@ import { registerDocTasksIpc } from '../../src/main/ipc/registerDocTasksIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -82,6 +82,7 @@ async function makeHarness(opts: { unlocked?: boolean } = {}): Promise<Harness> 
 
   const unlocked = opts.unlocked ?? true
   const ctx = {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath: root, workspacePath },
     get db() {
       return db

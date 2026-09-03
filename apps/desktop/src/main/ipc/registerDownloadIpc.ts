@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { DownloadJob } from '../../shared/types'
@@ -19,6 +19,7 @@ import { log } from '../services/logging'
 // semantics) for manifests whose `license_review.status` is not `approved`.
 
 export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // Production injects the global fetch; tests pass a manager with a fake (CI is
   // zero-network — nothing in the suite ever constructs the default). The audit hook
   // routes the manager's background started/verified/failed outcomes to the app
@@ -43,7 +44,7 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
     return { policyAllows: policy.network.allowModelDownloads, settingAllows }
   }
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.downloadModel,
     async (_e, modelId: string, opts?: { licenseAccepted?: boolean }): Promise<DownloadJob> => {
       if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
@@ -63,7 +64,7 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
     }
   )
 
-  ipcMain.handle(IPC.getDownloadJob, (_e, jobId: string): DownloadJob => downloads.get(jobId))
+  ipcHandle(IPC.getDownloadJob, (_e, jobId: string): DownloadJob => downloads.get(jobId))
 
-  ipcMain.handle(IPC.cancelDownload, (_e, jobId: string): DownloadJob => downloads.cancel(jobId))
+  ipcHandle(IPC.cancelDownload, (_e, jobId: string): DownloadJob => downloads.cancel(jobId))
 }

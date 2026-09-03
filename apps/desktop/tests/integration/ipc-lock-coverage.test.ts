@@ -47,7 +47,7 @@ import { registerLocalApiIpc } from '../../src/main/ipc/registerLocalApiIpc'
 import { IPC } from '../../src/shared/ipc'
 import { initLogging } from '../../src/main/services/logging'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -56,6 +56,7 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
  *  requireUnlocked() preamble (the first statement) before any of this matters. */
 function lockedCtx(tmp: string): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     workspace: { isUnlocked: () => false },
     paths: { workspacePath: tmp, rootPath: tmp, configPath: join(tmp, 'config.json') },
     runtime: {

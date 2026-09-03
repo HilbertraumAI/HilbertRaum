@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { tMain } from '../services/i18n'
@@ -27,6 +27,7 @@ import { aggregateExtractions } from '../services/analysis/extract'
 // them. The manager records the ids-only `document_task_*` audit events itself.
 
 export function registerDocTasksIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // Guard throws are ephemeral IPC emissions — localized via tMain (i18n record §3.3).
   const requireTasks = () => {
     if (!ctx.docTasks) throw new Error(tMain('main.task.unavailable'))
@@ -42,24 +43,24 @@ export function registerDocTasksIpc(ctx: AppContext): void {
     }
   }
 
-  ipcMain.handle(IPC.startDocTask, (_e, req: StartDocTaskRequest): { jobId: string } => {
+  ipcHandle(IPC.startDocTask, (_e, req: StartDocTaskRequest): { jobId: string } => {
     requireUnlocked()
     return requireTasks().startDocTask(req)
   })
 
-  ipcMain.handle(IPC.getDocTask, (_e, jobId: string): DocTaskStatus =>
+  ipcHandle(IPC.getDocTask, (_e, jobId: string): DocTaskStatus =>
     requireTasks().getDocTask(typeof jobId === 'string' ? jobId : '')
   )
 
   // Reload adoption: the RUNNING task's status (a copy) or null — the #38 chain-adopt read.
   // A safe read — never starts anything.
-  ipcMain.handle(IPC.getActiveDocTask, (): DocTaskStatus | null => requireTasks().getActiveDocTask())
+  ipcHandle(IPC.getActiveDocTask, (): DocTaskStatus | null => requireTasks().getActiveDocTask())
 
   // #157 (DT-5): the file-translation reload-adoption read (FA-3 / F-3) — running + queued
   // tasks in lane order, so a translation QUEUED behind a foreign task is adoptable too.
-  ipcMain.handle(IPC.listActiveDocTasks, (): DocTaskStatus[] => requireTasks().listActiveDocTasks())
+  ipcHandle(IPC.listActiveDocTasks, (): DocTaskStatus[] => requireTasks().listActiveDocTasks())
 
-  ipcMain.handle(IPC.cancelDocTask, (_e, jobId?: string | null): void => {
+  ipcHandle(IPC.cancelDocTask, (_e, jobId?: string | null): void => {
     const manager = requireTasks()
     const id = typeof jobId === 'string' && jobId.length > 0 ? jobId : null
     // A PRESENT id is a TARGETED cancel: exact-id, running OR queued (#157 DT-2 — the old
@@ -74,7 +75,7 @@ export function registerDocTasksIpc(ctx: AppContext): void {
   // Read-only coverage + provenance of a document's CURRENT summary (whole-document-analysis
   // plan §5.1, Phase 2). No model call — pure DB reads. Coverage/provenance are CONTENT-derived
   // (counts + source-chunk lineage), so this handler never logs or audits them.
-  ipcMain.handle(
+  ipcHandle(
     IPC.documentCoverage,
     (_e, documentId: string): DocumentCoverage | null => {
       requireUnlocked()
@@ -96,7 +97,7 @@ export function registerDocTasksIpc(ctx: AppContext): void {
   // pure GROUP BY over the precomputed `extraction_records` for one record type, scoped via the
   // shared buildScopeFilter (M3). ZERO model calls. The aggregated values are CONTENT — never
   // logged or audited (only the ids/counts of the precompute pass are).
-  ipcMain.handle(
+  ipcHandle(
     IPC.listAllExtractions,
     (_e, req: ExtractionListingRequest): ExtractionListing | null => {
       requireUnlocked()

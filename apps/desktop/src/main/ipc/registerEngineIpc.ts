@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { EngineDownloadJob, EngineStatus } from '../../shared/types'
@@ -44,6 +44,7 @@ export function whisperSidecarInUse(): boolean {
 }
 
 export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManager): void {
+  const ipcHandle = guardedHandleFor(ctx)
   const engine =
     manager ?? new EngineDownloadManager({ fetchImpl: fetch, log: (m, meta) => log.info(m, meta) })
 
@@ -53,12 +54,12 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
     return { policyAllows: policy.network.allowModelDownloads, settingAllows }
   }
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.getEngineStatus,
     (): EngineStatus => engineStatus(ctx.paths.rootPath, ctx.manifestsDir ?? null)
   )
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.downloadEngine,
     (): Promise<EngineDownloadJob> =>
       engine.start({
@@ -78,9 +79,9 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
       })
   )
 
-  ipcMain.handle(IPC.getEngineJob, (_e, jobId: string): EngineDownloadJob => engine.get(jobId))
+  ipcHandle(IPC.getEngineJob, (_e, jobId: string): EngineDownloadJob => engine.get(jobId))
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.cancelEngineDownload,
     (_e, jobId: string): EngineDownloadJob => engine.cancel(jobId)
   )

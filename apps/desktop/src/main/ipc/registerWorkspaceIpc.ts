@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import {
@@ -111,9 +111,10 @@ async function settleAndSweepPlaintextOps(ctx: AppContext): Promise<void> {
 }
 
 export function registerWorkspaceIpc(ctx: AppContext): void {
-  ipcMain.handle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
+  const ipcHandle = guardedHandleFor(ctx)
+  ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
 
-  ipcMain.handle(IPC.unlockWorkspace, (_e, password: string): WorkspaceActionResult => {
+  ipcHandle(IPC.unlockWorkspace, (_e, password: string): WorkspaceActionResult => {
     // The renderer is the untrusted boundary in Electron (M-S2): args are TS-typed but
     // arrive unvalidated. A non-string password would throw deep in the vault; reject it
     // here as a clean wrong-password result instead.
@@ -193,7 +194,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     }
   })
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.createWorkspace,
     (_e, password: string, mode: WorkspaceMode): WorkspaceActionResult => {
       // M-S2: validate the renderer-supplied shapes FIRST. `password.length` used to be
@@ -252,7 +253,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
   // new event, never the password). On a legacy v1 vault the first change runs the
   // one-time journaled migration to the v2 envelope — it can take a while on a big
   // document corpus, so the renderer shows honest progress copy while this resolves.
-  ipcMain.handle(
+  ipcHandle(
     IPC.changeWorkspacePassword,
     (_e, currentPassword: string, nextPassword: string): WorkspaceActionResult => {
       // M-S2: a non-string current password would throw in the vault verifier — treat it
@@ -315,7 +316,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.lockWorkspace, async (): Promise<WorkspaceStateInfo> => {
+  ipcHandle(IPC.lockWorkspace, async (): Promise<WorkspaceStateInfo> => {
     // AUD-02 — arm the lock latch FIRST, before any await. Everything below this line is an
     // awaited teardown that can take seconds (sidecar suspends, stream settles, the doc-task
     // settle), and an async ipcMain handler yields the main thread at every one of those awaits,

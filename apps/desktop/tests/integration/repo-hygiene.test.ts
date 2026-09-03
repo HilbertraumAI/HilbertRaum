@@ -621,3 +621,50 @@ describe('repo hygiene — CHANGELOG is release-page-shaped', () => {
     expect(changelog).not.toMatch(/No public release yet/i)
   })
 })
+
+// #252: every `ipcMain.handle` registration in the main process goes through
+// `guardedHandle` (src/main/ipc/guarded-handle.ts), which refuses an untrusted sender before
+// the handler body runs. A registrar that kept the direct `ipcMain` import would leave the
+// guard partial while every test stayed green (the harness is permissive), so the ban is
+// structural: no bare `ipcMain.handle(` and no `ipcMain` import under src/main/ipc/** except
+// in the guard module itself.
+describe('repo hygiene — every ipcMain.handle under src/main/ipc goes through the guard (#252)', () => {
+  const ipcDir = join(process.cwd(), 'src', 'main', 'ipc')
+  const sources = readdirSync(ipcDir)
+    .filter((f) => f.endsWith('.ts') && f !== 'guarded-handle.ts')
+    .map((f) => ({ file: f, src: readFileSync(join(ipcDir, f), 'utf8') }))
+
+  it('no bare ipcMain.handle( remains outside guarded-handle.ts', () => {
+    const offenders = sources
+      .map(({ file, src }) => ({ file, n: (src.match(/ipcMain\.handle\(/g) ?? []).length }))
+      .filter(({ n }) => n > 0)
+      .map(({ file, n }) => `${file}: ${n}`)
+    expect(offenders).toEqual([])
+  })
+
+  it('no registrar imports ipcMain at all (the guard is the only registration path)', () => {
+    const offenders = sources
+      .filter(({ src }) => /import\s*\{[^}]*\bipcMain\b[^}]*\}\s*from\s*'electron'/.test(src))
+      .map(({ file }) => file)
+    expect(offenders).toEqual([])
+  })
+
+  it('the guard module itself is the one place that calls ipcMain.handle', () => {
+    const guard = readFileSync(join(ipcDir, 'guarded-handle.ts'), 'utf8')
+    const code = guard.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '') // its comments name the call too
+    expect((code.match(/ipcMain\.handle\(/g) ?? []).length).toBe(1)
+  })
+
+  it('the permissive ANY_SENDER set is referenced nowhere under src/main except its definition', () => {
+    const mainDir = join(process.cwd(), 'src', 'main')
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(dir, e.name)) : e.name.endsWith('.ts') ? [join(dir, e.name)] : []
+      )
+    const offenders = walk(mainDir)
+      .filter((p) => !p.endsWith('guarded-handle.ts'))
+      .filter((p) => /\bANY_SENDER\b/.test(readFileSync(p, 'utf8')))
+      .map((p) => p.slice(mainDir.length + 1))
+    expect(offenders).toEqual([])
+  })
+})

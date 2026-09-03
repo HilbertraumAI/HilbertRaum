@@ -2,7 +2,8 @@ import { statSync } from 'node:fs'
 import { open, type FileHandle } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { BrowserWindow, dialog } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
@@ -64,6 +65,7 @@ const clampImageDim = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v >= 1 && v <= MAX_IMAGE_DIM ? Math.floor(v) : null
 
 export function registerImagesIpc(ctx: AppContext, service?: VisionService): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // WARNING (#119): this `??` fallback constructs a VisionService WITHOUT the
   // `isWorkspaceLocking` latch (AUD-02). Production always wires the LATCHED instance via
   // `ctx.vision` (main/index.ts), so the fallback is TEST-ONLY today — do not "simplify" the
@@ -122,9 +124,9 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     }
   }
 
-  ipcMain.handle(IPC.imageGetStatus, (): Promise<VisionStatus> => getVisionStatus(ctx))
+  ipcHandle(IPC.imageGetStatus, (): Promise<VisionStatus> => getVisionStatus(ctx))
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.imageChooseImage,
     async (): Promise<{ token: string; name: string; sizeBytes: number } | null> => {
       // #119: chooseImage is a FILE handler and follows the module's documented invariant
@@ -165,7 +167,7 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
   // NOT a path — so it cannot make main read an arbitrary file (confused deputy, threat #1).
   // We still re-validate extension + byte cap in MAIN (SEC-3), now on the OPEN fd so the cap
   // can't be bypassed by growing the file between stat and read (TOCTOU).
-  ipcMain.handle(IPC.imageReadBytes, async (_e, token: unknown): Promise<Uint8Array> => {
+  ipcHandle(IPC.imageReadBytes, async (_e, token: unknown): Promise<Uint8Array> => {
     requireUnlocked()
     const path = consumeImageToken(token)
     if (path === null || !isSupportedImagePath(path)) {
@@ -207,7 +209,7 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
   const errCode = (err: unknown): string | undefined =>
     err instanceof Error ? ((err as NodeJS.ErrnoException).code ?? err.name) : undefined
 
-  ipcMain.handle(IPC.imageAnalyze, (event, req: ImageAnalyzeRequest): ImageJob => {
+  ipcHandle(IPC.imageAnalyze, (event, req: ImageAnalyzeRequest): ImageJob => {
     requireUnlocked()
 
     // History persistence (image-understanding history): a NEW image (no sessionId) stores the
@@ -291,23 +293,23 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
   // Gated on unlock (MEDIUM vuln-scan-2026-06-21), consistent with imageAnalyze and the history
   // handlers: a job (and its answer) is workspace-scoped, so it must not be reachable once the
   // vault is locked. (stop() also clears the job map at lock, so there is nothing to return.)
-  ipcMain.handle(IPC.imageGetJob, (_e, jobId: unknown): ImageJob => {
+  ipcHandle(IPC.imageGetJob, (_e, jobId: unknown): ImageJob => {
     requireUnlocked()
     return vision.getJob(typeof jobId === 'string' ? jobId : '')
   })
 
-  ipcMain.handle(IPC.imageCancel, (_e, jobId: unknown): ImageJob => {
+  ipcHandle(IPC.imageCancel, (_e, jobId: unknown): ImageJob => {
     requireUnlocked()
     return vision.cancel(typeof jobId === 'string' ? jobId : '')
   })
 
   // --- Image-analysis history (local-only, encrypted at rest, user-deletable) ---
-  ipcMain.handle(IPC.imageListSessions, (): ImageSessionSummary[] => {
+  ipcHandle(IPC.imageListSessions, (): ImageSessionSummary[] => {
     requireUnlocked()
     return listImageSessions(ctx.db)
   })
 
-  ipcMain.handle(IPC.imageGetSession, (_e, id: unknown): Promise<ImageSessionDetail | null> => {
+  ipcHandle(IPC.imageGetSession, (_e, id: unknown): Promise<ImageSessionDetail | null> => {
     requireUnlocked()
     if (typeof id !== 'string') return Promise.resolve(null)
     // ASYNC (audit 2026-07-16 F-12): decrypt+read off the main thread.
@@ -319,7 +321,7 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     )
   })
 
-  ipcMain.handle(IPC.imageDeleteSession, async (_e, id: unknown): Promise<void> => {
+  ipcHandle(IPC.imageDeleteSession, async (_e, id: unknown): Promise<void> => {
     requireUnlocked()
     // ASYNC (audit 2026-07-16 F-12): the post-commit shred runs off the main thread.
     if (typeof id === 'string') await deleteImageSession(ctx.db, imagesDir(ctx.paths.workspacePath), id)
@@ -328,7 +330,7 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
   // #122: the bulk "Clear image history" action — one transactional row sweep, post-commit
   // best-effort shreds (REL-5 ordering preserved; see clearImageSessions). Gated like its
   // history siblings.
-  ipcMain.handle(IPC.imageClearSessions, async (): Promise<number> => {
+  ipcHandle(IPC.imageClearSessions, async (): Promise<number> => {
     requireUnlocked()
     return clearImageSessions(ctx.db, imagesDir(ctx.paths.workspacePath))
   })

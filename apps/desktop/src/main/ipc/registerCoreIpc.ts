@@ -1,4 +1,5 @@
-import { ipcMain, app, clipboard } from 'electron'
+import { app, clipboard } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { buildDriveStatus } from '../services/workspace'
@@ -17,6 +18,7 @@ import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../.
 // IPC for app/drive status + settings, the privacy policy surface (`getPolicy`),
 // and the policy-aware `offlineMode` (spec §9.1, §3.6).
 export function registerCoreIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // The user's allowNetwork setting lives inside the (possibly locked) DB. When the
   // workspace is locked we can't read it — fall back to the safe default (false), which
   // keeps the offline ceiling intact until the workspace is unlocked.
@@ -35,7 +37,7 @@ export function registerCoreIpc(ctx: AppContext): void {
     if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.settings.locked'))
   }
 
-  ipcMain.handle(IPC.getAppStatus, (): AppStatus => {
+  ipcHandle(IPC.getAppStatus, (): AppStatus => {
     const ws = ctx.workspace.getState()
     const unlocked = ctx.workspace.isUnlocked()
     const s = unlocked ? getSettings(ctx.db) : null
@@ -81,29 +83,29 @@ export function registerCoreIpc(ctx: AppContext): void {
     }
   })
 
-  ipcMain.handle(IPC.getDriveStatus, () => buildDriveStatus(ctx.paths))
+  ipcHandle(IPC.getDriveStatus, () => buildDriveStatus(ctx.paths))
 
   // The friendly, non-blocking launch preflight (spec §11.4). Reuses the drive
   // status + benchmark probe; surfaced on Home for a non-technical first run.
-  ipcMain.handle(
+  ipcHandle(
     IPC.runPreflight,
     (): Promise<PreflightResult> => runPreflight({ rootPath: ctx.paths.rootPath })
   )
 
-  ipcMain.handle(IPC.getPolicy, (): PolicyStatus =>
+  ipcHandle(IPC.getPolicy, (): PolicyStatus =>
     buildPolicyStatus(ctx.paths.configPath, allowNetworkSetting(), (m) => log.warn(m), {
       isDev: ctx.isDev
     })
   )
 
   // Spec §7.11 "show recent local logs" — read-only, local, never uploaded.
-  ipcMain.handle(IPC.getLogTail, (): string[] => readLogTail())
+  ipcHandle(IPC.getLogTail, (): string[] => readLogTail())
 
   // Copy text to the OS clipboard. Done in MAIN because the sandboxed preload has no access
   // to Electron's `clipboard` module and `navigator.clipboard` is unreliable in the
   // file://-loaded renderer (it threw the "can't copy" error). Returns false on failure so
   // the renderer can show a friendly message rather than throw.
-  ipcMain.handle(IPC.writeClipboard, (_e, text: string): boolean => {
+  ipcHandle(IPC.writeClipboard, (_e, text: string): boolean => {
     try {
       clipboard.writeText(String(text ?? ''))
       return true
@@ -116,7 +118,7 @@ export function registerCoreIpc(ctx: AppContext): void {
   // hand diagnostics to support without unsealing the workspace. The dialog + write run in
   // MAIN (saveTextExport). The on-disk log stays encrypted; this writes a copy the user
   // deliberately places outside the vault (spec §7.11 — logs are FOR THE USER).
-  ipcMain.handle(IPC.exportLog, async (): Promise<string | null> => {
+  ipcHandle(IPC.exportLog, async (): Promise<string | null> => {
     const filePath = await saveTextExport(
       {
         title: tMain('main.dialog.exportLog'),
@@ -132,12 +134,12 @@ export function registerCoreIpc(ctx: AppContext): void {
     return filePath
   })
 
-  ipcMain.handle(IPC.getSettings, () => {
+  ipcHandle(IPC.getSettings, () => {
     requireUnlocked()
     return getSettings(ctx.db)
   })
 
-  ipcMain.handle(IPC.updateSettings, (_e, patch: Partial<AppSettings>) => {
+  ipcHandle(IPC.updateSettings, (_e, patch: Partial<AppSettings>) => {
     requireUnlocked()
     // BE-1 (full-audit 2026-07-10): shape-check the patch BEFORE touching it —
     // `Object.keys(null)` threw a raw TypeError out of the handler; reject junk with the

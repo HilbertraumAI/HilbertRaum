@@ -1,4 +1,5 @@
-import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { type IpcMainInvokeEvent } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import {
@@ -120,6 +121,7 @@ function readyTreeCountInScope(db: Db, scope: RetrievalScope): number {
 // the "start a model" empty state.
 
 export function registerRagIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // The FAITHFUL content reach a tool-skill analysis handler needs (full-doc-skills §3.2): a
   // document's ordered, non-overlapping, newline-preserving parser segments, re-extracted from the
   // stored copy — the SAME reader the skills-run IPC injects (`documentSegments.ts`), so the chat
@@ -128,7 +130,7 @@ export function registerRagIpc(ctx: AppContext): void {
   // rows. Content stays main-side: only the tool ever sees it.
   const readDocumentSegments = buildDocumentSegmentReader(ctx)
 
-  ipcMain.handle(
+  ipcHandle(
     IPC.askDocuments,
     async (
       event: IpcMainInvokeEvent,

@@ -26,7 +26,7 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings, updateSettings } from '../../src/main/services/settings'
 import type { DownloadJob } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -94,6 +94,7 @@ function makeCtx(opts: {
   // case genuinely exercises the setting-off gate rather than inheriting the default.
   updateSettings(db, { allowNetwork: opts.allowNetwork ?? false })
   const ctx = {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath: drive.rootPath, configPath: drive.configPath },
     db,
     workspace: { isUnlocked: () => opts.unlocked !== false },

@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { statSync } from 'node:fs'
 import { EVENTS, IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
@@ -312,6 +312,7 @@ export function maybeAutoStartActiveModel(ctx: AppContext): void {
 }
 
 export function registerModelIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // #108: persistence is a property of RECORDING — the observer fires on every sample
   // (including one from a background download's cold-file hash, which has no model IPC
   // afterwards to piggyback on). The explicit persistEffectiveRead calls after
@@ -330,7 +331,7 @@ export function registerModelIpc(ctx: AppContext): void {
     if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.models.locked'))
   }
 
-  ipcMain.handle(IPC.listModels, async (event, lazyVerify?: boolean): Promise<ModelInfo[]> => {
+  ipcHandle(IPC.listModels, async (event, lazyVerify?: boolean): Promise<ModelInfo[]> => {
     requireUnlocked()
     if (!ctx.manifestsDir) {
       log.warn('No model-manifests directory found; returning empty model list')
@@ -374,7 +375,7 @@ export function registerModelIpc(ctx: AppContext): void {
     return models
   })
 
-  ipcMain.handle(IPC.selectModel, (_e, modelId: string) => {
+  ipcHandle(IPC.selectModel, (_e, modelId: string) => {
     requireUnlocked()
     if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
     log.info('Select model', { modelId })
@@ -386,7 +387,7 @@ export function registerModelIpc(ctx: AppContext): void {
   // Forced re-verify (the "Verify checksum" button): drop the cached hash for this
   // model's weight file and re-hash it for real. `listModels` alone would read the
   // cache back and confirm nothing.
-  ipcMain.handle(IPC.verifyModel, async (_e, modelId: string): Promise<ModelState> => {
+  ipcHandle(IPC.verifyModel, async (_e, modelId: string): Promise<ModelState> => {
     requireUnlocked()
     if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
     const { manifests } = discoverManifests(ctx.manifestsDir)
@@ -410,7 +411,7 @@ export function registerModelIpc(ctx: AppContext): void {
     return state
   })
 
-  ipcMain.handle(IPC.startRuntime, (_e, modelId: string): Promise<RuntimeStatus> => {
+  ipcHandle(IPC.startRuntime, (_e, modelId: string): Promise<RuntimeStatus> => {
     requireUnlocked()
     // Starting/switching the runtime tears down the current llama-server. A yielding
     // deep-index build holds that slot and is pinned to the current model (M12) — abort it
@@ -428,7 +429,7 @@ export function registerModelIpc(ctx: AppContext): void {
   // chatting; collapsing them removes the ambiguity. Selected models already auto-start at launch,
   // and chat-send never auto-starts (registerChatIpc contract), so the merged action MUST start the
   // runtime — a select alone would still leave the runtime down mid-session.
-  ipcMain.handle(IPC.useModel, async (_e, modelId: string): Promise<RuntimeStatus> => {
+  ipcHandle(IPC.useModel, async (_e, modelId: string): Promise<RuntimeStatus> => {
     requireUnlocked()
     if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
     // Reject a non-chat role BEFORE any persist (mirrors startModelRuntime's guard): an automatic
@@ -457,7 +458,7 @@ export function registerModelIpc(ctx: AppContext): void {
     return startModelRuntime(ctx, modelId)
   })
 
-  ipcMain.handle(IPC.stopRuntime, async (): Promise<void> => {
+  ipcHandle(IPC.stopRuntime, async (): Promise<void> => {
     log.info('Stop runtime')
     const modelId = ctx.runtime.activeModelId()
     ctx.docTasks?.abortActiveBuild()
@@ -472,7 +473,7 @@ export function registerModelIpc(ctx: AppContext): void {
   // so the Chat composer knows whether to offer the Deep answer mode. Manifest reads
   // happen only while a runtime is actually running (the ChatScreen's not-running
   // poll stays I/O-free), and a read failure just leaves the flag absent.
-  ipcMain.handle(IPC.getRuntimeStatus, (): RuntimeStatus => {
+  ipcHandle(IPC.getRuntimeStatus, (): RuntimeStatus => {
     const status = ctx.runtime.status()
     if (status.running && status.modelId && ctx.manifestsDir) {
       try {
@@ -519,7 +520,7 @@ export function registerModelIpc(ctx: AppContext): void {
 
   // Which sidecar build the drive carries (the .hilbertraum-runtime.json install marker) —
   // the Diagnostics "runtime build" line. Null on unmarked/DIY drives.
-  ipcMain.handle(
+  ipcHandle(
     IPC.getRuntimeInstall,
     (): RuntimeInstallInfo | null => readRuntimeMarker(llamaServerDir(ctx.paths.rootPath))
   )

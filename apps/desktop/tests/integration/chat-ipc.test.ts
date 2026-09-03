@@ -46,7 +46,7 @@ import type { TableSpec } from '../../src/main/services/tables'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, RuntimeChatOptions, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
-import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -91,6 +91,7 @@ function throwingRuntime(): ModelRuntime {
 
 function makeCtx(db: Db, runtime: ModelRuntime | null, unlocked = true): AppContext {
   return {
+    trustedSenders: ANY_SENDER,
     db,
     workspace: { isUnlocked: () => unlocked },
     runtime: { active: () => runtime, activeModelId: () => runtime?.modelId ?? null }
@@ -181,6 +182,7 @@ describe('registerChatIpc', () => {
     linkConversationDocument(db, conv.id, 'att-1')
 
     const ctx = {
+      trustedSenders: ANY_SENDER,
       db,
       workspace: { isUnlocked: () => true },
       embedder: createMockEmbedder(),
@@ -265,6 +267,7 @@ describe('registerChatIpc', () => {
     linkConversationDocument(db, conv.id, 'att-a')
     linkConversationDocument(db, conv.id, 'att-b')
     const ctx = {
+      trustedSenders: ANY_SENDER,
       db,
       workspace: { isUnlocked: () => true },
       embedder: { id: 'active-model' },
@@ -570,7 +573,10 @@ describe('locked-vault guard coverage (TEST-N8)', () => {
   })
 
   it('the benchmark handlers refuse when locked (SEC-N2 parity)', async () => {
-    registerBenchmarkIpc({ workspace: { isUnlocked: () => false } } as unknown as AppContext)
+    registerBenchmarkIpc({
+      trustedSenders: ANY_SENDER,
+      workspace: { isUnlocked: () => false }
+    } as unknown as AppContext)
     await expect(invoke(handlers, IPC.runBenchmark)).rejects.toThrow('Workspace is locked. Unlock it to run the benchmark.')
     await expect(invoke(handlers, IPC.tryGpuAgain)).rejects.toThrow('Workspace is locked. Unlock it to run the benchmark.')
     await expect(invoke(handlers, IPC.runBenchmark)).rejects.not.toThrow(/unlock it first/i)
@@ -586,6 +592,7 @@ describe('chat export handlers (T-8)', () => {
   function ctxWithAudit(db: Db): { ctx: AppContext; audit: ReturnType<typeof vi.fn> } {
     const audit = vi.fn()
     const ctx = {
+      trustedSenders: ANY_SENDER,
       db,
       workspace: { isUnlocked: () => true },
       runtime: { active: () => null, activeModelId: () => null },

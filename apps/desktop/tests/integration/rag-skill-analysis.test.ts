@@ -36,7 +36,7 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import { t } from '../../src/shared/i18n'
-import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const BANK_INSTALL_ID = 'app:bank-statement'
@@ -161,6 +161,7 @@ async function makeHarness(
 
   const audit: { type: string; meta?: Record<string, unknown> }[] = []
   const ctx = {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath: root, workspacePath },
     get db() {
       return db
@@ -641,6 +642,7 @@ async function makeMultiHarness(opts: {
 
   const audit: { type: string; meta?: Record<string, unknown> }[] = []
   const ctx = {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath: root, workspacePath },
     get db() {
       return db

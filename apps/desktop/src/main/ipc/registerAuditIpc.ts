@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { AuditEvent } from '../../shared/types'
@@ -14,6 +14,7 @@ import { saveTextExport } from './save-export'
 // exporting are the only ways it leaves the workspace DB, both user actions.
 
 export function registerAuditIpc(ctx: AppContext): void {
+  const ipcHandle = guardedHandleFor(ctx)
   // F16 (audit-postmerge-2026-06-29): both handlers touch ctx.db (listAuditEvents). The ctx.db
   // getter already fail-closes when locked, but it throws the raw English vault-getter string;
   // mirror every other DB-touching handler with an explicit requireUnlocked() so a locked call
@@ -27,7 +28,7 @@ export function registerAuditIpc(ctx: AppContext): void {
 
   // Newest-first page; `beforeId` is the pagination cursor ("Load more"). The type
   // filter lives in the renderer (client-side over loaded pages).
-  ipcMain.handle(
+  ipcHandle(
     IPC.getAuditEvents,
     (_e, limit?: number, beforeId?: string | null): AuditEvent[] => {
       requireUnlocked()
@@ -38,7 +39,7 @@ export function registerAuditIpc(ctx: AppContext): void {
   // Save the whole retained log to a user-chosen file (the exportConversation
   // precedent: dialog in MAIN, returns the path or null on cancel). JSON — the log is
   // structured data; a compliance reader wants machine-readable.
-  ipcMain.handle(IPC.exportAuditLog, async (): Promise<string | null> => {
+  ipcHandle(IPC.exportAuditLog, async (): Promise<string | null> => {
     requireUnlocked()
     const events = listAuditEvents(ctx.db, { limit: AUDIT_MAX_ROWS })
     const filePath = await saveTextExport(

@@ -43,7 +43,7 @@ import type {
   EvidenceReviewDetail,
   EvidenceReviewFreshness
 } from '../../src/shared/types'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -79,6 +79,7 @@ function makeHarness(): { ctx: AppContext; db: Db; runtimeTouched: string[] } {
   const db = openDatabase(join(root, 'test.sqlite'))
   const runtimeTouched: string[] = []
   const ctx = {
+    trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath: root, rootPath: root, configPath: join(root, 'config.json') },
     workspace: { isUnlocked: () => true },

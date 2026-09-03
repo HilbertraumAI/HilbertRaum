@@ -64,7 +64,7 @@ import { createQueuedDocument, documentsDir, processDocument } from '../../src/m
 import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
 import { performShutdown } from '../../src/main/shutdown'
 import { t } from '../../src/shared/i18n'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
@@ -223,6 +223,7 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   if (opts.failReEncrypt) release()
 
   const ctx = {
+    trustedSenders: ANY_SENDER,
     paths: { rootPath: root, configPath: join(root, 'config'), workspacePath, dbPath: vp.dbPath },
     get db() {
       return ctrl.requireDb()
@@ -516,6 +517,7 @@ describe('admission during the lock teardown (AUD-02)', () => {
     ctrl.init()
     expect(ctrl.isUnlocked()).toBe(true)
     registerWorkspaceIpc({
+      trustedSenders: ANY_SENDER,
       workspace: ctrl,
       runtime: { stop: async () => {}, activeModelId: () => null },
       embedder: { stop: async () => {} }
