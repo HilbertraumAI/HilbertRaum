@@ -148,6 +148,24 @@ export class VaultDamagedError extends Error {
 }
 
 /**
+ * Thrown by `WorkspaceController.unlock()` while the startup salvage is BLOCKED (#242): a
+ * working file newer than `.enc` — the only fresh copy of the last session's data — could
+ * not be moved aside as `.recovery`, because another program holds the spent `.recovery`
+ * already sitting on that name (a Windows AV/indexer hold refusing the overwrite, the
+ * unlink and the rename). `init()` then skips the crash sweep, and an unlock must not
+ * proceed either: decrypting the stale `.enc` would land on top of that fresh file.
+ * Content-free ON PURPOSE (like `VaultLockError`): the IPC layer maps it to the
+ * `vault_recovery_blocked` result + `main.workspace.recoveryBlocked`. The retry is simply
+ * the next unlock — `unlock()` re-runs the salvage first, so it clears once the hold is gone.
+ */
+export class VaultRecoveryBlockedError extends Error {
+  constructor() {
+    super('A recovery file is held by another program; the workspace cannot be opened safely yet')
+    this.name = 'VaultRecoveryBlockedError'
+  }
+}
+
+/**
  * Thrown by a `DocumentCipher` closure invoked AFTER `lock()` zeroed the vault key
  * (full-audit 2026-07-12 SEC-1). The closures re-read the live key per invocation, so a
  * cipher captured by an in-flight import fails CLOSED when "Lock now" lands mid-job —
@@ -645,8 +663,8 @@ function fileHasSqliteHeader(path: string): boolean {
  *
  * Detect exactly that state and move the file aside as `<db>.recovery`, which the sweep
  * never matches; `unlockEncryptedVault` rolls it FORWARD once the key exists. The
- * failed-lock signature is deliberately narrow — every check must hold, else fall through
- * to the shred (today's behavior):
+ * failed-lock signature is deliberately narrow — every check must hold, else the file is
+ * derived data and the sweep may shred it (`'not-needed'`):
  *   • the working file is strictly NEWER than `.enc` (mtime) — else it is derived data;
  *   • NO live `-wal`/`-shm` sidecars — lock's checkpoint + close flushed and removed them.
  *     Live sidecars are the MID-SESSION crash state instead: the main file can be
@@ -655,26 +673,37 @@ function fileHasSqliteHeader(path: string): boolean {
  *     (docs/security-model.md "Lock failure & durability");
  *   • the file starts with the SQLite header — a failed shred's random-overwrite must
  *     never be re-encrypted over the good `.enc`.
+ *
+ * Returns what happened, because the caller's next step depends on it (#242): `'preserved'`
+ * (moved aside; sweep safe), `'not-needed'` (no such file; sweep safe), or `'failed'` — the
+ * signature held (or could not even be probed) but the move did NOT land: the working file
+ * is still the only fresh copy, so the caller must refuse to sweep and refuse to open.
+ * Before #242 that last case fell through to the sweep, which shredded the fresh copy.
  */
-export function preserveNewerPlaintext(vaultPaths: VaultPaths): void {
+export type PreserveOutcome = 'preserved' | 'not-needed' | 'failed'
+
+export function preserveNewerPlaintext(vaultPaths: VaultPaths): PreserveOutcome {
   try {
-    if (!existsSync(vaultPaths.dbPath) || !existsSync(vaultPaths.encPath)) return
-    if (existsSync(`${vaultPaths.dbPath}-wal`) || existsSync(`${vaultPaths.dbPath}-shm`)) return
-    if (statSync(vaultPaths.dbPath).mtimeMs <= statSync(vaultPaths.encPath).mtimeMs) return
-    if (!fileHasSqliteHeader(vaultPaths.dbPath)) return
+    if (!existsSync(vaultPaths.dbPath) || !existsSync(vaultPaths.encPath)) return 'not-needed'
+    if (existsSync(`${vaultPaths.dbPath}-wal`) || existsSync(`${vaultPaths.dbPath}-shm`)) return 'not-needed'
+    if (statSync(vaultPaths.dbPath).mtimeMs <= statSync(vaultPaths.encPath).mtimeMs) return 'not-needed'
+    if (!fileHasSqliteHeader(vaultPaths.dbPath)) return 'not-needed'
     const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
     // full-audit 2026-07-12 REL-1 — shred a pre-existing `.recovery` BEFORE the rename. Any
     // `.recovery` coexisting with a working dbPath is spent or garbage (an intervening unlock
     // consumed or out-dated it; this runs only from init(), single-threaded, before any IPC).
     // On success the rename would overwrite it anyway; the pre-shred covers the case where the
     // target is HELD (Windows AV/indexer without FILE_SHARE_DELETE; likelier on exFAT/FAT32) —
-    // an unshreddable held target still fails the rename into the swallowing catch below, but
-    // a merely-lingering spent leftover no longer makes this rename fail and hand the ONLY
-    // fresh copy of the session's data to shredStalePlaintext.
+    // a merely-lingering spent leftover no longer makes this rename fail. A target the hold
+    // keeps through the overwrite, the unlink AND the rename still fails the rename into the
+    // catch below, which now reports `'failed'` instead of handing the ONLY fresh copy of the
+    // session's data to shredStalePlaintext (#242).
     shredFile(recoveryPath)
     renameSync(vaultPaths.dbPath, recoveryPath)
+    return 'preserved'
   } catch {
-    /* best-effort: on any doubt fall through to the sweep (today's behavior) */
+    // On any doubt refuse the sweep (#242) — the caller blocks and the next unlock retries.
+    return 'failed'
   }
 }
 
@@ -1263,11 +1292,9 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
     // full-audit 2026-07-12 REL-2 — the freshness PROBE is exception-guarded: a Windows
     // AV/indexer hold without FILE_SHARE_READ (or the file vanishing between existsSync and
     // openSync) throws EBUSY/EPERM/ENOENT here, which used to fail the whole unlock raw
-    // (generic openFailed) until the hold cleared. A probe error means "can't decide" —
-    // `fresher` stays null, `.recovery` is left IN PLACE (never shredded on a probe error,
-    // never rolled forward unverified), and the unlock proceeds normally; the next unlock
-    // retries the probe. Only the probe is wrapped: a roll-forward encryptFile failure
-    // (e.g. disk still full) keeps failing the unlock so the snapshot survives untouched.
+    // (generic openFailed) until the hold cleared. Only the probe is wrapped: a roll-forward
+    // encryptFile failure (e.g. disk still full) keeps failing the unlock so the snapshot
+    // survives untouched.
     let fresher: boolean | null = null
     try {
       fresher =
@@ -1275,7 +1302,25 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
         (!existsSync(vaultPaths.encPath) ||
           statSync(recoveryPath).mtimeMs > statSync(vaultPaths.encPath).mtimeMs)
     } catch {
-      /* probe error → can't decide → don't touch `.recovery`; unlock normally */
+      // #242 — a probe error means we cannot read the header. If `.recovery` could still be
+      // the fresh failed-lock delta — newer than `.enc`, `.enc` missing, or the mtime
+      // unreadable too — we must NOT unlock into the stale `.enc` and leave the snapshot to
+      // be shredded once a later lock makes `.enc` newer: refuse exactly as the init()
+      // salvage does, and let the next unlock retry once the hold clears. Only when `.enc`
+      // is demonstrably newer (a spent leftover) is it safe to proceed and unlock normally.
+      let encStrictlyNewer = false
+      try {
+        encStrictlyNewer =
+          existsSync(vaultPaths.encPath) &&
+          statSync(vaultPaths.encPath).mtimeMs > statSync(recoveryPath).mtimeMs
+      } catch {
+        /* even the stat failed → treat as possibly fresh → refuse */
+      }
+      if (!encStrictlyNewer) {
+        fileKey.fill(0)
+        throw new VaultRecoveryBlockedError()
+      }
+      /* `.enc` newer → spent leftover → leave it in place, unlock normally */
     }
     if (fresher !== null) {
       if (fresher) encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
@@ -1455,6 +1500,14 @@ export class WorkspaceController {
   /** True while `changePassword` runs (defensive: it is synchronous today). */
   private changingPassword = false
   /**
+   * #242 — set by {@link init} when the startup salvage FAILED: a working file newer than
+   * `.enc` (the only fresh copy of the last session's data) could not be moved aside because
+   * a held `.recovery` sits on the target. While set, the crash sweep and the pending-rekey
+   * recovery are skipped and {@link unlock} is refused — it re-runs the salvage first, so the
+   * user's next unlock clears the state once the hold is gone.
+   */
+  private _recoveryBlocked = false
+  /**
    * AUD-02 — armed by {@link beginLock} as the FIRST act of the interactive lock path, before
    * any await, and read by {@link workspaceAdmitsWork}. See that function for why `isUnlocked()`
    * alone cannot express "a lock is under way": the DB stays open for the whole teardown.
@@ -1489,6 +1542,11 @@ export class WorkspaceController {
 
   isUnlocked(): boolean {
     return this._db !== null
+  }
+
+  /** True while the startup salvage is blocked by a held `.recovery` (#242) — see {@link _recoveryBlocked}. */
+  isRecoveryBlocked(): boolean {
+    return this._recoveryBlocked
   }
 
   /**
@@ -1580,7 +1638,11 @@ export class WorkspaceController {
       // — EXCEPT the failed-lock state (full-audit 2026-07-11 CODE-1b): a cleanly-closed
       // working file NEWER than `.enc` is the only fresh copy of the last session's data,
       // so it is moved aside FIRST and rolled forward at unlock instead of shredded.
-      preserveNewerPlaintext(this.vaultPaths)
+      // #242: when that move FAILS (a held `.recovery` on the target) refuse to sweep — the
+      // working file is still the only fresh copy — and refuse to open until a retry lands
+      // it; the pending-rekey recovery waits as well (unlock runs it once admitted).
+      this._recoveryBlocked = preserveNewerPlaintext(this.vaultPaths) === 'failed'
+      if (this._recoveryBlocked) return // locked AND blocked; unlock() re-runs this salvage
       shredStalePlaintext(this.vaultPaths)
       // And resolve any password change the crash interrupted (roll forward or back per
       // the descriptor — unlock would do this too; doing it here keeps disk state clean
@@ -1617,6 +1679,12 @@ export class WorkspaceController {
     // between a mid-teardown unlock and a re-opened admission window; only the lock handler
     // (via `cancelLock()`) and a genuine closed → open transition may clear the latch.
     if (this.isUnlocked()) return this.getState()
+    // #242: a blocked salvage is retried here — the hold may have cleared since init(). Still
+    // blocked → refuse: unlockEncryptedVault would decrypt the stale `.enc` over the fresh file.
+    if (this._recoveryBlocked) {
+      this.init()
+      if (this._recoveryBlocked) throw new VaultRecoveryBlockedError()
+    }
     const { db, key, descriptor } = unlockEncryptedVault(this.vaultPaths, password)
     this._db = db
     this.key = key

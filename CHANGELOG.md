@@ -27,6 +27,15 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A held file can no longer make the app lose your newest data after a failed lock.** When
+  locking the workspace fails (for example on a nearly-full drive), the app keeps that
+  session's newest data as a recovery file and secures it at the next unlock. If another
+  program was holding an earlier recovery file open — antivirus or a search indexer scanning
+  the drive is the usual cause — the app could previously delete the newest copy while trying
+  to set it aside. It now detects that case, leaves your data in place, and **refuses to open
+  the workspace until the hold clears** rather than falling back to the older copy. Close
+  whatever is scanning the drive and unlock again; nothing is lost. A new message on the unlock
+  screen explains this when it happens.
 - **Changing the password of an older encrypted workspace no longer strands its image history.**
   Workspaces created with a development build older than 11 June 2026 use an older vault
   format that is migrated to the current one on their first password change; no released

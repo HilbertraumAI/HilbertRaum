@@ -678,6 +678,20 @@ explicitly:
   shred can leave a spent `.recovery` behind, e.g. a Windows AV/indexer holding the file —
   it must never roll the vault back to a stale snapshot or encrypt shred-garbage over the
   good `.enc`). Anything not matching that narrow signature is shredded as before.
+  When the salvage cannot judge or move the fresh copy safely because a program holds the
+  `.recovery` file, the app **refuses to open** rather than losing it (#242). Two legs: at
+  startup, if the move-aside cannot land — another program holds the spent `.recovery`
+  already on that name through the overwrite, the unlink **and** the rename (a Windows
+  AV/indexer without delete sharing) — `init()` skips the sweep (the working file is still
+  the only fresh copy); and at unlock, if a hold denies reading the `.recovery` header while
+  the file could still be the fresh snapshot (newer than `.enc`, or `.enc` missing), the
+  unlock refuses instead of decrypting the stale `.enc` and letting a later lock make `.enc`
+  newer so the next probe shreds the never-rolled-forward copy. Both surface
+  `vault_recovery_blocked`; the retry is simply the next unlock, and it clears once the hold
+  is gone — nothing is lost. Only a `.recovery` demonstrably OLDER than `.enc` (a spent
+  leftover) is treated as safe to ignore. While a startup salvage is blocked the crash sweep
+  does not run, so the ordinary transient plaintext it clears (`<db>.tmp`, `documents/*.parse*`,
+  `images/*.tmp`) can linger until the retry succeeds.
   **Part of this decision is a confidentiality trade:** after a failed lock + quit, the
   session's data rests on the drive **in plaintext** as `<db>.recovery` until the next
   successful unlock secures it — previously that leftover was shredded at the next launch
@@ -720,6 +734,11 @@ explicitly:
   intact stale `.enc` with garbage, so it is deliberately shredded instead. Confidentiality
   is chosen over mid-session durability here; the mitigations are the clean quit path
   (lock-on-quit + the `uncaughtException` crash lock) and the safe-eject guidance above.
+  A separate, filesystem-level durability limit — a rename that has not yet reached the
+  directory metadata can roll back after a power cut on exFAT/FAT32, and no directory-flush
+  primitive is exposed through Node on Windows — is covered in
+  [`drive-layout.md`](drive-layout.md) under **Filesystem** (the last successfully locked
+  snapshot always survives) (#243).
 
 ### Vault-overwrite guards & single instance (issue #208)
 

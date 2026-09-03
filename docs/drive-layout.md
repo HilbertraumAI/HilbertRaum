@@ -274,6 +274,25 @@ carries ONLY the language data under `ocr/`:
 - Path separators handled via `node:path`; works on Windows/macOS/Linux.
 - The SQLite file is self-contained, so moving the `workspace/` folder moves all data.
 
+### Filesystem
+For a kit that must be read and written on Windows, macOS **and** Linux, format the drive as
+**exFAT** — it is the one filesystem all three write natively. (A single-OS drive can use that
+OS's native filesystem — NTFS, APFS, ext4 — which the app also supports.)
+
+exFAT carries one durability caveat worth stating where the format is chosen. The app commits
+every durability-critical write by fsyncing the file and then renaming it into place, so the
+data inside a file is flushed before the rename. It does **not** flush the containing
+directory afterwards: there is no directory-flush primitive exposed through Node on Windows,
+and the write-through rename primitive (`MoveFileEx` with `MOVEFILE_WRITE_THROUGH`) is not
+reachable from the runtime. On exFAT/FAT32 that leaves a narrow window in which a **hard power
+cut or unplug** immediately after a rename can roll the new name back to the old one. The
+design is old-or-new by construction — the **last successfully locked snapshot always
+survives** a rollback; you never get a torn mix — so the exposure is the changes since that
+lock, the same window a mid-session crash already carries (see
+[`security-model.md`](security-model.md) "Lock failure & durability"). The practical
+mitigation is the ordinary one: quit the app and eject the drive safely before unplugging
+(see [`troubleshooting.md`](troubleshooting.md) "Windows asks to scan and fix the drive").
+
 ## First real-drive bring-up — durable lessons (design record, 2026-06-10)
 
 _Moved here from `BUILD_STATE.md` §9 on 2026-08-20 (doc-lifecycle rule: durable
