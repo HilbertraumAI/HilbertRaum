@@ -40,7 +40,7 @@ a bare `ipcMain.handle(` under `src/main/ipc/**`; the two `ipcMain.on` sites sta
 `guarded-handle.test.ts` (foreign id refused, main id passes, a real registrar through a
 non-permissive set); harness `makeEvent(senderId?)` + `ANY_SENDER` in 36 fake contexts (PR #279).**_
 Launch smoke NOT run: this machine's application-control policy blocks the dev `electron.exe`
-(substitute proof in the PR body; the smoke joins the owner list). Phase 8 suite: 370 / 5,559 / 74.
+(substitute proof in the PR body; the smoke joins the owner list). Phase 8 suite: 370 / 5,561 / 74.
 
 _2026-09-03 — **Audit 2026-09-02 Phase 8 (PR 8-a) — small code items: SEC-2 #245 the engine
 archive's on-disk name is `archiveNameFromUrl` (last URL path segment, percent-decoded, must match
