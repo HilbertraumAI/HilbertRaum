@@ -364,7 +364,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
               // preflight notice, when it ran, already did; a job adopted after a reload has none).
               if (job.exhausted && !walkCutNoticedRef.current) {
                 walkCutNoticedRef.current = true
-                showToast(t('docs.import.walkCut', { count: job.total }))
+                showToast(tCount('docs.import.walkCut', job.total))
               }
             }
           }
@@ -524,7 +524,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       walkCutNoticedRef.current = false
       if (pre.exhausted) {
         walkCutNoticedRef.current = true
-        showToast(t('docs.import.walkCut', { count: pre.fileCount }))
+        showToast(tCount('docs.import.walkCut', pre.fileCount))
       }
       if (pre.audioBytes >= LARGE_AUDIO_CONFIRM_BYTES) {
         setConfirmAudio({ paths, token, audioFileCount: pre.audioFileCount, audioBytes: pre.audioBytes })

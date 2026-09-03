@@ -483,7 +483,8 @@ export const en = {
   'docs.import.files': 'Import files',
   'docs.import.folder': 'Import folder',
   // #274: the folder walk was cut by its budget — the count is a lower bound, not the folder.
-  'docs.import.walkCut': 'The folder was too large to scan completely — {count} items were counted.',
+  'docs.import.walkCut.one': 'The folder was too large to scan completely — {count} item was counted.',
+  'docs.import.walkCut.other': 'The folder was too large to scan completely — {count} items were counted.',
   'docs.refresh': 'Refresh',
   'docs.loading': 'Loading documents…',
   'docs.askSelected': 'Ask these documents ({count})',
