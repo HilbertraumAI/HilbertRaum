@@ -30,6 +30,7 @@ import {
   type TrustedSenders
 } from '../../src/main/ipc/guarded-handle'
 import { registerAuditIpc } from '../../src/main/ipc/registerAuditIpc'
+import { log as appLog } from '../../src/main/services/logging'
 import { openDatabase } from '../../src/main/services/db'
 import type { AppContext } from '../../src/main/services/context'
 import { IPC } from '../../src/shared/ipc'
@@ -61,6 +62,25 @@ describe('guardedHandle (#252)', () => {
     expect(log.warn).toHaveBeenCalledTimes(1)
     expect(log.lines.join('\n')).toContain('t:refuse')
     expect(log.lines.join('\n')).not.toContain(SECRET_ARG)
+  })
+
+  it('without an injected logger the refusal goes to the app log (production wiring), still content-free', async () => {
+    handlers.clear()
+    const warn = vi.spyOn(appLog, 'warn').mockImplementation(() => {})
+    try {
+      const trusted = createTrustedSenders()
+      trusted.add(7)
+      guardedHandle('t:applog', () => 'ran', { trustedSenders: trusted })
+      await expect(
+        Promise.resolve().then(() => handlers.get('t:applog')!(makeEvent(8), SECRET_ARG))
+      ).rejects.toBeInstanceOf(UntrustedSenderError)
+      expect(warn).toHaveBeenCalledTimes(1)
+      const said = JSON.stringify(warn.mock.calls[0])
+      expect(said).toContain('t:applog')
+      expect(said).not.toContain(SECRET_ARG)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('the trusted id passes and the handler sees the event and its arguments', async () => {

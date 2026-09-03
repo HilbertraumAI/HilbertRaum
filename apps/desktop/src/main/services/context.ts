@@ -23,7 +23,7 @@ export interface AppContext {
   /**
    * WebContents ids allowed to invoke `ipcMain.handle` channels (#252): the main window's,
    * added in `createWindow`. Every registrar registers through `guardedHandleFor(ctx)`;
-   * the fake test harness passes the permissive `ANY_SENDER`.
+   * the fake test harness passes its permissive set (never used in production).
    */
   trustedSenders: TrustedSenders
   /**

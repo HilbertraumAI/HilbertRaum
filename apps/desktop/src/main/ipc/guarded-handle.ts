@@ -1,4 +1,5 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { log as appLog } from '../services/logging'
 
 // Every `ipcMain.handle` in the main process goes through `guardedHandle` (#252): the
 // handler body runs only for an event whose `sender` (a WebContents) is in the trusted
@@ -51,7 +52,7 @@ export type GuardedHandler = (event: IpcMainInvokeEvent, ...args: never[]) => un
 
 export interface GuardedHandleOptions {
   trustedSenders: TrustedSenders
-  /** Content-free refusal log (channel name only — never arguments). */
+  /** Content-free refusal log (channel name only — never arguments); the app log by default. */
   log?: { warn(msg: string, meta?: unknown): void }
 }
 
@@ -64,7 +65,8 @@ export function guardedHandle(
   handler: GuardedHandler,
   opts: GuardedHandleOptions
 ): void {
-  const { trustedSenders, log } = opts
+  const { trustedSenders } = opts
+  const log = opts.log ?? appLog
   if (typeof trustedSenders?.isTrusted !== 'function') {
     // Fail closed and LOUD at registration: a context without the set would otherwise
     // refuse every invoke at runtime with no hint where the wiring went missing.
@@ -73,7 +75,7 @@ export function guardedHandle(
   ipcMain.handle(channel, (event: IpcMainInvokeEvent, ...args: unknown[]) => {
     const id = (event as { sender?: { id?: unknown } } | null | undefined)?.sender?.id
     if (!trustedSenders.isTrusted(typeof id === 'number' ? id : undefined)) {
-      log?.warn('IPC refused: untrusted sender', { channel })
+      log.warn('IPC refused: untrusted sender', { channel })
       throw new UntrustedSenderError()
     }
     return handler(event, ...(args as never[]))
