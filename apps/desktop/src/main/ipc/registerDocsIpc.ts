@@ -336,43 +336,50 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   )
 
-  ipcHandle(IPC.importDocuments, (_e, paths: string[], options?: ImportOptions): ImportJob => {
+  ipcHandle(IPC.importDocuments, async (_e, paths: string[], options?: ImportOptions): Promise<ImportJob> => {
+    requireUnlocked()
+    // M-S2 / D1: the renderer is the untrusted boundary. A PICKER import carries
+    // `options.pickerToken`; main resolves it to the exact paths the OS dialog returned and
+    // IGNORES the renderer-supplied `paths`, so a code-exec'd renderer can't forge a
+    // picker-origin import of an arbitrary file. With NO token this is the drag-drop seam
+    // (the OS hands the drop to the renderer, untokenizable) — keep only existing, non-symlink
+    // canonicalized paths. Either way, strings are still server-validated downstream
+    // (expandPathsWithSource filters to existing, supported files).
+    const safePaths =
+      typeof options?.pickerToken === 'string' && options.pickerToken
+        ? consumePickerToken(options.pickerToken)
+        : hardenDroppedPaths(paths)
+    // Destination (plan §11.3): persisted per queued doc and applied on indexing success.
+    // No options ⇒ Library default, byte-for-byte with the pre-Phase-C behaviour.
+    const destination: ImportDestination = sanitizeDestination(options?.destination)
+    // preserveRelativePaths (N12): explicit when given, else default true for a folder
+    // import (any picked path is a directory), false otherwise. Display-only metadata.
+    const hasDir = safePaths.some((p) => {
+      try {
+        return statSync(p).isDirectory()
+      } catch {
+        return false
+      }
+    })
+    const preserve = options?.preserveRelativePaths ?? hasDir
+    // #274: the walk is asynchronous — the handler yields here, so an IPC call, the lock and
+    // the quit path all run between directories instead of waiting out a frozen thread. It
+    // touches nothing workspace-side, so the document-work lease is taken only AFTER it (no
+    // lease is ever held across an await, and a password change is not refused for the length
+    // of a slow walk), and the unlock gate is re-checked because the workspace may have locked
+    // while the walk ran — the rows below must never be queued into a closing DB.
+    const { files, exhausted } = await expandPathsWithSource(safePaths)
     requireUnlocked()
     // Race guard: the whole import job holds a document-work lease so a vault
     // password change (which re-encrypts `.enc` sidecars) refuses to start while we
     // write them — and vice versa, this throws a friendly VaultBusyError mid-change.
     const releaseDocWork = ctx.workspace.beginDocumentWork()
     // The lease is held until the background loop's `finally`. Anything that can throw
-    // synchronously between here and that loop (a failed INSERT, a path expansion error)
-    // must release the lease first, or a vault password change is wedged for the whole
-    // session with no import in flight to explain it.
+    // synchronously between here and that loop (a failed INSERT) must release the lease first,
+    // or a vault password change is wedged for the whole session with no import in flight to
+    // explain it.
     let documentIds: string[]
     try {
-      // M-S2 / D1: the renderer is the untrusted boundary. A PICKER import carries
-      // `options.pickerToken`; main resolves it to the exact paths the OS dialog returned and
-      // IGNORES the renderer-supplied `paths`, so a code-exec'd renderer can't forge a
-      // picker-origin import of an arbitrary file. With NO token this is the drag-drop seam
-      // (the OS hands the drop to the renderer, untokenizable) — keep only existing, non-symlink
-      // canonicalized paths. Either way, strings are still server-validated downstream
-      // (expandPathsWithSource filters to existing, supported files).
-      const safePaths =
-        typeof options?.pickerToken === 'string' && options.pickerToken
-          ? consumePickerToken(options.pickerToken)
-          : hardenDroppedPaths(paths)
-      // Destination (plan §11.3): persisted per queued doc and applied on indexing success.
-      // No options ⇒ Library default, byte-for-byte with the pre-Phase-C behaviour.
-      const destination: ImportDestination = sanitizeDestination(options?.destination)
-      // preserveRelativePaths (N12): explicit when given, else default true for a folder
-      // import (any picked path is a directory), false otherwise. Display-only metadata.
-      const hasDir = safePaths.some((p) => {
-        try {
-          return statSync(p).isDirectory()
-        } catch {
-          return false
-        }
-      })
-      const preserve = options?.preserveRelativePaths ?? hasDir
-      const files = expandPathsWithSource(safePaths)
       documentIds = files.map(
         (f) =>
           createQueuedDocument(ctx.db, f.path, {
@@ -387,12 +394,19 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
 
     const jobId = randomUUID()
+    // #274: a walk cut by its budget queued a subset — say so in the log (counts only, never a
+    // path) and on the job, so the renderer can tell the user instead of showing a complete-looking
+    // import. Additive: the field is absent when the walk completed.
+    if (exhausted !== null) {
+      log.warn('Import walk cut by its budget', { jobId, reason: exhausted, files: files.length })
+    }
     const status: ImportJobStatus = {
       jobId,
       total: documentIds.length,
       completed: 0,
       failed: 0,
-      done: documentIds.length === 0
+      done: documentIds.length === 0,
+      ...(exhausted !== null ? { exhausted } : {})
     }
     jobs.set(jobId, status)
     // DB-6: evict the oldest DONE jobs (insertion order) once over the cap. Never evict an
@@ -523,7 +537,7 @@ export function registerDocsIpc(ctx: AppContext): void {
       log.info('Import finished', { jobId, completed: status.completed, failed: status.failed })
     })()
 
-    return { jobId, documentIds }
+    return exhausted !== null ? { jobId, documentIds, exhausted } : { jobId, documentIds }
   })
 
   ipcHandle(IPC.getImportJob, (_e, jobId: string): ImportJobStatus => {
@@ -598,19 +612,35 @@ export function registerDocsIpc(ctx: AppContext): void {
   // selection contains BEFORE importing, so large audio (stored copy + a full
   // transcription are real costs) gets an explicit confirmation. Read-only.
   // L-3: gate + type-filter exactly like importDocuments — a compromised renderer must
-  // not drive a recursive statSync/readdirSync walk of arbitrary directories while the
-  // workspace is locked, nor pass non-string elements that would crash expandPaths.
+  // not drive a recursive directory walk of arbitrary directories while the workspace is
+  // locked, nor pass non-string elements that would crash the walk.
   // #240: with a live picker token the count runs over the main-vetted paths (the renderer's
   // array is ignored, the token is NOT spent — `importDocuments` spends it); without one this is
   // the raw seam and the array is capped before any filesystem call.
-  ipcHandle(IPC.importPreflight, (_e, paths: string[], pickerToken?: string): ImportPreflight => {
-    requireUnlocked()
-    const picked = pickerTokens.peek(pickerToken)
-    if (picked !== undefined) return summarizeImportPaths(picked)
-    const safePaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
-    requireDropCount(safePaths)
-    return summarizeImportPaths(safePaths)
-  })
+  // #274: the walk is asynchronous (the handler yields between directories); a walk cut by its
+  // budget is reported on the result (`exhausted`) and logged — counts only, never a path.
+  ipcHandle(
+    IPC.importPreflight,
+    async (_e, paths: string[], pickerToken?: string): Promise<ImportPreflight> => {
+      requireUnlocked()
+      const picked = pickerTokens.peek(pickerToken)
+      let summary: ImportPreflight
+      if (picked !== undefined) {
+        summary = await summarizeImportPaths(picked)
+      } else {
+        const safePaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
+        requireDropCount(safePaths)
+        summary = await summarizeImportPaths(safePaths)
+      }
+      if (summary.exhausted !== undefined) {
+        log.warn('Import preflight walk cut by its budget', {
+          reason: summary.exhausted,
+          fileCount: summary.fileCount
+        })
+      }
+      return summary
+    }
+  )
 
   ipcHandle(IPC.deleteDocument, (_e, documentId: string): void => {
     requireUnlocked()

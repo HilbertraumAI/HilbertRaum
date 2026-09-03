@@ -10,14 +10,16 @@ import { expandPathsWithSource } from '../../src/main/services/ingestion'
 // must not show `sub\folder\file.pdf` breadcrumbs.
 
 describe('expandPathsWithSource — separator normalization (full-audit 2026-07-12 CODE-1)', () => {
-  it('sourceRelativePath uses forward slashes regardless of the host separator', () => {
+  it('sourceRelativePath uses forward slashes regardless of the host separator', async () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-expand-src-'))
     const sub = join(root, 'sub')
     mkdirSync(sub)
     writeFileSync(join(sub, 'nested.txt'), 'x')
     writeFileSync(join(root, 'top.txt'), 'x')
 
-    const files = expandPathsWithSource([root])
+    // #274: the walk is asynchronous and reports whether it was cut (`null` = complete).
+    const { files, exhausted } = await expandPathsWithSource([root])
+    expect(exhausted).toBeNull()
     const nested = files.find((f) => f.path.endsWith('nested.txt'))
     // Red on Windows pre-fix: `relative()` returned `sub\nested.txt` and was persisted as-is.
     expect(nested?.sourceRelativePath).toBe('sub/nested.txt')

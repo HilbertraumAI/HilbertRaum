@@ -407,6 +407,46 @@ describe('registerDocsIpc', () => {
     expect(job.exhausted).toBeUndefined()
   })
 
+  // #274: the walk is asynchronous, so a lock can land WHILE a folder is being walked. The
+  // import must then fail before it touches the workspace: no row queued, and the document-work
+  // lease never taken (it is acquired only after the walk, so nothing is held across the await).
+  it('a lock landing mid-walk fails the import before any row or lease (#274)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    let unlocked = true
+    let held = 0
+    let peak = 0
+    const ctx = {
+      ...ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true),
+      workspace: {
+        isUnlocked: () => unlocked,
+        beginDocumentWork: () => {
+          held += 1
+          peak = Math.max(peak, held)
+          return () => {
+            held -= 1
+          }
+        },
+        documentCipher: () => null
+      }
+    } as unknown as AppContext
+    registerDocsIpc(ctx)
+    const probe = `probe-${randomUUID()}`
+    const dir = join(workspacePath, `${probe}-folder`)
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'dropped.txt'), 'a dropped note with enough words to index here please')
+    let release!: () => void
+    fsLog.slow = { probe, spinMs: 0, gate: new Promise<void>((r) => (release = r)) }
+
+    const importP = invoke(handlers, IPC.importDocuments, [dir])
+    // The walk is parked inside the folder's readdir; the workspace locks underneath it.
+    unlocked = false
+    release()
+    await expect(importP).rejects.toThrow(/Workspace is locked/)
+    expect(peak).toBe(0)
+    expect(held).toBe(0)
+    expect((db.prepare('SELECT COUNT(*) AS n FROM documents').get() as { n: number }).n).toBe(0)
+  })
+
   it('reconciles a prior-run stuck document and flags a stale-embedding document (M5 + M7)', async () => {
     const { db, workspacePath } = freshWorkspace()
     const indexer = createMockEmbedder() // id = 'mock-embedder'
@@ -1166,10 +1206,10 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     expect(rows.map((r) => r.size_bytes)).toEqual([10, 20, null, 30])
   })
 
-  // DB-4 (integration): a folder import queues EVERY row synchronously before the invoke returns —
-  // the batch commits all N inserts in one BEGIN…COMMIT (the walk stays synchronous). Reverting to a
-  // lazy/async queue phase would make the count < N at return.
-  it('DB-4: a folder import queues all rows synchronously before importDocuments returns', async () => {
+  // DB-4 (integration): a folder import queues EVERY row before the invoke RESOLVES — the batch
+  // commits all N inserts in one BEGIN…COMMIT after the (asynchronous since #274) walk is awaited.
+  // Reverting to a lazy queue phase would make the count < N at resolution.
+  it('DB-4: a folder import queues all rows before importDocuments resolves', async () => {
     const { db, workspacePath } = freshWorkspace()
     registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
     const dir = mkdtempSync(join(tmpdir(), 'hr-batch-'))

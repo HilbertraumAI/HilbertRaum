@@ -504,6 +504,9 @@ export const de: Record<keyof typeof en, string> = {
   'docs.import.busy': 'Wird importiert…',
   'docs.import.files': 'Dateien importieren',
   'docs.import.folder': 'Ordner importieren',
+  // #274: the folder walk was cut by its budget — the count is a lower bound, not the folder.
+  'docs.import.walkCut':
+    'Der Ordner war zu groß, um vollständig durchsucht zu werden – {count} Elemente wurden gezählt.',
   'docs.refresh': 'Aktualisieren',
   'docs.loading': 'Dokumente werden geladen…',
   'docs.askSelected': 'Diese Dokumente fragen ({count})',

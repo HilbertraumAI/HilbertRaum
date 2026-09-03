@@ -580,6 +580,35 @@ describe('DocumentsScreen', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  // #274: a folder walk cut by its budget is reported on the preflight result — the screen says so
+  // ONCE (the import's own walk is cut the same way, so the job's `exhausted` must not toast again)
+  // and the import still proceeds with what was counted.
+  it('a walk cut by its budget toasts "too large to scan completely" once and still imports (#274)', async () => {
+    const user = userEvent.setup()
+    const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: ['d9', 'd10', 'd11'], exhausted: 'entries' as const }))
+    stubApi({
+      listDocuments: vi.fn(async () => [doc({})]),
+      pickDocuments: vi.fn(async () => ({ token: 'tok3', paths: ['/u/huge-folder'] })),
+      importPreflight: vi.fn(async () => ({ fileCount: 3, audioFileCount: 0, audioBytes: 0, exhausted: 'entries' as const })),
+      importDocuments,
+      getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 3, completed: 3, failed: 0, done: true, exhausted: 'entries' as const }))
+    })
+    render(
+      <ToastProvider>
+        <DocumentsScreen />
+      </ToastProvider>
+    )
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: /import folder/i }))
+    await screen.findByText('The folder was too large to scan completely — 3 items were counted.')
+    await waitFor(() =>
+      expect(importDocuments).toHaveBeenCalledWith(['/u/huge-folder'], { pickerToken: 'tok3' })
+    )
+    // The job completes with the same cut — one notice, not two.
+    await waitFor(() => expect(screen.queryByText(/importing…/i)).not.toBeInTheDocument())
+    expect(screen.getAllByText(/too large to scan completely/)).toHaveLength(1)
+  })
+
   it('"Re-index all" confirms first, then starts the main-owned bulk job with every stale id (M-U6)', async () => {
     const user = userEvent.setup()
     const stale = [

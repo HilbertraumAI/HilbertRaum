@@ -25,6 +25,20 @@ import { join } from 'node:path'
 // VisionService; only the sidecars and the embedder are boundary fakes.
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
+// #274: park the (asynchronous) import walk inside one directory's `readdir` so a lock can land
+// mid-walk. Pass-through — every other call, and every path without the probe, reaches the real
+// filesystem untouched (the vault's own I/O included). Disarmed before every test.
+const walkGate = vi.hoisted(() => ({ probe: '', gate: null as Promise<void> | null }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  const readdir: typeof actual.readdir = (async (...args: unknown[]) => {
+    const p = String(args[0])
+    if (walkGate.gate !== null && walkGate.probe !== '' && p.includes(walkGate.probe)) await walkGate.gate
+    return (actual.readdir as unknown as (...a: unknown[]) => Promise<unknown>)(...args)
+  }) as unknown as typeof actual.readdir
+  const mocked = { ...actual, readdir }
+  return { ...mocked, default: mocked }
+})
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
@@ -320,7 +334,11 @@ async function parkedLock(h: Harness): Promise<{ lockP: Promise<{ result: unknow
   return { lockP }
 }
 
-beforeEach(() => ipcState.handlers.clear())
+beforeEach(() => {
+  ipcState.handlers.clear()
+  walkGate.probe = ''
+  walkGate.gate = null
+})
 
 describe('admission during the lock teardown (AUD-02)', () => {
   it('stops the local API BEFORE the sidecar suspends (local-api D7 — the lock-path ordering pin)', async () => {
@@ -413,6 +431,45 @@ describe('admission during the lock teardown (AUD-02)', () => {
     h.releaseSuspend()
     await lockP
     expect(h.ctrl.isUnlocked()).toBe(false)
+  })
+
+  // #274: the import walk is asynchronous, so a lock can now land WHILE a dropped folder is being
+  // walked. The import must then fail without touching the workspace: the unlock gate is re-checked
+  // after the walk (no row is queued into the closing DB) and the document-work lease is taken only
+  // after it — so nothing stays held, and a password change after the next unlock is not refused
+  // as "documents are still being imported". Real encrypted vault, real controller, real handlers.
+  it('a lock landing mid-walk fails the import cleanly — no row queued, no lease held (#274)', async () => {
+    const h = await harness()
+    const before = (
+      h.ctrl.requireDb().prepare('SELECT COUNT(*) AS n FROM documents').get() as unknown as { n: number }
+    ).n
+    const probe = `probe-${Math.random().toString(36).slice(2)}`
+    const folder = join(h.ctx.paths.rootPath, `${probe}-folder`)
+    mkdirSync(folder)
+    writeFileSync(join(folder, 'dropped.txt'), 'some text to import', 'utf8')
+    let release!: () => void
+    walkGate.probe = probe
+    walkGate.gate = new Promise<void>((r) => (release = r))
+
+    // Admitted (the workspace is unlocked and idle) — then parked inside the folder's readdir.
+    const importP = invoke(handlers, IPC.importDocuments, [folder])
+    const { lockP } = await parkedLock(h)
+    release()
+    await expect(importP).rejects.toThrow(/Workspace is locked\./)
+    for (let i = 0; i < 20; i++) await tick()
+    // The DB is still open here (the teardown is parked): no row was queued by the aborted import.
+    const after = (
+      h.ctrl.requireDb().prepare('SELECT COUNT(*) AS n FROM documents').get() as unknown as { n: number }
+    ).n
+    expect(after).toBe(before)
+
+    h.releaseSuspend()
+    await lockP
+    expect(h.ctrl.isUnlocked()).toBe(false)
+    // No lease was left held across the lock: a password change on the re-unlocked vault would be
+    // refused with the "still being imported" VaultBusyError while one is live.
+    h.ctrl.unlock('right-password')
+    expect(() => h.ctrl.changePassword('right-password', 'next-password', FAST_KDF)).not.toThrow()
   })
 
   // The latch must not outlive a FAILED lock. The re-encrypt realistically fails on ENOSPC (during

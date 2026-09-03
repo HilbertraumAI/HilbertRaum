@@ -175,6 +175,9 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     audioFileCount: number
     audioBytes: number
   } | null>(null)
+  // #274: whether the "folder too large to scan completely" notice already showed for the import
+  // in flight (the preflight walk and the import's own walk are cut the same way — one notice).
+  const walkCutNoticedRef = useRef(false)
   // "Translate" language choice: the row button opens this small modal. The source+target
   // pair starts from the session's last choice (else a UI-language-aware default) — TG-3
   // widened the closed de/en pair to the curated 10-language set.
@@ -355,7 +358,15 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
           if (job.done) {
             if (pollRef.current) clearInterval(pollRef.current)
             pollRef.current = null
-            if (mountedRef.current) setBusy(null)
+            if (mountedRef.current) {
+              setBusy(null)
+              // #274: a walk cut by its budget imported a subset — tell the user once (the
+              // preflight notice, when it ran, already did; a job adopted after a reload has none).
+              if (job.exhausted && !walkCutNoticedRef.current) {
+                walkCutNoticedRef.current = true
+                showToast(t('docs.import.walkCut', { count: job.total }))
+              }
+            }
           }
         } catch (e) {
           if (pollRef.current) clearInterval(pollRef.current)
@@ -508,6 +519,13 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       // (the workspace copy) and real transcription time — ask first.
       // The token lets main count its own vetted paths (no drop cap on a picker selection, #240).
       const pre = await window.api.importPreflight(paths, token)
+      // #274: a walk cut by its budget counted a subset — say so before the import starts, so a
+      // partial import never looks complete. The count is what the walk reached, a lower bound.
+      walkCutNoticedRef.current = false
+      if (pre.exhausted) {
+        walkCutNoticedRef.current = true
+        showToast(t('docs.import.walkCut', { count: pre.fileCount }))
+      }
       if (pre.audioBytes >= LARGE_AUDIO_CONFIRM_BYTES) {
         setConfirmAudio({ paths, token, audioFileCount: pre.audioFileCount, audioBytes: pre.audioBytes })
         return

@@ -83,7 +83,7 @@ export function resolveIngestionLimits(env: NodeJS.ProcessEnv = process.env): In
  */
 export const MAX_DROP_PATHS = 512
 
-/** Bounds on the synchronous directory walk behind a folder drop / pick (#240). */
+/** Bounds on the directory walk behind a folder drop / pick (#240; asynchronous since #274). */
 export interface WalkBudget {
   /** Max directory entries the walk will look at across the whole selection. */
   maxEntries: number
@@ -95,10 +95,11 @@ export interface WalkBudget {
 
 /**
  * Defaults: 50 000 entries covers any realistic document archive on a portable drive; 64
- * levels is beyond any hand-made tree; 10 s is the longest the main thread may stay busy on a
- * slow USB walk before the selection is cut. A cut walk imports what it reached and stops —
- * bounded, not perfect (the off-thread rewrite is #274). Each is env-overridable like the
- * parser caps above.
+ * levels is beyond any hand-made tree; 10 s is the longest a slow USB walk may run before the
+ * selection is cut — since #274 the walk is asynchronous, so the budget bounds how long the
+ * user waits, not a main-thread freeze. A cut walk imports what it reached, stops, and reports
+ * the cut (`exhausted` on the preflight result and the import job). Each is env-overridable
+ * like the parser caps above.
  */
 export const DEFAULT_WALK_BUDGET: WalkBudget = {
   maxEntries: 50_000,
