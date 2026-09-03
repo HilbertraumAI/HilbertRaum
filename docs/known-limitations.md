@@ -31,20 +31,26 @@ password recovery — are documented in
   canonicalizes them; the read *content* has no network sink (offline), but the *path* can be one
   on Windows — a UNC path reaches `lstat` before any lexical check, which makes Windows attempt an
   SMB connection to the named host and, where that host is reachable and outgoing NTLM is not
-  restricted, a credential exchange (documented behaviour, not probed; pending #240 / owner
-  decision #222; see `security-model.md` "Residual egress channels").
+  restricted, a credential exchange (documented behaviour, not probed; an accepted residual —
+  owner decision #222 declined the lexical rejection on 2026-09-03, #240; see
+  `security-model.md` "Residual egress channels").
 - **Some things live or pass outside the drive by design.** Display preferences (the language, a
   few collapsed-panel states) sit in the host browser profile under the app's OS app-data folder,
   not in the workspace; text copied with a Copy button goes to the OS clipboard like any copied
-  text; a link opened from an answer or a model manifest opens in the OS browser. See
-  `security-model.md` "What lives or passes outside the drive" and "Residual egress channels"
-  (#249, #250).
-- **Two interim precautions stand as limitations until their owner decisions are answered (#236 /
-  owner decision #221; #240 / owner decision #222; promoted from the time-boxed containment list
-  at the round's close-out — `architecture.md` §52 — so it does not become permanent silently):**
-  treat every model-emitted or manifest-sourced link (including `licenseUrl` in the download
-  dialog) as untrusted and do not open it from inside the app; do not drop network-share paths
-  into the app; managed Windows fleets can block outbound 445/WebDAV at the host firewall.
+  text and is never cleared by the app (owner decision #227, 2026-09-03: document only); a link
+  opened from an answer or a model manifest opens in the OS browser. See `security-model.md`
+  "What lives or passes outside the drive" and "Residual egress channels" (#249, #250).
+- **Do not drop network-share paths into the app (#240; owner decision #222 — declined
+  2026-09-03; a permanent limitation).** A UNC path reaches `lstat` before any lexical check
+  (the drag-drop bullet above), and the app will not reject such paths lexically because that
+  would change the drop contract for network-share users. Managed Windows fleets can block
+  outbound 445/WebDAV at the host firewall.
+- **One interim precaution stands as a limitation until its owner decision is executed (#236 /
+  owner decision #221 — "confirmation", 2026-09-03; promoted from the time-boxed containment
+  list at the round's close-out — `architecture.md` §52 — so it does not become permanent
+  silently):** treat every model-emitted or manifest-sourced link (including `licenseUrl` in the
+  download dialog) as untrusted and do not open it from inside the app, until the consenting
+  opener lands (#236).
 - **Quit the app before shutting down or logging off (#248; owner decision #226 pending).** OS
   session end is a hard kill — nothing locks the workspace, so every change since the last
   **Lock now** or normal quit is lost (user-guide §13; `security-model.md` "OS session end is a

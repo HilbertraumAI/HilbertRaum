@@ -744,7 +744,11 @@ explicitly:
   directory metadata can roll back after a power cut on exFAT/FAT32, and no directory-flush
   primitive is exposed through Node on Windows — is covered in
   [`drive-layout.md`](drive-layout.md) under **Filesystem** (the last successfully locked
-  snapshot always survives) (#243).
+  snapshot always survives). Owner decision #223 (2026-09-03) ruled it documented, with one
+  manual crash-cut on an exFAT kit before the first kit ships — `packaging.md` "Manual pre-ship
+  checklist" item 9 (#243 closed). Note that a cut landing during the lock's encrypt phase is
+  the failed-lock signature above, so the next unlock rolls the session **forward** — both
+  outcomes are the design working.
 
 ### Vault-overwrite guards & single instance (issue #208)
 
@@ -1247,8 +1251,8 @@ worth naming so "everything stays on the drive" is not read as "nothing touches 
   after 60 s if the clipboard still holds the key. Once text is on the OS clipboard it is outside
   the drive: Windows clipboard history (Win+V) keeps it, and cross-device clipboard sync (Windows
   "cloud clipboard", macOS Universal Clipboard) forwards it to other devices if the user has that
-  turned on. Owner decision #227 keeps "document only" as the default and records a timed clear
-  (generalising the key-copy timer) as the alternative (#250).
+  turned on. Owner decision #227 ruled **document only** on 2026-09-03 — no timed clear ships;
+  the timer design (generalising the key-copy timer) stays recorded on #250, now closed.
 
 ## Malicious-document resource caps (audit M-1/M-2/M-3, 2026-06-13)
 
@@ -1723,7 +1727,8 @@ are tracked under "Open hardening items" in `BUILD_STATE.md`.)
   nor crash `expandPaths` with junk elements. It is still a token-less probe, though: after the
   path cap (PR #275) it `stat`s the raw paths it is given (following symlinks — unlike the drop
   seam, it rejects none), so a UNC or device path reaches the filesystem before any lexical
-  check — residual egress channel (ii) below, pending #240 (owner decision #222).
+  check — residual egress channel (ii) below, an accepted residual since owner decision #222
+  declined the lexical rejection on 2026-09-03 (#240).
 
 ## Parsing-DoS hardening — the content tools' regexes are now linear (vuln-scan 2026-06-21)
 
@@ -1812,8 +1817,9 @@ read any supported-type file anywhere on disk (the text is then reachable via
   canonicalized (a `.pdf`-named symlink can't reach a sensitive target through the importer). A
   compromised renderer can still drive this seam with on-disk paths, but the offline guarantee
   means there is **no network sink to exfiltrate** read content (the *path* itself is one on
-  Windows — "Residual egress channels" (ii) below, pending #240 / #222), and the dominant picker surface
-  is now non-forgeable. `importPreflight` still takes raw paths (counts/sizes only — lower impact).
+  Windows — "Residual egress channels" (ii) below, an accepted residual since the 2026-09-03
+  ruling on #222, #240), and the dominant picker surface is now non-forgeable.
+  `importPreflight` still takes raw paths (counts/sizes only — lower impact).
 - **Skills use the same token mechanism (#240, PR #275):** `pickSkillPackage` is unlock-gated and
   returns `{ token, path }`; `previewSkillPackage` reads through the token without spending it and
   `importSkill` spends it, so a renderer string that is not a live token is refused before the
@@ -1837,8 +1843,9 @@ read any supported-type file anywhere on disk (the text is then reachable via
   after the walk and only then spends the picker token, takes the document-work lease and queues
   the rows in one transaction — a lock landing mid-walk queues nothing and keeps the token for the
   retry; a lock plus re-unlock inside the walk abandons the import. What this does NOT
-  do: reject a UNC or device path lexically — that changes the drop contract for network-share
-  users and waits on #222.
+  do: reject a UNC or device path lexically — that would change the drop contract for
+  network-share users and was **declined** (owner decision #222, 2026-09-03): the
+  credential-exposure leg is the accepted residual, item (ii) below.
 
 ### D2 — `imageReadBytes` takes an opaque token, never a renderer path
 `imageChooseImage` now returns `{ token, name, sizeBytes }` — the absolute path stays in main,
@@ -2070,8 +2077,11 @@ it.
   outbound 445/WebDAV is reachable and outgoing NTLM is not restricted, an NTLM/Kerberos
   credential exchange (documented Windows behaviour, not probed here). What can leave is the
   machine's credentials, not document content. Mapped network drives cannot be told apart
-  lexically at all. Rejecting such paths changes the drop contract for network-share users:
-  pending #240 (owner decision #222).
+  lexically at all. Rejecting such paths lexically would change the drop contract for
+  network-share users and was **declined** (owner decision #222, 2026-09-03; #240 closed): this
+  leg is an accepted residual. The mitigation is operational — do not drop network-share paths
+  into the app; managed Windows fleets can block outbound 445/WebDAV at the host firewall
+  (`known-limitations.md`).
 - **(iii) Chromium's own background fetches and form submits — landed.** The spell-check
   dictionary download is closed by construction (`spellcheck: false`, #239), the CSP carries
   `form-action 'none'` with header/meta parity (#266), and every `ipcMain.handle` channel checks
@@ -2079,8 +2089,9 @@ it.
   the CSP but need a compromised renderer first; confirmed and documented, not closed (#254). See
   "Chromium background fetches" above.
 - **(iv) The OS clipboard.** Text copied from the app reaches the OS clipboard, and from there
-  clipboard history or cross-device sync. See "What lives or passes outside the drive" above
-  (#250; owner decision #227).
+  clipboard history or cross-device sync. See "What lives or passes outside the drive" above.
+  Accepted as documented — owner decision #227 ruled "document only" on 2026-09-03 (#250 closed);
+  no timed clear ships.
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).

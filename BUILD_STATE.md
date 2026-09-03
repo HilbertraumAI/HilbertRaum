@@ -29,6 +29,14 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-04 — **Phase F PR 2 (#284, closes #240 / #243 / #250 — docs only): the three defaults the
+owner confirmed as rulings on 2026-09-03 are now accepted wording — #222 decline (the NTLM leg is
+a permanent `known-limitations.md` line; `security-model.md` residual egress (ii), the D1/L-3
+pointers, BUILD_STATE §8 L-4), #223 document + one manual exFAT crash-cut before the first kit
+ships (`drive-layout.md` Filesystem; `packaging.md` pre-ship checklist item 9), #227 document only
+(the clipboard paragraph and residual egress (iv)); three §52 addendum rows; #217 re-opened for the
+PR and closed at merge.**_ No code, no launch smoke; `repo-hygiene.test.ts` + byte checks green.
+
 _2026-09-04 — **Phase F PR 1 (#283, closes #274): the drop/preflight directory walk is asynchronous
 (`expandPathsBoundedAsync`, same budget/cycle guard/order, pinned to the synchronous reference), both
 import handlers are async, a lock mid-walk queues nothing, and a cut walk is reported (`exhausted` on
@@ -563,22 +571,19 @@ open round's item stays the last block of §5.)
     - **External-open consent (#236; decisions #221, #228):** a renderer http(s) `window.open`
       still reaches `shell.openExternal` unconfirmed; the residual wording landed (9a), no code —
       5a never opened. Its containment sentence is promoted verbatim to `known-limitations.md`.
-    - **Raw-path lexical rejection + the NTLM credential exposure (#240; decision #222):** a
-      UNC/device path dropped into the app still reaches `lstat` before any lexical check (Windows
-      SMB → a possible NTLM exchange where 445/WebDAV egress is open) — 5b-b never opened; the
-      skills token, the 512-path cap and the bounded walk landed (5b-a); off-thread walk #274. Its
-      containment sentence is promoted verbatim to `known-limitations.md`.
+    - **Ruled 2026-09-03, recorded 2026-09-04 (Phase F PR 2, #284 — §52 addendum rows):** #240
+      lexical rejection **declined** (#222; the NTLM leg is the accepted residual, a permanent
+      `known-limitations.md` line); #243 exFAT durability **documented** (#223) plus one manual
+      crash-cut on an exFAT kit before the first kit ships (`packaging.md` checklist item 9);
+      #250 clipboard **document only** (#227). All three issues closed.
     - **OS session end is a hard kill (#248; decision #226):** documented (9a), no handler; "quit
       before shutdown/logoff" promoted verbatim to `known-limitations.md`.
     - **Chromium egress outside CSP (#254, closed as a confirmed residual):** WebRTC and
-      dns-prefetch/preconnect are unused by the renderer and reachable only after a renderer
-      compromise; no flag added (unverifiable offline).
-    - **Directory durability after renames (#243; decision #223):** exFAT non-durability documented
-      (`drive-layout.md` **Filesystem**); the write-through + crash-cut spike only if ratified.
+      dns-prefetch/preconnect unused by the renderer, reachable only after a compromise; no flag.
     - **No `PRAGMA user_version` (#247; decision #225):** not ratified — an old build cannot tell it
       opened a newer DB (the launcher refusal, PR #272, closes the trigger).
-    - **OS-backed workspace lock (#263, accepted; decision #224):** not built. **Clipboard timer
-      (#250; decision #227)** and **`clearStorageData()` on lock (#231 rider; #249)**: documented only.
+    - **OS-backed workspace lock (#263, accepted; decision #224):** not built.
+      **`clearStorageData()` on lock (#231 rider; #249)**: documented only.
     - **Spawn-time refusal of hashless runtime markers on sold kits:** wired but OFF
       (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false`, `binary-verifier.ts`; owner call).
     - **Nine owner-runnable manual smokes never run** (recipes in §52): packaged OCR recognition
@@ -589,11 +594,10 @@ open round's item stays the last block of §5.)
       `skills-installer`, `third-party-notices`, `ocr`, `rail-labels` tests), the katex hoist
       compare, `as unknown as` private-field injection — convert to behavioural assertions when
       touched; `FullSuiteGuard` cannot see dropped individual tests.
-    - **Phase F register:** the one remaining audit-ID comment (`tests/unit/window-security.test.ts`,
-      `// SEC-1:`); #274; the "answered the other way" designs recorded on #218–#231 and in §52.
-    - **Phase F, 2026-09-04 — PR 1 (#283) closed #274** (async walk, `exhausted` surfaced; §52
-      addendum row) and swept the last audit-ID comment above; the owner answered decisions
-      #221/#222/#223/#225/#226/#227/#228 on 2026-09-03 (`**DECISION:**`) — PRs 2–5 follow in order.
+    - **Phase F (rulings 2026-09-03 on #221/#222/#223/#225/#226/#227/#228; "other way" designs on
+      #218–#231 and in §52):** PR 1 (#283) closed #274 (async walk, `exhausted` surfaced) and swept
+      the last audit-ID comment; PR 2 (#284) closed #240/#243/#250 (above). Next, in order: PR 3
+      (#248 handler), PR 4 (#236 consent + eval-gated RAG framing), PR 5 (#247 `user_version`).
 
 ---
 
@@ -663,8 +667,9 @@ the offline/privacy guarantees:
   `importSkill` since PR #275 (`src/main/ipc/picker-tokens.ts`). The DROP half still passes raw
   paths (an OS drop reaches the renderer, untokenizable): each path is `lstat`-checked, symlinks
   refused, canonicalized, the array capped at `MAX_DROP_PATHS` (512) and the walk bounded — but a
-  UNC/device path still reaches `lstat` before any lexical check. Lexical rejection changes the
-  drop contract for network-share users: **owner decision 5 (#222) pending.**
+  UNC/device path still reaches `lstat` before any lexical check. Lexical rejection would change
+  the drop contract for network-share users: **declined 2026-09-03 (owner decision #222) — an
+  accepted residual** (`security-model.md` residual egress (ii); #240 closed, Phase F PR 2).
 - **L-5 — `expandPaths` follows directory symlinks (restated 2026-09-03, #240 / PR #275).** A
   visited-realpath CYCLE guard exists (backend-audit 2026-06-27 REL-9 `onPath`, `architecture.md`
   §-ledger) and the walk is now bounded (entries / depth / wall clock, `limits.ts`); the walk still
