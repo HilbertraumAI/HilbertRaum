@@ -28,7 +28,16 @@ password recovery — are documented in
   it returned), so a compromised renderer can't forge a picker-origin read of an arbitrary file
   (`security-model.md` D1). A native OS drag-drop is delivered to the
   *renderer*, so main can't tokenize it — that seam still accepts raw paths but rejects symlinks and
-  canonicalizes them, and there is no network sink to exfiltrate read content (offline).
+  canonicalizes them; the read *content* has no network sink (offline), but the *path* is one on
+  Windows — a UNC path reaches `lstat` before any lexical check, opening an SMB connection and an
+  NTLM/Kerberos credential exchange to the named host (pending #240 / owner decision #222; see
+  `security-model.md` "Residual egress channels").
+- **Some things live or pass outside the drive by design.** Display preferences (the language, a
+  few collapsed-panel states) sit in the host browser profile under the app's OS app-data folder,
+  not in the workspace; text copied with a Copy button goes to the OS clipboard like any copied
+  text; a link opened from an answer or a model manifest opens in the OS browser. See
+  `security-model.md` "What lives or passes outside the drive" and "Residual egress channels"
+  (#249, #250).
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.

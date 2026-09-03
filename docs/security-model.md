@@ -1064,6 +1064,16 @@ re-encrypts (the bullet below).
   reaper). A `quit: locking workspace` log line precedes the lock — with no window left, it is the
   only visible state of a quit. Pinned by `tests/unit/shutdown.test.ts` (B1 inverted, the
   activate guard, the deadline with the lock outside it).
+- **OS session end is a hard kill (#248; owner decision #226, default = document).** Nothing in
+  `src/main` handles Windows `session-end` or macOS `shutdown` — the awaited teardown above
+  (`will-quit`: sidecar stops, settle, then lock = re-encrypt + shred) never runs on logoff or
+  shutdown, so the process is killed with the working DB still plaintext on the drive. The only
+  lock outside that awaited teardown is the synchronous `uncaughtException` crash path in
+  `main/index.ts` (`detachVaultKey()` + `workspace.shutdown()`), and it is not wired to session
+  end either. On the next start the crash-recovery sweep finds the live working copy, shreds it
+  and restores the last locked encrypted snapshot — the session delta since that lock is lost.
+  `docs/user-guide.md` §13 names this loss for users; a best-effort synchronous lock on those two
+  events is the alternative recorded on #226.
 - **Doc-task pipeline is flushed on lock/quit (TA-1).** The lock/quit handlers call
   `ctx.docTasks.cancelAllDocTasks()` — cancelling the running task **and every queued task** —
   not just the active one. The DB stays *open* while the handler awaits the sidecar suspends, so
@@ -1207,6 +1217,37 @@ sidecar's KV cache dies with the child, and the CPU replacement starts empty.
   leave original blocks recoverable. We do not over-promise this.
 - **No password recovery.** The password is never stored and the key is unrecoverable without it —
   losing the password means losing the workspace. Onboarding copy says so.
+
+### What lives or passes outside the drive
+
+A few things live on the host computer rather than in the workspace by design, or leave the app
+through the OS once the user acts on them. None of it is document or chat content, but it is
+worth naming so "everything stays on the drive" is not read as "nothing touches the host" (#249).
+
+- **The host Chromium profile.** The app never sets a session `partition` and never calls
+  `session.clearStorageData()`, so Electron's default session — its web storage and Chromium's
+  own cache directories (GPU shader cache, code cache, and the like) — persists under
+  `app.getPath('userData')` on the host computer, not on the drive (dev builds add a `-dev`
+  suffix). The renderer writes only UI-preference `localStorage` keys there — the active language
+  and a few collapsed/expanded panel states (`hilbertraum.uiLanguage`,
+  `hilbertraum.chat.listCollapsed`, `hilbertraum.docs.railCollapsed`,
+  `hilbertraum.docs.viewsMoreOpen`; the set is pinned by `tests/unit/renderer-storage-keys.test.ts`)
+  — never document or chat content. When no prepared drive is found, the workspace itself falls
+  back to this same folder (`PRIVACY.md` says so). Nothing here is cleared on lock: owner decision
+  #231 keeps "document only" as the default and records clearing the profile on lock as the
+  alternative.
+- **The spell-check dictionary — none.** Chromium's spellchecker is off (`spellcheck: false` on
+  every window, #239 / owner decision #218), so there is no Hunspell `.bdic` download and no
+  `Dictionaries/` folder under `userData`. See "Chromium background fetches" above.
+- **The OS clipboard.** Eight Copy sites in seven renderer files — chat answers, document
+  summaries, translations, image answers, evidence-review hashes, the two diagnostics copies and
+  the local-API address — write straight to the OS clipboard through the `writeClipboard` IPC,
+  with no wipe and no timer. The one exception is the local-API *key* copy, which clears itself
+  after 60 s if the clipboard still holds the key. Once text is on the OS clipboard it is outside
+  the drive: Windows clipboard history (Win+V) keeps it, and cross-device clipboard sync (Windows
+  "cloud clipboard", macOS Universal Clipboard) forwards it to other devices if the user has that
+  turned on. Owner decision #227 keeps "document only" as the default and records a timed clear
+  (generalising the key-copy timer) as the alternative (#250).
 
 ## Malicious-document resource caps (audit M-1/M-2/M-3, 2026-06-13)
 
@@ -1678,7 +1719,9 @@ are tracked under "Open hardening items" in `BUILD_STATE.md`.)
   (`registerDocsIpc.ts`) was an unauthenticated filesystem probe; it now calls `requireUnlocked()`
   and drops non-string path elements exactly like `importDocuments`, so a compromised renderer
   can neither drive a recursive directory walk of arbitrary paths while the workspace is locked
-  nor crash `expandPaths` with junk elements.
+  nor crash `expandPaths` with junk elements. It is still a token-less probe, though: after the
+  path cap (PR #275) it `lstat`s the raw paths it is given, so a UNC or device path reaches the
+  filesystem before any lexical check — residual egress channel (ii) below, pending #222.
 
 ## Parsing-DoS hardening — the content tools' regexes are now linear (vuln-scan 2026-06-21)
 
@@ -1766,8 +1809,9 @@ read any supported-type file anywhere on disk (the text is then reachable via
   each top-level path is `lstat`-checked and a **symlink is rejected**, then `realpathSync`-
   canonicalized (a `.pdf`-named symlink can't reach a sensitive target through the importer). A
   compromised renderer can still drive this seam with on-disk paths, but the offline guarantee
-  means there is **no network sink to exfiltrate** read content, and the dominant picker surface is
-  now non-forgeable. `importPreflight` still takes raw paths (counts/sizes only — lower impact).
+  means there is **no network sink to exfiltrate** read content (the *path* itself is one on
+  Windows — "Residual egress channels" (ii) below, pending #222), and the dominant picker surface
+  is now non-forgeable. `importPreflight` still takes raw paths (counts/sizes only — lower impact).
 - **Skills use the same token mechanism (#240, PR #275):** `pickSkillPackage` is unlock-gated and
   returns `{ token, path }`; `previewSkillPackage` reads through the token without spending it and
   `importSkill` spends it, so a renderer string that is not a live token is refused before the
@@ -1999,6 +2043,32 @@ content, so the tail carries nothing content-bearing. This is **accepted as an I
 500-char cap bounds size and a one-line `INVARIANT (SEC-N3)` comment at the cap pins the expectation and
 asks for a re-verify on every llama.cpp pin bump; if a future server ever echoed request content into an
 error body, the fallback should be sanitized to a fixed structural string + numeric status.
+
+## Residual egress channels
+
+The offline guarantee above covers the app's own network use. These are the ways bytes can still
+leave the machine despite it, each with its current status and the issue that closes or records
+it.
+
+- **(i) An OS browser open of a link.** A link in a model answer, or a model manifest's license
+  link, goes straight from `window.open` to `shell.openExternal` with no confirmation or throttle:
+  the OS browser opens it, and the link's host learns the machine's IP address and user agent.
+  Pending #236 (owner decision #221).
+- **(ii) A UNC or device path on the raw path seams.** A native drag-drop and a token-less import
+  preflight `lstat` each path before any lexical rejection, so a `\\host\share\...` path opens an
+  SMB connection — on Windows with an NTLM/Kerberos credential exchange — to the named host before
+  any file is read. The machine's credentials, not document content, are what can leave. Mapped
+  network drives cannot be told apart lexically at all. Rejecting such paths changes the drop
+  contract for network-share users: pending #240 (owner decision #222).
+- **(iii) Chromium's own background fetches and form submits — landed.** The spell-check
+  dictionary download is closed by construction (`spellcheck: false`, #239), the CSP carries
+  `form-action 'none'` with header/meta parity (#266), and every `ipcMain.handle` channel checks
+  its sender (#252). Two channels — WebRTC and `dns-prefetch`/`preconnect` hints — sit outside
+  the CSP but need a compromised renderer first; confirmed and documented, not closed (#254). See
+  "Chromium background fetches" above.
+- **(iv) The OS clipboard.** Text copied from the app reaches the OS clipboard, and from there
+  clipboard history or cross-device sync. See "What lives or passes outside the drive" above
+  (#250; owner decision #227).
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).

@@ -1020,6 +1020,12 @@ cleanly, and the safe eject flushes everything else. Skipping the eject is what 
 show the *"scan and fix this drive?"* prompt on the next plug-in (harmless, but see
 [`troubleshooting.md`](troubleshooting.md) if it appears).
 
+**If the app is not quit cleanly:** pulling the drive while the app is running, a crash, or
+shutting down or logging off the computer with the app still open loses any changes made since
+the workspace last locked (the last **Lock now** or a normal quit). The workspace itself is not
+damaged — it reopens from that last locked point — but everything after it is gone, so quit the
+app first.
+
 ---
 
 Stuck? See [`troubleshooting.md`](troubleshooting.md).

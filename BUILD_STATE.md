@@ -655,13 +655,10 @@ open round's item stays the last block of §5.)
 
 19. **Full-audit 2026-09-02 (security/reliability) — REMEDIATION IN PROGRESS** (tracker #217;
     labels `audit-2026-09-02`, `severity:*`, `phase:0`..`phase:9`, `owner-decision`, `follow-up`).
-    Working paper, plan and STATE ledger live under the git-ignored `tmp/` for the round; the
-    durable ledger is written once, at close-out, as `docs/architecture.md` "§52 Full audit
-    (2026-09-02) — remediation ledger + close-out" (after §51). Fourteen owner decisions are open
-    as #218–#231; until answered, each phase runs on the plan's default and says so in its PR body
-    (a default is never upgraded to a ruling). Phases 0–4 as listed below, then 5a external-open
-    consent, 5b raw-path hardening, 6 rekey, 7 recovery + durability docs, 8 small code items,
-    9a docs sweep, 9b close-out. One line per merged phase (outcome + PR + pointer):
+    Working paper, plan and STATE ledger live under the git-ignored `tmp/`; the durable ledger is
+    written once, at close-out, as `docs/architecture.md` "§52 Full audit (2026-09-02) —
+    remediation ledger + close-out" (after §51). Owner decisions #218–#231: each phase runs on the
+    plan's default until answered and says so in its PR body. One line per merged phase:
     - **0-a** (2026-09-02, docs-only, PR #265): the eight closed 2026-08-20…08-22 dated entries
       drained to `docs/build-log.md`; this item opened.
     - **0** (2026-09-02, PR #267): SEC-12 + GAP-2 (quit re-entry prevented, 30 s overall deadline,
@@ -803,9 +800,9 @@ the offline/privacy guarantees:
   labeled hypothesis, likely moot (libarchive/bsdtar checks linknames; hardlinks need an
   existing same-volume target; the archive hash is owner-pinned). Owner ratified 2026-07-12:
   skip the one-time fixture probe; re-open only if the extraction path or tar binary changes.
-- **L-8 — Lockfile / `npm ci` discipline.** Confirm `package-lock.json` is committed and the
-  provisioning/build scripts use `npm ci` (not `npm install`) so a build can't float a caret range
-  to a newer minor. Integrity anchor = the committed lockfile.
+- **L-8 — Lockfile / `npm ci` discipline — CLOSED 2026-09-03 (#260).** `package-lock.json` is
+  committed; `setup-dev.{ps1,sh}`, CI and the release workflow run `npm ci` (issue #49); the one
+  stale `npm install` instruction (`data-contracts.md`) was corrected. Anchor = the lockfile.
 
 ---
 ## 9. First real Windows `D:\` drive bring-up — durable lessons (2026-06-10)
