@@ -29,6 +29,17 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-03 — **Audit 2026-09-02 Phase 9a — early docs sweep (PR #280): the user guide §13 now says
+what an unclean stop loses (a hard pull, a crash, shutdown or logoff with the app open — every
+change since the last lock; the encrypted snapshot survives); `security-model.md` gained "What
+lives or passes outside the drive" (host Chromium profile — four `localStorage` keys, caches, no
+`Dictionaries/`, not cleared on lock; the OS clipboard — 8 Copy sites, only the local-API key copy
+self-clears) and "Residual egress channels" (i)–(iv) with the pending markers #236/#221 and
+#240/#222; OS session end documented as a hard kill (#248); `data-contracts.md` 138 IPC channels +
+`npm ci`; §8 L-8 closed; `renderer-storage-keys.test.ts` pins the key set. Decisions 9/10/14
+(#226/#227/#231) unanswered → the plan defaults (document). DOC-16 #261 investigated in its own PR.**_
+Docs-only, no launch smoke needed. Suite: 371 / 5,568 / 74 excluding the Electron smoke (which passed this run; raw 372 / 5,574 / 74).
+
 _2026-09-03 — **Audit 2026-09-02 Phase 8 (PR 8-b) — SEC-6 #252: every `ipcMain.handle` in the
 main process goes through `guardedHandle(channel, handler, { trustedSenders, log })`
 (`src/main/ipc/guarded-handle.ts`): the body runs only when `event.sender.id` is in
@@ -691,6 +702,9 @@ open round's item stays the last block of §5.)
       unlock reason `vault_recovery_blocked`) + REL-9/DOC-15 exFAT durability docs — dated entry above.
     - **8** (2026-09-03, PRs #278 + #279): SEC-2, SEC-5, SEC-7, REL-1, REL-2, SEC-14 fixed, GAP-3 a
       confirmed residual (8-a); SEC-6 `guardedHandle` over all 137 registrations + the hygiene ban (8-b) — dated entries above.
+    - **9a** (2026-09-03, PR #280): DOC-6, DOC-9, DOC-10, SEC-3 closed by the docs; GAP-1 + SEC-4 documented on
+      defaults (#248, #250 open on #226/#227); residual-egress list (i)–(iv) pending #236/#221 and #240/#222;
+      5a (#236) and 5b-b (#240) stay blocked on #221/#228 and #222 — dated entry above. DOC-16 #261: own PR.
 
 
 ---
