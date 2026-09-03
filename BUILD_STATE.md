@@ -29,6 +29,15 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-04 — **Phase F PR 3 (#285, closes #248 / #226): OS session end locks the workspace —
+`emergencyLock` (the crash path's synchronous best-effort lock, extracted to `main/shutdown.ts`)
+runs from `onSessionEnd` on the lifecycle factory, once, over the same closure as `will-quit`;
+registered on the main window's `session-end` (win32) and on `powerMonitor` `shutdown` (darwin —
+UNVERIFIED, owner live check); premise corrected: neither is an `app` event.**_ Docs:
+`security-model.md` lifecycle bullet, user-guide §13, `known-limitations.md` (the precaution
+narrowed to macOS/Linux), CHANGELOG; §52 addendum row; #217 re-opened for the PR and closed at
+merge. Suite and launch smoke: see the PR body.
+
 _2026-09-04 — **Phase F PR 2 (#284, closes #240 / #243 / #250 — docs only): the three defaults the
 owner confirmed as rulings on 2026-09-03 are now accepted wording — #222 decline (the NTLM leg is
 a permanent `known-limitations.md` line; `security-model.md` residual egress (ii), the D1/L-3
@@ -576,8 +585,8 @@ open round's item stays the last block of §5.)
       `known-limitations.md` line); #243 exFAT durability **documented** (#223) plus one manual
       crash-cut on an exFAT kit before the first kit ships (`packaging.md` checklist item 9);
       #250 clipboard **document only** (#227). All three issues closed.
-    - **OS session end is a hard kill (#248; decision #226):** documented (9a), no handler; "quit
-      before shutdown/logoff" promoted verbatim to `known-limitations.md`.
+    - **OS session end (#248; decision #226 — handler):** DONE, PR 3 (#285): Windows locks on
+      `session-end`; the macOS leg is registered but UNVERIFIED (owner live check); Linux: none.
     - **Chromium egress outside CSP (#254, closed as a confirmed residual):** WebRTC and
       dns-prefetch/preconnect unused by the renderer, reachable only after a compromise; no flag.
     - **No `PRAGMA user_version` (#247; decision #225):** not ratified — an old build cannot tell it
@@ -596,8 +605,9 @@ open round's item stays the last block of §5.)
       touched; `FullSuiteGuard` cannot see dropped individual tests.
     - **Phase F (rulings 2026-09-03 on #221/#222/#223/#225/#226/#227/#228; "other way" designs on
       #218–#231 and in §52):** PR 1 (#283) closed #274 (async walk, `exhausted` surfaced) and swept
-      the last audit-ID comment; PR 2 (#284) closed #240/#243/#250 (above). Next, in order: PR 3
-      (#248 handler), PR 4 (#236 consent + eval-gated RAG framing), PR 5 (#247 `user_version`).
+      the last audit-ID comment; PR 2 (#284) closed #240/#243/#250; PR 3 (#285) closed #248/#226
+      (above). Next, in order: PR 4 (#236 consent + eval-gated RAG framing), PR 5 (#247
+      `user_version`).
 
 ---
 

@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
-import { performShutdown, createAppLifecycleHandlers, SHUTDOWN_OVERALL_DEADLINE_MS } from '../../src/main/shutdown'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  performShutdown,
+  createAppLifecycleHandlers,
+  emergencyLock,
+  SHUTDOWN_OVERALL_DEADLINE_MS
+} from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
 
 // REL-4 (full-audit-2026-06-29 follow-up): the QUIT teardown must abort in-flight chat/RAG streams
@@ -313,6 +320,7 @@ describe('will-quit re-entry during a parked teardown (#238, B1 inverted)', () =
           detachVaultKey: () => order.push('detach'),
           log: quietLog
         }),
+      emergencyLock: () => order.push('emergency-lock'),
       exit: (code) => {
         order.push('exit')
         exits.push(code)
@@ -372,6 +380,7 @@ describe('activate during a parked teardown (#238)', () => {
     let created = 0
     const handlers = createAppLifecycleHandlers({
       performShutdown: () => new Promise<void>(() => {}), // parked forever
+      emergencyLock: () => undefined,
       exit: () => undefined,
       createWindow: () => {
         created++
@@ -388,6 +397,144 @@ describe('activate during a parked teardown (#238)', () => {
     expect(handlers.isShuttingDown()).toBe(true)
     handlers.onActivate()
     expect(created).toBe(1) // no fresh window against a workspace whose lock latch is armed
+  })
+})
+
+// #248: an OS session end (Windows `session-end` on the main window; macOS `powerMonitor`
+// `shutdown`, unverified on a Mac — #226) never passes through `will-quit`, so before this
+// handler the process was killed with the working DB still plaintext on the drive and the next
+// launch shredded the session delta. The handler runs the crash path's synchronous best-effort
+// lock (`emergencyLock`) exactly once, shares the quit closure so a session end and a quit can
+// never lock twice, and lets a `will-quit` that follows the lock exit at once (a prevented quit
+// that never exits would make macOS report the app as cancelling the shutdown).
+describe('OS session end (#248) — a best-effort synchronous lock, exactly once', () => {
+  /** The real session-end lock and the real (parkable) quit teardown over ONE fake ctx. */
+  function sessionHarness() {
+    const order: string[] = []
+    const exits: number[] = []
+    let windows = 1
+    const { ctx, release } = parkedCtx(order)
+    const handlers = createAppLifecycleHandlers({
+      performShutdown: () =>
+        performShutdown(ctx, {
+          inFlightStreams: new Map(),
+          detachVaultKey: () => order.push('detach'),
+          log: quietLog
+        }),
+      emergencyLock: () =>
+        emergencyLock(ctx, {
+          detachVaultKey: () => order.push('detach'),
+          killSidecarChildren: () => order.push('reap'),
+          log: quietLog
+        }),
+      exit: (code) => {
+        order.push('exit')
+        exits.push(code)
+      },
+      createWindow: () => {
+        order.push('createWindow')
+        windows++
+      },
+      windowCount: () => windows,
+      killSidecarChildren: () => order.push('reap'),
+      log: quietLog
+    })
+    return { order, exits, release, handlers, setWindows: (n: number) => void (windows = n) }
+  }
+
+  it('locks the unlocked workspace SYNCHRONOUSLY on session end — flush, lock, reap — exactly once', () => {
+    const { order, exits, handlers } = sessionHarness()
+    handlers.onSessionEnd({ reasons: ['shutdown'] })
+    // No await: the OS kills the process as soon as the handler returns, so everything that
+    // matters happened by now. The local-API stop is fire-and-forget (in-process, no orphan).
+    expect(order).toEqual(['localApi.stop', 'detach', 'lock', 'reap'])
+    expect(handlers.isShuttingDown()).toBe(true)
+    expect(exits).toEqual([]) // the lock does not exit by itself — the OS ends the process
+  })
+
+  it('a second emission does not lock twice', () => {
+    const { order, handlers } = sessionHarness()
+    handlers.onSessionEnd({ reasons: ['logoff'] })
+    handlers.onSessionEnd({ reasons: ['logoff'] })
+    handlers.onSessionEnd() // the macOS leg carries no event
+    expect(order.filter((l) => l === 'lock')).toHaveLength(1)
+    expect(order.filter((l) => l === 'reap')).toHaveLength(1)
+  })
+
+  it('a will-quit AFTER the session-end lock exits at once — no teardown, no second lock', async () => {
+    const { order, exits, handlers } = sessionHarness()
+    handlers.onSessionEnd()
+    const ev = quitEvent()
+    handlers.onWillQuit(ev)
+    await drain()
+    expect(ev.defaultPrevented).toBe(true)
+    expect(order).not.toContain('embedder.stop(parked)') // the awaited teardown never started
+    expect(order.filter((l) => l === 'lock')).toHaveLength(1)
+    expect(order.slice(-2)).toEqual(['reap', 'exit']) // reaped again right before the exit
+    expect(exits).toEqual([0])
+    // …and a will-quit re-entry after that exit is inert too.
+    handlers.onWillQuit(quitEvent())
+    expect(exits).toEqual([0])
+  })
+
+  it('a session end DURING a parked quit teardown defers to it — the teardown owns the one lock', async () => {
+    const { order, exits, release, handlers } = sessionHarness()
+    handlers.onWillQuit(quitEvent())
+    await drain()
+    expect(order).toContain('embedder.stop(parked)')
+    expect(order).not.toContain('lock')
+    handlers.onSessionEnd({ reasons: ['shutdown'] })
+    expect(order).not.toContain('lock') // not a second, competing lock mid-teardown
+    release()
+    await drain()
+    expect(order.filter((l) => l === 'lock')).toHaveLength(1)
+    expect(order.slice(-3)).toEqual(['lock', 'reap', 'exit']) // the exit path still reaps
+    expect(exits).toEqual([0])
+  })
+
+  it('no fresh window after a session-end lock (the activate guard shares the closure)', () => {
+    const { order, handlers, setWindows } = sessionHarness()
+    setWindows(0)
+    handlers.onActivate()
+    expect(order.filter((l) => l === 'createWindow')).toHaveLength(1) // a normal Dock click creates one
+    setWindows(0)
+    handlers.onSessionEnd()
+    handlers.onActivate()
+    expect(order.filter((l) => l === 'createWindow')).toHaveLength(1) // …but none against the locked vault
+  })
+
+  it('emergencyLock is throw-safe: a lock that throws still reaps the sidecar children', () => {
+    const order: string[] = []
+    const ctx = {
+      localApi: { stop: async () => Promise.reject(new Error('already stopped')) },
+      workspace: {
+        shutdown: () => {
+          order.push('lock(throws)')
+          throw new Error('ENOSPC')
+        }
+      }
+    } as unknown as AppContext
+    const errors: string[] = []
+    emergencyLock(ctx, {
+      detachVaultKey: () => order.push('detach'),
+      killSidecarChildren: () => order.push('reap'),
+      log: { error: (msg: string) => void errors.push(msg), info: () => undefined }
+    })
+    expect(order).toEqual(['detach', 'lock(throws)', 'reap'])
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+    // A null ctx (a crash before initBackend) is safe too.
+    expect(() =>
+      emergencyLock(null, { detachVaultKey: () => undefined, killSidecarChildren: () => undefined, log: quietLog })
+    ).not.toThrow()
+  })
+
+  it('index.ts wires the handler: session-end on the main window (win32), powerMonitor shutdown (darwin), the crash path', () => {
+    // Source-text pin (idiom: window-security.test.ts) — index.ts cannot be imported under vitest.
+    const indexSrc = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8')
+    expect(indexSrc).toContain("on('session-end', lifecycle.onSessionEnd)")
+    expect(indexSrc).toContain("powerMonitor.on('shutdown'")
+    // The crash path itself (not the lifecycle deps binding) calls the lock before exit(1).
+    expect(indexSrc).toMatch(/process\.on\('uncaughtException'[\s\S]*?\bemergencyLock\(ctx\)[\s\S]*?process\.exit\(1\)/)
   })
 })
 

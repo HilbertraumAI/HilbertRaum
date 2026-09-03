@@ -1021,10 +1021,14 @@ show the *"scan and fix this drive?"* prompt on the next plug-in (harmless, but 
 [`troubleshooting.md`](troubleshooting.md) if it appears).
 
 **If the app is not quit cleanly:** pulling the drive while the app is running, a power cut or a
-forced kill of the app, or shutting down or logging off the computer with the app still open
-loses any changes made since the workspace last locked (the last **Lock now** or a normal quit).
-The workspace itself is not damaged — it reopens from that last locked point — but everything
-after it is gone, so quit the app first.
+forced kill of the app loses any changes made since the workspace last locked (the last
+**Lock now** or a normal quit). The workspace itself is not damaged — it reopens from that last
+locked point — but everything after it is gone, so quit the app first.
+
+**Shutting down, restarting or logging off with the app still open:** on Windows the app locks
+the workspace on its own as the session ends. That is a best-effort safety net — a very large
+workspace may not finish locking in the time Windows allows — so quitting the app first is
+still the sure way. On a Mac this is not yet verified: quit the app before you shut down.
 
 ---
 

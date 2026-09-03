@@ -4,11 +4,14 @@ import {
   awaitInFlightStreamsSettled
 } from './ipc/inflight'
 import { detachVaultKey as realDetachVaultKey, log as realLog } from './services/logging'
+import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import type { AppContext } from './services/context'
 
 // Graceful QUIT teardown (Electron `will-quit`), extracted from `main/index.ts` so its ORDERING is
 // unit-testable with a fake ctx (the real `main/index.ts` registers app handlers at import time and
-// cannot be imported under jsdom). The will-quit handler is the only caller.
+// cannot be imported under jsdom). The will-quit handler is the only caller. The SYNCHRONOUS
+// best-effort lock the crash path and the OS session-end handler share (`emergencyLock`, #248)
+// lives here too, for the same reason.
 
 /** Injection seams so a unit test can drive `performShutdown` without the real singletons. */
 export interface ShutdownDeps {
@@ -233,6 +236,62 @@ async function withOverallDeadline(
   }
 }
 
+// ---- The synchronous best-effort lock (crash path + OS session end) -------------------
+
+/** Injection seams for `emergencyLock` (defaults are the real singletons). */
+export interface EmergencyLockDeps {
+  /** Flush the encrypted diagnostics log before `lock()` zeroes the vault key. */
+  detachVaultKey?: () => void
+  /** `killRegisteredSidecarChildren` — the synchronous, throw-safe-per-PID reaper. */
+  killSidecarChildren?: () => void
+  log?: Pick<typeof realLog, 'error' | 'info'>
+}
+
+/**
+ * Lock the workspace NOW, synchronously and best-effort, for a process that is about to die
+ * without `will-quit`: the `uncaughtException` crash path (`main/index.ts`) and an OS session
+ * end (#248 — Windows `session-end`, macOS `powerMonitor` `shutdown`). NOT the awaited
+ * `performShutdown` teardown: nothing here can be awaited, because whoever called this exits
+ * or is killed as soon as it returns. In order: arm the workspace lock latch (so no content
+ * surface admits new work between here and the kill), fire-and-forget the local API's stop
+ * (in-process, no orphan class — only so live external sockets abort instead of dangling until
+ * the OS reaps them), flush the encrypted log while the vault key is live, then
+ * `workspace.shutdown()` = `lock()` (re-encrypt + shred the plaintext working DB; for
+ * `plaintext_dev` a checkpoint + close so no `-wal`/`-shm` outlive the process, #51). Then reap
+ * every registered sidecar child: on Windows the children survive the parent, so without this
+ * a `llama-server` holding GBs of RAM and a loopback port outlives the session (the data-safety
+ * half first, the hygiene half in its OWN try so a lock throw cannot skip it). A failed lock is
+ * logged and left to the next launch's recovery (`workspace.shutdown()` closes the re-opened
+ * handle so the working file rests bare and newer than `.enc` — the salvage signature `init()`
+ * rolls forward instead of shredding).
+ */
+export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = {}): void {
+  const detachVaultKey = deps.detachVaultKey ?? realDetachVaultKey
+  const killSidecarChildren = deps.killSidecarChildren ?? killRegisteredSidecarChildren
+  const log = deps.log ?? realLog
+  try {
+    ctx?.workspace.beginLock?.()
+  } catch {
+    /* best-effort */
+  }
+  try {
+    void ctx?.localApi?.stop().catch(() => {})
+  } catch {
+    /* best-effort */
+  }
+  try {
+    detachVaultKey()
+    ctx?.workspace.shutdown()
+  } catch (err) {
+    log.error('emergency lock failed — the next launch recovers the working copy', String(err))
+  }
+  try {
+    killSidecarChildren()
+  } catch {
+    /* best-effort */
+  }
+}
+
 // ---- The Electron app-lifecycle handlers (#238) -------------------
 
 /** The subset of Electron's `will-quit` event the handler uses (kept electron-free for tests). */
@@ -240,10 +299,23 @@ export interface WillQuitEventLike {
   preventDefault(): void
 }
 
+/**
+ * The subset of Electron's `WindowSessionEndEvent` (Windows `session-end`) the handler reads;
+ * the macOS `powerMonitor` `shutdown` listener is typed without an event.
+ */
+export interface SessionEndEventLike {
+  reasons?: ReadonlyArray<string>
+}
+
 /** The Electron surface the handlers touch — injected so `tests/unit/shutdown.test.ts` drives them. */
 export interface AppLifecycleDeps {
   /** The graceful teardown; the real caller binds `performShutdown(ctx)`. Never expected to reject. */
   performShutdown: () => Promise<void>
+  /**
+   * The synchronous best-effort lock for a process that is about to be killed without a quit
+   * (#248); the real caller binds `emergencyLock(ctx)`. Never expected to throw.
+   */
+  emergencyLock: () => void
   /** `app.exit` — the ONLY way the process leaves once a quit has begun. */
   exit: (code: number) => void
   /** `createWindow` (a macOS Dock click fires `activate` with no window open). */
@@ -262,7 +334,13 @@ export interface AppLifecycleDeps {
 export interface AppLifecycleHandlers {
   onWillQuit: (event: WillQuitEventLike) => void
   onActivate: () => void
-  /** True from the first `will-quit` on (tests + diagnostics). */
+  /**
+   * The OS is ending the session (#248): Windows `session-end` on the main window (a shutdown,
+   * restart or log-off — cannot be prevented; the process is killed once the handler returns),
+   * or macOS `powerMonitor` `shutdown` (unverified on a Mac — #226). Runs `emergencyLock` once.
+   */
+  onSessionEnd: (event?: SessionEndEventLike) => void
+  /** True from the first `will-quit` or session end on (tests + diagnostics). */
   isShuttingDown: () => boolean
 }
 
@@ -278,20 +356,44 @@ export interface AppLifecycleHandlers {
  * click (`activate`) during the parked teardown opened a fresh window against a workspace whose
  * runtime latch and lock latch were already armed.
  *
- * The two handlers must share the closure: a per-handler copy of the flag would freeze the
+ * The handlers must share the closure: a per-handler copy of the flag would freeze the
  * activate guard at `false` in production while a test constructing it with `true` still passed.
  * `main/index.ts` cannot be imported under vitest (it takes the single-instance lock and may call
  * `app.exit` at module scope), so everything Electron is injected via `AppLifecycleDeps`.
+ *
+ * #248 — the OS session-end handler shares it too, so a session end and a quit can never lock
+ * twice, whichever arrives first: a session end during a running quit teardown defers to it
+ * (that teardown owns the lock and exits from its own finally — on Windows this ordering cannot
+ * even occur, `session-end` is a window event and the quit closed every window before
+ * `will-quit`); a `will-quit` AFTER the session-end lock exits at once instead of starting the
+ * teardown — the vault is already locked and the children reaped, and a prevented quit that never
+ * exited would make macOS report the app as cancelling the shutdown.
  */
 export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycleHandlers {
   let shuttingDown = false
+  /** The session-end lock ran (nothing awaits; a later `will-quit` has nothing left to do). */
+  let sessionEndLocked = false
   return {
     onWillQuit: (event) => {
       // #238: EVERY will-quit is prevented — the first one starts the teardown, any later one
       // arrives while it is still running (the DB is plaintext until `performShutdown` locks
       // it). The teardown's own finally is the only exit; `app.exit` re-emits nothing.
       event.preventDefault()
-      if (shuttingDown) return
+      if (shuttingDown) {
+        if (sessionEndLocked) {
+          sessionEndLocked = false // exit once; `app.exit` returns nothing to re-enter with
+          // Reap again right before the exit: on macOS a cancelled system shutdown leaves the
+          // app alive after the lock, and a background model auto-start could have spawned a
+          // child since (`emergencyLock` arms the workspace latch, not the runtime latch).
+          try {
+            deps.killSidecarChildren()
+          } catch {
+            /* best-effort */
+          }
+          deps.exit(0)
+        }
+        return
+      }
       shuttingDown = true
       void deps
         .performShutdown()
@@ -309,6 +411,22 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       // #238: no fresh window once a quit has begun.
       if (shuttingDown) return
       if (deps.windowCount() === 0) deps.createWindow()
+    },
+    onSessionEnd: (event) => {
+      // #248: once only, and never beside a running quit teardown (see the factory comment).
+      if (shuttingDown) {
+        deps.log.info('session-end: a quit teardown is already running — it owns the lock')
+        return
+      }
+      shuttingDown = true
+      sessionEndLocked = true
+      // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
+      deps.log.info('session-end: locking workspace', { reasons: event?.reasons ?? [] })
+      try {
+        deps.emergencyLock()
+      } catch (err) {
+        deps.log.error('session-end: lock failed', String(err))
+      }
     },
     isShuttingDown: () => shuttingDown
   }
