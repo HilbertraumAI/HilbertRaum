@@ -798,7 +798,7 @@ describe('runtime-sources.yaml ocr: block (D32)', () => {
     llama_cpp: {
       version: 'b1',
       builds: [
-        { os: 'win', arch: 'x64', backend: 'cpu', url: 'u', sha256: 'h', extract_to: 'runtime/llama.cpp/win' }
+        { os: 'win', arch: 'x64', backend: 'cpu', url: 'https://x/f.gz', sha256: 'h', extract_to: 'runtime/llama.cpp/win' }
       ]
     }
   }
@@ -835,8 +835,8 @@ describe('runtime-sources.yaml ocr: block (D32)', () => {
         ocr: {
           version: 'v',
           files: [
-            { lang: 'deu', url: 'u', sha256: 'h', dest: 'ocr/a.gz' },
-            { lang: 'deu', url: 'u', sha256: 'h', dest: 'ocr/b.gz' }
+            { lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: 'ocr/a.gz' },
+            { lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: 'ocr/b.gz' }
           ]
         }
       }).ok
@@ -844,7 +844,7 @@ describe('runtime-sources.yaml ocr: block (D32)', () => {
     expect(
       validateRuntimeSources({
         ...base,
-        ocr: { version: 'v', files: [{ lang: 'deu', url: 'u', sha256: 'h', dest: '../escape.gz' }] }
+        ocr: { version: 'v', files: [{ lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: '../escape.gz' }] }
       }).ok
     ).toBe(false)
   })
@@ -898,7 +898,7 @@ describe('planOcrDownloads (assets.ts)', () => {
     await expect(
       planOcrDownloads(root, {
         version: 'v',
-        files: [{ lang: 'deu', url: 'u', sha256: 'h', dest: '../outside.gz' }]
+        files: [{ lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: '../outside.gz' }]
       })
     ).rejects.toThrow(/escapes the drive root/)
   })
