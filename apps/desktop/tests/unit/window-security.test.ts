@@ -41,7 +41,7 @@ describe('buildCsp', () => {
     expect(buildCsp(false)).toBe(
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
         "connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; " +
-        "base-uri 'none'; frame-ancestors 'none'"
+        "base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
     )
   })
 
@@ -49,7 +49,7 @@ describe('buildCsp', () => {
     expect(buildCsp(true)).toBe(
       "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
         "style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:* http://localhost:*; " +
-        "img-src 'self' data:; font-src 'self'"
+        "img-src 'self' data:; font-src 'self'; form-action 'none'"
     )
   })
 
@@ -79,25 +79,29 @@ describe('buildMetaCsp (BE-2, ocr-audit 2026-07-18 — the meta tags baked into 
   // production renderer posture. electron.vite.config.ts rewrites both pages' meta tags
   // from this function at build time; tests/integration/csp-build-output.test.ts proves
   // the built HTML matches these strings byte for byte.
+  // #266: both metas carry the header's hardening tail (`object-src`/`base-uri`/
+  // `frame-ancestors`) plus `form-action`, so the fallback layer denies the same things.
+  const TAIL = "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+
   it('index page: prod is the dev policy with the localhost connect-src entries stripped', () => {
     expect(buildMetaCsp(false, 'index')).toBe(
       "default-src 'self'; script-src 'self'; connect-src 'self'; " +
-        "img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'"
+        `img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; ${TAIL}`
     )
     expect(buildMetaCsp(true, 'index')).toBe(
       "default-src 'self'; script-src 'self'; connect-src 'self' ws://localhost:* http://localhost:*; " +
-        "img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'"
+        `img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; ${TAIL}`
     )
   })
 
   it('ocr page: same split, plus the pdfjs allowances (worker-src blob:, img-src blob:)', () => {
     expect(buildMetaCsp(false, 'ocr')).toBe(
       "default-src 'self'; script-src 'self'; connect-src 'self'; " +
-        "img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'"
+        `img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; ${TAIL}`
     )
     expect(buildMetaCsp(true, 'ocr')).toBe(
       "default-src 'self'; script-src 'self'; connect-src 'self' ws://localhost:* http://localhost:*; " +
-        "img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'"
+        `img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; ${TAIL}`
     )
   })
 
@@ -114,6 +118,50 @@ describe('buildMetaCsp (BE-2, ocr-audit 2026-07-18 — the meta tags baked into 
       // And prod allows NO scheme://host origin at all (blob:/data: carry no host).
       expect(prod).not.toMatch(/[a-z]+:\/\//)
     }
+  })
+})
+
+// #266: the header is the enforced layer and the meta is the fallback if the header wiring
+// ever regresses, so the hardening tail must exist in BOTH with the same values — and
+// neither carried `form-action` before. Behavioural: the directives are parsed, not the
+// exact strings compared (those pins live above).
+describe('CSP hardening tail — header/meta parity (#266)', () => {
+  const directives = (csp: string): Map<string, string> =>
+    new Map(
+      csp
+        .split(';')
+        .map((d) => d.trim())
+        .filter(Boolean)
+        .map((d) => {
+          const [name, ...rest] = d.split(/\s+/)
+          return [name, rest.join(' ')] as [string, string]
+        })
+    )
+  const TAIL = ['object-src', 'base-uri', 'frame-ancestors', 'form-action']
+
+  it("the production header refuses plugins, base changes, framing and form submits ('none' each)", () => {
+    const header = directives(buildCsp(false))
+    for (const name of TAIL) expect(header.get(name), name).toBe("'none'")
+  })
+
+  it('the dev header carries form-action too (HMR needs none of the four)', () => {
+    expect(directives(buildCsp(true)).get('form-action')).toBe("'none'")
+  })
+
+  it('every baked meta carries the same tail with the same values, dev and prod', () => {
+    for (const page of ['index', 'ocr'] as const) {
+      for (const isDev of [false, true]) {
+        const meta = directives(buildMetaCsp(isDev, page))
+        for (const name of TAIL) {
+          expect(meta.get(name), `${page} ${isDev ? 'dev' : 'prod'} ${name}`).toBe("'none'")
+        }
+      }
+    }
+  })
+
+  it('the KaTeX style allowance and the pdfjs worker allowance survive', () => {
+    expect(directives(buildCsp(false)).get('style-src')).toBe("'self' 'unsafe-inline'")
+    expect(directives(buildMetaCsp(false, 'ocr')).get('worker-src')).toBe("'self' blob:")
   })
 })
 
@@ -164,6 +212,9 @@ describe('call-site wiring (the flags cannot be re-inlined)', () => {
   // The unit pins above are worthless if index.ts stops using the module — so pin the
   // wiring at source level too (idiom: ocr.test.ts preload-channel contract). A
   // re-inlined `sandbox: false` after the spread would fail the no-inline-literal scan.
+  // watch-item (#266): these are source-text pins, brittle by design — index.ts cannot be
+  // imported without Electron, so a behavioural form is not small. Re-check them whenever
+  // the CSP builders or the window call sites move.
   const indexSrc = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8')
   const rasterizerSrc = readFileSync(
     join(__dirname, '../../src/main/services/ocr/rasterizer.ts'),

@@ -38,7 +38,7 @@ interface Harness {
 }
 
 async function makeHarness(
-  opts: { echoAnswer?: string; headersTimeoutMs?: number } = {}
+  opts: { echoAnswer?: string; headersTimeoutMs?: number; bodyTotalTimeoutMs?: number } = {}
 ): Promise<Harness> {
   const logged: string[] = []
   const mgr = new RuntimeManager((startOpts) => ({
@@ -71,6 +71,7 @@ async function makeHarness(
     estimateBusySeconds: () => 30,
     appVersion: '0.0.0-test',
     headersTimeoutMs: opts.headersTimeoutMs,
+    bodyTotalTimeoutMs: opts.bodyTotalTimeoutMs,
     // Without a matching sweep interval Node would not notice the expiry for 30 s.
     connectionsCheckIntervalMs: opts.headersTimeoutMs != null ? 100 : undefined,
     // Capture EVERYTHING the server would write to the app log.
@@ -284,6 +285,46 @@ describe('local API hardening — hostile wire input is bounded', () => {
       headers: authed(h.token),
       body
     })
+    expect(ok.status).toBe(200)
+  })
+
+  it('the SERVER cuts off a body that trickles forever — a total deadline, not only the idle timer (#255)', async () => {
+    // One byte every 25 ms keeps the idle timer reset for as long as the client likes, and
+    // sixteen such sockets exhaust the listener. Only a TOTAL body deadline ends it. The seam
+    // shortens that deadline so the test can watch the server hang up; without the deadline
+    // the socket stays open and this test fails on its own timer.
+    const h = await makeHarness({ bodyTotalTimeoutMs: 400 })
+    const socket = net.connect(h.port, '127.0.0.1')
+    socket.on('error', () => {}) // an RST is a valid way for the server to end it
+    await new Promise<void>((r) => socket.once('connect', r))
+    socket.write(
+      [
+        'POST /v1/chat/completions HTTP/1.1',
+        `host: 127.0.0.1:${h.port}`,
+        `authorization: Bearer ${h.token}`,
+        'content-type: application/json',
+        'content-length: 100000', // far below the body cap: the cap never ends this
+        '',
+        ''
+      ].join('\r\n')
+    )
+    const trickle = setInterval(() => {
+      if (!socket.destroyed) socket.write('x')
+    }, 25)
+    const startedAt = Date.now()
+    const closedByServer = await new Promise<boolean>((resolve) => {
+      socket.once('close', () => resolve(true))
+      const timer = setTimeout(() => resolve(false), 5000)
+      timer.unref?.()
+    })
+    clearInterval(trickle)
+    socket.destroy()
+    expect(closedByServer).toBe(true)
+    expect(Date.now() - startedAt).toBeLessThan(5000)
+
+    // No generation was ever started, and the listener is unharmed.
+    expect(h.mgr.isGenerating()).toBe(false)
+    const ok = await fetch(`${h.base}/v1/models`, { headers: authed(h.token) })
     expect(ok.status).toBe(200)
   })
 

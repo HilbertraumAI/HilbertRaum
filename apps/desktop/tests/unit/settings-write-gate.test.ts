@@ -11,6 +11,7 @@ import {
   seedSettings,
   updateSettings
 } from '../../src/main/services/settings'
+import { DEFAULT_SETTINGS, type AppSettings } from '../../src/shared/types'
 
 // BE-1 (full-audit 2026-07-10): the write gate's generic type check had two holes —
 // (a) `value === null` bypassed it for EVERY key, so `{ checksumCache: null }` persisted over
@@ -193,5 +194,89 @@ describe('local API settings (local-api P2)', () => {
     const serialized = JSON.stringify(s)
     expect(serialized).not.toContain(token)
     expect(serialized).not.toContain('hr-')
+  })
+})
+
+// The key allowlist used `key in DEFAULT_SETTINGS`, which is true for INHERITED names: a
+// renderer patch built as JSON.parse('{"__proto__": …}') carries an own `__proto__` property
+// and passed the gate. No prototype pollution (JSON.parse never assigns a prototype), but a
+// junk row of unbounded size in the encrypted settings blob, parsed on every unlock (#251).
+// The gate is `Object.hasOwn` now and the byte cap applies to every non-primitive write.
+// The pre-fix behaviour was reproduced during the review that raised #251 by a scratch test
+// whose output was not archived; this block is its inverted, durable form.
+describe('settings write gate — inherited keys are not settings (#251)', () => {
+  function rowFor(db: Db, key: string): string | undefined {
+    const row = db.prepare('SELECT value_json FROM settings WHERE key = ?').get(key) as
+      | { value_json: string }
+      | undefined
+    return row?.value_json
+  }
+  // Built with JSON.parse: an object LITERAL `{ __proto__: … }` would set the prototype
+  // instead of creating an own property, which is not what the IPC boundary delivers.
+  function protoPatch(json: string): Partial<AppSettings> {
+    const patch = JSON.parse(json) as Record<string, unknown>
+    expect(Object.hasOwn(patch, '__proto__')).toBe(true)
+    return patch as Partial<AppSettings>
+  }
+
+  it('A: a `__proto__` key writes no row', () => {
+    const db = freshDb()
+    updateSettings(db, protoPatch('{"__proto__": {"polluted": 1}}'))
+    expect(rowFor(db, '__proto__')).toBeUndefined()
+  })
+
+  it('B: Object.prototype is untouched and the read-back carries no junk (control)', () => {
+    const db = freshDb()
+    updateSettings(db, protoPatch('{"__proto__": {"polluted": 1}}'))
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    const s = getSettings(db) as unknown as Record<string, unknown>
+    expect(s.polluted).toBeUndefined()
+    expect(Object.hasOwn(s, 'polluted')).toBe(false)
+  })
+
+  it('C: a known key cannot be overridden through the prototype chain on a later read (control)', () => {
+    const db = freshDb()
+    updateSettings(db, protoPatch('{"__proto__": {"theme": "PWNED", "allowNetwork": false}}'))
+    const s = getSettings(db)
+    expect(s.theme).toBe(DEFAULT_SETTINGS.theme)
+    expect(s.allowNetwork).toBe(true)
+  })
+
+  it('D: a `constructor` payload writes no row and pollutes nothing', () => {
+    const db = freshDb()
+    updateSettings(db, { constructor: { prototype: { polluted2: 1 } } } as unknown as Partial<AppSettings>)
+    expect(rowFor(db, 'constructor')).toBeUndefined()
+    expect(({} as Record<string, unknown>).polluted2).toBeUndefined()
+  })
+
+  it('E: a 2 MB `__proto__` value is not stored (it used to persist unbounded)', () => {
+    const db = freshDb()
+    const patch = JSON.parse('{"__proto__": null}') as Record<string, unknown>
+    Object.defineProperty(patch, '__proto__', {
+      value: { junk: 'x'.repeat(2_000_000) },
+      enumerable: true,
+      writable: true,
+      configurable: true
+    })
+    expect(Object.hasOwn(patch, '__proto__')).toBe(true)
+    updateSettings(db, patch as Partial<AppSettings>)
+    expect(rowFor(db, '__proto__')).toBeUndefined()
+  })
+
+  it('F: the settings still read back after all of that (smoke)', () => {
+    const db = freshDb()
+    updateSettings(db, protoPatch('{"__proto__": {"polluted": 1}}'))
+    updateSettings(db, { constructor: {} } as unknown as Partial<AppSettings>)
+    const s = getSettings(db)
+    expect(s).toBeDefined()
+    expect(s.localApiPort).toBe(4980)
+  })
+
+  it('the byte cap covers every non-primitive write, not only the three named object keys', () => {
+    const db = freshDb()
+    updateSettings(db, { skillInfoSeen: ['x'.repeat(MAX_SETTINGS_OBJECT_BYTES + 1)] })
+    expect(getSettings(db).skillInfoSeen).toEqual([])
+    updateSettings(db, { skillInfoSeen: ['a', 'b'] })
+    expect(getSettings(db).skillInfoSeen).toEqual(['a', 'b'])
   })
 })

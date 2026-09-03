@@ -141,6 +141,9 @@ describe('injection suite (spec §29.4)', () => {
     // Every internal anchor stays index-derived even with a hostile source KEY.
     expect(html).not.toMatch(/href="(?!#)/)
     expect(html).toContain('id="src-1"')
+    // The CSP meta survives the hostile render unchanged and unduplicated (#253).
+    expect(html.match(/http-equiv="Content-Security-Policy"/g)).toHaveLength(1)
+    expect(html).toContain(`content="default-src 'none'; style-src 'unsafe-inline'"`)
   })
 
   it('keeps hostile markdown inert (rendered as escaped plain text, never as markup)', () => {
@@ -171,6 +174,17 @@ describe('self-containment (spec §17.2) + print contract (plan §4 D-1)', () =>
     expect(html.match(/<style>/g)).toHaveLength(1)
     expect(html).toContain('<meta charset="utf-8">')
     expect(html.startsWith('<!DOCTYPE html>')).toBe(true)
+  })
+
+  // A pack opened in a browser outside the app gets the same self-containment the print
+  // window enforces: the meta forbids every resource class except the embedded stylesheet,
+  // so an escaping failure could never fetch or run anything (#253).
+  it('carries a CSP meta that forbids every active resource, ahead of the stylesheet (#253)', () => {
+    const CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">`
+    expect(html).toContain(CSP)
+    expect(html.match(/http-equiv="Content-Security-Policy"/g)).toHaveLength(1)
+    expect(html.indexOf(CSP)).toBeLessThan(html.indexOf('<style>'))
+    expect(html.indexOf(CSP)).toBeLessThan(html.indexOf('</head>'))
   })
 
   it('honors the D-1 print contract: @page A4, break-inside, system fonts', () => {
