@@ -41,6 +41,31 @@ export class ExternalGenerationBusyError extends Error {
   }
 }
 
+/**
+ * llama-server's per-request timing block, as carried on a streamed chat completion's final
+ * chunk(s) (issues #290/#291). Decode figures (`predicted_*`) cover generation only — prompt
+ * processing (prefill) is the separate `prompt_*` pair — and count TOKENS, not SSE chunks, so
+ * they stay honest under MTP speculative decoding (#182), where one chunk can carry an accepted
+ * draft run of several tokens. Every field is optional: the shape is upstream-defined and a
+ * runtime that sends none (the mock; an older server) simply reports no timings. This is the
+ * ONE shared timings type for the chat runtime boundary (spec §9.2) — the translation sidecar's
+ * `CompletionTimings` describes the native `/completion` shape and is deliberately not reused.
+ */
+export interface RuntimeTimings {
+  /** Generated (decode) tokens in this completion. */
+  predicted_n?: number
+  /** Wall milliseconds spent generating them. */
+  predicted_ms?: number
+  /** Prompt tokens processed (prefill). */
+  prompt_n?: number
+  /** Wall milliseconds spent on prefill. */
+  prompt_ms?: number
+  /** Decode throughput, tokens per second — the headline speed figure. */
+  predicted_per_second?: number
+  /** Prefill throughput, tokens per second. */
+  prompt_per_second?: number
+}
+
 export interface RuntimeChatOptions {
   /** Explicit caps/sampling; when set they WIN over anything `mode` would derive. */
   maxTokens?: number
@@ -68,8 +93,13 @@ export interface RuntimeChatOptions {
    * UI can say the reply was cut off instead of stopping mid-word silently. Never fired on a user
    * abort (an aborted request carries no final chunk). The mock runtime reports 'stop' on a clean
    * finish; a runtime that can't report one simply never calls it (callers treat that as 'stop').
+   *
+   * The optional second argument carries the server's per-request `timings` when the stream
+   * had them (#290/#291 — the last top-level `timings` object seen on any chunk, handed up once
+   * at the `[DONE]` sentinel / clean close). Undefined when the runtime sent none (the mock).
+   * Existing callers that take only the reason stay source-compatible.
    */
-  onFinish?: (finishReason: string) => void
+  onFinish?: (finishReason: string, timings?: RuntimeTimings) => void
   /**
    * Grammar-constrained decoding (D55): when set, the runtime constrains the model's output to
    * this JSON Schema via llama-server's OpenAI-compatible `response_format: { type: 'json_schema' }`,
