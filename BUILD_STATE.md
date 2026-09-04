@@ -29,50 +29,15 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-09-04 — **Phase F PR 5 (#289, closes #247 / #225): the workspace database carries
-`PRAGMA user_version` = `SCHEMA_VERSION` (`services/db.ts`, read before any write): a newer stamp
-is refused with the typed `WorkspaceNewerError` → IPC `workspace_newer` ("update the app"), nothing
-written, the decrypted working file shredded again on the encrypted flavour; version 0 (every
-existing DB) is migrated and stamped in place; builds ≤ 0.1.59 ignore the stamp.**_ Docs:
-`data-contracts.md` (reason union + "Schema stamp"), `security-model.md` single-instance bullet,
-`known-limitations.md`, `troubleshooting.md`, CHANGELOG; §52 addendum row; #217 re-opened for the
-PR and closed at merge. Suite and launch smoke: see the PR body.
-
-_2026-09-04 — **Phase F PR 4 (#287, closes #236 / #221): every http(s) link the renderer opens is
-confirmed by a native dialog naming the site before it reaches the OS browser (`main/external-open.ts`
-behind the unchanged window-open policy; one dialog at a time, Cancel the default); `license_url`
-https-only with its host shown. The RAG excerpt framing (#228, "wrap, gated by the grounded-QA
-eval") did NOT ship: the harness cannot run on the execution machine (Windows Smart App Control
-blocks the K: runtime DLLs) — recorded on #228, which stays open.**_ Docs: `security-model.md`
-(control row, D1, residual egress (i)), `known-limitations.md`, `architecture.md`, user-guide,
-CHANGELOG; §52 addendum row; #217 re-opened for the PR and closed at merge. Suite and launch smoke:
-see the PR body.
-
-_2026-09-04 — **Phase F PR 3 (#285, closes #248 / #226): OS session end locks the workspace —
-`emergencyLock` (the crash path's synchronous best-effort lock, extracted to `main/shutdown.ts`)
-runs from `onSessionEnd` on the lifecycle factory, once, over the same closure as `will-quit`;
-registered on the main window's `session-end` (win32) and on `powerMonitor` `shutdown` (darwin —
-UNVERIFIED, owner live check); premise corrected: neither is an `app` event.**_ Docs:
-`security-model.md` lifecycle bullet, user-guide §13, `known-limitations.md` (the precaution
-narrowed to macOS/Linux), CHANGELOG; §52 addendum row; #217 re-opened for the PR and closed at
-merge. Suite and launch smoke: see the PR body.
-
-_2026-09-04 — **Phase F PR 2 (#284, closes #240 / #243 / #250 — docs only): the three defaults the
-owner confirmed as rulings on 2026-09-03 are now accepted wording — #222 decline (the NTLM leg is
-a permanent `known-limitations.md` line; `security-model.md` residual egress (ii), the D1/L-3
-pointers, BUILD_STATE §8 L-4), #223 document + one manual exFAT crash-cut before the first kit
-ships (`drive-layout.md` Filesystem; `packaging.md` pre-ship checklist item 9), #227 document only
-(the clipboard paragraph and residual egress (iv)); three §52 addendum rows; #217 re-opened for the
-PR and closed at merge.**_ No code, no launch smoke; `repo-hygiene.test.ts` + byte checks green.
-
-_2026-09-04 — **Phase F PR 1 (#283, closes #274): the drop/preflight directory walk is asynchronous
-(`expandPathsBoundedAsync`, same budget/cycle guard/order, pinned to the synchronous reference), both
-import handlers are async, a lock mid-walk queues nothing, and a cut walk is reported (`exhausted` on
-`ImportPreflight`/`ImportJob`/`ImportJobStatus`, a warn log, the EN/DE "too large to scan completely"
-notice); riders: images picker tokens on `createPickerTokens`, the last audit-ID test comment swept.**_
-Ledger: §52 addendum row. Owner rulings of 2026-09-03 on #221/#222/#223/#225/#226/#227/#228 drive
-PRs 2–5 (docs confirmation; session-end handler; external-open consent + eval-gated RAG framing;
-`PRAGMA user_version`). Suite: see the PR body.
+_2026-09-04 — **Phase F close-out (PR #292, docs only): Phase F is complete except #228. PRs 1–5
+(#283 `6329f40e`, #284 `94c9faf8`, #285 `a6d19700`, #287 `533945b8`, #289 `f30c73fc`) closed #274,
+#240/#243/#250, #248/#226, #236/#221, #247/#225; the RAG excerpt framing (#228, "wrap, gated by
+the grounded-QA eval") stays open — the eval probe (`K:\runtime\llama.cpp\win\llama-server.exe
+--version`) exits `0xC0E90002` again on the execution machine (Smart App Control), recorded on
+#228.**_ §5 item 19 collapsed to outcome + pointer + residuals; the five 2026-09-04 entries
+archived verbatim to `docs/build-log.md`; §52 gained the "Phase F close-out" paragraph. Suite on
+master `f30c73fc` (this machine): 375 / 5,628 / 74 raw (the Electron smoke ran; 374 / 5,622 / 74
+excluding it). No code, no launch smoke.
 
 _2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the durable ledger
 `docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46
@@ -99,7 +64,8 @@ successor wave (PR #199), local API docs, #202 sizes, the docs/code-comment audi
 #208 second-instance guard, the #212 CI-flake fix) on 2026-09-02 (preamble budget, making room for
 the full-audit 2026-09-02 remediation round — §5 item 19), and the eleven entries of that round
 (2026-09-02 Phase 0 … 2026-09-03 Phase 9a, PRs #265–#281) on 2026-09-03 at its close-out (Phase 9b;
-ledger `docs/architecture.md` §52) —
+ledger `docs/architecture.md` §52), and the five 2026-09-04 Phase F entries (PRs #283–#289) on
+2026-09-04 at the Phase F close-out (PR #292; §52 "Phase F close-out") —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
@@ -589,31 +555,32 @@ consecutive full runs, zero flakes).** Per-phase gate history (test counts, bund
 per-phase test inventories) lives in git history. (This gate paragraph sits above item 19 so the
 open round's item stays the last block of §5.)
 
-19. **Full-audit 2026-09-02 (security/reliability) — ROUND COMPLETE** (close-out 2026-09-03; ledger
-    `docs/architecture.md` §52 — the ONLY durable copy: the working papers lived under the
-    git-ignored `tmp/` and were deleted after the ledger merged; tracker #217 closed). Phases 0-a…9b
-    = PRs #265, #267 (0), #268 + #269 (1), #270 (comment sweep), #271 (2), #272 (3), #273 (4), #275
-    (5b-a), #276 (6), #277 (7), #278 + #279 (8), #280 + #281 (9a), #282 (9b). Every owner decision
-    #218–#231 ran on its plan default — a default is never upgraded to a ruling — and each decision
-    issue was closed "default stands — re-open on request". Still open (Phase F; §52 "Residuals"):
-    - **External-open consent (#236; decisions #221, #228):** DONE, PR 4 (#287) — the consenting
-      opener + https-only `license_url`. The RAG excerpt framing (#228) did NOT ship: the eval
-      harness is blocked on the execution machine (Smart App Control); #228 stays open.
-    - **Ruled 2026-09-03, recorded 2026-09-04 (Phase F PR 2, #284 — §52 addendum rows):** #240
-      lexical rejection **declined** (#222; the NTLM leg is the accepted residual, a permanent
-      `known-limitations.md` line); #243 exFAT durability **documented** (#223) plus one manual
-      crash-cut on an exFAT kit before the first kit ships (`packaging.md` checklist item 9);
-      #250 clipboard **document only** (#227). All three issues closed.
-    - **OS session end (#248; decision #226 — handler):** DONE, PR 3 (#285): Windows locks on
-      `session-end`; the macOS leg is registered but UNVERIFIED (owner live check); Linux: none.
+19. **Full-audit 2026-09-02 (security/reliability) — ROUND COMPLETE; Phase F COMPLETE except #228**
+    (close-out 2026-09-03; Phase F close-out 2026-09-04; ledger `docs/architecture.md` §52 — the ONLY
+    durable copy: the working papers lived under the git-ignored `tmp/` and were deleted after the
+    ledger merged; tracker #217 closed). Phases 0-a…9b = PRs #265, #267 (0), #268 + #269 (1), #270
+    (comment sweep), #271 (2), #272 (3), #273 (4), #275 (5b-a), #276 (6), #277 (7), #278 + #279 (8),
+    #280 + #281 (9a), #282 (9b). Every owner decision #218–#231 ran on its plan default — a default is
+    never upgraded to a ruling; the owner then ruled on #221/#222/#223/#225/#226/#227/#228 on
+    2026-09-03 and Phase F ran five PRs on 2026-09-04: PR 1 (#283) the autonomous #274 async walk;
+    PR 2 (#284) #240/#243/#250 declined / documented + one exFAT crash-cut / documented (#222/#223/
+    #227); PR 3 (#285) #248 the OS session-end lock (#226; Windows; macOS registered, unverified);
+    PR 4 (#287) #236 the consenting external opener + https-only `license_url` (#221); PR 5 (#289)
+    #247 `PRAGMA user_version` (#225). §52: the seven addendum rows, the "F — PR n" phase-table
+    rows, the "Phase F close-out" paragraph. Still open:
+    - **RAG excerpt framing (#228, in #236; `**DECISION:** wrap, gated by the grounded-QA eval`):**
+      NOT shipped — the grounded-QA harness cannot run on the execution machine (Windows Smart App
+      Control blocks the K: runtime's unsigned `llama.dll`; `llama-server.exe --version` exits
+      `0xC0E90002`, reproduced 2026-09-04 as PR 4's eval gate and again at the close-out). Rides
+      once the eval runs somewhere; #228 carries the change set, the gate and the probe records.
+    - **Owner-only:** the macOS live check of the session-end lock (#226; Linux registers nothing,
+      not ruled); the exFAT crash-cut (`packaging.md` checklist item 9, #223);
+      `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false` (`binary-verifier.ts` — wired, tested,
+      OFF; flipping the constant is the whole enablement).
     - **Chromium egress outside CSP (#254, closed as a confirmed residual):** WebRTC and
       dns-prefetch/preconnect unused by the renderer, reachable only after a compromise; no flag.
-    - **`PRAGMA user_version` (#247; decision #225 — ratify):** DONE, PR 5 (#289) — every DB is
-      stamped `SCHEMA_VERSION`, a newer stamp is refused (`workspace_newer`); builds ≤ 0.1.59 ignore it.
     - **OS-backed workspace lock (#263, accepted; decision #224):** not built.
       **`clearStorageData()` on lock (#231 rider; #249)**: documented only.
-    - **Spawn-time refusal of hashless runtime markers on sold kits:** wired but OFF
-      (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false`, `binary-verifier.ts`; owner call).
     - **Nine owner-runnable manual smokes never run** (recipes in §52): packaged OCR recognition
       (18(c)), double quit, the Windows update-walk GUI leg, lock mid-preview, skills pick/import,
       image + password change, evidence-pack PDF export, one IPC action after the sender guard;
@@ -622,11 +589,6 @@ open round's item stays the last block of §5.)
       `skills-installer`, `third-party-notices`, `ocr`, `rail-labels` tests), the katex hoist
       compare, `as unknown as` private-field injection — convert to behavioural assertions when
       touched; `FullSuiteGuard` cannot see dropped individual tests.
-    - **Phase F (rulings 2026-09-03 on #221/#222/#223/#225/#226/#227/#228; "other way" designs on
-      #218–#231 and in §52):** PR 1 (#283) closed #274 (async walk, `exhausted` surfaced) and swept
-      the last audit-ID comment; PR 2 (#284) closed #240/#243/#250; PR 3 (#285) closed #248/#226;
-      PR 4 (#287) closed #236/#221 (the framing withheld, #228 open — above); PR 5 (#289) closed
-      #247/#225. Phase F is done except #228 — the framing rides once the eval runs somewhere.
 
 ---
 
@@ -704,7 +666,7 @@ the offline/privacy guarantees:
   §-ledger) and the walk is now bounded (entries / depth / wall clock, `limits.ts`); the walk still
   FOLLOWS a symlink to a distinct directory by design, so a picked folder linking to e.g.
   `C:\Windows` still traverses outside the selection (supported extensions only, not RCE).
-  Off-thread walk: #274.
+  Off-thread walk: done (#274, PR #283).
 - **L-7 — Runtime-archive extraction doesn't prevent member traversal (build-time AND in-app;
   scope corrected 2026-07-12, full-audit SEC-2 — the earlier "build-time only" framing was
   wrong).** `Expand-Archive` / `tar -xzf` in `scripts/fetch-runtime.{ps1,sh}` run on the drive

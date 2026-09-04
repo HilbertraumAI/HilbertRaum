@@ -8414,6 +8414,52 @@ the papers by section; each resolves here:
 - The `§N` numbers of THIS file collide across records by standing decision; "§52" means
   this section, the 2026-09-02 ledger directly following §51.
 
+**Phase F close-out (2026-09-04, PR #292, `docs/pf-close-out` — docs only).** The seven owner
+rulings of 2026-09-03 (the `**DECISION:**` comments on #221, #222, #223, #225, #226, #227, #228)
+were executed in PRs 2–5 on 2026-09-04, the autonomous #274 follow-up shipped first as PR 1 —
+each on a feature branch from fresh `origin/master` under the round's ritual (the
+characterisation test red first where code changed, an independent
+reviewer pass with every catch repaired in-PR, `ci-success`, a merge commit; #217 re-opened for
+each PR and closed at its merge): **PR 1** #283 (`6329f40e`, `fix/pf-rel13-async-walk`) closed
+#274; **PR 2** #284 (`94c9faf8`, `docs/pf-decisions-confirmed`) closed #240 / #243 / #250;
+**PR 3** #285 (`a6d19700`, `fix/pf-gap1-session-end`) closed #248 / #226; **PR 4** #287
+(`533945b8`, `fix/pf-sec8-external-open-consent`) closed #236 / #221; **PR 5** #289 (`f30c73fc`,
+`fix/pf-rel4-user-version`) closed #247 / #225. The seven "§52 addendum 2026-09-04" rows and the
+five "F — PR n" phase-table rows above are the per-finding record. Suite on `f30c73fc` (the
+execution machine): 375 files / 5,628 tests / 74 skipped raw, 374 / 5,622 / 74 excluding
+the Electron PDF smoke.
+
+**Still open — one item.** #228 (CODE-1, folded into SEC-8 #236; `**DECISION:** wrap, gated by
+the grounded-QA eval`, 2026-09-03). The framing — wrap the excerpt lists of `buildGroundedPrompt`
+and `buildCompareWholeDocPrompt` (`services/rag/index.ts`) in `grounded-data.ts`-style BEGIN/END
+markers plus a not-instructions guard line worded for excerpts, in the user turn only, and update
+the pins in `chat-compaction.test.ts`, `skills-turn.test.ts` and `rag.test.ts` — ships only with
+before/after numbers from the grounded-QA harness (`tests/manual/model-eval.test.ts`,
+`docs/model-benchmarks.md` §2) on every chat GGUF of the eval drive, judged on the rank > 0
+models: `mean_f1` level or up, `abstain_rate_unans` level or up, `hallucination_rate` level or
+down, within run-to-run noise (`docs/model-benchmarks.md` §9.4); a regression on any ranked model
+or a run that cannot complete means no ship. Blocker: on the execution machine (Windows 11 with
+Smart App Control) the eval drive's runtime does not execute — the probe
+`& K:\runtime\llama.cpp\win\llama-server.exe
+--version` exits `-1058471934` (`0xC0E90002`) with no banner (Code Integrity events 3077/3033 on
+the unsigned `llama.dll` / `llama-common.dll`, 3118 "Smart App Control Block"), reproduced as
+PR 4's eval gate and again at this close-out; not a repo defect, changed by no PR (the policy is
+the owner's machine setting, never altered by a session). The item rides once the harness runs on
+a machine where the runtime executes; #228 carries the change set, the gate and both probe records.
+
+**Owner-only, for no PR:** the macOS live check of the session-end lock (#226 — the ordering
+against `will-quit`, the grace, a Dock-menu Quit, a cancelled shutdown; Linux registers nothing,
+not ruled); the exFAT crash-cut
+session (`packaging.md` pre-ship checklist item 9, #223); the spawn-time refusal of hashless runtime
+markers on sold kits (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false`, `binary-verifier.ts`);
+the nine manual smokes listed under "Residuals" plus the macOS/Linux packaged-OCR and update-walk
+legs before those kits ship. **Machine facts for the record:** the application-control block was
+INTERMITTENT for the dev `electron.exe` (blocked 2026-09-03; ran on 2026-09-04 — every Phase F
+gate's Electron PDF smoke ran) and FIRM for the K: llama.cpp DLLs on 2026-09-04 in both sessions;
+`K:\` is the eval/test drive (the `b9849` Vulkan build), `D:\` the coding disk and never a target.
+BUILD_STATE §5 item 19 is collapsed to outcome + this pointer + the residuals; the five 2026-09-04
+dated entries were archived verbatim to `docs/build-log.md`.
+
 ### §20 Span-transform engine (beta-feedback-2026-07 Phase 6, decision D74)
 
 The C-wave of the beta-feedback wave (#22 LLM-located redaction, #23 targeted edits) asks for one

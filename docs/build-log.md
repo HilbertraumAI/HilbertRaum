@@ -1357,6 +1357,51 @@ tag triggers the release workflow's draft build).
 
 ---
 
+_2026-09-04 — **Phase F PR 5 (#289, closes #247 / #225): the workspace database carries
+`PRAGMA user_version` = `SCHEMA_VERSION` (`services/db.ts`, read before any write): a newer stamp
+is refused with the typed `WorkspaceNewerError` → IPC `workspace_newer` ("update the app"), nothing
+written, the decrypted working file shredded again on the encrypted flavour; version 0 (every
+existing DB) is migrated and stamped in place; builds ≤ 0.1.59 ignore the stamp.**_ Docs:
+`data-contracts.md` (reason union + "Schema stamp"), `security-model.md` single-instance bullet,
+`known-limitations.md`, `troubleshooting.md`, CHANGELOG; §52 addendum row; #217 re-opened for the
+PR and closed at merge. Suite and launch smoke: see the PR body.
+
+_2026-09-04 — **Phase F PR 4 (#287, closes #236 / #221): every http(s) link the renderer opens is
+confirmed by a native dialog naming the site before it reaches the OS browser (`main/external-open.ts`
+behind the unchanged window-open policy; one dialog at a time, Cancel the default); `license_url`
+https-only with its host shown. The RAG excerpt framing (#228, "wrap, gated by the grounded-QA
+eval") did NOT ship: the harness cannot run on the execution machine (Windows Smart App Control
+blocks the K: runtime DLLs) — recorded on #228, which stays open.**_ Docs: `security-model.md`
+(control row, D1, residual egress (i)), `known-limitations.md`, `architecture.md`, user-guide,
+CHANGELOG; §52 addendum row; #217 re-opened for the PR and closed at merge. Suite and launch smoke:
+see the PR body.
+
+_2026-09-04 — **Phase F PR 3 (#285, closes #248 / #226): OS session end locks the workspace —
+`emergencyLock` (the crash path's synchronous best-effort lock, extracted to `main/shutdown.ts`)
+runs from `onSessionEnd` on the lifecycle factory, once, over the same closure as `will-quit`;
+registered on the main window's `session-end` (win32) and on `powerMonitor` `shutdown` (darwin —
+UNVERIFIED, owner live check); premise corrected: neither is an `app` event.**_ Docs:
+`security-model.md` lifecycle bullet, user-guide §13, `known-limitations.md` (the precaution
+narrowed to macOS/Linux), CHANGELOG; §52 addendum row; #217 re-opened for the PR and closed at
+merge. Suite and launch smoke: see the PR body.
+
+_2026-09-04 — **Phase F PR 2 (#284, closes #240 / #243 / #250 — docs only): the three defaults the
+owner confirmed as rulings on 2026-09-03 are now accepted wording — #222 decline (the NTLM leg is
+a permanent `known-limitations.md` line; `security-model.md` residual egress (ii), the D1/L-3
+pointers, BUILD_STATE §8 L-4), #223 document + one manual exFAT crash-cut before the first kit
+ships (`drive-layout.md` Filesystem; `packaging.md` pre-ship checklist item 9), #227 document only
+(the clipboard paragraph and residual egress (iv)); three §52 addendum rows; #217 re-opened for the
+PR and closed at merge.**_ No code, no launch smoke; `repo-hygiene.test.ts` + byte checks green.
+
+_2026-09-04 — **Phase F PR 1 (#283, closes #274): the drop/preflight directory walk is asynchronous
+(`expandPathsBoundedAsync`, same budget/cycle guard/order, pinned to the synchronous reference), both
+import handlers are async, a lock mid-walk queues nothing, and a cut walk is reported (`exhausted` on
+`ImportPreflight`/`ImportJob`/`ImportJobStatus`, a warn log, the EN/DE "too large to scan completely"
+notice); riders: images picker tokens on `createPickerTokens`, the last audit-ID test comment swept.**_
+Ledger: §52 addendum row. Owner rulings of 2026-09-03 on #221/#222/#223/#225/#226/#227/#228 drive
+PRs 2–5 (docs confirmation; session-end handler; external-open consent + eval-gated RAG framing;
+`PRAGMA user_version`). Suite: see the PR body.
+
 _2026-09-03 — **Audit 2026-09-02 Phase 9a — early docs sweep (PR #280): the user guide §13 now says
 what an unclean stop loses (a hard pull, a crash, shutdown or logoff with the app open — every
 change since the last lock; the encrypted snapshot survives); `security-model.md` gained "What
