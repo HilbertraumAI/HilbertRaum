@@ -40,6 +40,9 @@ interface LadderCall {
 
 /** Build a factory whose first `failFirst` llama attempts throw at start(). */
 function ladderHarness(config: {
+  /** Dev build flag + environment for the dev-only HILBERTRAUM_LLAMA_EXTRA_ARGS override. */
+  isDev?: boolean
+  env?: NodeJS.ProcessEnv
   failFirst?: number
   /** Message thrown by the failing rungs (default `rung N failed to start`). */
   failMessage?: string
@@ -145,6 +148,8 @@ function ladderHarness(config: {
 
   const factory = createSelectingRuntimeFactory({
     rootPath: '/root',
+    isDev: config.isDev,
+    env: config.env ?? {},
     resolveBin: () => (config.resolveBin === undefined ? '/bin/llama-server' : config.resolveBin),
     modelExists: () => true,
     makeLlama,
@@ -199,6 +204,26 @@ async function until(cond: () => boolean): Promise<void> {
 }
 
 describe('the GPU start ladder', () => {
+  it('dev build: HILBERTRAUM_LLAMA_EXTRA_ARGS is appended to the GPU rung only', async () => {
+    const env = { HILBERTRAUM_LLAMA_EXTRA_ARGS: ' -ncmoe 40  -ot ple_ngram_embd=CPU -fa on ' }
+    const h = ladderHarness({ probe: [RTX], isDev: true, env, failFirst: 1 })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(2)
+    expect(h.calls[0].extraArgs).toEqual(['-ncmoe', '40', '-ot', 'ple_ngram_embd=CPU', '-fa', 'on'])
+    // The forced-CPU rung is untouched: the override is for GPU placement experiments only.
+    expect(h.calls[1].extraArgs).toEqual(['--device', 'none'])
+  })
+
+  it('packaged build: HILBERTRAUM_LLAMA_EXTRA_ARGS is ignored', async () => {
+    const env = { HILBERTRAUM_LLAMA_EXTRA_ARGS: '-ncmoe 40' }
+    const h = ladderHarness({ probe: [RTX], isDev: false, env })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(1)
+    expect(h.calls[0].extraArgs).toEqual([])
+  })
+
   it('rung 1 passes NO -ngl and NO --device args; backend = gpu per a non-empty probe', async () => {
     const h = ladderHarness({ probe: [RTX] })
     const runtime = h.factory(opts)
