@@ -27,6 +27,10 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Answers from your documents now tell the model more firmly that document text is not
+  instructions.** The excerpts an answer is built from are marked as document content, so a
+  passage that reads like a command ("ignore the rules above …") is something to quote, not to
+  obey. Citations, sources and the answer format are unchanged.
 - **An older HilbertRaum now refuses a workspace written by a newer one instead of opening it
   half-understood.** The workspace database carries a version stamp; a copy of the app that
   finds a newer stamp says "This workspace was written by a newer HilbertRaum — update the app"
