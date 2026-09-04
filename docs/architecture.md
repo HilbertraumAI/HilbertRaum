@@ -12077,12 +12077,17 @@ the lesson of #42 applied up front rather than after a bug report.
   documented; the concern recorded here was that a llama-server batching an accepted draft run
   into one SSE delta would make the probe under-read on an MTP model. #291 was the first
   observation: on the reporter's i9-9900X / RTX 3090 with `qwen3.8-27b-q4` (rung 1a) the card
-  showed 25 tok/s against the server's own 47.9 (draft acceptance 106/186) — the pinned b9849
-  DOES pack the accepted run into one chunk, and the wall-clock window paid the prefill on top.
-  Resolved by reading the server's `timings` off the final chunk (`readChatSSE` → `onFinish`,
+  showed 25 tok/s against the server's own figure (the issue's 47.9 came from a newer `-fa` build;
+  the pinned b9849 with the app's exact argv does 26–32 t/s on that card, #298) — the server DOES
+  pack an accepted draft run into one chunk (the #298 capture: `draft_n` 20, `draft_n_accepted` 15,
+  `predicted_n` 25 in far fewer chunks), and the wall-clock window paid the prefill on top.
+  Resolved by reading the server's `timings` off the finish chunk (`readChatSSE` → `onFinish`,
   `RuntimeTimings`) and reporting `predicted_per_second` — decode tokens over decode time — with
-  the chunk count kept only as a flagged fallback (`BenchmarkResult.speedBasis`). Record:
-  `docs/benchmark.md` step 4.
+  the chunk count kept only as a flagged fallback (`BenchmarkResult.speedBasis`). **Verified on
+  hardware 2026-09-04 (#298):** Diagnostics 28.2 / 25.9 (MTP) and 21.8 / 21.8 (no MTP) against
+  `print_timing` 28.20 / 25.87 and 21.84 / 21.85; a 207-token prompt gave 25.7 / 25.5 — prefill no
+  longer moves the value. The real wire shape is pinned by `tests/fixtures/chat-sse-timings-b9849.txt`.
+  Record: `docs/benchmark.md` step 4.
 - **Two owed hardware gates — both RAN AND PASSED 2026-08-19** (issue #182, on the i9-9900X +
   RTX 3090 rig): the §2 grounded-QA harness re-run for both quants with MTP on held score parity
   within cross-run tolerance (which was the gate, NOT byte identity), and the §9.1 smoke legs on

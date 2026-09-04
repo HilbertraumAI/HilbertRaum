@@ -50,6 +50,13 @@ TTFT on the `first_token` clock) keyed to the persisted message id; `ChatScreen`
 design record: `architecture.md` "Chat & streaming" → "Per-answer speed line" §1–§3. PR 3 = #297
 (376 / 5,670 / 74; +37 tests over master across the stack). Dev launch not possible on this
 machine (Smart App Control blocks `electron.exe` and the sidecar) — build + suite only.
+**#298 VERIFIED on hardware the same day** (the #291 reporter, i9-9900X / RTX 3090, pinned b9849,
+every box ticked: Diagnostics 28.2 / 25.9 MTP and 21.8 no-MTP vs `print_timing` 28.20 / 25.87 /
+21.84; prefill-independent; speed line 32 / 28 tok/s + token counts exact, abort / reload / mock /
+German / document-answer legs clean; the app's argv confirmed from `/proc` — no `-fa`). **PR 4
+(`fix/290-291-pr4-timings-fixture`):** the captured b9849 transcript committed as
+`tests/fixtures/chat-sse-timings-b9849.txt` (+ `chat-sse-timings-fixture.test.ts`), the records
+corrected (the issue's 47.9 was a `-fa` build; b9849 does 26–32 t/s there); closes #290/#291/#298.
 
 _2026-09-04 — **Phase F PR 6 (PR #293, `fix/pf-code1-rag-excerpt-framing`): #228 shipped — the excerpt
 block of `buildGroundedPrompt` / `buildCompareWholeDocPrompt` is framed as document content, not
@@ -626,13 +633,14 @@ open round's item stays the last block of §5.)
     excluded) with the chunk count as the flagged fallback; `BenchmarkResult.speedBasis`; the card
     says "Decode speed" + the token count; MTP record §7 watch item → observed. PR 3 (#290): chat
     only — one ephemeral `chat:speed:<id>` payload per finished answer, `tok/s · s to first
-    token · tokens`, EN/DE, nothing persisted. **Both issues stay OPEN** ("Refs", not "Closes"):
-    the "matches llama-server's `print_timing` within rounding" legs need a real runtime and the
-    execution machine cannot launch one (Smart App Control, exit `0xC0E90002`) — verification
-    issue **#298** (assigned to the #291 reporter) carries both acceptance lists, the
-    reconstructed rung-1a argv (the app does not log it) and a request for a captured final-chunk
-    SSE transcript from the b9849 pin, to be committed as a fixture. PRs: #295 → #296 → #297
-    (stacked; merge in order, re-basing each onto master as the one below lands). Thresholds (`VERY_LOW_TOKENS_PER_SECOND`,
+    token · tokens`, EN/DE, nothing persisted. The PRs used "Refs", not "Closes": the "matches
+    llama-server's `print_timing` within rounding" legs need a real runtime and the execution
+    machine cannot launch one (Smart App Control, exit `0xC0E90002`) — verification issue
+    **#298** (the #291 reporter) carried both acceptance lists and the reconstructed rung-1a argv.
+    **#298 VERIFIED 2026-09-04, every box ticked** (figures in the dated entry); the captured b9849
+    transcript is committed by PR 4 (`fix/290-291-pr4-timings-fixture`, which closes
+    #290/#291/#298). PRs: #295 → #296 → #297 → PR 4 (stacked; merge in order, re-basing each onto
+    master as the one below lands). Remaining after merge: nothing — collapse this item. Thresholds (`VERY_LOW_TOKENS_PER_SECOND`,
     `SLOW_PICK_TOKENS_PER_SECOND`) deliberately NOT retuned — they now compare a decode figure
     against probe-basis calibration (recorded in `docs/benchmark.md` / `model-benchmarks.md` §6.5).
 
