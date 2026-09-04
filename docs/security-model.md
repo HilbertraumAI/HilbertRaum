@@ -771,7 +771,13 @@ password. Four guards close this:
   0.1.59 or newer. A pre-0.1.59 build takes no lock at all, so the drive launchers refuse to
   start while more than one app artifact sits at the drive root (naming what to delete, never
   deleting) and the update procedure deletes the prior artifact first (`drive-layout.md`
-  "Updating a drive", #235). Dev builds get their
+  "Updating a drive", #235). A second floor sits in the database itself (#247, owner decision
+  #225, PR #289): the workspace database carries `PRAGMA user_version` = `SCHEMA_VERSION`,
+  read before any write, so a build that finds a HIGHER stamp refuses the workspace with
+  "written by a newer HilbertRaum — update the app" and changes nothing — an old artifact
+  started directly can no longer open a newer workspace half-understood. Builds ≤ 0.1.59 never
+  read the stamp, so that floor holds only when the older build is newer than PR #289 (see
+  `data-contracts.md` "Schema stamp"). Dev builds get their
   own `userData` suffix (`-dev`), so `npm run dev` no longer operates on the production
   vault at all (mixed dev/release access to one vault is what widened the incident
   window). Residual: two processes with *different* `userData` pointed at one drive

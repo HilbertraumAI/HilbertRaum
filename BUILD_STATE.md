@@ -29,6 +29,15 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-04 — **Phase F PR 5 (#289, closes #247 / #225): the workspace database carries
+`PRAGMA user_version` = `SCHEMA_VERSION` (`services/db.ts`, read before any write): a newer stamp
+is refused with the typed `WorkspaceNewerError` → IPC `workspace_newer` ("update the app"), nothing
+written, the decrypted working file shredded again on the encrypted flavour; version 0 (every
+existing DB) is migrated and stamped in place; builds ≤ 0.1.59 ignore the stamp.**_ Docs:
+`data-contracts.md` (reason union + "Schema stamp"), `security-model.md` single-instance bullet,
+`known-limitations.md`, `troubleshooting.md`, CHANGELOG; §52 addendum row; #217 re-opened for the
+PR and closed at merge. Suite and launch smoke: see the PR body.
+
 _2026-09-04 — **Phase F PR 4 (#287, closes #236 / #221): every http(s) link the renderer opens is
 confirmed by a native dialog naming the site before it reaches the OS browser (`main/external-open.ts`
 behind the unchanged window-open policy; one dialog at a time, Cancel the default); `license_url`
@@ -599,8 +608,8 @@ open round's item stays the last block of §5.)
       `session-end`; the macOS leg is registered but UNVERIFIED (owner live check); Linux: none.
     - **Chromium egress outside CSP (#254, closed as a confirmed residual):** WebRTC and
       dns-prefetch/preconnect unused by the renderer, reachable only after a compromise; no flag.
-    - **No `PRAGMA user_version` (#247; decision #225):** not ratified — an old build cannot tell it
-      opened a newer DB (the launcher refusal, PR #272, closes the trigger).
+    - **`PRAGMA user_version` (#247; decision #225 — ratify):** DONE, PR 5 (#289) — every DB is
+      stamped `SCHEMA_VERSION`, a newer stamp is refused (`workspace_newer`); builds ≤ 0.1.59 ignore it.
     - **OS-backed workspace lock (#263, accepted; decision #224):** not built.
       **`clearStorageData()` on lock (#231 rider; #249)**: documented only.
     - **Spawn-time refusal of hashless runtime markers on sold kits:** wired but OFF
@@ -616,8 +625,8 @@ open round's item stays the last block of §5.)
     - **Phase F (rulings 2026-09-03 on #221/#222/#223/#225/#226/#227/#228; "other way" designs on
       #218–#231 and in §52):** PR 1 (#283) closed #274 (async walk, `exhausted` surfaced) and swept
       the last audit-ID comment; PR 2 (#284) closed #240/#243/#250; PR 3 (#285) closed #248/#226;
-      PR 4 (#287) closed #236/#221 (the framing withheld, #228 open — above). Next: PR 5 (#247
-      `user_version`); then the framing once the eval runs somewhere.
+      PR 4 (#287) closed #236/#221 (the framing withheld, #228 open — above); PR 5 (#289) closed
+      #247/#225. Phase F is done except #228 — the framing rides once the eval runs somewhere.
 
 ---
 

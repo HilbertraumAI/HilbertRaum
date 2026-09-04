@@ -27,6 +27,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **An older HilbertRaum now refuses a workspace written by a newer one instead of opening it
+  half-understood.** The workspace database carries a version stamp; a copy of the app that
+  finds a newer stamp says "This workspace was written by a newer HilbertRaum — update the app"
+  and changes nothing. Existing workspaces are stamped the next time they open. Copies up to
+  0.1.59 do not read the stamp, so the protection starts with this release.
 - **A link in an answer or a model's licence link now asks before it opens your browser.** The
   app shows the site and the address first; Cancel is the default, and only Open hands the
   link to your browser. If several links try to open at once, only the first asks and the rest
