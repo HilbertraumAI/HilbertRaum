@@ -38,6 +38,7 @@ import {
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
 import { MAX_REDUCE_CONTINUATIONS } from '../../src/main/services/rag/whole-doc-tree'
+import { stripSkillFenceEcho } from '../../src/main/services/skills/prompt'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import {
   createQueuedDocument,
@@ -533,7 +534,11 @@ describe('generateGroundedAnswer', () => {
 
     expect(tokens.length).toBeGreaterThan(1)
     expect(msg.role).toBe('assistant')
-    expect(msg.content).toBe(tokens.join(''))
+    // The mock runtime echoes the whole grounded prompt back, framing lines included; the persisted
+    // content is the streamed text minus any echoed app framing (#228 — the same scrub as the skill fence).
+    expect(msg.content).toBe(stripSkillFenceEcho(tokens.join('')))
+    expect(tokens.join('')).toContain(EXCERPT_GUARD_LINE)
+    expect(msg.content).not.toContain(EXCERPT_GUARD_LINE)
     expect(msg.citations).toBeDefined()
     expect(msg.citations?.[0]).toMatchObject({ label: 'S1', sourceTitle: 'science.pdf', pageNumber: 2 })
 

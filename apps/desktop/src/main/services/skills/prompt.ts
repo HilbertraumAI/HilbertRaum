@@ -1,5 +1,6 @@
 import { approxTokenCount } from '../ingestion/chunker'
 import { log } from '../logging'
+import { EXCERPT_BEGIN, EXCERPT_END, EXCERPT_GUARD_LINE } from '../rag/grounded-data'
 
 // Skill prompt integration (skills plan §11). Builds the ONE selected skill's fenced data
 // block + computes the token budget so the fence never starves the base preamble, the final
@@ -32,7 +33,9 @@ export const SKILL_GUARD_LINE =
  * dynamic "Skill name: <title>" line). A no-op when no framing line is present, so non-skill answers
  * and clean skill answers stay byte-identical; only a detected echo triggers cleanup (drop the lines,
  * collapse the blank run a removed delimiter leaves, trim the ends). Applied after `stripThinkBlocks`
- * on every model answer (plain chat + grounded), the same place reasoning is scrubbed.
+ * on every model answer (plain chat + grounded), the same place reasoning is scrubbed. The grounded
+ * excerpt framing (#228: `EXCERPT_BEGIN` / `EXCERPT_END` / `EXCERPT_GUARD_LINE`, fixed single lines that
+ * ride in EVERY grounded turn) is scrubbed the same way.
  */
 export function stripSkillFenceEcho(content: string): string {
   const framing = new Set<string>([
@@ -40,7 +43,10 @@ export function stripSkillFenceEcho(content: string): string {
     FENCE_END,
     SCOPE_LINE,
     INSTRUCTIONS_LABEL,
-    SKILL_GUARD_LINE
+    SKILL_GUARD_LINE,
+    EXCERPT_BEGIN,
+    EXCERPT_END,
+    EXCERPT_GUARD_LINE
   ])
   const lines = content.split('\n')
   if (!lines.some((l) => framing.has(l.trim()))) return content

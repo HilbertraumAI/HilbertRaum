@@ -459,7 +459,9 @@ BEGIN/END markers and the guard line (`EXCERPT_BEGIN` / `EXCERPT_END` / `EXCERPT
 `rag/grounded-data.ts` — the same shape the grounded-data mode and the skill fence use) are fixed
 English and byte-stable; they ride in this user turn only, so `GROUNDED_SYSTEM_PROMPT` is unchanged
 and the cache prefix holds. `buildCompareWholeDocPrompt` wraps its whole two-document block once, after
-the compare preface. Shipped under owner decision #228 ("wrap, gated by the grounded-QA eval") with a
+the compare preface; a partial half's app-authored notice is printed BEFORE the block (an instruction
+from the app must not sit under the not-instructions guard). An echoed marker or guard line is
+scrubbed from the answer like the skill-fence framing (`stripSkillFenceEcho`). Shipped under owner decision #228 ("wrap, gated by the grounded-QA eval") with a
 before/after run of the grounded-QA harness (`architecture.md` §52 carries the numbers).
 
 **RT-2 — the rules ride in the cacheable system prompt (perf audit 2026-06-18, Wave P3).** The rules

@@ -5,7 +5,9 @@
 // ACTUAL question over verified data — quoting figures verbatim, never computing one. The figures stay the
 // parser's; the model only reads them (the §8.1 division of labor). Kept in its own file (plan §W3: "new
 // small prompt builder — prefer a new file") so it is pure + unit-testable with no DB/runtime imports —
-// `generateGroundedDataAnswer` in `index.ts` does the streaming orchestration around it.
+// `generateGroundedDataAnswer` in `index.ts` does the streaming orchestration around it. Since #228 this
+// import-free file is also home to the ordinary excerpt framing (`EXCERPT_*` below) that the relevance,
+// whole-document and compare builders in `index.ts` share with it.
 
 /**
  * The STABLE, model-facing rules for the grounded-data turn (fixed English, app-authored — D-L6

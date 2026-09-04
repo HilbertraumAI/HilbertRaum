@@ -1169,20 +1169,26 @@ export function buildCompareWholeDocPrompt(
   }>,
   skillFence?: string | null
 ): string {
+  // A PARTIAL half prints its own notice (named "Document A"/"Document B") so the model never reports a
+  // value as "removed"/"absent" merely because it fell past this document's provided beginning (audit
+  // §2.2). The notice is an instruction FROM the app, so it is printed BEFORE the delimited excerpt block
+  // (#228) — never inside it, where the guard line would tell the model to disregard it.
+  const notices: string[] = []
   const docs = groups
     .map((g, i) => {
       const letter = i === 0 ? 'A' : 'B'
       const excerpts = g.chunks
         .map((c) => `[${c.label}] File: ${c.sourceTitle}${sourceMeta(c)}\n"${c.text}"`)
         .join('\n\n')
-      // A PARTIAL half prints its own notice under its label so the model never reports a value as
-      // "removed"/"absent" merely because it fell past this document's provided beginning (audit §2.2).
-      const notice = g.truncated
-        ? `\n${truncationNotice(g.chunksCovered ?? g.chunks.length, g.chunksTotal ?? g.chunks.length, `Document ${letter}`)}`
-        : ''
-      return `${describeCompareDoc(letter, g.title, g.importedAt)}:${notice}\n${excerpts}`
+      if (g.truncated) {
+        notices.push(
+          truncationNotice(g.chunksCovered ?? g.chunks.length, g.chunksTotal ?? g.chunks.length, `Document ${letter}`)
+        )
+      }
+      return `${describeCompareDoc(letter, g.title, g.importedAt)}:\n${excerpts}`
     })
     .join('\n\n')
+  const noticeBlock = notices.length > 0 ? `${notices.join('\n')}\n\n` : ''
   const skillBlock = skillFence ? `\n${skillFence}\n` : ''
   return `Question:
 ${question}
@@ -1191,7 +1197,7 @@ Compare the two documents below. They are labelled A and B by import order ONLY 
 you which is the older or newer version. Describe the differences between Document A and Document B;
 never call either the "old" or the "new" version.
 
-${EXCERPT_BEGIN}
+${noticeBlock}${EXCERPT_BEGIN}
 ${docs}
 ${EXCERPT_END}
 ${EXCERPT_GUARD_LINE}
@@ -1365,15 +1371,15 @@ export interface GroundedAnswerOptions {
   answerPrefix?: string
 }
 
+/** Approx tokens of the fixed excerpt framing every grounded turn carries (#228) — counted by the budgets. */
+const EXCERPT_FRAMING_TOKENS = approxPromptTokens(`${EXCERPT_BEGIN}\n${EXCERPT_END}\n${EXCERPT_GUARD_LINE}`)
+
 /**
  * Token budget for the whole-document chunk block (skill-whole-doc engine). The real launched
  * context window minus the answer reserve, the grounded system prompt, the question scaffolding,
  * and an allowance for the skill fence (the fence's precise placement/trim is still done downstream
  * in `generateGroundedAnswer`). Never below a small floor so a tiny window still includes something.
  */
-/** Approx tokens of the fixed excerpt framing every grounded turn carries (#228) — counted by the budgets. */
-const EXCERPT_FRAMING_TOKENS = approxPromptTokens(`${EXCERPT_BEGIN}\n${EXCERPT_END}\n${EXCERPT_GUARD_LINE}`)
-
 export function wholeDocumentBudgetTokens(
   contextTokens: number,
   question: string,
