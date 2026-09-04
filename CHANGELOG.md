@@ -27,6 +27,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A link in an answer or a model's licence link now asks before it opens your browser.** The
+  app shows the site and the address first; Cancel is the default, and only Open hands the
+  link to your browser. If several links try to open at once, only the first asks and the rest
+  are dropped. In the download dialog, the licence link also names its site and is offered only
+  for an `https://` address.
 - **Shutting down or logging off Windows with the app open no longer loses the session.** The
   app now locks the workspace itself as the Windows session ends, so the changes since the last
   lock survive. It is a best-effort safety net — a very large workspace may not finish locking in

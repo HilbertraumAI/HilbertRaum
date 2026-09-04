@@ -1974,6 +1974,21 @@ export const en = {
   // EMISSION set (D-L5): ephemeral strings localized at the emission site via tMain()
   // — IPC throws, runtime notices, preflight problems, task-status errors, dialog
   // titles. These never reach the DB.
+  // #236: the native confirmation before an http(s) link from an answer or a model manifest
+  // opens in the OS browser — the site on its own line, the URL (cut past 200 characters,
+  // marked), Cancel as the default.
+  'main.dialog.openLink.title': 'Open this link in your browser?',
+  'main.dialog.openLink.message': 'Open this link in your browser?',
+  'main.dialog.openLink.site': 'Site: {site}',
+  // Non-inflecting count form (reads the same at 1) — on the i18n test's reviewed list.
+  'main.dialog.openLink.truncated': 'The link is shortened here — characters not shown: {hidden}.',
+  'main.dialog.openLink.credentials':
+    'The address carries a username — the site it actually opens is the one on the Site line.',
+  'main.dialog.openLink.hint':
+    'This link comes from an answer or a model manifest, not from HilbertRaum. Your browser ' +
+    'will connect to this site.',
+  'main.dialog.openLink.open': 'Open',
+  'main.dialog.openLink.cancel': 'Cancel',
   'main.workspace.wrongPassword':
     "That password didn't unlock your workspace. Check it and try again.",
   'main.workspace.openFailed': 'Could not open the workspace.',

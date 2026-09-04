@@ -165,8 +165,10 @@ internet for, and it never happens by itself:
    builder deliberately disabled downloads in the drive's policy — rare; the app is fully usable
    without it either way).
 2. On **AI Model**, click **Download** on the model you want. A confirmation shows the size,
-   the license (with a link), and the address the file comes from. If the model's license
-   hasn't been pre-reviewed, you'll also tick a box accepting it.
+   the license (with a link that names the site it points to), and the address the file comes
+   from. If the model's license hasn't been pre-reviewed, you'll also tick a box accepting it.
+   Like every link in the app, the license link opens in your browser only after you confirm
+   the small dialog that shows its site and address (§6).
 3. The download shows its progress on the model's card; you can **Cancel** any time. A
    cancelled or interrupted download **resumes where it stopped** when you start it again.
 4. The file is checksum-verified before the app will use it — a corrupted download is
@@ -246,7 +248,13 @@ Starting fresh? The empty chat suggests a few example questions — click one to
 the message box — and, if you haven't imported anything yet, offers **Add documents to ask
 about them**.
 
-Everything you type and everything the model replies stays on your device.
+Everything you type and everything the model replies stays on your device. The one exception
+is a link you choose to follow: clicking a link in an answer first shows a small dialog with the
+site and the address — **Cancel** is the default, and only **Open** hands the address to
+your browser, which then connects to that site (so the site sees your IP address, as with any
+page you visit). A model can write any address into an answer, so read the site line before
+you press Open. If several links try to open at once, only the first asks; the rest are
+dropped.
 
 ### Dictate a message (voice)
 
@@ -859,7 +867,8 @@ Open **Settings → Privacy & data** (or click the **🔒 Local · Offline** sta
 to see where your data lives and confirm the app's network state. Internet access is used **only**
 for optional model/engine downloads — it is on by default so you can fetch a model out of the
 box, including on a prepared commercial drive; every download is explicit and
-confirmed, and the core app — chat, documents, search — never goes online. Logs are stored
+confirmed, and the core app — chat, documents, search — never goes online. (A link you confirm
+in the dialog described in §6 is opened by your *browser*, not by the app.) Logs are stored
 **locally** on the drive (encrypted on an encrypted workspace) and never uploaded.
 
 Two related switches in Settings: **Developer mode** (Settings → General → Developer card, off by default)

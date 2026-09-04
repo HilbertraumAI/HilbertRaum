@@ -113,8 +113,11 @@ export function buildMetaCsp(isDev: boolean, page: 'index' | 'ocr'): string {
  * the app window — but only safe web schemes. Handing an arbitrary renderer-supplied
  * URL (e.g. file://, smb://) to the OS handler is a known Electron pitfall, so anything
  * other than http(s) is dropped; the in-app open is ALWAYS denied. `openExternal` is
- * injected (the real caller passes shell.openExternal) so the policy is unit-testable.
- * The OCR rasterizer's worker window does not use this — it denies everything inline.
+ * injected so the policy is unit-testable — the real caller passes the consenting opener
+ * from external-open.ts (#236: a native dialog naming the site stands between this callback
+ * and the OS browser; tests/unit/external-open.test.ts pins that nothing under src/main
+ * reaches the Electron sink directly). The OCR rasterizer's worker window does not use
+ * this — it denies everything inline.
  */
 export function createWindowOpenPolicy(
   openExternal: (url: string) => void

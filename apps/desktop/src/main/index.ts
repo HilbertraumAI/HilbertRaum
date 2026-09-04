@@ -1,9 +1,10 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, powerMonitor, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
-import { applyUiLanguageSetting, initMainI18n } from './services/i18n'
+import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
+import { createExternalOpener } from './external-open'
 import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
 import { installNavigationGuard } from './services/navigation-guard'
 import {
@@ -704,10 +705,17 @@ function createWindow(): void {
 
   // Open external links in the OS browser, never inside the app window — policy in
   // window-security.ts (only http(s) reaches the OS handler; the in-app open is always
-  // denied), pinned by tests/unit/window-security.test.ts.
-  mainWindow.webContents.setWindowOpenHandler(
-    createWindowOpenPolicy((url) => void shell.openExternal(url))
-  )
+  // denied), pinned by tests/unit/window-security.test.ts. #236: the OS handler is the
+  // consenting opener (external-open.ts) — a native dialog names the site and the full URL
+  // before anything reaches the browser, Cancel is the default, and further opens are dropped
+  // while a dialog is up; pinned by tests/unit/external-open.test.ts.
+  const openExternalWithConsent = createExternalOpener({
+    dialog,
+    shell,
+    getWindow: () => mainWindow,
+    t: tMain
+  })
+  mainWindow.webContents.setWindowOpenHandler(createWindowOpenPolicy(openExternalWithConsent))
 
   // Block in-app navigation to remote origins (defence in depth). SEC-3
   // (backend-audit-2026-06-27): the guard covers BOTH `will-navigate` and `will-redirect`

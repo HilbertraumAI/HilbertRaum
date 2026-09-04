@@ -873,3 +873,44 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
     // The remembered job ends terminal ('done'), so nothing live leaks into later tests.
   })
 })
+
+describe('ModelsScreen — the licence link names its host and is https-only (#236)', () => {
+  async function openConfirm(m: ModelInfo): Promise<ReturnType<typeof within>> {
+    stub({ models: [m] })
+    const user = userEvent.setup()
+    render(<ModelsScreen />)
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    return within(screen.getByRole('dialog'))
+  }
+
+  it('shows the licence host beside the link, and the href is the https URL', async () => {
+    const dialog = await openConfirm(
+      model({
+        download: {
+          url: 'https://example.test/qwen3-4b.gguf',
+          sizeBytes: 2_900_000_000,
+          licenseUrl: 'https://licenses.example.test/qwen/LICENSE',
+          licenseApproved: true
+        }
+      })
+    )
+    const link = dialog.getByRole('link', { name: /read the license/ })
+    expect(link).toHaveAttribute('href', 'https://licenses.example.test/qwen/LICENSE')
+    expect(dialog.getByText(/licenses\.example\.test/)).toBeInTheDocument()
+  })
+
+  it('a non-https licence URL (a stale or hostile manifest) never renders as a link', async () => {
+    const dialog = await openConfirm(
+      model({
+        download: {
+          url: 'https://example.test/qwen3-4b.gguf',
+          sizeBytes: 2_900_000_000,
+          licenseUrl: 'http://licenses.example.test/qwen/LICENSE',
+          licenseApproved: true
+        }
+      })
+    )
+    expect(dialog.queryByRole('link', { name: /read the license/ })).not.toBeInTheDocument()
+    expect(dialog.getByText(/apache-2\.0/)).toBeInTheDocument() // the licence name still shows
+  })
+})

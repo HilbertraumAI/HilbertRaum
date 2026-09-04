@@ -48,6 +48,24 @@ function fmtGb(bytes: number | null, fallbackGb: number, lang: UiLanguage): stri
  * (M-U5). Unlike `fmtGb` this does not round the manifest figure away; it only routes
  * the decimal separator + grouping through the UI language (German "4,5 GB").
  */
+/**
+ * The licence link as rendered — its href and the host shown beside it — or null when it must
+ * not render as a link (#236): the manifest validator already refuses a non-https `license_url`,
+ * but a stale cached manifest or a hostile one that slipped past an older build must not become
+ * a clickable `javascript:` or `http:` anchor behind the fixed "read the license" label.
+ * Stricter than the chat-link gate, which also allows `http:`. Returning both from one parse
+ * keeps the anchor and the validated host from ever diverging.
+ */
+function licenseLink(url: string | null | undefined): { href: string; host: string } | null {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' ? { href: parsed.href, host: parsed.host } : null
+  } catch {
+    return null
+  }
+}
+
 function fmtGbNum(gb: number, lang: UiLanguage): string {
   return `${gb.toLocaleString(lang)} GB`
 }
@@ -726,6 +744,7 @@ export function ModelsScreen(): JSX.Element {
   function confirmDialog(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
     const needsAck = !m.download.licenseApproved
+    const license = licenseLink(m.download.licenseUrl)
     const close = (): void => {
       setConfirming(null)
       setLicenseAck(false)
@@ -746,12 +765,16 @@ export function ModelsScreen(): JSX.Element {
           <dt>{t('models.confirm.license')}</dt>
           <dd>
             {m.license}
-            {m.download.licenseUrl && (
+            {license && (
               <>
                 {' — '}
-                <a href={m.download.licenseUrl} target="_blank" rel="noreferrer">
+                <a href={license.href} target="_blank" rel="noreferrer">
                   {t('models.confirm.readLicense')}
                 </a>
+                {/* #236: the destination host is shown, like the download address below it. */}
+                {' ('}
+                <code>{license.host}</code>
+                {')'}
               </>
             )}
           </dd>

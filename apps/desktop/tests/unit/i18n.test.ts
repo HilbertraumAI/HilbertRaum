@@ -226,7 +226,7 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
     }
   })
 
-  it('CODE-8 net: every {count}/{done} key consumed via plain t() is on the reviewed non-grammatical list', () => {
+  it('CODE-8 net: every {count}/{done}/{hidden} key consumed via plain t() is on the reviewed non-grammatical list', () => {
     // full-audit 2026-07-11 CODE-8 (task 2): the plural class must not regress. A key whose
     // value interpolates {count} (or the {done} progress twin) and is consumed via plain
     // t() can render broken grammar the moment a call site passes 1 ("Retry 1 failed
@@ -247,7 +247,9 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
       'models.context.autoResolved', // the same pre-formatted figure in the Auto label
       // " ({count} cores)" — a single-core machine would read "(1 cores)"; registered as a
       // residual in the remediation plan's discoveries, deliberately not fixed in Phase G.
-      'diag.bench.cores'
+      'diag.bench.cores',
+      // #236: "characters not shown: {hidden}" — a figure after a colon, no noun inflects.
+      'main.dialog.openLink.truncated'
     ])
     // Scan the shipped source for plain `t('key'` consumptions (bound renderer t and the
     // shared t(lang, …) form differ in shape — the latter never matches `t('`). The read is
@@ -273,7 +275,7 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
         const key = m[1]
         const value = catalog[key]
         if (value === undefined) continue // dynamic/derived keys are out of static reach
-        if (!/\{count\}|\{done\}/.test(value)) continue
+        if (!/\{count\}|\{done\}|\{hidden\}/.test(value)) continue
         if (!NON_GRAMMATICAL.has(key)) offenders.add(key)
       }
     }
@@ -286,7 +288,7 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
     // or de-counted key must be pruned here, not silently ignored.
     for (const key of NON_GRAMMATICAL) {
       expect(catalog[key], `stale allowlist entry ${key}`).toBeDefined()
-      expect(/\{count\}|\{done\}/.test(catalog[key]), `allowlisted key no longer counts: ${key}`).toBe(true)
+      expect(/\{count\}|\{done\}|\{hidden\}/.test(catalog[key]), `allowlisted key no longer counts: ${key}`).toBe(true)
     }
   })
 

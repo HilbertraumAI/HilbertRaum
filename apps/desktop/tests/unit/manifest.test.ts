@@ -194,6 +194,33 @@ describe('validateManifest — optional download block (Phase 12)', () => {
     expect(res.errors.some((e) => e.includes('https'))).toBe(true)
   })
 
+  // #236: `license_url` renders as a link in the download dialog, so it takes the same
+  // https-only rule as `download.url` — a hostile manifest cannot plant an http: or
+  // javascript: destination behind the fixed "read the license" label.
+  it('rejects a non-https license_url (http:, javascript:, a bare host) — #236', () => {
+    for (const bad of ['http://example.test/LICENSE', 'javascript:alert(1)', 'example.test/LICENSE', '']) {
+      const res = validateManifest(rawManifest({ download: downloadBlock({ license_url: bad }) }))
+      expect(res.ok, `license_url ${JSON.stringify(bad)} must be refused`).toBe(false)
+      expect(res.errors.some((e) => e.includes('download.license_url') && e.includes('https'))).toBe(true)
+    }
+  })
+
+  it('rejects a non-https mmproj.download.license_url too (#236)', () => {
+    const hash = 'd'.repeat(64)
+    const res = validateManifest(
+      rawManifest({
+        role: 'vision',
+        mmproj: {
+          local_path: 'models/vision/mmproj.gguf',
+          sha256: hash,
+          download: { url: 'https://x/y.gguf', sha256: hash, license_url: 'http://x/LICENSE' }
+        }
+      })
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('mmproj.download.license_url'))).toBe(true)
+  })
+
   it('rejects a negative size_bytes', () => {
     const res = validateManifest(rawManifest({ download: downloadBlock({ size_bytes: -5 }) }))
     expect(res.ok).toBe(false)

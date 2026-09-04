@@ -29,6 +29,16 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-04 — **Phase F PR 4 (#287, closes #236 / #221): every http(s) link the renderer opens is
+confirmed by a native dialog naming the site before it reaches the OS browser (`main/external-open.ts`
+behind the unchanged window-open policy; one dialog at a time, Cancel the default); `license_url`
+https-only with its host shown. The RAG excerpt framing (#228, "wrap, gated by the grounded-QA
+eval") did NOT ship: the harness cannot run on the execution machine (Windows Smart App Control
+blocks the K: runtime DLLs) — recorded on #228, which stays open.**_ Docs: `security-model.md`
+(control row, D1, residual egress (i)), `known-limitations.md`, `architecture.md`, user-guide,
+CHANGELOG; §52 addendum row; #217 re-opened for the PR and closed at merge. Suite and launch smoke:
+see the PR body.
+
 _2026-09-04 — **Phase F PR 3 (#285, closes #248 / #226): OS session end locks the workspace —
 `emergencyLock` (the crash path's synchronous best-effort lock, extracted to `main/shutdown.ts`)
 runs from `onSessionEnd` on the lifecycle factory, once, over the same closure as `will-quit`;
@@ -577,9 +587,9 @@ open round's item stays the last block of §5.)
     (5b-a), #276 (6), #277 (7), #278 + #279 (8), #280 + #281 (9a), #282 (9b). Every owner decision
     #218–#231 ran on its plan default — a default is never upgraded to a ruling — and each decision
     issue was closed "default stands — re-open on request". Still open (Phase F; §52 "Residuals"):
-    - **External-open consent (#236; decisions #221, #228):** a renderer http(s) `window.open`
-      still reaches `shell.openExternal` unconfirmed; the residual wording landed (9a), no code —
-      5a never opened. Its containment sentence is promoted verbatim to `known-limitations.md`.
+    - **External-open consent (#236; decisions #221, #228):** DONE, PR 4 (#287) — the consenting
+      opener + https-only `license_url`. The RAG excerpt framing (#228) did NOT ship: the eval
+      harness is blocked on the execution machine (Smart App Control); #228 stays open.
     - **Ruled 2026-09-03, recorded 2026-09-04 (Phase F PR 2, #284 — §52 addendum rows):** #240
       lexical rejection **declined** (#222; the NTLM leg is the accepted residual, a permanent
       `known-limitations.md` line); #243 exFAT durability **documented** (#223) plus one manual
@@ -605,9 +615,9 @@ open round's item stays the last block of §5.)
       touched; `FullSuiteGuard` cannot see dropped individual tests.
     - **Phase F (rulings 2026-09-03 on #221/#222/#223/#225/#226/#227/#228; "other way" designs on
       #218–#231 and in §52):** PR 1 (#283) closed #274 (async walk, `exhausted` surfaced) and swept
-      the last audit-ID comment; PR 2 (#284) closed #240/#243/#250; PR 3 (#285) closed #248/#226
-      (above). Next, in order: PR 4 (#236 consent + eval-gated RAG framing), PR 5 (#247
-      `user_version`).
+      the last audit-ID comment; PR 2 (#284) closed #240/#243/#250; PR 3 (#285) closed #248/#226;
+      PR 4 (#287) closed #236/#221 (the framing withheld, #228 open — above). Next: PR 5 (#247
+      `user_version`); then the framing once the eval runs somewhere.
 
 ---
 
