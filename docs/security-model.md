@@ -30,7 +30,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | Renderer talks only to a typed `contextBridge` (`window.api`) | `preload/index.ts` |
 | **Every `ipcMain.handle` checks the sender** — the handler body runs only for the main window's `webContents.id` (#252); a bare registration under `src/main/ipc/**` is banned by `repo-hygiene.test.ts` | `main/ipc/guarded-handle.ts`, set populated in `main/index.ts` `createWindow` |
 | `will-navigate` **and `will-redirect`** block remote origins (SEC-3) | `services/navigation-guard.ts`, installed in `main/index.ts` + OCR window |
-| `setWindowOpenHandler` opens external links in the OS browser, denies in-app | `main/index.ts` |
+| `setWindowOpenHandler` denies every in-app open; an http(s) link reaches the OS browser only through a native confirmation that names the site and shows the URL, Cancel the default, one dialog at a time (#236) | `main/window-security.ts` (policy) + `main/external-open.ts` (consent), wired in `main/index.ts` |
 | **Content-Security-Policy** (response header + build-time-generated meta tag) | `main/window-security.ts` (both policies), applied in `main/index.ts` + `electron.vite.config.ts` |
 | **Deny-by-default permission handlers** — both the *request* and the *check* path (Phase 31; single scoped microphone allow added in Phase 37; check handler added SEC-2) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
@@ -1837,9 +1837,11 @@ read any supported-type file anywhere on disk (the text is then reachable via
   each top-level path is `lstat`-checked and a **symlink is rejected**, then `realpathSync`-
   canonicalized (a `.pdf`-named symlink can't reach a sensitive target through the importer). A
   compromised renderer can still drive this seam with on-disk paths, but the offline guarantee
-  means there is **no network sink to exfiltrate** read content (the *path* itself is one on
-  Windows — "Residual egress channels" (ii) below, an accepted residual since the 2026-09-03
-  ruling on #222, #240), and the dominant picker surface is now non-forgeable.
+  means there is **no unattended network sink to exfiltrate** read content — the one sink for
+  read content, an OS browser open of a link, needs the user's confirmation naming the site
+  since #236 ("Residual egress channels" (i) below), and the *path* itself is one on Windows
+  ((ii) below, an accepted residual since the 2026-09-03 ruling on #222, #240) — and the
+  dominant picker surface is now non-forgeable.
   `importPreflight` still takes raw paths (counts/sizes only — lower impact).
 - **Skills use the same token mechanism (#240, PR #275):** `pickSkillPackage` is unlock-gated and
   returns `{ token, path }`; `previewSkillPackage` reads through the token without spending it and
@@ -2088,10 +2090,18 @@ The offline guarantee above covers the app's own network use. These are the ways
 leave the machine despite it, each with its current status and the issue that closes or records
 it.
 
-- **(i) An OS browser open of a link.** A link in a model answer, or a model manifest's license
-  link, goes straight from `window.open` to `shell.openExternal` with no confirmation or throttle:
-  the OS browser opens it, and the link's host learns the machine's IP address and user agent.
-  Pending #236 (owner decision #221).
+- **(i) An OS browser open of a link — consented (#236; owner decision #221, "confirmation",
+  2026-09-03).** A link in a model answer, or a model manifest's license link, no longer goes
+  straight from `window.open` to `shell.openExternal`: the window-open policy hands every http(s)
+  URL to the consenting opener (`main/external-open.ts`), which shows ONE native dialog naming
+  the site (the origin on its own line) and the full URL (cut past 200 characters with the cut
+  marked, never inside the host), with Cancel as the default and the Esc button; only the Open
+  button reaches the OS browser, and further requests are dropped while a dialog is open, so a
+  compromised renderer cannot page content out through a burst of windows or race a click. The
+  licence link additionally must be https at manifest validation and shows its host in the
+  download dialog. What remains is what the user consents to: once opened, the link's host
+  learns the machine's IP address and user agent, and the URL itself can carry whatever the
+  answer put in it — read the site line before pressing Open.
 - **(ii) A UNC or device path on the raw path seams.** A native drag-drop `lstat`s and a token-less
   import preflight `stat`s each path before any lexical rejection, so a `\\host\share\...` path
   makes Windows attempt an SMB connection to the named host before any file is read — and, where
