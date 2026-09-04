@@ -610,6 +610,9 @@ open round's item stays the last block of §5.)
     into the corpus. (c) **Evidence review** identity for archive citations (today:
     honest `unresolved`). (d) The manual acceptance leg: the airplane-mode demo on a
     real drive with `wikipedia_de_*` packs + kiwix-tools 3.8.1 (the §17 user story).
+    (e) Observation for item 1b's matrix, measured 2026-09-04 on the i7-8550U + UHD 620:
+    GPU auto-offload gains nothing on pp (56 vs 57 t/s) and LOSES 45 percent on tg
+    (11 vs 19.6) — on this iGPU class `gpuMode: off` would be the better default.
 
 ## 6. Open issues / risks
 
