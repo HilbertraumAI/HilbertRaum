@@ -29,6 +29,16 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-04 — **Phase F close-out (PR #292, docs only): Phase F is complete except #228. PRs 1–5
+(#283 `6329f40e`, #284 `94c9faf8`, #285 `a6d19700`, #287 `533945b8`, #289 `f30c73fc`) closed #274,
+#240/#243/#250, #248/#226, #236/#221, #247/#225; the RAG excerpt framing (#228, "wrap, gated by
+the grounded-QA eval") stays open — the eval probe (`K:\runtime\llama.cpp\win\llama-server.exe
+--version`) exits `0xC0E90002` again on the execution machine (Smart App Control), recorded on
+#228.**_ §5 item 19 collapsed to outcome + pointer + residuals; the five 2026-09-04 entries
+archived verbatim to `docs/build-log.md`; §52 gained the "Phase F close-out" paragraph. Suite on
+master `f30c73fc` (this machine): 375 / 5,628 / 74 raw (the Electron smoke ran; 374 / 5,622 / 74
+excluding it). No code, no launch smoke.
+
 _2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the durable ledger
 `docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46
 non-findings; containment items 1–8; the 14 decisions on their defaults; B1..B9 ports; a §-anchor
@@ -54,7 +64,8 @@ successor wave (PR #199), local API docs, #202 sizes, the docs/code-comment audi
 #208 second-instance guard, the #212 CI-flake fix) on 2026-09-02 (preamble budget, making room for
 the full-audit 2026-09-02 remediation round — §5 item 19), and the eleven entries of that round
 (2026-09-02 Phase 0 … 2026-09-03 Phase 9a, PRs #265–#281) on 2026-09-03 at its close-out (Phase 9b;
-ledger `docs/architecture.md` §52) —
+ledger `docs/architecture.md` §52), and the five 2026-09-04 Phase F entries (PRs #283–#289) on
+2026-09-04 at the Phase F close-out (PR #292; §52 "Phase F close-out") —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
