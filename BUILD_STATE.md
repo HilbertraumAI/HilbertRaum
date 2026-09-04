@@ -36,7 +36,12 @@ watchdog trip; one shared `RuntimeTimings` type in `runtime/index.ts`; every exi
 caller source-compatible.**_ Blast-radius re-analysis in the PR description (the app never logs the
 sidecar argv; the finish hand-up moved from the finish chunk to the sentinel). §5 item 20 tracks the
 wave; #290/#291 stay OPEN until the reporter runs the hardware legs (verification issue opened
-with PR 3). Suite on the branch: see the PR. Master `b4e0ed06` recounted: 375 / 5,633 / 74 raw.
+with PR 3). PR 1 = #295 (375 / 5,645 / 74). Master `b4e0ed06` recounted: 375 / 5,633 / 74 raw.
+**PR 2 (`fix/290-291-pr2-decode-speed`, #291):** `measureTokensPerSecond` → `SpeedReading`
+(`predicted_per_second` when timings are present, chunk fallback flagged), the early `break`
+removed, `BENCHMARK_PROMPT` now a paragraph so the 64-token cap fills, `BenchmarkResult.speedBasis`,
+the card says "Decode speed" + token window / "≈ approximate"; thresholds NOT retuned (basis
+recorded in `benchmark.md`, `model-benchmarks.md` §6.5); MTP record §7 watch item → observed.
 
 _2026-09-04 — **Phase F PR 6 (PR #293, `fix/pf-code1-rag-excerpt-framing`): #228 shipped — the excerpt
 block of `buildGroundedPrompt` / `buildCompareWholeDocPrompt` is framed as document content, not

@@ -1916,7 +1916,21 @@ export interface BenchmarkResult {
    */
   driveReadMbps: number | null
   driveWriteMbps: number | null
+  /**
+   * Decode speed in tokens/sec. Since #291 the runtime's own `timings.predicted_per_second`
+   * (decode only, prefill excluded, tokens not chunks) whenever the stream carried it; see
+   * `speedBasis` for which it was. null when nothing was measured.
+   */
   tokensPerSecond: number | null
+  /**
+   * HOW `tokensPerSecond` was measured (#291): `basis: 'timings'` = the runtime's decode timings
+   * over `tokens` generated tokens; `basis: 'chunks'` = the wall-clock chunk-count fallback (a
+   * runtime that sent no timings — the mock) over `tokens` streamed chunks, approximate and
+   * prefill-inclusive. Optional: ABSENT on results persisted before the field existed, which
+   * were all chunk-based — readers render an absent basis as approximate. null when nothing
+   * was measured. No migration.
+   */
+  speedBasis?: { basis: 'timings' | 'chunks'; tokens: number } | null
   /**
    * Id of the model the tokens/sec probe streamed through — the CURRENTLY LOADED model at
    * benchmark time, which is often NOT `recommendedModelId` (issue #52). null when nothing
