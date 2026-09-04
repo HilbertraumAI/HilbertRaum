@@ -397,6 +397,11 @@ export const en = {
   'chat.truncated.label': 'Reply cut off — reached the model’s context limit',
   'chat.truncated.hint':
     'The model ran out of room to finish this answer. Ask it to continue, start a new chat, or raise the context size on the AI Model screen.',
+  // #290: the per-answer speed line under a finished chat answer (this session only, never saved).
+  // {tps} / {ttft} / {tokens} arrive pre-formatted for the UI language.
+  'chat.speed.line': '{tps} tok/s · {ttft} s to first token · {tokens} tokens',
+  'chat.speed.hint':
+    'How fast this answer was generated: decode speed from the AI engine, the wait until the first word, and the number of tokens produced. Shown for answers from this session only.',
 
   // ---- Chat: document scope (ScopePopover.tsx) ----
   // Truthful, calm scope copy: never "Using all 0 documents". Zero documents routes to

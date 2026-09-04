@@ -42,6 +42,12 @@ with PR 3). PR 1 = #295 (375 / 5,645 / 74). Master `b4e0ed06` recounted: 375 / 5
 removed, `BENCHMARK_PROMPT` now a paragraph so the 64-token cap fills, `BenchmarkResult.speedBasis`,
 the card says "Decode speed" + token window / "≈ approximate"; thresholds NOT retuned (basis
 recorded in `benchmark.md`, `model-benchmarks.md` §6.5); MTP record §7 watch item → observed.
+PR 2 = #296 (375 / 5,654 / 74). **PR 3 (`fix/290-291-pr3-answer-speed-line`, #290):** chat
+only — `GenerateOptions.onTimings` (completed streams only) → `withChatStream` `sendTimings` →
+ONE ephemeral `chat:speed:<id>` `AnswerSpeed` payload (tok/s + tokens from the server timings,
+TTFT on the `first_token` clock) keyed to the persisted message id; `ChatScreen` session map →
+`Transcript` line `42 tok/s · 1.8 s to first token · 615 tokens` (EN/DE); nothing persisted;
+design record: `architecture.md` "Chat & streaming" → "Per-answer speed line" §1–§3.
 
 _2026-09-04 — **Phase F PR 6 (PR #293, `fix/pf-code1-rag-excerpt-framing`): #228 shipped — the excerpt
 block of `buildGroundedPrompt` / `buildCompareWholeDocPrompt` is framed as document content, not

@@ -295,7 +295,7 @@ export function registerChatIpc(ctx: AppContext): void {
         'Chat generation failed',
         // F2: on regenerate the destructive delete runs INSIDE this runFn (slot held) and is
         // restored on a non-abort failure, so a failed regenerate never leaves the turn answer-less.
-        withRegenerateGuard(ctx.db, conversationId, regenerate, (signal, sendToken, sendReasoning, sendCompaction, sendUsage) =>
+        withRegenerateGuard(ctx.db, conversationId, regenerate, (signal, sendToken, sendReasoning, sendCompaction, sendUsage, sendTimings) =>
           generateAssistantMessage(ctx.db, runtime, conversationId, {
             signal,
             mode,
@@ -307,7 +307,10 @@ export function registerChatIpc(ctx: AppContext): void {
             // starts (§5.2); isDestroyed-guarded inside withChatStream, never buffered (R14).
             onCompactionStart: sendCompaction,
             // The real assembled-prompt usage for the live composer meter (ephemeral, R14).
-            onPromptUsage: sendUsage
+            onPromptUsage: sendUsage,
+            // #290: the runtime's timings of a COMPLETED answer → the one ephemeral speed line.
+            // Plain chat only — the document channels never wire this.
+            onTimings: sendTimings
           })),
         (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
       )

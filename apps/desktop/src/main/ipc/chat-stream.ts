@@ -1,5 +1,6 @@
 import type { IpcMainInvokeEvent } from 'electron'
-import { STREAM, type CompactionNotice } from '../../shared/ipc'
+import { STREAM, type AnswerSpeed, type CompactionNotice } from '../../shared/ipc'
+import type { RuntimeTimings } from '../services/runtime'
 import type { AppContext } from '../services/context'
 import {
   DOC_TASK_BUSY_MESSAGE,
@@ -103,6 +104,15 @@ export type SendCompaction = (kind?: CompactionNotice['kind']) => void
  * never buffered; a remount misses it and the meter falls back to the resting estimate.
  */
 export type SendUsage = (usage: ContextUsage) => void
+/**
+ * #290: a one-shot sink for the runtime's per-request `timings` of a COMPLETED answer. The
+ * stream lifecycle turns them into ONE ephemeral `chat:speed:<id>` payload (tokens/sec, the
+ * user-felt time to first token measured on its own clock, the token count) keyed to the
+ * persisted message id, fired right before `done`. EPHEMERAL like `SendUsage` (R14): never
+ * buffered, nothing persisted. Only the plain-chat channel wires it; a runFn that never calls it
+ * (document answers, the mock runtime, an aborted answer) emits no speed payload at all.
+ */
+export type SendTimings = (timings: RuntimeTimings) => void
 
 /** The generation body run under the locked streaming contract — handed the turn's abort signal
  *  and the guarded senders, resolving with the persisted assistant Message. */
@@ -111,7 +121,9 @@ export type ChatStreamRunFn = (
   sendToken: SendToken,
   sendReasoning: SendReasoning,
   sendCompaction: SendCompaction,
-  sendUsage: SendUsage
+  sendUsage: SendUsage,
+  /** Optional so existing five-argument callers (the regenerate tests) stay source-compatible. */
+  sendTimings?: SendTimings
 ) => Promise<Message>
 
 /**
@@ -143,7 +155,7 @@ export function withRegenerateGuard(
   runFn: ChatStreamRunFn
 ): ChatStreamRunFn {
   if (!regenerate) return runFn
-  return async (signal, sendToken, sendReasoning, sendCompaction, sendUsage) => {
+  return async (signal, sendToken, sendReasoning, sendCompaction, sendUsage, sendTimings) => {
     // AUD-01 (data loss): `evidence_reviews.message_id` is a foreign key with ON DELETE CASCADE
     // and the workspace runs with `PRAGMA foreign_keys = ON`, so the `DELETE FROM messages` below
     // does not just drop an answer — it takes the reply's ENTIRE review chain with it: the review
@@ -162,7 +174,7 @@ export function withRegenerateGuard(
     }
     const deleted = deleteLastAssistantMessage(db, conversationId)
     try {
-      const result = await runFn(signal, sendToken, sendReasoning, sendCompaction, sendUsage)
+      const result = await runFn(signal, sendToken, sendReasoning, sendCompaction, sendUsage, sendTimings)
       // CB-2: a Stop BEFORE the first token RESOLVES (it does not throw) with an unpersisted empty
       // message (`content === ''`, the sole empty-return path of `generateAssistantMessage`). Without
       // this the destructive regenerate delete would stand with NOTHING in its place — two clicks
@@ -181,6 +193,26 @@ export function withRegenerateGuard(
       throw err
     }
   }
+}
+
+/**
+ * #290: build the per-answer speed payload, or null when any input is unusable. Pure and
+ * exported for the IPC test. Requires a persisted non-empty reply, a first token on the stream
+ * clock, and finite positive `predicted_per_second` + `predicted_n` from the runtime — a
+ * runtime without timings (the mock), an aborted answer (no timings) or an empty reply yields
+ * null, so the line is absent rather than wrong.
+ */
+export function answerSpeedFrom(
+  assistant: Message,
+  timings: RuntimeTimings | null,
+  ttftMs: number | null
+): AnswerSpeed | null {
+  if (!timings || ttftMs == null || assistant.content === '' || !assistant.id) return null
+  const tps = timings.predicted_per_second
+  const tokens = timings.predicted_n
+  if (typeof tps !== 'number' || !Number.isFinite(tps) || tps <= 0) return null
+  if (typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens <= 0) return null
+  return { messageId: assistant.id, tokensPerSecond: tps, ttftMs, tokens: Math.round(tokens) }
 }
 
 /**
@@ -229,8 +261,13 @@ export async function withChatStream(
   // chunk approximates a token for llama-server; the mock streams words.
   const streamT0 = performance.now()
   let chunkCount = 0
+  // #290: the user-felt time to first token, on the SAME clock as the `first_token` perf mark.
+  let ttftMs: number | null = null
   const sendToken: SendToken = (token) => {
-    if (chunkCount === 0) perfMark('first_token', { ttftMs: perfMs(streamT0) })
+    if (chunkCount === 0) {
+      ttftMs = perfMs(streamT0)
+      perfMark('first_token', { ttftMs })
+    }
     chunkCount += 1
     const buf = streamBuffers.get(conversationId)
     if (buf) buf.content += token
@@ -262,17 +299,32 @@ export async function withChatStream(
       event.sender.send(STREAM.usage(conversationId), usage)
     }
   }
+  // #290: the runtime's timings for a COMPLETED answer are parked here and turned into the one
+  // `chat:speed` payload once the persisted message id is known (after runFn resolves). The
+  // message id has to come from the persisted row, which is why this is not sent immediately.
+  let pendingTimings: RuntimeTimings | null = null
+  const sendTimings: SendTimings = (timings) => {
+    pendingTimings = timings
+  }
   try {
     // Hand the model slot off from a yielding build before any model call (no-op when none).
     // The abort signal is threaded in (REL-3) so a Stop while parked waiting for the build's
     // handoff rejects this acquire instead of blocking for up to one tree-node summarization.
     if (acquireSlot) releaseSlot = await acquireSlot(controller.signal)
-    const assistant = await runFn(controller.signal, sendToken, sendReasoning, sendCompaction, sendUsage)
+    const assistant = await runFn(controller.signal, sendToken, sendReasoning, sendCompaction, sendUsage, sendTimings)
     perfMark('stream_done', {
       chunks: chunkCount,
       chars: streamBuffers.get(conversationId)?.content.length ?? 0,
       elapsedMs: perfMs(streamT0)
     })
+    // #290: ONE ephemeral speed payload per finished answer, before `done`. Requires a persisted
+    // (non-empty) reply, a first token on this clock, and usable server figures — anything less
+    // (an abort carries no timings; a stripped-to-empty reply persists nothing) emits nothing,
+    // never a wrong speed. Not buffered (R14): a remount or reload shows no line.
+    const speed = answerSpeedFrom(assistant, pendingTimings, ttftMs)
+    if (speed && !event.sender.isDestroyed()) {
+      event.sender.send(STREAM.speed(conversationId), speed)
+    }
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.done(conversationId), assistant)
     }

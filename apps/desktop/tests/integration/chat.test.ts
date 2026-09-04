@@ -473,6 +473,94 @@ describe('generateAssistantMessage (streaming)', () => {
     expect(listMessages(db, conv.id).at(-1)?.truncated).toBe(true)
   })
 
+  // #290: the runtime's per-request timings reach the caller through `onTimings` — only for a
+  // COMPLETED stream, and only when the runtime actually sent them.
+  describe('onTimings (#290)', () => {
+    const timings = { prompt_n: 12, predicted_n: 615, predicted_ms: 14_640, predicted_per_second: 42 }
+    function timedRuntime(finish: (options?: RuntimeChatOptions) => void): ModelRuntime {
+      return {
+        modelId: 'timed',
+        start: async () => {},
+        stop: async () => {},
+        health: async () => ({ healthy: true, message: 'ok', port: null }),
+        contextWindow: () => 2048,
+        async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
+          yield 'a full'
+          yield ' answer'
+          finish(options)
+        }
+      }
+    }
+
+    it('hands the runtime timings up once for a completed answer', async () => {
+      const db = freshDb()
+      const conv = createConversation(db, {})
+      appendMessage(db, { conversationId: conv.id, role: 'user', content: 'how fast?' })
+      const seen: unknown[] = []
+      const msg = await generateAssistantMessage(
+        db,
+        timedRuntime((o) => o?.onFinish?.('stop', timings)),
+        conv.id,
+        { onTimings: (tm) => seen.push(tm) }
+      )
+      expect(msg.content).toBe('a full answer')
+      expect(seen).toEqual([timings])
+      // Nothing about the speed is persisted — the row carries no such column/field.
+      expect(Object.keys(listMessages(db, conv.id).at(-1) ?? {})).not.toContain('timings')
+    })
+
+    it('never fires when the runtime sent no timings (the mock runtime)', async () => {
+      const db = freshDb()
+      const conv = createConversation(db, {})
+      appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+      const seen: unknown[] = []
+      await generateAssistantMessage(db, runtime(), conv.id, { onTimings: (tm) => seen.push(tm) })
+      expect(seen).toEqual([])
+    })
+
+    it('never fires on a user Stop — an aborted stream carries no final chunk', async () => {
+      const db = freshDb()
+      const conv = createConversation(db, {})
+      appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+      const controller = new AbortController()
+      const seen: unknown[] = []
+      const aborting: ModelRuntime = {
+        ...timedRuntime(() => {}),
+        async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
+          yield 'partial'
+          controller.abort()
+          // A real runtime's reader returns on the aborted signal before any finish chunk; a
+          // timings hand-up here would be a bug in the runtime — the service must still refuse it.
+          if (options?.signal?.aborted) return
+          options?.onFinish?.('stop', timings)
+        }
+      }
+      const msg = await generateAssistantMessage(db, aborting, conv.id, {
+        signal: controller.signal,
+        onTimings: (tm) => seen.push(tm)
+      })
+      expect(msg.content).toBe('partial')
+      expect(seen).toEqual([])
+    })
+
+    it('refuses timings that arrive on an aborted signal even if the runtime reported them', async () => {
+      const db = freshDb()
+      const conv = createConversation(db, {})
+      appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+      const controller = new AbortController()
+      const seen: unknown[] = []
+      const misbehaving = timedRuntime((o) => {
+        controller.abort()
+        o?.onFinish?.('stop', timings)
+      })
+      await generateAssistantMessage(db, misbehaving, conv.id, {
+        signal: controller.signal,
+        onTimings: (tm) => seen.push(tm)
+      })
+      expect(seen).toEqual([])
+    })
+  })
+
   // 2026-07-04 user report: a Fast-mode reply that hit the FAST_MAX_TOKENS cap also finishes with
   // 'length', and the badge then claimed "reached the model's context limit" while the meter
   // (truthfully) sat at single-digit percent. A capped run must NOT wear the context-limit badge.
