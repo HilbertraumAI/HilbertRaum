@@ -562,20 +562,21 @@ open round's item stays the last block of §5.)
     (comment sweep), #271 (2), #272 (3), #273 (4), #275 (5b-a), #276 (6), #277 (7), #278 + #279 (8),
     #280 + #281 (9a), #282 (9b). Every owner decision #218–#231 ran on its plan default — a default is
     never upgraded to a ruling; the owner then ruled on #221/#222/#223/#225/#226/#227/#228 on
-    2026-09-03 and Phase F executed the rulings on 2026-09-04: PR 1 (#283) #274 async walk; PR 2 (#284)
-    #240/#243/#250 declined / documented + one exFAT crash-cut / documented; PR 3 (#285) #248/#226 the
-    OS session-end lock (Windows; macOS registered, unverified); PR 4 (#287) #236/#221 the consenting
-    external opener + https-only `license_url`; PR 5 (#289) #247/#225 `PRAGMA user_version` (§52:
-    the seven addendum rows, the "F — PR n" phase-table rows, the "Phase F close-out" paragraph).
-    Still open:
+    2026-09-03 and Phase F ran five PRs on 2026-09-04: PR 1 (#283) the autonomous #274 async walk;
+    PR 2 (#284) #240/#243/#250 declined / documented + one exFAT crash-cut / documented (#222/#223/
+    #227); PR 3 (#285) #248 the OS session-end lock (#226; Windows; macOS registered, unverified);
+    PR 4 (#287) #236 the consenting external opener + https-only `license_url` (#221); PR 5 (#289)
+    #247 `PRAGMA user_version` (#225). §52: the seven addendum rows, the "F — PR n" phase-table
+    rows, the "Phase F close-out" paragraph. Still open:
     - **RAG excerpt framing (#228, in #236; `**DECISION:** wrap, gated by the grounded-QA eval`):**
       NOT shipped — the grounded-QA harness cannot run on the execution machine (Windows Smart App
       Control blocks the K: runtime's unsigned `llama.dll`; `llama-server.exe --version` exits
-      `0xC0E90002`, reproduced 2026-09-04 before PR 4 and again at the close-out). Rides once the
-      eval runs somewhere; #228 carries the change set, the gate and the probe records.
-    - **Owner-only:** the macOS live check of the session-end lock (#226); the exFAT crash-cut
-      (`packaging.md` checklist item 9, #223); `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false`
-      (`binary-verifier.ts` — wired, tested, OFF; flipping the constant is the whole enablement).
+      `0xC0E90002`, reproduced 2026-09-04 as PR 4's eval gate and again at the close-out). Rides
+      once the eval runs somewhere; #228 carries the change set, the gate and the probe records.
+    - **Owner-only:** the macOS live check of the session-end lock (#226; Linux registers nothing,
+      not ruled); the exFAT crash-cut (`packaging.md` checklist item 9, #223);
+      `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false` (`binary-verifier.ts` — wired, tested,
+      OFF; flipping the constant is the whole enablement).
     - **Chromium egress outside CSP (#254, closed as a confirmed residual):** WebRTC and
       dns-prefetch/preconnect unused by the renderer, reachable only after a compromise; no flag.
     - **OS-backed workspace lock (#263, accepted; decision #224):** not built.
@@ -665,7 +666,7 @@ the offline/privacy guarantees:
   §-ledger) and the walk is now bounded (entries / depth / wall clock, `limits.ts`); the walk still
   FOLLOWS a symlink to a distinct directory by design, so a picked folder linking to e.g.
   `C:\Windows` still traverses outside the selection (supported extensions only, not RCE).
-  Off-thread walk: #274.
+  Off-thread walk: done (#274, PR #283).
 - **L-7 — Runtime-archive extraction doesn't prevent member traversal (build-time AND in-app;
   scope corrected 2026-07-12, full-audit SEC-2 — the earlier "build-time only" framing was
   wrong).** `Expand-Archive` / `tar -xzf` in `scripts/fetch-runtime.{ps1,sh}` run on the drive
