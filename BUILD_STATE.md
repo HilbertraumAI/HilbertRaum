@@ -29,6 +29,15 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
+`readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one
+up through `onFinish(reason, timings?)` at `[DONE]`/close — never on an abort, error frame or
+watchdog trip; one shared `RuntimeTimings` type in `runtime/index.ts`; every existing `onFinish`
+caller source-compatible.**_ Blast-radius re-analysis in the PR description (the app never logs the
+sidecar argv; the finish hand-up moved from the finish chunk to the sentinel). §5 item 20 tracks the
+wave; #290/#291 stay OPEN until the reporter runs the hardware legs (verification issue opened
+with PR 3). Suite on the branch: see the PR. Master `b4e0ed06` recounted: 375 / 5,633 / 74 raw.
+
 _2026-09-04 — **Phase F PR 6 (PR #293, `fix/pf-code1-rag-excerpt-framing`): #228 shipped — the excerpt
 block of `buildGroundedPrompt` / `buildCompareWholeDocPrompt` is framed as document content, not
 instructions (BEGIN/END markers + a guard line, user turn only, `rag/grounded-data.ts`). The eval
@@ -596,6 +605,22 @@ open round's item stays the last block of §5.)
       `skills-installer`, `third-party-notices`, `ocr`, `rail-labels` tests), the katex hoist
       compare, `as unknown as` private-field injection — convert to behavioural assertions when
       touched; `FullSuiteGuard` cannot see dropped individual tests.
+
+20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line (opened
+    2026-09-04; three stacked PRs on one lineage).** PR 1 (`fix/290-291-pr1-sse-timings-seam`):
+    the `readChatSSE` seam — `onFinish(reason, timings?)`, `RuntimeTimings` in `runtime/index.ts`.
+    PR 2 (#291): `measureTokensPerSecond` reports `predicted_per_second` (decode tokens, prefill
+    excluded) with the chunk count as the flagged fallback; `BenchmarkResult.speedBasis`; the card
+    says "Decode speed" + the token count; MTP record §7 watch item → observed. PR 3 (#290): chat
+    only — one ephemeral `chat:speed:<id>` payload per finished answer, `tok/s · s to first
+    token · tokens`, EN/DE, nothing persisted. **Both issues stay OPEN** ("Refs", not "Closes"):
+    the "matches llama-server's `print_timing` within rounding" legs need a real runtime and the
+    execution machine cannot launch one (Smart App Control, exit `0xC0E90002`) — a verification
+    issue assigned to the reporter carries both acceptance lists, the reconstructed rung-1a argv
+    (the app does not log it) and a request for a captured final-chunk SSE transcript from the
+    b9849 pin, to be committed as a fixture. Thresholds (`VERY_LOW_TOKENS_PER_SECOND`,
+    `SLOW_PICK_TOKENS_PER_SECOND`) deliberately NOT retuned — they now compare a decode figure
+    against probe-basis calibration (recorded in `docs/benchmark.md` / `model-benchmarks.md` §6.5).
 
 ---
 

@@ -142,6 +142,35 @@ describe('readChatSSE', () => {
     expect(out.join('')).toBe('done')
     expect(finishes).toEqual(['stop'])
   })
+
+  // #290/#291: the server's per-request `timings` block (b9849 shape — hand-authored, see the
+  // fixture-provenance note above; NO captured chat transcript with timings exists in the repo yet).
+  it('hands the final chunk\'s `timings` up with the finish reason (#290/#291)', async () => {
+    const timings = { prompt_n: 9, prompt_ms: 120, predicted_n: 64, predicted_ms: 1336, predicted_per_second: 47.9, prompt_per_second: 75 }
+    const stream = sseStream([
+      chatChunk('fast'),
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], timings })}\n\n`,
+      'data: [DONE]\n\n'
+    ])
+    const finishes: Array<[string, unknown]> = []
+    const out: string[] = []
+    for await (const t of readChatSSE(stream, undefined, undefined, (r, tm) => finishes.push([r, tm]))) {
+      out.push(t)
+    }
+    expect(out.join('')).toBe('fast')
+    expect(finishes).toEqual([['stop', timings]])
+  })
+
+  it('hands up undefined timings when the final chunk carries none (#290/#291)', async () => {
+    const stream = sseStream([
+      chatChunk('x'),
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n'
+    ])
+    const finishes: Array<[string, unknown]> = []
+    for await (const _t of readChatSSE(stream, undefined, undefined, (r, tm) => finishes.push([r, tm]))) void _t
+    expect(finishes).toEqual([['stop', undefined]])
+  })
 })
 
 describe('LlamaRuntime', () => {
@@ -191,6 +220,36 @@ describe('LlamaRuntime', () => {
     const h = await runtime.health()
     expect(h.healthy).toBe(true)
     expect(h.port).toBe(51000)
+    await runtime.stop()
+  })
+
+  it('forwards the server timings through RuntimeChatOptions.onFinish end-to-end (#290/#291)', async () => {
+    const { spawn } = fakeSpawn()
+    const timings = { prompt_n: 5, prompt_ms: 40, predicted_n: 2, predicted_ms: 50, predicted_per_second: 40, prompt_per_second: 125 }
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn,
+      fetchImpl: chatFetch({
+        frames: [
+          chatChunk('Privacy'),
+          chatChunk(' first'),
+          `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], timings })}\n\n`,
+          'data: [DONE]\n\n'
+        ]
+      }),
+      findPort: async () => 51001,
+      healthIntervalMs: 1
+    })
+    await runtime.start()
+    const finishes: Array<[string, unknown]> = []
+    const out: string[] = []
+    for await (const t of runtime.chatStream([{ role: 'user', content: 'hi' }], {
+      onFinish: (reason, tm) => finishes.push([reason, tm])
+    })) {
+      out.push(t)
+    }
+    expect(out.join('')).toBe('Privacy first')
+    expect(finishes).toEqual([['stop', timings]])
     await runtime.stop()
   })
 

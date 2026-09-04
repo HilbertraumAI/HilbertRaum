@@ -212,3 +212,136 @@ describe('readChatSSE — in-band error frames reject the stream (F-02)', () => 
     expect(finish).toBe('stop')
   })
 })
+
+// #290/#291 — llama-server's per-request `timings` block rides the streamed completion (at the
+// pinned b9849, on the completing chunk as far as the repo knows; NO captured chat transcript with
+// `timings` exists here yet, hence the tolerant shapes below). The reader remembers the last one
+// seen on ANY chunk and hands it up with the finish reason, once, at `[DONE]` / the clean close —
+// and never on an abort, an error frame or a watchdog trip.
+describe('readChatSSE — server timings ride the finish hand-up (#290/#291)', () => {
+  const TIMINGS = {
+    prompt_n: 12,
+    prompt_ms: 180.5,
+    predicted_n: 64,
+    predicted_ms: 1336.1,
+    predicted_per_second: 47.9,
+    prompt_per_second: 66.5
+  }
+  const finishWithTimings = (): string =>
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], timings: TIMINGS })}\n\n`
+  type Finish = { reason: string; timings: unknown }
+  const collect = async (frames: string[], signal?: AbortSignal): Promise<{ out: string; finishes: Finish[] }> => {
+    const finishes: Finish[] = []
+    const out: string[] = []
+    for await (const t of readChatSSE(pacedStream(frames, 1), signal, undefined, (reason, timings) =>
+      finishes.push({ reason, timings })
+    )) {
+      out.push(t)
+    }
+    return { out: out.join(''), finishes }
+  }
+
+  it('surfaces a timings object carried on the final (finish_reason) chunk', async () => {
+    const { out, finishes } = await collect([chatChunk('a'), chatChunk('b'), finishWithTimings(), 'data: [DONE]\n\n'])
+    expect(out).toBe('ab')
+    expect(finishes).toEqual([{ reason: 'stop', timings: TIMINGS }])
+  })
+
+  it('hands up undefined timings when no chunk carried them (the mock / an older server)', async () => {
+    const finishChunk = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`
+    const { finishes } = await collect([chatChunk('a'), finishChunk, 'data: [DONE]\n\n'])
+    expect(finishes).toEqual([{ reason: 'stop', timings: undefined }])
+  })
+
+  it('still surfaces timings sent on a separate TRAILING chunk with empty choices', async () => {
+    const finishChunk = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }] })}\n\n`
+    const trailing = `data: ${JSON.stringify({ choices: [], timings: TIMINGS })}\n\n`
+    const { out, finishes } = await collect([chatChunk('x'), finishChunk, trailing, 'data: [DONE]\n\n'])
+    expect(out).toBe('x')
+    expect(finishes).toEqual([{ reason: 'length', timings: TIMINGS }])
+  })
+
+  it('keeps the LAST timings seen when several chunks carry one (cumulative per request)', async () => {
+    const early = `data: ${JSON.stringify({ choices: [{ delta: { content: 'a' } }], timings: { predicted_n: 1 } })}\n\n`
+    const { finishes } = await collect([early, finishWithTimings(), 'data: [DONE]\n\n'])
+    expect(finishes[0].timings).toEqual(TIMINGS)
+  })
+
+  it('hands the timings up on a clean close WITHOUT [DONE] (the flush path)', async () => {
+    const enc2 = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc2.encode(chatChunk('a')))
+        // No trailing newline, no sentinel — the server closed right after the finish chunk.
+        controller.enqueue(enc2.encode(finishWithTimings().trimEnd()))
+        controller.close()
+      }
+    })
+    const finishes: Finish[] = []
+    for await (const _t of readChatSSE(stream, undefined, undefined, (reason, timings) =>
+      finishes.push({ reason, timings })
+    )) {
+      void _t
+    }
+    expect(finishes).toEqual([{ reason: 'stop', timings: TIMINGS }])
+  })
+
+  it('never reports timings (or a finish) on an aborted stream', async () => {
+    const controller = new AbortController()
+    const finishes: Finish[] = []
+    const out: string[] = []
+    for await (const t of readChatSSE(
+      pacedStream([chatChunk('a'), chatChunk('b'), finishWithTimings(), 'data: [DONE]\n\n'], 1),
+      controller.signal,
+      undefined,
+      (reason, timings) => finishes.push({ reason, timings })
+    )) {
+      out.push(t)
+      controller.abort()
+    }
+    expect(out).toEqual(['a'])
+    expect(finishes).toEqual([])
+  })
+
+  it('never reports timings when an in-band error frame ends the stream (F-02 unchanged)', async () => {
+    const finishes: Finish[] = []
+    const errorFrame = `data: ${JSON.stringify({ error: { message: 'slot failed', type: 'server_error' } })}\n\n`
+    await expect(async () => {
+      for await (const _t of readChatSSE(pacedStream([chatChunk('a'), errorFrame], 1), undefined, undefined, (reason, timings) =>
+        finishes.push({ reason, timings })
+      )) {
+        void _t
+      }
+    }).rejects.toBeInstanceOf(ChatStreamError)
+    expect(finishes).toEqual([])
+  })
+
+  it('never reports timings when the idle watchdog trips (CB-5 unchanged)', async () => {
+    const finishes: Finish[] = []
+    const idle = { prefillMs: 500, streamMs: 40 }
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(enc.encode(chatChunk('a')))
+        // Then silence beyond the stream budget; the watchdog fires before anything else arrives.
+        await delay(400)
+        controller.close()
+      }
+    })
+    await expect(async () => {
+      for await (const _t of readChatSSE(stream, undefined, undefined, (reason, timings) =>
+        finishes.push({ reason, timings }), idle)) {
+        void _t
+      }
+    }).rejects.toBeInstanceOf(RuntimeUnresponsiveError)
+    expect(finishes).toEqual([])
+  })
+
+  it('ignores a non-object timings value and a timings block on an ignored post-[DONE] chunk', async () => {
+    const junk = `data: ${JSON.stringify({ choices: [{ delta: { content: 'a' } }], timings: 'nope' })}\n\n`
+    const finishChunk = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`
+    const late = `data: ${JSON.stringify({ choices: [], timings: TIMINGS })}\n\n`
+    const { out, finishes } = await collect([junk, finishChunk, 'data: [DONE]\n\n', late])
+    expect(out).toBe('a')
+    expect(finishes).toEqual([{ reason: 'stop', timings: undefined }])
+  })
+})
