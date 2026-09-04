@@ -29,6 +29,17 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-04 — **Qwen3.8-Flash-Next catalog entry (dev-only) + `HILBERTRAUM_LLAMA_EXTRA_ARGS`:
+`model-manifests/chat/qwen3.8-flash-next-ud-q4kxl.yaml` (rank 0, 120/128 GB RAM, `license_review`
+PENDING — Qwen Community License 1.0 clause 2 "AI Work Assistant" is an open legal question, no
+`download` block because the weight is four shards and the downloader fetches one file) and the
+dev-only env override that appends llama-server flags to the GPU rungs (`devExtraServerArgs`,
+`factory.ts`; packaged builds ignore it), so the 125B MoE can be measured through the real app
+with `-ncmoe 40 -ot ple_ngram_embd=CPU -fa on` on a PR #27742 build via `HILBERTRAUM_LLAMA_BIN`.**_
+Open: multi-file download + per-shard checksum (the app checks shard 1 only), runtime pin bump
+once the PR merges, legal review before any drive. Docs: `model-policy.md` (the dev-only bullet),
+CHANGELOG Added, DRIVE-NOTICES regenerated.
+
 _2026-09-04 — **Phase F PR 3 (#285, closes #248 / #226): OS session end locks the workspace —
 `emergencyLock` (the crash path's synchronous best-effort lock, extracted to `main/shutdown.ts`)
 runs from `onSessionEnd` on the lifecycle factory, once, over the same closure as `will-quit`;

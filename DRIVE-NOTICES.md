@@ -59,6 +59,7 @@ model: qwen3.8-27b-q6 apache-2.0
 model: qwen3.8-27b-ud-q4km apache-2.0
 model: qwen3.8-27b-ud-q5km apache-2.0
 model: qwen3.8-27b-ud-q6k apache-2.0
+model: qwen3.8-flash-next-ud-q4kxl qwen-community-1.0
 model: translategemma-12b-it-q4 gemma
 model: whisper-small-multilingual mit
 ```
@@ -228,6 +229,14 @@ review time (as published upstream — the `licenses/README.md` convention).
 
 - Multilingual E5 Small (F16) (`multilingual-e5-small-q8`) — upstream: https://huggingface.co/keisuke-miyako/multilingual-e5-small-gguf-f16 — license: mit (https://huggingface.co/intfloat/multilingual-e5-small) — Copyright (c) Microsoft Corporation (github.com/microsoft/unilm, the multilingual-e5 upstream)
 - Whisper Small (multilingual transcriber) (`whisper-small-multilingual`) — upstream: https://huggingface.co/ggerganov/whisper.cpp — license: mit (https://github.com/openai/whisper/blob/main/LICENSE) — Copyright (c) 2022 OpenAI (github.com/openai/whisper)
+
+### qwen-community-1.0 (1 model)
+
+Not covered by a permissive text reproduced in this file — see each line's
+license URL for the governing terms and the manifest's `license_review` block
+for the review record.
+
+- Qwen3.8-Flash-Next 125B-A6B (UD-Q4_K_XL) (`qwen3.8-flash-next-ud-q4kxl`) — upstream: (no download block — see the manifest) — license: qwen-community-1.0 — license_review.status: pending
 
 ## Apache License 2.0
 

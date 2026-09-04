@@ -278,6 +278,17 @@ vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools
   successors on 2026-08-20 (acceptance 0.79 / 0.67, head PRESENT; §9.5), which is why they keep
   the field and why nothing keeps it unverified.
 
+- **Dev-only `HILBERTRAUM_LLAMA_EXTRA_ARGS`** (2026-09-04) is the one place extra llama-server
+  flags can come from, and it is not a manifest: a whitespace-separated list in the environment,
+  honoured **only in a dev build** (`!app.isPackaged`, the `HILBERTRAUM_LLAMA_BIN` posture) and
+  appended to the GPU rungs (1 and 1a) only. It exists so a maintainer can measure a weight the
+  shipped ladder cannot place well yet — `qwen3.8-flash-next-ud-q4kxl` needs
+  `-ncmoe 40 -ot ple_ngram_embd=CPU -fa on` (and a llama.cpp with PR #27742 via
+  `HILBERTRAUM_LLAMA_BIN`) to keep its experts in RAM — through the real app before any product
+  decision. A packaged build logs and ignores the variable; the security argument above is
+  unchanged: nothing on a drive can append a flag. `devExtraServerArgs` in
+  `services/runtime/factory.ts`; pinned by `runtime-ladder.test.ts`.
+
 ## Model states (spec §7.4)
 Computed by `services/models.ts` with this precedence:
 `unsupported` → `missing` (file absent) → `checksum_failed` (hash mismatch, or placeholder hash

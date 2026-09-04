@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { log } from '../logging'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import type { GpuDevice } from '../../../shared/types'
@@ -173,6 +174,8 @@ export interface RuntimeSelectionDeps {
   rootPath: string
   /** Dev build — gates the dev-only `HILBERTRAUM_LLAMA_BIN` override (M-5). Default false. */
   isDev?: boolean
+  /** Environment consulted for the dev-only overrides (defaults to `process.env`). */
+  env?: NodeJS.ProcessEnv
   /** Resolve the sidecar binary (defaults to `resolveLlamaServerPath`). */
   resolveBin?: (rootPath: string) => string | null
   /** Check whether the model weight file exists (defaults to `existsSync`). */
@@ -640,14 +643,38 @@ class LadderRuntime implements ModelRuntime {
 }
 
 /**
+ * Dev-only extra llama-server flags for the GPU rungs, from `HILBERTRAUM_LLAMA_EXTRA_ARGS`
+ * (whitespace-separated, e.g. `-ncmoe 40 -ot ple_ngram_embd=CPU -fa on`). Exists for weights
+ * the shipped ladder cannot place well on its own yet (a 125B MoE whose experts must stay in
+ * RAM), so a maintainer can measure them through the real app before any product decision.
+ * Same posture as `HILBERTRAUM_LLAMA_BIN`: honoured ONLY in a dev build. A packaged build
+ * ignores the variable, because manifests and drives must never be able to append server
+ * flags (extras go last and a later `--host` would win — see `speculative_decoding` in
+ * docs/model-policy.md). Applied to the GPU rungs only; the forced-CPU rungs stay untouched.
+ */
+export function devExtraServerArgs(isDev: boolean | undefined, env: NodeJS.ProcessEnv): string[] {
+  const raw = env.HILBERTRAUM_LLAMA_EXTRA_ARGS?.trim()
+  if (!raw) return []
+  if (!isDev) {
+    log.warn('Ignoring HILBERTRAUM_LLAMA_EXTRA_ARGS in a packaged build (dev-only override)')
+    return []
+  }
+  const args = raw.split(/\s+/)
+  log.warn(`Dev override: appending llama-server args from HILBERTRAUM_LLAMA_EXTRA_ARGS: ${args.join(' ')}`)
+  return args
+}
+
+/**
  * Build a `RuntimeFactory` that returns the GPU-ladder runtime when the sidecar binary
  * + the model weights are present, else `MockRuntime`. Pure + dependency-injected so
  * the selection + ladder logic is unit-testable without spawning anything.
  */
 export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): RuntimeFactory {
+  const env = deps.env ?? process.env
   const resolveBin =
     deps.resolveBin ??
-    ((root: string) => resolveLlamaServerPath(root, process.platform, process.env, { isDev: deps.isDev }))
+    ((root: string) => resolveLlamaServerPath(root, process.platform, env, { isDev: deps.isDev }))
+  const devExtra = devExtraServerArgs(deps.isDev, env)
   const modelExists = deps.modelExists ?? existsSync
   const makeLlama =
     deps.makeLlama ??
@@ -684,13 +711,19 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
         rungs.push({
           label: 'rung 1a (GPU auto-offload + MTP speculative decoding)',
           binPath,
-          extraArgs: [...MTP_SERVER_ARGS],
+          extraArgs: [...MTP_SERVER_ARGS, ...devExtra],
           gpuAttempt: true,
           speculative: true
         })
       }
-      // Rung 1: NO -ngl / --device args — b9585 defaults to ngl=auto + fit=on.
-      rungs.push({ label: 'rung 1 (default args, GPU auto-offload)', binPath, extraArgs: [], gpuAttempt: true })
+      // Rung 1: NO -ngl / --device args — b9585 defaults to ngl=auto + fit=on. `devExtra` is
+      // empty outside a dev build with HILBERTRAUM_LLAMA_EXTRA_ARGS set.
+      rungs.push({
+        label: 'rung 1 (default args, GPU auto-offload)',
+        binPath,
+        extraArgs: [...devExtra],
+        gpuAttempt: true
+      })
     }
     // Rung 2: same binary, forced CPU. `--device none` is the ONLY way we force CPU.
     rungs.push({

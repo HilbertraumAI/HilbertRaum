@@ -25,6 +25,14 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+### Added
+
+- **Qwen3.8-Flash-Next (125B MoE, UD-Q4_K_XL) is in the model catalog as a selectable, never
+  auto-recommended entry.** It needs about 128 GB of RAM, a llama.cpp newer than the one the
+  app ships today, and the four weight files placed by hand, so for now it is a developer
+  entry: the AI Model screen lists it, but a normal install cannot download or start it yet.
+  Its license is the Qwen Community License, not Apache-2.0, and it is not bundled on any drive.
+
 ### Fixed
 
 - **Shutting down or logging off Windows with the app open no longer loses the session.** The
