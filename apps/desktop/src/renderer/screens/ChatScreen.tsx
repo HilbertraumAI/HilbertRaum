@@ -3,6 +3,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   DOC_TASK_BUSY_MESSAGE,
   type ChatDepthMode,
+  type Citation,
   type Collection,
   type ContextUsage,
   type Conversation,
@@ -10,6 +11,7 @@ import {
   type DocumentInfo,
   type DocumentScope,
   type EvidenceReviewSummary,
+  type KnowledgePack,
   type Message,
   type RunnableTool,
   type RuntimeStatus,
@@ -38,7 +40,7 @@ import { RUNTIME_POLL_MS, STREAM_RECOVER_FAILURE_BUDGET, STREAM_RECOVER_POLL_MS 
 import { useEventCallback } from '../lib/useEventCallback'
 import { useT, type I18n } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, Progress, SegmentedControl, Spinner, useToast } from '../components'
-import { Composer, ContextMeter, ConversationList, DepthMenu, ScopeNarrowDialog, ScopePopover, SkillInfoCard, SkillPicker, SkillRunBar, Transcript, type SkillRunTarget } from '../chat'
+import { ArticleModal, Composer, ContextMeter, ConversationList, DepthMenu, ScopeNarrowDialog, ScopePopover, SkillInfoCard, SkillPicker, SkillRunBar, Transcript, type ArticleTarget, type SkillRunTarget } from '../chat'
 import { requestSkillDetail } from '../lib/skillDetailRequest'
 import type { MessageKey } from '@shared/i18n'
 
@@ -290,6 +292,10 @@ export function ChatScreen({
   // Collections (Library + projects) — drives the multi-select source picker + footer union
   // (document-organization plan §13). Best-effort: a failed load leaves the picker docs-only.
   const [collections, setCollections] = useState<Collection[]>([])
+  // Knowledge packs (ZIM wave): the pickable pack sources for the scope popover, and the
+  // citation article viewer target (null = closed).
+  const [packs, setPacks] = useState<KnowledgePack[]>([])
+  const [articleTarget, setArticleTarget] = useState<ArticleTarget | null>(null)
   // Voice dictation: availability-driven — the composer mic renders only
   // when a transcriber is selected (whisper binary + weights on the drive). Best-effort
   // like `docs`: a failed status read just hides the mic.
@@ -490,6 +496,14 @@ export function ChatScreen({
         setCollections((await window.api.listCollections?.()) ?? [])
       } catch {
         setCollections([])
+      }
+    })()
+    void (async () => {
+      // Absent service / no kiwix-tools / locked edge => no packs section, never an error.
+      try {
+        setPacks((await window.api.listKnowledgePacks?.()) ?? [])
+      } catch {
+        setPacks([])
       }
     })()
     void (async () => {
@@ -1054,6 +1068,12 @@ export function ChatScreen({
   const handleOpenReviewMessage = useEventCallback((messageId: string) => {
     const summary = reviewSummaries.get(messageId)
     onOpenReview?.(summary ? { reviewId: summary.id } : { messageId })
+  })
+  // Knowledge packs: a stable identity so the 300-line MessageBlock memo holds (FE-3 rule).
+  const handleOpenArticle = useEventCallback((c: Citation) => {
+    if (c.packId && c.articlePath) {
+      setArticleTarget({ packId: c.packId, articlePath: c.articlePath, archiveTitle: c.archiveTitle })
+    }
   })
   const handleTryAgain = useEventCallback(onTryAgain)
   const handleAnswerWithoutSkill = useEventCallback(onAnswerWithoutSkill)
@@ -2337,6 +2357,7 @@ export function ChatScreen({
           // when App provides the handoff (onOpenReview); per-message eligibility + labels are
           // resolved inside Transcript via the shared isReviewEligible + reviewSummaries.
           onOpenReview={onOpenReview ? handleOpenReviewMessage : undefined}
+          onOpenArticle={handleOpenArticle}
           reviewSummaries={reviewSummaries}
           reviewConversation={reviewConversation}
           actionsDisabled={busyStreaming}
@@ -2444,6 +2465,7 @@ export function ChatScreen({
                   <ScopePopover
                     docs={docs}
                     collections={collections}
+                    packs={packs}
                     scope={pickerScope}
                     disabled={busyStreaming}
                     onChangeScope={(next) => void onChangeScope(next)}
@@ -2502,6 +2524,9 @@ export function ChatScreen({
           // to this conversation may ask again (a dismissal is not a decision).
           onDismiss={() => setScopeChoice(null)}
         />
+        {/* Knowledge packs (ZIM wave): the offline article viewer a citation's "Open
+            article" opens. Modal-portal based; placement in the tree is cosmetic. */}
+        <ArticleModal target={articleTarget} onClose={() => setArticleTarget(null)} />
       </section>
     </div>
   )
