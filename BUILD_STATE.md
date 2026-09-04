@@ -29,6 +29,16 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-04 — **Phase F PR 6 (PR #293, `fix/pf-code1-rag-excerpt-framing`): #228 shipped — the excerpt
+block of `buildGroundedPrompt` / `buildCompareWholeDocPrompt` is framed as document content, not
+instructions (BEGIN/END markers + a guard line, user turn only, `rag/grounded-data.ts`). The eval
+probe passed at midday (`llama-server.exe --version` → `version: 9849`, exit 0), so the grounded-QA
+gate ran before/after on all ten K: chat GGUFs: level within noise on the ranked models (§52, the
+#228 addendum row + the "Phase F addendum" paragraph). Phase F COMPLETE; #217 closed.**_ Review
+catches repaired in-PR (the compare notice hoisted out of the block; echoed framing scrubbed). Suite
+on the branch (this machine): 375 / 5,633 / 74 raw (the Electron smoke ran; 374 / 5,627 / 74
+excluding it), +5 tests over master `03080b85`. Dev launch OK (app-data dev root).
+
 _2026-09-04 — **Phase F close-out (PR #292, docs only): Phase F is complete except #228. PRs 1–5
 (#283 `6329f40e`, #284 `94c9faf8`, #285 `a6d19700`, #287 `533945b8`, #289 `f30c73fc`) closed #274,
 #240/#243/#250, #248/#226, #236/#221, #247/#225; the RAG excerpt framing (#228, "wrap, gated by
@@ -555,8 +565,8 @@ consecutive full runs, zero flakes).** Per-phase gate history (test counts, bund
 per-phase test inventories) lives in git history. (This gate paragraph sits above item 19 so the
 open round's item stays the last block of §5.)
 
-19. **Full-audit 2026-09-02 (security/reliability) — ROUND COMPLETE; Phase F COMPLETE except #228**
-    (close-out 2026-09-03; Phase F close-out 2026-09-04; ledger `docs/architecture.md` §52 — the ONLY
+19. **Full-audit 2026-09-02 (security/reliability) — ROUND COMPLETE; Phase F COMPLETE**
+    (close-out 2026-09-03; Phase F close-out 2026-09-04 + PR 6 the same day; ledger `docs/architecture.md` §52 — the ONLY
     durable copy: the working papers lived under the git-ignored `tmp/` and were deleted after the
     ledger merged; tracker #217 closed). Phases 0-a…9b = PRs #265, #267 (0), #268 + #269 (1), #270
     (comment sweep), #271 (2), #272 (3), #273 (4), #275 (5b-a), #276 (6), #277 (7), #278 + #279 (8),
@@ -567,12 +577,9 @@ open round's item stays the last block of §5.)
     #227); PR 3 (#285) #248 the OS session-end lock (#226; Windows; macOS registered, unverified);
     PR 4 (#287) #236 the consenting external opener + https-only `license_url` (#221); PR 5 (#289)
     #247 `PRAGMA user_version` (#225). §52: the seven addendum rows, the "F — PR n" phase-table
-    rows, the "Phase F close-out" paragraph. Still open:
-    - **RAG excerpt framing (#228, in #236; `**DECISION:** wrap, gated by the grounded-QA eval`):**
-      NOT shipped — the grounded-QA harness cannot run on the execution machine (Windows Smart App
-      Control blocks the K: runtime's unsigned `llama.dll`; `llama-server.exe --version` exits
-      `0xC0E90002`, reproduced 2026-09-04 as PR 4's eval gate and again at the close-out). Rides
-      once the eval runs somewhere; #228 carries the change set, the gate and the probe records.
+    rows, the "Phase F close-out" paragraph; PR 6 (#293) #228 the RAG excerpt framing, shipped on a
+    before/after grounded-QA eval (level within noise on the ranked models; the #228 addendum row +
+    the "Phase F addendum" paragraph). Still open:
     - **Owner-only:** the macOS live check of the session-end lock (#226; Linux registers nothing,
       not ruled); the exFAT crash-cut (`packaging.md` checklist item 9, #223);
       `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false` (`binary-verifier.ts` — wired, tested,
