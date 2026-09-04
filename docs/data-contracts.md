@@ -604,11 +604,21 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
-  'vault_damaged'|'vault_recovery_blocked'|'refused'|'error', message}` — a wrong password /
-  policy refusal is a normal result, not a throw; `vault_damaged` (#208) is the
+  'vault_damaged'|'vault_recovery_blocked'|'workspace_newer'|'refused'|'error', message}` — a
+  wrong password / policy refusal is a normal result, not a throw; `vault_damaged` (#208) is the
   password-verified-but-undecryptable-to-a-database unlock failure, deliberately distinct from
   `wrong_password`; `vault_recovery_blocked` (#242) is the unlock refused because a held
-  `.recovery` file blocks the failed-lock salvage — retry once the hold clears, nothing lost);
+  `.recovery` file blocks the failed-lock salvage — retry once the hold clears, nothing lost;
+  `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
+  written by a NEWER build — nothing written, update the app);
+  **Schema stamp (#247):** the workspace database carries `PRAGMA user_version` =
+  `SCHEMA_VERSION` (`services/db.ts`; `1` since PR #289). `openDatabase` reads it before any
+  PRAGMA that writes: `0` (every database written before the stamp) and any lower value run the
+  additive migrations and are stamped in place; an equal value writes nothing (a second open is
+  a no-op); a HIGHER value throws the typed `WorkspaceNewerError` with the handle closed and the
+  file byte-identical. Bump `SCHEMA_VERSION` only for a change an older build must not open.
+  Builds ≤ 0.1.59 never read the stamp, so it protects only pairs whose older build is newer
+  than PR #289;
   `lockWorkspace` → `WorkspaceStateInfo`. Registered in `initBackend()`; exposed on preload `api` +
   `PreloadApi`.
 - **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),

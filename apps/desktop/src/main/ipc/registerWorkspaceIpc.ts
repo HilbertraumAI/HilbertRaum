@@ -13,6 +13,7 @@ import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { maybeStartLocalApi } from '../services/local-api/lifecycle'
 import { inFlightStreams, awaitInFlightStreamsSettled } from './inflight'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
+import { isWorkspaceNewerError } from '../services/db'
 import { getSettings } from '../services/settings'
 import { purgeResidentVectors } from '../services/embeddings'
 import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
@@ -188,6 +189,16 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           message: tMain('main.workspace.recoveryBlocked')
         }
       }
+      // #247: the password verified but the database was written by a NEWER build. Its own
+      // reason + copy (update the app); the vault is untouched and nothing was written.
+      if (isWorkspaceNewerError(err)) {
+        log.warn('Workspace unlock refused: the database was written by a newer build', {
+          found: err.found,
+          supported: err.supported
+        })
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (newer workspace)')
+        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
+      }
       log.error('Workspace unlock failed', String(err))
       ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed')
       return { ok: false, reason: 'error', message: tMain('main.workspace.openFailed') }
@@ -236,6 +247,15 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         maybeStartLocalApi(ctx)
         return { ok: true, state }
       } catch (err) {
+        // #247: the database already on disk (a plaintext workspace, or the file a create
+        // would open) was written by a NEWER build — refused before any write.
+        if (isWorkspaceNewerError(err)) {
+          log.warn('Workspace create refused: the database on disk was written by a newer build', {
+            found: err.found,
+            supported: err.supported
+          })
+          return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
+        }
         // Plaintext refused by policy, and create-over-an-existing-vault (would wipe
         // the user's data), are expected refusals — surface the real message.
         const message = err instanceof Error ? err.message : String(err)

@@ -972,6 +972,40 @@ function seedCollections(db: Db): void {
   ).run(libraryId, now)
 }
 
+/**
+ * The schema version this build writes and understands (#247, owner decision #225). Stored in
+ * the database header as `PRAGMA user_version`; read FIRST on every open, before any PRAGMA
+ * that writes. `0` = every database written before this stamp existed (upgraded in place and
+ * stamped); a value ABOVE this constant was written by a newer build and is refused with
+ * `WorkspaceNewerError` — the migrations below are additive, and an older build cannot know
+ * what a newer schema means, so opening it would degrade silently. Bump it whenever the schema
+ * changes in a way an older build must not open. Builds ≤ 0.1.59 never read the stamp, so it
+ * protects only pairs where the older build is newer than this change.
+ */
+export const SCHEMA_VERSION = 1
+
+/**
+ * Thrown by `openDatabase` when the file's `user_version` exceeds `SCHEMA_VERSION`. The
+ * handle is closed before it propagates and nothing was written. Content-free on purpose
+ * (like the vault errors): the IPC layer maps it to `workspace_newer` + `main.workspace.newer`.
+ */
+export class WorkspaceNewerError extends Error {
+  constructor(
+    readonly found: number,
+    readonly supported: number = SCHEMA_VERSION
+  ) {
+    super(
+      `The workspace database was written by a newer build (schema ${found}; this build reads up to ${supported})`
+    )
+    this.name = 'WorkspaceNewerError'
+  }
+}
+
+/** instanceof PLUS the name — the production bundle can hold a second copy of this module. */
+export function isWorkspaceNewerError(err: unknown): err is WorkspaceNewerError {
+  return err instanceof WorkspaceNewerError || (err instanceof Error && err.name === 'WorkspaceNewerError')
+}
+
 /** Open (or create) the database at `path` and run migrations. */
 export function openDatabase(path: string): Db {
   const db = new DatabaseSync(path)
@@ -996,6 +1030,12 @@ export function openDatabase(path: string): Db {
 /** The PRAGMA + additive-migration body of {@link openDatabase}. Throws on a file whose
  *  bytes are not a SQLite database; the caller owns closing the handle on failure. */
 function applyPragmasAndMigrations(db: Db): void {
+  // #247: the stamp is read before anything writes, so a refused file is byte-identical and
+  // no sidecar is left behind (a WAL-mode file opens `-wal`/`-shm` transiently for the read;
+  // the close on the refusal path removes them). On a non-SQLite file this read is what
+  // throws "file is not a database" — the caller's damaged-vault path is unchanged.
+  const found = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
+  if (found > SCHEMA_VERSION) throw new WorkspaceNewerError(found)
   db.exec('PRAGMA journal_mode = WAL;')
   db.exec('PRAGMA foreign_keys = ON;')
   // DB-2 — portable-drive performance PRAGMAs (perf audit 2026-06-18). HilbertRaum runs from a
@@ -1224,6 +1264,9 @@ function applyPragmasAndMigrations(db: Db): void {
   ensureMessagesFtsUpdateKindFilter(db)
   ensureFtsRowidSync(db)
   seedCollections(db)
+  // #247: stamp AFTER the migrations, and only when moving up — a same-version open writes
+  // nothing here, so a second open is a no-op.
+  if (found < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)
 }
 
 /** List of table names — used by tests/diagnostics to confirm migration ran. */

@@ -71,7 +71,11 @@ password recovery — are documented in
   own design). A pre-0.1.59 build takes no lock at all: the drive launchers refuse to start
   while two app versions sit at the drive root (#235), but starting an artifact directly
   bypasses the launcher, and a signed current-release manifest at the root is an open owner
-  decision (#220).
+  decision (#220). Since PR #289 the workspace database is stamped with a schema version
+  (#247), so a build newer than that PR refuses a workspace written by a still-newer one
+  instead of opening it — but every build up to 0.1.59 ignores the stamp, so an old artifact
+  from that line still opens a newer workspace silently; delete old artifacts as the update
+  procedure says.
 - **A pre-envelope build cannot open a v2 (envelope) vault.** New vaults — and any vault after
   its first password change — use the descriptor-v2 envelope (`security-model.md`). An older
   app version derives the correct KEK and even passes the verifier, but then tries to decrypt

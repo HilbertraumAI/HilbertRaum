@@ -210,12 +210,20 @@ export interface WorkspaceStateInfo {
  *  `vault_recovery_blocked` (#242): the last session's newest data still waits to be salvaged
  *  and another program holds the recovery file it must be moved onto — the unlock is refused
  *  (opening would decrypt the stale snapshot over it); close that program and retry, nothing
- *  is lost. */
+ *  is lost.
+ *  `workspace_newer` (#247): the database was written by a NEWER build (`PRAGMA user_version`
+ *  above this build's `SCHEMA_VERSION`) — refused before any write; update the app. */
 export type WorkspaceActionResult =
   | { ok: true; state: WorkspaceStateInfo }
   | {
       ok: false
-      reason: 'wrong_password' | 'vault_damaged' | 'vault_recovery_blocked' | 'refused' | 'error'
+      reason:
+        | 'wrong_password'
+        | 'vault_damaged'
+        | 'vault_recovery_blocked'
+        | 'workspace_newer'
+        | 'refused'
+        | 'error'
       message: string
     }
 

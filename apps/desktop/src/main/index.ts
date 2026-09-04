@@ -186,6 +186,11 @@ function initBackend(): void {
     // file; the crash sweep was skipped and the unlock IPC refuses until a retry lands it.
     log.warn('Workspace recovery blocked: a recovery file is held by another program')
   }
+  if (workspace.isNewerWorkspace()) {
+    // #247: the plaintext database on disk was written by a newer build — left closed and
+    // untouched; the gate reports `workspace_newer` (update the app).
+    log.warn('Workspace not opened: its database was written by a newer build (update the app)')
+  }
 
   // Settings are readable right away on a plaintext workspace — resolve the UI language
   // for main-side emissions (tMain) now. Encrypted workspaces stay on the OS-locale

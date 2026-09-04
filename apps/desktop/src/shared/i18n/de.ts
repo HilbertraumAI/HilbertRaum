@@ -2045,6 +2045,9 @@ export const de: Record<keyof typeof en, string> = {
     'Wiederherstellungsdatei mit deinen neuesten Daten fest. Schließe alles, was das Laufwerk ' +
     'gerade prüft (Virenscanner, Suchindex, ein Dateifenster mit dem Ordner „workspace“), ' +
     'warte kurz und versuch es dann noch einmal. Es ist nichts verloren.',
+  'main.workspace.newer':
+    'Dieser Arbeitsbereich wurde von einer neueren HilbertRaum-Version geschrieben — ' +
+    'aktualisiere die App, um ihn zu öffnen. Es wurde nichts verändert.',
   'main.workspace.createFailed': 'Der Arbeitsbereich konnte nicht erstellt werden.',
   'main.workspace.passwordTooShort': 'Das Passwort muss mindestens {min} Zeichen lang sein.',
   'main.workspace.newPasswordTooShort':

@@ -2002,6 +2002,10 @@ export const en = {
     'Could not open the workspace yet: another program is holding a recovery file with your ' +
     'newest data. Close anything that may be scanning the drive (antivirus, search indexing, ' +
     'a file window on the workspace folder), wait a moment, then try again. Nothing is lost.',
+  // #247: the database was written by a newer build (its schema stamp is above this build's).
+  'main.workspace.newer':
+    'This workspace was written by a newer HilbertRaum — update the app to open it. Nothing ' +
+    'was changed.',
   'main.workspace.createFailed': 'Could not create the workspace.',
   'main.workspace.passwordTooShort': 'Password must be at least {min} characters.',
   'main.workspace.newPasswordTooShort': 'The new password must be at least {min} characters.',
