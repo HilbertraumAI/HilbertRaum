@@ -20,7 +20,7 @@ import { tMain } from './i18n'
 import { canonicalLeafFor } from './ingestion/stored-copy-leaf'
 import { perfMark, perfMs } from './perf'
 import type { Db } from './db'
-import { openDatabase } from './db'
+import { isWorkspaceNewerError, openDatabase } from './db'
 import { seedSettings, updateSettings } from './settings'
 import type { PrivacyPolicy, WorkspaceMode, WorkspaceStateInfo } from '../../shared/types'
 import {
@@ -1345,10 +1345,14 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
   let db: Db
   try {
     db = openDatabase(vaultPaths.dbPath)
-  } catch {
+  } catch (err) {
     shredFile(vaultPaths.dbPath)
     cleanSidecars(vaultPaths.dbPath)
     fileKey.fill(0)
+    // #247: a database a NEWER build stamped is not damage — the password verified and the
+    // file is a database; it is refused as such (the plaintext is shredded again exactly like
+    // the damaged case, `.enc` untouched) and the IPC layer names the remedy: update the app.
+    if (isWorkspaceNewerError(err)) throw err
     throw new VaultDamagedError()
   }
   seedSettings(db)
@@ -1507,6 +1511,7 @@ export class WorkspaceController {
    * user's next unlock clears the state once the hold is gone.
    */
   private _recoveryBlocked = false
+  private _newerWorkspace = false
   /**
    * AUD-02 — armed by {@link beginLock} as the FIRST act of the interactive lock path, before
    * any await, and read by {@link workspaceAdmitsWork}. See that function for why `isUnlocked()`
@@ -1657,8 +1662,23 @@ export class WorkspaceController {
       // plaintext working file may be the only recoverable copy of the data.
       return
     }
-    if (this.allowPlaintext()) this.openPlaintext()
+    if (this.allowPlaintext()) {
+      try {
+        this.openPlaintext()
+      } catch (err) {
+        // #247: the plaintext database on disk was written by a NEWER build. `openDatabase`
+        // closed it before any write; stay uninitialized so startup completes (the gate's
+        // create then reaches the same refusal and reports `workspace_newer`).
+        if (!isWorkspaceNewerError(err)) throw err
+        this._newerWorkspace = true
+      }
+    }
     // else uninitialized → onboarding will create an encrypted workspace
+  }
+
+  /** #247: startup found a database written by a newer build and left it closed. */
+  isNewerWorkspace(): boolean {
+    return this._newerWorkspace
   }
 
   getState(): WorkspaceStateInfo {
