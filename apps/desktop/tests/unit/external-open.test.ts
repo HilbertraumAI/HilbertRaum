@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import type { BaseWindow, BrowserWindow, Dialog, MessageBoxOptions, MessageBoxReturnValue, Shell } from 'electron'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import {
   createExternalOpener,
@@ -16,30 +17,32 @@ import {
 // browser windows). The opener is unit-tested with a fake `dialog` / `shell`; the wiring pin at
 // the end keeps `index.ts` on it.
 
-type Shown = { window: unknown; options: Record<string, unknown> }
+type Shown = { window: BaseWindow | null; options: MessageBoxOptions }
 
 function harness(opts: { response?: number; hold?: boolean; reject?: boolean } = {}) {
   const shown: Shown[] = []
   const opened: string[] = []
   let release: (() => void) | null = null
-  const dialog = {
-    showMessageBox: vi.fn(async (window: unknown, options: Record<string, unknown>) => {
-      shown.push({ window, options })
+  // Typed fakes (no casts): one implementation covering both `showMessageBox` overloads.
+  const dialog: Pick<Dialog, 'showMessageBox'> = {
+    async showMessageBox(a: BaseWindow | MessageBoxOptions, b?: MessageBoxOptions): Promise<MessageBoxReturnValue> {
+      shown.push(b ? { window: a as BaseWindow, options: b } : { window: null, options: a as MessageBoxOptions })
       if (opts.reject) throw new Error('dialog failed')
       if (opts.hold) await new Promise<void>((r) => (release = r))
       return { response: opts.response ?? 1, checkboxChecked: false }
-    })
+    }
   }
-  const shell = {
-    openExternal: vi.fn(async (url: string) => {
+  const shell: Pick<Shell, 'openExternal'> = {
+    openExternal: async (url: string) => {
       opened.push(url)
-    })
+    }
   }
-  const window = { id: 'main', isDestroyed: () => false }
+  // Only `isDestroyed` is read off the window; the dialog fake records the reference.
+  const window = { isDestroyed: () => false } as BrowserWindow
   const open = createExternalOpener({
-    dialog: dialog as never,
-    shell: shell as never,
-    getWindow: () => window as never,
+    dialog,
+    shell,
+    getWindow: () => window,
     t: (key: MessageKey, params?: MessageParams) => t('en', key, params)
   })
   // One macrotask drains every pending microtask (the dialog promise, the openExternal
