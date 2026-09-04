@@ -27,7 +27,7 @@ import {
   skillFenceBudgetTokens,
   stripSkillFenceEcho
 } from './skills/prompt'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from './runtime'
 import { requestParamsForMode } from './runtime/llama'
 import { ensureCompacted } from './chat/compaction'
 import { log } from './logging'
@@ -1473,6 +1473,13 @@ export interface GenerateOptions {
    * excerpt/document block.
    */
   onPromptUsage?: (usage: ContextUsage) => void
+  /**
+   * #290: fired at most once, after the stream COMPLETED (never on a user Stop — an aborted
+   * request carries no final chunk), with the runtime's per-request `timings` when it sent any.
+   * The mock runtime sends none, so this never fires there. Numbers only; the IPC layer turns
+   * them into the ephemeral per-answer speed line. Nothing is persisted.
+   */
+  onTimings?: (timings: RuntimeTimings) => void
 }
 
 /**
@@ -1530,12 +1537,16 @@ export async function generateAssistantMessage(
   // (§L0 honest-signal). A user Stop aborts before any final chunk, so this stays null → not
   // truncated (the abort partial is intentional and user-known).
   let finishReason: string | null = null
+  // #290: the runtime's per-request timings ride the same final chunk as the finish reason, so
+  // a user Stop (no final chunk) leaves this null and the speed line is simply never emitted.
+  let timings: RuntimeTimings | null = null
   const stream = runtime.chatStream(messages, {
     signal: opts.signal,
     mode: opts.mode,
     onReasoning: opts.onReasoning,
-    onFinish: (reason) => {
+    onFinish: (reason, tm) => {
       finishReason = reason
+      timings = tm ?? null
     },
     ...opts.runtimeOptions
   })
@@ -1551,6 +1562,8 @@ export async function generateAssistantMessage(
     if (!isAbortError(err, opts.signal)) throw err
     caughtAbort = true
   }
+  // #290: hand the timings up only for a COMPLETED stream — never a wrong speed on a partial.
+  if (timings && !caughtAbort && opts.signal?.aborted !== true) opts.onTimings?.(timings)
   // CB-4: capture whether the model actually emitted anything BEFORE the strip passes below. A
   // reply that arrived and then stripped to empty (all-`<think>`/fence-echo) is a benign silent-empty
   // — distinct from a completed stream that produced no token at all.

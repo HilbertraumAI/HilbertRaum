@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { EVENTS, IPC, STREAM, type CompactionNotice, type ScopeNotice } from '../shared/ipc'
+import {
+  EVENTS,
+  IPC,
+  STREAM,
+  type AnswerSpeed,
+  type CompactionNotice,
+  type ScopeNotice
+} from '../shared/ipc'
 import type {
   ActiveStreamSnapshot,
   AppSettings,
@@ -747,6 +754,15 @@ const api = {
   onContextUsage: (requestId: string, cb: (usage: ContextUsage) => void): (() => void) => {
     const ch = STREAM.usage(requestId)
     const handler = (_e: unknown, usage: ContextUsage) => cb(usage)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
+  /** Subscribe to the one-shot per-answer speed payload of a FINISHED chat answer (#290):
+   *  decode tokens/sec, time to first token and token count, keyed to the persisted message id.
+   *  Fired right before `done`; ephemeral, never persisted — a reload shows nothing. */
+  onAnswerSpeed: (requestId: string, cb: (speed: AnswerSpeed) => void): (() => void) => {
+    const ch = STREAM.speed(requestId)
+    const handler = (_e: unknown, speed: AnswerSpeed) => cb(speed)
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
   },

@@ -1186,6 +1186,25 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `chat:scope:<id>` (`STREAM.scope`) carries a one-shot `ScopeNotice` — the filenames retrieval
   was auto-restricted to — before the first token of a document answer when filename auto-scope
   fires; informational only, never persisted.
+- **Per-answer speed line (issue #290, 2026-09-04) — design record §1–§3.** **§1 What it shows.**
+  Under a FINISHED plain-chat answer, one quiet metadata line in the skill-glyph / truncation-note
+  style: `42 tok/s · 1.8 s to first token · 615 tokens` (no decimals at or above 10 tok/s, one
+  below; EN + DE via `chat.speed.line`, formatted by `renderer/chat/answerSpeed.ts`). **§2 Where
+  the numbers come from.** Tokens/sec and the token count are llama-server's own `timings`
+  (`predicted_per_second`, `predicted_n`) handed up by `readChatSSE` → `onFinish(reason, timings)`
+  (the #291 seam) → `generateAssistantMessage`'s `onTimings` (fired only for a COMPLETED stream)
+  → `withChatStream`'s `sendTimings`; time to first token is `withChatStream`'s own clock (stream
+  registration → first `sendToken`, the same figure as the `first_token` perf mark — prompt
+  assembly, any compaction pre-pass and prefill included, i.e. the user-felt wait). One ADDITIVE
+  ephemeral channel `chat:speed:<id>` (`STREAM.speed`, payload `AnswerSpeed` keyed to the persisted
+  message id) fires right before `done`; `answerSpeedFrom` is the single rule and yields nothing
+  without timings, without a first token, for an empty reply or for non-positive figures — so an
+  aborted answer (no final chunk) and the mock runtime (no timings) show no line, never a wrong
+  one. **§3 Scope + persistence.** Nothing is persisted, no schema change, not in `streamBuffers`
+  (R14): the renderer keeps a session map by message id (`ChatScreen` `answerSpeeds` → `Transcript`),
+  so a reload shows nothing on old messages. Plain chat only — the document channels, the hidden
+  warm-up (#109), Fast-mode warm-up, doc tasks, skill runs and compaction never wire `sendTimings`.
+  The local API deliberately still omits `usage` (local-api.md §6.5).
 - **Answer-depth modes (Phase 20, spec §10.3).** `ChatOptions.mode` (`fast|balanced|deep`,
   per message, sticky per conversation in the renderer) threads through
   `generateAssistantMessage` → `RuntimeChatOptions.mode`. The mapping to request parameters

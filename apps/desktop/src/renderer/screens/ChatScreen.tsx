@@ -16,6 +16,7 @@ import {
   type SkillInfo,
   type SkillSuggestion
 } from '@shared/types'
+import type { AnswerSpeed } from '@shared/ipc'
 import { isReviewEligible } from '@shared/evidence-review'
 import type { ReviewHandoffTarget } from '../lib/reviewSession'
 import { cancelActiveDocTask } from '../lib/doctasks'
@@ -235,6 +236,10 @@ export function ChatScreen({
    *  base while streaming; cleared when the turn settles (the excerpt block is per-turn, so the
    *  meter honestly drops back to the resting read). */
   const [streamUsage, setStreamUsage] = useState<ContextUsage | null>(null)
+  /** #290: per-answer speed figures for answers generated in THIS session, keyed by message id
+   *  (the one-shot `chat:speed` payload). Session state only — never persisted, so a reload or a
+   *  message the mock runtime answered (no timings) shows no line. */
+  const [answerSpeeds, setAnswerSpeeds] = useState<ReadonlyMap<string, AnswerSpeed>>(() => new Map())
   /** The latest compaction summary + its transcript marker position (§5.3, D-b); null hides it. */
   const [summaryMarker, setSummaryMarker] = useState<ConversationSummaryMarker | null>(null)
   // True while RECOVERING an in-flight generation that this component instance did not
@@ -1524,6 +1529,7 @@ export function ChatScreen({
     let unsubscribe: () => void = () => {}
     let unsubscribeCompaction: (() => void) | undefined
     let unsubscribeUsage: (() => void) | undefined
+    let unsubscribeSpeed: (() => void) | undefined
     let unsubscribeReasoning: () => void = () => {}
     let unsubscribeScope: () => void = () => {}
     // Only update the visible transcript if the user is still looking at THIS
@@ -1580,6 +1586,11 @@ export function ChatScreen({
       // base while streaming — the only way a document turn's injected excerpt block reaches the
       // meter. Optional-chained like onCompaction (tolerates an older bridge); ephemeral (R14).
       unsubscribeUsage = window.api.onContextUsage?.(convId, (usage) => setStreamUsage(usage))
+      // #290: the one-shot per-answer speed payload (fired right before `done`, keyed to the
+      // persisted message id). Kept in session state only; optional-chained like the others.
+      unsubscribeSpeed = window.api.onAnswerSpeed?.(convId, (speed) =>
+        setAnswerSpeeds((prev) => new Map(prev).set(speed.messageId, speed))
+      )
       // Deep-mode reasoning deltas feed the live "Thinking…" line. They are
       // a separate channel from answer tokens and are never part of the persisted reply.
       unsubscribeReasoning = window.api.onReasoning(convId, (delta) => {
@@ -1648,6 +1659,7 @@ export function ChatScreen({
       unsubscribeScope()
       unsubscribeCompaction?.()
       unsubscribeUsage?.()
+      unsubscribeSpeed?.()
       // #39: retire the warm-up hint with the turn — clear the pending timer, invalidate any
       // in-flight status check (turn identity), and drop the visible line.
       clearTimeout(warmupTimer)
@@ -2314,6 +2326,8 @@ export function ChatScreen({
           warmupHint={warmupHint}
           thinkingOpen={thinkingOpen}
           onThinkingOpenChange={setThinkingOpen}
+          // #290: session-only per-answer speed figures; a message without an entry shows no line.
+          answerSpeeds={answerSpeeds}
           emptyState={emptyState}
           onTryAgain={canTryAgain ? handleTryAgain : undefined}
           // The undo's own placement gate (last skill-stamped turn — auto-fired OR picked, U3 §4.3)

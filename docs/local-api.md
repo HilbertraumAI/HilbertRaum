@@ -340,9 +340,11 @@ no chat history — the endpoint sends exactly the messages you passed.
 (`delta: {"role":"assistant"}`), content chunks (`delta: {"content":"…"}`), a final chunk carrying
 `finish_reason`, then `data: [DONE]`.
 
-> **`usage` is deliberately absent in v1.** The runtime's streaming reader discards token counts,
-> and fabricating numbers would be worse than omitting them. Do not read `usage.total_tokens` — it
-> is not there. (A post-v1 candidate.)
+> **`usage` is deliberately absent in v1.** Fabricating numbers would be worse than omitting them.
+> Do not read `usage.total_tokens` — it is not there. Since #290/#291 the runtime's streaming
+> reader does keep llama-server's `timings` (the in-app Diagnostics figure and the per-answer
+> speed line use them), but exposing them here as `usage` is a separate wire-contract decision
+> that has not been taken. (A post-v1 candidate.)
 
 > **A truncated stream never ends with `[DONE]`.** If a generation is interrupted you get an
 > in-band error frame and the stream closes *without* the terminator. Treat "no `[DONE]`" as "not

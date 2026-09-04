@@ -25,6 +25,15 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+### Added
+
+- **Each finished chat answer now shows how fast it was generated.** A small line under the
+  answer reads, for example, "42 tok/s · 1.8 s to first token · 615 tokens": the model's decode
+  speed as reported by the AI engine, how long you waited for the first word, and how many
+  tokens the answer took. It appears for answers generated in the current session only — nothing
+  is saved, so older answers show no line after a restart — and only for plain chat answers with
+  the real AI engine (not for document answers, and not for a stopped answer). English and German.
+
 ### Fixed
 
 - **The speed figure on Settings → Diagnostics is now the model's real decode speed.** The
