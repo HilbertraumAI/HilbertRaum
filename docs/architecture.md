@@ -2619,8 +2619,12 @@ files**.
   or a bare `error: {…}` field line, then a close without `[DONE]`) **rejects** with a typed
   `ChatStreamError` instead of ending cleanly — a failed generation can never persist as a clean
   answer (audit 2026-07-16 F-02; frame shapes pinned to b9849, re-verify on pin bumps per TS-3(a)). This feeds the **locked Phase-3 streaming contract**
-  unchanged, so `measureTokensPerSecond` (Phase 7) now reports **real tokens/sec** the moment a real
-  runtime streams.
+  unchanged. The reader also keeps the server's top-level **`timings`** block (last one seen on any
+  chunk) and hands it up through `onFinish(reason, timings?)` at `[DONE]`/close, never on an abort
+  (#290/#291; `RuntimeTimings` in `runtime/index.ts`), so `measureTokensPerSecond` (Phase 7) reports
+  the runtime's **decode tokens/sec** (`predicted_per_second`, prefill excluded, tokens not chunks)
+  the moment a real runtime streams, and only falls back to a chunk count for a runtime without
+  timings.
 - **`services/runtime/factory.ts`** — `createSelectingRuntimeFactory({ rootPath, … })` returns a
   `RuntimeFactory` that picks `LlamaRuntime` vs `MockRuntime` per `start()` (when the concrete model
   path is known), behind the unchanged `RuntimeManager`. `main/index.ts` uses it in place of the bare
@@ -12049,11 +12053,17 @@ the lesson of #42 applied up front rather than after a bug report.
   pre-MTP figures and stay that way until re-measured with the flag on. The repo rule is that
   manifest numbers are measured, never estimated.
 - **No UI.** Nothing to decide, nothing to show.
-- **Watch item — the tokens/sec probe.** `measureTokensPerSecond` counts stream **chunks**, an
-  approximation it already documents. If a future llama-server batches an accepted draft run into
-  one SSE delta, the probe would under-read on an MTP model and could feed the very-low-tps
-  downgrade. Not observed; recorded so the next person who sees a nonsense figure on a fast
-  machine has the thread.
+- **Watch item — the tokens/sec probe — OBSERVED and RESOLVED (issue #291, 2026-09-04).**
+  `measureTokensPerSecond` counted stream **chunks** over wall time, an approximation it
+  documented; the concern recorded here was that a llama-server batching an accepted draft run
+  into one SSE delta would make the probe under-read on an MTP model. #291 was the first
+  observation: on the reporter's i9-9900X / RTX 3090 with `qwen3.8-27b-q4` (rung 1a) the card
+  showed 25 tok/s against the server's own 47.9 (draft acceptance 106/186) — the pinned b9849
+  DOES pack the accepted run into one chunk, and the wall-clock window paid the prefill on top.
+  Resolved by reading the server's `timings` off the final chunk (`readChatSSE` → `onFinish`,
+  `RuntimeTimings`) and reporting `predicted_per_second` — decode tokens over decode time — with
+  the chunk count kept only as a flagged fallback (`BenchmarkResult.speedBasis`). Record:
+  `docs/benchmark.md` step 4.
 - **Two owed hardware gates — both RAN AND PASSED 2026-08-19** (issue #182, on the i9-9900X +
   RTX 3090 rig): the §2 grounded-QA harness re-run for both quants with MTP on held score parity
   within cross-run tolerance (which was the gate, NOT byte identity), and the §9.1 smoke legs on

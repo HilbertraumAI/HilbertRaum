@@ -192,6 +192,7 @@ const overrides: Record<string, unknown> = {
       driveReadMbps: 2412, // the retired page-cache figure — must appear NOWHERE
       driveWriteMbps: 11.2,
       tokensPerSecond: 6,
+      speedBasis: { basis: 'timings', tokens: 64 },
       measuredModelId: 'qwen3-9b',
       effectiveRead:
         c === 'diagnostics-read'

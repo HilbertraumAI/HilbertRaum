@@ -15,7 +15,7 @@ import { perfMark } from './perf'
 import { throughputMbps } from './read-speed'
 import type { ModelManifest } from '../../shared/manifest'
 import type { BenchmarkResult, EffectiveReadSample, HardwareProfile } from '../../shared/types'
-import type { ModelRuntime } from './runtime'
+import type { ModelRuntime, RuntimeTimings } from './runtime'
 import { recommendModelId, recommendModelIdByRam } from './models'
 
 // Hardware benchmarker (spec §7.3, §11). Detects RAM/CPU/OS, measures drive
@@ -201,25 +201,49 @@ export async function measureDriveSpeed(workspacePath: string): Promise<DriveSpe
 // means. (The import direction matters: read-speed.ts is a leaf; importing this module
 // from there would cycle through models.ts.)
 
-/** Prompt used for the short tokens/sec probe (spec §11.2 step 7). */
-export const BENCHMARK_PROMPT = 'Write one sentence about privacy.'
-/** How many tokens to time before stopping the probe. */
+/**
+ * Prompt used for the short decode-speed probe (spec §11.2 step 7). Asks for a PARAGRAPH so the
+ * `BENCHMARK_TOKEN_TARGET` cap fills reliably (#291): the earlier one-sentence prompt finished in
+ * ~20 tokens, and a 20-token decode window is dominated by per-request overhead. Thinking is off
+ * (balanced default), so no reasoning tokens inflate the window.
+ */
+export const BENCHMARK_PROMPT = 'Write a short paragraph about privacy.'
+/** The `max_tokens` cap the probe sends — the decode window the figure is measured over. */
 export const BENCHMARK_TOKEN_TARGET = 64
 
+/** What the speed probe measured and how (#291). */
+export interface SpeedReading {
+  /** Tokens per second, one decimal. */
+  tokensPerSecond: number
+  /**
+   * 'timings': llama-server's own `predicted_per_second` — decode only (prefill excluded),
+   * TOKENS not chunks. 'chunks': the wall-clock chunk-count fallback for a runtime that sent no
+   * `timings` (the mock) — approximate, includes prefill, and under-reads on an MTP model whose
+   * chunks carry several tokens each.
+   */
+  basis: 'timings' | 'chunks'
+  /** Tokens (basis 'timings') or chunks (basis 'chunks') the figure was measured over. */
+  tokens: number
+}
+
 /**
- * Estimate tokens/sec by running a short prompt through the active runtime
- * (spec §11.2 step 7). Returns null when no runtime is running, so it is fully
- * optional in the mock era. Never throws.
+ * Measure decode speed by running a short prompt through the active runtime (spec §11.2
+ * step 7). Returns null when no runtime is running, so it is fully optional in the mock era.
+ * Never throws.
  *
- * APPROXIMATION: this counts **stream chunks**, not true tokens — one `chatStream`
- * yield is one mock word-fragment or one real SSE delta (which may be sub- or
- * multi-token), so the number is a coarse "throughput", not an exact token rate. It feeds
- * the `VERY_LOW_TOKENS_PER_SECOND` downgrade, which only needs an order-of-magnitude signal.
+ * Since #291 the figure is the runtime's own `timings.predicted_per_second` whenever the
+ * stream carries it (see `RuntimeTimings`): decode tokens over decode time — prefill and the
+ * first-token latency are NOT in the window, and an MTP-accepted draft run counts as its
+ * tokens, not as one chunk. Without `timings` the reading falls back to the old APPROXIMATION
+ * — **stream chunks** over wall time from before the request — and says so (`basis: 'chunks'`).
+ * The `VERY_LOW_TOKENS_PER_SECOND` downgrade and the §6.5 picker step-down were calibrated on
+ * that chunk basis (the #153 figures); they now compare a decode-only figure, which reads
+ * higher — both are order-of-magnitude gates and were deliberately NOT retuned.
  */
 export async function measureTokensPerSecond(
   runtime: ModelRuntime | null | undefined,
   opts?: { signal?: AbortSignal; modelBusy?: () => boolean; onBusySkip?: () => void }
-): Promise<number | null> {
+): Promise<SpeedReading | null> {
   if (!runtime) return null
   // #185: refuse to measure a CONTENDED model. The benchmark's own admission guard already
   // refused to start beside a chat answer or a document task, but the admission is followed by
@@ -236,14 +260,23 @@ export async function measureTokensPerSecond(
   try {
     const t0 = performance.now()
     let count = 0
+    let timings: RuntimeTimings | undefined
+    // No early exit at the cap (#291): the server bounds the reply via `max_tokens`, and the
+    // chunk that carries `timings` is the FINAL one — breaking out on the 64th chunk cancelled
+    // the reader before it arrived, so the timings never reached the probe.
     for await (const _token of runtime.chatStream(
       [{ role: 'user', content: BENCHMARK_PROMPT }],
-      { maxTokens: BENCHMARK_TOKEN_TARGET, signal: opts?.signal }
+      {
+        maxTokens: BENCHMARK_TOKEN_TARGET,
+        signal: opts?.signal,
+        onFinish: (_reason, tm) => {
+          timings = tm
+        }
+      }
     )) {
       count++
-      if (count >= BENCHMARK_TOKEN_TARGET) break
       // …and DISCARD a reading that became contended mid-probe (a message sent while the 64
-      // tokens stream). Breaking runs the generator's `return()`, so the runtime manager's
+      // tokens stream). Returning runs the generator's `return()`, so the runtime manager's
       // generation gate decrements normally — an abandoned count is exactly what its epoch
       // guard exists to catch, and this path never creates one.
       if (opts?.modelBusy?.()) {
@@ -252,8 +285,17 @@ export async function measureTokensPerSecond(
       }
     }
     const seconds = (performance.now() - t0) / 1000
+    const tps = timings?.predicted_per_second
+    if (typeof tps === 'number' && Number.isFinite(tps) && tps > 0) {
+      const n = timings?.predicted_n
+      return {
+        tokensPerSecond: Math.round(tps * 10) / 10,
+        basis: 'timings',
+        tokens: typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.round(n) : count
+      }
+    }
     if (count === 0 || seconds <= 0) return null
-    return Math.round((count / seconds) * 10) / 10
+    return { tokensPerSecond: Math.round((count / seconds) * 10) / 10, basis: 'chunks', tokens: count }
   } catch {
     return null
   }
@@ -449,12 +491,16 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   // #185: `speedSkipped` distinguishes "no runtime was up, nothing to measure" (silent, the
   // long-standing behavior) from "a runtime WAS up but something else was using it" (warned).
   let speedSkipped = false
-  const tokensPerSecond = await measureTokensPerSecond(deps.runtime ?? null, {
+  const reading = await measureTokensPerSecond(deps.runtime ?? null, {
     modelBusy: deps.modelBusy,
     onBusySkip: () => {
       speedSkipped = true
     }
   })
+  const tokensPerSecond = reading?.tokensPerSecond ?? null
+  // #291: HOW the figure was measured — the runtime's decode timings, or the chunk fallback —
+  // plus the token/chunk count it covers, so the card can mark a fallback as approximate.
+  const speedBasis = reading ? { basis: reading.basis, tokens: reading.tokens } : null
   // Issue #52: record WHICH model produced the tok/s number — the currently loaded one,
   // which is often not the recommended one. null whenever nothing was measured.
   const measuredModelId = tokensPerSecond != null ? (deps.runtime?.modelId ?? null) : null
@@ -501,6 +547,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     driveReadMbps: drive.readMbps,
     driveWriteMbps: drive.writeMbps,
     tokensPerSecond,
+    speedBasis,
     measuredModelId,
     effectiveRead: deps.effectiveRead ?? null,
     profile,

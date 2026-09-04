@@ -1794,9 +1794,13 @@ export const de: Record<keyof typeof en, string> = {
   'diag.bench.notMeasured': 'nicht gemessen',
   // RD-3-Glossar: „Token", nicht „Tokens" — steht auf Diagnose direkt neben
   // models.tech.contextValue („{count} Token") (CODE-43).
-  'diag.bench.tokens': 'Token / Sek.',
+  'diag.bench.tokens': 'Decodier-Geschwindigkeit (Token / Sek.)',
   'diag.bench.tokensNotMeasured': 'nicht gemessen (starte zuerst ein Modell)',
   'diag.bench.tokensModel': 'gemessen mit dem geladenen Modell {model}',
+  // #291: das Decodier-Fenster, über das die Laufzeit-Messung gilt.
+  'diag.bench.tokensOver': 'über {tokens} Token',
+  // #291: der Chunk-Zähl-Notweg (und jedes Ergebnis, das vor der Basis-Angabe gespeichert wurde).
+  'diag.bench.tokensApprox': 'ungefähr – gezählte Chunks, nicht die Laufzeit-Messung',
   'diag.bench.lastRun': 'Letzter Lauf',
   'diag.system.title': 'System',
   'diag.system.osPlatform': 'OS / Plattform',

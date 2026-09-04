@@ -57,7 +57,10 @@ export function createLocalApiServer(ctx: AppContext, appVersion: string): Local
 
 /** Retry-After heuristic from the persisted measured throughput. #52 rule: a measured
  *  rate applies only when it was measured ON the currently active model
- *  (`measuredModelId` — the registerModelIpc `speedSignal` guard); anything else → 30 s. */
+ *  (`measuredModelId` — the registerModelIpc `speedSignal` guard); anything else → 30 s.
+ *  Basis (#291): the persisted figure is now the runtime's decode-only tokens/sec when the
+ *  runtime sent `timings` (higher than the old prefill-inclusive chunk rate), so this estimate
+ *  reads a little shorter for the same machine — an advisory hint, deliberately not retuned. */
 function estimateBusySeconds(ctx: AppContext): number {
   const bench = readSettingRow<{ tokensPerSecond?: number | null; measuredModelId?: string | null } | null>(
     ctx,

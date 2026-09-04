@@ -35,6 +35,8 @@ const benchmark: BenchmarkResult = {
   // Issue #52: the loaded model at measure time — deliberately DIFFERENT from
   // recommendedModelId above, since disambiguating the two is the point of the label.
   measuredModelId: 'mock-chat-8b',
+  // #291: measured from the runtime's own decode timings over the 64-token probe window.
+  speedBasis: { basis: 'timings', tokens: 64 },
   // #108: the honest read figure from a real load window (6.0 GB in 85.2 s ≈ 70.4 MB/s
   // — the USB-stick class the field exists to expose).
   effectiveRead: {
@@ -195,7 +197,33 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     expect(lastCopied).not.toContain('120 MB/s')
     // Issue #52: the tok/s line names the model that produced the number (the loaded one,
     // not the recommended one) in the card AND the copied report.
-    expect(lastCopied).toContain('Tokens / sec: 30 (measured with the loaded model mock-chat-8b)')
+    // #291: the label says decode speed, the value names its token window.
+    expect(lastCopied).toContain(
+      'Decode speed (tokens / sec): 30 (over 64 tokens; measured with the loaded model mock-chat-8b)'
+    )
+    expect(lastCopied).not.toContain('approximate')
+  })
+
+  it('marks a chunk-count fallback reading approximate in the card and the copy (#291)', async () => {
+    const user = userEvent.setup()
+    stubDiagnostics({}, { ...benchmark, speedBasis: { basis: 'chunks', tokens: 41 } })
+    renderDiagnostics()
+    await screen.findByText('Test CPU', { exact: false })
+    expect(screen.getByText(/≈ 30 \(approximate — counted chunks, not runtime timings; measured with the loaded model mock-chat-8b\)/)).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Copy' })[1])
+    expect(lastCopied).toContain(
+      'Decode speed (tokens / sec): ≈ 30 (approximate — counted chunks, not runtime timings; measured with the loaded model mock-chat-8b)'
+    )
+  })
+
+  it('renders a result persisted before speedBasis existed as approximate (#291 — they were all chunk-based)', async () => {
+    const legacy = { ...benchmark }
+    delete (legacy as Partial<BenchmarkResult>).speedBasis
+    stubDiagnostics({}, legacy)
+    renderDiagnostics()
+    await screen.findByText('Test CPU', { exact: false })
+    expect(screen.getByText(/≈ 30 \(approximate/)).toBeInTheDocument()
+    expect(screen.queryByText(/over 64 tokens/)).not.toBeInTheDocument()
   })
 
   it('renders "not measured yet" for a result persisted before the effective-read field existed', async () => {
@@ -218,9 +246,10 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     stubDiagnostics({}, legacy)
     renderDiagnostics()
 
-    // The card row shows the bare number, exactly as before the field existed.
+    // The card row shows the number without a model name, exactly as before the field existed
+    // (the #291 token-window note still renders — the fixture carries a timings basis).
     await screen.findByText('Test CPU', { exact: false })
-    expect(screen.getByText('30')).toBeInTheDocument()
+    expect(screen.getByText('30 (over 64 tokens)')).toBeInTheDocument()
     expect(screen.queryByText(/measured with the loaded model/)).not.toBeInTheDocument()
   })
 

@@ -27,6 +27,14 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The speed figure on Settings → Diagnostics is now the model's real decode speed.** The
+  benchmark used to count streamed chunks over the whole request, including the time the model
+  spent reading the prompt, so on the recommended Qwen3.8 models — which can produce several
+  tokens per chunk — it showed roughly half the true speed. The row is now labelled "Decode
+  speed", takes the number from the AI engine's own timing (generation only, counted in tokens)
+  and shows how many tokens it was measured over. A result that could not use the engine's timing
+  is marked approximate; results saved by earlier versions show as approximate too, since they
+  were all measured the old way. Re-run the benchmark to get the new figure.
 - **Answers from your documents now tell the model more firmly that document text is not
   instructions.** The excerpts an answer is built from are marked as document content, so a
   passage that reads like a command ("ignore the rules above …") is something to quote, not to
