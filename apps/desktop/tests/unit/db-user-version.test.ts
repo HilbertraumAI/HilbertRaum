@@ -60,9 +60,13 @@ describe('PRAGMA user_version (#247)', () => {
     expect(db.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('documents') WHERE name = 'ocr_meta_json'").get()).toEqual({ n: 1 })
     db.close()
     expect(readVersion(p)).toBe(SCHEMA_VERSION)
+    // A second open at the current version writes NOTHING: an unconditional stamp would
+    // rewrite page 1 (the change counter moves) and this hash would differ.
+    const before = sha(p)
     const again = openDatabase(p)
     expect((again.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION)
     again.close()
+    expect(sha(p)).toBe(before)
   })
 
   it('a database stamped by a NEWER build is refused with WorkspaceNewerError — closed, no writes', () => {
@@ -81,10 +85,11 @@ describe('PRAGMA user_version (#247)', () => {
     expect((caught as WorkspaceNewerError).found).toBe(SCHEMA_VERSION + 1)
     expect((caught as WorkspaceNewerError).supported).toBe(SCHEMA_VERSION)
     // No write reached the file (the stamp is read before the first PRAGMA that writes) and
-    // no WAL/journal sidecar was created.
+    // no sidecar is left behind (a WAL-mode file opens `-wal`/`-shm` transiently for the read;
+    // the close removes them).
     expect(sha(p)).toBe(before)
     expect(existsSync(`${p}-wal`)).toBe(false)
-    expect(existsSync(`${p}-journal`)).toBe(false)
+    expect(existsSync(`${p}-shm`)).toBe(false)
     // The handle is closed: on Windows an open handle would make the unlink fail (EPERM).
     rmSync(p)
     expect(existsSync(p)).toBe(false)

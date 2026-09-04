@@ -1209,17 +1209,22 @@ export function createEncryptedVaultOnDisk(
   // path shares this ordering but not the roll-forward (recovery is v2-gated); it exists
   // only so tests can build migration fixtures — the app never passes it.
   const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
-  const db = openDatabase(vaultPaths.dbPath)
-  seedSettings(db)
-  updateSettings(db, { workspaceMode: 'encrypted' })
-  db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
-  db.close()
-  encryptFile(vaultPaths.dbPath, staged, fileKey)
-  shredFile(vaultPaths.dbPath)
-  cleanSidecars(vaultPaths.dbPath)
-  writeVaultDescriptor(vaultPaths.descriptorPath, descriptor) // COMMIT POINT
-  renameSync(staged, vaultPaths.encPath)
-  fileKey.fill(0)
+  try {
+    // #247: a leftover plaintext file at `dbPath` stamped by a NEWER build makes this open
+    // throw (handled: the create IPC reports `workspace_newer`) — the key is zeroed either way.
+    const db = openDatabase(vaultPaths.dbPath)
+    seedSettings(db)
+    updateSettings(db, { workspaceMode: 'encrypted' })
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    db.close()
+    encryptFile(vaultPaths.dbPath, staged, fileKey)
+    shredFile(vaultPaths.dbPath)
+    cleanSidecars(vaultPaths.dbPath)
+    writeVaultDescriptor(vaultPaths.descriptorPath, descriptor) // COMMIT POINT
+    renameSync(staged, vaultPaths.encPath)
+  } finally {
+    fileKey.fill(0)
+  }
 }
 
 /** The in-memory result of a successful unlock. */
@@ -1351,7 +1356,8 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
     fileKey.fill(0)
     // #247: a database a NEWER build stamped is not damage — the password verified and the
     // file is a database; it is refused as such (the plaintext is shredded again exactly like
-    // the damaged case, `.enc` untouched) and the IPC layer names the remedy: update the app.
+    // the damaged case; `.enc` is not rewritten here — a pending `.recovery` above still rolls
+    // forward first, so nothing is lost) and the IPC layer names the remedy: update the app.
     if (isWorkspaceNewerError(err)) throw err
     throw new VaultDamagedError()
   }

@@ -186,7 +186,7 @@ newer refuse a second instance on their own — but an older copy takes no such 
 protection only holds when **both** copies are 0.1.59 or newer. When upgrading, quit the old
 version, delete its app file from the drive, and only then start the new one (see "Two app
 versions on the drive" below). If the app says **"This workspace was written by a newer
-HilbertRaum — update the app"**, you started an older copy on a workspace a newer copy has
+HilbertRaum — update the app to open it."**, you started an older copy on a workspace a newer copy has
 already opened: nothing was changed — update (or start the newer copy) and the workspace opens
 normally. Copies up to 0.1.59 cannot give that message; they open the workspace anyway.
 

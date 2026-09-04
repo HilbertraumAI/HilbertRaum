@@ -774,7 +774,8 @@ password. Four guards close this:
   "Updating a drive", #235). A second floor sits in the database itself (#247, owner decision
   #225, PR #289): the workspace database carries `PRAGMA user_version` = `SCHEMA_VERSION`,
   read before any write, so a build that finds a HIGHER stamp refuses the workspace with
-  "written by a newer HilbertRaum — update the app" and changes nothing — an old artifact
+  "This workspace was written by a newer HilbertRaum — update the app to open it." and changes
+  nothing — an old artifact
   started directly can no longer open a newer workspace half-understood. Builds ≤ 0.1.59 never
   read the stamp, so that floor holds only when the older build is newer than PR #289 (see
   `data-contracts.md` "Schema stamp"). Dev builds get their

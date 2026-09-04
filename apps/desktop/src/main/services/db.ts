@@ -972,7 +972,6 @@ function seedCollections(db: Db): void {
   ).run(libraryId, now)
 }
 
-/** Open (or create) the database at `path` and run migrations. */
 /**
  * The schema version this build writes and understands (#247, owner decision #225). Stored in
  * the database header as `PRAGMA user_version`; read FIRST on every open, before any PRAGMA
@@ -1007,6 +1006,7 @@ export function isWorkspaceNewerError(err: unknown): err is WorkspaceNewerError 
   return err instanceof WorkspaceNewerError || (err instanceof Error && err.name === 'WorkspaceNewerError')
 }
 
+/** Open (or create) the database at `path` and run migrations. */
 export function openDatabase(path: string): Db {
   const db = new DatabaseSync(path)
   // #208: everything below the constructor can throw (the very first PRAGMA does, with
@@ -1031,8 +1031,9 @@ export function openDatabase(path: string): Db {
  *  bytes are not a SQLite database; the caller owns closing the handle on failure. */
 function applyPragmasAndMigrations(db: Db): void {
   // #247: the stamp is read before anything writes, so a refused file is byte-identical and
-  // no WAL/journal sidecar is created for it. (On a non-SQLite file this read is what throws
-  // "file is not a database" — the caller's damaged-vault path is unchanged.)
+  // no sidecar is left behind (a WAL-mode file opens `-wal`/`-shm` transiently for the read;
+  // the close on the refusal path removes them). On a non-SQLite file this read is what
+  // throws "file is not a database" — the caller's damaged-vault path is unchanged.
   const found = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
   if (found > SCHEMA_VERSION) throw new WorkspaceNewerError(found)
   db.exec('PRAGMA journal_mode = WAL;')
