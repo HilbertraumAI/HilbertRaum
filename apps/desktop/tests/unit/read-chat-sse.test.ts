@@ -213,11 +213,12 @@ describe('readChatSSE — in-band error frames reject the stream (F-02)', () => 
   })
 })
 
-// #290/#291 — llama-server's per-request `timings` block rides the streamed completion (at the
-// pinned b9849, on the completing chunk as far as the repo knows; NO captured chat transcript with
-// `timings` exists here yet, hence the tolerant shapes below). The reader remembers the last one
-// seen on ANY chunk and hands it up with the finish reason, once, at `[DONE]` / the clean close —
-// and never on an abort, an error frame or a watchdog trip.
+// #290/#291 — llama-server's per-request `timings` block rides the streamed completion. The REAL
+// b9849 shape is pinned by `chat-sse-timings-fixture.test.ts` on the transcript captured for #298
+// (the timings ride the `finish_reason: "stop"` chunk itself; no trailing choices-less chunk). The
+// shapes below are ROBUSTNESS cases beyond that pin. The reader remembers the last block seen on
+// ANY chunk and hands it up with the finish reason, once, at `[DONE]` / the clean close — and
+// never on an abort, an error frame or a watchdog trip.
 describe('readChatSSE — server timings ride the finish hand-up (#290/#291)', () => {
   const TIMINGS = {
     prompt_n: 12,

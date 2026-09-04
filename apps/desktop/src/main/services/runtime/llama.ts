@@ -106,9 +106,10 @@ interface ChatCompletionChunk {
     finish_reason?: string | null
   }>
   /**
-   * llama-server's per-request timing block (#290/#291). Rides the completing chunk at the
-   * pinned b9849 as far as the repo knows — but NO captured chat transcript with `timings`
-   * exists here yet, so the reader tolerates it on ANY chunk, including one with no `choices`.
+   * llama-server's per-request timing block (#290/#291). At the pinned b9849 it rides the
+   * `finish_reason` chunk itself — pinned by the captured transcript
+   * `tests/fixtures/chat-sse-timings-b9849.txt` (#298). The reader still tolerates it on ANY
+   * chunk, including one with no `choices`, so a future server that moves it keeps working.
    */
   timings?: RuntimeTimings
 }
@@ -343,8 +344,8 @@ function readWithIdleTimeout<T>(
  * `RuntimeUnresponsiveError` instead of wedging the conversation forever. A user Stop still wins first.
  *
  * #290/#291: the server's top-level `timings` block is remembered from whichever chunk carries it
- * (the completing chunk at the pinned b9849, as far as the repo knows — a chunk with no `choices` is
- * tolerated too) and handed up with the finish reason ONCE, at the `[DONE]` sentinel or the clean
+ * (the `finish_reason` chunk at the pinned b9849 — captured in `tests/fixtures/chat-sse-timings-b9849.txt`,
+ * #298; a chunk with no `choices` is tolerated too) and handed up with the finish reason ONCE, at the `[DONE]` sentinel or the clean
  * close. Deferring the hand-up to the sentinel (instead of firing on the `finish_reason` chunk) is
  * what lets a trailing timings-only chunk still be attached; no consumer observes the difference —
  * every caller reads the captured value after the stream completes, and the finish chunk's delta is

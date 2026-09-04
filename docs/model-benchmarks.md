@@ -466,7 +466,8 @@ model; the new sibling warning names the consequence for the pick.
 prefill-inclusive and, on an MTP model, chunk-not-token. Since #291 the persisted
 `tokensPerSecond` is llama-server's own decode-only `predicted_per_second` whenever the runtime
 sends `timings` (`BenchmarkResult.speedBasis`), which reads HIGHER than the old figure (the #291
-rig: 25 → 47.9 with MTP, 38.4 without). The threshold was deliberately not retuned: it is an
+rig on the pinned b9849, verified on #298: the old probe's 25 vs 28.2 / 25.9 with MTP and 21.8
+without; the issue's 47.9 / 38.4 came from a newer `-fa` build). The threshold was deliberately not retuned: it is an
 order-of-magnitude crawl gate, no benchmarked machine sits within a factor of two of it, and a
 decode-only figure only moves readings further above it. Re-measure the #153 class on the new
 basis before any future retune.

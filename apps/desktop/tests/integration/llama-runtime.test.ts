@@ -143,8 +143,9 @@ describe('readChatSSE', () => {
     expect(finishes).toEqual(['stop'])
   })
 
-  // #290/#291: the server's per-request `timings` block (b9849 shape — hand-authored, see the
-  // fixture-provenance note above; NO captured chat transcript with timings exists in the repo yet).
+  // #290/#291: the server's per-request `timings` block. Hand-authored to the b9849 shape pinned by
+  // the captured transcript in `tests/fixtures/chat-sse-timings-b9849.txt` (#298) — the timings ride
+  // the finish chunk itself; `tests/unit/chat-sse-timings-fixture.test.ts` reads the real bytes.
   it('hands the final chunk\'s `timings` up with the finish reason (#290/#291)', async () => {
     const timings = { prompt_n: 9, prompt_ms: 120, predicted_n: 64, predicted_ms: 1336, predicted_per_second: 47.9, prompt_per_second: 75 }
     const stream = sseStream([

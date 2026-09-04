@@ -106,7 +106,9 @@ Adjustments, in order:
 - **Very low** throughput (`tokensPerSecond < VERY_LOW_TOKENS_PER_SECOND = 3`) downgrades one
   step (never below `TINY`). **Basis shift (issue #291, 2026-09-04):** the threshold was
   calibrated when the figure was a prefill-inclusive chunk rate; it now compares the runtime's
-  decode-only tokens/sec, which reads higher (the #291 rig: 25 → 47.9 with MTP). It is an
+  decode-only tokens/sec, which reads higher (the #291 rig on the pinned b9849: the old probe's
+  25 vs 28.2 / 25.9 measured with MTP, 21.8 without — verified against `print_timing` on #298;
+  the issue's 47.9 came from a newer `-fa` build). It is an
   order-of-magnitude gate far below any figure the change moves, so it was deliberately **not
   retuned** — the same applies to the §6.5 picker step-down (`SLOW_PICK_TOKENS_PER_SECOND = 5`)
   and the local API's Retry-After heuristic. Since issue #52 this is **no longer silent**: when the reading

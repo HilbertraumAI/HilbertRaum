@@ -1,0 +1,13 @@
+: Captured llama-server SSE tail — pinned b9849 (system_fingerprint b9849-799fcc04a), Linux Vulkan release,
+: /v1/chat/completions with stream:true, prompt "Write one sentence about privacy.", max_tokens 64, thinking off,
+: rung-1a argv (--jinja --reasoning-format deepseek --spec-type draft-mtp --spec-draft-n-max 2), qwen3.8-27b-q4.
+: Source: issue #298 (2026-09-04, the #291 reporter). Frames: the last content chunk, the finish chunk carrying
+: `timings` (there is NO trailing choices-less chunk), then [DONE]. The model path was scrubbed to <drive>/…;
+: nothing else was edited. Matching server line: eval time = 848.62 ms / 25 tokens (29.46 tokens per second),
+: draft acceptance 15 / 20. These leading colon lines are SSE comments — readChatSSE ignores them.
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"."}}],"created":1788533198,"id":"chatcmpl-bq6BCmbXyd2Fl2ydgKvNUvjKLUEkoeBM","model":"<drive>/models/chat/qwen3.8-27b-q4.gguf","system_fingerprint":"b9849-799fcc04a","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],"created":1788533198,"id":"chatcmpl-bq6BCmbXyd2Fl2ydgKvNUvjKLUEkoeBM","model":"<drive>/models/chat/qwen3.8-27b-q4.gguf","system_fingerprint":"b9849-799fcc04a","object":"chat.completion.chunk","timings":{"cache_n":0,"prompt_n":18,"prompt_ms":442.473,"prompt_per_token_ms":24.581833333333336,"prompt_per_second":40.68044829854025,"predicted_n":25,"predicted_ms":848.618,"predicted_per_token_ms":33.944720000000004,"predicted_per_second":29.459662651511042,"draft_n":20,"draft_n_accepted":15}}
+
+data: [DONE]
