@@ -224,8 +224,15 @@ function validateDownloadSubBlock(
     }
   }
   const licenseUrlRaw = dl['license_url']
-  if (licenseUrlRaw !== undefined && licenseUrlRaw !== null && typeof licenseUrlRaw !== 'string') {
-    errors.push(`"${label}.license_url" must be a string when present`)
+  if (licenseUrlRaw !== undefined && licenseUrlRaw !== null) {
+    if (typeof licenseUrlRaw !== 'string') {
+      errors.push(`"${label}.license_url" must be a string when present`)
+    } else if (!isHttpsUrl(licenseUrlRaw)) {
+      // #236: the licence link renders as an anchor in the download dialog, so it takes the
+      // same https-only rule as `url` — a manifest cannot plant an http: or javascript:
+      // destination behind the fixed "read the license" label.
+      errors.push(`"${label}.license_url" must be an https:// URL when present`)
+    }
   }
   // Optional withdrawal note (#196). A non-empty STRING, never a bare `true`: the note is
   // shown to the user and read by a maintainer months later, so "withdrawn" without a date

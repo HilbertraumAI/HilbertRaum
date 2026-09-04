@@ -42,12 +42,9 @@ function harness(opts: { response?: number; hold?: boolean; reject?: boolean } =
     getWindow: () => window as never,
     t: (key: MessageKey, params?: MessageParams) => t('en', key, params)
   })
-  const settle = async (): Promise<void> => {
-    // Two microtask turns: the dialog promise, then the openExternal continuation.
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-  }
+  // One macrotask drains every pending microtask (the dialog promise, the openExternal
+  // continuation, the finally that clears the guard) — no counting of promise hops.
+  const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
   return { open, shown, opened, window, release: () => release?.(), settle }
 }
 
@@ -105,10 +102,14 @@ describe('createExternalOpener (#236) — consent before any OS browser open', (
     h.release()
     await h.settle()
     expect(h.opened).toEqual(['https://first.example/'])
-    // The guard resets once the dialog settles: a later request is shown again.
+    // The guard resets once the dialog settles: a later request is shown again (and, being
+    // held by the fake like the first, opens once released).
     h.open('https://fourth.example/')
     await h.settle()
     expect(h.shown).toHaveLength(2)
+    expect(h.opened).toEqual(['https://first.example/'])
+    h.release()
+    await h.settle()
     expect(h.opened).toEqual(['https://first.example/', 'https://fourth.example/'])
   })
 
@@ -169,7 +170,10 @@ describe('call-site wiring (#236) — index.ts hands the policy the consenting o
     expect(indexSrc).toMatch(/const (\w+) = createExternalOpener\(\{[\s\S]*?createWindowOpenPolicy\(\1\)/)
   })
 
-  it('shell.openExternal is called nowhere under src/main except external-open.ts', () => {
+  it('shell.openExternal is reached nowhere under src/main except external-open.ts', () => {
+    // Both spellings of the sink: a member call on Electron's `shell`, and `openExternal`
+    // pulled out of the 'electron' import. (window-security.ts's `openExternal` is the
+    // policy's injected callback parameter, not the sink.)
     const offenders: string[] = []
     const walk = (dir: string): void => {
       for (const name of readdirSync(dir)) {
@@ -177,7 +181,10 @@ describe('call-site wiring (#236) — index.ts hands the policy the consenting o
         if (statSync(p).isDirectory()) walk(p)
         else if (/\.ts$/.test(name) && !/\.test\.ts$/.test(name)) {
           if (name === 'external-open.ts') continue
-          if (/\bopenExternal\s*\(/.test(readFileSync(p, 'utf8'))) offenders.push(p.slice(mainDir.length + 1))
+          const src = readFileSync(p, 'utf8')
+          if (/\bshell\s*\.\s*openExternal\b/.test(src) || /import\s*\{[^}]*\bopenExternal\b[^}]*\}\s*from\s*['"]electron['"]/.test(src)) {
+            offenders.push(p.slice(mainDir.length + 1))
+          }
         }
       }
     }
