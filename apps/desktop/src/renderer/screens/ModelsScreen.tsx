@@ -49,16 +49,18 @@ function fmtGb(bytes: number | null, fallbackGb: number, lang: UiLanguage): stri
  * the decimal separator + grouping through the UI language (German "4,5 GB").
  */
 /**
- * The host a licence link points at, or null when it must not render as a link (#236): the
- * manifest validator already refuses a non-https `license_url`, but a stale cached manifest or a
- * hostile one that slipped past an older build must not become a clickable `javascript:` or
- * `http:` anchor behind the fixed "read the license" label. Mirrors the chat-link gate.
+ * The licence link as rendered — its href and the host shown beside it — or null when it must
+ * not render as a link (#236): the manifest validator already refuses a non-https `license_url`,
+ * but a stale cached manifest or a hostile one that slipped past an older build must not become
+ * a clickable `javascript:` or `http:` anchor behind the fixed "read the license" label.
+ * Stricter than the chat-link gate, which also allows `http:`. Returning both from one parse
+ * keeps the anchor and the validated host from ever diverging.
  */
-function licenseLinkHost(url: string | null | undefined): string | null {
+function licenseLink(url: string | null | undefined): { href: string; host: string } | null {
   if (!url) return null
   try {
     const parsed = new URL(url)
-    return parsed.protocol === 'https:' ? parsed.host : null
+    return parsed.protocol === 'https:' ? { href: parsed.href, host: parsed.host } : null
   } catch {
     return null
   }
@@ -742,7 +744,7 @@ export function ModelsScreen(): JSX.Element {
   function confirmDialog(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
     const needsAck = !m.download.licenseApproved
-    const licenseHost = licenseLinkHost(m.download.licenseUrl)
+    const license = licenseLink(m.download.licenseUrl)
     const close = (): void => {
       setConfirming(null)
       setLicenseAck(false)
@@ -763,15 +765,15 @@ export function ModelsScreen(): JSX.Element {
           <dt>{t('models.confirm.license')}</dt>
           <dd>
             {m.license}
-            {licenseHost && (
+            {license && (
               <>
                 {' — '}
-                <a href={m.download.licenseUrl ?? undefined} target="_blank" rel="noreferrer">
+                <a href={license.href} target="_blank" rel="noreferrer">
                   {t('models.confirm.readLicense')}
                 </a>
-                {/* #236: the destination host is shown, like the download URL below it. */}
+                {/* #236: the destination host is shown, like the download address below it. */}
                 {' ('}
-                <code>{licenseHost}</code>
+                <code>{license.host}</code>
                 {')'}
               </>
             )}

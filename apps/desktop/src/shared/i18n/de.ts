@@ -2022,8 +2022,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.openLink.title': 'Diesen Link im Browser öffnen?',
   'main.dialog.openLink.message': 'Diesen Link im Browser öffnen?',
   'main.dialog.openLink.site': 'Website: {site}',
-  'main.dialog.openLink.truncated':
-    'Der Link ist länger als angezeigt — {hidden} weitere Zeichen werden nicht angezeigt.',
+  'main.dialog.openLink.truncated': 'Der Link ist hier gekürzt — nicht angezeigte Zeichen: {hidden}.',
+  'main.dialog.openLink.credentials':
+    'Die Adresse enthält einen Benutzernamen — geöffnet wird die Website in der Zeile „Website“.',
   'main.dialog.openLink.hint':
     'Dieser Link stammt aus einer Antwort oder einem Modell-Manifest, nicht von HilbertRaum. ' +
     'Dein Browser verbindet sich mit dieser Website.',

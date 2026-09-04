@@ -28,7 +28,8 @@ password recovery — are documented in
   it returned), so a compromised renderer can't forge a picker-origin read of an arbitrary file
   (`security-model.md` D1). A native OS drag-drop is delivered to the
   *renderer*, so main can't tokenize it — that seam still accepts raw paths but rejects symlinks and
-  canonicalizes them; the read *content* has no network sink (offline), but the *path* can be one
+  canonicalizes them; the read *content* has no unattended network sink (offline; a link open
+  needs your confirmation, #236), but the *path* can be one
   on Windows — a UNC path reaches `lstat` before any lexical check, which makes Windows attempt an
   SMB connection to the named host and, where that host is reachable and outgoing NTLM is not
   restricted, a credential exchange (documented behaviour, not probed; an accepted residual —

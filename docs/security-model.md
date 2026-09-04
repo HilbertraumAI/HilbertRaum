@@ -2094,8 +2094,10 @@ it.
   2026-09-03).** A link in a model answer, or a model manifest's license link, no longer goes
   straight from `window.open` to `shell.openExternal`: the window-open policy hands every http(s)
   URL to the consenting opener (`main/external-open.ts`), which shows ONE native dialog naming
-  the site (the origin on its own line) and the full URL (cut past 200 characters with the cut
-  marked, never inside the host), with Cancel as the default and the Esc button; only the Open
+  the site (the origin on its own line) and the URL (built from the parsed URL as origin +
+  path, cut past 200 characters with the cut marked, never inside the host; a username in the
+  address is dropped from the display and flagged — the `https://bank.example@evil.test/`
+  deception), with Cancel as the default and the Esc button; only the Open
   button reaches the OS browser, and further requests are dropped while a dialog is open, so a
   compromised renderer cannot page content out through a burst of windows or race a click. The
   licence link additionally must be https at manifest validation and shows its host in the

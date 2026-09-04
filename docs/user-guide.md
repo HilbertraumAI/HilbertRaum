@@ -250,7 +250,7 @@ about them**.
 
 Everything you type and everything the model replies stays on your device. The one exception
 is a link you choose to follow: clicking a link in an answer first shows a small dialog with the
-site and the full address — **Cancel** is the default, and only **Open** hands the address to
+site and the address — **Cancel** is the default, and only **Open** hands the address to
 your browser, which then connects to that site (so the site sees your IP address, as with any
 page you visit). A model can write any address into an answer, so read the site line before
 you press Open. If several links try to open at once, only the first asks; the rest are

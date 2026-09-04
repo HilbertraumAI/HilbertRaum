@@ -1980,8 +1980,10 @@ export const en = {
   'main.dialog.openLink.title': 'Open this link in your browser?',
   'main.dialog.openLink.message': 'Open this link in your browser?',
   'main.dialog.openLink.site': 'Site: {site}',
-  'main.dialog.openLink.truncated':
-    'The link is longer than shown — {hidden} more characters are not displayed.',
+  // Non-inflecting count form (reads the same at 1) — on the i18n test's reviewed list.
+  'main.dialog.openLink.truncated': 'The link is shortened here — characters not shown: {hidden}.',
+  'main.dialog.openLink.credentials':
+    'The address carries a username — the site it actually opens is the one on the Site line.',
   'main.dialog.openLink.hint':
     'This link comes from an answer or a model manifest, not from HilbertRaum. Your browser ' +
     'will connect to this site.',
