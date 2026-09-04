@@ -610,6 +610,9 @@ CREATE TABLE IF NOT EXISTS knowledge_packs (
   recorded_path  TEXT NOT NULL,             -- path as registered (fallback resolution; may be absolute)
   enabled        INTEGER NOT NULL,          -- 0/1 (a disabled pack stays registered but is never queried)
   unavailable_at TEXT,                      -- NULL = file present at last look; ISO stamp = vanished (never blind-deleted)
+  removed_at     TEXT,                      -- tombstone: user removed the registration. The ROW stays so
+                                            -- drive auto-discovery (keyed by leaf) cannot resurrect a
+                                            -- deliberately removed pack; an explicit re-add clears it.
   added_at       TEXT NOT NULL,
   updated_at     TEXT NOT NULL
 );

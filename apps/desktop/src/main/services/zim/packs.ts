@@ -40,6 +40,7 @@ interface PackRow {
   recorded_path: string
   enabled: number
   unavailable_at: string | null
+  removed_at: string | null
   added_at: string
   updated_at: string
 }
@@ -78,7 +79,7 @@ const nowIso = (): string => new Date().toISOString()
 export function listPacks(db: Db, zimDir: string): KnowledgePack[] {
   const rows = prepareCached(
     db,
-    'SELECT * FROM knowledge_packs ORDER BY title COLLATE NOCASE, id'
+    'SELECT * FROM knowledge_packs WHERE removed_at IS NULL ORDER BY title COLLATE NOCASE, id'
   ).all() as unknown as PackRow[]
   const out: KnowledgePack[] = []
   for (const row of rows) {
@@ -109,7 +110,7 @@ export function retrievablePacks(
 ): Array<KnowledgePack & { filePath: string }> {
   if (packIds.length === 0) return []
   const wanted = new Set(packIds)
-  const rows = prepareCached(db, 'SELECT * FROM knowledge_packs WHERE enabled = 1').all() as unknown as PackRow[]
+  const rows = prepareCached(db, 'SELECT * FROM knowledge_packs WHERE enabled = 1 AND removed_at IS NULL').all() as unknown as PackRow[]
   const out: Array<KnowledgePack & { filePath: string }> = []
   for (const row of rows) {
     if (!wanted.has(row.id)) continue
@@ -142,14 +143,15 @@ export async function registerPack(db: Db, deps: PackDeps, zimPath: string): Pro
     db,
     `INSERT INTO knowledge_packs
        (id, title, description, language, zim_date, article_count, media_count, size_bytes,
-        leaf, recorded_path, enabled, unavailable_at, added_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)
+        leaf, recorded_path, enabled, unavailable_at, removed_at, added_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        title = excluded.title, description = excluded.description,
        language = excluded.language, zim_date = excluded.zim_date,
        article_count = excluded.article_count, media_count = excluded.media_count,
        size_bytes = excluded.size_bytes, leaf = excluded.leaf,
        recorded_path = excluded.recorded_path, unavailable_at = NULL,
+       removed_at = NULL, enabled = 1,
        updated_at = excluded.updated_at`
   ).run(
     book.id,
@@ -169,19 +171,25 @@ export async function registerPack(db: Db, deps: PackDeps, zimPath: string): Pro
   return rowToPack(row, true)
 }
 
-/** Remove a registration (the archive FILE is never touched). True when a row existed. */
+/**
+ * Remove a registration (the archive FILE is never touched). A TOMBSTONE, not a DELETE:
+ * drive auto-discovery keys "already known" by leaf, so a deleted row for a file still
+ * sitting in zim/ would resurrect on the next list. True when a live row existed.
+ */
 export function removePack(db: Db, id: string): boolean {
-  const res = prepareCached(db, 'DELETE FROM knowledge_packs WHERE id = ?').run(id)
+  const res = prepareCached(
+    db,
+    'UPDATE knowledge_packs SET removed_at = ?, updated_at = ? WHERE id = ? AND removed_at IS NULL'
+  ).run(nowIso(), nowIso(), id)
   return Number(res.changes) > 0
 }
 
 /** Flip a pack's enabled flag. True when the row existed. */
 export function setPackEnabled(db: Db, id: string, enabled: boolean): boolean {
-  const res = prepareCached(db, 'UPDATE knowledge_packs SET enabled = ?, updated_at = ? WHERE id = ?').run(
-    enabled ? 1 : 0,
-    nowIso(),
-    id
-  )
+  const res = prepareCached(
+    db,
+    'UPDATE knowledge_packs SET enabled = ?, updated_at = ? WHERE id = ? AND removed_at IS NULL'
+  ).run(enabled ? 1 : 0, nowIso(), id)
   return Number(res.changes) > 0
 }
 
@@ -229,7 +237,7 @@ export async function writeLibraryXml(db: Db, deps: PackDeps, libraryXmlPath: st
   } catch {
     /* a stale file that cannot be removed will surface via kiwix-manage below */
   }
-  const rows = prepareCached(db, 'SELECT * FROM knowledge_packs WHERE enabled = 1').all() as unknown as PackRow[]
+  const rows = prepareCached(db, 'SELECT * FROM knowledge_packs WHERE enabled = 1 AND removed_at IS NULL').all() as unknown as PackRow[]
   let count = 0
   for (const row of rows) {
     const filePath = resolvePackFile(deps.zimDir, row)

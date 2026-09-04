@@ -760,6 +760,10 @@ export function registerRagIpc(ctx: AppContext): void {
             // Retrieval reranker: null when no reranker is provisioned — retrieval then
             // keeps the unreranked ordering byte-identical.
             reranker: ctx.reranker,
+            // Knowledge packs (ZIM wave): the query-time archive arm, only when this chat's
+            // scope selected packs (opt-in per chat). makeArm returns null when the tools
+            // are missing or nothing is retrievable; retrieve() isolates arm failures.
+            externalArm: ctx.zim?.makeArm(ctx.db, scope.packIds) ?? null,
             // The turn's skill: its fence rides in the grounded user turn; the assistant row is
             // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
             skill,

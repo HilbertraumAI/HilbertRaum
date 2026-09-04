@@ -8,6 +8,7 @@ import type {
   BenchmarkResult,
   ChatOptions,
   Collection,
+  KnowledgePack,
   ContextUsage,
   Conversation,
   ConversationSearchResult,
@@ -510,6 +511,25 @@ const api = {
 
   // ---- Document organization — collections (projects + built-ins, plan §16) ----
   /** All collections (built-ins first, then projects by name). */
+  // ---- Knowledge packs (ZIM wave; handlers in registerZimIpc.ts) ----
+  /** Registered packs (availability recomputed; drive zim/ auto-discovery runs first). */
+  listKnowledgePacks: (): Promise<KnowledgePack[]> => ipcRenderer.invoke(IPC.listKnowledgePacks),
+  /** Native .zim picker + registration in one main-side call; null = cancelled. */
+  addKnowledgePacks: (): Promise<KnowledgePack[] | null> => ipcRenderer.invoke(IPC.addKnowledgePacks),
+  /** Remove a registration (the archive file is never touched). */
+  removeKnowledgePack: (id: string): Promise<void> => ipcRenderer.invoke(IPC.removeKnowledgePack, id),
+  /** Enable/disable a pack. */
+  setKnowledgePackEnabled: (id: string, enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke(IPC.setKnowledgePackEnabled, id, enabled),
+  /** Whether the kiwix-tools binaries are installed (feature availability). */
+  getKnowledgePackStatus: (): Promise<{ toolsInstalled: boolean }> =>
+    ipcRenderer.invoke(IPC.getKnowledgePackStatus),
+  /** One pack article as plain sectioned text for the citation viewer; null = unavailable. */
+  getPackArticle: (
+    packId: string,
+    articlePath: string
+  ): Promise<{ title: string; sections: Array<{ label: string | null; text: string }> } | null> =>
+    ipcRenderer.invoke(IPC.getPackArticle, packId, articlePath),
   listCollections: (): Promise<Collection[]> => ipcRenderer.invoke(IPC.listCollections),
   /** Create a project. */
   createCollection: (

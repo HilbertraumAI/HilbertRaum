@@ -2318,6 +2318,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportLog': 'Diagnose-Logs speichern',
   'main.dialog.filterDocuments': 'Dokumente',
   'main.dialog.filterAll': 'Alle Dateien',
+  'main.zim.unavailable': 'Wissenspakete sind in dieser Sitzung nicht verfügbar.',
+  'main.zim.dialogTitle': 'Wissenspakete hinzufügen',
+  'main.zim.filterZim': 'ZIM-Archive',
+  'main.zim.addFailed': 'Das Archiv konnte nicht hinzugefügt werden: {reason}',
   'main.dialog.chooseImage': 'Bild auswählen',
   'main.dialog.filterImages': 'Bilder',
   // #120 Punkt 4: die IPC-Ablehnungstexte des Bild-Moduls (fast toter Text — der Renderer zeigt

@@ -162,7 +162,9 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
         ctx?.vision?.stop() ?? Promise.resolve(),
         // The TranslateGemma sidecar (TG wave) is a 5th co-resident llama-server — permanent stop()
         // so its child + its KV cache of recent source/translation text never orphan on quit.
-        ctx?.translator?.stop?.() ?? Promise.resolve()
+        ctx?.translator?.stop?.() ?? Promise.resolve(),
+        // The kiwix-serve sidecar (ZIM wave): stop + remove its generated temp library.xml.
+        ctx?.zim?.stop() ?? Promise.resolve()
       ])
     } catch (err) {
       log.error('Error stopping sidecars on quit', String(err))

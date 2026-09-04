@@ -2247,6 +2247,10 @@ export const en = {
   'main.dialog.exportLog': 'Save diagnostic logs',
   'main.dialog.filterDocuments': 'Documents',
   'main.dialog.filterAll': 'All files',
+  'main.zim.unavailable': 'Knowledge packs are not available in this session.',
+  'main.zim.dialogTitle': 'Add knowledge packs',
+  'main.zim.filterZim': 'ZIM archives',
+  'main.zim.addFailed': 'The archive could not be added: {reason}',
   'main.dialog.chooseImage': 'Choose an image',
   'main.dialog.filterImages': 'Images',
   // #120 item 4: the images IPC refusal backstops (near-dead text — the renderer shows its own

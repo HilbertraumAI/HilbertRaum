@@ -244,6 +244,23 @@ export const IPC = {
   getAuditEvents: 'audit:list',
   /** Save the activity log to a user-chosen file (the exportConversation pattern). */
   exportAuditLog: 'audit:export',
+  // Knowledge packs (ZIM wave). Handlers in registerZimIpc.ts; all DB-backed and
+  // requireUnlocked. Audit metadata is ids/counts only (pack titles/filenames are content).
+  /** All registered packs, availability recomputed; runs drive zim/ auto-discovery first — `KnowledgePack[]`. */
+  listKnowledgePacks: 'packs:list',
+  /** Open the native .zim picker AND register the chosen archives (dialog + registration in ONE
+   *  main-side handler — no renderer-supplied path ever reaches registration). Returns the packs
+   *  added, or null when the dialog was cancelled. */
+  addKnowledgePacks: 'packs:add',
+  /** Remove a registration (never touches the archive file). */
+  removeKnowledgePack: 'packs:remove',
+  /** Enable/disable a pack (a disabled pack stays registered but is never queried). */
+  setKnowledgePackEnabled: 'packs:setEnabled',
+  /** Whether the kiwix-tools binaries are installed (feature availability for the UI). */
+  getKnowledgePackStatus: 'packs:status',
+  /** Read one article from a pack for the citation viewer — plain sectioned TEXT
+   *  (`PackArticle`), resolved MAIN-side over the loopback sidecar; null when unavailable. */
+  getPackArticle: 'packs:getArticle',
   // Document organization — collections (projects + built-ins). Handlers in
   // registerCollectionsIpc.ts; membership/lifecycle live on the docs: namespace above.
   /** All collections (built-ins first, then projects by name). */

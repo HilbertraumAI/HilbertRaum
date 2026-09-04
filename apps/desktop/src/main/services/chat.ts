@@ -181,10 +181,14 @@ function normalizeScope(ids: string[] | null | undefined): string[] | null {
 /** Serialize a composite scope for `scope_v2_json` (null clears it). Empty scope persists. */
 function serializeDocumentScope(scope: DocumentScope | null | undefined): string | null {
   if (!scope) return null
+  const packIds = (scope.packIds ?? []).filter((x) => typeof x === 'string' && x.length > 0)
   return JSON.stringify({
     collectionIds: scope.collectionIds ?? [],
     documentIds: scope.documentIds ?? [],
-    ...(scope.includeArchived ? { includeArchived: true } : {})
+    ...(scope.includeArchived ? { includeArchived: true } : {}),
+    // Knowledge packs (ZIM wave): persisted only when selected, so pre-wave rows and
+    // pack-less scopes serialize byte-identically to before.
+    ...(packIds.length > 0 ? { packIds } : {})
   })
 }
 
