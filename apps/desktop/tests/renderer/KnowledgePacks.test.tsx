@@ -6,7 +6,7 @@ import { PacksPanel } from '../../src/renderer/screens/documents/PacksPanel'
 import { ArticleModal } from '../../src/renderer/chat/ArticleModal'
 import { ScopePopover } from '../../src/renderer/chat/ScopePopover'
 import { I18nProvider } from '../../src/renderer/i18n'
-import type { DocumentScope, KnowledgePack } from '../../src/shared/types'
+import type { Collection, DocumentInfo, DocumentScope, KnowledgePack } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Knowledge packs (ZIM wave) renderer surfaces: the PacksPanel management list, the
@@ -113,7 +113,7 @@ describe('PacksPanel', () => {
 })
 
 describe('ScopePopover — knowledge packs', () => {
-  const collections = [
+  const collections: Collection[] = [
     {
       id: 'lib',
       name: 'Library',
@@ -124,14 +124,14 @@ describe('ScopePopover — knowledge packs', () => {
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
       archivedAt: null
-    }
-  ] as never[]
+    } as Collection
+  ]
   const doc = {
     id: 'd1',
     title: 'contract.pdf',
     status: 'indexed',
     chunkCount: 1
-  } as never
+  } as DocumentInfo
 
   it('renders the packs section, toggles a pack, and an unavailable pack is not tickable', async () => {
     stubApi({})

@@ -1489,3 +1489,32 @@ download R2; npm-workspace dep hoisting may need a tweak) and a live USB-drive r
 sidecar binaries (not in repo). The selectors fall back to mocks when those files are absent, so dev +
 CI are unaffected.
 
+
+---
+
+### Knowledge packs (ZIM wave live — rag-design §17)
+
+**Channels (`packs:` namespace, registerZimIpc.ts; all requireUnlocked except `packs:status`):**
+`packs:list` (drive `zim/` auto-discovery first → `KnowledgePack[]`) · `packs:add`
+(native picker + registration in ONE main-side handler — no renderer-supplied archive
+path exists on this surface; `KnowledgePack[] | null`) · `packs:remove` (tombstone,
+file untouched) · `packs:setEnabled` · `packs:status` (`{ toolsInstalled }`) ·
+`packs:getArticle` (`PackArticle | null` — plain sectioned TEXT, never HTML).
+
+**Shapes (shared/types.ts):** `KnowledgePack` (id = archive UUID, title, language,
+zimDate, articleCount, sizeBytes, leaf, enabled, available, addedAt);
+`DocumentScope.packIds?: string[]` / `RetrievalScope.packIds?` (additive — a pack-less
+scope serializes byte-identically; consumed only by the ZIM retrieval arm, never by
+`buildScopeFilter`); `Citation` additive archive fields (`sourceKind: 'archive'`,
+`packId`, `archiveTitle`, `articlePath`; archive citations carry NO documentId/chunkId).
+
+**Table `knowledge_packs`** (db.ts SCHEMA): id PK (ZIM UUID) · title/description/
+language/zim_date/article_count/media_count/size_bytes · leaf + recorded_path
+(stored-copy resolution: `<drive>/zim/<leaf>` first) · enabled 0/1 · unavailable_at
+(file vanished — mark, never delete) · removed_at (tombstone so drive auto-discovery
+cannot resurrect a removed pack) · added_at/updated_at. No FK from conversations —
+a removed pack degrades to “not retrieved from” (the skills C3 rule).
+
+**Audit:** `knowledge_pack_added` ({ packId, sizeBytes, articleCount }) ·
+`knowledge_pack_removed` ({ packId }). Pack titles/filenames are CONTENT — never in
+`runtime_events` (sentinel-tested in zim-ipc.test.ts).

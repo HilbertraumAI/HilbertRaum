@@ -25,6 +25,16 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+### Added
+
+- **Knowledge packs: ask an offline Wikipedia (or any ZIM archive).** Register ZIM
+  files — e.g. from the Kiwix library — as knowledge packs (Documents → Knowledge
+  packs, or just drop them into the drive’s `zim/` folder), tick them as sources in a
+  documents chat, and answers draw on them with citations that name the archive and
+  open the article offline. Fully local: the pack server binds to 127.0.0.1 only,
+  archives are used in place and never copied. Needs the kiwix-tools binaries on the
+  drive — still a manual step in this release (see the user guide §7b).
+
 ### Fixed
 
 - **An older HilbertRaum now refuses a workspace written by a newer one instead of opening it

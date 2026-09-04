@@ -71,7 +71,11 @@ HILBERTRAUM/
 ├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family: the whisper-cli transcriber
 │   └── .hilbertraum-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
 ├── models/{chat,embeddings,reranker,transcriber,vision,translation}/ # weights (git-ignored; transcriber/ = whisper GGML .bin; vision/ = the GGUF + its mmproj projector, image understanding V1–V5; translation/ = TranslateGemma GGUF, TG wave)
+├── runtime/kiwix-tools/{win,mac,linux}/        # THIRD sidecar family: kiwix-serve + kiwix-manage (knowledge packs).
+│                                                #   NOT yet provisioned by the scripts — placed manually (rag-design §17)
 ├── ocr/                                        # OCR language files: {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
+├── zim/                                        # Knowledge packs: ZIM archives (offline Wikipedia etc.) — PLAIN read-only
+│                                                #   files, auto-discovered; ships EMPTY (rag-design §17; git-ignored)
 ├── model-manifests/{chat,embeddings,reranker,transcriber,vision,translation}/ # committed YAML (the only model metadata in git)
 │   └── runtime-sources.yaml                     # sidecar download manifest (llama_cpp + whisper_cpp + ocr blocks)
 ├── app-skills/                                 # app-shipped Skills (read-only PLAIN folders; provisioned + asserted, S3/S9)

@@ -84,10 +84,14 @@ export function kiwixManageAdd(
   zimPath: string,
   spawnFn: SpawnFn
 ): Promise<void> {
+  // kiwix-manage on Windows REJECTS forward-slash absolute paths ("Cannot add ZIM …" —
+  // spike 2026-08-22). `join()`-built paths are already native, but an env/config-sourced
+  // path may not be; normalizing here removes the whole failure class.
+  const native = (p: string): string => (process.platform === 'win32' ? p.replace(/\//g, '\\') : p)
   return new Promise((resolve, reject) => {
     let child: ChildProcessLike
     try {
-      child = spawnFn(managePath, [libraryXmlPath, 'add', zimPath], {
+      child = spawnFn(managePath, [native(libraryXmlPath), 'add', native(zimPath)], {
         stdio: ['ignore', 'ignore', 'pipe'],
         windowsHide: true
       })

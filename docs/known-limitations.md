@@ -2380,3 +2380,27 @@ _**History.** Many bullets carry short finding ids (`D77`, `SKA-24`, `C1`, `audi
 resolve through the design records and their §-anchor legends in
 [`architecture.md`](architecture.md) / [`rag-design.md`](rag-design.md). The underlying audit
 reports and phase plans were working papers; their full text lives in git history._
+
+## Knowledge packs — ZIM archives ([`rag-design.md`](rag-design.md) §17)
+
+- **kiwix-tools is not provisioned yet.** The sidecar binaries (`kiwix-serve`,
+  `kiwix-manage`) are NOT in runtime-sources.yaml, the engine downloader, DRIVE-NOTICES,
+  or the drive scripts — they must be placed manually under `runtime/kiwix-tools/<os>/` — unzip the WHOLE
+  kiwix-tools archive there (the Windows build needs its ICU DLLs beside the exes)
+  (download kiwix-tools from kiwix.org; §5 item 20 tracks the provisioning wave). Until
+  then the packs panel says so and the feature stays dormant.
+- **Packs ride the RELEVANCE ask path only.** Whole-document reads, compares, and
+  doc-task flows are document reads by definition and never consult packs.
+- **A pure-archive answer records no coverage fraction** (there is no document corpus to
+  be “N of M sections” over) and **evidence review resolves archive citations as
+  honest `unresolved`** — review over archive sources is a future wave.
+- **The article viewer derives the serving URL id from the pack’s filename stem** (the
+  kiwix-serve `--library` rule, verified on kiwix-tools 3.8.1). Retrieval itself parses
+  ids from search results and does not depend on the rule; a kiwix naming change would
+  surface as a viewer 404 (“not available right now”), not a wrong article.
+- **Every enabled in-scope pack is searched for every ask**, regardless of language —
+  a German question against an English pack simply scores poorly. The reranker sorts it
+  out when present; without one, expect occasional off-language chunks.
+- **Content licensing is the user’s call.** Registration accepts any readable ZIM;
+  nothing checks the archive’s license terms (relevant only for redistribution, not
+  for private use).

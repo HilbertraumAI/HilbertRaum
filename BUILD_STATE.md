@@ -39,6 +39,15 @@ archived verbatim to `docs/build-log.md`; §52 gained the "Phase F close-out" pa
 master `f30c73fc` (this machine): 375 / 5,628 / 74 raw (the Electron smoke ran; 374 / 5,622 / 74
 excluding it). No code, no launch smoke.
 
+_2026-09-04 — **ZIM knowledge packs — MVP BUILT (feat/zim-knowledge-packs; design
+record: rag-design §17).**_ Offline ZIM archives (e.g. Wikipedia) as opt-in per-chat
+retrieval sources: kiwix-serve as the THIRD sidecar family (spike 2026-08-22 ruled out
+node-libzim on Windows), query-time Xapian search → shared chunker → the existing
+reranker via a new optional external-arm seam in `retrieve()` (no-arm path byte-identical,
+pinned). New: `knowledge_packs` table, `packs:*` IPC, scope `packIds`, archive citations +
+offline article viewer, Documents-screen packs panel, drive `zim/` dir. Deliberate MVP
+cuts + follow-ups in §5 item 20. Suite green (5660+), typecheck green.
+
 _2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the durable ledger
 `docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46
 non-findings; containment items 1–8; the 14 decisions on their defaults; B1..B9 ports; a §-anchor
@@ -591,6 +600,16 @@ open round's item stays the last block of §5.)
       touched; `FullSuiteGuard` cannot see dropped individual tests.
 
 ---
+20. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable
+    record: [`docs/rag-design.md`](docs/rag-design.md) §17 “Deliberately not built”).**
+    (a) **kiwix_tools provisioning wave** — runtime-sources.yaml block + validator key,
+    ENGINE_FAMILIES + familyBlock branch, fetch-runtime scripts, DRIVE-NOTICES (its
+    knownFamilies gate throws on the new family — needs the pinned GPL-3.0 text +
+    prose), commercial-drive checkFamily, script-drift matrices. Until then binaries are
+    manual (known-limitations). (b) **Tier 2**: persistent import of selected articles
+    into the corpus. (c) **Evidence review** identity for archive citations (today:
+    honest `unresolved`). (d) The manual acceptance leg: the airplane-mode demo on a
+    real drive with `wikipedia_de_*` packs + kiwix-tools 3.8.1 (the §17 user story).
 
 ## 6. Open issues / risks
 

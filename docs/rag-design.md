@@ -2093,3 +2093,97 @@ the `chunks` table (the stored extraction), resolved main-side from the review's
 snapshot (renderer sends review id + source key only), located via the snapshotted chunk id
 (document-verified) or a stored-text containment search — never a re-read of the source
 file, and an unlocatable excerpt is said to be unlocatable, never approximated.
+
+---
+
+## 17. ZIM knowledge packs — design record (kiwix-serve retrieval arm, 2026-09-04)
+
+**What it is.** The user registers ZIM archives (openZIM/Kiwix format — e.g. an offline
+Wikipedia from library.kiwix.org) as *knowledge packs* and opts a chat into them via the
+scope popover; the ask then retrieves from the packs *query-time* alongside the document
+corpus, with citations that name the archive + article + section and open a read-only
+offline article viewer. Files are registered in place, never copied.
+
+### The decisions and the facts they rest on
+
+- **D-Z1 — kiwix-serve sidecar, not libzim bindings.** `@openzim/libzim` does not install
+  on Windows (no Windows libzim binary upstream, no Windows target in its binding.gyp,
+  node-gyp requires MSVC) — established by the 2026-08-22 spike. kiwix-serve (kiwix-tools)
+  ships Windows binaries, starts in ~0.5 s, idles at ~52 MB RSS, and its embedded Xapian
+  full-text search answers in 40–200 ms. `services/zim/serve.ts` (`KiwixServer`) is a
+  compact LlamaServer sibling: shared `findFreePort`/bind-race-retry-once, the crash-reap
+  PID registry (`SidecarFamily` gained `'kiwix_tools'`), pre-spawn binary verification,
+  `stop()` SIGTERM→grace→SIGKILL. Lazy single-flight start; a start failure latches until
+  the pack set changes. No auto-restart and no idle teardown (read-only content server,
+  trivial RSS): an unexpected death cold-starts on the next ask.
+- **D-Z2 — node:http, never fetch.** Node 24's undici crashes (`assert(!this.paused)`) on
+  kiwix-serve/libmicrohttpd response framing, keep-alive or not (spike-reproduced;
+  Electron 43 = Node 24). `services/zim/client.ts` uses `node:http` with a non-keepalive
+  agent, loopback-only by construction, 8 MiB body ceiling.
+- **D-Z3 — query-time retrieval, no embeddings.** A full-Wikipedia pack has millions of
+  articles; pre-embedding is off the table and unnecessary: the ZIM's own Xapian index is
+  the recall stage and the existing reranker (§11) is the precision stage. Per ask and per
+  pack: `/search?books.id=<uuid>` top-5 articles → `/raw/.../content/<path>` HTML →
+  `zimArticleToSegments` (html.ts, a hand-rolled Parsoid-aware scanner: sections → heading
+  `sectionLabel`s, mw-ref sups dropped, `<math alttext>` LaTeX kept, tables/figures
+  dropped) → the SAME `chunkSegments` chunker → top-4 chunks/article by query-term
+  overlap, ≤24 candidates total. Spike-measured end-to-end (search + 5 articles → text):
+  82–165 ms, inside the ≤300 ms acceptance budget before rerank.
+- **D-Z4 — one seam in `retrieve()`.** An optional `ExternalRetrievalArm` (parameter 8)
+  appends candidates between the chunk-row join and the rerank, so rerank, dedup, token
+  budget and `[Sn]` labelling treat archive and document chunks uniformly. No reranker →
+  round-robin interleave (a straight trim would always drop the appended arm). Arm
+  failure is logged and swallowed — an unplugged pack drive never breaks a document ask.
+  The no-arm path is byte-identical (pinned by test).
+- **D-Z5 — synthetic identity, honest exclusions.** Archive chunks carry
+  `chunkId 'zim:<packId>:<path>#<n>'`, `documentId 'zim:<packId>'`, `sourceKind:
+  'archive'`. Their citations carry `packId`/`archiveTitle`/`articlePath` and **no**
+  `documentId`/`chunkId` (the evidence-pack resolver reads a non-null documentId as a
+  real row). Coverage math excludes archive chunks; a pure-archive answer records no
+  coverage fraction. The prompt meta line reads `| Archive: <title> | Section: <heading>`.
+- **D-Z6 — registered in place; kiwix-manage is the metadata reader.** Packs are multi-GB,
+  public, read-only — the deliberate exception to the §1 copy-into-workspace rule. One
+  `kiwix-manage add` into a throwaway library.xml reads the archive header (fast at any
+  size) and yields uuid/title/language/date/articleCount — no libzim anywhere.
+  Resolution follows stored-copy: `<drive>/zim/<leaf>` first, recorded path second;
+  a missing file marks `unavailable_at`, never a delete. Removal is a **tombstone**
+  (`removed_at`): drive auto-discovery keys known files by leaf, so a deleted row for a
+  file still in `zim/` would resurrect on the next list (caught by test).
+- **D-Z7 — opt-in per chat.** `DocumentScope.packIds` (additive; a pack-less scope
+  serializes byte-identically), resolved by `resolveScope` into `RetrievalScope.packIds`,
+  consumed ONLY by the arm — `buildScopeFilter` never sees it. Packs add query-time
+  latency, so they are never silently included.
+- **D-Z8 — no renderer loopback, no HTML.** The CSP (window-security.ts) blocks both an
+  iframe to `127.0.0.1` and a renderer fetch, deliberately. The article viewer
+  (`packs:getArticle` → ArticleModal) ships main-extracted plain sectioned text — the
+  same converter retrieval uses — so the renderer keeps its no-innerHTML posture and no
+  sanitizer dependency exists. The generated library.xml lives in an OS temp dir,
+  recreated per server start, removed on stop.
+- **D-Z9 — dialog-in-handler registration.** `packs:add` opens the native picker AND
+  registers inside one main-side handler; no archive path ever crosses the IPC bridge.
+  Audit is ids/counts only — pack titles and filenames are content (sentinel-tested).
+
+### Module map
+
+`services/zim/`: `html.ts` (article HTML → segments), `client.ts` (node:http + search/
+library XML parsing), `tools.ts` (binary discovery `runtime/kiwix-tools/<os>/`, dev-only
+`HILBERTRAUM_KIWIX_BIN`, kiwix-manage runner), `serve.ts` (KiwixServer), `packs.ts`
+(registry over `knowledge_packs`), `arm.ts` (candidate production), `index.ts`
+(`ZimService` facade on `AppContext.zim`; quit teardown in shutdown.ts). IPC:
+`ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt). Renderer:
+`documents/PacksPanel.tsx`, ScopePopover pack sources, SourcesDisclosure "Open article",
+`chat/ArticleModal.tsx`. Shapes: [`data-contracts.md`](data-contracts.md) "Knowledge
+packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit),
+`zim-arm/zim-ipc` (integration), `KnowledgePacks.test.tsx` (renderer); real-article
+checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
+
+### Deliberately not built (MVP cut; §5 item 20 tracks the follow-ups)
+
+Provisioning of the `kiwix_tools` family (runtime-sources.yaml, engine downloader,
+DRIVE-NOTICES, commercial-drive checks, fetch scripts — binaries are placed manually);
+persistent article import (Tier 2); an in-app ZIM catalog/downloader; evidence review
+over archive citations (they resolve as honest 'unresolved'); packs on the whole-document
+/ compare paths; quality guarantees for non-Wikimedia ZIMs. The viewer derives the
+serving URL id from the filename stem (the kiwix-serve `--library` naming rule, verified
+against kiwix-tools 3.8.1) — retrieval itself parses ids from search links and does not
+depend on that rule.

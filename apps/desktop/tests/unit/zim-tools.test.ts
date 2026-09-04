@@ -83,10 +83,12 @@ describe('kiwixManageAdd', () => {
     const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn)
     queueMicrotask(() => child.emit('exit', 0, null))
     await expect(done).resolves.toBeUndefined()
-    expect(calls[0]).toEqual({
-      command: '/bin/kiwix-manage',
-      args: ['/lib/library.xml', 'add', '/zim/a.zim']
-    })
+    // Paths are normalized to the platform's separator before spawn (kiwix-manage on
+    // Windows rejects forward-slash absolute paths), so assert shape, not separators.
+    expect(calls[0]?.command).toBe('/bin/kiwix-manage')
+    expect(calls[0]?.args[1]).toBe('add')
+    expect(calls[0]?.args[0]?.endsWith('library.xml')).toBe(true)
+    expect(calls[0]?.args[2]?.endsWith('a.zim')).toBe(true)
   })
 
   it('rejects with the stderr tail on a non-zero exit', async () => {
