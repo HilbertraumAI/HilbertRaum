@@ -1732,6 +1732,8 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.evidence_review_ready': 'Nachweis-Prüfung als fertig markiert',
   'diag.audit.evidence_review_deleted': 'Nachweis-Prüfung gelöscht',
   'diag.audit.evidence_pack_exported': 'Nachweispaket exportiert',
+  'diag.audit.knowledge_pack_added': 'Wissenspaket hinzugefügt',
+  'diag.audit.knowledge_pack_removed': 'Wissenspaket entfernt',
   'diag.accel.gpuFallbackName': 'Grafikkarte',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Eingebauter Demo-Modus',

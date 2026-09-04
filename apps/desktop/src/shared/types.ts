@@ -873,6 +873,19 @@ export interface Citation {
   /** EP-1 Phase 0 — the cited chunk's id (`chunks.id`), where cheaply available at
    *  construction. Same additive/back-compat rules as `documentId`. */
   chunkId?: string | null
+  /**
+   * Knowledge packs (ZIM wave): 'archive' marks a citation whose source is a registered
+   * ZIM archive, NOT a `documents` row — `documentId` is then absent by construction, so
+   * the evidence-pack resolver must not read it as a deleted document. Absent/'document'
+   * ⇒ the classic document citation. Additive forever, like the EP-1 fields.
+   */
+  sourceKind?: 'document' | 'archive'
+  /** Archive citations only: the registered pack's id (`knowledge_packs.id`, the ZIM UUID). */
+  packId?: string | null
+  /** Archive citations only: the pack's display title (e.g. "Klimawandel von Wikipedia"). */
+  archiveTitle?: string | null
+  /** Archive citations only: the article path within the archive (opens the article viewer). */
+  articlePath?: string | null
 }
 
 export interface Message {
@@ -1782,6 +1795,31 @@ export function generatedStaleness(
   return changed ? { stale: true, reason: 'source-changed' } : NOT_STALE
 }
 
+/**
+ * A registered ZIM knowledge pack as surfaced over IPC (a `knowledge_packs` row plus the
+ * availability recomputed at list time). Packs are external archive FILES (offline
+ * Wikipedia etc.) registered in place — never copied into the workspace (they are
+ * multi-GB, public, and read-only; the copy-into-workspace rule is for user documents).
+ */
+export interface KnowledgePack {
+  /** The archive's UUID (ZIM header, via kiwix-manage) — stable across re-registration. */
+  id: string
+  title: string
+  description: string | null
+  /** ISO-639 code as recorded in the archive (e.g. "deu", "eng"). */
+  language: string | null
+  /** Archive build date, `YYYY-MM-DD`. */
+  zimDate: string | null
+  articleCount: number | null
+  sizeBytes: number | null
+  /** File basename — resolution tries `<drive>/zim/<leaf>` first (portable). */
+  leaf: string
+  enabled: boolean
+  /** False when the file could not be found at last look (drive unplugged / file moved). */
+  available: boolean
+  addedAt: string
+}
+
 /** A collection as surfaced over IPC (a `collections` row). */
 export interface Collection {
   id: string
@@ -1812,6 +1850,13 @@ export interface DocumentScope {
   documentIds: string[]
   /** Include `lifecycle='archived'` documents. Default false. */
   includeArchived?: boolean
+  /**
+   * Knowledge packs (ZIM wave): registered packs this chat also retrieves from, by
+   * `knowledge_packs.id`. Absent/empty ⇒ packs OFF for this chat (opt-in per chat — a
+   * pack adds query-time latency, so it is never silently included). Additive: rows
+   * persisted before this field parse unchanged.
+   */
+  packIds?: string[]
 }
 
 /**
@@ -1833,6 +1878,12 @@ export interface RetrievalScope {
    * merged into `documentIds`). Gates the filename auto-scope skip (plan §10.1 rule 5 / N2).
    */
   hasExplicitDocSelection?: boolean
+  /**
+   * Knowledge packs (ZIM wave): pack ids whose archives the ZIM retrieval arm queries.
+   * Consumed ONLY by that arm — `buildScopeFilter` ignores it (packs are not
+   * `documents`-table sources), which keeps the SQL scope machinery untouched.
+   */
+  packIds?: string[] | null
 }
 
 /**
@@ -2419,6 +2470,12 @@ export type AuditEventType =
   | 'evidence_review_ready'
   | 'evidence_review_deleted'
   | 'evidence_pack_exported'
+  // Knowledge packs (ZIM wave): registration lifecycle. Metadata is IDS/COUNTS ONLY —
+  // the pack id (archive UUID), sizeBytes, articleCount. The pack TITLE and FILENAME are
+  // content by the export rule (they name what the user reads), exactly like document
+  // filenames — never in message or metadata.
+  | 'knowledge_pack_added'
+  | 'knowledge_pack_removed'
 
 /** One audit-log entry (a `runtime_events` row), newest-first over the IPC surface. */
 export interface AuditEvent {

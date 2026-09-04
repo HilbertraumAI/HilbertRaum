@@ -1688,6 +1688,8 @@ export const en = {
   'diag.audit.evidence_review_ready': 'Evidence review marked ready',
   'diag.audit.evidence_review_deleted': 'Evidence review deleted',
   'diag.audit.evidence_pack_exported': 'Evidence pack exported',
+  'diag.audit.knowledge_pack_added': 'Knowledge pack added',
+  'diag.audit.knowledge_pack_removed': 'Knowledge pack removed',
   'diag.accel.gpuFallbackName': 'Graphics card',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Built-in demo mode',
