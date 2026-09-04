@@ -228,7 +228,7 @@ const realSpawn: SpawnFn = (command, args, options) => nodeSpawn(command, args, 
  * live, a `whisper_cpp` install while a transcription/dictation child runs. Structurally identical
  * to runtime-download's `EngineFamily`; kept local so this low-level module owns no upward import.
  */
-export type SidecarFamily = 'llama_cpp' | 'whisper_cpp'
+export type SidecarFamily = 'llama_cpp' | 'whisper_cpp' | 'kiwix_tools'
 
 const liveSidecarPids = new Map<number, SidecarFamily>()
 

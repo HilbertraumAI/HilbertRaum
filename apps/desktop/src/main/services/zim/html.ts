@@ -101,8 +101,10 @@ function safeFromCodePoint(cp: number, fallback: string): string {
   return String.fromCodePoint(cp)
 }
 
-/** Pull one attribute value out of a raw attribute string (both quote styles). */
-function attrValue(attrs: string, name: string): string | null {
+/** Pull one attribute value out of a raw attribute string (both quote styles).
+ *  Shared with the library-XML parser (client.ts) — kiwix output is machine-generated,
+ *  always-quoted markup, which is all this reader supports. */
+export function attrValue(attrs: string, name: string): string | null {
   const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, 'i').exec(attrs)
   if (!m) return null
   return m[2] ?? m[3] ?? null
