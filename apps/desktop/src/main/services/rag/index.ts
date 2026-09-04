@@ -59,8 +59,14 @@ import { answerWholeDocFromTree, continueUntilComplete, streamWholeDocMapReduce 
 import { documentChunkCount } from '../analysis/coverage'
 import { codePointSlice } from '../text'
 import { SUMMARY_MAP_CALL_CEILING } from '../doctasks/summary'
-import { buildGroundedDataPrompt } from './grounded-data'
-export { buildGroundedDataPrompt, GROUNDED_DATA_RULES } from './grounded-data'
+import { buildGroundedDataPrompt, EXCERPT_BEGIN, EXCERPT_END, EXCERPT_GUARD_LINE } from './grounded-data'
+export {
+  buildGroundedDataPrompt,
+  GROUNDED_DATA_RULES,
+  EXCERPT_BEGIN,
+  EXCERPT_END,
+  EXCERPT_GUARD_LINE
+} from './grounded-data'
 
 // RAG service (spec §7.8; pipeline design in rag-design §11). Turns a
 // question into a grounded, cited answer:
@@ -1130,11 +1136,16 @@ export function buildGroundedPrompt(
   // The analysis block (U2 share-safe pre-scan) sits after the truncation notice, before the excerpts.
   // Absent ⇒ byte-identical to the pre-U2 prompt (every non-share-safe caller passes nothing).
   const analysis = analysisBlock ? `\n${analysisBlock}\n` : ''
+  // #228: the excerpt block is delimited and closed by a guard line — the excerpts are document content,
+  // not instructions (the grounded-data and skill-fence precedent). Fixed strings, user turn only.
   return `Question:
 ${question}
 ${skillBlock}${truncationBlock}${analysis}
 Document excerpts:
+${EXCERPT_BEGIN}
 ${excerpts}
+${EXCERPT_END}
+${EXCERPT_GUARD_LINE}
 
 Answer:`
 }
@@ -1180,7 +1191,10 @@ Compare the two documents below. They are labelled A and B by import order ONLY 
 you which is the older or newer version. Describe the differences between Document A and Document B;
 never call either the "old" or the "new" version.
 
+${EXCERPT_BEGIN}
 ${docs}
+${EXCERPT_END}
+${EXCERPT_GUARD_LINE}
 
 Answer:`
 }
@@ -1357,6 +1371,9 @@ export interface GroundedAnswerOptions {
  * and an allowance for the skill fence (the fence's precise placement/trim is still done downstream
  * in `generateGroundedAnswer`). Never below a small floor so a tiny window still includes something.
  */
+/** Approx tokens of the fixed excerpt framing every grounded turn carries (#228) — counted by the budgets. */
+const EXCERPT_FRAMING_TOKENS = approxPromptTokens(`${EXCERPT_BEGIN}\n${EXCERPT_END}\n${EXCERPT_GUARD_LINE}`)
+
 export function wholeDocumentBudgetTokens(
   contextTokens: number,
   question: string,
@@ -1365,7 +1382,8 @@ export function wholeDocumentBudgetTokens(
   const fenceAllowance = skill
     ? approxPromptTokens(buildSkillFence({ title: skill.title, body: skill.body }).text ?? '')
     : 0
-  const questionScaffold = approxPromptTokens(question) + 64 // question + "Question:/Answer:" framing
+  // question + "Question:/Answer:" framing, plus the fixed excerpt framing (#228: markers + guard line)
+  const questionScaffold = approxPromptTokens(question) + 64 + EXCERPT_FRAMING_TOKENS
   const budget =
     contextTokens -
     CHAT_RESPONSE_RESERVE_TOKENS -

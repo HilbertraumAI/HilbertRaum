@@ -34,7 +34,13 @@ import {
   MIN_COMPACTABLE_TURNS,
   selfSummaryPrompt
 } from '../../src/main/services/chat/compaction'
-import { buildGroundedChatMessages, GROUNDED_SYSTEM_PROMPT } from '../../src/main/services/rag'
+import {
+  buildGroundedChatMessages,
+  EXCERPT_BEGIN,
+  EXCERPT_END,
+  EXCERPT_GUARD_LINE,
+  GROUNDED_SYSTEM_PROMPT
+} from '../../src/main/services/rag'
 import { ChatStreamError } from '../../src/main/services/runtime/llama'
 import { log } from '../../src/main/services/logging'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
@@ -547,7 +553,10 @@ describe('RAG assembly — checkpoint from raw turns, live citations intact (R-R
       summary: 'RAGSUMMARY earlier doc Q&A.',
       coversThroughRowid: turns[3].rowid
     })
-    const grounded = 'Question:\nWhat is X?\n\nDocument excerpts:\n[S1] File: Doc | Page: 2\n"X is 42."\n\nAnswer:'
+    // The grounded turn as buildGroundedPrompt renders it (#228: the excerpt block is delimited + guarded).
+    const grounded =
+      'Question:\nWhat is X?\n\nDocument excerpts:\n' +
+      `${EXCERPT_BEGIN}\n[S1] File: Doc | Page: 2\n"X is 42."\n${EXCERPT_END}\n${EXCERPT_GUARD_LINE}\n\nAnswer:`
     const built = buildGroundedChatMessages(db, conv.id, grounded, 4096)
 
     expect(built[0]).toEqual({ role: 'system', content: GROUNDED_SYSTEM_PROMPT })

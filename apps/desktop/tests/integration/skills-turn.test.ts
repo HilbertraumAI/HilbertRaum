@@ -23,6 +23,9 @@ import { updateSettings } from '../../src/main/services/settings'
 import {
   buildGroundedChatMessages,
   buildGroundedPrompt,
+  EXCERPT_BEGIN,
+  EXCERPT_END,
+  EXCERPT_GUARD_LINE,
   GROUNDED_SYSTEM_PROMPT,
   generateGroundedAnswer,
   ragSettingsFrom,
@@ -188,6 +191,10 @@ describe('fence placement (§11.2/§22-H2)', () => {
     const grounded = buildGroundedPrompt('What is the balance?', chunks, fence)
     expect(grounded).toContain('FENCE-MARKER')
     expect(grounded).toContain('Document excerpts:')
+    // #228: the fence sits BEFORE the delimited excerpt block; the block closes with the guard line.
+    expect(grounded).toContain(EXCERPT_BEGIN)
+    expect(grounded.indexOf('FENCE-MARKER')).toBeLessThan(grounded.indexOf(EXCERPT_BEGIN))
+    expect(grounded.indexOf(EXCERPT_END)).toBeLessThan(grounded.indexOf(EXCERPT_GUARD_LINE))
     // RT-2: the grounding rules keep precedence by living in the SYSTEM prompt (≥ the user
     // turn), no longer inline in the user prompt before the fence.
     expect(GROUNDED_SYSTEM_PROMPT).toContain('Use only the document excerpts')
