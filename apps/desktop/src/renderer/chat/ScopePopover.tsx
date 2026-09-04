@@ -131,7 +131,10 @@ export function ScopePopover({
   // Truthful footer copy (guidelines §7): with no indexed documents AND no chat attachments
   // the affordance becomes a direct "Add documents" jump, not a scope picker. (Attachments —
   // live or still processing — keep the picker, so a freshly dropped file is visible.)
-  if (indexed.length === 0 && fileCount === 0) {
+  // Knowledge packs (ZIM wave): registered packs are pickable sources too, so a pack-only
+  // corpus (fresh workspace, offline Wikipedia added, nothing imported yet) MUST keep the
+  // picker — the early return used to swallow the packs section entirely in that state.
+  if (indexed.length === 0 && fileCount === 0 && packs.length === 0) {
     return (
       <button type="button" className="footer-menu-btn" disabled={disabled} onClick={onAddDocuments}>
         <Icon name="file" className="footer-menu-icon" /> {t('chat.scope.none')}

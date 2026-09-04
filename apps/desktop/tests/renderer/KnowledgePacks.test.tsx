@@ -161,6 +161,29 @@ describe('ScopePopover — knowledge packs', () => {
     })
   })
 
+  it('keeps the picker for a pack-only corpus (no documents imported yet)', async () => {
+    // Regression: the empty-corpus early return used to collapse the picker into the
+    // "Add documents" jump, making the packs section unreachable in a fresh workspace
+    // with an offline Wikipedia added but nothing imported (found in the live demo).
+    stubApi({})
+    const emitted: DocumentScope[] = []
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[]}
+          collections={collections}
+          packs={[pack()]}
+          scope={{ collectionIds: [], documentIds: [] }}
+          onChangeScope={(next) => emitted.push(next)}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    await user.click(await screen.findByRole('checkbox', { name: /Klimawandel von Wikipedia/ }))
+    expect(emitted.at(-1)?.packIds).toEqual(['uuid-climate'])
+  })
+
   it('preserves packIds when an unrelated source is toggled (spread-preservation)', async () => {
     stubApi({})
     const emitted: DocumentScope[] = []
