@@ -29,6 +29,15 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), IN
+PROGRESS:** On this drive / Browse views, name/id search, task/family filters, compact
+rows and expandable quantization groups; design record `docs/design-guidelines.md` §15;
+user-guide §5. After the 2026-09-05 review the branch was rebuilt on master as UX-only —
+Flash-Next stays on `feat/qwen38-flash-next-manifest`, its own PR. Fix wave phases P1
+(rebuild) through P5 planned: P2 catalog guards, P3 terminal download-result panel (F2),
+P4 repair visibility + group face (F3/F5), P5 docs + dead-key cleanup (F6/F7). Validation
+counts recorded per phase in the ledger._
+
 _2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
 `readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one
 up through `onFinish(reason, timings?)` at `[DONE]`/close — never on an abort, error frame or

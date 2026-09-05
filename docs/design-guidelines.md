@@ -1,5 +1,8 @@
 # Design & UI/UX Guidelines — HilbertRaum
 
+> **Model-library update (2026-09-05):** §15 supersedes the older full-card model picker
+> and installed/download subheadings described below.
+
 **Status:** ADOPTED 2026-06-10. Source: external design research (Claude web, 2026-06-10),
 reviewed and adapted to this repo's constraints — adaptations are marked **[adapted]**.
 This is the durable reference for all UI work. The UI polish wave (Phases 23–27) that rolled
@@ -1339,3 +1342,32 @@ keeping the tiers and over uncapped full width:
   no-model/empty states now share the 1180px frame like every other screen.
 - Guards updated in `screen-width-tiers.test.ts`: the single width, a no-per-screen-max-width
   sweep, the `scrollbar-gutter` reserve, and the three 72ch prose pins.
+
+## 15. Model library — design record (2026-09-05)
+
+The growing catalog made full cards and repeated quantizations expensive to scan. The AI Model
+screen now keeps the active chat model pinned above a compact library of alternatives:
+
+- **On this drive / Browse models:** initialize once from installed-model presence; a completed
+  download does not change the user's view. Browse includes installed and missing entries.
+  Existing installed/recommended/memory-fit ordering and all main-process gates remain intact.
+- **Search + task + family filters:** search display name, exact id and family, case-insensitively,
+  matching every whitespace-separated term. Filter before grouping so a collapsed variant is
+  directly discoverable. Tasks are Chat, Document search (embeddings + reranker), Translation,
+  Images and Voice. Reset/empty states are explicit, and the active model remains visible.
+- **Variant identity:** renderer-only, strip a recognized terminal quantization label from the
+  display name, then key by role + family + runtime + remaining name. Preserve sizes, instruction
+  revisions, generations, and QAT identity; unrecognized suffixes are not stripped. No manifest,
+  IPC, recommender, or runtime identifiers change. Exact names/actions remain on every row.
+- **Groups:** the first ordered variant stays visible; a keyboard-accessible button with
+  `aria-expanded` reveals the rest. Counts describe matching alternatives, excluding the pinned
+  active model. Single variants need no group shell. Expanded-group state survives filtering.
+- **Compact rows:** task, storage, minimum RAM, status badges and existing actions; descriptions,
+  automatic-role explanations and technical fields share the existing closed disclosure.
+  Rows stack at narrow widths and retain the shared screen frame and theme tokens.
+- **Downloads:** live progress/cancel appears once above results, so filtering or collapsing a
+  group cannot hide it. Confirmation, license acknowledgement, verification and start gates
+  retain their existing behavior. Context-size settings stay in their existing location.
+
+Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts`, `styles.css`, EN/DE catalogs. Behavioral
+coverage: `ModelsScreen.test.tsx`, `model-library.test.ts`; visual fixtures: `models*` preview cases.

@@ -121,13 +121,16 @@ blocks you.
 
 ## 5. Pick and start a model
 
-1. Open **AI Model**. Your current model (if one is selected) is shown first; the rest are
-   below as alternatives, each with a plain-language note on its size and speed. When a list
-   mixes both kinds, it is split into **On this drive — ready to use** and **Available to
-   download** (not-yet-downloaded cards also look quieter), so you can tell at a glance what
-   works right now and what would cost a download first. The file paths, checksums, and other
-   internals are tucked behind each card's **Technical details** — you never need them for
-   everyday use.
+1. Open **AI Model**. Your current model stays at the top. The **Model library** below defaults
+   to **On this drive** when models are installed; **Browse models** shows the full catalog of
+   alternatives, including downloads. Search by name, family, or exact variant, and filter by
+   task or family. Task groups are Chat, Document search (including rerankers), Translation,
+   Images, and Voice. Each compact row shows the purpose, storage size, minimum memory,
+   status, and available action. Expand **Technical details** for its description, automatic-use
+   explanation, paths, and verification controls.
+   Quantization variants of the same model share one entry. The installed/recommended choice
+   leads; **Show all variants** reveals the other exact versions. Search also finds collapsed
+   variants. The current model is only shown at the top and is not counted again in the library.
 2. You'll see the models on your drive with a status:
    - **Installed** — ready to use.
    - **Recommended** — the largest model that runs comfortably in this computer's memory.
@@ -136,7 +139,7 @@ blocks you.
      can't be selected or started here. Pick a smaller model — quality stays great.
    - **Can't verify** — the file is present but its checksum didn't match; re-download it.
    - **Unsupported** — this model can't run on this computer/build.
-3. Click a downloaded model, then **Use this model** — this makes it your model *and* starts it, so
+3. Click **Use this model** on a downloaded model's row — this makes it your model *and* starts it, so
    you can go straight to chatting. The first start of a model can take a little while as it loads
    into memory.
 

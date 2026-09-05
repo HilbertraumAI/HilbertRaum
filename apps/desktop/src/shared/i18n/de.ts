@@ -1086,6 +1086,31 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Models ----
   'models.title': 'KI-Modell',
+  'models.library.title': 'Modellbibliothek',
+  'models.library.view': 'Ansicht der Modellbibliothek',
+  'models.library.onDrive': 'Auf diesem Laufwerk',
+  'models.library.browse': 'Modelle entdecken',
+  'models.library.search': 'Modelle suchen',
+  'models.library.searchPlaceholder': 'Name, Familie oder Variante…',
+  'models.library.task': 'Aufgabe',
+  'models.library.allTasks': 'Alle Aufgaben',
+  'models.library.family': 'Familie',
+  'models.library.allFamilies': 'Alle Familien',
+  'models.library.chat': 'Chat',
+  'models.library.translation': 'Übersetzung',
+  'models.library.images': 'Bilder',
+  'models.library.voice': 'Spracheingabe',
+  'models.library.memory': 'Mindestarbeitsspeicher: {size}',
+  'models.library.clear': 'Filter zurücksetzen',
+  'models.library.showVariants': 'Alle Varianten anzeigen ({count})',
+  'models.library.hideVariants': 'Weniger Varianten anzeigen ({count})',
+  'models.library.results.one': '{count} passende Variante',
+  'models.library.results.other': '{count} passende Varianten',
+  'models.library.noMatches': 'Keine Modelle passen zu diesen Filtern. Versuche eine andere Suche oder setze die Filter zurück.',
+  'models.library.noneInstalled': 'Auf diesem Laufwerk sind noch keine Modelle einsatzbereit.',
+  'models.library.onlyActive': 'Dein installiertes Modell steht oben. Im Katalog findest du weitere Modelle.',
+  'models.library.noAlternatives': 'Dieser Katalog enthält keine weiteren Modelle.',
+  'models.library.download': 'Aktueller Modelldownload',
   'models.lead':
     'Das KI-Modell beantwortet deine Fragen, vollständig auf diesem Gerät. Alles wird vor ' +
     'der Verwendung geprüft, und nichts wird ohne deine ausdrückliche Bestätigung ' +

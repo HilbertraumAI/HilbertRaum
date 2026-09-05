@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, Spinner, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
+import { groupModelVariants, matchesModelSearch, modelTask, type ModelTask } from '../lib/modelLibrary'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
@@ -23,6 +24,13 @@ import { RUNTIME_POLL_MS } from '../lib/polling'
 // RAM-gate / mock-start flows live in the main process; this screen only presents them.
 
 const UNKNOWN_RAM = null
+const TASKS: { value: ModelTask; label: MessageKey }[] = [
+  { value: 'chat', label: 'models.library.chat' },
+  { value: 'documents', label: 'models.section.docSearch' },
+  { value: 'translation', label: 'models.library.translation' },
+  { value: 'vision', label: 'models.library.images' },
+  { value: 'transcriber', label: 'models.library.voice' }
+]
 
 // Status pills: icon + word, never color-only (guidelines §6). Label values are
 // MessageKeys resolved at render (i18n record §5).
@@ -98,7 +106,7 @@ const CONTEXT_SIZE_PRESETS = [4096, 8192, 16384, 32768, 65536, 131072] as const
 /** Picks at or above this show the "large windows cost memory" hint (issue #43). */
 const CONTEXT_SIZE_WARNING_MIN = 65_536
 
-/** Usable right now — no download needed. The boundary `groupedCards` makes visible (#35). */
+/** Usable right now — no download needed. Defines the On this drive view. */
 export function isModelInstalled(m: ModelInfo): boolean {
   return m.state === 'installed' || m.state === 'running' || m.state === 'ready'
 }
@@ -118,8 +126,7 @@ export function isModelRunnableHere(m: ModelInfo): boolean {
  *
  * Three keys, in order:
  *  1. **Installed first** — a model already on the drive is usable now, while the rest cost a
- *     multi-GB download. Unchanged, and it stays PRIMARY: `groupedCards` renders that boundary
- *     as a labelled subheading, so the lower keys may only reorder cards WITHIN a group.
+ *     multi-GB download. It stays PRIMARY in Browse; On this drive filters by this predicate.
  *  2. **Recommended first** (issue #93 item 3) — the ★ card leads its group. On a fresh
  *     install with nothing on the drive, the recommendation is the ONE actionable answer the
  *     screen has for "which of these should I download?" — it must be the first card scanned,
@@ -163,8 +170,13 @@ const ENGINE_JOB_LIVE: ReadonlySet<EngineDownloadJob['status']> = new Set([
 ])
 
 export function ModelsScreen(): JSX.Element {
-  const { t, lang } = useT()
+  const { t, tCount, lang } = useT()
   const [models, setModels] = useState<ModelInfo[] | null>(null)
+  const [libraryView, setLibraryView] = useState<'installed' | 'browse' | null>(null)
+  const [query, setQuery] = useState('')
+  const [task, setTask] = useState<ModelTask | 'all'>('all')
+  const [family, setFamily] = useState('all')
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set())
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [policy, setPolicy] = useState<PolicyStatus | null>(null)
   const [machineRam, setMachineRam] = useState<number | null>(UNKNOWN_RAM)
@@ -210,6 +222,8 @@ export function ModelsScreen(): JSX.Element {
     ])
     if (!mountedRef.current) return // unmounted while the batch was loading (FE-4)
     setModels(m)
+    // Initialize once: finishing a download must not unexpectedly change views.
+    setLibraryView((current) => current ?? (m.some(isModelInstalled) ? 'installed' : 'browse'))
     setSettings(s)
     setPolicy(p)
     setEngine(e)
@@ -407,14 +421,21 @@ export function ModelsScreen(): JSX.Element {
       : settings.activeModelId === m.id
 
   const chat = models.filter((m) => m.role === 'chat')
-  const embeddings = models.filter((m) => m.role === 'embeddings')
-  const others = models.filter((m) => m.role !== 'chat' && m.role !== 'embeddings')
 
-  // The active chat model leads the screen (guidelines §2); the rest are the picker, whose
-  // display order is `orderPickerModels` above (installed first, then runnable-on-this-machine
-  // first). `groupedCards` below makes the installed/needs-download boundary VISIBLE (#35).
+  // The active chat model remains pinned outside the filters. The library contains
+  // alternatives, ordered by availability/recommendation before grouping variants.
   const activeChat = chat.find(isActive) ?? null
-  const otherChat = orderPickerModels(chat.filter((m) => m !== activeChat))
+  const visibleModels = orderPickerModels(models.filter((m) =>
+    m !== activeChat &&
+    (libraryView !== 'installed' || isModelInstalled(m)) &&
+    (task === 'all' || modelTask(m) === task) &&
+    (family === 'all' || m.family === family) &&
+    matchesModelSearch(m, query)
+  ))
+  const families = [...new Set(models.map((m) => m.family))].sort()
+  const hasFilters = query !== '' || task !== 'all' || family !== 'all'
+  const liveDownloadModel = job && JOB_LIVE.has(job.status)
+    ? models.find((m) => m.id === job.modelId) : null
 
   // Download gates: the drive policy is the ceiling, the Settings toggle the
   // switch. The copy distinguishes the two — "disabled by policy" vs. "turn it on in
@@ -571,7 +592,9 @@ export function ModelsScreen(): JSX.Element {
           <div>
             <div className="model-title">{m.displayName}</div>
             <div className="model-sub">
-              {t(plainHintKey(m))} {t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
+              {t(TASKS.find((entry) => entry.value === modelTask(m))!.label)}
+              {' · '}{t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
+              {' · '}{t('models.library.memory', { size: fmtGbNum(m.recommendedMinRamGb, lang) })}
             </div>
           </div>
           <div className="badges">
@@ -596,23 +619,8 @@ export function ModelsScreen(): JSX.Element {
           </div>
         </div>
 
-        {ramTooLow && <Banner tone="warning">{ramHint}</Banner>}
-
-        {automatic ? (
-          <p className="hint hint-tight">
-            {m.role === 'vision'
-              ? installed
-                ? t('models.vision.installed')
-                : t('models.vision.notInstalled')
-              : m.role === 'translation'
-                ? installed
-                  ? t('models.translation.installed')
-                  : t('models.translation.notInstalled')
-                : installed
-                  ? t('models.automatic.installed')
-                  : t('models.automatic.notInstalled')}
-          </p>
-        ) : (
+        <div className="model-row-actions">
+        {!automatic && (
           // A "Not downloaded" card shows ONE clear action — Download (rendered below) —
           // plus, in demo-capable developer mode, "Try in demo mode". The disabled
           // "Select" / "Start runtime" buttons are noise before the weights exist, so they
@@ -663,13 +671,25 @@ export function ModelsScreen(): JSX.Element {
           )
         )}
 
-        {downloadSection(m)}
+        {liveDownloadModel?.id !== m.id && downloadSection(m)}
+        </div>
 
         {/* Checksums / quantization ids / paths / runtime internals live here, closed
             by default (guidelines §2/§3 principle 3 — never in the everyday path). */}
         <details className="tech-details">
           <summary>{t('models.tech.summary')}</summary>
           <div className="tech-details-body">
+            <p className="hint">{t(plainHintKey(m))}</p>
+            {ramTooLow && <Banner tone="warning">{ramHint}</Banner>}
+            {automatic && (
+              <p className="hint hint-tight">
+                {m.role === 'vision'
+                  ? installed ? t('models.vision.installed') : t('models.vision.notInstalled')
+                  : m.role === 'translation'
+                    ? installed ? t('models.translation.installed') : t('models.translation.notInstalled')
+                    : installed ? t('models.automatic.installed') : t('models.automatic.notInstalled')}
+              </p>
+            )}
             <dl className="kv">
               <dt>{t('models.tech.id')}</dt>
               <dd>
@@ -718,27 +738,30 @@ export function ModelsScreen(): JSX.Element {
     )
   }
 
-  /**
-   * A picker section's cards with the installed/needs-download boundary explicit (#35).
-   * The old implicit sort relied on the per-card state badge — scanning the list couldn't
-   * tell "usable right now" from "costs a multi-GB download first". When a section holds
-   * both groups, each gets a small labeled subheading ("On this drive" / "Available to
-   * download"); a homogeneous section renders flat — there is no boundary to mark, and
-   * the badges already say which world it is. Grouping preserves order within each group,
-   * so the sorted chat picker renders the same cards in the same order.
-   */
-  function groupedCards(list: ModelInfo[]): JSX.Element {
-    const onDrive = list.filter(isModelInstalled)
-    const toDownload = list.filter((m) => !isModelInstalled(m))
-    if (onDrive.length === 0 || toDownload.length === 0) return <>{list.map(card)}</>
-    return (
-      <>
-        <div className="model-group-title">{t('models.group.onDrive')}</div>
-        {onDrive.map(card)}
-        <div className="model-group-title">{t('models.group.toDownload')}</div>
-        {toDownload.map(card)}
-      </>
-    )
+  function libraryRows(list: ModelInfo[]): JSX.Element[] {
+    return groupModelVariants(list).map((group) => {
+      if (group.models.length === 1) return card(group.models[0])
+      const expanded = expandedGroups.has(group.key)
+      return (
+        <section className="model-variant-group" key={group.key} aria-label={group.name}>
+          <div className="model-variant-heading">
+            <h3>{group.name}</h3>
+            <Button size="sm" variant="ghost" aria-expanded={expanded} onClick={() => {
+              setExpandedGroups((previous) => {
+                const next = new Set(previous)
+                if (expanded) next.delete(group.key)
+                else next.add(group.key)
+                return next
+              })
+            }}>
+              {t(expanded ? 'models.library.hideVariants' : 'models.library.showVariants', { count: group.models.length })}
+            </Button>
+          </div>
+          {card(group.models[0])}
+          {expanded && group.models.slice(1).map(card)}
+        </section>
+      )
+    })
   }
 
   function confirmDialog(m: ModelInfo): JSX.Element | null {
@@ -984,18 +1007,64 @@ export function ModelsScreen(): JSX.Element {
         </div>
       )}
 
-      {otherChat.length > 0 && (
-        <div className="section-title">
-          {activeChat ? t('models.section.otherModels') : t('models.section.choose')}
+      <section className="model-library" aria-label={t('models.library.title')}>
+        <h2>{t('models.library.title')}</h2>
+        <SegmentedControl
+          ariaLabel={t('models.library.view')}
+          value={libraryView ?? 'browse'}
+          options={[
+            { value: 'installed', label: t('models.library.onDrive') },
+            { value: 'browse', label: t('models.library.browse') }
+          ]}
+          onChange={setLibraryView}
+        />
+        <div className="model-library-filters">
+          <label className="model-library-search">
+            {t('models.library.search')}
+            <input className="input" type="search" value={query} onChange={(e) => setQuery(e.target.value)}
+              placeholder={t('models.library.searchPlaceholder')} />
+          </label>
+          <label>
+            {t('models.library.task')}
+            <select className="select" value={task} onChange={(e) => setTask(e.target.value as ModelTask | 'all')}>
+              <option value="all">{t('models.library.allTasks')}</option>
+              {TASKS.map((entry) => <option key={entry.value} value={entry.value}>{t(entry.label)}</option>)}
+            </select>
+          </label>
+          <label>
+            {t('models.library.family')}
+            <select className="select" value={family} onChange={(e) => setFamily(e.target.value)}>
+              <option value="all">{t('models.library.allFamilies')}</option>
+              {families.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+          {hasFilters && <Button size="sm" onClick={() => { setQuery(''); setTask('all'); setFamily('all') }}>
+            {t('models.library.clear')}
+          </Button>}
         </div>
-      )}
-      {groupedCards(otherChat)}
-
-      {embeddings.length > 0 && <div className="section-title">{t('models.section.docSearch')}</div>}
-      {groupedCards(embeddings)}
-
-      {others.length > 0 && <div className="section-title">{t('models.section.other')}</div>}
-      {groupedCards(others)}
+        {/* Progress/cancel remains reachable even when filters or a collapsed group hide its row. */}
+        {liveDownloadModel && <div className="model-library-download" role="region" aria-label={t('models.library.download')}>
+          <strong>{liveDownloadModel.displayName}</strong>
+          {downloadSection(liveDownloadModel)}
+        </div>}
+        <p className="hint" role="status">{tCount('models.library.results', visibleModels.length)}</p>
+        {visibleModels.length === 0 ? (
+          <div className="model-library-empty">
+            <p>{t(hasFilters ? 'models.library.noMatches' : libraryView === 'installed'
+              ? activeChat && isModelInstalled(activeChat) ? 'models.library.onlyActive' : 'models.library.noneInstalled'
+              : 'models.library.noAlternatives')}</p>
+            {libraryView === 'installed' && <Button onClick={() => setLibraryView('browse')}>
+              {t('models.library.browse')}
+            </Button>}
+          </div>
+        ) : TASKS.map((entry) => {
+          const list = visibleModels.filter((m) => modelTask(m) === entry.value)
+          return list.length > 0 && <section key={entry.value} aria-label={t(entry.label)}>
+            <h3 className="model-task-heading">{t(entry.label)}</h3>
+            {libraryRows(list)}
+          </section>
+        })}
+      </section>
 
       {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}
       <ErrorBanner message={error} t={t} />
