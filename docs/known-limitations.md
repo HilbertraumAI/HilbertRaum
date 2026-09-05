@@ -2387,7 +2387,7 @@ reports and phase plans were working papers; their full text lives in git histor
   `kiwix-manage`) are NOT in runtime-sources.yaml, the engine downloader, DRIVE-NOTICES,
   or the drive scripts — they must be placed manually under `runtime/kiwix-tools/<os>/` — unzip the WHOLE
   kiwix-tools archive there (the Windows build needs its ICU DLLs beside the exes)
-  (download kiwix-tools from kiwix.org; §5 item 20 tracks the provisioning wave). Until
+  (download kiwix-tools from kiwix.org; §5 item 21 tracks the provisioning wave). Until
   then the packs panel says so and the feature stays dormant.
 - **Packs ride the RELEVANCE ask path only.** Whole-document reads, compares, and
   doc-task flows are document reads by definition and never consult packs.

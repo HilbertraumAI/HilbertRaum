@@ -2149,7 +2149,8 @@ offline article viewer. Files are registered in place, never copied.
   budget and `[Sn]` labelling treat archive and document chunks uniformly. No reranker →
   round-robin interleave (a straight trim would always drop the appended arm). Arm
   failure is logged and swallowed — an unplugged pack drive never breaks a document ask.
-  The no-arm path is byte-identical (pinned by test).
+  The no-arm path is pinned against a retrieval result captured from pre-arm master `bfdb514a`
+  (`tests/fixtures/zim/no-arm-retrieval-master-bfdb514a.json`, review L6, `zim-arm.test.ts`).
 - **D-Z5 — synthetic identity, honest exclusions.** Archive chunks carry
   `chunkId 'zim:<packId>:<path>#<n>'`, `documentId 'zim:<packId>'`, `sourceKind:
   'archive'`. Their citations carry `packId`/`archiveTitle`/`articlePath` and **no**
@@ -2192,7 +2193,7 @@ packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit),
 `zim-arm/zim-ipc` (integration), `KnowledgePacks.test.tsx` (renderer); real-article
 checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
 
-### Deliberately not built (MVP cut; §5 item 20 tracks the follow-ups)
+### Deliberately not built (MVP cut; §5 item 21 tracks the follow-ups)
 
 Provisioning of the `kiwix_tools` family (runtime-sources.yaml, engine downloader,
 DRIVE-NOTICES, commercial-drive checks, fetch scripts — binaries are placed manually);

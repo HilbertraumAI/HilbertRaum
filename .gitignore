@@ -47,6 +47,9 @@ logs/
 # Anchored to the repo root so it does NOT match the source tree's
 # apps/desktop/src/main/services/runtime/ (that bug silently un-tracked the runtime service).
 /runtime/
+# Drive knowledge packs (ZIM archives, PR #294 L2) — the DRIVE's zim/ dir only; anchored for
+# the same reason as /runtime/ (apps/desktop/src/main/services/zim/ must stay tracked).
+/zim/
 
 # OCR language data (Phase 38) — vendored onto the drive at build time, never committed
 # (the never-commit-model-assets rule). Anchored: the source tree has services/ocr/.

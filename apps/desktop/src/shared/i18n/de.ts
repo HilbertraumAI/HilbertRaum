@@ -2453,6 +2453,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.scope.library': 'Bibliothek',
   'chat.scope.projectNamed': 'Projekt: {name}',
   'chat.scope.projectCount.one': '{count} Projekt',
+  'chat.scope.projectCount.other': '{count} Projekte',
   // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
   'chat.scope.packsTitle': 'Wissenspakete',
   'chat.scope.packUnavailable': 'nicht verfügbar',
@@ -2489,7 +2490,6 @@ export const de: Record<keyof typeof en, string> = {
   'packs.removeTitle': 'Dieses Wissenspaket entfernen?',
   'packs.removeConfirm': 'Paket entfernen',
   'packs.removeBody': 'Das Paket wird nur aus HilbertRaum entfernt - die Archivdatei auf dem Datenträger bleibt unangetastet. Chats, die es genutzt haben, greifen einfach nicht mehr darauf zu.',
-  'chat.scope.projectCount.other': '{count} Projekte',
   'chat.scope.docCount.one': '{count} Dokument',
   'chat.scope.docCount.other': '{count} Dokumente',
   'chat.scope.filesInChat.one': '{count} Datei in diesem Chat',
