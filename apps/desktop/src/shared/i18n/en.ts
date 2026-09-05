@@ -2397,6 +2397,7 @@ export const en = {
   'chat.article.from': 'From {archive} - offline copy',
   'chat.article.loading': 'Loading the article…',
   'chat.article.unavailable': 'This article is not available right now. The pack may be disabled, removed, or its drive unplugged.',
+  'chat.article.partial': 'Only the first part of this article could be shown.',
   'docs.section.sources': 'Reference',
   'docs.section.packs': 'Knowledge packs',
   'packs.add': 'Add packs…',

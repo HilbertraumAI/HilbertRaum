@@ -19,6 +19,10 @@ export interface ArticleTarget {
 interface PackArticleView {
   title: string
   sections: Array<{ label: string | null; text: string }>
+  /** True when the converter stopped short of the whole article (PR #294 review H1: the
+   *  input cap, the scan-work budget or unterminated markup). The viewer says so rather
+   *  than presenting a partial extraction as the complete article. */
+  partial: boolean
 }
 
 export function ArticleModal({
@@ -76,6 +80,9 @@ export function ArticleModal({
           <p className="hint">
             <span aria-hidden="true">⚠</span> {t('chat.article.unavailable')}
           </p>
+        )}
+        {phase === 'ready' && article?.partial && (
+          <p className="hint pack-article-source">{t('chat.article.partial')}</p>
         )}
         {phase === 'ready' && article && (
           <div className="pack-article-body">

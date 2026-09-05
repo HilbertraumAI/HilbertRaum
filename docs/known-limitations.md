@@ -2404,3 +2404,10 @@ reports and phase plans were working papers; their full text lives in git histor
 - **Content licensing is the user’s call.** Registration accepts any readable ZIM;
   nothing checks the archive’s license terms (relevant only for redistribution, not
   for private use).
+- **Very large or malformed articles convert partially.** An article whose markup
+  exceeds 1 MiB, whose scan exhausts the work budget, or whose HTML is unterminated is
+  converted only up to the cut: retrieval uses the text extracted before it, and the
+  article viewer shows a hint that only the first part of the article could be
+  displayed rather than presenting the partial extraction as the whole article. The
+  parser's slow-hardware gate (the i7-8550U reference laptop) is still to be recorded —
+  see [`rag-design.md`](rag-design.md) §17 D-Z3.
