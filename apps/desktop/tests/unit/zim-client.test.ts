@@ -107,17 +107,21 @@ describe('kiwixGet', () => {
     await expect(pending).rejects.toThrow()
   })
 
+  // The two 8 MiB legs move real bytes over loopback: ~0.2 s alone, but under a full-suite fork
+  // load on Windows the transfer has taken > 15 s (2026-09-05, one flaky failure in an otherwise
+  // green run), so they carry their own generous budget — the assertion is unchanged.
+  const BIG_BODY_BUDGET_MS = 60_000
   it('rejects a body over the 8 MiB ceiling mid-stream (T01, review INFO)', async () => {
-    await expect(kiwixGet(port, '/big', { timeoutMs: 20_000 })).rejects.toThrow(
+    await expect(kiwixGet(port, '/big', { timeoutMs: BIG_BODY_BUDGET_MS })).rejects.toThrow(
       /exceeded 8388608 bytes/
     )
-  })
+  }, BIG_BODY_BUDGET_MS)
 
   it('accepts a body of exactly 8 MiB (the ceiling is strict-greater)', async () => {
-    const res = await kiwixGet(port, '/atceiling', { timeoutMs: 20_000 })
+    const res = await kiwixGet(port, '/atceiling', { timeoutMs: BIG_BODY_BUDGET_MS })
     expect(res.status).toBe(200)
     expect(res.body.length).toBe(CEILING_BYTES)
-  })
+  }, BIG_BODY_BUDGET_MS)
 })
 
 describe('parseSearchXml / searchPack', () => {

@@ -2465,6 +2465,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.article.from': 'Aus {archive} - Offline-Kopie',
   'chat.article.loading': 'Artikel wird geladen…',
   'chat.article.unavailable': 'Dieser Artikel ist gerade nicht verfügbar. Das Paket ist möglicherweise deaktiviert, entfernt oder das Laufwerk nicht angeschlossen.',
+  'chat.article.partial': 'Nur der erste Teil dieses Artikels konnte angezeigt werden.',
   'docs.section.sources': 'Nachschlagewerke',
   'docs.section.packs': 'Wissenspakete',
   'packs.add': 'Pakete hinzufügen…',

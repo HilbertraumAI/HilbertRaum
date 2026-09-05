@@ -214,7 +214,8 @@ describe('ArticleModal', () => {
         sections: [
           { label: null, text: 'Treibhausgase sind Spurengase.' },
           { label: 'Landwirtschaft', text: 'Methan entsteht in der Landwirtschaft.' }
-        ]
+        ],
+        partial: false
       })
     })
     render(
@@ -228,6 +229,27 @@ describe('ArticleModal', () => {
     expect(await screen.findByText('Treibhausgase sind Spurengase.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Landwirtschaft' })).toBeInTheDocument()
     expect(screen.getByText(/From Klimawandel von Wikipedia/)).toBeInTheDocument()
+  })
+
+  it('warns that only the first part is shown when the conversion was partial (H1 truncation)', async () => {
+    stubApi({
+      getPackArticle: async () => ({
+        title: 'Treibhausgas',
+        sections: [{ label: null, text: 'Treibhausgase sind Spurengase.' }],
+        partial: true
+      })
+    })
+    render(
+      <I18nProvider>
+        <ArticleModal
+          target={{ packId: 'uuid-climate', articlePath: 'Treibhausgas' }}
+          onClose={() => {}}
+        />
+      </I18nProvider>
+    )
+    expect(await screen.findByText(/Only the first part of this article could be shown/)).toBeInTheDocument()
+    // The partial text itself is still shown — a partial extraction beats an empty viewer.
+    expect(screen.getByText('Treibhausgase sind Spurengase.')).toBeInTheDocument()
   })
 
   it('shows the honest unavailable state on a null article', async () => {

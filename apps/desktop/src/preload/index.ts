@@ -535,7 +535,12 @@ const api = {
   getPackArticle: (
     packId: string,
     articlePath: string
-  ): Promise<{ title: string; sections: Array<{ label: string | null; text: string }> } | null> =>
+  ): Promise<{
+    title: string
+    sections: Array<{ label: string | null; text: string }>
+    /** True when only the first part of the article could be converted. */
+    partial: boolean
+  } | null> =>
     ipcRenderer.invoke(IPC.getPackArticle, packId, articlePath),
   listCollections: (): Promise<Collection[]> => ipcRenderer.invoke(IPC.listCollections),
   /** Create a project. */

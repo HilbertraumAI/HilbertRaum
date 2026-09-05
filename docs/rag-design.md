@@ -2139,11 +2139,82 @@ offline article viewer. Files are registered in place, never copied.
   articles; pre-embedding is off the table and unnecessary: the ZIM's own Xapian index is
   the recall stage and the existing reranker (§11) is the precision stage. Per ask and per
   pack: `/search?books.id=<uuid>` top-5 articles → `/raw/.../content/<path>` HTML →
-  `zimArticleToSegments` (html.ts, a hand-rolled Parsoid-aware scanner: sections → heading
-  `sectionLabel`s, mw-ref sups dropped, `<math alttext>` LaTeX kept, tables/figures
-  dropped) → the SAME `chunkSegments` chunker → top-4 chunks/article by query-term
-  overlap, ≤24 candidates total. Spike-measured end-to-end (search + 5 articles → text):
-  82–165 ms, inside the ≤300 ms acceptance budget before rerank.
+  `zimArticleToSegments` (html.ts — a single-cursor **linear forward scanner** with
+  memoised failed lookaheads: every input index is examined at most K = 5 times; the proof
+  is the "LINEAR FORWARD SCANNER — complexity record" header comment in that file, PR #294
+  review H1. Sections → heading `sectionLabel`s, mw-ref sups dropped, `<math alttext>`
+  LaTeX kept, tables/figures dropped) → the SAME `chunkSegments` chunker → top-4
+  chunks/article by query-term overlap, ≤24 candidates total.
+
+  **Truncation / budget contract.** The converter takes `{ maxChars?, maxWork? }`
+  (defaults 1 MiB / 4×`maxChars`) and never throws: a cut reports
+  `truncated: { reason: 'maxChars' | 'workBudget' | 'unterminated', at, what? }` (the work
+  budget takes precedence over the char cap), but the segments produced before the cut are
+  always returned, so a partial article still contributes retrieval chunks (`arm.ts`
+  unchanged) and the viewer's `PackArticle.partial` flag tells the user only the first part
+  was shown instead of presenting a partial extraction as the whole article.
+
+  The **2026-08-22 end-to-end spike figure** (search + fetch + convert, warm, this
+  machine): 82–165 ms, inside the ≤300 ms acceptance budget before rerank — kept as a
+  distinct measurement from the parser-only figures below (review DOC-2 flagged the two as
+  conflated).
+
+  **Measured (P1, 2026-09-05).** Workload: Section A pathology families (unclosed-`<`,
+  unmatched-quote, unterminated-comment/-script, repeated-`<`, entity-heavy, deep-nesting,
+  wellformed synthetic Parsoid-like) at 30k/60k/300k/1 MiB chars; Section B = 60
+  conversions of five synthetic ~30 KB Parsoid-like articles (no real mwoffliner articles
+  available on this machine — stated explicitly as synthetic). Hardware: i9-14900K (8
+  P-cores + 16 E-cores), Node v24.19.0, plain Node (no Electron), the P1 tree on
+  `9125c6df`. Cold = first call of a given input in the process; warm = median of 20 runs
+  after 5 warm-ups (batch: median of 10 passes). Gate thresholds: laptop (i) ≤ 50 ms /
+  (ii) ≤ 150 ms; one-third early-warning rule ≈ 16.67 ms / 50 ms (assumes a P-core).
+
+  | run (affinity) | 1 MiB worst warm | worst family | batch warm | (i) vs 16.67 ms | (ii) vs 50 ms |
+  |---|---|---|---|---|---|
+  | P-cores pinned, run A | 16.23 ms | wellformed | 29.56 ms | 0.97× PASS | 0.59× PASS |
+  | P-cores pinned, run B | 15.25 ms | repeated-lt | 28.74 ms | 0.92× PASS | 0.57× PASS |
+  | E-cores pinned | 27.79 ms | wellformed | 46.66 ms | 1.67× FAIL | 0.93× PASS |
+  | unpinned, 3 runs | 33.28–36.21 ms | entity-heavy | 48.38–64.85 ms | 2.00–2.17× FAIL | 0.97–1.30× (2/3 FAIL) |
+
+  Per-size P-core MAX (warm): 30k 0.74 ms, 60k 0.94 ms, 300k 4.45 ms, 1 MiB 16.23 ms; the
+  batch's per-conversion mean is ≈0.49 ms on a P-core. The unclosed-`<` pathology that took
+  ~188 ms at 30k chars before P1 now takes 0.43 ms at 30k and 17.9 ms at 1 MiB.
+
+  **Verdict (14900K early warning, one-third rule, assumes a P-core).** Gate (ii) passes
+  with margin on P-cores (0.57–0.59×) and E-cores (0.93×); gate (i) passes on a P-core but
+  only just (0.92–0.97×) and fails on E-cores/unpinned. So the 14900K does not already fail
+  a third of a gate on the core class the rule assumes, and **the worker decision is
+  pending the laptop figure**: i7-8550U decisive figure — pending (owner); worker decision
+  pending it. B02: because the P-core gate-(i) figure is within 20% of its threshold,
+  expect the laptop to be re-run at P7 rather than the ÷3 proxy. The laptop was not
+  available in this session.
+
+  **Laptop leg 1 — owner's i7-1185G7 (Tiger Lake, 4C/8T, 15.8 GiB), 2026-09-05, from the
+  `ce062b6c` zip, `--gate laptop`, synthetic batch articles, unpinned.** Not the decisive
+  reference machine (the i7-8550U is slower per core and still pending) — an upper bound on what
+  the reference can do. Node 24 is the app's runtime (Electron 43); the Node 22 runs are
+  informative only.
+
+  | run | Node | 1 MiB worst warm (family) | cold | batch warm | batch cold | (i) vs 50 ms | (ii) vs 150 ms |
+  |---|---|---|---|---|---|---|---|
+  | 1 | 24.20.0 | 56.99 ms (entity-heavy) | 82.42 ms | 85.69 ms | 79.05 ms | 1.14× FAIL | 0.57× PASS |
+  | 2 | 24.20.0 | 55.12 ms (deep-nesting) | 74.86 ms | 96.27 ms | 110.07 ms | 1.10× FAIL | 0.64× PASS |
+  | 3 | 24.20.0 | 62.85 ms (wellformed) | 118.68 ms | 106.81 ms | 169.21 ms | 1.26× FAIL | 0.71× PASS |
+  | 1 | 22.23.1 | 31.88 ms (wellformed) | 49.13 ms | 51.11 ms | 73.93 ms | 0.64× PASS | 0.34× PASS |
+  | 2 | 22.23.1 | 32.22 ms (entity-heavy) | 52.33 ms | 49.53 ms | 61.97 ms | 0.64× PASS | 0.33× PASS |
+  | 3 | 22.23.1 | 46.30 ms (wellformed) | 44.70 ms | 57.33 ms | 99.52 ms | 0.93× PASS | 0.38× PASS |
+
+  Caveats: power plan / AC state not recorded; the 30k MAX drifted 1.78 → 4.52 → 5.52 ms across
+  the three Node 24 runs within 25 s (throttling or background load), so the Node 24 figures are
+  noisy upward — but even the best Node 24 run fails gate (i) by 10 %, and Node 22 vs 24 on the
+  same machine differ ~1.8× (runtime or heat; not separable from this data). Where the 1 MiB time
+  goes (14900K P-core, all families 13–16 ms): the scanner loop itself is the floor;
+  `decodeEntities` is ~7 of the 13 ms only on the entity-heavy family. **Reading:** on the app's
+  runtime a machine faster than the reference already fails gate (i) while gate (ii) passes with
+  a 30–40 % margin; the i7-8550U cannot do better, so under D2 as ruled the worker follow-up PR
+  is expected before P4 unless the owner re-rules the 1 MiB worst-case gate (e.g. a 512 KiB
+  `maxChars` — the largest observed maxi article is ~0.5 MB — or accepting a one-off 60–90 ms
+  stall for a pathological 1 MiB article). Decision: pending the i7-8550U figure and that ruling.
 - **D-Z4 — one seam in `retrieve()`.** An optional `ExternalRetrievalArm` (parameter 8)
   appends candidates between the chunk-row join and the rerank, so rerank, dedup, token
   budget and `[Sn]` labelling treat archive and document chunks uniformly. No reranker →
@@ -2181,7 +2252,8 @@ offline article viewer. Files are registered in place, never copied.
 
 ### Module map
 
-`services/zim/`: `html.ts` (article HTML → segments), `client.ts` (node:http + search/
+`services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
+budget and `truncated` signal — PR #294 review H1), `client.ts` (node:http + search/
 library XML parsing), `tools.ts` (binary discovery `runtime/kiwix-tools/<os>/`, dev-only
 `HILBERTRAUM_KIWIX_BIN`, kiwix-manage runner), `serve.ts` (KiwixServer), `packs.ts`
 (registry over `knowledge_packs`), `arm.ts` (candidate production), `index.ts`
@@ -2189,9 +2261,13 @@ library XML parsing), `tools.ts` (binary discovery `runtime/kiwix-tools/<os>/`, 
 `ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt). Renderer:
 `documents/PacksPanel.tsx`, ScopePopover pack sources, SourcesDisclosure "Open article",
 `chat/ArticleModal.tsx`. Shapes: [`data-contracts.md`](data-contracts.md) "Knowledge
-packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit),
-`zim-arm/zim-ipc` (integration), `KnowledgePacks.test.tsx` (renderer); real-article
-checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
+packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit) — `zim-html`
+runs four attributed synthetic non-Wikipedia fixtures under `tests/fixtures/zim/`
+(Parsoid data-mw, zimit/warc2zim, DevDocs, Stack Exchange/sotoki) in normal CI —
+`zim-arm/zim-ipc` (integration), `KnowledgePacks.test.tsx` (renderer, incl. the
+`partial`-hint case); real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
+`scripts/zim-html-perf.mjs` prints the D2 measurement table outside Vitest/Electron
+(`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`).
 
 ### Deliberately not built (MVP cut; §5 item 21 tracks the follow-ups)
 

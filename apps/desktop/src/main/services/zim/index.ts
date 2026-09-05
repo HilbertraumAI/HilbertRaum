@@ -43,6 +43,10 @@ export interface ZimServiceOptions {
 export interface PackArticle {
   title: string
   sections: Array<{ label: string | null; text: string }>
+  /** True when the converter stopped short of the whole article (input cap, work budget or
+   *  unterminated markup — html.ts `ZimArticle.truncated`), so the viewer must not present
+   *  the text as the complete article. */
+  partial: boolean
 }
 
 export class ZimService {
@@ -212,6 +216,6 @@ export class ZimService {
       }
       return { label: s.sectionLabel ?? null, text }
     })
-    return { title: article.title ?? articlePath, sections }
+    return { title: article.title ?? articlePath, sections, partial: article.truncated !== null }
   }
 }

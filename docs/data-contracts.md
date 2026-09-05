@@ -1505,7 +1505,11 @@ CI are unaffected.
 (native picker + registration in ONE main-side handler — no renderer-supplied archive
 path exists on this surface; `KnowledgePack[] | null`) · `packs:remove` (tombstone,
 file untouched) · `packs:setEnabled` · `packs:status` (`{ toolsInstalled }`) ·
-`packs:getArticle` (`PackArticle | null` — plain sectioned TEXT, never HTML).
+`packs:getArticle` (`PackArticle | null` — plain sectioned TEXT, never HTML;
+`PackArticle` adds `partial: boolean`, true when `html.ts`'s converter stopped short of
+the whole article — input cap, work budget or unterminated markup — Phase 1, PR #294
+review H1; the modal shows a hint line instead of presenting the partial text as
+complete).
 
 **Shapes (shared/types.ts):** `KnowledgePack` (id = archive UUID, title, language,
 zimDate, articleCount, sizeBytes, leaf, enabled, available, addedAt);
