@@ -57,7 +57,11 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   } catch (err) {
     log.warn('GPU probe failed (benchmark continues without it)', String(err))
   }
-  return { name: devices[0]?.name ?? null, useful: gpuUsefulForProfile(devices) }
+  return {
+    name: devices[0]?.name ?? null,
+    useful: gpuUsefulForProfile(devices),
+    totalMb: devices[0]?.totalMb ?? null
+  }
 }
 
 /**
@@ -223,8 +227,10 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
   // last start on this drive went.
   const persistedLoad =
     current?.effectiveRead?.source === 'model_load' ? current.effectiveRead : null
+  const probed = settings.gpuProbe?.devices[0]
   return {
     current,
+    currentGpu: probed ? { name: probed.name, totalMb: probed.totalMb } : null,
     // An unknown identity on either side reads as "this machine": the moved-drive check in
     // maybeRunFirstBenchmark makes the same call, so the two never contradict each other.
     currentMachine: here == null || currentKey == null || here === currentKey,

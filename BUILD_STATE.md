@@ -31,7 +31,8 @@
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance" (8 primary + 1
-utility, design-guidelines §2).** Verdict + three rated tiles, the session's observed figures (last
+utility, design-guidelines §2).** Verdict + four rated tiles (speed, RAM, VRAM via
+`BenchmarkResult.gpuVramMb`, drive), the session's observed figures (last
 answer via a `chat:speed` observer, last model start / file check via per-source read-speed
 latches), and one result per computer (`settings.benchmarkHistory`, `machineKey`). The moved-drive
 check in `maybeRunFirstBenchmark` restores a known machine's result or benchmarks a new one;

@@ -2531,8 +2531,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 .perf-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .perf-card-head h2 { margin: 0 0 4px; }
 .perf-verdict { font-size: var(--text-base); line-height: var(--line-base); margin: 0 0 14px; max-width: 72ch; }
-.perf-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-@media (max-width: 900px) { .perf-tiles { grid-template-columns: minmax(0, 1fr); } }
+.perf-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1100px) { .perf-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .perf-tiles { grid-template-columns: minmax(0, 1fr); } }
 .perf-tile { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px; background: var(--surface); min-width: 0; }
 .perf-tile-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .perf-tile-label { font-size: var(--text-xs); line-height: var(--line-xs); color: var(--text-muted); }

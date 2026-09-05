@@ -192,12 +192,24 @@ describe('buildPerformanceSnapshot', () => {
 
     expect(snap.current?.ranAt).toBe(here.ranAt)
     expect(snap.currentMachine).toBe(true)
+    // The live probe rides along for the graphics tile (no probe here: null).
+    expect(snap.currentGpu).toBeNull()
     expect(snap.otherMachines.map((e) => e.cpuModel)).toEqual([foreign.cpuModel])
     expect(snap.running).toBe(false)
     expect(snap.observed.lastAnswer?.tokensPerSecond).toBe(11.8)
     expect(snap.observed.lastChecksum?.modelId).toBe('qwen3.5-9b-ud-q4kxl')
     // No model start this session: the persisted model-load sample still tells the story.
     expect(snap.observed.lastModelLoad?.mbps).toBe(430)
+  })
+
+  it('carries the live GPU probe for the graphics tile', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, {
+      lastBenchmark: hereResult(),
+      gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, freeMb: 20000 }], probedAt: '2026-09-05T00:00:00Z' }
+    })
+    expect(buildPerformanceSnapshot(ctxWith(root, db)).currentGpu).toEqual({ name: 'NVIDIA GeForce RTX 3090', totalMb: 24576 })
   })
 
   it('reads a result from another computer as "not this machine"', () => {
@@ -210,6 +222,7 @@ describe('buildPerformanceSnapshot', () => {
 
     expect(snap.currentMachine).toBe(false)
     expect(snap.otherMachines).toEqual([])
+    expect(snap.currentGpu).toBeNull()
     expect(snap.observed).toEqual({ lastAnswer: null, lastModelLoad: null, lastChecksum: null })
   })
 })

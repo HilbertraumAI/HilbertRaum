@@ -266,15 +266,21 @@ utility"). Diagnostics keeps the raw table and its Copy button as the support su
 screen answers the user's question in plain words. Three cards:
 
 1. **This computer**: one verdict sentence ("Runs \<model\> at about \<n\> tokens per second.
-   Model starts from this drive are fast/slow.") and three tiles, each with a rating WORD, never a
+   Model starts from this drive are fast/slow.") and four tiles, each with a rating WORD, never a
    colour alone: Speed (decode tokens/s, the measured model and date; "Approximate" on a
    chunk-basis result), Memory (RAM, the profile as the pill, the model the RAM fits together with
    the context it launches with: the user's `contextTokensOverride` or the model's recommended
-   window, plus CPU and GPU), Drive (`effectiveRead` with its source and date; "Pending" until a
-   model start measured it). Actions: **Check again** (or **Start \<model\> and measure** when
-   speed is unmeasured, the recommended model is installed and nothing runs: `useModel` then
-   `runBenchmark`), **Why this model?** and **Change context size** (both open AI Model, the one
-   place the context is set), **Copy report**. A result measured on another computer says so.
+   window, plus CPU), Graphics memory (`BenchmarkResult.gpuVramMb`, the primary probed device's
+   total MiB recorded at benchmark time so the history rows carry it too; "Usable" at or above the
+   runtime's 6 GiB GPU gate, "Small" below it with the plain consequence "models run on the
+   processor", "None" without a device; a result persisted before the field existed falls back to
+   the live `settings.gpuProbe` via `PerformanceSnapshot.currentGpu`, for the current machine
+   only), Drive (`effectiveRead` with its source and date; "Pending" until a model start measured
+   it). Actions: **Check again** (or **Start \<model\> and measure** when speed is unmeasured,
+   the recommended model is installed and nothing runs: `useModel` then `runBenchmark`), **Change
+   context size** (opens AI Model, the one place the context is set), **Copy report**. A "Why this
+   model?" link to AI Model was tried and dropped (2026-09-05, owner: it led nowhere useful). A
+   result measured on another computer says so.
 2. **Observed while you worked**: figures from real use, session-only, never persisted: the last
    finished answer (the #290 `chat:speed` payload, latched by `setAnswerSpeedObserver` in
    `chat-stream.ts` with the model that produced it), the last model start (the `model_load`
@@ -285,8 +291,8 @@ screen answers the user's question in plain words. Three cards:
    first, each with its speed/model, CPU/RAM/date and rating pills ("Slow drive" under 100 MB/s).
 
 **Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
-in `registerBenchmarkIpc.ts`): `current`, `currentMachine`, `otherMachines`, `running` (the
-`benchmark` occupancy lane), `observed`. **Progress**: `RunBenchmarkDeps.onProgress` reports
+in `registerBenchmarkIpc.ts`): `current`, `currentMachine`, `currentGpu`, `otherMachines`,
+`running` (the `benchmark` occupancy lane), `observed`. **Progress**: `RunBenchmarkDeps.onProgress` reports
 `'system' | 'drive' | 'speed' | 'done'` as each step lands ('speed' only when a runtime was up);
 the IPC handler forwards them to the requesting window as `benchmark:progress`, and the screen
 shows a step list instead of an opaque "Running…" button. The first-run path passes no callback.

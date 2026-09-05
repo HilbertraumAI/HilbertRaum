@@ -47,7 +47,8 @@ Collapse the nav destinations into 8 primary + 1 utility:
   first-class task surface, distinct from OCR and from any image generation;
   image-understanding §6) · **AI Model** (reframed from "Models" — singular mental model;
   checksums/quantization behind a "Technical details" disclosure) · **Performance** (what this
-  computer can run and how fast: the hardware check's answer as a verdict and three rated tiles,
+  computer can run and how fast: the hardware check's answer as a verdict and four rated tiles
+  (speed, memory, graphics memory, drive),
   the figures observed in real use, and one result per computer the drive has been in;
   `docs/benchmark.md` "Performance screen") · **Skills** (the user's
   capability library — manage, import, enable; a first-class destination, *not* a Settings

@@ -28,8 +28,8 @@ from its first public `1.0.0` release onward.
 ### Added
 
 - **A new Performance page in the left navigation.** It answers, in plain words, what this
-  computer can run and how fast: one sentence, then three tiles for speed, memory and drive,
-  each with a rating word. Below it, figures from real use (your last answer, the last model
+  computer can run and how fast: one sentence, then four tiles for speed, memory, graphics
+  memory and drive, each with a rating word. Below it, figures from real use (your last answer, the last model
   start, the last file check) and one result for every computer this drive has been plugged
   into. The check runs on its own the first time and whenever the drive lands on a different
   computer; on a computer it already knows, the earlier result is restored so the recommended

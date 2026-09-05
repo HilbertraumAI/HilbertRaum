@@ -28,6 +28,7 @@ function result(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
     cpuCores: 12,
     ramGb: 15.7,
     gpu: null,
+    gpuVramMb: null,
     driveReadMbps: null,
     driveWriteMbps: 312,
     tokensPerSecond: 12,
@@ -54,6 +55,7 @@ const office = result({
   cpuCores: 32,
   ramGb: 64,
   gpu: 'NVIDIA GeForce RTX 3090',
+  gpuVramMb: 24576,
   tokensPerSecond: 41,
   measuredModelId: 'qwen3.8-27b-ud-q4km',
   recommendedModelId: 'qwen3.8-27b-ud-q4km',
@@ -81,6 +83,7 @@ function snapshot(over: Partial<PerformanceSnapshot> = {}): PerformanceSnapshot 
   return {
     current: result(),
     currentMachine: true,
+    currentGpu: null,
     otherMachines: [office, oldLaptop],
     running: false,
     observed: {
@@ -136,6 +139,10 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(screen.getAllByText('Fast').length).toBeGreaterThanOrEqual(1)
     // The Memory tile names the model the RAM fits and the context it launches with.
     expect(screen.getByText(/Fits Qwen3\.5 9B \(UD-Q4_K_XL\) with a 8,192-token context/)).toBeInTheDocument()
+    // No graphics card on this laptop: the Graphics tile says so in words, never a bare dash.
+    expect(screen.getByText('Graphics memory')).toBeInTheDocument()
+    expect(screen.getByText(/No usable graphics card/)).toBeInTheDocument()
+    expect(screen.getByText('None')).toBeInTheDocument()
     // No jargon on the primary surface.
     expect(screen.queryByText(/benchmark/i)).not.toBeInTheDocument()
   })
@@ -146,7 +153,8 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(await screen.findByText(/Last answer: 11\.8 tokens \/ s, first token after 0\.9 s/)).toBeInTheDocument()
     expect(screen.getByText(/Model start: 13\.5 s/)).toBeInTheDocument()
     expect(screen.getByText(/41 tokens \/ s with Qwen3\.8 27B UD-Q4_K_M/)).toBeInTheDocument()
-    expect(screen.getByText(/Intel Core i9-13900K, 64\.0 GB RAM/)).toBeInTheDocument()
+    // Graphics memory rides along in the other-computer rows once the result carries it.
+    expect(screen.getByText(/Intel Core i9-13900K, 64\.0 GB RAM, 24\.0 GB VRAM/)).toBeInTheDocument()
     expect(screen.getByText(/2 tokens \/ s with Qwen3\.5 4B/)).toBeInTheDocument()
     // The 70 MB/s laptop is flagged by its drive, in words.
     expect(screen.getByText('Slow drive')).toBeInTheDocument()
@@ -158,9 +166,30 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(await screen.findByRole('button', { name: 'Check this computer' })).toBeInTheDocument()
     // The card header and the Memory tile both say it: not checked yet.
     expect(screen.getAllByText('Not checked yet').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Pending')).toHaveLength(2)
+    expect(screen.getAllByText('Pending')).toHaveLength(3)
     expect(screen.getByText(/Nothing observed yet this session/)).toBeInTheDocument()
     expect(screen.getByText(/None yet\. Plug the drive into another computer/)).toBeInTheDocument()
+  })
+
+  it('shows the graphics memory from the result, or from the live probe when the result predates the field', async () => {
+    install(snapshot({ current: result({ gpu: 'NVIDIA GeForce RTX 3090', gpuVramMb: 24576 }) }))
+    renderScreen()
+    expect(await screen.findByText('24.0')).toBeInTheDocument()
+    expect(screen.getByText('Usable')).toBeInTheDocument()
+    cleanup()
+    // An old result (no gpuVramMb) on the current machine: the live probe fills the tile.
+    const legacy = result()
+    delete (legacy as Partial<BenchmarkResult>).gpuVramMb
+    install(snapshot({ current: legacy, currentGpu: { name: 'Intel Iris Xe', totalMb: 4096 } }))
+    renderScreen()
+    expect(await screen.findByText('4.0')).toBeInTheDocument()
+    expect(screen.getByText('Small')).toBeInTheDocument()
+    expect(screen.getByText(/Under 6 GB: models run on the processor/)).toBeInTheDocument()
+    cleanup()
+    // …but never for a result from ANOTHER computer.
+    install(snapshot({ current: legacy, currentMachine: false, currentGpu: { name: 'Intel Iris Xe', totalMb: 4096 } }))
+    renderScreen()
+    expect(await screen.findByText(/No usable graphics card/)).toBeInTheDocument()
   })
 
   it('says so when the last result belongs to a different computer', async () => {
@@ -203,12 +232,11 @@ describe('PerformanceScreen: actions', () => {
     await waitFor(() => expect(api.runBenchmark).toHaveBeenCalledTimes(1))
   })
 
-  it('"Why this model?" and "Change context size" go to AI Model; the footer link opens Diagnostics', async () => {
+  it('"Change context size" goes to AI Model; the footer link opens Diagnostics; no "Why this model?" button', async () => {
     install(snapshot())
     const onNavigate = renderScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Why this model?' }))
-    expect(onNavigate).toHaveBeenLastCalledWith('models')
-    await userEvent.click(screen.getByRole('button', { name: 'Change context size' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Change context size' }))
+    expect(screen.queryByRole('button', { name: /Why this model/ })).not.toBeInTheDocument()
     expect(onNavigate).toHaveBeenLastCalledWith('models')
     await userEvent.click(screen.getByRole('button', { name: 'Open Diagnostics' }))
     expect(onNavigate).toHaveBeenLastCalledWith('settings:diagnostics')
@@ -223,6 +251,7 @@ describe('PerformanceScreen: actions', () => {
     expect(text).toContain('This computer')
     expect(text).toContain('Qwen3.5 9B (UD-Q4_K_XL)')
     expect(text).toContain('8,192 tokens')
+    expect(text).toContain('Graphics memory: None')
   })
 
   it('surfaces a failed run as a calm banner and returns to the tiles', async () => {

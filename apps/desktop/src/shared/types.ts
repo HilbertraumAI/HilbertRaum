@@ -1920,6 +1920,14 @@ export interface BenchmarkResult {
   ramGb: number
   gpu: string | null
   /**
+   * Total memory of the primary probed GPU in MiB (the `--list-devices` probe injected at
+   * benchmark time), or null with no usable GPU. Optional: absent on results persisted
+   * before the field existed; the Performance screen then falls back to the live probe for
+   * the current machine and shows nothing for other machines. Graphics memory decides what
+   * runs accelerated, so it gets its own tile beside RAM.
+   */
+  gpuVramMb?: number | null
+  /**
    * The 8 MB probe's read-back leg — page-cache-served (F-35), ~100× inflated on slow
    * media, so it is NOT displayed and never gates a warning; kept for continuity with
    * old persisted results and the probe's own diagnostics. `effectiveRead` is the
@@ -1999,6 +2007,12 @@ export interface PerformanceSnapshot {
   /** True when `current` was measured on the computer the app is running on right now. */
   currentMachine: boolean
   otherMachines: BenchmarkResult[]
+  /**
+   * The live GPU probe for the computer the app runs on (`settings.gpuProbe`, refreshed once
+   * per session), so the graphics-memory tile has a figure even when `current` predates
+   * `gpuVramMb`. Null with no probe or no device.
+   */
+  currentGpu: { name: string; totalMb: number } | null
   /** True while a benchmark is running (the button disables; steps stream via the event). */
   running: boolean
   observed: {

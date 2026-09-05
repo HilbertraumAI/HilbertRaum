@@ -15,8 +15,8 @@ import type {
 
 // The Performance screen (design-guidelines §2 "8 primary + 1 utility"; benchmark.md
 // "Performance screen"). Three cards:
-//   1. "This computer": the hardware check's answer as a verdict line + three tiles (speed,
-//      memory, drive) and the one action, "Check again". While a check runs, the steps show
+//   1. "This computer": the hardware check's answer as a verdict line + four tiles (speed,
+//      memory, graphics memory, drive) and the one action, "Check again". While a check runs, the steps show
 //      as they land (EVENTS.benchmarkProgress) instead of an opaque "Running…" button.
 //   2. "Observed while you worked": real figures from normal use (the last finished answer,
 //      the last model start, the last full file check): session-only, never persisted.
@@ -28,6 +28,14 @@ import type {
 const SLOW_TOKENS_PER_SECOND = 5
 /** The honest-read threshold the slow-read warning uses (benchmark.ts SLOW_EFFECTIVE_READ_MBPS). */
 const SLOW_READ_MBPS = 100
+/** Below this much graphics memory the runtime's GPU gate keeps models on the processor
+ *  (runtime/gpu.ts GPU_BUMP_MIN_VRAM_MB, 6 GiB). */
+const USABLE_VRAM_MB = 6144
+
+/** MiB → GB (1 GiB units, one decimal), the figure the probe reports. */
+function vramGb(mb: number, lang: UiLanguage): string {
+  return fmt1(mb / 1024, lang)
+}
 
 type Tone = 'success' | 'warning' | 'neutral' | 'accent'
 
@@ -90,7 +98,9 @@ function buildReport(
     }`,
     `${t('perf.tile.memory')}: ${bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)} ${t('perf.tile.memory.unit')}` : t('diag.app.unknown')}`,
     `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')}`,
-    `${t('diag.bench.gpu')}: ${bench.gpu ?? t('perf.tile.memory.noGpu')}`,
+    `${t('perf.tile.graphics')}: ${
+      bench.gpuVramMb != null ? `${vramGb(bench.gpuVramMb, lang)} ${t('perf.tile.graphics.unit')} (${bench.gpu ?? ''})` : t('perf.rating.none')
+    }`,
     `${t('perf.tile.drive')}: ${
       bench.effectiveRead ? `${fmtNum(bench.effectiveRead.mbps, lang)} ${t('perf.tile.drive.unit')}` : t('perf.tile.drive.none')
     }`,
@@ -315,7 +325,6 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const cpu = bench
       ? (bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')
       : ''
-    const gpu = bench?.gpu ? t('perf.tile.memory.gpu', { name: bench.gpu }) : t('perf.tile.memory.noGpu')
     const fits =
       recommendedName && contextTokens != null
         ? t('perf.tile.memory.fits', { model: recommendedName, context: contextTokens.toLocaleString(lang) })
@@ -325,9 +334,40 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
         label={t('perf.tile.memory')}
         value={bench && bench.ramGb > 0 ? fmt1(bench.ramGb, lang) : null}
         unit={t('perf.tile.memory.unit')}
-        sub={bench ? [fits, cpu, gpu].filter(Boolean).join(' · ') : t('perf.notChecked')}
+        sub={bench ? [fits, cpu].filter(Boolean).join(' · ') : t('perf.notChecked')}
         pill={t(`perf.profile.${bench?.profile ?? 'UNKNOWN'}`)}
         tone={bench ? profileTone(bench.profile) : 'neutral'}
+      />
+    )
+  }
+
+  /** Graphics memory decides what runs accelerated, so it stands beside RAM as its own
+   *  tile. The result's own figure wins; a result persisted before the field existed falls
+   *  back to the live probe, but only for the computer the app is on right now. */
+  function graphicsTile(): JSX.Element {
+    const liveMb = snap?.currentMachine ? (snap.currentGpu?.totalMb ?? null) : null
+    const mb = bench?.gpuVramMb ?? liveMb
+    const name = bench?.gpu ?? (snap?.currentMachine ? (snap.currentGpu?.name ?? null) : null)
+    if (mb == null || mb <= 0) {
+      return (
+        <Tile
+          label={t('perf.tile.graphics')}
+          value={null}
+          sub={bench ? t('perf.tile.graphics.none') : t('perf.notChecked')}
+          pill={bench ? t('perf.rating.none') : t('perf.rating.pending')}
+          tone="neutral"
+        />
+      )
+    }
+    const usable = mb >= USABLE_VRAM_MB
+    return (
+      <Tile
+        label={t('perf.tile.graphics')}
+        value={vramGb(mb, lang)}
+        unit={t('perf.tile.graphics.unit')}
+        sub={usable ? (name ?? '') : [name, t('perf.tile.graphics.small', { min: Math.round(USABLE_VRAM_MB / 1024) })].filter(Boolean).join(' · ')}
+        pill={usable ? t('perf.rating.usable') : t('perf.rating.small')}
+        tone={usable ? 'success' : 'warning'}
       />
     )
   }
@@ -419,6 +459,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             <div className="perf-tiles">
               {speedTile()}
               {memoryTile()}
+              {graphicsTile()}
               {driveTile()}
             </div>
             <div className="actions perf-actions">
@@ -428,11 +469,6 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 </Button>
               ) : null}
               <Button onClick={() => void runCheck()}>{bench ? t('perf.checkAgain') : t('perf.check')}</Button>
-              {bench?.recommendedModelId && (
-                <Button variant="ghost" onClick={() => onNavigate('models')}>
-                  {t('perf.whyModel')}
-                </Button>
-              )}
               <Button variant="ghost" onClick={() => onNavigate('models')}>
                 {t('perf.contextSize')}
               </Button>
@@ -541,11 +577,18 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                       : t('perf.others.rowNoSpeed', { model: name })}
                   </div>
                   <div className="perf-row-sub">
-                    {t('perf.others.sub', {
-                      cpu: entry.cpuModel || t('perf.unknownCpu'),
-                      ram: fmt1(entry.ramGb, lang),
-                      when: fmtDate(entry.ranAt, lang)
-                    })}
+                    {entry.gpuVramMb != null && entry.gpuVramMb > 0
+                      ? t('perf.others.subGpu', {
+                          cpu: entry.cpuModel || t('perf.unknownCpu'),
+                          ram: fmt1(entry.ramGb, lang),
+                          vram: vramGb(entry.gpuVramMb, lang),
+                          when: fmtDate(entry.ranAt, lang)
+                        })
+                      : t('perf.others.sub', {
+                          cpu: entry.cpuModel || t('perf.unknownCpu'),
+                          ram: fmt1(entry.ramGb, lang),
+                          when: fmtDate(entry.ranAt, lang)
+                        })}
                   </div>
                   <div className="perf-row-side">
                     {entry.tokensPerSecond != null && (

@@ -448,6 +448,8 @@ export interface GpuBenchmarkInput {
   name: string | null
   /** Pre-computed bump eligibility (`gpuUsefulForProfile` over the probed devices). */
   useful: boolean
+  /** Total memory of the primary device in MiB (→ `BenchmarkResult.gpuVramMb`); absent/null = unknown. */
+  totalMb?: number | null
 }
 
 export interface RunBenchmarkDeps {
@@ -568,6 +570,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     cpuCores: sys.cpuCores,
     ramGb: sys.ramGb,
     gpu: gpuName,
+    gpuVramMb: deps.gpu?.totalMb ?? null,
     driveReadMbps: drive.readMbps,
     driveWriteMbps: drive.writeMbps,
     tokensPerSecond,
