@@ -281,6 +281,16 @@ export async function retrieve(
   externalArm?: ExternalRetrievalArm | null
 ): Promise<RetrievalResult> {
   const s = normalizeScope(scope)
+  // Knowledge packs (ZIM wave, live-demo finding 2026-09-05): a scope that selects packs
+  // but NO document sources means "answer from the packs" — the document arms are skipped.
+  // Without this, the empty composed doc-scope fell through to its historical whole-corpus
+  // meaning and unrelated documents (an invoice) claimed the topKFinal slots of a
+  // packs-only ask. Any document source keeps the arms: a ticked collection or hand-picked
+  // doc makes collectionIds/documentIds non-null in resolveScope, and chat attachments are
+  // always unioned into documentIds before this runs.
+  const packsOnly =
+    externalArm != null && (s.packIds?.length ?? 0) > 0 && s.collectionIds == null && s.documentIds == null
+
   // Mismatch guard: only search vectors tagged with the active embedder's id.
   // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
   // them; scoping by model id stops a corpus indexed under one embedder from polluting
@@ -291,19 +301,23 @@ export async function retrieve(
     collectionIds: s.collectionIds ?? null,
     includeArchived: s.includeArchived
   })
-  const vectorHits = (await index.searchText(question, settings.topKInitial, signal)).filter(
-    (hit) => hit.score >= settings.minSimilarity
-  )
+  const vectorHits = packsOnly
+    ? []
+    : (await index.searchText(question, settings.topKInitial, signal)).filter(
+        (hit) => hit.score >= settings.minSimilarity
+      )
   // Hybrid keyword path: the exact terms embeddings miss.
   // Scoped to chunks VISIBLE to the active embedder so the keyword path can
   // never surface a document vector search couldn't — the re-index honesty story
   // (staleEmbeddings / corpusNeedsReindex / REINDEX_NEEDED_ANSWER) is unchanged.
-  const keywordHits = keywordSearchChunks(db, question, settings.topKInitial, {
-    embeddingModelId: embedder.id,
-    documentIds: s.documentIds ?? null,
-    collectionIds: s.collectionIds ?? null,
-    includeArchived: s.includeArchived
-  })
+  const keywordHits = packsOnly
+    ? []
+    : keywordSearchChunks(db, question, settings.topKInitial, {
+        embeddingModelId: embedder.id,
+        documentIds: s.documentIds ?? null,
+        collectionIds: s.collectionIds ?? null,
+        includeArchived: s.includeArchived
+      })
   const fused = rrfFuse(vectorHits, keywordHits)
 
   // Join fused candidates → chunk rows in ONE `IN (…)` query (placeholders only),

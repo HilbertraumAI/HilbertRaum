@@ -210,6 +210,33 @@ describe('retrieve() with an external arm', () => {
     expect(r.chunks[0]?.label).toBe('S1')
   })
 
+  it('a packs-only scope skips the document arms entirely (live-demo finding 2026-09-05)', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    // A document that WOULD match the question — it must not surface when the user
+    // selected packs and no document sources (the empty composed doc-scope used to fall
+    // through to whole-corpus, and an invoice claimed the packs-only answer's slots).
+    await seedDocument(db, embedder, 'invoice.pdf', ['Treibhausgase entstehen in der Landwirtschaft.'])
+    const scope = { packIds: ['pack-1'], collectionIds: null, documentIds: null }
+    const r = await retrieve(db, embedder, 'Treibhausgas', SETTINGS, scope, null, undefined, async () => [
+      archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')
+    ])
+    expect(r.chunks.length).toBeGreaterThan(0)
+    expect(r.chunks.every((c) => c.sourceKind === 'archive')).toBe(true)
+    // Counter-check: the same scope WITH a collection selected keeps the document arms.
+    const both = await retrieve(
+      db,
+      embedder,
+      'Treibhausgas',
+      SETTINGS,
+      { ...scope, collectionIds: ['some-collection'] },
+      null,
+      undefined,
+      async () => [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+    )
+    expect(both.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
+  })
+
   it('a throwing arm never breaks the document ask', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
