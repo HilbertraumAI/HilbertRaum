@@ -55,36 +55,64 @@ export function registerZimIpc(ctx: AppContext): void {
   ipcHandle(IPC.addKnowledgePacks, async (): Promise<KnowledgePack[] | null> => {
     requireUnlocked()
     const svc = zim()
-    const options = {
-      title: tMain('main.zim.dialogTitle'),
-      properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>,
-      filters: [
-        { name: tMain('main.zim.filterZim'), extensions: ['zim'] },
-        { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
-      ]
-    }
-    const win = BrowserWindow.getFocusedWindow()
-    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
-    if (result.canceled || result.filePaths.length === 0) return null
-    const added: KnowledgePack[] = []
-    const failures: string[] = []
-    for (const path of result.filePaths) {
-      try {
-        const pack = await svc.registerPack(ctx.db, path)
-        added.push(pack)
-        ctx.audit?.('knowledge_pack_added', 'Knowledge pack registered', {
-          packId: pack.id,
-          sizeBytes: pack.sizeBytes,
-          articleCount: pack.articleCount
-        })
-      } catch (err) {
-        failures.push(err instanceof Error ? err.message : String(err))
+    // H4 — the PICKER WAIT is itself a registered operation, opened BEFORE the dialog is
+    // awaited. The OS dialog cannot be cancelled, so a user who clicks "Lock now" with the
+    // file browser open still gets a resolution here seconds (or minutes) later, against a
+    // workspace that has locked — or locked and unlocked again into a NEW session with a NEW
+    // database. The operation belongs to the SERVICE, so the lock/quit `zimOps.abortAll()`
+    // reaches it, and `assert()` on the dialog result is what refuses the late completion.
+    const op = svc.beginRegistration()
+    try {
+      const options = {
+        title: tMain('main.zim.dialogTitle'),
+        properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>,
+        filters: [
+          { name: tMain('main.zim.filterZim'), extensions: ['zim'] },
+          { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
+        ]
       }
+      const win = BrowserWindow.getFocusedWindow()
+      const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+      try {
+        op.assert()
+      } catch {
+        // The same friendly locked copy every other refused surface uses: the user chose files
+        // for a workspace that no longer admits them.
+        throw new Error(tMain('main.docs.locked'))
+      }
+      if (result.canceled || result.filePaths.length === 0) return null
+      const added: KnowledgePack[] = []
+      const failures: string[] = []
+      for (const path of result.filePaths) {
+        try {
+          // Every file of one "Add packs" runs under the SAME operation, so one abort stops
+          // the whole batch rather than only the file in flight.
+          const pack = await svc.registerPack(ctx.db, path, op)
+          added.push(pack)
+          ctx.audit?.('knowledge_pack_added', 'Knowledge pack registered', {
+            packId: pack.id,
+            sizeBytes: pack.sizeBytes,
+            articleCount: pack.articleCount
+          })
+        } catch (err) {
+          // A cancellation is NOT a per-archive failure: the workspace stopped admitting this
+          // add while the manager was running, so it wears the locked copy like the late
+          // picker above rather than "the archive could not be added".
+          try {
+            op.assert()
+          } catch {
+            throw new Error(tMain('main.docs.locked'))
+          }
+          failures.push(err instanceof Error ? err.message : String(err))
+        }
+      }
+      if (added.length === 0 && failures.length > 0) {
+        throw new Error(tMain('main.zim.addFailed', { reason: failures[0] }))
+      }
+      return added
+    } finally {
+      op.release()
     }
-    if (added.length === 0 && failures.length > 0) {
-      throw new Error(tMain('main.zim.addFailed', { reason: failures[0] }))
-    }
-    return added
   })
 
   ipcHandle(IPC.removeKnowledgePack, (_e, id: string): void => {

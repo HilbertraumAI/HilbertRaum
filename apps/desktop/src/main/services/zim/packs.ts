@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { KnowledgePack } from '../../../shared/types'
@@ -29,6 +29,27 @@ export interface PackDeps {
   /** The drive's `zim/` folder (canonical pack home; may not exist). */
   zimDir: string
   manageAdd: ManageAddFn
+  /**
+   * Where the registration throwaway `library.xml` goes (#301 P3b, findings L3/M4). Production
+   * returns a fresh `<workspacePath>/zim-transient/meta-<n>` (`<n>` from the service's ONE
+   * generation allocator, so it never repeats in a process) and tracks the file on the owning
+   * operation before it is written. Absent ⇒ the P3a OS-temp `hilbertraum-zim-meta-` fallback
+   * (tests only; production always supplies this).
+   */
+  metaDir?: () => string
+  /**
+   * Called with the throwaway directory when the manager child could not be confirmed dead: it
+   * is kept (a possibly-live child may still write into it) and the caller adds it to the set
+   * the transient cleanup must leave alone until the next session start.
+   */
+  onUncertain?: (path: string) => void
+  /**
+   * The owning operation's admission / cancellation / epoch recheck (#301 P3b, finding H4).
+   * Called after the manager work and immediately BEFORE the registry write, so a registration
+   * whose metadata read straddled a lock (or a lock + unlock) never reaches the database.
+   * Throws the `AbortError` the caller propagates. Absent ⇒ no recheck (tests, partial contexts).
+   */
+  assert?: () => void
 }
 
 interface PackRow {
@@ -132,6 +153,10 @@ export function retrievablePacks(
  */
 export async function registerPack(db: Db, deps: PackDeps, zimPath: string): Promise<KnowledgePack> {
   const book = await readZimMetadata(deps, zimPath)
+  // H4: the manager work above is an await. Recheck the owning operation's admission, epoch
+  // and cancellation before the UPSERT — a registration that straddled a lock must not write
+  // into the session's database (nor into the NEXT session's, after a lock + unlock).
+  deps.assert?.()
   const leaf = basename(zimPath)
   let sizeBytes: number | null = null
   try {
@@ -218,16 +243,29 @@ export async function discoverDrivePacks(db: Db, deps: PackDeps): Promise<number
   let added = 0
   for (const leaf of files) {
     if (known.has(leaf)) continue
+    // H4: recheck before each file — a discovery pass that straddles a lock stops here rather
+    // than registering the rest of the folder into a locking (or already re-locked) session.
+    deps.assert?.()
     try {
       await registerPack(db, deps, join(deps.zimDir, leaf))
       added++
     } catch (err) {
+      // A cancellation is NOT an ordinary per-file failure: it must stop the pass, not be
+      // swallowed as "one corrupt archive skipped".
+      if (isCancellation(err)) throw err
       log.warn(
         `Knowledge-pack auto-discovery skipped one file: ${err instanceof Error ? err.message : String(err)}`
       )
     }
   }
   return added
+}
+
+/** The #159 `AbortError` convention, or a manager child cancelled by the caller's signal. */
+function isCancellation(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === 'AbortError') return true
+  if (err instanceof Error && err.name === 'AbortError') return true
+  return err instanceof KiwixManageError && err.kind === 'abort'
 }
 
 /**
@@ -275,13 +313,20 @@ export async function writeLibraryXml(
 }
 
 /**
- * Read one archive's metadata via a throwaway kiwix-manage library.xml. The temp meta
- * dir is normally removed in `finally` — EXCEPT when the manager settled `'uncertain'`
- * (the SIGKILLed child may still be writing into it): removing it then would race a
- * child that might still be alive, so the dir is left for P3b's startup sweep (R-7).
+ * Read one archive's metadata via a throwaway kiwix-manage library.xml. The meta dir is
+ * `<workspacePath>/zim-transient/meta-<n>` when the service supplies `deps.metaDir` (always in
+ * production, #301 P3b) and an OS-temp `hilbertraum-zim-meta-` directory otherwise (tests).
+ *
+ * It is normally removed in `finally` — EXCEPT when the manager settled `'uncertain'` (the
+ * SIGKILLed child may still be writing into it): removing it then would race a child that might
+ * still be alive, so the dir is KEPT, reported through `deps.onUncertain` and removed by the
+ * next session-start cleanup (R-7).
  */
 async function readZimMetadata(deps: PackDeps, zimPath: string): Promise<KiwixBook> {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-meta-'))
+  const dir = deps.metaDir
+    ? deps.metaDir()
+    : mkdtempSync(join(tmpdir(), 'hilbertraum-zim-meta-'))
+  if (deps.metaDir) mkdirSync(dir, { recursive: true })
   const tempLibrary = join(dir, 'library.xml')
   let manageErr: unknown
   try {
@@ -296,6 +341,8 @@ async function readZimMetadata(deps: PackDeps, zimPath: string): Promise<KiwixBo
   } finally {
     if (manageErr instanceof KiwixManageError && manageErr.childState === 'uncertain') {
       log.warn('kiwix-manage cleanup not confirmed — leaving the throwaway metadata dir for the startup sweep (R-7)')
+      // The caller keeps this path out of the transient cleanup until the next session start.
+      deps.onUncertain?.(dir)
     } else {
       try {
         rmSync(dir, { recursive: true, force: true })

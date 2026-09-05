@@ -72,6 +72,28 @@ function fakeZimService(db: () => Db, zimDir: string): unknown {
     setPackEnabled: (d: Db, id: string, enabled: boolean) => packs.setPackEnabled(d, id, enabled),
     getArticle: async () => null,
     makeArm: () => null,
+    // #301 P3b: `packs:add` opens the native picker under a service-owned operation. This
+    // stand-in has no operation registry, so it returns the always-admitted no-op shape the
+    // real service also uses when `ctx.zimOps` is absent. The SESSION behaviour (a lock
+    // aborting a parked picker, the late result refused) is driven against the REAL service in
+    // zim-ipc-session.test.ts, not here.
+    beginRegistration: () => ({
+      signal: new AbortController().signal,
+      epoch: null,
+      assert: () => undefined,
+      track: () => undefined,
+      release: () => undefined
+    }),
+    suspend: async () => {},
+    cleanupTransients: () => ({
+      removed: 0,
+      kept: 0,
+      unknownEntries: 0,
+      unsettledOps: 0,
+      unconfirmedChildren: 0,
+      confirmed: true
+    }),
+    whenSettled: async () => {},
     stop: async () => {}
   }
 }

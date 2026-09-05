@@ -15,6 +15,7 @@ import {
 import type { BinaryVerifyResult } from '../../src/main/services/binary-verifier'
 import { ZimService, type ZimAdmission } from '../../src/main/services/zim'
 import { KiwixServer } from '../../src/main/services/zim/serve'
+import { ServeFakeChild, serveGate, type ServeChildMode } from '../helpers/zim-fakes'
 
 // P3a — service generations, publication and cancellation. This file is shared with a
 // parallel agent's T05 (`KiwixServer`/`ZimService`) block; this describe covers ONLY
@@ -409,69 +410,9 @@ describe('readZimMetadata (via registerPack) — the throwaway meta dir on an un
 // kill-grace timers elapse, and what is asserted afterwards is a fake's RECORDED state.
 // =====================================================================================
 
-/** A controlled promise: `entered` resolves when the code under test reaches the gate,
- *  `release(value)` lets it continue. */
-interface ServeGate<T> {
-  readonly entered: Promise<void>
-  wait(): Promise<T>
-  release(value: T): void
-}
-
-function serveGate<T>(): ServeGate<T> {
-  let markEntered: () => void = () => {}
-  const entered = new Promise<void>((resolve) => {
-    markEntered = () => resolve()
-  })
-  let release: (value: T) => void = () => {}
-  const released = new Promise<T>((resolve) => {
-    release = resolve
-  })
-  return {
-    entered,
-    wait: (): Promise<T> => {
-      markEntered()
-      return released
-    },
-    release: (value: T): void => release(value)
-  }
-}
-
-/**
- * How a fake child reacts to `kill()`:
- * - `exit-on-sigterm` — the polite signal is enough (the ordinary case),
- * - `ignore-sigterm`  — only `SIGKILL` kills it (proves the escalation),
- * - `ignore-all`      — nothing kills it (proves the bounded wait and the `uncertain`
- *   failure policy: the PID stays registered and the build file is kept).
- * `kill()` NEVER implies a terminal state on its own — the test decides when `exit` arrives.
- */
-type ServeChildMode = 'exit-on-sigterm' | 'ignore-sigterm' | 'ignore-all'
-
-class ServeFakeChild extends EventEmitter implements ChildProcessLike {
-  pid: number
-  killed = false
-  /** Set by its own listener when it emits  — the ordering oracle for "the next
-   *  child spawns only after the previous one is terminal". */
-  exited = false
-  stderr = new EventEmitter()
-  readonly killCalls: Array<NodeJS.Signals | number | undefined> = []
-  mode: ServeChildMode
-  constructor(pid: number, mode: ServeChildMode) {
-    super()
-    this.pid = pid
-    this.mode = mode
-    this.on('exit', () => {
-      this.exited = true
-    })
-  }
-  kill(signal?: NodeJS.Signals | number): boolean {
-    this.killCalls.push(signal)
-    this.killed = true
-    if (this.mode === 'exit-on-sigterm') queueMicrotask(() => this.emit('exit', 0, null))
-    else if (this.mode === 'ignore-sigterm' && signal === 'SIGKILL')
-      queueMicrotask(() => this.emit('exit', null, 'SIGKILL'))
-    return true
-  }
-}
+// The controlled gate and the fake serve child now live in tests/helpers/zim-fakes.ts —
+// shared verbatim with the P3b session suite so the two cannot drift on what "the child
+// ignored SIGTERM" means (#301).
 
 interface ServeSpawnRecord {
   args: string[]
@@ -971,11 +912,14 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(await h.svc.ensureServer(h.db)).toBeNull()
     expect(h.serveSpawns).toHaveLength(0)
 
-    // The generation allocator is the witness that the second ask did NOT rebuild: the
-    // empty build took g1, so the next real build is g2 and its child g3 — not g3/g4.
+    // The generation allocator is the witness that the second ask did NOT rebuild. P3b (#301)
+    // draws the registration throwaway `meta-<n>/` from the SAME allocator, so `addPack` above
+    // took g1: the empty build is g2, the next real build g3 and its child g4 — not g4/g5,
+    // which is what a rebuild on the second (null) ask would have produced. Unchanged claim,
+    // shifted by exactly the one registration.
     h.svc.setPackEnabled(h.db, alpha, true) // revision 3
     const port = await h.svc.ensureServer(h.db)
-    expect(h.svc.serverState()).toMatchObject({ revision: 3, build: 2, generation: 3, port, alive: true })
+    expect(h.svc.serverState()).toMatchObject({ revision: 3, build: 3, generation: 4, port, alive: true })
     await h.svc.stop()
   })
 

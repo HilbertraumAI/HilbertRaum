@@ -134,6 +134,15 @@ export interface AppContext {
    */
   zim?: ZimService
   /**
+   * Knowledge-pack operation registry (#301, finding H4) — a SECOND instance of the
+   * `plaintextOps` contract, dedicated to the ZIM operations (an ask's arm, an article read,
+   * a registration incl. the native picker wait, the reconciliation). Separate from
+   * `plaintextOps` so the lock/quit ZIM settle is its own bounded step and the paths it
+   * tracks are only `zim-transient/` files, never a document transient. Optional so partial
+   * test contexts stay valid; absent ⇒ the service's operations are local no-ops.
+   */
+  zimOps?: PlaintextOpsRegistry
+  /**
    * Image-understanding (vision) sidecar orchestrator: a SEPARATE lazy llama-server with the
    * mmproj projector (image-understanding plan §10). Optional so partial test contexts stay
    * valid. Owns its own idle teardown; the lock/quit handlers also call `stop()` so its
