@@ -199,6 +199,21 @@ describe('runBenchmark GPU injection (Phase 16)', () => {
 
 // ---- Recommendation selection per profile (real manifests) ----------------------
 
+describe('runBenchmark picks by graphics memory on a discrete card (§6.6)', () => {
+  it('a 24 GB card gets the 27B; an 8 GB card gets the 9B; without a class the RAM pick stands', async () => {
+    const manifests = realManifests()
+    const base = { workspacePath: workspace(), manifests, runtime: null }
+    const big = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, memoryClass: 'discrete' } })
+    const small = await runBenchmark({ ...base, gpu: { name: 'RTX 3050', useful: true, totalMb: 8192, memoryClass: 'discrete' } })
+    const none = await runBenchmark({ ...base, gpu: null })
+    // The test host's RAM decides the RAM gate; the card decides the tier when RAM is ample.
+    if (big.ramGb >= 24) expect(big.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
+    if (small.ramGb >= 12) expect(small.recommendedModelId).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(none.recommendedModelId).toBe(recommendModelIdByRam(manifests, Math.round(none.ramGb), 'chat'))
+    expect(big.gpuVramMb).toBe(24_822)
+  })
+})
+
 describe('recommendation per profile', () => {
   it('selects the right chat model from the committed manifests', () => {
     const manifests = realManifests()

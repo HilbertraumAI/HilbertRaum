@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   discoverManifests,
   resolveManifestsDir,
+  recommendChatModelId,
   recommendModelIdByRam
 } from '../../src/main/services/models'
 import { isRealSha256, type ModelManifest } from '../../src/shared/manifest'
@@ -112,6 +113,41 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
     for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
       const picked = recommendModelIdByRam(chat, ram, 'chat')
       expect(unpromoted.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
+    }
+  })
+
+  // §6.6 (2026-09-05): on a discrete card the pick is by graphics memory. Pinned per card size
+  // against the committed catalog (with RAM ample, so only the card decides).
+  it('recommends by graphics memory on a discrete card (real manifests, §6.6)', () => {
+    const chat = committedManifests()
+    const onCard = (vramGb: number, ramGb = 64): string | null =>
+      recommendChatModelId(chat, { memoryClass: 'discrete', ramGb, vramMb: vramGb * 1024 })
+    expect(onCard(6)).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(onCard(8)).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(onCard(12)).toBe('gemma4-12b-it-qat-q4')
+    expect(onCard(16)).toBe('gemma4-12b-it-qat-q4')
+    expect(onCard(24)).toBe('qwen3.8-27b-ud-q5km')
+    expect(onCard(32)).toBe('qwen3.8-27b-ud-q5km')
+    expect(onCard(48, 128)).toBe('qwen3.8-27b-ud-q5km')
+    // The card decides, not the RAM: an 8 GB card in a 32 GB box still gets the 9B, where the
+    // RAM picker would send the 27B to a partial offload.
+    expect(onCard(8, 32)).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(recommendModelIdByRam(chat, 32, 'chat')).toBe('qwen3.8-27b-ud-q5km')
+    // RAM stays a hard gate: a 24 GB card in a 16 GB box cannot run the 27B (min RAM 23).
+    expect(onCard(24, 16)).not.toBe('qwen3.8-27b-ud-q5km')
+  })
+
+  it('the card pick NEVER lands on an opt-in / loser / rank-0 model either (§6.3 carries over)', () => {
+    const chat = committedManifests()
+    for (const vram of [6, 8, 12, 16, 20, 24, 32, 48, 96]) {
+      for (const ram of [16, 32, 64, 128]) {
+        const id = recommendChatModelId(chat, { memoryClass: 'discrete', ramGb: ram, vramMb: vram * 1024 })
+        expect(id, `card=${vram} ram=${ram}`).not.toBe('qwen3-30b-a3b-q4')
+        expect(id, `card=${vram} ram=${ram}`).not.toBe('granite-4.1-8b-q4')
+        expect(id, `card=${vram} ram=${ram}`).not.toBe('qwen3.5-35b-a3b-ud-q4kxl')
+        expect(id, `card=${vram} ram=${ram}`).not.toBe('qwen3.8-27b-q6')
+        expect(id, `card=${vram} ram=${ram}`).not.toBe('qwen3.8-27b-ud-q6k')
+      }
     }
   })
 

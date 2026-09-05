@@ -11,6 +11,7 @@ import {
 } from '../../shared/manifest'
 import type {
   HardwareProfile,
+  MemoryClass,
   ModelDownloadInfo,
   ModelInfo,
   ModelState,
@@ -902,6 +903,84 @@ export function recommendModelIdByRam(
   return runnable[0]?.id ?? null
 }
 
+// ---- Graphics-memory-aware pick (model-benchmarks.md §6.6, 2026-09-05) ----
+
+/** llama.cpp's `--fit-target` default: the margin the fit keeps free on the card, GiB. */
+export const VRAM_FIT_MARGIN_GIB = 1
+/** Working (compute) buffers the runtime reserves beside the weights, as a share of the weights
+ *  (the rig's 27B measured 2.8 GiB on 18.4 GiB of weights at a 2048-token batch, ~15 %). */
+export const VRAM_WORKING_SHARE = 0.15
+/** The context cache at the catalog's recommended windows, GiB (8k tokens on a 27B was 0.5). */
+export const VRAM_KV_RESERVE_GIB = 0.5
+
+/** The manifest's decimal "size on disk" in GiB, the unit the probe reports VRAM in. */
+export function weightsGib(m: ModelManifest): number {
+  return (m.sizeOnDiskGb * 1e9) / 1024 ** 3
+}
+
+/**
+ * Would every layer of this model land on a card with `vramGib` of memory? The weights plus
+ * what the runtime puts beside them (working buffers, the context cache) plus the fit's own
+ * margin. Calibrated on the rig: the 27B Q5 (18.4 GiB) needs 22.7 GiB in practice and reads
+ * 22.7 here.
+ */
+export function fitsGraphicsMemory(m: ModelManifest, vramGib: number): boolean {
+  const w = weightsGib(m)
+  return w + VRAM_WORKING_SHARE * w + VRAM_KV_RESERVE_GIB + VRAM_FIT_MARGIN_GIB <= vramGib
+}
+
+/**
+ * Graphics-memory-best-fit recommendation (model-benchmarks.md §6.6): on a computer with a
+ * usable discrete card, the model has to FIT THE CARD to run at card speed, so the pick is
+ * the best model whose weights (plus the runtime's reservations) fit the card's memory. RAM
+ * stays a hard gate (`recommended_min_ram_gb` ≤ RAM: the Models screen refuses to start a
+ * model over it, and the pick must never point at a refused model). Among the fitting
+ * models the ORDER is the RAM picker's (§6.2: capacity tier, then rank, then size) and the
+ * ranked-only guard (§6.3) applies, so the owner's tier ratifications carry over: the
+ * rank-1 35B-A3B stays an alternative behind the rank-3 27B on a 32 GB card exactly as it
+ * does on a 32 GB box. The §6.5 speed step-down applies as before. When NOTHING fits the
+ * card (a small card next to a big catalog), the RAM pick stands: the model will partially
+ * offload, which is still the best answer the catalog has.
+ */
+export function recommendModelIdByVram(
+  manifests: ModelManifest[],
+  vramGib: number,
+  ramGb: number,
+  role: ModelRole = 'chat',
+  speedSignal?: PickerSpeedSignal | null
+): string | null {
+  if (!Number.isFinite(vramGib) || vramGib <= 0) return recommendModelIdByRam(manifests, ramGb, role, speedSignal)
+  const candidates = manifests.filter((m) => m.role === role)
+  const ramOk = (m: ModelManifest): boolean => !(Number.isFinite(ramGb) && ramGb > 0) || m.recommendedMinRamGb <= ramGb
+  const fits = preferRanked(candidates.filter((m) => fitsGraphicsMemory(m, vramGib) && ramOk(m))).sort(comfortableOrder)
+  if (fits.length === 0) return recommendModelIdByRam(manifests, ramGb, role, speedSignal)
+  return applySpeedSignal(candidates, fits[0], speedSignal).id
+}
+
+/** What the chat picker needs to know about the computer's memory (benchmark.md "Your model"). */
+export interface PickerMemory {
+  memoryClass: MemoryClass
+  /** Whole GB, as `machineRamGb()` reports it. */
+  ramGb: number
+  /** The primary card's total memory in MiB, or null when unknown. */
+  vramMb: number | null
+}
+
+/**
+ * The chat recommendation for this computer: by graphics memory on a discrete card, by RAM
+ * on unified memory (one pool) and on a machine without a usable card.
+ */
+export function recommendChatModelId(
+  manifests: ModelManifest[],
+  memory: PickerMemory,
+  speedSignal?: PickerSpeedSignal | null
+): string | null {
+  if (memory.memoryClass === 'discrete' && memory.vramMb != null && memory.vramMb > 0) {
+    return recommendModelIdByVram(manifests, memory.vramMb / 1024, memory.ramGb, 'chat', speedSignal)
+  }
+  return recommendModelIdByRam(manifests, memory.ramGb, 'chat', speedSignal)
+}
+
 function toModelInfo(
   manifest: ModelManifest,
   state: ModelState,
@@ -968,6 +1047,13 @@ export interface BuildModelListOptions {
    */
   speedSignal?: PickerSpeedSignal | null
   /**
+   * The computer's memory class and card memory (§6.6): on a discrete card the chat pick
+   * is by graphics memory; unified / cpu keep the RAM pick. Omitted → the RAM pick (legacy
+   * callers and tests unchanged).
+   */
+  memoryClass?: MemoryClass
+  machineVramMb?: number | null
+  /**
    * Optional verification-progress sink. Called once per model that will be hashed (with
    * a 1-based step index + the byte-weighted overall totals), throttled within a file by
    * `sha256File`, plus a terminal `done` event. `overallBytesTotal === 0` ⇒ nothing to
@@ -1000,7 +1086,11 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   // speed signal applies to the chat pick only.
   const recommendedChat =
     ram != null
-      ? recommendModelIdByRam(all, ram, 'chat', opts.speedSignal)
+      ? recommendChatModelId(
+          all,
+          { memoryClass: opts.memoryClass ?? 'cpu', ramGb: ram, vramMb: opts.machineVramMb ?? null },
+          opts.speedSignal
+        )
       : recommendModelId(all, opts.profile, 'chat')
   const recommendedEmbed =
     ram != null

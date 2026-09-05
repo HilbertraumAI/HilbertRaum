@@ -65,7 +65,8 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   return {
     name: devices[0]?.name ?? null,
     useful: gpuUsefulForProfile(devices),
-    totalMb: devices[0]?.totalMb ?? null
+    totalMb: devices[0]?.totalMb ?? null,
+    memoryClass: memoryClassOf(process.platform, process.arch, devices)
   }
 }
 

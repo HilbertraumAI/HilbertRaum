@@ -27,6 +27,7 @@ import {
   weightPath
 } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
+import { memoryClassOf } from '../services/performance'
 import {
   latestEffectiveRead,
   preferCandidate,
@@ -346,6 +347,10 @@ export function registerModelIpc(ctx: AppContext): void {
       runningModelId: ctx.runtime.activeModelId(),
       hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),
       machineRamGb: machineRamGb(),
+      // §6.6: the ★ pick goes by graphics memory on a discrete card, the SAME rule
+      // runBenchmark applies, so the Performance screen and the Models screen agree.
+      memoryClass: memoryClassOf(process.platform, process.arch, s.gpuProbe?.devices ?? []),
+      machineVramMb: s.gpuProbe?.devices[0]?.totalMb ?? null,
       // §6.5 signal-aware step-down (issue #95): feed the persisted Diagnostics pairing
       // (tok/s + the model that produced it, issue #52) into the chat recommendation.
       // Derived fresh from lastBenchmark on every call — stateless, never compounds.

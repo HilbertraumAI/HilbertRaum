@@ -491,6 +491,57 @@ flip-rule guidance for E2B stands (§9.3 thinking table).
 
 ---
 
+### 6.6 Graphics-memory-aware picker: the card decides on a discrete GPU (2026-09-05)
+
+**Status: design record, implemented on `feat/vram-aware-picker` (stacked on the Performance
+wave, PR #303). Changes the recommendation on every machine with a usable discrete card, so it
+carries the §5 item 8 standing requirement: owner sign-off in PR review before merge.**
+
+**The finding.** The RAM-best-fit picker (§6.2/§6.3) sees RAM only. On the rig (24 GB RTX 3090,
+125 GB RAM) it recommends the 27B Q5 because RAM is ample, and on a hypothetical 8 GB card in a
+32 GB box it would recommend the same 27B, which llama.cpp's `--fit` then splits across the card
+and RAM at roughly processor speed. On a machine with a discrete card the model has to FIT THE
+CARD to run at card speed, and the card is the smaller number on every consumer machine.
+
+**The rule** (`recommendChatModelId` → `recommendModelIdByVram` in `services/models.ts`):
+1. Memory class (`memoryClassOf`, services/performance.ts): `discrete` = a usable card by the
+   runtime's own gate (≥ 6 GiB, not integrated), `unified` = Apple Silicon, `cpu` = the rest.
+   Only `discrete` changes anything; unified memory is one pool and keeps the RAM pick, as does a
+   machine without a card.
+2. A model fits the card when `weights(GiB) × 1.15 + 0.5 + 1 ≤ VRAM(GiB)`: the weights (the
+   manifest's decimal size converted), the runtime's working buffers (15 % of the weights, the
+   rig's 27B measured 2.8 GiB on 18.4), the context cache at the catalog's recommended window
+   (0.5 GiB on the 27B at 8k), and the fit's fixed 1 GiB `--fit-target` margin. Calibrated on the
+   rig: the 27B Q5 needs 22.7 GiB in practice and reads 22.7 here.
+3. RAM stays a HARD gate: `recommended_min_ram_gb ≤ RAM`. The Models screen refuses to start a
+   model over it, and the pick must never point at a refused model.
+4. Among the fitting models the ORDER is the RAM picker's: capacity tier (`recommended_ram_gb`),
+   then `recommendation_rank`, then size, with the §6.3 ranked-only guard. So the owner's tier
+   ratifications carry over unchanged: the rank-1 35B-A3B stays an alternative behind the rank-3
+   27B on a 32 GB card exactly as on a 32 GB box; nothing rank-0 is ever the pick.
+5. The §6.5 speed step-down applies to the card pick as before.
+6. When NOTHING fits the card the RAM pick stands (the model will partially offload, still the
+   catalog's best answer).
+
+**The picks against the committed catalog** (RAM ample; `committed-catalog.test.ts` pins them):
+
+| Card | Chat model | RAM pick would be |
+|---|---|---|
+| 6 GB | `qwen3.5-4b-ud-q4kxl` | the 9B |
+| 8 GB | `qwen3.5-9b-ud-q4kxl` | the 27B Q5 (at 32 GB RAM) |
+| 12 GB | `gemma4-12b-it-qat-q4` | the 27B Q5 |
+| 16 GB | `gemma4-12b-it-qat-q4` | the 27B Q5 |
+| 24 GB | `qwen3.8-27b-ud-q5km` | the same |
+| 32 GB and up | `qwen3.8-27b-ud-q5km` | the same |
+
+Both consumers use the same rule so the screens agree: `runBenchmark` (the injected GPU summary
+now carries `memoryClass`) and `buildModelList` (`memoryClass` + `machineVramMb` from the
+persisted probe). Legacy callers that pass neither get the RAM pick, byte-identical.
+
+**Not changed here.** The `insufficientRam` gate and its copy still speak of RAM only; the 16 GB
+card picks Gemma 4 12B (rank 2) over Qwen3 14B (rank 1) by the §6.2 order, which is the same
+verdict the 24 GB RAM tier applied before the Qwen3.8 handover.
+
 ## 7. Design record — catalog expansion (Phases 28–29, decisions D16–D22)
 
 _Formerly `docs/model-catalog-expansion-plan.md` (folded in here, 2026-06-12 docs

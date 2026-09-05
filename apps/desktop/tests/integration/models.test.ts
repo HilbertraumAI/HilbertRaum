@@ -20,6 +20,10 @@ import {
   invalidateChecksum,
   recommendModelId,
   recommendModelIdByRam,
+  recommendModelIdByVram,
+  recommendChatModelId,
+  fitsGraphicsMemory,
+  weightsGib,
   SLOW_PICK_TOKENS_PER_SECOND,
   discoverManifests,
   findManifestById,
@@ -689,6 +693,58 @@ describe('recommendModelId', () => {
 })
 
 // Post-MVP: "which model do we recommend?" is a RAM question first. Best fit = the
+// §6.6 (2026-09-05): on a discrete card the chat pick is graphics-memory-best-fit. The model
+// has to FIT THE CARD (weights + the runtime's working buffers + the context cache + the fit's
+// 1 GiB margin) to run at card speed; RAM stays a hard gate; the order among fitting models is
+// the RAM picker's (tier, rank, size) so tier ratifications carry over.
+describe('recommendModelIdByVram / recommendChatModelId (§6.6)', () => {
+  const tiny = asManifest({ id: 'tiny', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 3 })
+  const mid = asManifest({ id: 'mid', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3 })
+  const big = asManifest({ id: 'big', size_on_disk_gb: 19.8, recommended_min_ram_gb: 23, recommended_ram_gb: 32, recommendation_rank: 3 })
+  const huge = asManifest({ id: 'huge', size_on_disk_gb: 22.2, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 1 })
+  const all = [tiny, mid, big, huge]
+
+  it('fitsGraphicsMemory: weights in GiB + 15 % working + 0.5 GiB cache + 1 GiB margin ≤ card', () => {
+    // 19.8 decimal GB = 18.44 GiB; needs 18.44 * 1.15 + 1.5 = 22.7 GiB (the rig's measured need).
+    expect(weightsGib(big)).toBeCloseTo(18.44, 1)
+    expect(fitsGraphicsMemory(big, 24.2)).toBe(true)
+    expect(fitsGraphicsMemory(big, 22)).toBe(false)
+    expect(fitsGraphicsMemory(mid, 8)).toBe(true) // 5.59 * 1.15 + 1.5 = 7.9
+    expect(fitsGraphicsMemory(mid, 6)).toBe(false)
+  })
+
+  it('picks the best model that fits the card, in the RAM picker\'s tier/rank order', () => {
+    expect(recommendModelIdByVram(all, 24, 64)).toBe('big') // huge (rank 1) ties on tier, loses on rank
+    expect(recommendModelIdByVram(all, 32, 64)).toBe('big')
+    expect(recommendModelIdByVram(all, 16, 64)).toBe('mid')
+    expect(recommendModelIdByVram(all, 8, 64)).toBe('mid')
+    expect(recommendModelIdByVram(all, 6, 64)).toBe('tiny')
+  })
+
+  it('RAM stays a hard gate: never a model the Models screen would refuse to start', () => {
+    // A 24 GB card in a 16 GB box: big needs 23 GB RAM minimum → mid.
+    expect(recommendModelIdByVram(all, 24, 16)).toBe('mid')
+  })
+
+  it('falls back to the RAM pick when nothing fits the card at all', () => {
+    const onlyBig = [big, huge]
+    expect(recommendModelIdByVram(onlyBig, 8, 64)).toBe(recommendModelIdByRam(onlyBig, 64))
+    expect(recommendModelIdByVram(all, Number.NaN, 64)).toBe(recommendModelIdByRam(all, 64))
+  })
+
+  it('applies the §6.5 speed step-down on the card pick too', () => {
+    const slow = { tokensPerSecond: SLOW_PICK_TOKENS_PER_SECOND - 1, measuredModelId: 'big' }
+    expect(recommendModelIdByVram(all, 24, 64, 'chat', slow)).toBe('mid')
+  })
+
+  it('recommendChatModelId dispatches: discrete → card, unified / cpu / unknown card → RAM', () => {
+    expect(recommendChatModelId(all, { memoryClass: 'discrete', ramGb: 64, vramMb: 8 * 1024 })).toBe('mid')
+    expect(recommendChatModelId(all, { memoryClass: 'unified', ramGb: 64, vramMb: null })).toBe('big')
+    expect(recommendChatModelId(all, { memoryClass: 'cpu', ramGb: 64, vramMb: null })).toBe('big')
+    expect(recommendChatModelId(all, { memoryClass: 'discrete', ramGb: 64, vramMb: null })).toBe('big')
+  })
+})
+
 // LARGEST model that runs comfortably (recommended_ram_gb fits); if nothing fits
 // comfortably, the lightest model that at least meets its minimum; else null.
 describe('recommendModelIdByRam', () => {
