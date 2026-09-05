@@ -459,6 +459,8 @@ code, pre, kbd { font-family: var(--font-mono); }
 .model-library-empty { padding: 16px 0; }
 .model-library-download { padding: 12px 16px; margin-top: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .model-library-download > strong { display: block; margin-bottom: 8px; }
+/* F2: the retained terminal result's recovery row (Retry / Dismiss). */
+.model-library-download-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 @media (max-width: 900px) {
   .model-card { grid-template-columns: minmax(0, 1fr); }
   .model-row-actions .download-progress { max-width: none; }

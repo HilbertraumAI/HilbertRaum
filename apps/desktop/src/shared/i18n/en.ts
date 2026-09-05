@@ -1123,6 +1123,15 @@ export const en = {
   'models.download.titled': 'Download {name} ({size})',
   'models.download.resume': 'Resume download',
   'models.download.start': 'Download',
+  // F2: a failed or unverified download keeps a NAMED result above the results list, with its
+  // own recovery actions, until the user acts on it — filters and collapsed groups can no
+  // longer swallow the outcome (design-guidelines §15 "Terminal download results").
+  'models.download.failed': 'Downloading {name} failed.',
+  'models.download.retry': 'Retry download',
+  'models.download.dismiss': 'Dismiss',
+  'models.download.retryUnavailable':
+    'This model is no longer offered for download here, so it cannot be retried from this ' +
+    'result. Dismiss it, or look for the model in the library.',
   // #196: the publisher removed the exact file this manifest pins. Sentence case, no blame,
   // and it says what still works — this card is read by someone deciding what to install.
   'models.download.withdrawn':

@@ -172,8 +172,16 @@ internet for, and it never happens by itself:
    from. If the model's license hasn't been pre-reviewed, you'll also tick a box accepting it.
    Like every link in the app, the license link opens in your browser only after you confirm
    the small dialog that shows its site and address (§6).
-3. The download shows its progress on the model's card; you can **Cancel** any time. A
+3. The download shows its progress in a panel just above the list of models, so a search, a
+   filter or a collapsed group of variants can never hide it; you can **Cancel** any time. A
    cancelled or interrupted download **resumes where it stopped** when you start it again.
+   If a download **fails**, or finishes without a checksum the app can verify, the result stays
+   in that panel — named, with **Retry download** and **Dismiss** — until you act on it. It
+   survives searching and filtering, and it is still there when you leave the **AI Model** screen
+   and come back. **Retry download** re-opens the same confirmation (size, license, address) for
+   exactly that model; it is greyed out with the reason when downloads are switched off or the
+   file is no longer offered. **Dismiss** clears the panel and puts the result back on the model's
+   own card, where its Resume button is.
 4. The file is checksum-verified before the app will use it — a corrupted download is
    discarded automatically, never silently kept.
 

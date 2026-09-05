@@ -20,7 +20,7 @@ import { Transcript } from '../chat/Transcript'
 import { App } from '../App'
 import { ChatScreen } from '../screens/ChatScreen'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
-import { ModelsScreen } from '../screens/ModelsScreen'
+import { ModelsScreen, __resetModelsScreenMemoryForTests } from '../screens/ModelsScreen'
 import { SettingsScreen } from '../screens/SettingsScreen'
 import { TranslateScreen } from '../screens/TranslateScreen'
 import { LocalApiCard } from '../screens/settings/LocalApiCard'
@@ -129,6 +129,25 @@ const PREVIEW_MODELS: ModelInfo[] = [
     download: { url: 'https://example.test/model.gguf', sizeBytes: null, licenseUrl: null, licenseApproved: true } })),
   modelRow({ id: 'voice', displayName: 'Whisper Small multilingual', family: 'whisper', role: 'transcriber', sizeOnDiskGb: 0.49 })
 ]
+
+// PR #302 F2: the retained terminal-download panel. The result is derived from the screen's
+// module-scoped remembered job, so the capture seeds one FAILED job (with the model name it was
+// started for) instead of driving a download through the UI. Only the `models-download-failed`
+// case seeds it; every other case starts from the cleared state.
+if ((new URLSearchParams(location.search).get('case') ?? '') === 'models-download-failed') {
+  __resetModelsScreenMemoryForTests({
+    job: {
+      jobId: 'preview-failed-download',
+      modelId: 'qwen38-ud',
+      status: 'failed',
+      receivedBytes: 8_100_000_000,
+      totalBytes: 16_500_000_000,
+      unverified: false,
+      error: 'The connection was interrupted after 8.1 GB (network error).'
+    },
+    jobName: 'Qwen3.8 27B UD-Q4_K_M'
+  })
+}
 
 // ---- Mock window.api: a Proxy so any unlisted method resolves to a harmless default ------------
 const overrides: Record<string, unknown> = {
@@ -652,6 +671,12 @@ CASES['local-api-busy-de'] = {
 CASES['skill-info-card-de'] = { ...CASES['skill-info-card'], label: `${CASES['skill-info-card'].label} — DE` }
 CASES['context-meter-de'] = { ...CASES['context-meter'], label: `${CASES['context-meter'].label} — DE` }
 CASES['models-de'] = { ...CASES.models, label: `${CASES.models.label} — DE` }
+// PR #302 F2: the failed-download result panel (named, with Retry / Dismiss) that a search,
+// a filter or a collapsed variant group can no longer hide.
+CASES['models-download-failed'] = {
+  ...CASES.models,
+  label: 'Model library — a failed download keeps its named result'
+}
 for (const suffix of ['browse', 'browse-de', 'browse-light', 'browse-de-light', 'browse-expanded']) {
   CASES[`models-${suffix}`] = { ...CASES.models, label: `Model library — ${suffix}` }
 }
@@ -980,7 +1005,29 @@ overrides.listDocuments = async () => (isMkt() ? mktDocuments() : DOCUMENTS)
 // offline state + drive paths. Fully-offline posture, prepared drive at E:\ (Windows-flavored
 // paths: the Kit's primary platform).
 overrides.getPolicy = async () =>
-  isMkt()
+  // PR #302 F2: the retained failed-download capture needs downloads ALLOWED, so Retry renders
+  // in its enabled state instead of the policy-blocked one. Every other case is unchanged.
+  (new URLSearchParams(location.search).get('case') ?? '') === 'models-download-failed'
+    ? ({
+        policy: {
+          network: {
+            allowModelDownloads: true,
+            allowUpdateChecks: false,
+            allowTelemetry: false,
+            allowLocalApi: true
+          },
+          workspace: { encryptionRequired: false, allowPlaintextDevMode: true },
+          models: { allowUnverifiedModels: true, requireManifest: true, requireSha256Match: false }
+        },
+        policyFilePresent: true,
+        driveFilePresent: true,
+        allowNetworkSetting: true,
+        networkAllowedByPolicy: true,
+        networkAllowed: true,
+        offlineMode: false,
+        telemetryAllowed: false
+      } as unknown as PolicyStatus)
+    : isMkt()
     ? ({
         // Minimal but SHAPED policy: renderer code reading policy.network.* (e.g. the
         // local-API card's allowLocalApi ceiling) must see real booleans, not undefined

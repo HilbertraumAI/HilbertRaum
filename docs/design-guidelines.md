@@ -1368,6 +1368,26 @@ screen now keeps the active chat model pinned above a compact library of alterna
 - **Downloads:** live progress/cancel appears once above results, so filtering or collapsing a
   group cannot hide it. Confirmation, license acknowledgement, verification and start gates
   retain their existing behavior. Context-size settings stay in their existing location.
+- **Terminal download results:** the SAME panel stays mounted through a `failed` job and a `done`
+  job that could not be verified — the outcome must not vanish at the moment the user has to act
+  on it, and the model's own row may be filtered away or collapsed. Presentation is derived from
+  the polled job (no second copy of it), independently of the row's state/withdrawal guards, so a
+  refresh that returns the model as `installed` or stops listing it cannot erase the result; the
+  last known display name, falling back to the model id, keeps it named. ONE alert element is
+  mounted for the panel's whole lifetime — empty during progress, filled on the terminal
+  transition — so the outcome is announced on an element that was already in the tree. While the
+  panel owns a job the row does not repeat its progress or result. **Retry** resolves the exact
+  variant id and reuses the existing confirmation with that variant's license link and a RESET
+  acknowledgement; it is disabled with the reason when downloads are blocked by policy or the
+  Settings toggle, when the source was withdrawn (#196), or when the entry no longer offers a
+  download. **Dismiss** is remembered by job id — the result does not return on a refresh, a
+  re-render or a re-entry of the screen — and the row's own Resume/verification affordances take
+  over again. The panel is replaced only by an ACCEPTED new job (a cancelled dialog, a rejected
+  start and an IPC rejection all keep the previous result) and disappears on a verified completion
+  or a cancellation, exactly as before. A retained result is not a live job: `JOB_LIVE` remains
+  the only gate on other models' Download/Use. Recovering a download whose id is unknown after a
+  renderer reload is out of scope here (follow-up I5); ordinary screen navigation is covered by
+  the existing remembered-job mechanism.
 
 Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts`, `styles.css`, EN/DE catalogs. Behavioral
 coverage: `ModelsScreen.test.tsx`, `model-library.test.ts`; visual fixtures: `models*` preview cases.

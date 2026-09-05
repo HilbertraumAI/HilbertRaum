@@ -157,7 +157,32 @@ export function orderPickerModels(list: ModelInfo[]): ModelInfo[] {
 // lives in the main process; this only remembers which one to keep polling).
 let rememberedJob: DownloadJob | null = null
 
+/**
+ * The display name of the remembered job's model (F2/B1). A refresh at the terminal transition
+ * can stop listing the model, or list it as `installed` — the RESULT must still be named, so the
+ * last known name is remembered alongside the job id it belongs to. Falls back to the model id.
+ */
+let rememberedJobName: { jobId: string; name: string } | null = null
+
+/**
+ * A terminal result the user dismissed, by job id (F2/B1): it must not come back on a refresh,
+ * a re-render, or a remount within this renderer session. Module-scoped for the same reason
+ * `rememberedJob` is — leaving and re-entering the screen remounts the component. Recovery after
+ * a renderer RELOAD (which recreates this module) is a separate lifecycle, issue I5.
+ */
+let dismissedJobId: string | null = null
+
 const JOB_LIVE: ReadonlySet<DownloadJob['status']> = new Set(['queued', 'downloading', 'verifying'])
+
+/**
+ * A finished download the user still has to act on: it failed, or it completed but could not be
+ * verified. These keep the independent download panel (named, with Retry / Dismiss) so a search,
+ * a task/family/view filter or a collapsed group cannot swallow the outcome. A VERIFIED `done`
+ * and a `cancelled` job need no panel — the row itself carries their state (existing behaviour).
+ */
+function isUnresolvedResult(j: DownloadJob | null): boolean {
+  return j != null && (j.status === 'failed' || (j.status === 'done' && j.unverified === true))
+}
 
 // The engine download (like the model download) outlives leaving the screen.
 let rememberedEngineJob: EngineDownloadJob | null = null
@@ -168,6 +193,22 @@ const ENGINE_JOB_LIVE: ReadonlySet<EngineDownloadJob['status']> = new Set([
   'verifying',
   'extracting'
 ])
+
+/**
+ * Test/preview-only reset (optionally: seed) of this module's download memory. Module state is
+ * deliberately outside React so it survives a remount, which also means a jsdom test or a preview
+ * case has no other way to start from a known state. Production code never calls this.
+ */
+export function __resetModelsScreenMemoryForTests(seed?: {
+  job?: DownloadJob | null
+  jobName?: string | null
+}): void {
+  rememberedJob = seed?.job ?? null
+  rememberedJobName =
+    seed?.job && seed.jobName ? { jobId: seed.job.jobId, name: seed.jobName } : null
+  dismissedJobId = null
+  rememberedEngineJob = null
+}
 
 export function ModelsScreen(): JSX.Element {
   const { t, tCount, lang } = useT()
@@ -195,6 +236,10 @@ export function ModelsScreen(): JSX.Element {
   const [licenseAck, setLicenseAck] = useState(false)
   const [job, setJob] = useState<DownloadJob | null>(rememberedJob)
   const jobRef = useRef<DownloadJob | null>(rememberedJob)
+  // F2/B1: the last known display name of the job's model, and the terminal result the user
+  // dismissed. Both mirror module state so they survive leaving + re-entering the screen.
+  const [jobName, setJobName] = useState<{ jobId: string; name: string } | null>(rememberedJobName)
+  const [dismissedJob, setDismissedJob] = useState<string | null>(dismissedJobId)
   // The real AI engine (llama.cpp): without it, started models run in demo mode.
   const [engine, setEngine] = useState<EngineStatus | null>(null)
   const [engineJob, setEngineJob] = useState<EngineDownloadJob | null>(rememberedEngineJob)
@@ -280,6 +325,17 @@ export function ModelsScreen(): JSX.Element {
     return () => clearInterval(timer)
   }, [runtime?.startingModelId])
 
+  // F2/B1: remember the downloading model's NAME while the catalog still lists it, so a terminal
+  // result stays named after a refresh that drops the entry or flips it to `installed`.
+  useEffect(() => {
+    if (!job || !models) return
+    const found = models.find((m) => m.id === job.modelId)
+    if (!found) return
+    if (rememberedJobName?.jobId === job.jobId && rememberedJobName.name === found.displayName) return
+    rememberedJobName = { jobId: job.jobId, name: found.displayName }
+    setJobName(rememberedJobName)
+  }, [job, models])
+
   // Poll the live download job (async-with-polling, like import progress).
   useEffect(() => {
     jobRef.current = job
@@ -290,6 +346,9 @@ export function ModelsScreen(): JSX.Element {
         .getDownloadJob(job.jobId)
         .then((next) => {
           if (!mountedRef.current) return // late tick after unmount (FE-4)
+          // F2/B1: a response for a job that is no longer the current one (a new download was
+          // accepted meanwhile) must never overwrite the newer job or resurrect an old result.
+          if (jobRef.current?.jobId !== job.jobId || next.jobId !== job.jobId) return
           setJob(next)
           // A finished download changes install state — refresh the cards once. CODE-28
           // (full-audit 2026-07-11): surfaced, not fire-and-forget — a failing refresh at
@@ -369,11 +428,17 @@ export function ModelsScreen(): JSX.Element {
     setError(null)
     try {
       const started = await window.api.downloadModel(m.id, { licenseAccepted: licenseAck })
+      // F2/B1: only an ACCEPTED job replaces a retained terminal result — a rejected start (and a
+      // cancelled dialog) leaves the previous result on screen. The dismissal is cleared with it so
+      // a backend that resumes under the same job id cannot start out hidden. FE-4 mounted guard.
+      if (!mountedRef.current) return
+      dismissedJobId = null
+      setDismissedJob(null)
       setJob(started)
     } catch (e) {
-      setError(friendlyIpcError(e))
+      if (mountedRef.current) setError(friendlyIpcError(e))
     } finally {
-      setLicenseAck(false)
+      if (mountedRef.current) setLicenseAck(false)
     }
   }
 
@@ -434,8 +499,21 @@ export function ModelsScreen(): JSX.Element {
   ))
   const families = [...new Set(models.map((m) => m.family))].sort()
   const hasFilters = query !== '' || task !== 'all' || family !== 'all'
-  const liveDownloadModel = job && JOB_LIVE.has(job.status)
-    ? models.find((m) => m.id === job.modelId) : null
+  // F2/B1 — what the independent "Current model download" panel owns: the live job (as before)
+  // AND an unresolved terminal result, until the user dismisses it, a new job is accepted, or the
+  // download ends verified/cancelled. Derived from `job` alone; no separate copy of the job.
+  const panelJob =
+    job && job.jobId !== dismissedJob && (JOB_LIVE.has(job.status) || isUnresolvedResult(job))
+      ? job
+      : null
+  const panelLive = panelJob != null && JOB_LIVE.has(panelJob.status)
+  const panelModel = panelJob ? models.find((m) => m.id === panelJob.modelId) ?? null : null
+  // Name the result even when the refresh at the transition no longer lists the model.
+  const panelName = panelJob
+    ? panelModel?.displayName ??
+      (jobName?.jobId === panelJob.jobId ? jobName.name : null) ??
+      panelJob.modelId
+    : ''
 
   // Download gates: the drive policy is the ceiling, the Settings toggle the
   // switch. The copy distinguishes the two — "disabled by policy" vs. "turn it on in
@@ -452,6 +530,21 @@ export function ModelsScreen(): JSX.Element {
   const anyDownloadable = models.some(
     (m) => m.download && !m.download.withdrawn && (m.state === 'missing' || m.state === 'checksum_failed')
   )
+
+  // Retry (panel, terminal result only): resolve the EXACT model id from the current list and run
+  // it through the same confirmation as every other download — the same gates, the same license
+  // link, a fresh acknowledgement. A model that left the catalog, lost its download block or was
+  // withdrawn (#196) keeps a visible, explained result instead of a button that can only fail.
+  const retryTarget =
+    panelJob && !panelLive ? models.find((m) => m.id === panelJob.modelId) ?? null : null
+  const retryWithdrawn = retryTarget?.download?.withdrawn ?? null
+  const retryUnavailable = retryTarget == null || retryTarget.download == null
+  const retryBlockedReason =
+    downloadsBlockedReason ??
+    (retryWithdrawn != null ? t('models.download.withdrawn', { reason: retryWithdrawn }) : null) ??
+    (retryUnavailable ? t('models.download.retryUnavailable') : null) ??
+    // The same one-at-a-time gate the rows use; a retained result never widens it (see below).
+    (job != null && JOB_LIVE.has(job.status) ? t('models.download.otherRunning') : null)
 
   function downloadSection(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
@@ -671,7 +764,10 @@ export function ModelsScreen(): JSX.Element {
           )
         )}
 
-        {liveDownloadModel?.id !== m.id && downloadSection(m)}
+        {/* While the panel above owns this model's job — live progress OR a retained terminal
+            result — the row must not repeat it. After Dismiss the row's own status/recovery UI
+            (Resume, the unverified note) comes back exactly as before. */}
+        {panelJob?.modelId !== m.id && downloadSection(m)}
         </div>
 
         {/* Checksums / quantization ids / paths / runtime internals live here, closed
@@ -1042,10 +1138,73 @@ export function ModelsScreen(): JSX.Element {
             {t('models.library.clear')}
           </Button>}
         </div>
-        {/* Progress/cancel remains reachable even when filters or a collapsed group hide its row. */}
-        {liveDownloadModel && <div className="model-library-download" role="region" aria-label={t('models.library.download')}>
-          <strong>{liveDownloadModel.displayName}</strong>
-          {downloadSection(liveDownloadModel)}
+        {/* Progress/cancel remains reachable even when filters or a collapsed group hide its row —
+            and a FAILED or unverified result stays here, named, with Retry / Dismiss, until the
+            user acts, a new download is accepted, or the download ends verified/cancelled
+            (design-guidelines §15 "Terminal download results"). */}
+        {panelJob && <div className="model-library-download" role="region" aria-label={t('models.library.download')}>
+          <strong>{panelName}</strong>
+          {/* ONE always-mounted alert node for the whole panel lifetime: empty while the download
+              runs, filled on the terminal transition. Same wrapper shape as ErrorBanner (audit
+              M-U1) — a live region that only appears at failure is not reliably announced. */}
+          <div className="error-banner-region" role="alert" aria-live="assertive">
+            {panelJob.status === 'failed' && (
+              <Banner tone="error" role="status">
+                <p>{t('models.download.failed', { name: panelName })}</p>
+                {panelJob.error && <p>{panelJob.error}</p>}
+              </Banner>
+            )}
+            {panelJob.status === 'done' && panelJob.unverified && (
+              <Banner tone="warning" role="status">
+                {t('models.download.unverifiedBefore')}
+                <code>verify-models --generate</code>
+                {t('models.download.unverifiedAfter')}
+              </Banner>
+            )}
+          </div>
+          {panelLive ? (
+            panelModel && downloadSection(panelModel)
+          ) : (
+            <>
+              <div className="model-library-download-actions">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={retryBlockedReason != null}
+                  title={
+                    retryBlockedReason ??
+                    t('models.download.titled', {
+                      name: panelName,
+                      size: fmtGb(
+                        retryTarget?.download?.sizeBytes ?? null,
+                        retryTarget?.sizeOnDiskGb ?? 0,
+                        lang
+                      )
+                    })
+                  }
+                  // The EXISTING confirmation, with this variant's license link and a reset
+                  // acknowledgement — a retry never silently accepts a pending license.
+                  onClick={() => {
+                    if (!retryTarget) return
+                    setLicenseAck(false)
+                    setConfirming(retryTarget)
+                  }}
+                >
+                  {t('models.download.retry')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    dismissedJobId = panelJob.jobId
+                    setDismissedJob(panelJob.jobId)
+                  }}
+                >
+                  {t('models.download.dismiss')}
+                </Button>
+              </div>
+              {retryBlockedReason && <p className="hint mb-0">{retryBlockedReason}</p>}
+            </>
+          )}
         </div>}
         <p className="hint" role="status">{tCount('models.library.results', visibleModels.length)}</p>
         {visibleModels.length === 0 ? (

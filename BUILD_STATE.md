@@ -34,10 +34,11 @@ PROGRESS:** On this drive / Browse views, name/id search, task/family filters, c
 rows and expandable quantization groups; design record `docs/design-guidelines.md` §15;
 user-guide §5. After the 2026-09-05 review the branch was rebuilt on master as UX-only —
 Flash-Next stays on `feat/qwen38-flash-next-manifest`, its own PR. P1 rebuild `7c03c8e6`
-(377 / 5,674 / 80, CI green). P2 catalog guard: `committed-catalog.test.ts` pins the split
-id absent and no `-NNNNN-of-NNNNN.gguf` path anywhere the app enumerates (+5 tests, red-proof
-in an isolated temp catalog). Next: P3 terminal download-result panel (F2), P4 repair
-visibility + group face (F3/F5), P5 docs + dead-key cleanup (F6/F7)._
+(377 / 5,674 / 80, CI green). P2 `bfc62201`: catalog guard against sharded `-NNNNN-of-NNNNN.gguf`
+entries (+5 tests). P3 (F2): a failed / unverified download keeps a NAMED result in the
+same "Current model download" panel (same alert node, Retry via the existing confirmation,
+Dismiss by job id, replaced only by an accepted job; §15 "Terminal download results",
+user-guide §6). Next: P4 repair visibility + group face (F3/F5), P5 docs + dead-key cleanup._
 
 _2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
 `readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one

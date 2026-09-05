@@ -1157,6 +1157,14 @@ export const de: Record<keyof typeof en, string> = {
   'models.download.titled': '{name} herunterladen ({size})',
   'models.download.resume': 'Download fortsetzen',
   'models.download.start': 'Herunterladen',
+  // F2: Ein fehlgeschlagener oder ungeprüfter Download behält ein benanntes Ergebnis mit
+  // eigenen Wiederherstellungsaktionen über der Ergebnisliste (design-guidelines §15).
+  'models.download.failed': 'Der Download von {name} ist fehlgeschlagen.',
+  'models.download.retry': 'Download erneut versuchen',
+  'models.download.dismiss': 'Ausblenden',
+  'models.download.retryUnavailable':
+    'Dieses Modell wird hier nicht mehr zum Download angeboten und kann aus diesem Ergebnis ' +
+    'nicht erneut gestartet werden. Blende es aus oder suche das Modell in der Bibliothek.',
   // #196: Der Anbieter hat genau diese Datei entfernt.
   'models.download.withdrawn':
     'Nicht mehr zum Download verfügbar: Der Anbieter hat genau diese Datei entfernt ' +
