@@ -56,9 +56,6 @@ const SettingsScreen = lazyScreen(() =>
 const PerformanceScreen = lazyScreen(() =>
   import('./screens/PerformanceScreen').then((m) => ({ default: m.PerformanceScreen }))
 )
-const SkillsScreen = lazyScreen(() =>
-  import('./screens/SkillsScreen').then((m) => ({ default: m.SkillsScreen }))
-)
 // Evidence-review workspace (EP-1 plan §7.1): lazy like the other non-first-frame screens.
 // No nav-rail entry — reachable ONLY via the openReview handoff below.
 const ReviewScreen = lazyScreen(() =>
@@ -90,31 +87,25 @@ interface NavItem {
   icon: IconName
 }
 
-// Information architecture (design-guidelines §2): 7 everyday destinations on top,
-// Settings as the single bottom utility. Privacy and Diagnostics live INSIDE Settings
-// as tabs — they are no longer nav destinations. Skills is a top-level destination of its
-// own (no longer a Settings tab) — it is a first-class capability surface, not a setting.
-// Images (image-understanding §6) and Translate (TranslateGemma plan §2 D6) are distinct
-// task surfaces parallel to Documents/Chat.
-const NAV_TOP: NavItem[] = [
-  { id: 'home', labelKey: 'nav.home', icon: 'home' },
+// Information architecture (design-guidelines §2, rail rework 2026-09-05): three groups.
+//   work    = Chat · Documents · Translate · Images   (the everyday task surfaces)
+//   machine = AI Model · Performance                  (what runs, and how well it runs)
+//   utility = Settings                                (Privacy, Skills, Diagnostics as tabs)
+// Home has no rail item: the brand mark above the groups IS the Home button (it already
+// navigated home since #47; a logo atop a nav column reads as "go home", and two controls
+// for one destination crowded the rail). It carries the lit state when Home is open.
+// Skills moved back into Settings as a tab: the composer's skill picker in Chat is the
+// everyday entry, so a rail slot for the library was redundant.
+const NAV_WORK: NavItem[] = [
   { id: 'chat', labelKey: 'nav.chat', icon: 'chat' },
   { id: 'documents', labelKey: 'nav.documents', icon: 'file' },
-  // Translate is a genuine primary destination — a first-class text-translation surface on the
-  // dedicated TranslateGemma sidecar (TranslateGemma plan §2 D6; design-guidelines §2 updated to
-  // "7 primary + 1 utility"). Sits after Documents, before Images.
   { id: 'translate', labelKey: 'nav.translate', icon: 'translate' },
-  // Images is a genuine primary destination — a first-class task surface parallel to
-  // Documents/Chat, not a sub-mode (image-understanding §6). After Translate, before AI Model.
-  { id: 'images', labelKey: 'nav.images', icon: 'image' },
+  { id: 'images', labelKey: 'nav.images', icon: 'image' }
+]
+
+const NAV_MACHINE: NavItem[] = [
   { id: 'models', labelKey: 'nav.models', icon: 'brain' },
-  // Performance is a primary destination (design-guidelines §2, "8 primary + 1 utility"):
-  // the hardware check's answer ("what can this computer run, how fast"), the figures observed
-  // in real use, and one result per computer the drive has been in. Before this it was the
-  // third card of the Diagnostics tab, which keeps the raw table for support. After AI Model,
-  // whose ★ pick it explains; before Skills.
-  { id: 'performance', labelKey: 'nav.performance', icon: 'gauge' },
-  { id: 'skills', labelKey: 'nav.skills', icon: 'puzzle' }
+  { id: 'performance', labelKey: 'nav.performance', icon: 'gauge' }
 ]
 
 const NAV_BOTTOM: NavItem[] = [{ id: 'settings', labelKey: 'nav.settings', icon: 'settings' }]
@@ -385,14 +376,14 @@ function AppShell(): JSX.Element {
     <div className="app-shell">
       <nav className="sidebar" aria-label={t('nav.aria')}>
         {/* Issue #47: the lockup heads a column of clickable rail items, and decades of
-            convention read a logo in that position as "go Home" — so it must not be the
-            one dead click on the rail. Same navigate() path as the labelled Home item
-            below, which keeps carrying the VISUAL current-screen highlight; the logo
-            carries the semantic aria-current only, so the rail never shows two lit
-            selections. The accessible name folds the wordmark and the destination. */}
+            convention read a logo in that position as "go Home", so it must not be the one
+            dead click on the rail. Since the 2026-09-05 rail rework it is THE Home control
+            (the labelled Home item is gone), so it carries both the semantic aria-current
+            and the visual lit state the other rail items use. The accessible name and the
+            tooltip fold the wordmark and the destination. */}
         <button
           type="button"
-          className="brand"
+          className={`brand ${screen === 'home' ? 'active' : ''}`}
           title={`HilbertRaum — ${t('nav.home')}`}
           aria-label={`HilbertRaum — ${t('nav.home')}`}
           aria-current={screen === 'home' ? 'page' : undefined}
@@ -400,7 +391,8 @@ function AppShell(): JSX.Element {
         >
           <BrandMark size={24} />
         </button>
-        <ul className="nav-list">{NAV_TOP.map(navButton)}</ul>
+        <ul className="nav-list">{NAV_WORK.map(navButton)}</ul>
+        <ul className="nav-list nav-group">{NAV_MACHINE.map(navButton)}</ul>
         <ul className="nav-list nav-bottom">{NAV_BOTTOM.map(navButton)}</ul>
         {workspace.mode === 'encrypted' && (
           <button
@@ -508,7 +500,6 @@ function AppShell(): JSX.Element {
             {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
             {screen === 'models' && <ModelsScreen />}
             {screen === 'performance' && <PerformanceScreen onNavigate={navigate} />}
-            {screen === 'skills' && <SkillsScreen />}
             {screen === 'settings' && (
               <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />
             )}

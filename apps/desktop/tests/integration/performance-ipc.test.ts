@@ -46,7 +46,7 @@ function seededDb(root: string): Db {
   return db
 }
 
-function ctxWith(root: string, db: Db): AppContext {
+function ctxWith(root: string, db: Db, over: Record<string, unknown> = {}): AppContext {
   return {
     paths: { rootPath: root, workspacePath: join(root, 'workspace') },
     db,
@@ -54,7 +54,8 @@ function ctxWith(root: string, db: Db): AppContext {
     // No binary on this root: the GPU probe resolves to "no devices" and never blocks.
     probeGpu: undefined,
     runtime: { occupancy: new ModelOccupancy(), active: () => null },
-    isDev: true
+    isDev: true,
+    ...over
   } as unknown as AppContext
 }
 
@@ -257,6 +258,9 @@ describe('buildPerformanceSnapshot', () => {
     expect(snap.placement.model?.id).toBe('some-model')
     // Not in the catalog: size 0, context from settings.
     expect(snap.placement.model?.sizeOnDiskGb).toBe(0)
+    // A catalog model's size is converted from the manifest's decimal GB to GiB, the unit the
+    // rest of the screen uses (19.8 decimal GB reads 18.4).
+    expect(Math.round(((19.8 * 1e9) / 1024 ** 3) * 10) / 10).toBe(18.4)
     expect(snap.placement.observed?.cpuModelMb).toBe(3000)
     expect(snap.placement.verdict).toMatchObject({ kind: 'cpu', needMb: 3200, estimated: false })
 
@@ -274,6 +278,36 @@ describe('buildPerformanceSnapshot', () => {
     snap = buildPerformanceSnapshot(ctxWith(root, db))
     expect(snap.placement.observed?.contextTokens).toBe(8192)
     expect(snap.placement.verdict.kind).toBe('gpu')
+  })
+
+  it('lists every model the app can hold, with liveness from each service and the totals', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'qwen3.5-9b-ud-q4kxl' })
+    const ctx = ctxWith(root, db, {
+      manifestsDir: join(__dirname, '..', '..', '..', '..', 'model-manifests'),
+      runtime: { occupancy: new ModelOccupancy(), active: () => ({ modelId: 'qwen3.5-9b-ud-q4kxl' }) },
+      translator: { deviceStatus: () => ({ device: 'auto', gpuLayers: 20, totalLayers: 49, live: true }) },
+      vision: { isLoaded: () => false },
+      reranker: { isLoaded: () => true },
+      embedder: { isLoaded: () => true }
+    })
+    const snap = buildPerformanceSnapshot(ctx)
+    const rows = snap.placement.models
+    expect(rows[0]).toMatchObject({ role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', loaded: true, lifetime: 'session' })
+    // The catalog's translation model, live, with its observed split; pinned roles say cpu.
+    const tr = rows.find((r) => r.role === 'translation')
+    expect(tr).toMatchObject({ loaded: true, lifetime: 'idle', gpuLayers: 20, totalLayers: 49 })
+    expect(tr?.modelId).toBeTruthy()
+    expect(rows.find((r) => r.role === 'vision')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'idle' })
+    expect(rows.find((r) => r.role === 'reranker')).toMatchObject({ device: 'cpu', loaded: true, lifetime: 'session' })
+    expect(rows.find((r) => r.role === 'embeddings')).toMatchObject({ device: 'cpu', loaded: true })
+    expect(rows.find((r) => r.role === 'transcriber')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'per-use' })
+    // Sizes are GiB from the manifests' decimal GB; the total sums every row.
+    const sum = rows.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0), 0)
+    expect(snap.placement.totals.ramAllMb).toBe(Math.round(sum * 1024))
+    // Both on the card only counts on a machine WITH a card (this test host has no probe → cpu class).
+    expect(snap.placement.totals.bothOnCard).toBe(snap.placement.memoryClass !== 'cpu')
   })
 
   it('reads a result from another computer as "not this machine"', () => {

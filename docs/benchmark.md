@@ -261,8 +261,8 @@ serialized cap applies to the list).
 ## Performance screen (2026-09-05)
 
 The check's answer moved out of the Diagnostics tab onto a primary rail destination,
-**Performance** (`renderer/screens/PerformanceScreen.tsx`; design-guidelines §2 "8 primary + 1
-utility"). Diagnostics keeps the raw table and its Copy button as the support surface; the
+**Performance** (`renderer/screens/PerformanceScreen.tsx`; design-guidelines §2, the machine
+group beside AI Model). Diagnostics keeps the raw table and its Copy button as the support surface; the
 screen answers the user's question in plain words. Three cards:
 
 1. **This computer**: one verdict sentence ("Runs \<model\> at about \<n\> tokens per second.
@@ -293,21 +293,53 @@ Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
 labelled "Unified memory" and the graphics tile is hidden); `cpu` = no usable card, budget = RAM.
 **Observed first**: after a start, llama.cpp's own load log says where the model landed, and the
 chat ladder now reads it (`runtime/placement.ts`, one parser per attempt, fed by the sidecar's
-`onStderrData`): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices
+`onStderrData`; the chat server runs with `-lv 4` because the pinned build prints these lines
+only from log verbosity 4 up, verified 2026-09-05: 3 prints none, 5 adds the `--fit` dry-run
+pass): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices
 are the CPU side), every `<device> KV buffer size`, the Metal budget line. The reading is recorded
 once the rung is healthy (`recordModelPlacement`, stamped with the backend, the launched context
 and `machineKey`), latched for the session, and persisted per model id in
 `settings.modelPlacements` by the observer `registerBenchmarkIpc` registers; the snapshot uses it
 only for the active model and only when the record's machine is this one. **Verdict**
 (`placementVerdict`, pure): observed → 'gpu' when every layer is on the GPU (unified reads the
-same), 'partial' otherwise with the CPU-side bytes as the spill, 'cpu' for a CPU backend; the size
-shown is weights + context cache as measured. Before the first start → an ESTIMATE from the
+same), 'partial' otherwise with the CPU-side bytes as the spill (CPU, CPU_Mapped and the
+backends' `*_Host` buffers), 'cpu' for a CPU backend, 'unknown' for a GPU start whose log carried
+no offload line (never a guess); the size shown is weights + context cache as measured. A
+partial offload on a card that would hold the model is the normal `--fit` outcome when the card
+was not empty at start: the parser also reads the `device_info` "N MiB free" figure
+(`gpuFreeAtStartMb`), and, with the `sched_reserve` compute-buffer line (`gpuComputeMb`), the copy tells the two
+cases apart: a card that was NOT free at start ("only N GB was free, restart once the card is
+free") versus a card that WAS free, where the fit's own reservations are the reason (model +
+cache + working buffers + the fixed 1 GiB `--fit-target` margin came within a whole layer of the
+free memory, and the fit moves whole layers, ~430 MB each on a 27B). Whether the app should
+trade that margin for a full offload is an owner decision (BUILD_STATE §5 item 21 (f)). Units: every size on the
+screen is GiB (RAM, VRAM, the buffers), so the manifest's decimal "size on disk" is converted
+once in the snapshot (19.8 GB → 18.4). Before the first start → an ESTIMATE from the
 weights alone (the file size; the copy says so and that the context cache is measured on the first
 start) against the budget with 8 % headroom: a discrete card too small for the weights is 'partial'
 if RAM + VRAM can hold them, else 'too_large'; unified and cpu are 'gpu'/'cpu' or 'too_large'.
 'too_large' offers "Choose a smaller model" (AI Model). Pills: On GPU / Partly on GPU / On
 processor / Too large / Not measured. Phase 2 (not built): the context-cache estimate from the GGUF
 header, and a VRAM-aware ★ picker (today's picker is RAM-best-fit).
+
+**Models on this computer** (a card between the observed rows and the other computers; 2026-09-05,
+owner direction, placed BELOW "Observed while you worked" because what the machine actually did
+outranks what it could hold): the card is shared and the processor's RAM is shared, so the screen lists EVERY model
+the app can hold, one row per role (`PerformanceSnapshot.placement.models`, `ResidentModelRow`):
+chat and translation auto-fit onto the card (`device: 'gpu'`; `'cpu'` on a machine without a
+usable card), images / document search (reranker + embedder) / voice are pinned to the processor
+by design (`--device none`, see vision/runtime.ts, embeddings/e5.ts, reranker/llama.ts; whisper is
+a CLI) and say so. Lifetime: chat / reranker / embedder stay for the session, translation and
+vision unload after their idle window, whisper runs only while transcribing. Liveness comes from
+each service's own handle (`isLoaded()` on `E5Embedder`, `LlamaReranker`, `VisionRuntime` /
+`VisionService`; `Translator.deviceStatus().live`; `runtime.active()` for chat); the translation
+row carries its observed layer split when live. Two summary lines: the card (chat + translation
+sizes against VRAM, with the START-ORDER warning when both are resident: whichever started second
+got the leftovers and runs slower; stop and start it once the other has unloaded) and the
+processor (everything loadable at once against RAM, "Too much at once" when it exceeds it). What
+the app should DO about the start-order contention (force translation to the processor while chat
+holds the card, or reclaim the card when translation goes idle) is an owner decision (§5 item 21
+(g)).
 
 2. **Observed while you worked**: figures from real use, session-only, never persisted: the last
    finished answer (the #290 `chat:speed` payload, latched by `setAnswerSpeedObserver` in
@@ -321,7 +353,7 @@ header, and a VRAM-aware ★ picker (today's picker is RAM-best-fit).
 **Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
 in `registerBenchmarkIpc.ts`): `current`, `currentMachine`, `currentGpu`, `otherMachines`,
 `running` (the `benchmark` occupancy lane), `placement` (memory class, RAM/VRAM, the active
-model, the observed placement, the verdict), `observed`. **Progress**: `RunBenchmarkDeps.onProgress` reports
+model, the observed placement, the verdict, the per-role `models` rows, `totals`), `observed`. **Progress**: `RunBenchmarkDeps.onProgress` reports
 `'system' | 'drive' | 'speed' | 'done'` as each step lands ('speed' only when a runtime was up);
 the IPC handler forwards them to the requesting window as `benchmark:progress`, and the screen
 shows a step list instead of an opaque "Running…" button. The first-run path passes no callback.

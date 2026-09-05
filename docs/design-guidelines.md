@@ -37,30 +37,40 @@ Audience: non-technical professionals (lawyers, doctors, accountants, consultant
 
 ## 2. Information architecture
 
-Collapse the nav destinations into 8 primary + 1 utility:
+The rail is three groups plus the brand mark (rail rework 2026-09-05, owner decision; the
+earlier "N primary + 1 utility" counts below are history):
 
-- **Top group (everyday):** Home (genuine status hub: ready? model running? doc count? one
-  big "Start chatting") · Chat · Documents · **Translate** (live text translation on the
-  dedicated TranslateGemma sidecar — a first-class task surface parallel to Documents/Chat,
+- **The brand mark is Home.** Home stays the status hub (ready? model running? doc count? one
+  big "Start chatting"), but it has no rail item: the mark above the groups navigates home
+  (it did since #47) and now also carries the lit selection when Home is open. Two controls
+  for one destination crowded the rail.
+- **Work group (everyday):** Chat · Documents · **Translate** (live text translation on the
+  dedicated TranslateGemma sidecar, a first-class task surface parallel to Documents/Chat,
   distinct from the document-translation doc-task under Documents; TranslateGemma plan §2 D6)
-  · **Images** (visual understanding of one local image via a local vision model — a
+  · **Images** (visual understanding of one local image via a local vision model, a
   first-class task surface, distinct from OCR and from any image generation;
-  image-understanding §6) · **AI Model** (reframed from "Models" — singular mental model;
+  image-understanding §6).
+- **Machine group:** **AI Model** (reframed from "Models": singular mental model;
   checksums/quantization behind a "Technical details" disclosure) · **Performance** (what this
   computer can run and how fast: the hardware check's answer as a verdict and four rated tiles
-  (speed, memory, graphics memory, drive),
-  the figures observed in real use, and one result per computer the drive has been in;
-  `docs/benchmark.md` "Performance screen") · **Skills** (the user's
-  capability library — manage, import, enable; a first-class destination, *not* a Settings
-  tab, since it is a thing the user builds up over time, not a knob).
-  - _Why Performance is a primary destination, not a Diagnostics card (8th deliberate IA
-    change, 2026-09-05):_ the check decides the ★ model pick and the profile, and its answer is
-    the user's question ("can this computer run it, how fast, is the drive fast enough"); as the
-    third card of the Diagnostics tab it was found by nobody. A one-shot probe alone would not
-    earn a rail slot; the destination carries what changes over time as well: the figures from
-    real use and the per-computer history a travelling drive accumulates. Diagnostics keeps the
-    raw table and Copy for support. The single-word labels ("Performance"/"Leistung") fit the
-    rail; a gauge glyph in the icon set's 24-grid, 1.65 stroke.
+  (speed, memory, graphics memory, drive), the "Your model" placement row, the figures observed
+  in real use, and one result per computer the drive has been in; `docs/benchmark.md`
+  "Performance screen"). Set apart from the work group by a hairline: these are about the
+  machine, not about a task.
+- **Utility group:** **Settings**, with **Privacy, Skills and Diagnostics folded in as tabs**
+  ("Privacy & data", "Skills", "Diagnostics (advanced)"). Privacy is a posture expressed
+  everywhere, not a destination; Diagnostics is a support surface; Skills is the user's
+  capability library (manage, import, enable), reached day to day through the composer's skill
+  picker in Chat, so it does not need a rail slot of its own. (It was a rail destination from
+  2026-07 to 2026-09-05; the `skills` navigation target still resolves, to the tab.)
+  - _Why Performance is a primary destination, not a Diagnostics card (2026-09-05):_ the check
+    decides the ★ model pick and the profile, and its answer is the user's question ("can this
+    computer run it, how fast, is the drive fast enough"); as the third card of the Diagnostics
+    tab it was found by nobody. A one-shot probe alone would not earn a rail slot; the
+    destination carries what changes over time as well: the figures from real use and the
+    per-computer history a travelling drive accumulates. Diagnostics keeps the raw table and
+    Copy for support. The single-word labels ("Performance"/"Leistung") fit the rail; a gauge
+    glyph in the icon set's 24-grid, 1.65 stroke.
   - _Why Translate is a primary destination, not a sub-mode (7th deliberate IA change):_
     translating pasted text is a distinct, complete task — text in, translation out — that
     stands parallel to Chat/Documents/Images, runs on its own model (TranslateGemma, not the
@@ -68,9 +78,6 @@ Collapse the nav destinations into 8 primary + 1 utility:
     document. It shares the window planner + sidecar with the Documents translate action, but
     the surfaces are separate tasks. The single-word labels ("Translate"/"Übersetzen") fit the
     existing slim rail (sized for the longer "Einstellungen"), so the 7th item adds no reflow.
-- **Bottom group (utility):** **Settings**, with **Privacy and Diagnostics folded in as
-  sub-pages/tabs** ("Privacy & data", "Diagnostics (advanced)"). Privacy is a posture
-  expressed everywhere, not a destination; Diagnostics is a support surface.
 
 **First-run:** 3-step guided setup, full-window, no nav rail yet:
 1. Welcome + trust framing ("Everything stays on this drive. No internet, no account.")

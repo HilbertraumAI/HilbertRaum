@@ -189,6 +189,11 @@ export class E5Embedder implements Embedder {
   readonly id: string
   readonly dimensions: number
   private server: LlamaServer | null = null
+
+  /** Resident right now? (The sidecar is lazy-started and then held for the session.) */
+  isLoaded(): boolean {
+    return this.server !== null
+  }
   private starting: Promise<void> | null = null
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false

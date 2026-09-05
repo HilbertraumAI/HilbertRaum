@@ -93,9 +93,10 @@ enter your password on a single unlock screen.
 
 ## 4. Finding your way around
 
-The sidebar has seven everyday destinations — **Home**, **Chat**, **Documents**, **Translate**,
-**Images**, **AI Model**, and **Skills** — plus **Settings** at the bottom. Settings has three tabs:
-**General**, **Privacy & data**, and **Diagnostics (advanced)** (see §10).
+The sidebar has three groups: **Chat**, **Documents**, **Translate** and **Images** for everyday
+work; **AI Model** and **Performance** for the machine; and **Settings** at the bottom. The
+HilbertRaum mark at the top is the **Home** button. Settings has four tabs: **General**,
+**Privacy & data**, **Skills**, and **Diagnostics (advanced)** (see §10).
 
 A quiet **🔒 Local · Offline** status sits in the chat header. Hover it for the short version — *"Everything stays on this drive. No internet
 connection is used."* — or click it to open the full privacy details. If you have enabled
@@ -838,9 +839,9 @@ without dismissing anything first.
 > A **scanned PDF** (an image of a page) can only be worked on through the text the app recognised
 > from it, so redact those from the `.txt` output.
 
-### Manage skills (open **Skills** in the sidebar)
+### Manage skills (Settings › **Skills**)
 
-Open **Skills** in the sidebar to see every installed skill, turn each one **on or off**, and **Import**
+Open **Settings › Skills** to see every installed skill, turn each one **on or off**, and **Import**
 or **Delete** your own.
 
 - **Import** takes a `.skill.zip` file *or* a folder that contains a `SKILL.md`. The app checks the

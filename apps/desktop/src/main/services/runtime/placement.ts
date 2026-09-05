@@ -15,12 +15,18 @@ import type { ModelPlacement } from '../../../shared/types'
 //   load_tensors:   CPU_Mapped model buffer size =   400.00 MiB
 //   llama_kv_cache: CUDA0 KV buffer size = 1360.00 MiB
 //   ggml_metal_init: recommendedMaxWorkingSetSize = 51539.61 MB
-// A device whose name starts with "CPU" is the CPU side; everything else is a GPU.
+// A device whose name starts with "CPU" (CPU, CPU_Mapped) or ends in "_Host" (Vulkan_Host,
+// CUDA_Host: pinned host memory the backend keeps CPU-side) is the CPU side; everything else
+// is a GPU. The lines are printed from log verbosity 4 up (`-lv 4`, CHAT_SERVER_ARGS).
 
 const OFFLOAD_RE = /offloaded\s+(\d+)\s*\/\s*(\d+)\s+layers to GPU/
 const MODEL_BUFFER_RE = /(\S+) model buffer size\s*=\s*([\d.]+)\s*MiB/
 const KV_BUFFER_RE = /(\S+) KV buffer size\s*=\s*([\d.]+)\s*MiB/
+/** `sched_reserve:    Vulkan0 compute buffer size =  2860.00 MiB` (the working buffers). */
+const COMPUTE_BUFFER_RE = /(\S+) compute buffer size\s*=\s*([\d.]+)\s*MiB/
 const METAL_BUDGET_RE = /recommendedMaxWorkingSetSize\s*=\s*([\d.]+)\s*MB/
+/** `device_info` rows: `  - Vulkan0 : NVIDIA GeForce RTX 3090 (24822 MiB, 2703 MiB free)`. */
+const DEVICE_INFO_RE = /-\s+(\S+)\s+:\s+.*\((\d+)\s*MiB,\s*(\d+)\s*MiB free\)/
 
 /** What one start's log said; every figure null until its line is seen. */
 export interface PlacementReading {
@@ -31,6 +37,10 @@ export interface PlacementReading {
   gpuKvMb: number | null
   cpuKvMb: number | null
   metalMaxWorkingSetMb: number | null
+  /** Free MiB on the first GPU device when the server started (the `device_info` block). */
+  gpuFreeAtStartMb: number | null
+  /** Working (compute) buffers reserved on GPU devices, MiB summed. */
+  gpuComputeMb: number | null
 }
 
 export interface PlacementParser {
@@ -41,7 +51,8 @@ export interface PlacementParser {
 }
 
 function isCpuDevice(name: string): boolean {
-  return name.toUpperCase().startsWith('CPU')
+  const upper = name.toUpperCase()
+  return upper.startsWith('CPU') || upper.endsWith('_HOST')
 }
 
 /** One parser per start attempt: a retried rung gets a fresh reading. */
@@ -53,10 +64,12 @@ export function createPlacementParser(): PlacementParser {
     cpuModelMb: null,
     gpuKvMb: null,
     cpuKvMb: null,
-    metalMaxWorkingSetMb: null
+    metalMaxWorkingSetMb: null,
+    gpuFreeAtStartMb: null,
+    gpuComputeMb: null
   }
   let pending = ''
-  const add = (key: 'gpuModelMb' | 'cpuModelMb' | 'gpuKvMb' | 'cpuKvMb', mb: number): void => {
+  const add = (key: 'gpuModelMb' | 'cpuModelMb' | 'gpuKvMb' | 'cpuKvMb' | 'gpuComputeMb', mb: number): void => {
     r[key] = Math.round(((r[key] ?? 0) + mb) * 100) / 100
   }
   const line = (text: string): void => {
@@ -76,8 +89,19 @@ export function createPlacementParser(): PlacementParser {
       add(isCpuDevice(kv[1]) ? 'cpuKvMb' : 'gpuKvMb', Number(kv[2]))
       return
     }
+    const compute = COMPUTE_BUFFER_RE.exec(text)
+    if (compute) {
+      if (!isCpuDevice(compute[1])) add('gpuComputeMb', Number(compute[2]))
+      return
+    }
     const metal = METAL_BUDGET_RE.exec(text)
-    if (metal) r.metalMaxWorkingSetMb = Math.round(Number(metal[1]))
+    if (metal) {
+      r.metalMaxWorkingSetMb = Math.round(Number(metal[1]))
+      return
+    }
+    // The FIRST GPU device's free figure: the fit works against what was free right then.
+    const dev = DEVICE_INFO_RE.exec(text)
+    if (dev && !isCpuDevice(dev[1]) && r.gpuFreeAtStartMb == null) r.gpuFreeAtStartMb = Number(dev[3])
   }
   return {
     onStderrData: (text) => {

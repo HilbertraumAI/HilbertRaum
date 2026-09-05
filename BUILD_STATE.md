@@ -30,8 +30,10 @@
 > named in §5's branch analysis still carry unmerged work.
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
-third card of Settings › Diagnostics to a primary rail destination, "Performance" (8 primary + 1
-utility, design-guidelines §2).** Verdict + four rated tiles (speed, RAM, VRAM via
+third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
+the same branch (owner decision): three groups (Chat · Documents · Translate · Images ‖ AI Model ·
+Performance ‖ Settings), Home behind the brand mark (lit on Home), Skills back into Settings as a
+tab (`skills` target resolves there); design-guidelines §2 rewritten.** Verdict + four rated tiles (speed, RAM, VRAM via
 `BenchmarkResult.gpuVramMb`, drive) and the "Your model" row (memory class discrete / unified /
 cpu, the chat ladder's placement parser over llama.cpp's load log, `settings.modelPlacements`,
 `placementVerdict`), the session's observed figures (last
@@ -667,7 +669,15 @@ open round's item stays the last block of §5.)
     600 weight; (d) model-load duration per machine in the history rows (the `model_load` sample
     carries it; only the current machine shows it today); (e) "Your model" Phase 2: the
     context-cache estimate from the GGUF header, and a VRAM-aware ★ picker (the picker is
-    RAM-best-fit today, which is how a 24 GB card gets a 27B Q5 recommended on a 125 GB box).
+    RAM-best-fit today, which is how a 24 GB card gets a 27B Q5 recommended on a 125 GB box);
+    (f) the fit margin: on the rig the 27B Q5 lands 62/66 layers on a FREE 24 GB card (model
+    18.9 GiB + ~2.9 GiB working buffers + the fit's fixed 1 GiB margin comes within a layer of
+    the free memory); options are a smaller `--fit-target`, a smaller ubatch for the largest
+    models, or a full-offload rung when the app's own estimate says it fits (the "never -ngl"
+    rule would need a decision). Owner call; the row now states the reason. (g) start-order
+    contention between chat and translation on one card (the "Models on this computer" card now
+    names it): force translation to the processor while chat holds the card, or reclaim the card
+    when translation goes idle. Owner call.
 
 ---
 

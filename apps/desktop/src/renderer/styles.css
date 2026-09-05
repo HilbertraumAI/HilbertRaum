@@ -94,6 +94,8 @@ button { min-width: 24px; min-height: 24px; }
   transition: background var(--dur-fast) var(--ease);
 }
 .brand:hover { background: var(--surface-hover); }
+/* The mark is the Home control (rail rework 2026-09-05): lit like a selected rail item on Home. */
+.brand.active { background: var(--surface-hover); }
 /* Brand mark / lockup (components/BrandMark.tsx): both images render; the CSS pair toggle
    shows the theme-correct one via [data-theme] — no JS theme read, so it works pre-unlock in
    the gate. The dot is always teal; the square ink flips with the background. */
@@ -106,6 +108,10 @@ button { min-width: 24px; min-height: 24px; }
 /* Bottom utility group (guidelines §2): Settings sits apart from the
    everyday destinations, above the lock button. */
 .nav-list.nav-bottom { flex: 0 0 auto; border-top: 1px solid var(--border); padding-top: 6px; margin-top: 6px; }
+/* Middle group (rail rework 2026-09-05): AI Model + Performance, "the machine", set apart from
+   the everyday work group above by the same hairline the utility group uses. Does not flex:
+   the work group above takes the slack so the two lower groups stay pinned together. */
+.nav-list.nav-group { flex: 0 0 auto; border-top: 1px solid var(--border); padding-top: 6px; margin-top: 6px; }
 .nav-item, .lock-btn {
   width: 100%;
   display: flex;
@@ -2525,7 +2531,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .progress-label { font-size: var(--text-sm); line-height: var(--line-sm); color: var(--text-muted); }
 .progress progress { width: 100%; height: 8px; accent-color: var(--accent); }
 
-/* ---- Performance screen (design-guidelines §2 "8 primary + 1 utility"; benchmark.md
+/* ---- Performance screen (design-guidelines §2, the machine group; benchmark.md
    "Performance screen"): the hardware check's answer as three tiles, then the figures
    observed in real use, then one row per other computer the drive has been in. ---- */
 .perf-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
@@ -2561,3 +2567,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .perf-model-line { grid-column: 1; font-size: var(--text-base); line-height: var(--line-base); overflow-wrap: anywhere; }
 .perf-model-verdict { grid-column: 1; font-size: var(--text-sm); line-height: var(--line-sm); overflow-wrap: anywhere; }
 .perf-model-side { grid-column: 2; grid-row: 1 / span 3; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.perf-models { margin-top: 12px; }
+.perf-models .perf-row { padding: 8px 0; }
+.perf-models-summary { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.perf-models-summary-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--text-sm); line-height: var(--line-sm); }

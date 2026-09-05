@@ -88,7 +88,16 @@ function placement(over: Partial<PerformanceSnapshot['placement']> = {}): Perfor
     vramMb: 24_822,
     model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, contextTokens: 8192 },
     observed: null,
-    verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 24_822, spillMb: null, gpuLayers: null, totalLayers: null },
+    verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null },
+    models: [
+      { role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.4, device: 'gpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
+      { role: 'translation', modelId: 'translategemma-12b-it-q4', sizeOnDiskGb: 6.8, device: 'gpu', loaded: false, lifetime: 'idle', gpuLayers: null, totalLayers: null },
+      { role: 'vision', modelId: 'qwen2.5-vl-3b-instruct-q4', sizeOnDiskGb: 3.0, device: 'cpu', loaded: false, lifetime: 'idle', gpuLayers: null, totalLayers: null },
+      { role: 'reranker', modelId: 'bge-reranker-v2-m3-f16', sizeOnDiskGb: 1.1, device: 'cpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
+      { role: 'embeddings', modelId: 'multilingual-e5-small-q8', sizeOnDiskGb: 0.2, device: 'cpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
+      { role: 'transcriber', modelId: 'whisper-small', sizeOnDiskGb: 0.5, device: 'cpu', loaded: false, lifetime: 'per-use', gpuLayers: null, totalLayers: null }
+    ],
+    totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: false },
     ...over
   }
 }
@@ -250,7 +259,7 @@ describe('PerformanceScreen: the Your-model row', () => {
   it('reads an observed full offload off the log: layers, size with context, On GPU', async () => {
     install(snapshot({ placement: placement({
       observed: observedFull,
-      verdict: { kind: 'gpu', needMb: 6540, estimated: false, budgetMb: 24_822, spillMb: null, gpuLayers: 41, totalLayers: 41 }
+      verdict: { kind: 'gpu', needMb: 6540, estimated: false, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: 41, totalLayers: 41 }
     }) }))
     renderScreen()
     expect(await screen.findByText(/Takes 6\.4 GB with this context\. Fits in graphics memory \(24\.2 GB\): all 41 layers on the GPU\./)).toBeInTheDocument()
@@ -261,11 +270,32 @@ describe('PerformanceScreen: the Your-model row', () => {
     install(snapshot({ placement: placement({
       vramMb: 16_384,
       observed: { ...observedFull, gpuLayers: 30, gpuModelMb: 4000, cpuModelMb: 1900 },
-      verdict: { kind: 'partial', needMb: 6540, estimated: false, budgetMb: 16_384, spillMb: 1900, gpuLayers: 30, totalLayers: 41 }
+      verdict: { kind: 'partial', needMb: 6540, estimated: false, budgetMb: 16_384, freeAtStartMb: null, workingMb: null, spillMb: 1900, gpuLayers: 30, totalLayers: 41 }
     }) }))
     renderScreen()
     expect(await screen.findByText(/Graphics memory holds 16\.0 GB: 30 of 41 layers on the GPU, about 1\.9 GB runs from RAM\. Answers slower\./)).toBeInTheDocument()
     expect(screen.getByText('Partly on GPU')).toBeInTheDocument()
+  })
+
+  it('explains a spill on a card that would hold the model: what was free at start, plus the margin', async () => {
+    install(snapshot({ placement: placement({
+      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, contextTokens: 8192 },
+      observed: { ...observedFull, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66, gpuModelMb: 17_600, cpuModelMb: 1750, gpuKvMb: 512, gpuFreeAtStartMb: 20_300 },
+      verdict: { kind: 'partial', needMb: 19_862, estimated: false, budgetMb: 24_822, freeAtStartMb: 20_300, workingMb: 2860, spillMb: 1750, gpuLayers: 62, totalLayers: 66 }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText(/62 of 66 layers on the GPU, about 1\.7 GB runs from RAM: only 19\.8 GB of the card’s 24\.2 GB was free when the model started, and the runtime keeps a 1 GB safety margin\. Answers slower\. Restart the model once the card is free\./)).toBeInTheDocument()
+  })
+
+  it('explains a spill on a card that WAS free: the working buffers and the fixed margin', async () => {
+    install(snapshot({ placement: placement({
+      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, contextTokens: 8192 },
+      observed: { ...observedFull, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66, gpuModelMb: 17_134, cpuModelMb: 1711, gpuKvMb: 512, gpuFreeAtStartMb: 23_615, gpuComputeMb: 2860 },
+      verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb: 23_615, workingMb: 2860, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText(/The card was free \(23\.1 of 24\.2 GB\), but the runtime also sets aside 2\.8 GB of working buffers and a 1 GB safety margin, and moves whole layers off the card when the sum gets close\. Answers slower\./)).toBeInTheDocument()
+    expect(screen.queryByText(/only 23\.1 GB/)).not.toBeInTheDocument()
   })
 
   it('on Apple Silicon shows one Unified memory tile, no graphics tile, and the unified budget', async () => {
@@ -273,7 +303,7 @@ describe('PerformanceScreen: the Your-model row', () => {
       memoryClass: 'unified',
       vramMb: null,
       ramMb: 49_152,
-      verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 36_864, spillMb: null, gpuLayers: null, totalLayers: null }
+      verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 36_864, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
     }) }))
     renderScreen()
     expect(await screen.findByText('Unified memory')).toBeInTheDocument()
@@ -287,7 +317,7 @@ describe('PerformanceScreen: the Your-model row', () => {
       vramMb: null,
       ramMb: 8192,
       model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 16.5, contextTokens: 8192 },
-      verdict: { kind: 'too_large', needMb: 16_896, estimated: true, budgetMb: 8192, spillMb: null, gpuLayers: null, totalLayers: null }
+      verdict: { kind: 'too_large', needMb: 16_896, estimated: true, budgetMb: 8192, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
     }) }))
     const onNavigate = renderScreen()
     expect(await screen.findByText(/Too large for this computer \(8\.0 GB available\)\. Pick a smaller model\./)).toBeInTheDocument()
@@ -297,10 +327,51 @@ describe('PerformanceScreen: the Your-model row', () => {
   })
 
   it('with no model selected says so and points at AI Model', async () => {
-    install(snapshot({ placement: placement({ model: null, verdict: { kind: 'unknown', needMb: null, estimated: true, budgetMb: 24_822, spillMb: null, gpuLayers: null, totalLayers: null } }) }))
+    install(snapshot({ placement: placement({ model: null, verdict: { kind: 'unknown', needMb: null, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null } }) }))
     renderScreen()
     expect(await screen.findByText(/No model selected yet/)).toBeInTheDocument()
     expect(screen.getByText('Not measured')).toBeInTheDocument()
+  })
+})
+
+describe('PerformanceScreen: models on this computer', () => {
+  it('lists every role with where it runs by design, its lifetime and whether it is loaded now', async () => {
+    install(snapshot())
+    renderScreen()
+    expect(await screen.findByText('Models on this computer')).toBeInTheDocument()
+    expect(screen.getByText('Translation')).toBeInTheDocument()
+    expect(screen.getByText(/Document search \(ranking\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Document search \(index\)/)).toBeInTheDocument()
+    expect(screen.getByText('Voice')).toBeInTheDocument()
+    // Pinned roles say so, in words; the CLI says it runs only while working.
+    expect(screen.getAllByText(/processor, by design/).length).toBe(4)
+    expect(screen.getByText(/runs only while working/)).toBeInTheDocument()
+    expect(screen.getAllByText(/unloads when idle/).length).toBe(2)
+    expect(screen.getAllByText('loaded now').length).toBe(3)
+    expect(screen.getAllByText('not loaded').length).toBe(3)
+  })
+
+  it('sums the card budget and the everything-at-once RAM need, flagging too much', async () => {
+    install(snapshot({ placement: placement({ ramMb: 16_077, totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: false } }) }))
+    renderScreen()
+    expect(await screen.findByText(/Graphics card: chat 5\.4 GB \+ translation 6\.8 GB, of 24\.2 GB\./)).toBeInTheDocument()
+    expect(screen.getByText(/Everything loaded at once needs about 17\.0 GB of 15\.7 GB RAM\./)).toBeInTheDocument()
+    expect(screen.getByText('Too much at once')).toBeInTheDocument()
+  })
+
+  it('warns when chat and translation are both on the card, with the start-order advice', async () => {
+    install(snapshot({ placement: placement({ ramMb: 131_072, totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: true } }) }))
+    renderScreen()
+    expect(await screen.findByText(/Both are on the card right now\. Whichever started second got what was left and runs slower/)).toBeInTheDocument()
+    expect(screen.getByText('Fits')).toBeInTheDocument()
+  })
+
+  it('on a machine without a usable card there is no card line, only the RAM line', async () => {
+    install(snapshot({ placement: placement({ memoryClass: 'cpu', vramMb: null, ramMb: 131_072 }) }))
+    renderScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Everything loaded at once needs about/)).toBeInTheDocument()
   })
 })
 

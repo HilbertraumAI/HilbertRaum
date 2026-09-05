@@ -28,7 +28,15 @@ import { LlamaServer, type LlamaServerOptions } from './sidecar'
  *                                `<think>` tags in `delta.content`
  * The E5 embedder composes `LlamaServer` directly and does not get these.
  */
-export const CHAT_SERVER_ARGS = ['--jinja', '--reasoning-format', 'deepseek'] as const
+/**
+ * `-lv 4` (log verbosity): the pinned build prints its load log (`load_tensors: offloaded X/Y
+ * layers to GPU`, the per-device model and KV buffer sizes) only from verbosity 4 up; the
+ * default 3 prints none of it, which left the placement parser (benchmark.md "Your model")
+ * with nothing to read (verified 2026-09-05 on the shipped binary: 3 → no lines, 4 → the
+ * lines, 5 → also the `--fit` dry-run pass with 0.00 MiB buffers, which would double the
+ * offload line). Load-time lines only; per-request logging is unchanged at 4.
+ */
+export const CHAT_SERVER_ARGS = ['--jinja', '--reasoning-format', 'deepseek', '-lv', '4'] as const
 
 /**
  * Physical-batch cap for the chat sidecar's prompt prefill (RT-1, perf audit 2026-06-18).

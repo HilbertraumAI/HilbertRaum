@@ -2027,6 +2027,20 @@ export interface ModelPlacement {
   cpuKvMb: number | null
   /** Metal's `recommendedMaxWorkingSetSize` in MB when printed: the unified-memory budget. */
   metalMaxWorkingSetMb: number | null
+  /**
+   * Free memory on the primary GPU when the server started (the `device_info` line's
+   * "N MiB free"), or null when not printed. Explains a partial offload on a card that would
+   * hold the model when empty: `--fit` places layers into what was FREE at that moment, minus
+   * its 1 GiB safety margin. Optional: absent on records persisted before the field existed.
+   */
+  gpuFreeAtStartMb?: number | null
+  /**
+   * The working (compute) buffers the runtime reserved on the GPU beside the weights and the
+   * cache (`sched_reserve: <device> compute buffer size`), MiB; null when not printed. Part of
+   * why a fit can leave layers off a card that would hold the weights. Optional: absent on
+   * records persisted before the field existed.
+   */
+  gpuComputeMb?: number | null
   /** The machine the start ran on (`machineKey`), so a travelling drive never shows another computer's placement. */
   machineKey: string | null
   at: string
@@ -2051,8 +2065,33 @@ export interface PlacementVerdict {
   estimated: boolean
   /** The memory the verdict was measured against (VRAM, the Metal budget, or RAM), MiB. */
   budgetMb: number | null
+  /** Free memory on the card when the model started (observed only), MiB; null when unknown. */
+  freeAtStartMb: number | null
+  /** Working buffers the runtime reserved on the GPU (observed only), MiB; null when unknown. */
+  workingMb: number | null
   /** Bytes that landed (or would land) outside the budget, MiB: the RAM spill of a partial offload. */
   spillMb: number | null
+  gpuLayers: number | null
+  totalLayers: number | null
+}
+
+/**
+ * One model the app can hold in memory (benchmark.md "Models on this computer"): what it is,
+ * where it runs by design, and whether it is resident right now.
+ */
+export interface ResidentModelRow {
+  role: 'chat' | 'translation' | 'vision' | 'embeddings' | 'reranker' | 'transcriber'
+  /** The model id for the role, or null when none is installed/selected. */
+  modelId: string | null
+  /** GiB (the manifest's decimal figure converted), or null when unknown. */
+  sizeOnDiskGb: number | null
+  /** 'gpu' = auto-fit onto the graphics card (chat, translation); 'cpu' = pinned to the processor by design. */
+  device: 'gpu' | 'cpu'
+  /** Resident right now. */
+  loaded: boolean
+  /** 'session' = stays until stopped/lock; 'idle' = unloads after an idle window; 'per-use' = runs only while working (whisper CLI). */
+  lifetime: 'session' | 'idle' | 'per-use'
+  /** The translation sidecar's observed layer split when live (null otherwise / for other roles). */
   gpuLayers: number | null
   totalLayers: number | null
 }
@@ -2081,10 +2120,22 @@ export interface PerformanceSnapshot {
     memoryClass: MemoryClass
     ramMb: number | null
     vramMb: number | null
-    /** The active model, or null when none is selected. */
+    /**
+     * The active model, or null when none is selected. `sizeOnDiskGb` is the manifest's
+     * decimal figure converted to GiB (1024³), the unit every other figure on the screen uses
+     * (RAM, VRAM, the observed buffers), so the row never shows two sizes for one thing.
+     */
     model: { id: string; sizeOnDiskGb: number; contextTokens: number } | null
     observed: ModelPlacement | null
     verdict: PlacementVerdict
+    /** Every model the app can hold, chat first (benchmark.md "Models on this computer"). */
+    models: ResidentModelRow[]
+    totals: {
+      /** Everything loadable at once, MiB (the sizes summed); null when nothing is installed. */
+      ramAllMb: number | null
+      /** Chat and translation are both resident on the card right now: the second one got the leftovers. */
+      bothOnCard: boolean
+    }
   }
   observed: {
     lastAnswer: ObservedAnswerSpeed | null

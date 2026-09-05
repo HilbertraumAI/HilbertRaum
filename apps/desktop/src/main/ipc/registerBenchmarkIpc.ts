@@ -7,8 +7,10 @@ import type {
   BenchmarkProgressStep,
   BenchmarkResult,
   GpuDevice,
-  PerformanceSnapshot
+  PerformanceSnapshot,
+  ResidentModelRow
 } from '../../shared/types'
+import type { ModelManifest } from '../../shared/manifest'
 import { detectSystem, runBenchmark, type GpuBenchmarkInput } from '../services/benchmark'
 import { effectiveReadOrPersisted } from './registerModelIpc'
 import {
@@ -232,16 +234,100 @@ function buildPlacement(
   const ramMb = ramGb > 0 ? Math.round(ramGb * 1024) : null
   const vramMb = devices[0]?.totalMb ?? null
   const activeId = settings.activeModelId
+  const manifests: ModelManifest[] = ctx.manifestsDir
+    ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
+    : []
+  // Manifests state decimal GB; the screen's other figures are GiB (RAM, VRAM, the observed
+  // buffers), so convert once here rather than show 19.8 "on disk" beside 18.9 "takes".
+  const gib = (m: ModelManifest | undefined): number | null =>
+    m ? Math.round(((m.sizeOnDiskGb * 1e9) / 1024 ** 3) * 10) / 10 : null
   let model: PerformanceSnapshot['placement']['model'] = null
   if (activeId) {
-    const manifest = ctx.manifestsDir
-      ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest).find((m) => m.id === activeId)
-      : undefined
+    const manifest = manifests.find((m) => m.id === activeId)
     model = {
       id: activeId,
-      sizeOnDiskGb: manifest?.sizeOnDiskGb ?? 0,
+      sizeOnDiskGb: gib(manifest) ?? 0,
       contextTokens: settings.contextTokensOverride ?? manifest?.recommendedContextTokens ?? settings.contextTokens
     }
+  }
+  // Every model the app can hold (benchmark.md "Models on this computer"): chat and translation
+  // auto-fit onto the card (on a machine with one); images, document search and voice are pinned
+  // to the processor by design (contention immunity; vision/runtime.ts, embeddings/e5.ts,
+  // reranker/llama.ts). Liveness comes from each service's own handle; whisper is a CLI that
+  // runs only while transcribing.
+  const byRole = (role: ModelManifest['role']): ModelManifest | undefined => manifests.find((m) => m.role === role)
+  const embeddingsManifest = settings.activeEmbeddingModelId
+    ? (manifests.find((m) => m.id === settings.activeEmbeddingModelId) ?? byRole('embeddings'))
+    : byRole('embeddings')
+  const gpuDevice: ResidentModelRow['device'] = memoryClass === 'cpu' ? 'cpu' : 'gpu'
+  const translation = ctx.translator?.deviceStatus?.() ?? null
+  const allRows: ResidentModelRow[] = [
+    {
+      role: 'chat',
+      modelId: activeId,
+      sizeOnDiskGb: model?.sizeOnDiskGb ?? null,
+      device: gpuDevice,
+      loaded: ctx.runtime.active() != null,
+      lifetime: 'session',
+      gpuLayers: null,
+      totalLayers: null
+    },
+    {
+      role: 'translation',
+      modelId: byRole('translation')?.id ?? null,
+      sizeOnDiskGb: gib(byRole('translation')),
+      device: gpuDevice,
+      loaded: translation?.live ?? false,
+      lifetime: 'idle',
+      gpuLayers: translation?.live ? translation.gpuLayers : null,
+      totalLayers: translation?.live ? translation.totalLayers : null
+    },
+    {
+      role: 'vision',
+      modelId: byRole('vision')?.id ?? null,
+      sizeOnDiskGb: gib(byRole('vision')),
+      device: 'cpu',
+      loaded: ctx.vision?.isLoaded?.() ?? false,
+      lifetime: 'idle',
+      gpuLayers: null,
+      totalLayers: null
+    },
+    {
+      role: 'reranker',
+      modelId: byRole('reranker')?.id ?? null,
+      sizeOnDiskGb: gib(byRole('reranker')),
+      device: 'cpu',
+      loaded: ctx.reranker?.isLoaded?.() ?? false,
+      lifetime: 'session',
+      gpuLayers: null,
+      totalLayers: null
+    },
+    {
+      role: 'embeddings',
+      modelId: embeddingsManifest?.id ?? null,
+      sizeOnDiskGb: gib(embeddingsManifest),
+      device: 'cpu',
+      loaded: ctx.embedder?.isLoaded?.() ?? false,
+      lifetime: 'session',
+      gpuLayers: null,
+      totalLayers: null
+    },
+    {
+      role: 'transcriber',
+      modelId: byRole('transcriber')?.id ?? null,
+      sizeOnDiskGb: gib(byRole('transcriber')),
+      device: 'cpu',
+      loaded: false,
+      lifetime: 'per-use',
+      gpuLayers: null,
+      totalLayers: null
+    }
+  ]
+  const rows = allRows.filter((r) => r.role === 'chat' || r.modelId != null)
+  const sizes = rows.map((r) => r.sizeOnDiskGb).filter((x): x is number => x != null)
+  const totals = {
+    ramAllMb: sizes.length === 0 ? null : Math.round(sizes.reduce((a, b) => a + b, 0) * 1024),
+    bothOnCard: gpuDevice === 'gpu' && rows[0].loaded && (rows.find((r) => r.role === 'translation')?.loaded ?? false)
   }
   // The session latch wins (this start), else the persisted record; either counts only for
   // the active model on THIS machine (an unknown machine on either side is accepted).
@@ -259,7 +345,9 @@ function buildPlacement(
     vramMb,
     model,
     observed,
-    verdict: placementVerdict({ memoryClass, ramMb, vramMb, sizeOnDiskGb: model?.sizeOnDiskGb ?? null, observed })
+    verdict: placementVerdict({ memoryClass, ramMb, vramMb, sizeOnDiskGb: model?.sizeOnDiskGb ?? null, observed }),
+    models: rows,
+    totals
   }
 }
 

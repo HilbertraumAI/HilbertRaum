@@ -9,7 +9,9 @@ import { t, type MessageKey } from '../../src/shared/i18n'
 // (`hyphens: none`) while the `.app-shell` grid column is widened so the longest single-word
 // label in either locale fits on one line at the 12px text floor.
 
-const NAV_KEYS: MessageKey[] = ['nav.home', 'nav.chat', 'nav.documents', 'nav.translate', 'nav.images', 'nav.models', 'nav.skills', 'nav.settings']
+// nav.home is the brand mark's tooltip since the 2026-09-05 rail rework (no Home item); Skills
+// is a Settings tab again, so it has no rail label.
+const NAV_KEYS: MessageKey[] = ['nav.home', 'nav.chat', 'nav.documents', 'nav.translate', 'nav.images', 'nav.models', 'nav.performance', 'nav.settings']
 const STYLES = readFileSync(join(__dirname, '..', '..', 'src', 'renderer', 'styles.css'), 'utf8')
 
 describe('rail nav labels — no mid-word hyphenation (Task A)', () => {

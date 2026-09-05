@@ -162,6 +162,13 @@ describe('placementVerdict', () => {
     expect(cpu.kind).toBe('cpu')
   })
 
+  it('a GPU start whose log carried no offload line is unknown, never "all on the GPU"', () => {
+    const v = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, observed: observed({ gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null, gpuKvMb: null }) })
+    expect(v.kind).toBe('unknown')
+    expect(v.needMb).toBeNull()
+    expect(v.estimated).toBe(false)
+  })
+
   it('estimates from the weights before the first start, with headroom, per memory class', () => {
     const base = { ramMb: 16_384, vramMb: 24_576, sizeOnDiskGb: 5.8, observed: null }
     expect(placementVerdict({ memoryClass: 'discrete', ...base })).toMatchObject({ kind: 'gpu', needMb: 5939, estimated: true })

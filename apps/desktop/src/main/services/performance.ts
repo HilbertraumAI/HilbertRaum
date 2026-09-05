@@ -124,7 +124,8 @@ const sum = (...xs: Array<number | null>): number | null => {
  * The verdict. OBSERVED (the model has started on this machine): the log says where the
  * weights and the context cache landed, so the outcome is read off, not computed: every
  * layer on the GPU is 'gpu' (unified memory reads the same way), fewer is 'partial' with
- * the CPU-side bytes as the spill, a CPU backend is 'cpu'. ESTIMATED (no start yet): the
+ * the CPU-side bytes as the spill, a CPU backend is 'cpu', and a GPU start whose log carried
+ * no offload line is 'unknown' rather than a guess. ESTIMATED (no start yet): the
  * weights alone against the budget with headroom; a discrete card that cannot hold them
  * still runs the model if RAM can take the rest ('partial'), and beyond RAM + VRAM it is
  * 'too_large'. A model larger than RAM on a CPU or unified machine is 'too_large' as well.
@@ -140,14 +141,25 @@ export function placementVerdict(input: {
   const budgetMb = memoryBudgetMb(memoryClass, ramMb, vramMb, observed)
   if (observed) {
     const needMb = sum(observed.gpuModelMb, observed.cpuModelMb, observed.gpuKvMb, observed.cpuKvMb)
-    const base = { needMb, estimated: false, budgetMb, gpuLayers: observed.gpuLayers, totalLayers: observed.totalLayers }
+    const base = {
+      needMb,
+      estimated: false,
+      budgetMb,
+      freeAtStartMb: observed.gpuFreeAtStartMb ?? null,
+      workingMb: observed.gpuComputeMb ?? null,
+      gpuLayers: observed.gpuLayers,
+      totalLayers: observed.totalLayers
+    }
     if (observed.backend === 'cpu') return { ...base, kind: 'cpu', spillMb: null }
-    const allOnGpu =
-      observed.gpuLayers != null && observed.totalLayers != null && observed.gpuLayers >= observed.totalLayers
-    if (allOnGpu || observed.gpuLayers == null) return { ...base, kind: 'gpu', spillMb: null }
+    // A GPU start whose log carried no offload line (a build logging below verbosity 4) is
+    // NOT "all on the GPU": say so, never claim a split the log did not report.
+    if (observed.gpuLayers == null || observed.totalLayers == null) {
+      return { ...base, kind: 'unknown', spillMb: null }
+    }
+    if (observed.gpuLayers >= observed.totalLayers) return { ...base, kind: 'gpu', spillMb: null }
     return { ...base, kind: 'partial', spillMb: sum(observed.cpuModelMb, observed.cpuKvMb) }
   }
-  const est = { estimated: true, budgetMb, gpuLayers: null, totalLayers: null, spillMb: null }
+  const est = { estimated: true, budgetMb, freeAtStartMb: null, workingMb: null, gpuLayers: null, totalLayers: null, spillMb: null }
   if (sizeOnDiskGb == null || sizeOnDiskGb <= 0) return { ...est, kind: 'unknown', needMb: null }
   const needMb = Math.round(sizeOnDiskGb * 1024)
   if (budgetMb == null) return { ...est, kind: 'unknown', needMb }

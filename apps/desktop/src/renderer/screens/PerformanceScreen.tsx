@@ -14,14 +14,17 @@ import type {
   PlacementKind
 } from '@shared/types'
 
-// The Performance screen (design-guidelines §2 "8 primary + 1 utility"; benchmark.md
+// The Performance screen (design-guidelines §2, the machine group; benchmark.md
 // "Performance screen"). Three cards:
 //   1. "This computer": the hardware check's answer as a verdict line + four tiles (speed,
 //      memory, graphics memory, drive) and the one action, "Check again". While a check runs, the steps show
 //      as they land (EVENTS.benchmarkProgress) instead of an opaque "Running…" button.
 //   2. "Observed while you worked": real figures from normal use (the last finished answer,
-//      the last model start, the last full file check): session-only, never persisted.
-//   3. "Other computers": one row per machine the drive has been checked on.
+//      the last model start, the last full file check): session-only, never persisted. Above
+//      the models card on purpose: what the machine actually did outranks what it could hold.
+//   3. "Models on this computer": every model the app can hold, where it runs, loaded or not,
+//      and the two shared budgets (card, RAM).
+//   4. "Other computers": one row per machine the drive has been checked on.
 // The raw table + Copy stays on Settings › Diagnostics (the support surface); this screen
 // answers the user's question ("what can this computer run, how fast") in plain words.
 
@@ -32,6 +35,9 @@ const SLOW_READ_MBPS = 100
 /** Below this much graphics memory the runtime's GPU gate keeps models on the processor
  *  (runtime/gpu.ts GPU_BUMP_MIN_VRAM_MB, 6 GiB). */
 const USABLE_VRAM_MB = 6144
+
+/** A card counts as "free at start" when at most this much was in use (desktop, other apps). */
+const CARD_FREE_SLACK_MB = 1536
 
 /** MiB → GB (1 GiB units, one decimal), the figure the probe reports. */
 function vramGb(mb: number, lang: UiLanguage): string {
@@ -437,11 +443,24 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 ? t('perf.model.gpuEstimate', { budget })
                 : t('perf.model.gpu', { budget, layers: String(v.totalLayers ?? '') })
           break
-        case 'partial':
-          text = v.estimated
-            ? t('perf.model.partialEstimate', { budget, spill: gb(v.spillMb) })
-            : t('perf.model.partial', { budget, gpuLayers: String(v.gpuLayers ?? ''), layers: String(v.totalLayers ?? ''), spill: gb(v.spillMb) })
+        case 'partial': {
+          const split = { budget, gpuLayers: String(v.gpuLayers ?? ''), layers: String(v.totalLayers ?? ''), spill: gb(v.spillMb) }
+          if (v.estimated) {
+            text = t('perf.model.partialEstimate', { budget, spill: gb(v.spillMb) })
+          } else if (v.freeAtStartMb == null) {
+            text = t('perf.model.partial', split)
+          } else if (v.budgetMb != null && v.freeAtStartMb >= v.budgetMb - CARD_FREE_SLACK_MB) {
+            // The card was essentially empty: the fit's own reservations are the reason.
+            const free = gb(v.freeAtStartMb)
+            text =
+              v.workingMb != null
+                ? t('perf.model.partialMargin', { ...split, free, working: gb(v.workingMb) })
+                : t('perf.model.partialMarginNoWorking', { ...split, free })
+          } else {
+            text = t('perf.model.partialFree', { ...split, free: gb(v.freeAtStartMb) })
+          }
           break
+        }
         case 'cpu':
           text = t(v.estimated ? 'perf.model.cpuEstimate' : 'perf.model.cpu', { budget })
           break
@@ -471,6 +490,76 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             <Button size="sm" onClick={() => onNavigate('models')}>
               {t('perf.model.choose')}
             </Button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  /** "Models on this computer": every model the app can hold, where it runs, and whether it is
+   *  resident now, then the two shared budgets (the card, the processor's RAM). */
+  function modelsCard(): JSX.Element {
+    const p = snap?.placement
+    if (!p) return <></>
+    const gbOf = (v: number | null): string => (v == null ? '' : fmt1(v, lang))
+    const chatRow = p.models.find((r) => r.role === 'chat')
+    const trRow = p.models.find((r) => r.role === 'translation')
+    const vram = p.vramMb != null ? fmt1(p.vramMb / 1024, lang) : null
+    const ramGb = p.ramMb != null ? fmt1(p.ramMb / 1024, lang) : null
+    const sumGb = p.totals.ramAllMb != null ? fmt1(p.totals.ramAllMb / 1024, lang) : null
+    const tooMuch = p.totals.ramAllMb != null && p.ramMb != null && p.totals.ramAllMb > p.ramMb
+    return (
+      <div className="card">
+        <h2 style={{ marginBottom: 2 }}>{t('perf.models.title')}</h2>
+        <p className="hint hint-lede">{t('perf.models.hint')}</p>
+        <div className="perf-rows perf-models">
+          {p.models.map((r) => (
+            <div className="perf-row" key={r.role}>
+              <div className="perf-row-main">
+                <strong>{t(`perf.role.${r.role}`)}</strong>
+                {': '}
+                {r.modelId
+                  ? r.sizeOnDiskGb != null
+                    ? t('perf.models.row', { model: modelName(r.modelId, models, t), size: gbOf(r.sizeOnDiskGb) })
+                    : t('perf.models.rowNoSize', { model: modelName(r.modelId, models, t) })
+                  : t('perf.models.none')}
+              </div>
+              <div className="perf-row-sub">
+                {[
+                  t(`perf.models.device.${r.device}`),
+                  t(`perf.models.lifetime.${r.lifetime}`),
+                  r.gpuLayers != null && r.totalLayers != null
+                    ? t('perf.models.split', { gpuLayers: String(r.gpuLayers), layers: String(r.totalLayers) })
+                    : null
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </div>
+              <div className="perf-row-side">
+                {r.modelId && (
+                  <Badge tone={r.loaded ? 'success' : 'neutral'}>
+                    {r.loaded ? t('perf.models.loaded') : t('perf.models.notLoaded')}
+                  </Badge>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="perf-models-summary">
+          {p.memoryClass !== 'cpu' && vram && chatRow && trRow && (
+            <div className="perf-models-summary-line">
+              <span>
+                {t('perf.models.card', { chat: gbOf(chatRow.sizeOnDiskGb), translation: gbOf(trRow.sizeOnDiskGb), vram })}
+                {p.totals.bothOnCard ? ` ${t('perf.models.cardBoth')}` : ''}
+              </span>
+              {p.totals.bothOnCard && <Badge tone="warning">{t('perf.place.partial')}</Badge>}
+            </div>
+          )}
+          {sumGb && ramGb && (
+            <div className="perf-models-summary-line">
+              <span>{t('perf.models.ram', { sum: sumGb, ram: ramGb })}</span>
+              <Badge tone={tooMuch ? 'warning' : 'success'}>{tooMuch ? t('perf.models.ramTooMuch') : t('perf.models.ramOk')}</Badge>
+            </div>
           )}
         </div>
       </div>
@@ -637,6 +726,8 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           </div>
         )}
       </div>
+
+      {modelsCard()}
 
       <div className="card">
         <h2 style={{ marginBottom: 2 }}>{t('perf.others.title')}</h2>

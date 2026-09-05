@@ -22,7 +22,6 @@ export const en = {
   'nav.images': 'Images',
   'nav.models': 'AI Model',
   'nav.performance': 'Performance',
-  'nav.skills': 'Skills',
   'nav.settings': 'Settings',
   'app.lockNow': 'Lock now',
   'app.lockNowTitle': 'Re-encrypt and lock the workspace',
@@ -1212,6 +1211,7 @@ export const en = {
   'settings.tabsAria': 'Settings sections',
   'settings.tab.general': 'General',
   'settings.tab.privacy': 'Privacy & data',
+  'settings.tab.skills': 'Skills',
   'settings.tab.diagnostics': 'Diagnostics (advanced)',
   'settings.loading': 'Loading settings…',
   'settings.saved': 'Saved',
@@ -1764,6 +1764,16 @@ export const en = {
   'perf.model.gpuEstimate': 'Should fit in graphics memory ({budget} GB).',
   'perf.model.partial':
     'Graphics memory holds {budget} GB: {gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. Answers slower.',
+  // With the free figure: why a card that would hold the model still spilled (something else
+  // held part of it at start, plus the runtime's fixed 1 GB safety margin).
+  'perf.model.partialFree':
+    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM: only {free} GB of the card\u2019s {budget} GB was free when the model started, and the runtime keeps a 1 GB safety margin. Answers slower. Restart the model once the card is free.',
+  // The card WAS free: the fit still moved whole layers off because model + cache + working
+  // buffers + its fixed 1 GB margin came within a layer of the free memory.
+  'perf.model.partialMargin':
+    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. The card was free ({free} of {budget} GB), but the runtime also sets aside {working} GB of working buffers and a 1 GB safety margin, and moves whole layers off the card when the sum gets close. Answers slower.',
+  'perf.model.partialMarginNoWorking':
+    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. The card was free ({free} of {budget} GB), but the runtime also sets aside working buffers and a 1 GB safety margin, and moves whole layers off the card when the sum gets close. Answers slower.',
   'perf.model.partialEstimate':
     'Graphics memory holds {budget} GB: about {spill} GB will run from RAM. Answers slower.',
   'perf.model.cpu': 'Runs on the processor from RAM ({budget} GB).',
@@ -1773,6 +1783,32 @@ export const en = {
   'perf.model.tooLarge': 'Too large for this computer ({budget} GB available). Pick a smaller model.',
   'perf.model.unknown': 'Where the model lands is measured on its first start.',
   'perf.model.choose': 'Choose a smaller model',
+  'perf.models.title': 'Models on this computer',
+  'perf.models.hint':
+    'Chat and translation share the graphics card. Images, document search and voice run on the processor by design, so they cost RAM, not graphics memory.',
+  'perf.role.chat': 'Chat',
+  'perf.role.translation': 'Translation',
+  'perf.role.vision': 'Images',
+  'perf.role.reranker': 'Document search (ranking)',
+  'perf.role.embeddings': 'Document search (index)',
+  'perf.role.transcriber': 'Voice',
+  'perf.models.row': '{model} · {size} GB',
+  'perf.models.rowNoSize': '{model}',
+  'perf.models.none': 'No model installed for this.',
+  'perf.models.device.gpu': 'graphics card',
+  'perf.models.device.cpu': 'processor, by design',
+  'perf.models.loaded': 'loaded now',
+  'perf.models.notLoaded': 'not loaded',
+  'perf.models.lifetime.session': 'stays loaded',
+  'perf.models.lifetime.idle': 'unloads when idle',
+  'perf.models.lifetime.per-use': 'runs only while working',
+  'perf.models.split': '{gpuLayers} of {layers} layers on the card',
+  'perf.models.card': 'Graphics card: chat {chat} GB + translation {translation} GB, of {vram} GB.',
+  'perf.models.cardBoth':
+    'Both are on the card right now. Whichever started second got what was left and runs slower; stop and start it once the other has unloaded.',
+  'perf.models.ram': 'Everything loaded at once needs about {sum} GB of {ram} GB RAM.',
+  'perf.models.ramTooMuch': 'Too much at once',
+  'perf.models.ramOk': 'Fits',
   'perf.place.gpu': 'On GPU',
   'perf.place.partial': 'Partly on GPU',
   'perf.place.cpu': 'On processor',

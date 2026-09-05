@@ -530,7 +530,7 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window. `performance:get`
   returns the `PerformanceSnapshot` the Performance screen renders (`current`, `currentMachine`,
   `currentGpu`, `otherMachines`, `running`, `placement: { memoryClass, ramMb, vramMb, model,
-  observed, verdict }`, `observed: { lastAnswer, lastModelLoad, lastChecksum }`; the
+  observed, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }`, `observed: { lastAnswer, lastModelLoad, lastChecksum }`; the
   observed figures are session-only latches, never persisted). Registered in `initBackend()`;
   exposed on preload `api.runBenchmark` / `api.getPerformance` / `api.onBenchmarkProgress`.
 - **Renderer:** `DiagnosticsScreen` Run-benchmark button → RAM / CPU / OS-arch / measured read
