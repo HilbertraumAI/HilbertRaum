@@ -108,20 +108,24 @@ describe('kiwixGet', () => {
   })
 
   // The two 8 MiB legs move real bytes over loopback: ~0.2 s alone, but under a full-suite fork
-  // load on Windows the transfer has taken > 15 s (2026-09-05, one flaky failure in an otherwise
-  // green run), so they carry their own generous budget — the assertion is unchanged.
+  // load on Windows they have failed on their own in otherwise green runs (2026-09-05: one
+  // 15 s timeout, then one `read ECONNRESET` at ~19 s on the at-ceiling leg while the build
+  // and typecheck ran alongside; both pass 10/10 alone every time). The loopback transfer
+  // itself is what the environment starves, so they carry a generous budget AND one retry —
+  // the assertions are unchanged and a genuine ceiling regression fails every attempt.
   const BIG_BODY_BUDGET_MS = 60_000
+  const BIG_BODY_TEST = { timeout: BIG_BODY_BUDGET_MS, retry: 2 }
   it('rejects a body over the 8 MiB ceiling mid-stream (T01, review INFO)', async () => {
     await expect(kiwixGet(port, '/big', { timeoutMs: BIG_BODY_BUDGET_MS })).rejects.toThrow(
       /exceeded 8388608 bytes/
     )
-  }, BIG_BODY_BUDGET_MS)
+  }, BIG_BODY_TEST)
 
   it('accepts a body of exactly 8 MiB (the ceiling is strict-greater)', async () => {
     const res = await kiwixGet(port, '/atceiling', { timeoutMs: BIG_BODY_BUDGET_MS })
     expect(res.status).toBe(200)
     expect(res.body.length).toBe(CEILING_BYTES)
-  }, BIG_BODY_BUDGET_MS)
+  }, BIG_BODY_TEST)
 })
 
 describe('parseSearchXml / searchPack', () => {

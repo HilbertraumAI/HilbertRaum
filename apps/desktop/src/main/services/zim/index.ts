@@ -9,7 +9,7 @@ import { resolveZimDir } from '../drive'
 import type { ExternalRetrievalArm } from '../rag'
 import { collectPackCandidates } from './arm'
 import { fetchArticleHtml } from './client'
-import { zimArticleToSegments } from './html'
+import { zimArticleToSegmentsAsync } from './html'
 import {
   discoverDrivePacks,
   listPacks,
@@ -207,7 +207,9 @@ export class ZimService {
     const urlId = pack.leaf.replace(/\.zim$/i, '')
     const html = await fetchArticleHtml(port, urlId, articlePath)
     if (html === null) return null
-    const article = zimArticleToSegments(html)
+    // Sliced like the ask path (P1b) so a big article cannot stall the main process while
+    // the viewer opens. No signal exists on this IPC yet; P3b adds admission/epoch handling.
+    const article = await zimArticleToSegmentsAsync(html)
     const sections = article.segments.map((s) => {
       let text = s.text
       if (s.sectionLabel && text.startsWith(s.sectionLabel)) {

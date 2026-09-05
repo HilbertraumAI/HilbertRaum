@@ -1,7 +1,18 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { attrValue, decodeEntities, zimArticleToSegments } from '../../src/main/services/zim/html'
+import {
+  DEFAULT_SLICE_WORK,
+  IncrementalTidy,
+  TEXT_PIECE_CHARS,
+  attrValue,
+  decodeEntities,
+  tidyWhole,
+  zimArticleSlices,
+  zimArticleToSegments,
+  zimArticleToSegmentsAsync,
+  type ZimArticle
+} from '../../src/main/services/zim/html'
 
 // ZIM article HTML → segments (knowledge packs). The fixture is a hand-trimmed
 // Parsoid/mwoffliner page carrying every structure the converter must handle:
@@ -425,6 +436,329 @@ describe('zimArticleToSegments — H1 linear scanner', () => {
     expect(text).toContain('tail')
     expect(text).not.toContain('hidden')
     expect(r.truncated).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------------------
+// P1b — cooperative slicing (PR #294 review H1). Linear was not enough: a worst-case 1 MiB
+// article is 55–63 ms of uninterruptible main-thread work on laptop-class hardware, so the
+// scanner is now a generator that yields every `sliceWork` work units. These tests pin the
+// three things that make slicing real rather than cosmetic — the slice boundaries exist, the
+// event loop actually turns between them, and an abort stops the conversion — plus the
+// equivalence that lets the sync API and the perf script keep using the same code.
+// ---------------------------------------------------------------------------------------
+
+/** A ~1 MiB body of `unit`, wrapped in the usual lead/tail so output is checkable. */
+const megabyte = (unit: string): string => pathology(unit, 1_040_000)
+
+/**
+ * Run `fn` with `globalThis.setImmediate` counted (and optionally hooked). The converter
+ * reaches the global at call time, so this observes exactly the macrotask hops it takes
+ * between slices — the public, deterministic way to see slice boundaries from outside.
+ */
+async function withHopCounter<T>(
+  fn: () => Promise<T>,
+  onHop?: (hop: number) => void
+): Promise<{ result?: T; error?: unknown; hops: number }> {
+  const real = globalThis.setImmediate
+  let hops = 0
+  const patched = ((cb: (...a: never[]) => void, ...args: never[]) => {
+    hops += 1
+    onHop?.(hops)
+    return real(cb, ...args)
+  }) as unknown as typeof globalThis.setImmediate
+  globalThis.setImmediate = patched
+  try {
+    const result = await fn()
+    return { result, hops }
+  } catch (error) {
+    return { error, hops }
+  } finally {
+    globalThis.setImmediate = real
+  }
+}
+
+describe('zimArticleToSegments — P1b cooperative slicing', () => {
+  const textOf = (a: ZimArticle): string => a.segments.map((s) => s.text).join('\n')
+
+  it('P1b slices the scan: a small article is one slice, and slices never exceed work / DEFAULT_SLICE_WORK + 1', () => {
+    // A ~30 KB real article — the common case — must not be sliced at all.
+    for (const f of NON_WIKIPEDIA) {
+      const html = readFileSync(join(__dirname, '../fixtures/zim', f.file), 'utf8')
+      expect(zimArticleToSegments(html).slices, f.file).toBe(1)
+    }
+    expect(zimArticleToSegments('<h1>T</h1><p>a short article body</p>').slices).toBe(1)
+    expect(zimArticleToSegments('').slices).toBe(1)
+
+    // The invariant that always holds. There are two slice triggers: `sliceWork` units of
+    // scan work, and one emitted text piece of TEXT_PIECE_CHARS. Every char emitted was
+    // charged to `work` first (by the `find` hop that skipped the run), and the two
+    // constants are equal, so each trigger can fire at most work/sliceWork times:
+    // slices ≤ floor(2 × work / sliceWork) + 1 on ANY input.
+    for (const f of FAMILIES) {
+      const r = zimArticleToSegments(megabyte(f.unit))
+      expect(r.slices, f.what).toBeGreaterThanOrEqual(1)
+      expect(r.slices, f.what).toBeLessThanOrEqual(
+        Math.floor((2 * r.work) / DEFAULT_SLICE_WORK) + 1
+      )
+    }
+
+    // Pure markup, no text to emit: work accrues by stepping and only the scan trigger
+    // fires, so slices track work / sliceWork exactly.
+    const markupOnly = zimArticleToSegments(megabyte('<x '))
+    expect(markupOnly.slices).toBe(Math.ceil(markupOnly.work / DEFAULT_SLICE_WORK))
+    expect(markupOnly.slices).toBeGreaterThan(10)
+
+    // Text-bearing families are sliced by BOTH triggers, so they land between the scan-only
+    // count and the two-trigger bound — never at 1, which is the regression that matters.
+    for (const unit of ['<', '<div>', '<p>some words of body text</p>', '&amp;&#65;&aaaa ']) {
+      const r = zimArticleToSegments(megabyte(unit))
+      expect(r.slices, unit).toBeGreaterThanOrEqual(Math.ceil(r.work / DEFAULT_SLICE_WORK))
+      expect(r.slices, unit).toBeLessThanOrEqual(
+        Math.floor((2 * r.work) / DEFAULT_SLICE_WORK) + 1
+      )
+      expect(r.slices, unit).toBeGreaterThan(10)
+    }
+
+    // A family that charges most of its work in ONE failed lookahead legitimately yields
+    // fewer slices than work / sliceWork: the hop is indivisible (the documented overshoot),
+    // and its content is discarded rather than emitted, so no text piece follows either.
+    const oneHop = zimArticleToSegments(megabyte('<!--c '))
+    expect(oneHop.work).toBeGreaterThan(10 * DEFAULT_SLICE_WORK)
+    expect(oneHop.slices).toBeLessThan(3)
+  })
+
+  it('P1b a tiny sliceWork slices a 30k input many times without changing the result', () => {
+    const html = pathology('<x ', 30_000)
+    let yields = 0
+    const run = zimArticleSlices(html, { sliceWork: 1_000 })
+    let step = run.next()
+    while (!step.done) {
+      yields += 1
+      step = run.next()
+    }
+    expect(yields).toBeGreaterThan(25)
+    expect(step.value.slices).toBe(yields + 1)
+    // Same work, same output, same truncation — only the slicing changed.
+    const whole = zimArticleToSegments(html)
+    expect({ ...step.value, slices: 0 }).toEqual({ ...whole, slices: 0 })
+  })
+
+  it('P1b the event loop runs between slices, and a single-slice article never yields a macrotask', async () => {
+    const multi = await withHopCounter(() => zimArticleToSegmentsAsync(megabyte('<x ')))
+    expect(multi.error).toBeUndefined()
+    expect(multi.result?.slices).toBeGreaterThan(10)
+    // One macrotask hop per slice boundary: the main thread really was handed back.
+    expect(multi.hops).toBe((multi.result?.slices ?? 0) - 1)
+
+    const single = await withHopCounter(() =>
+      zimArticleToSegmentsAsync('<h1>T</h1><p>a short article body</p>')
+    )
+    expect(single.result?.slices).toBe(1)
+    expect(single.hops).toBe(0)
+  })
+
+  it('P1b an abort mid-conversion rejects with the signal reason and runs no further slice', async () => {
+    const html = megabyte('<x ')
+    const full = zimArticleToSegments(html)
+    expect(full.slices).toBeGreaterThan(10)
+
+    const ac = new AbortController()
+    const reason = new Error('the ask was cancelled')
+    // Abort from inside the FIRST inter-slice hop: the next slice boundary must refuse.
+    const aborted = await withHopCounter(
+      () => zimArticleToSegmentsAsync(html, { signal: ac.signal }),
+      (hop) => {
+        if (hop === 1) ac.abort(reason)
+      }
+    )
+    expect(aborted.result).toBeUndefined()
+    expect(aborted.error).toBe(reason)
+    // One slice ran, one hop happened, and then nothing: far short of the full conversion.
+    expect(aborted.hops).toBe(1)
+    expect(aborted.hops).toBeLessThan(full.slices - 1)
+  })
+
+  it('P1b an already-aborted signal rejects before the first slice', async () => {
+    const ac = new AbortController()
+    ac.abort()
+    const run = await withHopCounter(() =>
+      zimArticleToSegmentsAsync(megabyte('<x '), { signal: ac.signal })
+    )
+    expect(run.result).toBeUndefined()
+    expect(run.hops).toBe(0)
+    // No reason given ⇒ the platform's own AbortError; with a reason ⇒ that reason verbatim.
+    expect((run.error as { name?: string })?.name).toBe('AbortError')
+
+    const withReason = new AbortController()
+    const reason = { code: 'cancelled' }
+    withReason.abort(reason)
+    await expect(
+      zimArticleToSegmentsAsync('<p>x</p>', { signal: withReason.signal })
+    ).rejects.toBe(reason)
+  })
+
+  it('P1b the async result is identical to the sync result on the fixtures and pathology families', async () => {
+    for (const f of NON_WIKIPEDIA) {
+      const html = readFileSync(join(__dirname, '../fixtures/zim', f.file), 'utf8')
+      expect(await zimArticleToSegmentsAsync(html), f.file).toEqual(zimArticleToSegments(html))
+    }
+    for (const unit of ['<x ', '<!--c ']) {
+      const html = megabyte(unit)
+      const async_ = await zimArticleToSegmentsAsync(html)
+      const sync = zimArticleToSegments(html)
+      expect(async_, unit).toEqual(sync)
+      // Spelled out: the fields the ask path and the viewer depend on.
+      expect(async_.work, unit).toBe(sync.work)
+      expect(async_.slices, unit).toBe(sync.slices)
+      expect(async_.truncated, unit).toEqual(sync.truncated)
+      expect(textOf(async_), unit).toBe(textOf(sync))
+    }
+  })
+})
+
+describe('IncrementalTidy — the whole-string tidy, applied piece by piece', () => {
+  // A deterministic PRNG: a failure here must be reproducible from the seed alone.
+  const rng = (seed: number): (() => number) => {
+    let s = seed >>> 0
+    return () => {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+      return s / 0x1_0000_0000
+    }
+  }
+  // Letters, every flavour of horizontal and vertical whitespace, the invisibles the first
+  // tidy pass strips, and entity text — the alphabet the rules actually distinguish.
+  const TOKENS = [
+    'a',
+    'bc',
+    'Wort',
+    '9',
+    '.',
+    ',',
+    ' ',
+    '  ',
+    '\t',
+    '\r',
+    '\r\n',
+    '\n',
+    '\n\n',
+    '\n\n\n',
+    '\v',
+    '\f',
+    ' ',
+    ' ',
+    '　',
+    '­',
+    '​',
+    '‌',
+    '‍',
+    '﻿',
+    '&amp;',
+    '&#65;',
+    '&nbsp;',
+    '&aaaa',
+    ' \n ',
+    '\t\n\t'
+  ]
+  const build = (next: () => number): string => {
+    const parts: string[] = []
+    const count = 1 + Math.floor(next() * 40)
+    for (let i = 0; i < count; i += 1) parts.push(TOKENS[Math.floor(next() * TOKENS.length)]!)
+    return parts.join('')
+  }
+  const drive = (whole: string, pieceSizes: number[]): string => {
+    const inc = new IncrementalTidy()
+    let at = 0
+    let k = 0
+    while (at < whole.length) {
+      const size = Math.max(1, pieceSizes[k % pieceSizes.length]!)
+      inc.push(whole.slice(at, at + size))
+      at += size
+      k += 1
+    }
+    return inc.result()
+  }
+
+  it('P1b the incremental tidy equals tidyWhole over the concatenation, for any split', () => {
+    const next = rng(0x9e3779b9)
+    let checked = 0
+    for (let t = 0; t < 400; t += 1) {
+      const whole = build(next)
+      const expected = tidyWhole(whole)
+      // Split size 1 — the worst case for a carry — plus a handful of random sizes and the
+      // degenerate "one piece" case.
+      const splits: number[][] = [
+        [1],
+        [2],
+        [3],
+        [whole.length || 1],
+        [1 + Math.floor(next() * 7)],
+        [1 + Math.floor(next() * 5), 1 + Math.floor(next() * 11), 1]
+      ]
+      for (const sizes of splits) {
+        expect(drive(whole, sizes), `${JSON.stringify(whole)} split ${sizes.join(',')}`).toBe(
+          expected
+        )
+        checked += 1
+      }
+    }
+    expect(checked).toBe(400 * 6)
+  })
+
+  it('P1b the incremental tidy handles the seeded section start and repeated resets', () => {
+    const inc = new IncrementalTidy()
+    // How a heading seeds the next segment: canonical text plus one pending newline.
+    inc.reset('Verfahren', 1)
+    inc.push('   \n  Erster Absatz.  ')
+    inc.push('\n\n\n Zweiter.   \n\t')
+    expect(inc.result()).toBe(tidyWhole('Verfahren\n   \n  Erster Absatz.  \n\n\n Zweiter.   \n\t'))
+    inc.reset()
+    expect(inc.result()).toBe('')
+    inc.push('  \n only \t text \n  ')
+    expect(inc.result()).toBe(tidyWhole('  \n only \t text \n  '))
+  })
+
+  it('P1b a text run longer than TEXT_PIECE_CHARS decodes and tidies exactly as one piece would', () => {
+    // Entities every few chars, so piece boundaries land on and around them constantly.
+    const run = '&amp;a &#65; b&nbsp;&aaaa \n c '.repeat(Math.ceil(1_100_000 / 30))
+    const article = zimArticleToSegments(`<p>${run}</p>`)
+    expect(article.segments).toHaveLength(1)
+    // maxChars cuts the input at 1 MiB; the converted run is everything after the 3-char
+    // <p> prefix up to that cut, decoded and tidied as one string by the oracle.
+    expect(article.segments[0]?.text).toBe(tidyWhole(decodeEntities(run.slice(0, 1_048_576 - 3))))
+    expect(article.truncated).toMatchObject({ reason: 'maxChars' })
+
+    // And an entity placed so that it straddles the piece boundary exactly.
+    for (const offset of [-3, -1, 0, 1, 3]) {
+      const at = TEXT_PIECE_CHARS + offset - '&amp;'.length
+      const raw = `${'x'.repeat(at)}&amp;${'y'.repeat(1000)}`
+      expect(zimArticleToSegments(`<p>${raw}</p>`).segments[0]?.text, `offset ${offset}`).toBe(
+        tidyWhole(decodeEntities(raw))
+      )
+    }
+  })
+
+  it('P1b every segment the converter produces is already in canonical (tidyWhole) form', () => {
+    const inputs: Array<[string, string]> = [
+      ...NON_WIKIPEDIA.map(
+        (f): [string, string] => [
+          f.file,
+          readFileSync(join(__dirname, '../fixtures/zim', f.file), 'utf8')
+        ]
+      ),
+      ['article.html', FIXTURE],
+      ...FAMILIES.map((f): [string, string] => [f.what, megabyte(f.unit)])
+    ]
+    for (const [label, html] of inputs) {
+      const a = zimArticleToSegments(html)
+      for (const s of a.segments) {
+        expect(s.text, `${label}: segment is canonical`).toBe(tidyWhole(s.text))
+        expect(s.text, `${label}: no leading/trailing whitespace`).toBe(s.text.trim())
+        expect(s.text, `${label}: no run of three newlines`).not.toMatch(/\n{3}/)
+        expect(s.text, `${label}: no space beside a newline`).not.toMatch(/ \n| \n|\n /)
+      }
+      if (a.title !== null) expect(a.title, `${label}: title`).toBe(tidyWhole(a.title))
+    }
   })
 })
 

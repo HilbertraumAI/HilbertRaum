@@ -51,7 +51,9 @@ const repoRoot = dirname(__dirname)
 const htmlTsPath = join(repoRoot, 'apps/desktop/src/main/services/zim/html.ts')
 const fixturesDirDefault = join(repoRoot, 'apps/desktop/tests/fixtures/zim')
 
-const { zimArticleToSegments } = await import(pathToFileURL(htmlTsPath).href)
+const { zimArticleToSegments, zimArticleSlices, DEFAULT_SLICE_WORK } = await import(
+  pathToFileURL(htmlTsPath).href
+)
 
 // ---- CLI ----
 const argv = process.argv.slice(2)
@@ -75,6 +77,12 @@ function convert(html) {
 const outputChars = (r) => (r.segments ?? []).reduce((a, s) => a + s.text.length, 0)
 const workCell = (r) => (typeof r.work === 'number' ? r.work : 'n/a')
 const truncatedCell = (r) => (!('truncated' in r) ? 'n/a' : r.truncated === null ? '-' : r.truncated.reason)
+
+/** The p-quantile of xs (p in [0,1]), nearest-rank. */
+function quantile(xs, p) {
+  const sorted = [...xs].sort((a, b) => a - b)
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))]
+}
 
 function median(xs) {
   const s = [...xs].sort((a, b) => a - b)
@@ -258,8 +266,134 @@ function runSectionC() {
   return rows
 }
 
+// ---- Section D: cooperative slicing (P1b) — per-slice main-thread stall ----
+// The D2 remedy is slicing, so the gate that matters is no longer the total but the longest
+// single main-thread stall between two yields. This drives `zimArticleSlices` by hand and
+// times every `next()` call: that is exactly the work the event loop cannot interrupt.
+//
+// EVERY pathology family is measured at 1 MiB, not only Section A's worst by total: the
+// slowest family overall is not the one with the longest single slice. A family whose work
+// arrives in one indivisible hop (one giant text run, one failed lookahead) does most of its
+// work — including `decodeEntities` over that run — inside a single slice, and the final
+// `flush()`/`tidy()` after the loop is likewise one uninterruptible step. Those, not the scan,
+// are what the per-slice gate has to survive, and they are invisible in a totals-only view.
+//
+// The 1 MiB leg always runs at 1 MiB even under --quick (which caps Section A at 60k): a
+// per-slice measurement needs a multi-slice input, and post-scanner one 1 MiB conversion is a
+// few tens of ms, not the minutes the pre-P1 quadratic converter took.
+function sliceTimes(html) {
+  const run = zimArticleSlices(html, {})
+  const times = []
+  let result = null
+  for (;;) {
+    const s = performance.now()
+    const step = run.next()
+    times.push(performance.now() - s)
+    if (step.done) {
+      result = step.value
+      break
+    }
+  }
+  return { times, result }
+}
+
+function sliceRow(label, html, warmups) {
+  for (let i = 0; i < warmups; i++) sliceTimes(html)
+  // Three timed runs. The reported max is the MEDIAN of the three runs' maxima, not the worst
+  // sample: at sub-millisecond slice sizes a single OS interruption or JIT tier-up shows up as
+  // one 3-6x outlier at a random slice index, and the point of this gate is the longest
+  // uninterruptible unit of OUR work, which is present in every run. `worstMaxMs` keeps the
+  // outlier visible — a real indivisible step makes the two columns agree.
+  const runs = [sliceTimes(html), sliceTimes(html), sliceTimes(html)].map(({ times, result }) => ({
+    times,
+    result,
+    maxMs: Math.max(...times),
+    totalMs: times.reduce((a, b) => a + b, 0)
+  }))
+  const byTotal = [...runs].sort((a, b) => a.totalMs - b.totalMs)
+  const { times, result, totalMs } = byTotal[1]
+  const maxima = runs.map((r) => r.maxMs).sort((a, b) => a - b)
+  const pooledTimes = runs.flatMap((r) => r.times)
+  const syncMs = timeWarm(html, 2, 5).ms
+  return {
+    label,
+    chars: html.length,
+    slices: times.length,
+    reportedSlices: result.slices,
+    maxMs: maxima[1],
+    p95Ms: quantile(pooledTimes, 0.95),
+    worstMaxMs: maxima[2],
+    /** Which slice was the worst in the reported run — a fixed index across runs means a real
+     *  indivisible step (a giant leading text run, or a trailing flush); a random one is noise. */
+    maxAt: times.indexOf(Math.max(...times)),
+    medianMs: median(times),
+    totalMs,
+    syncMs,
+    overheadPct: (totalMs / syncMs - 1) * 100
+  }
+}
+
+function runSectionD() {
+  const oneMiB = Object.entries(FAMILY_BODY).map(([family, bodyFn]) =>
+    sliceRow(family, wrapPathology(bodyFn(1_048_576 - WRAP_LEN)), 2)
+  )
+
+  // The batch: 60 conversions driven slice by slice. The event loop turns between every pair
+  // of slices, so the stall is the worst single slice pooled across the whole batch.
+  const { articles, source } = loadBatchArticles()
+  const batch = Array.from({ length: 60 }, (_, i) => articles[i % articles.length])
+  for (const a of batch) sliceTimes(a.html)
+  // Three passes over the batch, reported through the median of their maxima (see sliceRow).
+  const passes = []
+  for (let p = 0; p < 3; p++) {
+    const pooled = []
+    let slices = 0
+    let totalMs = 0
+    for (const a of batch) {
+      const { times } = sliceTimes(a.html)
+      slices += times.length
+      totalMs += times.reduce((x, y) => x + y, 0)
+      pooled.push(...times)
+    }
+    passes.push({ pooled, slices, totalMs, maxMs: Math.max(...pooled) })
+  }
+  const batchMaxima = passes.map((p) => p.maxMs).sort((x, y) => x - y)
+  const byTotal = [...passes].sort((x, y) => x.totalMs - y.totalMs)
+  const { pooled, slices: batchSlices, totalMs: batchTotalMs } = byTotal[1]
+  const batchSyncMs = median(
+    Array.from({ length: 5 }, () => {
+      const s = performance.now()
+      for (const a of batch) convert(a.html)
+      return performance.now() - s
+    })
+  )
+
+  return {
+    sliceWork: DEFAULT_SLICE_WORK,
+    oneMiB,
+    batch: {
+      source,
+      conversions: batch.length,
+      slices: batchSlices,
+      maxMs: batchMaxima[1],
+      p95Ms: quantile(passes.flatMap((p) => p.pooled), 0.95),
+      worstMaxMs: batchMaxima[2],
+      medianMs: median(pooled),
+      totalMs: batchTotalMs,
+      syncMs: batchSyncMs,
+      overheadPct: (batchTotalMs / batchSyncMs - 1) * 100
+    }
+  }
+}
+
 // ---- Verdict ----
-const GATES = { laptop: { oneMiB: 50, batch: 150 }, 'early-warning': { oneMiB: 50 / 3, batch: 150 / 3 } }
+// (iii) is the P1b gate: the longest uninterruptible main-thread stall between two yields.
+// 5 ms on the i7-8550U reference is a third of a 16 ms frame; the early-warning profile is
+// a third of that again, the i9-14900K P-core rule the other two thresholds already use.
+const GATES = {
+  laptop: { oneMiB: 50, batch: 150, slice: 5 },
+  'early-warning': { oneMiB: 50 / 3, batch: 150 / 3, slice: 5 / 3 }
+}
 function verdictLine(label, value, thresholdMs, coldValue) {
   if (value === null || value === undefined) {
     return `${label}: n/a (size not run under --quick)`
@@ -348,14 +482,58 @@ function main() {
     sectionC.map((r) => [r.file, r.chars, r.warmMs.toFixed(2), r.work, r.outputChars, r.truncated])
   )
 
+  console.log('\n== Section D — cooperative slicing (P1b): per-slice main-thread stall ==')
+  const sectionD = runSectionD()
+  console.log(`sliceWork: ${sectionD.sliceWork} work units (every family at 1 MiB)`)
+  printTable(
+    ['family (1 MiB)', 'slices', 'max slice ms', 'p95 slice ms', 'worst of 3', 'worst slice #', 'median slice ms', 'total ms', 'sync ms', 'overhead %'],
+    sectionD.oneMiB.map((r) => [
+      r.label,
+      r.slices,
+      r.maxMs.toFixed(3),
+      r.p95Ms.toFixed(3),
+      r.worstMaxMs.toFixed(3),
+      `${r.maxAt}/${r.slices - 1}`,
+      r.medianMs.toFixed(3),
+      r.totalMs.toFixed(2),
+      r.syncMs.toFixed(2),
+      r.overheadPct.toFixed(1)
+    ])
+  )
+  const worstOneMiB = sectionD.oneMiB.reduce((a, b) => (b.maxMs > a.maxMs ? b : a))
+  console.log(
+    `MAX per-slice (1 MiB): ${worstOneMiB.maxMs.toFixed(3)} ms in ${worstOneMiB.label}` +
+      ` (slice ${worstOneMiB.maxAt} of ${worstOneMiB.slices - 1})`
+  )
+  printTable(
+    ['batch leg', 'conversions', 'slices', 'max slice ms', 'p95 slice ms', 'worst of 3', 'median slice ms', 'total ms', 'sync ms', 'overhead %'],
+    [
+      [
+        sectionD.batch.source,
+        sectionD.batch.conversions,
+        sectionD.batch.slices,
+        sectionD.batch.maxMs.toFixed(3),
+        sectionD.batch.p95Ms.toFixed(3),
+        sectionD.batch.worstMaxMs.toFixed(3),
+        sectionD.batch.medianMs.toFixed(3),
+        sectionD.batch.totalMs.toFixed(2),
+        sectionD.batch.syncMs.toFixed(2),
+        sectionD.batch.overheadPct.toFixed(1)
+      ]
+    ]
+  )
   console.log('\n== Verdict ==')
   const gate = GATES[gateProfile] ?? GATES['early-warning']
   const oneMiB = sectionA.maxes.find((m) => m.size === 1_048_576)
   console.log(verdictLine('(i) 1 MiB worst case', oneMiB?.warmMs ?? null, gate.oneMiB, oneMiB?.coldMs))
   console.log(verdictLine('(ii) 60-conversion batch', sectionB.warmTotalMs, gate.batch, sectionB.coldTotalMs))
+  const worstSliceMs = Math.max(...sectionD.oneMiB.map((r) => r.maxMs), sectionD.batch.maxMs)
+  console.log(verdictLine('(iii) max per-slice stall', worstSliceMs, gate.slice))
+  const worstP95Ms = Math.max(...sectionD.oneMiB.map((r) => r.p95Ms), sectionD.batch.p95Ms)
+  console.log(verdictLine('(iii-p95) per-slice stall, p95', worstP95Ms, gate.slice))
 
   if (jsonPath) {
-    writeFileSync(jsonPath, JSON.stringify({ header, sectionA, sectionB, sectionC }, null, 2))
+    writeFileSync(jsonPath, JSON.stringify({ header, sectionA, sectionB, sectionC, sectionD }, null, 2))
     console.log(`\nJSON written to ${jsonPath}`)
   }
   process.exitCode = 0

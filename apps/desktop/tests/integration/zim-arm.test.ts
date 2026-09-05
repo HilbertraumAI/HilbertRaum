@@ -32,6 +32,18 @@ function articleHtml(title: string, sections: Array<[string, string]>): string {
   return `<!DOCTYPE html><html lang="de"><head><title>${title}</title></head><body><h1>${title}</h1><section data-mw-section-id="0"><p>Einleitung zu ${title}.</p></section>${body}</body></html>`
 }
 
+/** A multi-slice article (P1b): ~600 KB of well-formed sections, comfortably past
+ *  DEFAULT_SLICE_WORK so the converter yields to the event loop several times. */
+function bigArticleHtml(): string {
+  const sections: Array<[string, string]> = Array.from({ length: 400 }, (_, i) => [
+    `Abschnitt ${i}`,
+    `Treibhausgas aus der Landwirtschaft, Absatz ${i}. `.repeat(20)
+  ])
+  return articleHtml('Grossartikel', sections)
+}
+/** Set by the fake sidecar once the big article's body has been written. */
+let bigArticleServed = false
+
 function searchXml(bookUrlId: string, titles: string[]): string {
   const items = titles
     .map(
@@ -52,13 +64,34 @@ beforeAll(async () => {
         res.end('boom')
         return
       }
-      const titles = book === 'pack-climate' ? ['Treibhausgas', 'Treibhauspotential'] : ['Schwefel']
+      const titles =
+        book === 'pack-climate'
+          ? ['Treibhausgas', 'Treibhauspotential']
+          : book === 'pack-big'
+            ? ['Grossartikel']
+            : book === 'pack-mixed'
+              ? ['Kaputt', 'Schwefel']
+              : ['Schwefel']
       res.writeHead(200, { 'content-type': 'application/xml' })
       res.end(searchXml(`book-${book}`, titles))
       return
     }
     if (url.pathname.startsWith('/raw/')) {
       const article = decodeURIComponent(url.pathname.split('/content/')[1] ?? '').replace(/_/g, ' ')
+      // One article whose fetch fails: the arm must skip THAT HIT and keep the others.
+      if (article === 'Kaputt') {
+        res.writeHead(500)
+        res.end('boom')
+        return
+      }
+      // One article big enough to need several converter slices (P1b), so an ask that is
+      // cancelled while it converts has something to be cancelled during.
+      if (article === 'Grossartikel') {
+        res.writeHead(200, { 'content-type': 'text/html' })
+        res.end(bigArticleHtml())
+        bigArticleServed = true
+        return
+      }
       res.writeHead(200, { 'content-type': 'text/html' })
       res.end(
         articleHtml(article, [
@@ -96,6 +129,51 @@ describe('collectPackCandidates', () => {
     expect(first.articlePath).toBe('Treibhausgas')
     // The overlap picker prefers the section naming the query terms.
     expect(first.text).toContain('Landwirtschaft')
+  })
+
+  it('P1b an aborted ask signal propagates out of collectPackCandidates instead of an empty list', async () => {
+    // The ask signal drives BOTH the HTTP fetch and (since P1b) the conversion, and the two
+    // have opposite contracts: a fetch failure skips that hit, a conversion abort must
+    // propagate. To pin the second without racing the first, the signal here is inert to
+    // HTTP — kiwixGet captures `aborted` once at request setup (combineSignals) and then
+    // relies on an 'abort' listener, which this object never fires — while the converter
+    // reads `aborted` afresh at every slice boundary. So the fetch always succeeds and the
+    // conversion always sees the cancellation, with no timing window either way.
+    bigArticleServed = false
+    const reason = new Error('the ask was cancelled')
+    let cancelled = false
+    const signal = {
+      get aborted(): boolean {
+        return cancelled
+      },
+      get reason(): unknown {
+        return reason
+      },
+      onabort: null,
+      throwIfAborted(): void {},
+      addEventListener(): void {},
+      removeEventListener(): void {},
+      dispatchEvent(): boolean {
+        return true
+      }
+    } as unknown as AbortSignal
+    // Cancel as soon as the sidecar has written the big article: the conversion is then the
+    // only work left, and it is the multi-slice one.
+    const cancelWhenServed = (): void => {
+      if (bigArticleServed) cancelled = true
+      else setImmediate(cancelWhenServed)
+    }
+    setImmediate(cancelWhenServed)
+
+    await expect(
+      collectPackCandidates(port, [{ id: 'pack-big', title: 'Gross' }], 'Treibhausgas Landwirtschaft', signal)
+    ).rejects.toBe(reason)
+  })
+
+  it('P1b a per-hit fetch failure is still skipped — only the conversion abort propagates', async () => {
+    const out = await collectPackCandidates(port, [{ id: 'pack-mixed', title: 'Gemischt' }], 'Schwefel Verbrennung')
+    expect(out.length).toBeGreaterThan(0)
+    expect(out.every((c) => c.articlePath === 'Schwefel')).toBe(true)
   })
 
   it('isolates a failing pack — the healthy pack still contributes', async () => {

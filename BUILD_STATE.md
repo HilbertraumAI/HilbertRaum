@@ -29,6 +29,21 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 1b — D2 remedy re-ruled: cooperative
+slicing, not a worker.**_ Why: laptop leg 1 (owner's i7-1185G7, Node 24) failed gate (i) at 55–63 ms vs
+50 while (ii) passed; the scanner loop is the floor, and a worker's blast radius (main rollup entry,
+first-party `asarUnpack`, pool/lifecycle in P3b's boundary, an owner-only packaged-load smoke class)
+was judged larger than slicing's (`html.ts` + two await sites, provable in Vitest). Shipped: the
+`zimArticleSlices` generator (yields every 32 Ki work units and after every 32 Ki-char text piece,
+cut before an `&`), `zimArticleToSegmentsAsync(html, { …, signal? })` (`setImmediate` between slices,
+rejects on abort), the incremental tidy; output byte-identical to P1 on 45 inputs; `arm.ts` propagates
+the ask abort. 14900K P-core: per-slice p95 ≤ 0.99 ms vs the 1.67 ms early-warning third of the 5 ms
+gate (PASS; the raw batch max 2.7 ms is random-index jitter); the 1 MiB sync total rose ≈ 15 % (price
+of divisibility, recorded not gated). Decisive i7-8550U per-slice figure pending (owner, T02-c); the
+worker stays the fallback only. Suite: 411 / 5,866 (5,787 / 78) — the load-flaky `zim-client` 8 MiB
+legs (one `ECONNRESET` under fork load, green alone) now carry one retry; typecheck clean, build green.
+Pointers: `docs/rag-design.md` §17 D-Z3 "P1b", `scripts/zim-html-perf.mjs` Section D.
+
 _2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 1 — parser finding H1 closed: a linear
 forward scanner.**_ `zimArticleToSegments` is now a single-cursor scanner with memoised failed
 lookaheads (every input index examined at most K = 5 times; proof in html.ts's "LINEAR FORWARD
@@ -38,9 +53,11 @@ SCANNER" header) replacing the O(n²) regex tokenizer. New contract: `{ maxChars
 CI oracle is the deterministic `work` counter, never wall-clock; four attributed non-Wikipedia
 fixtures added (T02-a/T02-b implemented). **14900K early warning (plain Node, this machine):**
 P-core 15–16 ms / 29–30 ms vs the ≈17 ms / 50 ms one-third gate (both pass, margin thin on (i));
-E-core fails gate (i). **Owner's i7-1185G7 (Node 24) already FAILS gate (i): 55–63 ms vs 50; gate (ii) 86–107 vs 150 passes** — the i7-8550U cannot do better, so the worker follow-up PR is expected before P4 unless D2's 1 MiB gate is re-ruled; decision pending that and the 8550U figure (T02-c). Baselines
-H2/M3/M8 untouched. Suite: 411 files (388 passed / 23 skipped) / 5,854 tests (5,775 passed / 78 skipped), +13 over P0; a first run failed only the load-sensitive `zim-client` 8 MiB over-ceiling test (15 s timeout under fork load, green alone) — hardened with its own 60 s budget in this PR, re-run green; typecheck clean, build green. Pointers: `docs/rag-design.md`
-§17 D-Z3, `scripts/zim-html-perf.mjs`.
+E-core fails gate (i). **Owner's i7-1185G7 (Node 24) already FAILS gate (i): 55–63 ms vs 50; gate (ii)
+86–107 vs 150 passes** — superseded the same evening by the D2 re-ruling (Phase 1b entry above).
+Baselines H2/M3/M8 untouched. Suite: 411 / 5,854 (5,775 / 78), +13 over P0; a first run failed only
+the load-sensitive `zim-client` 8 MiB over-ceiling test (green alone) — given a 60 s budget, re-run
+green; typecheck clean, build green. Pointers: `docs/rag-design.md` §17 D-Z3, `scripts/zim-html-perf.mjs`.
 
 _2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 0 — integration baseline on the PR's own
 branch `feat/zim-knowledge-packs`.**_ Master `bfdb514a` merged IN (merge commit `3b321571`, no rewrite;
@@ -687,9 +704,9 @@ open round's item stays the last block of §5.)
     (e) Observation for item 1b's matrix, measured 2026-09-04 on the i7-8550U + UHD 620:
     GPU auto-offload gains nothing on pp (56 vs 57 t/s) and LOSES 45 percent on tg
     (11 vs 19.6) — on this iGPU class `gpuMode: off` would be the better default.
-    (f) **D2 parser hardware gate** — 14900K early warning recorded 2026-09-05 (P1); the
-    decisive i7-8550U run is pending; fail either gate ⇒ the worker follow-up PR before P4
-    (§5.1 of the wave plan; rag-design D-Z3).
+    (f) **D2 parser hardware gate, re-ruled (P1b)** — gate is now the per-slice main-thread
+    stall (≤5 ms on the i7-8550U); cooperative slicing shipped, 14900K P-core p95 passes
+    early warning; the decisive i7-8550U per-slice figure is still pending (owner, T02-c).
 
 ## 6. Open issues / risks
 

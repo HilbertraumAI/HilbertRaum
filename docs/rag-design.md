@@ -2152,7 +2152,8 @@ offline article viewer. Files are registered in place, never copied.
   budget takes precedence over the char cap), but the segments produced before the cut are
   always returned, so a partial article still contributes retrieval chunks (`arm.ts`
   unchanged) and the viewer's `PackArticle.partial` flag tells the user only the first part
-  was shown instead of presenting a partial extraction as the whole article.
+  was shown instead of presenting a partial extraction as the whole article. The contract is
+  identical on the async form, `zimArticleToSegmentsAsync` (P1b), that the ask path now calls.
 
   The **2026-08-22 end-to-end spike figure** (search + fetch + convert, warm, this
   machine): 82–165 ms, inside the ≤300 ms acceptance budget before rerank — kept as a
@@ -2215,6 +2216,53 @@ offline article viewer. Files are registered in place, never copied.
   is expected before P4 unless the owner re-rules the 1 MiB worst-case gate (e.g. a 512 KiB
   `maxChars` — the largest observed maxi article is ~0.5 MB — or accepting a one-off 60–90 ms
   stall for a pathological 1 MiB article). Decision: pending the i7-8550U figure and that ruling.
+
+  **P1b — cooperative slicing (re-ruled remedy, 2026-09-05).** D2's remedy is re-ruled from a
+  worker to cooperative slicing: a worker's blast radius (a new main rollup entry, first-party
+  `asarUnpack`, a pool/lifecycle boundary, an owner-only packaged-load smoke class) was judged
+  larger than slicing's, which is `html.ts` plus two `await` call sites, fully provable in
+  Vitest — mechanism in that file's "COOPERATIVE SLICING (P1b)" header comment. `zimArticleSlices`
+  is now the one implementation: a generator yielding every `DEFAULT_SLICE_WORK` work units
+  (32,768, halved from 65,536 after measurement) and, independently, after every emitted
+  `TEXT_PIECE_CHARS`-sized text piece (the cut is backed up to the last `&` so no entity
+  straddles it). `zimArticleToSegments` drains it unchanged; the new
+  `zimArticleToSegmentsAsync(html, { …, signal? })` awaits `setImmediate` between slices (the
+  event loop's check phase, so IPC and socket reads get through — a microtask would not) and
+  checks the caller's `AbortSignal` before every slice, rejecting with `signal.reason` and
+  running no further slice — an ordinary ~30 KB article (one slice) still resolves in the same
+  tick.
+
+  Gate (iii) is the longest uninterruptible main-thread stall between two yields, ruled ≤5 ms
+  on the i7-8550U reference (early-warning third ≈1.67 ms on a 14900K P-core); the (i)/(ii)
+  totals stay recorded as CPU/latency facts, not gated. It is read on the p95 across pooled
+  slices AND the median-of-three run max (each family/batch timed three runs; `max` = median
+  of the three runs' maxima): a lone max more than ~3× the p95 at a random slice index is
+  scheduling jitter, not real indivisible work — a genuine one would show a FIXED worst-slice
+  index across runs.
+
+  14900K P-core Section D (both pinned runs, every family at 1 MiB):
+
+  | family | slices | max ms | p95 ms | median ms |
+  |---|---|---|---|---|
+  | unclosed-lt | 43 | 0.57–0.64 | 0.47–0.51 | 0.41–0.42 |
+  | unmatched-quote | 32 | 0.16–0.18 | 0.08–0.09 | 0.07 |
+  | unterminated-comment | 1 | 0.02 | 0.02 | 0.02 |
+  | unterminated-script | 1 | 0.02 | 0.02 | 0.02 |
+  | repeated-lt | 63 | 0.64–0.82 | 0.56–0.57 | 0.47–0.48 |
+  | entity-heavy | 33 | 0.52–0.60 | 0.50–0.56 | 0.44 |
+  | deep-nesting | 32 | 0.75–0.99 | 0.72 | 0.61–0.63 |
+  | wellformed | 32 | 0.65–0.86 | 0.71–0.99 | 0.52–0.54 |
+  | batch (60 conversions) | 60 | 2.71–2.77 | 0.53–0.58 | 0.49–0.50 |
+
+  **Verdict.** (iii) PASSES on p95 and on the median-of-three max for every 1 MiB family. The
+  script's raw verdict line still reads FAIL 1.63–1.66×: that figure is the batch leg's max, a
+  single ~30 KB article (one slice, median 0.5 ms) taking 2.7 ms at a random position — per the
+  reading rule above that is scheduling jitter, not the verdict. The two steps that were genuinely
+  indivisible before the follow-up (~13 ms of `decodeEntities` over one huge text run at a fixed
+  slice 0, ~2.2 ms of trailing whole-buffer tidy at the fixed last slice) now cost ~0.6–0.7 ms and
+  no longer sit at a fixed index. The sync 1 MiB totals rose ≈15% over P1 (the price of
+  divisibility: generator driving, text pieces, incremental tidy) — recorded as a CPU/latency
+  fact under the re-ruled gate, not hidden. Decisive i7-8550U per-slice figure: pending (owner).
 - **D-Z4 — one seam in `retrieve()`.** An optional `ExternalRetrievalArm` (parameter 8)
   appends candidates between the chunk-row join and the rerank, so rerank, dedup, token
   budget and `[Sn]` labelling treat archive and document chunks uniformly. No reranker →
@@ -2253,7 +2301,8 @@ offline article viewer. Files are registered in place, never copied.
 ### Module map
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
-budget and `truncated` signal — PR #294 review H1), `client.ts` (node:http + search/
+budget and `truncated` signal — PR #294 review H1; cooperatively sliced, async on the ask
+path — P1b), `client.ts` (node:http + search/
 library XML parsing), `tools.ts` (binary discovery `runtime/kiwix-tools/<os>/`, dev-only
 `HILBERTRAUM_KIWIX_BIN`, kiwix-manage runner), `serve.ts` (KiwixServer), `packs.ts`
 (registry over `knowledge_packs`), `arm.ts` (candidate production), `index.ts`
@@ -2267,7 +2316,9 @@ runs four attributed synthetic non-Wikipedia fixtures under `tests/fixtures/zim/
 `zim-arm/zim-ipc` (integration), `KnowledgePacks.test.tsx` (renderer, incl. the
 `partial`-hint case); real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
 `scripts/zim-html-perf.mjs` prints the D2 measurement table outside Vitest/Electron
-(`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`).
+(`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`), including
+Section D's per-slice cooperative-slicing gate (P1b) — each `--gate` profile now also
+carries a `slice` threshold alongside `oneMiB`/`batch`.
 
 ### Deliberately not built (MVP cut; §5 item 21 tracks the follow-ups)
 

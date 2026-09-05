@@ -1,7 +1,7 @@
 import type { RetrievedChunk } from '../rag'
 import { CHUNK_DEFAULTS, chunkSegments } from '../ingestion/chunker'
 import { fetchArticleHtml, searchPack } from './client'
-import { zimArticleToSegments } from './html'
+import { zimArticleToSegmentsAsync } from './html'
 
 // Query-time candidate production for the ZIM retrieval arm (knowledge packs).
 // Per pack: Xapian full-text search (the archive's own index — the keyword stage we
@@ -57,7 +57,11 @@ export async function collectPackCandidates(
         continue
       }
       if (!html) continue
-      const article = zimArticleToSegments(html)
+      // Cooperatively sliced (P1b): the main thread is handed back between slices and the
+      // ask signal is honoured at every slice boundary. Deliberately OUTSIDE the per-hit
+      // catch above — a fetch failure skips one article, but an abort must propagate out of
+      // collectPackCandidates rather than be swallowed into an empty candidate list.
+      const article = await zimArticleToSegmentsAsync(html, { signal })
       const chunks = chunkSegments(article.segments, CHUNK_DEFAULTS)
       const scored = chunks
         .map((c, i) => ({ c, i, overlap: overlapScore(c.text, terms) }))

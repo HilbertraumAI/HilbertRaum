@@ -2409,5 +2409,7 @@ reports and phase plans were working papers; their full text lives in git histor
   converted only up to the cut: retrieval uses the text extracted before it, and the
   article viewer shows a hint that only the first part of the article could be
   displayed rather than presenting the partial extraction as the whole article. The
-  parser's slow-hardware gate (the i7-8550U reference laptop) is still to be recorded —
-  see [`rag-design.md`](rag-design.md) §17 D-Z3.
+  parser no longer stalls the main process for a whole article (P1b: the conversion is
+  cooperatively sliced and abortable on the ask path); the slow-hardware per-slice figure
+  (the i7-8550U reference laptop) is still to be recorded — see
+  [`rag-design.md`](rag-design.md) §17 D-Z3.
