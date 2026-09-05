@@ -2380,3 +2380,55 @@ _**History.** Many bullets carry short finding ids (`D77`, `SKA-24`, `C1`, `audi
 resolve through the design records and their §-anchor legends in
 [`architecture.md`](architecture.md) / [`rag-design.md`](rag-design.md). The underlying audit
 reports and phase plans were working papers; their full text lives in git history._
+
+## Knowledge packs — ZIM archives ([`rag-design.md`](rag-design.md) §17)
+
+- **kiwix-tools is not provisioned yet.** The sidecar binaries (`kiwix-serve`,
+  `kiwix-manage`) are NOT in runtime-sources.yaml, the engine downloader, DRIVE-NOTICES,
+  or the drive scripts — they must be placed manually under `runtime/kiwix-tools/<os>/` — unzip the WHOLE
+  kiwix-tools archive there (the Windows build needs its ICU DLLs beside the exes)
+  (download kiwix-tools from kiwix.org; §5 item 21 tracks the provisioning wave). Until
+  then the packs panel says so and the feature stays dormant.
+- **Packs ride the RELEVANCE ask path only.** Whole-document reads, compares, and
+  doc-task flows are document reads by definition and never consult packs.
+- **A pure-archive answer records no coverage fraction** (there is no document corpus to
+  be “N of M sections” over). **Evidence review resolves archive citations as honest
+  `unresolved` by construction**, not by matching-title accident: the resolver and its
+  read-time whitelist both check `sourceKind` before any document-id/title branch runs
+  (PR #294 review H2, #301). There is no full-archive content hash, so a review can
+  never verify or date an archive article — freshness reports it "cannot be verified",
+  never "changed" — and that stays a limitation, not a defect. The review, its HTML/PDF
+  evidence pack and the Markdown transcript export still record the pack id and article
+  path even though identity is unresolved. A review row has no "Open article" yet — there
+  is no workspace document to open, and the article viewer bridge needs a later wave's
+  locator/serving-map contract. Evidence reviews created on a pre-release knowledge-pack
+  build that cite an archive may carry a wrongly resolved document identity and must be
+  re-run; the app never rewrites a frozen review.
+- **The article viewer derives the serving URL id from the pack’s filename stem** (the
+  kiwix-serve `--library` rule, verified on kiwix-tools 3.8.1). Retrieval itself parses
+  ids from search results and does not depend on the rule; a kiwix naming change would
+  surface as a viewer 404 (“not available right now”), not a wrong article.
+- **Every enabled in-scope pack is searched for every ask**, regardless of language —
+  a German question against an English pack simply scores poorly. The reranker sorts it
+  out when present; without one, expect occasional off-language chunks.
+- **Content licensing is the user’s call.** Registration accepts any readable ZIM;
+  nothing checks the archive’s license terms (relevant only for redistribution, not
+  for private use).
+- **Very large or malformed articles convert partially.** An article whose markup
+  exceeds 1 MiB, whose scan exhausts the work budget, or whose HTML is unterminated is
+  converted only up to the cut: retrieval uses the text extracted before it, and the
+  article viewer shows a hint that only the first part of the article could be
+  displayed rather than presenting the partial extraction as the whole article. The
+  parser no longer stalls the main process for a whole article (P1b: the conversion is
+  cooperatively sliced and abortable on the ask path); the slow-hardware per-slice figure
+  (the i7-8550U reference laptop) is still to be recorded — see
+  [`rag-design.md`](rag-design.md) §17 D-Z3.
+- **A kiwix-serve or kiwix-manage child that cannot be confirmed stopped within the
+  teardown bound** (SIGTERM → SIGKILL → a bounded wait — ≈5 s total for kiwix-serve,
+  ≈3 s for kiwix-manage) is reported as cleanup NOT CONFIRMED, never "complete": its
+  PID stays on the crash-reap list and its `library.<n>.xml` build (or, for
+  registration, its throwaway metadata temp directory) is left in the OS temp dir
+  until the crash reaper or a later startup sweep (P3b) removes it. Separately,
+  **kiwix-manage on a legacy hashless install marker runs with a logged warning
+  instead of integrity verification** (residual R-1) — retained until the
+  provisioning wave above proves both binaries' verification and repair.

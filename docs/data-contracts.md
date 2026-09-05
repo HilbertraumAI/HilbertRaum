@@ -877,7 +877,15 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   ('supported'|'partly_supported'|'not_supported'|'follow_up'|'not_reviewed'|'not_applicable'),
   `EvidenceReviewStatus` ('draft'|'ready'), `AnswerBlockKind`, `EvidenceSourceSnapshot`
   (spec §18.2 **plus** `identity: 'resolved'|'unresolved'` — the plan-§1.2 honest legacy
-  state; `availabilityAtCreation` is nullable and reported only for resolved identities),
+  state; `availabilityAtCreation` is nullable and reported only for resolved identities;
+  **P2 (ZIM wave #301, PR #294 review H2/M11, 2026-09-05)** added four ADDITIVE fields —
+  `sourceKind: 'document' | 'archive'` (always written; absent/`'document'` = the classic
+  document source), `archiveTitle`, `packId` (`knowledge_packs.id`, the pack's UUID),
+  `articlePath` (archive sources only, else null) — no new storage column,
+  `SCHEMA_VERSION` unchanged; an archive source is forced `identity:'unresolved'` with
+  null `documentId`/`documentSha256`/`mimeType`/`availabilityAtCreation` before either
+  resolver branch runs, and `packId`/`articlePath` are the source's stable locator
+  carried through every export),
   `EvidenceGenerationSnapshot` (spec §18.3 but **every field optional** per plan §1.3 — absent
   renders "Unavailable", never invented), `EvidenceLink`, `EvidenceReviewItem`,
   `EvidenceReadyGate`, `EvidenceReview`, `EvidenceReviewSummary`, `EvidenceReviewDetail`,
@@ -1495,3 +1503,52 @@ download R2; npm-workspace dep hoisting may need a tweak) and a live USB-drive r
 sidecar binaries (not in repo). The selectors fall back to mocks when those files are absent, so dev +
 CI are unaffected.
 
+
+---
+
+### Knowledge packs (ZIM wave live — rag-design §17)
+
+**Channels (`packs:` namespace, registerZimIpc.ts; all requireUnlocked except `packs:status`):**
+`packs:list` (drive `zim/` auto-discovery first → `KnowledgePack[]`) · `packs:add`
+(native picker + registration in ONE main-side handler — no renderer-supplied archive
+path exists on this surface; `KnowledgePack[] | null`) · `packs:remove` (tombstone,
+file untouched) · `packs:setEnabled` · `packs:status` (`{ toolsInstalled }`) ·
+`packs:getArticle` (`PackArticle | null` — plain sectioned TEXT, never HTML;
+`PackArticle` adds `partial: boolean`, true when `html.ts`'s converter stopped short of
+the whole article — input cap, work budget or unterminated markup — Phase 1, PR #294
+review H1; the modal shows a hint line instead of presenting the partial text as
+complete).
+
+**Shapes (shared/types.ts):** `KnowledgePack` (id = archive UUID, title, language,
+zimDate, articleCount, sizeBytes, leaf, enabled, available, addedAt);
+`DocumentScope.packIds?: string[]` / `RetrievalScope.packIds?` (additive — a pack-less
+scope serializes byte-identically; consumed only by the ZIM retrieval arm, never by
+`buildScopeFilter`); `Citation` additive archive fields (`sourceKind: 'archive'`,
+`packId`, `archiveTitle`, `articlePath`; archive citations carry NO documentId/chunkId).
+Evidence review snapshots persist the same four fields as `sourceKind`/`archiveTitle`/
+`packId`/`articlePath` in `source_snapshot_json` (P2, review H2/M11, #301): an archive
+citation is always `identity:'unresolved'` on write and read, and the pack id + article
+path survive into the HTML/PDF evidence pack and the Markdown transcript export even
+though identity is never resolved.
+
+**Table `knowledge_packs`** (db.ts SCHEMA): id PK (ZIM UUID) · title/description/
+language/zim_date/article_count/media_count/size_bytes · leaf + recorded_path
+(stored-copy resolution: `<drive>/zim/<leaf>` first) · enabled 0/1 · unavailable_at
+(file vanished — mark, never delete) · removed_at (tombstone so drive auto-discovery
+cannot resurrect a removed pack) · added_at/updated_at. No FK from conversations —
+a removed pack degrades to “not retrieved from” (the skills C3 rule).
+
+**Audit:** `knowledge_pack_added` ({ packId, sizeBytes, articleCount }) ·
+`knowledge_pack_removed` ({ packId }). Pack titles/filenames are CONTENT — never in
+`runtime_events` (sentinel-tested in zim-ipc.test.ts).
+
+**Service publication (P3a):** `ZimService` (`services/zim/index.ts`) publishes one
+tuple per pack revision, `{ revision, build, generation, port, libraryXmlPath }` (or,
+when nothing is enabled/available, `{ revision, kind: 'empty' }` — no child, no XML).
+`revision`, `build` and `generation` are monotonic counters owned by the service for
+the life of the process; `generation` is ONE allocator shared by library builds and
+kiwix-serve children, so a rebuild and a child spawn (including a bind-race retry or a
+crash restart) never reuse a value. Library files are named `library.<build>.xml`
+under the service's temp library directory. `ZimService.serverState(): { revision,
+build, generation, port, alive } | null` is the read P5's request guard consumes
+before and after a request; no IPC channel changed.

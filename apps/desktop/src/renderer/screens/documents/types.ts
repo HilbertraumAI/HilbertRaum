@@ -13,6 +13,8 @@ export type DocSection =
   | { kind: 'library' | 'temporary' | 'generated' | 'archived' | 'all' }
   | { kind: 'recent' | 'unfiled' | 'needsReindex' | 'large' | 'failed' | 'audio' | 'ocr' }
   | { kind: 'project'; id: string }
+  // Knowledge packs (ZIM wave): the management panel replaces the document list.
+  | { kind: 'packs' }
 
 /** The rare, diagnostic smart views — folded behind the Views "More" disclosure so the
  *  common filters stay visible and empty diagnostics don't sit on screen. */

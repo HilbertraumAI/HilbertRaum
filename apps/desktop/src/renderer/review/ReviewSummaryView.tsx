@@ -58,7 +58,12 @@ export function ReviewSummaryView({
   for (const item of detail.items) {
     counts.set(item.decision, (counts.get(item.decision) ?? 0) + 1)
   }
-  const unresolved = detail.sources.filter((s) => s.identity === 'unresolved').length
+  // M11: an archive source is unresolved by construction (H2) and gets its OWN count/line
+  // below — excluded here so the two warnings never both fire for one source.
+  const unresolved = detail.sources.filter(
+    (s) => s.identity === 'unresolved' && s.sourceKind !== 'archive'
+  ).length
+  const archiveCount = detail.sources.filter((s) => s.sourceKind === 'archive').length
   const missing = detail.sources.filter((s) => s.availabilityAtCreation === 'missing').length
   // P4 (spec §10.4 "Missing or changed source documents"): at-open drift counts. New
   // deletions only — creation-missing sources have their own line above.
@@ -132,6 +137,11 @@ export function ReviewSummaryView({
         {unresolved > 0 && (
           <p className="hint">
             <span aria-hidden="true">?</span> {tCount('review.summary.sourcesUnresolved', unresolved)}
+          </p>
+        )}
+        {archiveCount > 0 && (
+          <p className="hint">
+            <span aria-hidden="true">?</span> {tCount('review.summary.sourcesArchive', archiveCount)}
           </p>
         )}
         {missing > 0 && (

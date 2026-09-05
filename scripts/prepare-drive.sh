@@ -90,6 +90,7 @@ DIRS=(
   runtime/whisper.cpp/mac
   runtime/whisper.cpp/linux
   ocr
+  zim
   logs
   config
   docs

@@ -47,6 +47,7 @@ import { en, type MessageKey, type UiLanguage } from '@shared/i18n'
 // keep resolving against `DocumentsScreen`.
 import { DocRow } from './documents/DocRow'
 import { SectionRail } from './documents/SectionRail'
+import { PacksPanel } from './documents/PacksPanel'
 import { PreviewModal } from './documents/PreviewModal'
 import {
   ACTIVE_STATUSES,
@@ -1171,6 +1172,13 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         </button>
       )}
 
+      {section.kind === 'packs' ? (
+        /* Knowledge packs (ZIM wave): the management panel replaces the document toolbar +
+           list wholesale (a pack is not a document; none of the doc affordances apply). */
+        <PacksPanel />
+      ) : (
+        <>
+
       {/* Toolbar: Import files (Primary) + Import folder (Secondary) carry the screen;
           Refresh is a quiet icon button (§6/Task 7). Multi-document operations live in the
           selection toolbar below, not here, so the toolbar stays uncluttered. When the list
@@ -1389,6 +1397,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         visibleDocs.map((d) => renderRow(d))
       )}
       </div>{/* /doc-list */}
+      </>
+      )}
         </div>
       </div>{/* /docs-layout */}
 

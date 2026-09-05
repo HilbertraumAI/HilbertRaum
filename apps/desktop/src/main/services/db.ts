@@ -583,6 +583,39 @@ CREATE TABLE IF NOT EXISTS evidence_exports (
   FOREIGN KEY (review_id) REFERENCES evidence_reviews(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_exports_review ON evidence_exports(review_id);
+
+-- Knowledge packs (ZIM wave): registered external ZIM archives the chat can retrieve from
+-- via the kiwix-serve sidecar. Like skills, a derived index over on-disk files — the id
+-- is the archive's own UUID (read by kiwix-manage at registration), so a re-registration
+-- of the same archive is an upsert and the id survives a DB rebuild. The FILE is never
+-- copied (multi-GB, public, read-only — the deliberate exception to the stored-copy rule,
+-- rag-design ZIM record): leaf + recorded_path follow the stored-copy resolution shape
+-- (drive-relative zim/<leaf> first, recorded path second; ingestion/stored-copy.ts
+-- precedent), and a missing file marks unavailable_at — never a blind delete. Metadata
+-- columns are pack-level facts from the archive header (title/description/language/counts):
+-- they name what the user reads, so they are CONTENT for audit/export purposes (ids/counts
+-- only in runtime_events) but plain rows here inside the encrypted workspace DB.
+-- No FK from conversations into this table: a chat's scope stores pack ids in
+-- scope_v2_json and a removed pack degrades to "not retrieved from" (the skills C3 rule).
+CREATE TABLE IF NOT EXISTS knowledge_packs (
+  id             TEXT PRIMARY KEY,          -- ZIM archive UUID (natural key; stable across re-adds/rebuilds)
+  title          TEXT NOT NULL,
+  description    TEXT,
+  language       TEXT,                      -- archive-declared ISO code ("deu", "eng")
+  zim_date       TEXT,                      -- archive build date YYYY-MM-DD
+  article_count  INTEGER,
+  media_count    INTEGER,
+  size_bytes     INTEGER,
+  leaf           TEXT NOT NULL,             -- file BASENAME (portable resolution: <drive>/zim/<leaf> first)
+  recorded_path  TEXT NOT NULL,             -- path as registered (fallback resolution; may be absolute)
+  enabled        INTEGER NOT NULL,          -- 0/1 (a disabled pack stays registered but is never queried)
+  unavailable_at TEXT,                      -- NULL = file present at last look; ISO stamp = vanished (never blind-deleted)
+  removed_at     TEXT,                      -- tombstone: user removed the registration. The ROW stays so
+                                            -- drive auto-discovery (keyed by leaf) cannot resurrect a
+                                            -- deliberately removed pack; an explicit re-add clears it.
+  added_at       TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT

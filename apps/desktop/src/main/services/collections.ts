@@ -476,9 +476,19 @@ export function parseDocumentScope(json: string | null): DocumentScope | null {
     const documentIds = Array.isArray(o.documentIds)
       ? o.documentIds.filter((x): x is string => typeof x === 'string' && x.length > 0)
       : []
+    // Knowledge packs (ZIM wave): additive, tolerant like the id arrays — a pre-wave row
+    // parses to no packs, and junk entries are dropped, never fatal.
+    const packIds = Array.isArray(o.packIds)
+      ? o.packIds.filter((x): x is string => typeof x === 'string' && x.length > 0)
+      : []
     // A present-but-empty scope is the explicit "All documents" choice — keep it distinct
     // from an absent (NULL) scope, which falls through to the Library default.
-    return { collectionIds, documentIds, includeArchived: o.includeArchived === true }
+    return {
+      collectionIds,
+      documentIds,
+      includeArchived: o.includeArchived === true,
+      ...(packIds.length > 0 ? { packIds } : {})
+    }
   } catch {
     return null
   }
@@ -562,6 +572,10 @@ export function resolveScope(db: Db, conversationId: string): RetrievalScope {
     collectionIds: collectionIds.length > 0 ? collectionIds : null,
     documentIds: documentIds.length > 0 ? documentIds : null,
     includeArchived,
-    hasExplicitDocSelection
+    hasExplicitDocSelection,
+    // Knowledge packs (ZIM wave): pass-through for the ZIM retrieval arm only — the SQL
+    // scope filter never sees it. Only the composite scope can carry packs (legacy scopes
+    // predate the feature). Scope-narrowing spreads ({ ...scope, … }) keep it intact.
+    packIds: v2?.packIds && v2.packIds.length > 0 ? v2.packIds : null
   }
 }

@@ -27,6 +27,19 @@ from its first public `1.0.0` release onward.
 
 ### Added
 
+- **Knowledge packs: ask an offline Wikipedia (or any ZIM archive).** Register ZIM
+  files — e.g. from the Kiwix library — as knowledge packs (Documents → Knowledge
+  packs, or just drop them into the drive’s `zim/` folder), tick them as sources in a
+  documents chat, and answers draw on them with citations that name the archive and
+  open the article offline. Fully local: the pack server binds to 127.0.0.1 only,
+  archives are used in place and never copied. Needs the kiwix-tools binaries on the
+  drive — still a manual step in this release (see the user guide §7b).
+- **Evidence reviews now name the knowledge pack, not a same-named document.** Reviewing an
+  answer that cites a knowledge-pack article records the archive, the article and its pack
+  id honestly, and shows identity as not verifiable against the workspace instead of
+  matching it to a similarly named document — the review, its HTML/PDF evidence pack and
+  the Markdown transcript export all name the pack. Reviews created on a pre-release
+  knowledge-pack build that cite an archive must be re-run.
 - **Each finished chat answer now shows how fast it was generated.** A small line under the
   answer reads, for example, "42 tok/s · 1.8 s to first token · 615 tokens": the model's decode
   speed as reported by the AI engine, how long you waited for the first word, and how many

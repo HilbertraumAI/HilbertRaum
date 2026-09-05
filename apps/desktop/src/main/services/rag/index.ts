@@ -134,12 +134,39 @@ export interface RetrievedChunk {
    * citations never persist scores.
    */
   score: number
+  /**
+   * Knowledge packs (ZIM wave): 'archive' marks a chunk produced query-time by the ZIM
+   * retrieval arm — not backed by a `chunks` row. Its `chunkId` is synthetic
+   * (`zim:<packId>:<path>#<n>`) and its `documentId` is `zim:<packId>` — non-empty so
+   * the dedup key stays well-formed, but NEVER a `documents.id` (coverage and evidence
+   * must filter on `sourceKind`, not parse ids). Absent ⇒ classic document chunk.
+   */
+  sourceKind?: 'document' | 'archive'
+  /** Archive chunks only: the registered pack id (ZIM UUID). */
+  packId?: string
+  /** Archive chunks only: the pack's display title for the prompt/citation meta line. */
+  archiveTitle?: string
+  /** Archive chunks only: the article path (opens the offline viewer from a citation). */
+  articlePath?: string
 }
 
 export interface RetrievalResult {
   chunks: RetrievedChunk[]
   citations: Citation[]
 }
+
+/**
+ * Knowledge packs (ZIM wave): a query-time candidate source OUTSIDE the documents corpus.
+ * `retrieve` appends its candidates between the chunk-row join and the rerank, so they get
+ * rerank + dedup + budget + `[Sn]` labelling for free. The arm must return candidates whose
+ * synthetic ids can never collide with real `chunks.id`s (the `zim:` prefix) and MUST be
+ * failure-isolated by the caller contract: `retrieve` logs and continues when it throws —
+ * an unplugged drive never breaks asking about documents.
+ */
+export type ExternalRetrievalArm = (
+  question: string,
+  signal?: AbortSignal
+) => Promise<Array<Omit<RetrievedChunk, 'label'>>>
 
 /** Chunk text stored on a citation snippet is capped to keep citations_json small. */
 export const SNIPPET_MAX_CHARS = 600
@@ -250,9 +277,20 @@ export async function retrieve(
   settings: RagRetrievalSettings,
   scope?: string[] | RetrievalScope | null,
   reranker?: Reranker | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  externalArm?: ExternalRetrievalArm | null
 ): Promise<RetrievalResult> {
   const s = normalizeScope(scope)
+  // Knowledge packs (ZIM wave, live-demo finding 2026-09-05): a scope that selects packs
+  // but NO document sources means "answer from the packs" — the document arms are skipped.
+  // Without this, the empty composed doc-scope fell through to its historical whole-corpus
+  // meaning and unrelated documents (an invoice) claimed the topKFinal slots of a
+  // packs-only ask. Any document source keeps the arms: a ticked collection or hand-picked
+  // doc makes collectionIds/documentIds non-null in resolveScope, and chat attachments are
+  // always unioned into documentIds before this runs.
+  const packsOnly =
+    externalArm != null && (s.packIds?.length ?? 0) > 0 && s.collectionIds == null && s.documentIds == null
+
   // Mismatch guard: only search vectors tagged with the active embedder's id.
   // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
   // them; scoping by model id stops a corpus indexed under one embedder from polluting
@@ -263,19 +301,23 @@ export async function retrieve(
     collectionIds: s.collectionIds ?? null,
     includeArchived: s.includeArchived
   })
-  const vectorHits = (await index.searchText(question, settings.topKInitial, signal)).filter(
-    (hit) => hit.score >= settings.minSimilarity
-  )
+  const vectorHits = packsOnly
+    ? []
+    : (await index.searchText(question, settings.topKInitial, signal)).filter(
+        (hit) => hit.score >= settings.minSimilarity
+      )
   // Hybrid keyword path: the exact terms embeddings miss.
   // Scoped to chunks VISIBLE to the active embedder so the keyword path can
   // never surface a document vector search couldn't — the re-index honesty story
   // (staleEmbeddings / corpusNeedsReindex / REINDEX_NEEDED_ANSWER) is unchanged.
-  const keywordHits = keywordSearchChunks(db, question, settings.topKInitial, {
-    embeddingModelId: embedder.id,
-    documentIds: s.documentIds ?? null,
-    collectionIds: s.collectionIds ?? null,
-    includeArchived: s.includeArchived
-  })
+  const keywordHits = packsOnly
+    ? []
+    : keywordSearchChunks(db, question, settings.topKInitial, {
+        embeddingModelId: embedder.id,
+        documentIds: s.documentIds ?? null,
+        collectionIds: s.collectionIds ?? null,
+        includeArchived: s.includeArchived
+      })
   const fused = rrfFuse(vectorHits, keywordHits)
 
   // Join fused candidates → chunk rows in ONE `IN (…)` query (placeholders only),
@@ -313,6 +355,23 @@ export async function retrieve(
     }
   }
 
+  // Knowledge packs (ZIM wave): append the external arm's query-time candidates HERE —
+  // after the SQL join (candidates are plain objects from this point), before the rerank
+  // (so the cross-encoder scores archive and document chunks on one scale). Arm failure
+  // is logged and swallowed: an unplugged pack drive must never break asking.
+  let externalCount = 0
+  if (externalArm) {
+    try {
+      const external = await externalArm(question, signal)
+      externalCount = external.length
+      candidates.push(...external)
+    } catch (err) {
+      log.warn('Knowledge-pack retrieval unavailable for this question', {
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
+  }
+
   // Rerank between fusion and dedup: the cross-encoder rescoring decides which chunk
   // represents a page BEFORE the dedup collapse. A failing reranker logs and keeps
   // the fused order — a quality pass must never turn into an error for the user.
@@ -333,6 +392,20 @@ export async function retrieve(
         error: err instanceof Error ? err.message : String(err)
       })
     }
+  } else if (externalCount > 0 && candidates.length > externalCount) {
+    // No reranker to merge the two scales, and external candidates were appended AFTER
+    // every fused document candidate — a straight trim to topKFinal would then always
+    // drop the archive chunks. Round-robin interleave document/archive candidates so both
+    // sources reach the budget trim in their own rank order. (With a reranker this branch
+    // is dead: relevance decides.)
+    const docs = candidates.slice(0, candidates.length - externalCount)
+    const ext = candidates.slice(candidates.length - externalCount)
+    const merged: typeof candidates = []
+    for (let i = 0; i < Math.max(docs.length, ext.length); i++) {
+      if (i < docs.length) merged.push(docs[i])
+      if (i < ext.length) merged.push(ext[i])
+    }
+    candidates = merged
   }
 
   // Dedup by document/page (spec §7.8). Only chunks that share a real page number
@@ -360,17 +433,34 @@ export async function retrieve(
   }
 
   const chunks: RetrievedChunk[] = selected.map((c, i) => ({ ...c, label: `S${i + 1}` }))
-  const citations: Citation[] = chunks.map((c) => ({
-    label: c.label,
-    sourceTitle: c.sourceTitle,
-    pageNumber: c.pageNumber,
-    section: c.sectionLabel,
-    snippet: truncateSnippet(c.text),
-    // EP-1 Phase 0 (plan §5 item 2): additive source-identity enrichment — lets a later
-    // evidence review pin the document exactly instead of best-effort by title.
-    documentId: c.documentId,
-    chunkId: c.chunkId
-  }))
+  const citations: Citation[] = chunks.map((c) =>
+    c.sourceKind === 'archive'
+      ? {
+          label: c.label,
+          sourceTitle: c.sourceTitle,
+          pageNumber: null,
+          section: c.sectionLabel,
+          snippet: truncateSnippet(c.text),
+          // NO documentId/chunkId: the synthetic ids are not rows, and the evidence-pack
+          // resolver reads a non-null documentId as a real document (it would misreport
+          // an archive source as a deleted document). sourceKind is the honest marker.
+          sourceKind: 'archive',
+          packId: c.packId ?? null,
+          archiveTitle: c.archiveTitle ?? null,
+          articlePath: c.articlePath ?? null
+        }
+      : {
+          label: c.label,
+          sourceTitle: c.sourceTitle,
+          pageNumber: c.pageNumber,
+          section: c.sectionLabel,
+          snippet: truncateSnippet(c.text),
+          // EP-1 Phase 0 (plan §5 item 2): additive source-identity enrichment — lets a later
+          // evidence review pin the document exactly instead of best-effort by title.
+          documentId: c.documentId,
+          chunkId: c.chunkId
+        }
+  )
   return { chunks, citations }
 }
 
@@ -630,8 +720,15 @@ export async function answerWholeDocFromChunks(deps: WholeDocChunksDeps): Promis
   })
 }
 
-/** The `[Sn] File: X | Page: 4` / `| Section: Y` metadata line for a chunk (spec §7.8). */
+/** The `[Sn] File: X | Page: 4` / `| Section: Y` metadata line for a chunk (spec §7.8).
+ *  Archive chunks (ZIM wave) name their pack too, so the model can attribute the source
+ *  ("according to the offline Wikipedia…") instead of absorbing it into `File:`. */
 function sourceMeta(chunk: RetrievedChunk): string {
+  if (chunk.sourceKind === 'archive') {
+    const archive = chunk.archiveTitle ? ` | Archive: ${chunk.archiveTitle}` : ''
+    const section = chunk.sectionLabel ? ` | Section: ${chunk.sectionLabel}` : ''
+    return `${archive}${section}`
+  }
   if (chunk.pageNumber != null) return ` | Page: ${chunk.pageNumber}`
   if (chunk.sectionLabel) return ` | Section: ${chunk.sectionLabel}`
   return ''
@@ -1369,6 +1466,13 @@ export interface GroundedAnswerOptions {
    * (the byte-unchanged path). App-authored text; it carries no content and needs no model call.
    */
   answerPrefix?: string
+  /**
+   * Knowledge packs (ZIM wave): the query-time archive arm for this conversation's scope,
+   * built by the IPC layer from `RetrievalScope.packIds` (absent/empty scope ⇒ undefined —
+   * the byte-unchanged document-only path). Only the RELEVANCE path consumes it; the
+   * whole-document and compare paths are document reads by definition.
+   */
+  externalArm?: ExternalRetrievalArm | null
 }
 
 /** Approx tokens of the fixed excerpt framing every grounded turn carries (#228) — counted by the budgets. */
@@ -1607,7 +1711,16 @@ export async function generateGroundedAnswer(
       excerptBudget < settings.maxContextTokens
         ? { ...settings, maxContextTokens: excerptBudget }
         : settings
-    const r = await retrieve(db, embedder, question, fitted, scopeArg, opts.reranker, opts.signal)
+    const r = await retrieve(
+      db,
+      embedder,
+      question,
+      fitted,
+      scopeArg,
+      opts.reranker,
+      opts.signal,
+      opts.externalArm
+    )
     chunks = r.chunks
     citations = r.citations
     // D72 (#24): stamp a real `relevance` CoverageInfo so every grounded answer can show a
@@ -1619,9 +1732,14 @@ export async function generateGroundedAnswer(
     // "whole document"). `fullyChunked` reflects those docs so the fraction never overclaims. An
     // empty retrieval (chunks.length === 0) returns the NO_DOCUMENT_CONTEXT/REINDEX answer below
     // WITHOUT persisting coverage, so we skip the compute on that path.
-    if (chunks.length > 0) {
-      const docIds = [...new Set(chunks.map((c) => c.documentId))]
-      const distinctCitedChunks = new Set(chunks.map((c) => c.chunkId)).size
+    // Archive chunks (ZIM wave) are excluded from the coverage math: their synthetic
+    // documentIds have no `chunks` rows, so counting them would deflate chunksTotal and
+    // flip fullyChunked. A pure-archive answer gets NO coverage fraction (honest: there
+    // is no document corpus to be "N of M" over).
+    const docChunks = chunks.filter((c) => c.sourceKind !== 'archive')
+    if (docChunks.length > 0) {
+      const docIds = [...new Set(docChunks.map((c) => c.documentId))]
+      const distinctCitedChunks = new Set(docChunks.map((c) => c.chunkId)).size
       coverage = {
         mode: 'relevance',
         chunksCovered: distinctCitedChunks,

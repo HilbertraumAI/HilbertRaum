@@ -68,6 +68,11 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   // OCR language files: `<lang>.traineddata.gz`, vendored at drive-build
   // time (runtime-sources.yaml `ocr:` block) — the engine never fetches at runtime.
   'ocr',
+  // Knowledge packs (ZIM wave): external ZIM archives (offline Wikipedia etc.) the chat
+  // can retrieve from. PLAIN files outside the encrypted workspace (public, read-only,
+  // multi-GB — the skills-folder class, not user content). Ships EMPTY; the user drops
+  // archives in (auto-discovered) or registers files elsewhere via the picker.
+  'zim',
   'logs',
   'config',
   'docs'
@@ -100,6 +105,14 @@ export function resolveAppSkillsDir(rootPath: string, appPath?: string): string 
     }
   }
   return onDrive
+}
+
+/**
+ * Resolve the knowledge-pack archive directory (ZIM wave) — always `<root>/zim/`.
+ * Pure resolution like `resolveUserSkillsDir`; discovery tolerates an absent dir.
+ */
+export function resolveZimDir(rootPath: string): string {
+  return join(rootPath, 'zim')
 }
 
 /**

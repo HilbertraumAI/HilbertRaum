@@ -11,7 +11,9 @@ import { compareStoredHashes } from './freshness'
 // only — the document id is read from the review's OWN snapshot, so the renderer can never
 // point this handler at an arbitrary document, and unknown review/key inputs read as null.
 // Unresolved-identity sources return null too: there is no document to read (the card
-// already says "cannot be verified", and inventing context would be a false claim).
+// already says "cannot be verified", and inventing context would be a false claim). Archive
+// sources (ZIM knowledge-pack articles, PR #294 review H2) return null for the same reason,
+// checked explicitly below.
 //
 // Content source (D-5: "extracted text around the citation, existing preview limits; no
 // page-image rendering"): the `chunks` table — the extraction ingestion already persisted —
@@ -148,6 +150,13 @@ export function getEvidenceSourceContext(
   if (!review) return null
   const source = parseSourceSnapshots(review.source_snapshot_json).find((s) => s.key === sourceKey)
   if (!source) return null
+  // Knowledge packs (PR #294 review H2): an ARCHIVE source has NO workspace document — there
+  // are no stored `chunks` to read context out of, and the extracted article text is not
+  // persisted anywhere. Explicit and BEFORE the identity check (never rely on the identity
+  // repair alone): the honest answer is "no context", which the card already renders as
+  // unavailable. Deliberately not an "Open article" bridge into the pack viewer here — that
+  // consumer belongs with the pack service/locator work, not with the review reader.
+  if (source.sourceKind === 'archive') return null
   if (source.identity !== 'resolved' || !source.documentId) return null
 
   const doc = prepareCached(db, 'SELECT id, title, sha256 FROM documents WHERE id = ?').get(

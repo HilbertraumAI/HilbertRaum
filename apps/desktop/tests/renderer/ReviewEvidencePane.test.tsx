@@ -178,6 +178,94 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
     expect(cardTitles()).toContain('doc-3.pdf')
   })
 
+  it('ZIM wave (#294 review M11): archive card shows its own badge + where-line, no unresolved badge and no "Open source in context" button (EN + DE)', () => {
+    const archiveSource: EvidenceSourceSnapshot = {
+      ...makeDetail().sources[0]!,
+      key: 'sArchive',
+      machineLabel: 'S2',
+      identity: 'unresolved',
+      documentId: null,
+      documentSha256: null,
+      mimeType: null,
+      documentTitle: 'Klimawandel',
+      sectionLabel: 'Übersicht',
+      pageNumber: null,
+      sourceKind: 'archive',
+      archiveTitle: 'Wikipedia (DE)',
+      packId: 'pack-uuid-1',
+      articlePath: 'A/Klimawandel'
+    }
+    render(
+      <EvidencePane
+        sources={[archiveSource]}
+        coverage={{ mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }}
+        selectedItem={null}
+        readOnly={false}
+        freshness={null}
+        onLink={vi.fn()}
+        onUnlink={vi.fn()}
+        onSetRelation={vi.fn()}
+        onOpenContext={vi.fn()}
+        t={tEn}
+        tCount={tCountEn}
+      />
+    )
+    expect(screen.getByText(tEn('review.source.archive'))).toBeInTheDocument()
+    expect(screen.queryByText(tEn('review.source.unresolved'))).not.toBeInTheDocument()
+    expect(screen.getByText('Wikipedia (DE) · Übersicht')).toBeInTheDocument()
+    expect(screen.queryByText(tEn('review.sourceContext.open'))).not.toBeInTheDocument()
+
+    cleanup()
+    const tDe = (key: MessageKey, params?: MessageParams): string => t('de', key, params)
+    const tCountDe = (key: CountMessageKey, count: number, params?: MessageParams): string =>
+      tCount('de', key, count, params)
+    render(
+      <EvidencePane
+        sources={[archiveSource]}
+        coverage={{ mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }}
+        selectedItem={null}
+        readOnly={false}
+        freshness={null}
+        onLink={vi.fn()}
+        onUnlink={vi.fn()}
+        onSetRelation={vi.fn()}
+        onOpenContext={vi.fn()}
+        t={tDe}
+        tCount={tCountDe}
+      />
+    )
+    expect(screen.getByText(tDe('review.source.archive'))).toBeInTheDocument()
+    expect(screen.queryByText(tDe('review.source.unresolved'))).not.toBeInTheDocument()
+    expect(screen.queryByText(tDe('review.sourceContext.open'))).not.toBeInTheDocument()
+  })
+
+  it('ZIM wave (#294 review M11): the filter matches the archive title too', () => {
+    const sources = makeSources(30)
+    const archived: EvidenceSourceSnapshot = {
+      ...sources[5]!,
+      sourceKind: 'archive',
+      archiveTitle: 'UNIQUE_PACK_TITLE',
+      packId: 'p1',
+      articlePath: 'A/x'
+    }
+    renderPane([...sources.slice(0, 5), archived, ...sources.slice(6)])
+    const input = screen.getByLabelText(tEn('review.evidence.filterLabel'))
+    fireEvent.change(input, { target: { value: 'unique_pack_title' } })
+    expect(cardTitles()).toEqual([archived.documentTitle])
+  })
+
+  it('ZIM wave (#294 review M11): a document card is unchanged — unresolved badge stays, no archive badge', () => {
+    const documentSource: EvidenceSourceSnapshot = {
+      ...makeDetail().sources[0]!,
+      key: 'sDoc',
+      identity: 'unresolved',
+      documentId: null
+    }
+    renderPane([documentSource])
+    expect(screen.getByText(tEn('review.source.unresolved'))).toBeInTheDocument()
+    expect(screen.queryByText(tEn('review.source.archive'))).not.toBeInTheDocument()
+  })
+
   it('matcher covers section label and page number; filter change RESETS the reveal (FIX-5b)', () => {
     const sources = makeSources(60).map((s, i) =>
       i === 40 ? { ...s, sectionLabel: 'Anhang B', pageNumber: 77 } : s

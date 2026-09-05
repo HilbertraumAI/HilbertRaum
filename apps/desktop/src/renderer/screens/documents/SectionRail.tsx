@@ -230,6 +230,15 @@ export function SectionRail({
           </>
         )}
       </div>
+
+      {/* KNOWLEDGE PACKS (ZIM wave): offline reference archives — a management panel,
+          not a document filter, so it sits in its own group at the bottom. */}
+      <div className="docs-rail-group">
+        <div className="docs-rail-group-head">
+          <span className="docs-rail-group-label">{t('docs.section.sources')}</span>
+        </div>
+        {railBtn({ kind: 'packs' }, t('docs.section.packs'))}
+      </div>
     </nav>
   )
 }

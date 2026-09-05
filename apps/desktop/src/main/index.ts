@@ -26,6 +26,8 @@ import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModel
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerCollectionsIpc } from './ipc/registerCollectionsIpc'
+import { registerZimIpc } from './ipc/registerZimIpc'
+import { ZimService } from './services/zim'
 import { registerEvidenceReviewsIpc } from './ipc/registerEvidenceReviewsIpc'
 import { registerSkillsIpc } from './ipc/registerSkillsIpc'
 import { registerBuiltinSkillAnalysisHandlers } from './services/skills/analysis'
@@ -514,6 +516,10 @@ function initBackend(): void {
     plaintextOps,
     skills
   }
+  // Knowledge packs (ZIM wave): registry + lazy kiwix-serve sidecar. Built here — not inside
+  // registerZimIpc — so the quit teardown reaches it via `ctx.zim`. Spawns nothing until the
+  // first ask with packs in scope (or a registration runs kiwix-manage briefly).
+  ctx.zim = new ZimService({ rootPath: paths.rootPath, isDev })
   // The vision sidecar orchestrator (image-understanding plan §10). Built here — not inside
   // registerImagesIpc — so the workspace-lock + quit teardown paths can reach it via `ctx.vision`.
   // Lazy: it spawns nothing until the first analyze of an available model.
@@ -593,6 +599,7 @@ function initBackend(): void {
   registerChatIpc(ctx)
   registerDocsIpc(ctx)
   registerCollectionsIpc(ctx)
+  registerZimIpc(ctx)
   registerEvidenceReviewsIpc(ctx)
   registerSkillsIpc(ctx)
   registerDocTasksIpc(ctx)

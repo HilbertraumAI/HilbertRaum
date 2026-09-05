@@ -2524,3 +2524,39 @@ code, pre, kbd { font-family: var(--font-mono); }
 .progress { display: flex; flex-direction: column; gap: 6px; flex: 1 1 220px; min-width: 160px; }
 .progress-label { font-size: var(--text-sm); line-height: var(--line-sm); color: var(--text-muted); }
 .progress progress { width: 100%; height: 8px; accent-color: var(--accent); }
+
+/* ---- Knowledge packs (ZIM wave) --------------------------------------------------- */
+/* Scope popover: the packs source group gets a little separation from the doc sources. */
+.scope-packs { margin-top: 8px; }
+
+/* Source card: the quiet "Open article" affordance on archive citations (link-styled,
+   like .sources-review — never a loud button inside the disclosure). */
+.source-card-open {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: auto;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.source-card-open:hover { text-decoration: underline; }
+
+/* Packs management panel (Documents screen). Cards reuse the shared .card chrome. */
+.packs-panel { display: flex; flex-direction: column; gap: 12px; max-width: 1000px; }
+.packs-list { display: flex; flex-direction: column; gap: 10px; }
+.packs-card { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; }
+.packs-card-head { display: flex; align-items: center; gap: 10px; }
+.packs-card-title { font-weight: 500; overflow-wrap: anywhere; }
+.packs-card-missing .packs-card-title { color: var(--text-muted); }
+.packs-card-desc { margin: 0; }
+.packs-card-meta { margin: 0; }
+.packs-card-actions { display: flex; gap: 8px; margin-top: 4px; }
+.packs-tools-hint { margin: 0; }
+
+/* Offline article viewer: readable measure inside the wide modal; scrolls in the modal. */
+.pack-article { display: flex; flex-direction: column; gap: 8px; }
+.pack-article-source { margin: 0; }
+.pack-article-body { max-width: 68ch; }
+.pack-article-heading { font-size: var(--text-md); margin: 14px 0 4px; }
+.pack-article-para { margin: 0 0 10px; white-space: pre-wrap; }

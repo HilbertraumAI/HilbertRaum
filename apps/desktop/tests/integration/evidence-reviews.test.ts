@@ -456,6 +456,88 @@ describe('tolerant parsing of stored rows (malformed → safe defaults, never a 
     expect(detail?.sources).toHaveLength(1)
     expect(detail?.sources[0]).toMatchObject({ key: 'S1', identity: 'unresolved', kind: 'whole_document_provenance' })
   })
+
+  it('an archive snapshot round-trips its locator through the stored row but never gains a document identity from it (PR #294 review H2/M11)', () => {
+    const db = freshDb()
+    const { messageId } = seedAnswer(db)
+    const review = createEvidenceReview(db, {
+      messageId,
+      title: 't',
+      answerSnapshot: 'a',
+      questionSnapshot: 'q'
+    })
+    db.prepare('UPDATE evidence_reviews SET source_snapshot_json = ? WHERE id = ?').run(
+      JSON.stringify([
+        {
+          // A stored archive snapshot that ALSO claims a resolved document identity — what a
+          // pre-fix build, a hand-edited row or a hostile workspace could hold.
+          key: 'S1',
+          documentTitle: 'Treibhausgas',
+          kind: 'direct_excerpt',
+          identity: 'resolved',
+          documentId: 'doc-1',
+          documentSha256: 'aa'.repeat(32),
+          mimeType: 'application/pdf',
+          availabilityAtCreation: 'available',
+          sourceKind: 'archive',
+          archiveTitle: 'Wikipedia (DE)',
+          packId: 'pack-climate',
+          articlePath: 'A/Treibhausgas'
+        },
+        {
+          // A document snapshot: unchanged behaviour, and the ABSENT sourceKind reads as
+          // 'document' (pre-merge reviews are never migrated or re-classified).
+          key: 'S2',
+          documentTitle: 'Klimabericht.pdf',
+          kind: 'direct_excerpt',
+          identity: 'resolved',
+          documentId: 'doc-2',
+          documentSha256: 'bb'.repeat(32),
+          mimeType: 'application/pdf',
+          availabilityAtCreation: 'available'
+        },
+        // Mistyped locators drop to null; the marker counts only when it is literally 'archive'.
+        { key: 'S3', documentTitle: 'x', sourceKind: 'ARCHIVE', archiveTitle: 7, packId: null }
+      ]),
+      review.id
+    )
+    const detail = getEvidenceReview(db, review.id)
+    expect(detail?.sources).toHaveLength(3)
+    expect(detail?.sources[0]).toMatchObject({
+      key: 'S1',
+      sourceKind: 'archive',
+      // Repaired DOWN, never up: no identity, no id, no hash, no mime, no availability.
+      identity: 'unresolved',
+      documentId: null,
+      documentSha256: null,
+      mimeType: null,
+      availabilityAtCreation: null,
+      // The locator survives intact — display provenance is independent of identity.
+      documentTitle: 'Treibhausgas',
+      archiveTitle: 'Wikipedia (DE)',
+      packId: 'pack-climate',
+      articlePath: 'A/Treibhausgas'
+    })
+    expect(detail?.sources[1]).toMatchObject({
+      key: 'S2',
+      sourceKind: 'document',
+      identity: 'resolved',
+      documentId: 'doc-2',
+      documentSha256: 'bb'.repeat(32),
+      mimeType: 'application/pdf',
+      availabilityAtCreation: 'available',
+      archiveTitle: null,
+      packId: null,
+      articlePath: null
+    })
+    expect(detail?.sources[2]).toMatchObject({
+      key: 'S3',
+      sourceKind: 'document', // 'ARCHIVE' is not the literal marker
+      archiveTitle: null,
+      packId: null,
+      articlePath: null
+    })
+  })
 })
 
 describe('cascade behavior (plan §5 tests — through the REAL deleteConversation)', () => {

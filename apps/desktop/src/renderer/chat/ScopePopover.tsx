@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import * as Popover from '@radix-ui/react-popover'
-import type { Collection, DocumentInfo, DocumentScope } from '@shared/types'
+import type { Collection, DocumentInfo, DocumentScope, KnowledgePack } from '@shared/types'
 import { Button, Chip, Icon } from '../components'
 import { useT, type I18n } from '../i18n'
 
@@ -36,6 +36,12 @@ interface ScopePopoverProps {
   attachments?: DocumentInfo[]
   /** File names of attachments still being processed (N4): non-removable pending chips. */
   pendingAttachmentNames?: string[]
+  /**
+   * Knowledge packs (ZIM wave): registered, non-removed packs offered as additional
+   * sources. Absent/empty => the section never renders (byte-identical popover). An
+   * unavailable pack (file missing) is shown but not tickable - honest state.
+   */
+  packs?: KnowledgePack[]
 }
 
 /** Stable empty-id list for a null scope (PF-7d) — a fresh `[]` per render would bust the memos. */
@@ -50,11 +56,13 @@ export function scopeSources(
   scope: DocumentScope | null,
   collections: Collection[],
   t: I18n['t'],
-  tCount: I18n['tCount']
+  tCount: I18n['tCount'],
+  packs: KnowledgePack[] = []
 ): string | null {
   const collIds = scope?.collectionIds ?? []
   const docIds = scope?.documentIds ?? []
-  if (collIds.length === 0 && docIds.length === 0) return null
+  const packIds = scope?.packIds ?? []
+  if (collIds.length === 0 && docIds.length === 0 && packIds.length === 0) return null
 
   const parts: string[] = []
   const picked = collIds
@@ -66,6 +74,13 @@ export function scopeSources(
   if (projects.length === 1) parts.push(t('chat.scope.projectNamed', { name: projects[0].name }))
   else if (projects.length > 1) parts.push(tCount('chat.scope.projectCount', projects.length))
   if (docIds.length > 0) parts.push(tCount('chat.scope.docCount', docIds.length))
+  // Knowledge packs: name a single pack, count several (the projects pattern).
+  if (packIds.length === 1) {
+    const pack = packs.find((k) => k.id === packIds[0])
+    parts.push(pack ? t('chat.scope.packNamed', { name: pack.title }) : tCount('chat.scope.packCount', 1))
+  } else if (packIds.length > 1) {
+    parts.push(tCount('chat.scope.packCount', packIds.length))
+  }
 
   return parts.length === 0 ? null : parts.join(' + ')
 }
@@ -75,9 +90,10 @@ export function scopeFooterLabel(
   scope: DocumentScope | null,
   collections: Collection[],
   t: I18n['t'],
-  tCount: I18n['tCount']
+  tCount: I18n['tCount'],
+  packs: KnowledgePack[] = []
 ): string {
-  const sources = scopeSources(scope, collections, t, tCount)
+  const sources = scopeSources(scope, collections, t, tCount, packs)
   return sources ? t('chat.scope.using', { sources }) : t('chat.scope.usingAll')
 }
 
@@ -89,7 +105,8 @@ export function ScopePopover({
   onChangeScope,
   onAddDocuments,
   attachments = [],
-  pendingAttachmentNames = []
+  pendingAttachmentNames = [],
+  packs = []
 }: ScopePopoverProps): JSX.Element {
   const { t, tCount } = useT()
   const [showDocs, setShowDocs] = useState(false)
@@ -101,6 +118,7 @@ export function ScopePopover({
 
   const collIds = scope?.collectionIds ?? EMPTY_IDS
   const docIds = scope?.documentIds ?? EMPTY_IDS
+  const packIds = scope?.packIds ?? EMPTY_IDS
   // Pickable sources: Library + non-archived projects (archived projects drop out — C1).
   const library = useMemo(() => collections.find((c) => c.type === 'library'), [collections])
   const projects = useMemo(
@@ -113,7 +131,10 @@ export function ScopePopover({
   // Truthful footer copy (guidelines §7): with no indexed documents AND no chat attachments
   // the affordance becomes a direct "Add documents" jump, not a scope picker. (Attachments —
   // live or still processing — keep the picker, so a freshly dropped file is visible.)
-  if (indexed.length === 0 && fileCount === 0) {
+  // Knowledge packs (ZIM wave): registered packs are pickable sources too, so a pack-only
+  // corpus (fresh workspace, offline Wikipedia added, nothing imported yet) MUST keep the
+  // picker — the early return used to swallow the packs section entirely in that state.
+  if (indexed.length === 0 && fileCount === 0 && packs.length === 0) {
     return (
       <button type="button" className="footer-menu-btn" disabled={disabled} onClick={onAddDocuments}>
         <Icon name="file" className="footer-menu-icon" /> {t('chat.scope.none')}
@@ -121,12 +142,22 @@ export function ScopePopover({
     )
   }
 
-  function emit(nextColl: string[], nextDocs: string[]): void {
-    onChangeScope({ collectionIds: nextColl, documentIds: nextDocs })
+  function emit(nextColl: string[], nextDocs: string[], nextPacks: string[] = packIds): void {
+    // packIds ride every emit (spread-preservation): a doc/project toggle must never
+    // silently drop the chat's selected knowledge packs.
+    onChangeScope({
+      collectionIds: nextColl,
+      documentIds: nextDocs,
+      ...(nextPacks.length > 0 ? { packIds: nextPacks } : {})
+    })
   }
 
   function toggleCollection(id: string): void {
     emit(collIds.includes(id) ? collIds.filter((x) => x !== id) : [...collIds, id], docIds)
+  }
+
+  function togglePack(id: string): void {
+    emit(collIds, docIds, packIds.includes(id) ? packIds.filter((x) => x !== id) : [...packIds, id])
   }
 
   function title(id: string): string {
@@ -135,7 +166,7 @@ export function ScopePopover({
 
   // The active retrieval scope, framed as an always-visible "Answering from: {source}" chip (D71).
   // The chip IS the popover trigger, so it stays visible before asking and one click opens the picker.
-  const composedEmpty = collIds.length === 0 && docIds.length === 0
+  const composedEmpty = collIds.length === 0 && docIds.length === 0 && packIds.length === 0
   const source = ((): string => {
     // Empty composed scope + attachments: main-side `resolveScope` unions the chat attachments in, so
     // retrieval is scoped to THOSE files — never the whole corpus. Name the single file, else count them
@@ -145,15 +176,21 @@ export function ScopePopover({
       return names.length === 1 ? names[0] : tCount('chat.scope.filesInChat', fileCount)
     }
     // A single specific document → name it (the #26 "ask exactly this one document" case).
-    if (collIds.length === 0 && docIds.length === 1) return title(docIds[0])
+    if (collIds.length === 0 && docIds.length === 1 && packIds.length === 0) return title(docIds[0])
     // Whole library: the explicit "All documents" (empty) OR the Library-only default — both answer
     // from everything, so state the corpus size instead of the bare word "Library".
     const pickedTypes = collIds.map((id) => collections.find((c) => c.id === id)?.type)
-    if (docIds.length === 0 && (composedEmpty || pickedTypes.every((tp) => tp === 'library'))) {
+    if (
+      docIds.length === 0 &&
+      packIds.length === 0 &&
+      (composedEmpty || pickedTypes.every((tp) => tp === 'library'))
+    ) {
       return tCount('chat.scope.wholeLibrary', indexed.length)
     }
-    // Projects / multi-doc / mixed → the composed sources phrase (single-sourced with the footer).
-    return scopeSources(scope, collections, t, tCount) ?? tCount('chat.scope.wholeLibrary', indexed.length)
+    // Projects / multi-doc / packs / mixed → the composed sources phrase (single-sourced with the footer).
+    return (
+      scopeSources(scope, collections, t, tCount, packs) ?? tCount('chat.scope.wholeLibrary', indexed.length)
+    )
   })()
   const label = t('chat.scope.answeringFrom', { source })
   // Chat attachments (live + pending) are always included; surfaced as a quiet count alongside the
@@ -205,6 +242,29 @@ export function ScopePopover({
               </label>
             ))}
           </div>
+
+          {/* Knowledge packs (ZIM wave): offline reference archives as additional sources.
+              Rendered only when packs exist; an unavailable pack (file missing) shows its
+              state and cannot be ticked. */}
+          {packs.length > 0 && (
+            <div className="scope-sources scope-packs">
+              <p className="popover-line">{t('chat.scope.packsTitle')}</p>
+              {packs.map((k) => (
+                <label className="scope-source-row" key={k.id}>
+                  <input
+                    type="checkbox"
+                    checked={packIds.includes(k.id)}
+                    disabled={disabled || !k.available}
+                    onChange={() => togglePack(k.id)}
+                  />
+                  <span className="scope-source-name">{k.title}</span>
+                  {!k.available && (
+                    <span className="scope-source-hint">{t('chat.scope.packUnavailable')}</span>
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
 
           {/* Specific documents — the explicit-doc branch of the union (and the only way to
               reach a generated/temporary doc, D3/N10). Selected docs render as removable chips. */}
@@ -273,12 +333,12 @@ export function ScopePopover({
             </div>
           )}
 
-          {(collIds.length > 0 || docIds.length > 0) && (
+          {(collIds.length > 0 || docIds.length > 0 || packIds.length > 0) && (
             <Button
               size="sm"
               className="popover-reset"
               disabled={disabled}
-              onClick={() => emit([], [])}
+              onClick={() => emit([], [], [])}
             >
               {/* full-audit 2026-07-11 CODE-31 (owner decision: relabel truthfully — the emitted
                   scope stays the empty explicit one). In a chat WITH attachments, main-side

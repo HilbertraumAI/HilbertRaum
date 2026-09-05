@@ -2039,7 +2039,12 @@ compared not re-hashed per spec §21.2); a documentId whose row is GONE stays
 absent). A legacy citation resolves by EXACT title match only when the match is UNIQUE —
 zero or multiple matches leave `identity:'unresolved'` (availability null: it cannot be
 known). Unresolved ≠ missing is load-bearing: Phase-4 freshness may only say "cannot verify"
-for unresolved sources, never "changed"/"deleted".
+for unresolved sources, never "changed"/"deleted". **Archive exception (P2, PR #294 review
+H2, #301):** a citation with `sourceKind: 'archive'` (a ZIM knowledge-pack article) never
+enters either branch — the resolver checks `sourceKind` first and forces
+`identity:'unresolved'` with null `documentId`/`documentSha256`/`mimeType`/
+`availabilityAtCreation`, even when stale or malformed data also supplies a document id or
+an exact-matching document title exists. §17 D-Z5 records the archive-specific fields.
 
 ### 16.3 Truncation and coverage honesty (§14.10)
 
@@ -2108,3 +2113,345 @@ the `chunks` table (the stored extraction), resolved main-side from the review's
 snapshot (renderer sends review id + source key only), located via the snapshotted chunk id
 (document-verified) or a stored-text containment search — never a re-read of the source
 file, and an unlocatable excerpt is said to be unlocatable, never approximated.
+
+---
+
+## 17. ZIM knowledge packs — design record (kiwix-serve retrieval arm, 2026-09-04)
+
+**What it is.** The user registers ZIM archives (openZIM/Kiwix format — e.g. an offline
+Wikipedia from library.kiwix.org) as *knowledge packs* and opts a chat into them via the
+scope popover; the ask then retrieves from the packs *query-time* alongside the document
+corpus, with citations that name the archive + article + section and open a read-only
+offline article viewer. Files are registered in place, never copied.
+
+### The decisions and the facts they rest on
+
+- **D-Z1 — kiwix-serve sidecar, not libzim bindings.** `@openzim/libzim` does not install
+  on Windows (no Windows libzim binary upstream, no Windows target in its binding.gyp,
+  node-gyp requires MSVC) — established by the 2026-08-22 spike. kiwix-serve (kiwix-tools)
+  ships Windows binaries, starts in ~0.5 s, idles at ~52 MB RSS, and its embedded Xapian
+  full-text search answers in 40–200 ms. `services/zim/serve.ts` (`KiwixServer`) is a
+  compact LlamaServer sibling: shared `findFreePort`/bind-race-retry-once, the crash-reap
+  PID registry (`SidecarFamily` gained `'kiwix_tools'`), pre-spawn binary verification, and
+  a bounded teardown policy (SIGTERM → 2 s → SIGKILL → 3 s → reported "not confirmed",
+  the PID kept in the crash reaper — the full record is D-Z10). The start is lazy and
+  shared per pack revision; a start failure latches by revision until the pack set
+  changes, but an aborted start never latches. No idle teardown (read-only content
+  server, trivial RSS): an unexpected death makes the next ask spawn a NEW generation
+  over the SAME library build, not a rebuild.
+- **D-Z2 — node:http, never fetch.** Node 24's undici crashes (`assert(!this.paused)`) on
+  kiwix-serve/libmicrohttpd response framing, keep-alive or not (spike-reproduced;
+  Electron 43 = Node 24). `services/zim/client.ts` uses `node:http` with a non-keepalive
+  agent, loopback-only by construction, 8 MiB body ceiling.
+- **D-Z3 — query-time retrieval, no embeddings.** A full-Wikipedia pack has millions of
+  articles; pre-embedding is off the table and unnecessary: the ZIM's own Xapian index is
+  the recall stage and the existing reranker (§11) is the precision stage. Per ask and per
+  pack: `/search?books.id=<uuid>` top-5 articles → `/raw/.../content/<path>` HTML →
+  `zimArticleToSegments` (html.ts — a single-cursor **linear forward scanner** with
+  memoised failed lookaheads: every input index is examined at most K = 5 times; the proof
+  is the "LINEAR FORWARD SCANNER — complexity record" header comment in that file, PR #294
+  review H1. Sections → heading `sectionLabel`s, mw-ref sups dropped, `<math alttext>`
+  LaTeX kept, tables/figures dropped) → the SAME `chunkSegments` chunker → top-4
+  chunks/article by query-term overlap, ≤24 candidates total.
+
+  **Truncation / budget contract.** The converter takes `{ maxChars?, maxWork? }`
+  (defaults 1 MiB / 4×`maxChars`) and never throws: a cut reports
+  `truncated: { reason: 'maxChars' | 'workBudget' | 'unterminated', at, what? }` (the work
+  budget takes precedence over the char cap), but the segments produced before the cut are
+  always returned, so a partial article still contributes retrieval chunks (`arm.ts`
+  unchanged) and the viewer's `PackArticle.partial` flag tells the user only the first part
+  was shown instead of presenting a partial extraction as the whole article. The contract is
+  identical on the async form, `zimArticleToSegmentsAsync` (P1b), that the ask path now calls.
+
+  The **2026-08-22 end-to-end spike figure** (search + fetch + convert, warm, this
+  machine): 82–165 ms, inside the ≤300 ms acceptance budget before rerank — kept as a
+  distinct measurement from the parser-only figures below (review DOC-2 flagged the two as
+  conflated).
+
+  **Measured (P1, 2026-09-05).** Workload: Section A pathology families (unclosed-`<`,
+  unmatched-quote, unterminated-comment/-script, repeated-`<`, entity-heavy, deep-nesting,
+  wellformed synthetic Parsoid-like) at 30k/60k/300k/1 MiB chars; Section B = 60
+  conversions of five synthetic ~30 KB Parsoid-like articles (no real mwoffliner articles
+  available on this machine — stated explicitly as synthetic). Hardware: i9-14900K (8
+  P-cores + 16 E-cores), Node v24.19.0, plain Node (no Electron), the P1 tree on
+  `9125c6df`. Cold = first call of a given input in the process; warm = median of 20 runs
+  after 5 warm-ups (batch: median of 10 passes). Gate thresholds: laptop (i) ≤ 50 ms /
+  (ii) ≤ 150 ms; one-third early-warning rule ≈ 16.67 ms / 50 ms (assumes a P-core).
+
+  | run (affinity) | 1 MiB worst warm | worst family | batch warm | (i) vs 16.67 ms | (ii) vs 50 ms |
+  |---|---|---|---|---|---|
+  | P-cores pinned, run A | 16.23 ms | wellformed | 29.56 ms | 0.97× PASS | 0.59× PASS |
+  | P-cores pinned, run B | 15.25 ms | repeated-lt | 28.74 ms | 0.92× PASS | 0.57× PASS |
+  | E-cores pinned | 27.79 ms | wellformed | 46.66 ms | 1.67× FAIL | 0.93× PASS |
+  | unpinned, 3 runs | 33.28–36.21 ms | entity-heavy | 48.38–64.85 ms | 2.00–2.17× FAIL | 0.97–1.30× (2/3 FAIL) |
+
+  Per-size P-core MAX (warm): 30k 0.74 ms, 60k 0.94 ms, 300k 4.45 ms, 1 MiB 16.23 ms; the
+  batch's per-conversion mean is ≈0.49 ms on a P-core. The unclosed-`<` pathology that took
+  ~188 ms at 30k chars before P1 now takes 0.43 ms at 30k and 17.9 ms at 1 MiB.
+
+  **Verdict (14900K early warning, one-third rule, assumes a P-core).** Gate (ii) passes
+  with margin on P-cores (0.57–0.59×) and E-cores (0.93×); gate (i) passes on a P-core but
+  only just (0.92–0.97×) and fails on E-cores/unpinned. So the 14900K does not already fail
+  a third of a gate on the core class the rule assumes, and **the worker decision is
+  pending the laptop figure**: i7-8550U decisive figure — pending (owner); worker decision
+  pending it. B02: because the P-core gate-(i) figure is within 20% of its threshold,
+  expect the laptop to be re-run at P7 rather than the ÷3 proxy. The laptop was not
+  available in this session.
+
+  **Laptop leg 1 — owner's i7-1185G7 (Tiger Lake, 4C/8T, 15.8 GiB), 2026-09-05, from the
+  `ce062b6c` zip, `--gate laptop`, synthetic batch articles, unpinned.** Not the decisive
+  reference machine (the i7-8550U is slower per core and still pending) — an upper bound on what
+  the reference can do. Node 24 is the app's runtime (Electron 43); the Node 22 runs are
+  informative only.
+
+  | run | Node | 1 MiB worst warm (family) | cold | batch warm | batch cold | (i) vs 50 ms | (ii) vs 150 ms |
+  |---|---|---|---|---|---|---|---|
+  | 1 | 24.20.0 | 56.99 ms (entity-heavy) | 82.42 ms | 85.69 ms | 79.05 ms | 1.14× FAIL | 0.57× PASS |
+  | 2 | 24.20.0 | 55.12 ms (deep-nesting) | 74.86 ms | 96.27 ms | 110.07 ms | 1.10× FAIL | 0.64× PASS |
+  | 3 | 24.20.0 | 62.85 ms (wellformed) | 118.68 ms | 106.81 ms | 169.21 ms | 1.26× FAIL | 0.71× PASS |
+  | 1 | 22.23.1 | 31.88 ms (wellformed) | 49.13 ms | 51.11 ms | 73.93 ms | 0.64× PASS | 0.34× PASS |
+  | 2 | 22.23.1 | 32.22 ms (entity-heavy) | 52.33 ms | 49.53 ms | 61.97 ms | 0.64× PASS | 0.33× PASS |
+  | 3 | 22.23.1 | 46.30 ms (wellformed) | 44.70 ms | 57.33 ms | 99.52 ms | 0.93× PASS | 0.38× PASS |
+
+  Caveats: power plan / AC state not recorded; the 30k MAX drifted 1.78 → 4.52 → 5.52 ms across
+  the three Node 24 runs within 25 s (throttling or background load), so the Node 24 figures are
+  noisy upward — but even the best Node 24 run fails gate (i) by 10 %, and Node 22 vs 24 on the
+  same machine differ ~1.8× (runtime or heat; not separable from this data). Where the 1 MiB time
+  goes (14900K P-core, all families 13–16 ms): the scanner loop itself is the floor;
+  `decodeEntities` is ~7 of the 13 ms only on the entity-heavy family. **Reading:** on the app's
+  runtime a machine faster than the reference already fails gate (i) while gate (ii) passes with
+  a 30–40 % margin; the i7-8550U cannot do better, so under D2 as ruled the worker follow-up PR
+  is expected before P4 unless the owner re-rules the 1 MiB worst-case gate (e.g. a 512 KiB
+  `maxChars` — the largest observed maxi article is ~0.5 MB — or accepting a one-off 60–90 ms
+  stall for a pathological 1 MiB article). Decision: pending the i7-8550U figure and that ruling.
+
+  **Laptop leg 2 — the reporter's i7-8550U (the slow-hardware reference), 2026-09-05, on the P1
+  converter `ce062b6c` (before slicing), `--gate laptop`, unpinned, AC power, High performance
+  plan, Node 24.18.0, Windows 11 Pro 26200.** Warm 1 MiB worst case 130.13 / 95.84 / 79.38 /
+  72.97 ms (run 1 was the first process after setup; runs 2–4 settled) vs 50 ms — FAIL 1.46–2.60×
+  in every run; 60 × 30 KB synthetic batch 249.97 / 133.99 / 126.59 ms vs 150 ms — fail once, pass
+  twice (0.84–0.89×), 2.1–4.2 ms per conversion; a fourth run over three REAL kiwix-serve articles
+  (46–293 KB, mean ~160 KB, 1.5–9.7× the assumed size) totalled 307 ms — not comparable to the
+  30 KB assumption, per-char consistent with Section A. Per-family 1 MiB warm (run 3): unclosed-lt
+  46.6, repeated-lt 79.4, entity-heavy 57.7, deep-nesting 76.2, wellformed 59.6 ms. **Reading:** this
+  core class is 4.6–8× slower than a 14900K P-core on this workload, not the 2.5–3× the one-third
+  rule assumed — the rule under-warned; under D2 as originally ruled the reference fails gate (i)
+  outright, which is what the re-ruling (P1b, below) answers. The decisive figure is now the
+  reference's PER-SLICE stall on the P1b converter (Section D, pending — the reporter's next run;
+  the P1b converter was not on the laptop yet). Expectation from the ratio: 14900K p95 0.5–1.0 ms ×
+  4.6–8 ≈ 2.5–8 ms against the 5 ms bound, so `DEFAULT_SLICE_WORK` may need to drop to 16 Ki
+  (the perf script's `--slice-work` flag lets the laptop try both in one session; the CPU total
+  is unchanged either way).
+
+  **P1b — cooperative slicing (re-ruled remedy, 2026-09-05).** D2's remedy is re-ruled from a
+  worker to cooperative slicing: a worker's blast radius (a new main rollup entry, first-party
+  `asarUnpack`, a pool/lifecycle boundary, an owner-only packaged-load smoke class) was judged
+  larger than slicing's, which is `html.ts` plus two `await` call sites, fully provable in
+  Vitest — mechanism in that file's "COOPERATIVE SLICING (P1b)" header comment. `zimArticleSlices`
+  is now the one implementation: a generator yielding every `DEFAULT_SLICE_WORK` work units
+  (32,768, halved from 65,536 after measurement) and, independently, after every emitted
+  `TEXT_PIECE_CHARS`-sized text piece (the cut is backed up to the last `&` so no entity
+  straddles it). `zimArticleToSegments` drains it unchanged; the new
+  `zimArticleToSegmentsAsync(html, { …, signal? })` awaits `setImmediate` between slices (the
+  event loop's check phase, so IPC and socket reads get through — a microtask would not) and
+  checks the caller's `AbortSignal` before every slice, rejecting with `signal.reason` and
+  running no further slice — an ordinary ~30 KB article (one slice) still resolves in the same
+  tick.
+
+  Gate (iii) is the longest uninterruptible main-thread stall between two yields, ruled ≤5 ms
+  on the i7-8550U reference (early-warning third ≈1.67 ms on a 14900K P-core); the (i)/(ii)
+  totals stay recorded as CPU/latency facts, not gated. It is read on the p95 across pooled
+  slices AND the median-of-three run max (each family/batch timed three runs; `max` = median
+  of the three runs' maxima): a lone max more than ~3× the p95 at a random slice index is
+  scheduling jitter, not real indivisible work — a genuine one would show a FIXED worst-slice
+  index across runs.
+
+  14900K P-core Section D (both pinned runs, every family at 1 MiB):
+
+  | family | slices | max ms | p95 ms | median ms |
+  |---|---|---|---|---|
+  | unclosed-lt | 43 | 0.57–0.64 | 0.47–0.51 | 0.41–0.42 |
+  | unmatched-quote | 32 | 0.16–0.18 | 0.08–0.09 | 0.07 |
+  | unterminated-comment | 1 | 0.02 | 0.02 | 0.02 |
+  | unterminated-script | 1 | 0.02 | 0.02 | 0.02 |
+  | repeated-lt | 63 | 0.64–0.82 | 0.56–0.57 | 0.47–0.48 |
+  | entity-heavy | 33 | 0.52–0.60 | 0.50–0.56 | 0.44 |
+  | deep-nesting | 32 | 0.75–0.99 | 0.72 | 0.61–0.63 |
+  | wellformed | 32 | 0.65–0.86 | 0.71–0.99 | 0.52–0.54 |
+  | batch (60 conversions) | 60 | 2.71–2.77 | 0.53–0.58 | 0.49–0.50 |
+
+  **Verdict.** (iii) PASSES on p95 and on the median-of-three max for every 1 MiB family. The
+  script's raw verdict line still reads FAIL 1.63–1.66×: that figure is the batch leg's max, a
+  single ~30 KB article (one slice, median 0.5 ms) taking 2.7 ms at a random position — per the
+  reading rule above that is scheduling jitter, not the verdict. The two steps that were genuinely
+  indivisible before the follow-up (~13 ms of `decodeEntities` over one huge text run at a fixed
+  slice 0, ~2.2 ms of trailing whole-buffer tidy at the fixed last slice) now cost ~0.6–0.7 ms and
+  no longer sit at a fixed index. The sync 1 MiB totals rose ≈15% over P1 (the price of
+  divisibility: generator driving, text pieces, incremental tidy) — recorded as a CPU/latency
+  fact under the re-ruled gate, not hidden. Decisive i7-8550U per-slice figure: pending (owner).
+  **Laptop leg 3 — the reporter's i7-8550U on the P1b converter (`5f68cec4`), 2026-09-05, the
+  decisive per-slice run.** Conditions as leg 2 (AC, High performance, Node 24.18, no pinning);
+  32 Ki and 16 Ki slice sizes, three synthetic runs each plus one real-fixture run each.
+
+  | series | 1 MiB families: median-of-3 max | 1 MiB p95 | batch max | batch p95 | batch median |
+  |---|---|---|---|---|---|
+  | 32 Ki (3 runs) | 3.32 / 5.21 / 3.71 ms (wellformed) | 3.15–3.72 ms | 7.61 / 7.83 / 9.36 ms | 1.78–2.17 ms | 1.37–1.52 ms |
+  | 16 Ki (3 runs) | 2.76 / 2.97 / 2.69 ms | 2.37–2.72 ms | 7.49 / 8.25 / 6.12 ms | 0.98–1.74 ms | 0.75–0.99 ms |
+  | 32 Ki real fixtures | 6.18 ms (wellformed) | 4.14 ms | 5.37 ms | 0.78 ms | 0.59 ms |
+  | 16 Ki real fixtures | 5.12 ms (wellformed) | 2.14 ms | 5.99 ms | 0.49 ms | 0.31 ms |
+
+  Every run PASSES (iii-p95) at both sizes (0.43–0.83×) and FAILS the raw (iii) max (1.20–1.87×)
+  — and, as the reporter observed, the failing max is the batch leg's, at a random article,
+  unchanged when the slice size halves (60 → 120 slices), i.e. not scan work. The script now
+  counts GC events per row (a `PerformanceObserver` on `gc`): on the 14900K the three batch
+  passes show 5 minor collections totalling ~10 ms, ~2 ms each, at random articles — the same
+  shape the laptop shows at its speed (6–9 ms). Those are allocation-driven pauses that hit the
+  synchronous path identically and are outside what slicing can divide; reducing allocation is
+  a separate constant-factor task, not part of the gate. **Decision (2026-09-05): `DEFAULT_SLICE_WORK`
+  = `TEXT_PIECE_CHARS` = 16 Ki** — on the reference every 1 MiB family's median-of-three max
+  is under 3 ms and p95 2.4–2.7 ms (32 Ki reached 5.2 ms / 3.7 ms), at ~0 % overhead; an ordinary
+  ~30 KB article becomes two slices (one macrotask hop). Gate (iii) reading on the reference:
+  **PASS** on p95 and on the 1 MiB families' median-of-three max; the batch's residual maxima are
+  GC, recorded. The CPU totals on the reference (facts, not gated): 1 MiB 53–80 ms, synthetic
+  batch 87–103 ms (one slow run 168), real-fixture batch 188–210 ms (size caveat). T02-c is
+  thereby recorded; P7's re-check (B02) runs Section D at 16 Ki on the final build.
+- **D-Z4 — one seam in `retrieve()`.** An optional `ExternalRetrievalArm` (parameter 8)
+  appends candidates between the chunk-row join and the rerank, so rerank, dedup, token
+  budget and `[Sn]` labelling treat archive and document chunks uniformly. No reranker →
+  round-robin interleave (a straight trim would always drop the appended arm). Arm
+  failure is logged and swallowed — an unplugged pack drive never breaks a document ask.
+  The no-arm path is pinned against a retrieval result captured from pre-arm master `bfdb514a`
+  (`tests/fixtures/zim/no-arm-retrieval-master-bfdb514a.json`, review L6, `zim-arm.test.ts`).
+- **D-Z5 — synthetic identity, honest exclusions.** Archive chunks carry
+  `chunkId 'zim:<packId>:<path>#<n>'`, `documentId 'zim:<packId>'`, `sourceKind:
+  'archive'`. Their citations carry `packId`/`archiveTitle`/`articlePath` and **no**
+  `documentId`/`chunkId` (the evidence-pack resolver reads a non-null documentId as a
+  real row). Coverage math excludes archive chunks; a pure-archive answer records no
+  coverage fraction. The prompt meta line reads `| Archive: <title> | Section: <heading>`.
+  **P2 (2026-09-05, PR #294 review H2/M11, #301) — evidence identity and provenance.**
+  `buildEvidenceSourceSnapshots` (`evidence-pack/snapshot.ts`) checks
+  `c.sourceKind === 'archive'` BEFORE both the document-id branch and the legacy
+  exact-title branch: an archive citation is always `identity:'unresolved'` with null
+  `documentId`/`documentSha256`/`mimeType`/`availabilityAtCreation`, even when stale or
+  malformed data also supplies a document id. The same guard runs at READ time in
+  `parseSourceSnapshots` (`services/evidence-reviews.ts`); freshness reports such a source
+  `'unverifiable'` by an explicit archive branch (never `'changed'`/`'missing'`, §16.2/
+  §16.5), and the source-in-context handler returns null for it (no workspace file to
+  read). `EvidenceSourceSnapshot` (`shared/types.ts`) gained four ADDITIVE fields —
+  `sourceKind: 'document' | 'archive'` (always written; stored JSON without the field
+  reads as `'document'`), `archiveTitle`, `packId` (`knowledge_packs.id`), `articlePath`
+  — carried through every whitelist/re-modelling layer into the HTML/PDF evidence pack
+  (a distinct archive card, warning and register row; document sources render
+  byte-identically to before), the Markdown transcript export, and
+  `EvidencePane`/`ReviewSummaryView` (a distinct unresolved-archive badge, no "Open
+  source in context"). No new storage column, `SCHEMA_VERSION` unchanged. **Saved-review
+  compatibility is disposable** (owner ruling 2026-09-05): a review created on a pre-merge ZIM
+  build that cites an archive may carry a wrongly resolved document identity and must be
+  re-run — no detection, invalidation or migration flow, and the app never rewrites a
+  frozen review or infers an archive from a matching title (CHANGELOG). **Review context
+  is honest unavailable:** an archive row in a review offers no "Open article" (there is
+  no workspace document, and the article viewer bridge needs P3b's locator/serving-map
+  contract) — P6 owns adding it after P3b, with tests for unavailable/renamed/deleted
+  packs.
+- **D-Z6 — registered in place; kiwix-manage is the metadata reader.** Packs are multi-GB,
+  public, read-only — the deliberate exception to the §1 copy-into-workspace rule. One
+  `kiwix-manage add` into a throwaway library.xml reads the archive header (fast at any
+  size) and yields uuid/title/language/date/articleCount — no libzim anywhere.
+  Resolution follows stored-copy: `<drive>/zim/<leaf>` first, recorded path second;
+  a missing file marks `unavailable_at`, never a delete. Removal is a **tombstone**
+  (`removed_at`): drive auto-discovery keys known files by leaf, so a deleted row for a
+  file still in `zim/` would resurrect on the next list (caught by test).
+- **D-Z7 — opt-in per chat.** `DocumentScope.packIds` (additive; a pack-less scope
+  serializes byte-identically), resolved by `resolveScope` into `RetrievalScope.packIds`,
+  consumed ONLY by the arm — `buildScopeFilter` never sees it. Packs add query-time
+  latency, so they are never silently included.
+- **D-Z8 — no renderer loopback, no HTML.** The CSP (window-security.ts) blocks both an
+  iframe to `127.0.0.1` and a renderer fetch, deliberately. The article viewer
+  (`packs:getArticle` → ArticleModal) ships main-extracted plain sectioned text — the
+  same converter retrieval uses — so the renderer keeps its no-innerHTML posture and no
+  sanitizer dependency exists. The generated library is one immutable
+  `library.<build>.xml` per pack revision in an OS temp dir (P3a; P3b relocates it under
+  the workspace) — a new file per rebuild, never rewritten in place, deleted only after
+  the child that read it reached a confirmed terminal state — and every build is removed
+  on quit unless a child could not be confirmed dead.
+- **D-Z9 — dialog-in-handler registration.** `packs:add` opens the native picker AND
+  registers inside one main-side handler; no archive path ever crosses the IPC bridge.
+  Audit is ids/counts only — pack titles and filenames are content (sentinel-tested).
+- **D-Z10 — service generations: one writer, one published tuple, bounded teardown
+  (P3a, 2026-09-05; PR #294 review H3 / M2 / M9).** `ZimService` (`services/zim/index.ts`)
+  publishes one coherent configuration per pack revision — `{ revision, build,
+  generation, port, library.<build>.xml }`. A pack-set change bumps a monotonic
+  revision; every library build and every kiwix-serve child (a bind-race retry and a
+  crash restart included) draws a distinct monotonic generation from one
+  service-owned allocator, so a generation never repeats in a process. A single promise
+  chain is the only writer of library files and the only path that stops or starts a
+  child; each start gets its own immutable XML path, captures its revision and
+  cancellation before the first await, and rechecks after verification, the manager
+  work, port allocation and the health probe — publishing only a tuple that is still
+  current, or else cleaning its own build so the caller retries under the current
+  revision.
+  Concurrent asks share one start: a cancelled ask stops waiting without cancelling the
+  shared start, and only a pack change, lock or quit aborts it, with every waiter
+  rechecking before it consumes a result. Teardown (`serve.ts`'s `killRecord`/`stop()`)
+  is single-flight and self-bounded — SIGTERM, 2 s, SIGKILL, 3 s — and a child that
+  still cannot be confirmed dead stays in the crash-reap registry and keeps its file;
+  the teardown then reports that outcome rather than "complete", which is exactly what
+  the lock and quit paths must surface too, never a silent "cleanup complete". A start
+  failure latches by revision until the pack set changes; an aborted start never
+  latches.
+  `kiwix-manage` (`tools.ts`) runs under the same pre-spawn verifier — a hashless
+  install marker resolves `skip-legacy` and keeps launching under a logged warning
+  rather than integrity verification (residual R-1, open until the provisioning wave
+  proves both binaries' hashes/verification/repair) — registers every PID, honours the
+  caller's abort, and settles only after its child reaches a terminal state or the
+  bound expires, so no directory is ever removed while the child may still be writing
+  it. `ZimService.serverState()` exposes `{ revision, build, generation, port, alive }`
+  for the P5 alive/generation request guard. P3b adds the admission-epoch half of this
+  record.
+
+### Module map
+
+`services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
+budget and `truncated` signal — PR #294 review H1; cooperatively sliced, async on the ask
+path — P1b), `client.ts` (node:http + search/
+library XML parsing), `tools.ts` (binary discovery `runtime/kiwix-tools/<os>/`, dev-only
+`HILBERTRAUM_KIWIX_BIN`, the verified `kiwix-manage` runner — pre-spawn verifier, PID
+registration for as long as the child may be running, settles only after a terminal
+state or the bounded wait — D-Z10), `serve.ts` (`KiwixServer` — per-child records, no
+mutable state on `this`, the bounded SIGTERM→SIGKILL teardown policy — D-Z10),
+`packs.ts` (registry over `knowledge_packs`; `writeLibraryXml` stops and rethrows on an
+unconfirmed manager child, D-Z10), `arm.ts` (candidate production), `index.ts`
+(`ZimService` facade on `AppContext.zim` — the revision/generation allocator, the FIFO
+build/teardown/start chain and the published tuple, D-Z10; quit teardown in
+shutdown.ts). IPC: `ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt).
+Renderer: `documents/PacksPanel.tsx`, ScopePopover pack sources, SourcesDisclosure "Open
+article", `chat/ArticleModal.tsx`. Shapes: [`data-contracts.md`](data-contracts.md)
+"Knowledge packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit) —
+`zim-html` runs four attributed synthetic non-Wikipedia fixtures under
+`tests/fixtures/zim/` (Parsoid data-mw, zimit/warc2zim, DevDocs, Stack Exchange/sotoki)
+in normal CI — `zim-service-lifecycle.test.ts` (unit, NEW, P3a) exercises the
+generation/publication races and the manager contract: test T05 parks the verifier,
+port allocator, manager call and health probe in turn against an overlapping
+`stop()`/`invalidateLibrary()`/restart, plus a cancelled waiter beside a live one, a
+lock (`suspend()`) aborting every waiter, a revision-keyed failure latch cleared by a
+pack change, and an ignored SIGTERM escalating to SIGKILL and reporting the child
+unconfirmed with its PID and file kept; test T06 walks `kiwix-manage`'s verifier
+outcomes (match/mismatch/hashless), PID registration bounded to the child's lifetime,
+and timeout/abort settling only after a terminal state — `zim-arm/zim-ipc`
+(integration), `KnowledgePacks.test.tsx` (renderer, incl. the `partial`-hint case);
+real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
+`scripts/zim-html-perf.mjs` prints the D2 measurement table outside Vitest/Electron
+(`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`), including
+Section D's per-slice cooperative-slicing gate (P1b) — each `--gate` profile now also
+carries a `slice` threshold alongside `oneMiB`/`batch`.
+
+### Deliberately not built (MVP cut; §5 item 21 tracks the follow-ups)
+
+Provisioning of the `kiwix_tools` family (runtime-sources.yaml, engine downloader,
+DRIVE-NOTICES, commercial-drive checks, fetch scripts — binaries are placed manually);
+persistent article import (Tier 2); an in-app ZIM catalog/downloader; evidence review
+over archive citations (they resolve as honest 'unresolved'); packs on the whole-document
+/ compare paths; quality guarantees for non-Wikimedia ZIMs. The viewer derives the
+serving URL id from the filename stem (the kiwix-serve `--library` naming rule, verified
+against kiwix-tools 3.8.1) — retrieval itself parses ids from search links and does not
+depend on that rule.

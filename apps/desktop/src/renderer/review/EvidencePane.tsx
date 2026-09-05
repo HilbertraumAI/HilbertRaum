@@ -48,6 +48,8 @@ function matchesSourceFilter(source: EvidenceSourceSnapshot, q: string, t: I18n[
     source.documentTitle.toLowerCase().includes(q) ||
     (source.snippet ?? '').toLowerCase().includes(q) ||
     (source.sectionLabel ?? '').toLowerCase().includes(q) ||
+    // ZIM wave (#294 review M11): the knowledge-pack title is a searchable card fact too.
+    (source.archiveTitle ?? '').toLowerCase().includes(q) ||
     (source.machineLabel ?? '').toLowerCase().includes(q) ||
     (source.machineLabel != null &&
       formatCitationLabel(t, source.machineLabel).toLowerCase().includes(q)) ||
@@ -257,7 +259,14 @@ function EvidenceCard({
           : null
   // D-5: context resolves through the snapshotted documentId — only resolved sources can
   // offer it (an unresolved identity has no document to read; main refuses it too).
-  const canOpenContext = onOpenContext != null && source.identity === 'resolved' && !!source.documentId
+  // M11: an archive source is unresolved by construction, so this is already unreachable
+  // for it — kept explicit as the phase's review-context decision (honest unavailable, no
+  // "Open article" action here).
+  const canOpenContext =
+    onOpenContext != null &&
+    source.identity === 'resolved' &&
+    !!source.documentId &&
+    source.sourceKind !== 'archive'
   return (
     <div className="source-card review-source-card">
       <div className="source-card-head">
@@ -269,6 +278,12 @@ function EvidenceCard({
           <span className="source-card-where">
             {t('chat.sources.page', { page: source.pageNumber })}
           </span>
+        ) : source.sourceKind === 'archive' ? (
+          // ZIM wave (#294 review M11): the knowledge pack alongside the section, exactly
+          // like SourcesDisclosure.tsx renders the same fields for a chat citation card.
+          <span className="source-card-where">
+            {[source.archiveTitle, source.sectionLabel].filter(Boolean).join(' · ')}
+          </span>
         ) : source.sectionLabel ? (
           <span className="source-card-where">{source.sectionLabel}</span>
         ) : null}
@@ -278,10 +293,18 @@ function EvidenceCard({
         <span className="review-source-kind">{t(`review.source.kind.${source.kind}`)}</span>
         {/* Honest identity/availability states (spec §13.5/§25.2): the CREATION-TIME facts
             the snapshot recorded; the P4 freshness badge below adds the CURRENT state. */}
-        {source.identity === 'unresolved' && (
+        {/* M11: an archive card gets its OWN badge — distinct wording from the legacy
+            document "identity could not be determined" claim — and never both. */}
+        {source.sourceKind === 'archive' ? (
           <span className="review-source-state">
-            <span aria-hidden="true">?</span> {t('review.source.unresolved')}
+            <span aria-hidden="true">?</span> {t('review.source.archive')}
           </span>
+        ) : (
+          source.identity === 'unresolved' && (
+            <span className="review-source-state">
+              <span aria-hidden="true">?</span> {t('review.source.unresolved')}
+            </span>
+          )
         )}
         {source.availabilityAtCreation === 'missing' && (
           <span className="review-source-state">

@@ -1,6 +1,6 @@
 import { Fragment, memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AssistantMarkdown } from './AssistantMarkdownLazy'
-import type { ConversationSummaryMarker, EvidenceReviewSummary, Message } from '@shared/types'
+import type { Citation, ConversationSummaryMarker, EvidenceReviewSummary, Message } from '@shared/types'
 import type { AnswerSpeed } from '@shared/ipc'
 import type { UiLanguage } from '@shared/i18n'
 import { isReviewEligible } from '@shared/evidence-review'
@@ -85,6 +85,9 @@ interface TranscriptProps {
    * all — only persisted turns reach MessageActions).
    */
   onOpenReview?: (messageId: string) => void
+  /** Knowledge packs (ZIM wave): open the offline article viewer for an archive citation.
+   *  Absent => archive source cards render without the open affordance. */
+  onOpenArticle?: (citation: Citation) => void
   /**
    * Known review state per message id (null = checked, none exists) — drives the
    * "Review evidence" vs "Continue review" label + the Draft/Ready chip (spec §9.4).
@@ -134,6 +137,7 @@ export const Transcript = memo(function Transcript({
   onSave,
   onExportTable,
   onOpenReview,
+  onOpenArticle,
   reviewSummaries,
   reviewConversation,
   actionsDisabled,
@@ -215,6 +219,7 @@ export const Transcript = memo(function Transcript({
               onSave={onSave}
               onExportTable={onExportTable}
               onOpenReview={onOpenReview}
+              onOpenArticle={onOpenArticle}
               reviewSummary={reviewSummaries?.get(m.id) ?? null}
               reviewConversation={reviewConversation}
               actionsDisabled={actionsDisabled}
@@ -325,6 +330,7 @@ const MessageBlock = memo(function MessageBlock({
   onSave,
   onExportTable,
   onOpenReview,
+  onOpenArticle,
   reviewSummary,
   reviewConversation,
   actionsDisabled,
@@ -347,6 +353,7 @@ const MessageBlock = memo(function MessageBlock({
   onSave: () => void
   onExportTable?: (messageId: string) => void
   onOpenReview?: (messageId: string) => void
+  onOpenArticle?: (citation: Citation) => void
   reviewSummary?: EvidenceReviewSummary | null
   reviewConversation?: { mode: 'chat' | 'documents' } | null
   actionsDisabled: boolean
@@ -387,6 +394,7 @@ const MessageBlock = memo(function MessageBlock({
               mode={m.coverage?.mode}
               onReview={openReview}
               reviewDisabled={actionsDisabled}
+              onOpenArticle={onOpenArticle}
             />
             {/* Honesty (whole-document-analysis §4.5/§5.2; full-doc-skills §3.3/D48): render the
                 answer's PERSISTED coverage when we have it, else fall back to the relevance label —

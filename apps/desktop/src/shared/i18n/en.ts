@@ -1693,6 +1693,8 @@ export const en = {
   'diag.audit.evidence_review_ready': 'Evidence review marked ready',
   'diag.audit.evidence_review_deleted': 'Evidence review deleted',
   'diag.audit.evidence_pack_exported': 'Evidence pack exported',
+  'diag.audit.knowledge_pack_added': 'Knowledge pack added',
+  'diag.audit.knowledge_pack_removed': 'Knowledge pack removed',
   'diag.accel.gpuFallbackName': 'Graphics card',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Built-in demo mode',
@@ -2256,6 +2258,10 @@ export const en = {
   'main.dialog.exportLog': 'Save diagnostic logs',
   'main.dialog.filterDocuments': 'Documents',
   'main.dialog.filterAll': 'All files',
+  'main.zim.unavailable': 'Knowledge packs are not available in this session.',
+  'main.zim.dialogTitle': 'Add knowledge packs',
+  'main.zim.filterZim': 'ZIM archives',
+  'main.zim.addFailed': 'The archive could not be added: {reason}',
   'main.dialog.chooseImage': 'Choose an image',
   'main.dialog.filterImages': 'Images',
   // #120 item 4: the images IPC refusal backstops (near-dead text — the renderer shows its own
@@ -2380,6 +2386,43 @@ export const en = {
   'chat.scope.projectNamed': 'Project: {name}',
   'chat.scope.projectCount.one': '{count} project',
   'chat.scope.projectCount.other': '{count} projects',
+  // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
+  'chat.scope.packsTitle': 'Knowledge packs',
+  'chat.scope.packUnavailable': 'not available',
+  'chat.scope.packNamed': 'Pack: {name}',
+  'chat.scope.packCount.one': '{count} knowledge pack',
+  'chat.scope.packCount.other': '{count} knowledge packs',
+  'chat.sources.openArticle': 'Open article',
+  'chat.article.title': 'Article',
+  'chat.article.from': 'From {archive} - offline copy',
+  'chat.article.loading': 'Loading the article…',
+  'chat.article.unavailable': 'This article is not available right now. The pack may be disabled, removed, or its drive unplugged.',
+  'chat.article.partial': 'Only the first part of this article could be shown.',
+  'docs.section.sources': 'Reference',
+  'docs.section.packs': 'Knowledge packs',
+  'packs.add': 'Add packs…',
+  'packs.addBusy': 'Adding…',
+  'packs.lead': 'ZIM archives (for example an offline Wikipedia) the chat can answer from. Files are used in place and never copied; drop archives into the drive’s zim folder or add them here.',
+  'packs.loading': 'Loading packs…',
+  'packs.emptyTitle': 'No knowledge packs yet',
+  'packs.emptyLine': 'Add a ZIM archive, or copy one into the drive’s zim folder and reopen this view.',
+  'packs.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See the user guide for the manual install step.',
+  'packs.addedToast.one': 'Knowledge pack added',
+  'packs.addedToast.other': '{count} knowledge packs added',
+  'packs.removedToast': 'Knowledge pack removed',
+  'packs.articleCount.one': '{count} article',
+  'packs.articleCount.other': '{count} articles',
+  'packs.state.enabled': 'Enabled',
+  'packs.state.disabled': 'Disabled',
+  'packs.state.missing': 'File missing',
+  'packs.state.missingTitle': 'The archive file could not be found - is the drive plugged in?',
+  'packs.enable': 'Enable',
+  'packs.disable': 'Disable',
+  'packs.working': 'Working…',
+  'packs.remove': 'Remove',
+  'packs.removeTitle': 'Remove this knowledge pack?',
+  'packs.removeConfirm': 'Remove pack',
+  'packs.removeBody': 'The pack is removed from HilbertRaum only - the archive file on disk is not touched. Chats that used it simply stop retrieving from it.',
   'chat.scope.docCount.one': '{count} document',
   'chat.scope.docCount.other': '{count} documents',
   'chat.scope.filesInChat.one': '{count} file in this chat',
@@ -2726,6 +2769,10 @@ export const en = {
   'review.source.kind.whole_document_provenance': 'Whole-document provenance',
   'review.source.kind.structured_record': 'Extracted record',
   'review.source.unresolved': 'Source identity could not be determined',
+  // ZIM wave (#294 review M11): DISTINCT from the legacy document claim above — an archive
+  // article was never resolvable against a workspace document in the first place.
+  'review.source.archive':
+    'Knowledge-pack article — its identity and content cannot be verified against the workspace',
   'review.source.missingAtCreation': 'Source was not available when this review was created',
   // P4 per-card freshness badges (spec §15.4/§15.5 copy; text + icon, never color-only).
   // Unresolved sources keep ONLY the unresolved badge — their current state cannot be
@@ -2815,6 +2862,12 @@ export const en = {
   'review.summary.sourcesCount.other': '{count} sources',
   'review.summary.sourcesUnresolved.one': '{count} source identity could not be determined',
   'review.summary.sourcesUnresolved.other': '{count} source identities could not be determined',
+  // ZIM wave (#294 review M11): archives are excluded from sourcesUnresolved above — this is
+  // their own, distinct count.
+  'review.summary.sourcesArchive.one':
+    '{count} source is a knowledge-pack article that cannot be verified against the workspace',
+  'review.summary.sourcesArchive.other':
+    '{count} sources are knowledge-pack articles that cannot be verified against the workspace',
   'review.summary.sourcesMissing.one':
     '{count} source was not available when this review was created',
   'review.summary.sourcesMissing.other':
@@ -2885,7 +2938,7 @@ export const en = {
   // HTML from the pack's language option; a persisted pack is a frozen snapshot and is
   // never re-localized later). Reused in the pack: review.status.*, review.decision.*,
   // review.relation.*, review.link.cited/.reviewer, review.summary.unavailable/.truncated,
-  // review.summary.sourcesUnresolved/.sourcesMissing, chat.sources.marker. ----
+  // review.summary.sourcesUnresolved/.sourcesMissing/.sourcesArchive, chat.sources.marker. ----
   'packExport.docTitle': 'Evidence pack',
   'packExport.privacy': 'Created locally by HilbertRaum. No cloud services were involved.',
   'packExport.disclaimer':
@@ -2939,11 +2992,18 @@ export const en = {
   'packExport.evidence.kindStructured': 'Structured extraction record',
   'packExport.evidence.page': 'Page {n}',
   'packExport.evidence.sectionLabel': 'Section',
+  // ZIM wave (#294 review M11): the archive card's readable pack line + its mono locator.
+  'packExport.evidence.archive': 'Knowledge pack',
+  'packExport.evidence.packId': 'Pack id',
+  'packExport.evidence.article': 'Article',
   'packExport.evidence.excerpt': 'Persisted excerpt',
   'packExport.evidence.noExcerpt': 'No excerpt was persisted for this source.',
   'packExport.evidence.relations': 'Reviewer relations',
   'packExport.evidence.identityUnresolved':
     'The identity of this source document could not be verified against the workspace.',
+  // M11: DISTINCT from the legacy document claim above — never both on one card.
+  'packExport.evidence.archiveIdentity':
+    'This source is an article from a knowledge pack (ZIM archive), not a workspace document. Its identity and content are not verified against the workspace; the pack id and article path identify it.',
   'packExport.evidence.missingAtCreation':
     'This source document was already missing from the workspace when the review was created.',
   // P4 at-export per-card states (spec §15.4/§15.5 wording).
@@ -2987,6 +3047,9 @@ export const en = {
   'packExport.section.sources': 'Source register',
   'packExport.sources.colTitle': 'Document',
   'packExport.sources.colType': 'File type',
+  // ZIM wave (#294 review M11): the type/availability values an archive row shows instead
+  // of a mime type / the generic "cannot be verified" claim.
+  'packExport.sources.typeArchive': 'Knowledge-pack article (ZIM archive)',
   'packExport.sources.colSha': 'SHA-256 at review time',
   'packExport.sources.colAvailability': 'Availability at review creation',
   'packExport.sources.colAvailabilityExport': 'Availability at export',
@@ -2994,6 +3057,7 @@ export const en = {
   'packExport.sources.availabilityMissing': 'Missing',
   'packExport.sources.availabilityChanged': 'Changed since review',
   'packExport.sources.availabilityUnknown': 'Cannot be verified',
+  'packExport.sources.availabilityArchive': 'Archive article — not verifiable against the workspace',
   'packExport.sources.hashExcluded': 'Excluded by export options',
   'packExport.sources.pathNote': 'Original file paths are never included in an evidence pack.',
   'packExport.section.generation': 'Generation details',

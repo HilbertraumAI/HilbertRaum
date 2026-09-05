@@ -181,10 +181,14 @@ function normalizeScope(ids: string[] | null | undefined): string[] | null {
 /** Serialize a composite scope for `scope_v2_json` (null clears it). Empty scope persists. */
 function serializeDocumentScope(scope: DocumentScope | null | undefined): string | null {
   if (!scope) return null
+  const packIds = (scope.packIds ?? []).filter((x) => typeof x === 'string' && x.length > 0)
   return JSON.stringify({
     collectionIds: scope.collectionIds ?? [],
     documentIds: scope.documentIds ?? [],
-    ...(scope.includeArchived ? { includeArchived: true } : {})
+    ...(scope.includeArchived ? { includeArchived: true } : {}),
+    // Knowledge packs (ZIM wave): persisted only when selected, so pre-wave rows and
+    // pack-less scopes serialize byte-identically to before.
+    ...(packIds.length > 0 ? { packIds } : {})
   })
 }
 
@@ -244,6 +248,16 @@ function isCitation(v: unknown): v is Citation {
   // row without them passes unchanged; a malformed value rejects the element like the rest.
   if (c.documentId != null && typeof c.documentId !== 'string') return false
   if (c.chunkId != null && typeof c.chunkId !== 'string') return false
+  // Knowledge packs (ZIM wave, #294 review M11): the four archive fields follow the SAME
+  // tolerant-but-typed rule. Without this the locator flowed untyped to consumers that
+  // assume strings (the Markdown export's `.replace`, the chat/review cards) — exactly the
+  // L6 hazard the guards above exist to close.
+  // A non-string kind is malformed; an UNKNOWN string (a newer build's kind) is kept and reads as
+  // a document downstream (every consumer tests `=== 'archive'`) — the tolerant direction.
+  if (c.sourceKind != null && typeof c.sourceKind !== 'string') return false
+  if (c.packId != null && typeof c.packId !== 'string') return false
+  if (c.archiveTitle != null && typeof c.archiveTitle !== 'string') return false
+  if (c.articlePath != null && typeof c.articlePath !== 'string') return false
   return true
 }
 
@@ -1214,7 +1228,27 @@ export function exportTranscript(db: Db, conversationId: string): { title: strin
       for (const c of m.citations) {
         const where =
           c.pageNumber != null ? `, p. ${c.pageNumber}` : c.section ? `, ${c.section}` : ''
-        lines.push(`- [${c.label}] ${c.sourceTitle}${where}`)
+        if (c.sourceKind === 'archive') {
+          // ZIM wave (#294 review M11): preserve archive provenance — the pack title and
+          // the stable pack UUID/entry-path locator — even though identity stays unresolved
+          // (H2). Missing locator values are OMITTED, never invented; `\r`/`\n` are stripped
+          // from every untrusted locator field so a hostile value cannot break the line.
+          const clean = (v: string | null | undefined): string | null => {
+            const stripped = (v ?? '').replace(/[\r\n]+/g, ' ').trim()
+            return stripped.length > 0 ? stripped : null
+          }
+          const archiveTitle = clean(c.archiveTitle)
+          const packId = clean(c.packId)
+          const articlePath = clean(c.articlePath)
+          const locator: string[] = []
+          if (archiveTitle) locator.push(`knowledge pack: ${archiveTitle}`)
+          if (packId) locator.push(`pack id ${packId}`)
+          if (articlePath) locator.push(`article ${articlePath}`)
+          const suffix = locator.length > 0 ? ` — ${locator.join('; ')}` : ''
+          lines.push(`- [${c.label}] ${c.sourceTitle}${where}${suffix}`)
+        } else {
+          lines.push(`- [${c.label}] ${c.sourceTitle}${where}`)
+        }
       }
     }
     lines.push('')
