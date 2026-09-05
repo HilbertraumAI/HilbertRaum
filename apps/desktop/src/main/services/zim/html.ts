@@ -97,14 +97,66 @@ import type { ExtractedSegment } from '../ingestion/parsers'
 // 3.00. The `work` counter below measures exactly those examinations, so CI asserts the
 // bound deterministically instead of by wall-clock time.
 //
-// `decodeEntities` and `tidy` are the only post-processing; both were checked for their own
-// super-linear risks and are linear. `decodeEntities` is hand-rolled (see its own note):
+// ---------------------------------------------------------------------------------------
+// COOPERATIVE SLICING (P1b) — why the linear scanner still yields (PR #294 review H1)
+// ---------------------------------------------------------------------------------------
+// Linear is not the same as short. The scanner loop is the floor at 13–16 ms per MiB on a
+// desktop P-core, and on the owner's laptop-class hardware a worst-case 1 MiB article costs
+// 55–63 ms — one uninterruptible main-process stall, since the converter runs on the main
+// thread for every fetched article and an AbortSignal cannot interrupt a synchronous loop.
+// No constant-factor fix removes that: the remedy is to stop making it ONE stall.
+//
+// `zimArticleSlices` is therefore the real implementation — a generator that yields every
+// `sliceWork` work units (default `DEFAULT_SLICE_WORK`). `zimArticleToSegments` drains it in
+// one go (unchanged behaviour, for tests, tooling and off-ask-path callers);
+// `zimArticleToSegmentsAsync` awaits a `setImmediate` between slices, so the event loop turns
+// — IPC, socket reads and timers all get through — and checks the caller's AbortSignal at
+// every slice boundary.
+//
+// What this does and does not change:
+//   • CPU totals are unchanged. Slicing does not make conversion cheaper; it makes the stall
+//     bounded. The gate is per-slice (max slice ≤ 5 ms on the reference laptop), not total.
+//   • Work accounting, the truncation contract, extraction semantics and the complexity
+//     record above are untouched — the same loop, with one `yield` at the top.
+//   • Overshoot: the slice check sits at the top of the loop, so the current iteration always
+//     completes first. One iteration costs at most one `find` hop, so a slice can exceed
+//     `sliceWork` by at most that hop (bounded by the input length) — a failed lookahead near
+//     the start of a 1 MiB input is the worst case, and it ends the scan anyway.
+//   • `slices` (yields + 1) is reported on `ZimArticle` and is identical on both paths.
+//   • TWO SLICE TRIGGERS, because `sliceWork` counts scanner examinations and the first
+//     measurement showed the scan was never the problem. Ordinary scan slices came in at
+//     0.1–1.1 ms per MiB, but two post-processing steps were indivisible and dominated:
+//     `decodeEntities` over one enormous text run (a 1 MiB page containing no `<` at all
+//     was a single `indexOf` hop and a single decode — ~13 ms, all inside the first slice)
+//     and the trailing whole-buffer `tidy()` at flush (~2.2 ms for a `<<<<` page). Both are
+//     now divisible:
+//       – character data is emitted in pieces of at most `TEXT_PIECE_CHARS`, and every piece
+//         that is not the last of its run ends a slice. The cut is backed up to the last `&`
+//         in the piece so that `&` starts the NEXT piece: an entity always begins with `&`,
+//         so none can straddle a cut. (A lone `&` at a piece’s very start is left in place —
+//         an "entity" longer than `TEXT_PIECE_CHARS` decodes verbatim on either path, so the
+//         concatenation is unchanged.)
+//       – the segment body is tidied AS IT IS BUILT by `IncrementalTidy`, which is exactly
+//         `tidyWhole` re-associated over pieces (see its own note). `tidyWhole` survives for
+//         headings — short by construction — and as the property test’s oracle.
+//     The emission trigger deliberately does NOT touch `work`: those chars were already
+//     charged by the `find` hop that skipped the run, so charging them again would move the
+//     H1 oracle and the K·n + c bound. `work`, `truncated`, `title` and the segments are
+//     byte-identical to the pre-slicing implementation (checked article by article against
+//     it on every committed fixture, every pathology family at 30k and 1 MiB, and the
+//     malformed-input cases). What does change is `slices`: with two triggers of equal size,
+//     and every emitted char charged to `work` first, the bound becomes
+//     slices ≤ 2·work/sliceWork + 1 (it was work/sliceWork + 1).
+//
+// `decodeEntities` and the tidy are the only post-processing; both were checked for their
+// own super-linear risks and are linear. `decodeEntities` is hand-rolled (see its own note):
 // each `&` is located by one forward `indexOf` and the digit/letter run after it is examined
 // once — a run belongs to at most one preceding `&` — so `&`-heavy and entity-heavy input
-// stays O(n) with no backtracking at all. `tidy`'s five passes are simple character-class or
-// `\n{3,}` scans (no nested quantifier) over disjoint per-segment buffers, and `emit`
-// suppresses newline runs beyond the two `tidy` would keep, so whitespace-heavy input cannot
-// build a huge buffer for a tiny result. Neither is counted in `work`, which measures the
+// stays O(n) with no backtracking at all. `tidyWhole`'s five passes are simple
+// character-class or `\n{3,}` scans with no nested quantifier, and the incremental form walks
+// each piece exactly once; `emitBreak` also drops a block boundary that would only lengthen a
+// whitespace run the rules already cap, so whitespace-heavy input can never build a large
+// buffer for a tiny result. Neither is counted in `work`, which measures the
 // scanner's own examinations.
 
 /** Elements whose entire subtree is dropped. `<math>` is handled separately (alttext). */
@@ -246,6 +298,7 @@ const CH_LT = 60
 const CH_EQ = 61
 const CH_GT = 62
 const CH_QUESTION = 63
+const CH_AMP = 38
 const CH_HASH = 35
 const CH_SEMI = 59
 const CH_LOWER_X = 120
@@ -320,12 +373,151 @@ export function attrValue(attrs: string, name: string): string | null {
 /** Default input cap: 1 MiB of markup. */
 const DEFAULT_MAX_CHARS = 1_048_576
 
+/**
+ * Work units per cooperative slice (P1b), and the size of one emitted text piece — kept
+ * equal so the two slice triggers have the same granularity. 16_384 measures at ~0.3 ms
+ * median / 0.5 ms p95 per slice on a desktop P-core and 1.2 ms median / 2.4–2.7 ms p95 on the
+ * i7-8550U reference — inside the ruled 5 ms per-slice stall with margin — while a whole 1 MiB
+ * article still costs only ~60 macrotask hops and an ordinary ~30 KB article is two slices.
+ * Set from measurement, twice: 65_536 → 32_768 on the i9-14900K (the busiest family sat at
+ * 1.1 ms median with a jitter tail past the 1.67 ms early-warning third), then 32_768 →
+ * 16_384 on the i7-8550U reference itself (2026-09-05: at 32 Ki the 1 MiB families' median-of-
+ * three max reached 5.2 ms and p95 3.2–3.7 ms; at 16 Ki max 2.7–3.0 ms and p95 2.4–2.7 ms —
+ * inside the 5 ms bound with margin, at ~0 % overhead). The residual 6–9 ms spikes that
+ * machine shows at a random article of the batch do NOT shrink with the slice size and are
+ * therefore not scan work (see the perf script's GC columns).
+ */
+export const DEFAULT_SLICE_WORK = 16_384
+
+/**
+ * Longest run of character data handed to `decodeEntities` (and to the incremental tidy)
+ * in one step — kept equal to DEFAULT_SLICE_WORK so both slice triggers have one granularity. A 1 MiB page containing no `<` at all used to be one hop, one decode and
+ * one tidy — 13 ms of main thread nobody could interrupt. Emitting in pieces makes a slice
+ * boundary reachable inside a single text run (P1b follow-up).
+ */
+export const TEXT_PIECE_CHARS = 16_384
+
+/** JS `\s`, by code unit — the set `tidyWhole`'s character classes operate on. */
+function isWhitespaceCode(cc: number): boolean {
+  return (
+    cc === 32 ||
+    (cc >= 9 && cc <= 13) ||
+    cc === 0xa0 ||
+    cc === 0x1680 ||
+    (cc >= 0x2000 && cc <= 0x200a) ||
+    cc === 0x2028 ||
+    cc === 0x2029 ||
+    cc === 0x202f ||
+    cc === 0x205f ||
+    cc === 0x3000 ||
+    cc === 0xfeff
+  )
+}
+
+const INVISIBLES = /[\u00AD\u200B-\u200D\uFEFF]/g
+const WHITESPACE_RUN = /\s+/g
+
+/** Newlines in `text[from, to)`, capped at 2 — the only distinction the rules make. */
+function countNewlines(text: string, from = 0, to = text.length): number {
+  let k = 0
+  for (let i = from; i < to && k < 2; i += 1) if (text.charCodeAt(i) === CH_LF) k += 1
+  return k
+}
+
+/** The canonical form `tidyWhole` gives one maximal whitespace run, by newline count. */
+function canonicalWhitespace(newlines: number): string {
+  return newlines >= 2 ? '\n\n' : newlines === 1 ? '\n' : ' '
+}
+
+const canonicalRun = (run: string): string => canonicalWhitespace(countNewlines(run))
+
+/**
+ * `tidyWhole` applied piece by piece instead of to a finished buffer (P1b follow-up).
+ *
+ * Why it is exact rather than an approximation: composed, `tidyWhole`'s five passes rewrite
+ * every MAXIMAL whitespace run to a form that depends only on how many newlines it holds —
+ * two or more → '\\n\\n', exactly one → '\\n', none → ' ' — after invisible characters have
+ * been removed, and then trim the first and last run away. Removing invisibles is
+ * position-independent, so it can be done per piece. The only run that can straddle a piece
+ * boundary is the one at the end of a piece, so that run is held back as the CARRY and
+ * merged with the next piece's leading run before being canonicalised. Newline counts are
+ * capped at two, which is exactly the information the canonical form preserves, so the carry
+ * loses nothing. The leading trim is "emit nothing until the first non-whitespace" and the
+ * trailing trim is "drop the final carry".
+ *
+ * The result is byte-identical to `tidyWhole` over the concatenation of the pieces, for any
+ * split — pinned by a property test over random inputs and random split sizes down to 1.
+ */
+export class IncrementalTidy {
+  private out = ''
+  /** True once a non-whitespace character has been appended (the leading trim is over). */
+  private started = false
+  /** A whitespace run is pending at the end of the text so far. */
+  private pending = false
+  private pendingNewlines = 0
+
+  /** Newlines held in the pending trailing run (0, 1 or 2 — capped like the rules). */
+  get carryNewlines(): number {
+    return this.pending ? this.pendingNewlines : 0
+  }
+
+  /** The canonical text so far. The pending run is dropped: that is the trailing trim. */
+  result(): string {
+    return this.out
+  }
+
+  /** Start a new segment, optionally seeded with already-canonical text plus a pending run. */
+  reset(seed = '', seedTrailingNewlines = 0): void {
+    this.out = seed
+    this.started = seed.length > 0
+    this.pending = seedTrailingNewlines > 0
+    this.pendingNewlines = seedTrailingNewlines
+  }
+
+  push(raw: string): void {
+    if (raw.length === 0) return
+    const text = raw.replace(INVISIBLES, '')
+    const n = text.length
+    if (n === 0) return
+
+    let a = 0
+    while (a < n && isWhitespaceCode(text.charCodeAt(a))) a += 1
+    if (a === n) {
+      // All whitespace: it merges into the pending run and nothing is decided yet.
+      this.pendingNewlines = Math.min(2, this.pendingNewlines + countNewlines(text))
+      this.pending = true
+      return
+    }
+    let b = n
+    while (b > a && isWhitespaceCode(text.charCodeAt(b - 1))) b -= 1
+
+    // The carry and this piece's leading run are ONE run of the concatenated text.
+    if (this.started && (this.pending || a > 0)) {
+      this.out += canonicalWhitespace(Math.min(2, this.pendingNewlines + countNewlines(text, 0, a)))
+    }
+    this.out += text.slice(a, b).replace(WHITESPACE_RUN, canonicalRun)
+    this.started = true
+    this.pending = b < n
+    this.pendingNewlines = b < n ? countNewlines(text, b, n) : 0
+  }
+}
+
 export interface ZimConvertOptions {
   /** Input cap in chars (default 1 MiB = 1_048_576): everything past it is not converted. */
   maxChars?: number
   /** Scan-work cap in work units (default 4 × maxChars); the scanner stops at the cap and
    *  reports partial output rather than stalling the ask path. */
   maxWork?: number
+}
+
+export interface ZimSliceOptions extends ZimConvertOptions {
+  /** Work units per slice before the generator yields (default `DEFAULT_SLICE_WORK`). */
+  sliceWork?: number
+}
+
+export interface ZimAsyncOptions extends ZimSliceOptions {
+  /** Checked before every slice; on abort the promise rejects and no further slice runs. */
+  signal?: AbortSignal
 }
 
 /** What an `unterminated` truncation ran out of. */
@@ -352,17 +544,28 @@ export interface ZimArticle {
    * oracle for H1, never wall-clock time.
    */
   work: number
+  /**
+   * Cooperative slices the conversion took (P1b) = generator yields + 1. Deterministic for a
+   * given input and `sliceWork`, and identical on the sync and async paths — they drain the
+   * same generator. 1 means the whole article fitted in one slice.
+   */
+  slices: number
 }
 
 /**
- * Extract readable text segments from one ZIM article's HTML. Pure and synchronous.
- * `maxChars` bounds the input and `maxWork` the scan itself, so no page — however
- * malformed — can stall the ask path; `truncated` says when the output is partial and why.
- * Never throws: malformed input degrades to the best text the recovery rules can reach.
+ * The scanner as a cooperative generator: it yields (returning the main thread to the event
+ * loop) roughly every `sliceWork` work units and returns the finished `ZimArticle`. Both
+ * public entry points below drive this one implementation, so the sync and async results are
+ * identical by construction. Never throws: malformed input degrades to the best text the
+ * recovery rules can reach.
  */
-export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {}): ZimArticle {
+export function* zimArticleSlices(
+  html: string,
+  opts: ZimSliceOptions = {}
+): Generator<void, ZimArticle, void> {
   const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS
   const maxWork = opts.maxWork ?? maxChars * 4
+  const sliceWork = opts.sliceWork ?? DEFAULT_SLICE_WORK
   const sliced = html.length > maxChars
   const input = sliced ? html.slice(0, maxChars) : html
   const n = input.length
@@ -393,23 +596,16 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
   const segments: ExtractedSegment[] = []
   let title: string | null = null
   let currentLabel: string | null = null
-  let buffer = ''
+  // The segment body is tidied AS IT IS BUILT (P1b follow-up), so no buffer ever has to be
+  // normalised in one uninterruptible step at flush, and a run of block boundaries costs
+  // O(1) instead of a character each.
+  const body = new IncrementalTidy()
 
   // Heading capture: while > 0 we are inside <hN> and text goes to headingBuf instead.
+  // Headings keep the whole-string tidy: they are short, and the trailing-newline counter
+  // below is what stops a pathological page nesting blocks inside one from growing it.
   let headingLevel = 0
   let headingBuf = ''
-
-  // Subtree skipping: depth counters rather than a full open-tag stack — Parsoid output
-  // is balanced, and a counter survives the odd unbalanced tag without corrupting state.
-  let skipDepth = 0
-  let supSkipDepth = 0
-  let mathDepth = 0
-
-  // Trailing-newline counters. `tidy` collapses any run of three or more newlines to two,
-  // so a block boundary that would only lengthen an existing run is dropped at emit time:
-  // a page of 200k nested <div>s otherwise builds a 200k-char buffer for two characters of
-  // output. Counted rather than tested with `endsWith`, which can flatten the rope.
-  let bufferNewlines = 0
   let headingNewlines = 0
   const trailingNewlines = (text: string, before: number): number => {
     let k = 0
@@ -417,11 +613,16 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
     return k === text.length ? before + k : k
   }
 
+  // Subtree skipping: depth counters rather than a full open-tag stack — Parsoid output
+  // is balanced, and a counter survives the odd unbalanced tag without corrupting state.
+  let skipDepth = 0
+  let supSkipDepth = 0
+  let mathDepth = 0
+
   const flush = (): void => {
-    const text = tidy(buffer)
+    const text = body.result()
     if (text.length > 0) segments.push({ text, pageNumber: null, sectionLabel: currentLabel })
-    buffer = ''
-    bufferNewlines = 0
+    body.reset()
   }
 
   const emit = (text: string): void => {
@@ -430,24 +631,54 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
       headingBuf += text
       headingNewlines = trailingNewlines(text, headingNewlines)
     } else {
-      buffer += text
-      bufferNewlines = trailingNewlines(text, bufferNewlines)
+      body.push(text)
     }
   }
 
-  /** A block boundary: one newline, unless two already terminate the buffer. */
+  /** A block boundary: one newline, unless two already terminate the text. */
   const emitBreak = (): void => {
-    if ((headingLevel > 0 ? headingNewlines : bufferNewlines) >= 2) return
+    if ((headingLevel > 0 ? headingNewlines : body.carryNewlines) >= 2) return
     emit('\n')
   }
 
-  // Character data between the previous token and `upto`. Advancing the text cursor here
-  // is what guarantees no region is emitted twice and a discarded region is never emitted.
+  // Character data between the previous token and `upto`, in pieces of at most
+  // TEXT_PIECE_CHARS so that a slice boundary is reachable INSIDE one long run. Advancing
+  // the text cursor is what guarantees no region is emitted twice and a discarded region is
+  // never emitted. A generator, not a plain closure, because `yield` cannot cross a function
+  // boundary — every call site drives it with `yield*`.
   let textStart = 0
-  const emitTextUpTo = (upto: number): void => {
+  const emitTextUpTo = function* (upto: number): Generator<void, void, void> {
     if (upto <= textStart) return
     if (skipDepth === 0 && supSkipDepth === 0 && mathDepth === 0) {
-      emit(decodeEntities(input.slice(textStart, upto)))
+      let from = textStart
+      while (from < upto) {
+        let to = from + TEXT_PIECE_CHARS
+        if (to < upto) {
+          // Cut back to the last `&` in the piece so that `&` starts the NEXT piece: an
+          // entity always begins with `&`, so no entity can straddle the cut. Bounded by
+          // the piece length, and skipped when the piece holds no `&` (decoding is then a
+          // no-op across the boundary anyway). A single `&` at the very start of a piece is
+          // left alone — an "entity" longer than TEXT_PIECE_CHARS decodes verbatim either
+          // way (out-of-range code point, or a name no table holds).
+          for (let k = to - 1; k > from; k -= 1) {
+            if (input.charCodeAt(k) === CH_AMP) {
+              to = k
+              break
+            }
+          }
+        } else {
+          to = upto
+        }
+        emit(decodeEntities(input.slice(from, to)))
+        from = to
+        // One piece is the indivisible unit of emission work, so every piece that is not the
+        // last of the run ends a slice. A run of at most TEXT_PIECE_CHARS is one piece and
+        // yields nothing, which is why ordinary articles are still single-slice.
+        if (from < upto) {
+          noteSlice()
+          yield
+        }
+      }
     }
     textStart = upto
   }
@@ -458,9 +689,31 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
   }
 
   let cursor = 0
+  let slices = 1
+  let workAtLastYield = 0
+  // Two independent slice triggers, and `work` is deliberately NOT changed by the second:
+  // scan work bounds the loop (below), and TEXT_PIECE_CHARS bounds emission, which is
+  // post-processing (`decodeEntities` + the incremental tidy) whose cost `work` never
+  // modelled and which is what used to dominate a slice. Charging emitted chars to `work`
+  // would double-count them — the `find` hop that skipped the run charged them already — and
+  // would move the H1 oracle. Both triggers are deterministic, so `slices` is too.
+  const sliceDue = (): boolean => work - workAtLastYield >= sliceWork
+  const noteSlice = (): void => {
+    workAtLastYield = work
+    slices += 1
+  }
   while (cursor < n) {
+    // ---- cooperative slice boundary (P1b) --------------------------------------
+    // The check sits at the TOP of the loop, so one iteration always runs to completion
+    // before we yield: a single `find` hop over a long suffix can overshoot the budget by
+    // that hop, and by at most that one hop (see the header's slicing section).
+    if (sliceDue()) {
+      noteSlice()
+      yield
+    }
+
     if (work > maxWork) {
-      emitTextUpTo(cursor)
+      yield* emitTextUpTo(cursor)
       truncated = { reason: 'workBudget', at: cursor }
       textStart = n
       break
@@ -482,7 +735,7 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
       if (input.charCodeAt(lt + 2) === CH_HYPHEN && input.charCodeAt(lt + 3) === CH_HYPHEN) {
         // ---- S6 comment --------------------------------------------------------
         const end = find('-->', lt + 4)
-        emitTextUpTo(lt)
+        yield* emitTextUpTo(lt)
         if (end < 0) {
           if (lt + 4 < n) cut('comment', lt)
           textStart = n
@@ -497,7 +750,7 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
         // ---- S7 CDATA ----------------------------------------------------------
         work += 7
         const end = find(']]>', lt + 9)
-        emitTextUpTo(lt)
+        yield* emitTextUpTo(lt)
         if (end < 0) {
           if (lt + 9 < n) cut('cdata', lt)
           textStart = n
@@ -510,7 +763,7 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
       }
       // ---- S8 declaration / bogus comment: DOCTYPE, `<![endif]>`, `<!x` ---------
       const end = find('>', lt + 2)
-      emitTextUpTo(lt)
+      yield* emitTextUpTo(lt)
       if (end < 0) {
         if (lt + 2 < n) cut('comment', lt)
         textStart = n
@@ -530,7 +783,7 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
     if (c1 === CH_QUESTION || (isClose && !isAlpha(first))) {
       // ---- S8 bogus comment: `<?…`, `</>`, `</ x` ------------------------------
       const end = find('>', nameAt)
-      emitTextUpTo(lt)
+      yield* emitTextUpTo(lt)
       if (end < 0) {
         if (nameAt < n) cut('comment', lt)
         textStart = n
@@ -587,7 +840,7 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
     }
 
     if (tagEnd < 0) {
-      emitTextUpTo(lt)
+      yield* emitTextUpTo(lt)
       if (resync >= 0) {
         // Malformed tag abandoned at the `<`: drop the tag text, resume at that `<`.
         textStart = resync
@@ -604,7 +857,7 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
 
     const attrs = input.slice(attrStart, tagEnd)
     const selfClosing = attrs.endsWith('/') || VOID.has(name)
-    emitTextUpTo(lt)
+    yield* emitTextUpTo(lt)
     cursor = tagEnd + 1
     textStart = cursor
 
@@ -675,7 +928,7 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
         headingBuf = ''
         headingNewlines = 0
       } else if (headingLevel > 0) {
-        const heading = tidy(headingBuf)
+        const heading = tidyWhole(headingBuf)
         headingLevel = 0
         if (heading.length > 0) {
           if (title === null) {
@@ -685,8 +938,7 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
           } else {
             flush()
             currentLabel = heading
-            buffer = `${heading}\n`
-            bufferNewlines = 1
+            body.reset(heading, 1)
           }
         }
       }
@@ -700,7 +952,7 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
 
   // Trailing character data (a well-formed page ends in tags, but stay total). Any
   // scan-level truncation already parked `textStart` at the end of the input.
-  emitTextUpTo(n)
+  yield* emitTextUpTo(n)
   flush()
 
   // An input longer than `maxChars` was sliced mid-markup, so the scan almost always ends in
@@ -713,7 +965,57 @@ export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {})
     truncated = { reason: 'maxChars', at: scanCut === null ? input.length : scanCut.at }
   }
 
-  return { title, segments, truncated, work }
+  return { title, segments, truncated, work, slices }
+}
+
+/**
+ * Extract readable text segments from one ZIM article's HTML, synchronously. `maxChars`
+ * bounds the input and `maxWork` the scan itself, so no page — however malformed — can stall
+ * the ask path unboundedly; `truncated` says when the output is partial and why. Drains
+ * `zimArticleSlices` in one go, so the whole conversion is one main-thread stall: keep this
+ * for tests, tooling and off-ask-path callers, and use the async form on the ask path.
+ */
+export function zimArticleToSegments(html: string, opts: ZimConvertOptions = {}): ZimArticle {
+  const run = zimArticleSlices(html, opts)
+  for (;;) {
+    const step = run.next()
+    if (step.done) return step.value
+  }
+}
+
+/**
+ * The ask-path form: the same conversion, but the main thread is handed back to the event
+ * loop between slices and the caller's `AbortSignal` is honoured at every slice boundary.
+ *
+ * The hop is `setImmediate`, not a microtask (`queueMicrotask` / `await Promise.resolve()`):
+ * microtasks drain before the loop turns at all, so IPC messages, socket reads and timers
+ * would still be starved by a long conversion. `setImmediate` runs in the check phase, after
+ * the poll phase has delivered pending I/O — which is exactly where the ask's HTTP reads and
+ * the renderer's IPC live.
+ *
+ * Abort contract: the signal is checked BEFORE every slice, so an already-aborted signal
+ * rejects before any work is done, and an abort during the conversion rejects with
+ * `signal.reason` (a plain `AbortError` when the reason is undefined) and runs no further
+ * slice. Rejection propagates to the caller; it is never turned into a partial article.
+ *
+ * A single-slice article (the common ~30 KB case) never awaits a macrotask: the generator
+ * returns on its first `next()` and this resolves in the same tick.
+ */
+export async function zimArticleToSegmentsAsync(
+  html: string,
+  opts: ZimAsyncOptions = {}
+): Promise<ZimArticle> {
+  const { signal } = opts
+  const run = zimArticleSlices(html, opts)
+  for (;;) {
+    if (signal?.aborted) {
+      // The generator is simply abandoned — it holds no resource and has no finally block.
+      throw signal.reason ?? new DOMException('The conversion was aborted', 'AbortError')
+    }
+    const step = run.next()
+    if (step.done) return step.value
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
 }
 
 /** ASCII-case-insensitive `name` at `at`, followed by a tag-name terminator (or EOF).
@@ -732,8 +1034,12 @@ function matchesEndTagName(input: string, at: number, name: string): boolean {
   return isSpace(cc) || cc === CH_GT || cc === CH_SLASH
 }
 
-/** Collapse intra-line whitespace, strip invisible characters, cap blank runs. */
-function tidy(text: string): string {
+/**
+ * Collapse intra-line whitespace, strip invisible characters, cap blank runs — over a
+ * whole string. Still used for headings (short by construction) and kept exported as the
+ * ORACLE the incremental tidy below is tested against (PR #294 review H1, P1b follow-up).
+ */
+export function tidyWhole(text: string): string {
   return text
     .replace(/[­​-‍﻿]/g, '')
     .replace(/[^\S\n]+/g, ' ')

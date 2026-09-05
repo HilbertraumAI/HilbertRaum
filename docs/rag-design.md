@@ -2152,7 +2152,8 @@ offline article viewer. Files are registered in place, never copied.
   budget takes precedence over the char cap), but the segments produced before the cut are
   always returned, so a partial article still contributes retrieval chunks (`arm.ts`
   unchanged) and the viewer's `PackArticle.partial` flag tells the user only the first part
-  was shown instead of presenting a partial extraction as the whole article.
+  was shown instead of presenting a partial extraction as the whole article. The contract is
+  identical on the async form, `zimArticleToSegmentsAsync` (P1b), that the ask path now calls.
 
   The **2026-08-22 end-to-end spike figure** (search + fetch + convert, warm, this
   machine): 82–165 ms, inside the ≤300 ms acceptance budget before rerank — kept as a
@@ -2215,6 +2216,97 @@ offline article viewer. Files are registered in place, never copied.
   is expected before P4 unless the owner re-rules the 1 MiB worst-case gate (e.g. a 512 KiB
   `maxChars` — the largest observed maxi article is ~0.5 MB — or accepting a one-off 60–90 ms
   stall for a pathological 1 MiB article). Decision: pending the i7-8550U figure and that ruling.
+
+  **Laptop leg 2 — the reporter's i7-8550U (the slow-hardware reference), 2026-09-05, on the P1
+  converter `ce062b6c` (before slicing), `--gate laptop`, unpinned, AC power, High performance
+  plan, Node 24.18.0, Windows 11 Pro 26200.** Warm 1 MiB worst case 130.13 / 95.84 / 79.38 /
+  72.97 ms (run 1 was the first process after setup; runs 2–4 settled) vs 50 ms — FAIL 1.46–2.60×
+  in every run; 60 × 30 KB synthetic batch 249.97 / 133.99 / 126.59 ms vs 150 ms — fail once, pass
+  twice (0.84–0.89×), 2.1–4.2 ms per conversion; a fourth run over three REAL kiwix-serve articles
+  (46–293 KB, mean ~160 KB, 1.5–9.7× the assumed size) totalled 307 ms — not comparable to the
+  30 KB assumption, per-char consistent with Section A. Per-family 1 MiB warm (run 3): unclosed-lt
+  46.6, repeated-lt 79.4, entity-heavy 57.7, deep-nesting 76.2, wellformed 59.6 ms. **Reading:** this
+  core class is 4.6–8× slower than a 14900K P-core on this workload, not the 2.5–3× the one-third
+  rule assumed — the rule under-warned; under D2 as originally ruled the reference fails gate (i)
+  outright, which is what the re-ruling (P1b, below) answers. The decisive figure is now the
+  reference's PER-SLICE stall on the P1b converter (Section D, pending — the reporter's next run;
+  the P1b converter was not on the laptop yet). Expectation from the ratio: 14900K p95 0.5–1.0 ms ×
+  4.6–8 ≈ 2.5–8 ms against the 5 ms bound, so `DEFAULT_SLICE_WORK` may need to drop to 16 Ki
+  (the perf script's `--slice-work` flag lets the laptop try both in one session; the CPU total
+  is unchanged either way).
+
+  **P1b — cooperative slicing (re-ruled remedy, 2026-09-05).** D2's remedy is re-ruled from a
+  worker to cooperative slicing: a worker's blast radius (a new main rollup entry, first-party
+  `asarUnpack`, a pool/lifecycle boundary, an owner-only packaged-load smoke class) was judged
+  larger than slicing's, which is `html.ts` plus two `await` call sites, fully provable in
+  Vitest — mechanism in that file's "COOPERATIVE SLICING (P1b)" header comment. `zimArticleSlices`
+  is now the one implementation: a generator yielding every `DEFAULT_SLICE_WORK` work units
+  (32,768, halved from 65,536 after measurement) and, independently, after every emitted
+  `TEXT_PIECE_CHARS`-sized text piece (the cut is backed up to the last `&` so no entity
+  straddles it). `zimArticleToSegments` drains it unchanged; the new
+  `zimArticleToSegmentsAsync(html, { …, signal? })` awaits `setImmediate` between slices (the
+  event loop's check phase, so IPC and socket reads get through — a microtask would not) and
+  checks the caller's `AbortSignal` before every slice, rejecting with `signal.reason` and
+  running no further slice — an ordinary ~30 KB article (one slice) still resolves in the same
+  tick.
+
+  Gate (iii) is the longest uninterruptible main-thread stall between two yields, ruled ≤5 ms
+  on the i7-8550U reference (early-warning third ≈1.67 ms on a 14900K P-core); the (i)/(ii)
+  totals stay recorded as CPU/latency facts, not gated. It is read on the p95 across pooled
+  slices AND the median-of-three run max (each family/batch timed three runs; `max` = median
+  of the three runs' maxima): a lone max more than ~3× the p95 at a random slice index is
+  scheduling jitter, not real indivisible work — a genuine one would show a FIXED worst-slice
+  index across runs.
+
+  14900K P-core Section D (both pinned runs, every family at 1 MiB):
+
+  | family | slices | max ms | p95 ms | median ms |
+  |---|---|---|---|---|
+  | unclosed-lt | 43 | 0.57–0.64 | 0.47–0.51 | 0.41–0.42 |
+  | unmatched-quote | 32 | 0.16–0.18 | 0.08–0.09 | 0.07 |
+  | unterminated-comment | 1 | 0.02 | 0.02 | 0.02 |
+  | unterminated-script | 1 | 0.02 | 0.02 | 0.02 |
+  | repeated-lt | 63 | 0.64–0.82 | 0.56–0.57 | 0.47–0.48 |
+  | entity-heavy | 33 | 0.52–0.60 | 0.50–0.56 | 0.44 |
+  | deep-nesting | 32 | 0.75–0.99 | 0.72 | 0.61–0.63 |
+  | wellformed | 32 | 0.65–0.86 | 0.71–0.99 | 0.52–0.54 |
+  | batch (60 conversions) | 60 | 2.71–2.77 | 0.53–0.58 | 0.49–0.50 |
+
+  **Verdict.** (iii) PASSES on p95 and on the median-of-three max for every 1 MiB family. The
+  script's raw verdict line still reads FAIL 1.63–1.66×: that figure is the batch leg's max, a
+  single ~30 KB article (one slice, median 0.5 ms) taking 2.7 ms at a random position — per the
+  reading rule above that is scheduling jitter, not the verdict. The two steps that were genuinely
+  indivisible before the follow-up (~13 ms of `decodeEntities` over one huge text run at a fixed
+  slice 0, ~2.2 ms of trailing whole-buffer tidy at the fixed last slice) now cost ~0.6–0.7 ms and
+  no longer sit at a fixed index. The sync 1 MiB totals rose ≈15% over P1 (the price of
+  divisibility: generator driving, text pieces, incremental tidy) — recorded as a CPU/latency
+  fact under the re-ruled gate, not hidden. Decisive i7-8550U per-slice figure: pending (owner).
+  **Laptop leg 3 — the reporter's i7-8550U on the P1b converter (`5f68cec4`), 2026-09-05, the
+  decisive per-slice run.** Conditions as leg 2 (AC, High performance, Node 24.18, no pinning);
+  32 Ki and 16 Ki slice sizes, three synthetic runs each plus one real-fixture run each.
+
+  | series | 1 MiB families: median-of-3 max | 1 MiB p95 | batch max | batch p95 | batch median |
+  |---|---|---|---|---|---|
+  | 32 Ki (3 runs) | 3.32 / 5.21 / 3.71 ms (wellformed) | 3.15–3.72 ms | 7.61 / 7.83 / 9.36 ms | 1.78–2.17 ms | 1.37–1.52 ms |
+  | 16 Ki (3 runs) | 2.76 / 2.97 / 2.69 ms | 2.37–2.72 ms | 7.49 / 8.25 / 6.12 ms | 0.98–1.74 ms | 0.75–0.99 ms |
+  | 32 Ki real fixtures | 6.18 ms (wellformed) | 4.14 ms | 5.37 ms | 0.78 ms | 0.59 ms |
+  | 16 Ki real fixtures | 5.12 ms (wellformed) | 2.14 ms | 5.99 ms | 0.49 ms | 0.31 ms |
+
+  Every run PASSES (iii-p95) at both sizes (0.43–0.83×) and FAILS the raw (iii) max (1.20–1.87×)
+  — and, as the reporter observed, the failing max is the batch leg's, at a random article,
+  unchanged when the slice size halves (60 → 120 slices), i.e. not scan work. The script now
+  counts GC events per row (a `PerformanceObserver` on `gc`): on the 14900K the three batch
+  passes show 5 minor collections totalling ~10 ms, ~2 ms each, at random articles — the same
+  shape the laptop shows at its speed (6–9 ms). Those are allocation-driven pauses that hit the
+  synchronous path identically and are outside what slicing can divide; reducing allocation is
+  a separate constant-factor task, not part of the gate. **Decision (2026-09-05): `DEFAULT_SLICE_WORK`
+  = `TEXT_PIECE_CHARS` = 16 Ki** — on the reference every 1 MiB family's median-of-three max
+  is under 3 ms and p95 2.4–2.7 ms (32 Ki reached 5.2 ms / 3.7 ms), at ~0 % overhead; an ordinary
+  ~30 KB article becomes two slices (one macrotask hop). Gate (iii) reading on the reference:
+  **PASS** on p95 and on the 1 MiB families' median-of-three max; the batch's residual maxima are
+  GC, recorded. The CPU totals on the reference (facts, not gated): 1 MiB 53–80 ms, synthetic
+  batch 87–103 ms (one slow run 168), real-fixture batch 188–210 ms (size caveat). T02-c is
+  thereby recorded; P7's re-check (B02) runs Section D at 16 Ki on the final build.
 - **D-Z4 — one seam in `retrieve()`.** An optional `ExternalRetrievalArm` (parameter 8)
   appends candidates between the chunk-row join and the rerank, so rerank, dedup, token
   budget and `[Sn]` labelling treat archive and document chunks uniformly. No reranker →
@@ -2253,7 +2345,8 @@ offline article viewer. Files are registered in place, never copied.
 ### Module map
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
-budget and `truncated` signal — PR #294 review H1), `client.ts` (node:http + search/
+budget and `truncated` signal — PR #294 review H1; cooperatively sliced, async on the ask
+path — P1b), `client.ts` (node:http + search/
 library XML parsing), `tools.ts` (binary discovery `runtime/kiwix-tools/<os>/`, dev-only
 `HILBERTRAUM_KIWIX_BIN`, kiwix-manage runner), `serve.ts` (KiwixServer), `packs.ts`
 (registry over `knowledge_packs`), `arm.ts` (candidate production), `index.ts`
@@ -2267,7 +2360,9 @@ runs four attributed synthetic non-Wikipedia fixtures under `tests/fixtures/zim/
 `zim-arm/zim-ipc` (integration), `KnowledgePacks.test.tsx` (renderer, incl. the
 `partial`-hint case); real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
 `scripts/zim-html-perf.mjs` prints the D2 measurement table outside Vitest/Electron
-(`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`).
+(`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`), including
+Section D's per-slice cooperative-slicing gate (P1b) — each `--gate` profile now also
+carries a `slice` threshold alongside `oneMiB`/`batch`.
 
 ### Deliberately not built (MVP cut; §5 item 21 tracks the follow-ups)
 
