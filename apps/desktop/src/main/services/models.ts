@@ -782,8 +782,14 @@ export function machineRamGb(): number {
 
 /**
  * Measured-speed signal fed into the picker (model-benchmarks.md §6.5, issue #95): the
- * Diagnostics probe's honest pairing (issue #52) — the chunk-rate tok/s AND the model that
+ * Diagnostics probe's honest pairing (issue #52) — the measured tok/s AND the model that
  * produced it. Absent/null anywhere → the pure RAM-best-fit path, byte-identical.
+ *
+ * Basis (#291): since 2026-09-04 the figure is the runtime's decode-only `predicted_per_second`
+ * (tokens, prefill excluded) whenever the runtime sent `timings`, else the old prefill-inclusive
+ * chunk rate. `SLOW_PICK_TOKENS_PER_SECOND` was calibrated on the chunk basis and deliberately
+ * NOT retuned — a decode-only figure reads higher, and the gate is an order-of-magnitude crawl
+ * test (model-benchmarks.md §6.5 "Basis note").
  */
 export interface PickerSpeedSignal {
   /** Measured tok/s from the loaded-model probe; null when the probe did not run. */

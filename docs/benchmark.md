@@ -58,17 +58,30 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    own `drive_benchmark` perf mark) but never displayed and never gates anything. Old persisted
    `lastBenchmark` values (no `effectiveRead` field) render the "not measured" state — no
    migration.
-4. **Tokens/sec** (`measureTokensPerSecond`): **optional**. Only runs when a runtime is
-   active — it streams the prompt *"Write one sentence about privacy."* and times up to 64
-   tokens. It is `null` when no runtime is running. Because `measureTokensPerSecond`
-   drives off `runtime.chatStream`, this is now a **real** figure whenever the real `LlamaRuntime`
-   is streaming (it remains a simulated figure under the mock runtime). The low-tokens/sec profile
-   **downgrade** and the GPU **bump** therefore become live with real local inference.
+4. **Decode speed** (`measureTokensPerSecond`): **optional**. Only runs when a runtime is
+   active — it streams the prompt *"Write a short paragraph about privacy."* under a 64-token
+   `max_tokens` cap (the paragraph wording fills the cap reliably; a one-sentence prompt finished in
+   ~20 tokens, a window dominated by per-request overhead — issue #291). It is `null` when no
+   runtime is running. **What the number is (since #291):** llama-server's own
+   `timings.predicted_per_second` from the stream's final chunk — **decode tokens over decode
+   time**, prefill and the first-token latency excluded, and TOKENS rather than SSE chunks (under
+   MTP speculative decoding, #182, one chunk carries an accepted draft run of several tokens, which
+   halved the old chunk-count reading on the recommended Qwen3.8 entries). The result records the
+   basis and the token window (`BenchmarkResult.speedBasis = { basis: 'timings', tokens }`), and
+   the card shows the count ("48 (over 64 tokens, …)"). A runtime that sends no `timings` (the mock;
+   an older server) falls back to the old **approximation** — streamed chunks over wall time
+   measured from before the request, so prefill-inclusive — flagged `basis: 'chunks'` and rendered
+   "≈ 30 (approximate — counted chunks, not runtime timings; …)". Results persisted before the
+   field existed were all chunk-based and render as approximate too; no migration. The probe
+   consumes the whole capped stream (no early exit at 64 chunks — that used to cancel the reader
+   before the timings chunk arrived) and still DISCARDS a reading that became contended mid-probe
+   (#185). The low-tokens/sec profile **downgrade** and the GPU **bump** are live with real local
+   inference.
    **The number measures the CURRENTLY LOADED model, not the recommended one** (issue #52):
    `runBenchmark` records the loaded model's id as `BenchmarkResult.measuredModelId` (null when
    nothing was measured; absent on results persisted before the field existed), and the
-   Diagnostics card + its Copy text render the value as *"30 (measured with the loaded model
-   \<id\>)"* so the tok/s can't be misread as a property of the recommended model.
+   Diagnostics card + its Copy text render the value as *"48 (over 64 tokens; measured with the
+   loaded model \<id\>)"* so the tok/s can't be misread as a property of the recommended model.
 
 ## Profile classification (spec §11.3)
 
@@ -91,7 +104,14 @@ Adjustments, in order:
   14B recommendation — a false negative only costs a too-small recommendation, never a
   too-big one.
 - **Very low** throughput (`tokensPerSecond < VERY_LOW_TOKENS_PER_SECOND = 3`) downgrades one
-  step (never below `TINY`). Since issue #52 this is **no longer silent**: when the reading
+  step (never below `TINY`). **Basis shift (issue #291, 2026-09-04):** the threshold was
+  calibrated when the figure was a prefill-inclusive chunk rate; it now compares the runtime's
+  decode-only tokens/sec, which reads higher (the #291 rig on the pinned b9849: the old probe's
+  25 vs 28.2 / 25.9 measured with MTP, 21.8 without — verified against `print_timing` on #298;
+  the issue's 47.9 came from a newer `-fa` build). It is an
+  order-of-magnitude gate far below any figure the change moves, so it was deliberately **not
+  retuned** — the same applies to the §6.5 picker step-down (`SLOW_PICK_TOKENS_PER_SECOND = 5`)
+  and the local API's Retry-After heuristic. Since issue #52 this is **no longer silent**: when the reading
   actually moved the profile (computed as "profile with the tps hint ≠ profile without it", so
   an already-TINY machine never over-claims), the result carries a warning that **names the
   measured model** — a crawl measured on an oversized loaded model is evidence about that
@@ -202,8 +222,8 @@ falling back to **`UNKNOWN`** until the user runs the benchmark for the first ti
 
 The Diagnostics screen surfaces a **Run benchmark** button and renders RAM / CPU / OS-arch /
 measured read speed (`effectiveRead`, with its source + GB context, or "not measured yet") /
-drive write / tokens-sec / assigned profile / recommended model + the warnings, and re-loads the
-last result from settings on mount. The `effectiveRead` field is additionally **updated in
+drive write / decode speed (with its basis and token window, #291) / assigned profile /
+recommended model + the warnings, and re-loads the last result from settings on mount. The `effectiveRead` field is additionally **updated in
 place** on the persisted result outside benchmark runs (`persistEffectiveRead` in
 `registerModelIpc`) as model starts / Models-screen visits / forced re-verifies observe fresh
 samples, and `runBenchmark` receives the latest sample **injected**

@@ -431,6 +431,13 @@ export const STREAM = {
   // ("meter says 7% while the window is full"). Ephemeral like `compaction` (R14): never
   // buffered, fine to miss on remount — the meter then falls back to the resting estimate.
   usage: (requestId: string) => `chat:usage:${requestId}`,
+  // ADDITIVE (#290): ONE ephemeral `AnswerSpeed` payload per FINISHED chat answer — the runtime's
+  // decode tokens/sec + token count (llama-server `timings`) and the user-felt time to first
+  // token — fired right before `done`, keyed to the persisted message id. Never persisted, never
+  // buffered (R14): a reload shows nothing on old messages, and the mock runtime (no timings)
+  // never fires it. Plain chat answers only — not the hidden warm-up, document tasks, skill runs
+  // or compaction. An aborted answer carries no timings and fires nothing.
+  speed: (requestId: string) => `chat:speed:${requestId}`,
   // Image understanding (vision) per-job streaming (image-understanding plan §9.1). Mirrors the
   // chat token/done/error contract, keyed by analyze jobId: the vision sidecar emits SSE
   // byte-identical to chat (V1-confirmed), so `readChatSSE` forwards the deltas as imgToken.
@@ -466,6 +473,23 @@ export interface ScopeNotice {
 export interface CompactionNotice {
   phase: 'start'
   kind?: 'compaction' | 'analysis'
+}
+
+/**
+ * Payload of the `speed` channel (#290): how fast a FINISHED chat answer was generated. Session-
+ * only — never persisted, never on the local API (`usage` there stays absent by decision,
+ * local-api.md §6.5). Numbers only, never content.
+ */
+export interface AnswerSpeed {
+  /** The persisted assistant message the figures belong to. */
+  messageId: string
+  /** Decode throughput from llama-server `timings.predicted_per_second` (tokens, not chunks). */
+  tokensPerSecond: number
+  /** User-felt wait from the send to the first answer token (prompt assembly, any compaction
+   *  pre-pass and prefill included), in milliseconds. */
+  ttftMs: number
+  /** Generated tokens (`timings.predicted_n`). */
+  tokens: number
 }
 
 /**

@@ -420,6 +420,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.context.usageTooltip': 'Speicher für dieses Gespräch: {pct} % belegt (etwa {used} von {window} Token).',
   'chat.context.willSummarize': 'Bei vollem Speicher werden ältere Nachrichten automatisch zusammengefasst, um Platz zu schaffen.',
   // Ehrliches Signal (§L0): erscheint bei einer Antwort, die das Modell am Kontextlimit abgeschnitten hat.
+  // #290: Geschwindigkeitszeile unter einer fertigen Antwort (nur diese Sitzung, nie gespeichert).
+  'chat.speed.line': '{tps} Token/s · {ttft} s bis zum ersten Token · {tokens} Token',
+  'chat.speed.hint':
+    'Wie schnell diese Antwort entstanden ist: Decodier-Geschwindigkeit der KI-Engine, Wartezeit bis zum ersten Wort und Anzahl der erzeugten Token. Nur für Antworten aus dieser Sitzung.',
   'chat.truncated.label': 'Antwort abgeschnitten – Kontextlimit des Modells erreicht',
   'chat.truncated.hint':
     'Dem Modell ging der Platz aus, um diese Antwort zu beenden. Bitte es fortzufahren, beginne einen neuen Chat oder erhöhe die Kontextgröße im Bereich „KI-Modell“.',
@@ -1796,9 +1800,13 @@ export const de: Record<keyof typeof en, string> = {
   'diag.bench.notMeasured': 'nicht gemessen',
   // RD-3-Glossar: „Token", nicht „Tokens" — steht auf Diagnose direkt neben
   // models.tech.contextValue („{count} Token") (CODE-43).
-  'diag.bench.tokens': 'Token / Sek.',
+  'diag.bench.tokens': 'Decodier-Geschwindigkeit (Token / Sek.)',
   'diag.bench.tokensNotMeasured': 'nicht gemessen (starte zuerst ein Modell)',
   'diag.bench.tokensModel': 'gemessen mit dem geladenen Modell {model}',
+  // #291: das Decodier-Fenster, über das die Laufzeit-Messung gilt.
+  'diag.bench.tokensOver': 'über {tokens} Token',
+  // #291: der Chunk-Zähl-Notweg (und jedes Ergebnis, das vor der Basis-Angabe gespeichert wurde).
+  'diag.bench.tokensApprox': 'ungefähr – gezählte Chunks, nicht die Laufzeit-Messung',
   'diag.bench.lastRun': 'Letzter Lauf',
   'diag.system.title': 'System',
   'diag.system.osPlatform': 'OS / Plattform',

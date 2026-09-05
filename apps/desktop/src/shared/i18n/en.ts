@@ -397,6 +397,11 @@ export const en = {
   'chat.truncated.label': 'Reply cut off — reached the model’s context limit',
   'chat.truncated.hint':
     'The model ran out of room to finish this answer. Ask it to continue, start a new chat, or raise the context size on the AI Model screen.',
+  // #290: the per-answer speed line under a finished chat answer (this session only, never saved).
+  // {tps} / {ttft} / {tokens} arrive pre-formatted for the UI language.
+  'chat.speed.line': '{tps} tok/s · {ttft} s to first token · {tokens} tokens',
+  'chat.speed.hint':
+    'How fast this answer was generated: decode speed from the AI engine, the wait until the first word, and the number of tokens produced. Shown for answers from this session only.',
 
   // ---- Chat: document scope (ScopePopover.tsx) ----
   // Truthful, calm scope copy: never "Using all 0 documents". Zero documents routes to
@@ -1749,11 +1754,17 @@ export const en = {
   'diag.bench.effectiveReadHash': 'from a file check on {when}, {gb} GB read',
   'diag.bench.driveWrite': 'Drive write',
   'diag.bench.notMeasured': 'not measured',
-  'diag.bench.tokens': 'Tokens / sec',
+  // #291: the figure is the runtime's own decode speed (generation only, prefill excluded,
+  // tokens not chunks); the label says so.
+  'diag.bench.tokens': 'Decode speed (tokens / sec)',
   'diag.bench.tokensNotMeasured': 'not measured (start a model first)',
   // Issue #52: names the model the tok/s probe actually streamed through — the loaded one,
   // which is often not the recommended one the card lists above.
   'diag.bench.tokensModel': 'measured with the loaded model {model}',
+  // #291: the decode window the runtime-timings figure covers.
+  'diag.bench.tokensOver': 'over {tokens} tokens',
+  // #291: the chunk-count fallback (and every result saved before the basis was recorded).
+  'diag.bench.tokensApprox': 'approximate — counted chunks, not runtime timings',
   'diag.bench.lastRun': 'Last run',
   'diag.system.title': 'System',
   'diag.system.osPlatform': 'OS / platform',

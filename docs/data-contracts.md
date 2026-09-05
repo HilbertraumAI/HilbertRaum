@@ -503,8 +503,14 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   `runBenchmark` via `RunBenchmarkDeps.effectiveRead` (ranking-aware carry-forward). Feeds the
   Diagnostics "Measured read speed" row (which carries the sample's own date — the card's "Last
   run" describes the benchmark, not this row), the #110 gate, and the #107 estimate.
-- **`measureTokensPerSecond(runtime)`** → number | `null` (only when a runtime is active;
-  prompt + ≤64 tokens). Mock now, real in Phase 10.
+- **`measureTokensPerSecond(runtime)`** → `SpeedReading | null` (only when a runtime is
+  active; the paragraph prompt under a 64-token cap). Since #291: `{ tokensPerSecond, basis,
+  tokens }` — `basis: 'timings'` is llama-server's own `predicted_per_second` (decode only,
+  prefill excluded, tokens not chunks) over `tokens = predicted_n`; `basis: 'chunks'` is the
+  wall-clock chunk-count fallback for a runtime without `timings` (the mock), over `tokens`
+  streamed chunks. Persisted as **`BenchmarkResult.speedBasis?: { basis, tokens } | null`** —
+  optional (absent on results persisted before the field existed, which were all chunk-based and
+  render as approximate; `null` = nothing measured). No migration.
 - **`buildWarnings(...)`** — spec §11.4 friendly copy. Since #110 the PRIMARY drive warning is
   the interpolated slow-read note (`effectiveReadMbps < SLOW_EFFECTIVE_READ_MBPS = 100`; no
   sample → no warning); the write-keyed slow-drive note (`< SLOW_DRIVE_MBPS = 30`) stays as the

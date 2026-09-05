@@ -6,6 +6,7 @@ import type {
   RuntimeChatOptions,
   RuntimeStartOptions
 } from './index'
+import type { RuntimeTimings } from './index'
 import { LlamaServer, type LlamaServerOptions } from './sidecar'
 
 // Real local inference (spec §3.2, §7.5). `LlamaRuntime` drops in behind
@@ -104,6 +105,13 @@ interface ChatCompletionChunk {
      */
     finish_reason?: string | null
   }>
+  /**
+   * llama-server's per-request timing block (#290/#291). At the pinned b9849 it rides the
+   * `finish_reason` chunk itself — pinned by the captured transcript
+   * `tests/fixtures/chat-sse-timings-b9849.txt` (#298). The reader still tolerates it on ANY
+   * chunk, including one with no `choices`, so a future server that moves it keeps working.
+   */
+  timings?: RuntimeTimings
 }
 
 /**
@@ -126,6 +134,8 @@ function parseSseLine(line: string): {
   finishReason?: string
   done?: boolean
   streamError?: ChatStreamError
+  /** A top-level `timings` object on this chunk (#290/#291) — read off ANY data chunk. */
+  timings?: RuntimeTimings
 } {
   const t = line.trim()
   // F-02: the bare `error: {…}` SSE field-line carrier (mirrors completion.ts's M3 handling).
@@ -162,7 +172,16 @@ function parseSseLine(line: string): {
     }
     const choice = json.choices?.[0]
     const d = choice?.delta
-    const out: { delta?: string; reasoning?: string; finishReason?: string } = {}
+    const out: {
+      delta?: string
+      reasoning?: string
+      finishReason?: string
+      timings?: RuntimeTimings
+    } = {}
+    // #290/#291: the server's timing block. Read from whichever chunk carries it — with or
+    // without `choices` — and let the reader keep the LAST one seen (llama-server's are cumulative
+    // for the request, so the last is the complete one).
+    if (json.timings != null && typeof json.timings === 'object') out.timings = json.timings
     if (typeof d?.content === 'string' && d.content.length > 0) out.delta = d.content
     if (typeof d?.reasoning_content === 'string' && d.reasoning_content.length > 0) {
       out.reasoning = d.reasoning_content
@@ -323,12 +342,21 @@ function readWithIdleTimeout<T>(
  * CB-5: each read is raced against a two-phase idle watchdog (`idle`, injectable for tests; the
  * production default keeps behaviour byte-identical on any live stream) so a HUNG sidecar rejects with
  * `RuntimeUnresponsiveError` instead of wedging the conversation forever. A user Stop still wins first.
+ *
+ * #290/#291: the server's top-level `timings` block is remembered from whichever chunk carries it
+ * (the `finish_reason` chunk at the pinned b9849 — captured in `tests/fixtures/chat-sse-timings-b9849.txt`,
+ * #298; a chunk with no `choices` is tolerated too) and handed up with the finish reason ONCE, at the `[DONE]` sentinel or the clean
+ * close. Deferring the hand-up to the sentinel (instead of firing on the `finish_reason` chunk) is
+ * what lets a trailing timings-only chunk still be attached; no consumer observes the difference —
+ * every caller reads the captured value after the stream completes, and the finish chunk's delta is
+ * empty. A stream that never reaches the sentinel (abort, error frame, idle watchdog) hands up
+ * nothing, exactly as before.
  */
 export async function* readChatSSE(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
   onReasoning?: (delta: string) => void,
-  onFinish?: (finishReason: string) => void,
+  onFinish?: (finishReason: string, timings?: RuntimeTimings) => void,
   idle: IdleWatchdog = DEFAULT_IDLE
 ): AsyncGenerator<string, void, unknown> {
   const reader = body.getReader()
@@ -337,6 +365,12 @@ export async function* readChatSSE(
   // The FIRST chunk gets the generous prefill budget; once any chunk (token OR reasoning delta) has
   // landed, later reads get the tighter stream budget. Re-armed per read, so a steady stream resets it.
   let sawChunk = false
+  // The finish reason + the last timings block seen, handed up together at the sentinel/close.
+  let finishReason: string | undefined
+  let timings: RuntimeTimings | undefined
+  const finish = (): void => {
+    if (finishReason) onFinish?.(finishReason, timings)
+  }
   try {
     for (;;) {
       if (signal?.aborted) return
@@ -357,10 +391,15 @@ export async function* readChatSSE(
         // signal-aborted read never reaches this loop, and consumers treat a race via
         // `isAbortError(err, signal)` (signal-aborted ⇒ abort semantics, partial kept).
         if (r.streamError) throw r.streamError
-        // The finish reason rides the final content chunk, which arrives BEFORE `[DONE]`;
-        // surface it before honouring the sentinel so a 'length' stop is never dropped.
-        if (r.finishReason) onFinish?.(r.finishReason)
-        if (r.done) return
+        // The finish reason rides the final content chunk, which arrives BEFORE `[DONE]`; it is
+        // captured here and surfaced at the sentinel (with the timings) so a 'length' stop is
+        // never dropped and a timings block on a later chunk is never missed.
+        if (r.finishReason) finishReason = r.finishReason
+        if (r.timings) timings = r.timings
+        if (r.done) {
+          finish()
+          return
+        }
         // A reasoning delta counts as a live chunk (a long "thinking" phase must not trip the
         // watchdog); switch to the tighter inter-chunk budget once anything has streamed.
         if (r.reasoning) {
@@ -378,9 +417,13 @@ export async function* readChatSSE(
     const r = parseSseLine(buffer)
     // F-02: a server that dies mid-write can flush the error frame WITHOUT a trailing newline.
     if (r.streamError) throw r.streamError
-    if (r.finishReason) onFinish?.(r.finishReason)
+    if (r.finishReason) finishReason = r.finishReason
+    if (r.timings) timings = r.timings
     if (r.reasoning) onReasoning?.(r.reasoning)
     if (r.delta) yield r.delta
+    // A clean close without `[DONE]` still hands the captured finish up (byte-identical to the
+    // pre-#290 behaviour for a stream whose finish chunk was the last thing sent).
+    finish()
   } finally {
     try {
       await reader.cancel()

@@ -26,11 +26,18 @@ import {
   upsertSlowReadWarning,
   VERY_LOW_TOKENS_PER_SECOND,
   SLOW_DRIVE_MBPS,
-  SLOW_EFFECTIVE_READ_MBPS
+  SLOW_EFFECTIVE_READ_MBPS,
+  BENCHMARK_PROMPT,
+  BENCHMARK_TOKEN_TARGET
 } from '../../src/main/services/benchmark'
 import { t } from '../../src/shared/i18n'
 import { gpuUsefulForProfile } from '../../src/main/services/runtime/gpu'
-import type { ModelRuntime } from '../../src/main/services/runtime'
+import type {
+  ChatMessage,
+  ModelRuntime,
+  RuntimeChatOptions,
+  RuntimeTimings
+} from '../../src/main/services/runtime'
 import type { GpuDevice } from '../../src/shared/types'
 
 function freshDb(): Db {
@@ -281,10 +288,104 @@ describe('measureTokensPerSecond', () => {
     expect(await measureTokensPerSecond(undefined)).toBeNull()
   })
 
-  it('returns a positive estimate from a running (mock) runtime', async () => {
-    const tps = await measureTokensPerSecond(runtime())
-    expect(tps).not.toBeNull()
-    expect(tps!).toBeGreaterThan(0)
+  it('returns a positive estimate from a running (mock) runtime — the chunk fallback, flagged', async () => {
+    const reading = await measureTokensPerSecond(runtime())
+    expect(reading).not.toBeNull()
+    expect(reading!.tokensPerSecond).toBeGreaterThan(0)
+    // The mock sends no `timings`, so the reading is the approximate chunk count over wall time.
+    expect(reading!.basis).toBe('chunks')
+    expect(reading!.tokens).toBeGreaterThan(0)
+  })
+
+  // #291 — the runtime's own decode timings win over the chunk count. A fake runtime whose
+  // stream reports `timings` on its final chunk (the llama-server shape via PR 1's onFinish
+  // hand-up); the wall clock plays no part in the timings-based figure.
+  function timedRuntime(
+    chunks: string[],
+    timings: RuntimeTimings | undefined,
+    perChunkDelayMs = 0
+  ): ModelRuntime {
+    return {
+      modelId: 'timed',
+      async start() {},
+      async stop() {},
+      async health() {
+        return { healthy: true, message: '', port: null }
+      },
+      async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
+        for (const c of chunks) {
+          if (perChunkDelayMs > 0) await new Promise((r) => setTimeout(r, perChunkDelayMs))
+          yield c
+        }
+        options?.onFinish?.('length', timings)
+      }
+    }
+  }
+
+  it('reports the runtime timings’ predicted_per_second (decode only) when the final chunk carries them', async () => {
+    const reading = await measureTokensPerSecond(
+      timedRuntime(['a', 'b', 'c'], {
+        prompt_n: 12,
+        prompt_ms: 900, // a long prefill that a wall-clock window would have paid for
+        predicted_n: 64,
+        predicted_ms: 1336,
+        predicted_per_second: 47.9,
+        prompt_per_second: 13.3
+      })
+    )
+    expect(reading).toEqual({ tokensPerSecond: 47.9, basis: 'timings', tokens: 64 })
+  })
+
+  it('does NOT undercount MTP-style multi-token chunks when timings are present', async () => {
+    // Three SSE chunks carrying eight tokens (an accepted draft run rides one chunk each);
+    // 25 ms per chunk ⇒ a chunk-rate reading would be ~40 chunks/s, the server says 106 tok/s.
+    const reading = await measureTokensPerSecond(
+      timedRuntime(['one two three', 'four five', 'six seven eight'], {
+        predicted_n: 8,
+        predicted_ms: 75.5,
+        predicted_per_second: 106
+      }, 25)
+    )
+    expect(reading).toEqual({ tokensPerSecond: 106, basis: 'timings', tokens: 8 })
+  })
+
+  it('falls back to the chunk count over wall time when the stream carries no timings', async () => {
+    const reading = await measureTokensPerSecond(timedRuntime(['a', 'b', 'c', 'd'], undefined, 5))
+    expect(reading).not.toBeNull()
+    expect(reading!.basis).toBe('chunks')
+    expect(reading!.tokens).toBe(4)
+    expect(reading!.tokensPerSecond).toBeGreaterThan(0)
+  })
+
+  it('ignores a timings block without a usable predicted_per_second (falls back, flagged)', async () => {
+    const reading = await measureTokensPerSecond(timedRuntime(['a', 'b'], { prompt_n: 3 }, 5))
+    expect(reading!.basis).toBe('chunks')
+    expect(reading!.tokens).toBe(2)
+  })
+
+  it('consumes the whole capped stream so the final (timings) chunk is never cancelled away', async () => {
+    // Trap 1 (#291): the old probe broke out on the 64th chunk, cancelling the reader before the
+    // finish chunk arrived. Exactly BENCHMARK_TOKEN_TARGET chunks then the finish → timings land.
+    const chunks = Array.from({ length: BENCHMARK_TOKEN_TARGET }, (_, i) => `t${i} `)
+    const reading = await measureTokensPerSecond(
+      timedRuntime(chunks, { predicted_n: BENCHMARK_TOKEN_TARGET, predicted_per_second: 38.4 })
+    )
+    expect(reading).toEqual({ tokensPerSecond: 38.4, basis: 'timings', tokens: BENCHMARK_TOKEN_TARGET })
+  })
+
+  it('sends the paragraph prompt under the 64-token cap', async () => {
+    let seen: { prompt: string; maxTokens?: number } | null = null
+    const spy: ModelRuntime = {
+      ...timedRuntime(['x'], undefined),
+      async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
+        seen = { prompt: messages[0].content, maxTokens: options?.maxTokens }
+        yield 'x'
+        options?.onFinish?.('stop')
+      }
+    }
+    await measureTokensPerSecond(spy)
+    expect(seen).toEqual({ prompt: BENCHMARK_PROMPT, maxTokens: BENCHMARK_TOKEN_TARGET })
+    expect(BENCHMARK_PROMPT).toMatch(/paragraph/)
   })
 })
 
@@ -456,6 +557,30 @@ describe('buildWarnings', () => {
 // ---- runBenchmark + persistence + downstream reads ------------------------------
 
 describe('runBenchmark', () => {
+  it('persists HOW the speed was measured next to the figure (#291 speedBasis)', async () => {
+    const timed: ModelRuntime = {
+      modelId: 'qwen3-9b',
+      async start() {},
+      async stop() {},
+      async health() {
+        return { healthy: true, message: '', port: null }
+      },
+      async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
+        yield 'a'
+        options?.onFinish?.('length', { predicted_n: 64, predicted_per_second: 47.9 })
+      }
+    }
+    const result = await runBenchmark({ workspacePath: workspace(), manifests: [], runtime: timed })
+    expect(result.tokensPerSecond).toBe(47.9)
+    expect(result.speedBasis).toEqual({ basis: 'timings', tokens: 64 })
+    expect(result.measuredModelId).toBe('qwen3-9b')
+    // The mock (no timings) records the chunk fallback; no runtime records null.
+    const mock = await runBenchmark({ workspacePath: workspace(), manifests: [], runtime: runtime() })
+    expect(mock.speedBasis?.basis).toBe('chunks')
+    const none = await runBenchmark({ workspacePath: workspace(), manifests: [] })
+    expect(none.speedBasis).toBeNull()
+  })
+
   it('assembles a complete BenchmarkResult', async () => {
     const result = await runBenchmark({
       workspacePath: workspace(),

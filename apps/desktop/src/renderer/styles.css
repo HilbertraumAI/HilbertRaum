@@ -889,6 +889,18 @@ code, pre, kbd { font-family: var(--font-mono); }
   cursor: default;
 }
 .msg-truncated-glyph { flex-shrink: 0; font-size: 12px; }
+/* #290: the per-answer speed line (decode tok/s · time to first token · tokens) — the same quiet
+   muted metadata vocabulary as .msg-skill; numbers in tabular figures so lines align. */
+.msg-speed {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
 /* S13c (D3): the per-turn "answer without it" undo on an auto-fired turn — a quiet inline link, not a
    loud button, so an auto-applied skill is reversible without shouting. */
 .msg-skill-undo {

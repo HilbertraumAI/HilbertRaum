@@ -167,18 +167,26 @@ function buildAppRuntimeReport(
 }
 
 /**
- * The "Tokens / sec" value, naming the model the probe actually streamed through (issue #52:
+ * The "Decode speed" value, naming the model the probe actually streamed through (issue #52:
  * the number is measured on the CURRENTLY LOADED model, not the recommended one the card lists
  * above — without the name, the layout invites the wrong reading). Shared by the card row and
  * the Copy text so the two can never disagree. Results persisted before the field existed
- * have no measuredModelId and render as the bare number, exactly as before.
+ * have no measuredModelId and render without the model name, exactly as before.
+ *
+ * #291: a figure from the runtime's own decode timings shows the token count it covers; the
+ * chunk-count fallback — and every result persisted before `speedBasis` existed, which were all
+ * chunk-based — is marked approximate (it counts SSE chunks over wall time including prefill).
  */
 function tokensPerSecondValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
   if (bench.tokensPerSecond == null) return t('diag.bench.tokensNotMeasured')
-  const value = fmtNum(bench.tokensPerSecond, lang)
-  return bench.measuredModelId
-    ? `${value} (${t('diag.bench.tokensModel', { model: bench.measuredModelId })})`
-    : value
+  const basis = bench.speedBasis
+  const exact = basis?.basis === 'timings'
+  const value = exact ? fmtNum(bench.tokensPerSecond, lang) : `≈ ${fmtNum(bench.tokensPerSecond, lang)}`
+  const notes: string[] = []
+  if (exact) notes.push(t('diag.bench.tokensOver', { tokens: fmtNum(basis.tokens, lang) }))
+  else notes.push(t('diag.bench.tokensApprox'))
+  if (bench.measuredModelId) notes.push(t('diag.bench.tokensModel', { model: bench.measuredModelId }))
+  return `${value} (${notes.join('; ')})`
 }
 
 /**

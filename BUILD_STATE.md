@@ -29,6 +29,45 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
+`readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one
+up through `onFinish(reason, timings?)` at `[DONE]`/close — never on an abort, error frame or
+watchdog trip; one shared `RuntimeTimings` type in `runtime/index.ts`; every existing `onFinish`
+caller source-compatible.**_ Blast-radius re-analysis in the PR description (the app never logs the
+sidecar argv; the finish hand-up moved from the finish chunk to the sentinel). §5 item 20 tracks the
+wave; #290/#291 stay OPEN until the reporter runs the hardware legs (verification issue **#298**,
+assigned to the #291 reporter). PR 1 = #295 (375 / 5,645 / 74). Master `b4e0ed06` recounted: 375 / 5,633 / 74 raw.
+**PR 2 (`fix/290-291-pr2-decode-speed`, #291):** `measureTokensPerSecond` → `SpeedReading`
+(`predicted_per_second` when timings are present, chunk fallback flagged), the early `break`
+removed, `BENCHMARK_PROMPT` now a paragraph so the 64-token cap fills, `BenchmarkResult.speedBasis`,
+the card says "Decode speed" + token window / "≈ approximate"; thresholds NOT retuned (basis
+recorded in `benchmark.md`, `model-benchmarks.md` §6.5); MTP record §7 watch item → observed.
+PR 2 = #296 (375 / 5,654 / 74). **PR 3 (`fix/290-291-pr3-answer-speed-line`, #290):** chat
+only — `GenerateOptions.onTimings` (completed streams only) → `withChatStream` `sendTimings` →
+ONE ephemeral `chat:speed:<id>` `AnswerSpeed` payload (tok/s + tokens from the server timings,
+TTFT on the `first_token` clock) keyed to the persisted message id; `ChatScreen` session map →
+`Transcript` line `42 tok/s · 1.8 s to first token · 615 tokens` (EN/DE); nothing persisted;
+design record: `architecture.md` "Chat & streaming" → "Per-answer speed line" §1–§3. PR 3 = #297
+(376 / 5,670 / 74; +37 tests over master across the stack). Dev launch not possible on this
+machine (Smart App Control blocks `electron.exe` and the sidecar) — build + suite only.
+**#298 VERIFIED on hardware the same day** (the #291 reporter, i9-9900X / RTX 3090, pinned b9849,
+every box ticked: Diagnostics 28.2 / 25.9 MTP and 21.8 no-MTP vs `print_timing` 28.20 / 25.87 /
+21.84; prefill-independent; speed line 32 / 28 tok/s + token counts exact, abort / reload / mock /
+German / document-answer legs clean; the app's argv confirmed from `/proc` — no `-fa`). **PR 4
+(`fix/290-291-pr4-timings-fixture`):** the captured b9849 transcript committed as
+`tests/fixtures/chat-sse-timings-b9849.txt` (+ `chat-sse-timings-fixture.test.ts`), the records
+corrected (the issue's 47.9 was a `-fa` build; b9849 does 26–32 t/s there); closes #290/#291/#298.
+
+_2026-09-04 — **Phase F PR 6 (PR #293, `fix/pf-code1-rag-excerpt-framing`): #228 shipped — the excerpt
+block of `buildGroundedPrompt` / `buildCompareWholeDocPrompt` is framed as document content, not
+instructions (BEGIN/END markers + a guard line, user turn only, `rag/grounded-data.ts`). The eval
+probe passed at midday (`llama-server.exe --version` → `version: 9849`, exit 0), so the grounded-QA
+gate ran before/after on all ten K: chat GGUFs: level within noise on the ranked models (§52, the
+#228 addendum row + the "Phase F addendum" paragraph). Phase F COMPLETE; #217 closed.**_ Review
+catches repaired in-PR (the compare notice hoisted out of the block; echoed framing scrubbed). Suite
+on the branch (this machine): 375 / 5,633 / 74 raw (the Electron smoke ran; 374 / 5,627 / 74
+excluding it), +5 tests over master `03080b85`. Dev launch OK (app-data dev root).
+
 _2026-09-04 — **Phase F close-out (PR #292, docs only): Phase F is complete except #228. PRs 1–5
 (#283 `6329f40e`, #284 `94c9faf8`, #285 `a6d19700`, #287 `533945b8`, #289 `f30c73fc`) closed #274,
 #240/#243/#250, #248/#226, #236/#221, #247/#225; the RAG excerpt framing (#228, "wrap, gated by
@@ -564,8 +603,8 @@ consecutive full runs, zero flakes).** Per-phase gate history (test counts, bund
 per-phase test inventories) lives in git history. (This gate paragraph sits above item 19 so the
 open round's item stays the last block of §5.)
 
-19. **Full-audit 2026-09-02 (security/reliability) — ROUND COMPLETE; Phase F COMPLETE except #228**
-    (close-out 2026-09-03; Phase F close-out 2026-09-04; ledger `docs/architecture.md` §52 — the ONLY
+19. **Full-audit 2026-09-02 (security/reliability) — ROUND COMPLETE; Phase F COMPLETE**
+    (close-out 2026-09-03; Phase F close-out 2026-09-04 + PR 6 the same day; ledger `docs/architecture.md` §52 — the ONLY
     durable copy: the working papers lived under the git-ignored `tmp/` and were deleted after the
     ledger merged; tracker #217 closed). Phases 0-a…9b = PRs #265, #267 (0), #268 + #269 (1), #270
     (comment sweep), #271 (2), #272 (3), #273 (4), #275 (5b-a), #276 (6), #277 (7), #278 + #279 (8),
@@ -576,12 +615,9 @@ open round's item stays the last block of §5.)
     #227); PR 3 (#285) #248 the OS session-end lock (#226; Windows; macOS registered, unverified);
     PR 4 (#287) #236 the consenting external opener + https-only `license_url` (#221); PR 5 (#289)
     #247 `PRAGMA user_version` (#225). §52: the seven addendum rows, the "F — PR n" phase-table
-    rows, the "Phase F close-out" paragraph. Still open:
-    - **RAG excerpt framing (#228, in #236; `**DECISION:** wrap, gated by the grounded-QA eval`):**
-      NOT shipped — the grounded-QA harness cannot run on the execution machine (Windows Smart App
-      Control blocks the K: runtime's unsigned `llama.dll`; `llama-server.exe --version` exits
-      `0xC0E90002`, reproduced 2026-09-04 as PR 4's eval gate and again at the close-out). Rides
-      once the eval runs somewhere; #228 carries the change set, the gate and the probe records.
+    rows, the "Phase F close-out" paragraph; PR 6 (#293) #228 the RAG excerpt framing, shipped on a
+    before/after grounded-QA eval (level within noise on the ranked models; the #228 addendum row +
+    the "Phase F addendum" paragraph). Still open:
     - **Owner-only:** the macOS live check of the session-end lock (#226; Linux registers nothing,
       not ruled); the exFAT crash-cut (`packaging.md` checklist item 9, #223);
       `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false` (`binary-verifier.ts` — wired, tested,
@@ -598,6 +634,24 @@ open round's item stays the last block of §5.)
       `skills-installer`, `third-party-notices`, `ocr`, `rail-labels` tests), the katex hoist
       compare, `as unknown as` private-field injection — convert to behavioural assertions when
       touched; `FullSuiteGuard` cannot see dropped individual tests.
+
+20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line (opened
+    2026-09-04; three stacked PRs on one lineage).** PR 1 (`fix/290-291-pr1-sse-timings-seam`):
+    the `readChatSSE` seam — `onFinish(reason, timings?)`, `RuntimeTimings` in `runtime/index.ts`.
+    PR 2 (#291): `measureTokensPerSecond` reports `predicted_per_second` (decode tokens, prefill
+    excluded) with the chunk count as the flagged fallback; `BenchmarkResult.speedBasis`; the card
+    says "Decode speed" + the token count; MTP record §7 watch item → observed. PR 3 (#290): chat
+    only — one ephemeral `chat:speed:<id>` payload per finished answer, `tok/s · s to first
+    token · tokens`, EN/DE, nothing persisted. The PRs used "Refs", not "Closes": the "matches
+    llama-server's `print_timing` within rounding" legs need a real runtime and the execution
+    machine cannot launch one (Smart App Control, exit `0xC0E90002`) — verification issue
+    **#298** (the #291 reporter) carried both acceptance lists and the reconstructed rung-1a argv.
+    **#298 VERIFIED 2026-09-04, every box ticked** (figures in the dated entry); the captured b9849
+    transcript is committed by PR 4 (`fix/290-291-pr4-timings-fixture`, which closes
+    #290/#291/#298). PRs: #295 → #296 → #297 → PR 4 (stacked; merge in order, re-basing each onto
+    master as the one below lands). Remaining after merge: nothing — collapse this item. Thresholds (`VERY_LOW_TOKENS_PER_SECOND`,
+    `SLOW_PICK_TOKENS_PER_SECOND`) deliberately NOT retuned — they now compare a decode figure
+    against probe-basis calibration (recorded in `docs/benchmark.md` / `model-benchmarks.md` §6.5).
 
 ---
 20. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable

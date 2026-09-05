@@ -34,9 +34,27 @@ from its first public `1.0.0` release onward.
   open the article offline. Fully local: the pack server binds to 127.0.0.1 only,
   archives are used in place and never copied. Needs the kiwix-tools binaries on the
   drive — still a manual step in this release (see the user guide §7b).
+- **Each finished chat answer now shows how fast it was generated.** A small line under the
+  answer reads, for example, "42 tok/s · 1.8 s to first token · 615 tokens": the model's decode
+  speed as reported by the AI engine, how long you waited for the first word, and how many
+  tokens the answer took. It appears for answers generated in the current session only — nothing
+  is saved, so older answers show no line after a restart — and only for plain chat answers with
+  the real AI engine (not for document answers, and not for a stopped answer). English and German.
 
 ### Fixed
 
+- **The speed figure on Settings → Diagnostics is now the model's real decode speed.** The
+  benchmark used to count streamed chunks over the whole request, including the time the model
+  spent reading the prompt, so on the recommended Qwen3.8 models — which can produce several
+  tokens per chunk — it showed roughly half the true speed. The row is now labelled "Decode
+  speed", takes the number from the AI engine's own timing (generation only, counted in tokens)
+  and shows how many tokens it was measured over. A result that could not use the engine's timing
+  is marked approximate; results saved by earlier versions show as approximate too, since they
+  were all measured the old way. Re-run the benchmark to get the new figure.
+- **Answers from your documents now tell the model more firmly that document text is not
+  instructions.** The excerpts an answer is built from are marked as document content, so a
+  passage that reads like a command ("ignore the rules above …") is something to quote, not to
+  obey. Citations, sources and the answer format are unchanged.
 - **An older HilbertRaum now refuses a workspace written by a newer one instead of opening it
   half-understood.** The workspace database carries a version stamp; a copy of the app that
   finds a newer stamp says "This workspace was written by a newer HilbertRaum — update the app"

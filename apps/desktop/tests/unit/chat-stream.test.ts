@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
-import { withChatStream } from '../../src/main/ipc/chat-stream'
+import { answerSpeedFrom, withChatStream } from '../../src/main/ipc/chat-stream'
 import {
   ChatRequestError,
   ChatStreamError,
@@ -74,6 +74,74 @@ describe('withChatStream (M-A2)', () => {
     expect(sent[2].args[0]).toMatchObject({ content: 'hello world' })
     // The registry entry is cleared on completion.
     expect(inFlightStreams.has('c1')).toBe(false)
+  })
+
+  // #290: ONE ephemeral `chat:speed:<id>` payload per FINISHED answer, keyed to the persisted
+  // message id, before `done` — and nothing at all when the runtime sent no timings, the reply
+  // is empty, or the stream never produced a first token.
+  describe('per-answer speed payload (#290)', () => {
+    const timings = { prompt_n: 20, predicted_n: 615, predicted_ms: 14_640, predicted_per_second: 42 }
+
+    it('emits chat:speed with the message id, tok/s, TTFT and token count right before done', async () => {
+      const { event, sent } = fakeEvent()
+      await withChatStream(event, 'c1', 'label', async (_s, sendToken, _r, _c, _u, sendTimings) => {
+        sendToken('hello')
+        sendTimings?.(timings)
+        return msg('hello')
+      })
+      expect(sent.map((s) => s.channel)).toEqual(['chat:token:c1', 'chat:speed:c1', 'chat:done:c1'])
+      const speed = sent[1].args[0] as { messageId: string; tokensPerSecond: number; ttftMs: number; tokens: number }
+      expect(speed.messageId).toBe('a1')
+      expect(speed.tokensPerSecond).toBe(42)
+      expect(speed.tokens).toBe(615)
+      // TTFT is measured on the stream clock (registration → first token): non-negative, finite.
+      expect(Number.isFinite(speed.ttftMs)).toBe(true)
+      expect(speed.ttftMs).toBeGreaterThanOrEqual(0)
+      // Ephemeral (R14): nothing of it in the recovery buffers or the message.
+      expect(sent[2].args[0]).not.toHaveProperty('tokensPerSecond')
+    })
+
+    it('emits nothing when the run never hands timings up (the mock runtime, document answers)', async () => {
+      const { event, sent } = fakeEvent()
+      await withChatStream(event, 'c1', 'label', async (_s, sendToken) => {
+        sendToken('hello')
+        return msg('hello')
+      })
+      expect(sent.map((s) => s.channel)).toEqual(['chat:token:c1', 'chat:done:c1'])
+    })
+
+    it('emits nothing for an empty (unpersisted) reply even if timings arrived', async () => {
+      const { event, sent } = fakeEvent()
+      await withChatStream(event, 'c1', 'label', async (_s, _t, _r, _c, _u, sendTimings) => {
+        sendTimings?.(timings)
+        return msg('')
+      })
+      expect(sent.map((s) => s.channel)).toEqual(['chat:done:c1'])
+    })
+
+    it('emits nothing when the timings carry no usable rate or count', async () => {
+      const { event, sent } = fakeEvent()
+      await withChatStream(event, 'c1', 'label', async (_s, sendToken, _r, _c, _u, sendTimings) => {
+        sendToken('x')
+        sendTimings?.({ prompt_n: 3 })
+        return msg('x')
+      })
+      expect(sent.map((s) => s.channel)).toEqual(['chat:token:c1', 'chat:done:c1'])
+    })
+
+    it('answerSpeedFrom is the single rule: null without timings, TTFT, content or positive figures', () => {
+      expect(answerSpeedFrom(msg('x'), null, 5)).toBeNull()
+      expect(answerSpeedFrom(msg('x'), timings, null)).toBeNull()
+      expect(answerSpeedFrom(msg(''), timings, 5)).toBeNull()
+      expect(answerSpeedFrom(msg('x'), { predicted_per_second: 0, predicted_n: 5 }, 5)).toBeNull()
+      expect(answerSpeedFrom(msg('x'), { predicted_per_second: 12, predicted_n: 0 }, 5)).toBeNull()
+      expect(answerSpeedFrom(msg('x'), { predicted_per_second: 12.4, predicted_n: 7.6 }, 1800)).toEqual({
+        messageId: 'a1',
+        tokensPerSecond: 12.4,
+        ttftMs: 1800,
+        tokens: 8
+      })
+    })
   })
 
   it('emits error and clears the entry when the run throws, then rethrows', async () => {

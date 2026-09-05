@@ -460,6 +460,18 @@ RECOMMENDATION applies the predicate above instead: an oversized crawl never mov
 a right-sized crawl moves it exactly one tier. The #52 warning keeps naming the measured
 model; the new sibling warning names the consequence for the pick.
 
+**Basis note (issue #291, 2026-09-04).** Every tok/s figure in this section — the
+`SLOW_PICK_TOKENS_PER_SECOND = 5` calibration and the #153 legs below (17.0 / 9.0 / 14.6) — is
+**probe-basis**: streamed SSE chunks over a wall-clock window that started before the request, so
+prefill-inclusive and, on an MTP model, chunk-not-token. Since #291 the persisted
+`tokensPerSecond` is llama-server's own decode-only `predicted_per_second` whenever the runtime
+sends `timings` (`BenchmarkResult.speedBasis`), which reads HIGHER than the old figure (the #291
+rig on the pinned b9849, verified on #298: the old probe's 25 vs 28.2 / 25.9 with MTP and 21.8
+without; the issue's 47.9 / 38.4 came from a newer `-fa` build). The threshold was deliberately not retuned: it is an
+order-of-magnitude crawl gate, no benchmarked machine sits within a factor of two of it, and a
+decode-only figure only moves readings further above it. Re-measure the #153 class on the new
+basis before any future retune.
+
 **#153 amendment (2026-08-09, owner-ratified): the E2B promotion gives the step-down its
 sub-16 landing tier.** The weak-16 GB-box in-app Diagnostics leg (issue #153, successor to
 #95 item 2) ran on the designated class (15.8 GB, i7-1185G7, Iris Xe iGPU, Vulkan b9849, AC +

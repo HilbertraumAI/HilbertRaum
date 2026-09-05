@@ -1,7 +1,10 @@
 import { Fragment, memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AssistantMarkdown } from './AssistantMarkdownLazy'
 import type { Citation, ConversationSummaryMarker, EvidenceReviewSummary, Message } from '@shared/types'
+import type { AnswerSpeed } from '@shared/ipc'
+import type { UiLanguage } from '@shared/i18n'
 import { isReviewEligible } from '@shared/evidence-review'
+import { formatAnswerSpeed } from './answerSpeed'
 import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
 import { CoverageMeter, Icon, Spinner } from '../components'
@@ -60,6 +63,12 @@ interface TranscriptProps {
    * available (older callers keep their behavior; main still refuses the stale id).
    */
   isSkillOfferAvailable?: (installId: string) => boolean
+  /**
+   * #290: per-answer speed figures for answers generated in THIS session, keyed by message id.
+   * A message without an entry (older turns after a reload, the mock runtime, an aborted answer)
+   * renders no line. Absent ⇒ no lines at all.
+   */
+  answerSpeeds?: ReadonlyMap<string, AnswerSpeed>
   onCopy: (content: string) => void
   onSave: () => void
   /**
@@ -134,9 +143,10 @@ export const Transcript = memo(function Transcript({
   actionsDisabled,
   resolveSkillTitle,
   progressNotice,
-  summaryMarker
+  summaryMarker,
+  answerSpeeds
 }: TranscriptProps): JSX.Element {
-  const { t } = useT()
+  const { t, lang } = useT()
   // Stable ids wiring the live "Thinking…" toggle to its region (FE-D aria-controls).
   const thinkingId = useId()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -214,6 +224,8 @@ export const Transcript = memo(function Transcript({
               reviewConversation={reviewConversation}
               actionsDisabled={actionsDisabled}
               resolveSkillTitle={resolveSkillTitle}
+              answerSpeed={answerSpeeds?.get(m.id) ?? null}
+              lang={lang}
             />
           </Fragment>
         ))}
@@ -322,10 +334,15 @@ const MessageBlock = memo(function MessageBlock({
   reviewSummary,
   reviewConversation,
   actionsDisabled,
-  resolveSkillTitle
+  resolveSkillTitle,
+  answerSpeed,
+  lang
 }: {
   m: Message
   t: I18n['t']
+  /** #290: this session's speed figures for the answer, or null (no line). */
+  answerSpeed: AnswerSpeed | null
+  lang: UiLanguage
   /** True on the last assistant turn — gates the regenerate + "answer without it" affordances. */
   isLast: boolean
   onTryAgain?: () => void
@@ -502,6 +519,15 @@ const MessageBlock = memo(function MessageBlock({
               ⚠
             </span>
             <span>{t('chat.truncated.label')}</span>
+          </div>
+        )}
+        {/* #290: the per-answer speed line — decode tokens/sec, time to first token, token count —
+            in the same quiet metadata style as the skill glyph and the truncation note. Session-only:
+            rendered only for an answer whose `chat:speed` payload arrived in this session, so older
+            turns after a reload, a mock-runtime answer and an aborted answer show nothing. */}
+        {m.role === 'assistant' && answerSpeed && (
+          <div className="msg-speed" role="note" title={t('chat.speed.hint')}>
+            {formatAnswerSpeed(answerSpeed, t, lang)}
           </div>
         )}
       </div>

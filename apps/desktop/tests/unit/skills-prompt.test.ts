@@ -8,6 +8,7 @@ import {
   stripSkillFenceEcho,
   SKILL_GUARD_LINE
 } from '../../src/main/services/skills/prompt'
+import { EXCERPT_BEGIN, EXCERPT_END, EXCERPT_GUARD_LINE } from '../../src/main/services/rag/grounded-data'
 import { readLogTail } from '../../src/main/services/logging'
 
 // Skills plan §11 (S7) — the skill fence builder + budget. Pure, no DB, no Electron. Covers the
@@ -135,6 +136,14 @@ describe('stripSkillFenceEcho — drop fence framing the model echoed back', () 
     // a "Skill name:" is left intact; only the verbatim app delimiters are removed.
     const answer = 'Skill name: My Skill\nThis line stays.'
     expect(stripSkillFenceEcho(answer)).toBe(answer)
+  })
+
+  it('also drops the echoed excerpt-block framing of a grounded turn (#228)', () => {
+    // The excerpt markers + guard line ride in EVERY grounded turn, so an echo lands in real answers.
+    const answer = ['The cap is one million [S1].', EXCERPT_END, EXCERPT_GUARD_LINE].join('\n')
+    expect(stripSkillFenceEcho(answer)).toBe('The cap is one million [S1].')
+    const begin = [EXCERPT_BEGIN, 'Body that survives.'].join('\n')
+    expect(stripSkillFenceEcho(begin)).toBe('Body that survives.')
   })
 })
 
