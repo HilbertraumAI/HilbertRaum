@@ -120,7 +120,14 @@ const PREVIEW_MODELS: ModelInfo[] = [
     recommendedMinRamGb: 64,
     insufficientRam: true
   }),
-  modelRow({ id: 'demo-model', displayName: 'Qwen3 0.6B (demo)', state: 'missing', startableAsMock: true })
+  modelRow({ id: 'demo-model', displayName: 'Qwen3 0.6B (demo)', state: 'missing', startableAsMock: true }),
+  ...[
+    { id: 'qwen38-q4', displayName: 'Qwen3.8 27B Q4_K_M', sizeOnDiskGb: 16.7 },
+    { id: 'qwen38-q6', displayName: 'Qwen3.8 27B Q6_K', sizeOnDiskGb: 22.1 },
+    { id: 'qwen38-ud', displayName: 'Qwen3.8 27B UD-Q4_K_M', sizeOnDiskGb: 16.5, state: 'missing' as const }
+  ].map((m) => modelRow({ ...m, family: 'qwen3.8', recommendedMinRamGb: 24,
+    download: { url: 'https://example.test/model.gguf', sizeBytes: null, licenseUrl: null, licenseApproved: true } })),
+  modelRow({ id: 'voice', displayName: 'Whisper Small multilingual', family: 'whisper', role: 'transcriber', sizeOnDiskGb: 0.49 })
 ]
 
 // ---- Mock window.api: a Proxy so any unlisted method resolves to a harmless default ------------
@@ -381,7 +388,7 @@ const CASES: Record<string, { label: string; node: JSX.Element }> = {
   models: {
     label: 'AI Model screen — one "Use this model" action per installed card',
     node: (
-      <div style={{ width: 760 }}>
+      <div style={{ width: '100%' }}>
         <ModelsScreen />
       </div>
     )
@@ -645,6 +652,9 @@ CASES['local-api-busy-de'] = {
 CASES['skill-info-card-de'] = { ...CASES['skill-info-card'], label: `${CASES['skill-info-card'].label} — DE` }
 CASES['context-meter-de'] = { ...CASES['context-meter'], label: `${CASES['context-meter'].label} — DE` }
 CASES['models-de'] = { ...CASES.models, label: `${CASES.models.label} — DE` }
+for (const suffix of ['browse', 'browse-de', 'browse-light', 'browse-de-light', 'browse-expanded']) {
+  CASES[`models-${suffix}`] = { ...CASES.models, label: `Model library — ${suffix}` }
+}
 CASES['scope-chip-de'] = { ...CASES['scope-chip'], label: `${CASES['scope-chip'].label} — DE` }
 CASES['coverage-line-de'] = { ...CASES['coverage-line'], label: `${CASES['coverage-line'].label} — DE` }
 

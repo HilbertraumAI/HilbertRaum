@@ -196,7 +196,7 @@ describe('ModelsScreen — "AI Model" reframe (Phase 26, guidelines §2)', () =>
     await screen.findByText('Active Model')
 
     expect(screen.getByText('Your AI model')).toBeInTheDocument()
-    expect(screen.getByText('Other models')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Model library' })).toBeInTheDocument()
     // DOM order: the active model's card precedes the picker.
     const titles = [...document.querySelectorAll('.model-title')].map((el) => el.textContent)
     expect(titles).toEqual(['Active Model', 'Other Model'])
@@ -477,13 +477,8 @@ describe('ModelsScreen — one "Use this model" action (beta #27, D70 collapse)'
   })
 })
 
-// Issue #35: installed models and models that still need a multi-GB download used to sit
-// in ONE flat list, distinguishable only by the small state badge — the picker's
-// installed-first sort was invisible. Mixed sections now split into two labeled groups
-// ("On this drive — ready to use" / "Available to download"), and not-yet-downloaded
-// cards render visually muted (.model-card-missing).
-describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
-  it('labels both groups and keeps installed models first when the picker is mixed', async () => {
+describe('ModelsScreen — installed and catalog library views', () => {
+  it('defaults to on-drive models; Browse includes downloads with installed models first', async () => {
     stub({
       models: [
         model({ id: 'a-installed', displayName: 'A Installed', state: 'installed' }),
@@ -494,18 +489,15 @@ describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
     render(<ModelsScreen />)
     await screen.findByText('A Installed')
 
-    expect(screen.getByText(t('en', 'models.group.onDrive'))).toBeInTheDocument()
-    expect(screen.getByText(t('en', 'models.group.toDownload'))).toBeInTheDocument()
-    // Reading order: the on-drive label, its cards (manifest order preserved), the
-    // download label, then the not-yet-downloaded card.
-    const flow = [...document.querySelectorAll('.model-group-title, .model-title')].map(
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByText('B Missing')).not.toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole('radio', { name: 'Browse models' }))
+    const flow = [...document.querySelectorAll('.model-title')].map(
       (el) => el.textContent
     )
     expect(flow).toEqual([
-      t('en', 'models.group.onDrive'),
       'A Installed',
       'C Installed',
-      t('en', 'models.group.toDownload'),
       'B Missing'
     ])
   })
@@ -532,6 +524,7 @@ describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
     })
     render(<ModelsScreen />)
     await screen.findByText('A Installed')
+    await userEvent.setup().click(screen.getByRole('radio', { name: 'Browse models' }))
     const cards = [...document.querySelectorAll('.model-card')]
     const missingCard = cards.find((c) => c.textContent?.includes('B Missing'))
     const installedCard = cards.find((c) => c.textContent?.includes('A Installed'))
@@ -559,9 +552,102 @@ describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
     })
     render(<ModelsScreen />)
     await screen.findByText('Embedder Installed')
-    expect(screen.getByText(t('en', 'models.section.docSearch'))).toBeInTheDocument()
-    expect(screen.getByText(t('en', 'models.group.onDrive'))).toBeInTheDocument()
-    expect(screen.getByText(t('en', 'models.group.toDownload'))).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: t('en', 'models.section.docSearch') })).toBeInTheDocument()
+    expect(screen.queryByText('Embedder Missing')).not.toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole('radio', { name: 'Browse models' }))
+    expect(screen.getByText('Embedder Missing')).toBeInTheDocument()
+  })
+})
+
+describe('ModelsScreen — search, tasks and model variants', () => {
+  it('starts in Browse on a fresh drive and expands exact variants with the recommended one first', async () => {
+    const user = userEvent.setup()
+    stub({ models: [
+      model({ id: 'qwen-q4', displayName: 'Qwen3.8 27B Q4_K_M' }),
+      model({ id: 'qwen-ud', displayName: 'Qwen3.8 27B UD-Q4_K_M', recommended: true }),
+      model({ id: 'qwen-q6', displayName: 'Qwen3.8 27B Q6_K' })
+    ] })
+    render(<ModelsScreen />)
+    expect(await screen.findByRole('radio', { name: 'Browse models' })).toHaveAttribute('aria-checked', 'true')
+    const group = within(screen.getByRole('region', { name: 'Qwen3.8 27B' }))
+    expect(group.getByText('Qwen3.8 27B UD-Q4_K_M')).toBeVisible()
+    expect(group.queryByText('Qwen3.8 27B Q4_K_M')).not.toBeInTheDocument()
+    const expand = group.getByRole('button', { name: 'Show all variants (3)' })
+    expand.focus()
+    await user.keyboard('{Enter}')
+    expect(expand).toHaveAttribute('aria-expanded', 'true')
+    expect(group.getByText('Qwen3.8 27B Q4_K_M')).toBeVisible()
+    // Each variant's action still targets its exact catalog id.
+    await user.click(within(group.getByText('Qwen3.8 27B Q6_K').closest('.model-card') as HTMLElement)
+      .getByRole('button', { name: 'Download' }))
+    expect(screen.getByRole('dialog')).toHaveTextContent('Qwen3.8 27B Q6_K')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+    await user.click(expand)
+    expect(group.queryByText('Qwen3.8 27B Q6_K')).not.toBeInTheDocument()
+    // A search finds a collapsed variant directly, without first expanding its group.
+    await user.type(screen.getByRole('searchbox', { name: 'Search models' }), 'qwen Q6')
+    expect(screen.getByText('Qwen3.8 27B Q6_K')).toBeVisible()
+    expect(screen.queryByText('Qwen3.8 27B UD-Q4_K_M')).not.toBeInTheDocument()
+  })
+
+  it('combines task, family and case-insensitive search; reset restores results and keeps the active model pinned', async () => {
+    const user = userEvent.setup()
+    stub({ activeModelId: 'active', models: [
+      model({ id: 'active', displayName: 'Active model', state: 'running' }),
+      model({ id: 'embed', displayName: 'Document embedder', family: 'e5', role: 'embeddings', state: 'installed' }),
+      model({ id: 'rerank', displayName: 'Document reranker', family: 'bge', role: 'reranker', state: 'installed' }),
+      model({ id: 'voice', displayName: 'Voice model', family: 'whisper', role: 'transcriber', state: 'installed' })
+    ] })
+    render(<ModelsScreen />)
+    await screen.findByText('Active model')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'documents')
+    expect(screen.getByText('Document embedder')).toBeVisible()
+    expect(screen.getByText('Document reranker')).toBeVisible()
+    expect(screen.queryByText('Voice model')).not.toBeInTheDocument()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Family' }), 'bge')
+    await user.type(screen.getByRole('searchbox'), 'RERANK')
+    expect(screen.getByText('Document reranker')).toBeVisible()
+    expect(screen.queryByText('Document embedder')).not.toBeInTheDocument()
+    await user.type(screen.getByRole('searchbox'), ' xyz')
+    expect(screen.getByText(/No models match/)).toBeVisible()
+    expect(screen.getByText('Active model')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }))
+    expect(screen.getByText('Voice model')).toBeVisible()
+    expect(screen.getByText('Document embedder')).toBeVisible()
+  })
+
+  it('does not hide an installed variant when this computer has too little memory', async () => {
+    stub({ models: [model({ state: 'installed', insufficientRam: true })] })
+    render(<ModelsScreen />)
+    expect(await screen.findByRole('button', { name: 'Use this model' })).toBeDisabled()
+    expect(screen.getByText('Qwen3 4B Instruct')).toBeVisible()
+  })
+
+  it('keeps a filtered-out download cancellable and preserves the chosen view', async () => {
+    const user = userEvent.setup()
+    const downloading = model({ id: 'filtered-download', displayName: 'Filtered download Q4' })
+    let currentJob: DownloadJob = {
+      jobId: 'filtered-job', modelId: downloading.id, status: 'downloading',
+      receivedBytes: 10, totalBytes: 1000, unverified: false, error: null
+    }
+    stub({ models: [downloading], downloadModel: vi.fn(async () => currentJob),
+      getDownloadJob: vi.fn(async () => currentJob) })
+    const cancel = vi.fn(async () => {
+      currentJob = { ...currentJob, status: 'cancelled' }
+      return currentJob
+    })
+    window.api.cancelDownload = cancel
+    render(<ModelsScreen />)
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    await user.click(screen.getByRole('radio', { name: 'On this drive' }))
+    await user.type(screen.getByRole('searchbox'), 'no match')
+    const progress = within(screen.getByRole('region', { name: 'Current model download' }))
+    expect(progress.getByText(downloading.displayName)).toBeVisible()
+    await user.click(progress.getByRole('button', { name: 'Cancel download' }))
+    expect(cancel).toHaveBeenCalledWith('filtered-job')
+    expect(screen.queryByRole('region', { name: 'Current model download' })).not.toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute('aria-checked', 'true')
   })
 })
 
@@ -581,7 +667,7 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
   it('offers the 65,536 and 131,072 rungs — the old 32k ceiling dead-ended long-document workflows', async () => {
     stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4' })
     render(<ModelsScreen />)
-    const select = await screen.findByRole('combobox')
+    const select = await screen.findByRole('combobox', { name: /Context window for answers/ })
     expect(within(select).getByRole('option', { name: '65,536 tokens' })).toBeInTheDocument()
     expect(within(select).getByRole('option', { name: '131,072 tokens' })).toBeInTheDocument()
   })
@@ -591,7 +677,7 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
       model({ state: 'installed', recommendedContextTokens: 98_304 })
     ])
     render(<ModelsScreen />)
-    const select = await screen.findByRole('combobox')
+    const select = await screen.findByRole('combobox', { name: /Context window for answers/ })
     // "Auto" is often the LARGEST choice in the list; naming its resolved size stops it
     // reading as a small default (issue #43).
     expect(within(select).getByRole('option', { name: /Automatic.*98,304/ })).toBeInTheDocument()
@@ -637,7 +723,7 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
     // BLANK. It now gets an extra option in the same label style, selected.
     stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4', contextTokensOverride: 24_576 })
     render(<ModelsScreen />)
-    const select = (await screen.findByRole('combobox')) as HTMLSelectElement
+    const select = (await screen.findByRole('combobox', { name: /Context window for answers/ })) as HTMLSelectElement
     const option = within(select).getByRole('option', {
       name: t('en', 'models.tech.contextValue', { count: (24_576).toLocaleString('en') })
     }) as HTMLOptionElement
@@ -648,13 +734,13 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
   it('shows the honest memory warning for a big fixed pick — and not for a small one', async () => {
     stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4', contextTokensOverride: 131_072 })
     render(<ModelsScreen />)
-    await screen.findByRole('combobox')
+    await screen.findByRole('combobox', { name: /Context window for answers/ })
     expect(document.querySelector('.context-size-warning')).not.toBeNull()
     cleanup()
 
     stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4', contextTokensOverride: 8192 })
     render(<ModelsScreen />)
-    await screen.findByRole('combobox')
+    await screen.findByRole('combobox', { name: /Context window for answers/ })
     expect(document.querySelector('.context-size-warning')).toBeNull()
   })
 })
