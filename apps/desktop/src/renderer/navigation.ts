@@ -2,6 +2,8 @@
 // (Translate added as a primary between Documents and Images — TranslateGemma plan §2 D6,
 // making the rail "7 primary + 1 utility"; Images is image-understanding §6); everything else
 // screens may ask for is a VIRTUAL target resolved here:
+//   - 'performance'            → the Performance screen (an 8th primary destination since the
+//     2026-09 performance wave: "8 primary + 1 utility" — design-guidelines §2)
 //   - 'ask-documents'          → Chat screen opened in documents mode
 //   - 'settings:privacy'       → Settings, "Privacy & data" tab
 //   - 'settings:diagnostics'   → Settings, "Diagnostics (advanced)" tab
@@ -19,6 +21,7 @@ export type ScreenId =
   | 'translate'
   | 'images'
   | 'models'
+  | 'performance'
   | 'skills'
   | 'settings'
   // Evidence review workspace (EP-1 plan §7.1): a full-window screen with NO nav-rail entry.
@@ -58,6 +61,7 @@ export function resolveNavTarget(target: string): NavResolution {
     case 'translate':
     case 'images':
     case 'models':
+    case 'performance':
     case 'skills':
       return { screen: target }
     default:

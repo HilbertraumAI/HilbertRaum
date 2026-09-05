@@ -232,6 +232,8 @@ export const IPC = {
   translateGetActive: 'translate:getActive',
   // Benchmark
   runBenchmark: 'benchmark:run',
+  /** The Performance screen's one read: last result, per-machine history, observed figures. */
+  getPerformance: 'performance:get',
   /**
    * "Try GPU again": clears `gpuAutoDisabled`/`gpuLastError`,
    * invalidates the session probe cache, re-probes + persists, returns fresh settings.
@@ -502,6 +504,11 @@ export const EVENTS = {
    * "switched to compatibility mode" message — spec §11.4 tone, never alarming).
    */
   runtimeNotice: 'runtime:notice',
+  /**
+   * The step a running benchmark just finished (`BenchmarkProgressStep`), sent to the
+   * renderer that started it so the Performance screen can show the steps as they land.
+   */
+  benchmarkProgress: 'benchmark:progress',
   /**
    * Checksum-verification progress during `listModels` (`ModelVerifyProgress`). Emitted
    * to the calling renderer (`event.sender`) while first-run weight hashing runs, so the

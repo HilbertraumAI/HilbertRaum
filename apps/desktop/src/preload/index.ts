@@ -12,6 +12,7 @@ import type {
   AppSettings,
   AppStatus,
   AuditEvent,
+  BenchmarkProgressStep,
   BenchmarkResult,
   ChatOptions,
   Collection,
@@ -60,6 +61,7 @@ import type {
   ModelVerifyProgress,
   PickDocumentsResult,
   LocalApiConnectionInfo,
+  PerformanceSnapshot,
   PolicyStatus,
   PreflightResult,
   RuntimeInstallInfo,
@@ -268,6 +270,14 @@ const api = {
   // ---- Hardware benchmark ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */
   runBenchmark: (): Promise<BenchmarkResult> => ipcRenderer.invoke(IPC.runBenchmark),
+  /** The Performance screen's one read: last result, per-machine history, observed figures. */
+  getPerformance: (): Promise<PerformanceSnapshot> => ipcRenderer.invoke(IPC.getPerformance),
+  /** Subscribe to the steps of a benchmark THIS window started; returns an unsubscribe fn. */
+  onBenchmarkProgress: (cb: (step: BenchmarkProgressStep) => void): (() => void) => {
+    const handler = (_e: unknown, step: BenchmarkProgressStep) => cb(step)
+    ipcRenderer.on(EVENTS.benchmarkProgress, handler)
+    return () => ipcRenderer.removeListener(EVENTS.benchmarkProgress, handler)
+  },
   /** "Try GPU again": clears the compatibility-mode flag, re-probes, returns fresh settings. */
   tryGpuAgain: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.tryGpuAgain),
 

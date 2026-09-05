@@ -37,7 +37,7 @@ Audience: non-technical professionals (lawyers, doctors, accountants, consultant
 
 ## 2. Information architecture
 
-Collapse the nav destinations into 7 primary + 1 utility:
+Collapse the nav destinations into 8 primary + 1 utility:
 
 - **Top group (everyday):** Home (genuine status hub: ready? model running? doc count? one
   big "Start chatting") · Chat · Documents · **Translate** (live text translation on the
@@ -46,9 +46,20 @@ Collapse the nav destinations into 7 primary + 1 utility:
   · **Images** (visual understanding of one local image via a local vision model — a
   first-class task surface, distinct from OCR and from any image generation;
   image-understanding §6) · **AI Model** (reframed from "Models" — singular mental model;
-  checksums/quantization behind a "Technical details" disclosure) · **Skills** (the user's
+  checksums/quantization behind a "Technical details" disclosure) · **Performance** (what this
+  computer can run and how fast: the hardware check's answer as a verdict and three rated tiles,
+  the figures observed in real use, and one result per computer the drive has been in;
+  `docs/benchmark.md` "Performance screen") · **Skills** (the user's
   capability library — manage, import, enable; a first-class destination, *not* a Settings
   tab, since it is a thing the user builds up over time, not a knob).
+  - _Why Performance is a primary destination, not a Diagnostics card (8th deliberate IA
+    change, 2026-09-05):_ the check decides the ★ model pick and the profile, and its answer is
+    the user's question ("can this computer run it, how fast, is the drive fast enough"); as the
+    third card of the Diagnostics tab it was found by nobody. A one-shot probe alone would not
+    earn a rail slot; the destination carries what changes over time as well: the figures from
+    real use and the per-computer history a travelling drive accumulates. Diagnostics keeps the
+    raw table and Copy for support. The single-word labels ("Performance"/"Leistung") fit the
+    rail; a gauge glyph in the icon set's 24-grid, 1.65 stroke.
   - _Why Translate is a primary destination, not a sub-mode (7th deliberate IA change):_
     translating pasted text is a distinct, complete task — text in, translation out — that
     stands parallel to Chat/Documents/Images, runs on its own model (TranslateGemma, not the

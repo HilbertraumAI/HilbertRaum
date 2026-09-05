@@ -214,7 +214,8 @@ word-regex would silently mis-bind once two drive-worded warnings can co-fire, a
 
 Spec §8 defines **no `benchmarks` table**, so the last result is persisted via the **settings
 store** as `AppSettings.lastBenchmark` (a JSON `BenchmarkResult`, default `null`).
-`runBenchmark()` writes it after each run. Downstream reads use `lastBenchmark.profile`,
+`runBenchmark()` writes it after each run, and files the same result under this machine in
+`AppSettings.benchmarkHistory` (see "History per machine" below). Downstream reads use `lastBenchmark.profile`,
 falling back to **`UNKNOWN`** until the user runs the benchmark for the first time:
 
 - `getAppStatus().hardwareProfile` (Home screen).
@@ -229,6 +230,66 @@ place** on the persisted result outside benchmark runs (`persistEffectiveRead` i
 samples, and `runBenchmark` receives the latest sample **injected**
 (`RunBenchmarkDeps.effectiveRead`, the GPU-probe injection pattern — this module measures
 nothing itself), carried forward from the previous result so a re-run never loses it.
+
+## History per machine (2026-09-05)
+
+A portable drive travels, and a benchmark result describes the computer it ran on, not the
+drive. Since the performance wave the settings store also keeps **one result per computer**:
+`AppSettings.benchmarkHistory` (`BenchmarkResult[]`, newest first, default `[]`, capped at
+`MAX_BENCHMARK_HISTORY = 8`; `services/performance.ts`). Every persisted run calls
+`upsertHistory`: the entry for the same machine is replaced, other machines stay, the oldest
+other machine falls off the cap.
+
+**The machine fingerprint** (`machineKey`) is OS, arch, CPU model, core count and RAM rounded to
+whole GB (`os.totalmem()` drifts by a few MB between boots of one machine; the Models screen
+rounds the same way). A result with no usable identity (an empty `cpuModel`, `ramGb` of 0, or a
+blob persisted before these fields were reliably filled) has a **null key**: it is never filed in
+the history and never counts as "another computer", so an old workspace keeps behaving as before.
+
+**The moved-drive check** lives in `maybeRunFirstBenchmark`, which already runs after every
+unlock. If `lastBenchmark` exists and its key differs from this machine's:
+
+- a history entry for this machine is **restored** into `lastBenchmark` (so the ★ pick and the
+  profile follow the machine, not the drive) and nothing is re-measured;
+- with no entry, this is a first run on a new computer and the benchmark runs in the background
+  exactly as on a fresh workspace.
+
+Either way the per-session GPU probe refresh still happens first. The `benchmarkHistory` write
+gate accepts only an array of plain objects (junk elements dropped, length capped; the 256 KB
+serialized cap applies to the list).
+
+## Performance screen (2026-09-05)
+
+The check's answer moved out of the Diagnostics tab onto a primary rail destination,
+**Performance** (`renderer/screens/PerformanceScreen.tsx`; design-guidelines §2 "8 primary + 1
+utility"). Diagnostics keeps the raw table and its Copy button as the support surface; the
+screen answers the user's question in plain words. Three cards:
+
+1. **This computer**: one verdict sentence ("Runs \<model\> at about \<n\> tokens per second.
+   Model starts from this drive are fast/slow.") and three tiles, each with a rating WORD, never a
+   colour alone: Speed (decode tokens/s, the measured model and date; "Approximate" on a
+   chunk-basis result), Memory (RAM, the profile as the pill, the model the RAM fits together with
+   the context it launches with: the user's `contextTokensOverride` or the model's recommended
+   window, plus CPU and GPU), Drive (`effectiveRead` with its source and date; "Pending" until a
+   model start measured it). Actions: **Check again** (or **Start \<model\> and measure** when
+   speed is unmeasured, the recommended model is installed and nothing runs: `useModel` then
+   `runBenchmark`), **Why this model?** and **Change context size** (both open AI Model, the one
+   place the context is set), **Copy report**. A result measured on another computer says so.
+2. **Observed while you worked**: figures from real use, session-only, never persisted: the last
+   finished answer (the #290 `chat:speed` payload, latched by `setAnswerSpeedObserver` in
+   `chat-stream.ts` with the model that produced it), the last model start (the `model_load`
+   read sample: bytes, elapsed, MB/s; falls back to the persisted sample), the last full file
+   check (the `checksum` sample). `read-speed.ts` keeps an unranked newest-per-source latch for
+   this (`latestEffectiveReadBySource`); the ranked `latestEffectiveRead` is unchanged.
+3. **Other computers this drive has been used on**: the history minus this machine, newest
+   first, each with its speed/model, CPU/RAM/date and rating pills ("Slow drive" under 100 MB/s).
+
+**Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
+in `registerBenchmarkIpc.ts`): `current`, `currentMachine`, `otherMachines`, `running` (the
+`benchmark` occupancy lane), `observed`. **Progress**: `RunBenchmarkDeps.onProgress` reports
+`'system' | 'drive' | 'speed' | 'done'` as each step lands ('speed' only when a runtime was up);
+the IPC handler forwards them to the requesting window as `benchmark:progress`, and the screen
+shows a step list instead of an opaque "Running…" button. The first-run path passes no callback.
 
 ## Perf marks (opt-in, `HILBERTRAUM_PERF_LOG=1`)
 

@@ -27,6 +27,15 @@ from its first public `1.0.0` release onward.
 
 ### Added
 
+- **A new Performance page in the left navigation.** It answers, in plain words, what this
+  computer can run and how fast: one sentence, then three tiles for speed, memory and drive,
+  each with a rating word. Below it, figures from real use (your last answer, the last model
+  start, the last file check) and one result for every computer this drive has been plugged
+  into. The check runs on its own the first time and whenever the drive lands on a different
+  computer; on a computer it already knows, the earlier result is restored so the recommended
+  model follows the machine. While a check runs you see its steps instead of a plain "Running…"
+  button, and if no model has run yet the page offers to start the recommended one and measure.
+  The technical table stays on Settings → Diagnostics. English and German.
 - **Each finished chat answer now shows how fast it was generated.** A small line under the
   answer reads, for example, "42 tok/s · 1.8 s to first token · 615 tokens": the model's decode
   speed as reported by the AI engine, how long you waited for the first word, and how many

@@ -53,6 +53,9 @@ const ModelsScreen = lazyScreen(() =>
 const SettingsScreen = lazyScreen(() =>
   import('./screens/SettingsScreen').then((m) => ({ default: m.SettingsScreen }))
 )
+const PerformanceScreen = lazyScreen(() =>
+  import('./screens/PerformanceScreen').then((m) => ({ default: m.PerformanceScreen }))
+)
 const SkillsScreen = lazyScreen(() =>
   import('./screens/SkillsScreen').then((m) => ({ default: m.SkillsScreen }))
 )
@@ -105,6 +108,12 @@ const NAV_TOP: NavItem[] = [
   // Documents/Chat, not a sub-mode (image-understanding §6). After Translate, before AI Model.
   { id: 'images', labelKey: 'nav.images', icon: 'image' },
   { id: 'models', labelKey: 'nav.models', icon: 'brain' },
+  // Performance is a primary destination (design-guidelines §2, "8 primary + 1 utility"):
+  // the hardware check's answer ("what can this computer run, how fast"), the figures observed
+  // in real use, and one result per computer the drive has been in. Before this it was the
+  // third card of the Diagnostics tab, which keeps the raw table for support. After AI Model,
+  // whose ★ pick it explains; before Skills.
+  { id: 'performance', labelKey: 'nav.performance', icon: 'gauge' },
   { id: 'skills', labelKey: 'nav.skills', icon: 'puzzle' }
 ]
 
@@ -498,6 +507,7 @@ function AppShell(): JSX.Element {
             {screen === 'translate' && <TranslateScreen onNavigate={navigate} />}
             {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
             {screen === 'models' && <ModelsScreen />}
+            {screen === 'performance' && <PerformanceScreen onNavigate={navigate} />}
             {screen === 'skills' && <SkillsScreen />}
             {screen === 'settings' && (
               <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />

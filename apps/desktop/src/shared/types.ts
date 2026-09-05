@@ -296,6 +296,16 @@ export interface AppSettings {
    * (`lastBenchmark.profile`) drives model recommendation + `AppStatus.hardwareProfile`.
    */
   lastBenchmark: BenchmarkResult | null
+  /**
+   * One benchmark result per COMPUTER this drive has been checked on (benchmark.md
+   * "History per machine"), newest first, keyed by the machine fingerprint
+   * (`machineKey` in services/performance.ts: OS, arch, CPU model, cores, rounded RAM).
+   * `lastBenchmark` is always the entry for the machine the app last ran on; the others
+   * are what the Performance screen lists as "other computers", and what the moved-drive
+   * check restores from so the recommendation follows the machine, not the drive.
+   * Capped at `MAX_BENCHMARK_HISTORY`; default `[]` (older workspaces have no history).
+   */
+  benchmarkHistory: BenchmarkResult[]
   // ---- GPU acceleration (architecture.md GPU record §5.4) ----
   /**
    * User intent: 'auto' (default — GPU when it works, the fallback ladder handles the
@@ -421,6 +431,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ragMaxContextTokens: 2500,
   ragMinSimilarity: 0,
   lastBenchmark: null,
+  benchmarkHistory: [],
   // GPU is ALWAYS the default ('auto'); only a detected problem or the explicit Settings
   // toggle moves a machine to CPU.
   gpuMode: 'auto',
@@ -1950,6 +1961,51 @@ export interface BenchmarkResult {
   recommendedModelId: string | null
   warnings: string[]
   ranAt: string
+}
+
+/** Most machines the drive keeps a benchmark result for (`AppSettings.benchmarkHistory`). */
+export const MAX_BENCHMARK_HISTORY = 8
+
+/**
+ * The step the running benchmark is on (`EVENTS.benchmarkProgress`): the Performance screen
+ * shows the steps as they complete instead of one opaque "Running…" button. 'speed' is
+ * skipped entirely (no event) when no runtime is up.
+ */
+export type BenchmarkProgressStep = 'system' | 'drive' | 'speed' | 'done'
+
+/**
+ * How fast the last FINISHED chat answer of this session was (the #290 `chat:speed`
+ * payload plus the model it ran on and when). Session-only, never persisted — the same
+ * decision #290 made for the per-answer line; the Performance screen shows it as an
+ * "observed" figure beside the benchmark probe.
+ */
+export interface ObservedAnswerSpeed {
+  tokensPerSecond: number
+  ttftMs: number
+  tokens: number
+  modelId: string | null
+  /** ISO-8601 timestamp of the answer. */
+  at: string
+}
+
+/**
+ * Everything the Performance screen renders, in one read (`performance:get`).
+ * `current` is `settings.lastBenchmark`; `otherMachines` is the history minus the current
+ * machine's entry; the `observed` figures come from real use (a finished chat answer, a
+ * model start, a full file check), not from the probe.
+ */
+export interface PerformanceSnapshot {
+  current: BenchmarkResult | null
+  /** True when `current` was measured on the computer the app is running on right now. */
+  currentMachine: boolean
+  otherMachines: BenchmarkResult[]
+  /** True while a benchmark is running (the button disables; steps stream via the event). */
+  running: boolean
+  observed: {
+    lastAnswer: ObservedAnswerSpeed | null
+    lastModelLoad: EffectiveReadSample | null
+    lastChecksum: EffectiveReadSample | null
+  }
 }
 
 // ---- Audit log (architecture.md "Audit log") ----

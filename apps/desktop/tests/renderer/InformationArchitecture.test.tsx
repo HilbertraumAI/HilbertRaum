@@ -27,13 +27,15 @@ beforeAll(() => {
 })
 
 describe('resolveNavTarget — virtual targets + legacy aliases', () => {
-  it('maps the eight real destinations to themselves', () => {
+  it('maps the nine real destinations to themselves', () => {
     expect(resolveNavTarget('home')).toEqual({ screen: 'home' })
     expect(resolveNavTarget('documents')).toEqual({ screen: 'documents' })
     // Translate is a primary destination between Documents and Images (TranslateGemma plan §2 D6).
     expect(resolveNavTarget('translate')).toEqual({ screen: 'translate' })
     expect(resolveNavTarget('images')).toEqual({ screen: 'images' })
     expect(resolveNavTarget('models')).toEqual({ screen: 'models' })
+    // Performance is a primary destination after AI Model (design-guidelines §2, 2026-09).
+    expect(resolveNavTarget('performance')).toEqual({ screen: 'performance' })
     expect(resolveNavTarget('skills')).toEqual({ screen: 'skills' })
     expect(resolveNavTarget('chat')).toEqual({ screen: 'chat', chatMode: 'chat' })
     expect(resolveNavTarget('settings')).toEqual({ screen: 'settings', settingsTab: 'general' })
@@ -66,7 +68,7 @@ describe('resolveNavTarget — virtual targets + legacy aliases', () => {
   it("keeps 'review' OUT of plain navigation — reachable only via App's handoff slot (EP-1 §7.1)", () => {
     // The review screen is meaningless without a review/message id in the handoff slot, so
     // as a plain target it lands on home like any unknown target; App.openReview is the
-    // one way in (and the nav rail carries NO review item — the IA test above pins the 8).
+    // one way in (and the nav rail carries NO review item — the IA test above pins the 9).
     expect(resolveNavTarget('review')).toEqual({ screen: 'home' })
   })
 })
@@ -115,8 +117,8 @@ function stubAppShell(): void {
   })
 }
 
-describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
-  it('renders exactly Home · Chat · Documents · Translate · Images · AI Model · Skills ‖ Settings — no Privacy/Diagnostics items', async () => {
+describe('App shell — 9-item nav (TranslateGemma adds Translate; the performance wave adds Performance)', () => {
+  it('renders exactly Home · Chat · Documents · Translate · Images · AI Model · Performance · Skills ‖ Settings — no Privacy/Diagnostics items', async () => {
     stubAppShell()
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -134,6 +136,7 @@ describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
       'Translate',
       'Images',
       'AI Model',
+      'Performance',
       'Skills',
       'Settings'
     ])

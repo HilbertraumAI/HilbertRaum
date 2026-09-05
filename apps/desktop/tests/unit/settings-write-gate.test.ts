@@ -11,7 +11,7 @@ import {
   seedSettings,
   updateSettings
 } from '../../src/main/services/settings'
-import { DEFAULT_SETTINGS, type AppSettings } from '../../src/shared/types'
+import { DEFAULT_SETTINGS, MAX_BENCHMARK_HISTORY, type AppSettings } from '../../src/shared/types'
 
 // BE-1 (full-audit 2026-07-10): the write gate's generic type check had two holes —
 // (a) `value === null` bypassed it for EVERY key, so `{ checksumCache: null }` persisted over
@@ -26,6 +26,31 @@ function freshDb(): Db {
   seedSettings(db)
   return db
 }
+
+describe('settings write gate — benchmarkHistory (the one array-of-objects setting)', () => {
+  type History = AppSettings['benchmarkHistory']
+  const entry = (cpuModel: string): History[number] =>
+    ({ cpuModel, cpuCores: 8, ramGb: 16, os: 'linux', arch: 'x64', ranAt: '2026-09-05T00:00:00Z' }) as unknown as History[number]
+
+  it('keeps plain-object entries, drops junk elements, and caps at MAX_BENCHMARK_HISTORY', () => {
+    const db = freshDb()
+    const junk = [entry('a'), 'nope', 42, null, ['no'], entry('b')] as unknown as History
+    updateSettings(db, { benchmarkHistory: junk })
+    expect(getSettings(db).benchmarkHistory.map((e) => e.cpuModel)).toEqual(['a', 'b'])
+
+    const many = Array.from({ length: MAX_BENCHMARK_HISTORY + 3 }, (_, i) => entry(`m${i}`))
+    updateSettings(db, { benchmarkHistory: many })
+    expect(getSettings(db).benchmarkHistory).toHaveLength(MAX_BENCHMARK_HISTORY)
+  })
+
+  it('drops a non-array value and null (the default is a non-null array)', () => {
+    const db = freshDb()
+    updateSettings(db, { benchmarkHistory: [entry('keep')] })
+    updateSettings(db, { benchmarkHistory: { not: 'an array' } as unknown as History })
+    updateSettings(db, { benchmarkHistory: null as unknown as History })
+    expect(getSettings(db).benchmarkHistory.map((e) => e.cpuModel)).toEqual(['keep'])
+  })
+})
 
 describe('settings write gate (BE-1)', () => {
   it('drops null for keys whose default is non-null (checksumCache must stay an object)', () => {
