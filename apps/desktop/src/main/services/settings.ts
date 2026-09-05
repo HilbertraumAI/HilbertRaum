@@ -108,7 +108,10 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // start-hot readers touch) is applied once, below, to every non-primitive write (#251).
     // `value === null` (a legitimate clear of the null-default pair) is accepted upstream and
     // never reaches here.
-    if ((key === 'lastBenchmark' || key === 'gpuProbe' || key === 'checksumCache') && value !== null) {
+    if (
+      (key === 'lastBenchmark' || key === 'gpuProbe' || key === 'checksumCache' || key === 'modelPlacements') &&
+      value !== null
+    ) {
       if (typeof value !== 'object' || Array.isArray(value)) continue
     }
     // Array-typed defaults (any future `string[]` setting) pass the

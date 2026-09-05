@@ -3,12 +3,15 @@ import {
   findMachine,
   latestAnswerSpeed,
   machineKey,
+  memoryBudgetMb,
+  memoryClassOf,
   otherMachines,
+  placementVerdict,
   recordAnswerSpeed,
   resetPerformanceForTests,
   upsertHistory
 } from '../../src/main/services/performance'
-import { MAX_BENCHMARK_HISTORY, type BenchmarkResult } from '../../src/shared/types'
+import { MAX_BENCHMARK_HISTORY, type BenchmarkResult, type ModelPlacement } from '../../src/shared/types'
 
 // The Performance screen's model (benchmark.md "History per machine"): one result per
 // computer, keyed by a fingerprint that survives a reboot (rounded RAM) and that an OLD
@@ -114,5 +117,70 @@ describe('answer-speed latch', () => {
     })
     recordAnswerSpeed({ messageId: 'a2', tokensPerSecond: 3, ttftMs: 2000, tokens: 10 }, null, now)
     expect(latestAnswerSpeed()?.tokensPerSecond).toBe(3)
+  })
+})
+
+// ---- "Your model" (benchmark.md): memory class, budget, verdict ----
+
+const RTX = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_576, freeMb: 20_000 }
+const IRIS = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, freeMb: 16_000 }
+
+describe('memoryClassOf / memoryBudgetMb', () => {
+  it('Apple Silicon is unified regardless of the probe; a usable card is discrete; else cpu', () => {
+    expect(memoryClassOf('darwin', 'arm64', [])).toBe('unified')
+    expect(memoryClassOf('linux', 'x64', [RTX])).toBe('discrete')
+    // The iGPU reporting shared memory is NOT a discrete budget (the runtime's own gate).
+    expect(memoryClassOf('win32', 'x64', [IRIS])).toBe('cpu')
+    expect(memoryClassOf('win32', 'x64', [])).toBe('cpu')
+  })
+
+  it('budgets: VRAM for discrete, Metal working set (else 75% of RAM) for unified, RAM for cpu', () => {
+    expect(memoryBudgetMb('discrete', 16_000, 24_576, null)).toBe(24_576)
+    expect(memoryBudgetMb('unified', 49_152, null, null)).toBe(36_864)
+    const withMetal = { metalMaxWorkingSetMb: 40_000 } as ModelPlacement
+    expect(memoryBudgetMb('unified', 49_152, null, withMetal)).toBe(40_000)
+    expect(memoryBudgetMb('cpu', 16_000, null, null)).toBe(16_000)
+  })
+})
+
+describe('placementVerdict', () => {
+  const observed = (over: Partial<ModelPlacement> = {}): ModelPlacement => ({
+    modelId: 'm', contextTokens: 8192, backend: 'gpu', gpuLayers: 41, totalLayers: 41,
+    gpuModelMb: 5500, cpuModelMb: 400, gpuKvMb: 640, cpuKvMb: null, metalMaxWorkingSetMb: null,
+    machineKey: null, at: '2026-09-05T00:00:00Z', ...over
+  })
+
+  it('reads an observed start off the log: all layers on the GPU, size = weights + cache', () => {
+    const v = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 5.8, observed: observed() })
+    expect(v).toMatchObject({ kind: 'gpu', needMb: 6540, estimated: false, budgetMb: 24_576, gpuLayers: 41, totalLayers: 41 })
+  })
+
+  it('a partial offload is named with the CPU-side bytes as the spill; a CPU backend is cpu', () => {
+    const partial = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 8192, sizeOnDiskGb: 5.8, observed: observed({ gpuLayers: 30, cpuModelMb: 1900, cpuKvMb: 200 }) })
+    expect(partial).toMatchObject({ kind: 'partial', spillMb: 2100, gpuLayers: 30, totalLayers: 41 })
+    const cpu = placementVerdict({ memoryClass: 'cpu', ramMb: 16_000, vramMb: null, sizeOnDiskGb: 5.8, observed: observed({ backend: 'cpu', gpuLayers: null, totalLayers: null }) })
+    expect(cpu.kind).toBe('cpu')
+  })
+
+  it('estimates from the weights before the first start, with headroom, per memory class', () => {
+    const base = { ramMb: 16_384, vramMb: 24_576, sizeOnDiskGb: 5.8, observed: null }
+    expect(placementVerdict({ memoryClass: 'discrete', ...base })).toMatchObject({ kind: 'gpu', needMb: 5939, estimated: true })
+    // 19.8 GB on a 16 GB card: partial, the excess spills to RAM.
+    const spill = placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 16_384, sizeOnDiskGb: 19.8, observed: null })
+    expect(spill.kind).toBe('partial')
+    expect(spill.spillMb).toBe(Math.round(19.8 * 1024) - Math.round(16_384 * 0.92))
+    // 19.8 GB on a 16 GB card in a 4 GB box: RAM cannot take the rest.
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 4096, vramMb: 16_384, sizeOnDiskGb: 19.8, observed: null }).kind).toBe('too_large')
+    // Unified: the 75% budget decides.
+    expect(placementVerdict({ memoryClass: 'unified', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 5.8, observed: null }).kind).toBe('gpu')
+    expect(placementVerdict({ memoryClass: 'unified', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 12, observed: null }).kind).toBe('too_large')
+    // CPU: RAM decides.
+    expect(placementVerdict({ memoryClass: 'cpu', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 5.8, observed: null }).kind).toBe('cpu')
+    expect(placementVerdict({ memoryClass: 'cpu', ramMb: 8192, vramMb: null, sizeOnDiskGb: 9, observed: null }).kind).toBe('too_large')
+  })
+
+  it('is unknown without a size or a budget', () => {
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: null, vramMb: null, sizeOnDiskGb: 5.8, observed: null }).kind).toBe('unknown')
+    expect(placementVerdict({ memoryClass: 'cpu', ramMb: 16_000, vramMb: null, sizeOnDiskGb: 0, observed: null }).kind).toBe('unknown')
   })
 })

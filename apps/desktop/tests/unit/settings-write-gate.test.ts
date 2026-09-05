@@ -52,6 +52,18 @@ describe('settings write gate — benchmarkHistory (the one array-of-objects set
   })
 })
 
+describe('settings write gate — modelPlacements (object map, never an array)', () => {
+  it('stores a plain object map and drops an array or a primitive', () => {
+    const db = freshDb()
+    const rec = { modelId: 'm', contextTokens: 1, backend: 'cpu', gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: 1, gpuKvMb: null, cpuKvMb: null, metalMaxWorkingSetMb: null, machineKey: null, at: 'x' } as const
+    updateSettings(db, { modelPlacements: { m: rec } })
+    expect(getSettings(db).modelPlacements.m?.cpuModelMb).toBe(1)
+    updateSettings(db, { modelPlacements: [rec] as unknown as AppSettings['modelPlacements'] })
+    updateSettings(db, { modelPlacements: 'junk' as unknown as AppSettings['modelPlacements'] })
+    expect(getSettings(db).modelPlacements.m?.cpuModelMb).toBe(1)
+  })
+})
+
 describe('settings write gate (BE-1)', () => {
   it('drops null for keys whose default is non-null (checksumCache must stay an object)', () => {
     const db = freshDb()

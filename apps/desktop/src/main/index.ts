@@ -49,7 +49,8 @@ import { registerEngineIpc } from './ipc/registerEngineIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
 import { setAnswerSpeedObserver } from './ipc/chat-stream'
-import { recordAnswerSpeed } from './services/performance'
+import { machineKey, recordAnswerSpeed } from './services/performance'
+import { detectSystem } from './services/benchmark'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
@@ -327,6 +328,8 @@ function initBackend(): void {
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({
       rootPath: paths.rootPath,
+      // Stamps each placement record with this machine (benchmark.md "Your model").
+      machineKey: () => machineKey(detectSystem()),
       // M-5: the dev-only HILBERTRAUM_LLAMA_BIN override is honoured only in a dev build.
       isDev,
       onSelect: (kind, opts, reason) => {

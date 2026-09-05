@@ -32,7 +32,9 @@
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance" (8 primary + 1
 utility, design-guidelines §2).** Verdict + four rated tiles (speed, RAM, VRAM via
-`BenchmarkResult.gpuVramMb`, drive), the session's observed figures (last
+`BenchmarkResult.gpuVramMb`, drive) and the "Your model" row (memory class discrete / unified /
+cpu, the chat ladder's placement parser over llama.cpp's load log, `settings.modelPlacements`,
+`placementVerdict`), the session's observed figures (last
 answer via a `chat:speed` observer, last model start / file check via per-source read-speed
 latches), and one result per computer (`settings.benchmarkHistory`, `machineKey`). The moved-drive
 check in `maybeRunFirstBenchmark` restores a known machine's result or benchmarks a new one;
@@ -663,7 +665,9 @@ open round's item stays the last block of §5.)
     lives on Performance; (c) the hardware legs on the rig: a real moved-drive round trip between
     two machines (restore, then new-machine background run) and the German rail label width at the
     600 weight; (d) model-load duration per machine in the history rows (the `model_load` sample
-    carries it; only the current machine shows it today).
+    carries it; only the current machine shows it today); (e) "Your model" Phase 2: the
+    context-cache estimate from the GGUF header, and a VRAM-aware ★ picker (the picker is
+    RAM-best-fit today, which is how a 24 GB card gets a 27B Q5 recommended on a 125 GB box).
 
 ---
 

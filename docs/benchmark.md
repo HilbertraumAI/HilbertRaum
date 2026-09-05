@@ -283,6 +283,32 @@ screen answers the user's question in plain words. Three cards:
    context size** (opens AI Model, the one place the context is set), **Copy report**. A "Why this
    model?" link to AI Model was tried and dropped (2026-09-05, owner: it led nowhere useful). A
    result measured on another computer says so.
+**Your model** (a row under the tiles; 2026-09-05, owner direction): whether the ACTIVE model fits
+is not a property of RAM or of VRAM alone, so neither tile says it. The row names the model, its
+size on disk and the context it launches with, then gives one verdict against this computer's
+**memory class** (`memoryClassOf` in `services/performance.ts`): `discrete` = a usable graphics
+card (the runtime's own 6 GiB, not-integrated gate) whose VRAM is the budget; `unified` = Apple
+Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
+`recommendedMaxWorkingSetSize` when the load log printed it, else 75 % of RAM (the Memory tile is
+labelled "Unified memory" and the graphics tile is hidden); `cpu` = no usable card, budget = RAM.
+**Observed first**: after a start, llama.cpp's own load log says where the model landed, and the
+chat ladder now reads it (`runtime/placement.ts`, one parser per attempt, fed by the sidecar's
+`onStderrData`): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices
+are the CPU side), every `<device> KV buffer size`, the Metal budget line. The reading is recorded
+once the rung is healthy (`recordModelPlacement`, stamped with the backend, the launched context
+and `machineKey`), latched for the session, and persisted per model id in
+`settings.modelPlacements` by the observer `registerBenchmarkIpc` registers; the snapshot uses it
+only for the active model and only when the record's machine is this one. **Verdict**
+(`placementVerdict`, pure): observed → 'gpu' when every layer is on the GPU (unified reads the
+same), 'partial' otherwise with the CPU-side bytes as the spill, 'cpu' for a CPU backend; the size
+shown is weights + context cache as measured. Before the first start → an ESTIMATE from the
+weights alone (the file size; the copy says so and that the context cache is measured on the first
+start) against the budget with 8 % headroom: a discrete card too small for the weights is 'partial'
+if RAM + VRAM can hold them, else 'too_large'; unified and cpu are 'gpu'/'cpu' or 'too_large'.
+'too_large' offers "Choose a smaller model" (AI Model). Pills: On GPU / Partly on GPU / On
+processor / Too large / Not measured. Phase 2 (not built): the context-cache estimate from the GGUF
+header, and a VRAM-aware ★ picker (today's picker is RAM-best-fit).
+
 2. **Observed while you worked**: figures from real use, session-only, never persisted: the last
    finished answer (the #290 `chat:speed` payload, latched by `setAnswerSpeedObserver` in
    `chat-stream.ts` with the model that produced it), the last model start (the `model_load`
@@ -294,7 +320,8 @@ screen answers the user's question in plain words. Three cards:
 
 **Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
 in `registerBenchmarkIpc.ts`): `current`, `currentMachine`, `currentGpu`, `otherMachines`,
-`running` (the `benchmark` occupancy lane), `observed`. **Progress**: `RunBenchmarkDeps.onProgress` reports
+`running` (the `benchmark` occupancy lane), `placement` (memory class, RAM/VRAM, the active
+model, the observed placement, the verdict), `observed`. **Progress**: `RunBenchmarkDeps.onProgress` reports
 `'system' | 'drive' | 'speed' | 'done'` as each step lands ('speed' only when a runtime was up);
 the IPC handler forwards them to the requesting window as `benchmark:progress`, and the screen
 shows a step list instead of an opaque "Running…" button. The first-run path passes no callback.

@@ -306,6 +306,14 @@ export interface AppSettings {
    * Capped at `MAX_BENCHMARK_HISTORY`; default `[]` (older workspaces have no history).
    */
   benchmarkHistory: BenchmarkResult[]
+  /**
+   * The observed placement of each model's last start on this drive, keyed by model id
+   * (benchmark.md "Your model"): what llama.cpp's own load log said about where the weights
+   * and the context cache landed. Written by the placement observer after every successful
+   * chat-runtime start; read by the Performance screen for the active model, and only when
+   * the entry's machine matches the current one. Default `{}`.
+   */
+  modelPlacements: Record<string, ModelPlacement>
   // ---- GPU acceleration (architecture.md GPU record §5.4) ----
   /**
    * User intent: 'auto' (default — GPU when it works, the fallback ladder handles the
@@ -432,6 +440,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ragMinSimilarity: 0,
   lastBenchmark: null,
   benchmarkHistory: [],
+  modelPlacements: {},
   // GPU is ALWAYS the default ('auto'); only a detected problem or the explicit Settings
   // toggle moves a machine to CPU.
   gpuMode: 'auto',
@@ -1997,6 +2006,58 @@ export interface ObservedAnswerSpeed {
 }
 
 /**
+ * Where one model's start actually put it (benchmark.md "Your model"), parsed from
+ * llama.cpp's load log by `runtime/placement.ts`: the layer split (`offloaded X/Y layers to
+ * GPU`), the per-device model buffers, the context-cache buffers, and on Apple Silicon the
+ * memory Metal lets the GPU take. Every figure is null when its line was not printed (a
+ * forced-CPU start prints no offload line). MiB throughout, as the log prints them.
+ */
+export interface ModelPlacement {
+  modelId: string
+  /** The `--ctx-size` the server was launched with: the context the cache figures are for. */
+  contextTokens: number
+  backend: 'gpu' | 'cpu'
+  gpuLayers: number | null
+  totalLayers: number | null
+  /** Weights resident on GPU devices (every non-CPU "model buffer size" line summed). */
+  gpuModelMb: number | null
+  /** Weights on the CPU side (the CPU and CPU_Mapped buffers summed). */
+  cpuModelMb: number | null
+  gpuKvMb: number | null
+  cpuKvMb: number | null
+  /** Metal's `recommendedMaxWorkingSetSize` in MB when printed: the unified-memory budget. */
+  metalMaxWorkingSetMb: number | null
+  /** The machine the start ran on (`machineKey`), so a travelling drive never shows another computer's placement. */
+  machineKey: string | null
+  at: string
+}
+
+/**
+ * How this computer's memory is organised for a model (benchmark.md "Your model"):
+ * 'discrete' = a usable graphics card with its own memory (the budget is VRAM),
+ * 'unified' = Apple Silicon, one pool shared by CPU and GPU (the budget is what Metal lets
+ * the GPU take), 'cpu' = no usable graphics card (the budget is RAM).
+ */
+export type MemoryClass = 'discrete' | 'unified' | 'cpu'
+
+/** The one-word outcome of the fit question, always paired with the numbers behind it. */
+export type PlacementKind = 'gpu' | 'partial' | 'cpu' | 'too_large' | 'unknown'
+
+export interface PlacementVerdict {
+  kind: PlacementKind
+  /** What the model takes (observed: weights + context cache; estimated: the weights only), MiB. */
+  needMb: number | null
+  /** True before the model's first start on this machine: the figure is the file size, not a measurement. */
+  estimated: boolean
+  /** The memory the verdict was measured against (VRAM, the Metal budget, or RAM), MiB. */
+  budgetMb: number | null
+  /** Bytes that landed (or would land) outside the budget, MiB: the RAM spill of a partial offload. */
+  spillMb: number | null
+  gpuLayers: number | null
+  totalLayers: number | null
+}
+
+/**
  * Everything the Performance screen renders, in one read (`performance:get`).
  * `current` is `settings.lastBenchmark`; `otherMachines` is the history minus the current
  * machine's entry; the `observed` figures come from real use (a finished chat answer, a
@@ -2015,6 +2076,16 @@ export interface PerformanceSnapshot {
   currentGpu: { name: string; totalMb: number } | null
   /** True while a benchmark is running (the button disables; steps stream via the event). */
   running: boolean
+  /** The active model against this computer's memory (benchmark.md "Your model"). */
+  placement: {
+    memoryClass: MemoryClass
+    ramMb: number | null
+    vramMb: number | null
+    /** The active model, or null when none is selected. */
+    model: { id: string; sizeOnDiskGb: number; contextTokens: number } | null
+    observed: ModelPlacement | null
+    verdict: PlacementVerdict
+  }
   observed: {
     lastAnswer: ObservedAnswerSpeed | null
     lastModelLoad: EffectiveReadSample | null

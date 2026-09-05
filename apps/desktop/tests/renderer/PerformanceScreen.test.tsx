@@ -9,6 +9,7 @@ import {
   type BenchmarkProgressStep,
   type BenchmarkResult,
   type ModelInfo,
+  type ModelPlacement,
   type PerformanceSnapshot
 } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
@@ -79,6 +80,34 @@ const models = [
   { id: 'qwen3.5-4b-ud-q4kxl', displayName: 'Qwen3.5 4B (UD-Q4_K_XL)', state: 'missing', recommended: false, recommendedContextTokens: 8192 }
 ] as unknown as ModelInfo[]
 
+/** A discrete-GPU machine with the 9B active and no start observed yet (weights-only estimate). */
+function placement(over: Partial<PerformanceSnapshot['placement']> = {}): PerformanceSnapshot['placement'] {
+  return {
+    memoryClass: 'discrete',
+    ramMb: 16_077,
+    vramMb: 24_822,
+    model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, contextTokens: 8192 },
+    observed: null,
+    verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 24_822, spillMb: null, gpuLayers: null, totalLayers: null },
+    ...over
+  }
+}
+
+const observedFull: ModelPlacement = {
+  modelId: 'qwen3.5-9b-ud-q4kxl',
+  contextTokens: 8192,
+  backend: 'gpu',
+  gpuLayers: 41,
+  totalLayers: 41,
+  gpuModelMb: 5500,
+  cpuModelMb: 400,
+  gpuKvMb: 640,
+  cpuKvMb: null,
+  metalMaxWorkingSetMb: null,
+  machineKey: null,
+  at: '2026-09-05T14:00:00Z'
+}
+
 function snapshot(over: Partial<PerformanceSnapshot> = {}): PerformanceSnapshot {
   return {
     current: result(),
@@ -86,6 +115,7 @@ function snapshot(over: Partial<PerformanceSnapshot> = {}): PerformanceSnapshot 
     currentGpu: null,
     otherMachines: [office, oldLaptop],
     running: false,
+    placement: placement(),
     observed: {
       lastAnswer: { tokensPerSecond: 11.8, ttftMs: 900, tokens: 312, modelId: 'qwen3.5-9b-ud-q4kxl', at: '2026-09-05T14:02:00Z' },
       lastModelLoad: result().effectiveRead ?? null,
@@ -137,8 +167,12 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(screen.getByText('Lite')).toBeInTheDocument()
     expect(screen.getByText('Drive')).toBeInTheDocument()
     expect(screen.getAllByText('Fast').length).toBeGreaterThanOrEqual(1)
-    // The Memory tile names the model the RAM fits and the context it launches with.
-    expect(screen.getByText(/Fits Qwen3\.5 9B \(UD-Q4_K_XL\) with a 8,192-token context/)).toBeInTheDocument()
+    // The fit question is answered in its own row, never under RAM or VRAM.
+    expect(screen.getByText('Your model')).toBeInTheDocument()
+    expect(screen.getByText(/Qwen3\.5 9B \(UD-Q4_K_XL\) · 5\.8 GB on disk · 8,192-token context/)).toBeInTheDocument()
+    expect(screen.getByText(/Needs at least 5\.8 GB for the weights.*Should fit in graphics memory \(24\.2 GB\)/)).toBeInTheDocument()
+    expect(screen.getByText('On GPU')).toBeInTheDocument()
+    expect(screen.queryByText(/Fits Qwen/)).not.toBeInTheDocument()
     // No graphics card on this laptop: the Graphics tile says so in words, never a bare dash.
     expect(screen.getByText('Graphics memory')).toBeInTheDocument()
     expect(screen.getByText(/No usable graphics card/)).toBeInTheDocument()
@@ -209,6 +243,64 @@ describe('PerformanceScreen: the check as an answer', () => {
     install(snapshot({ currentMachine: false }))
     renderScreen()
     expect(await screen.findByText(/measured on a different computer/)).toBeInTheDocument()
+  })
+})
+
+describe('PerformanceScreen: the Your-model row', () => {
+  it('reads an observed full offload off the log: layers, size with context, On GPU', async () => {
+    install(snapshot({ placement: placement({
+      observed: observedFull,
+      verdict: { kind: 'gpu', needMb: 6540, estimated: false, budgetMb: 24_822, spillMb: null, gpuLayers: 41, totalLayers: 41 }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText(/Takes 6\.4 GB with this context\. Fits in graphics memory \(24\.2 GB\): all 41 layers on the GPU\./)).toBeInTheDocument()
+    expect(screen.getByText('On GPU')).toBeInTheDocument()
+  })
+
+  it('names a partial offload with the layer split and the RAM spill, in words', async () => {
+    install(snapshot({ placement: placement({
+      vramMb: 16_384,
+      observed: { ...observedFull, gpuLayers: 30, gpuModelMb: 4000, cpuModelMb: 1900 },
+      verdict: { kind: 'partial', needMb: 6540, estimated: false, budgetMb: 16_384, spillMb: 1900, gpuLayers: 30, totalLayers: 41 }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText(/Graphics memory holds 16\.0 GB: 30 of 41 layers on the GPU, about 1\.9 GB runs from RAM\. Answers slower\./)).toBeInTheDocument()
+    expect(screen.getByText('Partly on GPU')).toBeInTheDocument()
+  })
+
+  it('on Apple Silicon shows one Unified memory tile, no graphics tile, and the unified budget', async () => {
+    install(snapshot({ placement: placement({
+      memoryClass: 'unified',
+      vramMb: null,
+      ramMb: 49_152,
+      verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 36_864, spillMb: null, gpuLayers: null, totalLayers: null }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText('Unified memory')).toBeInTheDocument()
+    expect(screen.queryByText('Graphics memory')).not.toBeInTheDocument()
+    expect(screen.getByText(/Should fit in unified memory \(48\.0 GB, up to 36\.0 GB available to the model\)/)).toBeInTheDocument()
+  })
+
+  it('a model that cannot fit gets "Too large" and a way to a smaller model', async () => {
+    install(snapshot({ placement: placement({
+      memoryClass: 'cpu',
+      vramMb: null,
+      ramMb: 8192,
+      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 16.5, contextTokens: 8192 },
+      verdict: { kind: 'too_large', needMb: 16_896, estimated: true, budgetMb: 8192, spillMb: null, gpuLayers: null, totalLayers: null }
+    }) }))
+    const onNavigate = renderScreen()
+    expect(await screen.findByText(/Too large for this computer \(8\.0 GB available\)\. Pick a smaller model\./)).toBeInTheDocument()
+    expect(screen.getByText('Too large')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Choose a smaller model' }))
+    expect(onNavigate).toHaveBeenLastCalledWith('models')
+  })
+
+  it('with no model selected says so and points at AI Model', async () => {
+    install(snapshot({ placement: placement({ model: null, verdict: { kind: 'unknown', needMb: null, estimated: true, budgetMb: 24_822, spillMb: null, gpuLayers: null, totalLayers: null } }) }))
+    renderScreen()
+    expect(await screen.findByText(/No model selected yet/)).toBeInTheDocument()
+    expect(screen.getByText('Not measured')).toBeInTheDocument()
   })
 })
 

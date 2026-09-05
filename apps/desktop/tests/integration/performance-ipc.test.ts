@@ -28,6 +28,7 @@ import { detectSystem } from '../../src/main/services/benchmark'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { machineKey, recordAnswerSpeed, resetPerformanceForTests } from '../../src/main/services/performance'
 import { recordChecksumRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
+import { recordModelPlacement, resetModelPlacementForTests } from '../../src/main/services/runtime/placement'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppContext } from '../../src/main/services/context'
@@ -100,6 +101,7 @@ function hereResult(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
 beforeEach(() => {
   resetPerformanceForTests()
   resetEffectiveReadForTests()
+  resetModelPlacementForTests()
 })
 
 describe('runAndPersistBenchmark: files the result under this machine', () => {
@@ -228,6 +230,50 @@ describe('buildPerformanceSnapshot', () => {
     expect(snap.currentMachine).toBe(false)
     expect(snap.current?.gpuVramMb).toBeUndefined()
     expect(snap.currentGpu?.totalMb).toBe(24576)
+  })
+
+  it('the Your-model block: no active model → unknown; a persisted placement for THIS machine → observed', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult() })
+    let snap = buildPerformanceSnapshot(ctxWith(root, db))
+    expect(snap.placement.model).toBeNull()
+    expect(snap.placement.verdict.kind).toBe('unknown')
+    expect(['discrete', 'unified', 'cpu']).toContain(snap.placement.memoryClass)
+
+    // An active model with a persisted placement stamped with THIS machine.
+    const here = machineKey(detectSystem())
+    updateSettings(db, {
+      activeModelId: 'some-model',
+      modelPlacements: {
+        'some-model': {
+          modelId: 'some-model', contextTokens: 4096, backend: 'cpu', gpuLayers: null, totalLayers: null,
+          gpuModelMb: null, cpuModelMb: 3000, gpuKvMb: null, cpuKvMb: 200, metalMaxWorkingSetMb: null,
+          machineKey: here, at: '2026-09-05T00:00:00Z'
+        }
+      }
+    })
+    snap = buildPerformanceSnapshot(ctxWith(root, db))
+    expect(snap.placement.model?.id).toBe('some-model')
+    // Not in the catalog: size 0, context from settings.
+    expect(snap.placement.model?.sizeOnDiskGb).toBe(0)
+    expect(snap.placement.observed?.cpuModelMb).toBe(3000)
+    expect(snap.placement.verdict).toMatchObject({ kind: 'cpu', needMb: 3200, estimated: false })
+
+    // The same record stamped with ANOTHER machine is ignored.
+    updateSettings(db, { modelPlacements: { 'some-model': { ...getSettings(db).modelPlacements['some-model'], machineKey: 'elsewhere' } } })
+    snap = buildPerformanceSnapshot(ctxWith(root, db))
+    expect(snap.placement.observed).toBeNull()
+
+    // The session latch (this start) wins over the persisted record.
+    recordModelPlacement({
+      modelId: 'some-model', contextTokens: 8192, backend: 'gpu', gpuLayers: 10, totalLayers: 10,
+      gpuModelMb: 2500, cpuModelMb: 100, gpuKvMb: 300, cpuKvMb: null, metalMaxWorkingSetMb: null,
+      machineKey: here, at: '2026-09-05T01:00:00Z'
+    })
+    snap = buildPerformanceSnapshot(ctxWith(root, db))
+    expect(snap.placement.observed?.contextTokens).toBe(8192)
+    expect(snap.placement.verdict.kind).toBe('gpu')
   })
 
   it('reads a result from another computer as "not this machine"', () => {

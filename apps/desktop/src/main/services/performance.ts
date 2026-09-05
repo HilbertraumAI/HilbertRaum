@@ -1,6 +1,14 @@
 import { MAX_BENCHMARK_HISTORY } from '../../shared/types'
 import type { AnswerSpeed } from '../../shared/ipc'
-import type { BenchmarkResult, ObservedAnswerSpeed } from '../../shared/types'
+import type {
+  BenchmarkResult,
+  GpuDevice,
+  MemoryClass,
+  ModelPlacement,
+  ObservedAnswerSpeed,
+  PlacementVerdict
+} from '../../shared/types'
+import { gpuUsefulForProfile } from './runtime/gpu'
 
 // The Performance screen's model (benchmark.md "Performance screen"): one benchmark result
 // per COMPUTER the drive has been used on, and the session's observed figures. Pure
@@ -73,4 +81,85 @@ export function latestAnswerSpeed(): ObservedAnswerSpeed | null {
 /** Test seam. */
 export function resetPerformanceForTests(): void {
   lastAnswer = null
+}
+
+// ---- "Your model": memory class, budget, and the fit verdict (benchmark.md) ----
+
+/** Share of RAM Metal lets the GPU take when the load log has not said (Apple's default working-set cap). */
+export const UNIFIED_BUDGET_SHARE = 0.75
+/** Headroom kept back from VRAM/RAM before a weights-only estimate is called a fit (drivers, compute buffers). */
+export const ESTIMATE_HEADROOM = 0.92
+
+/**
+ * How this computer's memory is organised for a model. Apple Silicon (darwin + arm64) is one
+ * unified pool; a usable discrete card (the runtime's own 6 GiB, not-integrated gate) has its
+ * own memory; everything else runs from RAM.
+ */
+export function memoryClassOf(platform: string, arch: string, devices: GpuDevice[]): MemoryClass {
+  if (platform === 'darwin' && arch === 'arm64') return 'unified'
+  return gpuUsefulForProfile(devices) ? 'discrete' : 'cpu'
+}
+
+/** The memory the fit question is asked against, MiB. */
+export function memoryBudgetMb(
+  memoryClass: MemoryClass,
+  ramMb: number | null,
+  vramMb: number | null,
+  observed: ModelPlacement | null
+): number | null {
+  if (memoryClass === 'discrete') return vramMb
+  if (memoryClass === 'unified') {
+    if (observed?.metalMaxWorkingSetMb != null) return observed.metalMaxWorkingSetMb
+    return ramMb != null ? Math.round(ramMb * UNIFIED_BUDGET_SHARE) : null
+  }
+  return ramMb
+}
+
+const sum = (...xs: Array<number | null>): number | null => {
+  const known = xs.filter((x): x is number => x != null)
+  return known.length === 0 ? null : Math.round(known.reduce((a, b) => a + b, 0))
+}
+
+/**
+ * The verdict. OBSERVED (the model has started on this machine): the log says where the
+ * weights and the context cache landed, so the outcome is read off, not computed: every
+ * layer on the GPU is 'gpu' (unified memory reads the same way), fewer is 'partial' with
+ * the CPU-side bytes as the spill, a CPU backend is 'cpu'. ESTIMATED (no start yet): the
+ * weights alone against the budget with headroom; a discrete card that cannot hold them
+ * still runs the model if RAM can take the rest ('partial'), and beyond RAM + VRAM it is
+ * 'too_large'. A model larger than RAM on a CPU or unified machine is 'too_large' as well.
+ */
+export function placementVerdict(input: {
+  memoryClass: MemoryClass
+  ramMb: number | null
+  vramMb: number | null
+  sizeOnDiskGb: number | null
+  observed: ModelPlacement | null
+}): PlacementVerdict {
+  const { memoryClass, ramMb, vramMb, sizeOnDiskGb, observed } = input
+  const budgetMb = memoryBudgetMb(memoryClass, ramMb, vramMb, observed)
+  if (observed) {
+    const needMb = sum(observed.gpuModelMb, observed.cpuModelMb, observed.gpuKvMb, observed.cpuKvMb)
+    const base = { needMb, estimated: false, budgetMb, gpuLayers: observed.gpuLayers, totalLayers: observed.totalLayers }
+    if (observed.backend === 'cpu') return { ...base, kind: 'cpu', spillMb: null }
+    const allOnGpu =
+      observed.gpuLayers != null && observed.totalLayers != null && observed.gpuLayers >= observed.totalLayers
+    if (allOnGpu || observed.gpuLayers == null) return { ...base, kind: 'gpu', spillMb: null }
+    return { ...base, kind: 'partial', spillMb: sum(observed.cpuModelMb, observed.cpuKvMb) }
+  }
+  const est = { estimated: true, budgetMb, gpuLayers: null, totalLayers: null, spillMb: null }
+  if (sizeOnDiskGb == null || sizeOnDiskGb <= 0) return { ...est, kind: 'unknown', needMb: null }
+  const needMb = Math.round(sizeOnDiskGb * 1024)
+  if (budgetMb == null) return { ...est, kind: 'unknown', needMb }
+  const fits = needMb <= budgetMb * ESTIMATE_HEADROOM
+  if (memoryClass === 'discrete') {
+    if (fits) return { ...est, kind: 'gpu', needMb }
+    const total = ramMb != null ? ramMb + budgetMb : null
+    if (total != null && needMb <= total * ESTIMATE_HEADROOM) {
+      return { ...est, kind: 'partial', needMb, spillMb: Math.max(0, needMb - Math.round(budgetMb * ESTIMATE_HEADROOM)) }
+    }
+    return { ...est, kind: 'too_large', needMb }
+  }
+  if (fits) return { ...est, kind: memoryClass === 'unified' ? 'gpu' : 'cpu', needMb }
+  return { ...est, kind: 'too_large', needMb }
 }

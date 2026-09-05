@@ -54,6 +54,9 @@ export type LlamaRuntimeDeps = Pick<
   // the ONLY CPU-forcing mechanism, NEVER `-ngl` — and hooks mid-session crashes.
   | 'extraArgs'
   | 'onUnexpectedExit'
+  // The placement parser's stderr feed (benchmark.md "Your model"): llama.cpp's load log is
+  // the only place the real offload outcome is reported. Observability only.
+  | 'onStderrData'
 > & {
   binPath: string
 }
@@ -449,6 +452,7 @@ export class LlamaRuntime implements ModelRuntime {
       physicalBatchSize: Math.min(opts.contextTokens, CHAT_MAX_PHYSICAL_BATCH),
       extraArgs: [...CHAT_SERVER_ARGS, ...(deps.extraArgs ?? [])],
       onUnexpectedExit: deps.onUnexpectedExit,
+      onStderrData: deps.onStderrData,
       spawn: deps.spawn,
       fetchImpl: deps.fetchImpl,
       findPort: deps.findPort,

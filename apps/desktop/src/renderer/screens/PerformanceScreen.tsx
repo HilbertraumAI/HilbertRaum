@@ -10,7 +10,8 @@ import type {
   BenchmarkResult,
   EffectiveReadSample,
   ModelInfo,
-  PerformanceSnapshot
+  PerformanceSnapshot,
+  PlacementKind
 } from '@shared/types'
 
 // The Performance screen (design-guidelines §2 "8 primary + 1 utility"; benchmark.md
@@ -35,6 +36,14 @@ const USABLE_VRAM_MB = 6144
 /** MiB → GB (1 GiB units, one decimal), the figure the probe reports. */
 function vramGb(mb: number, lang: UiLanguage): string {
   return fmt1(mb / 1024, lang)
+}
+
+const PLACE_PILL: Record<PlacementKind, { key: 'perf.place.gpu' | 'perf.place.partial' | 'perf.place.cpu' | 'perf.place.tooLarge' | 'perf.place.unknown'; tone: 'success' | 'warning' | 'neutral' | 'error' }> = {
+  gpu: { key: 'perf.place.gpu', tone: 'success' },
+  partial: { key: 'perf.place.partial', tone: 'warning' },
+  cpu: { key: 'perf.place.cpu', tone: 'neutral' },
+  too_large: { key: 'perf.place.tooLarge', tone: 'error' },
+  unknown: { key: 'perf.place.unknown', tone: 'neutral' }
 }
 
 type Tone = 'success' | 'warning' | 'neutral' | 'accent'
@@ -329,20 +338,18 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     )
   }
 
+  const unified = snap?.placement.memoryClass === 'unified'
+
   function memoryTile(): JSX.Element {
     const cpu = bench
       ? (bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')
       : ''
-    const fits =
-      recommendedName && contextTokens != null
-        ? t('perf.tile.memory.fits', { model: recommendedName, context: contextTokens.toLocaleString(lang) })
-        : null
     return (
       <Tile
-        label={t('perf.tile.memory')}
+        label={unified ? t('perf.tile.memory.unified') : t('perf.tile.memory')}
         value={bench && bench.ramGb > 0 ? fmt1(bench.ramGb, lang) : null}
         unit={t('perf.tile.memory.unit')}
-        sub={bench ? [fits, cpu].filter(Boolean).join(' · ') : t('perf.notChecked')}
+        sub={bench ? [unified ? t('perf.tile.memory.unifiedSub') : null, cpu].filter(Boolean).join(' · ') : t('perf.notChecked')}
         pill={t(`perf.profile.${bench?.profile ?? 'UNKNOWN'}`)}
         tone={bench ? profileTone(bench.profile) : 'neutral'}
       />
@@ -406,6 +413,70 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     )
   }
 
+  /** "Your model": the active model against this computer's memory (benchmark.md). The
+   *  verdict is main-side; this only puts words and numbers to it. */
+  function modelRow(): JSX.Element {
+    const p = snap?.placement
+    if (!p) return <></>
+    const gb = (mb: number | null | undefined): string => (mb == null ? '' : fmt1(mb / 1024, lang))
+    const pill = PLACE_PILL[p.model ? p.verdict.kind : 'unknown']
+    const v = p.verdict
+    let need = ''
+    let text = ''
+    if (!p.model) {
+      text = t('perf.model.none')
+    } else {
+      need = v.needMb == null ? '' : v.estimated ? t('perf.model.needEstimate', { need: gb(v.needMb) }) : t('perf.model.need', { need: gb(v.needMb) })
+      const budget = gb(v.budgetMb)
+      switch (v.kind) {
+        case 'gpu':
+          text =
+            p.memoryClass === 'unified'
+              ? t(v.estimated ? 'perf.model.unifiedEstimate' : 'perf.model.unified', { ram: gb(p.ramMb), budget })
+              : v.estimated
+                ? t('perf.model.gpuEstimate', { budget })
+                : t('perf.model.gpu', { budget, layers: String(v.totalLayers ?? '') })
+          break
+        case 'partial':
+          text = v.estimated
+            ? t('perf.model.partialEstimate', { budget, spill: gb(v.spillMb) })
+            : t('perf.model.partial', { budget, gpuLayers: String(v.gpuLayers ?? ''), layers: String(v.totalLayers ?? ''), spill: gb(v.spillMb) })
+          break
+        case 'cpu':
+          text = t(v.estimated ? 'perf.model.cpuEstimate' : 'perf.model.cpu', { budget })
+          break
+        case 'too_large':
+          text = t('perf.model.tooLarge', { budget })
+          break
+        default:
+          text = t('perf.model.unknown')
+      }
+    }
+    return (
+      <div className="perf-model">
+        <div className="perf-model-title">{t('perf.model.title')}</div>
+        <div className="perf-model-line">
+          {p.model
+            ? t('perf.model.line', {
+                model: modelName(p.model.id, models, t),
+                size: fmt1(p.model.sizeOnDiskGb, lang),
+                context: p.model.contextTokens.toLocaleString(lang)
+              })
+            : t('perf.model.none')}
+        </div>
+        {p.model && <div className="perf-model-verdict">{[need, text].filter(Boolean).join(' ')}</div>}
+        <div className="perf-model-side">
+          <Badge tone={pill.tone}>{t(pill.key)}</Badge>
+          {p.model && v.kind === 'too_large' && (
+            <Button size="sm" onClick={() => onNavigate('models')}>
+              {t('perf.model.choose')}
+            </Button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   function steps(): JSX.Element {
     // The speed step only exists when a runtime is up; a run with no model shows it skipped.
     const speedLabel = runtimeModelId
@@ -464,12 +535,13 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
         ) : (
           <>
             <p className="perf-verdict">{verdict()}</p>
-            <div className="perf-tiles">
+            <div className="perf-tiles" style={unified ? { gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' } : undefined}>
               {speedTile()}
               {memoryTile()}
-              {graphicsTile()}
+              {!unified && graphicsTile()}
               {driveTile()}
             </div>
+            {modelRow()}
             <div className="actions perf-actions">
               {canStartRecommended && recommended && bench?.tokensPerSecond == null ? (
                 <Button variant="primary" onClick={() => void startAndMeasure(recommended.id)}>

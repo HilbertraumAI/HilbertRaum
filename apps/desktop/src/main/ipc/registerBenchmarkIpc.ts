@@ -15,9 +15,12 @@ import {
   findMachine,
   latestAnswerSpeed,
   machineKey,
+  memoryClassOf,
   otherMachines,
+  placementVerdict,
   upsertHistory
 } from '../services/performance'
+import { latestModelPlacement, setModelPlacementObserver } from '../services/runtime/placement'
 import { latestEffectiveReadBySource } from '../services/read-speed'
 import { EVENTS } from '../../shared/ipc'
 import { gpuUsefulForProfile } from '../services/runtime/gpu'
@@ -217,9 +220,53 @@ export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
  * session's observed figures (a finished answer, a model start, a file check) — the latter
  * two straight from the read-speed latches, never persisted.
  */
+/** The "Your model" block: the active model against this computer's memory. */
+function buildPlacement(
+  ctx: AppContext,
+  settings: AppSettings,
+  here: string | null,
+  ramGb: number
+): PerformanceSnapshot['placement'] {
+  const devices = settings.gpuProbe?.devices ?? []
+  const memoryClass = memoryClassOf(process.platform, process.arch, devices)
+  const ramMb = ramGb > 0 ? Math.round(ramGb * 1024) : null
+  const vramMb = devices[0]?.totalMb ?? null
+  const activeId = settings.activeModelId
+  let model: PerformanceSnapshot['placement']['model'] = null
+  if (activeId) {
+    const manifest = ctx.manifestsDir
+      ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest).find((m) => m.id === activeId)
+      : undefined
+    model = {
+      id: activeId,
+      sizeOnDiskGb: manifest?.sizeOnDiskGb ?? 0,
+      contextTokens: settings.contextTokensOverride ?? manifest?.recommendedContextTokens ?? settings.contextTokens
+    }
+  }
+  // The session latch wins (this start), else the persisted record; either counts only for
+  // the active model on THIS machine (an unknown machine on either side is accepted).
+  const latched = latestModelPlacement()
+  const candidate = activeId
+    ? latched?.modelId === activeId
+      ? latched
+      : (settings.modelPlacements[activeId] ?? null)
+    : null
+  const observed =
+    candidate && (here == null || candidate.machineKey == null || candidate.machineKey === here) ? candidate : null
+  return {
+    memoryClass,
+    ramMb,
+    vramMb,
+    model,
+    observed,
+    verdict: placementVerdict({ memoryClass, ramMb, vramMb, sizeOnDiskGb: model?.sizeOnDiskGb ?? null, observed })
+  }
+}
+
 export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
   const settings = getSettings(ctx.db)
-  const here = machineKey(detectSystem())
+  const sys = detectSystem()
+  const here = machineKey(sys)
   const current = settings.lastBenchmark
   const currentKey = machineKey(current)
   // The persisted model-load sample outlives the session; the session latch wins when it
@@ -244,6 +291,7 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
     currentMachine,
     otherMachines: otherMachines(settings.benchmarkHistory, currentKey ?? here),
     running: modelBusyLane(ctx) === 'benchmark',
+    placement: buildPlacement(ctx, settings, here, sys.ramGb),
     observed: {
       lastAnswer: latestAnswerSpeed(),
       lastModelLoad: latestEffectiveReadBySource('model_load') ?? persistedLoad,
@@ -254,6 +302,17 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
 
 export function registerBenchmarkIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
+  // Persist every observed placement under its model id (benchmark.md "Your model"), so the
+  // row survives a restart. Skipped while locked; a failure is logged, never thrown into a start.
+  setModelPlacementObserver((placement) => {
+    try {
+      if (!workspaceAdmitsWork(ctx.workspace)) return
+      const placements = { ...getSettings(ctx.db).modelPlacements, [placement.modelId]: placement }
+      updateSettings(ctx.db, { modelPlacements: placements })
+    } catch (err) {
+      log.warn('Could not persist the model placement', { error: String(err) })
+    }
+  })
   // SEC-N2: both handlers touch ctx.db (via updateSettings/getSettings). The ctx.db getter already
   // fail-closes when the workspace is locked, but it throws a raw English string; mirror every other
   // DB-touching handler with an explicit requireUnlocked() so a locked call surfaces the localized
