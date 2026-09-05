@@ -15,13 +15,32 @@ import {
 
 let server: http.Server
 let port = 0
+/** Mirrors client.ts MAX_BODY_BYTES (8 MiB) — kept literal here so the test pins the shipped ceiling. */
+const CEILING_BYTES = 8 * 1024 * 1024
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
     if (req.url?.startsWith('/slow')) return // never responds — timeout leg
-    if (req.url?.startsWith('/big')) {
-      res.writeHead(200)
-      res.end('x'.repeat(1024))
+    // Body-ceiling fixtures (PR #294 review INFO / plan T01): kiwixGet rejects a body of
+    // MORE than 8 MiB and accepts one of exactly 8 MiB. Streamed in 1 MiB writes so the
+    // ceiling is hit mid-stream, the way a pathological entry would arrive.
+    if (req.url?.startsWith('/big') || req.url?.startsWith('/atceiling')) {
+      const total = CEILING_BYTES + (req.url.startsWith('/big') ? 1 : 0)
+      res.writeHead(200, { 'content-type': 'text/html' })
+      const piece = Buffer.alloc(1024 * 1024, 0x78)
+      let sent = 0
+      const pump = (): void => {
+        while (sent < total) {
+          const n = Math.min(piece.length, total - sent)
+          sent += n
+          if (!res.write(n === piece.length ? piece : piece.subarray(0, n))) {
+            res.once('drain', pump)
+            return
+          }
+        }
+        res.end()
+      }
+      pump()
       return
     }
     if (req.url?.startsWith('/missing')) {
@@ -86,6 +105,18 @@ describe('kiwixGet', () => {
     const pending = kiwixGet(port, '/slow', { signal: ac.signal })
     ac.abort()
     await expect(pending).rejects.toThrow()
+  })
+
+  it('rejects a body over the 8 MiB ceiling mid-stream (T01, review INFO)', async () => {
+    await expect(kiwixGet(port, '/big', { timeoutMs: 20_000 })).rejects.toThrow(
+      /exceeded 8388608 bytes/
+    )
+  })
+
+  it('accepts a body of exactly 8 MiB (the ceiling is strict-greater)', async () => {
+    const res = await kiwixGet(port, '/atceiling', { timeoutMs: 20_000 })
+    expect(res.status).toBe(200)
+    expect(res.body.length).toBe(CEILING_BYTES)
   })
 })
 

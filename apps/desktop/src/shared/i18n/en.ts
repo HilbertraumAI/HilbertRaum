@@ -2385,6 +2385,7 @@ export const en = {
   'chat.scope.library': 'Library',
   'chat.scope.projectNamed': 'Project: {name}',
   'chat.scope.projectCount.one': '{count} project',
+  'chat.scope.projectCount.other': '{count} projects',
   // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
   'chat.scope.packsTitle': 'Knowledge packs',
   'chat.scope.packUnavailable': 'not available',
@@ -2421,7 +2422,6 @@ export const en = {
   'packs.removeTitle': 'Remove this knowledge pack?',
   'packs.removeConfirm': 'Remove pack',
   'packs.removeBody': 'The pack is removed from HilbertRaum only - the archive file on disk is not touched. Chats that used it simply stop retrieving from it.',
-  'chat.scope.projectCount.other': '{count} projects',
   'chat.scope.docCount.one': '{count} document',
   'chat.scope.docCount.other': '{count} documents',
   'chat.scope.filesInChat.one': '{count} file in this chat',

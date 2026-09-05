@@ -912,6 +912,31 @@ MVP-era examples from this audit — the depth-mode plumbing, `runtime_events` �
 since shipped in Phases 19–20).
 
 
+### BUILD_STATE §5 item 20 — the #290/#291 speed-figures wave (retired verbatim 2026-09-05, ZIM wave Phase 0)
+
+> Item 20 as it stood in BUILD_STATE §5 before the ZIM knowledge-packs wave (PR #294 → #301) collapsed it
+> on 2026-09-05 to outcome + record pointers (the wave was CLOSED on 2026-09-04: PRs #295, #300, #297, #299
+> merged; #290/#291/#298 closed; the collapse freed §5 budget for the wave's item 21). The item text below
+> is verbatim; it carries no relative links, so nothing was de-linkified.
+
+20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line (opened
+    2026-09-04; three stacked PRs on one lineage).** PR 1 (`fix/290-291-pr1-sse-timings-seam`):
+    the `readChatSSE` seam — `onFinish(reason, timings?)`, `RuntimeTimings` in `runtime/index.ts`.
+    PR 2 (#291): `measureTokensPerSecond` reports `predicted_per_second` (decode tokens, prefill
+    excluded) with the chunk count as the flagged fallback; `BenchmarkResult.speedBasis`; the card
+    says "Decode speed" + the token count; MTP record §7 watch item → observed. PR 3 (#290): chat
+    only — one ephemeral `chat:speed:<id>` payload per finished answer, `tok/s · s to first
+    token · tokens`, EN/DE, nothing persisted. The PRs used "Refs", not "Closes": the "matches
+    llama-server's `print_timing` within rounding" legs need a real runtime and the execution
+    machine cannot launch one (Smart App Control, exit `0xC0E90002`) — verification issue
+    **#298** (the #291 reporter) carried both acceptance lists and the reconstructed rung-1a argv.
+    **#298 VERIFIED 2026-09-04, every box ticked** (figures in the dated entry); the captured b9849
+    transcript is committed by PR 4 (`fix/290-291-pr4-timings-fixture`, which closes
+    #290/#291/#298). PRs: #295 → #296 → #297 → PR 4 (stacked; merge in order, re-basing each onto
+    master as the one below lands). Remaining after merge: nothing — collapse this item. Thresholds (`VERY_LOW_TOKENS_PER_SECOND`,
+    `SLOW_PICK_TOKENS_PER_SECOND`) deliberately NOT retuned — they now compare a decode figure
+    against probe-basis calibration (recorded in `docs/benchmark.md` / `model-benchmarks.md` §6.5).
+
 ### BUILD_STATE §5 items 11–14 — the closed audit rounds' wave narratives (retired verbatim)
 
 > Their outcome lines, ledger pointers and still-open residuals stayed in BUILD_STATE §5 under

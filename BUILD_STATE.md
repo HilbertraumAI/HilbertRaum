@@ -29,6 +29,22 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 0 — integration baseline on the PR's own
+branch `feat/zim-knowledge-packs`.**_ Master `bfdb514a` merged IN (merge commit `3b321571`, no rewrite;
+the two known conflicts resolved — `CHANGELOG.md` both entries kept, `Transcript.tsx` the archive-opening
+and the answer-speed props both kept). Integrated baseline on this machine: 409 files / 5,824 tests
+(5,745 passed / 78 skipped) → after P0 411 / 5,841 (5,762 / 78); typecheck + build green. P0 landed: the
+anchored `/zim/` ignore rule (L2); the PR's §5 item renumbered 20 → **21** (master's finished #290/#291
+item 20 collapsed, narrative to `docs/build-log.md`) + the three in-doc pointers; the #293 excerpt framing
+proven for archive excerpts (T01, `zim-prompt-framing.test.ts`; `EXCERPT_GUARD_LINE` wording KEPT — the
+grounded-QA eval gate could not run here, residual R-5 → recorded at P7 as D-Z14); H2/M3/M8 `it.fails`
+baselines (`zim-regressions.test.ts`, setup outside the inverted bodies; the review's H1 timing case
+dropped — P1 pins it with a work counter); the checked-in required-check inventory
+`tests/fixtures/zim/required-checks.json` + its `repo-hygiene.test.ts` validator; the 8 MiB response
+ceiling tested; the tautological byte-identity test replaced by a fixture captured from master `bfdb514a`
+(L6); the EN/DE `projectCount` plural pair re-joined. Real tools / Electron: not run (Smart App Control,
+exit `0xC0E90002`). Phases 1–7 follow as PRs INTO the branch; #294 alone goes to master and closes #301.
+
 _2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
 `readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one
 up through `onFinish(reason, timings?)` at `[DONE]`/close — never on an abort, error frame or
@@ -85,7 +101,7 @@ node-libzim on Windows), query-time Xapian search → shared chunker → the exi
 reranker via a new optional external-arm seam in `retrieve()` (no-arm path byte-identical,
 pinned). New: `knowledge_packs` table, `packs:*` IPC, scope `packIds`, archive citations +
 offline article viewer, Documents-screen packs panel, drive `zim/` dir. Deliberate MVP
-cuts + follow-ups in §5 item 20. Suite green (5660+), typecheck green.
+cuts + follow-ups in §5 item 21. Suite green (5660+), typecheck green.
 
 _2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the durable ledger
 `docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46
@@ -635,26 +651,17 @@ open round's item stays the last block of §5.)
       compare, `as unknown as` private-field injection — convert to behavioural assertions when
       touched; `FullSuiteGuard` cannot see dropped individual tests.
 
-20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line (opened
-    2026-09-04; three stacked PRs on one lineage).** PR 1 (`fix/290-291-pr1-sse-timings-seam`):
-    the `readChatSSE` seam — `onFinish(reason, timings?)`, `RuntimeTimings` in `runtime/index.ts`.
-    PR 2 (#291): `measureTokensPerSecond` reports `predicted_per_second` (decode tokens, prefill
-    excluded) with the chunk count as the flagged fallback; `BenchmarkResult.speedBasis`; the card
-    says "Decode speed" + the token count; MTP record §7 watch item → observed. PR 3 (#290): chat
-    only — one ephemeral `chat:speed:<id>` payload per finished answer, `tok/s · s to first
-    token · tokens`, EN/DE, nothing persisted. The PRs used "Refs", not "Closes": the "matches
-    llama-server's `print_timing` within rounding" legs need a real runtime and the execution
-    machine cannot launch one (Smart App Control, exit `0xC0E90002`) — verification issue
-    **#298** (the #291 reporter) carried both acceptance lists and the reconstructed rung-1a argv.
-    **#298 VERIFIED 2026-09-04, every box ticked** (figures in the dated entry); the captured b9849
-    transcript is committed by PR 4 (`fix/290-291-pr4-timings-fixture`, which closes
-    #290/#291/#298). PRs: #295 → #296 → #297 → PR 4 (stacked; merge in order, re-basing each onto
-    master as the one below lands). Remaining after merge: nothing — collapse this item. Thresholds (`VERY_LOW_TOKENS_PER_SECOND`,
-    `SLOW_PICK_TOKENS_PER_SECOND`) deliberately NOT retuned — they now compare a decode figure
-    against probe-basis calibration (recorded in `docs/benchmark.md` / `model-benchmarks.md` §6.5).
+20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line — CLOSED
+    2026-09-04** (PRs #295, #300, #297, #299 merged — the four stacked PRs; #290/#291/#298 closed;
+    every #298 hardware box ticked the same day on the i9-9900X / RTX 3090; the captured b9849
+    transcript is pinned as `tests/fixtures/chat-sse-timings-b9849.txt`). Records: `architecture.md`
+    "Chat & streaming" → "Per-answer speed line" §1–§3; `benchmark.md` / `model-benchmarks.md` §6.5
+    (thresholds deliberately NOT retuned). Narrative: the 2026-09-04 dated entry above; the item text
+    as it stood before this collapse is in `docs/build-log.md` (retired verbatim 2026-09-05, ZIM wave
+    Phase 0). Residuals: none.
 
 ---
-20. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable
+21. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable
     record: [`docs/rag-design.md`](docs/rag-design.md) §17 “Deliberately not built”).**
     (a) **kiwix_tools provisioning wave** — runtime-sources.yaml block + validator key,
     ENGINE_FAMILIES + familyBlock branch, fetch-runtime scripts, DRIVE-NOTICES (its
