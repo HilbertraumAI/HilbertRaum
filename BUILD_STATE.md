@@ -29,6 +29,19 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 3a — server and manager generations: review
+H3 / M2 / M9 closed.**_ `KiwixServer` keeps per-child records whose late callbacks can never touch a newer
+child; `ZimService` owns a monotonic pack revision, ONE generation allocator for library builds and children,
+and one FIFO chain — the only writer of `library.<build>.xml` — publishing a single `{ revision, build,
+generation, port, xml }` tuple only after rechecks at every await. Concurrent asks share one start (a cancelled
+ask stops waiting without cancelling it; pack change / lock / quit abort it); a start failure latches by revision;
+teardown is single-flight and bounded (SIGTERM → 2 s → SIGKILL → 3 s → "not confirmed": PID kept in the crash
+reaper, file kept). `kiwix-manage` runs under the pre-spawn verifier (hashless marker → `skip-legacy`, residual
+R-1), registers its PID, honours abort and settles only after its child is terminal. T05-a / T06-a implemented
+(`zim-service-lifecycle.test.ts`, 22 tests on fake children). Suite on the rebased tree (`527c1143` + P3a):
+412 / 5,918 (5,839 / 78); typecheck + build green; real kiwix-tools not installed here. Record: `docs/rag-design.md`
+§17 D-Z10; P3b consumes `suspend()` + the admission seam + the teardown bound, P5 consumes `serverState()`.
+
 _2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 2 — evidence identity and
 provenance (H2, M11).**_ `buildEvidenceSourceSnapshots` guards `sourceKind === 'archive'`
 before the document-id and legacy exact-title branches (same guard at read time): an
@@ -678,6 +691,9 @@ open round's item stays the last block of §5.)
     (f) **D2 parser hardware gate, re-ruled (P1b)** — gate is now the per-slice main-thread
     stall (≤5 ms on the i7-8550U); cooperative slicing shipped, 14900K P-core p95 passes
     early warning; the decisive i7-8550U per-slice figure is still pending (owner, T02-c).
+    (g) **R-1 registered (P3a, 2026-09-05):** `kiwix-manage` on a hashless install marker runs as
+    `skip-legacy` (one logged warning) — no integrity claim for the manager until (a) proves install
+    hashes for serve AND manage; kiwix-serve already had the same tolerance. Record: rag-design D-Z10.
 
 ## 6. Open issues / risks
 

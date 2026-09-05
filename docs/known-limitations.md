@@ -2423,3 +2423,12 @@ reports and phase plans were working papers; their full text lives in git histor
   cooperatively sliced and abortable on the ask path); the slow-hardware per-slice figure
   (the i7-8550U reference laptop) is still to be recorded — see
   [`rag-design.md`](rag-design.md) §17 D-Z3.
+- **A kiwix-serve or kiwix-manage child that cannot be confirmed stopped within the
+  teardown bound** (SIGTERM → SIGKILL → a bounded wait — ≈5 s total for kiwix-serve,
+  ≈3 s for kiwix-manage) is reported as cleanup NOT CONFIRMED, never "complete": its
+  PID stays on the crash-reap list and its `library.<n>.xml` build (or, for
+  registration, its throwaway metadata temp directory) is left in the OS temp dir
+  until the crash reaper or a later startup sweep (P3b) removes it. Separately,
+  **kiwix-manage on a legacy hashless install marker runs with a logged warning
+  instead of integrity verification** (residual R-1) — retained until the
+  provisioning wave above proves both binaries' verification and repair.
