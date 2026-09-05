@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
@@ -6,6 +6,8 @@ import type { KnowledgePack } from '../../../shared/types'
 import type { Db } from '../db'
 import { log } from '../logging'
 import { resolveZimDir } from '../drive'
+import type { BinaryVerifyResult } from '../binary-verifier'
+import type { SpawnFn } from '../runtime/sidecar'
 import type { ExternalRetrievalArm } from '../rag'
 import { collectPackCandidates } from './arm'
 import { fetchArticleHtml } from './client'
@@ -25,19 +27,115 @@ import { kiwixManageAdd, resolveKiwixManagePath, resolveKiwixServePath } from '.
 
 // ZimService — the knowledge-packs facade the IPC layer and the RAG ask path talk to.
 // Owns: kiwix-tools resolution, the (lazy, single) kiwix-serve instance, the generated
-// library.xml, registration wrappers that invalidate the running server, the retrieval
+// library builds, registration wrappers that invalidate the running server, the retrieval
 // arm factory, and the article read for the citation viewer.
 //
-// The library.xml lives in a per-service OS temp dir, regenerated on every server
-// (re)start and removed on stop: nothing about the user's pack collection persists
-// outside the encrypted workspace DB (the drive's zim/ files themselves are, of course,
-// visible — they are the packs).
+// GENERATIONS AND PUBLICATION (#301 P3a, findings H3/M2; plan §9.15). The service publishes
+// ONE coherent configuration per pack revision:
+//
+//     Published = { revision, build, generation, port, library.<build>.xml }
+//
+// - `packRevision` is bumped SYNCHRONOUSLY by every pack-set mutation (register / discover /
+//   remove / enable). "Desired revision" is the value an `ensureServer` call reads before its
+//   first await; every recheck compares against it.
+// - ONE monotonic allocator (`nextGeneration`) hands out generations to library BUILDS and to
+//   kiwix-serve CHILDREN alike, so no generation ever repeats in the process: a build takes
+//   g₁ and writes `library.<g₁>.xml`, its first child takes g₂, a bind-race retry g₃, a
+//   natural-crash restart g₄ (same XML — the pack set did not change, so the build is current).
+//   P5's alive/generation request guard consumes this through `serverState()`.
+// - ONE promise chain (`chain`) carries every library rebuild, teardown and start in FIFO
+//   order, so there is exactly ONE writer of library files at any time and no two builds
+//   share a path — the M2 lost-update bug ("two callers both run writeLibraryXml on the same
+//   path; a parked rebuild clears the staleness flag set by a NEWER invalidation") cannot
+//   occur: staleness is a revision comparison, not a boolean.
+// - A start captures { revision, signal, admissionEpoch } before its first await and rechecks
+//   after the manager work and immediately before publishing (the server rechecks its own
+//   signal after verification, port allocation and the health probe). A stale build deletes
+//   ITS OWN file and yields; the caller re-loops under the current revision.
+//
+// Concurrent asks SHARE one start (`starting`); a cancelled ask stops waiting without
+// cancelling the start (another live waiter may still consume it). Only `invalidateLibrary()`,
+// `suspend()` and `stop()` abort the shared start, and then every waiter rejects `AbortError`.
+//
+// The library builds live in a per-service OS temp dir; the `zim-transient/` relocation, the
+// crash sweep and the real admission/lock wiring are P3b's (the `admission` seam below is the
+// agreed contract, with the recheck points already implemented). Nothing about the user's pack
+// collection persists outside the encrypted workspace DB except those transient builds (L3).
+
+/** How many times one `ensureServer` call re-loops under a newly current revision before
+ *  giving up: a pack set that keeps changing must not spin. */
+const MAX_ENSURE_ATTEMPTS = 3
+
+const abortError = (message: string): DOMException => new DOMException(message, 'AbortError')
+
+/** Internal: the build this operation produced is no longer current. Not an abort — the
+ *  caller re-loops under the current revision instead of failing the ask. */
+class StaleBuildError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'StaleBuildError'
+  }
+}
+
+/** Test seams for the whole service (plan §9.15 item 11). Absent in production. */
+export interface ZimServiceDeps {
+  /** Replaces the on-drive binary resolution. Null ⇒ "kiwix-tools is not installed". */
+  resolveTools?: () => { serve: string; manage: string } | null
+  /** Spawn seam for kiwix-serve. */
+  spawn?: SpawnFn
+  /** Spawn seam for kiwix-manage (defaults to `spawn`). */
+  manageSpawn?: SpawnFn
+  findPort?: () => Promise<number>
+  probe?: (port: number) => Promise<boolean>
+  /** Pre-spawn integrity seam shared by kiwix-serve and kiwix-manage. */
+  verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
+  healthTimeoutMs?: number
+  healthIntervalMs?: number
+  killGraceMs?: number
+  forceKillWaitMs?: number
+  /** Where `library.<build>.xml` files are written (default: a fresh OS temp dir). */
+  libraryDir?: string
+}
+
+/**
+ * Workspace admission seam (plan §9.15 item 1). P3a implements the RECHECK points; P3b wires
+ * the real `{ admitsWork: workspaceAdmitsWork, epoch: unlockEpoch }` pair. Absent ⇒ no-op.
+ */
+export interface ZimAdmission {
+  admitsWork(): boolean
+  epoch(): number
+}
 
 export interface ZimServiceOptions {
   rootPath: string
   isDev: boolean
   platform?: NodeJS.Platform
   env?: NodeJS.ProcessEnv
+  deps?: ZimServiceDeps
+  admission?: ZimAdmission
+}
+
+/** The published configuration, or the revision-keyed "nothing to serve" state. */
+type Published =
+  | {
+      kind: 'served'
+      revision: number
+      build: number
+      generation: number
+      port: number
+      libraryXmlPath: string
+    }
+  | { kind: 'empty'; revision: number }
+
+/** What P5's `withServer` alive/generation guard captures around a request (plan §9.15 item 9). */
+export interface ZimServerState {
+  revision: number
+  build: number
+  generation: number
+  port: number
+  /** The published record is still the server's current child AND it has not reached a
+   *  terminal state. False after a crash, before a restart. */
+  alive: boolean
 }
 
 export interface PackArticle {
@@ -49,37 +147,91 @@ export interface PackArticle {
   partial: boolean
 }
 
+/** One `ensureServer` call's captured tuple, read BEFORE its first await. */
+interface Captured {
+  revision: number
+  signal: AbortSignal | undefined
+  admissionEpoch: number | null
+}
+
+interface StartEntry {
+  revision: number
+  promise: Promise<Published>
+  abort: AbortController
+}
+
 export class ZimService {
   private readonly opts: ZimServiceOptions
+  private readonly deps: ZimServiceDeps
   readonly zimDir: string
+
+  /** Bumped synchronously by every pack-set mutation. Never reset (P5's guard needs that). */
+  private packRevision = 0
+  /** ONE allocator for library builds AND kiwix-serve children (plan §9.15 item 1). */
+  private generationCounter = 0
+  /** The FIFO chain every rebuild / teardown / start passes through: the single-writer rule. */
+  private chain: Promise<unknown> = Promise.resolve()
+
   private server: KiwixServer | null = null
   private libraryDir: string | null = null
-  private libraryStale = true
+  private ownsLibraryDir = false
+  private published: Published | null = null
+  private starting: StartEntry | null = null
+  /** Revision-keyed start-failure latch: "a start failure latches until the pack set changes". */
+  private startFailure: { revision: number; error: Error } | null = null
+  /** Permanent quit latch (only `stop()` arms it; `suspend()` deliberately does not). */
+  private stopped = false
+  /** The most recent teardown could not confirm the child was gone (plan §9.15 item 6): its
+   *  PID stays in the reaper registry and its build file is kept. */
+  private lastTeardownUncertain = false
+  /** How many children this service could never confirm dead. STICKY for the life of the
+   *  process: once one may still be writing a build file, no later path — quit included —
+   *  may clear the transient directory. The crash reaper and P3b's startup sweep own it,
+   *  and a teardown report says "cleanup not confirmed", never "complete".*/
+  private unconfirmedChildren = 0
 
   constructor(opts: ZimServiceOptions) {
     this.opts = opts
+    this.deps = opts.deps ?? {}
     this.zimDir = resolveZimDir(opts.rootPath)
   }
 
+  // ---- tools --------------------------------------------------------------------
+
   /** True when the kiwix-tools binaries are present (feature availability for the UI). */
   toolsInstalled(): boolean {
-    const serve = this.servePath()
-    return serve !== null && resolveKiwixManagePath(serve, this.opts.platform) !== null
+    return this.resolveToolPaths() !== null
   }
 
-  private servePath(): string | null {
-    return resolveKiwixServePath(this.opts.rootPath, this.opts.platform, this.opts.env, {
+  private resolveToolPaths(): { serve: string; manage: string } | null {
+    if (this.deps.resolveTools) return this.deps.resolveTools()
+    const serve = resolveKiwixServePath(this.opts.rootPath, this.opts.platform, this.opts.env, {
       isDev: this.opts.isDev
     })
+    const manage = resolveKiwixManagePath(serve, this.opts.platform)
+    return serve && manage ? { serve, manage } : null
   }
 
-  private packDeps(): PackDeps {
-    const manage = resolveKiwixManagePath(this.servePath(), this.opts.platform)
+  /**
+   * The pack-registry dependencies for one operation. `signal` (when given) reaches every
+   * `kiwix-manage` child, so a lock/quit teardown cancels the manager work instead of waiting
+   * it out; `writeLibraryXml` rethrows on an abort or an `uncertain` manager child, because a
+   * shared library.xml with an unconfirmed writer is not a publishable build (plan §9.15 item 8).
+   */
+  private packDeps(signal?: AbortSignal): PackDeps {
+    const tools = this.resolveToolPaths()
+    const spawnFn: SpawnFn =
+      this.deps.manageSpawn ?? this.deps.spawn ?? ((cmd, args, o) => nodeSpawn(cmd, args, o))
     return {
       zimDir: this.zimDir,
-      manageAdd: async (libraryXmlPath, zimPath) => {
-        if (!manage) throw new Error('kiwix-tools is not installed')
-        await kiwixManageAdd(manage, libraryXmlPath, zimPath, (cmd, args, o) => nodeSpawn(cmd, args, o))
+      manageAdd: async (libraryXmlPath, zimPath, perCallSignal) => {
+        if (!tools) throw new Error('kiwix-tools is not installed')
+        await kiwixManageAdd(tools.manage, libraryXmlPath, zimPath, spawnFn, {
+          signal: perCallSignal ?? signal,
+          verifyBinary: this.deps.verifyBinary,
+          killGraceMs: this.deps.killGraceMs,
+          forceKillWaitMs: this.deps.forceKillWaitMs
+        })
       }
     }
   }
@@ -115,58 +267,395 @@ export class ZimService {
     return changed
   }
 
-  /** Pack set changed: the served library is stale — stop the server (next ask rebuilds)
-   *  and re-arm a latched start failure (the change may be the fix). */
+  /**
+   * The pack set changed (plan §9.15 item 4). SYNCHRONOUS by contract, so the very next
+   * `ensureServer` already reads the new revision:
+   *   1. bump the revision (every in-flight capture is now stale),
+   *   2. clear a failure latch that belonged to the old revision (the change may be the fix),
+   *   3. abort the shared in-flight start,
+   *   4. drop the publication and enqueue a TRACKED teardown of the old child on the chain —
+   *      the old build's XML is deleted inside that step, only after the child is terminal,
+   *      and never the XML of a build this call did not own.
+   */
   private invalidateLibrary(): void {
-    this.libraryStale = true
+    this.packRevision++
+    this.startFailure = null
+    const inFlight = this.starting
+    this.starting = null
+    inFlight?.abort.abort()
     this.server?.resetFailureLatch()
-    const server = this.server
-    if (server) {
-      void server.stop().catch(() => {
-        /* stop is best-effort here; ensureServer spawns fresh */
-      })
-    }
+    const stale = this.published
+    this.published = null
+    void this.enqueue(() => this.teardownPublished(stale)).catch(() => {
+      /* the teardown is bounded and self-reporting; a rejection must not become unhandled */
+    })
   }
 
   // ---- sidecar ------------------------------------------------------------------
 
-  /**
-   * Ensure a sidecar serving the current enabled+available packs; resolves its port,
-   * or null when there is nothing to serve or no binaries. Rebuilds library.xml only
-   * when the pack set changed since the last start.
-   */
-  async ensureServer(db: Db): Promise<number | null> {
-    const bin = this.servePath()
-    if (!bin) return null
-    if (!this.libraryDir) {
-      this.libraryDir = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-library-'))
-    }
-    const libraryXmlPath = join(this.libraryDir, 'library.xml')
-    if (this.libraryStale || !this.server) {
-      const count = await writeLibraryXml(db, this.packDeps(), libraryXmlPath)
-      this.libraryStale = false
-      if (count === 0) return null
-      if (!this.server) {
-        this.server = new KiwixServer({ binPath: bin, libraryXmlPath })
-      }
-    }
-    return this.server.ensureStarted()
+  /** The current pack revision (a pack-set change bumps it; never reset). */
+  revision(): number {
+    return this.packRevision
   }
 
-  /** Stop the sidecar and remove the generated library (quit path — shutdown.ts). */
-  async stop(): Promise<void> {
+  /** The next generation for a library build or a kiwix-serve child. Monotonic per process. */
+  private nextGeneration(): number {
+    return ++this.generationCounter
+  }
+
+  /** Resolves once every queued rebuild / teardown / start has settled (tests; P3b). */
+  whenSettled(): Promise<void> {
+    return this.chain.then(
+      () => undefined,
+      () => undefined
+    )
+  }
+
+  /**
+   * The coherent published tuple for P5's request guard, or null when nothing is published
+   * (never started, an empty revision, suspended, stopped).
+   */
+  serverState(): ZimServerState | null {
+    const pub = this.published
+    if (!pub || pub.kind !== 'served') return null
     const server = this.server
-    this.server = null
-    if (server) await server.stop()
-    if (this.libraryDir) {
-      try {
-        rmSync(this.libraryDir, { recursive: true, force: true })
-      } catch {
-        /* temp dir — best-effort */
-      }
-      this.libraryDir = null
-      this.libraryStale = true
+    const alive = server !== null && server.alive() && server.generation() === pub.generation
+    return {
+      revision: pub.revision,
+      build: pub.build,
+      generation: pub.generation,
+      port: pub.port,
+      alive
     }
+  }
+
+  /**
+   * Ensure a sidecar serving the CURRENT enabled+available packs; resolves its port, or null
+   * when there is nothing to serve or no binaries. Concurrent calls share one start; a waiter
+   * whose own `signal` fires rejects at once WITHOUT cancelling the shared start; a waiter
+   * whose revision moved while it waited re-loops under the new revision (at most
+   * `MAX_ENSURE_ATTEMPTS` rounds). Rejects with an `AbortError` when this operation itself is
+   * cancelled, the workspace stopped admitting it, or the service was stopped.
+   */
+  async ensureServer(db: Db, signal?: AbortSignal): Promise<number | null> {
+    for (let attempt = 0; attempt < MAX_ENSURE_ATTEMPTS; attempt++) {
+      const captured = this.capture(signal)
+      this.assertAdmitted(captured)
+      if (!this.resolveToolPaths()) return null
+
+      // Fast path: a coherent publication under the desired revision with a live child.
+      const pub = this.published
+      if (pub && pub.revision === captured.revision) {
+        if (pub.kind === 'empty') return null
+        const server = this.server
+        if (server && server.alive() && server.generation() === pub.generation) {
+          this.assertAdmitted(captured)
+          return pub.port
+        }
+        // Published but the child is gone (a natural crash): fall through and restart it
+        // over the SAME build — a new generation, the same revision.
+      }
+      if (this.startFailure) {
+        if (this.startFailure.revision !== this.packRevision) this.startFailure = null
+        else if (this.startFailure.revision === captured.revision) throw this.startFailure.error
+      }
+
+      const shared =
+        this.starting && this.starting.revision === captured.revision
+          ? this.starting
+          : this.beginStart(db, captured.revision)
+
+      let result: Published
+      try {
+        result = await raceSignal(shared.promise, captured.signal)
+      } catch (err) {
+        // My own cancellation / the quit latch / an admission change always wins.
+        this.assertAdmitted(captured)
+        // The pack set moved while I waited (an invalidate aborted the shared start, or the
+        // op yielded a stale build): re-loop under the now-current revision.
+        if (this.packRevision !== captured.revision) continue
+        throw err
+      }
+      // Every waiter rechecks before CONSUMING a published result (plan §9.15 item 5).
+      this.assertAdmitted(captured)
+      if (result.revision !== this.packRevision) continue
+      return result.kind === 'empty' ? null : result.port
+    }
+    throw new Error('The knowledge-pack set kept changing while the library server was starting')
+  }
+
+  private capture(signal: AbortSignal | undefined): Captured {
+    return {
+      revision: this.packRevision,
+      signal,
+      admissionEpoch: this.opts.admission?.epoch() ?? null
+    }
+  }
+
+  /** Cancellation / quit / admission recheck. A failed recheck REJECTS (never latches,
+   *  never logs and continues) with the #159 `AbortError` convention. */
+  private assertAdmitted(cap: Captured): void {
+    if (this.stopped) throw abortError('The knowledge-pack service has been stopped')
+    if (cap.signal?.aborted) throw abortError('The knowledge-pack operation was cancelled')
+    const admission = this.opts.admission
+    if (admission && (!admission.admitsWork() || admission.epoch() !== cap.admissionEpoch)) {
+      throw abortError('The workspace no longer admits this knowledge-pack operation')
+    }
+  }
+
+  /** The full recheck an OPERATION performs at its recheck points: admission plus revision. */
+  private assertCurrent(cap: Captured): void {
+    this.assertAdmitted(cap)
+    if (cap.revision !== this.packRevision) {
+      throw new StaleBuildError(
+        `The knowledge-pack set changed (revision ${cap.revision} → ${this.packRevision})`
+      )
+    }
+  }
+
+  /** Own the shared start for one revision. The start belongs to the SERVICE, not to any
+   *  waiter, so an unconsumed successful start simply becomes the server for the next ask. */
+  private beginStart(db: Db, revision: number): StartEntry {
+    const abort = new AbortController()
+    const captured: Captured = {
+      revision,
+      signal: abort.signal,
+      admissionEpoch: this.opts.admission?.epoch() ?? null
+    }
+    const promise = this.enqueue(() => this.startOp(db, captured, abort.signal)).catch(
+      (err: unknown) => {
+        // An aborted or superseded start NEVER latches (plan §9.15 item 7).
+        if (!isAbortError(err) && !(err instanceof StaleBuildError)) {
+          this.startFailure = {
+            revision,
+            error: err instanceof Error ? err : new Error(String(err))
+          }
+        }
+        throw err
+      }
+    )
+    const entry: StartEntry = { revision, promise, abort }
+    this.starting = entry
+    // Every waiter may have left before this settles; keep the rejection handled.
+    promise.catch(() => undefined)
+    void promise
+      .then(
+        () => undefined,
+        () => undefined
+      )
+      .then(() => {
+        if (this.starting === entry) this.starting = null
+      })
+    return entry
+  }
+
+  /**
+   * One start, on the chain: build (or reuse) an immutable library file, spawn a child for it
+   * and publish the still-current tuple. Recheck points per plan §9.15 item 1.
+   */
+  private async startOp(db: Db, cap: Captured, signal: AbortSignal): Promise<Published> {
+    this.assertCurrent(cap)
+    const tools = this.resolveToolPaths()
+    if (!tools) throw new Error('kiwix-tools is not installed')
+    const dir = this.ensureLibraryDir()
+
+    const prior = this.published
+    let build: number
+    let libraryXmlPath: string
+    let ownsBuild = false
+    if (
+      prior &&
+      prior.kind === 'served' &&
+      prior.revision === cap.revision &&
+      existsSync(prior.libraryXmlPath)
+    ) {
+      // Natural-crash restart: the pack set did not change, so the BUILD is still current.
+      // Reuse its exact XML and take only a new child generation (plan §9.15 item 1).
+      build = prior.build
+      libraryXmlPath = prior.libraryXmlPath
+    } else {
+      build = this.nextGeneration()
+      libraryXmlPath = join(dir, `library.${build}.xml`)
+      ownsBuild = true
+      let count: number
+      try {
+        count = await writeLibraryXml(db, this.packDeps(signal), libraryXmlPath, signal)
+        // Recheck after the manager work: a build nobody wants any more is deleted here,
+        // and only ever THIS build's own file.
+        this.assertCurrent(cap)
+      } catch (err) {
+        this.discardBuild(libraryXmlPath)
+        throw err
+      }
+      if (count === 0) {
+        // "Nothing to serve", keyed by revision: the next ask under the same revision
+        // returns null without rebuilding (the old `libraryStale` boolean's job, M2).
+        this.discardBuild(libraryXmlPath)
+        const empty: Published = { kind: 'empty', revision: cap.revision }
+        this.published = empty
+        return empty
+      }
+    }
+
+    const server = this.serverInstance(tools.serve)
+    let started: { port: number; generation: number }
+    try {
+      started = await server.ensureStarted({ libraryXmlPath, signal })
+    } catch (err) {
+      // A failing start never calls the service's own stop() (self-await): the server tore
+      // its own record down through the bounded record-level path before rejecting.
+      if (ownsBuild) this.discardBuild(libraryXmlPath)
+      throw err
+    }
+    try {
+      // Pre-publication recheck: the LAST gate before this tuple becomes the served truth.
+      this.assertCurrent(cap)
+    } catch (err) {
+      await server.stop()
+      this.lastTeardownUncertain = server.lastStopUncertain()
+      this.syncUnconfirmed(server)
+      if (!this.lastTeardownUncertain && ownsBuild) this.discardBuild(libraryXmlPath)
+      throw err
+    }
+    const pub: Published = {
+      kind: 'served',
+      revision: cap.revision,
+      build,
+      generation: started.generation,
+      port: started.port,
+      libraryXmlPath
+    }
+    this.published = pub
+    return pub
+  }
+
+  private serverInstance(binPath: string): KiwixServer {
+    if (!this.server) {
+      this.server = new KiwixServer({
+        binPath,
+        spawn: this.deps.spawn,
+        findPort: this.deps.findPort,
+        probe: this.deps.probe,
+        verifyBinary: this.deps.verifyBinary,
+        healthTimeoutMs: this.deps.healthTimeoutMs,
+        healthIntervalMs: this.deps.healthIntervalMs,
+        killGraceMs: this.deps.killGraceMs,
+        forceKillWaitMs: this.deps.forceKillWaitMs,
+        // Builds and children draw from ONE service-owned counter, so every child of this
+        // process — including a bind-race retry and a crash restart — has a distinct,
+        // service-observable generation.
+        allocateGeneration: () => this.nextGeneration()
+      })
+    }
+    return this.server
+  }
+
+  /** FIFO: rebuild, teardown and start never overlap, so there is exactly one library writer. */
+  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(fn, fn)
+    this.chain = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
+  }
+
+  private ensureLibraryDir(): string {
+    if (!this.libraryDir) {
+      const injected = this.deps.libraryDir
+      if (injected) {
+        mkdirSync(injected, { recursive: true })
+        this.libraryDir = injected
+        this.ownsLibraryDir = false
+      } else {
+        this.libraryDir = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-library-'))
+        this.ownsLibraryDir = true
+      }
+    }
+    return this.libraryDir
+  }
+
+  /** Delete ONE build's own file. Never called for a build this operation did not own, and
+   *  never for the file of a child whose death could not be confirmed. */
+  private discardBuild(libraryXmlPath: string): void {
+    try {
+      rmSync(libraryXmlPath, { force: true })
+    } catch {
+      /* transient dir — best-effort; P3b owns the crash sweep */
+    }
+  }
+
+  /** Stop the current child, then delete the build it was serving — only after a CONFIRMED
+   *  terminal state (an uncertain child may still be writing; its file and PID are kept). */
+  private async teardownPublished(stale: Published | null): Promise<void> {
+    const server = this.server
+    let uncertain = false
+    if (server) {
+      await server.stop()
+      uncertain = server.lastStopUncertain()
+      this.syncUnconfirmed(server)
+    }
+    this.lastTeardownUncertain = uncertain
+    if (stale && stale.kind === 'served' && !uncertain) this.discardBuild(stale.libraryXmlPath)
+  }
+
+  /**
+   * Kill the sidecar but allow a lazy restart on the next ask — the workspace LOCK path
+   * (P3b calls it from `runLockTeardown`'s sidecar block after `zimOps.abortAll()`). Bounded
+   * by the server's own SIGTERM → 2 s → SIGKILL → 3 s policy and NON-LATCHING: no flag that
+   * only an unlock could clear.
+   */
+  async suspend(): Promise<void> {
+    const inFlight = this.starting
+    this.starting = null
+    inFlight?.abort.abort()
+    const stale = this.published
+    this.published = null
+    await this.enqueue(() => this.teardownPublished(stale))
+  }
+
+  /** Stop the sidecar PERMANENTLY and remove the generated builds (quit path — shutdown.ts).
+   *  Terminal: a racing ask must not resurrect the child as an orphan. */
+  async stop(): Promise<void> {
+    this.stopped = true
+    const inFlight = this.starting
+    this.starting = null
+    inFlight?.abort.abort()
+    const stale = this.published
+    this.published = null
+    await this.enqueue(() => this.teardownPublished(stale))
+    if (this.server) this.syncUnconfirmed(this.server)
+    this.server = null
+    // A child this service could never confirm dead may still be writing its library file:
+    // leave the directory alone and let the crash reaper (and P3b's startup sweep) deal
+    // with it. The check is sticky, so an unconfirmed suspend earlier in the session still
+    // protects the file at quit.
+    if (this.unconfirmedChildren === 0) this.cleanupLibraryDir()
+  }
+
+  /** Carry the server's monotonic 'could not confirm this child dead' count onto the service,
+   *  where it outlives the server instance the quit path drops. */
+  private syncUnconfirmed(server: KiwixServer): void {
+    this.unconfirmedChildren = Math.max(this.unconfirmedChildren, server.unconfirmedChildren())
+  }
+
+  private cleanupLibraryDir(): void {
+    const dir = this.libraryDir
+    if (!dir) return
+    try {
+      if (this.ownsLibraryDir) {
+        rmSync(dir, { recursive: true, force: true })
+      } else {
+        // An injected dir belongs to the caller: remove only what this service wrote.
+        for (const entry of readdirSync(dir)) {
+          if (/^library\.\d+\.xml$/.test(entry)) rmSync(join(dir, entry), { force: true })
+        }
+      }
+    } catch {
+      /* temp dir — best-effort */
+    }
+    this.libraryDir = null
+    this.ownsLibraryDir = false
   }
 
   // ---- retrieval + viewer -------------------------------------------------------
@@ -185,7 +674,9 @@ export class ZimService {
     const packs = retrievablePacks(db, this.zimDir, packIds)
     if (packs.length === 0) return null
     return async (question, signal) => {
-      const port = await this.ensureServer(db)
+      // The ask's signal now reaches the library preparation and the sidecar start, not
+      // only the HTTP calls (the start half of H4; the admission half is P3b's).
+      const port = await this.ensureServer(db, signal)
       if (port == null) return []
       return collectPackCandidates(port, packs, question, signal)
     }
@@ -220,4 +711,23 @@ export class ZimService {
     })
     return { title: article.title ?? articlePath, sections, partial: article.truncated !== null }
   }
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError'
+}
+
+/**
+ * Race one waiter's own cancellation against the SHARED start (plan §9.15 item 5): the
+ * cancelled waiter rejects at once and stops waiting, but the start keeps running for the
+ * other waiters — and an unconsumed successful start simply becomes the next ask's server.
+ */
+function raceSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(abortError('The knowledge-pack ask was cancelled'))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(abortError('The knowledge-pack ask was cancelled'))
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+  })
 }
