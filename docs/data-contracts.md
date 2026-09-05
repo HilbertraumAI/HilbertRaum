@@ -877,7 +877,15 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   ('supported'|'partly_supported'|'not_supported'|'follow_up'|'not_reviewed'|'not_applicable'),
   `EvidenceReviewStatus` ('draft'|'ready'), `AnswerBlockKind`, `EvidenceSourceSnapshot`
   (spec §18.2 **plus** `identity: 'resolved'|'unresolved'` — the plan-§1.2 honest legacy
-  state; `availabilityAtCreation` is nullable and reported only for resolved identities),
+  state; `availabilityAtCreation` is nullable and reported only for resolved identities;
+  **P2 (ZIM wave #301, PR #294 review H2/M11, 2026-09-05)** added four ADDITIVE fields —
+  `sourceKind: 'document' | 'archive'` (always written; absent/`'document'` = the classic
+  document source), `archiveTitle`, `packId` (`knowledge_packs.id`, the pack's UUID),
+  `articlePath` (archive sources only, else null) — no new storage column,
+  `SCHEMA_VERSION` unchanged; an archive source is forced `identity:'unresolved'` with
+  null `documentId`/`documentSha256`/`mimeType`/`availabilityAtCreation` before either
+  resolver branch runs, and `packId`/`articlePath` are the source's stable locator
+  carried through every export),
   `EvidenceGenerationSnapshot` (spec §18.3 but **every field optional** per plan §1.3 — absent
   renders "Unavailable", never invented), `EvidenceLink`, `EvidenceReviewItem`,
   `EvidenceReadyGate`, `EvidenceReview`, `EvidenceReviewSummary`, `EvidenceReviewDetail`,
@@ -1517,6 +1525,11 @@ zimDate, articleCount, sizeBytes, leaf, enabled, available, addedAt);
 scope serializes byte-identically; consumed only by the ZIM retrieval arm, never by
 `buildScopeFilter`); `Citation` additive archive fields (`sourceKind: 'archive'`,
 `packId`, `archiveTitle`, `articlePath`; archive citations carry NO documentId/chunkId).
+Evidence review snapshots persist the same four fields as `sourceKind`/`archiveTitle`/
+`packId`/`articlePath` in `source_snapshot_json` (P2, review H2/M11, #301): an archive
+citation is always `identity:'unresolved'` on write and read, and the pack id + article
+path survive into the HTML/PDF evidence pack and the Markdown transcript export even
+though identity is never resolved.
 
 **Table `knowledge_packs`** (db.ts SCHEMA): id PK (ZIM UUID) · title/description/
 language/zim_date/article_count/media_count/size_bytes · leaf + recorded_path

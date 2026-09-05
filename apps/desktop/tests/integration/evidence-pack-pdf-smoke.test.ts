@@ -9,7 +9,8 @@ import { ensureDomMatrixPolyfill } from '../../src/main/services/ingestion/parse
 
 // EP-1 plan §11 — the REAL-Electron PDF smoke: the actual `printEvidencePackHtmlToPdf`
 // (bundled FROM SOURCE, not reimplemented) runs inside the locally installed Electron
-// binary, prints the CURRENT EN + DE golden pack HTML, and the resulting PDFs are
+// binary, prints the CURRENT EN + DE golden pack HTML (plus, since the ZIM wave, the two
+// archive-mixed goldens — PR #294 review M11, check T04-b), and the resulting PDFs are
 // verified here with the already-shipped pdfjs-dist — page count, EN/DE text sentinels
 // straight from the CURRENT catalog (P5 finalized the DE strings), pack-id + page-number
 // footer, the document outline `generateDocumentOutline` builds from the h1→h2→h3 tree,
@@ -82,6 +83,14 @@ const enabled = ELECTRON_BIN !== null && displayReachable
 const GOLDEN_DIR = join(__dirname, '..', 'fixtures', 'evidence-packs')
 const EN_PACK_ID = 'SMOKE-PACK-ID-EN-1f2e3d4c'
 const DE_PACK_ID = 'SMOKE-PACK-ID-DE-9a8b7c6d'
+// ZIM knowledge packs (PR #294 review M11 → #301, check T04-b): the two archive-mixed
+// goldens print here too. Each job's OWN pack id keeps the cover sentinels distinct; the
+// knowledge-pack UUIDs below are golden CONTENT (never normalized away) and must survive
+// Chromium print + pdfjs extraction unchanged.
+const AR_EN_PACK_ID = 'SMOKE-PACK-ID-AR-EN-2b3c4d5e'
+const AR_DE_PACK_ID = 'SMOKE-PACK-ID-AR-DE-6f7a8b9c'
+const ARCHIVE_PACK_ID_EN = '5c9a7e21-4b6d-4f38-9a0c-1d2e3f4a5b6c'
+const ARCHIVE_PACK_ID_DE = '7e2d4c60-8a19-4b53-bc71-0f5a6d3e2c14'
 
 interface SmokeJobResult {
   name: string
@@ -161,10 +170,14 @@ let root = ''
 let result: SmokeResult | null = null
 let enPdf = ''
 let dePdf = ''
+let arEnPdf = ''
+let arDePdf = ''
 let killOut = ''
 let killSource = ''
 let en: PdfFacts | null = null
 let de: PdfFacts | null = null
+let arEn: PdfFacts | null = null
+let arDe: PdfFacts | null = null
 
 describe.skipIf(!enabled)(
   'evidence-pack PDF smoke — REAL Electron printToPDF + pdfjs (skips where the Electron binary/display is absent, e.g. CI)',
@@ -201,9 +214,13 @@ describe.skipIf(!enabled)(
       }
       const enHtml = prepare('relevance.html', EN_PACK_ID, 'en.html')
       const deHtml = prepare('german.html', DE_PACK_ID, 'de.html')
+      const arEnHtml = prepare('archive-mixed.html', AR_EN_PACK_ID, 'archive-en.html')
+      const arDeHtml = prepare('archive-mixed-de.html', AR_DE_PACK_ID, 'archive-de.html')
 
       enPdf = join(root, 'en.pdf')
       dePdf = join(root, 'de.pdf')
+      arEnPdf = join(root, 'archive-en.pdf')
+      arDePdf = join(root, 'archive-de.pdf')
       killOut = join(root, 'killed.pdf')
       killSource = join(root, 'killed.pdf.print.tmp.html')
       const resultPath = join(root, 'result.json')
@@ -226,6 +243,20 @@ describe.skipIf(!enabled)(
               packId: DE_PACK_ID,
               outPdfPath: dePdf,
               sourceHtmlPath: join(root, 'de.pdf.print.tmp.html')
+            },
+            {
+              name: 'archive-en',
+              htmlPath: arEnHtml,
+              packId: AR_EN_PACK_ID,
+              outPdfPath: arEnPdf,
+              sourceHtmlPath: join(root, 'archive-en.pdf.print.tmp.html')
+            },
+            {
+              name: 'archive-de',
+              htmlPath: arDeHtml,
+              packId: AR_DE_PACK_ID,
+              outPdfPath: arDePdf,
+              sourceHtmlPath: join(root, 'archive-de.pdf.print.tmp.html')
             },
             {
               name: 'kill',
@@ -273,6 +304,8 @@ describe.skipIf(!enabled)(
       expect(code).toBe(0)
       en = await readPdfFacts(enPdf)
       de = await readPdfFacts(dePdf)
+      arEn = await readPdfFacts(arEnPdf)
+      arDe = await readPdfFacts(arDePdf)
     }, 240_000)
 
     afterAll(() => {
@@ -324,6 +357,66 @@ describe.skipIf(!enabled)(
       expect(de!.compact).toContain(`1/${de!.numPages}`)
       expect(de!.outlineTitles).toContain(t('de', 'packExport.section.qa'))
       expect(de!.outlineDepth).toBe(3)
+    })
+
+
+    // ---- ZIM knowledge packs (PR #294 review M11 → #301), T04-b: the archive locator has to
+    // survive the ONE step the golden bytes cannot cover — Chromium's print + text extraction.
+    // The two archive-mixed goldens print here, and their pack title / pack id / article path
+    // (umlaut + ß + the escaped hostile `<b>`) are read back out of the produced PDFs.
+    it('EN archive pack: the article title, the archive title, the pack id and the article path all survive print + text extraction; the archive card carries the archive warning, not the legacy unresolved one', () => {
+      const job = result!.results.find((r) => r.name === 'archive-en')!
+      expect(job.ok, job.error ?? '').toBe(true)
+      expect(job.sourceHtmlRemoved).toBe(true)
+      expect(readFileSync(arEnPdf).subarray(0, 5).toString('latin1')).toBe('%PDF-')
+      expect(arEn!.numPages).toBeGreaterThan(0)
+      // Provenance: the article title, the pack line, and the mono locator (pack UUID + entry
+      // path). The locator strings carry no spaces, so `compact` is the exact-match surface.
+      expect(arEn!.text).toContain('Treibhausgas')
+      expect(arEn!.text).toContain(
+        `${t('en', 'packExport.evidence.archive')}: Wikipedia (DE) – Klimawandel <b>`
+      )
+      expect(arEn!.text).toContain(t('en', 'packExport.evidence.packId'))
+      expect(arEn!.compact).toContain(ARCHIVE_PACK_ID_EN)
+      expect(arEn!.text).toContain(t('en', 'packExport.evidence.article'))
+      expect(arEn!.compact).toContain('Treibhausgas/Übersicht_ß')
+      // The archive-specific identity warning, never the legacy document claim.
+      expect(arEn!.text).toContain(t('en', 'packExport.evidence.archiveIdentity'))
+      expect(arEn!.text).not.toContain(t('en', 'packExport.evidence.identityUnresolved'))
+      // §16.1.7 register row: the archive type + availability wording, and no invented hash —
+      // the workspace document's SHA-256 is in the PDF exactly once, on its OWN row.
+      expect(arEn!.text).toContain(t('en', 'packExport.sources.typeArchive'))
+      expect(arEn!.text).toContain(t('en', 'packExport.sources.availabilityArchive'))
+      expect(arEn!.compact.split('ab'.repeat(32)).length - 1).toBe(1)
+      // Structure survived: the pack id footer and the sources bookmark are still there.
+      expect(arEn!.compact).toContain(`1/${arEn!.numPages}`)
+      expect(arEn!.text).toContain(AR_EN_PACK_ID)
+      expect(arEn!.outlineTitles).toContain(t('en', 'packExport.section.sources'))
+    })
+
+    it('DE archive pack: the German archive strings, the pack id and the umlaut/ß article path survive print + text extraction; the archive card carries the archive warning, not the legacy unresolved one', () => {
+      const job = result!.results.find((r) => r.name === 'archive-de')!
+      expect(job.ok, job.error ?? '').toBe(true)
+      expect(job.sourceHtmlRemoved).toBe(true)
+      expect(arDe!.numPages).toBeGreaterThan(0)
+      expect(arDe!.text).toContain(t('de', 'packExport.docTitle')) // "Nachweispaket"
+      expect(arDe!.text).toContain('Treibhausgas')
+      expect(arDe!.text).toContain(
+        `${t('de', 'packExport.evidence.archive')}: Wikipedia (DE) – Klimawandel`
+      )
+      expect(arDe!.text).toContain(t('de', 'packExport.evidence.packId'))
+      expect(arDe!.compact).toContain(ARCHIVE_PACK_ID_DE)
+      expect(arDe!.text).toContain(t('de', 'packExport.evidence.article'))
+      expect(arDe!.compact).toContain('Treibhausgas/Übersicht_ß') // umlaut + ß through print
+      expect(arDe!.text).toContain('ausschließlich') // ß in the document card, unchanged
+      expect(arDe!.text).toContain(t('de', 'packExport.evidence.archiveIdentity'))
+      expect(arDe!.text).not.toContain(t('de', 'packExport.evidence.identityUnresolved'))
+      expect(arDe!.text).toContain(t('de', 'packExport.sources.typeArchive'))
+      expect(arDe!.text).toContain(t('de', 'packExport.sources.availabilityArchive'))
+      expect(arDe!.compact.split('cd'.repeat(32)).length - 1).toBe(1)
+      expect(arDe!.compact).toContain(`1/${arDe!.numPages}`)
+      expect(arDe!.text).toContain(AR_DE_PACK_ID)
+      expect(arDe!.outlineTitles).toContain(t('de', 'packExport.section.sources'))
     })
 
     it('generateTaggedPDF produced a MARKED (tagged) PDF — best-effort accessibility, never a PDF/UA claim', () => {

@@ -2804,6 +2804,10 @@ export const de: Record<keyof typeof en, string> = {
   'review.source.kind.whole_document_provenance': 'Herkunft: Gesamtdokument-Analyse',
   'review.source.kind.structured_record': 'Extrahierter Datensatz',
   'review.source.unresolved': 'Quelle konnte nicht eindeutig zugeordnet werden',
+  // ZIM-Welle (#294 review M11): abweichend von der obigen Dokument-Aussage — ein
+  // Archivartikel war von vornherein keinem Arbeitsbereich-Dokument zuzuordnen.
+  'review.source.archive':
+    'Artikel aus einem Wissenspaket – Identität und Inhalt lassen sich nicht gegen den Arbeitsbereich prüfen',
   'review.source.missingAtCreation': 'Quelle war beim Anlegen dieser Prüfung nicht verfügbar',
   // P4-Frische-Hinweise pro Quelle (Spec §15.4/§15.5).
   'review.source.changed': 'Das Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert',
@@ -2885,6 +2889,11 @@ export const de: Record<keyof typeof en, string> = {
   'review.summary.sourcesUnresolved.one': '{count} Quelle konnte nicht eindeutig zugeordnet werden',
   'review.summary.sourcesUnresolved.other':
     '{count} Quellen konnten nicht eindeutig zugeordnet werden',
+  // ZIM-Welle (#294 review M11): Archive sind oben ausgeschlossen — eigene, getrennte Zahl.
+  'review.summary.sourcesArchive.one':
+    '{count} Quelle ist ein Artikel aus einem Wissenspaket und lässt sich nicht gegen den Arbeitsbereich prüfen',
+  'review.summary.sourcesArchive.other':
+    '{count} Quellen sind Artikel aus Wissenspaketen und lassen sich nicht gegen den Arbeitsbereich prüfen',
   'review.summary.sourcesMissing.one':
     '{count} Quelle war beim Anlegen dieser Prüfung nicht verfügbar',
   'review.summary.sourcesMissing.other':
@@ -3006,11 +3015,18 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.evidence.kindStructured': 'Strukturierter Extraktionsdatensatz',
   'packExport.evidence.page': 'Seite {n}',
   'packExport.evidence.sectionLabel': 'Abschnitt',
+  // ZIM-Welle (#294 review M11): Zeile mit dem Wissenspaket + der mono-Zeile mit dem Locator.
+  'packExport.evidence.archive': 'Wissenspaket',
+  'packExport.evidence.packId': 'Paket-ID',
+  'packExport.evidence.article': 'Artikel',
   'packExport.evidence.excerpt': 'Gespeicherter Auszug',
   'packExport.evidence.noExcerpt': 'Für diese Quelle wurde kein Auszug gespeichert.',
   'packExport.evidence.relations': 'Prüfer-Einordnungen',
   'packExport.evidence.identityUnresolved':
     'Die Identität dieses Quelldokuments konnte nicht gegen den Arbeitsbereich verifiziert werden.',
+  // M11: abweichend von der obigen Dokument-Aussage — nie beide auf derselben Karte.
+  'packExport.evidence.archiveIdentity':
+    'Diese Quelle ist ein Artikel aus einem Wissenspaket (ZIM-Archiv), kein Dokument aus dem Arbeitsbereich. Identität und Inhalt werden nicht gegen den Arbeitsbereich geprüft; die Paket-ID und der Artikelpfad identifizieren die Quelle.',
   'packExport.evidence.missingAtCreation':
     'Dieses Quelldokument fehlte bereits im Arbeitsbereich, als die Prüfung angelegt wurde.',
   // P4-Zustände zum Exportzeitpunkt (Spec §15.4/§15.5).
@@ -3054,6 +3070,8 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.section.sources': 'Quellenregister',
   'packExport.sources.colTitle': 'Dokument',
   'packExport.sources.colType': 'Dateityp',
+  // ZIM-Welle (#294 review M11): Typ-/Verfügbarkeitswerte für eine Archivzeile.
+  'packExport.sources.typeArchive': 'Artikel aus einem Wissenspaket (ZIM-Archiv)',
   'packExport.sources.colSha': 'SHA-256 zum Prüfzeitpunkt',
   'packExport.sources.colAvailability': 'Verfügbarkeit beim Anlegen der Prüfung',
   'packExport.sources.colAvailabilityExport': 'Verfügbarkeit beim Export',
@@ -3061,6 +3079,7 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.sources.availabilityMissing': 'Fehlte',
   'packExport.sources.availabilityChanged': 'Seit der Prüfung geändert',
   'packExport.sources.availabilityUnknown': 'Nicht überprüfbar',
+  'packExport.sources.availabilityArchive': 'Archivartikel – nicht gegen den Arbeitsbereich prüfbar',
   'packExport.sources.hashExcluded': 'Über Exportoptionen ausgeschlossen',
   'packExport.sources.pathNote':
     'Ursprüngliche Dateipfade sind in einem Nachweispaket niemals enthalten.',

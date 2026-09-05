@@ -29,6 +29,19 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 2 — evidence identity and
+provenance (H2, M11).**_ `buildEvidenceSourceSnapshots` guards `sourceKind === 'archive'`
+before the document-id and legacy exact-title branches (same guard at read time): an
+archive citation is always `identity:'unresolved'` with no document id/hash; freshness
+reports `'unverifiable'`. `EvidenceSourceSnapshot` gained four ADDITIVE fields
+(`sourceKind`, `archiveTitle`, `packId`, `articlePath`; absent ⇒ `'document'`; no schema
+migration) carried through the HTML/PDF evidence pack, the Markdown transcript export and
+`EvidencePane`; document sources unchanged. Saved pre-merge reviews are disposable
+(re-run, no migration). Review context stays honest unavailable — no "Open article" yet
+(owner: P6, after P3b). Tests: T03-a flipped `it.fails`→`it`; T03-b/T04-a implemented;
+T04-b RECORDED (real Electron printToPDF ran here: 4-page EN/DE archive PDFs carry archive title,
+pack id, article path and the archive warning). Baselines M3/M8 untouched. Suite: 411 / 5,870 (5,791 / 78), +29 over P0; typecheck + build green. Electron printToPDF ran (Smart App Control probe passed); real kiwix-tools not run.
+
 _2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 1b — D2 remedy re-ruled: cooperative
 slicing, not a worker.**_ Why: laptop leg 1 (owner's i7-1185G7, Node 24) failed gate (i) at 55–63 ms vs
 50 while (ii) passed; the scanner loop is the floor, and a worker's blast radius (main rollup entry,
@@ -701,8 +714,10 @@ open round's item stays the last block of §5.)
     knownFamilies gate throws on the new family — needs the pinned GPL-3.0 text +
     prose), commercial-drive checkFamily, script-drift matrices. Until then binaries are
     manual (known-limitations). (b) **Tier 2**: persistent import of selected articles
-    into the corpus. (c) **Evidence review** identity for archive citations (today:
-    honest `unresolved`). (d) The manual acceptance leg: the airplane-mode demo on a
+    into the corpus. (c) **Evidence review identity for archive citations — DONE in P2**
+    (2026-09-05, #301 review H2/M11): unresolved by construction, pack id + article path
+    exported through HTML/PDF/Markdown; residual = "Open article" from a review row
+    (owner: P6, after P3b). (d) The manual acceptance leg: the airplane-mode demo on a
     real drive with `wikipedia_de_*` packs + kiwix-tools 3.8.1 (the §17 user story).
     (e) Observation for item 1b's matrix, measured 2026-09-04 on the i7-8550U + UHD 620:
     GPU auto-offload gains nothing on pp (56 vs 57 t/s) and LOSES 45 percent on tg

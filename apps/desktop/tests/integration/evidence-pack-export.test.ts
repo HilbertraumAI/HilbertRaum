@@ -34,7 +34,8 @@ import type { Citation, CoverageInfo } from '../../src/shared/types'
 // EP-1 plan §8 exit gate (spec §30 Phase-2 gate) — the export pipeline end to end against
 // a real SQLite workspace: DETERMINISTIC GOLDEN PACKS for the five spec §29.5 classes
 // (relevance / whole-doc / partial-coverage / missing-source / German) plus the P4
-// outdated-acknowledged pack (spec §28.6 — six goldens total), the §20.3/§28.9
+// outdated-acknowledged pack (spec §28.6) plus the two ZIM archive-mixed packs (PR #294
+// review M11 — eight goldens total), the §20.3/§28.9
 // ATOMICITY guarantees (failure ⇒ no destination file, no export row), encoding (UTF-8,
 // NO BOM, meta charset), recorded-hash-matches-file-bytes, options persisted, export on a
 // READY review (the write-guard covers item mutations only — verified, not assumed), and
@@ -141,7 +142,8 @@ function compareGolden(name: string, html: string): void {
   expect(normalized).toBe(readFileSync(goldenPath, 'utf8'))
 }
 
-// ---- The six golden classes (the five spec §29.5 classes + P4 outdated-acknowledged) --
+// ---- The eight golden classes (the five spec §29.5 classes + P4 outdated-acknowledged +
+// ---- the two ZIM archive-mixed classes, PR #294 review M11) --------------------------
 
 describe('golden packs (deterministic; spec §29.5)', () => {
   it('relevance pack — ready review, notes, links, ready-review export allowed', async () => {
@@ -318,6 +320,118 @@ describe('golden packs (deterministic; spec §29.5)', () => {
     expect(html).toContain('Nachweispaket')
     expect(html).toContain('ausschließlich') // umlaut/ß round-trip
     compareGolden('german', html)
+  })
+
+  // ---- ZIM knowledge packs (PR #294 review M11 → #301): the two ARCHIVE golden classes ----
+  // A mixed pack (one workspace document + one knowledge-pack article) in each language. They
+  // pin the whole archive surface as BYTES: the "Knowledge pack" line, the mono pack-id/article
+  // locator, the archive-specific identity warning (never the legacy unresolved one), the
+  // §16.1.6 archive count, and the §16.1.7 type/availability cells with NO hash. The EN one
+  // carries hostile markup inside the archive title so the golden pins the escaping too.
+  const ARCHIVE_PACK_ID_EN = '5c9a7e21-4b6d-4f38-9a0c-1d2e3f4a5b6c'
+  const ARCHIVE_PACK_ID_DE = '7e2d4c60-8a19-4b53-bc71-0f5a6d3e2c14'
+  const ARCHIVE_ARTICLE_PATH = 'Treibhausgas/Übersicht_ß'
+
+  it('archive-mixed pack (EN) — a knowledge-pack article beside a document source: locator, archive warning, escaped hostile title', async () => {
+    const { db, root } = freshDb()
+    const docId = seedDocument(db, { title: 'contract.pdf', sha256: 'ab'.repeat(32) })
+    const messageId = seedAnswer(db, {
+      content:
+        'Termination requires 30 days notice. [S1]\n\nMethane from agriculture is a greenhouse gas. [S2]',
+      citations: [
+        {
+          label: 'S1',
+          sourceTitle: 'contract.pdf',
+          documentId: docId,
+          pageNumber: 12,
+          section: 'Termination',
+          snippet: 'Either party may terminate with 30 days notice.'
+        },
+        {
+          label: 'S2',
+          sourceTitle: 'Treibhausgas',
+          pageNumber: null,
+          section: 'Landwirtschaft',
+          snippet: 'Methan aus der Landwirtschaft ist ein Treibhausgas.',
+          sourceKind: 'archive',
+          packId: ARCHIVE_PACK_ID_EN,
+          archiveTitle: 'Wikipedia (DE) – Klimawandel <b>',
+          articlePath: ARCHIVE_ARTICLE_PATH
+          // NO documentId by construction (H2): an archive citation names no `documents` row.
+        }
+      ],
+      coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 9 }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId, {
+      appVersion: '0.1.52-test',
+      modelDisplayName: () => 'Test Model'
+    })
+    const dest = join(root, 'archive-mixed.html')
+    const record = await exportEvidencePackToFile(db, detail.id, { language: 'en' }, EXPORT_DEPS(dest))
+    expect(record).not.toBeNull()
+    const html = readFileSync(dest, 'utf8')
+    // The load-bearing M11 claims, stated here as well as pinned by the golden bytes.
+    expect(html).toContain(`${t('en', 'packExport.evidence.archive')}: Wikipedia (DE) – Klimawandel &lt;b&gt;`)
+    expect(html).toContain(`${t('en', 'packExport.evidence.packId')}: ${ARCHIVE_PACK_ID_EN}`)
+    expect(html).toContain(`${t('en', 'packExport.evidence.article')}: Treibhausgas/Übersicht_ß`)
+    expect(html).toContain(t('en', 'packExport.evidence.archiveIdentity'))
+    expect(html).not.toContain(t('en', 'packExport.evidence.identityUnresolved'))
+    expect(html).toContain(t('en', 'packExport.sources.typeArchive'))
+    expect(html).toContain(t('en', 'packExport.sources.availabilityArchive'))
+    // Hostile markup never survives raw, and the document's hash appears ONCE (its own row).
+    expect(html).not.toContain('Klimawandel <b>')
+    expect(html.split('ab'.repeat(32)).length - 1).toBe(1)
+    compareGolden('archive-mixed', html)
+  })
+
+  it('archive-mixed-de pack (DE) — the same mixed shape in German: umlaut/ß locator through the DE catalog', async () => {
+    const { db, root } = freshDb()
+    const docId = seedDocument(db, { title: 'vertrag.pdf', sha256: 'cd'.repeat(32) })
+    const messageId = seedAnswer(db, {
+      title: 'Vertragsfragen',
+      question: 'Was gilt bei Kündigung und wie entsteht Treibhausgas?',
+      content:
+        'Die Kündigungsfrist beträgt 30 Tage. [S1]\n\nMethan entsteht in der Landwirtschaft. [S2]',
+      citations: [
+        {
+          label: 'S1',
+          sourceTitle: 'vertrag.pdf',
+          documentId: docId,
+          pageNumber: 3,
+          snippet: 'Kündigung mit einer Frist von 30 Tagen — ausschließlich schriftlich.'
+        },
+        {
+          label: 'S2',
+          sourceTitle: 'Treibhausgas',
+          pageNumber: null,
+          section: 'Landwirtschaft',
+          snippet: 'Methan aus der Landwirtschaft ist ein Treibhausgas.',
+          sourceKind: 'archive',
+          packId: ARCHIVE_PACK_ID_DE,
+          archiveTitle: 'Wikipedia (DE) – Klimawandel',
+          articlePath: ARCHIVE_ARTICLE_PATH
+        }
+      ],
+      coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 6 }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId, {
+      appVersion: '0.1.52-test',
+      modelDisplayName: () => 'Test Model'
+    })
+    const dest = join(root, 'archive-mixed-de.html')
+    await exportEvidencePackToFile(db, detail.id, { language: 'de' }, EXPORT_DEPS(dest))
+    const html = readFileSync(dest, 'utf8')
+    expect(html).toContain('<html lang="de">')
+    expect(html).toContain('[Q2]') // DE display marker on the archive card
+    expect(html).toContain(`${t('de', 'packExport.evidence.archive')}: Wikipedia (DE) – Klimawandel`)
+    expect(html).toContain(`${t('de', 'packExport.evidence.packId')}: ${ARCHIVE_PACK_ID_DE}`)
+    expect(html).toContain(`${t('de', 'packExport.evidence.article')}: Treibhausgas/Übersicht_ß`)
+    expect(html).toContain(t('de', 'packExport.evidence.archiveIdentity'))
+    expect(html).not.toContain(t('de', 'packExport.evidence.identityUnresolved'))
+    expect(html).toContain(t('de', 'packExport.sources.typeArchive'))
+    expect(html).toContain(t('de', 'packExport.sources.availabilityArchive'))
+    expect(html.split('cd'.repeat(32)).length - 1).toBe(1)
+    compareGolden('archive-mixed-de', html)
   })
 })
 

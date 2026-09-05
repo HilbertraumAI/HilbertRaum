@@ -2392,8 +2392,18 @@ reports and phase plans were working papers; their full text lives in git histor
 - **Packs ride the RELEVANCE ask path only.** Whole-document reads, compares, and
   doc-task flows are document reads by definition and never consult packs.
 - **A pure-archive answer records no coverage fraction** (there is no document corpus to
-  be “N of M sections” over) and **evidence review resolves archive citations as
-  honest `unresolved`** — review over archive sources is a future wave.
+  be “N of M sections” over). **Evidence review resolves archive citations as honest
+  `unresolved` by construction**, not by matching-title accident: the resolver and its
+  read-time whitelist both check `sourceKind` before any document-id/title branch runs
+  (PR #294 review H2, #301). There is no full-archive content hash, so a review can
+  never verify or date an archive article — freshness reports it "cannot be verified",
+  never "changed" — and that stays a limitation, not a defect. The review, its HTML/PDF
+  evidence pack and the Markdown transcript export still record the pack id and article
+  path even though identity is unresolved. A review row has no "Open article" yet — there
+  is no workspace document to open, and the article viewer bridge needs a later wave's
+  locator/serving-map contract. Evidence reviews created on a pre-release knowledge-pack
+  build that cite an archive may carry a wrongly resolved document identity and must be
+  re-run; the app never rewrites a frozen review.
 - **The article viewer derives the serving URL id from the pack’s filename stem** (the
   kiwix-serve `--library` rule, verified on kiwix-tools 3.8.1). Retrieval itself parses
   ids from search results and does not depend on the rule; a kiwix naming change would

@@ -109,6 +109,20 @@ export interface EvidencePackSource {
   kind: EvidenceSourceSnapshot['kind']
   identity: 'resolved' | 'unresolved'
   documentTitle: string
+  /**
+   * ZIM wave (PR #294 review M11): 'archive' marks a source whose citation named an article
+   * inside a registered knowledge pack, NOT a workspace document — always `identity:
+   * 'unresolved'` by construction (H2). Absent snapshot field ⇒ 'document' (the classic,
+   * unchanged shape). Drives the render-html.ts archive card/table branches.
+   */
+  sourceKind: 'document' | 'archive'
+  /** Archive sources only: the registered pack's display title; null for a document source
+   *  or an absent/malformed value — never invented. */
+  archiveTitle: string | null
+  /** Archive sources only: the registered pack's id (the ZIM UUID); null otherwise. */
+  packId: string | null
+  /** Archive sources only: the article's entry path within the archive; null otherwise. */
+  articlePath: string | null
   /** null = absent or excluded by options (renderer distinguishes via the flag). */
   documentSha256: string | null
   mimeType: string | null
@@ -140,8 +154,12 @@ export interface EvidencePackHonesty {
   chunksTotal: number | null
   /** True only when truncation was honestly RECORDED; null = no record (never "false"). */
   answerTruncated: boolean | null
+  /** Excludes archive sources (M11): an archive is unresolved BY CONSTRUCTION and gets its
+   *  own `archiveSources` line below — the two warnings must never both fire for one source. */
   unresolvedSources: number
   missingSources: number
+  /** ZIM wave (M11): count of sources whose citation named a knowledge-pack article. */
+  archiveSources: number
 }
 
 /**
@@ -243,6 +261,10 @@ export function buildEvidencePackModel(
       kind: s.kind,
       identity: s.identity,
       documentTitle: s.documentTitle,
+      sourceKind: s.sourceKind === 'archive' ? 'archive' : 'document',
+      archiveTitle: textOrNull(s.archiveTitle ?? null),
+      packId: textOrNull(s.packId ?? null),
+      articlePath: textOrNull(s.articlePath ?? null),
       documentSha256: options.includeDocumentHashes ? textOrNull(s.documentSha256 ?? null) : null,
       mimeType: textOrNull(s.mimeType ?? null),
       pageNumber: typeof s.pageNumber === 'number' ? s.pageNumber : null,
@@ -328,8 +350,13 @@ export function buildEvidencePackModel(
     // Positive record only (the P1 generation-snapshot rule): true when honestly recorded
     // as cut off, null otherwise — absence of a record is never rendered as "complete".
     answerTruncated: gen?.answerTruncated === true ? true : null,
-    unresolvedSources: detail.sources.filter((s) => s.identity === 'unresolved').length,
-    missingSources: detail.sources.filter((s) => s.availabilityAtCreation === 'missing').length
+    // M11: an archive source is unresolved by construction (H2) and carries its own
+    // archiveSources line — never double-count it as an unresolved DOCUMENT identity.
+    unresolvedSources: detail.sources.filter(
+      (s) => s.identity === 'unresolved' && s.sourceKind !== 'archive'
+    ).length,
+    missingSources: detail.sources.filter((s) => s.availabilityAtCreation === 'missing').length,
+    archiveSources: detail.sources.filter((s) => s.sourceKind === 'archive').length
   }
 
   // P4: normalize the injected verdict. `sourcesMissingNow` counts NEW deletions only —
