@@ -38,7 +38,7 @@ SCANNER" header) replacing the O(n²) regex tokenizer. New contract: `{ maxChars
 CI oracle is the deterministic `work` counter, never wall-clock; four attributed non-Wikipedia
 fixtures added (T02-a/T02-b implemented). **14900K early warning (plain Node, this machine):**
 P-core 15–16 ms / 29–30 ms vs the ≈17 ms / 50 ms one-third gate (both pass, margin thin on (i));
-E-core fails gate (i). **Worker decision pending the i7-8550U figure** (owner; T02-c). Baselines
+E-core fails gate (i). **Owner's i7-1185G7 (Node 24) already FAILS gate (i): 55–63 ms vs 50; gate (ii) 86–107 vs 150 passes** — the i7-8550U cannot do better, so the worker follow-up PR is expected before P4 unless D2's 1 MiB gate is re-ruled; decision pending that and the 8550U figure (T02-c). Baselines
 H2/M3/M8 untouched. Suite: 411 files (388 passed / 23 skipped) / 5,854 tests (5,775 passed / 78 skipped), +13 over P0; a first run failed only the load-sensitive `zim-client` 8 MiB over-ceiling test (15 s timeout under fork load, green alone) — hardened with its own 60 s budget in this PR, re-run green; typecheck clean, build green. Pointers: `docs/rag-design.md`
 §17 D-Z3, `scripts/zim-html-perf.mjs`.
 

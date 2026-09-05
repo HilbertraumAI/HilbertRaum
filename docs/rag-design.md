@@ -2188,6 +2188,33 @@ offline article viewer. Files are registered in place, never copied.
   pending it. B02: because the P-core gate-(i) figure is within 20% of its threshold,
   expect the laptop to be re-run at P7 rather than the ÷3 proxy. The laptop was not
   available in this session.
+
+  **Laptop leg 1 — owner's i7-1185G7 (Tiger Lake, 4C/8T, 15.8 GiB), 2026-09-05, from the
+  `ce062b6c` zip, `--gate laptop`, synthetic batch articles, unpinned.** Not the decisive
+  reference machine (the i7-8550U is slower per core and still pending) — an upper bound on what
+  the reference can do. Node 24 is the app's runtime (Electron 43); the Node 22 runs are
+  informative only.
+
+  | run | Node | 1 MiB worst warm (family) | cold | batch warm | batch cold | (i) vs 50 ms | (ii) vs 150 ms |
+  |---|---|---|---|---|---|---|---|
+  | 1 | 24.20.0 | 56.99 ms (entity-heavy) | 82.42 ms | 85.69 ms | 79.05 ms | 1.14× FAIL | 0.57× PASS |
+  | 2 | 24.20.0 | 55.12 ms (deep-nesting) | 74.86 ms | 96.27 ms | 110.07 ms | 1.10× FAIL | 0.64× PASS |
+  | 3 | 24.20.0 | 62.85 ms (wellformed) | 118.68 ms | 106.81 ms | 169.21 ms | 1.26× FAIL | 0.71× PASS |
+  | 1 | 22.23.1 | 31.88 ms (wellformed) | 49.13 ms | 51.11 ms | 73.93 ms | 0.64× PASS | 0.34× PASS |
+  | 2 | 22.23.1 | 32.22 ms (entity-heavy) | 52.33 ms | 49.53 ms | 61.97 ms | 0.64× PASS | 0.33× PASS |
+  | 3 | 22.23.1 | 46.30 ms (wellformed) | 44.70 ms | 57.33 ms | 99.52 ms | 0.93× PASS | 0.38× PASS |
+
+  Caveats: power plan / AC state not recorded; the 30k MAX drifted 1.78 → 4.52 → 5.52 ms across
+  the three Node 24 runs within 25 s (throttling or background load), so the Node 24 figures are
+  noisy upward — but even the best Node 24 run fails gate (i) by 10 %, and Node 22 vs 24 on the
+  same machine differ ~1.8× (runtime or heat; not separable from this data). Where the 1 MiB time
+  goes (14900K P-core, all families 13–16 ms): the scanner loop itself is the floor;
+  `decodeEntities` is ~7 of the 13 ms only on the entity-heavy family. **Reading:** on the app's
+  runtime a machine faster than the reference already fails gate (i) while gate (ii) passes with
+  a 30–40 % margin; the i7-8550U cannot do better, so under D2 as ruled the worker follow-up PR
+  is expected before P4 unless the owner re-rules the 1 MiB worst-case gate (e.g. a 512 KiB
+  `maxChars` — the largest observed maxi article is ~0.5 MB — or accepting a one-off 60–90 ms
+  stall for a pathological 1 MiB article). Decision: pending the i7-8550U figure and that ruling.
 - **D-Z4 — one seam in `retrieve()`.** An optional `ExternalRetrievalArm` (parameter 8)
   appends candidates between the chunk-row join and the rerank, so rerank, dedup, token
   budget and `[Sn]` labelling treat archive and document chunks uniformly. No reranker →
