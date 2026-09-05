@@ -228,12 +228,20 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
   const persistedLoad =
     current?.effectiveRead?.source === 'model_load' ? current.effectiveRead : null
   const probed = settings.gpuProbe?.devices[0]
+  // An unknown identity on either side reads as "this machine": the moved-drive check in
+  // maybeRunFirstBenchmark makes the same call, so the two never contradict each other.
+  const currentMachine = here == null || currentKey == null || here === currentKey
+  // A result persisted before `gpuVramMb` existed (or one whose probe came back empty) gets
+  // the live probe's figure folded in, for THIS machine only: the graphics tile must not
+  // wait for a re-run when the app already knows the card.
+  const filled =
+    current && current.gpuVramMb == null && currentMachine && probed
+      ? { ...current, gpuVramMb: probed.totalMb, gpu: current.gpu ?? probed.name }
+      : current
   return {
-    current,
+    current: filled,
     currentGpu: probed ? { name: probed.name, totalMb: probed.totalMb } : null,
-    // An unknown identity on either side reads as "this machine": the moved-drive check in
-    // maybeRunFirstBenchmark makes the same call, so the two never contradict each other.
-    currentMachine: here == null || currentKey == null || here === currentKey,
+    currentMachine,
     otherMachines: otherMachines(settings.benchmarkHistory, currentKey ?? here),
     running: modelBusyLane(ctx) === 'benchmark',
     observed: {

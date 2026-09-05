@@ -190,6 +190,19 @@ describe('PerformanceScreen: the check as an answer', () => {
     install(snapshot({ current: legacy, currentMachine: false, currentGpu: { name: 'Intel Iris Xe', totalMb: 4096 } }))
     renderScreen()
     expect(await screen.findByText(/No usable graphics card/)).toBeInTheDocument()
+    cleanup()
+    // Last resort: a snapshot with no probe at all (an older main process), but the stored
+    // settings probe knows the card. The tile still fills.
+    install(snapshot({ current: legacy, currentGpu: null }), {
+      getSettings: vi.fn(async () => ({
+        ...DEFAULT_SETTINGS,
+        gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24822, freeMb: 3000 }], probedAt: '2026-09-05T00:00:00Z' }
+      }))
+    })
+    renderScreen()
+    expect(await screen.findByText('24.2')).toBeInTheDocument()
+    expect(screen.getByText('Usable')).toBeInTheDocument()
+    expect(screen.getByText('NVIDIA GeForce RTX 3090')).toBeInTheDocument()
   })
 
   it('says so when the last result belongs to a different computer', async () => {

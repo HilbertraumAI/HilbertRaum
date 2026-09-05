@@ -209,7 +209,25 @@ describe('buildPerformanceSnapshot', () => {
       lastBenchmark: hereResult(),
       gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, freeMb: 20000 }], probedAt: '2026-09-05T00:00:00Z' }
     })
-    expect(buildPerformanceSnapshot(ctxWith(root, db)).currentGpu).toEqual({ name: 'NVIDIA GeForce RTX 3090', totalMb: 24576 })
+    const snap = buildPerformanceSnapshot(ctxWith(root, db))
+    expect(snap.currentGpu).toEqual({ name: 'NVIDIA GeForce RTX 3090', totalMb: 24576 })
+    // The result predates gpuVramMb: the probe's figure is folded in for THIS machine…
+    expect(snap.current?.gpuVramMb).toBe(24576)
+  })
+
+  it('does not fold the live probe into another computer\'s result', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const foreign = result()
+    delete (foreign as Partial<BenchmarkResult>).gpuVramMb
+    updateSettings(db, {
+      lastBenchmark: foreign,
+      gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, freeMb: 20000 }], probedAt: '2026-09-05T00:00:00Z' }
+    })
+    const snap = buildPerformanceSnapshot(ctxWith(root, db))
+    expect(snap.currentMachine).toBe(false)
+    expect(snap.current?.gpuVramMb).toBeUndefined()
+    expect(snap.currentGpu?.totalMb).toBe(24576)
   })
 
   it('reads a result from another computer as "not this machine"', () => {

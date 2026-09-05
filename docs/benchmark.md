@@ -273,9 +273,11 @@ screen answers the user's question in plain words. Three cards:
    window, plus CPU), Graphics memory (`BenchmarkResult.gpuVramMb`, the primary probed device's
    total MiB recorded at benchmark time so the history rows carry it too; "Usable" at or above the
    runtime's 6 GiB GPU gate, "Small" below it with the plain consequence "models run on the
-   processor", "None" without a device; a result persisted before the field existed falls back to
-   the live `settings.gpuProbe` via `PerformanceSnapshot.currentGpu`, for the current machine
-   only), Drive (`effectiveRead` with its source and date; "Pending" until a model start measured
+   processor", "None" without a device; a result persisted before the field existed, or whose probe
+   came back empty, gets the stored `settings.gpuProbe` figure folded in by
+   `buildPerformanceSnapshot`, for the current machine only, and the screen keeps
+   `PerformanceSnapshot.currentGpu` plus the settings probe as last-resort fallbacks, so the
+   tile never waits for a re-run), Drive (`effectiveRead` with its source and date; "Pending" until a model start measured
    it). Actions: **Check again** (or **Start \<model\> and measure** when speed is unmeasured,
    the recommended model is installed and nothing runs: `useModel` then `runBenchmark`), **Change
    context size** (opens AI Model, the one place the context is set), **Copy report**. A "Why this

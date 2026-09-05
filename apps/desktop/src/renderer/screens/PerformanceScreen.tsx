@@ -160,6 +160,9 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const [snap, setSnap] = useState<PerformanceSnapshot | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [contextOverride, setContextOverride] = useState<number | null>(null)
+  // The stored GPU probe, the graphics tile's last-resort figure (the snapshot normally folds
+  // it into `current` main-side; this covers a main process older than that seam).
+  const [probedGpu, setProbedGpu] = useState<{ name: string; totalMb: number } | null>(null)
   const [runtimeModelId, setRuntimeModelId] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [doneSteps, setDoneSteps] = useState<BenchmarkProgressStep[]>([])
@@ -196,7 +199,12 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
       .catch(() => {})
     window.api
       .getSettings()
-      .then((s) => mountedRef.current && setContextOverride(s.contextTokensOverride ?? null))
+      .then((s) => {
+        if (!mountedRef.current) return
+        setContextOverride(s.contextTokensOverride ?? null)
+        const d = s.gpuProbe?.devices?.[0]
+        setProbedGpu(d ? { name: d.name, totalMb: d.totalMb } : null)
+      })
       .catch(() => {})
     window.api
       .getRuntimeStatus()
@@ -345,9 +353,9 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
    *  tile. The result's own figure wins; a result persisted before the field existed falls
    *  back to the live probe, but only for the computer the app is on right now. */
   function graphicsTile(): JSX.Element {
-    const liveMb = snap?.currentMachine ? (snap.currentGpu?.totalMb ?? null) : null
-    const mb = bench?.gpuVramMb ?? liveMb
-    const name = bench?.gpu ?? (snap?.currentMachine ? (snap.currentGpu?.name ?? null) : null)
+    const live = snap?.currentMachine ? (snap.currentGpu ?? probedGpu) : null
+    const mb = bench?.gpuVramMb ?? live?.totalMb ?? null
+    const name = bench?.gpu ?? live?.name ?? null
     if (mb == null || mb <= 0) {
       return (
         <Tile
