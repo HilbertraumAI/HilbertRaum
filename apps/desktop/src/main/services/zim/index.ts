@@ -13,15 +13,17 @@ import { collectPackCandidates } from './arm'
 import { fetchArticleHtml } from './client'
 import { zimArticleToSegmentsAsync } from './html'
 import {
-  discoverDrivePacks,
   listPacks,
+  reconcile,
   registerPack,
   removePack,
   retrievablePacks,
+  servedCandidates,
   setPackEnabled,
   writeLibraryXml,
   type PackDeps
 } from './packs'
+import { computeServedSet, type ServingNameCollision } from './identity'
 import { KiwixServer } from './serve'
 import { kiwixManageAdd, resolveKiwixManagePath, resolveKiwixServePath } from './tools'
 import type { PlaintextOpKind, PlaintextOpsRegistry } from '../ingestion/plaintext-ops'
@@ -76,6 +78,22 @@ import {
 // handler, owns the operations because it is the one place that knows the transient paths to
 // `track()`. Without a registry (tests, partial contexts) an operation is a local no-op whose
 // signal is the caller's own.
+//
+// IDENTITY, RECONCILIATION AND ROUTES (#301 P3b, findings M5/L4/L7; plan §9.17 (d)/(e)1). A
+// pack IS its archive UUID: every resolve reads the file's 80-byte header and compares it to
+// the row, at library-build time as well as on a read. The published configuration therefore
+// carries the identity-checked SERVING MAP as part of the same object —
+//
+//     Published = { revision, build, generation, port, library.<build>.xml, names, excluded }
+//
+// — where `names` is pack id → the name kiwix-serve answers to (libkiwix's own slug rule) and
+// `excluded` names the packs left OUT of the library because an earlier UUID already owns their
+// name. The arm and the viewer resolve their route from `names`, never from a filename stem.
+// The citation locator stays `packId + articlePath` with NO route hint (plan §9.17 (d)8): the
+// service resolves the route on read against the CURRENT map, so an old citation, a renamed
+// file, a restart and a drive-letter change all work, and a renderer can never select another
+// book. `listPacks` is a pure database read; the one filesystem pass is `reconcile()`, which is
+// single-flight and runs at session start and on an explicit Refresh.
 //
 // TRANSIENT FILES (#301 P3b, findings L3/M4, residual R-7; plan §9.17 (c)). Nothing about the
 // user's pack collection persists outside the workspace database EXCEPT the transient library
@@ -148,6 +166,23 @@ export interface ZimServiceOptions {
    * given; absent ⇒ the pre-P3b OS-temp fallback.
    */
   transientDir?: string
+  /**
+   * Broadcast one pack-set change to every window (#301 P3b, plan §9.17 (e)3 — wired in
+   * `main/index.ts` like `notifyRenderer`). ABSENT ⇒ `emitPacksChanged` is a no-op, which is
+   * every test and partial context today: step 3 of P3b adds the `packs:changed` channel, the
+   * preload subscription and the `mutation` producers. Emitted only AFTER an `assert()`, so a
+   * reconcile finishing under an old epoch writes nothing and announces nothing.
+   */
+  notify?: (notice: ZimPacksChangedNotice) => void
+}
+
+/** The payload of the pack-set update event (plan §9.17 (e)3). */
+export interface ZimPacksChangedNotice {
+  /** The unlock epoch the producing operation captured; a consumer ignores an older one. */
+  epoch: number | null
+  revision: number
+  refreshing: boolean
+  reason: 'reconcile-start' | 'reconcile-end' | 'mutation'
 }
 
 /**
@@ -179,8 +214,26 @@ type Published =
       generation: number
       port: number
       libraryXmlPath: string
+      /** pack id → the name kiwix-serve answers to for THIS build (plan §9.17 (d)6). */
+      names: ReadonlyMap<string, string>
+      /** Packs deliberately left out of the build: an earlier UUID owns their serving name. */
+      excluded: ReadonlyArray<ServingNameCollision>
     }
   | { kind: 'empty'; revision: number }
+
+/**
+ * What a successful `ensureServer` publishes to its caller (plan §9.17 (d)7). The port alone
+ * is not enough any more: a caller that knows the port but not the serving map would have to
+ * guess a route, which is finding L4. P5's `withServer` guard captures this whole tuple around
+ * a request and re-reads `serverState()` afterwards.
+ */
+export interface ServedLibrary {
+  port: number
+  revision: number
+  generation: number
+  names: ReadonlyMap<string, string>
+  excluded: ReadonlyArray<ServingNameCollision>
+}
 
 /** What P5's `withServer` alive/generation guard captures around a request (plan §9.15 item 9). */
 export interface ZimServerState {
@@ -248,6 +301,10 @@ export class ZimService {
    *  meta dir of a manager child, whose teardown could not be confirmed (plan §9.17 (c)2).
    *  They are reported as `kept` and removed by the next session-start pass. */
   private readonly keptPaths = new Set<string>()
+  /** The reconciliation pass currently running, or null — the single-flight latch (§9.17 (d)4). */
+  private reconcileInFlight: Promise<void> | null = null
+  /** A Refresh arrived while a pass was running: run exactly ONE more, however many arrived. */
+  private runAgain = false
 
   constructor(opts: ZimServiceOptions) {
     this.opts = opts
@@ -363,8 +420,10 @@ export class ZimService {
 
   // ---- registration (all mutations invalidate the running server's library) ------
 
+  /** The registered packs, DATABASE-ONLY (finding L7): no disk probe, no availability UPDATE,
+   *  no manager spawn. `reconcile()` is what writes the availability this reads. */
   listPacks(db: Db): KnowledgePack[] {
-    return listPacks(db, this.zimDir)
+    return listPacks(db)
   }
 
   /**
@@ -388,21 +447,75 @@ export class ZimService {
     }
   }
 
-  /** The drive-folder discovery pass (step 2 of P3b turns this into `reconcile()`). */
-  async discoverDrivePacks(db: Db): Promise<number> {
+  /**
+   * Reconcile the registry against the drive — the ONE filesystem pass (plan §9.17 (d)4–5,
+   * findings M5/L7). Runs at every session start and on an explicit Refresh.
+   *
+   * SINGLE-FLIGHT: a second call while one is running does NOT start a second pass; it sets
+   * `runAgain`, and exactly ONE more pass follows the current one however many Refreshes
+   * arrive meanwhile. Two concurrent passes would fight over the same rows and spawn the same
+   * managers twice.
+   *
+   * `invalidateLibrary()` fires ONLY when the effective served set actually moved, so a no-op
+   * Refresh does not churn the publication revision and kill a healthy sidecar.
+   */
+  async reconcile(db: Db): Promise<void> {
+    if (this.reconcileInFlight) {
+      this.runAgain = true
+      return this.reconcileInFlight
+    }
+    const run = this.reconcileOnce(db).finally(() => {
+      this.reconcileInFlight = null
+    })
+    this.reconcileInFlight = run
+    await run
+    // Exactly ONE coalesced rerun, whatever number of Refreshes landed during the pass.
+    if (this.runAgain) {
+      this.runAgain = false
+      await this.reconcile(db)
+    }
+  }
+
+  /** True while a reconciliation pass is running (step 3's `packs:status.refreshing`). */
+  refreshing(): boolean {
+    return this.reconcileInFlight !== null
+  }
+
+  private async reconcileOnce(db: Db): Promise<void> {
     const op = this.beginOp('zim-reconcile')
     try {
       op.assert()
-      if (!this.toolsInstalled()) return 0
-      const added = await this.underOp(op, () =>
-        discoverDrivePacks(db, this.packDeps(op.signal, op))
+      if (!this.toolsInstalled()) return
+      this.emitPacksChanged(op, 'reconcile-start', true)
+      const report = await this.underOp(op, () =>
+        reconcile(db, this.packDeps(op.signal, op), { assert: () => op.assert() })
       )
       op.assert()
-      if (added > 0) this.invalidateLibrary()
-      return added
+      if (report.changed) this.invalidateLibrary()
+      // AFTER the assert: a pass that finished under an old epoch wrote nothing above and must
+      // announce nothing either. `refreshing` is still true when a Refresh queued a rerun.
+      this.emitPacksChanged(op, 'reconcile-end', this.runAgain)
     } finally {
       op.release()
     }
+  }
+
+  /**
+   * The pack-update broadcast hook (plan §9.17 (e)3). A NO-OP without `opts.notify`, which is
+   * every context until step 3 of P3b wires `packs:changed` through `main/index.ts`. Kept here
+   * rather than at the call sites so there is one place that decides what a notice carries.
+   */
+  private emitPacksChanged(
+    op: ZimOp,
+    reason: ZimPacksChangedNotice['reason'],
+    refreshing: boolean
+  ): void {
+    this.opts.notify?.({
+      epoch: op.epoch,
+      revision: this.packRevision,
+      refreshing,
+      reason
+    })
   }
 
   removePack(db: Db, id: string): boolean {
@@ -501,7 +614,7 @@ export class ZimService {
    * `MAX_ENSURE_ATTEMPTS` rounds). Rejects with an `AbortError` when this operation itself is
    * cancelled, the workspace stopped admitting it, or the service was stopped.
    */
-  async ensureServer(db: Db, signal?: AbortSignal, op?: ZimOp): Promise<number | null> {
+  async ensureServer(db: Db, signal?: AbortSignal, op?: ZimOp): Promise<ServedLibrary | null> {
     for (let attempt = 0; attempt < MAX_ENSURE_ATTEMPTS; attempt++) {
       const captured = this.capture(signal)
       this.assertAdmitted(captured)
@@ -514,7 +627,7 @@ export class ZimService {
         const server = this.server
         if (server && server.alive() && server.generation() === pub.generation) {
           this.assertAdmitted(captured)
-          return pub.port
+          return servedLibraryOf(pub)
         }
         // Published but the child is gone (a natural crash): fall through and restart it
         // over the SAME build — a new generation, the same revision.
@@ -543,7 +656,7 @@ export class ZimService {
       // Every waiter rechecks before CONSUMING a published result (plan §9.15 item 5).
       this.assertAdmitted(captured)
       if (result.revision !== this.packRevision) continue
-      return result.kind === 'empty' ? null : result.port
+      return result.kind === 'empty' ? null : servedLibraryOf(result)
     }
     throw new Error('The knowledge-pack set kept changing while the library server was starting')
   }
@@ -641,6 +754,8 @@ export class ZimService {
     let build: number
     let libraryXmlPath: string
     let ownsBuild = false
+    let names: ReadonlyMap<string, string>
+    let excluded: ReadonlyArray<ServingNameCollision>
     if (
       prior &&
       prior.kind === 'served' &&
@@ -648,9 +763,12 @@ export class ZimService {
       existsSync(prior.libraryXmlPath)
     ) {
       // Natural-crash restart: the pack set did not change, so the BUILD is still current.
-      // Reuse its exact XML and take only a new child generation (plan §9.15 item 1).
+      // Reuse its exact XML — and therefore its exact serving map, which describes that file —
+      // and take only a new child generation (plan §9.15 item 1).
       build = prior.build
       libraryXmlPath = prior.libraryXmlPath
+      names = prior.names
+      excluded = prior.excluded
     } else {
       build = this.nextGeneration()
       libraryXmlPath = join(dir, `library.${build}.xml`)
@@ -658,9 +776,24 @@ export class ZimService {
       // Tracked on the operation that asked for this start BEFORE the first byte is written,
       // so a lock's sweep shreds it even if the build cannot cancel (plan §9.17 (c)1).
       op?.track(libraryXmlPath)
+      // IDENTITY FIRST (M5/L4, plan §9.17 (d)6). Resolve every enabled pack by its header
+      // UUID, compute libkiwix's own serving-name map, and build ONLY the winners: the
+      // collision losers never enter the XML, so the server cannot answer for the wrong book
+      // and the outcome matches whichever book libkiwix would have kept.
+      const resolved = servedCandidates(db, this.zimDir)
+      const served = computeServedSet(resolved, this.opts.platform ?? process.platform)
+      names = served.names
+      excluded = served.excluded
+      if (excluded.length > 0) {
+        // Ids only — a title or a path names what the user reads (the sentinel rule).
+        log.warn('Knowledge packs excluded from the served library: serving-name collision', {
+          excluded: excluded.map((e) => ({ packId: e.packId, collidesWith: e.collidesWith }))
+        })
+      }
+      const winners = resolved.filter((c) => names.has(c.id))
       let count: number
       try {
-        count = await writeLibraryXml(db, this.packDeps(signal), libraryXmlPath, signal)
+        count = await writeLibraryXml(this.packDeps(signal), libraryXmlPath, winners, signal)
         // Recheck after the manager work: a build nobody wants any more is deleted here,
         // and only ever THIS build's own file.
         this.assertCurrent(cap)
@@ -709,7 +842,9 @@ export class ZimService {
       build,
       generation: started.generation,
       port: started.port,
-      libraryXmlPath
+      libraryXmlPath,
+      names,
+      excluded
     }
     this.published = pub
     return pub
@@ -897,10 +1032,21 @@ export class ZimService {
       const op = this.beginOp('zim-ask', signal)
       try {
         op.assert()
-        const port = await this.ensureServer(db, op.signal, op)
+        const library = await this.ensureServer(db, op.signal, op)
         op.assert()
-        if (port == null) return []
-        const candidates = await collectPackCandidates(port, packs, question, op.signal)
+        if (library === null) return []
+        // A pack the served library does not carry — a collision loser, or one whose file
+        // stopped resolving between `retrievablePacks` and the build — is SKIPPED rather than
+        // searched under a name that belongs to another book (findings M5/L4).
+        const servable = packs.filter((p) => library.names.has(p.id))
+        if (servable.length === 0) return []
+        const candidates = await collectPackCandidates(
+          library.port,
+          servable,
+          question,
+          op.signal,
+          library.names
+        )
         // Before the CONTENT return: a lock that landed during the fetches must not hand
         // archive text back into the prompt of a session that is closing.
         op.assert()
@@ -927,13 +1073,17 @@ export class ZimService {
       const packs = retrievablePacks(db, this.zimDir, [packId])
       const pack = packs[0]
       if (!pack) return null
-      const port = await this.ensureServer(db, op.signal, op)
+      const library = await this.ensureServer(db, op.signal, op)
       op.assert()
-      if (port == null) return null
-      // The serving URL id is the filename stem (kiwix-serve's --library naming rule,
-      // verified in the 2026-09-04 contract test against kiwix-tools 3.8.1).
-      const urlId = pack.leaf.replace(/\.zim$/i, '')
-      const html = await fetchArticleHtml(port, urlId, articlePath, op.signal)
+      if (library === null) return null
+      // The route comes from the CURRENT serving map — never from the filename stem (finding
+      // L4: libkiwix ≥ 14 slugifies case, accents, spaces and `+`). This is also why the
+      // citation locator needs no URL hint: an old citation, a renamed file, a restart and a
+      // drive-letter change all resolve here, and a pack that is unmapped or was excluded as a
+      // collision loser returns the honest "unavailable" null instead of another book's text.
+      const name = library.names.get(packId)
+      if (name === undefined) return null
+      const html = await fetchArticleHtml(library.port, name, articlePath, op.signal)
       op.assert()
       if (html === null) return null
       // Sliced like the ask path (P1b) so a big article cannot stall the main process while
@@ -952,6 +1102,17 @@ export class ZimService {
     } finally {
       op.release()
     }
+  }
+}
+
+/** The caller-facing view of one published configuration (the XML path stays internal). */
+function servedLibraryOf(pub: Extract<Published, { kind: 'served' }>): ServedLibrary {
+  return {
+    port: pub.port,
+    revision: pub.revision,
+    generation: pub.generation,
+    names: pub.names,
+    excluded: pub.excluded
   }
 }
 

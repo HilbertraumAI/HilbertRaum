@@ -156,17 +156,36 @@ export function parseSearchXml(xml: string): KiwixSearchHit[] {
 // ---- /raw article fetch --------------------------------------------------------
 
 /**
+ * THE encoder for an archive entry key (#301 P3b, finding L4; plan §9.17 (d)8). Per SEGMENT
+ * `encodeURIComponent`, joined by literal `/`: the entry key's own slashes are structure and
+ * stay slashes, while every other character — spaces, `+`, `%`, `#`, Unicode, an ENCODED slash
+ * inside one segment — is escaped exactly once. Its inverse is `safeDecodeURIComponent`, which
+ * `parseSearchXml` applies to a hit's link, so a path round-trips search → citation → viewer
+ * unchanged (`my%20wiki` never becomes `my%2520wiki`).
+ *
+ * ONE owner: nothing else in `src/` may encode an article path. P5's entry-key validation
+ * (L5) lands inside this function, so there is a single place to enforce the contract.
+ */
+export function encodeArticlePath(articlePath: string): string {
+  return articlePath.split('/').map(encodeURIComponent).join('/')
+}
+
+/**
  * Fetch one article's raw HTML. 404 → null (entry vanished between search and fetch,
  * or the pack file changed underneath us — a skip, not a failure); other non-200 → throws.
+ *
+ * `name` is the SERVING name (`identity.ts` `servingNameFor`), never the file stem: libkiwix
+ * ≥ 14 slugifies case, accents, spaces and `+`, so the stem 404s or — worse — names another
+ * book (finding L4).
  */
 export async function fetchArticleHtml(
   port: number,
-  urlId: string,
+  name: string,
   articlePath: string,
   signal?: AbortSignal
 ): Promise<string | null> {
-  const encodedPath = articlePath.split('/').map(encodeURIComponent).join('/')
-  const res = await kiwixGet(port, `/raw/${encodeURIComponent(urlId)}/content/${encodedPath}`, {
+  const encodedPath = encodeArticlePath(articlePath)
+  const res = await kiwixGet(port, `/raw/${encodeURIComponent(name)}/content/${encodedPath}`, {
     signal
   })
   if (res.status === 404) return null

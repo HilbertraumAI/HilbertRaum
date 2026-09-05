@@ -37,19 +37,14 @@ export function registerZimIpc(ctx: AppContext): void {
     return { toolsInstalled: ctx.zim?.toolsInstalled() ?? false }
   })
 
-  ipcHandle(IPC.listKnowledgePacks, async (): Promise<KnowledgePack[]> => {
+  // DATABASE-ONLY (#301 P3b, finding L7). This handler used to run a full drive discovery
+  // first — one `kiwix-manage` spawn with a 30 s timeout per unknown file — on Chat mount, on
+  // panel open and after every toggle. Reconciliation is now a serialized background pass at
+  // session start and on an explicit Refresh; the list is a pure read of the registry, with no
+  // filesystem probe and no availability UPDATE.
+  ipcHandle(IPC.listKnowledgePacks, (): KnowledgePack[] => {
     requireUnlocked()
-    const svc = zim()
-    // Auto-discovery on every list: cheap (readdir + leaf diff; registration only for
-    // genuinely new files) and it makes "drop a .zim into zim/ and open the panel" work
-    // with no extra affordance. Non-fatal by construction (discoverDrivePacks skips
-    // per-file failures).
-    try {
-      await svc.discoverDrivePacks(ctx.db)
-    } catch (err) {
-      log.warn('Knowledge-pack discovery failed (non-fatal)', String(err))
-    }
-    return svc.listPacks(ctx.db)
+    return zim().listPacks(ctx.db)
   })
 
   ipcHandle(IPC.addKnowledgePacks, async (): Promise<KnowledgePack[] | null> => {

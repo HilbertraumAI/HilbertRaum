@@ -1232,6 +1232,14 @@ function applyPragmasAndMigrations(db: Db): void {
   // geometry reader); 'suspect-confirmed' = the retry ALSO read soup (final — the handler stops
   // retrying and refuses confident figures). A provenance flag — never logged/audited/exported.
   ensureColumn(db, 'invoices', 'text_quality', 'text_quality TEXT')
+  // WHY a knowledge pack is unavailable (#301 P3b, finding M5). Additive + nullable, so
+  // SCHEMA_VERSION stays put (the P0 posture for additive migrations): NULL = available, or a
+  // workspace written before this column existed (the next reconcile fills it in);
+  // 'missing' = no candidate file at either location; 'identity_mismatch' = a file IS there but
+  // its 80-byte header carries a different archive UUID — a materially different state, because
+  // old citations still point at the registered archive and the viewer must say so. A reason
+  // CODE, never a path or a title: it rides `KnowledgePack.unavailableReason` to the panel badge.
+  ensureColumn(db, 'knowledge_packs', 'unavailable_reason', 'unavailable_reason TEXT')
   // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
   // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
   // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.

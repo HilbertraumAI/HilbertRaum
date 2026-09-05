@@ -50,9 +50,10 @@ async function runSessionPass(ctx: AppContext): Promise<void> {
         unconfirmedChildren: report.unconfirmedChildren
       })
     }
-    // Step 2 of P3b replaces this with `reconcile(ctx.db)`; the seam, the timing and the
-    // operation kind are what this file owns.
-    await zim.discoverDrivePacks(ctx.db)
+    // The ONE filesystem pass of the session (findings M5/L7): heal paths by archive UUID,
+    // mark what vanished or was replaced, register genuinely new archives. Single-flight, so
+    // a Refresh that lands while this runs coalesces into exactly one more pass.
+    await zim.reconcile(ctx.db)
   } catch (err) {
     log.warn('Knowledge-pack session start failed (non-fatal)', String(err))
   }

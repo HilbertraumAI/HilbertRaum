@@ -1815,8 +1815,18 @@ export interface KnowledgePack {
   /** File basename — resolution tries `<drive>/zim/<leaf>` first (portable). */
   leaf: string
   enabled: boolean
-  /** False when the file could not be found at last look (drive unplugged / file moved). */
+  /** False when the archive could not be resolved at the last reconciliation (the file is
+   *  gone, or a file with that name is no longer this archive). */
   available: boolean
+  /**
+   * WHY it is unavailable (#301 P3b, finding M5) — `null` whenever `available` is true.
+   * `'missing'`: no file at the drive-relative location or the recorded path.
+   * `'identity-mismatch'`: a file IS there, but its ZIM header carries a different archive
+   * UUID — the pack was replaced or overwritten, so old citations still name the archive that
+   * was registered and the viewer reports it as unavailable rather than reading a stranger's
+   * article under this pack's title.
+   */
+  unavailableReason: 'missing' | 'identity-mismatch' | null
   addedAt: string
 }
 

@@ -25,6 +25,9 @@ function pack(over: Partial<KnowledgePack> = {}): KnowledgePack {
     leaf: 'wikipedia_de_climate.zim',
     enabled: true,
     available: true,
+    // #301 P3b (M5): additive and NON-optional on `KnowledgePack` — null whenever the pack is
+    // available; 'missing' / 'identity-mismatch' say WHY it is not. P6 owns the badge copy.
+    unavailableReason: null,
     addedAt: '2026-09-01T00:00:00Z',
     ...over
   }

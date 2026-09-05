@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -69,7 +80,10 @@ import type { Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { createPlaintextOps, type PlaintextOpsRegistry } from '../../src/main/services/ingestion/plaintext-ops'
 import { registeredSidecarPids, type SpawnFn } from '../../src/main/services/runtime/sidecar'
-import { ZimService } from '../../src/main/services/zim'
+import { ZimService, type ServedLibrary } from '../../src/main/services/zim'
+import { readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
+import { encodeArticlePath } from '../../src/main/services/zim/client'
+import { packUuid, writeZimFixture } from '../helpers/zim-header'
 import { zimTransientDir } from '../../src/main/services/zim/transients'
 import { startKnowledgePackSession } from '../../src/main/services/zim/session'
 import { performShutdown } from '../../src/main/shutdown'
@@ -127,6 +141,8 @@ interface SessionHooks {
   probe: (port: number) => Promise<boolean>
   /** Runs before the loopback server answers; park it to hold an HTTP read open. */
   beforeRespond: (url: string) => Promise<void>
+  /** Decide the whole response for this URL (T12), or null for the default fixtures. */
+  respond: (url: string) => { status: number; body: string } | null
 }
 
 interface SessionHarness {
@@ -143,11 +159,16 @@ interface SessionHarness {
   buildAdds: string[]
   metaAdds: string[]
   httpPort: number
+  /** Every URL the loopback server was asked for, in order (T12 route assertions). */
+  requests: string[]
+  /** A SECOND `ZimService` over the same seams — "the app restarted", and with a different
+   *  `rootPath`, "the drive came back under another letter". */
+  newService(rootOverride?: string): ZimService
   /** Mode applied to the NEXT spawned kiwix-serve / kiwix-manage child. */
   modes: { serve: ServeChildMode; manage: ServeChildMode }
   db(): Db
-  addPackFile(leaf: string): string
-  registerPack(leaf: string): Promise<string>
+  addPackFile(leaf: string, uuid?: string): string
+  registerPack(leaf: string, uuid?: string): Promise<string>
   transientEntries(): string[]
   packRows(): Array<{ id: string; enabled: number; updated_at: string }>
   /** Arm the gated sidecar boundary so the NEXT lock/quit parks inside its teardown. */
@@ -213,15 +234,26 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     manage: async () => undefined,
     findPort: async () => httpPort,
     probe: async () => true,
-    beforeRespond: async () => undefined
+    beforeRespond: async () => undefined,
+    respond: () => null
   }
+  const requests: string[] = []
   const server = createServer((req, res) => {
     void (async () => {
       const url = req.url ?? ''
+      requests.push(url)
       try {
         await hooks.beforeRespond(url)
       } catch {
         /* a parked response released by teardown still answers */
+      }
+      // The T12 seam: a test that needs per-book / per-entry bytes answers here, so
+      // "the viewer fetched the OTHER archive" cannot pass as a success.
+      const custom = hooks.respond(url)
+      if (custom) {
+        res.writeHead(custom.status, { 'content-type': 'text/html' })
+        res.end(custom.body)
+        return
       }
       if (url.startsWith('/search')) {
         res.writeHead(200, { 'content-type': 'application/xml' })
@@ -283,7 +315,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       const stem = basename(zimPath).replace(/\.zim$/i, '')
       appendFileSync(
         libraryXmlPath,
-        `<book id="uuid-${stem}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${stem}" ` +
+        `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${stem}" ` +
           `description="Test archive" language="deu" date="2026-07-01" articleCount="41" mediaCount="7" />\n`
       )
       child.emit('exit', 0, null)
@@ -298,28 +330,30 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       ? zimOpsReal
       : { ...zimOpsReal, awaitSettled: (ms) => zimOpsReal.awaitSettled(Math.min(ms, bound)) }
 
-  const svc = new ZimService({
-    rootPath: root,
-    isDev: true,
-    admission: {
-      admitsWork: () => workspaceAdmitsWork(ctrl),
-      epoch: () => ctrl.unlockEpoch()
-    },
-    ops: zimOps,
-    transientDir,
-    deps: {
-      resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
-      spawn: serveSpawn,
-      manageSpawn,
-      findPort: () => hooks.findPort(),
-      probe: (port) => hooks.probe(port),
-      verifyBinary: async () => 'ok',
-      healthTimeoutMs: 1_000,
-      healthIntervalMs: 1,
-      killGraceMs: 5,
-      forceKillWaitMs: 5
-    }
-  })
+  const makeService = (rootOverride?: string): ZimService =>
+    new ZimService({
+      rootPath: rootOverride ?? root,
+      isDev: true,
+      admission: {
+        admitsWork: () => workspaceAdmitsWork(ctrl),
+        epoch: () => ctrl.unlockEpoch()
+      },
+      ops: zimOps,
+      transientDir,
+      deps: {
+        resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
+        spawn: serveSpawn,
+        manageSpawn,
+        findPort: () => hooks.findPort(),
+        probe: (port) => hooks.probe(port),
+        verifyBinary: async () => 'ok',
+        healthTimeoutMs: 1_000,
+        healthIntervalMs: 1,
+        killGraceMs: 5,
+        forceKillWaitMs: 5
+      }
+    })
+  const svc = makeService()
 
   // The gated lock boundary: the teardown awaits this suspend, so the handler parks
   // mid-teardown with the database still open — the real multi-second window. RE-ARMABLE, so
@@ -390,15 +424,19 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     buildAdds,
     metaAdds,
     httpPort,
+    requests,
+    newService: makeService,
     modes,
     db: () => ctrl.requireDb(),
-    addPackFile: (leaf) => {
-      const p = join(zimDir, leaf)
-      writeFileSync(p, 'ZIM')
-      return p
+    // A REAL 80-byte header (#301 P3b): identity is what the FILE says. The uuid is derived
+    // from the leaf unless the caller pins one (the collision cases need a chosen ORDER).
+    addPackFile: (leaf, uuid) => {
+      return writeZimFixture(join(zimDir, leaf), uuid ?? packUuid('0000cc03', leaf.slice(0, 6)), {
+        trailing: `body of ${leaf}`
+      })
     },
-    registerPack: async (leaf) => {
-      const p = full.addPackFile(leaf)
+    registerPack: async (leaf, uuid) => {
+      const p = full.addPackFile(leaf, uuid)
       const pack = await svc.registerPack(ctrl.requireDb(), p)
       return pack.id
     },
@@ -516,7 +554,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         h.addPackFile('discovered-during-lock.zim')
         const manageGate = serveGate<void>()
         h.hooks.manage = () => manageGate.wait()
-        const discP = keepHandled(h.svc.discoverDrivePacks(h.db()))
+        const discP = keepHandled(h.svc.reconcile(h.db()))
         await manageGate.entered
         const { lockP } = await parkedLock(h)
         const rowsInLock = h.packRows()
@@ -626,8 +664,8 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       // ---- (7) HTTP READ: the article body is in flight when the lock lands ------------
       {
         // Warm the sidecar first, so the read really is an HTTP read and not a start.
-        const port = await h.svc.ensureServer(h.db())
-        expect(port).toBe(h.httpPort)
+        const library = await h.svc.ensureServer(h.db())
+        expect(library).toMatchObject({ port: h.httpPort })
         const servedChild = h.serveSpawns[h.serveSpawns.length - 1]!.child
         const httpGate = serveGate<void>()
         h.hooks.beforeRespond = (url) => (url.startsWith('/raw/') ? httpGate.wait() : Promise.resolve())
@@ -720,7 +758,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       try {
         // A pack file is already on the drive: the session pass is what discovers it.
         h.addPackFile('on-the-drive.zim')
-        const pass = vi.spyOn(h.svc, 'discoverDrivePacks')
+        const pass = vi.spyOn(h.svc, 'reconcile')
 
         const unlockP = invoke(handlers, IPC.unlockWorkspace, 'right-password')
         // Nothing runs while the unlock invoke is still pending — D3's "never on the critical
@@ -746,7 +784,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const h = await sessionHarness({ vault: 'none' })
       try {
         h.addPackFile('on-a-brand-new-drive.zim')
-        const pass = vi.spyOn(h.svc, 'discoverDrivePacks')
+        const pass = vi.spyOn(h.svc, 'reconcile')
 
         const createP = invoke(handlers, IPC.createWorkspace, 'a-good-password', 'encrypted')
         expect(pass).not.toHaveBeenCalled()
@@ -771,7 +809,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         // seam directly after `maybeStartLocalApi`. That call is what this drives (the module
         // itself needs Electron, so it cannot be driven end to end here).
         h.addPackFile('startup-drive-pack.zim')
-        const pass = vi.spyOn(h.svc, 'discoverDrivePacks')
+        const pass = vi.spyOn(h.svc, 'reconcile')
         startKnowledgePackSession(h.ctx)
         expect(pass).not.toHaveBeenCalled() // scheduled, never inline
 
@@ -782,7 +820,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
 
         // A session that is no longer admitted does nothing at all when its timer fires.
         h.ctrl.beginLock()
-        const second = vi.spyOn(h.svc, 'discoverDrivePacks')
+        const second = vi.spyOn(h.svc, 'reconcile')
         startKnowledgePackSession(h.ctx)
         for (let i = 0; i < 30; i++) await tick()
         expect(second).not.toHaveBeenCalled()
@@ -903,6 +941,213 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       op.release()
     } finally {
       warn.mockRestore()
+      await h.close()
+    }
+  })
+
+  // ---------------------------------------------------------------------------------------
+  // T12 — routes, encoding and the hint-free locator (#301 P3b, finding L4; plan §9.17 (d)6–8)
+  // ---------------------------------------------------------------------------------------
+  it('T12 collision / Unicode / plus / percent entry paths through one encoding boundary, an old citation without URL id, a saved citation after rename / restart / drive-letter change: expected article bytes, collision loser not served, stale or hostile hint cannot select another book', async () => {
+    const h = await sessionHarness()
+    try {
+      // Known content per (serving name, entry): "the viewer fetched the OTHER archive" can
+      // never pass as a success, because the bytes name what was actually asked for.
+      h.hooks.respond = (url) => {
+        const m = /^\/raw\/([^/]+)\/content\/(.+)$/.exec(url)
+        if (!m) return null
+        const name = decodeURIComponent(m[1]!)
+        const entry = m[2]!.split('/').map(decodeURIComponent).join('/')
+        return {
+          status: 200,
+          body:
+            `<html><body><h1>${name} :: ${entry}</h1><p>` +
+            `Known content of ${name} at ${entry}. `.repeat(6) +
+            '</p></body></html>'
+        }
+      }
+      const rawRequests = (): string[] => h.requests.filter((u) => u.startsWith('/raw/'))
+      const readArticle = async (svc: ZimService, packId: string, path: string): Promise<string> => {
+        const article = await svc.getArticle(h.db(), packId, path)
+        expect(article, `article for ${packId} ${path}`).not.toBeNull()
+        return article!.sections.map((s) => s.text).join('\n')
+      }
+
+      // ---- (1) TWO SERVING-NAME COLLISIONS: the smaller UUID wins, the loser is excluded ---
+      // libkiwix walks its book map in ascending UUID order and keeps the FIRST book for a
+      // name, so `wikipedia_de` and `aplusb` each have exactly one legitimate owner. We leave
+      // the losers OUT of the built library, which is why the server never sees a collision.
+      const accentWinner = await h.registerPack('Wikipédia_DE.zim', '11111111-0000-4000-8000-000000000000')
+      const accentLoser = await h.registerPack('wikipedia_de.zim', '99999999-0000-4000-8000-000000000000')
+      const plusWinner = await h.registerPack('a+b.zim', '22222222-0000-4000-8000-000000000000')
+      const plusLoser = await h.registerPack('aplusb.zim', '88888888-0000-4000-8000-000000000000')
+      const unicodePack = await h.registerPack(
+        'Groß Wiki+2024 100%.zim',
+        '33333333-0000-4000-8000-000000000000'
+      )
+
+      const library = (await h.svc.ensureServer(h.db())) as ServedLibrary
+      expect(library).not.toBeNull()
+      expect(library.names.get(accentWinner)).toBe('wikipedia_de')
+      expect(library.names.get(plusWinner)).toBe('aplusb')
+      expect(library.names.has(accentLoser)).toBe(false)
+      expect(library.names.has(plusLoser)).toBe(false)
+      expect([...library.excluded].sort((a, b) => a.packId.localeCompare(b.packId))).toEqual([
+        { packId: plusLoser, collidesWith: plusWinner },
+        { packId: accentLoser, collidesWith: accentWinner }
+      ])
+      // The fake kiwix-manage was pointed at the WINNERS only: the XML the child was handed
+      // never contained the losers, so no collision could be resolved server-side at all.
+      expect(h.buildAdds.slice().sort()).toEqual(
+        ['Groß Wiki+2024 100%.zim', 'Wikipédia_DE.zim', 'a+b.zim'].sort()
+      )
+      const servedChild = h.serveSpawns[h.serveSpawns.length - 1]!
+      const servedXml = readFileSync(servedChild.libraryXmlPath, 'utf8')
+      expect(servedXml).toContain(accentWinner)
+      expect(servedXml).not.toContain(accentLoser)
+      expect(servedXml).not.toContain(plusLoser)
+
+      // A read of the WINNER goes out under the shared name and comes back with its own bytes.
+      const winnerText = await readArticle(h.svc, accentWinner, 'A/Alpha')
+      expect(winnerText).toContain('Known content of wikipedia_de at A/Alpha')
+      // A read of the LOSER is refused — honestly, and WITHOUT a request: the pack is not in
+      // the served map, so there is no name under which it could be fetched. (Pre-P3b the
+      // viewer derived the name from the filename stem, and `wikipedia_de.zim` would have read
+      // the WINNER's article under the loser's title.)
+      const before = rawRequests().length
+      expect(await h.svc.getArticle(h.db(), accentLoser, 'A/Alpha')).toBeNull()
+      expect(await h.svc.getArticle(h.db(), plusLoser, 'A/Alpha')).toBeNull()
+      expect(rawRequests()).toHaveLength(before)
+      // …and the ask arm skips them too, so archive text is never labelled with the wrong pack.
+      const arm = h.svc.makeArm(h.db(), [accentLoser, plusLoser])
+      expect(await arm!('alpha climate', new AbortController().signal)).toEqual([])
+
+      // ---- (2) THE REQUEST PATH CARRIES THE EXACT servingNameFor VALUE --------------------
+      const unicodeFile = join(h.zimDir, 'Groß Wiki+2024 100%.zim')
+      const expectedName = servingNameFor(unicodeFile)
+      expect(expectedName).toBe(servingNameFor(unicodeFile)) // pinned below by the URL itself
+      expect(library.names.get(unicodePack)).toBe(expectedName)
+      h.requests.length = 0
+      await readArticle(h.svc, unicodePack, 'A/Alpha')
+      expect(rawRequests()).toEqual([
+        `/raw/${encodeURIComponent(expectedName)}/content/${encodeArticlePath('A/Alpha')}`
+      ])
+      // Unicode, `+`, `%` and a space all survive the round trip, escaped exactly once.
+      expect(expectedName).toContain('plus')
+      expect(expectedName).toContain('_')
+      expect(expectedName).not.toContain(' ')
+      expect(expectedName).not.toContain('+')
+
+      // ---- (3) ENTRY PATHS: encoded slash, hash, percent, space, Unicode — ONE encoder ----
+      const hostileEntries = [
+        'A/Über_ß',
+        'A/one#two',
+        'A/50%_rule',
+        'A/a%2Fb', // an ALREADY-encoded slash inside one segment: it must not become structure
+        'A/with space/deep',
+        'A/plus+sign'
+      ]
+      for (const entry of hostileEntries) {
+        h.requests.length = 0
+        const text = await readArticle(h.svc, unicodePack, entry)
+        const url = rawRequests()[0]!
+        // The URL is exactly what the ONE encoder produces…
+        expect(url).toBe(`/raw/${encodeURIComponent(expectedName)}/content/${encodeArticlePath(entry)}`)
+        // …and the server's decode of it yields the entry we asked for, segment for segment.
+        const decoded = /^\/raw\/[^/]+\/content\/(.+)$/
+          .exec(url)![1]!
+          .split('/')
+          .map(decodeURIComponent)
+          .join('/')
+        expect(decoded).toBe(entry)
+        expect(text).toContain(`Known content of ${expectedName} at ${entry}`)
+        // ONE encode pass, never two: a LITERAL `%` in the key is escaped exactly once
+        // (`a%2Fb` → `a%252Fb`, and one decode gives `a%2Fb` back — asserted above), while a key
+        // with no percent at all can never produce a `%25` (the L4 `my%20wiki` → `my%2520wiki`
+        // double-encode regression).
+        const encodedEntry = /^\/raw\/[^/]+\/content\/(.+)$/.exec(url)![1]!
+        if (!entry.includes('%')) expect(encodedEntry).not.toContain('%25')
+      }
+
+      // ---- (4) THE LOCATOR IS packId + articlePath — NO ROUTE HINT ------------------------
+      // An "old citation": nothing but the two fields a stored citation has ever carried.
+      const atlas = await h.registerPack('atlas.zim', '44444444-0000-4000-8000-000000000000')
+      const oldCitation = { packId: atlas, articlePath: 'A/Klimawandel' }
+      const viaIpc = await invoke(handlers, IPC.getPackArticle, oldCitation.packId, oldCitation.articlePath)
+      const sectionsOf = (r: unknown): string =>
+        ((r as { sections: Array<{ text: string }> }).sections ?? []).map((s) => s.text).join('\n')
+      const originalText = sectionsOf(viaIpc.result)
+      expect(originalText).toContain('Known content of atlas at A/Klimawandel')
+
+      // (a) RENAME: the file is renamed on the drive, so its SERVING NAME changes too. The
+      //     citation still resolves, because the route is looked up in the CURRENT map on read
+      //     rather than stored with the citation.
+      renameSync(join(h.zimDir, 'atlas.zim'), join(h.zimDir, 'Atlas Weltkarte+2027.zim'))
+      await h.svc.reconcile(h.db())
+      const renamedName = servingNameFor(join(h.zimDir, 'Atlas Weltkarte+2027.zim'))
+      expect(renamedName).not.toBe('atlas')
+      h.requests.length = 0
+      const afterRename = await readArticle(h.svc, oldCitation.packId, oldCitation.articlePath)
+      expect(rawRequests()[0]).toContain(encodeURIComponent(renamedName))
+      expect(afterRename).toContain(`Known content of ${renamedName} at A/Klimawandel`)
+
+      // A hostile EXTRA argument on the channel changes nothing: the handler reads exactly two,
+      // and the route comes from the service's own map. "Serve me THAT book instead" is not a
+      // request this surface can express.
+      h.requests.length = 0
+      const poisoned = await invoke(
+        handlers,
+        IPC.getPackArticle,
+        oldCitation.packId,
+        oldCitation.articlePath,
+        'wikipedia_de'
+      )
+      expect(sectionsOf(poisoned.result)).toContain(`Known content of ${renamedName}`)
+      expect(rawRequests()[0]).toContain(encodeURIComponent(renamedName))
+      expect(rawRequests()[0]).not.toContain('wikipedia_de')
+
+      // (b) RESTART: a brand-new ZimService over the SAME database — the citation needs no
+      //     migration and no hint.
+      const restarted = h.newService()
+      const afterRestart = await readArticle(restarted, oldCitation.packId, oldCitation.articlePath)
+      expect(afterRestart).toBe(afterRename)
+
+      // (c) DRIVE-LETTER CHANGE: the drive comes back under another root, and the recorded
+      //     absolute path no longer exists. The drive-relative `zim/<leaf>` candidate resolves,
+      //     and its header proves it is the same archive.
+      const newRoot = join(h.root, 'K-drive')
+      mkdirSync(join(newRoot, 'zim'), { recursive: true })
+      copyFileSync(
+        join(h.zimDir, 'Atlas Weltkarte+2027.zim'),
+        join(newRoot, 'zim', 'Atlas Weltkarte+2027.zim')
+      )
+      rmSync(join(h.zimDir, 'Atlas Weltkarte+2027.zim'))
+      const relocated = h.newService(newRoot)
+      const afterRelocation = await readArticle(relocated, oldCitation.packId, oldCitation.articlePath)
+      expect(afterRelocation).toBe(afterRename) // byte-identical article text
+
+      // ---- (5) THERE IS NO HINT FIELD TO POISON ------------------------------------------
+      // A renderer-supplied route hint is the attack this design removes rather than validates:
+      // it simply does not exist on the citation, on the viewer target, or on the bridge.
+      const src = (rel: string): string => readFileSync(join(process.cwd(), rel), 'utf8')
+      const citation = /export interface Citation \{[\s\S]*?\n\}/.exec(src('src/shared/types.ts'))![0]
+      expect(citation).toContain('packId')
+      expect(citation).toContain('articlePath')
+      expect(citation).not.toMatch(/urlId/i)
+      const target = /export interface ArticleTarget \{[\s\S]*?\n\}/.exec(
+        src('src/renderer/chat/ArticleModal.tsx')
+      )![0]
+      expect(target).not.toMatch(/urlId/i)
+      const bridge = /getPackArticle: \(([\s\S]*?)\):/.exec(src('src/preload/index.ts'))![1]!
+      expect(bridge).not.toMatch(/urlId/i)
+      // packId + articlePath, and nothing else may cross the bridge.
+      expect(
+        bridge
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean)
+      ).toEqual(['packId: string', 'articlePath: string'])
+    } finally {
       await h.close()
     }
   })
