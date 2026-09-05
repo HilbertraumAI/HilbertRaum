@@ -26,6 +26,9 @@
 //   --json <path>     Also write the full result set as JSON to <path>.
 //   --fixtures <dir>  Real *.html kiwix-serve articles for Section B (cycled to 60); falls back
 //                      to $HILBERTRAUM_ZIM_FIXTURES, else synthetic articles.
+//   --slice-work <n>  Section D slice size in work units (default: the converter's
+//                      DEFAULT_SLICE_WORK). Lets a slow machine try a smaller slice without a code
+//                      change — the per-slice gate is what it tunes.
 //   --gate <profile>  laptop | early-warning (default). laptop = i7-8550U decisive figures
 //                      (50 ms / 150 ms); early-warning = one third (~17 ms / ~50 ms), the
 //                      i9-14900K rule (a P-core is ~2.5-3x an 8550U core).
@@ -66,6 +69,8 @@ const quick = hasFlag('--quick')
 const jsonPath = flagValue('--json', null)
 const fixturesDir = flagValue('--fixtures', process.env.HILBERTRAUM_ZIM_FIXTURES || null)
 const gateProfile = flagValue('--gate', 'early-warning')
+const sliceWorkArg = Number.parseInt(flagValue('--slice-work', ''), 10)
+const sliceWork = Number.isFinite(sliceWorkArg) && sliceWorkArg > 0 ? sliceWorkArg : DEFAULT_SLICE_WORK
 
 // ---- Converter call + generic result-field access (tolerates the old converter, which returns
 // only {title, segments} — the new contract adds {truncated, work}). The converter runs with its
@@ -282,7 +287,7 @@ function runSectionC() {
 // per-slice measurement needs a multi-slice input, and post-scanner one 1 MiB conversion is a
 // few tens of ms, not the minutes the pre-P1 quadratic converter took.
 function sliceTimes(html) {
-  const run = zimArticleSlices(html, {})
+  const run = zimArticleSlices(html, { sliceWork })
   const times = []
   let result = null
   for (;;) {
@@ -369,7 +374,7 @@ function runSectionD() {
   )
 
   return {
-    sliceWork: DEFAULT_SLICE_WORK,
+    sliceWork,
     oneMiB,
     batch: {
       source,

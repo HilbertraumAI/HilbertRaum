@@ -2217,6 +2217,24 @@ offline article viewer. Files are registered in place, never copied.
   `maxChars` — the largest observed maxi article is ~0.5 MB — or accepting a one-off 60–90 ms
   stall for a pathological 1 MiB article). Decision: pending the i7-8550U figure and that ruling.
 
+  **Laptop leg 2 — the reporter's i7-8550U (the slow-hardware reference), 2026-09-05, on the P1
+  converter `ce062b6c` (before slicing), `--gate laptop`, unpinned, AC power, High performance
+  plan, Node 24.18.0, Windows 11 Pro 26200.** Warm 1 MiB worst case 130.13 / 95.84 / 79.38 /
+  72.97 ms (run 1 was the first process after setup; runs 2–4 settled) vs 50 ms — FAIL 1.46–2.60×
+  in every run; 60 × 30 KB synthetic batch 249.97 / 133.99 / 126.59 ms vs 150 ms — fail once, pass
+  twice (0.84–0.89×), 2.1–4.2 ms per conversion; a fourth run over three REAL kiwix-serve articles
+  (46–293 KB, mean ~160 KB, 1.5–9.7× the assumed size) totalled 307 ms — not comparable to the
+  30 KB assumption, per-char consistent with Section A. Per-family 1 MiB warm (run 3): unclosed-lt
+  46.6, repeated-lt 79.4, entity-heavy 57.7, deep-nesting 76.2, wellformed 59.6 ms. **Reading:** this
+  core class is 4.6–8× slower than a 14900K P-core on this workload, not the 2.5–3× the one-third
+  rule assumed — the rule under-warned; under D2 as originally ruled the reference fails gate (i)
+  outright, which is what the re-ruling (P1b, below) answers. The decisive figure is now the
+  reference's PER-SLICE stall on the P1b converter (Section D, pending — the reporter's next run;
+  the P1b converter was not on the laptop yet). Expectation from the ratio: 14900K p95 0.5–1.0 ms ×
+  4.6–8 ≈ 2.5–8 ms against the 5 ms bound, so `DEFAULT_SLICE_WORK` may need to drop to 16 Ki
+  (the perf script's `--slice-work` flag lets the laptop try both in one session; the CPU total
+  is unchanged either way).
+
   **P1b — cooperative slicing (re-ruled remedy, 2026-09-05).** D2's remedy is re-ruled from a
   worker to cooperative slicing: a worker's blast radius (a new main rollup entry, first-party
   `asarUnpack`, a pool/lifecycle boundary, an owner-only packaged-load smoke class) was judged
