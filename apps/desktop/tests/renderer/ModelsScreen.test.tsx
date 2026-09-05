@@ -524,8 +524,11 @@ describe('ModelsScreen — installed and catalog library views', () => {
     })
     render(<ModelsScreen />)
     await screen.findByText('A Installed')
-    expect(screen.queryByText(t('en', 'models.group.onDrive'))).not.toBeInTheDocument()
-    expect(screen.queryByText(t('en', 'models.group.toDownload'))).not.toBeInTheDocument()
+    // The old full-card picker's installed/needs-download subheading (#35) was removed with it
+    // (PR #302 F7) — confirm neither its retired literal copy nor its CSS hook still renders.
+    expect(screen.queryByText('On this drive — ready to use')).not.toBeInTheDocument()
+    expect(screen.queryByText('Available to download')).not.toBeInTheDocument()
+    expect(document.querySelector('.model-group-title')).not.toBeInTheDocument()
   })
 
   it('mutes not-yet-downloaded cards (.model-card-missing) so installed ones stand out', async () => {

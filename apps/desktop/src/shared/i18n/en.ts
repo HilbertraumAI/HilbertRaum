@@ -1232,13 +1232,7 @@ export const en = {
   'models.empty.lineBefore': 'Add YAML manifests under ',
   'models.empty.lineAfter': ' on the drive.',
   'models.section.yourModel': 'Your AI model',
-  'models.section.otherModels': 'Other models',
-  'models.section.choose': 'Choose your AI model',
   'models.section.docSearch': 'Document search',
-  'models.section.other': 'Other',
-  // #35: the explicit installed/needs-download boundary inside a mixed picker section.
-  'models.group.onDrive': 'On this drive — ready to use',
-  'models.group.toDownload': 'Available to download',
 
   // ---- Settings (SettingsScreen.tsx — chrome + the General tab) ----
   'settings.title': 'Settings',

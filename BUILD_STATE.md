@@ -35,10 +35,11 @@ rows and expandable quantization groups; design record `docs/design-guidelines.m
 user-guide §5. Rebuilt on master as UX-only after the 2026-09-05 review (Flash-Next stays on
 `feat/qwen38-flash-next-manifest`). P1 rebuild `7c03c8e6`; P2 `bfc62201` sharded-GGUF catalog
 guard; P3 `8de06742` (F2): failed / unverified downloads keep a named result in the same panel
-(Retry via the existing confirmation, Dismiss by job id; §15, user-guide §6). P4 (F3/F5): "On
-this drive" = installed OR `checksum_failed` (`lib/modelAvailability.ts`, pure relocation of the
-order helpers), repair groups start expanded (user toggle wins), `variantGroupFace` fronts an
-obtainable variant within the leading priority cohort, group headings h4. Next: P5 docs + F7._
+(Retry via the existing confirmation, Dismiss by job id; §15, user-guide §6); P4 `4efeb989`
+(F3/F5): "On this drive" = installed OR `checksum_failed` (`lib/modelAvailability.ts`), repair
+groups start expanded, `variantGroupFace` fronts an obtainable variant, group headings h4. P5
+(F6/F7): §11 DV-2 marked superseded, 5 orphan keys + dead CSS gone, `i18n-unused-keys.test.ts`
+guard (17 legacy orphans frozen as a baseline for separate review). Next: P6 review, P7 close._
 
 _2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
 `readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one

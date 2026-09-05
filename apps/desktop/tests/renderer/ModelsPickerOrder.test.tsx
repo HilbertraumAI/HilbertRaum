@@ -103,8 +103,12 @@ describe('orderPickerModels — runnable-first is unconditional', () => {
 
 describe('orderPickerModels — installed-first stays the primary key', () => {
   it('an installed but un-runnable model still outranks a runnable one that needs downloading', () => {
-    // `groupedCards` renders the installed/needs-download split as two labelled subheadings, so
-    // runnability may only order cards WITHIN a group — never lift one across the boundary.
+    // `orderPickerModels` (now in `lib/modelAvailability.ts`, re-exported from ModelsScreen —
+    // PR #302 P4) still orders the flat picker list installed-first/recommended-first/
+    // runnable-first; the model library renders that ordered list as variant GROUPS, each
+    // taking its leader's rank (`variantGroupOrder`, design-guidelines §15 "Ordering after
+    // grouping"), so runnability may only reorder cards WITHIN a group — never lift one across
+    // the installed-first boundary.
     const installedTooBig = model({ id: 'on-drive', state: 'installed', insufficientRam: true })
     const missingRunnable = model({ id: 'to-download' })
     expect(names(orderPickerModels([missingRunnable, installedTooBig]))).toEqual([

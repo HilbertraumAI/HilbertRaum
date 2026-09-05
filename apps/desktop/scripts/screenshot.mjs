@@ -29,6 +29,7 @@ const SIZES = {
   // The AI Model screen is tall (active card + context card + grouped picker) — capture it all.
   models: [840, 1500],
   'models-de': [840, 1500],
+  'models-download-failed': [1280, 1500],
   'models-browse': [1280, 1400],
   'models-browse-de': [1024, 1500],
   'models-browse-light': [1280, 1400],
@@ -50,8 +51,14 @@ const SIZES = {
 // capture as soon as the UI is real instead of sleeping a fixed worst-case interval.
 // Unlisted cases fall back to the generic "harness root has rendered children" check.
 const READY = {
+  // `.model-library` (the screen's outer section) is present in EVERY models* case, including
+  // the zero-card empty state (`.model-library-empty`), and it mounts before any individual
+  // `.model-card` renders — so it is both the earliest-rendering and the only selector reliable
+  // across every named models capture. A duplicate `models`/`models-de` key here (F7) used to
+  // shadow this with `.model-card`, which is absent whenever the view has no matching cards.
   models: '.model-library',
   'models-de': '.model-library',
+  'models-download-failed': '.model-library-download',
   'models-browse': '.model-library',
   'models-browse-de': '.model-library',
   'models-browse-light': '.model-library',
@@ -59,8 +66,6 @@ const READY = {
   'models-browse-expanded': '.model-library',
   documents: '.doc-row',
   'chat-byproject': '.chat-conv-group',
-  models: '.model-card',
-  'models-de': '.model-card',
   'chat-runtime': '.chat-runtime-hint',
   'chat-runtime-compat': '.chat-runtime-hint',
   'chat-warmup': '.chat-warmup-hint',

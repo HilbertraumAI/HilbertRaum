@@ -1032,6 +1032,11 @@ change; nothing here touches the model recommender. Code comments cite this sect
    models sat below the fold. `orderPickerModels` (`ModelsScreen.tsx`) adds **runnable-first as
    an unconditional second key**, with installed-first still PRIMARY (the installed/needs-download
    boundary is a labelled subheading, so runnability may only reorder cards *within* a group).
+   [**Superseded 2026-09-05 by §15:** the full-card picker's labelled subheading is gone — "On
+   this drive" is a view FILTER, not a subheading, and grouping is by variant, not by
+   installed/needs-download. `orderPickerModels`'s installed-first/recommended-first/runnable-first
+   key order is unchanged and still governs group rank; see §15 "Ordering after grouping" for how
+   that key order maps onto the current grouped rendering.]
    Runnability reads `insufficientRam`, the SAME flag the card's warning badge and banner render
    from, so the order can never contradict the warning printed on a card it moved. **Display
    order only** — the RAM-best-fit recommender in the main process is untouched.

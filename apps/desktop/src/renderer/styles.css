@@ -466,11 +466,10 @@ code, pre, kbd { font-family: var(--font-mono); }
   .model-row-actions .download-progress { max-width: none; }
   .model-head { flex-wrap: wrap; }
 }
-/* #35: the picker's installed/needs-download boundary is explicit — a small label per
-   group, and not-yet-downloaded cards render quieter (transparent fill + dashed border;
-   text colors untouched so contrast stays intact). */
-.model-group-title { font-size: 12px; color: var(--text-muted); margin: 18px 0 0; }
-.model-group-title + .card { margin-top: 8px; }
+/* Not-yet-downloaded cards render quieter (transparent fill + dashed border; text colors
+   untouched so contrast stays intact). The old #35 boundary label (.model-group-title) was
+   removed with the full-card picker (PR #302 F7) — the model library uses a view filter
+   ("On this drive" / "Browse models", §15) instead of a subheading. */
 .model-card-missing { background: transparent; border-style: dashed; box-shadow: none; }
 .model-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .model-title { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }

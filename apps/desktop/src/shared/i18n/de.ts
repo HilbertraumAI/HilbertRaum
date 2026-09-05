@@ -1274,13 +1274,7 @@ export const de: Record<keyof typeof en, string> = {
   'models.empty.lineBefore': 'Lege YAML-Manifeste unter ',
   'models.empty.lineAfter': ' auf dem Laufwerk ab.',
   'models.section.yourModel': 'Dein KI-Modell',
-  'models.section.otherModels': 'Weitere Modelle',
-  'models.section.choose': 'Wähle dein KI-Modell',
   'models.section.docSearch': 'Dokumentsuche',
-  'models.section.other': 'Sonstiges',
-  // #35: die sichtbare Grenze installiert/herunterzuladen in einem gemischten Abschnitt.
-  'models.group.onDrive': 'Auf diesem Laufwerk – sofort nutzbar',
-  'models.group.toDownload': 'Zum Herunterladen verfügbar',
 
   // ---- Settings ----
   'settings.title': 'Einstellungen',
