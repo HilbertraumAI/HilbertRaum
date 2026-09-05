@@ -2039,7 +2039,12 @@ compared not re-hashed per spec §21.2); a documentId whose row is GONE stays
 absent). A legacy citation resolves by EXACT title match only when the match is UNIQUE —
 zero or multiple matches leave `identity:'unresolved'` (availability null: it cannot be
 known). Unresolved ≠ missing is load-bearing: Phase-4 freshness may only say "cannot verify"
-for unresolved sources, never "changed"/"deleted".
+for unresolved sources, never "changed"/"deleted". **Archive exception (P2, PR #294 review
+H2, #301):** a citation with `sourceKind: 'archive'` (a ZIM knowledge-pack article) never
+enters either branch — the resolver checks `sourceKind` first and forces
+`identity:'unresolved'` with null `documentId`/`documentSha256`/`mimeType`/
+`availabilityAtCreation`, even when stale or malformed data also supplies a document id or
+an exact-matching document title exists. §17 D-Z5 records the archive-specific fields.
 
 ### 16.3 Truncation and coverage honesty (§14.10)
 
@@ -2320,6 +2325,31 @@ offline article viewer. Files are registered in place, never copied.
   `documentId`/`chunkId` (the evidence-pack resolver reads a non-null documentId as a
   real row). Coverage math excludes archive chunks; a pure-archive answer records no
   coverage fraction. The prompt meta line reads `| Archive: <title> | Section: <heading>`.
+  **P2 (2026-09-05, PR #294 review H2/M11, #301) — evidence identity and provenance.**
+  `buildEvidenceSourceSnapshots` (`evidence-pack/snapshot.ts`) checks
+  `c.sourceKind === 'archive'` BEFORE both the document-id branch and the legacy
+  exact-title branch: an archive citation is always `identity:'unresolved'` with null
+  `documentId`/`documentSha256`/`mimeType`/`availabilityAtCreation`, even when stale or
+  malformed data also supplies a document id. The same guard runs at READ time in
+  `parseSourceSnapshots` (`services/evidence-reviews.ts`); freshness reports such a source
+  `'unverifiable'` by an explicit archive branch (never `'changed'`/`'missing'`, §16.2/
+  §16.5), and the source-in-context handler returns null for it (no workspace file to
+  read). `EvidenceSourceSnapshot` (`shared/types.ts`) gained four ADDITIVE fields —
+  `sourceKind: 'document' | 'archive'` (always written; stored JSON without the field
+  reads as `'document'`), `archiveTitle`, `packId` (`knowledge_packs.id`), `articlePath`
+  — carried through every whitelist/re-modelling layer into the HTML/PDF evidence pack
+  (a distinct archive card, warning and register row; document sources render
+  byte-identically to before), the Markdown transcript export, and
+  `EvidencePane`/`ReviewSummaryView` (a distinct unresolved-archive badge, no "Open
+  source in context"). No new storage column, `SCHEMA_VERSION` unchanged. **Saved-review
+  compatibility is disposable** (owner ruling 2026-09-05): a review created on a pre-merge ZIM
+  build that cites an archive may carry a wrongly resolved document identity and must be
+  re-run — no detection, invalidation or migration flow, and the app never rewrites a
+  frozen review or infers an archive from a matching title (CHANGELOG). **Review context
+  is honest unavailable:** an archive row in a review offers no "Open article" (there is
+  no workspace document, and the article viewer bridge needs P3b's locator/serving-map
+  contract) — P6 owns adding it after P3b, with tests for unavailable/renamed/deleted
+  packs.
 - **D-Z6 — registered in place; kiwix-manage is the metadata reader.** Packs are multi-GB,
   public, read-only — the deliberate exception to the §1 copy-into-workspace rule. One
   `kiwix-manage add` into a throwaway library.xml reads the archive header (fast at any

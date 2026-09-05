@@ -2679,6 +2679,25 @@ export interface EvidenceSourceSnapshot {
   snippet?: string | null
   sourceChunkId?: string | null
   availabilityAtCreation?: 'available' | 'missing' | null
+  /**
+   * Knowledge packs (ZIM wave, P2 — PR #294 review H2/M11): 'archive' marks a source whose
+   * citation named an article inside a registered ZIM archive, NOT a `documents` row. Such a
+   * source is ALWAYS `identity: 'unresolved'` with null `documentId`/`documentSha256`/`mimeType` —
+   * there is no workspace document to resolve or hash-compare, even when stale or malformed
+   * data also supplies a document id (the resolver and the read whitelist both enforce it).
+   * The three locator fields below are the source's display provenance AND its stable
+   * identity for exports (the pack UUID + entry path), independent of resolution.
+   * Absent/'document' ⇒ the classic document source. Additive: snapshot JSON written before
+   * this field existed reads as 'document' (saved reviews from pre-merge ZIM builds are
+   * disposable — no detection or migration; CHANGELOG).
+   */
+  sourceKind?: 'document' | 'archive'
+  /** Archive sources only: the registered pack's display title (e.g. "Wikipedia (DE)"). */
+  archiveTitle?: string | null
+  /** Archive sources only: the registered pack's id (`knowledge_packs.id`, the ZIM UUID). */
+  packId?: string | null
+  /** Archive sources only: the article's entry path within the archive. */
+  articlePath?: string | null
 }
 
 /**

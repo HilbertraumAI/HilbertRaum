@@ -340,11 +340,28 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
     const marker = src.machineLabel ? `[${esc(localizeLabel(lang, src.machineLabel))}] ` : ''
     push(`<h3>${marker}${esc(src.documentTitle)}</h3>`)
     push(`<p class="hint">${s(KIND_KEY[src.kind])}</p>`)
+    // ZIM wave (#294 review M11): a knowledge-pack article's readable provenance (the pack
+    // title) plus its stable machine locator (pack UUID + entry path) — the section itself
+    // renders below in the where-line like a document's, since `sectionLabel` is populated
+    // the same way for both source kinds.
+    if (src.sourceKind === 'archive') {
+      if (src.archiveTitle) {
+        push(`<p>${s('packExport.evidence.archive')}: ${esc(src.archiveTitle)}</p>`)
+      }
+      const locator: string[] = []
+      if (src.packId) locator.push(`${s('packExport.evidence.packId')}: ${esc(src.packId)}`)
+      if (src.articlePath) locator.push(`${s('packExport.evidence.article')}: ${esc(src.articlePath)}`)
+      if (locator.length > 0) push(`<p class="mono">${locator.join(' · ')}</p>`)
+    }
     const where: string[] = []
     if (src.pageNumber != null) where.push(s('packExport.evidence.page', { n: src.pageNumber }))
     if (src.sectionLabel) where.push(`${s('packExport.evidence.sectionLabel')}: ${esc(src.sectionLabel)}`)
     if (where.length > 0) push(`<p>${where.join(' · ')}</p>`)
-    if (src.identity === 'unresolved') {
+    // M11: an archive card gets its OWN identity warning — distinct wording from the
+    // legacy document "identity could not be verified" claim, and never both for one card.
+    if (src.sourceKind === 'archive') {
+      warning(s('packExport.evidence.archiveIdentity'))
+    } else if (src.identity === 'unresolved') {
       warning(s('packExport.evidence.identityUnresolved'))
     } else if (src.availabilityAtCreation === 'missing') {
       warning(s('packExport.evidence.missingAtCreation'))
@@ -400,6 +417,11 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   if (model.honesty.unresolvedSources > 0) {
     warning(n('review.summary.sourcesUnresolved', model.honesty.unresolvedSources))
   }
+  // M11: archives are unresolved by construction — their own warning, never doubled with
+  // the line above (the model already excludes archives from `unresolvedSources`).
+  if (model.honesty.archiveSources > 0) {
+    warning(n('review.summary.sourcesArchive', model.honesty.archiveSources))
+  }
   if (model.honesty.missingSources > 0) {
     warning(n('review.summary.sourcesMissing', model.honesty.missingSources))
   }
@@ -444,28 +466,41 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
     )
     push('<tbody>')
     for (const src of model.evidence) {
-      const availability = atExport
-        ? src.currentState === 'unchanged'
-          ? s('packExport.sources.availabilityAvailable')
-          : src.currentState === 'changed'
-            ? s('packExport.sources.availabilityChanged')
-            : src.currentState === 'missing'
+      // M11: an archive row states its own availability ("not verifiable against the
+      // workspace") in BOTH the at-creation and at-export column, regardless of `atExport`
+      // or the (always-unresolved) identity — never the generic "cannot be verified" string.
+      const availability = src.sourceKind === 'archive'
+        ? s('packExport.sources.availabilityArchive')
+        : atExport
+          ? src.currentState === 'unchanged'
+            ? s('packExport.sources.availabilityAvailable')
+            : src.currentState === 'changed'
+              ? s('packExport.sources.availabilityChanged')
+              : src.currentState === 'missing'
+                ? s('packExport.sources.availabilityMissing')
+                : s('packExport.sources.availabilityUnknown')
+          : src.identity === 'unresolved'
+            ? s('packExport.sources.availabilityUnknown')
+            : src.availabilityAtCreation === 'missing'
               ? s('packExport.sources.availabilityMissing')
-              : s('packExport.sources.availabilityUnknown')
-        : src.identity === 'unresolved'
-          ? s('packExport.sources.availabilityUnknown')
-          : src.availabilityAtCreation === 'missing'
-            ? s('packExport.sources.availabilityMissing')
-            : src.availabilityAtCreation === 'available'
-              ? s('packExport.sources.availabilityAvailable')
-              : unavailable
+              : src.availabilityAtCreation === 'available'
+                ? s('packExport.sources.availabilityAvailable')
+                : unavailable
       const sha = !model.options.includeDocumentHashes
         ? s('packExport.sources.hashExcluded')
         : src.documentSha256
           ? `<span class="mono">${esc(src.documentSha256)}</span>`
           : unavailable
+      // M11: the type column names the archive kind instead of a (nonexistent) mime type —
+      // no hash exists for an archive article either, so `sha` above already falls through
+      // to the existing `unavailable` string (never invented).
+      const type = src.sourceKind === 'archive'
+        ? s('packExport.sources.typeArchive')
+        : src.mimeType
+          ? esc(src.mimeType)
+          : unavailable
       push(
-        `<tr><td><a href="#src-${src.index}">${esc(src.documentTitle)}</a></td><td>${src.mimeType ? esc(src.mimeType) : unavailable}</td><td>${sha}</td><td>${availability}</td></tr>`
+        `<tr><td><a href="#src-${src.index}">${esc(src.documentTitle)}</a></td><td>${type}</td><td>${sha}</td><td>${availability}</td></tr>`
       )
     }
     push('</tbody>')

@@ -2769,6 +2769,10 @@ export const en = {
   'review.source.kind.whole_document_provenance': 'Whole-document provenance',
   'review.source.kind.structured_record': 'Extracted record',
   'review.source.unresolved': 'Source identity could not be determined',
+  // ZIM wave (#294 review M11): DISTINCT from the legacy document claim above — an archive
+  // article was never resolvable against a workspace document in the first place.
+  'review.source.archive':
+    'Knowledge-pack article — its identity and content cannot be verified against the workspace',
   'review.source.missingAtCreation': 'Source was not available when this review was created',
   // P4 per-card freshness badges (spec §15.4/§15.5 copy; text + icon, never color-only).
   // Unresolved sources keep ONLY the unresolved badge — their current state cannot be
@@ -2858,6 +2862,12 @@ export const en = {
   'review.summary.sourcesCount.other': '{count} sources',
   'review.summary.sourcesUnresolved.one': '{count} source identity could not be determined',
   'review.summary.sourcesUnresolved.other': '{count} source identities could not be determined',
+  // ZIM wave (#294 review M11): archives are excluded from sourcesUnresolved above — this is
+  // their own, distinct count.
+  'review.summary.sourcesArchive.one':
+    '{count} source is a knowledge-pack article that cannot be verified against the workspace',
+  'review.summary.sourcesArchive.other':
+    '{count} sources are knowledge-pack articles that cannot be verified against the workspace',
   'review.summary.sourcesMissing.one':
     '{count} source was not available when this review was created',
   'review.summary.sourcesMissing.other':
@@ -2928,7 +2938,7 @@ export const en = {
   // HTML from the pack's language option; a persisted pack is a frozen snapshot and is
   // never re-localized later). Reused in the pack: review.status.*, review.decision.*,
   // review.relation.*, review.link.cited/.reviewer, review.summary.unavailable/.truncated,
-  // review.summary.sourcesUnresolved/.sourcesMissing, chat.sources.marker. ----
+  // review.summary.sourcesUnresolved/.sourcesMissing/.sourcesArchive, chat.sources.marker. ----
   'packExport.docTitle': 'Evidence pack',
   'packExport.privacy': 'Created locally by HilbertRaum. No cloud services were involved.',
   'packExport.disclaimer':
@@ -2982,11 +2992,18 @@ export const en = {
   'packExport.evidence.kindStructured': 'Structured extraction record',
   'packExport.evidence.page': 'Page {n}',
   'packExport.evidence.sectionLabel': 'Section',
+  // ZIM wave (#294 review M11): the archive card's readable pack line + its mono locator.
+  'packExport.evidence.archive': 'Knowledge pack',
+  'packExport.evidence.packId': 'Pack id',
+  'packExport.evidence.article': 'Article',
   'packExport.evidence.excerpt': 'Persisted excerpt',
   'packExport.evidence.noExcerpt': 'No excerpt was persisted for this source.',
   'packExport.evidence.relations': 'Reviewer relations',
   'packExport.evidence.identityUnresolved':
     'The identity of this source document could not be verified against the workspace.',
+  // M11: DISTINCT from the legacy document claim above — never both on one card.
+  'packExport.evidence.archiveIdentity':
+    'This source is an article from a knowledge pack (ZIM archive), not a workspace document. Its identity and content are not verified against the workspace; the pack id and article path identify it.',
   'packExport.evidence.missingAtCreation':
     'This source document was already missing from the workspace when the review was created.',
   // P4 at-export per-card states (spec §15.4/§15.5 wording).
@@ -3030,6 +3047,9 @@ export const en = {
   'packExport.section.sources': 'Source register',
   'packExport.sources.colTitle': 'Document',
   'packExport.sources.colType': 'File type',
+  // ZIM wave (#294 review M11): the type/availability values an archive row shows instead
+  // of a mime type / the generic "cannot be verified" claim.
+  'packExport.sources.typeArchive': 'Knowledge-pack article (ZIM archive)',
   'packExport.sources.colSha': 'SHA-256 at review time',
   'packExport.sources.colAvailability': 'Availability at review creation',
   'packExport.sources.colAvailabilityExport': 'Availability at export',
@@ -3037,6 +3057,7 @@ export const en = {
   'packExport.sources.availabilityMissing': 'Missing',
   'packExport.sources.availabilityChanged': 'Changed since review',
   'packExport.sources.availabilityUnknown': 'Cannot be verified',
+  'packExport.sources.availabilityArchive': 'Archive article — not verifiable against the workspace',
   'packExport.sources.hashExcluded': 'Excluded by export options',
   'packExport.sources.pathNote': 'Original file paths are never included in an evidence pack.',
   'packExport.section.generation': 'Generation details',

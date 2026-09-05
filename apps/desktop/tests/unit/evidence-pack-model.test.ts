@@ -166,6 +166,100 @@ describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
     expect(model.evidence).toHaveLength(0)
   })
 
+  it('ZIM wave (#294 review M11): an archive source carries the four provenance fields', () => {
+    const detail = makeDetail({
+      sources: [
+        {
+          key: 's1',
+          machineLabel: 'S1',
+          kind: 'direct_excerpt',
+          identity: 'unresolved',
+          documentId: null,
+          documentTitle: 'Treibhausgas',
+          documentSha256: null,
+          mimeType: null,
+          pageNumber: null,
+          sectionLabel: 'Landwirtschaft',
+          snippet: 'Methan entsteht…',
+          sourceChunkId: null,
+          availabilityAtCreation: null,
+          sourceKind: 'archive',
+          archiveTitle: 'Wikipedia (DE)',
+          packId: 'pack-uuid-1',
+          articlePath: 'A/Treibhausgas'
+        }
+      ]
+    })
+    const model = buildEvidencePackModel(detail, opts(), META)
+    expect(model.evidence[0]).toMatchObject({
+      sourceKind: 'archive',
+      archiveTitle: 'Wikipedia (DE)',
+      packId: 'pack-uuid-1',
+      articlePath: 'A/Treibhausgas'
+    })
+  })
+
+  it('ZIM wave (#294 review M11): honesty counts split — archiveSources vs unresolvedSources never double-count one source', () => {
+    const archiveOnly = makeDetail({
+      sources: [
+        {
+          key: 's1',
+          machineLabel: 'S1',
+          kind: 'direct_excerpt',
+          identity: 'unresolved',
+          documentId: null,
+          documentTitle: 'Treibhausgas',
+          documentSha256: null,
+          mimeType: null,
+          pageNumber: null,
+          sectionLabel: null,
+          snippet: null,
+          sourceChunkId: null,
+          availabilityAtCreation: null,
+          sourceKind: 'archive',
+          archiveTitle: 'Wikipedia (DE)',
+          packId: 'pack-uuid-1',
+          articlePath: 'A/Treibhausgas'
+        }
+      ]
+    })
+    const archiveModel = buildEvidencePackModel(archiveOnly, opts(), META)
+    expect(archiveModel.honesty.archiveSources).toBe(1)
+    expect(archiveModel.honesty.unresolvedSources).toBe(0)
+
+    // A genuinely unresolved DOCUMENT source still counts as unresolved (unchanged behavior).
+    const documentUnresolved = makeDetail({
+      sources: [
+        {
+          key: 's1',
+          machineLabel: 'S1',
+          kind: 'direct_excerpt',
+          identity: 'unresolved',
+          documentId: null,
+          documentTitle: 'ambiguous.pdf',
+          documentSha256: null,
+          mimeType: null,
+          pageNumber: null,
+          sectionLabel: null,
+          snippet: null,
+          sourceChunkId: null,
+          availabilityAtCreation: null
+        }
+      ]
+    })
+    const documentModel = buildEvidencePackModel(documentUnresolved, opts(), META)
+    expect(documentModel.honesty.unresolvedSources).toBe(1)
+    expect(documentModel.honesty.archiveSources).toBe(0)
+  })
+
+  it('ZIM wave (#294 review M11): sourceKind defaults to "document" when the snapshot lacks it', () => {
+    const model = buildEvidencePackModel(makeDetail(), opts(), META)
+    expect(model.evidence[0]!.sourceKind).toBe('document')
+    expect(model.evidence[0]!.archiveTitle).toBeNull()
+    expect(model.evidence[0]!.packId).toBeNull()
+    expect(model.evidence[0]!.articlePath).toBeNull()
+  })
+
   it('counts unresolved vs missing sources DISTINCTLY (P0/P1 identity semantics)', () => {
     const detail = makeDetail({
       sources: [

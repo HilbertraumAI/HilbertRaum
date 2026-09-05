@@ -13,6 +13,7 @@ import {
   deleteLastAssistantMessage,
   effectiveContextWindow,
   EmptyCompletionError,
+  exportTranscript,
   fitMessagesToContext,
   generateAssistantMessage,
   getLatestMessage,
@@ -29,7 +30,7 @@ import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
 import type { Db } from '../../src/main/services/db'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
-import type { CoverageInfo } from '../../src/shared/types'
+import type { Citation, CoverageInfo } from '../../src/shared/types'
 
 function freshDb(): Db {
   const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-chat-'))
@@ -1022,5 +1023,109 @@ describe('answer-depth threading + persistence hygiene (Phase 20)', () => {
     const built = buildChatMessages(db, conv.id)
     expect(built[1].content).toBe('literal <think>user text</think> stays')
     expect(built[2].content).toBe('Visible answer')
+  })
+})
+
+describe('exportTranscript — citation provenance (ZIM wave, #294 review M11)', () => {
+  it('renders a document citation exactly as before AND an archive citation with its knowledge-pack locator', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const citations: Citation[] = [
+      { label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 12 },
+      {
+        label: 'S2',
+        sourceTitle: 'Treibhausgas',
+        section: 'Landwirtschaft',
+        sourceKind: 'archive',
+        archiveTitle: 'Wikipedia (DE)',
+        packId: 'pack-uuid-1',
+        articlePath: 'A/Treibhausgas'
+      }
+    ]
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a [S1][S2]', citations })
+    const { markdown } = exportTranscript(db, conv.id)
+    expect(markdown).toContain('- [S1] contract.pdf, p. 12')
+    expect(markdown).toContain(
+      '- [S2] Treibhausgas, Landwirtschaft — knowledge pack: Wikipedia (DE); pack id pack-uuid-1; article A/Treibhausgas'
+    )
+  })
+
+  it('omits missing archive locator values, never invents them', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const citations: Citation[] = [
+      { label: 'S1', sourceTitle: 'Treibhausgas', sourceKind: 'archive', archiveTitle: null, packId: 'pack-uuid-1', articlePath: null }
+    ]
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a [S1]', citations })
+    const { markdown } = exportTranscript(db, conv.id)
+    expect(markdown).toContain('- [S1] Treibhausgas — pack id pack-uuid-1')
+    expect(markdown).not.toContain('knowledge pack:')
+    expect(markdown).not.toContain('article')
+  })
+
+  it('a `\\n` inside articlePath cannot break the line (stripped, single Markdown line)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const citations: Citation[] = [
+      {
+        label: 'S1',
+        sourceTitle: 'Treibhausgas',
+        sourceKind: 'archive',
+        archiveTitle: 'Wikipedia (DE)\nInjected',
+        packId: 'pack-uuid-1',
+        articlePath: 'A/Treibhausgas\n- [S99] fake citation'
+      }
+    ]
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a [S1]', citations })
+    const { markdown } = exportTranscript(db, conv.id)
+    const lines = markdown.split('\n')
+    const line = lines.find((l) => l.startsWith('- [S1]'))
+    expect(line).toBeDefined()
+    expect(line).not.toContain('\n')
+    // The injected "- [S99]" text survives only as INERT text inside the [S1] line — it
+    // never starts its OWN line (which is what would make it read as a real citation).
+    expect(lines.some((l) => l.startsWith('- [S99]'))).toBe(false)
+    expect(line).toBe(
+      '- [S1] Treibhausgas — knowledge pack: Wikipedia (DE) Injected; pack id pack-uuid-1; article A/Treibhausgas - [S99] fake citation'
+    )
+  })
+
+  it('a hand-edited row whose archive locator fields are the wrong TYPE is dropped by the citation validator, never handed untyped to the export or the cards (#294 review M11)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const msg = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'answer' })
+    // A stale / hand-edited payload: S1 is a well-formed archive citation, S2 carries objects
+    // where the locator strings belong. `.replace` on a non-string would throw in the export.
+    db.prepare('UPDATE messages SET citations_json = ? WHERE id = ?').run(
+      JSON.stringify([
+        {
+          label: 'S1',
+          sourceTitle: 'Treibhausgas',
+          sourceKind: 'archive',
+          archiveTitle: 'Wikipedia (DE)',
+          packId: 'pack-uuid-1',
+          articlePath: 'A/Treibhausgas'
+        },
+        {
+          label: 'S2',
+          sourceTitle: 'Klimawandel',
+          sourceKind: 'archive',
+          archiveTitle: { toString: 1 },
+          packId: 42,
+          articlePath: ['A/Klimawandel']
+        }
+      ]),
+      msg.id
+    )
+    expect(listMessages(db, conv.id).at(-1)?.citations?.map((x) => x.label)).toEqual(['S1'])
+    const { markdown } = exportTranscript(db, conv.id)
+    expect(markdown.split('\n').filter((l) => l.startsWith('- ['))).toEqual([
+      '- [S1] Treibhausgas — knowledge pack: Wikipedia (DE); pack id pack-uuid-1; article A/Treibhausgas'
+    ])
+    expect(markdown).not.toContain('Klimawandel')
   })
 })
