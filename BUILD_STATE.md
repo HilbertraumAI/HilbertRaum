@@ -33,10 +33,11 @@ _2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), 
 PROGRESS:** On this drive / Browse views, name/id search, task/family filters, compact
 rows and expandable quantization groups; design record `docs/design-guidelines.md` §15;
 user-guide §5. After the 2026-09-05 review the branch was rebuilt on master as UX-only —
-Flash-Next stays on `feat/qwen38-flash-next-manifest`, its own PR. Fix wave phases P1
-(rebuild) through P5 planned: P2 catalog guards, P3 terminal download-result panel (F2),
-P4 repair visibility + group face (F3/F5), P5 docs + dead-key cleanup (F6/F7). Validation
-counts recorded per phase in the ledger._
+Flash-Next stays on `feat/qwen38-flash-next-manifest`, its own PR. P1 rebuild `7c03c8e6`
+(377 / 5,674 / 80, CI green). P2 catalog guard: `committed-catalog.test.ts` pins the split
+id absent and no `-NNNNN-of-NNNNN.gguf` path anywhere the app enumerates (+5 tests, red-proof
+in an isolated temp catalog). Next: P3 terminal download-result panel (F2), P4 repair
+visibility + group face (F3/F5), P5 docs + dead-key cleanup (F6/F7)._
 
 _2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
 `readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one
