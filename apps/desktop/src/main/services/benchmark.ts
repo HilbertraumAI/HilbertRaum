@@ -18,10 +18,11 @@ import type {
   BenchmarkProgressStep,
   BenchmarkResult,
   EffectiveReadSample,
-  HardwareProfile
+  HardwareProfile,
+  MemoryClass
 } from '../../shared/types'
 import type { ModelRuntime, RuntimeTimings } from './runtime'
-import { recommendModelId, recommendModelIdByRam } from './models'
+import { recommendChatModelId, recommendModelId } from './models'
 
 // Hardware benchmarker (spec §7.3, §11). Detects RAM/CPU/OS, measures drive
 // read/write speed with a small temp file in the workspace, optionally estimates
@@ -450,6 +451,11 @@ export interface GpuBenchmarkInput {
   useful: boolean
   /** Total memory of the primary device in MiB (→ `BenchmarkResult.gpuVramMb`); absent/null = unknown. */
   totalMb?: number | null
+  /**
+   * The computer's memory class (services/performance.ts `memoryClassOf`): 'discrete' makes
+   * the chat pick graphics-memory-best-fit (§6.6); absent → 'cpu', the RAM pick.
+   */
+  memoryClass?: MemoryClass
 }
 
 export interface RunBenchmarkDeps {
@@ -544,10 +550,16 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   // so the Diagnostics card and the Models screen ★ agree within one run.
   const ramRounded = Math.round(sys.ramGb)
   const speedSignal = { tokensPerSecond, measuredModelId }
-  const ramPick = recommendModelIdByRam(deps.manifests, ramRounded, 'chat', speedSignal)
+  // §6.6: on a discrete card the pick is by graphics memory (the model has to fit the card
+  // to run at card speed); unified memory and no-card machines keep the RAM pick.
+  const memory = {
+    memoryClass: deps.gpu?.memoryClass ?? 'cpu',
+    ramGb: ramRounded,
+    vramMb: deps.gpu?.totalMb ?? null
+  } as const
+  const ramPick = recommendChatModelId(deps.manifests, memory, speedSignal)
   // Did the signal actually move the pick? Feeds the named §6.5 warning below.
-  const recommendationLowered =
-    ramPick !== recommendModelIdByRam(deps.manifests, ramRounded, 'chat')
+  const recommendationLowered = ramPick !== recommendChatModelId(deps.manifests, memory)
   const recommendedModelId = ramPick ?? recommendModelId(deps.manifests, profile, 'chat')
   const warnings = buildWarnings({
     profile,

@@ -29,6 +29,12 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-05: **Graphics-memory-aware picker (`feat/vram-aware-picker`, stacked on #303):** on a
+discrete card the chat ★ pick is the best model that fits the card (weights × 1.15 + 0.5 GiB + the
+fit's 1 GiB margin ≤ VRAM), RAM a hard gate, the §6.2 order among fitting models; unified / no-card
+keep the RAM pick. Record: model-benchmarks.md §6.6 (picks per card size pinned in
+`committed-catalog.test.ts`). Owner sign-off required in review (§5 item 8)._
+
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
 the same branch (owner decision): three groups (Chat · Documents · Translate · Images ‖ AI Model ·
@@ -668,8 +674,9 @@ open round's item stays the last block of §5.)
     two machines (restore, then new-machine background run) and the German rail label width at the
     600 weight; (d) model-load duration per machine in the history rows (the `model_load` sample
     carries it; only the current machine shows it today); (e) "Your model" Phase 2: the
-    context-cache estimate from the GGUF header, and a VRAM-aware ★ picker (the picker is
-    RAM-best-fit today, which is how a 24 GB card gets a 27B Q5 recommended on a 125 GB box);
+    context-cache estimate from the GGUF header still open; the VRAM-aware ★ picker SHIPPED on
+    `feat/vram-aware-picker` (stacked on #303; model-benchmarks.md §6.6; needs the §5 item 8
+    owner sign-off in review);
     (f) the fit margin: on the rig the 27B Q5 lands 62/66 layers on a FREE 24 GB card (model
     18.9 GiB + ~2.9 GiB working buffers + the fit's fixed 1 GiB margin comes within a layer of
     the free memory); options are a smaller `--fit-target`, a smaller ubatch for the largest

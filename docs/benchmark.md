@@ -122,11 +122,17 @@ Adjustments, in order:
 
 ## Recommendation
 
-**The primary picker is RAM-best-fit, not profile lookup.** `runBenchmark` calls
-`recommendModelIdByRam(manifests, round(ramGb), 'chat', speedSignal)`, which chooses the largest model
-that fits the measured RAM, breaking ties on each manifest's `recommendation_rank`. The profile-based
-`recommendModelId(manifests, profile, 'chat')` is only the **fallback** when RAM can't be detected
-(`ramGb = 0`). With the committed manifests the live, real-hardware recommendations are:
+**The primary picker is memory-best-fit, not profile lookup.** `runBenchmark` calls
+`recommendChatModelId(manifests, { memoryClass, ramGb: round(ramGb), vramMb }, speedSignal)`
+(model-benchmarks.md §6.6, 2026-09-05): on a computer with a usable **discrete card** the pick is the
+best model that FITS THE CARD (`recommendModelIdByVram`: weights × 1.15 + 0.5 GiB cache + the fit's
+1 GiB margin ≤ VRAM, RAM still a hard gate, then the RAM picker's tier/rank order); on **unified
+memory** (Apple Silicon) and on a machine **without a usable card** it is RAM-best-fit
+(`recommendModelIdByRam`: the largest model whose comfortable RAM fits, ties on
+`recommendation_rank`). The profile-based `recommendModelId(manifests, profile, 'chat')` is only the
+**fallback** when RAM can't be detected (`ramGb = 0`). With the committed manifests the live,
+real-hardware recommendations by card are 6 GB → `qwen3.5-4b-ud-q4kxl`, 8 GB → `qwen3.5-9b-ud-q4kxl`,
+12–16 GB → `gemma4-12b-it-qat-q4`, 24 GB and up → `qwen3.8-27b-ud-q5km` (§6.6 table); by RAM:
 
 | Measured RAM | Chat model |
 |---|---|

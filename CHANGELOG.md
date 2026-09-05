@@ -54,6 +54,16 @@ from its first public `1.0.0` release onward.
   is saved, so older answers show no line after a restart — and only for plain chat answers with
   the real AI engine (not for document answers, and not for a stopped answer). English and German.
 
+### Changed
+
+- **On a computer with a graphics card, the recommended chat model is now chosen by the
+  card's memory, not by RAM.** A model only runs at card speed when it fits the card, so the
+  star pick on the AI Model screen and the check on the Performance page now choose the best
+  model that fits your graphics memory (with room for the runtime's working buffers). RAM is
+  still respected: a model that needs more RAM than the computer has is never recommended.
+  Apple Silicon and computers without a usable graphics card keep the RAM-based pick. For
+  example, an 8 GB card now gets the 9B model instead of a 27B that would spill into RAM.
+
 ### Fixed
 
 - **The speed figure on Settings → Diagnostics is now the model's real decode speed.** The
