@@ -39,10 +39,11 @@ cut before an `&`), `zimArticleToSegmentsAsync(html, { …, signal? })` (`setImm
 rejects on abort), the incremental tidy; output byte-identical to P1 on 45 inputs; `arm.ts` propagates
 the ask abort. 14900K P-core: per-slice p95 ≤ 0.99 ms vs the 1.67 ms early-warning third of the 5 ms
 gate (PASS; the raw batch max 2.7 ms is random-index jitter); the 1 MiB sync total rose ≈ 15 % (price
-of divisibility, recorded not gated). The reporter's i7-8550U measured the P1 converter the same evening: 1 MiB 73–130 ms vs 50 (fails
-every run — this core class is 4.6–8× a 14900K P-core, the one-third rule under-warned), batch
-127–250 vs 150; its PER-SLICE figure on P1b is the decisive number and is pending (T02-c); the
-worker stays the fallback only. Suite: 411 / 5,866 (5,787 / 78) — the load-flaky `zim-client` 8 MiB
+of divisibility, recorded not gated). The reporter's i7-8550U then ran BOTH: the P1 converter (1 MiB 73–130 ms vs 50, fails every run —
+this core class is 4.6–8× a 14900K P-core) and P1b's Section D at 32 Ki and 16 Ki: per-slice p95
+2.4–2.7 ms at 16 Ki vs the 5 ms bound (PASS; 1 MiB families' max < 3 ms), the batch's residual 6–9 ms
+maxima being random-index GC pauses (now counted by the script). `DEFAULT_SLICE_WORK` = 16 Ki from
+that run; T02-c recorded; the worker stays the fallback only. Suite: 411 / 5,866 (5,787 / 78) — the load-flaky `zim-client` 8 MiB
 legs (one `ECONNRESET` under fork load, green alone) now carry one retry; typecheck clean, build green.
 Pointers: `docs/rag-design.md` §17 D-Z3 "P1b", `scripts/zim-html-perf.mjs` Section D.
 

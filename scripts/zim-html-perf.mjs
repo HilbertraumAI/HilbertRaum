@@ -46,6 +46,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import os from 'node:os'
+import { PerformanceObserver } from 'node:perf_hooks'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -286,6 +287,37 @@ function runSectionC() {
 // The 1 MiB leg always runs at 1 MiB even under --quick (which caps Section A at 60k): a
 // per-slice measurement needs a multi-slice input, and post-scanner one 1 MiB conversion is a
 // few tens of ms, not the minutes the pre-P1 quadratic converter took.
+// ---- GC attribution (P1b follow-up). The reference laptop showed 6-9 ms batch-leg maxima that did
+// NOT shrink when sliceWork halved, at a random article each run: not scan work, so the likeliest
+// cause is an allocation-driven minor GC pause landing inside a slice. Count and time the GC
+// events per row so the verdict can say "GC" from evidence, not from inference. Entries reach the
+// observer asynchronously, so each row awaits one macrotask before reading its counters.
+const gc = { n: 0, ms: 0, majors: 0 }
+let gcObserver = null
+try {
+  gcObserver = new PerformanceObserver((list) => {
+    for (const e of list.getEntries()) {
+      gc.n += 1
+      gc.ms += e.duration
+      // kind 2 = mark-sweep-compact (major); 4 = scavenge (minor) in Node's perf_hooks constants.
+      if (e.detail?.kind === 2 || e.kind === 2) gc.majors += 1
+    }
+  })
+  gcObserver.observe({ entryTypes: ['gc'] })
+} catch {
+  gcObserver = null
+}
+const flushGc = () => new Promise((resolve) => setImmediate(resolve))
+async function gcDelta(fn) {
+  await flushGc()
+  const n0 = gc.n
+  const ms0 = gc.ms
+  const maj0 = gc.majors
+  const result = await fn()
+  await flushGc()
+  return { result, gcN: gc.n - n0, gcMs: gc.ms - ms0, gcMajors: gc.majors - maj0 }
+}
+
 function sliceTimes(html) {
   const run = zimArticleSlices(html, { sliceWork })
   const times = []
@@ -302,19 +334,21 @@ function sliceTimes(html) {
   return { times, result }
 }
 
-function sliceRow(label, html, warmups) {
+async function sliceRow(label, html, warmups) {
   for (let i = 0; i < warmups; i++) sliceTimes(html)
+  const { result: runs, gcN, gcMs, gcMajors } = await gcDelta(async () =>
+    [sliceTimes(html), sliceTimes(html), sliceTimes(html)].map(({ times, result }) => ({
+      times,
+      result,
+      maxMs: Math.max(...times),
+      totalMs: times.reduce((a, b) => a + b, 0)
+    }))
+  )
   // Three timed runs. The reported max is the MEDIAN of the three runs' maxima, not the worst
   // sample: at sub-millisecond slice sizes a single OS interruption or JIT tier-up shows up as
   // one 3-6x outlier at a random slice index, and the point of this gate is the longest
   // uninterruptible unit of OUR work, which is present in every run. `worstMaxMs` keeps the
   // outlier visible — a real indivisible step makes the two columns agree.
-  const runs = [sliceTimes(html), sliceTimes(html), sliceTimes(html)].map(({ times, result }) => ({
-    times,
-    result,
-    maxMs: Math.max(...times),
-    totalMs: times.reduce((a, b) => a + b, 0)
-  }))
   const byTotal = [...runs].sort((a, b) => a.totalMs - b.totalMs)
   const { times, result, totalMs } = byTotal[1]
   const maxima = runs.map((r) => r.maxMs).sort((a, b) => a - b)
@@ -334,34 +368,43 @@ function sliceRow(label, html, warmups) {
     medianMs: median(times),
     totalMs,
     syncMs,
-    overheadPct: (totalMs / syncMs - 1) * 100
+    overheadPct: (totalMs / syncMs - 1) * 100,
+    /** GC events (and their summed ms, majors) observed during the three timed runs. */
+    gcN,
+    gcMs,
+    gcMajors
   }
 }
 
-function runSectionD() {
-  const oneMiB = Object.entries(FAMILY_BODY).map(([family, bodyFn]) =>
-    sliceRow(family, wrapPathology(bodyFn(1_048_576 - WRAP_LEN)), 2)
-  )
+async function runSectionD() {
+  const oneMiB = []
+  for (const [family, bodyFn] of Object.entries(FAMILY_BODY)) {
+    oneMiB.push(await sliceRow(family, wrapPathology(bodyFn(1_048_576 - WRAP_LEN)), 2))
+  }
 
   // The batch: 60 conversions driven slice by slice. The event loop turns between every pair
   // of slices, so the stall is the worst single slice pooled across the whole batch.
   const { articles, source } = loadBatchArticles()
   const batch = Array.from({ length: 60 }, (_, i) => articles[i % articles.length])
   for (const a of batch) sliceTimes(a.html)
-  // Three passes over the batch, reported through the median of their maxima (see sliceRow).
-  const passes = []
-  for (let p = 0; p < 3; p++) {
-    const pooled = []
-    let slices = 0
-    let totalMs = 0
-    for (const a of batch) {
-      const { times } = sliceTimes(a.html)
-      slices += times.length
-      totalMs += times.reduce((x, y) => x + y, 0)
-      pooled.push(...times)
+  // Three passes over the batch, reported through the median of their maxima (see sliceRow),
+  // with the GC events observed during them.
+  const { result: passes, gcN: batchGcN, gcMs: batchGcMs, gcMajors: batchGcMajors } = await gcDelta(async () => {
+    const out = []
+    for (let p = 0; p < 3; p++) {
+      const pooled = []
+      let slices = 0
+      let totalMs = 0
+      for (const a of batch) {
+        const { times } = sliceTimes(a.html)
+        slices += times.length
+        totalMs += times.reduce((x, y) => x + y, 0)
+        pooled.push(...times)
+      }
+      out.push({ pooled, slices, totalMs, maxMs: Math.max(...pooled) })
     }
-    passes.push({ pooled, slices, totalMs, maxMs: Math.max(...pooled) })
-  }
+    return out
+  })
   const batchMaxima = passes.map((p) => p.maxMs).sort((x, y) => x - y)
   const byTotal = [...passes].sort((x, y) => x.totalMs - y.totalMs)
   const { pooled, slices: batchSlices, totalMs: batchTotalMs } = byTotal[1]
@@ -386,8 +429,12 @@ function runSectionD() {
       medianMs: median(pooled),
       totalMs: batchTotalMs,
       syncMs: batchSyncMs,
-      overheadPct: (batchTotalMs / batchSyncMs - 1) * 100
-    }
+      overheadPct: (batchTotalMs / batchSyncMs - 1) * 100,
+      gcN: batchGcN,
+      gcMs: batchGcMs,
+      gcMajors: batchGcMajors
+    },
+    gcObserved: gcObserver !== null
   }
 }
 
@@ -426,7 +473,7 @@ function gitShortSha() {
 }
 
 // ---- Main ----
-function main() {
+async function main() {
   const cpus = os.cpus()
   const header = {
     date: new Date().toISOString(),
@@ -488,10 +535,10 @@ function main() {
   )
 
   console.log('\n== Section D — cooperative slicing (P1b): per-slice main-thread stall ==')
-  const sectionD = runSectionD()
+  const sectionD = await runSectionD()
   console.log(`sliceWork: ${sectionD.sliceWork} work units (every family at 1 MiB)`)
   printTable(
-    ['family (1 MiB)', 'slices', 'max slice ms', 'p95 slice ms', 'worst of 3', 'worst slice #', 'median slice ms', 'total ms', 'sync ms', 'overhead %'],
+    ['family (1 MiB)', 'slices', 'max slice ms', 'p95 slice ms', 'worst of 3', 'worst slice #', 'median slice ms', 'total ms', 'sync ms', 'overhead %', 'gc n', 'gc ms'],
     sectionD.oneMiB.map((r) => [
       r.label,
       r.slices,
@@ -502,7 +549,9 @@ function main() {
       r.medianMs.toFixed(3),
       r.totalMs.toFixed(2),
       r.syncMs.toFixed(2),
-      r.overheadPct.toFixed(1)
+      r.overheadPct.toFixed(1),
+      r.gcN,
+      r.gcMs.toFixed(2)
     ])
   )
   const worstOneMiB = sectionD.oneMiB.reduce((a, b) => (b.maxMs > a.maxMs ? b : a))
@@ -511,7 +560,7 @@ function main() {
       ` (slice ${worstOneMiB.maxAt} of ${worstOneMiB.slices - 1})`
   )
   printTable(
-    ['batch leg', 'conversions', 'slices', 'max slice ms', 'p95 slice ms', 'worst of 3', 'median slice ms', 'total ms', 'sync ms', 'overhead %'],
+    ['batch leg', 'conversions', 'slices', 'max slice ms', 'p95 slice ms', 'worst of 3', 'median slice ms', 'total ms', 'sync ms', 'overhead %', 'gc n', 'gc ms'],
     [
       [
         sectionD.batch.source,
@@ -523,9 +572,16 @@ function main() {
         sectionD.batch.medianMs.toFixed(3),
         sectionD.batch.totalMs.toFixed(2),
         sectionD.batch.syncMs.toFixed(2),
-        sectionD.batch.overheadPct.toFixed(1)
+        sectionD.batch.overheadPct.toFixed(1),
+        sectionD.batch.gcN,
+        sectionD.batch.gcMs.toFixed(2)
       ]
     ]
+  )
+  console.log(
+    sectionD.gcObserved
+      ? 'GC during the three batch passes: ' + sectionD.batch.gcN + ' events (' + sectionD.batch.gcMajors + ' major), ' + sectionD.batch.gcMs.toFixed(2) + ' ms - a GC pause inside a slice shows up as a random-index max that does not shrink with --slice-work'
+      : 'GC observation unavailable on this Node'
   )
   console.log('\n== Verdict ==')
   const gate = GATES[gateProfile] ?? GATES['early-warning']
@@ -544,4 +600,4 @@ function main() {
   process.exitCode = 0
 }
 
-main()
+await main()

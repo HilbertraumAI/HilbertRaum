@@ -2281,6 +2281,32 @@ offline article viewer. Files are registered in place, never copied.
   no longer sit at a fixed index. The sync 1 MiB totals rose ≈15% over P1 (the price of
   divisibility: generator driving, text pieces, incremental tidy) — recorded as a CPU/latency
   fact under the re-ruled gate, not hidden. Decisive i7-8550U per-slice figure: pending (owner).
+  **Laptop leg 3 — the reporter's i7-8550U on the P1b converter (`5f68cec4`), 2026-09-05, the
+  decisive per-slice run.** Conditions as leg 2 (AC, High performance, Node 24.18, no pinning);
+  32 Ki and 16 Ki slice sizes, three synthetic runs each plus one real-fixture run each.
+
+  | series | 1 MiB families: median-of-3 max | 1 MiB p95 | batch max | batch p95 | batch median |
+  |---|---|---|---|---|---|
+  | 32 Ki (3 runs) | 3.32 / 5.21 / 3.71 ms (wellformed) | 3.15–3.72 ms | 7.61 / 7.83 / 9.36 ms | 1.78–2.17 ms | 1.37–1.52 ms |
+  | 16 Ki (3 runs) | 2.76 / 2.97 / 2.69 ms | 2.37–2.72 ms | 7.49 / 8.25 / 6.12 ms | 0.98–1.74 ms | 0.75–0.99 ms |
+  | 32 Ki real fixtures | 6.18 ms (wellformed) | 4.14 ms | 5.37 ms | 0.78 ms | 0.59 ms |
+  | 16 Ki real fixtures | 5.12 ms (wellformed) | 2.14 ms | 5.99 ms | 0.49 ms | 0.31 ms |
+
+  Every run PASSES (iii-p95) at both sizes (0.43–0.83×) and FAILS the raw (iii) max (1.20–1.87×)
+  — and, as the reporter observed, the failing max is the batch leg's, at a random article,
+  unchanged when the slice size halves (60 → 120 slices), i.e. not scan work. The script now
+  counts GC events per row (a `PerformanceObserver` on `gc`): on the 14900K the three batch
+  passes show 5 minor collections totalling ~10 ms, ~2 ms each, at random articles — the same
+  shape the laptop shows at its speed (6–9 ms). Those are allocation-driven pauses that hit the
+  synchronous path identically and are outside what slicing can divide; reducing allocation is
+  a separate constant-factor task, not part of the gate. **Decision (2026-09-05): `DEFAULT_SLICE_WORK`
+  = `TEXT_PIECE_CHARS` = 16 Ki** — on the reference every 1 MiB family's median-of-three max
+  is under 3 ms and p95 2.4–2.7 ms (32 Ki reached 5.2 ms / 3.7 ms), at ~0 % overhead; an ordinary
+  ~30 KB article becomes two slices (one macrotask hop). Gate (iii) reading on the reference:
+  **PASS** on p95 and on the 1 MiB families' median-of-three max; the batch's residual maxima are
+  GC, recorded. The CPU totals on the reference (facts, not gated): 1 MiB 53–80 ms, synthetic
+  batch 87–103 ms (one slow run 168), real-fixture batch 188–210 ms (size caveat). T02-c is
+  thereby recorded; P7's re-check (B02) runs Section D at 16 Ki on the final build.
 - **D-Z4 — one seam in `retrieve()`.** An optional `ExternalRetrievalArm` (parameter 8)
   appends candidates between the chunk-row join and the rerank, so rerank, dedup, token
   budget and `[Sn]` labelling treat archive and document chunks uniformly. No reranker →

@@ -375,22 +375,27 @@ const DEFAULT_MAX_CHARS = 1_048_576
 
 /**
  * Work units per cooperative slice (P1b), and the size of one emitted text piece — kept
- * equal so the two slice triggers have the same granularity. 32_768 measures at ~0.5 ms per
- * slice on a desktop P-core and ~1 ms with scheduling jitter, comfortably inside the ruled
- * 5 ms per-slice stall on the reference laptop, while a whole 1 MiB article still costs only
- * tens of macrotask hops and any ordinary ~30 KB article stays a single slice. Halved from
- * 65_536 after measurement: at that size the busiest family sat at 1.1 ms median with a
- * jitter tail past the 1.67 ms early-warning threshold.
+ * equal so the two slice triggers have the same granularity. 16_384 measures at ~0.3 ms
+ * median / 0.5 ms p95 per slice on a desktop P-core and 1.2 ms median / 2.4–2.7 ms p95 on the
+ * i7-8550U reference — inside the ruled 5 ms per-slice stall with margin — while a whole 1 MiB
+ * article still costs only ~60 macrotask hops and an ordinary ~30 KB article is two slices.
+ * Set from measurement, twice: 65_536 → 32_768 on the i9-14900K (the busiest family sat at
+ * 1.1 ms median with a jitter tail past the 1.67 ms early-warning third), then 32_768 →
+ * 16_384 on the i7-8550U reference itself (2026-09-05: at 32 Ki the 1 MiB families' median-of-
+ * three max reached 5.2 ms and p95 3.2–3.7 ms; at 16 Ki max 2.7–3.0 ms and p95 2.4–2.7 ms —
+ * inside the 5 ms bound with margin, at ~0 % overhead). The residual 6–9 ms spikes that
+ * machine shows at a random article of the batch do NOT shrink with the slice size and are
+ * therefore not scan work (see the perf script's GC columns).
  */
-export const DEFAULT_SLICE_WORK = 32_768
+export const DEFAULT_SLICE_WORK = 16_384
 
 /**
  * Longest run of character data handed to `decodeEntities` (and to the incremental tidy)
- * in one step. A 1 MiB page containing no `<` at all used to be one hop, one decode and
+ * in one step — kept equal to DEFAULT_SLICE_WORK so both slice triggers have one granularity. A 1 MiB page containing no `<` at all used to be one hop, one decode and
  * one tidy — 13 ms of main thread nobody could interrupt. Emitting in pieces makes a slice
  * boundary reachable inside a single text run (P1b follow-up).
  */
-export const TEXT_PIECE_CHARS = 32_768
+export const TEXT_PIECE_CHARS = 16_384
 
 /** JS `\s`, by code unit — the set `tidyWhole`'s character classes operate on. */
 function isWhitespaceCode(cc: number): boolean {
