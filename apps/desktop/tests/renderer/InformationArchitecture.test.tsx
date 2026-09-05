@@ -9,10 +9,10 @@ import { DEFAULT_SETTINGS, type PolicyStatus, type WorkspaceStateInfo } from '..
 import { stubApi } from '../helpers/renderer'
 import { appStatus, driveStatus, makePolicyStatus } from '../helpers/status'
 
-// Phase 26 information architecture (guidelines §2): 5 nav destinations (4 everyday +
-// Settings), Privacy/Diagnostics folded into Settings tabs, and the navigate() virtual
-// targets — including the legacy 'privacy'/'diagnostics' aliases every pre-26 entry
-// point still uses.
+// Information architecture (guidelines §2, rail rework 2026-09-05): three rail groups
+// (Chat · Documents · Translate · Images ‖ AI Model · Performance ‖ Settings), Home behind
+// the brand mark, Privacy/Skills/Diagnostics folded into Settings tabs, and the navigate()
+// virtual targets, including every legacy alias older entry points still use.
 
 afterEach(cleanup)
 
@@ -27,14 +27,15 @@ beforeAll(() => {
 })
 
 describe('resolveNavTarget — virtual targets + legacy aliases', () => {
-  it('maps the eight real destinations to themselves', () => {
+  it('maps the eight real screens to themselves', () => {
     expect(resolveNavTarget('home')).toEqual({ screen: 'home' })
     expect(resolveNavTarget('documents')).toEqual({ screen: 'documents' })
     // Translate is a primary destination between Documents and Images (TranslateGemma plan §2 D6).
     expect(resolveNavTarget('translate')).toEqual({ screen: 'translate' })
     expect(resolveNavTarget('images')).toEqual({ screen: 'images' })
     expect(resolveNavTarget('models')).toEqual({ screen: 'models' })
-    expect(resolveNavTarget('skills')).toEqual({ screen: 'skills' })
+    // Performance is a primary destination after AI Model (design-guidelines §2, 2026-09).
+    expect(resolveNavTarget('performance')).toEqual({ screen: 'performance' })
     expect(resolveNavTarget('chat')).toEqual({ screen: 'chat', chatMode: 'chat' })
     expect(resolveNavTarget('settings')).toEqual({ screen: 'settings', settingsTab: 'general' })
   })
@@ -47,10 +48,11 @@ describe('resolveNavTarget — virtual targets + legacy aliases', () => {
     })
   })
 
-  it('keeps the legacy settings:skills target working, now routed to the Skills screen', () => {
-    // Skills graduated from a Settings tab to a top-level rail destination; the old
-    // settings:skills entry point still resolves (now to the standalone screen).
-    expect(resolveNavTarget('settings:skills')).toEqual({ screen: 'skills' })
+  it('routes both Skills spellings to the Settings "Skills" tab (rail rework 2026-09-05)', () => {
+    // Skills was a Settings tab, then a rail destination, and is a Settings tab again; the
+    // entry points of both eras (the chat composer uses 'skills') land on the tab.
+    expect(resolveNavTarget('settings:skills')).toEqual({ screen: 'settings', settingsTab: 'skills' })
+    expect(resolveNavTarget('skills')).toEqual({ screen: 'settings', settingsTab: 'skills' })
   })
 
   it('keeps the legacy privacy/diagnostics targets working as aliases', () => {
@@ -66,7 +68,7 @@ describe('resolveNavTarget — virtual targets + legacy aliases', () => {
   it("keeps 'review' OUT of plain navigation — reachable only via App's handoff slot (EP-1 §7.1)", () => {
     // The review screen is meaningless without a review/message id in the handoff slot, so
     // as a plain target it lands on home like any unknown target; App.openReview is the
-    // one way in (and the nav rail carries NO review item — the IA test above pins the 8).
+    // one way in (and the nav rail carries NO review item — the IA test above pins the 9).
     expect(resolveNavTarget('review')).toEqual({ screen: 'home' })
   })
 })
@@ -115,8 +117,8 @@ function stubAppShell(): void {
   })
 }
 
-describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
-  it('renders exactly Home · Chat · Documents · Translate · Images · AI Model · Skills ‖ Settings — no Privacy/Diagnostics items', async () => {
+describe('App shell: three rail groups, Home behind the brand mark (rail rework 2026-09-05)', () => {
+  it('renders exactly Chat · Documents · Translate · Images ‖ AI Model · Performance ‖ Settings, with no Home, Skills, Privacy or Diagnostics items', async () => {
     stubAppShell()
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -128,17 +130,37 @@ describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
     // hyphenation-polish change can't silently break the IA assertion.
     // Icons are now aria-hidden line SVGs (no text content), so only the label remains.
     expect(items.map((b) => b.textContent?.replace(/­/g, ''))).toEqual([
-      'Home',
       'Chat',
       'Documents',
       'Translate',
       'Images',
       'AI Model',
-      'Skills',
+      'Performance',
       'Settings'
     ])
     expect(within(nav).queryByText(/privacy/i)).not.toBeInTheDocument()
     expect(within(nav).queryByText(/diagnostics/i)).not.toBeInTheDocument()
+    expect(within(nav).queryByText(/skills/i)).not.toBeInTheDocument()
+    // The three groups: work, machine, utility (the two lower lists carry the divider classes).
+    const lists = nav.querySelectorAll('ul.nav-list')
+    expect(lists).toHaveLength(3)
+    expect(lists[1].className).toContain('nav-group')
+    expect(lists[2].className).toContain('nav-bottom')
+  })
+
+  it('the brand mark is the Home control: lit on Home, unlit elsewhere, and it navigates home', async () => {
+    stubAppShell()
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    const mark = within(nav).getByRole('button', { name: /HilbertRaum — Home/ })
+    // The app opens on Home: the mark carries the current-page state and the lit fill.
+    expect(mark).toHaveAttribute('aria-current', 'page')
+    expect(mark.className).toContain('active')
+    await userEvent.click(within(nav).getByRole('button', { name: 'Chat' }))
+    await waitFor(() => expect(mark).not.toHaveAttribute('aria-current'))
+    expect(mark.className).not.toContain('active')
+    await userEvent.click(mark)
+    await waitFor(() => expect(mark).toHaveAttribute('aria-current', 'page'))
   })
 
   it('renders exactly ONE app-wide privacy indicator, at the foot of the nav rail', async () => {

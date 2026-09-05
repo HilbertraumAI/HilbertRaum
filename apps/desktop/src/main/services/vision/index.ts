@@ -39,6 +39,8 @@ export interface VisionAnalyzer {
   }): Promise<string>
   /** Optional teardown (the real `VisionRuntime` has one; test fakes may omit it). */
   stop?(): Promise<void>
+  /** Optional: is the sidecar resident right now? (Performance screen.) */
+  isLoaded?(): boolean
   /** Optional (#117): true once this runtime latched a FAILED start. The service discards such
    *  an instance after the failing job settles, so the next analyze rebuilds fresh. */
   isStartFailed?(): boolean
@@ -78,6 +80,11 @@ export class VisionService {
   private activeJobId: string | null = null
   /** Lazily built once a model is available; reused across analyses. */
   private runtime: VisionAnalyzer | null = null
+
+  /** Is the vision sidecar resident right now? (Performance screen.) */
+  isLoaded(): boolean {
+    return this.runtime?.isLoaded?.() ?? false
+  }
   /**
    * Set WHILE `stop()` (workspace LOCK / quit) tears the runtime down, cleared in its `finally` —
    * the VisionService-level analogue of the e5/reranker `tearingDown` latch (F19, GPU §5.5c).

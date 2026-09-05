@@ -122,6 +122,12 @@ foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `c
 wins; a commercial `policy.json` can force it back off), `workspaceMode:'plaintext_dev'`,
 `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
 (JSON `BenchmarkResult | null`, default `null`) — the persisted hardware profile lives here.
+**The performance wave (2026-09-05) added `BenchmarkResult.gpuVramMb`** (primary probed device's
+total MiB, optional; absent on older results) **and `benchmarkHistory`** (`BenchmarkResult[]`, default `[]`,
+one entry per computer keyed by `machineKey`, capped at `MAX_BENCHMARK_HISTORY = 8`; the write
+gate keeps plain-object elements only) **and `modelPlacements`** (`Record<modelId, ModelPlacement>`,
+default `{}`: where each model's last start landed per llama.cpp's load log, stamped with
+`machineKey`; object-valued, size-capped); see `benchmark.md` "History per machine" / "Your model".
 **The post-MVP UX round added `autoStartActiveModel`** (boolean, default `true`) **and
 `checksumCache`** (`Record<path, {size, mtimeMs, sha256}>`, default `{}` — the persisted L2 of
 the weight-file hash cache).
@@ -520,8 +526,13 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   detection + drive + optional tokens/sec + `classifyProfile` + `recommendModelId` + warnings +
   the injected `effectiveRead`.
 - **`ipc/registerBenchmarkIpc.ts`** — `runBenchmark()` (`benchmark:run`); runs it, persists to
-  `settings.lastBenchmark`, returns the result. Registered in `initBackend()`; exposed on
-  preload `api.runBenchmark` + `PreloadApi`.
+  `settings.lastBenchmark` + `settings.benchmarkHistory`, returns the result, and streams
+  `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window. `performance:get`
+  returns the `PerformanceSnapshot` the Performance screen renders (`current`, `currentMachine`,
+  `currentGpu`, `otherMachines`, `running`, `placement: { memoryClass, ramMb, vramMb, model,
+  observed, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }`, `observed: { lastAnswer, lastModelLoad, lastChecksum }`; the
+  observed figures are session-only latches, never persisted). Registered in `initBackend()`;
+  exposed on preload `api.runBenchmark` / `api.getPerformance` / `api.onBenchmarkProgress`.
 - **Renderer:** `DiagnosticsScreen` Run-benchmark button → RAM / CPU / OS-arch / measured read
   speed (`effectiveRead` or "not measured yet") / drive write / tokens-sec / profile /
   recommended model + warnings; re-loads `lastBenchmark` on mount. `HomeScreen` profile reflects

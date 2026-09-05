@@ -14,7 +14,12 @@ import { t } from '../../shared/i18n'
 import { perfMark } from './perf'
 import { throughputMbps } from './read-speed'
 import type { ModelManifest } from '../../shared/manifest'
-import type { BenchmarkResult, EffectiveReadSample, HardwareProfile } from '../../shared/types'
+import type {
+  BenchmarkProgressStep,
+  BenchmarkResult,
+  EffectiveReadSample,
+  HardwareProfile
+} from '../../shared/types'
 import type { ModelRuntime, RuntimeTimings } from './runtime'
 import { recommendModelId, recommendModelIdByRam } from './models'
 
@@ -443,6 +448,8 @@ export interface GpuBenchmarkInput {
   name: string | null
   /** Pre-computed bump eligibility (`gpuUsefulForProfile` over the probed devices). */
   useful: boolean
+  /** Total memory of the primary device in MiB (→ `BenchmarkResult.gpuVramMb`); absent/null = unknown. */
+  totalMb?: number | null
 }
 
 export interface RunBenchmarkDeps {
@@ -477,6 +484,21 @@ export interface RunBenchmarkDeps {
   modelBusy?: () => boolean
   /** Injectable clock for deterministic `ranAt` in tests. */
   now?: () => Date
+  /**
+   * Called as each step completes ('system', 'drive', then 'speed' ONLY when a runtime was
+   * up to measure, then 'done'). The IPC layer forwards it to the renderer that started the
+   * run so the Performance screen can show the steps; the first-run path passes nothing.
+   * Never awaited, and a throwing callback never fails the run.
+   */
+  onProgress?: (step: BenchmarkProgressStep) => void
+}
+
+function report(deps: RunBenchmarkDeps, step: BenchmarkProgressStep): void {
+  try {
+    deps.onProgress?.(step)
+  } catch {
+    /* progress is a courtesy to the UI — never the run's problem */
+  }
 }
 
 /**
@@ -487,7 +509,9 @@ export interface RunBenchmarkDeps {
  */
 export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkResult> {
   const sys = detectSystem()
+  report(deps, 'system')
   const drive = await measureDriveSpeed(deps.workspacePath)
+  report(deps, 'drive')
   // #185: `speedSkipped` distinguishes "no runtime was up, nothing to measure" (silent, the
   // long-standing behavior) from "a runtime WAS up but something else was using it" (warned).
   let speedSkipped = false
@@ -497,6 +521,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
       speedSkipped = true
     }
   })
+  if (deps.runtime) report(deps, 'speed')
   const tokensPerSecond = reading?.tokensPerSecond ?? null
   // #291: HOW the figure was measured — the runtime's decode timings, or the chunk fallback —
   // plus the token/chunk count it covers, so the card can mark a fallback as approximate.
@@ -537,6 +562,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     effectiveReadMbps: deps.effectiveRead?.mbps ?? null
   })
 
+  report(deps, 'done')
   return {
     os: sys.os,
     arch: sys.arch,
@@ -544,6 +570,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     cpuCores: sys.cpuCores,
     ramGb: sys.ramGb,
     gpu: gpuName,
+    gpuVramMb: deps.gpu?.totalMb ?? null,
     driveReadMbps: drive.readMbps,
     driveWriteMbps: drive.writeMbps,
     tokensPerSecond,

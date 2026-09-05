@@ -196,6 +196,17 @@ export function withRegenerateGuard(
 }
 
 /**
+ * The single answer-speed observer (the Performance screen's session latch, registered in
+ * index.ts — read-speed.ts's observer idiom). Called with every `chat:speed` payload the
+ * stream emits; last registration wins; a throwing observer never fails an answer.
+ */
+let answerSpeedObserver: ((speed: AnswerSpeed) => void) | null = null
+
+export function setAnswerSpeedObserver(cb: ((speed: AnswerSpeed) => void) | null): void {
+  answerSpeedObserver = cb
+}
+
+/**
  * #290: build the per-answer speed payload, or null when any input is unusable. Pure and
  * exported for the IPC test. Requires a persisted non-empty reply, a first token on the stream
  * clock, and finite positive `predicted_per_second` + `predicted_n` from the runtime — a
@@ -322,6 +333,13 @@ export async function withChatStream(
     // (an abort carries no timings; a stripped-to-empty reply persists nothing) emits nothing,
     // never a wrong speed. Not buffered (R14): a remount or reload shows no line.
     const speed = answerSpeedFrom(assistant, pendingTimings, ttftMs)
+    if (speed) {
+      try {
+        answerSpeedObserver?.(speed)
+      } catch {
+        /* an observer is a courtesy to the Performance screen, never the answer's problem */
+      }
+    }
     if (speed && !event.sender.isDestroyed()) {
       event.sender.send(STREAM.speed(conversationId), speed)
     }

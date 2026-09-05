@@ -32,6 +32,8 @@ export interface Reranker {
   readonly id: string
   /** Score every document against `query`. Returns EXACTLY one hit per input. */
   rerank(query: string, documents: string[], opts?: RerankOptions): Promise<RerankedHit[]>
+  /** Optional: is the sidecar resident right now? (Performance screen.) */
+  isLoaded?(): boolean
   /** Release the backing sidecar PERMANENTLY. Called on `will-quit`. */
   stop?(): Promise<void>
   /** Stop the sidecar but allow a lazy restart on next use. Called on workspace lock. */

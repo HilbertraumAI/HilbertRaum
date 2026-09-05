@@ -186,6 +186,11 @@ export interface VisionAnalyzeOptions {
 export class VisionRuntime {
   readonly modelId: string
   private server: LlamaServer | null = null
+
+  /** Resident right now? (Torn down after the idle window.) */
+  isLoaded(): boolean {
+    return this.server !== null
+  }
   private starting: Promise<void> | null = null
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after teardown. */
   private stopped = false

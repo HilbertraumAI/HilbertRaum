@@ -1,5 +1,5 @@
 import type { Db } from './db'
-import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
+import { DEFAULT_SETTINGS, MAX_BENCHMARK_HISTORY, type AppSettings } from '../../shared/types'
 import { MAX_LOCAL_API_PORT, MIN_LOCAL_API_PORT } from '../../shared/local-api'
 
 /** Upper bound on any persisted string[] setting so a buggy/hostile renderer can't bloat the
@@ -108,7 +108,10 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // start-hot readers touch) is applied once, below, to every non-primitive write (#251).
     // `value === null` (a legitimate clear of the null-default pair) is accepted upstream and
     // never reaches here.
-    if ((key === 'lastBenchmark' || key === 'gpuProbe' || key === 'checksumCache') && value !== null) {
+    if (
+      (key === 'lastBenchmark' || key === 'gpuProbe' || key === 'checksumCache' || key === 'modelPlacements') &&
+      value !== null
+    ) {
       if (typeof value !== 'object' || Array.isArray(value)) continue
     }
     // Array-typed defaults (any future `string[]` setting) pass the
@@ -117,7 +120,15 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // `safeIdArray`/`parseDocumentScope` pattern so a non-array/oversized renderer value is
     // never persisted verbatim into the encrypted blob.
     let toStore: unknown = value
-    if (Array.isArray(def)) {
+    if (key === 'benchmarkHistory') {
+      // The one array-of-OBJECTS setting: plain objects only (an array or primitive element
+      // is dropped, never persisted), capped at the per-machine history size. The
+      // serialized-size cap below still applies to the whole list.
+      if (!Array.isArray(value)) continue
+      toStore = (value as unknown[])
+        .filter((x) => typeof x === 'object' && x !== null && !Array.isArray(x))
+        .slice(0, MAX_BENCHMARK_HISTORY)
+    } else if (Array.isArray(def)) {
       if (!Array.isArray(value)) continue
       toStore = (value as unknown[]).filter((x) => typeof x === 'string').slice(0, MAX_SETTINGS_ARRAY)
     }

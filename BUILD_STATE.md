@@ -29,6 +29,21 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
+third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
+the same branch (owner decision): three groups (Chat · Documents · Translate · Images ‖ AI Model ·
+Performance ‖ Settings), Home behind the brand mark (lit on Home), Skills back into Settings as a
+tab (`skills` target resolves there); design-guidelines §2 rewritten.** Verdict + four rated tiles (speed, RAM, VRAM via
+`BenchmarkResult.gpuVramMb`, drive) and the "Your model" row (memory class discrete / unified /
+cpu, the chat ladder's placement parser over llama.cpp's load log, `settings.modelPlacements`,
+`placementVerdict`), the session's observed figures (last
+answer via a `chat:speed` observer, last model start / file check via per-source read-speed
+latches), and one result per computer (`settings.benchmarkHistory`, `machineKey`). The moved-drive
+check in `maybeRunFirstBenchmark` restores a known machine's result or benchmarks a new one;
+`benchmark:progress` streams the run's steps. Diagnostics keeps the raw table. Records:
+`docs/benchmark.md` "History per machine" / "Performance screen", data-contracts (settings
+storage + IPC). §5 item 21 tracks the residuals._
+
 _2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
 `readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one
 up through `onFinish(reason, timings?)` at `[DONE]`/close — never on an abort, error frame or
@@ -643,6 +658,26 @@ open round's item stays the last block of §5.)
     master as the one below lands). Remaining after merge: nothing — collapse this item. Thresholds (`VERY_LOW_TOKENS_PER_SECOND`,
     `SLOW_PICK_TOKENS_PER_SECOND`) deliberately NOT retuned — they now compare a decode figure
     against probe-basis calibration (recorded in `docs/benchmark.md` / `model-benchmarks.md` §6.5).
+21. **Performance screen residuals (opened 2026-09-05, `feat/performance-screen`).** Shipped: the
+    rail destination, per-machine history + moved-drive restore, observed rows, step progress,
+    "Start \<model\> and measure". Still open, owner call each: (a) a Home readiness row ("This
+    computer: Balanced, about 12 tokens/s") plus a moved-drive notice with a "Check this computer"
+    action (the mock-up's Home artboard; today the re-check is silent in the background);
+    (b) the Diagnostics benchmark card could shrink to the raw table + Copy now that the answer
+    lives on Performance; (c) the hardware legs on the rig: a real moved-drive round trip between
+    two machines (restore, then new-machine background run) and the German rail label width at the
+    600 weight; (d) model-load duration per machine in the history rows (the `model_load` sample
+    carries it; only the current machine shows it today); (e) "Your model" Phase 2: the
+    context-cache estimate from the GGUF header, and a VRAM-aware ★ picker (the picker is
+    RAM-best-fit today, which is how a 24 GB card gets a 27B Q5 recommended on a 125 GB box);
+    (f) the fit margin: on the rig the 27B Q5 lands 62/66 layers on a FREE 24 GB card (model
+    18.9 GiB + ~2.9 GiB working buffers + the fit's fixed 1 GiB margin comes within a layer of
+    the free memory); options are a smaller `--fit-target`, a smaller ubatch for the largest
+    models, or a full-offload rung when the app's own estimate says it fits (the "never -ngl"
+    rule would need a decision). Owner call; the row now states the reason. (g) start-order
+    contention between chat and translation on one card (the "Models on this computer" card now
+    names it): force translation to the processor while chat holds the card, or reclaim the card
+    when translation goes idle. Owner call.
 
 ---
 

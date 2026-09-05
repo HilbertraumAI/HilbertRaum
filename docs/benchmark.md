@@ -214,7 +214,8 @@ word-regex would silently mis-bind once two drive-worded warnings can co-fire, a
 
 Spec §8 defines **no `benchmarks` table**, so the last result is persisted via the **settings
 store** as `AppSettings.lastBenchmark` (a JSON `BenchmarkResult`, default `null`).
-`runBenchmark()` writes it after each run. Downstream reads use `lastBenchmark.profile`,
+`runBenchmark()` writes it after each run, and files the same result under this machine in
+`AppSettings.benchmarkHistory` (see "History per machine" below). Downstream reads use `lastBenchmark.profile`,
 falling back to **`UNKNOWN`** until the user runs the benchmark for the first time:
 
 - `getAppStatus().hardwareProfile` (Home screen).
@@ -229,6 +230,133 @@ place** on the persisted result outside benchmark runs (`persistEffectiveRead` i
 samples, and `runBenchmark` receives the latest sample **injected**
 (`RunBenchmarkDeps.effectiveRead`, the GPU-probe injection pattern — this module measures
 nothing itself), carried forward from the previous result so a re-run never loses it.
+
+## History per machine (2026-09-05)
+
+A portable drive travels, and a benchmark result describes the computer it ran on, not the
+drive. Since the performance wave the settings store also keeps **one result per computer**:
+`AppSettings.benchmarkHistory` (`BenchmarkResult[]`, newest first, default `[]`, capped at
+`MAX_BENCHMARK_HISTORY = 8`; `services/performance.ts`). Every persisted run calls
+`upsertHistory`: the entry for the same machine is replaced, other machines stay, the oldest
+other machine falls off the cap.
+
+**The machine fingerprint** (`machineKey`) is OS, arch, CPU model, core count and RAM rounded to
+whole GB (`os.totalmem()` drifts by a few MB between boots of one machine; the Models screen
+rounds the same way). A result with no usable identity (an empty `cpuModel`, `ramGb` of 0, or a
+blob persisted before these fields were reliably filled) has a **null key**: it is never filed in
+the history and never counts as "another computer", so an old workspace keeps behaving as before.
+
+**The moved-drive check** lives in `maybeRunFirstBenchmark`, which already runs after every
+unlock. If `lastBenchmark` exists and its key differs from this machine's:
+
+- a history entry for this machine is **restored** into `lastBenchmark` (so the ★ pick and the
+  profile follow the machine, not the drive) and nothing is re-measured;
+- with no entry, this is a first run on a new computer and the benchmark runs in the background
+  exactly as on a fresh workspace.
+
+Either way the per-session GPU probe refresh still happens first. The `benchmarkHistory` write
+gate accepts only an array of plain objects (junk elements dropped, length capped; the 256 KB
+serialized cap applies to the list).
+
+## Performance screen (2026-09-05)
+
+The check's answer moved out of the Diagnostics tab onto a primary rail destination,
+**Performance** (`renderer/screens/PerformanceScreen.tsx`; design-guidelines §2, the machine
+group beside AI Model). Diagnostics keeps the raw table and its Copy button as the support surface; the
+screen answers the user's question in plain words. Three cards:
+
+1. **This computer**: one verdict sentence ("Runs \<model\> at about \<n\> tokens per second.
+   Model starts from this drive are fast/slow.") and four tiles, each with a rating WORD, never a
+   colour alone: Speed (decode tokens/s, the measured model and date; "Approximate" on a
+   chunk-basis result), Memory (RAM, the profile as the pill, the model the RAM fits together with
+   the context it launches with: the user's `contextTokensOverride` or the model's recommended
+   window, plus CPU), Graphics memory (`BenchmarkResult.gpuVramMb`, the primary probed device's
+   total MiB recorded at benchmark time so the history rows carry it too; "Usable" at or above the
+   runtime's 6 GiB GPU gate, "Small" below it with the plain consequence "models run on the
+   processor", "None" without a device; a result persisted before the field existed, or whose probe
+   came back empty, gets the stored `settings.gpuProbe` figure folded in by
+   `buildPerformanceSnapshot`, for the current machine only, and the screen keeps
+   `PerformanceSnapshot.currentGpu` plus the settings probe as last-resort fallbacks, so the
+   tile never waits for a re-run), Drive (`effectiveRead` with its source and date; "Pending" until a model start measured
+   it). Actions: **Check again** (or **Start \<model\> and measure** when speed is unmeasured,
+   the recommended model is installed and nothing runs: `useModel` then `runBenchmark`), **Change
+   context size** (opens AI Model, the one place the context is set), **Copy report**. A "Why this
+   model?" link to AI Model was tried and dropped (2026-09-05, owner: it led nowhere useful). A
+   result measured on another computer says so.
+**Your model** (a row under the tiles; 2026-09-05, owner direction): whether the ACTIVE model fits
+is not a property of RAM or of VRAM alone, so neither tile says it. The row names the model, its
+size on disk and the context it launches with, then gives one verdict against this computer's
+**memory class** (`memoryClassOf` in `services/performance.ts`): `discrete` = a usable graphics
+card (the runtime's own 6 GiB, not-integrated gate) whose VRAM is the budget; `unified` = Apple
+Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
+`recommendedMaxWorkingSetSize` when the load log printed it, else 75 % of RAM (the Memory tile is
+labelled "Unified memory" and the graphics tile is hidden); `cpu` = no usable card, budget = RAM.
+**Observed first**: after a start, llama.cpp's own load log says where the model landed, and the
+chat ladder now reads it (`runtime/placement.ts`, one parser per attempt, fed by the sidecar's
+`onStderrData`; the chat server runs with `-lv 4` because the pinned build prints these lines
+only from log verbosity 4 up, verified 2026-09-05: 3 prints none, 5 adds the `--fit` dry-run
+pass): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices
+are the CPU side), every `<device> KV buffer size`, the Metal budget line. The reading is recorded
+once the rung is healthy (`recordModelPlacement`, stamped with the backend, the launched context
+and `machineKey`), latched for the session, and persisted per model id in
+`settings.modelPlacements` by the observer `registerBenchmarkIpc` registers; the snapshot uses it
+only for the active model and only when the record's machine is this one. **Verdict**
+(`placementVerdict`, pure): observed → 'gpu' when every layer is on the GPU (unified reads the
+same), 'partial' otherwise with the CPU-side bytes as the spill (CPU, CPU_Mapped and the
+backends' `*_Host` buffers), 'cpu' for a CPU backend, 'unknown' for a GPU start whose log carried
+no offload line (never a guess); the size shown is weights + context cache as measured. A
+partial offload on a card that would hold the model is the normal `--fit` outcome when the card
+was not empty at start: the parser also reads the `device_info` "N MiB free" figure
+(`gpuFreeAtStartMb`), and, with the `sched_reserve` compute-buffer line (`gpuComputeMb`), the copy tells the two
+cases apart: a card that was NOT free at start ("only N GB was free, restart once the card is
+free") versus a card that WAS free, where the fit's own reservations are the reason (model +
+cache + working buffers + the fixed 1 GiB `--fit-target` margin came within a whole layer of the
+free memory, and the fit moves whole layers, ~430 MB each on a 27B). Whether the app should
+trade that margin for a full offload is an owner decision (BUILD_STATE §5 item 21 (f)). Units: every size on the
+screen is GiB (RAM, VRAM, the buffers), so the manifest's decimal "size on disk" is converted
+once in the snapshot (19.8 GB → 18.4). Before the first start → an ESTIMATE from the
+weights alone (the file size; the copy says so and that the context cache is measured on the first
+start) against the budget with 8 % headroom: a discrete card too small for the weights is 'partial'
+if RAM + VRAM can hold them, else 'too_large'; unified and cpu are 'gpu'/'cpu' or 'too_large'.
+'too_large' offers "Choose a smaller model" (AI Model). Pills: On GPU / Partly on GPU / On
+processor / Too large / Not measured. Phase 2 (not built): the context-cache estimate from the GGUF
+header, and a VRAM-aware ★ picker (today's picker is RAM-best-fit).
+
+**Models on this computer** (a card between the observed rows and the other computers; 2026-09-05,
+owner direction, placed BELOW "Observed while you worked" because what the machine actually did
+outranks what it could hold): the card is shared and the processor's RAM is shared, so the screen lists EVERY model
+the app can hold, one row per role (`PerformanceSnapshot.placement.models`, `ResidentModelRow`):
+chat and translation auto-fit onto the card (`device: 'gpu'`; `'cpu'` on a machine without a
+usable card), images / document search (reranker + embedder) / voice are pinned to the processor
+by design (`--device none`, see vision/runtime.ts, embeddings/e5.ts, reranker/llama.ts; whisper is
+a CLI) and say so. Lifetime: chat / reranker / embedder stay for the session, translation and
+vision unload after their idle window, whisper runs only while transcribing. Liveness comes from
+each service's own handle (`isLoaded()` on `E5Embedder`, `LlamaReranker`, `VisionRuntime` /
+`VisionService`; `Translator.deviceStatus().live`; `runtime.active()` for chat); the translation
+row carries its observed layer split when live. Two summary lines: the card (chat + translation
+sizes against VRAM, with the START-ORDER warning when both are resident: whichever started second
+got the leftovers and runs slower; stop and start it once the other has unloaded) and the
+processor (everything loadable at once against RAM, "Too much at once" when it exceeds it). What
+the app should DO about the start-order contention (force translation to the processor while chat
+holds the card, or reclaim the card when translation goes idle) is an owner decision (§5 item 21
+(g)).
+
+2. **Observed while you worked**: figures from real use, session-only, never persisted: the last
+   finished answer (the #290 `chat:speed` payload, latched by `setAnswerSpeedObserver` in
+   `chat-stream.ts` with the model that produced it), the last model start (the `model_load`
+   read sample: bytes, elapsed, MB/s; falls back to the persisted sample), the last full file
+   check (the `checksum` sample). `read-speed.ts` keeps an unranked newest-per-source latch for
+   this (`latestEffectiveReadBySource`); the ranked `latestEffectiveRead` is unchanged.
+3. **Other computers this drive has been used on**: the history minus this machine, newest
+   first, each with its speed/model, CPU/RAM/date and rating pills ("Slow drive" under 100 MB/s).
+
+**Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
+in `registerBenchmarkIpc.ts`): `current`, `currentMachine`, `currentGpu`, `otherMachines`,
+`running` (the `benchmark` occupancy lane), `placement` (memory class, RAM/VRAM, the active
+model, the observed placement, the verdict, the per-role `models` rows, `totals`), `observed`. **Progress**: `RunBenchmarkDeps.onProgress` reports
+`'system' | 'drive' | 'speed' | 'done'` as each step lands ('speed' only when a runtime was up);
+the IPC handler forwards them to the requesting window as `benchmark:progress`, and the screen
+shows a step list instead of an opaque "Running…" button. The first-run path passes no callback.
 
 ## Perf marks (opt-in, `HILBERTRAUM_PERF_LOG=1`)
 

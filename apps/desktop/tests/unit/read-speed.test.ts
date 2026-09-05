@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   latestEffectiveRead,
+  latestEffectiveReadBySource,
   MIN_MODEL_LOAD_SAMPLE_BYTES,
   MIN_READ_SAMPLE_BYTES,
   MIN_READ_SAMPLE_MS,
@@ -137,5 +138,26 @@ describe('effective-read latch (#108)', () => {
     setEffectiveReadObserver(cb)
     recordChecksumRead(6_000_000_000, 60_000, 'latched-first')
     expect(cb).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('per-source latches (the Performance screen\'s observed rows)', () => {
+  beforeEach(() => resetEffectiveReadForTests())
+
+  it('keeps the newest sample of EACH source, unranked, while the ranked latch still prefers model_load', () => {
+    recordModelLoadRead('/m.gguf', 30_000, 'm1', 6_000_000_000)
+    recordChecksumRead(5_000_000_000, 40_000, 'm2')
+    // The ranked latch hides the checksum behind the model load…
+    expect(latestEffectiveRead()?.source).toBe('model_load')
+    // …the per-source view shows both, each the newest of its kind.
+    expect(latestEffectiveReadBySource('model_load')?.modelId).toBe('m1')
+    expect(latestEffectiveReadBySource('checksum')?.modelId).toBe('m2')
+    recordChecksumRead(5_000_000_000, 20_000, 'm3')
+    expect(latestEffectiveReadBySource('checksum')?.modelId).toBe('m3')
+  })
+
+  it('starts empty and clears with the test reset', () => {
+    expect(latestEffectiveReadBySource('model_load')).toBeNull()
+    expect(latestEffectiveReadBySource('checksum')).toBeNull()
   })
 })

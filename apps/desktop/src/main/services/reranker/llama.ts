@@ -82,6 +82,11 @@ export class LlamaReranker implements Reranker {
   private readonly queryApproxTokens: number
   private readonly docApproxTokens: number
   private server: LlamaServer | null = null
+
+  /** Resident right now? (Lazy-started, then held for the session.) */
+  isLoaded(): boolean {
+    return this.server !== null
+  }
   private starting: Promise<void> | null = null
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false

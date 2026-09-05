@@ -46,6 +46,13 @@ export const MIN_READ_SAMPLE_MS = 250
 export const MIN_MODEL_LOAD_SAMPLE_BYTES = 2 * 1024 ** 3
 
 let latest: EffectiveReadSample | null = null
+/** The newest sample PER SOURCE, unranked: the Performance screen shows the last model
+ *  start and the last file check side by side, where the ranked `latest` would hide a
+ *  checksum behind any model-load sample. */
+const latestBySource: Record<EffectiveReadSample['source'], EffectiveReadSample | null> = {
+  model_load: null,
+  checksum: null
+}
 let suppressNextModelLoad = false
 let observer: (() => void) | null = null
 
@@ -89,6 +96,7 @@ function record(
     modelId,
     at: new Date().toISOString()
   }
+  latestBySource[source] = candidate
   if (!preferCandidate(candidate, latest)) return
   latest = candidate
   try {
@@ -158,6 +166,13 @@ export function latestEffectiveRead(): EffectiveReadSample | null {
   return latest
 }
 
+/** The newest sample of ONE source this session (no ranking), or null. */
+export function latestEffectiveReadBySource(
+  source: EffectiveReadSample['source']
+): EffectiveReadSample | null {
+  return latestBySource[source]
+}
+
 /**
  * Register the single sample observer (the IPC layer's persister). Persistence is a
  * property of RECORDING, not of each producing call site — a sample recorded by a
@@ -171,6 +186,8 @@ export function setEffectiveReadObserver(cb: (() => void) | null): void {
 /** Test seam: clear the session latch, suppression, and observer. */
 export function resetEffectiveReadForTests(): void {
   latest = null
+  latestBySource.model_load = null
+  latestBySource.checksum = null
   suppressNextModelLoad = false
   observer = null
 }

@@ -296,6 +296,24 @@ export interface AppSettings {
    * (`lastBenchmark.profile`) drives model recommendation + `AppStatus.hardwareProfile`.
    */
   lastBenchmark: BenchmarkResult | null
+  /**
+   * One benchmark result per COMPUTER this drive has been checked on (benchmark.md
+   * "History per machine"), newest first, keyed by the machine fingerprint
+   * (`machineKey` in services/performance.ts: OS, arch, CPU model, cores, rounded RAM).
+   * `lastBenchmark` is always the entry for the machine the app last ran on; the others
+   * are what the Performance screen lists as "other computers", and what the moved-drive
+   * check restores from so the recommendation follows the machine, not the drive.
+   * Capped at `MAX_BENCHMARK_HISTORY`; default `[]` (older workspaces have no history).
+   */
+  benchmarkHistory: BenchmarkResult[]
+  /**
+   * The observed placement of each model's last start on this drive, keyed by model id
+   * (benchmark.md "Your model"): what llama.cpp's own load log said about where the weights
+   * and the context cache landed. Written by the placement observer after every successful
+   * chat-runtime start; read by the Performance screen for the active model, and only when
+   * the entry's machine matches the current one. Default `{}`.
+   */
+  modelPlacements: Record<string, ModelPlacement>
   // ---- GPU acceleration (architecture.md GPU record §5.4) ----
   /**
    * User intent: 'auto' (default — GPU when it works, the fallback ladder handles the
@@ -421,6 +439,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ragMaxContextTokens: 2500,
   ragMinSimilarity: 0,
   lastBenchmark: null,
+  benchmarkHistory: [],
+  modelPlacements: {},
   // GPU is ALWAYS the default ('auto'); only a detected problem or the explicit Settings
   // toggle moves a machine to CPU.
   gpuMode: 'auto',
@@ -1909,6 +1929,14 @@ export interface BenchmarkResult {
   ramGb: number
   gpu: string | null
   /**
+   * Total memory of the primary probed GPU in MiB (the `--list-devices` probe injected at
+   * benchmark time), or null with no usable GPU. Optional: absent on results persisted
+   * before the field existed; the Performance screen then falls back to the live probe for
+   * the current machine and shows nothing for other machines. Graphics memory decides what
+   * runs accelerated, so it gets its own tile beside RAM.
+   */
+  gpuVramMb?: number | null
+  /**
    * The 8 MB probe's read-back leg — page-cache-served (F-35), ~100× inflated on slow
    * media, so it is NOT displayed and never gates a warning; kept for continuity with
    * old persisted results and the probe's own diagnostics. `effectiveRead` is the
@@ -1950,6 +1978,170 @@ export interface BenchmarkResult {
   recommendedModelId: string | null
   warnings: string[]
   ranAt: string
+}
+
+/** Most machines the drive keeps a benchmark result for (`AppSettings.benchmarkHistory`). */
+export const MAX_BENCHMARK_HISTORY = 8
+
+/**
+ * The step the running benchmark is on (`EVENTS.benchmarkProgress`): the Performance screen
+ * shows the steps as they complete instead of one opaque "Running…" button. 'speed' is
+ * skipped entirely (no event) when no runtime is up.
+ */
+export type BenchmarkProgressStep = 'system' | 'drive' | 'speed' | 'done'
+
+/**
+ * How fast the last FINISHED chat answer of this session was (the #290 `chat:speed`
+ * payload plus the model it ran on and when). Session-only, never persisted — the same
+ * decision #290 made for the per-answer line; the Performance screen shows it as an
+ * "observed" figure beside the benchmark probe.
+ */
+export interface ObservedAnswerSpeed {
+  tokensPerSecond: number
+  ttftMs: number
+  tokens: number
+  modelId: string | null
+  /** ISO-8601 timestamp of the answer. */
+  at: string
+}
+
+/**
+ * Where one model's start actually put it (benchmark.md "Your model"), parsed from
+ * llama.cpp's load log by `runtime/placement.ts`: the layer split (`offloaded X/Y layers to
+ * GPU`), the per-device model buffers, the context-cache buffers, and on Apple Silicon the
+ * memory Metal lets the GPU take. Every figure is null when its line was not printed (a
+ * forced-CPU start prints no offload line). MiB throughout, as the log prints them.
+ */
+export interface ModelPlacement {
+  modelId: string
+  /** The `--ctx-size` the server was launched with: the context the cache figures are for. */
+  contextTokens: number
+  backend: 'gpu' | 'cpu'
+  gpuLayers: number | null
+  totalLayers: number | null
+  /** Weights resident on GPU devices (every non-CPU "model buffer size" line summed). */
+  gpuModelMb: number | null
+  /** Weights on the CPU side (the CPU and CPU_Mapped buffers summed). */
+  cpuModelMb: number | null
+  gpuKvMb: number | null
+  cpuKvMb: number | null
+  /** Metal's `recommendedMaxWorkingSetSize` in MB when printed: the unified-memory budget. */
+  metalMaxWorkingSetMb: number | null
+  /**
+   * Free memory on the primary GPU when the server started (the `device_info` line's
+   * "N MiB free"), or null when not printed. Explains a partial offload on a card that would
+   * hold the model when empty: `--fit` places layers into what was FREE at that moment, minus
+   * its 1 GiB safety margin. Optional: absent on records persisted before the field existed.
+   */
+  gpuFreeAtStartMb?: number | null
+  /**
+   * The working (compute) buffers the runtime reserved on the GPU beside the weights and the
+   * cache (`sched_reserve: <device> compute buffer size`), MiB; null when not printed. Part of
+   * why a fit can leave layers off a card that would hold the weights. Optional: absent on
+   * records persisted before the field existed.
+   */
+  gpuComputeMb?: number | null
+  /** The machine the start ran on (`machineKey`), so a travelling drive never shows another computer's placement. */
+  machineKey: string | null
+  at: string
+}
+
+/**
+ * How this computer's memory is organised for a model (benchmark.md "Your model"):
+ * 'discrete' = a usable graphics card with its own memory (the budget is VRAM),
+ * 'unified' = Apple Silicon, one pool shared by CPU and GPU (the budget is what Metal lets
+ * the GPU take), 'cpu' = no usable graphics card (the budget is RAM).
+ */
+export type MemoryClass = 'discrete' | 'unified' | 'cpu'
+
+/** The one-word outcome of the fit question, always paired with the numbers behind it. */
+export type PlacementKind = 'gpu' | 'partial' | 'cpu' | 'too_large' | 'unknown'
+
+export interface PlacementVerdict {
+  kind: PlacementKind
+  /** What the model takes (observed: weights + context cache; estimated: the weights only), MiB. */
+  needMb: number | null
+  /** True before the model's first start on this machine: the figure is the file size, not a measurement. */
+  estimated: boolean
+  /** The memory the verdict was measured against (VRAM, the Metal budget, or RAM), MiB. */
+  budgetMb: number | null
+  /** Free memory on the card when the model started (observed only), MiB; null when unknown. */
+  freeAtStartMb: number | null
+  /** Working buffers the runtime reserved on the GPU (observed only), MiB; null when unknown. */
+  workingMb: number | null
+  /** Bytes that landed (or would land) outside the budget, MiB: the RAM spill of a partial offload. */
+  spillMb: number | null
+  gpuLayers: number | null
+  totalLayers: number | null
+}
+
+/**
+ * One model the app can hold in memory (benchmark.md "Models on this computer"): what it is,
+ * where it runs by design, and whether it is resident right now.
+ */
+export interface ResidentModelRow {
+  role: 'chat' | 'translation' | 'vision' | 'embeddings' | 'reranker' | 'transcriber'
+  /** The model id for the role, or null when none is installed/selected. */
+  modelId: string | null
+  /** GiB (the manifest's decimal figure converted), or null when unknown. */
+  sizeOnDiskGb: number | null
+  /** 'gpu' = auto-fit onto the graphics card (chat, translation); 'cpu' = pinned to the processor by design. */
+  device: 'gpu' | 'cpu'
+  /** Resident right now. */
+  loaded: boolean
+  /** 'session' = stays until stopped/lock; 'idle' = unloads after an idle window; 'per-use' = runs only while working (whisper CLI). */
+  lifetime: 'session' | 'idle' | 'per-use'
+  /** The translation sidecar's observed layer split when live (null otherwise / for other roles). */
+  gpuLayers: number | null
+  totalLayers: number | null
+}
+
+/**
+ * Everything the Performance screen renders, in one read (`performance:get`).
+ * `current` is `settings.lastBenchmark`; `otherMachines` is the history minus the current
+ * machine's entry; the `observed` figures come from real use (a finished chat answer, a
+ * model start, a full file check), not from the probe.
+ */
+export interface PerformanceSnapshot {
+  current: BenchmarkResult | null
+  /** True when `current` was measured on the computer the app is running on right now. */
+  currentMachine: boolean
+  otherMachines: BenchmarkResult[]
+  /**
+   * The live GPU probe for the computer the app runs on (`settings.gpuProbe`, refreshed once
+   * per session), so the graphics-memory tile has a figure even when `current` predates
+   * `gpuVramMb`. Null with no probe or no device.
+   */
+  currentGpu: { name: string; totalMb: number } | null
+  /** True while a benchmark is running (the button disables; steps stream via the event). */
+  running: boolean
+  /** The active model against this computer's memory (benchmark.md "Your model"). */
+  placement: {
+    memoryClass: MemoryClass
+    ramMb: number | null
+    vramMb: number | null
+    /**
+     * The active model, or null when none is selected. `sizeOnDiskGb` is the manifest's
+     * decimal figure converted to GiB (1024³), the unit every other figure on the screen uses
+     * (RAM, VRAM, the observed buffers), so the row never shows two sizes for one thing.
+     */
+    model: { id: string; sizeOnDiskGb: number; contextTokens: number } | null
+    observed: ModelPlacement | null
+    verdict: PlacementVerdict
+    /** Every model the app can hold, chat first (benchmark.md "Models on this computer"). */
+    models: ResidentModelRow[]
+    totals: {
+      /** Everything loadable at once, MiB (the sizes summed); null when nothing is installed. */
+      ramAllMb: number | null
+      /** Chat and translation are both resident on the card right now: the second one got the leftovers. */
+      bothOnCard: boolean
+    }
+  }
+  observed: {
+    lastAnswer: ObservedAnswerSpeed | null
+    lastModelLoad: EffectiveReadSample | null
+    lastChecksum: EffectiveReadSample | null
+  }
 }
 
 // ---- Audit log (architecture.md "Audit log") ----
