@@ -1348,9 +1348,15 @@ keeping the tiers and over uncapped full width:
 The growing catalog made full cards and repeated quantizations expensive to scan. The AI Model
 screen now keeps the active chat model pinned above a compact library of alternatives:
 
-- **On this drive / Browse models:** initialize once from installed-model presence; a completed
-  download does not change the user's view. Browse includes installed and missing entries.
-  Existing installed/recommended/memory-fit ordering and all main-process gates remain intact.
+- **On this drive / Browse models:** the view lists a model whose state is KNOWN to be on the
+  drive — `installed`/`ready`/`running`, plus `checksum_failed` ("Can't verify"), whose files are
+  present and whose entire recovery action (re-download) lives on that row (`isModelOnDrive`).
+  Nothing here infers file presence: `unsupported` and `not_recommended` describe the machine or
+  the policy, not the drive, and the renderer has no presence contract to read — widening the set
+  needs one first. The INITIAL view is still chosen once from whether anything is usable right now
+  (`isModelInstalled`), so a damaged-only drive opens in Browse; a completed download does not
+  change the user's view. Browse includes installed and missing entries. Existing
+  installed/recommended/memory-fit ordering and all main-process gates remain intact.
 - **Search + task + family filters:** search display name, exact id and family, case-insensitively,
   matching every whitespace-separated term. Filter before grouping so a collapsed variant is
   directly discoverable. Tasks are Chat, Document search (embeddings + reranker), Translation,
@@ -1359,9 +1365,29 @@ screen now keeps the active chat model pinned above a compact library of alterna
   display name, then key by role + family + runtime + remaining name. Preserve sizes, instruction
   revisions, generations, and QAT identity; unrecognized suffixes are not stripped. No manifest,
   IPC, recommender, or runtime identifiers change. Exact names/actions remain on every row.
-- **Groups:** the first ordered variant stays visible; a keyboard-accessible button with
-  `aria-expanded` reveals the rest. Counts describe matching alternatives, excluding the pinned
-  active model. Single variants need no group shell. Expanded-group state survives filtering.
+- **Groups:** one variant stays visible (the FACE, below); a keyboard-accessible button with
+  `aria-expanded` reveals the rest, and expanding lists every other variant exactly once in its
+  ordered position. Counts describe matching alternatives, excluding the pinned active model.
+  Single variants need no group shell. Expansion state survives filtering. A group holding a
+  `checksum_failed` variant starts EXPANDED — a damaged sibling must not hide behind a click the
+  user has no reason to make — and an explicit toggle by the user always wins over that default,
+  in both directions, keyed by the stable group key so it survives refreshes and filter changes.
+  Heading outline: screen `<h2>` → task section `<h3>` → variant group `<h4>`.
+- **Group face (the collapsed card):** normally the group's first ordered member. When the leading
+  members TIE on all three ordering keys (installed, recommended, runnable here) the face is the
+  first member of that leading cohort that is obtainable — already on the drive, or still offering
+  a download that has not been withdrawn (#196); otherwise the original leader stays. The scan
+  stops at the first member that leaves the cohort, so obtainability never lifts a variant across
+  a priority boundary (an installed-but-withdrawn weight keeps the face; a manual entry with no
+  `download` block never wins it). This is a PRESENTATION exception to stable tie order:
+  `group.models`, group membership and the global sort are untouched, and every row keeps its own
+  exact id and actions. Without it the real 16 GB catalog fronted its six-way-tied Qwen3.8 27B
+  group with a withdrawn weight — the one card the user saw offered nothing to do.
+- **Ordering after grouping (correction):** the picker's installed-first key orders the flat list,
+  but the library renders task sections of variant GROUPS, so the list reads group by group (a
+  group takes its leader's rank) and variants keep their relative order inside it. There is no
+  global installed-first boundary across the rendered rows — a group whose leader is installed can
+  expand to needs-download siblings that sit above the next group's leader.
 - **Compact rows:** task, storage, minimum RAM, status badges and existing actions; descriptions,
   automatic-role explanations and technical fields share the existing closed disclosure.
   Rows stack at narrow widths and retain the shared screen frame and theme tokens.
@@ -1389,5 +1415,8 @@ screen now keeps the active chat model pinned above a compact library of alterna
   renderer reload is out of scope here (follow-up I5); ordinary screen navigation is covered by
   the existing remembered-job mechanism.
 
-Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts`, `styles.css`, EN/DE catalogs. Behavioral
-coverage: `ModelsScreen.test.tsx`, `model-library.test.ts`; visual fixtures: `models*` preview cases.
+Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face), `lib/modelAvailability.ts`
+(the pure `isModelInstalled` / `isModelOnDrive` / `isModelRunnableHere` / `orderPickerModels`, split
+out of the screen so `modelLibrary` can share them without importing it back), `styles.css`, EN/DE
+catalogs. Behavioral coverage: `ModelsScreen.test.tsx`, `model-library.test.ts`, the real-catalog
+grouping/face controls in `committed-catalog.test.ts`; visual fixtures: `models*` preview cases.

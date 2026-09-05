@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
-import { groupModelVariants, matchesModelSearch, modelTask, type ModelTask } from '../lib/modelLibrary'
+import {
+  groupModelVariants,
+  matchesModelSearch,
+  modelTask,
+  variantGroupOrder,
+  type ModelTask
+} from '../lib/modelLibrary'
+import {
+  isModelInstalled,
+  isModelOnDrive,
+  orderPickerModels
+} from '../lib/modelAvailability'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
@@ -106,52 +117,12 @@ const CONTEXT_SIZE_PRESETS = [4096, 8192, 16384, 32768, 65536, 131072] as const
 /** Picks at or above this show the "large windows cost memory" hint (issue #43). */
 const CONTEXT_SIZE_WARNING_MIN = 65_536
 
-/** Usable right now — no download needed. Defines the On this drive view. */
-export function isModelInstalled(m: ModelInfo): boolean {
-  return m.state === 'installed' || m.state === 'running' || m.state === 'ready'
-}
-
 /**
- * Runnable on THIS machine, by exactly the flag the card's RAM warning renders from
- * (`insufficientRam`, computed in the main process against the machine's whole-GB RAM).
- * Sharing the flag is the point: the order can never disagree with the "Needs at least N GB"
- * badge and banner printed on the card it moved.
+ * The pure availability predicates + picker order now live in `lib/modelAvailability.ts` so
+ * `lib/modelLibrary` can share them without importing this screen back (that would be a cycle).
+ * Re-exported here unchanged: every existing importer of these three keeps working.
  */
-export function isModelRunnableHere(m: ModelInfo): boolean {
-  return m.insufficientRam !== true
-}
-
-/**
- * DV-2 — display order for the chat picker (the cards below the active model).
- *
- * Three keys, in order:
- *  1. **Installed first** — a model already on the drive is usable now, while the rest cost a
- *     multi-GB download. It stays PRIMARY in Browse; On this drive filters by this predicate.
- *  2. **Recommended first** (issue #93 item 3) — the ★ card leads its group. On a fresh
- *     install with nothing on the drive, the recommendation is the ONE actionable answer the
- *     screen has for "which of these should I download?" — it must be the first card scanned,
- *     not sit wherever catalog order put it inside the runnable block. This supersedes the
- *     DV-2 "plays no part" stance for the UPWARD direction only (design-guidelines §11's DV-2
- *     note): the ★ still never crosses the installed/needs-download boundary.
- *  3. **Runnable on this machine first** — unconditionally. Catalog order is alphabetical, so
- *     without this key the picker opened on models the machine cannot run at all (on a 16 GB
- *     box: three of the first four cards carried a "Needs at least 20/24 GB RAM" warning) while
- *     the usable ones sat below the fold. Runnability is not a tiebreak of last resort here —
- *     "can this computer run it" outranks alphabetical, always.
- *
- * Keys 2 and 3 can never fight: the RAM-best-fit recommender only ever picks a model that fits
- * this machine's RAM, so the ★ card is runnable by construction. Display order ONLY — the
- * recommender in the main process is untouched. `Array.prototype.sort` is stable, so models
- * that tie on all keys keep their catalog order.
- */
-export function orderPickerModels(list: ModelInfo[]): ModelInfo[] {
-  return [...list].sort(
-    (a, b) =>
-      Number(isModelInstalled(b)) - Number(isModelInstalled(a)) ||
-      Number(b.recommended === true) - Number(a.recommended === true) ||
-      Number(isModelRunnableHere(b)) - Number(isModelRunnableHere(a))
-  )
-}
+export { isModelInstalled, isModelRunnableHere, orderPickerModels } from '../lib/modelAvailability'
 
 // The in-flight download survives leaving + re-entering the screen (the job itself
 // lives in the main process; this only remembers which one to keep polling).
@@ -217,7 +188,12 @@ export function ModelsScreen(): JSX.Element {
   const [query, setQuery] = useState('')
   const [task, setTask] = useState<ModelTask | 'all'>('all')
   const [family, setFamily] = useState('all')
-  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set())
+  // F3/C1: group expansion is DERIVED by default — a group holding a damaged (`checksum_failed`)
+  // variant starts expanded, so the repair row is reachable without first guessing that it hides
+  // behind "Show all variants". This map records only the user's EXPLICIT toggles, by stable
+  // group key, and those always win — across a refresh that introduces or clears damage, and
+  // across filter/view changes (the key outlives both).
+  const [userToggledGroups, setUserToggledGroups] = useState<ReadonlyMap<string, boolean>>(new Map())
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [policy, setPolicy] = useState<PolicyStatus | null>(null)
   const [machineRam, setMachineRam] = useState<number | null>(UNKNOWN_RAM)
@@ -492,7 +468,8 @@ export function ModelsScreen(): JSX.Element {
   const activeChat = chat.find(isActive) ?? null
   const visibleModels = orderPickerModels(models.filter((m) =>
     m !== activeChat &&
-    (libraryView !== 'installed' || isModelInstalled(m)) &&
+    // F3/C1: the drive view lists known damaged entries too — the repair action is on the row.
+    (libraryView !== 'installed' || isModelOnDrive(m)) &&
     (task === 'all' || modelTask(m) === task) &&
     (family === 'all' || m.family === family) &&
     matchesModelSearch(m, query)
@@ -837,24 +814,26 @@ export function ModelsScreen(): JSX.Element {
   function libraryRows(list: ModelInfo[]): JSX.Element[] {
     return groupModelVariants(list).map((group) => {
       if (group.models.length === 1) return card(group.models[0])
-      const expanded = expandedGroups.has(group.key)
+      // C1: a damaged variant must not hide inside a collapsed group — the whole recovery action
+      // sits on its row. An explicit user toggle still wins (both directions).
+      const hasRepair = group.models.some((m) => m.state === 'checksum_failed')
+      const expanded = userToggledGroups.get(group.key) ?? hasRepair
+      // F5: the collapsed card is the group FACE (an obtainable member of the leader's priority
+      // cohort), then every other variant once, in the order the sort produced.
+      const ordered = variantGroupOrder(group)
       return (
+        // Heading outline (O5): screen <h2> → task section <h3> → this group <h4>.
         <section className="model-variant-group" key={group.key} aria-label={group.name}>
           <div className="model-variant-heading">
-            <h3>{group.name}</h3>
+            <h4>{group.name}</h4>
             <Button size="sm" variant="ghost" aria-expanded={expanded} onClick={() => {
-              setExpandedGroups((previous) => {
-                const next = new Set(previous)
-                if (expanded) next.delete(group.key)
-                else next.add(group.key)
-                return next
-              })
+              setUserToggledGroups((previous) => new Map(previous).set(group.key, !expanded))
             }}>
               {t(expanded ? 'models.library.hideVariants' : 'models.library.showVariants', { count: group.models.length })}
             </Button>
           </div>
-          {card(group.models[0])}
-          {expanded && group.models.slice(1).map(card)}
+          {card(ordered[0])}
+          {expanded && ordered.slice(1).map(card)}
         </section>
       )
     })

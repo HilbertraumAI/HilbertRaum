@@ -3,12 +3,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  buildModelList,
   discoverManifests,
   manifestFiles,
   resolveManifestsDir,
   recommendModelIdByRam
 } from '../../src/main/services/models'
 import { isRealSha256, type ModelManifest } from '../../src/shared/manifest'
+import type { ModelInfo } from '../../src/shared/types'
+import { groupModelVariants, variantGroupFace } from '../../src/renderer/lib/modelLibrary'
+import { orderPickerModels } from '../../src/renderer/lib/modelAvailability'
 
 // The COMMITTED model-manifests/ tree is what a real drive is provisioned from. These tests
 // assert invariants directly against the on-disk catalog (mirrors the committed
@@ -820,5 +824,83 @@ describe('committed catalog — no unsupported sharded GGUF entries (PR #302 F1)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// PR #302 P4 — the real-catalog grouping controls the audit ran as probes (O10) and the adapted
+// F5 face assertion. These build the ACTUAL list the renderer receives (`buildModelList` over the
+// committed manifests) so a catalog change that merged two models into one card, split a family
+// apart, or left a group fronting a withdrawn weight fails CI rather than a user's drive.
+//
+// `rootPath` is a throwaway temp directory: no weights exist under it, so every entry comes back
+// `missing` — which is exactly the fresh-drive state these controls describe.
+describe('committed catalog — variant grouping as the library renders it (PR #302 O10/F5)', () => {
+  const RAM_16_GB = 16
+
+  async function libraryModels(): Promise<ModelInfo[]> {
+    const manifestsDir = resolveManifestsDir(process.cwd())
+    if (!manifestsDir) throw new Error('could not locate model-manifests from the repo')
+    const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-catalog-group-'))
+    try {
+      const { models } = await buildModelList({
+        manifestsDir,
+        rootPath,
+        profile: 'BALANCED',
+        developerMode: false,
+        machineRamGb: RAM_16_GB
+      })
+      return models
+    } finally {
+      rmSync(rootPath, { recursive: true, force: true })
+    }
+  }
+
+  it('collapses into exactly three multi-member variant groups — no false merges (O10)', async () => {
+    const groups = groupModelVariants(await libraryModels()).filter((g) => g.models.length > 1)
+    expect(groups.map((g) => [g.name, g.models.length]).sort()).toEqual([
+      ['Qwen3.5 9B', 2],
+      ['Qwen3.6 27B', 2],
+      ['Qwen3.8 27B', 6]
+    ])
+  })
+
+  it('keeps every catalog model in exactly one group, and every group role/family-pure', async () => {
+    const models = await libraryModels()
+    const groups = groupModelVariants(models)
+    expect(groups.flatMap((g) => g.models.map((m) => m.id)).sort()).toEqual(
+      models.map((m) => m.id).sort()
+    )
+    for (const g of groups) {
+      expect(new Set(g.models.map((m) => `${m.role}/${m.family}/${m.runtime}`)).size).toBe(1)
+    }
+  })
+
+  // F5 (#196), ADAPTED from the audit probe `catalog-group-review.probe.ts` test 2. The probe
+  // asserted `group.models[0].download?.withdrawn` is undefined; the fix is presentation-only, so
+  // `group.models[0]` correctly STAYS the withdrawn catalog-first member and that raw assertion
+  // can never pass. The assertion moves to `variantGroupFace(group)` — the member the collapsed
+  // group actually shows — and the unchanged raw order is asserted alongside it.
+  it('fronts the tied 16 GB Qwen3.8 27B group with an obtainable variant', async () => {
+    const models = orderPickerModels(await libraryModels())
+    const group = groupModelVariants(models).find((g) => g.name === 'Qwen3.8 27B')
+    expect(group, 'the Qwen3.8 27B variant group exists').toBeTruthy()
+    expect(group!.models).toHaveLength(6)
+
+    // Preconditions: a six-way tie on all three ordering keys, so only catalog order separates
+    // them — the exact situation that let a withdrawn weight front the group.
+    expect(
+      group!.models.every((m) => m.insufficientRam && !m.recommended && m.state === 'missing')
+    ).toBe(true)
+    expect(group!.models.some((m) => m.download && !m.download.withdrawn)).toBe(true)
+
+    // The sort itself is untouched: the catalog-first member is still the withdrawn one.
+    expect(group!.models[0].download?.withdrawn).toBeTruthy()
+
+    // What the user sees on the collapsed card can actually be downloaded.
+    const face = variantGroupFace(group!)
+    expect(face.download, `${face.id} offers a download`).toBeTruthy()
+    expect(face.download!.withdrawn, `${face.id} is not withdrawn`).toBeUndefined()
+    // Presentation exception only — the face is a member of the group, not a new entry.
+    expect(group!.models).toContain(face)
   })
 })

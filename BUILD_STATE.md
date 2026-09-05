@@ -32,13 +32,13 @@
 _2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), IN
 PROGRESS:** On this drive / Browse views, name/id search, task/family filters, compact
 rows and expandable quantization groups; design record `docs/design-guidelines.md` §15;
-user-guide §5. After the 2026-09-05 review the branch was rebuilt on master as UX-only —
-Flash-Next stays on `feat/qwen38-flash-next-manifest`, its own PR. P1 rebuild `7c03c8e6`
-(377 / 5,674 / 80, CI green). P2 `bfc62201`: catalog guard against sharded `-NNNNN-of-NNNNN.gguf`
-entries (+5 tests). P3 (F2): a failed / unverified download keeps a NAMED result in the
-same "Current model download" panel (same alert node, Retry via the existing confirmation,
-Dismiss by job id, replaced only by an accepted job; §15 "Terminal download results",
-user-guide §6). Next: P4 repair visibility + group face (F3/F5), P5 docs + dead-key cleanup._
+user-guide §5. Rebuilt on master as UX-only after the 2026-09-05 review (Flash-Next stays on
+`feat/qwen38-flash-next-manifest`). P1 rebuild `7c03c8e6`; P2 `bfc62201` sharded-GGUF catalog
+guard; P3 `8de06742` (F2): failed / unverified downloads keep a named result in the same panel
+(Retry via the existing confirmation, Dismiss by job id; §15, user-guide §6). P4 (F3/F5): "On
+this drive" = installed OR `checksum_failed` (`lib/modelAvailability.ts`, pure relocation of the
+order helpers), repair groups start expanded (user toggle wins), `variantGroupFace` fronts an
+obtainable variant within the leading priority cohort, group headings h4. Next: P5 docs + F7._
 
 _2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
 `readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one

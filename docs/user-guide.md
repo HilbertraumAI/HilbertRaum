@@ -129,15 +129,22 @@ blocks you.
    status, and available action. Expand **Technical details** for its description, automatic-use
    explanation, paths, and verification controls.
    Quantization variants of the same model share one entry. The installed/recommended choice
-   leads; **Show all variants** reveals the other exact versions. Search also finds collapsed
-   variants. The current model is only shown at the top and is not counted again in the library.
+   leads — and where several versions are equally good picks, the one you can actually download
+   is the one shown; **Show all variants** reveals the other exact versions. A group that contains
+   a version the app **can't verify** opens by itself, and whichever way you set a group it stays
+   that way. Search also finds collapsed variants. The current model is only shown at the top and
+   is not counted again in the library.
 2. You'll see the models on your drive with a status:
    - **Installed** — ready to use.
    - **Recommended** — the largest model that runs comfortably in this computer's memory.
    - **Not downloaded** — the model file isn't on the drive (see Troubleshooting).
    - **Needs ≥N GB RAM** — this computer has less memory than the model's minimum, so it
      can't be selected or started here. Pick a smaller model — quality stays great.
-   - **Can't verify** — the file is present but its checksum didn't match; re-download it.
+   - **Can't verify** — the file is present but its checksum didn't match. The model stays listed
+     under **On this drive** with its **Download** action, so you can repair it without hunting
+     through the catalog; if it is one of several variants of the same model, that group opens
+     automatically so the damaged version is visible straight away. (If the publisher has since
+     withdrawn the file, the row explains that instead of offering a download.)
    - **Unsupported** — this model can't run on this computer/build.
 3. Click **Use this model** on a downloaded model's row — this makes it your model *and* starts it, so
    you can go straight to chatting. The first start of a model can take a little while as it loads

@@ -18,7 +18,9 @@ import {
 import { t } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
-import { makePolicyStatus } from '../helpers/status'
+import { appStatus as appStatusFixture, makePolicyStatus } from '../helpers/status'
+import { groupModelVariants, variantGroupFace } from '../../src/renderer/lib/modelLibrary'
+import { orderPickerModels } from '../../src/renderer/lib/modelAvailability'
 
 // Phase 18 — the Models screen download surface: the gate states (why downloads are
 // unavailable: policy vs. Settings), the per-download confirmation (license
@@ -1748,5 +1750,372 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     } finally {
       window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
     }
+  })
+})
+
+describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)', () => {
+  // Typed idle fixtures instead of `... as never` payload casts (F-41 ratchet).
+  const idleEngine: EngineStatus = {
+    installed: true,
+    available: true,
+    version: null,
+    backend: null,
+    missingFamilies: []
+  }
+  const idleRuntime: RuntimeStatus = {
+    running: false,
+    modelId: null,
+    startingModelId: null,
+    port: null,
+    healthy: false,
+    message: ''
+  }
+
+  const OBTAINABLE = {
+    url: 'https://example.test/weights.gguf',
+    sizeBytes: 1000,
+    licenseUrl: 'https://example.test/license',
+    licenseApproved: true
+  }
+  const WITHDRAWN = { ...OBTAINABLE, withdrawn: 'the publisher removed the pinned file' }
+
+  function variant(id: string, displayName: string, over: Partial<ModelInfo> = {}): ModelInfo {
+    return model({ id, displayName, family: 'qwen3.8', download: OBTAINABLE, ...over })
+  }
+
+  /** Every bridge method the screen calls, so `assertNoUnexpectedApiCalls` has teeth. */
+  function stubLibrary(opts: {
+    models: () => ModelInfo[]
+    activeModelId?: string | null
+    machineRamGb?: number
+    useModel?: ReturnType<typeof vi.fn>
+  }): { listModels: ReturnType<typeof vi.fn> } {
+    const listModels = vi.fn(async () => opts.models())
+    stubApi({
+      listModels,
+      getSettings: vi.fn(async () => ({
+        ...DEFAULT_SETTINGS,
+        activeModelId: opts.activeModelId ?? null
+      })),
+      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
+      getAppStatus: vi.fn(async () => appStatusFixture({ machineRamGb: opts.machineRamGb ?? 32 })),
+      getEngineStatus: vi.fn(async () => idleEngine),
+      getRuntimeStatus: vi.fn(async () => idleRuntime),
+      onModelVerifyProgress: vi.fn(() => () => {}),
+      ...(opts.useModel ? { useModel: opts.useModel } : {})
+    })
+    return { listModels }
+  }
+
+  function cardFor(displayName: string): HTMLElement {
+    const card = screen
+      .getAllByText(displayName)
+      .map((el) => el.closest('.model-card'))
+      .find((el): el is HTMLElement => el != null)
+    expect(card, `a .model-card for ${displayName}`).toBeTruthy()
+    return card as HTMLElement
+  }
+
+  /** Titles of the cards rendered inside one variant group, in DOM order. */
+  function groupTitles(name: string): string[] {
+    const region = screen.getByRole('region', { name })
+    return [...region.querySelectorAll('.model-title')].map((el) => el.textContent ?? '')
+  }
+
+  afterEach(() => {
+    cleanup()
+    assertNoUnexpectedApiCalls()
+  })
+
+  // ---- Ported audit probes (`model-library.probe.tsx`, F3) --------------------------------------
+
+  it.each(['different model', 'sibling variant'] as const)(
+    'shows a damaged %s in the default drive view so it can be repaired',
+    async (kind) => {
+      const active = variant('active', 'Active model', { state: 'running' })
+      const healthy = variant('healthy', 'Repair control Q4_K_M', { state: 'installed' })
+      const damaged = variant(
+        'damaged',
+        kind === 'sibling variant' ? 'Repair control Q6_K' : 'Damaged model',
+        { state: 'checksum_failed' }
+      )
+      stubLibrary({ models: () => [active, healthy, damaged], activeModelId: active.id })
+      render(<ModelsScreen />)
+      await screen.findByText(active.displayName)
+
+      // The default view is On this drive; the damaged model is ON the drive (its files are
+      // there, they just failed verification) and its whole recovery action lives on this row.
+      expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute(
+        'aria-checked',
+        'true'
+      )
+      // The sibling case must NOT need "Show all variants" first: a group holding a damaged
+      // member starts expanded (C1).
+      expect(screen.getByText(damaged.displayName)).toBeVisible()
+      expect(
+        within(cardFor(damaged.displayName)).getByRole('button', { name: 'Download' })
+      ).toBeEnabled()
+      expect(within(cardFor(damaged.displayName)).getByText('Can’t verify')).toBeVisible()
+    }
+  )
+
+  it('finds the damaged model by its exact name while On this drive is selected', async () => {
+    const healthy = variant('healthy', 'Healthy model', { state: 'installed' })
+    const damaged = variant('damaged', 'Damaged model Q6_K', { state: 'checksum_failed' })
+    stubLibrary({ models: () => [healthy, damaged] })
+    render(<ModelsScreen />)
+    await screen.findByText(healthy.displayName)
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+
+    // On the reviewed head this reported "No models match" — the search ran over a list the view
+    // filter had already emptied of repair states.
+    await userEvent.setup().type(screen.getByRole('searchbox'), damaged.displayName)
+    expect(screen.getByText(damaged.displayName)).toBeVisible()
+    expect(screen.queryByText(/No models match/)).not.toBeInTheDocument()
+  })
+
+  it.each(['embeddings', 'reranker', 'translation', 'vision', 'transcriber'] as const)(
+    'lists a damaged %s model in the default view with its Download action',
+    async (role) => {
+      const chat = variant('chat-installed', 'Chat model', { state: 'installed' })
+      const damaged = variant(`damaged-${role}`, `Damaged ${role} model`, {
+        role,
+        family: role,
+        state: 'checksum_failed'
+      })
+      stubLibrary({ models: () => [chat, damaged] })
+      render(<ModelsScreen />)
+      await screen.findByText(damaged.displayName)
+
+      expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute(
+        'aria-checked',
+        'true'
+      )
+      const card = within(cardFor(damaged.displayName))
+      expect(card.getByRole('button', { name: 'Download' })).toBeEnabled()
+      // Automatic roles never gain Select/Start from being visible here.
+      expect(card.queryByRole('button', { name: 'Use this model' })).not.toBeInTheDocument()
+    }
+  )
+
+  it('keeps the withdrawn explanation — never a promised Download — on a damaged withdrawn row', async () => {
+    const healthy = variant('healthy', 'Healthy model', { state: 'installed' })
+    const damaged = variant('damaged-withdrawn', 'Withdrawn damaged model', {
+      state: 'checksum_failed',
+      download: WITHDRAWN
+    })
+    stubLibrary({ models: () => [healthy, damaged] })
+    render(<ModelsScreen />)
+    await screen.findByText(damaged.displayName)
+
+    const card = within(cardFor(damaged.displayName))
+    expect(card.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument()
+    expect(
+      card.getByText(t('en', 'models.download.withdrawn', { reason: WITHDRAWN.withdrawn }))
+    ).toBeVisible()
+  })
+
+  it('a damaged-only drive still starts in Browse, and On this drive lists the damaged row', async () => {
+    const damaged = variant('damaged-only', 'Only damaged model', { state: 'checksum_failed' })
+    stubLibrary({ models: () => [damaged] })
+    render(<ModelsScreen />)
+    await screen.findByText(damaged.displayName)
+
+    // The INITIAL view choice is unchanged: it asks whether anything is usable right now
+    // (`isModelInstalled`), and a model that fails its checksum is not.
+    expect(screen.getByRole('radio', { name: 'Browse models' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    await userEvent.setup().click(screen.getByRole('radio', { name: 'On this drive' }))
+    expect(screen.getByText(damaged.displayName)).toBeVisible()
+    expect(screen.queryByText(t('en', 'models.library.noneInstalled'))).not.toBeInTheDocument()
+  })
+
+  it('still shows the "only your active model" empty state when nothing else is on the drive', async () => {
+    const active = variant('active', 'Active model', { state: 'installed' })
+    stubLibrary({ models: () => [active], activeModelId: active.id })
+    render(<ModelsScreen />)
+    await screen.findByText(active.displayName)
+
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    expect(screen.getByText(t('en', 'models.library.onlyActive'))).toBeVisible()
+  })
+
+  it('keeps the active model pinned above the library, listed exactly once', async () => {
+    const active = variant('active', 'Active model', { state: 'running' })
+    const damaged = variant('damaged', 'Damaged model', { state: 'checksum_failed' })
+    stubLibrary({ models: () => [active, damaged], activeModelId: active.id })
+    render(<ModelsScreen />)
+    await screen.findByText(active.displayName)
+
+    expect([...document.querySelectorAll('.model-title')].map((el) => el.textContent)).toEqual([
+      'Active model',
+      'Damaged model'
+    ])
+    expect(screen.getAllByText('Active model')).toHaveLength(1)
+  })
+
+  // ---- Default expansion vs. the user's explicit toggle (C1) ------------------------------------
+
+  it('expands the group on its own when a refresh introduces damage', async () => {
+    const healthy = variant('pair-q4', 'Refresh pair Q4_K_M', { state: 'installed' })
+    const sibling = variant('pair-q6', 'Refresh pair Q6_K', { state: 'installed' })
+    let damagedYet = false
+    const useModel = vi.fn(async () => idleRuntime)
+    stubLibrary({
+      models: () =>
+        damagedYet ? [healthy, { ...sibling, state: 'checksum_failed' as const }] : [healthy, sibling],
+      useModel
+    })
+    render(<ModelsScreen />)
+    await screen.findByText(healthy.displayName)
+
+    // Healthy pair: collapsed, so only the face shows.
+    expect(screen.getByRole('button', { name: 'Show all variants (2)' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+    expect(screen.queryByText(sibling.displayName)).not.toBeInTheDocument()
+
+    // Any refresh (here: the row's own Use action) re-derives expansion from the new states.
+    damagedYet = true
+    await userEvent.setup().click(
+      within(cardFor(healthy.displayName)).getByRole('button', { name: 'Use this model' })
+    )
+    await waitFor(() => expect(screen.getByText(sibling.displayName)).toBeVisible())
+    expect(screen.getByRole('button', { name: 'Show fewer variants (2)' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(useModel).toHaveBeenCalledExactlyOnceWith(healthy.id)
+  })
+
+  it('an explicit collapse survives a refresh and a filter change — and re-expansion works', async () => {
+    const user = userEvent.setup()
+    const healthy = variant('toggle-q4', 'Toggle pair Q4_K_M', { state: 'installed' })
+    const damaged = variant('toggle-q6', 'Toggle pair Q6_K', { state: 'checksum_failed' })
+    const useModel = vi.fn(async () => idleRuntime)
+    const api = stubLibrary({ models: () => [healthy, damaged], useModel })
+    render(<ModelsScreen />)
+    await screen.findByText(damaged.displayName)
+
+    // Starts expanded because of the damaged member; the user disagrees.
+    await user.click(screen.getByRole('button', { name: 'Show fewer variants (2)' }))
+    expect(screen.queryByText(damaged.displayName)).not.toBeInTheDocument()
+
+    // A refresh must not re-open what the user closed, even though the damage is still there.
+    await user.click(
+      within(cardFor(healthy.displayName)).getByRole('button', { name: 'Use this model' })
+    )
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2))
+    expect(screen.queryByText(damaged.displayName)).not.toBeInTheDocument()
+
+    // Nor a filter change: the choice is keyed by the stable group key.
+    await user.type(screen.getByRole('searchbox'), 'toggle')
+    expect(screen.queryByText(damaged.displayName)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show all variants (2)' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+
+    // And re-expanding still works.
+    await user.click(screen.getByRole('button', { name: 'Show all variants (2)' }))
+    expect(screen.getByText(damaged.displayName)).toBeVisible()
+  })
+
+  // ---- The rendered group face (F5) ------------------------------------------------------------
+
+  it('renders the variantGroupFace choice on the collapsed card, and every variant once when expanded', async () => {
+    const tie = { state: 'missing' as const, recommended: false, insufficientRam: true }
+    const models = [
+      variant('tie-q4km', 'Tie group Q4_K_M', { ...tie, download: WITHDRAWN }),
+      variant('tie-udq4kxl', 'Tie group UD-Q4_K_XL', { ...tie, download: OBTAINABLE }),
+      variant('tie-q4ks', 'Tie group Q4_K_S', { ...tie, download: WITHDRAWN }),
+      variant('tie-q6k', 'Tie group Q6_K', { ...tie, download: OBTAINABLE }),
+      variant('tie-q80', 'Tie group Q8_0', { ...tie, download: OBTAINABLE }),
+      variant('tie-udq6kxl', 'Tie group UD-Q6_K_XL', { ...tie, download: OBTAINABLE })
+    ]
+    stubLibrary({ models: () => models })
+    render(<ModelsScreen />)
+    await screen.findByRole('region', { name: 'Tie group' })
+
+    // The selector's answer, computed independently from the same inputs the screen receives.
+    const group = groupModelVariants(orderPickerModels(models)).find((g) => g.name === 'Tie group')
+    const face = variantGroupFace(group!)
+    expect(face.displayName).toBe('Tie group UD-Q4_K_XL')
+
+    // Collapsed: the DOM shows exactly that member — not the withdrawn catalog-first one.
+    expect(groupTitles('Tie group')).toEqual([face.displayName])
+    expect(screen.queryByText('Tie group Q4_K_M')).not.toBeInTheDocument()
+    expect(group!.models[0].displayName).toBe('Tie group Q4_K_M') // the sort is untouched
+
+    // Expanded: face first, then every other variant exactly once in its original order.
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Show all variants (6)' }))
+    expect(groupTitles('Tie group')).toEqual([
+      'Tie group UD-Q4_K_XL',
+      'Tie group Q4_K_M',
+      'Tie group Q4_K_S',
+      'Tie group Q6_K',
+      'Tie group Q8_0',
+      'Tie group UD-Q6_K_XL'
+    ])
+    expect(new Set(groupTitles('Tie group')).size).toBe(models.length)
+  })
+
+  // ---- O1 / O5 — the RAM badge and the heading outline ------------------------------------------
+
+  it('shows the ⚠ RAM badge and its full hint while Technical details is closed (O1)', async () => {
+    const tight = variant('ram-gated', 'RAM gated model', {
+      state: 'installed',
+      insufficientRam: true,
+      recommendedMinRamGb: 24
+    })
+    stubLibrary({ models: () => [tight], machineRamGb: 8 })
+    render(<ModelsScreen />)
+    await screen.findByText(tight.displayName)
+
+    expect((document.querySelector('details.tech-details') as HTMLDetailsElement).open).toBe(false)
+    // The BADGE itself (the disabled Use action carries the same hint as its title).
+    const badge = within(cardFor(tight.displayName)).getByText('Needs ≥24 GB RAM')
+    expect(badge).toBeVisible()
+    expect(badge.className).toContain('pill-warning')
+    expect(badge).toHaveAttribute(
+      'title',
+      t('en', 'models.ram.needs', { min: 24 }) +
+        t('en', 'models.ram.machine', { ram: 8 }) +
+        t('en', 'models.ram.advice')
+    )
+  })
+
+  it('nests the heading outline h2 → h3 (task) → h4 (group) and toggles aria-expanded (O5)', async () => {
+    const models = [
+      variant('outline-q4', 'Outline group Q4_K_M'),
+      variant('outline-q6', 'Outline group Q6_K')
+    ]
+    stubLibrary({ models: () => models })
+    render(<ModelsScreen />)
+    await screen.findByRole('region', { name: 'Outline group' })
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Model library' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 3, name: 'Chat' })).toBeInTheDocument()
+    const groupHeading = screen.getByRole('heading', { level: 4, name: 'Outline group' })
+    expect(groupHeading).toBeInTheDocument()
+    // No heading skips a level and the group heading is not a sibling-rank h3 any more.
+    expect(screen.queryByRole('heading', { level: 3, name: 'Outline group' })).not.toBeInTheDocument()
+
+    const toggle = screen.getByRole('button', { name: 'Show all variants (2)' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.setup().click(toggle)
+    expect(screen.getByRole('button', { name: 'Show fewer variants (2)' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
   })
 })

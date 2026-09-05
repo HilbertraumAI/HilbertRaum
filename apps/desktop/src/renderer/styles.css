@@ -453,7 +453,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .model-task-heading { margin: 20px 0 8px; font-size: 14px; }
 .model-variant-group { border: 1px solid var(--border); border-radius: var(--radius-md); margin: 10px 0; overflow: hidden; }
 .model-variant-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 16px; background: var(--surface-hover); }
-.model-variant-heading h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.model-variant-heading h4 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
 .model-variant-group > .model-card { margin: 0; border: 0; border-radius: 0; box-shadow: none; }
 .model-variant-group > .model-card + .model-card { border-top: 1px solid var(--border); }
 .model-library-empty { padding: 16px 0; }
