@@ -5,6 +5,7 @@ import type { KnowledgePack } from '../../../shared/types'
 import { type Db, prepareCached } from '../db'
 import { log } from '../logging'
 import { parseLibraryXml, type KiwixBook } from './client'
+import { KiwixManageError } from './tools'
 
 // Knowledge-pack registry (ZIM wave): CRUD + disk reconciliation over the
 // `knowledge_packs` table. Follows the skills-registry shape — disk is the truth for
@@ -18,8 +19,11 @@ import { parseLibraryXml, type KiwixBook } from './client'
 // kiwix-manage reads only the ZIM header, so registering a 100 GB archive is fast and
 // needs no libzim binding (the Windows blocker the 2026-08-22 spike established).
 
-/** Adds one ZIM to a library.xml — bound to the real kiwix-manage in index.ts; tests fake it. */
-export type ManageAddFn = (libraryXmlPath: string, zimPath: string) => Promise<void>
+/** Adds one ZIM to a library.xml — bound to the real kiwix-manage in index.ts; tests fake it.
+ *  `signal` (additive third param, P3a/M9) is forwarded from `writeLibraryXml` so a caller
+ *  teardown can cancel an in-flight `kiwix-manage` child; every existing fake still
+ *  type-checks (it simply never reads a third argument). */
+export type ManageAddFn = (libraryXmlPath: string, zimPath: string, signal?: AbortSignal) => Promise<void>
 
 export interface PackDeps {
   /** The drive's `zim/` folder (canonical pack home; may not exist). */
@@ -230,8 +234,20 @@ export async function discoverDrivePacks(db: Db, deps: PackDeps): Promise<number
  * (Re)build the library.xml the sidecar serves from: every enabled pack whose file
  * resolves, added via kiwix-manage into a FRESH file at `libraryXmlPath`. Returns the
  * number of books included (0 ⇒ the caller should not start the sidecar).
+ *
+ * `signal` (P3a/M9) is forwarded to every `manageAdd` call. An ordinary per-pack failure
+ * (a corrupt archive, a missing file) is still skipped with a warn — one bad pack must
+ * not block the others. But a `KiwixManageError` with `childState === 'uncertain'`, or
+ * `kind === 'abort'`, or the signal already being aborted STOPS the build and RETHROWS:
+ * a shared library.xml with an unconfirmed writer (the kiwix-manage child may still be
+ * appending to it) is not a publishable build.
  */
-export async function writeLibraryXml(db: Db, deps: PackDeps, libraryXmlPath: string): Promise<number> {
+export async function writeLibraryXml(
+  db: Db,
+  deps: PackDeps,
+  libraryXmlPath: string,
+  signal?: AbortSignal
+): Promise<number> {
   try {
     rmSync(libraryXmlPath, { force: true })
   } catch {
@@ -240,12 +256,16 @@ export async function writeLibraryXml(db: Db, deps: PackDeps, libraryXmlPath: st
   const rows = prepareCached(db, 'SELECT * FROM knowledge_packs WHERE enabled = 1 AND removed_at IS NULL').all() as unknown as PackRow[]
   let count = 0
   for (const row of rows) {
+    if (signal?.aborted) throw new DOMException('writeLibraryXml aborted', 'AbortError')
     const filePath = resolvePackFile(deps.zimDir, row)
     if (!filePath) continue
     try {
-      await deps.manageAdd(libraryXmlPath, filePath)
+      await deps.manageAdd(libraryXmlPath, filePath, signal)
       count++
     } catch (err) {
+      if (err instanceof KiwixManageError && (err.childState === 'uncertain' || err.kind === 'abort')) {
+        throw err
+      }
       log.warn(
         `Knowledge pack ${row.id} skipped from library.xml: ${err instanceof Error ? err.message : String(err)}`
       )
@@ -254,21 +274,34 @@ export async function writeLibraryXml(db: Db, deps: PackDeps, libraryXmlPath: st
   return count
 }
 
-/** Read one archive's metadata via a throwaway kiwix-manage library.xml. */
+/**
+ * Read one archive's metadata via a throwaway kiwix-manage library.xml. The temp meta
+ * dir is normally removed in `finally` — EXCEPT when the manager settled `'uncertain'`
+ * (the SIGKILLed child may still be writing into it): removing it then would race a
+ * child that might still be alive, so the dir is left for P3b's startup sweep (R-7).
+ */
 async function readZimMetadata(deps: PackDeps, zimPath: string): Promise<KiwixBook> {
   const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-meta-'))
   const tempLibrary = join(dir, 'library.xml')
+  let manageErr: unknown
   try {
     await deps.manageAdd(tempLibrary, zimPath)
     const books = parseLibraryXml(readFileSync(tempLibrary, 'utf8'))
     const book = books[0]
     if (!book) throw new Error('kiwix-manage produced no book entry for the archive')
     return book
+  } catch (err) {
+    manageErr = err
+    throw err
   } finally {
-    try {
-      rmSync(dir, { recursive: true, force: true })
-    } catch {
-      /* temp dir — best-effort */
+    if (manageErr instanceof KiwixManageError && manageErr.childState === 'uncertain') {
+      log.warn('kiwix-manage cleanup not confirmed — leaving the throwaway metadata dir for the startup sweep (R-7)')
+    } else {
+      try {
+        rmSync(dir, { recursive: true, force: true })
+      } catch {
+        /* temp dir — best-effort */
+      }
     }
   }
 }

@@ -2132,10 +2132,13 @@ offline article viewer. Files are registered in place, never copied.
   ships Windows binaries, starts in ~0.5 s, idles at ~52 MB RSS, and its embedded Xapian
   full-text search answers in 40–200 ms. `services/zim/serve.ts` (`KiwixServer`) is a
   compact LlamaServer sibling: shared `findFreePort`/bind-race-retry-once, the crash-reap
-  PID registry (`SidecarFamily` gained `'kiwix_tools'`), pre-spawn binary verification,
-  `stop()` SIGTERM→grace→SIGKILL. Lazy single-flight start; a start failure latches until
-  the pack set changes. No auto-restart and no idle teardown (read-only content server,
-  trivial RSS): an unexpected death cold-starts on the next ask.
+  PID registry (`SidecarFamily` gained `'kiwix_tools'`), pre-spawn binary verification, and
+  a bounded teardown policy (SIGTERM → 2 s → SIGKILL → 3 s → reported "not confirmed",
+  the PID kept in the crash reaper — the full record is D-Z10). The start is lazy and
+  shared per pack revision; a start failure latches by revision until the pack set
+  changes, but an aborted start never latches. No idle teardown (read-only content
+  server, trivial RSS): an unexpected death makes the next ask spawn a NEW generation
+  over the SAME library build, not a rebuild.
 - **D-Z2 — node:http, never fetch.** Node 24's undici crashes (`assert(!this.paused)`) on
   kiwix-serve/libmicrohttpd response framing, keep-alive or not (spike-reproduced;
   Electron 43 = Node 24). `services/zim/client.ts` uses `node:http` with a non-keepalive
@@ -2366,11 +2369,45 @@ offline article viewer. Files are registered in place, never copied.
   iframe to `127.0.0.1` and a renderer fetch, deliberately. The article viewer
   (`packs:getArticle` → ArticleModal) ships main-extracted plain sectioned text — the
   same converter retrieval uses — so the renderer keeps its no-innerHTML posture and no
-  sanitizer dependency exists. The generated library.xml lives in an OS temp dir,
-  recreated per server start, removed on stop.
+  sanitizer dependency exists. The generated library is one immutable
+  `library.<build>.xml` per pack revision in an OS temp dir (P3a; P3b relocates it under
+  the workspace) — a new file per rebuild, never rewritten in place, deleted only after
+  the child that read it reached a confirmed terminal state — and every build is removed
+  on quit unless a child could not be confirmed dead.
 - **D-Z9 — dialog-in-handler registration.** `packs:add` opens the native picker AND
   registers inside one main-side handler; no archive path ever crosses the IPC bridge.
   Audit is ids/counts only — pack titles and filenames are content (sentinel-tested).
+- **D-Z10 — service generations: one writer, one published tuple, bounded teardown
+  (P3a, 2026-09-05; PR #294 review H3 / M2 / M9).** `ZimService` (`services/zim/index.ts`)
+  publishes one coherent configuration per pack revision — `{ revision, build,
+  generation, port, library.<build>.xml }`. A pack-set change bumps a monotonic
+  revision; every library build and every kiwix-serve child (a bind-race retry and a
+  crash restart included) draws a distinct monotonic generation from one
+  service-owned allocator, so a generation never repeats in a process. A single promise
+  chain is the only writer of library files and the only path that stops or starts a
+  child; each start gets its own immutable XML path, captures its revision and
+  cancellation before the first await, and rechecks after verification, the manager
+  work, port allocation and the health probe — publishing only a tuple that is still
+  current, or else cleaning its own build so the caller retries under the current
+  revision.
+  Concurrent asks share one start: a cancelled ask stops waiting without cancelling the
+  shared start, and only a pack change, lock or quit aborts it, with every waiter
+  rechecking before it consumes a result. Teardown (`serve.ts`'s `killRecord`/`stop()`)
+  is single-flight and self-bounded — SIGTERM, 2 s, SIGKILL, 3 s — and a child that
+  still cannot be confirmed dead stays in the crash-reap registry and keeps its file;
+  the teardown then reports that outcome rather than "complete", which is exactly what
+  the lock and quit paths must surface too, never a silent "cleanup complete". A start
+  failure latches by revision until the pack set changes; an aborted start never
+  latches.
+  `kiwix-manage` (`tools.ts`) runs under the same pre-spawn verifier — a hashless
+  install marker resolves `skip-legacy` and keeps launching under a logged warning
+  rather than integrity verification (residual R-1, open until the provisioning wave
+  proves both binaries' hashes/verification/repair) — registers every PID, honours the
+  caller's abort, and settles only after its child reaches a terminal state or the
+  bound expires, so no directory is ever removed while the child may still be writing
+  it. `ZimService.serverState()` exposes `{ revision, build, generation, port, alive }`
+  for the P5 alive/generation request guard. P3b adds the admission-epoch half of this
+  record.
 
 ### Module map
 
@@ -2378,17 +2415,31 @@ offline article viewer. Files are registered in place, never copied.
 budget and `truncated` signal — PR #294 review H1; cooperatively sliced, async on the ask
 path — P1b), `client.ts` (node:http + search/
 library XML parsing), `tools.ts` (binary discovery `runtime/kiwix-tools/<os>/`, dev-only
-`HILBERTRAUM_KIWIX_BIN`, kiwix-manage runner), `serve.ts` (KiwixServer), `packs.ts`
-(registry over `knowledge_packs`), `arm.ts` (candidate production), `index.ts`
-(`ZimService` facade on `AppContext.zim`; quit teardown in shutdown.ts). IPC:
-`ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt). Renderer:
-`documents/PacksPanel.tsx`, ScopePopover pack sources, SourcesDisclosure "Open article",
-`chat/ArticleModal.tsx`. Shapes: [`data-contracts.md`](data-contracts.md) "Knowledge
-packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit) — `zim-html`
-runs four attributed synthetic non-Wikipedia fixtures under `tests/fixtures/zim/`
-(Parsoid data-mw, zimit/warc2zim, DevDocs, Stack Exchange/sotoki) in normal CI —
-`zim-arm/zim-ipc` (integration), `KnowledgePacks.test.tsx` (renderer, incl. the
-`partial`-hint case); real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
+`HILBERTRAUM_KIWIX_BIN`, the verified `kiwix-manage` runner — pre-spawn verifier, PID
+registration for as long as the child may be running, settles only after a terminal
+state or the bounded wait — D-Z10), `serve.ts` (`KiwixServer` — per-child records, no
+mutable state on `this`, the bounded SIGTERM→SIGKILL teardown policy — D-Z10),
+`packs.ts` (registry over `knowledge_packs`; `writeLibraryXml` stops and rethrows on an
+unconfirmed manager child, D-Z10), `arm.ts` (candidate production), `index.ts`
+(`ZimService` facade on `AppContext.zim` — the revision/generation allocator, the FIFO
+build/teardown/start chain and the published tuple, D-Z10; quit teardown in
+shutdown.ts). IPC: `ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt).
+Renderer: `documents/PacksPanel.tsx`, ScopePopover pack sources, SourcesDisclosure "Open
+article", `chat/ArticleModal.tsx`. Shapes: [`data-contracts.md`](data-contracts.md)
+"Knowledge packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit) —
+`zim-html` runs four attributed synthetic non-Wikipedia fixtures under
+`tests/fixtures/zim/` (Parsoid data-mw, zimit/warc2zim, DevDocs, Stack Exchange/sotoki)
+in normal CI — `zim-service-lifecycle.test.ts` (unit, NEW, P3a) exercises the
+generation/publication races and the manager contract: test T05 parks the verifier,
+port allocator, manager call and health probe in turn against an overlapping
+`stop()`/`invalidateLibrary()`/restart, plus a cancelled waiter beside a live one, a
+lock (`suspend()`) aborting every waiter, a revision-keyed failure latch cleared by a
+pack change, and an ignored SIGTERM escalating to SIGKILL and reporting the child
+unconfirmed with its PID and file kept; test T06 walks `kiwix-manage`'s verifier
+outcomes (match/mismatch/hashless), PID registration bounded to the child's lifetime,
+and timeout/abort settling only after a terminal state — `zim-arm/zim-ipc`
+(integration), `KnowledgePacks.test.tsx` (renderer, incl. the `partial`-hint case);
+real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
 `scripts/zim-html-perf.mjs` prints the D2 measurement table outside Vitest/Electron
 (`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`), including
 Section D's per-slice cooperative-slicing gate (P1b) — each `--gate` profile now also

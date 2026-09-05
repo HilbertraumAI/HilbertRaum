@@ -76,7 +76,7 @@ function makeServer(opts: {
 describe('KiwixServer', () => {
   it('starts, probes to healthy, and reports its port', async () => {
     const { server, calls } = makeServer({ probeResults: [false, true] })
-    await expect(server.ensureStarted()).resolves.toBe(8100)
+    await expect(server.ensureStarted()).resolves.toMatchObject({ port: 8100 })
     expect(server.port()).toBe(8100)
     expect(calls[0]?.args).toEqual([
       '--address',
@@ -103,7 +103,7 @@ describe('KiwixServer', () => {
   it('retries ONCE on a fresh port after a bind race', async () => {
     // Only the SECOND port ever becomes healthy — a dead first child must not probe true.
     const { server, calls } = makeServer({ failFirstChild: 'bind-race', probeResults: async (p) => p === 8101 })
-    await expect(server.ensureStarted()).resolves.toBe(8101)
+    await expect(server.ensureStarted()).resolves.toMatchObject({ port: 8101 })
     expect(calls).toHaveLength(2)
     expect(calls[1]?.args).toContain('8101')
     await server.stop()
@@ -116,7 +116,7 @@ describe('KiwixServer', () => {
     await expect(server.ensureStarted()).rejects.toThrow(/code 42/)
     expect(calls).toHaveLength(1)
     server.resetFailureLatch()
-    await expect(server.ensureStarted()).resolves.toBe(8101)
+    await expect(server.ensureStarted()).resolves.toMatchObject({ port: 8101 })
     await server.stop()
   })
 
@@ -138,7 +138,7 @@ describe('KiwixServer', () => {
     const { server, calls, children } = makeServer({})
     await server.ensureStarted()
     children[0]!.emit('exit', 1, null) // crash after healthy
-    await expect(server.ensureStarted()).resolves.toBe(8101)
+    await expect(server.ensureStarted()).resolves.toMatchObject({ port: 8101 })
     expect(calls).toHaveLength(2)
     await server.stop()
   })

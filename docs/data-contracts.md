@@ -1541,3 +1541,14 @@ a removed pack degrades to “not retrieved from” (the skills C3 rule).
 **Audit:** `knowledge_pack_added` ({ packId, sizeBytes, articleCount }) ·
 `knowledge_pack_removed` ({ packId }). Pack titles/filenames are CONTENT — never in
 `runtime_events` (sentinel-tested in zim-ipc.test.ts).
+
+**Service publication (P3a):** `ZimService` (`services/zim/index.ts`) publishes one
+tuple per pack revision, `{ revision, build, generation, port, libraryXmlPath }` (or,
+when nothing is enabled/available, `{ revision, kind: 'empty' }` — no child, no XML).
+`revision`, `build` and `generation` are monotonic counters owned by the service for
+the life of the process; `generation` is ONE allocator shared by library builds and
+kiwix-serve children, so a rebuild and a child spawn (including a bind-race retry or a
+crash restart) never reuse a value. Library files are named `library.<build>.xml`
+under the service's temp library directory. `ZimService.serverState(): { revision,
+build, generation, port, alive } | null` is the read P5's request guard consumes
+before and after a request; no IPC channel changed.

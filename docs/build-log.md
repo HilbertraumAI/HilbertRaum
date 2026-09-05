@@ -1382,6 +1382,55 @@ tag triggers the release workflow's draft build).
 
 ---
 
+_2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
+`readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one
+up through `onFinish(reason, timings?)` at `[DONE]`/close — never on an abort, error frame or
+watchdog trip; one shared `RuntimeTimings` type in `runtime/index.ts`; every existing `onFinish`
+caller source-compatible.**_ Blast-radius re-analysis in the PR description (the app never logs the
+sidecar argv; the finish hand-up moved from the finish chunk to the sentinel). §5 item 20 tracks the
+wave; #290/#291 stay OPEN until the reporter runs the hardware legs (verification issue **#298**,
+assigned to the #291 reporter). PR 1 = #295 (375 / 5,645 / 74). Master `b4e0ed06` recounted: 375 / 5,633 / 74 raw.
+**PR 2 (`fix/290-291-pr2-decode-speed`, #291):** `measureTokensPerSecond` → `SpeedReading`
+(`predicted_per_second` when timings are present, chunk fallback flagged), the early `break`
+removed, `BENCHMARK_PROMPT` now a paragraph so the 64-token cap fills, `BenchmarkResult.speedBasis`,
+the card says "Decode speed" + token window / "≈ approximate"; thresholds NOT retuned (basis
+recorded in `benchmark.md`, `model-benchmarks.md` §6.5); MTP record §7 watch item → observed.
+PR 2 = #296 (375 / 5,654 / 74). **PR 3 (`fix/290-291-pr3-answer-speed-line`, #290):** chat
+only — `GenerateOptions.onTimings` (completed streams only) → `withChatStream` `sendTimings` →
+ONE ephemeral `chat:speed:<id>` `AnswerSpeed` payload (tok/s + tokens from the server timings,
+TTFT on the `first_token` clock) keyed to the persisted message id; `ChatScreen` session map →
+`Transcript` line `42 tok/s · 1.8 s to first token · 615 tokens` (EN/DE); nothing persisted;
+design record: `architecture.md` "Chat & streaming" → "Per-answer speed line" §1–§3. PR 3 = #297
+(376 / 5,670 / 74; +37 tests over master across the stack). Dev launch not possible on this
+machine (Smart App Control blocks `electron.exe` and the sidecar) — build + suite only.
+**#298 VERIFIED on hardware the same day** (the #291 reporter, i9-9900X / RTX 3090, pinned b9849,
+every box ticked: Diagnostics 28.2 / 25.9 MTP and 21.8 no-MTP vs `print_timing` 28.20 / 25.87 /
+21.84; prefill-independent; speed line 32 / 28 tok/s + token counts exact, abort / reload / mock /
+German / document-answer legs clean; the app's argv confirmed from `/proc` — no `-fa`). **PR 4
+(`fix/290-291-pr4-timings-fixture`):** the captured b9849 transcript committed as
+`tests/fixtures/chat-sse-timings-b9849.txt` (+ `chat-sse-timings-fixture.test.ts`), the records
+corrected (the issue's 47.9 was a `-fa` build; b9849 does 26–32 t/s there); closes #290/#291/#298.
+
+_2026-09-04 — **Phase F PR 6 (PR #293, `fix/pf-code1-rag-excerpt-framing`): #228 shipped — the excerpt
+block of `buildGroundedPrompt` / `buildCompareWholeDocPrompt` is framed as document content, not
+instructions (BEGIN/END markers + a guard line, user turn only, `rag/grounded-data.ts`). The eval
+probe passed at midday (`llama-server.exe --version` → `version: 9849`, exit 0), so the grounded-QA
+gate ran before/after on all ten K: chat GGUFs: level within noise on the ranked models (§52, the
+#228 addendum row + the "Phase F addendum" paragraph). Phase F COMPLETE; #217 closed.**_ Review
+catches repaired in-PR (the compare notice hoisted out of the block; echoed framing scrubbed). Suite
+on the branch (this machine): 375 / 5,633 / 74 raw (the Electron smoke ran; 374 / 5,627 / 74
+excluding it), +5 tests over master `03080b85`. Dev launch OK (app-data dev root).
+
+_2026-09-04 — **Phase F close-out (PR #292, docs only): Phase F is complete except #228. PRs 1–5
+(#283 `6329f40e`, #284 `94c9faf8`, #285 `a6d19700`, #287 `533945b8`, #289 `f30c73fc`) closed #274,
+#240/#243/#250, #248/#226, #236/#221, #247/#225; the RAG excerpt framing (#228, "wrap, gated by
+the grounded-QA eval") stays open — the eval probe (`K:\runtime\llama.cpp\win\llama-server.exe
+--version`) exits `0xC0E90002` again on the execution machine (Smart App Control), recorded on
+#228.**_ §5 item 19 collapsed to outcome + pointer + residuals; the five 2026-09-04 entries
+archived verbatim to `docs/build-log.md`; §52 gained the "Phase F close-out" paragraph. Suite on
+master `f30c73fc` (this machine): 375 / 5,628 / 74 raw (the Electron smoke ran; 374 / 5,622 / 74
+excluding it). No code, no launch smoke.
+
 _2026-09-04 — **Phase F PR 5 (#289, closes #247 / #225): the workspace database carries
 `PRAGMA user_version` = `SCHEMA_VERSION` (`services/db.ts`, read before any write): a newer stamp
 is refused with the typed `WorkspaceNewerError` → IPC `workspace_newer` ("update the app"), nothing
