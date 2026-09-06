@@ -31,7 +31,8 @@ import {
   latestEffectiveRead,
   recordChecksumRead,
   recordModelLoadRead,
-  resetEffectiveReadForTests
+  resetEffectiveReadForTests,
+  setReadSpeedClockForTests
 } from '../../src/main/services/read-speed'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
@@ -98,6 +99,11 @@ function failingFirstWrite(db: Db): Db {
 beforeEach(() => {
   resetPerformanceForTests()
   resetEffectiveReadForTests()
+  // Samples are identified by their millisecond `at`; two recorded within one millisecond read as
+  // one (the PR #303 P5 CI run on ubuntu/Node 24 ignored the fast sample after the slow one at
+  // the #110 case). Real loads take seconds — give every recorded sample its own second.
+  let tick = Date.parse('2026-09-06T10:00:00.000Z')
+  setReadSpeedClockForTests(() => new Date((tick += 1000)))
 })
 
 describe('identity before ranking (M2)', () => {
