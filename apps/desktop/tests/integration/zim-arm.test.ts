@@ -7,7 +7,12 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
-import { ragSettingsFrom, retrieve, type RagRetrievalSettings } from '../../src/main/services/rag'
+import {
+  ragSettingsFrom,
+  retrieve,
+  type ExternalRetrievalOutput,
+  type RagRetrievalSettings
+} from '../../src/main/services/rag'
 import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import {
@@ -357,6 +362,13 @@ function archiveCandidate(n: number, text: string) {
   }
 }
 
+/** The arm's result shape (#301 P4, plan §9.21 (e)3): `{ candidates, outcomes }`. These cases are
+ *  about the CANDIDATE pipeline (interleave, rerank, scope, citations), so they report no outcomes
+ *  — the outcome contract itself is pinned by the arm/service suites and by T16-a. */
+function testArm(...candidates: Array<ReturnType<typeof archiveCandidate>>): ExternalRetrievalOutput {
+  return { candidates, outcomes: [] }
+}
+
 describe('retrieve() with an external arm', () => {
   it('interleaves document and archive candidates without a reranker and builds archive citations', async () => {
     const db = freshDb()
@@ -365,10 +377,12 @@ describe('retrieve() with an external arm', () => {
       'Treibhausgase entstehen in der Landwirtschaft.',
       'Ganz anderes Thema ohne Bezug.'
     ])
-    const r = await retrieve(db, embedder, 'Treibhausgas Landwirtschaft', SETTINGS, null, null, undefined, async () => [
-      archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'),
-      archiveCandidate(1, 'Weitere Treibhausgase sind Lachgas und CO2.')
-    ])
+    const r = await retrieve(db, embedder, 'Treibhausgas Landwirtschaft', SETTINGS, null, null, undefined, async () =>
+      testArm(
+        archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'),
+        archiveCandidate(1, 'Weitere Treibhausgase sind Lachgas und CO2.')
+      )
+    )
     const kinds = new Set(r.chunks.map((c) => c.sourceKind ?? 'document'))
     expect(kinds).toEqual(new Set(['document', 'archive']))
     // Interleave: the first archive chunk sits at position 2, not appended at the end.
@@ -397,9 +411,7 @@ describe('retrieve() with an external arm', () => {
         return docs.map((text, index) => ({ index, score: text.includes('Methan') ? 10 : 0 }))
       }
     } as Reranker
-    const r = await retrieve(db, embedder, 'Methan', SETTINGS, null, fakeReranker, undefined, async () => [
-      archiveCandidate(0, 'Methan aus der Landwirtschaft.')
-    ])
+    const r = await retrieve(db, embedder, 'Methan', SETTINGS, null, fakeReranker, undefined, async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft.')))
     expect(r.chunks[0]?.sourceKind).toBe('archive')
     expect(r.chunks[0]?.label).toBe('S1')
   })
@@ -416,9 +428,9 @@ describe('retrieve() with an external arm', () => {
     // documents off (an unrelated invoice used to claim the packs-only answer's slots).
     await seedDocument(db, embedder, 'invoice.pdf', ['Treibhausgase entstehen in der Landwirtschaft.'])
     const scope = { packIds: ['pack-1'], collectionIds: null, documentIds: null, noDocuments: true as const }
-    const r = await retrieve(db, embedder, 'Treibhausgas', SETTINGS, scope, null, undefined, async () => [
-      archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')
-    ])
+    const r = await retrieve(db, embedder, 'Treibhausgas', SETTINGS, scope, null, undefined, async () =>
+      testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
+    )
     expect(r.chunks.length).toBeGreaterThan(0)
     expect(r.chunks.every((c) => c.sourceKind === 'archive')).toBe(true)
     // Counter-assertion (D4): the SAME pack selection WITHOUT the flag keeps the document arms —
@@ -431,7 +443,7 @@ describe('retrieve() with an external arm', () => {
       { packIds: ['pack-1'], collectionIds: null, documentIds: null },
       null,
       undefined,
-      async () => [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+      async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
     )
     expect(additive.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
     expect(additive.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
@@ -445,7 +457,7 @@ describe('retrieve() with an external arm', () => {
       { ...scope, collectionIds: ['some-collection'] },
       null,
       undefined,
-      async () => [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+      async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
     )
     expect(contradictory.chunks.every((c) => c.sourceKind === 'archive')).toBe(true)
   })

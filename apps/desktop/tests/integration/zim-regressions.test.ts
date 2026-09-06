@@ -12,6 +12,7 @@ import {
   detectFilenameScope,
   ragSettingsFrom,
   retrieve,
+  type ExternalRetrievalOutput,
   type RagRetrievalSettings,
   type RetrievalResult
 } from '../../src/main/services/rag'
@@ -795,10 +796,11 @@ describe('M3 — reranker failure fallback', () => {
       null,
       throwingReranker,
       undefined,
-      async () => [
-        archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'),
-        archiveCandidate(1, 'Weitere Treibhausgase sind Lachgas und CO2.')
-      ]
+      async () =>
+        testArm(
+          archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'),
+          archiveCandidate(1, 'Weitere Treibhausgase sind Lachgas und CO2.')
+        )
     )
   })
 
@@ -850,6 +852,13 @@ function t09Archives(): ExternalCandidate[] {
   ]
 }
 
+/** The arm's result shape (#301 P4, plan §9.21 (e)3): `{ candidates, outcomes }`. The M3/T09/T10
+ *  cases are about the CANDIDATE pipeline (interleave, abort discipline, scope), so they report no
+ *  outcomes — T15-b and T16-a own the outcome contract. */
+function testArm(...candidates: ExternalCandidate[]): ExternalRetrievalOutput {
+  return { candidates, outcomes: [] }
+}
+
 /** A reranker that prefers the archive marker; `calls` proves it actually ran. */
 function markerReranker(calls: { n: number }): Reranker {
   return {
@@ -880,7 +889,7 @@ describe('T09 — reranker present / absent / throwing, and abort as a refusal (
       null,
       markerReranker(calls),
       undefined,
-      async () => t09Archives()
+      async () => testArm(...t09Archives())
     )
     expect(calls.n).toBe(1)
     expect(ranked.chunks[0]?.sourceKind).toBe('archive')
@@ -902,7 +911,7 @@ describe('T09 — reranker present / absent / throwing, and abort as a refusal (
       null,
       null,
       undefined,
-      async () => t09Archives()
+      async () => testArm(...t09Archives())
     )
     expect(interleaved.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
     expect(interleaved.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
@@ -920,7 +929,7 @@ describe('T09 — reranker present / absent / throwing, and abort as a refusal (
       null,
       { async rerank() { throw new Error('reranker model failed to load') } } as unknown as Reranker,
       undefined,
-      async () => t09Archives()
+      async () => testArm(...t09Archives())
     )
     expect(threw.chunks.length).toBeLessThanOrEqual(SETTINGS.topKFinal)
     expect(threw.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
@@ -951,7 +960,7 @@ describe('T09 — reranker present / absent / throwing, and abort as a refusal (
           }
         } as unknown as Reranker,
         undefined,
-        async () => t09Archives()
+        async () => testArm(...t09Archives())
       )
     ).rejects.toMatchObject({ name: 'AbortError' })
 
@@ -1355,7 +1364,7 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
       undefined,
       async () => {
         armCalls++
-        return [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+        return testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
       }
     )
     spy.restore()
@@ -1375,7 +1384,7 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
       { ...denyAll, noDocuments: undefined },
       null,
       undefined,
-      async () => [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+      async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
     )
     expect(withDocuments.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
 

@@ -1273,8 +1273,7 @@ export class ZimService {
     db: Db,
     packIds: readonly string[] | null | undefined,
     question: string,
-    signal?: AbortSignal,
-    opts: { propagateStaleServerError?: boolean } = {}
+    signal?: AbortSignal
   ): Promise<ExternalRetrievalOutput> {
     const ids = [...new Set(packIds ?? [])]
     if (ids.length === 0) return { candidates: [], outcomes: [] }
@@ -1353,7 +1352,7 @@ export class ZimService {
       }
       return result
     } catch (err) {
-      if (err instanceof StaleServerError && opts.propagateStaleServerError !== true) {
+      if (err instanceof StaleServerError) {
         // An ORDINARY error, not a cancellation: the session still admits the work, so the ask
         // continues and every eligible pack says "the pack server restarted during this
         // question" instead of silently contributing nothing.
@@ -1380,28 +1379,21 @@ export class ZimService {
   }
 
   /**
-   * The external retrieval arm for one ask, or null when packs cannot contribute
-   * (no ids in scope, tools missing, or nothing retrievable). The arm starts the
-   * sidecar lazily on first use; `retrieve` isolates any failure it throws.
+   * The external retrieval arm for one ask, or null ONLY when the ask's scope selected no pack at
+   * all — the byte-unchanged no-arm path (`retrieve` then produces no `packOutcomes` key and the
+   * pre-change fixture still compares equal, L6). The arm starts the sidecar lazily on first use;
+   * `retrieve` isolates any ordinary failure it throws.
    *
-   * A THIN WRAPPER over `runArm` for now (#301 P4, plan §9.21 (e)3): the outcome half is
-   * produced but not yet carried, because `ExternalRetrievalArm` still returns a bare candidate
-   * array and `retrieve` has no `packOutcomes` producer wired. The outcomes step replaces this
-   * with the object shape and drops the null returns — the outcomes must exist even when
-   * nothing is retrievable — and `propagateStaleServerError` goes with it: it preserves the
-   * CURRENT contract in which a twice-discarded attempt rejects the ask's arm (T17-a).
+   * #301 P4 (plan §9.21 (e)3): a NON-EMPTY selection ALWAYS gets an arm, even when kiwix-tools is
+   * missing or nothing is retrievable. Those used to return null, which erased the very facts the
+   * user needs — "makeArm = null or an empty candidate array cannot erase the outcomes". `runArm`
+   * classifies every selected pack before any eligibility filter and reports `tools-missing` /
+   * `file-missing` / `disabled` / … without waking a sidecar, so the honest arm costs no more than
+   * the null did.
    */
   makeArm(db: Db, packIds: readonly string[] | null | undefined): ExternalRetrievalArm | null {
     if (!packIds || packIds.length === 0) return null
-    if (!this.toolsInstalled()) {
-      log.warn('Knowledge packs in scope but kiwix-tools is not installed — skipping the ZIM arm')
-      return null
-    }
-    const packs = retrievablePacks(db, this.zimDir, packIds)
-    if (packs.length === 0) return null
-    return async (question, signal) =>
-      (await this.runArm(db, packIds, question, signal, { propagateStaleServerError: true }))
-        .candidates
+    return (question, signal) => this.runArm(db, packIds, question, signal)
   }
 
   /**

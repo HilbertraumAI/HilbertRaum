@@ -23,6 +23,7 @@ import {
   documentApproxTokenTotal,
   generateGroundedAnswer,
   generateGroundedDataAnswer,
+  modePackOutcomes,
   ragSettingsFrom,
   wholeDocumentFitBudgetTokens
 } from '../services/rag'
@@ -548,7 +549,12 @@ export function registerRagIpc(ctx: AppContext): void {
                       onToken: sendToken,
                       skill: turnSkill,
                       // W2 (§2.1): carry the auto-narrow scope notice into the grounded-data path too.
-                      answerPrefix: notice ? `${notice}\n\n` : undefined
+                      answerPrefix: notice ? `${notice}\n\n` : undefined,
+                      // Knowledge packs (#301 P4, plan §9.21 (e)5): this path narrates a
+                      // deterministic extract from DOCUMENTS and never queries a pack, so every
+                      // ticked pack gets an honest `skipped / mode` outcome. Built HERE because
+                      // `GroundedDataAnswerOptions` carries no scope — the resolved one lives here.
+                      packOutcomes: modePackOutcomes(ctx.db, scope.packIds)
                     }
                   )
                 }

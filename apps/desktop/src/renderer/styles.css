@@ -1191,6 +1191,25 @@ code, pre, kbd { font-family: var(--font-mono); }
   text-align: left;
 }
 
+/* Per-answer knowledge-pack outcomes (#301 P4, M6/M7): a quiet collapsed note under the answer
+   saying what happened to each ticked pack. Deliberately understated — it reports state, it is
+   not an alert (guidelines §9). P6 owns the visual pass; this keeps it legible until then. */
+.pack-outcomes { margin-top: 8px; font-size: var(--text-sm); }
+.pack-outcomes-summary { color: var(--text-muted); }
+.pack-outcomes-toggle {
+  background: transparent;
+  border: none;
+  color: var(--link);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: left;
+}
+.pack-outcomes-rows { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.pack-outcome-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.pack-outcome-title { font-weight: 500; word-break: break-word; }
+.pack-outcome-state, .pack-outcome-count { color: var(--text-muted); }
+
 /* Composer (guidelines §3/§6): centered with the transcript; auto-grow input,
    one Send/Stop button, quiet footer row. */
 .composer { display: flex; flex-direction: column; gap: 6px; max-width: 720px; width: 100%; margin: 0 auto; }

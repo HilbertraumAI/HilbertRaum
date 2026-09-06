@@ -10,6 +10,7 @@ import {
   generateGroundedAnswer,
   ragSettingsFrom,
   retrieve,
+  type ExternalRetrievalOutput,
   type RagRetrievalSettings,
   type RetrievedChunk
 } from '../../src/main/services/rag'
@@ -71,6 +72,12 @@ function archiveCandidate(n: number, text: string, section = 'Landwirtschaft'): 
     archiveTitle: 'Wikipedia (Test)',
     articlePath: 'Treibhausgas'
   }
+}
+
+/** The arm's result shape (#301 P4, plan §9.21 (e)3). These cases are about the excerpt framing and
+ *  the budget loop, so the outcome half is empty — T16-a owns the outcome contract. */
+function testArm(...candidates: ExternalCandidate[]): ExternalRetrievalOutput {
+  return { candidates, outcomes: [] }
 }
 
 /** Same unit as retrieve()'s budget loop: persisted/recomputed word estimate × TOKENS_PER_WORD (1.3). */
@@ -149,7 +156,7 @@ describe('T01 — #293 excerpt framing over mixed document + archive excerpts', 
     const tokens: string[] = []
     const msg = await generateGroundedAnswer(db, runtime, embedder, conv.id, question, SETTINGS, {
       onToken: (t) => tokens.push(t),
-      externalArm: async () => [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+      externalArm: async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
     })
     const streamed = tokens.join('')
     // The mock runtime echoes the grounded prompt: the archive excerpt and every framing line went out…
@@ -193,19 +200,19 @@ describe('T01 — #293 excerpt framing over mixed document + archive excerpts', 
       const db = freshDb()
       const embedder = new MockEmbedder()
       await seedDocument(db, embedder, 'notes.txt', [short])
-      const r = await retrieve(db, embedder, query, smallBudget, null, orderingReranker, undefined, async () => [
+      const r = await retrieve(db, embedder, query, smallBudget, null, orderingReranker, undefined, async () => testArm(
         archiveCandidate(0, huge),
         archiveCandidate(1, 'Lachgas ist ein Treibhausgas.', 'Lachgas')
-      ])
+      ))
       expect(r.chunks.some((c) => c.text === huge)).toBe(false)
       expect(r.chunks[0]?.text).toBe(short)
       const used = r.chunks.reduce((n, c) => n + budgetTokens(c.text), 0)
       expect(used).toBeLessThanOrEqual(smallBudget.maxContextTokens)
       // Control: with a wide budget the very same archive candidate IS included — so the exclusion
       // above was the budget, not the threshold or dedup.
-      const control = await retrieve(db, embedder, query, wideBudget, null, orderingReranker, undefined, async () => [
+      const control = await retrieve(db, embedder, query, wideBudget, null, orderingReranker, undefined, async () => testArm(
         archiveCandidate(0, huge)
-      ])
+      ))
       expect(control.chunks.some((c) => c.text === huge && c.sourceKind === 'archive')).toBe(true)
     }
 
@@ -215,16 +222,16 @@ describe('T01 — #293 excerpt framing over mixed document + archive excerpts', 
       const db = freshDb()
       const embedder = new MockEmbedder()
       await seedDocument(db, embedder, 'notes.txt', [short, huge])
-      const r = await retrieve(db, embedder, query, smallBudget, null, orderingReranker, undefined, async () => [
+      const r = await retrieve(db, embedder, query, smallBudget, null, orderingReranker, undefined, async () => testArm(
         archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')
-      ])
+      ))
       expect(r.chunks.some((c) => c.text === huge)).toBe(false)
       expect(r.chunks.map((c) => c.sourceKind ?? 'document')).toEqual(['document', 'archive'])
       const used = r.chunks.reduce((n, c) => n + budgetTokens(c.text), 0)
       expect(used).toBeLessThanOrEqual(smallBudget.maxContextTokens)
-      const control = await retrieve(db, embedder, query, wideBudget, null, orderingReranker, undefined, async () => [
+      const control = await retrieve(db, embedder, query, wideBudget, null, orderingReranker, undefined, async () => testArm(
         archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')
-      ])
+      ))
       expect(control.chunks.some((c) => c.text === huge && c.sourceKind !== 'archive')).toBe(true)
     }
   })

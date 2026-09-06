@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import * as Popover from '@radix-ui/react-popover'
 import type { Collection, DocumentInfo, DocumentScope, KnowledgePack } from '@shared/types'
+import { MAX_SELECTED_PACKS } from '@shared/types'
 import { Button, Chip, Icon } from '../components'
 import { useT, type I18n } from '../i18n'
 
@@ -142,6 +143,18 @@ export function ScopePopover({
   )
   // Hoisted above the empty-corpus early return below — hooks must run unconditionally.
   const addableDocs = useMemo(() => indexed.filter((d) => !docIds.includes(d.id)), [indexed, docIds])
+  // D6 (#301 P4, plan §9.21 (e)8): selected ids with NO matching pack row — the pack was removed
+  // from the registry while this chat still carries it in its stored scope. They render as
+  // synthetic ticked "Removed pack" rows rather than disappearing from the picker: an id the
+  // user cannot see is an id the user cannot clear.
+  const removedPackIds = useMemo(
+    () => packIds.filter((id) => !packs.some((k) => k.id === id)),
+    [packIds, packs]
+  )
+  // The chat is at the selection cap: every UNSELECTED tickable pack goes disabled and the cap
+  // line shows once. Counts what is SELECTED (the intended set), including removed ids — they
+  // occupy a slot in the stored scope exactly like a live pack does.
+  const atPackLimit = packIds.length >= MAX_SELECTED_PACKS
 
   // Truthful footer copy (guidelines §7): with no indexed documents AND no chat attachments
   // the affordance becomes a direct "Add documents" jump, not a scope picker. (Attachments —
@@ -149,7 +162,8 @@ export function ScopePopover({
   // Knowledge packs (ZIM wave): registered packs are pickable sources too, so a pack-only
   // corpus (fresh workspace, offline Wikipedia added, nothing imported yet) MUST keep the
   // picker — the early return used to swallow the packs section entirely in that state.
-  if (indexed.length === 0 && fileCount === 0 && packs.length === 0) {
+  // (A persisted-but-removed pack id also keeps the picker: the user must be able to clear it.)
+  if (indexed.length === 0 && fileCount === 0 && packs.length === 0 && removedPackIds.length === 0) {
     return (
       <button type="button" className="footer-menu-btn" disabled={disabled} onClick={onAddDocuments}>
         <Icon name="file" className="footer-menu-icon" /> {t('chat.scope.none')}
@@ -182,6 +196,10 @@ export function ScopePopover({
   }
 
   function togglePack(id: string): void {
+    // The 13th tick is REFUSED, not silently accepted and trimmed later (#301 P4, finding M8,
+    // ruling §7): the cap belongs to the chat's selection, so the popover is where the user
+    // learns about it. Unticking is always allowed — that is how you get back under the cap.
+    if (!packIds.includes(id) && packIds.length >= MAX_SELECTED_PACKS) return
     emit(collIds, docIds, packIds.includes(id) ? packIds.filter((x) => x !== id) : [...packIds, id])
   }
 
@@ -310,23 +328,58 @@ export function ScopePopover({
           </div>
 
           {/* Knowledge packs (ZIM wave): offline reference archives as additional sources.
-              Rendered only when packs exist; an unavailable pack (file missing) shows its
-              state and cannot be ticked. */}
-          {packs.length > 0 && (
+              D6 (#301 P4, ruling §7; plan §9.21 (e)8) — NOTHING IS HIDDEN and nothing the user
+              ticked becomes un-untickable:
+                • a SELECTED pack that is unavailable / disabled / over the cap keeps its box
+                  ENABLED (it must be possible to clear a choice that is doing nothing) and shows
+                  the reason beside it;
+                • an UNSELECTED ineligible pack stays unticked-and-disabled with the same hint;
+                • at MAX_SELECTED_PACKS every unselected tickable pack is disabled and the cap
+                  line shows once, so the refusal is visible rather than a dead click;
+                • a persisted id with NO matching pack row still renders — as a ticked "Removed
+                  pack" row the user can untick — instead of vanishing from the picker while
+                  staying in the stored scope. */}
+          {(packs.length > 0 || removedPackIds.length > 0) && (
             <div className="scope-sources scope-packs">
               <p className="popover-line">{t('chat.scope.packsTitle')}</p>
-              {packs.map((k) => (
-                <label className="scope-source-row" key={k.id}>
+              {atPackLimit && (
+                <p className="popover-line hint scope-pack-limit">
+                  {tCount('chat.scope.packLimit', MAX_SELECTED_PACKS)}
+                </p>
+              )}
+              {packs.map((k) => {
+                const selected = packIds.includes(k.id)
+                // Why this pack cannot take part in an ask, or null when it can. Order mirrors
+                // the arm's classification: removal/disabled before availability.
+                const ineligible = !k.enabled
+                  ? t('chat.scope.packDisabled')
+                  : !k.available
+                    ? t('chat.scope.packUnavailable')
+                    : null
+                return (
+                  <label className="scope-source-row" key={k.id}>
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      // A selected pack is ALWAYS deselectable (D6). An unselected one is
+                      // tickable only when it is eligible and the cap has room.
+                      disabled={disabled || (!selected && (ineligible != null || atPackLimit))}
+                      onChange={() => togglePack(k.id)}
+                    />
+                    <span className="scope-source-name">{k.title}</span>
+                    {ineligible && <span className="scope-source-hint">{ineligible}</span>}
+                  </label>
+                )
+              })}
+              {removedPackIds.map((id) => (
+                <label className="scope-source-row" key={id}>
                   <input
                     type="checkbox"
-                    checked={packIds.includes(k.id)}
-                    disabled={disabled || !k.available}
-                    onChange={() => togglePack(k.id)}
+                    checked
+                    disabled={disabled}
+                    onChange={() => togglePack(id)}
                   />
-                  <span className="scope-source-name">{k.title}</span>
-                  {!k.available && (
-                    <span className="scope-source-hint">{t('chat.scope.packUnavailable')}</span>
-                  )}
+                  <span className="scope-source-name">{t('chat.scope.packRemoved')}</span>
                 </label>
               ))}
             </div>

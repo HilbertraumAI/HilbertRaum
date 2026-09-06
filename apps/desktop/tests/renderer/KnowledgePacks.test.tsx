@@ -14,6 +14,7 @@ import type {
   KnowledgePack,
   KnowledgePacksChangedEvent
 } from '../../src/shared/types'
+import { MAX_SELECTED_PACKS } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Knowledge packs (ZIM wave) renderer surfaces: the PacksPanel management list, the
@@ -530,6 +531,120 @@ describe('ScopePopover — knowledge packs', () => {
     await user.click(await screen.findByRole('checkbox', { name: /Library/ }))
     expect(emitted.at(-1)?.packIds).toEqual(['uuid-climate'])
     expect(emitted.at(-1)?.collectionIds).toEqual(['lib'])
+  })
+
+  // ---- D6 + the selection cap (#301 P4, ruling §7; plan §9.21 (c)6 / (e)8) ------------------
+  // The rule these pin: a pack the user TICKED stays untickable-able whatever state it is in — a
+  // greyed box on a selection that is silently contributing nothing is a trap. Ineligibility is
+  // SHOWN, never hidden, and the 13th tick is refused where the user can see why.
+
+  it('refuses the 13th tick, disables every unticked pack at the cap, and shows the limit line once', async () => {
+    stubApi({})
+    const emitted: DocumentScope[] = []
+    const user = userEvent.setup()
+    const many = Array.from({ length: MAX_SELECTED_PACKS + 1 }, (_, i) =>
+      pack({ id: `uuid-${i}`, title: `Pack ${String(i).padStart(2, '0')}` })
+    )
+    const selected = many.slice(0, MAX_SELECTED_PACKS).map((k) => k.id)
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={many}
+          scope={{ collectionIds: [], documentIds: [], packIds: selected }}
+          onChangeScope={(next) => emitted.push(next)}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    const limitLine = `Up to ${MAX_SELECTED_PACKS} knowledge packs per chat`
+    expect(await screen.findByText(limitLine)).toBeInTheDocument()
+    expect(screen.getAllByText(limitLine)).toHaveLength(1) // once under the title, not per row
+    const thirteenth = screen.getByRole('checkbox', { name: /Pack 12/ })
+    expect(thirteenth).toBeDisabled()
+    await user.click(thirteenth)
+    expect(emitted).toEqual([]) // REFUSED — not accepted and silently trimmed downstream
+    // …and a SELECTED pack is still deselectable, which is how the user gets back under the cap.
+    await user.click(screen.getByRole('checkbox', { name: /Pack 00/ }))
+    expect(emitted.at(-1)?.packIds).toEqual(selected.filter((id) => id !== 'uuid-0'))
+  })
+
+  it('keeps a SELECTED unavailable or disabled pack deselectable and shows its reason', async () => {
+    stubApi({})
+    const emitted: DocumentScope[] = []
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[
+            pack({ id: 'uuid-gone', title: 'Chemie von Wikipedia', available: false, unavailableReason: 'missing' }),
+            pack({ id: 'uuid-off', title: 'Biologie von Wikipedia', enabled: false })
+          ]}
+          scope={{ collectionIds: [], documentIds: [], packIds: ['uuid-gone', 'uuid-off'] }}
+          onChangeScope={(next) => emitted.push(next)}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    const gone = await screen.findByRole('checkbox', { name: /Chemie von Wikipedia/ })
+    const off = screen.getByRole('checkbox', { name: /Biologie von Wikipedia/ })
+    expect(gone).toBeChecked()
+    expect(gone).toBeEnabled()
+    expect(off).toBeChecked()
+    expect(off).toBeEnabled()
+    expect(screen.getByText('not available')).toBeInTheDocument()
+    expect(screen.getByText('disabled')).toBeInTheDocument()
+    await user.click(gone)
+    expect(emitted.at(-1)?.packIds).toEqual(['uuid-off'])
+  })
+
+  it('renders a persisted id with no pack row as a ticked "Removed pack" that can be unticked', async () => {
+    stubApi({})
+    const emitted: DocumentScope[] = []
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[pack()]}
+          scope={{ collectionIds: [], documentIds: [], packIds: ['uuid-climate', 'uuid-vanished'] }}
+          onChangeScope={(next) => emitted.push(next)}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    const removed = await screen.findByRole('checkbox', { name: /Removed pack/ })
+    expect(removed).toBeChecked()
+    expect(removed).toBeEnabled()
+    await user.click(removed)
+    expect(emitted.at(-1)?.packIds).toEqual(['uuid-climate'])
+  })
+
+  it('leaves an UNSELECTED ineligible pack unticked and not tickable', async () => {
+    stubApi({})
+    const emitted: DocumentScope[] = []
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[pack({ id: 'uuid-gone', title: 'Chemie von Wikipedia', available: false })]}
+          scope={{ collectionIds: [], documentIds: [] }}
+          onChangeScope={(next) => emitted.push(next)}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    const gone = await screen.findByRole('checkbox', { name: /Chemie von Wikipedia/ })
+    expect(gone).not.toBeChecked()
+    expect(gone).toBeDisabled()
+    await user.click(gone)
+    expect(emitted).toEqual([])
   })
 })
 

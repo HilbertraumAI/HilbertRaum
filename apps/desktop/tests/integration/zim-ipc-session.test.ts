@@ -62,6 +62,27 @@ vi.mock('electron', () => ({
   clipboard: { writeText: () => {} }
 }))
 
+import { randomUUID } from 'node:crypto'
+import {
+  appendMessage,
+  createConversation,
+  deleteLastAssistantMessage,
+  exportTranscript,
+  listMessages,
+  restoreMessage,
+  setScope
+} from '../../src/main/services/chat'
+import { resolveScope } from '../../src/main/services/collections'
+import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { createMockRuntime } from '../../src/main/services/runtime/mock'
+import type { ModelRuntime } from '../../src/main/services/runtime'
+import {
+  generateGroundedAnswer,
+  ragSettingsFrom,
+  type RagRetrievalSettings
+} from '../../src/main/services/rag'
+import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import type { KnowledgePackOutcome, Message } from '../../src/shared/types'
 import { registerZimIpc } from '../../src/main/ipc/registerZimIpc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { IPC } from '../../src/shared/ipc'
@@ -134,6 +155,12 @@ async function expectAbortError(promise: Promise<unknown>): Promise<void> {
   expect((err as DOMException).name).toBe('AbortError')
 }
 
+/** Per-service seam overrides a test can hand `newService` (#301 P4, T16-a needs a service whose
+ *  kiwix-tools bundle is ABSENT, so the arm reports `tools-missing` without waking a sidecar). */
+interface ServiceOverrides {
+  resolveTools?: () => { serve: string; manage: string } | null
+}
+
 interface SessionHooks {
   /** Runs inside a fake kiwix-manage child before it appends its `<book>` and exits 0. */
   manage: (libraryXmlPath: string, zimPath: string) => Promise<void>
@@ -163,7 +190,7 @@ interface SessionHarness {
   requests: string[]
   /** A SECOND `ZimService` over the same seams — "the app restarted", and with a different
    *  `rootPath`, "the drive came back under another letter". */
-  newService(rootOverride?: string): ZimService
+  newService(rootOverride?: string, over?: ServiceOverrides): ZimService
   /** Mode applied to the NEXT spawned kiwix-serve / kiwix-manage child. */
   modes: { serve: ServeChildMode; manage: ServeChildMode }
   db(): Db
@@ -340,7 +367,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
   // harness creates (the main `svc` and any `newService()`), in emission order.
   const notices: ZimPacksChangedNotice[] = []
 
-  const makeService = (rootOverride?: string): ZimService =>
+  const makeService = (rootOverride?: string, over: ServiceOverrides = {}): ZimService =>
     new ZimService({
       rootPath: rootOverride ?? root,
       isDev: true,
@@ -352,7 +379,8 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       transientDir,
       notify: (event) => notices.push(event),
       deps: {
-        resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
+        resolveTools:
+          over.resolveTools ?? (() => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' })),
         spawn: serveSpawn,
         manageSpawn,
         findPort: () => hooks.findPort(),
@@ -539,7 +567,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const alpha = await h.registerPack('alpha.zim')
       const rowsAtStart = h.packRows()
       expect(rowsAtStart).toHaveLength(1)
-
       // ---- (1) PICKER: the OS dialog resolves AFTER the lock armed ---------------------
       {
         const picked = h.addPackFile('picked-during-lock.zim')
@@ -569,7 +596,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         h.ctrl.unlock('right-password')
         expect(h.packRows()).toEqual(rowsAtStart) // …and not after the unlock either
       }
-
       // ---- (2) DISCOVERY: a lock lands inside a parked kiwix-manage spawn --------------
       {
         h.addPackFile('discovered-during-lock.zim')
@@ -591,7 +617,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         h.ctrl.unlock('right-password')
         expect(h.packRows()).toEqual(rowsAtStart)
       }
-
       // ---- (3) REGISTRATION: the picker returned in time, the manager did not ----------
       {
         dialogState.gate = null
@@ -614,7 +639,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         h.ctrl.unlock('right-password')
         expect(h.packRows()).toEqual(rowsAtStart)
       }
-
       // ---- (4) REBUILD: the ask's library build is parked mid-write --------------------
       {
         const arm = h.svc.makeArm(h.db(), [alpha])
@@ -635,7 +659,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         expect(h.transientEntries()).toEqual([])
         h.ctrl.unlock('right-password')
       }
-
       // ---- (5) START: the port allocation is parked when the lock lands ----------------
       {
         const arm = h.svc.makeArm(h.db(), [alpha])
@@ -656,7 +679,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         expect(h.transientEntries()).toEqual([])
         h.ctrl.unlock('right-password')
       }
-
       // ---- (6) PROBE: the health probe succeeds only AFTER the lock --------------------
       {
         const arm = h.svc.makeArm(h.db(), [alpha])
@@ -681,7 +703,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         expect(h.transientEntries()).toEqual([])
         h.ctrl.unlock('right-password')
       }
-
       // ---- (7) HTTP READ: the article body is in flight when the lock lands ------------
       {
         // Warm the sidecar first, so the read really is an HTTP read and not a start.
@@ -712,7 +733,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const generationsBefore = h.serveSpawns.length
       h.ctrl.unlock('right-password')
       const arm = h.svc.makeArm(h.db(), [alpha])
-      const candidates = await arm!('alpha climate', new AbortController().signal)
+      const { candidates } = await arm!('alpha climate', new AbortController().signal)
       expect(h.serveSpawns.length).toBe(generationsBefore + 1) // a NEW child, new generation
       expect(h.svc.serverState()).toMatchObject({ port: h.httpPort, alive: true })
       expect(candidates.length).toBeGreaterThan(0) // and it really answered with article text
@@ -766,7 +787,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
 
         // …and a new ask restarts the suspended sidecar (a cold start, no latch).
         const arm = h.svc.makeArm(h.db(), [alpha])
-        const candidates = await arm!('alpha climate', new AbortController().signal)
+        const { candidates } = await arm!('alpha climate', new AbortController().signal)
         expect(candidates.length).toBeGreaterThan(0)
         expect(h.svc.serverState()).toMatchObject({ alive: true })
         expect(h.ctrl.unlockEpoch()).toBe(epochAfterFailure) // no new session was started
@@ -995,7 +1016,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         expect(article, `article for ${packId} ${path}`).not.toBeNull()
         return article!.sections.map((s) => s.text).join('\n')
       }
-
       // ---- (1) TWO SERVING-NAME COLLISIONS: the smaller UUID wins, the loser is excluded ---
       // libkiwix walks its book map in ascending UUID order and keeps the FIRST book for a
       // name, so `wikipedia_de` and `aplusb` each have exactly one legitimate owner. We leave
@@ -1042,9 +1062,19 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       expect(await h.svc.getArticle(h.db(), plusLoser, 'A/Alpha')).toBeNull()
       expect(rawRequests()).toHaveLength(before)
       // …and the ask arm skips them too, so archive text is never labelled with the wrong pack.
+      // #301 P4: skipping them is no longer SILENT — each collision loser gets the honest
+      // `not-served` outcome beside the empty candidate list (plan §9.21 (e)2).
       const arm = h.svc.makeArm(h.db(), [accentLoser, plusLoser])
-      expect(await arm!('alpha climate', new AbortController().signal)).toEqual([])
-
+      const collided = await arm!('alpha climate', new AbortController().signal)
+      expect(collided.candidates).toEqual([])
+      expect(
+        collided.outcomes.map((o) => ({ packId: o.packId, status: o.status, reason: o.reason }))
+      ).toEqual(
+        expect.arrayContaining([
+          { packId: accentLoser, status: 'skipped', reason: 'not-served' },
+          { packId: plusLoser, status: 'skipped', reason: 'not-served' }
+        ])
+      )
       // ---- (2) THE REQUEST PATH CARRIES THE EXACT servingNameFor VALUE --------------------
       const unicodeFile = join(h.zimDir, 'Groß Wiki+2024 100%.zim')
       const expectedName = servingNameFor(unicodeFile)
@@ -1060,7 +1090,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       expect(expectedName).toContain('_')
       expect(expectedName).not.toContain(' ')
       expect(expectedName).not.toContain('+')
-
       // ---- (3) ENTRY PATHS: encoded slash, hash, percent, space, Unicode — ONE encoder ----
       const hostileEntries = [
         'A/Über_ß',
@@ -1091,7 +1120,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         const encodedEntry = /^\/raw\/[^/]+\/content\/(.+)$/.exec(url)![1]!
         if (!entry.includes('%')) expect(encodedEntry).not.toContain('%25')
       }
-
       // ---- (4) THE LOCATOR IS packId + articlePath — NO ROUTE HINT ------------------------
       // An "old citation": nothing but the two fields a stored citation has ever carried.
       const atlas = await h.registerPack('atlas.zim', '44444444-0000-4000-8000-000000000000')
@@ -1148,7 +1176,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const relocated = h.newService(newRoot)
       const afterRelocation = await readArticle(relocated, oldCitation.packId, oldCitation.articlePath)
       expect(afterRelocation).toBe(afterRename) // byte-identical article text
-
       // ---- (5) THERE IS NO HINT FIELD TO POISON ------------------------------------------
       // A renderer-supplied route hint is the attack this design removes rather than validates:
       // it simply does not exist on the citation, on the viewer target, or on the bridge.
@@ -1194,7 +1221,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       expect(h.packRows()).toEqual(rowsBefore) // byte-for-byte, INCLUDING updated_at
       expect(h.buildAdds.length).toBe(buildAddsBefore) // no serve-library manager spawn
       expect(h.metaAdds.length).toBe(metaAddsBefore) // no registration manager spawn
-
       // ---- (2) a parked session-start reconcile + two packs:refresh calls: exactly ONE run
       //      in flight and exactly ONE coalesced rerun after release, never a third pass ------
       const manageGate = serveGate<void>()
@@ -1223,7 +1249,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         .filter((n) => n.reason === 'reconcile-end')
       expect(reconcileStarts).toHaveLength(2) // the parked pass + exactly one coalesced rerun
       expect(reconcileEnds).toHaveLength(2)
-
       // ---- (3) the notify seam: reconcile-start then reconcile-end carry the CURRENT epoch,
       //      never an old one — a lock parked mid-reconcile emits its reconcile-start but NEVER
       //      a reconcile-end (the post-manager assert throws first) and writes nothing; the new
@@ -1260,7 +1285,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       // aborted pass never got to.
       expect(h.metaAdds.length).toBe(metaAddsBeforeNewSession + 1)
       expect(h.metaAdds.slice(-1)).toEqual(['discovered-across-lock.zim'])
-
       // ---- (4) packs:remove / packs:setEnabled(false) issued while a reconcile is parked WIN:
       //      after release the rows stay tombstoned / disabled, and the columns the reconcile
       //      does not own (`enabled`, `removed_at`) — nor even touch when nothing else about
@@ -1337,7 +1361,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const liveChild = (): ServeFakeChild => h.serveSpawns[h.serveSpawns.length - 1]!.child
 
       const alpha = await h.registerPack('alpha.zim')
-
       // ---- (1) CHILD DEATH MID-ASK: the parked /search response is discarded -------------
       // The search is parked on the wire, the child dies underneath it, and the response is
       // then released carrying the squatter's article. The guard sees `alive:false` on the
@@ -1372,7 +1395,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         h.hooks.beforeRespond = async () => undefined
         searchGate.release()
 
-        const candidates = await askP
+        const { candidates } = await askP
         expect(searchResponses).toBe(2) // the attempt plus EXACTLY one retry
         expect(searchesSince(mark)).toHaveLength(2)
         expect(h.serveSpawns).toHaveLength(spawnsBefore + 1) // a genuinely new child…
@@ -1384,7 +1407,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         expect(candidates.every((c) => c.articlePath === 'A/Alpha')).toBe(true)
         h.hooks.respond = () => null
       }
-
       // ---- (2) THE REUSED PORT: the same socket, accepted only because we stayed alive ----
       // `findPort` hands back the same `httpPort` every time, so the retried child in leg (1)
       // published on the exact port the dead child had held and the squatter had answered on.
@@ -1399,7 +1421,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
           }
         }
         const mark = h.requests.length
-        const candidates = await h.svc.makeArm(h.db(), [alpha])!(
+        const { candidates } = await h.svc.makeArm(h.db(), [alpha])!(
           'alpha climate',
           new AbortController().signal
         )
@@ -1414,7 +1436,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         })
         h.hooks.beforeRespond = async () => undefined
       }
-
       // ---- (3) STALE GENERATION: eligibility is RECOMPUTED, never the old list -----------
       // A second pack is disabled while an article fetch is parked. `setPackEnabled` bumps the
       // revision and tears the child down, so the response arrives across a lifecycle change
@@ -1438,7 +1459,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         h.hooks.beforeRespond = async () => undefined
         rawGate.release()
 
-        const candidates = await askP
+        const { candidates } = await askP
         const searches = searchesSince(mark)
         expect(searches.filter((u) => u.includes(encodeURIComponent(alpha)))).toHaveLength(2)
         // Searched once — by the DISCARDED attempt, which was built from the pre-change list.
@@ -1473,7 +1494,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         h.hooks.beforeRespond = async () => undefined
         rawGate.release()
 
-        const candidates = await askP
+        const { candidates } = await askP
         const searches = searchesSince(mark)
         expect(searches.filter((u) => u.includes(encodeURIComponent(alpha)))).toHaveLength(2)
         expect(searches.filter((u) => u.includes(encodeURIComponent(delta)))).toHaveLength(1)
@@ -1481,7 +1502,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         // The reused build still names it — which is exactly why the map alone is not enough.
         expect((await h.svc.ensureServer(h.db()))!.names.has(delta)).toBe(true)
       }
-
       // ---- (4) NO RETRY INTO A NEW SESSION: lock + unlock across a parked response --------
       // The retry is admitted only while the SAME unlocked session still wants the work. A
       // lock aborts the operation; the unlock that follows restores admission and starts a NEW
@@ -1509,7 +1529,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         await expectAbortError(askP)
         expect(searchesSince(mark)).toHaveLength(1) // never a second request
       }
-
       // ---- (5) NO RETRY AFTER CANCELLATION: the user's own abort ------------------------
       {
         const mark = h.requests.length
@@ -1525,7 +1544,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         await expectAbortError(askP)
         expect(searchesSince(mark)).toHaveLength(1)
       }
-
       // ---- (6) EXACTLY ONE RETRY: a death during the retry as well -----------------------
       // The retry budget is one, not "until it works": a server that keeps dying must produce
       // an honest ordinary failure, not an unbounded loop against a possibly-hostile port.
@@ -1542,21 +1560,27 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
           'alpha climate',
           new AbortController().signal
         )
-        const err = await askP.then(
-          () => {
-            throw new Error('expected a StaleServerError rejection, but the ask resolved')
-          },
-          (e: unknown) => e
-        )
-        expect(err).toMatchObject({ name: 'StaleServerError', reason: 'child-died' })
-        // An ORDINARY error, not the #159 abort convention: the session still admits the work,
-        // so P4 reports "the pack server restarted during this question" as an outcome.
-        expect(err).not.toBeInstanceOf(DOMException)
+        // #301 P4 (plan §9.21 (e)2): a twice-discarded attempt is an ORDINARY failure, not the
+        // #159 abort convention — the session still admits the work, so the ask RESOLVES and
+        // every eligible pack carries `failed / server-restarted` with no candidates. (Before the
+        // outcome contract this leg asserted a `StaleServerError` REJECTION, which erased the very
+        // outcomes the user is owed; the retry BUDGET it proves is unchanged.)
+        const restarted = await askP
+        expect(restarted.candidates).toEqual([])
+        expect(restarted.outcomes).toEqual([
+          {
+            packId: alpha,
+            title: expect.any(String),
+            status: 'failed',
+            reason: 'server-restarted',
+            found: 0,
+            admitted: 0
+          }
+        ])
         expect(searchesSince(mark)).toHaveLength(2)
         expect(h.serveSpawns).toHaveLength(spawnsBefore + 2)
         h.hooks.beforeRespond = async () => undefined
       }
-
       // ---- (7) THE VIEWER: the same guard on getArticle, and the lock leg ----------------
       {
         // (a) death mid-read → one retry → the article of the SECOND attempt.
@@ -1702,4 +1726,377 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       await h.close()
     }
   })
+})
+
+// ---- T16-a — per-ask knowledge-pack OUTCOMES, end to end (#301 P4, findings M6/M7) ----------
+//
+// The honesty gap this closes: before P4 a pack the user ticked could be disabled, gone from the
+// drive, index-less, trimmed by the selection cap, colliding on its serving name, or its search
+// could simply fail — and the answer looked exactly like "your packs were searched and had
+// nothing to add". The arm now classifies EVERY selected id before any eligibility filter, the
+// outcome set is persisted WITH the answer message, and the answer paths that read documents
+// instead of querying packs say so rather than staying silent.
+//
+// Everything below runs on the real session harness: a real vault, a real `ZimService` with a
+// real op registry, fake kiwix children, the real loopback server standing in for kiwix-serve,
+// and a REAL `retrieve` / `generateGroundedAnswer` over the mock runtime with a real
+// `createConversation` / `setScope` / `resolveScope`. Ordering is controlled promises only.
+
+const EMPTY_SEARCH_XML = '<?xml version="1.0" encoding="UTF-8"?><rss><channel></channel></rss>'
+
+/** The mock chat runtime the grounded answers stream from (no network, no model). */
+const askRuntime = (): ModelRuntime =>
+  createMockRuntime({ modelId: 'mock-chat', modelPath: '/m.gguf', contextTokens: 4096 })
+
+const ASK_SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
+
+/** Seed one indexed document with real embeddings, and return its id. */
+async function seedAskDocument(
+  db: Db,
+  embedder: MockEmbedder,
+  title: string,
+  texts: string[]
+): Promise<string> {
+  const now = new Date().toISOString()
+  const docId = randomUUID()
+  db.prepare(
+    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
+  ).run(docId, title, now, now)
+  const vectors = await embedder.embed(texts)
+  for (let i = 0; i < texts.length; i++) {
+    const chunkId = randomUUID()
+    db.prepare(
+      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
+    ).run(chunkId, docId, i, texts[i], title, texts[i]!.split(/\s+/).length, now)
+    db.prepare(
+      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(chunkId, embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
+  }
+  return docId
+}
+
+/** Just the comparable part of an outcome — titles vary with the fixture's file names. */
+const shape = (outcomes: KnowledgePackOutcome[] | undefined) =>
+  (outcomes ?? [])
+    .map((o) => ({ packId: o.packId, status: o.status, reason: o.reason }))
+    .sort((a, b) => a.packId.localeCompare(b.packId))
+
+describe('T16 — per-ask knowledge-pack outcomes end to end (#301 P4, M6/M7)', () => {
+  it('T16 per-ask outcomes (all failed / zero hits / missing tools / removed or disabled selection / mixed / all fetches failed / two chats / scope changed mid-ask / reload) survive zero-citation answers, associate with the right message, persist with it, and whole-doc / compare never claim packs were queried', async () => {
+    const h = await sessionHarness()
+    try {
+      const db = h.db()
+      const embedder = new MockEmbedder()
+      const runtime = askRuntime()
+      const question = 'alpha climate'
+      // A document that WOULD answer the question, so the "documents on" legs really do produce a
+      // documents-only answer whose only honest pack signal is the outcome set.
+      const docA = await seedAskDocument(db, embedder, 'climate-notes.txt', [
+        'Alpha and the climate: a local note about the climate of alpha.',
+        'An unrelated paragraph about invoices and tax.'
+      ])
+      const docB = await seedAskDocument(db, embedder, 'climate-notes-v2.txt', [
+        'Alpha and the climate: a revised local note about the climate of alpha.',
+        'An unrelated paragraph about invoices and tax.'
+      ])
+
+      const alpha = await h.registerPack('alpha.zim')
+      const bravo = await h.registerPack('bravo.zim')
+      // Start the sidecar up front so the concurrency leg below parks on `/search`, never on a
+      // cold start (which would serialize the two asks and prove nothing about ordering).
+      expect(await h.svc.ensureServer(db)).not.toBeNull()
+
+      // The harness's default article fixture is ~2 kB, and the mock runtime ECHOES the grounded
+      // prompt token by token — so a successful archive leg would spend seconds streaming an
+      // excerpt none of these assertions read. A SHORT article keeps every leg's behaviour
+      // identical (it still carries both query terms, so it still produces a candidate) and the
+      // test fast. Legs that need a specific failure layer their own responder over this one.
+      const shortArticle =
+        '<html><body><h1>Alpha and the climate</h1><p>' +
+        'Alpha climate note. '.repeat(6) +
+        '</p></body></html>'
+      const baseRespond = (url: string): { status: number; body: string } | null =>
+        url.startsWith('/raw/') ? { status: 200, body: shortArticle } : null
+      h.hooks.respond = baseRespond
+
+      const searchesSince = (mark: number): string[] =>
+        h.requests.slice(mark).filter((u) => u.startsWith('/search'))
+
+      /** One ask, exactly as `registerRagIpc` composes it: resolve the stored scope, build the
+       *  arm from `scope.packIds`, and stream a real grounded answer over the mock runtime. */
+      const ask = async (
+        conversationId: string,
+        svc: ZimService = h.svc,
+        over: { wholeDocument?: { documentId: string }; wholeDocumentCompare?: { documentIds: string[] } } = {}
+      ): Promise<Message> => {
+        appendMessage(db, { conversationId, role: 'user', content: question })
+        const scope = resolveScope(db, conversationId)
+        return generateGroundedAnswer(db, runtime, embedder, conversationId, question, ASK_SETTINGS, {
+          scope,
+          externalArm: svc.makeArm(db, scope.packIds),
+          ...over
+        })
+      }
+
+      const newChat = (packIds: string[], documentsOff = true) => {
+        const conv = createConversation(db, { mode: 'documents' })
+        setScope(db, conv.id, {
+          collectionIds: [],
+          documentIds: [],
+          packIds,
+          ...(documentsOff ? { documentsOff: true as const } : {})
+        })
+        return conv
+      }
+      // ---- (1) EVERY SOURCE FAILED: two packs, both `/search` calls answer 500 ---------------
+      // The ask still resolves (an unplugged pack drive never breaks asking) and the answer is
+      // the no-context one — but it now carries WHY, per pack, instead of implying "no hits".
+      {
+        h.hooks.respond = (url) =>
+          url.startsWith('/search') ? { status: 500, body: 'boom' } : baseRespond(url)
+        const conv = newChat([alpha, bravo])
+        const msg = await ask(conv.id)
+        expect(shape(msg.packOutcomes)).toEqual(
+          [
+            { packId: alpha, status: 'failed', reason: 'search-failed' },
+            { packId: bravo, status: 'failed', reason: 'search-failed' }
+          ].sort((a, b) => a.packId.localeCompare(b.packId))
+        )
+        // A ZERO-CITATION answer — exactly the turn the notice exists for.
+        expect(msg.citations ?? []).toEqual([])
+        expect(msg.packOutcomes!.every((o) => o.found === 0 && o.admitted === 0)).toBe(true)
+        // …and it is PERSISTED with that message, not an ephemeral side channel.
+        expect(listMessages(db, conv.id).at(-1)?.packOutcomes).toEqual(msg.packOutcomes)
+        h.hooks.respond = baseRespond
+      }
+      // ---- (2) ZERO HITS: the search succeeded and the archive simply had nothing ------------
+      // `searched` with zero counts — a DIFFERENT fact from (1), and the user can now tell them
+      // apart, which was the whole complaint.
+      {
+        h.hooks.respond = (url) =>
+          url.startsWith('/search') ? { status: 200, body: EMPTY_SEARCH_XML } : baseRespond(url)
+        const conv = newChat([alpha])
+        const msg = await ask(conv.id)
+        expect(msg.packOutcomes).toEqual([
+          { packId: alpha, title: expect.any(String), status: 'searched', reason: null, found: 0, admitted: 0 }
+        ])
+        h.hooks.respond = baseRespond
+      }
+      // ---- (3) MISSING TOOLS: no kiwix-tools bundle at all -----------------------------------
+      // The old arm returned null here, which erased every outcome. It now reports them WITHOUT
+      // waking a sidecar or sending a request.
+      {
+        const toolless = h.newService(undefined, { resolveTools: () => null })
+        const spawnsBefore = h.serveSpawns.length
+        const mark = h.requests.length
+        const conv = newChat([alpha, bravo])
+        const msg = await ask(conv.id, toolless)
+        expect(shape(msg.packOutcomes)).toEqual(
+          [
+            { packId: alpha, status: 'skipped', reason: 'tools-missing' },
+            { packId: bravo, status: 'skipped', reason: 'tools-missing' }
+          ].sort((a, b) => a.packId.localeCompare(b.packId))
+        )
+        expect(h.serveSpawns).toHaveLength(spawnsBefore)
+        expect(searchesSince(mark)).toEqual([])
+      }
+      // ---- (4) A REMOVED AND A DISABLED PACK, plus an id with no row at all ------------------
+      {
+        const disabled = await h.registerPack('disabled.zim')
+        const tombstoned = await h.registerPack('tombstoned.zim')
+        db.prepare('UPDATE knowledge_packs SET enabled = 0 WHERE id = ?').run(disabled)
+        db.prepare('UPDATE knowledge_packs SET removed_at = ? WHERE id = ?').run(
+          new Date().toISOString(),
+          tombstoned
+        )
+        const mark = h.requests.length
+        const conv = newChat([disabled, tombstoned, 'uuid-never-registered'])
+        const msg = await ask(conv.id)
+        expect(shape(msg.packOutcomes)).toEqual(
+          [
+            { packId: disabled, status: 'skipped', reason: 'disabled' },
+            { packId: tombstoned, status: 'skipped', reason: 'removed' },
+            { packId: 'uuid-never-registered', status: 'skipped', reason: 'removed' }
+          ].sort((a, b) => a.packId.localeCompare(b.packId))
+        )
+        // An id with NO registration row has no title to show — the renderer says "a removed
+        // pack" rather than printing a raw UUID.
+        expect(msg.packOutcomes!.find((o) => o.packId === 'uuid-never-registered')!.title).toBeNull()
+        // Not one request went out for any of them.
+        expect(searchesSince(mark)).toEqual([])
+      }
+      // ---- (5) A SERVING-NAME COLLISION LOSER: `not-served`, never searched under the winner --
+      {
+        const winner = await h.registerPack('Wikipédia_DE.zim', '11111111-0000-4000-8000-000000000000')
+        const loser = await h.registerPack('wikipedia_de.zim', '99999999-0000-4000-8000-000000000000')
+        const library = (await h.svc.ensureServer(db)) as ServedLibrary
+        expect(library.names.has(loser)).toBe(false)
+        const mark = h.requests.length
+        const conv = newChat([loser])
+        const msg = await ask(conv.id)
+        expect(shape(msg.packOutcomes)).toEqual([
+          { packId: loser, status: 'skipped', reason: 'not-served' }
+        ])
+        // The loser's UUID was never asked for — that is the point: its article text must never
+        // reach an answer labelled with the winner's identity.
+        expect(searchesSince(mark).filter((u) => u.includes(encodeURIComponent(loser)))).toEqual([])
+        expect(winner).not.toBe(loser)
+      }
+      // ---- (6) MIXED: one pack answers, one fails — and the answer really cites the good one --
+      {
+        h.hooks.respond = (url) =>
+          url.startsWith('/search') && url.includes(encodeURIComponent(bravo))
+            ? { status: 500, body: 'boom' }
+            : baseRespond(url)
+        const conv = newChat([alpha, bravo])
+        const msg = await ask(conv.id)
+        const byId = new Map(msg.packOutcomes!.map((o) => [o.packId, o]))
+        expect(byId.get(alpha)).toMatchObject({ status: 'searched', reason: null })
+        expect(byId.get(alpha)!.found).toBeGreaterThan(0)
+        expect(byId.get(alpha)!.admitted).toBeGreaterThan(0)
+        expect(byId.get(bravo)).toMatchObject({ status: 'failed', reason: 'search-failed' })
+        expect(msg.citations!.some((c) => c.sourceKind === 'archive' && c.packId === alpha)).toBe(true)
+        h.hooks.respond = baseRespond
+      }
+      // ---- (7) ALL FETCHES FAILED: hits found, every article read refused --------------------
+      {
+        h.hooks.respond = (url) => (url.startsWith('/raw/') ? { status: 500, body: 'boom' } : baseRespond(url))
+        const conv = newChat([alpha])
+        const msg = await ask(conv.id)
+        expect(shape(msg.packOutcomes)).toEqual([
+          { packId: alpha, status: 'failed', reason: 'read-failed' }
+        ])
+        h.hooks.respond = baseRespond
+      }
+      // ---- (8) DOCUMENTS ON: a documents-only answer still records what the packs did ---------
+      // Zero ARCHIVE citations, a perfectly ordinary document answer — and the outcome set is the
+      // only thing standing between the user and the false read "the packs found nothing".
+      {
+        h.hooks.respond = (url) =>
+          url.startsWith('/search') ? { status: 500, body: 'boom' } : baseRespond(url)
+        const conv = newChat([alpha], false)
+        const msg = await ask(conv.id)
+        expect(msg.citations!.length).toBeGreaterThan(0)
+        expect(msg.citations!.some((c) => c.sourceKind === 'archive')).toBe(false)
+        expect(shape(msg.packOutcomes)).toEqual([
+          { packId: alpha, status: 'failed', reason: 'search-failed' }
+        ])
+        h.hooks.respond = baseRespond
+      }
+      // ---- (9) TWO CHATS CONCURRENTLY, responses released in REVERSE order -------------------
+      // The outcome set belongs to ONE ask. Two asks in flight whose responses land out of order
+      // must not cross-write each other's message.
+      {
+        const gateA = serveGate<void>()
+        const gateB = serveGate<void>()
+        h.hooks.beforeRespond = (url) => {
+          if (!url.startsWith('/search')) return Promise.resolve()
+          if (url.includes(encodeURIComponent(alpha))) return gateA.wait()
+          if (url.includes(encodeURIComponent(bravo))) return gateB.wait()
+          return Promise.resolve()
+        }
+        const convA = newChat([alpha])
+        const convB = newChat([bravo])
+        const askA = ask(convA.id)
+        await gateA.entered
+        const askB = ask(convB.id)
+        await gateB.entered
+        // Released LAST-IN-FIRST-OUT: B's response arrives before A's.
+        gateB.release()
+        const msgB = await askB
+        gateA.release()
+        const msgA = await askA
+        h.hooks.beforeRespond = async () => undefined
+
+        expect(shape(msgA.packOutcomes)).toEqual([{ packId: alpha, status: 'searched', reason: null }])
+        expect(shape(msgB.packOutcomes)).toEqual([{ packId: bravo, status: 'searched', reason: null }])
+        // …and on RELOAD each conversation reads back its own set, keyed to its own message.
+        expect(listMessages(db, convA.id).at(-1)).toMatchObject({ id: msgA.id })
+        expect(shape(listMessages(db, convA.id).at(-1)?.packOutcomes)).toEqual([
+          { packId: alpha, status: 'searched', reason: null }
+        ])
+        expect(shape(listMessages(db, convB.id).at(-1)?.packOutcomes)).toEqual([
+          { packId: bravo, status: 'searched', reason: null }
+        ])
+      }
+      // ---- (10) SCOPE CHANGED MID-ASK: the persisted set is the ASK-TIME one ------------------
+      {
+        const gate = serveGate<void>()
+        h.hooks.beforeRespond = (url) => (url.startsWith('/search') ? gate.wait() : Promise.resolve())
+        const conv = newChat([alpha])
+        const askP = ask(conv.id)
+        await gate.entered
+        // The user re-ticks the popover while the answer is still streaming.
+        setScope(db, conv.id, { collectionIds: [], documentIds: [], packIds: [bravo], documentsOff: true })
+        gate.release()
+        const msg = await askP
+        h.hooks.beforeRespond = async () => undefined
+        expect(shape(msg.packOutcomes)).toEqual([{ packId: alpha, status: 'searched', reason: null }])
+        expect(resolveScope(db, conv.id).packIds).toEqual([bravo]) // the NEW scope stands for the next ask
+        expect(shape(listMessages(db, conv.id).at(-1)?.packOutcomes)).toEqual([
+          { packId: alpha, status: 'searched', reason: null }
+        ])
+      }
+      // ---- (11) REGENERATE (delete + restore) and EXPORT --------------------------------------
+      {
+        const conv = newChat([alpha])
+        const msg = await ask(conv.id)
+        const storedBefore = (
+          db.prepare('SELECT pack_outcomes_json AS j FROM messages WHERE id = ?').get(msg.id) as { j: string }
+        ).j
+        expect(storedBefore).not.toBeNull()
+        const snapshot = deleteLastAssistantMessage(db, conv.id)
+        expect(snapshot!.packOutcomesJson).toBe(storedBefore)
+        restoreMessage(db, snapshot!)
+        expect(
+          (db.prepare('SELECT pack_outcomes_json AS j FROM messages WHERE id = ?').get(msg.id) as { j: string }).j
+        ).toBe(storedBefore) // byte-identical across the regenerate round trip
+        expect(shape(listMessages(db, conv.id).at(-1)?.packOutcomes)).toEqual([
+          { packId: alpha, status: 'searched', reason: null }
+        ])
+        const { markdown } = exportTranscript(db, conv.id)
+        expect(markdown).toContain('Knowledge packs:')
+        expect(markdown).toMatch(/- .*: searched — \d+ passage\(s\)/)
+      }
+      // ---- (12) WHOLE-DOCUMENT and COMPARE: `mode`, and NOT ONE pack request ------------------
+      // These paths read the document(s) by definition. Saying nothing would let the user read the
+      // answer as "the packs were consulted and added nothing".
+      {
+        const mark = h.requests.length
+        const convWhole = newChat([alpha, bravo], false)
+        const whole = await ask(convWhole.id, h.svc, { wholeDocument: { documentId: docA } })
+        expect(shape(whole.packOutcomes)).toEqual(
+          [
+            { packId: alpha, status: 'skipped', reason: 'mode' },
+            { packId: bravo, status: 'skipped', reason: 'mode' }
+          ].sort((a, b) => a.packId.localeCompare(b.packId))
+        )
+        // Titles come from the registry (a DB-only read), so the notice can name the packs.
+        expect(whole.packOutcomes!.every((o) => typeof o.title === 'string')).toBe(true)
+
+        const convCompare = newChat([alpha], false)
+        const compare = await ask(convCompare.id, h.svc, {
+          wholeDocumentCompare: { documentIds: [docA, docB] }
+        })
+        expect(shape(compare.packOutcomes)).toEqual([
+          { packId: alpha, status: 'skipped', reason: 'mode' }
+        ])
+        // The claim these legs really pin: ZERO pack requests went out on either path.
+        expect(searchesSince(mark)).toEqual([])
+        expect(h.requests.slice(mark).filter((u) => u.startsWith('/raw/'))).toEqual([])
+        // …and it survives the reload, like every other outcome set.
+        expect(shape(listMessages(db, convWhole.id).at(-1)?.packOutcomes)).toEqual(
+          shape(whole.packOutcomes)
+        )
+      }
+    } finally {
+      await h.close()
+    }
+    // A whole-pipeline test: twelve legs, each a REAL grounded answer over the mock runtime
+    // against a real service and a real loopback sidecar. The ceiling is generous on purpose —
+    // it bounds a hang, it is never the proof of anything (§10.1: every ordering fact below is a
+    // controlled promise with an entered/release pair, and no leg waits on a fixed sleep).
+  }, 120_000)
 })

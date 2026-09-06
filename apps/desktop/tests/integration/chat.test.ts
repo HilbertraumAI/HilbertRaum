@@ -22,6 +22,7 @@ import {
   listConversations,
   listMessages,
   maybeSetTitleFromFirstMessage,
+  parsePackOutcomes,
   restoreMessage,
   stripThinkBlocks,
   writeCheckpoint
@@ -30,7 +31,7 @@ import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
 import type { Db } from '../../src/main/services/db'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
-import type { Citation, CoverageInfo } from '../../src/shared/types'
+import type { Citation, CoverageInfo, KnowledgePackOutcome } from '../../src/shared/types'
 
 function freshDb(): Db {
   const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-chat-'))
@@ -1127,5 +1128,162 @@ describe('exportTranscript — citation provenance (ZIM wave, #294 review M11)',
       '- [S1] Treibhausgas — knowledge pack: Wikipedia (DE); pack id pack-uuid-1; article A/Treibhausgas'
     ])
     expect(markdown).not.toContain('Klimawandel')
+  })
+})
+
+// ---- Per-ask knowledge-pack outcomes on the message row (#301 P4, findings M6/M7) ----------
+// The honesty column: one recorded outcome per pack the ask selected, so a disabled / missing /
+// index-less / failed pack can never be mistaken for "searched and found nothing". It rides the
+// same three paths every other answer-metadata column rides — read back, regenerate + restore,
+// and the Markdown export — and reads TOLERANTLY, because a hand-edited or newer-build payload
+// must never break rendering a conversation.
+describe('messages.pack_outcomes_json — per-ask knowledge-pack outcomes (#301 P4, M6/M7)', () => {
+  const outcomes: KnowledgePackOutcome[] = [
+    { packId: 'uuid-climate', title: 'Klimawandel von Wikipedia', status: 'searched', reason: null, found: 5, admitted: 3 },
+    { packId: 'uuid-chem', title: 'Chemie', status: 'skipped', reason: 'not-searchable', found: 0, admitted: 0 },
+    { packId: 'uuid-gone', title: null, status: 'skipped', reason: 'removed', found: 0, admitted: 0 }
+  ]
+
+  it('round-trips through appendMessage / listMessages / getLatestMessage, and stays NULL without outcomes', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const returned = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: 'an answer',
+      packOutcomes: outcomes
+    })
+    // The returned Message and the re-read row agree — no "present in memory, gone after reload".
+    expect(returned.packOutcomes).toEqual(outcomes)
+    expect(listMessages(db, conv.id).at(-1)?.packOutcomes).toEqual(outcomes)
+    expect(getLatestMessage(db, conv.id)?.packOutcomes).toEqual(outcomes)
+
+    // A pack-less ask writes NULL and reads back undefined — every existing chat stays as it was.
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q2' })
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'plain' })
+    const plain = getLatestMessage(db, conv.id)!
+    expect(plain.packOutcomes).toBeUndefined()
+    expect(
+      (db.prepare('SELECT pack_outcomes_json AS j FROM messages WHERE id = ?').get(plain.id) as { j: string | null }).j
+    ).toBeNull()
+    // An EMPTY array is the same as none: nothing to say means no column, not a stored "[]".
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q3' })
+    const empty = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'x', packOutcomes: [] })
+    expect(empty.packOutcomes).toBeUndefined()
+    expect(getLatestMessage(db, conv.id)?.packOutcomes).toBeUndefined()
+  })
+
+  it('parses tolerantly: a malformed payload reads as undefined, and unknown or wrong-typed entries are dropped', () => {
+    // A malformed or truncated payload must degrade to "no notice", never to a render crash.
+    expect(parsePackOutcomes(null)).toBeUndefined()
+    expect(parsePackOutcomes('not json')).toBeUndefined()
+    expect(parsePackOutcomes('{"packId":"a"}')).toBeUndefined() // an object, not an array
+    expect(parsePackOutcomes('[]')).toBeUndefined()
+
+    const mixed = parsePackOutcomes(
+      JSON.stringify([
+        { packId: 'ok', title: 'T', status: 'searched', reason: null, found: 2, admitted: 1 },
+        // An UNKNOWN reason code (a newer build's, or hand-edited): DROPPED rather than rendered
+        // blank — the renderer maps codes to fixed copy and has nothing for this one.
+        { packId: 'newer', title: 'T', status: 'skipped', reason: 'quantum-flux', found: 0, admitted: 0 },
+        { packId: 'bad-status', title: 'T', status: 'maybe', reason: null, found: 0, admitted: 0 },
+        { packId: 42, title: 'T', status: 'searched', reason: null, found: 0, admitted: 0 },
+        { title: 'no id', status: 'searched', reason: null, found: 0, admitted: 0 },
+        { packId: 'bad-title', title: { x: 1 }, status: 'searched', reason: null, found: 0, admitted: 0 },
+        'a string',
+        null
+      ])
+    )
+    expect(mixed?.map((o) => o.packId)).toEqual(['ok'])
+
+    // Counts are coerced defensively — a hand-edited negative, fractional, null or string count
+    // must never reach the renderer's plural formatting.
+    const counts = parsePackOutcomes(
+      JSON.stringify([
+        { packId: 'a', title: null, status: 'searched', reason: null, found: -3, admitted: 2.7 },
+        { packId: 'b', title: null, status: 'searched', reason: null, found: '9', admitted: null }
+      ])
+    )
+    expect(counts).toEqual([
+      { packId: 'a', title: null, status: 'searched', reason: null, found: 0, admitted: 2 },
+      { packId: 'b', title: null, status: 'searched', reason: null, found: 0, admitted: 0 }
+    ])
+
+    // …and the same tolerance through the ROW read: a hand-edited row reads as undefined.
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const msg = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a' })
+    db.prepare('UPDATE messages SET pack_outcomes_json = ? WHERE id = ?').run('{oops', msg.id)
+    expect(getLatestMessage(db, conv.id)?.packOutcomes).toBeUndefined()
+  })
+
+  it('survives a regenerate delete + restore BYTE-IDENTICALLY (the Stop-before-first-token case)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const msg = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: 'an answer',
+      packOutcomes: outcomes
+    })
+    const storedBefore = (
+      db.prepare('SELECT pack_outcomes_json AS j FROM messages WHERE id = ?').get(msg.id) as { j: string }
+    ).j
+    const snapshot = deleteLastAssistantMessage(db, conv.id)
+    expect(snapshot!.packOutcomesJson).toBe(storedBefore)
+    restoreMessage(db, snapshot!)
+    const storedAfter = (
+      db.prepare('SELECT pack_outcomes_json AS j FROM messages WHERE id = ?').get(msg.id) as { j: string }
+    ).j
+    expect(storedAfter).toBe(storedBefore) // byte-identical, never re-derived
+    expect(getLatestMessage(db, conv.id)?.packOutcomes).toEqual(outcomes)
+  })
+
+  it('exports a "Knowledge packs:" block after the sources, and on its own when nothing was cited', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: 'a [S1]',
+      citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 12 }],
+      packOutcomes: outcomes
+    })
+    const lines = exportTranscript(db, conv.id).markdown.split('\n')
+    expect(lines).toContain('Knowledge packs:')
+    expect(lines.indexOf('Knowledge packs:')).toBeGreaterThan(lines.indexOf('Sources:'))
+    expect(lines).toContain('- Klimawandel von Wikipedia: searched — 3 passage(s)')
+    expect(lines).toContain('- Chemie: skipped (not-searchable) — 0 passage(s)')
+    // No registration row at all means no title — the id names it, rather than an empty label.
+    expect(lines).toContain('- pack uuid-gone: skipped (removed) — 0 passage(s)')
+
+    // The ZERO-CITATION answer — the turn the block matters most on — still carries it.
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q2' })
+    appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: 'I could not find that in your documents.',
+      packOutcomes: [{ packId: 'uuid-chem', title: 'Chemie', status: 'failed', reason: 'timeout', found: 0, admitted: 0 }]
+    })
+    const second = exportTranscript(db, conv.id).markdown
+    expect(second).toContain('- Chemie: failed (timeout) — 0 passage(s)')
+
+    // A newline inside a stored title cannot break the line (the M11 locator rule, applied here).
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q3' })
+    appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: 'a',
+      packOutcomes: [
+        { packId: 'p', title: 'Wiki\n- [S99] fake citation', status: 'searched', reason: null, found: 1, admitted: 1 }
+      ]
+    })
+    const third = exportTranscript(db, conv.id).markdown.split('\n')
+    expect(third).toContain('- Wiki - [S99] fake citation: searched — 1 passage(s)')
+    expect(third.some((l) => l.startsWith('- [S99]'))).toBe(false)
   })
 })

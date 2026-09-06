@@ -235,6 +235,28 @@ export function retrievablePacks(
   return out
 }
 
+/**
+ * The stored titles of a set of pack ids — a DB-ONLY read (no disk, no sidecar, no identity
+ * check) used by the answer paths that never query packs but still owe the user one honest
+ * outcome per selected pack (#301 P4, finding M6; plan §9.21 (e)5: the whole-document, compare
+ * and grounded-data `skipped / mode` outcomes).
+ *
+ * TOMBSTONED rows are included deliberately: a pack removed between the ask and the render still
+ * has a title the notice can name. The "a removed pack" fallback is reserved for an id with NO
+ * row at all, which maps to `null` here — exactly what `classifyPackSelection` reports for it.
+ */
+export function packTitles(db: Db, ids: readonly string[]): Map<string, string | null> {
+  const out = new Map<string, string | null>()
+  for (const id of ids) out.set(id, null)
+  if (out.size === 0) return out
+  const rows = prepareCached(db, 'SELECT id, title FROM knowledge_packs').all() as unknown as Array<{
+    id: string
+    title: string
+  }>
+  for (const row of rows) if (out.has(row.id)) out.set(row.id, row.title)
+  return out
+}
+
 /** What one ask's pack selection resolved to (#301 P4, findings M6/M7/M8; plan §9.21 (e)2). */
 export interface PackSelectionClassification {
   /** The packs the arm may search, in `title COLLATE NOCASE, id` order, with their files. */

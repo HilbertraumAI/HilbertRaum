@@ -7,6 +7,7 @@ import { isReviewEligible } from '@shared/evidence-review'
 import { formatAnswerSpeed } from './answerSpeed'
 import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
+import { PackOutcomesNotice } from './PackOutcomesNotice'
 import { CoverageMeter, Icon, Spinner } from '../components'
 import { localizeServerCopy } from '../lib/displayMap'
 import { useT, type I18n } from '../i18n'
@@ -405,6 +406,17 @@ const MessageBlock = memo(function MessageBlock({
               coverage={m.coverage ?? { mode: 'relevance', chunksCovered: 0, chunksTotal: 0 }}
             />
           </>
+        )}
+        {/* Knowledge packs (#301 P4, findings M6/M7): what happened to each pack this ask
+            selected. OUTSIDE the citations block on purpose — the turns that need it most are
+            the ones with zero citation cards (a no-context answer whose every pack failed), and
+            `SourcesDisclosure` only renders when the answer cited something. Assistant turns
+            only; a turn with neither outcomes nor an archive citation renders nothing. */}
+        {m.role === 'assistant' && (
+          <PackOutcomesNotice
+            outcomes={m.packOutcomes}
+            hasArchiveCitation={m.citations?.some((c) => c.sourceKind === 'archive')}
+          />
         )}
         {/* Per-message skill glyph (skills plan §15/DS16/§22-A5): a quiet, labelled marker on
             the answer a skill shaped — icon + word, never colour-only (guidelines §9). SKA-38

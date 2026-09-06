@@ -1167,6 +1167,12 @@ function applyPragmasAndMigrations(db: Db): void {
   // ordinary answer and every pre-migration row). Additive + nullable, STRUCTURAL only (never the
   // question or document text, §22-M1); an older app ignores the column and renders no offer.
   ensureColumn(db, 'messages', 'skill_offer_json', 'skill_offer_json TEXT')
+  // Knowledge packs (#301 P4, findings M6/M7; owner ruling plan §7) — the per-ask PACK OUTCOMES of
+  // an assistant turn: a JSON array of `KnowledgePackOutcome` (packId + title + status + reason
+  // code + found/admitted counts), or NULL (a pre-migration row, or an ask whose scope selected no
+  // pack). Additive + nullable, so no `SCHEMA_VERSION` bump and an older app simply ignores the
+  // column and renders no notice. CODE-only diagnostics — never a path, a filename or stderr.
+  ensureColumn(db, 'messages', 'pack_outcomes_json', 'pack_outcomes_json TEXT')
   // EP-1 Phase 4 (spec §15.5/§28.6): the acknowledged-drift record — JSON
   // { acknowledgedAt, fingerprint } written by acknowledgeEvidenceReviewFreshness; NULL =
   // never acknowledged. Additive + nullable so P0–P3 workspaces open unchanged; the ack is
