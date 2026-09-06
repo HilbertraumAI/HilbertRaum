@@ -468,9 +468,11 @@ export interface RunBenchmarkDeps {
   /**
    * Latest honest effective-read sample (issue #108), injected by the caller
    * (registerBenchmarkIpc reads the session latch in services/read-speed.ts, falling
-   * back to the previously persisted sample so a re-run never loses it). NEVER measured
-   * in here — the sample is a byproduct of real model loads / checksum passes, and this
-   * module keeps its zero-`child_process`, probe-only I/O posture.
+   * back to the previously persisted sample — of THIS machine only — so a re-run never
+   * loses it; it re-resolves after the run too, `mergeSampleIntoResult`, so a sample
+   * landing mid-run is not overwritten). NEVER measured in here — the sample is a
+   * byproduct of real model loads / checksum passes, and this module keeps its
+   * zero-`child_process`, probe-only I/O posture.
    */
   effectiveRead?: EffectiveReadSample | null
   /**

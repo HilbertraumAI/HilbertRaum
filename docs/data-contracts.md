@@ -125,7 +125,10 @@ wins; a commercial `policy.json` can force it back off), `workspaceMode:'plainte
 **The performance wave (2026-09-05) added `BenchmarkResult.gpuVramMb`** (primary probed device's
 total MiB, optional; absent on older results) **and `benchmarkHistory`** (`BenchmarkResult[]`, default `[]`,
 one entry per computer keyed by `machineKey`, capped at `MAX_BENCHMARK_HISTORY = 8`; the write
-gate keeps plain-object elements only) **and `modelPlacements`** (`Record<modelId, ModelPlacement>`,
+gate keeps plain-object elements only; since the PR #303 audit an outgoing `lastBenchmark` from
+another computer is backfilled into it before being replaced, the cap evicts the oldest OTHER
+machine, and the two keys are always written in one `updateSettings` call, history first — see
+`benchmark.md` "History per machine") **and `modelPlacements`** (`Record<modelId, ModelPlacement>`,
 default `{}`: where each model's last start landed per llama.cpp's load log, stamped with
 `machineKey`; object-valued, size-capped); see `benchmark.md` "History per machine" / "Your model".
 **The post-MVP UX round added `autoStartActiveModel`** (boolean, default `true`) **and
@@ -505,10 +508,18 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   read-speed OBSERVER (fires on every accepted sample, so a background download path persists
   too) and **also re-keys the slow-read warning in place** (`upsertSlowReadWarning`): the only
   automatic benchmark runs before any model exists, so the #110 warning must track the sample
-  between benchmark runs — and is removed again when a fast sample lands. Injected into
-  `runBenchmark` via `RunBenchmarkDeps.effectiveRead` (ranking-aware carry-forward). Feeds the
-  Diagnostics "Measured read speed" row (which carries the sample's own date — the card's "Last
-  run" describes the benchmark, not this row), the #110 gate, and the #107 estimate.
+  between benchmark runs — and is removed again when a fast sample lands. Since the PR #303
+  audit (M2/L2/M6) the persisted sample is **identity-gated**: it is written to, and carried
+  forward from, results of THIS machine only — `lastBenchmark` when its `machineKey` is this
+  machine's or unknown on either side (G3: compatibility, not provenance; an unkeyed result
+  never gets a fabricated key or a history entry) **and** this machine's `benchmarkHistory`
+  entry, each compared separately (`services/benchmark-persistence.ts`); a foreign headline is
+  never touched, and with no eligible destination the sample stays un-handled for a later retry.
+  `ranAt` is unchanged by a sample-only update. Injected into `runBenchmark` via
+  `RunBenchmarkDeps.effectiveRead` (identity-gated, ranking-aware carry-forward) and
+  re-resolved after the run so a sample landing mid-run is folded in, never overwritten. Feeds
+  the Diagnostics "Measured read speed" row (which carries the sample's own date — the card's
+  "Last run" describes the benchmark, not this row), the #110 gate, and the #107 estimate.
 - **`measureTokensPerSecond(runtime)`** → `SpeedReading | null` (only when a runtime is
   active; the paragraph prompt under a 64-token cap). Since #291: `{ tokensPerSecond, basis,
   tokens }` — `basis: 'timings'` is llama-server's own `predicted_per_second` (decode only,

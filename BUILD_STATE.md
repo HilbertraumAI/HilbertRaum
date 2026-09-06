@@ -32,7 +32,11 @@
 _2026-09-06 — **PR #303 audit remediation, P1 (same branch, master `ddd704ad` merged in first):** the
 M7 `_Host` and L7 empty-reading fixes of `ce741533` pinned (parser, verdict, renderer), stale `_Host`
 prose corrected, `skills.title` orphan removed, §5 item 20 archived to `docs/build-log.md` and
-collapsed, the remediation register added to item 21. Plan: `tmp/pr-303-fix-plan.md` (untracked)._
+collapsed, the remediation register added to item 21. Plan: `tmp/pr-303-fix-plan.md` (untracked).
+**P2:** M2/M4/M6/L2 repaired together in the new pure `services/benchmark-persistence.ts` (identity before
+source ranking under G3, outgoing-result backfill on the run / restore / startup-seed paths, commit-time
+re-resolution of a mid-run sample, samples written to `lastBenchmark` AND this machine's history entry,
+history-first write order); records in `benchmark.md` "Persistence" / "History per machine"._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -689,7 +693,7 @@ open round's item stays the last block of §5.)
     fixed on the same branch before merge from 2026-09-06; durable disposition record lands in
     `docs/benchmark.md` at P9, one commit per phase, CI green each):** P1 ✅ M7/L7 pins, stale
     `_Host` prose, item 20 archived, `skills.title` orphan removed after the master merge;
-    P2 ☐ M2/M4/M6/L2 persistence (identity before ranking, upgrade backfill, mid-run samples);
+    P2 ✅ M2/M4/M6/L2 persistence (identity before ranking, upgrade backfill, mid-run samples);
     P3 ☐ M1/M3/L3 `performance:changed` push + honest steps; P4 ☐ H1/L8/M5-residual schemas +
     launch context; P5 ☐ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
     P6 ☐ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ☐ L1/SD2 auto-start sequencing;
