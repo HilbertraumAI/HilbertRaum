@@ -2331,6 +2331,48 @@ offline article viewer. Files are registered in place, never copied.
   gated: (i) 1 MiB sync total 18.4–19.2 ms warm (cold 22–24 ms) — the ≈ 15 % price of
   divisibility; (ii) the 60-conversion batch 31–33 ms vs 50. No laptop re-run: the reference's
   decisive figure was not within 20 % of the bound. Logs: `tmp/zim-wave/p7/d2/` (maintainer-local).
+
+  **D-Z3 amendment — LaTeX alttext normalised to plain text (#340, 2026-09-06).** The `<math
+  alttext>` LaTeX source `html.ts` extracts (above) is no longer kept as raw TeX: `math.ts`'s
+  `normalizeMath()` turns it into plain text before it reaches a segment — arrows, fractions,
+  roots, Greek letters, operators and relations are written out (`\rightarrow` → `→`,
+  `\frac{1}{2}` → `1/2`, `\sqrt{2}` → `√2`, `\alpha` → `α`), and the UNWRAP family (`\text`,
+  `\mathrm`, `\mathbb`, `\operatorname`, …) disappears while its one argument survives. The call
+  order is `normalizeMath(decodeEntities(alt))` (`html.ts:911`) — the normaliser only ever sees
+  already-decoded text.
+
+  Sub/superscripts become PLAIN characters, never ₂/² Unicode — `E=mc^{2}` → `E=mc2`, not
+  `E=mc²` — for two mechanical reasons, not cosmetics: `<sub>/<sup>` already render plain
+  elsewhere in this same converter (`25 m2`, not `25 m²`), and the retrieval-arm tokeniser
+  (`arm.ts` `queryTerms` = `/[\p{L}\p{N}]{3,}/gu`, `overlapScore` = `includes`) treats `₂` as a
+  `\p{N}` character distinct from `2`, so a query typed as "CO2" would never match a literal
+  `CO₂` sitting in a chunk. The accepted lossy case that falls out of the same rule: `10^{-3}` →
+  `10-3`, indistinguishable from a subtraction once flattened — judged an acceptable trade
+  against the retrieval win.
+
+  What stays raw: an unrecognised `\command` is emitted with its backslash, and the brace group
+  immediately after it keeps its braces, while the rest of the string still normalises around
+  it. The WHOLE input is returned byte-identical (never partially normalised) under exactly four
+  conditions: over `MAX_INPUT_CHARS` (4,000 — the longest real formula measured is 262 chars),
+  unbalanced braces, nesting past `MAX_DEPTH` (64), or an argument-taking command (`\frac`,
+  `\sqrt`, the UNWRAP family) missing its argument.
+
+  `math.ts` is a single-cursor tokenizer over an explicit stack, not a regex: the corpus has
+  real nested `\frac`, and matching nested braces with a regex needs either a nested quantifier
+  or a fixpoint loop, both super-linear. Each input index is consumed once; only `\frac`/`\sqrt`
+  arguments materialise into a new string, so the worst case is O(n · fracDepth) ≤ ~256 k char
+  copies, bounded by the two caps above — measured 0.16 ms at the cap, and inputs over the cap
+  return in well under a microsecond (the length check runs before any scan).
+
+  Post-processing was already not charged to `work` (`html.ts:151-160`); the normaliser adds
+  nothing to that accounting, and P1b's cooperative slicing is unaffected — `normalizeMath` runs
+  entirely inside the `<math>` token handler, never across a slice boundary. `EXCERPT_GUARD_LINE`
+  and the rest of the grounded-data prompt framing are untouched: this change only reshapes text
+  that was already going to be quoted in an excerpt, never the framing around it. Evidence
+  excerpts persisted before this change keep their raw LaTeX by design — no migration; only
+  newly fetched or re-converted articles pick up plain-text formulas. Tests:
+  `tests/unit/zim-math.test.ts` (new, the full verified table) and `tests/unit/zim-html.test.ts`'s
+  "emits each formula once, normalised to plain text".
 - **D-Z4 — one seam in `retrieve()`.** An optional `ExternalRetrievalArm` (parameter 8)
   appends candidates between the chunk-row join and the rerank, so rerank, dedup, token
   budget and `[Sn]` labelling treat archive and document chunks uniformly. No reranker →
@@ -2735,7 +2777,8 @@ offline article viewer. Files are registered in place, never copied.
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
 budget and `truncated` signal — PR #294 review H1; cooperatively sliced, async on the ask
-path — P1b), `client.ts` (node:http + search/
+path — P1b), `math.ts` (`<math alttext>` LaTeX → plain text, a single-cursor tokenizer —
+#340, D-Z3 amendment), `client.ts` (node:http + search/
 library XML parsing; the ONE entry-key encoder with the L5 contract — controls, dot
 segments, 2048-char bound; URL-shaped and empty-segment keys accepted, P5; `KiwixBook.tags`
 + `probeSearchable` — the `/suggest` capability probe, D-Z11, P4), `tools.ts`

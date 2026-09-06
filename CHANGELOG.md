@@ -322,6 +322,10 @@ from its first public `1.0.0` release onward.
   character; the panel used to show the generic "could not be read by kiwix-manage" message, and
   now tells you to move the file to a path made of ASCII characters — the drive's `zim/` folder
   is simplest — and add it again.
+- **Formulas from a knowledge pack now read as text, not as typesetting code.** Arrows,
+  fractions, roots, Greek letters and signs are written out, and lowered or raised characters sit
+  on the line — CO2, m2, Fe3+ — which is how you type them when searching. Anything unreadable is
+  left as it was. Passages saved in earlier evidence reviews keep the older form.
 
 ## [0.1.59] — 2026-08-21
 

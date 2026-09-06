@@ -1,4 +1,5 @@
 import type { ExtractedSegment } from '../ingestion/parsers'
+import { normalizeMath } from './math'
 
 // ZIM article HTML → ExtractedSegment[] (knowledge packs, query-time retrieval arm).
 //
@@ -19,9 +20,9 @@ import type { ExtractedSegment } from '../ingestion/parsers'
 // Dropped subtrees: head, script/style/noscript (raw-text aware), tables (infoboxes and
 // data tables scramble into `header: value` noise without geometry), figures/images, nav,
 // and `<sup class="mw-ref">` citation brackets ([1][2] — noise for retrieval; other <sup>
-// like m<sup>2</sup> keeps its text). `<math>` emits its `alttext` LaTeX and skips the
-// MathML subtree; the `<img>` fallback that follows is dropped with all images, so each
-// formula appears exactly once.
+// like m<sup>2</sup> keeps its text). `<math>` emits its alttext normalised to plain text
+// (`math.ts`, #340) and skips the MathML subtree; the `<img>` fallback that follows is
+// dropped with all images, so each formula appears exactly once.
 //
 // ---------------------------------------------------------------------------------------
 // LINEAR FORWARD SCANNER — complexity record (PR #294 review H1)
@@ -908,7 +909,7 @@ export function* zimArticleSlices(
     if (!isClose && name === 'math') {
       // The LaTeX source rides in alttext; emit it once, skip the MathML rendering tree.
       const alt = attrValue(attrs, 'alttext')
-      if (alt) emit(` ${decodeEntities(alt)} `)
+      if (alt) emit(` ${normalizeMath(decodeEntities(alt))} `)
       if (!selfClosing) mathDepth = 1
       continue
     }
