@@ -504,8 +504,10 @@ twice.
 ### 6.6 Graphics-memory-aware picker: the card decides on a discrete GPU (2026-09-05)
 
 **Status: implemented on `feat/vram-aware-picker` (PR #308), merged onto the Performance wave
-(PR #303). Changes the recommendation on every machine with a usable discrete card, so it carries
-the §5 item 8 standing requirement: owner sign-off in PR review before merge.**
+(PR #303). Changes the recommendation on every machine with a usable discrete card, so it carried
+the §5 item 8 standing requirement: **owner sign-off given 2026-09-06 in the PR #308 review**
+(decisions 1–11, rule C on the free-memory basis, the cross-PR notes, and the strictly ranked
+card-path fallback of #326).**
 
 **2026-09-06 amendment (PR #308 audit).** An independent audit of the 2026-09-05 shipped picker
 found it read `devices[0]` instead of an explicit budget device (so a hybrid laptop could pick its
@@ -564,11 +566,11 @@ consumer machine.
    start a model over it, and the pick must never point at a refused model.
 6. **The order (rule C).** The RAM pick (`recommendModelIdByRam`, unchanged) stands wherever it
    ALSO fits the card. Only when it does not does the picker fall back to the fittest eligible
-   model ranked FIRST by `recommendation_rank`, then by RAM tier, then by size (the §6.3
-   ranked-only guard: it admits a rank-0 model only when nothing ranked fits at all, at very small
-   budgets — an owner-open question carried over from the RAM-only picker that the card path
-   now inherits too; issue #326). With nothing eligible at all the RAM pick stands unchanged — the
-   documented no-fit fallback (the model partially offloads).
+   model ranked FIRST by `recommendation_rank`, then by RAM tier, then by size — among RANKED
+   models only (owner decision 2026-09-06, issue #326: a rank-0 model is never the automatic
+   pick, so the card path is stricter here than the RAM picker's §6.3 guard). With no ranked
+   model eligible — a card under ~4.5 GiB free — the RAM pick stands unchanged: the documented
+   no-fit fallback (the model partially offloads; null when RAM is unknown as well).
 7. The §6.5 speed step-down applies to the card pick exactly as to the RAM pick, with the
    step-down's destination filtered through the same card eligibility (§6.5's single-step
    amendment below).
@@ -628,8 +630,8 @@ today. Whether to lower the gate is an owner call (§5 item 21 (k)).
 `qwen3-4b-instruct-q4`, `qwen3-8b-instruct-q4`, `ministral3-8b-instruct-2512-q4`,
 `qwen3-14b-instruct-q4`, `qwen3.6-27b-q4`, `qwen3.6-27b-q5`, `qwen3.5-35b-a3b-ud-q4kxl` — never
 win rule C's rank-first fallback against the ranked model at the same tier and are omitted here;
-their raw needs are pinned alongside these in the same test. The rank-0 fall-through, when
-reached at a very small budget: `qwen3.5-2b-ud-q4kxl` 2,962 MiB, `qwen3.5-0.8b-q6` 2,304 MiB.)
+their raw needs are pinned alongside these in the same test. Rank-0 models — `qwen3.5-2b-ud-q4kxl`
+2,962 MiB, `qwen3.5-0.8b-q6` 2,304 MiB — are never reached on the card path since #326.)
 
 Both consumers build the picker's `PickerMemory` from ONE decision — `pickerMemoryFor` in
 `registerModelIpc.ts` and `probeAndPersistGpu` in `registerBenchmarkIpc.ts`, both calling

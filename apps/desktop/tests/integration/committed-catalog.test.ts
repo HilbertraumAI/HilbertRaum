@@ -371,19 +371,21 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   })
 
   // (k) Unknown RAM on the card path keeps the pre-rule-C `ramOk` semantics: the floor is open,
-  // the card alone decides, in rank order. With no ranked model fitting, the ranked-only guard
-  // falls through to a rank-0 fit exactly as it did before (a card under ~4.5 GiB free).
+  // the card alone decides, in rank order. With no RANKED model fitting (a card under ~4.5 GiB
+  // free) the fallback is STRICTLY ranked (owner decision 2026-09-06, #326): no rank-0 model is
+  // ever the automatic pick, so the pick is the RAM pick — null when RAM is unknown too.
   it('unknown RAM (NaN / 0) on the card path: the floor is open, the card decides', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
     for (const ram of [Number.NaN, 0]) {
       expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram} RAM pick`).toBeNull()
       expect(onCard(chat, 24_000, ram), `ram=${ram} 24,000`).toBe('qwen3.8-27b-ud-q5km')
       expect(onCard(chat, 7168, ram), `ram=${ram} 7,168`).toBe('qwen3.5-4b-ud-q4kxl')
-      expect(onCard(chat, 4000, ram), `ram=${ram} 4,000`).toBe('qwen3.5-2b-ud-q4kxl')
+      expect(onCard(chat, 4000, ram), `ram=${ram} 4,000`).toBeNull()
     }
-    // The same rank-0 fall-through with KNOWN RAM: nothing ranked fits 4,000 MiB, so the guard
-    // admits the 2B (rank 0) rather than the no-fit fallback — the pre-rule-C card path did too.
-    expect(onCard(chat, 4000, 16)).toBe('qwen3.5-2b-ud-q4kxl')
+    // With KNOWN RAM and nothing ranked fitting 4,000 MiB, the no-fit fallback wins: the RAM pick
+    // (the 9B at 16 GB), partially offloaded — never the rank-0 2B (#326).
+    expect(onCard(chat, 4000, 16)).toBe(recommendModelIdByRam(chat, 16, 'chat'))
+    expect(onCard(chat, 4000, 16)).toBe('qwen3.5-9b-ud-q4kxl')
   })
 
   // (g) Unified / cpu with a KNOWN budget, and a legacy call without a class: the RAM pick,

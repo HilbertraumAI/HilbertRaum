@@ -1001,8 +1001,9 @@ function eligibleOrder(a: ModelManifest, b: ModelManifest): number {
  *      pre-rule-C card path did. `candidate = base` when base is eligible — the established
  *      recommendation stands wherever the card can hold it (decision 2: the 9B, not Gemma 12B,
  *      where both fit). Otherwise `candidate` = the highest-RANKED eligible model, ties by
- *      comfortable tier then size, ranked-only guard as today. Otherwise (nothing eligible: a
- *      small card beside a big catalog) `candidate = base` — the documented no-fit fallback:
+ *      comfortable tier then size — ranked models ONLY (a rank-0 model is never the automatic
+ *      pick, #326). Otherwise (no ranked model eligible: a small or nearly full card beside a big
+ *      catalog) `candidate = base` — the documented no-fit fallback:
  *      the RAM pick partially offloads, which is still the catalog's best answer.
  *   3. The §6.5 speed step-down applies ONCE, to `candidate`, restricted to the eligible pool on
  *      both ends (`applySpeedSignal` with `eligible`): a crawl measured on a model the card cannot
@@ -1032,7 +1033,10 @@ export function recommendModelIdByVram(
   if (base && eligible(base)) {
     candidate = base
   } else {
-    const pool = preferRanked(candidates.filter(eligible)).sort(eligibleOrder)
+    // STRICTLY ranked (owner decision 2026-09-06, issue #326): a rank-0 model is never the
+    // automatic pick (model-policy.md), so when no RANKED model fits the card the no-fit
+    // fallback below applies — the RAM pick, partially offloaded — rather than a rank-0 fit.
+    const pool = candidates.filter((c) => c.recommendationRank > 0 && eligible(c)).sort(eligibleOrder)
     candidate = pool[0] ?? base
   }
   if (!candidate) return null

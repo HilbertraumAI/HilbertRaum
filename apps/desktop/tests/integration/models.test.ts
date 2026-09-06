@@ -759,10 +759,13 @@ describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
     expect(recommendModelIdByVram(withG12, 12_288, 32)).toBe('mid')
     expect(recommendModelIdByVram(all, 23_000, 64)).toBe('mid')
     expect(recommendModelIdByVram(all, 8_000, 64)).toBe('tiny') // mid needs 8,116
-    // The ranked-only guard carries over: a rank-0 model is eligible only when no ranked one is.
+    // STRICTLY ranked (owner decision 2026-09-06, #326): a rank-0 model is never the automatic pick,
+    // so when no ranked model fits the no-fit fallback wins — the RAM pick (big at RAM 64), which
+    // partially offloads — never the rank-0 model that would fit.
     const rank0 = asManifest({ id: 'rank0', size_on_disk_gb: 1.3, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 0 })
     expect(recommendModelIdByVram([...all, rank0], 8_000, 64)).toBe('tiny')
-    expect(recommendModelIdByVram([...all, rank0], 4_000, 64)).toBe('rank0')
+    expect(recommendModelIdByVram([...all, rank0], 4_000, 64)).toBe(recommendModelIdByRam(all, 64))
+    expect(recommendModelIdByVram([...all, rank0], 4_000, 64)).toBe('big')
   })
 
   it('RAM stays a hard gate: never a model the Models screen would refuse to start', () => {
