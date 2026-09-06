@@ -573,11 +573,23 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
 - **`ipc/registerBenchmarkIpc.ts`** — `runBenchmark()` (`benchmark:run`); runs it, persists to
   `settings.lastBenchmark` + `settings.benchmarkHistory`, returns the result, and streams
   `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window. `performance:get`
-  returns the `PerformanceSnapshot` the Performance screen renders (`current`, `currentMachine`,
+  returns the `PerformanceSnapshot` the Performance screen renders (`current`,
+  **`recommendation: LiveRecommendation | null`** = `{ modelId: string | null; basis: MemoryClass }`
+  — the LIVE chat pick for the next start (PR #308 audit decision 8), computed by
+  `liveChatRecommendation(settings, manifests)` in registerModelIpc.ts from the same inputs the
+  `listModels` handler feeds `buildModelList`: `pickerMemoryFor(s)`, `machineRamGb()`,
+  `speedSignalFor(s)` (the persisted `{ tokensPerSecond, measuredModelId }` pairing; the handler
+  calls the same function), `basis` = the memory class the pick was judged against; null only
+  without a catalog; `current.recommendedModelId` is the historical figure and is never rewritten —,
+  `currentMachine`,
   `currentGpu` — the budget device for the next start, `{ name, totalMb }` or null, the same
   device `BenchmarkResult.gpu` and the `listModels` ★ go by, never `settings.gpuProbe.devices[0]` —,
   `otherMachines`, `running`, `placement: { memoryClass, ramMb, vramMb, model,
-  observed, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }`, `observed: { lastAnswer, lastModelLoad, lastChecksum }`; the
+  observed, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }` (the
+  pre-start `verdict` on a discrete card is `estimateGraphicsNeedMib(manifest) ≤
+  graphicsBudgetMib(device)` — the picker's fit — with `needMb` = the unrounded weights and
+  `budgetMb` = the card's total; `PlacementVerdictInput` in services/performance.ts carries
+  `graphicsBudgetMb` and `manifest` for it), `observed: { lastAnswer, lastModelLoad, lastChecksum }`; the
   observed figures are session-only latches, never persisted). Registered in `initBackend()`;
   exposed on preload `api.runBenchmark` / `api.getPerformance` / `api.onBenchmarkProgress`.
 - **Renderer:** `DiagnosticsScreen` Run-benchmark button → RAM / CPU / OS-arch / measured read

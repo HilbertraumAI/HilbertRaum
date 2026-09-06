@@ -47,7 +47,7 @@ import { buildPerformanceSnapshot, maybeRunFirstBenchmark, runAndPersistBenchmar
 import { pickerMemoryFor, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { detectSystem } from '../../src/main/services/benchmark'
 import { openDatabase } from '../../src/main/services/db'
-import { machineRamGb } from '../../src/main/services/models'
+import { discoverManifests, machineRamGb, weightsMib } from '../../src/main/services/models'
 import { machineKey } from '../../src/main/services/performance'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
 import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
@@ -398,5 +398,93 @@ describe('picker seams: a probe that cannot run or that threw persists an EMPTY 
     } finally {
       settingsState.refuseGpuProbeWrites = false
     }
+  })
+})
+
+describe('picker seams: the Performance snapshot carries the LIVE recommendation (P4, decision 8; audit A4/R4)', () => {
+  const STALE_AT = '2026-08-20T00:00:00Z'
+  /** A pre-PR saved result for THIS machine (no speed sample, the RAM pick) on top of a fixture. */
+  function withSavedRamPick(f: Fixture, over: Partial<AppSettings['lastBenchmark'] & object> = {}): Fixture {
+    updateSettings(f.ctx.db, {
+      lastBenchmark: {
+        ...detectSystem(),
+        gpu: null,
+        driveReadMbps: null,
+        driveWriteMbps: null,
+        tokensPerSecond: null,
+        measuredModelId: null,
+        profile: 'PRO',
+        recommendedModelId: RAM_PICK,
+        warnings: [],
+        ranAt: STALE_AT,
+        ...over
+      }
+    })
+    return f
+  }
+
+  it('same-machine saved Q5 result + a fresh 8 GiB probe, no re-run: the live pick is the 4B, the saved field stays Q5 (A4 inverted)', async () => {
+    // The drive stayed on this computer; a card was added (or the probe is simply fresh). The
+    // session refresh re-probes but never re-benchmarks a same-machine result — before P4 the
+    // Performance screen kept saying Q5 while the Models ★ already said the card pick.
+    const f = withSavedRamPick(fixture({ probeReturns: [CARD8], persisted: [] }))
+    maybeRunFirstBenchmark(f.ctx)
+    await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([CARD8]))
+    await new Promise((r) => setTimeout(r, 200))
+    expect(getSettings(f.ctx.db).lastBenchmark?.ranAt).toBe(STALE_AT)
+    expect(f.probe).toHaveBeenCalledTimes(1)
+
+    const snap = buildPerformanceSnapshot(f.ctx)
+    // LIVE: the RTX 3070 fixture `{ 8192, freeMb 8000 }` → budget 8,000 MiB < the 9B's 8,014 → the 4B.
+    expect(snap.recommendation).toEqual({ modelId: CARD8_PICK, basis: 'discrete' })
+    // HISTORICAL: what the check said at the time, untouched, with its old stamp.
+    expect(snap.current?.recommendedModelId).toBe(RAM_PICK)
+    expect(snap.current?.ranAt).toBe(STALE_AT)
+    expect(snap.currentMachine).toBe(true)
+    // …and the Models ★ says the same as the live field.
+    expect(await liveStar(f.ctx)).toBe(CARD8_PICK)
+  })
+
+  it.each([
+    ['an 8 GiB probe', { probeReturns: [] as GpuDevice[], persisted: [CARD8] }, CARD8_PICK, 'discrete'],
+    ['no probe', { probeReturns: [] as GpuDevice[], persisted: [] as GpuDevice[] }, RAM_PICK, 'cpu'],
+    ['GPU off with a card present', { probeReturns: [] as GpuDevice[], persisted: [CARD8], settings: { gpuMode: 'off' as const } }, RAM_PICK, 'cpu'],
+    ['a hybrid laptop, Intel first', { probeReturns: [] as GpuDevice[], persisted: [ARL, RTX5060] }, CARD8_PICK, 'discrete']
+  ])('both surfaces agree with %s: the listModels ★ === snapshot.recommendation.modelId (%s)', async (_label, opts, expected, basis) => {
+    const f = withSavedRamPick(fixture(opts))
+    const snap = buildPerformanceSnapshot(f.ctx)
+    expect(snap.recommendation?.modelId).toBe(expected)
+    expect(snap.recommendation?.basis).toBe(basis)
+    expect(await liveStar(f.ctx)).toBe(snap.recommendation?.modelId)
+    // The basis is the class the picker was given, the same class the placement row reports.
+    expect(snap.recommendation?.basis).toBe(pickerMemoryFor(getSettings(f.ctx.db)).memoryClass)
+    expect(snap.recommendation?.basis).toBe(snap.placement.memoryClass)
+  })
+
+  it('the persisted speed signal reaches the snapshot exactly as it reaches the ★: a crawl on the card pick moves both the same way', async () => {
+    // A 3 tok/s sample measured on the 4B (the card pick itself): the §6.5 step-down is fed to
+    // both surfaces from `speedSignalFor`, so whatever it does, it does to both.
+    const f = withSavedRamPick(fixture({ probeReturns: [], persisted: [CARD8] }), { tokensPerSecond: 3, measuredModelId: CARD8_PICK })
+    const snap = buildPerformanceSnapshot(f.ctx)
+    const star = await liveStar(f.ctx)
+    expect(snap.recommendation?.modelId).toBe(star)
+    // The signal is a real input here (not just plumbed through and ignored): the unsignalled
+    // pick would have been the 4B.
+    const unsignalled = buildPerformanceSnapshot(withSavedRamPick(fixture({ probeReturns: [], persisted: [CARD8] })).ctx)
+    expect(unsignalled.recommendation?.modelId).toBe(CARD8_PICK)
+    expect(snap.recommendation?.modelId).not.toBe(CARD8_PICK)
+  })
+
+  it('the "Your model" row on a card uses the picker\'s fit: Gemma 12B on the 8 GiB card is partial (estimated), the tile keeps the total', () => {
+    const g12 = 'gemma4-12b-it-qat-q4'
+    const f = fixture({ probeReturns: [], persisted: [CARD8], settings: { activeModelId: g12 } })
+    const snap = buildPerformanceSnapshot(f.ctx)
+    const m = discoverManifests(MANIFESTS).manifests.map((x) => x.manifest).find((x) => x.id === g12)
+    expect(m).toBeDefined()
+    // The card's need (11,159 MiB with its 2.4 GiB cache) is over the 8,000 MiB budget: not "gpu".
+    expect(snap.placement.verdict).toMatchObject({ kind: 'partial', estimated: true, budgetMb: 8192, needMb: Math.round(weightsMib(m!)) })
+    // Display stays one-decimal GiB; the verdict got the unrounded weights.
+    expect(snap.placement.model?.sizeOnDiskGb).toBe(6.5)
+    expect(snap.placement.vramMb).toBe(8192)
   })
 })

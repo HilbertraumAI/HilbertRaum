@@ -13,8 +13,13 @@ import {
   selectBudgetDevice,
   upsertHistory
 } from '../../src/main/services/performance'
+import { join } from 'node:path'
+import { discoverManifests, fitsGraphicsMemory, weightsMib } from '../../src/main/services/models'
 import { GPU_BUMP_MIN_VRAM_MB } from '../../src/main/services/runtime/gpu'
+import type { ModelManifest } from '../../src/shared/manifest'
 import { MAX_BENCHMARK_HISTORY, type BenchmarkResult, type GpuDevice, type ModelPlacement } from '../../src/shared/types'
+
+const MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 
 // The Performance screen's model (benchmark.md "History per machine"): one result per
 // computer, keyed by a fingerprint that survives a reboot (rounded RAM) and that an OLD
@@ -222,29 +227,36 @@ describe('placementVerdict', () => {
     gpuModelMb: 5500, cpuModelMb: 400, gpuKvMb: 640, cpuKvMb: null, metalMaxWorkingSetMb: null,
     machineKey: null, at: '2026-09-05T00:00:00Z', ...over
   })
+  // The unified / cpu branches and the observed reading never look at the card inputs.
+  const noCard = { graphicsBudgetMb: null, manifest: null }
+  /** A synthetic manifest (decimal GB on disk, an optional cache term) and the unrounded GiB the caller passes with it. */
+  const model = (sizeOnDiskGb: number, cacheGib?: number): { manifest: ModelManifest; sizeOnDiskGb: number } => {
+    const manifest = { id: `m-${sizeOnDiskGb}`, sizeOnDiskGb, ...(cacheGib != null ? { estimatedContextCacheGib: cacheGib } : {}) } as ModelManifest
+    return { manifest, sizeOnDiskGb: weightsMib(manifest) / 1024 }
+  }
 
   it('reads an observed start off the log: all layers on the GPU, size = weights + cache', () => {
-    const v = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 5.8, observed: observed() })
+    const v = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 5.8, ...noCard, observed: observed() })
     expect(v).toMatchObject({ kind: 'gpu', needMb: 6540, estimated: false, budgetMb: 24_576, gpuLayers: 41, totalLayers: 41 })
   })
 
   it('a partial offload is named with the CPU-side bytes as the spill; a CPU backend is cpu', () => {
-    const partial = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 8192, sizeOnDiskGb: 5.8, observed: observed({ gpuLayers: 30, cpuModelMb: 1900, cpuKvMb: 200 }) })
+    const partial = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 8192, sizeOnDiskGb: 5.8, ...noCard, observed: observed({ gpuLayers: 30, cpuModelMb: 1900, cpuKvMb: 200 }) })
     expect(partial).toMatchObject({ kind: 'partial', spillMb: 2100, gpuLayers: 30, totalLayers: 41 })
-    const cpu = placementVerdict({ memoryClass: 'cpu', ramMb: 16_000, vramMb: null, sizeOnDiskGb: 5.8, observed: observed({ backend: 'cpu', gpuLayers: null, totalLayers: null }) })
+    const cpu = placementVerdict({ memoryClass: 'cpu', ramMb: 16_000, vramMb: null, sizeOnDiskGb: 5.8, ...noCard, observed: observed({ backend: 'cpu', gpuLayers: null, totalLayers: null }) })
     expect(cpu.kind).toBe('cpu')
   })
 
   it('a GPU start whose log carried no offload line is unknown, never "all on the GPU"', () => {
-    const v = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, observed: observed({ gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null, gpuKvMb: null }) })
+    const v = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, ...noCard, observed: observed({ gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null, gpuKvMb: null }) })
     expect(v.kind).toBe('unknown')
     expect(v.needMb).toBeNull()
     // Measured, not guessed: the record exists, it just never said where the layers went.
     expect(v.estimated).toBe(false)
     expect(v.spillMb).toBeNull()
     // Half a reading (only one of the two counts printed) is unknown too, never a split.
-    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, observed: observed({ totalLayers: null }) }).kind).toBe('unknown')
-    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, observed: observed({ gpuLayers: null }) }).kind).toBe('unknown')
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, ...noCard, observed: observed({ totalLayers: null }) }).kind).toBe('unknown')
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, ...noCard, observed: observed({ gpuLayers: null }) }).kind).toBe('unknown')
   })
 
   it('an EMPTY reading is unknown on a gpu backend and cpu on a cpu backend, never a measured "On GPU"', () => {
@@ -254,33 +266,118 @@ describe('placementVerdict', () => {
       gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null,
       gpuKvMb: null, cpuKvMb: null, metalMaxWorkingSetMb: null
     })
-    const gpu = placementVerdict({ memoryClass: 'discrete', ramMb: 16_384, vramMb: 24_576, sizeOnDiskGb: 5.8, observed: empty })
+    const gpu = placementVerdict({ memoryClass: 'discrete', ramMb: 16_384, vramMb: 24_576, sizeOnDiskGb: 5.8, ...noCard, observed: empty })
     expect(gpu.kind).not.toBe('gpu')
     expect(gpu).toMatchObject({ kind: 'unknown', estimated: false, needMb: null, spillMb: null, gpuLayers: null, totalLayers: null })
     // The same empty reading on a CPU backend IS the answer: the backend alone settles it.
-    const cpu = placementVerdict({ memoryClass: 'cpu', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 5.8, observed: { ...empty, backend: 'cpu' } })
+    const cpu = placementVerdict({ memoryClass: 'cpu', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 5.8, ...noCard, observed: { ...empty, backend: 'cpu' } })
     expect(cpu).toMatchObject({ kind: 'cpu', estimated: false, needMb: null, spillMb: null })
   })
 
-  it('estimates from the weights before the first start, with headroom, per memory class', () => {
-    const base = { ramMb: 16_384, vramMb: 24_576, sizeOnDiskGb: 5.8, observed: null }
-    expect(placementVerdict({ memoryClass: 'discrete', ...base })).toMatchObject({ kind: 'gpu', needMb: 5939, estimated: true })
-    // 19.8 GB on a 16 GB card: partial, the excess spills to RAM.
-    const spill = placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 16_384, sizeOnDiskGb: 19.8, observed: null })
-    expect(spill.kind).toBe('partial')
-    expect(spill.spillMb).toBe(Math.round(19.8 * 1024) - Math.round(16_384 * 0.92))
-    // 19.8 GB on a 16 GB card in a 4 GB box: RAM cannot take the rest.
-    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 4096, vramMb: 16_384, sizeOnDiskGb: 19.8, observed: null }).kind).toBe('too_large')
-    // Unified: the 75% budget decides.
-    expect(placementVerdict({ memoryClass: 'unified', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 5.8, observed: null }).kind).toBe('gpu')
-    expect(placementVerdict({ memoryClass: 'unified', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 12, observed: null }).kind).toBe('too_large')
-    // CPU: RAM decides.
-    expect(placementVerdict({ memoryClass: 'cpu', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 5.8, observed: null }).kind).toBe('cpu')
-    expect(placementVerdict({ memoryClass: 'cpu', ramMb: 8192, vramMb: null, sizeOnDiskGb: 9, observed: null }).kind).toBe('too_large')
+  it('estimates from the weights before the first start: the picker\'s fit on a card, headroom on unified / cpu', () => {
+    // Discrete (PR #308 audit decision 8): the picker's own need — unrounded weights × 1.15 + the
+    // cache term + the 1 GiB margin — against the picker's BUDGET (free, else total − 1024), never
+    // the weights against 92 % of the total. A 5.8 GB model (5,531 MiB; need 7,897 with the default
+    // cache) on a 24 GiB card with 23,552 free fits; `needMb` stays the weights alone.
+    const small = model(5.8)
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_384, vramMb: 24_576, graphicsBudgetMb: 23_552, ...small, observed: null }))
+      .toMatchObject({ kind: 'gpu', needMb: 5531, estimated: true, budgetMb: 24_576 })
+    // 19.8 GB (18,883 MiB; need 23,251) on a 16 GiB card with 15,360 free: partial, the estimated
+    // need over the budget spills to RAM.
+    const big = model(19.8)
+    const spill = placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 16_384, graphicsBudgetMb: 15_360, ...big, observed: null })
+    expect(spill).toMatchObject({ kind: 'partial', needMb: 18_883, spillMb: 7891 })
+    // The spill is never more than the weights themselves (a card with almost nothing free).
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 16_384, graphicsBudgetMb: 1024, ...big, observed: null }).spillMb).toBe(18_883)
+    // The same on a 4 GB box: RAM + VRAM cannot take the weights.
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 4096, vramMb: 16_384, graphicsBudgetMb: 15_360, ...big, observed: null }).kind).toBe('too_large')
+    // The card's free figure decides, not its total: the same 8 GiB card holds the 9B (need
+    // 8,014 with its 0.4 GiB cache) at 8,100 free and not at 8,000.
+    const nineB = model(6.0, 0.4)
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 8192, graphicsBudgetMb: 8100, ...nineB, observed: null }).kind).toBe('gpu')
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 8192, graphicsBudgetMb: 8000, ...nineB, observed: null }).kind).toBe('partial')
+    // Unified: the 75% budget decides (unchanged).
+    expect(placementVerdict({ memoryClass: 'unified', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 5.8, ...noCard, observed: null }).kind).toBe('gpu')
+    expect(placementVerdict({ memoryClass: 'unified', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 12, ...noCard, observed: null }).kind).toBe('too_large')
+    // CPU: RAM decides (unchanged).
+    expect(placementVerdict({ memoryClass: 'cpu', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 5.8, ...noCard, observed: null }).kind).toBe('cpu')
+    expect(placementVerdict({ memoryClass: 'cpu', ramMb: 8192, vramMb: null, sizeOnDiskGb: 9, ...noCard, observed: null }).kind).toBe('too_large')
   })
 
-  it('is unknown without a size or a budget', () => {
-    expect(placementVerdict({ memoryClass: 'discrete', ramMb: null, vramMb: null, sizeOnDiskGb: 5.8, observed: null }).kind).toBe('unknown')
-    expect(placementVerdict({ memoryClass: 'cpu', ramMb: 16_000, vramMb: null, sizeOnDiskGb: 0, observed: null }).kind).toBe('unknown')
+  it('is unknown without a size or a budget, and on a card without a catalog entry or a card budget', () => {
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: null, vramMb: null, sizeOnDiskGb: 5.8, ...noCard, observed: null }).kind).toBe('unknown')
+    expect(placementVerdict({ memoryClass: 'cpu', ramMb: 16_000, vramMb: null, sizeOnDiskGb: 0, ...noCard, observed: null }).kind).toBe('unknown')
+    // A model outside the catalog has no cache term; a card without the picker's budget has
+    // nothing to fit against. Neither becomes a guess.
+    const v = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, graphicsBudgetMb: 23_552, sizeOnDiskGb: 5.4, manifest: null, observed: null })
+    expect(v).toMatchObject({ kind: 'unknown', needMb: 5530, estimated: true })
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, graphicsBudgetMb: null, ...model(5.8), observed: null }).kind).toBe('unknown')
+  })
+
+  describe('the discrete pre-start estimate IS the picker\'s fit (PR #308 audit §4.1 / A9 inverted)', () => {
+    const catalog = discoverManifests(MANIFESTS).manifests.map((m) => m.manifest).filter((m) => m.role === 'chat')
+    const byId = (id: string): ModelManifest => {
+      const m = catalog.find((x) => x.id === id)
+      if (!m) throw new Error(`missing manifest ${id}`)
+      return m
+    }
+    /** A card of `gib` nominal GiB with the total − 1,024 budget convention (idle desktop use; the same figure `graphicsBudgetMib` falls back to without a free figure). */
+    const card = (gib: number): { vramMb: number; graphicsBudgetMb: number } => ({ vramMb: gib * 1024, graphicsBudgetMb: gib * 1024 - 1024 })
+    const estimate = (m: ModelManifest, gib: number, sizeOnDiskGb = weightsMib(m) / 1024) =>
+      placementVerdict({ memoryClass: 'discrete', ramMb: 64 * 1024, ...card(gib), sizeOnDiskGb, manifest: m, observed: null })
+
+    it.each([
+      ['gemma4-12b-it-qat-q4', 8],
+      ['gemma4-26b-a4b-it-qat-q4', 16],
+      ['qwen3.6-27b-q5', 20],
+      ['qwen3.5-35b-a3b-ud-q4kxl', 24]
+    ])('%s on a %i GiB card: the old estimate said "gpu", the picker says no fit — the row now agrees (partial)', (id, gib) => {
+      const m = byId(id)
+      const v = estimate(m, gib)
+      const { vramMb, graphicsBudgetMb } = card(gib)
+      // The defect the audit tabulated: the weights alone sit under 92 % of the total…
+      expect(v.needMb).not.toBeNull()
+      expect(v.needMb as number).toBeLessThanOrEqual(vramMb * 0.92)
+      // …but the picker's need does not fit the budget, so the row must not promise a full offload.
+      expect(fitsGraphicsMemory(m, graphicsBudgetMb)).toBe(false)
+      expect(v.kind).not.toBe('gpu')
+      expect(v).toMatchObject({ kind: 'partial', estimated: true, budgetMb: vramMb })
+      expect(v.spillMb).toBeGreaterThan(0)
+    })
+
+    it('128-MiB sweep over the catalog: "gpu" iff the picker fits, and the one-decimal GiB rounding flips nothing', () => {
+      const gibRounded = (m: ModelManifest): number => Math.round((weightsMib(m) / 1024) * 10) / 10
+      const flips: string[] = []
+      const disagreements: string[] = []
+      let fits = 0
+      let points = 0
+      for (const m of catalog) {
+        for (let mb = 4096; mb <= 32_768; mb += 128) {
+          points++
+          const input = { memoryClass: 'discrete' as const, ramMb: 64 * 1024, vramMb: mb, graphicsBudgetMb: mb - 1024, manifest: m, observed: null }
+          const exact = placementVerdict({ ...input, sizeOnDiskGb: weightsMib(m) / 1024 }).kind
+          const rounded = placementVerdict({ ...input, sizeOnDiskGb: gibRounded(m) }).kind
+          if (exact !== rounded) flips.push(`${m.id}@${mb}: ${rounded} vs ${exact}`)
+          const pickerFits = fitsGraphicsMemory(m, mb - 1024)
+          if ((exact === 'gpu') !== pickerFits) disagreements.push(`${m.id}@${mb}: verdict ${exact}, picker ${pickerFits}`)
+          if (pickerFits) fits++
+        }
+      }
+      expect(flips).toEqual([])
+      expect(disagreements).toEqual([])
+      // Sanity: the sweep covers real fits and real misses, not one degenerate side.
+      expect(fits).toBeGreaterThan(0)
+      expect(fits).toBeLessThan(points)
+    })
+
+    it('an OBSERVED start wins over the estimate: Gemma 12B fully offloaded on an 8 GiB card reads "gpu", measured', () => {
+      const m = byId('gemma4-12b-it-qat-q4')
+      const v = placementVerdict({
+        memoryClass: 'discrete', ramMb: 64 * 1024, ...card(8), sizeOnDiskGb: weightsMib(m) / 1024, manifest: m,
+        observed: observed({ modelId: m.id, gpuLayers: 49, totalLayers: 49, gpuModelMb: 6500, cpuModelMb: 180, gpuKvMb: 900 })
+      })
+      expect(v).toMatchObject({ kind: 'gpu', estimated: false, needMb: 7580, gpuLayers: 49, totalLayers: 49 })
+      expect(estimate(m, 8).kind).toBe('partial')
+    })
   })
 })

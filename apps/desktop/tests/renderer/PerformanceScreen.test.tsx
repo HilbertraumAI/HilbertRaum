@@ -120,6 +120,8 @@ const observedFull: ModelPlacement = {
 function snapshot(over: Partial<PerformanceSnapshot> = {}): PerformanceSnapshot {
   return {
     current: result(),
+    // The LIVE pick (the same one the AI Model screen stars); the default agrees with the result's saved pick.
+    recommendation: { modelId: 'qwen3.5-9b-ud-q4kxl', basis: 'discrete' },
     currentMachine: true,
     currentGpu: null,
     otherMachines: [office, oldLaptop],
@@ -186,6 +188,8 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(screen.getByText('Graphics memory')).toBeInTheDocument()
     expect(screen.getByText(/No usable graphics card/)).toBeInTheDocument()
     expect(screen.getByText('None')).toBeInTheDocument()
+    // The saved pick and the live one agree: no "at the time of the check" line.
+    expect(screen.queryByText(/Recommended at the time of the check/)).not.toBeInTheDocument()
     // No jargon on the primary surface.
     expect(screen.queryByText(/benchmark/i)).not.toBeInTheDocument()
   })
@@ -234,18 +238,39 @@ describe('PerformanceScreen: the check as an answer', () => {
     renderScreen()
     expect(await screen.findByText(/No usable graphics card/)).toBeInTheDocument()
     cleanup()
-    // Last resort: a snapshot with no probe at all (an older main process), but the stored
-    // settings probe knows the card. The tile still fills.
+    // `snapshot.currentGpu` is the BUDGET device for the next start (PR #308 audit decision 9);
+    // when main reports none, the tile says so — it never falls back to the stored probe's first
+    // device, which on a hybrid laptop is the iGPU's shared-RAM figure (the P2 carry-over).
     install(snapshot({ current: legacy, currentGpu: null }), {
       getSettings: vi.fn(async () => ({
         ...DEFAULT_SETTINGS,
-        gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24822, freeMb: 3000 }], probedAt: '2026-09-05T00:00:00Z' }
+        gpuProbe: { devices: [{ id: 'Vulkan0', name: 'Intel(R) Graphics (ARL)', totalMb: 11577, freeMb: 8251 }], probedAt: '2026-09-05T00:00:00Z' }
       }))
     })
     renderScreen()
-    expect(await screen.findByText('24.2')).toBeInTheDocument()
-    expect(screen.getByText('Usable')).toBeInTheDocument()
-    expect(screen.getByText('NVIDIA GeForce RTX 3090')).toBeInTheDocument()
+    expect(await screen.findByText(/No usable graphics card/)).toBeInTheDocument()
+    expect(screen.queryByText('11.3')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Intel\(R\) Graphics/)).not.toBeInTheDocument()
+    expect(screen.getByText('None')).toBeInTheDocument()
+  })
+
+  it('with the GPU switched off (or auto-disabled) and no card for the next start, the tile says so instead of "no card"', async () => {
+    // The result names no card (`gpu` / `gpuVramMb` null: the next start runs from RAM) although
+    // the probe still lists one — the copy names the cause, not a missing card.
+    for (const flags of [{ gpuMode: 'off' as const }, { gpuAutoDisabled: true }]) {
+      install(snapshot({ current: result({ gpu: null, gpuVramMb: null }), currentGpu: null, placement: placement({ memoryClass: 'cpu', vramMb: null }) }), {
+        getSettings: vi.fn(async () => ({
+          ...DEFAULT_SETTINGS,
+          ...flags,
+          gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 8000 }], probedAt: '2026-09-05T00:00:00Z' }
+        }))
+      })
+      renderScreen()
+      expect(await screen.findByText('Graphics acceleration is off. Models run on the processor.')).toBeInTheDocument()
+      expect(screen.queryByText(/No usable graphics card/)).not.toBeInTheDocument()
+      expect(screen.getByText('None')).toBeInTheDocument()
+      cleanup()
+    }
   })
 
   it('says so when the last result belongs to a different computer', async () => {
@@ -426,6 +451,49 @@ describe('PerformanceScreen: actions', () => {
     await waitFor(() => expect(api.runBenchmark).toHaveBeenCalledTimes(1))
   })
 
+  it('"Start … and measure" targets the LIVE recommendation, never the id saved with the check, and labels the saved one', async () => {
+    // A fresh probe moved the pick to the 4B (installed); the saved result still says 9B. The
+    // offer and the verdict follow the live pick; the saved one is history and is labelled so.
+    const fourBInstalled = models.map((m) => (m.id === 'qwen3.5-4b-ud-q4kxl' ? { ...m, state: 'installed' } : m)) as ModelInfo[]
+    const { api } = install(
+      snapshot({
+        current: result({ tokensPerSecond: null, measuredModelId: null, speedBasis: null, recommendedModelId: 'qwen3.5-9b-ud-q4kxl' }),
+        recommendation: { modelId: 'qwen3.5-4b-ud-q4kxl', basis: 'discrete' }
+      }),
+      {
+        listModels: vi.fn(async () => fourBInstalled),
+        getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: '' }))
+      }
+    )
+    renderScreen()
+    expect(await screen.findByText(/Qwen3\.5 4B \(UD-Q4_K_XL\) is the best fit for this computer’s graphics memory\./)).toBeInTheDocument()
+    expect(screen.getByText('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Start Qwen3\.5 9B/ })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Start Qwen3.5 4B (UD-Q4_K_XL) and measure' }))
+    await waitFor(() => expect(api.useModel).toHaveBeenCalledWith('qwen3.5-4b-ud-q4kxl'))
+    expect(api.useModel).not.toHaveBeenCalledWith('qwen3.5-9b-ud-q4kxl')
+    await waitFor(() => expect(api.runBenchmark).toHaveBeenCalledTimes(1))
+  })
+
+  it('the verdict names the memory the live pick was judged against: graphics memory, unified memory, or RAM', async () => {
+    const cases: Array<[PerformanceSnapshot['recommendation'], RegExp]> = [
+      [{ modelId: 'qwen3.5-9b-ud-q4kxl', basis: 'unified' }, /best fit for this computer’s unified memory\./],
+      [{ modelId: 'qwen3.5-9b-ud-q4kxl', basis: 'cpu' }, /best fit for this computer’s RAM\./],
+      // Nothing in the catalog matches (or no catalog at all): the honest sentence, no CTA.
+      [{ modelId: null, basis: 'cpu' }, /No model in the catalog matches this computer yet\./],
+      [null, /No model in the catalog matches this computer yet\./]
+    ]
+    for (const [recommendation, text] of cases) {
+      install(snapshot({ current: result({ tokensPerSecond: null, measuredModelId: null, speedBasis: null }), recommendation }), {
+        getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: '' }))
+      })
+      renderScreen()
+      expect(await screen.findByText(text)).toBeInTheDocument()
+      if (!recommendation?.modelId) expect(screen.queryByRole('button', { name: /and measure/ })).not.toBeInTheDocument()
+      cleanup()
+    }
+  })
+
   it('"Change context size" goes to AI Model; the footer link opens Diagnostics; no "Why this model?" button', async () => {
     install(snapshot())
     const onNavigate = renderScreen()
@@ -446,6 +514,8 @@ describe('PerformanceScreen: actions', () => {
     expect(text).toContain('Qwen3.5 9B (UD-Q4_K_XL)')
     expect(text).toContain('8,192 tokens')
     expect(text).toContain('Graphics memory: None')
+    // The report carries the result's own pick, labelled as what the check said at the time.
+    expect(text).toContain('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')
   })
 
   it('surfaces a failed run as a calm banner and returns to the tiles', async () => {

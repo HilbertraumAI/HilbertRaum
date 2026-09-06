@@ -165,6 +165,22 @@ The larger `qwen3-30b-a3b-q4` (MoE) carries an **empty** `recommended_profiles` 
 auto-recommended — it stays selectable on the AI Model screen as a deliberate opt-in (it needs ~20 GB
 RAM but runs near-3B speed).
 
+**The Performance screen shows the LIVE recommendation (PR #308 audit decision 8, finding R4;
+2026-09-06).** `BenchmarkResult.recommendedModelId` is what the check said at the time it ran and is
+never rewritten, so a fresh GPU probe, a flipped GPU toggle or a new speed sample used to leave the
+Performance verdict and its "Start … and measure" offer on a stale pick while the Models ★ had
+already moved (audit A4: a same-machine result is never re-benchmarked). `buildPerformanceSnapshot`
+therefore carries `PerformanceSnapshot.recommendation: { modelId, basis } | null`, computed by
+`liveChatRecommendation(settings, manifests)` (registerModelIpc.ts) from the SAME inputs the
+`listModels` handler feeds `buildModelList` — `pickerMemoryFor(s)` (class + budget), `machineRamGb()`
+and `speedSignalFor(s)` (the persisted pairing; the handler calls the same function) — so the two
+surfaces cannot diverge; `basis` is the memory class the pick was judged against (`discrete` = the
+card's budget, `unified`, `cpu` = RAM). The screen's verdict sentence names that basis ("… is the
+best fit for this computer's graphics memory / unified memory / RAM"); the saved
+`recommendedModelId` stays visible only where it differs from the live pick, labelled "Recommended
+at the time of the check" (also the Copy report's label). `null` only without a catalog. A
+"recommendation changed since this check" note was deliberately omitted (audit gate G4).
+
 **Speed-signal step-down (issue #95, since 2026-08-09).** The picker optionally consumes the
 persisted probe pairing (`tokensPerSecond` + `measuredModelId`): a probe strictly under
 `SLOW_PICK_TOKENS_PER_SECOND = 5` tok/s, measured on a model whose `recommended_ram_gb` is at or
@@ -338,10 +354,17 @@ screen answers the user's question in plain words. Three cards:
    consequence "models run on the processor", "None" without a device; a result persisted before
    the field existed, or whose probe came back empty, gets the stored `settings.gpuProbe` figure
    folded in by `buildPerformanceSnapshot`, for the current machine only, and the screen keeps
-   `PerformanceSnapshot.currentGpu` plus the settings probe as last-resort fallbacks, so the
-   tile never waits for a re-run), Drive (`effectiveRead` with its source and date; "Pending" until a model start measured
-   it). Actions: **Check again** (or **Start \<model\> and measure** when speed is unmeasured,
-   the recommended model is installed and nothing runs: `useModel` then `runBenchmark`), **Change
+   `PerformanceSnapshot.currentGpu` — the budget device — as its only fallback (since the PR #308
+   audit P4 it no longer reads `settings.gpuProbe.devices[0]`, which on a hybrid laptop is the
+   iGPU's shared-RAM figure); with the GPU switched off or auto-disabled the result names no card
+   and the tile reads "Graphics acceleration is off. Models run on the processor." instead of "No
+   usable graphics card"), Drive (`effectiveRead` with its source and date; "Pending" until a model start measured
+   it). The verdict sentence and the **Start \<model\> and measure** offer name the **live**
+   recommendation (`PerformanceSnapshot.recommendation`, see "Recommendation" above — the same pick
+   the AI Model screen stars), never the id saved with the result; where the saved
+   `recommendedModelId` differs it is shown under the verdict as "Recommended at the time of the
+   check". Actions: **Check again** (or **Start \<model\> and measure** when speed is unmeasured,
+   the live pick is installed and nothing runs: `useModel` then `runBenchmark`), **Change
    context size** (opens AI Model, the one place the context is set), **Copy report**. A "Why this
    model?" link to AI Model was tried and dropped (2026-09-05, owner: it led nowhere useful). A
    result measured on another computer says so.
@@ -391,13 +414,24 @@ cache + working buffers + the fixed 1 GiB `--fit-target` margin came within a wh
 free memory, and the fit moves whole layers, ~430 MB each on a 27B). Whether the app should
 trade that margin for a full offload is an owner decision (BUILD_STATE §5 item 21 (f)). Units: every size on the
 screen is GiB (RAM, VRAM, the buffers), so the manifest's decimal "size on disk" is converted
-once in the snapshot (19.8 GB → 18.4). Before the first start → an ESTIMATE from the
-weights alone (the file size; the copy says so and that the context cache is measured on the first
-start) against the budget with 8 % headroom: a discrete card too small for the weights is 'partial'
-if RAM + VRAM can hold them, else 'too_large'; unified and cpu are 'gpu'/'cpu' or 'too_large'.
-'too_large' offers "Choose a smaller model" (AI Model). Pills: On GPU / Partly on GPU / On
-processor / Too large / Not measured. Phase 2 (not built): the context-cache estimate from the GGUF
-header, and a VRAM-aware ★ picker (today's picker is RAM-best-fit).
+once in the snapshot (19.8 GB → 18.4; display-only — the verdict gets the unrounded weights via
+`weightsMib`). Before the first start → an ESTIMATE (the copy says so and that the context cache is
+measured on the first start). **On a discrete card the estimate IS the picker's fit** (PR #308 audit
+decision 8, finding §4.1; 2026-09-06): `placementVerdict` calls `estimateGraphicsNeedMib(manifest)`
+— unrounded weights × 1.15 + the model's `estimated_context_cache_gib` (default 0.5) + the fit's
+1 GiB margin — against the picker's budget `graphicsBudgetMib(device)` (the probe's free figure,
+else total − 1024), exactly as the Models ★ does, so the row and the star can never call the same
+(model, card) pair differently; before, the row compared the one-decimal-rounded weights alone
+against 92 % of the card's TOTAL and said "gpu" for Gemma 12B on 8 GiB, the MoE on 16, the Qwen3.6
+Q5 on 20 and the 35B-A3B on 24 while the picker refused each. `needMb` on an estimate stays the
+weights alone; the verdict's `budgetMb` stays the card's total (the figure the tile quotes). A card
+that cannot hold the need is 'partial' if RAM + VRAM can hold the weights (with 8 % headroom; the
+spill is the estimated need over the budget, capped at the weights), else 'too_large'; a model
+outside the catalog on a card is 'unknown' (no cache term). Unified and cpu are unchanged: the
+weights against the budget with 8 % headroom → 'gpu'/'cpu' or 'too_large'. An observed start
+always wins over the estimate. 'too_large' offers "Choose a smaller model" (AI Model). Pills: On
+GPU / Partly on GPU / On processor / Too large / Not measured. Phase 2 (not built): the
+context-cache estimate from the GGUF header (BUILD_STATE §5 item 21 (e)).
 
 **Models on this computer** (a card between the observed rows and the other computers; 2026-09-05,
 owner direction, placed BELOW "Observed while you worked" because what the machine actually did
@@ -428,7 +462,8 @@ holds the card, or reclaim the card when translation goes idle) is an owner deci
    first, each with its speed/model, CPU/RAM/date and rating pills ("Slow drive" under 100 MB/s).
 
 **Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
-in `registerBenchmarkIpc.ts`): `current`, `currentMachine`, `currentGpu`, `otherMachines`,
+in `registerBenchmarkIpc.ts`): `current`, `recommendation` (the live pick, see "Recommendation"),
+`currentMachine`, `currentGpu`, `otherMachines`,
 `running` (the `benchmark` occupancy lane), `placement` (memory class, RAM/VRAM, the active
 model, the observed placement, the verdict, the per-role `models` rows, `totals`), `observed`. **Progress**: `RunBenchmarkDeps.onProgress` reports
 `'system' | 'drive' | 'speed' | 'done'` as each step lands ('speed' only when a runtime was up);

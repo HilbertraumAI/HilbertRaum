@@ -9,6 +9,8 @@ import type {
   ObservedAnswerSpeed,
   PlacementVerdict
 } from '../../shared/types'
+import type { ModelManifest } from '../../shared/manifest'
+import { estimateGraphicsNeedMib } from './models'
 import { GPU_BUMP_MIN_VRAM_MB, looksIntegrated } from './runtime/gpu'
 
 // The Performance screen's model (benchmark.md "Performance screen"): one benchmark result
@@ -88,7 +90,11 @@ export function resetPerformanceForTests(): void {
 
 /** Share of RAM Metal lets the GPU take when the load log has not said (Apple's default working-set cap). */
 export const UNIFIED_BUDGET_SHARE = 0.75
-/** Headroom kept back from VRAM/RAM before a weights-only estimate is called a fit (drivers, compute buffers). */
+/**
+ * Headroom kept back from RAM (cpu) and the unified budget before a weights-only estimate is
+ * called a fit (drivers, compute buffers), and from RAM + VRAM before a discrete spill is called
+ * 'too_large'. The discrete card fit itself is the picker's (`estimateGraphicsNeedMib`), not this.
+ */
 export const ESTIMATE_HEADROOM = 0.92
 
 /**
@@ -190,24 +196,42 @@ const sum = (...xs: Array<number | null>): number | null => {
   return known.length === 0 ? null : Math.round(known.reduce((a, b) => a + b, 0))
 }
 
+/** What `placementVerdict` is asked: the memory, the model and what the last start said. */
+export interface PlacementVerdictInput {
+  memoryClass: MemoryClass
+  ramMb: number | null
+  /** The budget device's TOTAL, MiB — the figure the card's memory is quoted at (`budgetMb` on a discrete verdict); null without a card. */
+  vramMb: number | null
+  /**
+   * The picker's graphics budget for the same device, MiB (`graphicsBudgetMib`: the probe's free
+   * figure, else total − 1024); the discrete pre-start estimate is judged against it, exactly as
+   * the Models ★ is. Null without a card.
+   */
+  graphicsBudgetMb: number | null
+  /** The active model's weights in GiB, UNROUNDED (`weightsMib(m) / 1024`); null when unknown. */
+  sizeOnDiskGb: number | null
+  /** The active model's manifest — the discrete estimate's cache term (`estimateGraphicsNeedMib`); null when it is not in the catalog. */
+  manifest: ModelManifest | null
+  observed: ModelPlacement | null
+}
+
 /**
  * The verdict. OBSERVED (the model has started on this machine): the log says where the
  * weights and the context cache landed, so the outcome is read off, not computed: every
  * layer on the GPU is 'gpu' (unified memory reads the same way), fewer is 'partial' with
  * the CPU-side bytes as the spill, a CPU backend is 'cpu', and a GPU start whose log carried
- * no offload line is 'unknown' rather than a guess. ESTIMATED (no start yet): the
- * weights alone against the budget with headroom; a discrete card that cannot hold them
- * still runs the model if RAM can take the rest ('partial'), and beyond RAM + VRAM it is
- * 'too_large'. A model larger than RAM on a CPU or unified machine is 'too_large' as well.
+ * no offload line is 'unknown' rather than a guess. ESTIMATED (no start yet): on a discrete
+ * card the picker's own fit (`estimateGraphicsNeedMib` — unrounded weights × 1.15 + the
+ * model's context-cache term + the fit's 1 GiB margin — against the picker's budget, PR #308
+ * audit decision 8, finding §4.1), so this row and the Models ★ can never call the same
+ * (model, card) pair differently; a card that cannot hold it still runs the model if RAM can
+ * take the rest ('partial', the spill being the estimated need over the budget), and beyond
+ * RAM + VRAM it is 'too_large'. On unified and cpu machines the weights alone against the
+ * budget with `ESTIMATE_HEADROOM` (unchanged); a model larger than that is 'too_large'.
+ * `needMb` on an estimate is always the weights alone (the copy says the cache is measured).
  */
-export function placementVerdict(input: {
-  memoryClass: MemoryClass
-  ramMb: number | null
-  vramMb: number | null
-  sizeOnDiskGb: number | null
-  observed: ModelPlacement | null
-}): PlacementVerdict {
-  const { memoryClass, ramMb, vramMb, sizeOnDiskGb, observed } = input
+export function placementVerdict(input: PlacementVerdictInput): PlacementVerdict {
+  const { memoryClass, ramMb, vramMb, graphicsBudgetMb, sizeOnDiskGb, manifest, observed } = input
   const budgetMb = memoryBudgetMb(memoryClass, ramMb, vramMb, observed)
   if (observed) {
     const needMb = sum(observed.gpuModelMb, observed.cpuModelMb, observed.gpuKvMb, observed.cpuKvMb)
@@ -233,15 +257,20 @@ export function placementVerdict(input: {
   if (sizeOnDiskGb == null || sizeOnDiskGb <= 0) return { ...est, kind: 'unknown', needMb: null }
   const needMb = Math.round(sizeOnDiskGb * 1024)
   if (budgetMb == null) return { ...est, kind: 'unknown', needMb }
-  const fits = needMb <= budgetMb * ESTIMATE_HEADROOM
   if (memoryClass === 'discrete') {
-    if (fits) return { ...est, kind: 'gpu', needMb }
+    // A model outside the catalog has no cache term; without the picker's budget there is no
+    // card to fit against. Neither is a guess worth showing.
+    if (manifest == null || graphicsBudgetMb == null) return { ...est, kind: 'unknown', needMb }
+    const needOnCardMb = estimateGraphicsNeedMib(manifest)
+    if (needOnCardMb <= graphicsBudgetMb) return { ...est, kind: 'gpu', needMb }
     const total = ramMb != null ? ramMb + budgetMb : null
     if (total != null && needMb <= total * ESTIMATE_HEADROOM) {
-      return { ...est, kind: 'partial', needMb, spillMb: Math.max(0, needMb - Math.round(budgetMb * ESTIMATE_HEADROOM)) }
+      // What the card cannot take of the estimated need runs from RAM — never more than the weights.
+      return { ...est, kind: 'partial', needMb, spillMb: Math.min(needMb, Math.max(0, Math.round(needOnCardMb - graphicsBudgetMb))) }
     }
     return { ...est, kind: 'too_large', needMb }
   }
+  const fits = needMb <= budgetMb * ESTIMATE_HEADROOM
   if (fits) return { ...est, kind: memoryClass === 'unified' ? 'gpu' : 'cpu', needMb }
   return { ...est, kind: 'too_large', needMb }
 }

@@ -12,7 +12,7 @@ import type {
 } from '../../shared/types'
 import type { ModelManifest } from '../../shared/manifest'
 import { detectSystem, runBenchmark, type GpuBenchmarkInput } from '../services/benchmark'
-import { effectiveReadOrPersisted } from './registerModelIpc'
+import { effectiveReadOrPersisted, liveChatRecommendation } from './registerModelIpc'
 import { backfillOutgoing, historyEquals, mergeSampleIntoResult } from '../services/benchmark-persistence'
 import {
   findMachine,
@@ -29,7 +29,7 @@ import { latestEffectiveReadBySource } from '../services/read-speed'
 import { EVENTS } from '../../shared/ipc'
 import { gpuUsefulForProfile } from '../services/runtime/gpu'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
-import { discoverManifests, graphicsBudgetMib } from '../services/models'
+import { discoverManifests, graphicsBudgetMib, weightsMib } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -315,7 +315,8 @@ function buildPlacement(
   settings: AppSettings,
   here: string | null,
   ramGb: number,
-  memory: NextStartMemory
+  memory: NextStartMemory,
+  manifests: ModelManifest[]
 ): PerformanceSnapshot['placement'] {
   // The class and the card are the NEXT start's (GPU off / auto-disabled → cpu, no card); the
   // observed placement below is what the LAST start did and is kept as an observation.
@@ -323,20 +324,19 @@ function buildPlacement(
   const ramMb = ramGb > 0 ? Math.round(ramGb * 1024) : null
   const vramMb = memory.device?.totalMb ?? null
   const activeId = settings.activeModelId
-  const manifests: ModelManifest[] = ctx.manifestsDir
-    ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
-    : []
   // Manifests state decimal GB; the screen's other figures are GiB (RAM, VRAM, the observed
-  // buffers), so convert once here rather than show 19.8 "on disk" beside 18.9 "takes".
+  // buffers), so convert once here rather than show 19.8 "on disk" beside 18.9 "takes". The
+  // one-decimal rounding is DISPLAY-ONLY: the verdict below gets the unrounded weights
+  // (`weightsMib`, the picker's own conversion — PR #308 audit decision 8).
   const gib = (m: ModelManifest | undefined): number | null =>
-    m ? Math.round(((m.sizeOnDiskGb * 1e9) / 1024 ** 3) * 10) / 10 : null
+    m ? Math.round((weightsMib(m) / 1024) * 10) / 10 : null
   let model: PerformanceSnapshot['placement']['model'] = null
+  const activeManifest = activeId ? manifests.find((m) => m.id === activeId) ?? null : null
   if (activeId) {
-    const manifest = manifests.find((m) => m.id === activeId)
     model = {
       id: activeId,
-      sizeOnDiskGb: gib(manifest) ?? 0,
-      contextTokens: settings.contextTokensOverride ?? manifest?.recommendedContextTokens ?? settings.contextTokens
+      sizeOnDiskGb: gib(activeManifest ?? undefined) ?? 0,
+      contextTokens: settings.contextTokensOverride ?? activeManifest?.recommendedContextTokens ?? settings.contextTokens
     }
   }
   // Every model the app can hold (benchmark.md "Models on this computer"): chat and translation
@@ -434,7 +434,17 @@ function buildPlacement(
     vramMb,
     model,
     observed,
-    verdict: placementVerdict({ memoryClass, ramMb, vramMb, sizeOnDiskGb: model?.sizeOnDiskGb ?? null, observed }),
+    verdict: placementVerdict({
+      memoryClass,
+      ramMb,
+      vramMb,
+      // The picker's budget for the same device (free, else total − 1024): the pre-start
+      // estimate is the Models ★'s fit, so the row and the star never disagree.
+      graphicsBudgetMb: graphicsBudgetMib(memory.device),
+      sizeOnDiskGb: activeManifest ? weightsMib(activeManifest) / 1024 : null,
+      manifest: activeManifest,
+      observed
+    }),
     models: rows,
     totals
   }
@@ -465,13 +475,22 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
     current && current.gpuVramMb == null && currentMachine && probed
       ? { ...current, gpuVramMb: probed.totalMb, gpu: current.gpu ?? probed.name }
       : current
+  // The catalog, read once for the "Your model" row and the live recommendation below.
+  const manifests: ModelManifest[] = ctx.manifestsDir
+    ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
+    : []
   return {
     current: filled,
+    // LIVE, through the same inputs the `listModels` ★ uses (PR #308 audit decision 8, R4): a
+    // fresh probe, a flipped GPU toggle or a new speed sample moves this at once, while
+    // `current.recommendedModelId` keeps saying what the check said at the time. The
+    // `listModels` handler returns no list without a catalog, so there is no ★ to agree with.
+    recommendation: ctx.manifestsDir ? liveChatRecommendation(settings, manifests) : null,
     currentGpu: probed ? { name: probed.name, totalMb: probed.totalMb } : null,
     currentMachine,
     otherMachines: otherMachines(settings.benchmarkHistory, currentKey ?? here),
     running: modelBusyLane(ctx) === 'benchmark',
-    placement: buildPlacement(ctx, settings, here, sys.ramGb, memory),
+    placement: buildPlacement(ctx, settings, here, sys.ramGb, memory, manifests),
     observed: {
       lastAnswer: latestAnswerSpeed(),
       lastModelLoad: latestEffectiveReadBySource('model_load') ?? persistedLoad,

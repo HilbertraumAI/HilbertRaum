@@ -5,6 +5,7 @@ import type { AppContext } from '../services/context'
 import type {
   AppSettings,
   EffectiveReadSample,
+  LiveRecommendation,
   ModelInfo,
   ModelState,
   RuntimeInstallInfo,
@@ -24,9 +25,11 @@ import {
   launchContextTokens,
   machineRamGb,
   manifestFiles,
+  recommendChatModelId,
   selectModel,
   weightPath,
-  type BuildModelListOptions
+  type BuildModelListOptions,
+  type PickerSpeedSignal
 } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
 import { nextStartMemory } from '../services/performance'
@@ -74,6 +77,41 @@ export function pickerMemoryFor(s: AppSettings): Pick<BuildModelListOptions, 'me
   // The budget is the device's FREE figure (else total − 1024), raw MiB — decision 10; the same
   // `graphicsBudgetMib` call `probeAndPersistGpu` makes for the benchmark.
   return { memoryClass: next.memoryClass, graphicsBudgetMb: graphicsBudgetMib(next.device) }
+}
+
+/**
+ * The §6.5 speed signal the chat ★ goes by (issue #95): the persisted Diagnostics pairing
+ * (tok/s + the model that produced it, issue #52), derived fresh from `lastBenchmark` on every
+ * call — stateless, never compounds. Shared by the `listModels` handler and the Performance
+ * snapshot's live recommendation so both surfaces read one signal.
+ */
+export function speedSignalFor(s: AppSettings): PickerSpeedSignal | null {
+  return s.lastBenchmark
+    ? {
+        tokensPerSecond: s.lastBenchmark.tokensPerSecond,
+        measuredModelId: s.lastBenchmark.measuredModelId ?? null
+      }
+    : null
+}
+
+/**
+ * The LIVE chat recommendation for the next start (PR #308 audit decision 8, finding R4), from
+ * the SAME inputs the `listModels` handler feeds `buildModelList`: `pickerMemoryFor(s)` (class +
+ * budget), `machineRamGb()` (whole GB — `buildModelList` reads `opts.machineRamGb` as is) and
+ * `speedSignalFor(s)`; the two `??` defaults mirror `buildModelList`'s own. `buildPerformanceSnapshot`
+ * returns it as `PerformanceSnapshot.recommendation`, so the Performance verdict and its "Start …
+ * and measure" target can never diverge from the Models ★ — the saved
+ * `lastBenchmark.recommendedModelId` is what the check said at the time and is left untouched.
+ */
+export function liveChatRecommendation(s: AppSettings, manifests: ModelManifest[]): LiveRecommendation {
+  const memory = pickerMemoryFor(s)
+  const basis = memory.memoryClass ?? 'cpu'
+  const modelId = recommendChatModelId(
+    manifests,
+    { memoryClass: basis, ramGb: machineRamGb(), budgetMb: memory.graphicsBudgetMb ?? null },
+    speedSignalFor(s)
+  )
+  return { modelId, basis }
 }
 
 function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
@@ -389,13 +427,9 @@ export function registerModelIpc(ctx: AppContext): void {
       ...pickerMemoryFor(s),
       // §6.5 signal-aware step-down (issue #95): feed the persisted Diagnostics pairing
       // (tok/s + the model that produced it, issue #52) into the chat recommendation.
-      // Derived fresh from lastBenchmark on every call — stateless, never compounds.
-      speedSignal: s.lastBenchmark
-        ? {
-            tokensPerSecond: s.lastBenchmark.tokensPerSecond,
-            measuredModelId: s.lastBenchmark.measuredModelId ?? null
-          }
-        : null,
+      // Derived fresh from lastBenchmark on every call — stateless, never compounds; the same
+      // function feeds the Performance snapshot's live recommendation (`liveChatRecommendation`).
+      speedSignal: speedSignalFor(s),
       // RT-3: the chat path (the workspace gate into Chat) passes lazyVerify so only the
       // active model is hashed on a cold cache — the full corpus of multi-GB GGUFs is
       // hashed only on an explicit Models-screen visit. Display-only; the start gate

@@ -22,7 +22,9 @@ import {
   maybeRunFirstBenchmark,
   runAndPersistBenchmark
 } from '../../src/main/ipc/registerBenchmarkIpc'
+import { liveChatRecommendation, pickerMemoryFor, speedSignalFor } from '../../src/main/ipc/registerModelIpc'
 import { detectSystem } from '../../src/main/services/benchmark'
+import { discoverManifests, machineRamGb, recommendChatModelId } from '../../src/main/services/models'
 import { machineKey, recordAnswerSpeed, resetPerformanceForTests } from '../../src/main/services/performance'
 import { recordChecksumRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import { recordModelPlacement, resetModelPlacementForTests } from '../../src/main/services/runtime/placement'
@@ -129,6 +131,8 @@ describe('buildPerformanceSnapshot', () => {
     expect(snap.currentMachine).toBe(true)
     // The live probe rides along for the graphics tile (no probe here: null).
     expect(snap.currentGpu).toBeNull()
+    // No catalog on this context: nothing to recommend live (listModels returns no list either).
+    expect(snap.recommendation).toBeNull()
     expect(snap.otherMachines.map((e) => e.cpuModel)).toEqual([foreign.cpuModel])
     expect(snap.running).toBe(false)
     expect(snap.observed.lastAnswer?.tokensPerSecond).toBe(11.8)
@@ -240,6 +244,34 @@ describe('buildPerformanceSnapshot', () => {
     expect(snap.placement.totals.ramAllMb).toBe(Math.round(sum * 1024))
     // Both on the card only counts on a machine WITH a card (this test host has no probe → cpu class).
     expect(snap.placement.totals.bothOnCard).toBe(snap.placement.memoryClass !== 'cpu')
+  })
+
+  it('carries the LIVE recommendation, built from the same inputs the listModels handler feeds buildModelList', () => {
+    // Host-dependent (this machine's RAM, its probe if any), so the assertion is equality with the
+    // shared input functions, not a pinned id — the pinned cases live in picker-seams.test.ts.
+    const root = freshRoot()
+    const db = seededDb(root)
+    const manifestsDir = join(__dirname, '..', '..', '..', '..', 'model-manifests')
+    updateSettings(db, { lastBenchmark: hereResult({ tokensPerSecond: 4, measuredModelId: 'qwen3.5-9b-ud-q4kxl' }) })
+    const snap = buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir }))
+    const settings = getSettings(db)
+    const manifests = discoverManifests(manifestsDir).manifests.map((m) => m.manifest)
+    const memory = pickerMemoryFor(settings)
+    expect(snap.recommendation).toEqual(liveChatRecommendation(settings, manifests))
+    expect(snap.recommendation?.basis).toBe(memory.memoryClass)
+    expect(snap.recommendation?.basis).toBe(snap.placement.memoryClass)
+    expect(snap.recommendation?.modelId).toBe(
+      recommendChatModelId(
+        manifests,
+        { memoryClass: memory.memoryClass ?? 'cpu', ramGb: machineRamGb(), budgetMb: memory.graphicsBudgetMb ?? null },
+        speedSignalFor(settings)
+      )
+    )
+    // The signal is the persisted pairing, exactly as the handler derives it.
+    expect(speedSignalFor(settings)).toEqual({ tokensPerSecond: 4, measuredModelId: 'qwen3.5-9b-ud-q4kxl' })
+    expect(speedSignalFor({ ...settings, lastBenchmark: null })).toBeNull()
+    // The saved field is left alone.
+    expect(snap.current?.recommendedModelId).toBe('qwen3.5-9b-ud-q4kxl')
   })
 
   it('reads a result from another computer as "not this machine"', () => {

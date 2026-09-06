@@ -1807,8 +1807,13 @@ export const de: Record<keyof typeof en, string> = {
   'perf.otherMachine':
     'Dieses Ergebnis wurde auf einem anderen Computer gemessen. Prüfe erneut, um diesen zu messen.',
   'perf.verdict.speed': 'Führt {model} mit etwa {tps} Token pro Sekunde aus.',
+  // perf.basis.* stehen im Dativ nach "zum" — sie werden nur in diesem Satz verwendet.
   'perf.verdict.noSpeed':
-    '{model} passt am besten zu {ram} GB Arbeitsspeicher. Die Geschwindigkeit wird gemessen, sobald ein Modell gelaufen ist.',
+    '{model} passt am besten zum {basis} dieses Computers. Die Geschwindigkeit wird gemessen, sobald ein Modell gelaufen ist.',
+  'perf.basis.discrete': 'Grafikspeicher',
+  'perf.basis.unified': 'gemeinsamen Speicher',
+  'perf.basis.cpu': 'Arbeitsspeicher',
+  'perf.recommendation.atCheckTime': 'Empfohlen zum Zeitpunkt der Prüfung',
   'perf.verdict.noRecommendation': 'Noch kein Modell im Katalog passt zu diesem Computer.',
   'perf.verdict.notChecked':
     'Eine kurze Prüfung misst Arbeitsspeicher, Laufwerksgeschwindigkeit und, sobald ein Modell läuft, die Generierungsgeschwindigkeit.',
@@ -1883,6 +1888,7 @@ export const de: Record<keyof typeof en, string> = {
   'perf.tile.graphics': 'Grafikspeicher',
   'perf.tile.graphics.unit': 'GB VRAM',
   'perf.tile.graphics.none': 'Keine nutzbare Grafikkarte. Modelle laufen auf dem Prozessor.',
+  'perf.tile.graphics.off': 'Grafikbeschleunigung ist aus. Modelle laufen auf dem Prozessor.',
   'perf.tile.graphics.small': 'Unter {min} GB: Modelle laufen auf dem Prozessor.',
   'perf.rating.usable': 'Nutzbar',
   'perf.rating.small': 'Klein',

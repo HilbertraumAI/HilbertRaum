@@ -2103,6 +2103,18 @@ export interface ResidentModelRow {
 }
 
 /**
+ * The LIVE chat recommendation for the NEXT start (benchmark.md "Recommendation"; PR #308 audit
+ * decision 8): what the Models screen stars right now, computed from the persisted probe, the GPU
+ * flags, this machine's RAM and the persisted speed signal — never a figure saved at check time.
+ */
+export interface LiveRecommendation {
+  /** The ★ model id (`recommendChatModelId`), or null when nothing in the catalog matches. */
+  modelId: string | null
+  /** The memory the pick was judged against: the card's budget (`discrete`), the unified pool, or RAM. */
+  basis: MemoryClass
+}
+
+/**
  * Everything the Performance screen renders, in one read (`performance:get`).
  * `current` is `settings.lastBenchmark`; `otherMachines` is the history minus the current
  * machine's entry; the `observed` figures come from real use (a finished chat answer, a
@@ -2110,6 +2122,13 @@ export interface ResidentModelRow {
  */
 export interface PerformanceSnapshot {
   current: BenchmarkResult | null
+  /**
+   * The live recommendation, through the SAME inputs the `listModels` ★ uses
+   * (`liveChatRecommendation` in registerModelIpc.ts), so the verdict sentence and the
+   * "Start … and measure" target can never disagree with the Models screen. `current.recommendedModelId`
+   * stays what it was at the time of the check (historical). Null when the app has no catalog.
+   */
+  recommendation: LiveRecommendation | null
   /** True when `current` was measured on the computer the app is running on right now. */
   currentMachine: boolean
   otherMachines: BenchmarkResult[]
