@@ -2868,7 +2868,12 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   "T19 an article whose first /raw read is cut short still opens whole…" (a paragraph past the cut
   reaches the viewer), the `zim-arm` leg "… an article whose first read is cut short keeps its
   chunks"; reporting
-  it upstream rides the P8 issue #339 (the pinned bundle is P8's).
+  it upstream rides the P8 issue #339 (the pinned bundle is P8's). **Proof on the real archive
+  (the rebuilt app, 60 consecutive article opens in real Electron):** 6 reads were cut short
+  (bytes received 130,310 / 195,590 of the entries' lengths), every one was retried and
+  completed — five on the second attempt (~4.1 s to open), one on the third (8.1 s) — zero
+  "article read failed" lines, every open ended on the real article; before the fix the same
+  sample had 12 of 60 opens end in the unavailable state.
 - **Not run here — the owner's legs (pending):** the relocated drive with persisted citations
   (K: → another letter, in Electron), live lock / unlock / failed lock with a running pack
   server, the offline ask + viewer with Wi-Fi off (BUILD_STATE §5 item 21(d)) — each is recorded
