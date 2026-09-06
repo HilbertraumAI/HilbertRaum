@@ -2874,10 +2874,35 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   completed — five on the second attempt (~4.1 s to open), one on the third (8.1 s) — zero
   "article read failed" lines, every open ended on the real article; before the fix the same
   sample had 12 of 60 opens end in the unavailable state.
-- **Not run here — the owner's legs (pending):** the relocated drive with persisted citations
-  (K: → another letter, in Electron), live lock / unlock / failed lock with a running pack
-  server, the offline ask + viewer with Wi-Fi off (BUILD_STATE §5 item 21(d)) — each is recorded
-  in the T19-a inventory row when run.
+- **The owner's legs (2026-09-06, the owner on the i9-14900K with the real K: HilbertRaum
+  drive — an encrypted workspace from 2026-08-20, kiwix-tools 3.8.1 in `runtime\kiwix-tools\win`,
+  the indexed pack in `zim\`, the index-less one added from `zim-external\` outside the drive, the
+  P7 tree run with `HILBERTRAUM_DRIVE_ROOT=K:\`, a real model — gemma4-e2b-it-qat-q4 on the GPU —
+  for the answers; procedure `tmp/zim-wave/p7/t19-owner-legs.md`, maintainer-local):**
+  **(vii) live lock / unlock / failed lock — PASSED.** With a pack server up after a real ask
+  (one `kiwix-serve.exe`, `zim-transient\library.<n>.xml` present): Lock now → the gate, the
+  child gone, `zim-transient\` empty, a fresh `hilbertraum.sqlite.enc`, no plaintext DB left;
+  unlock → a second pack question answered with citations from a fresh server and an article of
+  the OLD answer still opened; failed lock (a read-only `.enc` makes the re-encrypt's final rename
+  fail) → the "Could not lock the workspace — it stays open and your data is safe" banner, the
+  pack server gone, and after re-selecting the model a third pack question answered with citations
+  (pack work is admitted again — the non-latching recovery); then a normal lock and unlock with the
+  chat intact. **Observation (not a pack defect, its own follow-up):** the lock teardown stops the
+  chat engine (`ctx.runtime.stop()`) and only the post-unlock seam restarts it, so after a FAILED
+  lock the app asks for a model again before the next question. **(vi) the relocated drive with
+  persisted citations — PASSED.** Quit, `Set-Partition K → M`, launched with `M:\`, unlocked: the
+  `zim\` pack still Enabled (drive-relative resolution), the pack added from `K:\zim-external\…`
+  honestly "File missing" (its recorded path names the old letter); "Open article" on the first
+  answer's citation (written under K:) opened; a new ask cited; letter set back to K:, both packs
+  available again after Refresh. **(viii) the offline ask + viewer with Wi-Fi off (BUILD_STATE §5
+  item 21(d), the airplane-mode acceptance) — PASSED:** launched from the K: drive with the
+  network off, unlocked, a pack question answered with archive citations and an article opened
+  in the viewer — nothing waited on the network.
+  **Two more observations from the owner's setup (registered on #340):** a pack added through
+  "Add packs…" keeps `searchable: unknown` — tickable, no badge — until the next Refresh or unlock
+  (the probe runs only at a reconcile's end; an ask in between reports "search failed" for an
+  index-less pack); and a real model echoes the `<math alttext>` LaTeX the converter keeps
+  (`$\text{CO}_2$` in an answer) — strip or render math in excerpts and answers.
 
 ### §-anchor legend (working-paper citations)
 
