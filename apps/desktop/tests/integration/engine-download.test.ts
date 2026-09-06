@@ -782,8 +782,21 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
     mgr.cancel(started.jobId)
     release()
     expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
+    // `status` flips to 'cancelled' the instant cancel() is called, but the gated extractor is
+    // still writing its files: wait for the run to SETTLE (the F-33 busy latch — `activeJob()`
+    // stays non-null until then) before the next install pre-cleans the same directory, and
+    // re-install through the SAME manager so its latch, not a second manager, orders the two.
+    // The master CI run after the merge caught exactly that race on ubuntu-22.x.
+    const settleStart = Date.now()
+    while (mgr.activeJob() !== null) {
+      if (Date.now() - settleStart > 5000) throw new Error('the cancelled run never settled')
+      await new Promise((r) => setTimeout(r, 2))
+    }
     expect(existsSync(runtimeMarkerPath(KIWIX_DIR(rootPath)))).toBe(false)
-    const again = await installKiwix(rootPath, manifestsDir)
+    const again = await runToEnd(
+      mgr,
+      (await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['kiwix_tools'] })).jobId
+    )
     expect(again.status).toBe('done')
     expect(existsSync(runtimeMarkerPath(KIWIX_DIR(rootPath)))).toBe(true)
   })
