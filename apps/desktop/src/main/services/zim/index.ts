@@ -25,6 +25,7 @@ import {
   resetStaleSearchability,
   retrievablePacks,
   servedCandidates,
+  servedRegistryRows,
   setPackEnabled,
   unknownSearchablePacks,
   writeLibraryXml,
@@ -379,6 +380,11 @@ export class ZimService {
   private probeInFlight: Promise<void> | null = null
   /** A probe was requested while one ran: run exactly ONE more afterwards. */
   private probeAgain = false
+  /** The collision losers of the served set (#340, D-Z16) — `packs:status.excluded`. Null until
+   *  this session computed one (a reconciliation, a mutation or a library build); reset on
+   *  suspend, so a locked workspace's list never outlives it. In memory only: `packs:status` is
+   *  the lock-exempt channel and must not read the database. */
+  private lastExcluded: ServingNameCollision[] | null = null
 
   constructor(opts: ZimServiceOptions) {
     this.opts = opts
@@ -538,6 +544,7 @@ export class ZimService {
       )
       own.assert()
       this.invalidateLibrary()
+      this.refreshExcludedFromRegistry(db)
       // Mutation producer (plan §9.17 (e)3): AFTER the assert, so a registration that finished
       // under an old epoch (the op above would have thrown) never announces itself.
       this.emitPacksChanged(own, 'mutation', this.refreshing())
@@ -581,6 +588,27 @@ export class ZimService {
     return this.reconcileInFlight !== null
   }
 
+  /** The served set's collision losers as last computed this session, or null before any
+   *  reconciliation / mutation / build computed one (#340, D-Z16) — `packs:status.excluded`. */
+  excluded(): ReadonlyArray<ServingNameCollision> | null {
+    return this.lastExcluded
+  }
+
+  /**
+   * Recompute the collision surface from the REGISTRY (no disk probe, D-Z16): the reconcile
+   * writes the resolved winner into `recorded_path`, and the serving name depends only on the
+   * leaf, so this matches the build's own computation up to files that vanished since the last
+   * pass. Called under the producing operation, before its `packs:changed` notice, so the panel's
+   * refetch already sees it. Best-effort: a read failure keeps the previous list.
+   */
+  private refreshExcludedFromRegistry(db: Db): void {
+    try {
+      this.lastExcluded = computeServedSet(servedRegistryRows(db), this.opts.platform ?? process.platform).excluded
+    } catch {
+      /* the next reconciliation or build recomputes it */
+    }
+  }
+
   private async reconcileOnce(db: Db): Promise<void> {
     const op = this.beginOp('zim-reconcile')
     try {
@@ -592,6 +620,7 @@ export class ZimService {
       )
       op.assert()
       if (report.changed) this.invalidateLibrary()
+      this.refreshExcludedFromRegistry(db)
       // The capability probe runs at the END of the pass (#301 P4, finding M7; plan §9.21
       // (d)5) — after the reconcile has settled availability and the served set, and BEFORE
       // `reconcile-end`, so the panel refetches ONCE and already sees the verdicts.
@@ -752,6 +781,7 @@ export class ZimService {
       const removed = removePack(db, id)
       if (removed) {
         this.invalidateLibrary()
+        this.refreshExcludedFromRegistry(db)
         // Mutation producer (plan §9.17 (e)3) — only on a REAL change, like reconcile's own
         // `report.changed` gate; a no-op remove (unknown id) announces nothing.
         this.emitPacksChanged(op, 'mutation', this.refreshing())
@@ -769,6 +799,7 @@ export class ZimService {
       const changed = setPackEnabled(db, id, enabled)
       if (changed) {
         this.invalidateLibrary()
+        this.refreshExcludedFromRegistry(db)
         this.emitPacksChanged(op, 'mutation', this.refreshing())
       }
       return changed
@@ -1097,6 +1128,7 @@ export class ZimService {
       const served = computeServedSet(resolved, this.opts.platform ?? process.platform)
       names = served.names
       excluded = served.excluded
+      this.lastExcluded = [...excluded] // the authoritative (disk-resolved) list, D-Z16
       if (excluded.length > 0) {
         // Ids only — a title or a path names what the user reads (the sentinel rule).
         log.warn('Knowledge packs excluded from the served library: serving-name collision', {
@@ -1256,6 +1288,8 @@ export class ZimService {
     inFlight?.abort.abort()
     const stale = this.published
     this.published = null
+    // D-Z16: a locked workspace's collision list must not outlive it on the exempt channel.
+    this.lastExcluded = null
     await this.enqueue(() => this.teardownPublished(stale))
   }
 

@@ -103,6 +103,82 @@ describe('PacksPanel', () => {
     expect(screen.getAllByText(/4102 articles/).length).toBeGreaterThan(0)
   })
 
+  // #340 (rag-design D-Z16): the served library's collision losers ride `packs:status.excluded`
+  // — a served-library fact, so it is a badge + a visible reason line on the LOSER's row that
+  // names the winner, never a row field; a status without the field (an older main) or with
+  // `null` (nothing computed yet) shows nothing.
+  it('a serving-name collision loser gets a "Not served" badge naming the winner; null / absent status shows none', async () => {
+    const winner = pack({ id: 'uuid-aaaa', title: 'Klimawandel von Wikipedia' })
+    const loser = pack({ id: 'uuid-bbbb', title: 'Klimawandel (Kopie)', leaf: 'wikipedia_de_climate.zim' })
+    stubApi({
+      getKnowledgePackStatus: async () => ({
+        toolsInstalled: true,
+        refreshing: false,
+        revision: 0,
+        excluded: [{ packId: 'uuid-bbbb', collidesWith: 'uuid-aaaa' }]
+      }),
+      listKnowledgePacks: async () => [winner, loser]
+    })
+    const { unmount } = render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('Klimawandel (Kopie)')).toBeInTheDocument()
+    // The loser's row: the badge and the visible line naming the winner (guidelines §7 — the
+    // reason is reachable without a mouse). The winner's row carries neither.
+    expect(screen.getByText('Not served')).toBeInTheDocument()
+    expect(
+      screen.getByText(/clashes with “Klimawandel von Wikipedia”, so only that pack is served/)
+    ).toBeInTheDocument()
+    const loserCard = screen.getByText('Klimawandel (Kopie)').closest('li')
+    const winnerCard = screen.getByText('Klimawandel von Wikipedia').closest('li')
+    expect(loserCard).not.toBeNull()
+    expect(loserCard!.textContent).toContain('Not served')
+    expect(winnerCard!.textContent).not.toContain('Not served')
+    // Both stay Enabled: a collision is not a row state.
+    expect(screen.getAllByText('Enabled')).toHaveLength(2)
+    unmount()
+
+    // A winner the list no longer knows (a stale list): the generic line, still a badge.
+    stubApi({
+      getKnowledgePackStatus: async () => ({
+        toolsInstalled: true,
+        refreshing: false,
+        revision: 0,
+        excluded: [{ packId: 'uuid-bbbb', collidesWith: 'uuid-gone' }]
+      }),
+      listKnowledgePacks: async () => [loser]
+    })
+    const second = render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('Not served')).toBeInTheDocument()
+    expect(screen.getByText(/clashes with another pack’s/)).toBeInTheDocument()
+    second.unmount()
+
+    // `null` (nothing computed yet) and an ABSENT field (an older main): no badge at all.
+    for (const status of [
+      { toolsInstalled: true, refreshing: false, revision: 0, excluded: null },
+      { toolsInstalled: true, refreshing: false, revision: 0 }
+    ]) {
+      stubApi({
+        getKnowledgePackStatus: async () => status,
+        listKnowledgePacks: async () => [winner, loser]
+      })
+      const r = render(
+        <I18nProvider>
+          <PacksPanel />
+        </I18nProvider>
+      )
+      expect(await screen.findByText('Klimawandel (Kopie)')).toBeInTheDocument()
+      expect(screen.queryByText('Not served')).toBeNull()
+      r.unmount()
+    }
+  })
+
   it('shows the tools-missing hint and disables adding when kiwix-tools is absent', async () => {
     stubApi({
       getKnowledgePackStatus: async () => ({ toolsInstalled: false, refreshing: false, revision: 0 }),

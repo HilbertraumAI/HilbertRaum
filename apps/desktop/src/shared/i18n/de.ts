@@ -2755,6 +2755,13 @@ export const de: Record<keyof typeof en, string> = {
   'packs.state.notSearchable': 'Kein Volltextindex',
   'packs.state.notSearchableTitle':
     'Dieses Archiv hat keinen Volltextindex. Beim Fragen wird es übersprungen, seine Artikel bleiben aber lesbar.',
+  // #340 (rag-design D-Z16): ein Merkmal der bereitgestellten Bibliothek aus `packs:status.excluded` —
+  // zwei Dateien ergeben denselben Servernamen, und libkiwix behält nur das frühere Archiv.
+  'packs.state.notServed': 'Nicht bereitgestellt',
+  'packs.state.notServedTitle':
+    'Der Dateiname kollidiert mit „{title}“, deshalb wird nur dieses Paket bereitgestellt – diese Datei umbenennen, um beide zu nutzen.',
+  'packs.state.notServedTitleUnknown':
+    'Der Dateiname kollidiert mit dem eines anderen Pakets, deshalb wird nur jenes bereitgestellt – diese Datei umbenennen, um beide zu nutzen.',
   'packs.enable': 'Aktivieren',
   'packs.disable': 'Deaktivieren',
   'packs.working': 'Wird ausgeführt…',

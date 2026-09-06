@@ -87,7 +87,7 @@ import { registerZimIpc } from '../../src/main/ipc/registerZimIpc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { IPC } from '../../src/shared/ipc'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import type { KnowledgePackAddResult, PrivacyPolicy } from '../../src/shared/types'
+import type { KnowledgePackAddResult, KnowledgePackStatus, PrivacyPolicy } from '../../src/shared/types'
 import {
   WorkspaceController,
   createEncryptedVaultOnDisk,
@@ -2364,6 +2364,62 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
       expect(unlocked).toMatchObject({ ok: true })
       expect(searchableOf(h, delta).searchable).toBeNull()
       expect(await waitUntil(() => searchableOf(h, delta).searchable === 'yes', 2_000)).toBe(true)
+    } finally {
+      await h.close()
+    }
+  }, 60_000)
+
+  // #340 (rag-design D-Z16): the collision surface. `packs:status` is the ONE lock-exempt
+  // `packs:*` channel — in-memory only — so `excluded` is the service's last computed list:
+  // null before this session computed one, recomputed from the registry at every reconciliation
+  // and mutation (no disk probe), authoritative at a library build, reset by the lock.
+  it('#340 packs:status.excluded names the serving-name collision loser: null before the session computed it, [] after a clean reconcile, the larger UUID after a same-leaf registration, cleared by disabling the loser, null again after a lock, recomputed by the next session', async () => {
+    const h = await sessionHarness()
+    try {
+      const db = h.db()
+      const status = async (): Promise<KnowledgePackStatus> =>
+        (await invoke(handlers, IPC.getKnowledgePackStatus)).result as KnowledgePackStatus
+      expect((await status()).excluded).toBeNull() // nothing computed yet this session
+      await h.svc.reconcile(db)
+      expect((await status()).excluded).toEqual([])
+
+      // Two archives with the SAME leaf in different folders compute the same serving name;
+      // libkiwix keeps the smaller UUID (D-Z11), so the larger one is the loser.
+      const first = await h.registerPack('same-leaf.zim', packUuid('0000cc03', 'first'))
+      const elsewhere = join(h.root, 'elsewhere')
+      mkdirSync(elsewhere, { recursive: true })
+      const secondPath = writeZimFixture(join(elsewhere, 'same-leaf.zim'), packUuid('0000cc03', 'second'), {
+        trailing: 'body of the second same-leaf archive'
+      })
+      const second = (await h.svc.registerPack(db, secondPath)).id
+      const [winnerId, loserId] = first < second ? [first, second] : [second, first]
+      expect((await status()).excluded).toEqual([{ packId: loserId, collidesWith: winnerId }])
+      // …and a library BUILD agrees (the authoritative, disk-resolved computation).
+      const library = await h.svc.ensureServer(db)
+      expect(library?.excluded).toEqual([{ packId: loserId, collidesWith: winnerId }])
+      expect((await status()).excluded).toEqual([{ packId: loserId, collidesWith: winnerId }])
+
+      // Disabling the loser clears the collision; enabling it brings it back — both from the
+      // registry, without a sidecar or a disk probe.
+      await invoke(handlers, IPC.setKnowledgePackEnabled, loserId, false)
+      expect((await status()).excluded).toEqual([])
+      await invoke(handlers, IPC.setKnowledgePackEnabled, loserId, true)
+      expect((await status()).excluded).toEqual([{ packId: loserId, collidesWith: winnerId }])
+
+      // A lock resets it (the exempt channel must not carry a closed workspace's list); the
+      // next session's reconciliation recomputes it.
+      await invoke(handlers, IPC.lockWorkspace)
+      expect(h.ctrl.isUnlocked()).toBe(false)
+      expect((await status()).excluded).toBeNull()
+      const { result: unlocked } = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
+      expect(unlocked).toMatchObject({ ok: true })
+      expect(
+        await waitUntil(() => {
+          const s = h.svc.excluded()
+          return s !== null && s.length === 1 && s[0]!.packId === loserId
+        }, 2_000)
+      ).toBe(true)
+      expect((await status()).excluded).toEqual([{ packId: loserId, collidesWith: winnerId }])
     } finally {
       await h.close()
     }

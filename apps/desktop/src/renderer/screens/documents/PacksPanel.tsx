@@ -4,6 +4,7 @@ import type {
   KnowledgePackAddFailureReason,
   KnowledgePacksChangedEvent
 } from '@shared/types'
+import type { KnowledgePackCollision } from '@shared/types'
 import type { MessageKey } from '@shared/i18n'
 import { Badge, Button, ConfirmDialog, EmptyState, ErrorBanner, Spinner, useToast } from '../../components'
 import { friendlyIpcError } from '../../lib/errors'
@@ -53,6 +54,9 @@ export function PacksPanel(): JSX.Element {
   const showToast = useToast()
   const [packs, setPacks] = useState<KnowledgePack[] | null>(null)
   const [toolsInstalled, setToolsInstalled] = useState(true)
+  // #340 (rag-design D-Z16): the served library's collision losers from `packs:status` — a
+  // served-library fact, not a row field. Null until the session computed one (or an older main).
+  const [excluded, setExcluded] = useState<KnowledgePackCollision[] | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'add' | 'refresh' | string | null>(null)
@@ -78,6 +82,7 @@ export function PacksPanel(): JSX.Element {
       if (!mountedRef.current) return
       setToolsInstalled(status.toolsInstalled)
       setRefreshing(status.refreshing)
+      setExcluded(status.excluded ?? null)
       setPacks(list)
     } catch (e) {
       if (!mountedRef.current) return
@@ -248,6 +253,16 @@ export function PacksPanel(): JSX.Element {
               : notSearchable
                 ? t('packs.state.notSearchableTitle')
                 : null
+            // #340 (D-Z16): a collision loser is enabled and available yet NOT served — its own
+            // badge beside the state badge, and a visible line that names the winner when the
+            // list knows it (the winner is another registered pack; a stale list may not).
+            const collision = p.available && p.enabled ? (excluded?.find((e) => e.packId === p.id) ?? null) : null
+            const winner = collision ? (packs.find((k) => k.id === collision.collidesWith) ?? null) : null
+            const collisionText = collision
+              ? winner
+                ? t('packs.state.notServedTitle', { title: winner.title })
+                : t('packs.state.notServedTitleUnknown')
+              : null
             return (
               <li key={p.id} className={`card packs-card ${p.available ? '' : 'packs-card-missing'}`}>
                 <div className="packs-card-head">
@@ -276,8 +291,14 @@ export function PacksPanel(): JSX.Element {
                       {t('packs.state.notSearchable')}
                     </Badge>
                   )}
+                  {collisionText && (
+                    <Badge tone="warning" icon="⚠" title={collisionText}>
+                      {t('packs.state.notServed')}
+                    </Badge>
+                  )}
                 </div>
                 {reasonText && <p className="packs-card-reason hint">{reasonText}</p>}
+                {collisionText && <p className="packs-card-reason hint">{collisionText}</p>}
                 {p.description && <p className="packs-card-desc hint">{p.description}</p>}
                 <p className="packs-card-meta hint">{metaLine(p)}</p>
                 <div className="packs-card-actions">

@@ -76,6 +76,8 @@ function fakeZimService(db: () => Db, zimDir: string): unknown {
     },
     refreshing: () => false,
     revision: () => 0,
+    excluded: () => null, // #340 (D-Z16): nothing computed by this stand-in
+
     registerPack: (d: Db, p: string) => packs.registerPack(d, deps, p),
     removePack: (d: Db, id: string) => packs.removePack(d, id),
     setPackEnabled: (d: Db, id: string, enabled: boolean) => packs.setPackEnabled(d, id, enabled),
@@ -249,7 +251,8 @@ describe('packs IPC', () => {
     expect((await invoke(handlers, IPC.getKnowledgePackStatus)).result).toEqual({
       toolsInstalled: false,
       refreshing: false,
-      revision: 0
+      revision: 0,
+      excluded: null // #340 (D-Z16): no service ⇒ nothing computed
     })
   })
 
