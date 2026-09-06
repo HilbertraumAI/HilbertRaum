@@ -1,9 +1,9 @@
 import type { KnowledgePackOutcome } from '../../../shared/types'
 import type { ExternalRetrievalOutput, RetrievedChunk } from '../rag'
 import { CHUNK_DEFAULTS, chunkSegments } from '../ingestion/chunker'
-import { fetchArticleHtml, searchPack } from './client'
+import { fetchArticleHtml, searchPack, searchPackTotal } from './client'
 import { zimArticleToSegmentsAsync } from './html'
-import { searchPattern } from './query-rewrite'
+import { DF_PROBE_MAX_TERMS, narrowByFrequency, searchPattern } from './query-rewrite'
 
 // Query-time candidate production for the ZIM retrieval arm (knowledge packs).
 // Per pack: Xapian full-text search (the archive's own index — the keyword stage we
@@ -187,17 +187,29 @@ export async function collectPackCandidates(
     if (abortFailure === undefined) abortFailure = err
   }
 
-  // #340 L3 (D-Z18): Xapian ANDs every word of the pattern, so the question's function and
-  // frame words are stripped before the search; the ORIGINAL question stays the reranker's
-  // query and the chunk picker's `terms`. A first search that finds nothing is retried ONCE
-  // with the narrower pattern (the kept terms of five or more characters) when that differs.
+  // #340 L3 (D-Z18) + #353: Xapian ANDs every word of the pattern, so the question's function
+  // and frame words are stripped before the search; the ORIGINAL question stays the reranker's
+  // query and the chunk picker's `terms`. Three stages, each tried only when the one before it
+  // found nothing:
+  //   1. the stripped `pattern`;
+  //   2. once, the narrower `retry` (the kept terms of five or more characters) when it differs;
+  //   3. the #353 document-frequency LADDER — stage 2's length threshold cannot help a pattern
+  //      whose every term is already that long (a rare or misspelled five-plus-character word).
+  //      When the last pattern tried still has two or more terms, probe each term's own
+  //      archive-wide hit count (`searchPackTotal`, pageLength=1, up to `DF_PROBE_MAX_TERMS`
+  //      terms, sequentially) and search once more without the term `narrowByFrequency` picks
+  //      as the likely culprit. A probe (or the narrowed search) failing ends the ladder without
+  //      a verdict: stages 1–2 already answered honestly at zero, so the pack stays `searched`
+  //      with 0 found rather than `search-failed` (`docs/rag-design.md` §17 D-Z18 amendment).
   const rewrite = searchPattern(question)
   async function runPack(item: PackWork): Promise<void> {
     const { pack } = item
     let hits
+    let lastPattern = rewrite.pattern
     try {
       hits = await searchPack(port, pack.id, rewrite.pattern, ARTICLES_PER_PACK, signal)
       if (hits.length === 0 && rewrite.retry !== null) {
+        lastPattern = rewrite.retry
         hits = await searchPack(port, pack.id, rewrite.retry, ARTICLES_PER_PACK, signal)
       }
     } catch (err) {
@@ -206,6 +218,26 @@ export async function collectPackCandidates(
       item.settlement = 'search-failed'
       item.settled = true
       return
+    }
+    if (hits.length === 0) {
+      const terms = lastPattern.split(/\s+/).filter((t) => t.length > 0)
+      if (terms.length >= 2) {
+        const probeTerms = terms.slice(0, DF_PROBE_MAX_TERMS)
+        const df = new Map<string, number>()
+        try {
+          for (const term of probeTerms) {
+            const total = await searchPackTotal(port, pack.id, term, signal)
+            if (total !== null) df.set(term, total)
+          }
+          const narrowed = narrowByFrequency(probeTerms, df)
+          if (narrowed !== null) {
+            hits = await searchPack(port, pack.id, narrowed, ARTICLES_PER_PACK, signal)
+          }
+        } catch (err) {
+          if (aborted()) return noteAbort(err)
+          // Fail-soft (see the stage-3 comment above): keep the honest zero from stages 1–2.
+        }
+      }
     }
     let attempted = 0
     let read = 0

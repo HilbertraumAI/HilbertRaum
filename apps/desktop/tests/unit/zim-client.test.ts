@@ -16,9 +16,11 @@ import {
   ftIndexHint,
   kiwixGet,
   parseLibraryXml,
+  parseSearchTotal,
   parseSearchXml,
   probeSearchable,
-  searchPack
+  searchPack,
+  searchPackTotal
 } from '../../src/main/services/zim/client'
 
 // The loopback client against a real ephemeral node:http server — the transport is the
@@ -144,6 +146,13 @@ beforeAll(async () => {
       return
     }
     if (req.url?.startsWith('/search')) {
+      // #353: a fixed pattern that forces a non-200, the same way `/raw` failures are pinned
+      // elsewhere in this file — `searchPackTotal` must throw exactly like `searchPack`.
+      if (new URL(req.url, 'http://127.0.0.1').searchParams.get('pattern') === 'force-500') {
+        res.writeHead(500)
+        res.end('boom')
+        return
+      }
       res.writeHead(200, { 'content-type': 'application/xml' })
       res.end(SEARCH_XML)
       return
@@ -303,6 +312,37 @@ describe('parseSearchXml / searchPack', () => {
 
   it('returns an empty list for a resultless response', () => {
     expect(parseSearchXml('<rss><channel><title>Search: x</title></channel></rss>')).toEqual([])
+  })
+})
+
+describe('parseSearchTotal / searchPackTotal (#353 document-frequency ladder)', () => {
+  it('parses the opensearch:totalResults element', () => {
+    expect(parseSearchTotal(SEARCH_XML)).toBe(301)
+  })
+
+  it('returns null when the element is absent', () => {
+    expect(parseSearchTotal('<rss><channel><title>Search: x</title></channel></rss>')).toBeNull()
+  })
+
+  it('returns null for garbage content instead of NaN', () => {
+    expect(
+      parseSearchTotal(
+        '<rss><channel><opensearch:totalResults>not-a-number</opensearch:totalResults></channel></rss>'
+      )
+    ).toBeNull()
+  })
+
+  it('requests pageLength=1 on the same /search route and returns the parsed total', async () => {
+    requestLog.length = 0
+    await expect(searchPackTotal(port, 'uuid-1', 'Treibhausgas')).resolves.toBe(301)
+    const url = requestLog.find((u) => u.startsWith('/search'))
+    expect(url).toContain('pageLength=1')
+    expect(url).toContain('pattern=Treibhausgas')
+    expect(url).toContain('books.id=uuid-1')
+  })
+
+  it('throws on a non-200 status exactly like searchPack', async () => {
+    await expect(searchPackTotal(port, 'uuid-1', 'force-500')).rejects.toThrow(/search failed \(HTTP 500\)/)
   })
 })
 

@@ -16,6 +16,7 @@ import {
 import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import {
+  ARTICLES_PER_PACK,
   MAX_EXTERNAL_CANDIDATES,
   allocateCandidates,
   collectPackCandidates,
@@ -57,8 +58,27 @@ function bigArticleHtml(): string {
 }
 /** Set by the fake sidecar once the big article's body has been written. */
 let bigArticleServed = false
-/** Every `/search` pattern the fixture server received, in order (#340 L3). */
+/** Every `/search` pattern the fixture server received, in order (#340 L3). Scoped to
+ *  NON-PROBE searches (`pageLength !== '1'`) — see `allSearchRequests` for the #353 ladder's
+ *  probes, so this array's pre-existing exact-equality assertions stay unaffected by them. */
 const searchPatterns: string[] = []
+/** Every `/search` request the fixture server received, of EVERY book and EVERY pageLength, in
+ *  order (#353 document-frequency ladder) — pins the exact pattern/retry/probe/narrowed
+ *  sequence and that a probe carried `pageLength=1`. */
+const allSearchRequests: Array<{ book: string; pattern: string; pageLength: string }> = []
+
+// #353: the question below rewrites to three long content words (`searchPattern` keeps them
+// verbatim; all >= RETRY_MIN_TERM_CHARS so the length-based retry offers nothing), the pattern
+// search finds nothing, and the ladder probes each term's own hit count before narrowing.
+const DF_QUESTION = 'Nenne die wichtigsten eigenschaftn von ammoniak'
+const DF_NARROWED_PATTERN = 'wichtigsten ammoniak'
+const DF_TOTALS: Record<string, number> = { wichtigsten: 12, eigenschaftn: 0, ammoniak: 40 }
+function totalsXml(total: number): string {
+  return (
+    '<?xml version="1.0" encoding="UTF-8"?><rss><channel><title>Search</title>' +
+    `<opensearch:totalResults>${total}</opensearch:totalResults></channel></rss>`
+  )
+}
 /**
  * Article titles whose NEXT `/raw` read the fake sidecar CUTS SHORT — the measured kiwix-serve
  * 3.8.1 stall (#301 P7 T19): the 200, an honest `Content-Length` and most of the body arrive,
@@ -89,7 +109,35 @@ beforeAll(async () => {
         res.end('boom')
         return
       }
-      searchPatterns.push(url.searchParams.get('pattern') ?? '')
+      const pattern = url.searchParams.get('pattern') ?? ''
+      const pageLength = url.searchParams.get('pageLength') ?? ''
+      allSearchRequests.push({ book, pattern, pageLength })
+      if (pageLength !== '1') searchPatterns.push(pattern)
+      // #353: a book whose pattern search finds nothing, and whose per-term probes (pageLength=1)
+      // report a df of 0 for exactly one term — the ladder should narrow around it and re-search.
+      if (book === 'pack-df') {
+        if (pageLength === '1') {
+          res.writeHead(200, { 'content-type': 'application/xml' })
+          res.end(totalsXml(DF_TOTALS[pattern] ?? 0))
+          return
+        }
+        const titles = pattern === DF_NARROWED_PATTERN ? ['Ammoniak'] : []
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(searchXml(`book-${book}`, titles))
+        return
+      }
+      // #353: a book whose FIRST probe answers HTTP 500 — the ladder must end right there,
+      // fail-soft, with no further probe and no narrowed re-search.
+      if (book === 'pack-df-fail') {
+        if (pageLength === '1') {
+          res.writeHead(500)
+          res.end('boom')
+          return
+        }
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(searchXml(`book-${book}`, []))
+        return
+      }
       const titles =
         book === 'pack-climate'
           ? ['Treibhausgas', 'Treibhauspotential']
@@ -100,7 +148,7 @@ beforeAll(async () => {
               : book === 'pack-retry'
                 ? // #340 L3: a book that answers ONLY the narrower retry pattern — the first
                   // (broader) pattern finds nothing, the way an ANDed short generic word does.
-                  url.searchParams.get('pattern') === 'wirkt'
+                  pattern === 'wirkt'
                   ? ['Schwefel']
                   : []
                 : ['Schwefel']
@@ -319,6 +367,66 @@ describe('collectPackCandidates', () => {
     expect(searchPatterns).toEqual(['steigt Meeresspiegel'])
     expect(none.candidates).toEqual([])
     expect(none.outcomes[0]).toMatchObject({ packId: 'pack-retry', status: 'searched', found: 0 })
+  })
+
+  // #353: the length-based retry (#340 L3) cannot narrow a pattern whose terms are ALL already
+  // RETRY_MIN_TERM_CHARS or longer. The document-frequency ladder is the last resort: probe
+  // each term's own archive-wide hit count and search once more without the one the probes say
+  // is most likely responsible.
+  it('#353 narrows by document frequency when the length-based retry offers nothing: probes then re-searches without the df-0 term', async () => {
+    allSearchRequests.length = 0
+    const { candidates, outcomes } = await collectPackCandidates(
+      port,
+      [{ id: 'pack-df', title: 'Chemie' }],
+      DF_QUESTION
+    )
+    expect(candidates.length).toBeGreaterThan(0)
+    expect(candidates.some((c) => c.sourceTitle === 'Ammoniak')).toBe(true)
+    expect(outcomes[0]).toMatchObject({
+      packId: 'pack-df',
+      status: 'searched',
+      reason: null,
+      found: candidates.length
+    })
+
+    const dfRequests = allSearchRequests.filter((r) => r.book === 'pack-df')
+    // Stage 1 (zero hits) → three sequential probes, in pattern order → stage 3's one narrowed
+    // re-search. No retry stage: every kept term is already >= RETRY_MIN_TERM_CHARS.
+    expect(dfRequests.map((r) => r.pattern)).toEqual([
+      'wichtigsten eigenschaftn ammoniak',
+      'wichtigsten',
+      'eigenschaftn',
+      'ammoniak',
+      DF_NARROWED_PATTERN
+    ])
+    expect(dfRequests.map((r) => r.pageLength)).toEqual([
+      String(ARTICLES_PER_PACK),
+      '1',
+      '1',
+      '1',
+      String(ARTICLES_PER_PACK)
+    ])
+  })
+
+  it('#353 a failed probe ends the ladder fail-soft: the pack stays searched with zero, never search-failed', async () => {
+    allSearchRequests.length = 0
+    const { candidates, outcomes } = await collectPackCandidates(
+      port,
+      [{ id: 'pack-df-fail', title: 'Broken probe' }],
+      'Erkläre Xenongehalt Betonwerte' // → pattern 'Xenongehalt Betonwerte', no retry (both long)
+    )
+    expect(candidates).toEqual([])
+    expect(outcomes[0]).toMatchObject({
+      packId: 'pack-df-fail',
+      status: 'searched',
+      reason: null,
+      found: 0
+    })
+    const failRequests = allSearchRequests.filter((r) => r.book === 'pack-df-fail')
+    // The pattern search, then exactly ONE probe — which fails — and nothing after it: no
+    // second probe, no narrowed re-search.
+    expect(failRequests.map((r) => r.pattern)).toEqual(['Xenongehalt Betonwerte', 'Xenongehalt'])
+    expect(failRequests.map((r) => r.pageLength)).toEqual([String(ARTICLES_PER_PACK), '1'])
   })
 
   it('isolates a failing pack — the healthy pack still contributes', async () => {

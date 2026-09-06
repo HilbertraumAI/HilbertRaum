@@ -1587,7 +1587,12 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
       }
       if (url.pathname === '/search') {
         const book = url.searchParams.get('books.id') ?? ''
-        t15Searches.push(book)
+        // #353: a zero-hit pack's document-frequency ladder probes with `pageLength=1` — those
+        // are extra `/search` requests for the same book, not a second "was this pack asked at
+        // all" participation event, so they are excluded here (this fixture carries no
+        // `opensearch:totalResults`, so every probe just resolves unknown and changes nothing
+        // about which pack gets searched or admitted).
+        if (url.searchParams.get('pageLength') !== '1') t15Searches.push(book)
         const send = (): void => {
           leave()
           const behaviour = t15Behaviour.get(book) ?? 'long'

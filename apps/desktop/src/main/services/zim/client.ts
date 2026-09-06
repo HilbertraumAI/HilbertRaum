@@ -218,6 +218,41 @@ export async function searchPack(
   return parseSearchXml(res.body)
 }
 
+/**
+ * Parse the OpenSearch `<opensearch:totalResults>` count a `format=xml` search response
+ * carries — the archive-wide hit count for the pattern, independent of the `pageLength` asked
+ * for. Null when the element is absent or its content does not parse as a non-negative integer
+ * (#353 document-frequency ladder — the ladder treats "unknown" and "absent" the same way).
+ */
+export function parseSearchTotal(xml: string): number | null {
+  const m = /<opensearch:totalResults>([^<]*)<\/opensearch:totalResults>/.exec(xml)
+  return m ? toCount(m[1] ?? null) : null
+}
+
+/**
+ * The archive-wide hit COUNT for one term, via the same `/search` route as `searchPack` with
+ * `pageLength=1` — the smallest page that still makes kiwix-serve compute and report the total.
+ * This is the document-frequency PROBE the #353 ladder uses to narrow a pattern that found
+ * nothing (`arm.ts` `runPack`, `query-rewrite.ts` `narrowByFrequency`). Same failure contract as
+ * `searchPack`: throws on a non-200 status; resolves `null` when the response lacks (or does not
+ * parse) `<opensearch:totalResults>`.
+ */
+export async function searchPackTotal(
+  port: number,
+  bookUuid: string,
+  pattern: string,
+  signal?: AbortSignal
+): Promise<number | null> {
+  const path =
+    `/search?books.id=${encodeURIComponent(bookUuid)}` +
+    `&pattern=${encodeURIComponent(pattern)}&format=xml&pageLength=1`
+  const res = await kiwixGet(port, path, { signal })
+  if (res.status !== 200) {
+    throw new Error(`kiwix-serve search failed (HTTP ${res.status})`)
+  }
+  return parseSearchTotal(res.body)
+}
+
 /** Parse the OpenSearch RSS a `format=xml` search returns into hits. */
 export function parseSearchXml(xml: string): KiwixSearchHit[] {
   const hits: KiwixSearchHit[] = []

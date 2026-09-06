@@ -2731,6 +2731,30 @@ offline article viewer. Files are registered in place, never copied.
   the manual smoke replays the fixture when the registered archive is that pack and asserts
   every answerable question hits.
 
+  **2026-09-06 amendment, #353 — the document-frequency ladder.** The length-based `retry`
+  cannot help a pattern whose kept terms are ALL already `RETRY_MIN_TERM_CHARS` or longer: a
+  single pack-rare or misspelled five-plus-character word (`"eigenschaftn"`) still ANDs the
+  query to zero, and libzim 9.4.0's Xapian parser has no boolean flag to drop one term
+  deliberately (no `OR`, no `-term` exclusion — see the parser facts above). When stages 1–2
+  both find nothing and the last pattern tried still has two or more terms, `arm.ts` `runPack`
+  probes each of its terms' own archive-wide hit COUNT — `client.ts` `searchPackTotal(port,
+  bookUuid, term, signal)`, the same `/search` route with `pageLength=1` (the smallest page that
+  still makes kiwix-serve compute and report `<opensearch:totalResults>`, parsed by the new
+  `parseSearchTotal`) — sequentially, up to `query-rewrite.ts` `DF_PROBE_MAX_TERMS = 6` terms.
+  The PURE decision, `narrowByFrequency(terms, df)`: drop every term whose count is exactly 0
+  (Xapian can never find it); when no term has 0, drop the single lowest-count term instead
+  (ties broken by dropping the LAST such term, so an earlier subject word survives); a term
+  whose probe never returned a count (a probe failure, or the `DF_PROBE_MAX_TERMS` cap) is kept
+  and never treated as the lowest. When a pattern survives, the pack is searched once more with
+  it. FAIL-SOFT throughout: a probe (or the narrowed search) failing — a non-200, a network
+  error — ends the ladder with no verdict, and the pack keeps the honest zero stages 1–2 already
+  found (`'searched'`, never `'search-failed'` — the searches that mattered all succeeded).
+  Sequential, not concurrent, and bounded to 6 terms: at most 7 extra loopback requests for a
+  pack that was already going to answer "not found". `zim-client.test.ts` pins
+  `parseSearchTotal` / `searchPackTotal`; `zim-query-rewrite.test.ts` pins `narrowByFrequency`;
+  `zim-arm.test.ts` pins the request sequence (pattern → probes with `pageLength=1` → narrowed)
+  and the probe-failure fail-soft leg.
+
 ### Module map
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work

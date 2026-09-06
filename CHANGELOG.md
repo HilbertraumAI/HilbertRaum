@@ -148,6 +148,11 @@ from its first public `1.0.0` release onward.
   once more with fewer words when the first search finds nothing. On the German climate archive
   used for testing this took the questions that found their article from six of nine to nine
   of nine.
+- **A typo or a rare word no longer empties a knowledge-pack search.** The pack server still
+  requires every remaining word to appear in an article, so one misspelled or pack-rare word
+  among otherwise-fine ones used to blank the whole search even after the fixes above. When a
+  search still finds nothing, the app now checks how common each remaining word is in that
+  archive and drops the one that looks most responsible before giving up.
 - **A knowledge pack you just added is checked for full-text search right away.** Until now the
   check ran only when you unlocked or pressed Refresh, so a pack added through *Add packs…* (or
   enabled after being added) showed no "No full-text index" badge until then, and a question asked

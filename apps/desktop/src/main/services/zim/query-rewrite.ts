@@ -21,6 +21,16 @@
 // characters) lets the arm ask once more when the first search finds nothing at all: with AND
 // semantics one short generic word can still zero a query, and one extra ~100 ms request is
 // cheaper than a "not found" the archive would have answered.
+//
+// #353 amendment. The length-based `retry` cannot help a pattern whose terms are ALL already
+// `RETRY_MIN_TERM_CHARS` or longer — a single pack-rare or misspelled five-plus-character word
+// (e.g. "eigenschaftn") still ANDs the query to zero, and no boolean flag exists to drop it
+// deliberately (libzim 9.4.0's Xapian query parser, see above). `narrowByFrequency` is the pure
+// decision at the bottom of that last-resort ladder: given each term's own archive-wide hit
+// COUNT (`arm.ts` probes it via `client.ts` `searchPackTotal`, `pageLength=1`, up to
+// `DF_PROBE_MAX_TERMS` terms), it picks the one term most likely responsible and returns the
+// pattern without it — or null when there is nothing left to try or nothing worth dropping.
+// `docs/rag-design.md` §17 D-Z18 carries the amendment record.
 
 /** German + English function words (articles, pronouns, prepositions, auxiliaries, …). */
 const STOP_WORDS = new Set<string>(
@@ -93,4 +103,46 @@ export function searchPattern(question: string): SearchRewrite {
   const longer = kept.filter((t) => t.length >= RETRY_MIN_TERM_CHARS)
   const retry = kept.length >= 2 && longer.length > 0 && longer.length < kept.length ? longer.join(' ') : null
   return { pattern, retry, rewritten: pattern !== raw }
+}
+
+/** How many of the last pattern's terms the #353 document-frequency ladder probes, at most — a
+ *  bound on requests (one per term, sequential), not a claim that a longer pattern is rare. */
+export const DF_PROBE_MAX_TERMS = 6
+
+/**
+ * #353: which term the document-frequency ladder should drop, given each term's archive-wide
+ * hit COUNT (`df`, from `client.ts` `searchPackTotal`, `pageLength=1`). A term ABSENT from `df`
+ * — its probe failed, or it was never sent (the `DF_PROBE_MAX_TERMS` cap) — is KEPT and never
+ * treated as the lowest: dropping a term we know nothing about could just as easily remove the
+ * one word that mattered.
+ *
+ * Rule: drop every term whose df is exactly 0 (Xapian's AND can never find it — a typo or a
+ * word truly absent from the archive); when no term has df 0, drop the SINGLE lowest-df term
+ * instead (the rarest-but-present word is the next best guess for what emptied the query), ties
+ * broken by dropping the LAST such term in encounter order — a subject word usually leads a
+ * German or English question, so keeping the earliest survivor favours the subject.
+ *
+ * Returns null when fewer than one term would remain, or when nothing qualified to drop (no
+ * term has df 0 AND no term has a known df at all).
+ */
+export function narrowByFrequency(terms: readonly string[], df: ReadonlyMap<string, number>): string | null {
+  const zero = terms.filter((t) => df.get(t) === 0)
+  let survivors: string[]
+  if (zero.length > 0) {
+    survivors = terms.filter((t) => df.get(t) !== 0)
+  } else {
+    let lowestIndex = -1
+    let lowest = Infinity
+    for (let i = 0; i < terms.length; i++) {
+      const d = df.get(terms[i]!)
+      if (d === undefined) continue
+      if (d <= lowest) {
+        lowest = d
+        lowestIndex = i
+      }
+    }
+    if (lowestIndex === -1) return null // no term has a known df: nothing qualifies to drop
+    survivors = terms.filter((_, i) => i !== lowestIndex)
+  }
+  return survivors.length >= 1 ? survivors.join(' ') : null
 }
