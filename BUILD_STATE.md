@@ -615,7 +615,7 @@ open round's item stays the last block of §5.)
     (a) **kiwix_tools provisioning** — P8 successor issue #339.
     (b) **Tier 2** (persistent import of selected articles into the corpus) — P9 successor issue #340.
     (c) **Evidence identity for archive citations — CLOSED.** Identity resolution: P2, record rag-design D-Z5; the "Open article from a review" residual: closed P6, record design-guidelines §11.15.
-    (d) **Manual acceptance leg** (airplane-mode demo, `wikipedia_de_*` packs + kiwix-tools 3.8.1) — pending, owner (T19 (viii)).
+    (d) **Manual acceptance leg — CLOSED 2026-09-06:** the airplane-mode demo (the real K: drive, `wikipedia_de_*` packs + kiwix-tools 3.8.1, network off) passed as T19 (viii); record rag-design §17 "Real acceptance".
     (e) Observation for item 1b's matrix, measured 2026-09-04 on the i7-8550U + UHD 620: GPU auto-offload gains nothing on pp (56 vs 57 t/s) and LOSES 45 percent on tg (11 vs 19.6) — on this iGPU
     class `gpuMode: off` would be the better default.
     (f) **D2 parser hardware gate — CLOSED (re-ruled P1b).** Gate is the per-slice main-thread stall (≤5 ms on the i7-8550U); cooperative slicing shipped, `DEFAULT_SLICE_WORK` = 16 Ki, T02-c recorded
@@ -631,8 +631,10 @@ open round's item stays the last block of §5.)
     (l) **P7 residual register (2026-09-06):** the collision surface (`packs:status.excluded` addition — P9 issue; served-library fact, not a pack-row fact — the per-answer "not-served" row covers it
     today); PacksPanel: an unavailable pack can only be removed, not disabled (low, P9); every row's action buttons disable while one row is busy (low, P9); ChatScreen refetches on both
     `reconcile-start` and `-end` of one epoch (cosmetic, P9); the pack meta line shows the raw ISO 639-3 code unlabelled (copy nit, P9); `.footer-menu-btn` has no overflow rule of its own (low, P9);
-    accepted deviation: the ScopePopover is non-modal (design-guidelines §11.15 decision 1, P6); T18-b — RECORDED 2026-09-06 (run by the orchestrator at the owner's request in real Electron against the real packs; rag-design §17 "Real acceptance" → "T18-b"; it surfaced T19 finding 3: kiwix-serve 3.8.1 win-x86_64 cuts ~5–20 % of large /raw reads short (the body's last part never arrives) — upstream, mitigated by the P7 fix PR 2, upstream report on #339); T19 the owner's Electron/drive legs (relocated
-    drive with persisted citations, live lock/unlock/failed lock, offline ask + viewer) — pending, owner (the orchestrator's machine legs are recorded in rag-design §17 "Real acceptance"); R-1 open
+    accepted deviation: the ScopePopover is non-modal (design-guidelines §11.15 decision 1, P6); T18-b — RECORDED 2026-09-06 (run by the orchestrator at the owner's request in real Electron against the real packs; rag-design §17 "Real acceptance" → "T18-b"; it surfaced T19 finding 3: kiwix-serve 3.8.1 win-x86_64 cuts ~5–20 % of large /raw reads short (the body's last part never arrives) — upstream, mitigated by the P7 fix PR 2, upstream report on #339); T19 the owner's Electron/drive legs — (vi) the relocated drive with
+    persisted citations and (vii) live lock/unlock/failed lock PASSED 2026-09-06 on the real K: drive (rag-design §17 "Real acceptance" → "The owner's legs"; observations: a failed lock leaves the chat
+    engine stopped until a model is re-selected — #344; a pack added via Add packs… stays searchability-unknown until Refresh; LaTeX echoed in answers — #340), (viii) the offline ask + viewer PASSED
+    (item (d) closed) — T19 complete; the orchestrator's machine legs are recorded in rag-design §17 "Real acceptance"; R-1 open
     until P8 (the acceptance bundle has no install marker ⇒ `skip-legacy`); R-2 multipart unsupported; R-4 Authenticode — result recorded at P7 in model-policy.md; R-6 → P9; R-9 accepted
     (2026-09-05). From P7's T19: kiwix-manage 3.8.1 refuses non-ASCII archive paths on Windows (registration-only — kiwix-serve serves such a file from UTF-8 XML; documented in
     known-limitations / troubleshooting; a reason-specific message or metadata without kiwix-manage — P9); the retrieval-quality levers L1 (title-index `/suggest` arm), L2
