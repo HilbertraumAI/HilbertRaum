@@ -701,8 +701,8 @@ Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
    `runtime/kiwix-tools/win` (or `mac`/`linux`) on your drive — see
    [`known-limitations.md`](known-limitations.md) “Knowledge packs” while the
    installer step is still manual.
-2. **Add packs:** copy `.zim` files into the drive’s `zim/` folder (they are found
-   automatically), or use *Documents → Knowledge packs → Add packs…* for files
+2. **Add packs:** copy `.zim` files into the drive’s `zim/` folder (found when you
+   unlock, and on Refresh), or use *Documents → Knowledge packs → Add packs…* for files
    stored elsewhere. Files are used in place — nothing is copied. The list updates
    itself when you unlock; use **Refresh** under Knowledge packs after copying files
    while the app is open.
@@ -712,8 +712,11 @@ Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
 4. **Read the source:** answers cite pack articles like documents; *Open article* on a
    citation shows the article text offline.
 
-Everything stays on your machine: the pack server runs on 127.0.0.1 only, and asking
-never touches the network.
+Everything stays on this computer: the pack server listens on 127.0.0.1 only and asking
+never leaves this machine. One limit to know: While the workspace is unlocked and a
+knowledge pack has been used in a chat, other programs running under your own user
+account on this computer can read the enabled packs through the pack server, which has
+no password of its own; locking or quitting stops it.
 
 ## 8. Ask about an image
 

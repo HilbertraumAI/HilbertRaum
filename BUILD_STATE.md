@@ -29,6 +29,19 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 5 — access boundary and hygiene: review
+M1 / L1 / L5 / L8 / L9 / DOC-1 closed.**_ Every kiwix-serve request from the ask arm and article
+viewer runs inside `ZimService.withServer`: captures the revision/generation/port/alive tuple before
+and after, discards a response observed across a lifecycle change, retries exactly once — only while
+the session still admits the op and eligibility is recomputed under the current revision — else
+`StaleServerError`. `packs:add` answers one typed `KnowledgePackAddResult` (outcome, added packs,
+failure count, a reason code — never a path or a tool's stderr); the one encoder `encodeArticlePath`
+validates entry keys (2048-char bound); the real-tool smoke is fail-closed on `HILBERTRAUM_ZIM_SMOKE`; `platform` is injected throughout `services/zim/`. `security-model.md`
+carves out both `kiwix-serve` exceptions by name and records accepted residual R-9 (mirrored in
+PRIVACY/known-limitations/user-guide). Record: rag-design D-Z10 (request-guard paragraph),
+security-model "kiwix-serve — the one unauthenticated sidecar". T17-a / T17-b implemented. Suite on
+this machine: <COUNTS>; typecheck + build green; real kiwix-tools not installed here.
+
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 3b — session boundary, lock, identity, discovery: review
 H4 / M4 / M5 / L3 / L4 / L7 closed.**_ Every pack operation captures the unlock epoch and re-asserts admission/epoch/
 cancellation after every await; lock/quit abort the operation registry, suspend/stop the sidecar and clean the
@@ -712,6 +725,10 @@ open round's item stays the last block of §5.)
     failed registration, superseded rebuild and an unconfirmed manager child on the real encrypted vault
     (`zim-ipc-session.test.ts`, `zim-transients.test.ts`); limits in `known-limitations.md`: an unconfirmed
     child's file waits for the next session start, a file a stray process holds open is left and reported.
+    (i) **R-9 accepted (P5, 2026-09-06):** kiwix-serve is the one sidecar without request authentication
+    (upstream has none); bounded by the `withServer` alive/generation guard + one admitted retry; recorded
+    in security-model / PRIVACY / known-limitations; R-8 (`--urlRootLocation`) stays a documented unused
+    option; R-1 still open until (a).
 
 ## 6. Open issues / risks
 

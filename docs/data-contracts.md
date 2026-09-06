@@ -1511,7 +1511,11 @@ CI are unaffected.
 **Channels (`packs:` namespace, registerZimIpc.ts; all requireUnlocked except `packs:status`):**
 `packs:list` (DB-ONLY — no filesystem probe, no availability write; `KnowledgePack[]`) ·
 `packs:add` (native picker + registration in ONE main-side handler — no renderer-supplied
-archive path exists on this surface; `KnowledgePack[] | null`) · `packs:remove`
+archive path exists on this surface; returns `KnowledgePackAddResult` (#301 P5, finding L1):
+`{ outcome: 'cancelled' | 'success' | 'partial' | 'failure', added: KnowledgePack[], failed:
+number, failureReason: 'not-a-zim' | 'tools-missing' | 'manager' | 'other' | null }` — the
+invariants of §9.19 (c)1 in one sentence; codes only, never a path or a tool's stderr; a lock
+landing mid-add still REJECTS with the friendly locked copy) · `packs:remove`
 (tombstone, file untouched) · `packs:setEnabled` · `packs:refresh` (#301 P3b, finding L7 —
 schedules a background reconciliation and returns `{ started: boolean }` at once;
 completion arrives via the `packs:changed` event, not the return value) · `packs:status`
@@ -1520,7 +1524,10 @@ completion arrives via the `packs:changed` event, not the return value) · `pack
 TEXT, never HTML; `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
 stopped short of the whole article — input cap, work budget or unterminated markup —
 Phase 1, PR #294 review H1; the modal shows a hint line instead of presenting the partial
-text as complete).
+text as complete; a refused entry key (empty, > 2048 chars, a control character, a `.`/`..`
+segment, a lone surrogate — validated inside the one encoder `client.ts`
+`encodeArticlePath`, #301 P5 finding L5) → null, no request issued; URL-shaped and
+empty-segment keys stay accepted).
 
 **Event `EVENTS.knowledgePacksChanged`** (`packs:changed`, #301 P3b, finding L7) — an
 EVENT, not an invoke (the `EVENTS.modelVerifyProgress` shape above, but broadcast to
@@ -1543,7 +1550,8 @@ NO documentId/chunkId). Evidence review snapshots persist the same four fields a
 `sourceKind`/`archiveTitle`/`packId`/`articlePath` in `source_snapshot_json` (P2, review
 H2/M11, #301): an archive citation is always `identity:'unresolved'` on write and read,
 and the pack id + article path survive into the HTML/PDF evidence pack and the Markdown
-transcript export even though identity is never resolved.
+transcript export even though identity is never resolved. `KnowledgePackAddResult` /
+`KnowledgePackAddFailureReason` (#301 P5, finding L1 — the `packs:add` return shape above).
 
 **Table `knowledge_packs`** (db.ts SCHEMA): id PK (ZIM UUID) · title/description/
 language/zim_date/article_count/media_count/size_bytes · leaf + recorded_path
@@ -1578,6 +1586,31 @@ every resolve; `packs:list` is DB-only, and one serialized reconciliation (sessi
 names follow the pinned libkiwix rule; a collision keeps the ascending-UUID winner and
 excludes the loser. The citation locator stays `packId + articlePath`, resolved against
 the current serving map on every read.
+
+**Request guard (P5, #301, finding M1 / owner ruling D1(a)):** `ZimService.withServer(db,
+op, request)` wraps every kiwix-serve request the ask arm and the article viewer make. It
+captures the published tuple — revision, generation, port, alive — from `serverState()`
+before the request and reads it again after the response; a response observed across a
+change of that tuple is discarded whatever it contained, because on a reused loopback port
+a body that arrived after the app's own child died cannot be told apart from another
+process's. A discarded attempt is retried EXACTLY ONCE, and only while the same admitted
+session still holds — `op.assert()` still passes, the operation was not cancelled — with
+eligibility recomputed under the CURRENT revision, never against a list captured before the
+first attempt. A second discard rejects with `StaleServerError` (an ordinary error, mapped
+to P4's per-ask outcome), never `AbortError` (which is reserved for admission refusals: lock,
+lock+unlock into a new session, or the ask's own cancellation — none of these retry). The
+guard detects an OBSERVED LIFECYCLE CHANGE of the app's own child; it does not authenticate
+the server — see "kiwix-serve — the one unauthenticated sidecar" in `security-model.md`
+(residual R-9).
+
+**Manual harness env (P5, finding L8):** the real-tool smoke (`tests/manual/zim-real.test.ts`)
+is gated by `HILBERTRAUM_ZIM_SMOKE`; once requested, `HILBERTRAUM_ZIM_TOOLS_DIR` /
+`HILBERTRAUM_ZIM_FILE` / `HILBERTRAUM_ZIM_QUERY` are all REQUIRED (a requested-but-invalid
+combination FAILS the run; unrequested is a genuine skip) and `HILBERTRAUM_ZIM_EXPECT_ARTICLE`
+is optional. `HILBERTRAUM_ZIM_FIXTURES_DIR` is the separate, optional zim-html realism leg
+(`tests/unit/zim-html.test.ts`). `HILBERTRAUM_KIWIX_BIN` stays as a dev-only resolver override
+(`kiwix-manage` resolves as its sibling binary). See `docs/packaging.md`'s manual-harness
+matrix (the `zim-real` row) for the full input table.
 
 **Lock-channel inventory:** `ipc-lock-coverage.test.ts`'s `registerZimIpc` group gained
 `packs:refresh` as a DB-touching (non-exempt) channel; `packs:status` remains the sole
