@@ -117,7 +117,9 @@ code waits. **Step 3 — 21(l) the collision surface (`feat/340-packs-status-exc
 recompute at reconcile end + every mutation, the build authoritative, reset on suspend; the exempt channel never reads the DB), a "Not served" badge naming the winner on the
 loser's row; record rag-design **D-Z16**; tests `zim-ipc-session` "#340 packs:status.excluded …", `KnowledgePacks.test.tsx`. **Step 4 — 21(l) the UI nits (`fix/340-packs-ui-nits`, stacked
 on step 3; record design-guidelines §11.15 "Follow-up wave"):** per-row busy, an unavailable pack can be disabled, the language NAME in the meta line, the chip's "(disabled)" /
-"(not available)" state, `.footer-menu-btn`'s own shrink rule, no `reconcile-start` refetch. Next: #339 (plan note first), then #340 capabilities; (b)/(c) wait for the owner._
+"(not available)" state, `.footer-menu-btn`'s own shrink rule, no `reconcile-start` refetch. **Step 5 — #339 P8-1** (`feat/339-p8-1-kiwix-family`, design paper
+`tmp/339-p8-1-design.md`): the `kiwix_tools` family contract landed (record rag-design **D-Z17**); the consent step and the source-bundle code still wait on the owner's rulings.
+Next: #340 capabilities; (b)/(c) wait for the owner._
 
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — WAVE CLOSED: Phases 0–7 complete, #294 MERGED to master (`92e86a07`, 16:12 UTC), #301 closed by the merge.**_
 The PR's review remediation — 28 findings (H1–H4, M1–M11, L1–L9 with L10 withdrawn, DOC-1–DOC-4; three assessed High, H3 and DOC-1/DOC-2 Medium) — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;
@@ -704,7 +706,10 @@ open round's item stays the last block of §5.)
 ---
 21. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable
     record: [`docs/rag-design.md`](docs/rag-design.md) §17 "Deliberately not built").**
-    (a) **kiwix_tools provisioning** — P8 successor issue #339.
+    (a) **kiwix_tools provisioning** — P8 successor issue #339. P8-1 (the family contract) landed
+    on `feat/339-p8-1-kiwix-family`; open: P8-2 consent (owner ruling pending), P8-3 scripts,
+    P8-4 source bundle (owner ruling pending), P8-5 network-inventory prose, P8-6 the upstream
+    report, P8-7 T20-a real-run / R-4 re-verification.
     (b) **Tier 2** (persistent import of selected articles into the corpus) — P9 successor issue #340.
     (c) **Evidence identity for archive citations — CLOSED.** Identity resolution: P2, record rag-design D-Z5; the "Open article from a review" residual: closed P6, record design-guidelines §11.15.
     (d) **Manual acceptance leg — CLOSED 2026-09-06:** the airplane-mode demo (the real K: drive, `wikipedia_de_*` packs + kiwix-tools 3.8.1, network off) passed as T19 (viii); record rag-design §17 "Real acceptance".
@@ -712,8 +717,9 @@ open round's item stays the last block of §5.)
     class `gpuMode: off` would be the better default.
     (f) **D2 parser hardware gate — CLOSED (re-ruled P1b).** Gate is the per-slice main-thread stall (≤5 ms on the i7-8550U); cooperative slicing shipped, `DEFAULT_SLICE_WORK` = 16 Ki, T02-c recorded
     (laptop leg 3, 16 Ki); P7 re-check via the 14900K P-core ÷ 3 proxy (laptop not re-run — not within 20% of a gate). Record: rag-design D-Z3.
-    (g) **R-1 registered (P3a, 2026-09-05) — still open until (a):** `kiwix-manage` on a hashless install marker runs as `skip-legacy` (one logged warning) — no integrity claim for the manager
-    until (a) proves install hashes for serve AND manage. Record: rag-design D-Z10.
+    (g) **R-1 CLOSED at P8-1 for an in-app install** (both binaries hashed in the marker); a
+    hand-placed bundle still resolves `skip-legacy` by design (D-Z17). Record: rag-design D-Z10,
+    D-Z17.
     (h) **R-7 — CLOSED with recorded limits (P3b).** Record: known-limitations `zim-transient/` bullet.
     (i) **R-9 accepted (owner ruling 2026-09-05; recorded by P5 on 2026-09-06):** kiwix-serve is the one sidecar without request authentication; bounded by the `withServer` alive/generation guard + one admitted retry; recorded in
     security-model / PRIVACY / known-limitations. R-8 (`--urlRootLocation`) stays a documented unused option.

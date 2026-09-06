@@ -662,53 +662,130 @@ upstream):
 | `ocr/deu.traineddata.gz` | `306c4280d0cbed46fbff727486bd43b92730181bae80f56941a091f363bdf28b` | 1.27 MB |
 | `ocr/eng.traineddata.gz` | `45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91` | 2.82 MB |
 
-## Sidecar binaries — kiwix-tools (knowledge packs, #301)
+## Sidecar binaries — kiwix-tools (knowledge packs, #301; family contract #339 P8-1)
 
 **Status: INVENTORY, not clearance (D5 part 1; plan §6.1).** Nothing here authorizes shipping
-kiwix-tools inside a commercial Kit — P8 confirms every grant before any conveyance.
+kiwix-tools inside a commercial Kit — the owner's review below is still open, and it (not this
+inventory) is what would confirm any conveyance.
 
-The pinned acceptance bundle used for the #301 knowledge-packs wave is **kiwix-tools 3.8.1,
-win-x86_64** (zip MD5 `95f953f726aac8f320c7038f85785df9`, verified against the upstream
-published `.md5`). Its own `--version` output reports **libkiwix 14.1.1, libzim 9.4.0,
-libxapian 1.4.23, libcurl 8.4.0**. Files: `kiwix-serve.exe`, `kiwix-manage.exe`,
-`kiwix-search.exe`, `icudt74.dll`, `icuin74.dll`, `icuio74.dll`, `icutu74.dll`, `icuuc74.dll`
-— no separate `libmicrohttpd` DLL ships in this bundle, consistent with it being statically
-linked into `kiwix-serve` (to be confirmed against source at P8).
+`runtime-sources.yaml` pins the **`kiwix_tools:`** block — the THIRD sidecar family and the
+first **`optional: true`** one: it is never part of the default engine-install selection and
+never counted toward `engineStatus().installed`/`missingFamilies` — only an explicit
+`families: ['kiwix_tools']` request installs it (the consent surface that sends that request is
+P8-2; until then `EngineStatus.missingOptionalFamilies` reports the family separately, additive
+and optional so a pre-#339 renderer simply ignores it). The family also ships **more than one
+executable**: `executables: [kiwix-serve, kiwix-manage, kiwix-search]`, base names only
+(`sidecarBinaryName` adds `.exe` on win; the first entry is the primary binary,
+`plan.binaryPath`). Per build, `runtime_files` lists non-executable files the executables cannot
+start without — on Windows, the five ICU DLLs the win zip ships flat beside the three exes (the
+mac/linux tarballs are statically linked and declare no `runtime_files`). Validated by
+`shared/runtime-sources.ts` exactly like `llama_cpp`/`whisper_cpp` (duplicate `(os, arch,
+backend)` triples rejected); the two macOS builds legitimately share one
+`extract_to: runtime/kiwix-tools/mac` (the `arch` key tells them apart, and `kiwixToolsDir`
+resolves exactly one directory per OS regardless). After extraction the installer checks every
+declared file is present — `kiwix-serve`/`kiwix-manage` are a code-side floor a drive's yaml
+cannot lower; `kiwix-search` and every `runtime_files` entry are required too, because the
+archive's own verified hash already proves the bundle contains them — and writes a
+`.hilbertraum-runtime.json` install marker recording a SHA-256 **per executable and per ICU
+DLL**, all-or-nothing: a hashing failure leaves no `binaries` map at all rather than a partial
+one, so the family falls back to the hashless `skip-legacy` verifier path instead of looking
+"hashed" while one file is not.
 
-Grants, as published upstream (per upstream COPYING/LICENSE, to be confirmed at P8):
+The pinned release is **kiwix-tools 3.8.1** (upstream build 2025-12-02). The kiwix download
+server (`download.kiwix.org`, which 301s to `mirror.download.kiwix.org`) is the only binary
+distribution for 3.8.1 — the GitHub release carries source archives only — and it publishes
+**MD5 sidecars only** (`<file>.md5`; no `.sha256`). So, exactly like `whisper_cpp` above, every
+SHA-256 below was **computed from a fresh download on 2026-09-06** whose MD5 matched the
+published upstream sidecar:
 
-| Component | License |
-|---|---|
-| kiwix-tools | GPL-3.0-or-later |
-| libkiwix | GPL-3.0-or-later |
-| libzim | GPL-2.0-or-later |
-| Xapian (libxapian) | GPL-2.0-or-later |
-| libcurl | the curl license (MIT-style) |
-| ICU | the Unicode/ICU license |
-| libmicrohttpd | LGPL-2.1-or-later (statically linked into `kiwix-serve`) |
-| docopt (kiwix-tools dependency) | to inventory at P8 |
-| libzim's compression libraries (zlib, xz/liblzma, zstd) | to inventory at P8 |
+| Build (OS/arch) | URL | Bytes | Upstream MD5 | SHA-256 (computed) |
+|---|---|---|---|---|
+| win / x64 | `https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip` | 18,301,924 | `95f953f726aac8f320c7038f85785df9` | `fcd01ed2b93e9a68632c7863c83b9f66bf64406a66357be1df7b8b75596f3e45` |
+| mac / arm64 | `https://download.kiwix.org/release/kiwix-tools/kiwix-tools_macos-arm64-3.8.1.tar.gz` | 10,254,751 | `300d29d6ea02a9353092f29b8fabf76a` | `222e8398ca50ac005a7e92cf0116e0c83e3c44c79cab0bb7f6537943d517e8d3` |
+| mac / x64 | `https://download.kiwix.org/release/kiwix-tools/kiwix-tools_macos-x86_64-3.8.1.tar.gz` | 10,768,392 | `7032160e0c4dbabc11830e27f82a9c4f` | `70219e56f7c274e1fc0db8487abdcc91bde9a6f2923958894c0c81ee24b06c01` |
+| linux / x64 | `https://download.kiwix.org/release/kiwix-tools/kiwix-tools_linux-x86_64-3.8.1.tar.gz` | 21,503,420 | `ab0e372a814fde612ed79fd2a0b82d5a` | `46557f9a3c3eaada2556a957cf5bc662c07dc6286e8924e04fa3a173f83ff6dd` |
 
-Authenticode (inspected 2026-09-06 on Windows 11 with `Get-AuthenticodeSignature`; residual R-4
-answered for this build): `kiwix-serve.exe`, `kiwix-manage.exe` and `kiwix-search.exe` are
-**Valid**, signer `CN=Association Kiwix, O=Association Kiwix, L=Lausanne, S=Canton of Vaud, C=CH`;
-the five ICU DLLs are **NotSigned**. zip SHA-256
-`FCD01ED2B93E9A68632C7863C83B9F66BF64406A66357BE1DF7B8B75596F3E45` (18,301,924 B). Per-file
-SHA-256: `kiwix-serve.exe` `619ECCC76C112A57538E3CEB001D75E71CAF5A040171B2C1399C4D19F8E9BC95`,
+(The yaml's `arch` key is HilbertRaum's own — `x64` for both win and the macOS x86_64 asset, to
+match `hostRuntimeArch()` — while the filename keeps upstream's `x86_64` spelling.) The win
+build's own per-file inventory (Authenticode + per-file SHA-256, inspected 2026-09-06 on Windows
+11 with `Get-AuthenticodeSignature`; residual R-4 answered for this build): `kiwix-serve.exe`,
+`kiwix-manage.exe` and `kiwix-search.exe` are **Valid**, signer `CN=Association Kiwix,
+O=Association Kiwix, L=Lausanne, S=Canton of Vaud, C=CH`; the five ICU DLLs are **NotSigned**.
+Per-file SHA-256: `kiwix-serve.exe` `619ECCC76C112A57538E3CEB001D75E71CAF5A040171B2C1399C4D19F8E9BC95`,
 `kiwix-manage.exe` `43E9A19D3BF66D6D158A187B1799AEE75B1797C06F8F17C6DD2BDEBAE56E177C`,
 `kiwix-search.exe` `EBE683AB03D50BC6893E6D69D7F1753E5FD6EBDF89488ADFFD900574C24CDBB9`,
 `icudt74.dll` `CE6F56B89F3C7163A166210977642559C87033B579FF129C61443DE57FBD771B`,
 `icuin74.dll` `A80EFBE7966ECD99A86B9F1694BAD6995C8B43FEBC1B42FBFF5A3F5E9A6E36FF`,
 `icuio74.dll` `FEBDA93002C9E70A2DEE1DA316A799B5416A6EC5430FA88AA9AF82BBA3ADA0A6`,
 `icutu74.dll` `E533BD62973D215F5306B24C2BD473CC3B161C7F88819812284EE18132CA9560`,
-`icuuc74.dll` `0E3EC2D0D821B6244B78129334AED0E7EBE3CDE51F00D2FF77170C4900AF7F67`.
-Source tarballs: **NOT in hand** — P8 obtains them (B19 aggregation reasoning: a preloaded
-Kit that ships these GPL binaries must carry their corresponding source alongside the
-binaries).
+`icuuc74.dll` `0E3EC2D0D821B6244B78129334AED0E7EBE3CDE51F00D2FF77170C4900AF7F67`. The mac/linux archives
+carry no equivalent per-file inspection yet (their code-signing is R-4's remaining manual leg,
+owner's).
 
-Placement on the drive is **manual** until the provisioning wave (P8): unzip the whole
-bundle under `runtime/kiwix-tools/<os>/`. The hashless install marker resolves through the
-`skip-legacy` verifier path (residual R-1) rather than integrity verification.
+Transitive components, with grants **read from the pinned source trees** (`COPYING` files + the
+per-file headers under `src/`, not assumed from upstream README prose):
+
+| Component | Version | Grant, as the source tree states it |
+|---|---|---|
+| kiwix-tools | 3.8.1 | GPL-3.0-or-later (`COPYING` = GPL-3; every header "version 3 … or (at your option) any later version") |
+| libkiwix | 14.1.1 | GPL-3.0-or-later, with **one** file GPL-2.0-or-later (`COPYING` = GPL-3; 43 headers v3-or-later, 1 header v2-or-later) |
+| libzim | 9.4.0 | **GPL-2.0-or-later, with GPL-3.0-or-later files** (`COPYING` = GPL-2; 74 headers v2-or-later, 16 headers v3-or-later — never "all GPL-3") |
+| Xapian (`xapian-core`) | 1.4.23 | GPL-2.0-or-later |
+| libmicrohttpd | 0.9.76 | LGPL-2.1-or-later, statically linked into `kiwix-serve` (version from the kiwix-build recipe's dependency pin — `--version` does not report it) |
+| libcurl | 8.4.0 | the curl license (MIT-style) |
+| ICU | 74 | the Unicode/ICU license (the five `icu*74.dll` in the win bundle) |
+| docopt.cpp | 0.6.3 | MIT/Boost dual, taken under MIT |
+| pugixml | 1.15 | MIT |
+| zlib | 1.3.1 | the zlib license |
+| Zstandard (zstd) | 1.5.7 | BSD-3-Clause/GPL-2 dual, taken under BSD-3 |
+| xz / liblzma | 5.2.6 | public domain (the 5.2.6 `COPYING`; the 0BSD relicensing came in a later xz release) |
+
+The five copyleft components — kiwix-tools, libkiwix, libzim, Xapian, libmicrohttpd — are also
+the five whose corresponding source a preloaded Kit must carry. Their source tarballs, pinned
+against the same kiwix-build recipe (`github.com/kiwix/kiwix-build`) that produced the 3.8.1
+binaries:
+
+| Tarball | Bytes | SHA-256 | Upstream URL |
+|---|---|---|---|
+| `kiwix-tools-3.8.1.tar.xz` | 531,416 | `dd769c9bd3d75b59ad9e451b128187b128da6a10b1241bb2d0325fe4aafe51a3` | `https://download.kiwix.org/release/kiwix-tools/kiwix-tools-3.8.1.tar.xz` |
+| `libkiwix-14.1.1.tar.xz` | 1,123,600 | `e232f42bba33561493e2d7318c3be60d8508e83a8891a8358135519dedc5ff5a` | `https://download.kiwix.org/release/libkiwix/libkiwix-14.1.1.tar.xz` |
+| `libzim-9.4.0.tar.xz` | 217,752 | `7fa374f4714b23c43afa3fb406d7e21c483d77e8218895e1408e2f037969b6ea` | `https://download.openzim.org/release/libzim/libzim-9.4.0.tar.xz` |
+| `xapian-core-1.4.23.tar.xz` | 3,024,644 | `30d3518172084f310dab86d262b512718a7f9a13635aaa1a188e61dc26b2288c` | `https://oligarchy.co.uk/xapian/1.4.23/` |
+| `libmicrohttpd-0.9.76.tar.gz` | 2,199,858 | `f0b1547b5a42a6c0f724e8e1c1cb5ce9c4c35fb495e7d780b9930d35011ceb4c` | `https://dev.kiwix.org/kiwix-build/` (a GNU mirror carries the same release) |
+
+All five are **in hand**, archived by the maintainer outside the repo, **not yet on any drive**
+— the on-drive bundle (proposed `runtime/kiwix-tools/source/`) is **P8-4**, pending the owner's
+layout ruling (plan §3 item 2).
+
+**License-review record — kiwix-tools 3.8.1 runtime assets (status: PENDING the owner's review;
+nothing here authorizes conveyance):** kiwix-tools is the product's **first copyleft third-party
+native binary** — every prior sidecar (llama.cpp, whisper.cpp, the OCR traineddata) is permissive,
+and both llama.cpp review records above say "no new license class enters the product"; that
+sentence does not hold for kiwix-tools, and this record says so plainly rather than repeating it.
+Five components above are copyleft; on a preloaded Kit their corresponding-source duty is meant
+to be discharged by the P8-4 source bundle next to the binaries, and GPL-3.0-or-later text is
+meant to be satisfied by cross-referencing the drive's own root `LICENSE` (HilbertRaum is itself
+GPL-3.0-or-later) rather than inlining the ~35 KB text a second time — both are proposals for the
+owner to confirm, not settled here. Open for the owner: the GPL-3.0-via-root-`LICENSE`
+cross-reference itself; the libmicrohttpd version-from-recipe pin (not observable from the
+binary, so it rests on trusting the kiwix-build history); Authenticode/code-signing inspection
+of the mac/linux archives (R-4's remaining leg — win is done, above); and the consent (P8-2) and
+source-bundle (P8-4) rulings that gate any conveyance (plan §3).
+
+> **To bump the release:** pick a new tag from the
+> [kiwix/kiwix-tools releases](https://github.com/kiwix/kiwix-tools/releases) (the GitHub release
+> ships source archives only; binaries still come from `download.kiwix.org`), re-download all
+> four platform archives, re-verify each against its upstream `.md5` sidecar, recompute each real
+> SHA-256 and promote it into `runtime-sources.yaml`, and re-read the `COPYING` file plus the
+> per-file headers of all five copyleft source trees (re-fetching the source tarballs too) before
+> promoting any of it. A version bump here is a licence re-review, not a mechanical edit.
+
+Placement on the drive today is **manual**: unzip the whole bundle under
+`runtime/kiwix-tools/<os>/`. A hand-placed bundle carries no install marker and resolves through
+the hashless `skip-legacy` verifier path (residual R-1) rather than integrity verification; an
+in-app install (family contract landed, #339 P8-1) writes the marker described above and both
+`kiwix-serve` and `kiwix-manage` verify normally — but no user-reachable install exists yet
+(`downloadEngine` still takes no arguments; the consent step is P8-2).
 
 ## The vision role + mmproj projector (image understanding, Phases V1–V5)
 

@@ -2480,8 +2480,9 @@ offline article viewer. Files are registered in place, never copied.
   latches.
   `kiwix-manage` (`tools.ts`) runs under the same pre-spawn verifier — a hashless
   install marker resolves `skip-legacy` and keeps launching under a logged warning
-  rather than integrity verification (residual R-1, open until the provisioning wave
-  proves both binaries' hashes/verification/repair) — registers every PID, honours the
+  rather than integrity verification (residual R-1, CLOSED for an in-app install at P8-1 —
+  see D-Z17's closure statement; a hand-placed bundle still resolves `skip-legacy` by design)
+  — registers every PID, honours the
   caller's abort, and settles only after its child reaches a terminal state or the
   bound expires, so no directory is ever removed while the child may still be writing
   it. `ZimService.serverState()` exposes `{ revision, build, generation, port, alive }`
@@ -2676,6 +2677,35 @@ offline article viewer. Files are registered in place, never copied.
   winner named; stale winner; null / absent status show nothing), `zim-ipc` (the fake reports
   null).
 
+- **D-Z17 — the `kiwix_tools` family contract and the R-1 closure (#339 P8-1, 2026-09-06;
+  `feat/339-p8-1-kiwix-family`).** `runtime-sources.yaml`'s `kiwix_tools:` block is the third
+  build family and the first **optional, multi-file** one: `optional: true` (declarative — the
+  code-side `SidecarFamilySpec.optional` in `services/assets.ts` is load-bearing, so a
+  user-writable drive yaml cannot promote the family into the default engine-install selection)
+  and `executables: [kiwix-serve, kiwix-manage, kiwix-search]` (base names; per-build
+  `runtime_files` adds the five Windows ICU DLLs). `shared/runtime-sources.ts` validates the
+  block and exposes it through a keyed `RuntimeSourcesResult.families` map (`sources`/`whisper`
+  stay as aliases into the same objects). `services/assets.ts`'s `SIDECAR_FAMILY_SPECS` is the
+  one registry both the installer and the sell gate read, so the required-file set — the
+  primary binary, `kiwix-manage` as the code-side floor, plus the yaml's `executables` and
+  `runtime_files` — can never drift between them. An install checks every declared file is
+  present after extraction and hashes all of them into the `.hilbertraum-runtime.json` marker
+  **all-or-nothing**; `engineStatus()` never counts the family toward `installed`/
+  `missingFamilies`, reporting it instead through the additive `missingOptionalFamilies`; the
+  sell gate's `optionalRuntimesConsistent` requires the family fully provisioned or entirely
+  absent, grouping the two macOS builds (which share one `extract_to`) by resolved directory.
+  **R-1 closure statement:** an in-app install writes a marker with entries for both
+  `kiwix-serve` and `kiwix-manage` (and `kiwix-search` plus the ICU DLLs), so both spawn seams —
+  `zim/tools.ts` (`kiwix-manage`) and `zim/serve.ts` (`kiwix-serve`) — resolve their binary
+  inside that marker's directory and get a real `ok`/`mismatch` verdict instead of `skip-legacy`.
+  `skip-legacy` survives for exactly one remaining case: a bundle placed on the drive by hand,
+  with no marker at all — logged once per binary per process (both `tools.ts` and `serve.ts`
+  carry the warning since P8-1). On a commercial drive that hand-placed case is caught before
+  sale by `optionalRuntimesConsistent`, not by the verifier. Still open: the consent step that
+  lets a user actually reach the installer (P8-2), the drive scripts' `--family kiwix_tools`
+  support (P8-3), the on-drive corresponding-source bundle (P8-4), and the network-inventory
+  prose (P8-5) — see "Deliberately not built" below.
+
 ### Module map
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
@@ -2776,9 +2806,13 @@ outcomes notice over every reason code); `ReviewEvidencePane.test.tsx` / `Review
 
 ### Deliberately not built (MVP cut; §5 item 21 tracks the follow-ups)
 
-Provisioning of the `kiwix_tools` family (runtime-sources.yaml, engine downloader,
-DRIVE-NOTICES, commercial-drive checks, fetch scripts — binaries are placed manually);
-persistent article import (Tier 2); an in-app ZIM catalog/downloader; evidence review
+Provisioning of the `kiwix_tools` family: the family contract itself landed (#339 P8-1,
+D-Z17) — `runtime-sources.yaml`, the in-app installer, the sell gate. Still open: the consent
+step that lets a user reach the installer (P8-2), the drive scripts' `fetch-runtime`/
+`prepare-drive` support (P8-3), the on-drive corresponding-source bundle (P8-4), and the
+network-inventory prose in PRIVACY/README/user-guide/security-model (P8-5) — until P8-2 lands,
+binaries are still placed manually. Also not built: persistent article import (Tier 2); an
+in-app ZIM catalog/downloader; evidence review
 over archive citations (they resolve as honest 'unresolved'); packs on the whole-document
 / compare paths (disclosed per answer as `mode`, not queried — P4); quality guarantees
 for non-Wikimedia ZIMs. Serving names are computed
