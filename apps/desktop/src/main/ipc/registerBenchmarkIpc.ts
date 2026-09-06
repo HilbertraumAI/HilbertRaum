@@ -7,12 +7,14 @@ import type {
   BenchmarkProgressStep,
   BenchmarkResult,
   GpuDevice,
+  ModelPlacement,
   PerformanceSnapshot,
   ResidentModelRow
 } from '../../shared/types'
 import type { ModelManifest } from '../../shared/manifest'
 import { detectSystem, runBenchmark, type GpuBenchmarkInput } from '../services/benchmark'
 import { effectiveReadOrPersisted, liveChatRecommendation } from './registerModelIpc'
+import { notifyPerformanceChanged } from './performance-notify'
 import { backfillOutgoing, historyEquals, mergeSampleIntoResult } from '../services/benchmark-persistence'
 import {
   findMachine,
@@ -21,15 +23,16 @@ import {
   nextStartMemory,
   otherMachines,
   placementVerdict,
+  recordAnswerSpeed,
   upsertHistory,
   type NextStartMemory
 } from '../services/performance'
 import { latestModelPlacement, setModelPlacementObserver } from '../services/runtime/placement'
 import { latestEffectiveReadBySource } from '../services/read-speed'
-import { EVENTS } from '../../shared/ipc'
+import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
 import { gpuUsefulForProfile } from '../services/runtime/gpu'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
-import { discoverManifests, graphicsBudgetMib, weightsMib } from '../services/models'
+import { discoverManifests, graphicsBudgetMib, launchContextTokens, weightsMib } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -69,6 +72,10 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   let gpuAutoDisabled = false
   const persistProbe = (list: GpuDevice[]): void => {
     updateSettings(ctx.db, { gpuProbe: { devices: list, probedAt: new Date().toISOString() } })
+    // The graphics tile and the memory class read this probe: an empty device list is a
+    // result too (the tile flips to "None"), so every write notifies — the successful probe,
+    // the probe that could not run, and the probe that threw alike (PR #303 P3 push).
+    notifyPerformanceChanged()
   }
   try {
     const binPath = resolveLlamaServerPath(ctx.paths.rootPath, process.platform, process.env, {
@@ -136,7 +143,15 @@ function nextStartMemoryFor(settings: AppSettings): NextStartMemory {
  *
  * Throws the friendly, localized refusal. The Diagnostics button surfaces it; the first-run
  * caller (`maybeRunFirstBenchmark`) already logs and drops it, and re-runs next launch because
- * `lastBenchmark` stays null.
+ * `lastBenchmark` stays null. A refused call emits NO `performance:changed`: the span it saw
+ * belongs to the running benchmark, whose own release will announce the idle state — a
+ * refusal announcing it would tell the screen the first run had finished.
+ *
+ * The push (P3, G6): `performance:changed` once the span is taken (`running` flips true —
+ * the screen learns about a run it did not start: first-run, moved-drive, another window)
+ * and once more in the `finally`, after BOTH the persist and the release, on success and on
+ * failure alike. That second push is the idle signal; the progress 'done' step precedes the
+ * persist and must not be read as one.
  */
 export async function runAndPersistBenchmark(
   ctx: AppContext,
@@ -145,10 +160,12 @@ export async function runAndPersistBenchmark(
   const busy = modelBusyLane(ctx)
   if (busy) throw new Error(tMain(modelBusyMessageKey(busy)))
   const releaseOccupancy = ctx.runtime.occupancy.begin('benchmark')
+  notifyPerformanceChanged()
   try {
     return await runBenchmarkAndPersist(ctx, onProgress)
   } finally {
     releaseOccupancy()
+    notifyPerformanceChanged()
   }
 }
 
@@ -246,6 +263,7 @@ export function maybeRunFirstBenchmark(ctx: AppContext): void {
         if (!historyEquals(seeded, settings.benchmarkHistory)) {
           updateSettings(ctx.db, { benchmarkHistory: seeded })
           log.info('Filed the last benchmark result under this computer in the history')
+          notifyPerformanceChanged()
         }
         return
       }
@@ -264,10 +282,13 @@ export function maybeRunFirstBenchmark(ctx: AppContext): void {
           profile: known.profile,
           recommendedModelId: known.recommendedModelId
         })
+        // The screen may already be open on the outgoing computer's result: tell it.
+        notifyPerformanceChanged()
         return
       }
       if (!historyEquals(history, settings.benchmarkHistory)) {
         updateSettings(ctx.db, { benchmarkHistory: history })
+        notifyPerformanceChanged()
       }
       log.info('Drive is on a new computer: benchmarking it in the background')
     } else {
@@ -304,11 +325,21 @@ export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
 }
 
 /**
- * The Performance screen's one read: the last result and whether it is this computer's,
- * the other computers the drive has been checked on, whether a run is in progress, and the
- * session's observed figures (a finished answer, a model start, a file check) — the latter
- * two straight from the read-speed latches, never persisted.
+ * Is the ACTIVE chat model resident and ready? Read from the runtime's state, never from
+ * `active() != null` alone and never from the placement latch (DR6): the placement is
+ * recorded when the rung is healthy but BEFORE the #109 warm-up generation finishes, and
+ * `status().running` stays false for that whole window — so a loading model reads "not
+ * loaded" until it is actually ready. A start in flight (a first start or a switch) reads
+ * the same way, and a runtime running some OTHER model than the active one does not count
+ * for this row. Optional-chained like the sibling service probes: partial test contexts
+ * build a `runtime` with only the members they need.
  */
+function chatModelResident(ctx: AppContext, activeId: string | null): boolean {
+  const status = ctx.runtime?.status?.()
+  if (!status || !status.running || !status.healthy || status.startingModelId) return false
+  return activeId == null || status.modelId === activeId
+}
+
 /** The "Your model" block: the active model against this computer's memory. */
 function buildPlacement(
   ctx: AppContext,
@@ -316,10 +347,13 @@ function buildPlacement(
   here: string | null,
   ramGb: number,
   memory: NextStartMemory,
-  manifests: ModelManifest[]
+  manifests: ModelManifest[],
+  recommendedModelId: string | null
 ): PerformanceSnapshot['placement'] {
   // The class and the card are the NEXT start's (GPU off / auto-disabled → cpu, no card); the
-  // observed placement below is what the LAST start did and is kept as an observation.
+  // observed placement below is what the LAST start did, and it counts only while the current
+  // configuration would repeat it (`matchesConfig` below — a forced-CPU configuration admits
+  // no GPU record; the record itself is kept and travels as `observedMismatch`).
   const { memoryClass } = memory
   const ramMb = ramGb > 0 ? Math.round(ramGb * 1024) : null
   const vramMb = memory.device?.totalMb ?? null
@@ -330,15 +364,27 @@ function buildPlacement(
   // (`weightsMib`, the picker's own conversion — PR #308 audit decision 8).
   const gib = (m: ModelManifest | undefined): number | null =>
     m ? Math.round((weightsMib(m) / 1024) * 10) / 10 : null
+  // The context a start would ACTUALLY use, resolved by the launch path's own helper
+  // (`launchContextTokens`) rather than re-derived here (PR #303 audit M5 residual). The old
+  // `??` chain differed from it in one real case: a manifest whose `recommended_context_tokens`
+  // is missing or 0 (the parser returns 0) showed a "0-token context" while the runtime starts
+  // on `settings.contextTokens`. One helper, one answer, for the active AND the recommended
+  // model — the screen no longer recomputes either.
+  const contextFor = (modelId: string | null): number | null =>
+    modelId == null ? null : launchContextTokens(settings, manifests.find((m) => m.id === modelId) ?? null)
   let model: PerformanceSnapshot['placement']['model'] = null
   const activeManifest = activeId ? manifests.find((m) => m.id === activeId) ?? null : null
   if (activeId) {
     model = {
       id: activeId,
       sizeOnDiskGb: gib(activeManifest ?? undefined) ?? 0,
-      contextTokens: settings.contextTokensOverride ?? activeManifest?.recommendedContextTokens ?? settings.contextTokens
+      contextTokens: contextFor(activeId) ?? settings.contextTokens
     }
   }
+  // The LIVE recommendation's context (`snapshot.recommendation.modelId`, the model the CTA
+  // starts), not the id saved with the check: the screen quotes this figure beside the live
+  // name, and the saved pick is history (PR #308 decision 8 over PR #303 M5's saved-id read).
+  const recommendedContextTokens = contextFor(recommendedModelId)
   // Every model the app can hold (benchmark.md "Models on this computer"): chat and translation
   // auto-fit onto the card (on a machine with one); images, document search and voice are pinned
   // to the processor by design (contention immunity; vision/runtime.ts, embeddings/e5.ts,
@@ -356,7 +402,7 @@ function buildPlacement(
       modelId: activeId,
       sizeOnDiskGb: model?.sizeOnDiskGb ?? null,
       device: gpuDevice,
-      loaded: ctx.runtime.active() != null,
+      loaded: chatModelResident(ctx, activeId),
       lifetime: 'session',
       gpuLayers: null,
       totalLayers: null
@@ -426,14 +472,32 @@ function buildPlacement(
       ? latched
       : (settings.modelPlacements[activeId] ?? null)
     : null
-  const observed =
+  const mine =
     candidate && (here == null || candidate.machineKey == null || candidate.machineKey === here) ? candidate : null
+  // MEASURED EVIDENCE MUST MATCH THE CONFIGURATION (PR #303 audit). A placement is a
+  // measurement of ONE start: this model, this machine (above), with a specific context and on
+  // a specific backend. Change the context size, or force the processor after a GPU start, and
+  // the stored buffers describe a run the app would no longer perform — presenting them as
+  // "measured" would state a fit the current settings never asked for. The record is KEPT (the
+  // next matching start restores it, and it is still the truth about that start); the row falls
+  // back to the weights-only estimate, and the mismatch travels with the snapshot so the copy
+  // can say when the earlier measurement was taken. A configuration that forces the processor
+  // (`gpuMode: 'off'`, or the auto-disable after a GPU failure) admits only a `cpu` record; an
+  // 'auto' configuration admits either, because the ladder itself decides per start.
+  const cpuOnly = settings.gpuMode === 'off' || settings.gpuAutoDisabled
+  const matchesConfig = (p: ModelPlacement): boolean =>
+    p.contextTokens === (model?.contextTokens ?? null) && (!cpuOnly || p.backend === 'cpu')
+  const observed = mine && matchesConfig(mine) ? mine : null
+  const observedMismatch =
+    mine && !matchesConfig(mine) ? { contextTokens: mine.contextTokens, backend: mine.backend, at: mine.at } : null
   return {
     memoryClass,
     ramMb,
     vramMb,
     model,
+    recommendedContextTokens,
     observed,
+    observedMismatch,
     verdict: placementVerdict({
       memoryClass,
       ramMb,
@@ -450,17 +514,28 @@ function buildPlacement(
   }
 }
 
+/**
+ * The Performance screen's one read: the last result and whether it is this computer's,
+ * the other computers the drive has been checked on, whether a run is in progress, the
+ * placement block, and the session's observed figures. A GETTER: it must never call
+ * `notifyPerformanceChanged` (the push would fan a read out into more reads).
+ *
+ * `observed` (M3 / G2) is SESSION latches only — the last finished answer, the newest
+ * `model_load` sample, the newest `checksum` sample, each latched in the main process and
+ * cleared with it (they survive a workspace lock/unlock, never a restart). The persisted
+ * `current.effectiveRead` is deliberately NOT a fallback here, for a same-machine result as
+ * much as a foreign one: the copy promises "while you worked", and a weeks-old sample is not
+ * that. The Drive tile reads the persisted figure with its own source and date instead.
+ */
 export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
+  // Every record below is already VALIDATED: `getSettings` normalizes `lastBenchmark`,
+  // `benchmarkHistory` and `modelPlacements` on read (PR #303 audit H1/L8), so the snapshot
+  // composes trustworthy records and nothing here has to defend against `{}`.
   const settings = getSettings(ctx.db)
   const sys = detectSystem()
   const here = machineKey(sys)
   const current = settings.lastBenchmark
   const currentKey = machineKey(current)
-  // The persisted model-load sample outlives the session; the session latch wins when it
-  // exists (a start we just watched), otherwise the last persisted one still says how the
-  // last start on this drive went.
-  const persistedLoad =
-    current?.effectiveRead?.source === 'model_load' ? current.effectiveRead : null
   // The BUDGET device for the next start (decision 9), the same one `probeAndPersistGpu` and
   // `listModels` name — never the first device the driver happened to list.
   const memory = nextStartMemoryFor(settings)
@@ -479,39 +554,61 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
   const manifests: ModelManifest[] = ctx.manifestsDir
     ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
     : []
+  // LIVE, through the same inputs the `listModels` ★ uses (PR #308 audit decision 8, R4): a
+  // fresh probe, a flipped GPU toggle or a new speed sample moves this at once, while
+  // `current.recommendedModelId` keeps saying what the check said at the time. The
+  // `listModels` handler returns no list without a catalog, so there is no ★ to agree with.
+  // Computed before the placement block, which quotes this model's launch context.
+  const recommendation = ctx.manifestsDir ? liveChatRecommendation(settings, manifests) : null
   return {
     current: filled,
-    // LIVE, through the same inputs the `listModels` ★ uses (PR #308 audit decision 8, R4): a
-    // fresh probe, a flipped GPU toggle or a new speed sample moves this at once, while
-    // `current.recommendedModelId` keeps saying what the check said at the time. The
-    // `listModels` handler returns no list without a catalog, so there is no ★ to agree with.
-    recommendation: ctx.manifestsDir ? liveChatRecommendation(settings, manifests) : null,
+    recommendation,
     currentGpu: probed ? { name: probed.name, totalMb: probed.totalMb } : null,
     currentMachine,
     otherMachines: otherMachines(settings.benchmarkHistory, currentKey ?? here),
-    running: modelBusyLane(ctx) === 'benchmark',
-    placement: buildPlacement(ctx, settings, here, sys.ramGb, memory, manifests),
+    // The benchmark's OWN span, read directly (M1): `modelBusyLane` answers "chat" first, so a
+    // permitted foreground answer used to hide a held benchmark span and the screen re-enabled
+    // its button mid-run.
+    running: ctx.runtime.occupancy.held('benchmark'),
+    placement: buildPlacement(ctx, settings, here, sys.ramGb, memory, manifests, recommendation?.modelId ?? null),
     observed: {
       lastAnswer: latestAnswerSpeed(),
-      lastModelLoad: latestEffectiveReadBySource('model_load') ?? persistedLoad,
+      lastModelLoad: latestEffectiveReadBySource('model_load'),
       lastChecksum: latestEffectiveReadBySource('checksum')
     }
   }
+}
+
+/**
+ * The chat-stream answer-speed observer's body (wired in `initBackend` through
+ * `setAnswerSpeedObserver`): latch the finished answer's #290 payload with the model that
+ * produced it, then push. The latch itself (`recordAnswerSpeed`) stays pure; the push lives
+ * here in the IPC layer. Local-API answers never pass through the chat observer, so they
+ * never latch (documented, not changed).
+ */
+export function observeAnswerSpeed(ctx: AppContext, speed: AnswerSpeed): void {
+  recordAnswerSpeed(speed, ctx.runtime.active()?.modelId ?? null)
+  notifyPerformanceChanged()
 }
 
 export function registerBenchmarkIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
   // Persist every observed placement under its model id (benchmark.md "Your model"), so the
   // row survives a restart. Skipped while locked; a failure is logged, never thrown into a start.
+  // The session latch already moved before this observer ran, and the snapshot reads the
+  // latch first — so the push follows the observation even when the persist is skipped.
   setModelPlacementObserver((placement) => {
     try {
-      if (!workspaceAdmitsWork(ctx.workspace)) return
-      const placements = { ...getSettings(ctx.db).modelPlacements, [placement.modelId]: placement }
-      updateSettings(ctx.db, { modelPlacements: placements })
+      if (workspaceAdmitsWork(ctx.workspace)) {
+        const placements = { ...getSettings(ctx.db).modelPlacements, [placement.modelId]: placement }
+        updateSettings(ctx.db, { modelPlacements: placements })
+      }
     } catch (err) {
       log.warn('Could not persist the model placement', { error: String(err) })
     }
+    notifyPerformanceChanged()
   })
+
   // SEC-N2: both handlers touch ctx.db (via updateSettings/getSettings). The ctx.db getter already
   // fail-closes when the workspace is locked, but it throws a raw English string; mirror every other
   // DB-touching handler with an explicit requireUnlocked() so a locked call surfaces the localized

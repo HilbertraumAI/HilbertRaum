@@ -34,7 +34,10 @@ export interface Reranker {
   rerank(query: string, documents: string[], opts?: RerankOptions): Promise<RerankedHit[]>
   /** Optional: is the sidecar resident right now? (Performance screen.) */
   isLoaded?(): boolean
+  /** Optional (PR #303 P3): subscribe to `isLoaded()` flips; returns the unsubscribe. */
+  onResidencyChange?(cb: () => void): () => void
   /** Release the backing sidecar PERMANENTLY. Called on `will-quit`. */
+
   stop?(): Promise<void>
   /** Stop the sidecar but allow a lazy restart on next use. Called on workspace lock. */
   suspend?(): Promise<void>

@@ -120,6 +120,31 @@ export class LlamaReranker implements Reranker {
    * for the rest of the session. One per start.
    */
   private startAbort: AbortController | null = null
+  /** Residency listeners (`onResidencyChange`): fired after `isLoaded()` flips. */
+  private readonly residencyListeners = new Set<() => void>()
+
+  /**
+   * Subscribe to residency transitions (PR #303 P3): the lazy start landing and the
+   * suspend/stop teardown — everything that flips `isLoaded()`. Fired synchronously after
+   * the flip, before the kill is awaited. Observability only; a throwing listener never
+   * breaks the sidecar's lifecycle. Returns the unsubscribe.
+   */
+  onResidencyChange(cb: () => void): () => void {
+    this.residencyListeners.add(cb)
+    return () => {
+      this.residencyListeners.delete(cb)
+    }
+  }
+
+  private emitResidencyChange(): void {
+    for (const cb of this.residencyListeners) {
+      try {
+        cb()
+      } catch {
+        /* observability only */
+      }
+    }
+  }
 
   constructor(private readonly opts: LlamaRerankerOptions) {
     this.id = opts.id
@@ -190,6 +215,7 @@ export class LlamaReranker implements Reranker {
         .start()
         .then(() => {
           this.server = server
+          this.emitResidencyChange()
         })
         .catch((err) => {
           const error = err instanceof Error ? err : new Error(String(err))
@@ -306,9 +332,13 @@ export class LlamaReranker implements Reranker {
       }
       const server = this.server
       this.server = null
-      if (server) await server.stop()
+      if (server) {
+        this.emitResidencyChange()
+        await server.stop()
+      }
     } finally {
       // Cleared so a post-suspend rerank() can lazily restart (suspend() permits a fresh start;
+
       // only stop()'s separate, permanent `stopped` latch blocks that).
       this.tearingDown = false
     }

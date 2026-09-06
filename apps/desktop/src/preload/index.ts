@@ -278,6 +278,14 @@ const api = {
     ipcRenderer.on(EVENTS.benchmarkProgress, handler)
     return () => ipcRenderer.removeListener(EVENTS.benchmarkProgress, handler)
   },
+  /** Subscribe to the payload-free "re-read `performance:get`" push (every window receives it);
+   *  returns an unsubscribe fn. */
+  onPerformanceChanged: (cb: () => void): (() => void) => {
+    const handler = () => cb()
+    ipcRenderer.on(EVENTS.performanceChanged, handler)
+    return () => ipcRenderer.removeListener(EVENTS.performanceChanged, handler)
+  },
+
   /** "Try GPU again": clears the compatibility-mode flag, re-probes, returns fresh settings. */
   tryGpuAgain: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.tryGpuAgain),
 

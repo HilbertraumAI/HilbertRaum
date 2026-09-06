@@ -133,6 +133,36 @@ machine, and the two keys are always written in one `updateSettings` call, histo
 `benchmark.md` "History per machine") **and `modelPlacements`** (`Record<modelId, ModelPlacement>`,
 default `{}`: where each model's last start landed per llama.cpp's load log, stamped with
 `machineKey`; object-valued, size-capped); see `benchmark.md` "History per machine" / "Your model".
+**Since the PR #303 audit (H1/L8, owner decision G7) these three keys are VALIDATED, not merely
+shape-checked — on WRITE and on READ**, by the pure normalizers in
+[`shared/benchmark-schema.ts`](../apps/desktop/src/shared/benchmark-schema.ts)
+(`normalizeBenchmarkResult` / `normalizeBenchmarkHistory` / `normalizeModelPlacement(s)`, plus
+`normalizeEffectiveRead` / `normalizeSpeedBasis`; `machineKey` lives there too and
+`services/performance.ts` re-exports it):
+
+- `lastBenchmark` — a `BenchmarkResult` is valid when it is a plain object carrying EITHER a
+  parseable `ranAt` OR a real `HardwareProfile` (the LEGACY profile-only blob, kept valid by G3
+  with an unknown identity, `ranAt: ''` as the unknown-date sentinel — never a fabricated "now" —
+  and safe defaults). `{}` and friends are rejected. Every figure is finite and `>= 0` or `null`,
+  a malformed identity normalizes to the unknown one (so `machineKey` returns `null`, never half a
+  key), `warnings` keeps its strings, and the optional legacy fields (`gpuVramMb`, `speedBasis`,
+  `measuredModelId`, `effectiveRead`) stay ABSENT when the record has none — absence is what the
+  screens render as "approximate" / "not recorded".
+- `benchmarkHistory` — each element is normalized, invalid AND unkeyed entries are dropped (the
+  history is addressed by machine, so an entry `machineKey` cannot key could never be matched),
+  one record per key survives (newest `ranAt`), newest first, capped at `MAX_BENCHMARK_HISTORY`.
+- `modelPlacements` — each record must validate (non-empty `modelId`, `'gpu' | 'cpu'` backend,
+  positive whole `contextTokens`, parseable `at`; layer/buffer figures finite `>= 0` or `null`; an
+  ALL-NULL reading is valid — L7 renders it as `unknown`; a self-contradicting `gpuLayers >
+  totalLayers` is rejected) AND be filed under its own `modelId`.
+
+On WRITE, garbage is IGNORED (a `lastBenchmark` that normalizes to nothing leaves the previous
+result standing — the convention every mistyped value here follows; `null` is still the explicit
+clear), while the two collections store what survived. On READ the repair is IN MEMORY only: a row
+written by an older build, a hand-edited DB or a half-written blob is normalized for the caller
+and the stored row is left untouched, so `getSettings` keeps its no-side-effect contract. The
+256 KB `MAX_SETTINGS_OBJECT_BYTES` ceiling is a **`JSON.stringify(...).length` cap** (UTF-16 code
+units, not verified UTF-8 bytes) applied to the normalized value.
 **The post-MVP UX round added `autoStartActiveModel`** (boolean, default `true`) **and
 `checksumCache`** (`Record<path, {size, mtimeMs, sha256}>`, default `{}` — the persisted L2 of
 the weight-file hash cache).
@@ -574,7 +604,9 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   the injected `effectiveRead`.
 - **`ipc/registerBenchmarkIpc.ts`** — `runBenchmark()` (`benchmark:run`); runs it, persists to
   `settings.lastBenchmark` + `settings.benchmarkHistory`, returns the result, and streams
-  `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window. `performance:get`
+  `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window — a step only when it
+  succeeded (`'drive'` only on a successful probe, `'speed'` only on an obtained reading,
+  `'done'` always, and `'done'` PRECEDES the persist and the occupancy release). `performance:get`
   returns the `PerformanceSnapshot` the Performance screen renders (`current`,
   **`recommendation: LiveRecommendation | null`** = `{ modelId: string | null; basis: MemoryClass }`
   — the LIVE chat pick for the next start (PR #308 audit decision 8), computed by
@@ -586,14 +618,48 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   `currentMachine`,
   `currentGpu` — the budget device for the next start, `{ name, totalMb }` or null, the same
   device `BenchmarkResult.gpu` and the `listModels` ★ go by, never `settings.gpuProbe.devices[0]` —,
-  `otherMachines`, `running`, `placement: { memoryClass, ramMb, vramMb, model,
-  observed, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }` (the
+  `otherMachines`, `running` (the `benchmark` occupancy span, read directly),
+  `placement: { memoryClass, ramMb, vramMb, model, recommendedContextTokens, observed,
+  observedMismatch, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }` (the
   pre-start `verdict` on a discrete card is `estimateGraphicsNeedMib(manifest) ≤
   graphicsBudgetMib(device)` — the picker's fit — with `needMb` = the unrounded weights and
   `budgetMb` = the card's total; `PlacementVerdictInput` in services/performance.ts carries
-  `graphicsBudgetMb` and `manifest` for it), `observed: { lastAnswer, lastModelLoad, lastChecksum }`; the
-  observed figures are session-only latches, never persisted). Registered in `initBackend()`;
-  exposed on preload `api.runBenchmark` / `api.getPerformance` / `api.onBenchmarkProgress`.
+  `graphicsBudgetMb` and `manifest` for it),
+  `observed: { lastAnswer, lastModelLoad, lastChecksum }`). Two `placement` fields were added by
+  the PR #303 audit P4: **`recommendedContextTokens`** (`number | null`) is the context the
+  RECOMMENDED model would launch with — the live `recommendation.modelId`, the model the screen's
+  CTA starts, never the id saved with the check (PR #308 decision 8 on top of #303 M5) — resolved
+  main-side by the launch path's own
+  `launchContextTokens` — the screen used to recompute it with `??` and showed a "0-token context"
+  for a manifest stating no window, while the runtime starts such a model on
+  `settings.contextTokens` (M5 residual); **`observedMismatch`**
+  (`{ contextTokens, backend, at } | null`) reports a stored/latched placement that is real but
+  does not describe the current configuration (a different context size, or a GPU measurement
+  under a forced-CPU configuration) — the record is kept, `observed` goes `null` so the row falls
+  back to the weights-only ESTIMATE the current settings would actually produce (on a discrete
+  card that estimate is the picker's fit above), and the copy
+  dates the earlier measurement instead of presenting it as the fit.
+  The observed figures are SESSION latches only — session = the main-process lifetime (they
+  survive a workspace lock/unlock, an app restart clears them) — and never fall back to a
+  persisted sample, foreign or same-machine (PR #303 audit M3/G2): the answer figures are never
+  persisted; the read samples persist SEPARATELY into the benchmark records (`effectiveRead` on
+  `lastBenchmark` and this machine's history entry) where the Drive tile reads them with their
+  own source and date. Local-API answers never pass through the chat observer and never latch.
+  Registered in `initBackend()`; exposed on preload `api.runBenchmark` / `api.getPerformance` /
+  `api.onBenchmarkProgress` / `api.onPerformanceChanged`.
+- **`EVENTS.performanceChanged`** (`performance:changed`, PR #303 audit G6) — a PAYLOAD-FREE
+  main → renderer push to every live window: "something `performance:get` reads changed, re-read
+  it". Emitted by `notifyPerformanceChanged()` (`ipc/performance-notify.ts`) only AFTER a
+  mutation — a benchmark run taking / releasing its span (the release push, after the persist,
+  is the idle signal; a busy-refused run emits nothing), every accepted read-speed sample
+  (including a ranked loser), the answer latch, a placement observation, the restore / seed /
+  backfill / GPU-probe writes (every `probeAndPersistGpu` write, the empty probe of a probe that
+  could not run or threw included), chat-runtime transitions (`RuntimeManager.onChange`),
+  resident-sidecar transitions (`onResidencyChange` on the embedder, reranker, translation and
+  vision runtimes), and the snapshot's settings keys (`PERFORMANCE_SETTINGS_KEYS`) — and never
+  from a getter. The read stays gated; the event carries nothing to gate. Preload:
+  `onPerformanceChanged(cb: () => void): () => void` (returns the unsubscribe). No polling.
+
 - **Renderer:** `DiagnosticsScreen` Run-benchmark button → RAM / CPU / OS-arch / measured read
   speed (`effectiveRead` or "not measured yet") / drive write / tokens-sec / profile /
   recommended model + warnings; re-loads `lastBenchmark` on mount. `HomeScreen` profile reflects

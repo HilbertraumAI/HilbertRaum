@@ -50,17 +50,60 @@ describe('settings write gate — benchmarkHistory (the one array-of-objects set
     updateSettings(db, { benchmarkHistory: null as unknown as History })
     expect(getSettings(db).benchmarkHistory.map((e) => e.cpuModel)).toEqual(['keep'])
   })
+
+  // H1: the gate kept any plain object, so `{}` was a valid history entry — it reached the
+  // snapshot and threw in the screen's number formatter. An entry has to say something about a
+  // machine to be one.
+  it('drops a structurally invalid entry ({} and friends), keeping the valid ones', () => {
+    const db = freshDb()
+    const junk = [{}, { nothing: true }, entry('real'), { profile: 'NOPE' }] as unknown as History
+    updateSettings(db, { benchmarkHistory: junk })
+    expect(getSettings(db).benchmarkHistory.map((e) => e.cpuModel)).toEqual(['real'])
+  })
+
+  // The history is addressed by machine (`machineKey`), so an entry with no identity — the
+  // legacy `{ profile }` blob included — could never be matched again and is not filed. The
+  // same blob stays a perfectly valid `lastBenchmark` (G3).
+  it('drops an entry with no machine identity, and keeps one record per machine', () => {
+    const db = freshDb()
+    const legacy = { profile: 'BALANCED' } as unknown as History[number]
+    const older = { ...entry('same'), ranAt: '2026-01-01T00:00:00Z', tokensPerSecond: 1 } as History[number]
+    const newer = { ...entry('same'), ranAt: '2026-09-05T00:00:00Z', tokensPerSecond: 9 } as History[number]
+    updateSettings(db, { benchmarkHistory: [legacy, older, newer, entry('other')] })
+    const stored = getSettings(db).benchmarkHistory
+    expect(stored.map((e) => e.cpuModel)).toEqual(['same', 'other'])
+    expect(stored[0].tokensPerSecond).toBe(9)
+    updateSettings(db, { lastBenchmark: legacy })
+    expect(getSettings(db).lastBenchmark?.profile).toBe('BALANCED')
+  })
 })
 
 describe('settings write gate — modelPlacements (object map, never an array)', () => {
+  // PR #303 audit P4: `at` used to be the placeholder 'x' here — the record is VALIDATED now
+  // (L8), and a placement the screen dates has to carry a real timestamp.
+  const rec = { modelId: 'm', contextTokens: 1, backend: 'cpu', gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: 1, gpuKvMb: null, cpuKvMb: null, metalMaxWorkingSetMb: null, machineKey: null, at: '2026-09-05T00:00:00Z' } as const
+
   it('stores a plain object map and drops an array or a primitive', () => {
     const db = freshDb()
-    const rec = { modelId: 'm', contextTokens: 1, backend: 'cpu', gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: 1, gpuKvMb: null, cpuKvMb: null, metalMaxWorkingSetMb: null, machineKey: null, at: 'x' } as const
     updateSettings(db, { modelPlacements: { m: rec } })
     expect(getSettings(db).modelPlacements.m?.cpuModelMb).toBe(1)
     updateSettings(db, { modelPlacements: [rec] as unknown as AppSettings['modelPlacements'] })
     updateSettings(db, { modelPlacements: 'junk' as unknown as AppSettings['modelPlacements'] })
     expect(getSettings(db).modelPlacements.m?.cpuModelMb).toBe(1)
+  })
+
+  // L8: the gate checked the MAP only, so `{ m: {} }` and `{ m: 'x' }` were both stored and a
+  // `{}` record reached `placementVerdict`. Each record validates, and the map key must be the
+  // record's own model id (a mismatched key would hand one model's measurement to another).
+  it('drops a record that is not a placement, and one filed under the wrong model id', () => {
+    const db = freshDb()
+    updateSettings(db, { modelPlacements: { m: rec } })
+    updateSettings(db, { modelPlacements: { m: {} } as unknown as AppSettings['modelPlacements'] })
+    expect(getSettings(db).modelPlacements).toEqual({})
+    updateSettings(db, { modelPlacements: { m: rec, junk: 'x' } as unknown as AppSettings['modelPlacements'] })
+    expect(Object.keys(getSettings(db).modelPlacements)).toEqual(['m'])
+    updateSettings(db, { modelPlacements: { other: rec } as unknown as AppSettings['modelPlacements'] })
+    expect(getSettings(db).modelPlacements).toEqual({})
   })
 })
 
@@ -116,14 +159,17 @@ describe('settings write gate (BE-1)', () => {
     expect(updateSettings(db, { gpuLastError: reason }).gpuLastError).toBe(reason)
   })
 
+  // PR #303 audit P4: the blob was `{ profile: 'FAST_LOCAL' }` — a profile name the app has
+  // never had. The record is VALIDATED now (H1), so the fixture states a real `HardwareProfile`;
+  // `gpuProbe` still passes the plain-object gate only (P5 validates it next).
   it('lastBenchmark / gpuProbe accept plain objects only', () => {
     const db = freshDb()
     updateSettings(db, { lastBenchmark: 'junk' as never })
     expect(getSettings(db).lastBenchmark).toBeNull()
     updateSettings(db, { lastBenchmark: [1, 2, 3] as never })
     expect(getSettings(db).lastBenchmark).toBeNull()
-    updateSettings(db, { lastBenchmark: { profile: 'FAST_LOCAL' } as never })
-    expect(getSettings(db).lastBenchmark?.profile).toBe('FAST_LOCAL')
+    updateSettings(db, { lastBenchmark: { profile: 'BALANCED' } as never })
+    expect(getSettings(db).lastBenchmark?.profile).toBe('BALANCED')
     updateSettings(db, { gpuProbe: 3.14 as never })
     expect(getSettings(db).gpuProbe).toBeNull()
     updateSettings(db, { gpuProbe: { devices: [], probedAt: '2026-07-10T00:00:00.000Z' } })
@@ -140,13 +186,15 @@ describe('settings write gate — object-valued size cap + array rejection (CODE
   it('drops an oversized lastBenchmark blob (serialized JSON over the cap)', () => {
     const db = freshDb()
     // A healthy small blob persists…
-    updateSettings(db, { lastBenchmark: { profile: 'FAST_LOCAL' } as never })
-    expect(getSettings(db).lastBenchmark?.profile).toBe('FAST_LOCAL')
-    // …an over-cap payload is dropped, leaving the prior value untouched.
-    const huge = { profile: 'FAST_LOCAL', junk: 'x'.repeat(MAX_SETTINGS_OBJECT_BYTES + 1) }
+    updateSettings(db, { lastBenchmark: { profile: 'BALANCED' } as never })
+    expect(getSettings(db).lastBenchmark?.profile).toBe('BALANCED')
+    // …an over-cap payload is dropped, leaving the prior value untouched. PR #303 audit P4: the
+    // bloat has to ride a REAL field now (`cpuModel`) — an unknown key is stripped by the H1
+    // validator before the cap ever sees it, which would leave this pinning nothing.
+    const huge = { profile: 'BALANCED', cpuModel: 'x'.repeat(MAX_SETTINGS_OBJECT_BYTES + 1) }
     updateSettings(db, { lastBenchmark: huge as never })
-    expect(getSettings(db).lastBenchmark?.profile).toBe('FAST_LOCAL')
-    expect((getSettings(db).lastBenchmark as unknown as { junk?: string }).junk).toBeUndefined()
+    expect(getSettings(db).lastBenchmark?.profile).toBe('BALANCED')
+    expect(getSettings(db).lastBenchmark?.cpuModel).toBe('')
   })
 
   it('drops an oversized checksumCache blob and rejects an ARRAY for the object-default key', () => {

@@ -2593,6 +2593,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .perf-model-title { grid-column: 1; font-size: var(--text-xs); line-height: var(--line-xs); color: var(--text-muted); }
 .perf-model-line { grid-column: 1; font-size: var(--text-base); line-height: var(--line-base); overflow-wrap: anywhere; }
 .perf-model-verdict { grid-column: 1; font-size: var(--text-sm); line-height: var(--line-sm); overflow-wrap: anywhere; }
+.perf-model-note { grid-column: 1; font-size: var(--text-sm); line-height: var(--line-sm); overflow-wrap: anywhere; }
 .perf-model-side { grid-column: 2; grid-row: 1 / span 3; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .perf-models { margin-top: 12px; }
 .perf-models .perf-row { padding: 8px 0; }

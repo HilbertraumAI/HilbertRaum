@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { StrictMode } from 'react'
 import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PerformanceScreen } from '../../src/renderer/screens/PerformanceScreen'
@@ -10,8 +11,11 @@ import {
   type BenchmarkResult,
   type ModelInfo,
   type ModelPlacement,
-  type PerformanceSnapshot
+  type PerformanceSnapshot,
+  type RuntimeStatus
 } from '../../src/shared/types'
+import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
+import { t } from '../../src/shared/i18n'
 import { stubApi } from '../helpers/renderer'
 
 // The Performance screen (design-guidelines §2, benchmark.md "Performance screen"): the
@@ -19,7 +23,10 @@ import { stubApi } from '../helpers/renderer'
 // the two actions that lead somewhere (AI Model for the pick / context size, Diagnostics
 // for the raw table). Copy is plain and encouraging: no "benchmark", no hardware shaming.
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  window.localStorage.clear()
+})
 
 function result(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
   return {
@@ -87,7 +94,11 @@ function placement(over: Partial<PerformanceSnapshot['placement']> = {}): Perfor
     ramMb: 16_077,
     vramMb: 24_822,
     model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, contextTokens: 8192 },
+    // Resolved MAIN-side by `launchContextTokens` since the PR #303 audit M5 residual fix: the
+    // screen reads it off the snapshot instead of recomputing it from the catalog entry.
+    recommendedContextTokens: 8192,
     observed: null,
+    observedMismatch: null,
     verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null },
     models: [
       { role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.4, device: 'gpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
@@ -138,14 +149,32 @@ function snapshot(over: Partial<PerformanceSnapshot> = {}): PerformanceSnapshot 
 
 function install(snap: PerformanceSnapshot, over: Record<string, unknown> = {}) {
   const progress: Array<(step: BenchmarkProgressStep) => void> = []
+  /** Every live `performance:changed` subscriber (the payload-free "re-read the snapshot"). */
+  const pushes: Array<() => void> = []
+  /** The order the screen touched the bridge in — defaults only; an override records nothing. */
+  const calls: string[] = []
+  let unsubscribes = 0
   const api = {
-    getPerformance: vi.fn(async () => snap),
-    listModels: vi.fn(async () => models),
+    getPerformance: vi.fn(async () => {
+      calls.push('getPerformance')
+      return snap
+    }),
+    listModels: vi.fn(async () => {
+      calls.push('listModels')
+      return models
+    }),
     getSettings: vi.fn(async () => DEFAULT_SETTINGS),
     getRuntimeStatus: vi.fn(async () => ({ running: true, modelId: 'qwen3.5-9b-ud-q4kxl', port: 1, healthy: true, message: '' })),
     onBenchmarkProgress: vi.fn((cb: (step: BenchmarkProgressStep) => void) => {
       progress.push(cb)
       return () => {}
+    }),
+    onPerformanceChanged: vi.fn((cb: () => void) => {
+      calls.push('onPerformanceChanged')
+      pushes.push(cb)
+      return () => {
+        unsubscribes += 1
+      }
     }),
     runBenchmark: vi.fn(async () => result()),
     useModel: vi.fn(async () => ({ running: true, modelId: 'qwen3.5-9b-ud-q4kxl', port: 1, healthy: true, message: '' })),
@@ -153,8 +182,35 @@ function install(snap: PerformanceSnapshot, over: Record<string, unknown> = {}) 
     ...over
   }
   stubApi(api)
-  return { api, progress }
+  return { api, progress, pushes, calls, unsubscribed: () => unsubscribes }
 }
+
+/** Deliver `performance:changed` to every subscriber and let the re-read settle. */
+async function pushChanged(pushes: Array<() => void>): Promise<void> {
+  await act(async () => {
+    for (const cb of pushes) cb()
+  })
+}
+
+/** A promise a test resolves by hand — the only way to hold a read "in flight" without timers. */
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
+const RUNNING_STATUS = { running: true, modelId: 'qwen3.5-9b-ud-q4kxl', port: 1, healthy: true, message: '' }
+const STOPPED_STATUS = { running: false, modelId: null, port: null, healthy: false, message: '' }
+
+/** A snapshot with an answer in the observed rows (the M3 background observation). */
+const observedAnswer = {
+  lastAnswer: { tokensPerSecond: 40, ttftMs: 800, tokens: 100, modelId: 'qwen3.5-9b-ud-q4kxl', at: '2026-09-05T15:00:00Z' },
+  lastModelLoad: null,
+  lastChecksum: null
+}
+const noObservations = { lastAnswer: null, lastModelLoad: null, lastChecksum: null }
 
 function renderScreen(onNavigate = vi.fn()) {
   render(
@@ -163,6 +219,15 @@ function renderScreen(onNavigate = vi.fn()) {
     </ToastProvider>
   )
   return onNavigate
+}
+
+/** Same render, but hands back the RTL result so a test can unmount on purpose. */
+function mountScreen() {
+  return render(
+    <ToastProvider>
+      <PerformanceScreen onNavigate={vi.fn()} />
+    </ToastProvider>
+  )
 }
 
 describe('PerformanceScreen: the check as an answer', () => {
@@ -524,5 +589,445 @@ describe('PerformanceScreen: actions', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
     expect(await screen.findByText(/Check failed: .*busy/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument()
+  })
+})
+
+// The pushed refresh (PR #303 audit M1/M3; benchmark.md "Push, not poll"). `performance:changed`
+// carries nothing: every push means "re-read `performance:get`". The screen's own action flag and
+// the backend's occupancy span stay separate — one belongs to this window, the other to the
+// machine — and no read is polled, dropped, doubled or applied out of order.
+describe('PerformanceScreen: the pushed refresh', () => {
+  it('subscribes before the first read, and unsubscribes on unmount', async () => {
+    const { api, calls, pushes, unsubscribed } = install(snapshot())
+    const view = mountScreen()
+    await screen.findByText(/Runs Qwen3\.5 9B/)
+    // A push that lands DURING the first read must find a listener already there.
+    expect(calls[0]).toBe('onPerformanceChanged')
+    expect(calls.indexOf('onPerformanceChanged')).toBeLessThan(calls.indexOf('getPerformance'))
+    expect(api.onPerformanceChanged).toHaveBeenCalledTimes(1)
+    const reads = api.getPerformance.mock.calls.length
+    view.unmount()
+    expect(unsubscribed()).toBe(1)
+    await pushChanged(pushes)
+    expect(api.getPerformance).toHaveBeenCalledTimes(reads)
+  })
+
+  it('registers one listener per mount and leaves none behind on a remount', async () => {
+    const { api, pushes, unsubscribed } = install(snapshot())
+    const first = mountScreen()
+    await screen.findByText(/Runs Qwen3\.5 9B/)
+    first.unmount()
+    mountScreen()
+    await screen.findByText(/Runs Qwen3\.5 9B/)
+    expect(api.onPerformanceChanged).toHaveBeenCalledTimes(2)
+    expect(unsubscribed()).toBe(1)
+    // Both callbacks still exist in the fake bridge; only the live screen reads.
+    expect(pushes).toHaveLength(2)
+    const reads = api.getPerformance.mock.calls.length
+    await pushChanged(pushes)
+    expect(api.getPerformance).toHaveBeenCalledTimes(reads + 1)
+  })
+
+  it('M1: a run this window did not start releases the screen the moment the backend is idle', async () => {
+    const { api, pushes } = install(snapshot({ running: true }))
+    mountScreen()
+    expect(await screen.findByRole('button', { name: 'Running…' })).toBeDisabled()
+    api.getPerformance.mockResolvedValue(snapshot({ running: false }))
+    await pushChanged(pushes)
+    expect(await screen.findByRole('button', { name: 'Check again' })).toBeEnabled()
+    // The tiles are back, not just the button.
+    expect(screen.getByText('Speed')).toBeInTheDocument()
+    expect(screen.getByText(/Runs Qwen3\.5 9B/)).toBeInTheDocument()
+  })
+
+  it('M1: an external run shows as running with no steps ticked, never the last run’s', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    const { api, progress, pushes } = install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    act(() => progress.forEach((cb) => cb('system')))
+    expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
+    await act(async () => {
+      resolveRun(result())
+    })
+    await screen.findByRole('button', { name: 'Check again' })
+    // Someone else takes the lane: this window gets no steps for that run, so it shows none.
+    api.getPerformance.mockResolvedValue(snapshot({ running: true }))
+    await pushChanged(pushes)
+    expect(await screen.findByRole('button', { name: 'Running…' })).toBeDisabled()
+    expect(screen.getByText('Hardware detected').closest('li')?.className).not.toContain('perf-step-done')
+  })
+
+  it('the push announcing our OWN run does not un-tick the steps it already reported', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    const { api, progress, pushes } = install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    act(() => progress.forEach((cb) => cb('system')))
+    // Main pushes when the run takes its span — that snapshot is about OUR run.
+    api.getPerformance.mockResolvedValue(snapshot({ running: true }))
+    await pushChanged(pushes)
+    expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
+    await act(async () => {
+      resolveRun(result())
+    })
+  })
+
+  it('back-to-back checks each start with a clean step list', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    const { progress } = install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    act(() => progress.forEach((cb) => cb('system')))
+    act(() => progress.forEach((cb) => cb('drive')))
+    expect(screen.getByText('Drive write speed').closest('li')?.className).toContain('perf-step-done')
+    await act(async () => {
+      resolveRun(result())
+    })
+    await screen.findByRole('button', { name: 'Check again' })
+    await userEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    // The second run starts from nothing — never from what the first one reported.
+    expect(screen.getByText('Hardware detected').closest('li')?.className).not.toContain('perf-step-done')
+    expect(screen.getByText('Drive write speed').closest('li')?.className).not.toContain('perf-step-done')
+    await act(async () => {
+      resolveRun(result())
+    })
+  })
+
+  it('M3: an observation from normal use fills the rows without leaving the screen', async () => {
+    const { api, pushes } = install(snapshot({ observed: noObservations }))
+    mountScreen()
+    await screen.findByText(/Nothing observed yet this session/)
+    api.getPerformance.mockResolvedValue(snapshot({ observed: observedAnswer }))
+    await pushChanged(pushes)
+    expect(await screen.findByText(/Last answer: 40\.0 tokens \/ s/)).toBeInTheDocument()
+    expect(screen.queryByText(/Nothing observed yet this session/)).not.toBeInTheDocument()
+  })
+
+  it('a check this window starts disables its own button while the backend is still idle', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    const { api } = install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    // Nothing pushed and the snapshot still says idle: the local flag alone drives this.
+    expect(screen.getByRole('button', { name: 'Running…' })).toBeDisabled()
+    expect(api.getPerformance).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      resolveRun(result())
+    })
+    expect(await screen.findByRole('button', { name: 'Check again' })).toBeEnabled()
+    expect(api.getPerformance).toHaveBeenCalledTimes(2)
+  })
+
+  it('a push during a read is never dropped: one more read follows it', async () => {
+    const first = deferred<PerformanceSnapshot>()
+    let call = 0
+    const { api, pushes } = install(snapshot(), {
+      getPerformance: vi.fn(() => {
+        call += 1
+        return call === 1 ? first.promise : Promise.resolve(snapshot({ observed: observedAnswer }))
+      })
+    })
+    mountScreen()
+    await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(1))
+    await pushChanged(pushes)
+    // Serialised: the follow-up waits for the read already out.
+    expect(api.getPerformance).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      first.resolve(snapshot({ observed: noObservations }))
+    })
+    await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText(/Last answer: 40\.0 tokens \/ s/)).toBeInTheDocument()
+  })
+
+  it('several pushes during one read coalesce into a single follow-up read', async () => {
+    const first = deferred<PerformanceSnapshot>()
+    let call = 0
+    const { api, pushes } = install(snapshot(), {
+      getPerformance: vi.fn(() => {
+        call += 1
+        return call === 1 ? first.promise : Promise.resolve(snapshot())
+      })
+    })
+    mountScreen()
+    await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(1))
+    await pushChanged(pushes)
+    await pushChanged(pushes)
+    await pushChanged(pushes)
+    expect(api.getPerformance).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      first.resolve(snapshot())
+    })
+    await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(2))
+    // …and no third: one pass answered all three pushes.
+    await act(async () => {})
+    expect(api.getPerformance).toHaveBeenCalledTimes(2)
+  })
+
+  it('a reply from a superseded read is discarded, never applied over a newer one', async () => {
+    // The runtime status is read alongside each snapshot. Hold the FIRST one open, let a push
+    // issue a second read whose status says nothing is running, then answer the first with the
+    // opposite: the stale answer must not take the "Start … and measure" offer away.
+    const slowStatus = deferred<RuntimeStatus>()
+    let statusCall = 0
+    const { api, pushes } = install(
+      snapshot({ current: result({ tokensPerSecond: null, measuredModelId: null, speedBasis: null }) }),
+      {
+        getRuntimeStatus: vi.fn(() => {
+          statusCall += 1
+          return statusCall === 1 ? slowStatus.promise : Promise.resolve(STOPPED_STATUS)
+        })
+      }
+    )
+    mountScreen()
+    await waitFor(() => expect(api.getRuntimeStatus).toHaveBeenCalledTimes(1))
+    await pushChanged(pushes)
+    await waitFor(() => expect(api.getRuntimeStatus).toHaveBeenCalledTimes(2))
+    expect(await screen.findByRole('button', { name: 'Start Qwen3.5 9B (UD-Q4_K_XL) and measure' })).toBeInTheDocument()
+    await act(async () => {
+      slowStatus.resolve(RUNNING_STATUS)
+    })
+    expect(screen.getByRole('button', { name: 'Start Qwen3.5 9B (UD-Q4_K_XL) and measure' })).toBeInTheDocument()
+  })
+
+  it('a read that lands after unmount applies nothing', async () => {
+    const pending = deferred<PerformanceSnapshot>()
+    const { api } = install(snapshot(), { getPerformance: vi.fn(() => pending.promise) })
+    const errors: unknown[][] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      errors.push(args)
+    })
+    try {
+      const view = mountScreen()
+      await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(1))
+      view.unmount()
+      await act(async () => {
+        pending.resolve(snapshot())
+      })
+      // No "update on an unmounted component" / "not wrapped in act" noise.
+      expect(errors).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('the done step re-reads instead of declaring the run over', async () => {
+    const { api, progress } = install(snapshot({ running: true }))
+    mountScreen()
+    expect(await screen.findByRole('button', { name: 'Running…' })).toBeDisabled()
+    // 'done' means the PROBES finished — the persist and the release still follow, so the
+    // screen re-reads and keeps the run up until a snapshot says otherwise.
+    await act(async () => {
+      progress.forEach((cb) => cb('done'))
+    })
+    await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(2))
+    expect(screen.getByRole('button', { name: 'Running…' })).toBeDisabled()
+    api.getPerformance.mockResolvedValue(snapshot({ running: false }))
+    await act(async () => {
+      progress.forEach((cb) => cb('done'))
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled())
+  })
+
+  it('a failed read keeps the figures, says so, and the retry brings them back', async () => {
+    let call = 0
+    const { api, pushes } = install(snapshot(), {
+      getPerformance: vi.fn(async () => {
+        call += 1
+        if (call === 2) throw new Error("Error invoking remote method 'performance:get': Error: Workspace is locked")
+        return snapshot()
+      })
+    })
+    mountScreen()
+    await screen.findByText(/Runs Qwen3\.5 9B/)
+    await pushChanged(pushes)
+    expect(await screen.findByText(/Could not read the latest figures: Workspace is locked/)).toBeInTheDocument()
+    // The last figures stay on screen and the actions stay live.
+    expect(screen.getByText(/Runs Qwen3\.5 9B/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled()
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(screen.queryByText(/Could not read the latest figures/)).not.toBeInTheDocument())
+    expect(api.getPerformance).toHaveBeenCalledTimes(3)
+  })
+
+  it('a later successful read clears the read failure without hiding the failed check', async () => {
+    let call = 0
+    const { pushes } = install(snapshot(), {
+      runBenchmark: vi.fn(async () => {
+        throw new Error('Error: Model is busy right now')
+      }),
+      getPerformance: vi.fn(async () => {
+        call += 1
+        if (call === 3) throw new Error('Error: Workspace is locked')
+        return snapshot()
+      })
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    expect(await screen.findByText(/Check failed: .*busy/)).toBeInTheDocument()
+    await pushChanged(pushes)
+    expect(
+      await screen.findByText(/Check failed: .*busy.*Could not read the latest figures: Workspace is locked/)
+    ).toBeInTheDocument()
+    await pushChanged(pushes)
+    await waitFor(() => expect(screen.queryByText(/Could not read the latest figures/)).not.toBeInTheDocument())
+    expect(screen.getByText(/Check failed: .*busy/)).toBeInTheDocument()
+  })
+
+  it('a failed check clears only the local flag — a run that holds the lane still holds the screen', async () => {
+    const { api, pushes } = install(snapshot(), {
+      runBenchmark: vi.fn(async () => {
+        throw new Error('Error: Model is busy right now')
+      })
+    })
+    mountScreen()
+    await screen.findByRole('button', { name: 'Check again' })
+    // Refused because another run already holds the lane — which the next read reports.
+    api.getPerformance.mockResolvedValue(snapshot({ running: true }))
+    await userEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    expect(await screen.findByText(/Check failed: .*busy/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Running…' })).toBeDisabled()
+    // When that run ends, the push brings the screen back — with the failure still on it.
+    api.getPerformance.mockResolvedValue(snapshot({ running: false }))
+    await pushChanged(pushes)
+    expect(await screen.findByRole('button', { name: 'Check again' })).toBeEnabled()
+    expect(screen.getByText(/Check failed: .*busy/)).toBeInTheDocument()
+  })
+
+  it('survives a StrictMode double mount: the stale first reply is discarded and the re-read still loads', async () => {
+    // React.StrictMode (main.tsx) runs every effect twice in development: mount → cleanup →
+    // mount, on the SAME instance. The first read is still in flight when the cleanup bumps the
+    // generation and the second mount asks for a read of its own; that read must follow, or the
+    // screen sits on its empty state until the next push (the P3 launch smoke showed exactly
+    // that: a completed first-run benchmark and a screen saying "Not checked yet").
+    const first = deferred<PerformanceSnapshot>()
+    let reads = 0
+    const { api } = install(snapshot(), {
+      getPerformance: vi.fn(() => {
+        reads += 1
+        return reads === 1 ? first.promise : Promise.resolve(snapshot())
+      })
+    })
+    render(
+      <StrictMode>
+        <ToastProvider>
+          <PerformanceScreen onNavigate={vi.fn()} />
+        </ToastProvider>
+      </StrictMode>
+    )
+    await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      first.resolve(snapshot())
+    })
+    // The models card renders only from an APPLIED snapshot: the second read must have landed.
+    expect(await screen.findByText('Models on this computer')).toBeInTheDocument()
+    expect(api.getPerformance).toHaveBeenCalledTimes(2)
+  })
+
+})
+
+// PR #303 audit P4 (H1 / L8 / M5 residual): the persisted benchmark records are validated on
+// both sides of the settings store now, and the screen reads the launch context off the
+// snapshot instead of recomputing it. These cover what the screen must do with what it is
+// handed — including a record that never should have reached it.
+describe('PerformanceScreen: malformed records and the resolved context', () => {
+  it('H1: a structurally invalid other-computer row costs its own figures, never the screen', async () => {
+    // The exact shape the old settings gate accepted and the snapshot exposed. `fmt1(undefined)`
+    // threw here, and there is no error boundary above this screen: the whole page went blank.
+    install(snapshot({ otherMachines: [{} as BenchmarkResult, office] }))
+    renderScreen()
+    // The screen is up, the healthy row beside the blob is complete…
+    expect(await screen.findByText('Other computers this drive has been used on')).toBeInTheDocument()
+    expect(screen.getByText(/Intel Core i9-13900K, 64\.0 GB RAM, 24\.0 GB VRAM/)).toBeInTheDocument()
+    // …and the blob reads as unknowns rather than crashing or inventing figures.
+    expect(screen.getByText(/Unknown CPU, – GB RAM/)).toBeInTheDocument()
+    expect(screen.getAllByText('Unknown').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('H1: a partially filled record renders the fields it has and dashes the ones it lacks', async () => {
+    const partial = { cpuModel: 'Half A Record', profile: 'LITE', ranAt: '2026-08-01T00:00:00Z' } as unknown as BenchmarkResult
+    install(snapshot({ otherMachines: [partial] }))
+    renderScreen()
+    expect(await screen.findByText(/Half A Record, – GB RAM/)).toBeInTheDocument()
+    // Its own profile pill (the current result carries the same one).
+    expect(screen.getAllByText('Lite')).toHaveLength(2)
+  })
+
+  it('H1: a current result with no usable figures still renders the card', async () => {
+    const legacy = { profile: 'BALANCED', ranAt: '' } as unknown as BenchmarkResult
+    install(snapshot({ current: legacy, otherMachines: [] }))
+    renderScreen()
+    // An unknown date says so instead of printing "Invalid Date" or an empty stamp.
+    expect(await screen.findByText('Checked –')).toBeInTheDocument()
+    expect(screen.getByText('Balanced')).toBeInTheDocument()
+  })
+
+  it('M5 residual: the context in the report is the snapshot’s, not a recomputed catalog value', async () => {
+    // The catalog says 8,192 for this model; the snapshot says what the runtime would ACTUALLY
+    // launch with (a manifest stating no window falls back to the settings default). The screen
+    // must state the snapshot's figure — recomputing produced "0-token context" for that model.
+    const { api } = install(snapshot({ placement: placement({ recommendedContextTokens: 4096 }) }))
+    renderScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    const text = api.copyToClipboard.mock.calls[0][0] as string
+    expect(text).toContain('4,096 tokens')
+    expect(text).not.toContain('8,192 tokens')
+    expect(text).not.toContain('0 tokens')
+  })
+
+  it('M5 residual: with nothing recommended the report states no context at all', async () => {
+    const { api } = install(snapshot({ placement: placement({ recommendedContextTokens: null }) }))
+    renderScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    expect(api.copyToClipboard.mock.calls[0][0] as string).not.toContain('Context size')
+  })
+
+  it('an earlier measurement under another configuration is dated, not presented as the fit', async () => {
+    install(
+      snapshot({
+        placement: placement({
+          observed: null,
+          observedMismatch: { contextTokens: 32_768, backend: 'gpu', at: '2026-09-01T00:00:00Z' }
+        })
+      })
+    )
+    renderScreen()
+    expect(await screen.findByText(/Measured earlier with a 32,768-token context on/)).toBeInTheDocument()
+    // The verdict beside it is still the estimate for the CURRENT settings.
+    expect(screen.getByText(/Needs at least 5\.8 GB for the weights/)).toBeInTheDocument()
+  })
+
+  it('the same line in German (D-L8: asserted from the catalog, never a retyped literal)', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    install(
+      snapshot({
+        placement: placement({
+          observed: null,
+          observedMismatch: { contextTokens: 32_768, backend: 'gpu', at: '2026-09-01T00:00:00Z' }
+        })
+      })
+    )
+    render(
+      <I18nProvider>
+        <ToastProvider>
+          <PerformanceScreen onNavigate={vi.fn()} />
+        </ToastProvider>
+      </I18nProvider>
+    )
+    const expected = t('de', 'perf.model.measuredOther', {
+      context: (32_768).toLocaleString('de'),
+      when: new Date('2026-09-01T00:00:00Z').toLocaleDateString('de')
+    })
+    expect(await screen.findByText(expected)).toBeInTheDocument()
   })
 })

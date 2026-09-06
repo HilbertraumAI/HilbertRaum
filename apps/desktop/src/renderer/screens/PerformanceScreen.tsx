@@ -5,10 +5,12 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { fmt1 } from '../lib/format'
 import type { UiLanguage } from '@shared/i18n'
+import { isHardwareProfile } from '@shared/benchmark-schema'
 import type {
   BenchmarkProgressStep,
   BenchmarkResult,
   EffectiveReadSample,
+  HardwareProfile,
   ModelInfo,
   PerformanceSnapshot,
   PlacementKind
@@ -30,6 +32,12 @@ import type {
 //   4. "Other computers": one row per machine the drive has been checked on.
 // The raw table + Copy stays on Settings › Diagnostics (the support surface); this screen
 // answers the user's question ("what can this computer run, how fast") in plain words.
+//
+// The whole screen is PUSHED, never polled (benchmark.md "Push, not poll"): main broadcasts the
+// payload-free `performance:changed` after anything the snapshot reads has changed, and the
+// screen re-reads `performance:get`. So the observed rows, the loaded/not-loaded pills and the
+// running state stay current while the screen is open, including for a benchmark another window
+// (or the first-run path) started.
 
 /** Below this a measured decode speed reads "Slow" (the picker's own #95 step-down gate). */
 const SLOW_TOKENS_PER_SECOND = 5
@@ -61,12 +69,33 @@ function fmtNum(n: number, lang: UiLanguage): string {
   return n.toLocaleString(lang)
 }
 
-function fmtDate(iso: string, lang: UiLanguage): string {
+/** The dash the tiles already use for a figure the app does not have. */
+const UNKNOWN = '–'
+
+// Defence in depth against a malformed persisted record (PR #303 audit H1). `getSettings`
+// validates every benchmark record now, so the snapshot should never carry one — but the
+// formatters below are the LAST thing between a stored blob and the screen, and
+// `toLocaleString` on `undefined` throws, which took the whole screen down (there is no error
+// boundary above it). A missing/NaN figure reads as the tiles' unknown dash instead, so one
+// bad row can only ever cost its own value.
+
+function fmt1Safe(n: number | null | undefined, lang: UiLanguage): string {
+  return typeof n === 'number' && Number.isFinite(n) ? fmt1(n, lang) : UNKNOWN
+}
+
+function fmtNumSafe(n: number | null | undefined, lang: UiLanguage): string {
+  return typeof n === 'number' && Number.isFinite(n) ? fmtNum(n, lang) : UNKNOWN
+}
+
+/** A record whose date is unknown carries `ranAt: ''` (`UNKNOWN_RAN_AT`) — never a fake "now". */
+function fmtDate(iso: string | null | undefined, lang: UiLanguage): string {
+  if (!iso) return UNKNOWN
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(lang)
 }
 
-function fmtDateTime(iso: string, lang: UiLanguage): string {
+function fmtDateTime(iso: string | null | undefined, lang: UiLanguage): string {
+  if (!iso) return UNKNOWN
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(lang)
 }
@@ -91,8 +120,13 @@ function driveTone(mbps: number): Tone {
   return mbps < SLOW_READ_MBPS ? 'warning' : 'success'
 }
 
-function profileTone(profile: BenchmarkResult['profile']): Tone {
-  return profile === 'UNKNOWN' ? 'neutral' : 'accent'
+/** The profile of a record, tolerant of a malformed one (H1): anything unrecognised is UNKNOWN. */
+function profileOf(profile: BenchmarkResult['profile'] | undefined): HardwareProfile {
+  return isHardwareProfile(profile) ? profile : 'UNKNOWN'
+}
+
+function profileTone(profile: BenchmarkResult['profile'] | undefined): Tone {
+  return profileOf(profile) === 'UNKNOWN' ? 'neutral' : 'accent'
 }
 
 /** Plain-text rendering of the "This computer" card for the Copy button (mirrors the
@@ -108,19 +142,19 @@ function buildReport(
     t('perf.card.title'),
     `${t('perf.tile.speed')}: ${
       bench.tokensPerSecond != null
-        ? `${fmtNum(bench.tokensPerSecond, lang)} ${t('perf.tile.speed.unit')} (${t('perf.tile.speed.sub', {
+        ? `${fmtNumSafe(bench.tokensPerSecond, lang)} ${t('perf.tile.speed.unit')} (${t('perf.tile.speed.sub', {
             model: modelName(bench.measuredModelId, models, t),
             when: fmtDate(bench.ranAt, lang)
           })})`
         : t('perf.tile.speed.none')
     }`,
-    `${t('perf.tile.memory')}: ${bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)} ${t('perf.tile.memory.unit')}` : t('diag.app.unknown')}`,
+    `${t('perf.tile.memory')}: ${bench.ramGb > 0 ? `${fmt1Safe(bench.ramGb, lang)} ${t('perf.tile.memory.unit')}` : t('diag.app.unknown')}`,
     `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')}`,
     `${t('perf.tile.graphics')}: ${
       bench.gpuVramMb != null ? `${vramGb(bench.gpuVramMb, lang)} ${t('perf.tile.graphics.unit')} (${bench.gpu ?? ''})` : t('perf.rating.none')
     }`,
     `${t('perf.tile.drive')}: ${
-      bench.effectiveRead ? `${fmtNum(bench.effectiveRead.mbps, lang)} ${t('perf.tile.drive.unit')}` : t('perf.tile.drive.none')
+      bench.effectiveRead ? `${fmtNumSafe(bench.effectiveRead.mbps, lang)} ${t('perf.tile.drive.unit')}` : t('perf.tile.drive.none')
     }`,
     `${t('diag.bench.profile')}: ${bench.profile}`,
     // The result's own pick is what the check said then; the live one is on the screen.
@@ -178,78 +212,158 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const toast = useToast()
   const [snap, setSnap] = useState<PerformanceSnapshot | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
-  const [contextOverride, setContextOverride] = useState<number | null>(null)
   // The GPU is switched off in Settings or auto-disabled after a crash: the next start runs from
   // RAM whatever card the probe lists, and the graphics tile says so instead of "no card".
   const [gpuOff, setGpuOff] = useState(false)
   const [runtimeModelId, setRuntimeModelId] = useState<string | null>(null)
-  const [running, setRunning] = useState(false)
+  /** A check THIS window started ("Check again" / "Start … and measure"). Kept apart from the
+   *  snapshot's `running`, which is the backend's benchmark occupancy span and is true for runs
+   *  this window never started (PR #303 audit M1: merging the two locked the screen into
+   *  "Running…" for a foreign run and never let it out). */
+  const [ownActionInFlight, setOwnActionInFlight] = useState(false)
   const [doneSteps, setDoneSteps] = useState<BenchmarkProgressStep[]>([])
-  const [error, setError] = useState<string | null>(null)
+  /** The last failed `performance:get`; cleared by the next successful read. */
+  const [fetchError, setFetchError] = useState<string | null>(null)
+  /** The last failed action; cleared when the user starts another one — never by a read, so a
+   *  background refresh cannot swallow the failure the user is still looking at. */
+  const [actionError, setActionError] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
+  // ---- The snapshot read: pushed, serialised (benchmark.md "Push, not poll") ----------------
+  // `performance:changed` carries nothing; every push means "re-read `performance:get`". One
+  // read at a time: a push that lands while a read is in flight raises `wantedRef` and buys
+  // ANOTHER pass once that read settles, so no push is ever dropped and two reads never race.
+  // `genRef` stamps each issued read — only the newest stamp may apply a reply, and unmount
+  // bumps it, so a late reply is discarded instead of touching a dead screen. A discarded reply
+  // CONTINUES the drain rather than leaving it: a read wanted meanwhile (React.StrictMode's
+  // dev double mount asks for one on the same instance) must still be issued. No timers.
+  const genRef = useRef(0)
+  const readingRef = useRef(false)
+  const wantedRef = useRef(false)
+  const pendingRef = useRef<Promise<void> | null>(null)
+  /** Mirrors `ownActionInFlight` for the apply path (state is a render behind). */
+  const ownActionRef = useRef(false)
+  /** `running` of the last applied snapshot: its false → true edge is a run starting. */
+  const backendRunningRef = useRef(false)
+
+  const applySnapshot = useCallback((next: PerformanceSnapshot): void => {
+    // Verbatim, never merged with the previous value: the screen follows the backend out of a
+    // run as readily as into one.
+    setSnap(next)
+    // A run this window did not start has no steps here (main sends `benchmark:progress` to the
+    // requesting window only), so it shows the running state with none ticked rather than
+    // inventing them. Our own run cleared them at the click and its first step can land before
+    // this snapshot does — re-clearing under our own run would un-tick it.
+    if (next.running && !backendRunningRef.current && !ownActionRef.current) setDoneSteps([])
+    backendRunningRef.current = next.running
+  }, [])
+
+  /** The cheap metadata the actions read, re-read with every snapshot: which model is up (the
+   *  "Start … and measure" offer, the speed step's label) and the active context pick. NOT
+   *  `listModels` — that is a name lookup, mount-only. Fire-and-forget under the read's stamp,
+   *  so a slow reply neither stalls the snapshot nor overwrites a newer one. */
+  const refreshMeta = useCallback((gen: number): void => {
+    const fresh = (): boolean => mountedRef.current && gen === genRef.current
+    void window.api
+      .getRuntimeStatus()
+      .then((r) => {
+        if (fresh()) setRuntimeModelId(r.running ? r.modelId : null)
+      })
+      .catch(() => {})
+    void window.api
+      .getSettings()
+      .then((s) => {
+        if (!fresh()) return
+        setGpuOff(s.gpuMode === 'off' || s.gpuAutoDisabled)
+      })
+      .catch(() => {})
+  }, [])
+
+  const refresh = useCallback((): Promise<void> => {
+    wantedRef.current = true
+    // Already reading: the flag above guarantees one more pass when it settles.
+    if (readingRef.current) return pendingRef.current ?? Promise.resolve()
+    readingRef.current = true
+    const drain = async (): Promise<void> => {
+      try {
+        while (wantedRef.current && mountedRef.current) {
+          wantedRef.current = false
+          const gen = (genRef.current += 1)
+          try {
+            const next = await window.api.getPerformance()
+            if (!mountedRef.current || gen !== genRef.current) continue
+            applySnapshot(next)
+            setFetchError(null)
+          } catch (err) {
+            if (!mountedRef.current || gen !== genRef.current) continue
+            // The last snapshot stays on screen and the actions stay live; the banner explains
+            // the stale figures and offers the retry.
+            setFetchError(friendlyIpcError(err))
+          }
+          refreshMeta(gen)
+        }
+      } finally {
+        readingRef.current = false
+        pendingRef.current = null
+      }
+    }
+    const p = drain()
+    // Park it only if the drain actually suspended — a synchronous throw finishes it before
+    // this line, and its `finally` has already cleared the flags.
+    if (readingRef.current) pendingRef.current = p
+    return p
+  }, [applySnapshot, refreshMeta])
+
+  // Subscribe BEFORE the first read (a push that lands during it must not be missed) and tear
+  // both subscriptions down on unmount: one registration per mount, no accumulation.
   useEffect(() => {
     mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-    }
-  }, [])
-
-  const refresh = useCallback(async (): Promise<void> => {
-    try {
-      const next = await window.api.getPerformance()
-      if (mountedRef.current) {
-        setSnap(next)
-        setRunning((r) => r || next.running)
+    const offChanged = window.api.onPerformanceChanged(() => {
+      void refresh()
+    })
+    // The steps of a check THIS window started (main sends them to the requesting window only).
+    const offProgress = window.api.onBenchmarkProgress((step) => {
+      if (!mountedRef.current) return
+      // 'done' means the PROBES are complete — the persist and the occupancy release still
+      // follow (benchmark.md "Progress"), so it is not the idle signal: re-read rather than
+      // guess, and let the terminal push be the one that turns `running` off.
+      if (step === 'done') {
+        void refresh()
+        return
       }
-    } catch (err) {
-      if (mountedRef.current) setError(friendlyIpcError(err))
-    }
-  }, [])
-
-  useEffect(() => {
+      setDoneSteps((prev) => (prev.includes(step) ? prev : [...prev, step]))
+    })
     void refresh()
-    // Display names for the model ids the results carry, the active context pick, and which
-    // model is up (the "Start … and measure" offer). lazyVerify: no weight hashing for a
-    // name lookup.
+    // Display names for the model ids the results carry. Mount-only: it is a name lookup, no
+    // push changes it, and a model installed elsewhere arrives with this screen's next mount.
+    // lazyVerify: no weight hashing for a name lookup.
     window.api
       .listModels(true)
       .then((list) => mountedRef.current && setModels(list))
       .catch(() => {})
-    window.api
-      .getSettings()
-      .then((s) => {
-        if (!mountedRef.current) return
-        setContextOverride(s.contextTokensOverride ?? null)
-        setGpuOff(s.gpuMode === 'off' || s.gpuAutoDisabled)
-      })
-      .catch(() => {})
-    window.api
-      .getRuntimeStatus()
-      .then((r) => mountedRef.current && setRuntimeModelId(r.running ? r.modelId : null))
-      .catch(() => {})
+    return () => {
+      mountedRef.current = false
+      // Invalidate everything in flight: a reply that lands after this applies nothing.
+      genRef.current += 1
+      offChanged?.()
+      offProgress?.()
+    }
   }, [refresh])
 
-  // The steps of a check THIS window started (main sends them to the requesting window only).
-  useEffect(() => {
-    const off = window.api.onBenchmarkProgress?.((step) => {
-      if (!mountedRef.current) return
-      if (step === 'done') return
-      setDoneSteps((prev) => (prev.includes(step) ? prev : [...prev, step]))
-    })
-    return () => off?.()
-  }, [])
-
   const runCheck = useCallback(async (): Promise<void> => {
-    setRunning(true)
-    setError(null)
+    ownActionRef.current = true
+    setOwnActionInFlight(true)
+    setActionError(null)
     setDoneSteps([])
     try {
       await window.api.runBenchmark()
     } catch (err) {
-      if (mountedRef.current) setError(friendlyIpcError(err))
+      if (mountedRef.current) setActionError(friendlyIpcError(err))
     } finally {
-      if (mountedRef.current) setRunning(false)
+      // ONLY the local flag: whether a run still holds the lane is the snapshot's answer (the
+      // persist and the release follow the last step), and the push after them delivers it.
+      ownActionRef.current = false
+      if (mountedRef.current) setOwnActionInFlight(false)
       await refresh()
     }
   }, [refresh])
@@ -258,17 +372,19 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
    *  "Use this model" action), then check, so the check's speed leg has a runtime. */
   const startAndMeasure = useCallback(
     async (modelId: string): Promise<void> => {
-      setRunning(true)
-      setError(null)
+      ownActionRef.current = true
+      setOwnActionInFlight(true)
+      setActionError(null)
       setDoneSteps([])
       try {
         const status = await window.api.useModel(modelId)
         if (mountedRef.current) setRuntimeModelId(status.running ? status.modelId : null)
         await window.api.runBenchmark()
       } catch (err) {
-        if (mountedRef.current) setError(friendlyIpcError(err))
+        if (mountedRef.current) setActionError(friendlyIpcError(err))
       } finally {
-        if (mountedRef.current) setRunning(false)
+        ownActionRef.current = false
+        if (mountedRef.current) setOwnActionInFlight(false)
         await refresh()
       }
     },
@@ -286,6 +402,18 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   )
 
   const bench = snap?.current ?? null
+  /** The backend's own answer, taken from each snapshot as it comes. */
+  const backendRunning = snap?.running ?? false
+  /** What the card shows as busy: a run anywhere on this machine, or this window's own action. */
+  const busy = backendRunning || ownActionInFlight
+  // Both failures can stand at once; the read failure is the one with a retry.
+  const bannerMessage =
+    [
+      actionError ? t('perf.failed', { error: actionError }) : null,
+      fetchError ? t('perf.loadFailed', { error: fetchError }) : null
+    ]
+      .filter(Boolean)
+      .join(' ') || null
   // The LIVE pick (the same one the AI Model screen stars), never the id saved with the check:
   // a fresh probe, a flipped GPU toggle or a new speed sample moves it without a re-run. The
   // saved `recommendedModelId` is history and is labelled as such where it still shows.
@@ -296,9 +424,11 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     bench?.recommendedModelId && live && bench.recommendedModelId !== live.modelId
       ? modelName(bench.recommendedModelId, models, t)
       : null
-  // The context the recommended model would launch with: the user's override, else the
-  // model's own recommended window (the AI Model screen's "Automatic" resolution).
-  const contextTokens = contextOverride ?? recommended?.recommendedContextTokens ?? null
+  // The context the LIVE recommended model would launch with, resolved MAIN-SIDE by the launch
+  // path's own helper (PR #303 audit M5 residual): recomputing it here with `??` over the
+  // catalog entry showed a "0-token context" for a model whose manifest states no recommended
+  // window, while the runtime starts such a model on the settings default.
+  const contextTokens = snap?.placement.recommendedContextTokens ?? null
   const speedModelName = bench ? modelName(bench.measuredModelId, models, t) : ''
   const speedApprox = bench != null && bench.tokensPerSecond != null && bench.speedBasis?.basis !== 'timings'
   const canStartRecommended =
@@ -312,7 +442,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
       ? ' ' + (bench.effectiveRead.mbps < SLOW_READ_MBPS ? t('perf.verdict.driveSlow') : t('perf.verdict.driveFast'))
       : ''
     if (bench.tokensPerSecond != null) {
-      return t('perf.verdict.speed', { model: speedModelName, tps: fmtNum(bench.tokensPerSecond, lang) }) + drive
+      return t('perf.verdict.speed', { model: speedModelName, tps: fmtNumSafe(bench.tokensPerSecond, lang) }) + drive
     }
     if (recommendedName && live) {
       return t('perf.verdict.noSpeed', { model: recommendedName, basis: t(`perf.basis.${live.basis}`) }) + drive
@@ -335,7 +465,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     return (
       <Tile
         label={t('perf.tile.speed')}
-        value={fmtNum(bench.tokensPerSecond, lang)}
+        value={fmtNumSafe(bench.tokensPerSecond, lang)}
         unit={t('perf.tile.speed.unit')}
         sub={
           t('perf.tile.speed.sub', { model: speedModelName, when: fmtDate(bench.ranAt, lang) }) +
@@ -362,10 +492,10 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     return (
       <Tile
         label={unified ? t('perf.tile.memory.unified') : t('perf.tile.memory')}
-        value={bench && bench.ramGb > 0 ? fmt1(bench.ramGb, lang) : null}
+        value={bench && bench.ramGb > 0 ? fmt1Safe(bench.ramGb, lang) : null}
         unit={t('perf.tile.memory.unit')}
         sub={bench ? [unified ? t('perf.tile.memory.unifiedSub') : null, cpu].filter(Boolean).join(' · ') : t('perf.notChecked')}
-        pill={t(`perf.profile.${bench?.profile ?? 'UNKNOWN'}`)}
+        pill={t(`perf.profile.${profileOf(bench?.profile)}`)}
         tone={bench ? profileTone(bench.profile) : 'neutral'}
       />
     )
@@ -495,6 +625,18 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             : t('perf.model.none')}
         </div>
         {p.model && <div className="perf-model-verdict">{[need, text].filter(Boolean).join(' ')}</div>}
+        {/* An earlier measurement that does not describe the current configuration (a different
+            context size, or a GPU start now forced onto the processor): the verdict above is the
+            estimate for the settings as they stand, and this says what was measured and when, so
+            the two never read as one contradicting claim. */}
+        {p.model && p.observedMismatch && (
+          <div className="perf-model-note hint">
+            {t('perf.model.measuredOther', {
+              context: p.observedMismatch.contextTokens.toLocaleString(lang),
+              when: fmtDate(p.observedMismatch.at, lang)
+            })}
+          </div>
+        )}
         <div className="perf-model-side">
           <Badge tone={pill.tone}>{t(pill.key)}</Badge>
           {p.model && v.kind === 'too_large' && (
@@ -616,7 +758,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
         <div className="perf-card-head">
           <h2>{t('perf.card.title')}</h2>
           <span className="hint">
-            {running
+            {busy
               ? t('perf.running')
               : bench
                 ? t('perf.checkedAt', { when: fmtDateTime(bench.ranAt, lang) })
@@ -624,7 +766,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           </span>
         </div>
         {snap && bench && !snap.currentMachine && <p className="hint hint-lede">{t('perf.otherMachine')}</p>}
-        {running ? (
+        {busy ? (
           <>
             {steps()}
             <div className="actions perf-actions">
@@ -670,8 +812,18 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             </div>
           </>
         )}
-        {/* Always mounted so the FIRST failure is announced (SH-2, #145). */}
-        <ErrorBanner message={error ? t('perf.failed', { error }) : null} t={t} />
+        {/* Always mounted so the FIRST failure is announced (SH-2, #145). A failed check and a
+            failed read are separate: a later successful read clears the read failure without
+            hiding the check the user is still waiting on. */}
+        <ErrorBanner message={bannerMessage} t={t}>
+          {fetchError ? (
+            <div className="actions">
+              <Button size="sm" onClick={() => void refresh()}>
+                {t('perf.retry')}
+              </Button>
+            </div>
+          ) : null}
+        </ErrorBanner>
       </div>
 
       <div className="card">
@@ -760,20 +912,20 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 <div className="perf-row" key={`${entry.cpuModel}|${entry.ramGb}|${entry.ranAt}`}>
                   <div className="perf-row-main">
                     {entry.tokensPerSecond != null
-                      ? t('perf.others.row', { tps: fmtNum(entry.tokensPerSecond, lang), model: name })
+                      ? t('perf.others.row', { tps: fmtNumSafe(entry.tokensPerSecond, lang), model: name })
                       : t('perf.others.rowNoSpeed', { model: name })}
                   </div>
                   <div className="perf-row-sub">
                     {entry.gpuVramMb != null && entry.gpuVramMb > 0
                       ? t('perf.others.subGpu', {
                           cpu: entry.cpuModel || t('perf.unknownCpu'),
-                          ram: fmt1(entry.ramGb, lang),
+                          ram: fmt1Safe(entry.ramGb, lang),
                           vram: vramGb(entry.gpuVramMb, lang),
                           when: fmtDate(entry.ranAt, lang)
                         })
                       : t('perf.others.sub', {
                           cpu: entry.cpuModel || t('perf.unknownCpu'),
-                          ram: fmt1(entry.ramGb, lang),
+                          ram: fmt1Safe(entry.ramGb, lang),
                           when: fmtDate(entry.ranAt, lang)
                         })}
                   </div>
@@ -784,7 +936,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                       </Badge>
                     )}
                     {slowDrive && <Badge tone="warning">{t('perf.rating.slowDrive')}</Badge>}
-                    <Badge tone={profileTone(entry.profile)}>{t(`perf.profile.${entry.profile}`)}</Badge>
+                    <Badge tone={profileTone(entry.profile)}>{t(`perf.profile.${profileOf(entry.profile)}`)}</Badge>
                   </div>
                 </div>
               )

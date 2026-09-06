@@ -1853,6 +1853,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.model.unifiedEstimate': 'Sollte in den gemeinsamen Speicher passen ({ram} GB, bis zu {budget} GB für das Modell verfügbar).',
   'perf.model.tooLarge': 'Zu groß für diesen Computer ({budget} GB verfügbar). Wähle ein kleineres Modell.',
   'perf.model.unknown': 'Wo das Modell landet, wird beim ersten Start gemessen.',
+  'perf.model.measuredOther':
+    'Früher mit einem Kontext von {context} Token am {when} gemessen; die Schätzung oben gilt für die aktuellen Einstellungen.',
   'perf.model.choose': 'Kleineres Modell wählen',
   'perf.models.title': 'Modelle auf diesem Computer',
   'perf.models.hint':
@@ -1920,6 +1922,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.autoNote':
     'Läuft von selbst beim ersten Mal und immer, wenn dieses Laufwerk an einen anderen Computer angeschlossen wird.',
   'perf.failed': 'Prüfung fehlgeschlagen: {error}',
+  'perf.loadFailed': 'Die aktuellen Werte konnten nicht gelesen werden: {error}',
+  'perf.retry': 'Erneut versuchen',
   'perf.step.system': 'Hardware erkannt',
   'perf.step.drive': 'Schreibgeschwindigkeit des Laufwerks',
   'perf.step.speed': 'Generierungsgeschwindigkeit mit {model}',

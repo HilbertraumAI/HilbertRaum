@@ -6,8 +6,10 @@ import { join } from 'node:path'
 //  - a fresh benchmark files its result under this machine in `benchmarkHistory`;
 //  - the moved-drive check restores a KNOWN machine's result and benchmarks a NEW one,
 //    while a legacy result with no machine identity is left alone;
-//  - the snapshot the screen reads (current-machine flag, other machines, observed rows);
-//  - the progress steps a run reports.
+//  - the snapshot the screen reads (current-machine flag, other machines, observed rows —
+//    session latches only, M3 — `running` from the benchmark's own span, M1, and the chat
+//    row's residency from the runtime state, DR6);
+//  - the progress steps a run reports: a step ticks only when it SUCCEEDED (L3).
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -22,22 +24,68 @@ import {
   maybeRunFirstBenchmark,
   runAndPersistBenchmark
 } from '../../src/main/ipc/registerBenchmarkIpc'
+import { inFlightStreams } from '../../src/main/ipc/inflight'
+import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { liveChatRecommendation, pickerMemoryFor, speedSignalFor } from '../../src/main/ipc/registerModelIpc'
-import { detectSystem } from '../../src/main/services/benchmark'
+import { detectSystem, runBenchmark } from '../../src/main/services/benchmark'
 import { discoverManifests, machineRamGb, recommendChatModelId } from '../../src/main/services/models'
 import { machineKey, recordAnswerSpeed, resetPerformanceForTests } from '../../src/main/services/performance'
-import { recordChecksumRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
+import { recordChecksumRead, recordModelLoadRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import { recordModelPlacement, resetModelPlacementForTests } from '../../src/main/services/runtime/placement'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
-import type { BenchmarkProgressStep, BenchmarkResult } from '../../src/shared/types'
-import { ctxWith, freshRoot, hereResult, result, seededDb } from '../helpers/performance-fixture'
+import type { BenchmarkProgressStep, BenchmarkResult, EffectiveReadSample, RuntimeStatus } from '../../src/shared/types'
+import {
+  ctxWith,
+  freshRoot,
+  hereResult,
+  performanceChangedSpy,
+  result,
+  seededDb,
+  stoppedStatus
+} from '../helpers/performance-fixture'
 
 beforeEach(() => {
   resetPerformanceForTests()
   resetEffectiveReadForTests()
   resetModelPlacementForTests()
+  setPerformanceChangedSink(null)
+  inFlightStreams.clear()
 })
+
+/** A persisted model-load sample (the shape the Drive tile shows; never an observed row). */
+const persistedLoad: EffectiveReadSample = {
+  mbps: 430,
+  bytes: 5_800_000_000,
+  ms: 13_500,
+  source: 'model_load',
+  modelId: 'qwen3.5-9b-ud-q4kxl',
+  at: '2026-08-20T10:00:00Z'
+}
+
+/** A bare runtime whose stream yields a few chunks with timings — enough for the speed leg. */
+function stubRuntime(over: Partial<ModelRuntime> = {}): ModelRuntime {
+  return {
+    modelId: 'stub-chat',
+    async start() {},
+    async stop() {},
+    async health() {
+      return { healthy: true, message: '', port: null }
+    },
+    async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
+      yield 'a'
+      yield 'b'
+      options?.onFinish?.('length', { predicted_n: 2, predicted_per_second: 20 })
+    },
+    ...over
+  }
+}
+
+/** A running, healthy chat runtime's status for `modelId`. */
+function runningStatus(modelId: string, over: Partial<RuntimeStatus> = {}): RuntimeStatus {
+  return { running: true, modelId, port: 1, healthy: true, message: 'Running', backend: 'cpu', ...over }
+}
 
 describe('runAndPersistBenchmark: files the result under this machine', () => {
   it('persists lastBenchmark AND the history entry, keeping other machines, and reports its steps', async () => {
@@ -111,16 +159,7 @@ describe('buildPerformanceSnapshot', () => {
     const root = freshRoot()
     const db = seededDb(root)
     const foreign = result()
-    const here = hereResult({
-      effectiveRead: {
-        mbps: 430,
-        bytes: 5_800_000_000,
-        ms: 13_500,
-        source: 'model_load',
-        modelId: 'qwen3.5-9b-ud-q4kxl',
-        at: '2026-08-20T10:00:00Z'
-      }
-    })
+    const here = hereResult({ effectiveRead: persistedLoad })
     updateSettings(db, { lastBenchmark: here, benchmarkHistory: [here, foreign] })
     recordAnswerSpeed({ messageId: 'a', tokensPerSecond: 11.8, ttftMs: 900, tokens: 312 }, 'qwen3.5-9b-ud-q4kxl')
     recordChecksumRead(5_800_000_000, 40_000, 'qwen3.5-9b-ud-q4kxl')
@@ -137,8 +176,77 @@ describe('buildPerformanceSnapshot', () => {
     expect(snap.running).toBe(false)
     expect(snap.observed.lastAnswer?.tokensPerSecond).toBe(11.8)
     expect(snap.observed.lastChecksum?.modelId).toBe('qwen3.5-9b-ud-q4kxl')
-    // No model start this session: the persisted model-load sample still tells the story.
-    expect(snap.observed.lastModelLoad?.mbps).toBe(430)
+    // No model start this session: the observed row is empty (M3) — the persisted sample is the
+    // Drive tile's figure, with its own source and date, not a "while you worked" observation.
+    expect(snap.observed.lastModelLoad).toBeNull()
+    expect(snap.current?.effectiveRead).toEqual(persistedLoad)
+  })
+
+  describe('observed rows are session latches only (M3 / G2)', () => {
+    it('a same-machine persisted-only model_load sample is NOT an observed model start', () => {
+      const root = freshRoot()
+      const db = seededDb(root)
+      const here = hereResult({ effectiveRead: persistedLoad })
+      updateSettings(db, { lastBenchmark: here, benchmarkHistory: [here] })
+
+      const snap = buildPerformanceSnapshot(ctxWith(root, db))
+
+      expect(snap.currentMachine).toBe(true)
+      expect(snap.observed).toEqual({ lastAnswer: null, lastModelLoad: null, lastChecksum: null })
+      // The Drive tile keeps the persisted figure, source and date untouched.
+      expect(snap.current?.effectiveRead).toEqual(persistedLoad)
+    })
+
+    it("another computer's persisted model_load sample is not one either", () => {
+      const root = freshRoot()
+      const db = seededDb(root)
+      const foreign = result({ effectiveRead: { ...persistedLoad, modelId: 'foreign-model' } })
+      updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign] })
+
+      const snap = buildPerformanceSnapshot(ctxWith(root, db))
+
+      expect(snap.currentMachine).toBe(false)
+      expect(snap.observed.lastModelLoad).toBeNull()
+    })
+
+    it('a model start THIS session is', () => {
+      const root = freshRoot()
+      const db = seededDb(root)
+      updateSettings(db, { lastBenchmark: hereResult({ effectiveRead: persistedLoad }) })
+      recordModelLoadRead('unused', 10_000, 'session-load', 3_000_000_000)
+
+      const snap = buildPerformanceSnapshot(ctxWith(root, db))
+
+      expect(snap.observed.lastModelLoad?.modelId).toBe('session-load')
+      expect(snap.observed.lastModelLoad?.mbps).toBe(300)
+    })
+  })
+
+  it('`running` reads the benchmark span itself: a foreground chat does not hide it (M1)', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult() })
+    const ctx = ctxWith(root, db)
+    const release = ctx.runtime.occupancy.begin('benchmark')
+    // `modelBusyLane` answers 'chat' first while a stream is in flight — the old read.
+    inFlightStreams.set('chat', new AbortController())
+    try {
+      expect(buildPerformanceSnapshot(ctx).running).toBe(true)
+    } finally {
+      inFlightStreams.clear()
+      release()
+    }
+    expect(buildPerformanceSnapshot(ctx).running).toBe(false)
+  })
+
+  it('the snapshot is a getter: reading it never pushes `performance:changed`', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult() })
+    const spy = performanceChangedSpy()
+    buildPerformanceSnapshot(ctxWith(root, db))
+    buildPerformanceSnapshot(ctxWith(root, db))
+    expect(spy).not.toHaveBeenCalled()
   })
 
   it('carries the live GPU probe for the graphics tile', () => {
@@ -205,14 +313,16 @@ describe('buildPerformanceSnapshot', () => {
     snap = buildPerformanceSnapshot(ctxWith(root, db))
     expect(snap.placement.observed).toBeNull()
 
-    // The session latch (this start) wins over the persisted record.
+    // The session latch (this start) wins over the persisted record. Its context matches the
+    // configured launch context, as the persisted one did — a latch measured with a DIFFERENT
+    // context is no longer presented as the measured fit (see performance-schema.test.ts).
     recordModelPlacement({
-      modelId: 'some-model', contextTokens: 8192, backend: 'gpu', gpuLayers: 10, totalLayers: 10,
+      modelId: 'some-model', contextTokens: 4096, backend: 'gpu', gpuLayers: 10, totalLayers: 10,
       gpuModelMb: 2500, cpuModelMb: 100, gpuKvMb: 300, cpuKvMb: null, metalMaxWorkingSetMb: null,
       machineKey: here, at: '2026-09-05T01:00:00Z'
     })
     snap = buildPerformanceSnapshot(ctxWith(root, db))
-    expect(snap.placement.observed?.contextTokens).toBe(8192)
+    expect(snap.placement.observed?.at).toBe('2026-09-05T01:00:00Z')
     expect(snap.placement.verdict.kind).toBe('gpu')
   })
 
@@ -222,7 +332,11 @@ describe('buildPerformanceSnapshot', () => {
     updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'qwen3.5-9b-ud-q4kxl' })
     const ctx = ctxWith(root, db, {
       manifestsDir: join(__dirname, '..', '..', '..', '..', 'model-manifests'),
-      runtime: { occupancy: new ModelOccupancy(), active: () => ({ modelId: 'qwen3.5-9b-ud-q4kxl' }) },
+      runtime: {
+        occupancy: new ModelOccupancy(),
+        active: () => ({ modelId: 'qwen3.5-9b-ud-q4kxl' }),
+        status: () => runningStatus('qwen3.5-9b-ud-q4kxl')
+      },
       translator: { deviceStatus: () => ({ device: 'auto', gpuLayers: 20, totalLayers: 49, live: true }) },
       vision: { isLoaded: () => false },
       reranker: { isLoaded: () => true },
@@ -274,7 +388,31 @@ describe('buildPerformanceSnapshot', () => {
     expect(snap.current?.recommendedModelId).toBe('qwen3.5-9b-ud-q4kxl')
   })
 
+  it('the chat row is "loaded" only once the ACTIVE model is running and ready (DR6)', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'm' })
+    const chatRow = (status: RuntimeStatus, active: unknown = null) =>
+      buildPerformanceSnapshot(
+        ctxWith(root, db, { runtime: { occupancy: new ModelOccupancy(), active: () => active, status: () => status } })
+      ).placement.models[0]
+
+    // A start in flight: `active()` is null through the whole window (the #109 warm-up runs
+    // against the inner runtime), and the row must say so.
+    expect(chatRow({ ...stoppedStatus(), message: 'Starting', startingModelId: 'm' }).loaded).toBe(false)
+    // Ready.
+    expect(chatRow(runningStatus('m'), { modelId: 'm' }).loaded).toBe(true)
+    // A switch underway: the old model is still up, the active (new) one is not resident yet.
+    expect(chatRow(runningStatus('old', { startingModelId: 'm' }), { modelId: 'old' }).loaded).toBe(false)
+    // Running but not healthy, or running some other model than the active one: not this row.
+    expect(chatRow(runningStatus('m', { healthy: false }), { modelId: 'm' }).loaded).toBe(false)
+    expect(chatRow(runningStatus('other'), { modelId: 'other' }).loaded).toBe(false)
+    // Stopped.
+    expect(chatRow(stoppedStatus()).loaded).toBe(false)
+  })
+
   it('reads a result from another computer as "not this machine"', () => {
+
     const root = freshRoot()
     const db = seededDb(root)
     const foreign = result()
@@ -286,5 +424,58 @@ describe('buildPerformanceSnapshot', () => {
     expect(snap.otherMachines).toEqual([])
     expect(snap.currentGpu).toBeNull()
     expect(snap.observed).toEqual({ lastAnswer: null, lastModelLoad: null, lastChecksum: null })
+  })
+})
+
+describe('runBenchmark progress: a step ticks only when it succeeded (L3 / T4)', () => {
+  const run = async (
+    over: Partial<Parameters<typeof runBenchmark>[0]>,
+    workspacePath = join(freshRoot(), 'workspace')
+  ): Promise<BenchmarkProgressStep[]> => {
+    const steps: BenchmarkProgressStep[] = []
+    await runBenchmark({ workspacePath, manifests: [], onProgress: (s) => steps.push(s), ...over })
+    return steps
+  }
+
+  it('no runtime: system, drive, done', async () => {
+    expect(await run({})).toEqual(['system', 'drive', 'done'])
+  })
+
+  it('a runtime that produced a reading: system, drive, speed, done', async () => {
+    expect(await run({ runtime: stubRuntime() })).toEqual(['system', 'drive', 'speed', 'done'])
+  })
+
+  it('a runtime that was busy elsewhere (the leg skipped, #185): no speed step', async () => {
+    expect(await run({ runtime: stubRuntime(), modelBusy: () => true })).toEqual(['system', 'drive', 'done'])
+  })
+
+  it('a speed probe that failed (the stream threw): no speed step', async () => {
+    const failing = stubRuntime({
+      async *chatStream() {
+        throw new Error('sidecar gone')
+      }
+    })
+    expect(await run({ runtime: failing })).toEqual(['system', 'drive', 'done'])
+  })
+
+  it('a drive probe that failed (unwritable workspace): no drive step, and no later step implies it', async () => {
+    const missing = join(freshRoot(), 'does-not-exist', 'workspace')
+    const steps = await run({ runtime: stubRuntime() }, missing)
+    expect(steps).toEqual(['system', 'speed', 'done'])
+  })
+
+  it('a throwing onProgress never fails the run', async () => {
+    const workspacePath = join(freshRoot(), 'workspace')
+    const seen: BenchmarkProgressStep[] = []
+    const fresh = await runBenchmark({
+      workspacePath,
+      manifests: [],
+      onProgress: (s) => {
+        seen.push(s)
+        throw new Error('renderer gone')
+      }
+    })
+    expect(seen).toEqual(['system', 'drive', 'done'])
+    expect(fresh.profile).toBeTruthy()
   })
 })

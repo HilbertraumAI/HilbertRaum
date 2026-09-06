@@ -10,6 +10,7 @@ import type {
   PlacementVerdict
 } from '../../shared/types'
 import type { ModelManifest } from '../../shared/manifest'
+import { machineKey } from '../../shared/benchmark-schema'
 import { estimateGraphicsNeedMib } from './models'
 import { GPU_BUMP_MIN_VRAM_MB, looksIntegrated } from './runtime/gpu'
 
@@ -23,17 +24,13 @@ import { GPU_BUMP_MIN_VRAM_MB, looksIntegrated } from './runtime/gpu'
 export type MachineFields = Pick<BenchmarkResult, 'os' | 'arch' | 'cpuModel' | 'cpuCores' | 'ramGb'>
 
 /**
- * Fingerprint of the computer a result belongs to: OS, arch, CPU model + cores, and RAM
- * rounded to whole GB (`os.totalmem()` can drift by a few MB between boots of the same
- * machine; the Models screen rounds the same way). Returns null when the result carries
- * no usable identity (a detection failure, or a blob persisted before these fields were
- * reliably filled), so callers treat "unknown" as "keep what we have", never as "moved".
+ * Fingerprint of the computer a result belongs to (OS, arch, CPU model + cores, RAM rounded
+ * to whole GB), null for a result with no usable identity. The implementation moved to
+ * `shared/benchmark-schema.ts` with the PR #303 audit H1 validators — the history validator
+ * has to key on exactly this and the renderer must be able to import it — and is re-exported
+ * here so every existing `services/performance` import site is unchanged.
  */
-export function machineKey(fields: MachineFields | null | undefined): string | null {
-  if (!fields) return null
-  if (!fields.cpuModel || !(fields.ramGb > 0)) return null
-  return [fields.os, fields.arch, fields.cpuModel, fields.cpuCores, Math.round(fields.ramGb)].join('|')
-}
+export { machineKey }
 
 /**
  * The history after a fresh result: the entry for the same machine is replaced, the
@@ -146,9 +143,10 @@ export interface NextStartMemory {
  *
  * This is the ONE place class and device are decided; `probeAndPersistGpu`, `listModels`,
  * `buildPlacement` and the graphics tile all read it, so the Performance screen and the Models
- * screen can never name different cards. Observed placements are NOT overridden here: a
- * running GPU model stays observed on the GPU after the toggle flips (a settings change never
- * restarts it); this describes the next start only.
+ * screen can never name different cards. Observed placements are NOT rewritten here — this
+ * describes the next start only; whether a stored GPU observation still COUNTS for the row
+ * under a forced-CPU configuration is `buildPlacement`'s configuration match (PR #303 P4,
+ * `placement.observedMismatch`): the record is kept, the row estimates.
  */
 export function nextStartMemory(input: NextStartMemoryInput): NextStartMemory {
   const { platform, arch, devices, gpuMode, gpuAutoDisabled } = input

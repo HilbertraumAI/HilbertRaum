@@ -248,13 +248,16 @@ describe('picker seams: the next start honours the GPU flags (decision 6)', () =
     expect(pickerMemoryFor(getSettings(ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
   })
 
-  it('a placement OBSERVED on the card stays observed after the GPU is switched off (a toggle restarts nothing)', () => {
+  it('a placement OBSERVED on the card is kept after the GPU is switched off, but the row no longer counts it (#303 P4 configuration match)', () => {
     const here = machineKey(detectSystem())
     const { ctx } = fixture({
       probeReturns: [CARD8],
       persisted: [CARD8],
       settings: {
         activeModelId: CARD8_PICK,
+        // The observation counts only while the current configuration would repeat it: pin the
+        // launch context to the record's (the manifest's own window differs).
+        contextTokensOverride: 8192,
         modelPlacements: {
           [CARD8_PICK]: {
             modelId: CARD8_PICK, contextTokens: 8192, backend: 'gpu', gpuLayers: 41, totalLayers: 41,
@@ -270,10 +273,15 @@ describe('picker seams: the next start honours the GPU flags (decision 6)', () =
 
     updateSettings(ctx.db, { gpuMode: 'off' })
     const after = buildPerformanceSnapshot(ctx)
-    // The NEXT start's class flips; what the LAST start did is still reported as observed.
+    // The NEXT start's class flips. The GPU observation is KEPT (a toggle restarts nothing — the
+    // record is still on disk), but a forced-CPU configuration admits no GPU record for the row:
+    // it travels as `observedMismatch` and the row estimates the RAM start the settings ask for.
     expect(after.placement.memoryClass).toBe('cpu')
-    expect(after.placement.observed?.gpuLayers).toBe(41)
-    expect(after.placement.verdict).toMatchObject({ kind: 'gpu', estimated: false })
+    expect(getSettings(ctx.db).modelPlacements[CARD8_PICK]?.gpuLayers).toBe(41)
+    expect(after.placement.observed).toBeNull()
+    expect(after.placement.observedMismatch).toMatchObject({ backend: 'gpu', contextTokens: 8192 })
+    expect(after.placement.verdict).toMatchObject({ estimated: true })
+    expect(after.placement.verdict.kind).not.toBe('gpu')
   })
 
   it('"Try GPU again" clears the latch before it re-probes, so the summary describes the start that follows', async () => {

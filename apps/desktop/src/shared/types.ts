@@ -2138,7 +2138,12 @@ export interface PerformanceSnapshot {
    * `gpuVramMb`. Null with no probe or no device.
    */
   currentGpu: { name: string; totalMb: number } | null
-  /** True while a benchmark is running (the button disables; steps stream via the event). */
+  /**
+   * True while the benchmark occupancy span is held on this machine — a run THIS window
+   * started or any other (first-run, moved-drive, another window). Assigned verbatim by the
+   * screen on every read; the terminal performance:changed push after persistence + release
+   * is what turns it off (the progress done step precedes both).
+   */
   running: boolean
   /** The active model against this computer's memory (benchmark.md "Your model"). */
   placement: {
@@ -2151,7 +2156,26 @@ export interface PerformanceSnapshot {
      * (RAM, VRAM, the observed buffers), so the row never shows two sizes for one thing.
      */
     model: { id: string; sizeOnDiskGb: number; contextTokens: number } | null
+    /**
+     * The context the RECOMMENDED model (`current.recommendedModelId`) would launch with,
+     * resolved main-side by the SAME `launchContextTokens` the start path uses; null when
+     * nothing is recommended. The screen used to recompute it with `??` over the catalog
+     * entry, which showed a "0-token context" for a manifest whose `recommended_context_tokens`
+     * is missing or 0 while the launch path (`||`) actually starts on `settings.contextTokens`
+     * — PR #303 audit M5 residual.
+     */
+    recommendedContextTokens: number | null
     observed: ModelPlacement | null
+    /**
+     * A stored/latched placement that is real but does NOT describe the current configuration
+     * (PR #303 audit, measured-evidence rule): its `contextTokens` differ from the context the
+     * model would launch with now, or it was measured on the GPU while the configuration
+     * forces the processor. The record is kept in settings, `observed` is null (the row falls
+     * back to the weights-only ESTIMATE, which is what the current settings would actually
+     * do), and this says what the earlier measurement was so the copy can be honest about it.
+     * Null when the observation matches the configuration, or when there is none.
+     */
+    observedMismatch: { contextTokens: number; backend: 'gpu' | 'cpu'; at: string } | null
     verdict: PlacementVerdict
     /** Every model the app can hold, chat first (benchmark.md "Models on this computer"). */
     models: ResidentModelRow[]

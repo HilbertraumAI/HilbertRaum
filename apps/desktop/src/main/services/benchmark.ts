@@ -514,12 +514,19 @@ export interface RunBenchmarkDeps {
   /** Injectable clock for deterministic `ranAt` in tests. */
   now?: () => Date
   /**
-   * Called as each step completes ('system', 'drive', then 'speed' ONLY when a runtime was
-   * up to measure, then 'done'). The IPC layer forwards it to the renderer that started the
-   * run so the Performance screen can show the steps; the first-run path passes nothing.
-   * Never awaited, and a throwing callback never fails the run.
+   * Called as each step COMPLETES SUCCESSFULLY: 'system' always; 'drive' only when the
+   * write/fsync probe produced figures (a failed probe reports nothing for the step, and the
+   * result carries `warnDriveProbe`); 'speed' only when a tokens/sec reading was actually
+   * obtained (not when no runtime was up, not when the leg was skipped as busy — #185 — and
+   * not when the probe failed); 'done' always, once the result is assembled. A later step
+   * therefore never implies an omitted earlier one succeeded, and 'done' means the PROBES are
+   * complete — the caller's persistence and occupancy release still follow it (the
+   * `performance:changed` push after those is the idle signal). The IPC layer forwards the
+   * steps to the renderer that started the run; the first-run path passes nothing. Never
+   * awaited, and a throwing callback never fails the run.
    */
   onProgress?: (step: BenchmarkProgressStep) => void
+
 }
 
 function report(deps: RunBenchmarkDeps, step: BenchmarkProgressStep): void {
@@ -540,7 +547,10 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   const sys = detectSystem()
   report(deps, 'system')
   const drive = await measureDriveSpeed(deps.workspacePath)
-  report(deps, 'drive')
+  // L3: the step is a success tick, not a "we tried" tick — a failed probe (the error string
+  // set, figures null) reports nothing, and the result's `warnDriveProbe` says why.
+  if (!drive.error) report(deps, 'drive')
+
   // #185: `speedSkipped` distinguishes "no runtime was up, nothing to measure" (silent, the
   // long-standing behavior) from "a runtime WAS up but something else was using it" (warned).
   let speedSkipped = false
@@ -550,7 +560,11 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
       speedSkipped = true
     }
   })
-  if (deps.runtime) report(deps, 'speed')
+  // L3: only a READING completes the step. A runtime that was up but busy elsewhere (the leg
+  // skipped, `warnSpeedSkipped`), or whose probe failed, used to tick 'speed' anyway and the
+  // screen showed a measured step for a figure the card then lacked.
+  if (reading) report(deps, 'speed')
+
   const tokensPerSecond = reading?.tokensPerSecond ?? null
   // #291: HOW the figure was measured — the runtime's decode timings, or the chunk fallback —
   // plus the token/chunk count it covers, so the card can mark a fallback as approximate.
