@@ -105,7 +105,8 @@ are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
 `scopeDocumentIds: string[] | null` (additive `conversations.scope_json` column, guarded
 ALTER-TABLE migration in `db.ts`). **#138 (D-7):** since the document-organization wave it
 ALSO takes `collectionId?: string` (creation anchor) and `scope?: DocumentScope` (the
-composite `scope_v2_json` union — see rag-design §13), with the companions
+composite `scope_v2_json` union — see rag-design §13; #301 P4 finding M10 adds the additive
+`documentsOff?: true` flag — "Knowledge packs" below), with the companions
 `setConversationScope(conversationId, scope | null)`, `setConversationCollection(conversationId,
 collectionId | null)`, and `listAttachments(conversationId): Promise<DocumentInfo[]>` (the
 chat's temporary attachments)._
@@ -277,6 +278,9 @@ ISO-8601 UTC timestamps. **Message order = `created_at ASC, rowid ASC`** (rowid 
 equal-ms ties → stable turn order). **System prompt is built per request, NOT persisted**; the
 `messages` table holds only user/assistant turns. `Conversation`/`Message` shapes per
 `shared/types.ts`. `messages.citations_json` stays null until Phase 6.
+`messages.pack_outcomes_json` (#301 P4, findings M6/M7) is additive and null on every
+pre-P4 row and every message with no knowledge pack in scope — see "Knowledge packs"
+below for the shape and the whitelist that parses it.
 ✅ **Title:** new conversations are `"New chat"`; first user message sets the title (≤60 chars),
 later messages don't overwrite it. Conversations list newest-updated first.
 (Phase 42: the default is persist-canonical English — `t('en', 'main.chat.defaultTitle')`,
@@ -1542,9 +1546,24 @@ Consumers subscribe via preload `onKnowledgePacksChanged(cb)` and ignore an even
 **Shapes (shared/types.ts):** `KnowledgePack` (id = archive UUID, title, language,
 zimDate, articleCount, sizeBytes, leaf, enabled, available, `unavailableReason: 'missing'
 | 'identity-mismatch' | null` — additive, #301 P3b finding M5; null whenever `available`
-is true, addedAt); `DocumentScope.packIds?: string[]` / `RetrievalScope.packIds?`
-(additive — a pack-less scope serializes byte-identically; consumed only by the ZIM
-retrieval arm, never by `buildScopeFilter`); `Citation` additive archive fields
+is true, addedAt; `searchable?: 'yes' | 'no' | 'unknown'` / `searchableHint?: 'yes' | 'no'
+| null` — additive, #301 P4 finding M7, absent reads as `'unknown'`); `DocumentScope.packIds?:
+string[]` / `RetrievalScope.packIds?` (additive — a pack-less scope serializes
+byte-identically; consumed only by the ZIM retrieval arm, never by `buildScopeFilter`);
+`DocumentScope.documentsOff?: true` / `RetrievalScope.noDocuments?: true` (additive, #301
+P4 finding M10, owner ruling D4 — the explicit, additive "packs only" flag and its resolved
+deny-all counterpart; NEVER derived from an empty selection, so a pre-P4 row and a
+documents-on scope serialize byte-identically; see "Retrieval outcomes and searchability"
+below); `MAX_SELECTED_PACKS = 12` (#301 P4 finding M8, owner ruling §7 — the one constant
+the popover, chip, arm and outcomes all read); `KnowledgePackOutcomeStatus = 'searched' |
+'skipped' | 'failed'`, `KnowledgePackOutcomeReason` (14 codes — `selection-limit`,
+`removed`, `disabled`, `file-missing`, `identity-mismatch`, `not-served`, `not-searchable`,
+`tools-missing`, `mode`, `search-failed`, `read-failed`, `timeout`, `deadline`,
+`server-restarted`), `KnowledgePackOutcome = { packId, title: string | null, status,
+reason: KnowledgePackOutcomeReason | null, found: number, admitted: number }` (#301 P4
+findings M6/M7/M8 — codes only, never a path, filename or stderr) and `Message.packOutcomes?:
+KnowledgePackOutcome[]` (additive; undefined on a legacy row — the renderer says "outcome
+not recorded" rather than inventing one); `Citation` additive archive fields
 (`sourceKind: 'archive'`, `packId`, `archiveTitle`, `articlePath`; archive citations carry
 NO documentId/chunkId). Evidence review snapshots persist the same four fields as
 `sourceKind`/`archiveTitle`/`packId`/`articlePath` in `source_snapshot_json` (P2, review
@@ -1557,7 +1576,10 @@ transcript export even though identity is never resolved. `KnowledgePackAddResul
 language/zim_date/article_count/media_count/size_bytes · leaf + recorded_path
 (stored-copy resolution: `<drive>/zim/<leaf>` first) · enabled 0/1 · unavailable_at
 (file vanished — mark, never delete) · removed_at (tombstone so drive auto-discovery
-cannot resurrect a removed pack) · added_at/updated_at. No FK from conversations —
+cannot resurrect a removed pack) · added_at/updated_at · `searchable` TEXT (`'yes' | 'no'`,
+NULL = unknown), `searchable_key` TEXT (the fingerprint the verdict was taken under) and
+`ftindex_hint` TEXT (`'yes' | 'no'`, NULL = no tag) — three columns added #301 P4, finding
+M7, all nullable via `ensureColumn`, no `SCHEMA_VERSION` bump. No FK from conversations —
 a removed pack degrades to “not retrieved from” (the skills C3 rule).
 
 **Audit:** `knowledge_pack_added` ({ packId, sizeBytes, articleCount }) ·
@@ -1602,6 +1624,35 @@ lock+unlock into a new session, or the ask's own cancellation — none of these 
 guard detects an OBSERVED LIFECYCLE CHANGE of the app's own child; it does not authenticate
 the server — see "kiwix-serve — the one unauthenticated sidecar" in `security-model.md`
 (residual R-9).
+
+**Retrieval outcomes and searchability (P4, #301, findings M3/M6/M7/M8/M10 — full record:
+rag-design §17 D-Z4/D-Z11/D-Z12):** documents-off scope is an explicit, additive
+`DocumentScope.documentsOff` persisted by both scope owners and resolved by `resolveScope`
+into `RetrievalScope.noDocuments` only when no file is attached to the chat (attachments
+stay in scope); `buildScopeFilter`, the resident-vector fast path and `retrieve`'s pre-embed
+skip all honour it. A pack's searchability is CONFIRMED only by a validated `/suggest`
+probe (`GET /suggest?content=<name>&term=the&count=1`, `'yes'` iff the body is a JSON array
+with a `kind:"pattern"` entry) run once at the end of a reconciliation, under the SAME
+request guard as an ask, and cached against `<file size>:<file mtime>:<kiwix-serve binary
+size>:<mtime>` — a 404, a timeout, a malformed body or a response observed across a server
+change never confirms "no"; a confirmed-no pack is skipped by an ask but stays readable.
+Each ask allocates at most `MAX_SELECTED_PACKS = 12` packs' worth of work: up to
+`MAX_EXTERNAL_CANDIDATES = 24` candidates admitted round-robin in title order after every
+pack settles, at most `PACK_SEARCH_CONCURRENCY = 2` packs searched at once, under one
+`EXTERNAL_RETRIEVAL_DEADLINE_MS = 20_000` ms deadline shared with the request guard's one
+retry. `classifyPackSelection` (`zim/packs.ts`) classifies every selected pack id BEFORE
+any eligibility filter, so a missing tools bundle or an all-unavailable selection cannot
+erase the outcomes; every pack gets exactly one `KnowledgePackOutcome` per ask. The
+carriage is the persisted `Message` itself — `chat:done` already sends it in full, so no
+new IPC channel or preload change exists — via the additive `messages.pack_outcomes_json`
+column (parsed through the tolerant whitelist `parsePackOutcomes` in `chat.ts`), which
+therefore also rides `listMessages`, `getLatestMessage`, the `DeletedMessage` snapshot /
+`restoreMessage`, and `exportTranscript` (a "Knowledge packs:" block after "Sources:").
+`PackOutcomesNotice.tsx` renders it under any assistant turn that carries outcomes, even
+with zero citations; a legacy turn that cites an archive but carries none shows an explicit
+"outcome not recorded" line. A whole-document, compare or grounded-data answer produces
+`skipped/mode` for every selected pack — packs are still not queried on those paths, but
+the answer now says so.
 
 **Manual harness env (P5, finding L8):** the real-tool smoke (`tests/manual/zim-real.test.ts`)
 is gated by `HILBERTRAUM_ZIM_SMOKE`; once requested, `HILBERTRAUM_ZIM_TOOLS_DIR` /

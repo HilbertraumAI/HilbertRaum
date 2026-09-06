@@ -2391,6 +2391,47 @@ export const en = {
   'chat.scope.packNamed': 'Pack: {name}',
   'chat.scope.packCount.one': '{count} knowledge pack',
   'chat.scope.packCount.other': '{count} knowledge packs',
+  // Documents toggle (#301 P4, finding M10): the explicit "answer from the packs, not from my
+  // documents" choice. The hint names what stays ON — chat attachments are never dropped, so
+  // "only these packs" alone would be a false promise in a chat with files.
+  'chat.scope.documentsToggle': 'Search my documents',
+  'chat.scope.documentsToggleHint':
+    'Off: answers come from the ticked knowledge packs only. Files attached to this chat are still used.',
+  'chat.scope.documentsOffSuffix': 'documents off',
+  'chat.scope.documentsOffNoPacks': 'no sources — turn documents on or tick a knowledge pack',
+  // D6 (#301 P4, plan §9.21 (e)8): a SELECTED pack that cannot take part stays tickable so it can
+  // be UNticked, and says why. Nothing is hidden — a pack that vanished from the registry still
+  // renders as a row the user can clear.
+  'chat.scope.packDisabled': 'disabled',
+  'chat.scope.packRemoved': 'Removed pack',
+  // A plural PAIR even though `MAX_SELECTED_PACKS` is 12 today: the cap is a constant the
+  // product may move, and the CODE-8 net (i18n.test.ts) exists so a counting key can never
+  // render "Up to 1 knowledge packs per chat" the day it does.
+  'chat.scope.packLimit.one': 'Up to {count} knowledge pack per chat',
+  'chat.scope.packLimit.other': 'Up to {count} knowledge packs per chat',
+  // ---- Per-answer knowledge-pack outcomes (#301 P4, findings M6/M7 — PackOutcomesNotice) ----
+  // One line per pack the ask selected: searched with its passage count, or not searched / failed
+  // with a fixed reason. CODES map to this copy — never a path, a filename or a tool's stderr.
+  'chat.packs.outcome.summary': 'Knowledge packs: {searched} searched · {other} not searched or failed',
+  'chat.packs.outcome.removedPack': 'a removed pack',
+  'chat.packs.outcome.passages.one': '{count} passage',
+  'chat.packs.outcome.passages.other': '{count} passages',
+  'chat.packs.outcome.unknown': 'Knowledge packs: outcome not recorded for this older answer',
+  'chat.packs.outcome.searched': 'searched',
+  'chat.packs.outcome.selection-limit': 'not searched: selection limit (12 per chat)',
+  'chat.packs.outcome.removed': 'not searched: pack removed',
+  'chat.packs.outcome.disabled': 'not searched: pack disabled',
+  'chat.packs.outcome.file-missing': 'not searched: file missing',
+  'chat.packs.outcome.identity-mismatch': 'not searched: different archive at this location',
+  'chat.packs.outcome.not-served': 'not searched: name collision with another pack',
+  'chat.packs.outcome.not-searchable': 'not searched: no full-text index',
+  'chat.packs.outcome.tools-missing': 'not searched: kiwix-tools not installed',
+  'chat.packs.outcome.mode': 'not searched: whole-document answers read the document only',
+  'chat.packs.outcome.search-failed': 'failed: search error',
+  'chat.packs.outcome.read-failed': 'failed: no article could be read',
+  'chat.packs.outcome.timeout': 'failed: timed out',
+  'chat.packs.outcome.deadline': 'not searched: out of time for this question',
+  'chat.packs.outcome.server-restarted': 'failed: the pack server restarted during this question',
   'chat.sources.openArticle': 'Open article',
   'chat.article.title': 'Article',
   'chat.article.from': 'From {archive} - offline copy',

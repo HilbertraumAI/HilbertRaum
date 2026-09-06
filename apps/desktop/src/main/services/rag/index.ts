@@ -1,6 +1,6 @@
 import type { Db } from '../db'
 import { t } from '../../../shared/i18n'
-import type { AppSettings, Citation, ContextUsage, CoverageInfo, Message, RetrievalScope } from '../../../shared/types'
+import type { AppSettings, Citation, ContextUsage, CoverageInfo, KnowledgePackOutcome, Message, RetrievalScope } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
 import type { Reranker } from '../reranker'
@@ -11,7 +11,13 @@ export { detectFilenameScope, type DetectedScope, type ScopeableDoc } from './sc
 // (plan §10.2). The canonical definition lives in shared/types.ts (no cycle with embeddings).
 export type { RetrievalScope } from '../../../shared/types'
 
-/** Normalize retrieve's arg-5 union: a bare `string[]`/`null` is the legacy doc-id scope. */
+/**
+ * Normalize retrieve's arg-5 union: a bare `string[]`/`null` is the legacy doc-id scope.
+ *
+ * A `RetrievalScope` object is passed through BY IDENTITY, so every field `resolveScope`
+ * produced — including the knowledge-pack `packIds` and the deny-all `noDocuments` flag
+ * (#301 P4, M10) — reaches `retrieve` intact. The legacy array form can never carry either.
+ */
 function normalizeScope(scope: string[] | RetrievalScope | null | undefined): RetrievalScope {
   return Array.isArray(scope) || scope == null ? { documentIds: scope ?? null } : scope
 }
@@ -57,6 +63,10 @@ import { getSettings } from '../settings'
 import { scanRedactionCandidates, type RedactionCounts } from '../skills/tools/redaction'
 import { answerWholeDocFromTree, continueUntilComplete, streamWholeDocMapReduce } from './whole-doc-tree'
 import { documentChunkCount } from '../analysis/coverage'
+// #301 P4 (plan §9.21 (e)5): a DB-ONLY title lookup for the answer paths that never query packs.
+// No cycle — `services/zim` reaches back into `rag` with TYPE-only imports (`ExternalRetrievalArm`
+// / `ExternalRetrievalOutput`), which are erased, and `zim/packs.ts` imports nothing from here.
+import { packTitles } from '../zim/packs'
 import { codePointSlice } from '../text'
 import { SUMMARY_MAP_CALL_CEILING } from '../doctasks/summary'
 import { buildGroundedDataPrompt, EXCERPT_BEGIN, EXCERPT_END, EXCERPT_GUARD_LINE } from './grounded-data'
@@ -153,6 +163,13 @@ export interface RetrievedChunk {
 export interface RetrievalResult {
   chunks: RetrievedChunk[]
   citations: Citation[]
+  /**
+   * Knowledge packs (#301 P4, findings M6/M7): one outcome per pack id the ask's scope selected,
+   * classified before any eligibility filter (plan §9.21 (e)). ABSENT when no arm ran (the
+   * byte-unchanged no-arm path: the pre-change fixture still compares equal), present — possibly
+   * with every status `skipped`/`failed` — whenever the scope selected packs.
+   */
+  packOutcomes?: KnowledgePackOutcome[]
 }
 
 /**
@@ -162,11 +179,25 @@ export interface RetrievalResult {
  * synthetic ids can never collide with real `chunks.id`s (the `zim:` prefix) and MUST be
  * failure-isolated by the caller contract: `retrieve` logs and continues when it throws —
  * an unplugged drive never breaks asking about documents.
+ *
+ * #301 P4 (plan §9.21 (e)3): the arm resolves with `{ candidates, outcomes }`, never a bare
+ * candidate list — the per-pack outcomes are as load-bearing as the candidates, and an arm that
+ * could only answer with candidates had no way to say "nothing was searched, and here is why".
  */
 export type ExternalRetrievalArm = (
   question: string,
   signal?: AbortSignal
-) => Promise<Array<Omit<RetrievedChunk, 'label'>>>
+) => Promise<ExternalRetrievalOutput>
+
+/**
+ * The arm's result (plan §9.21 (e)3): the candidates exactly as before, plus ONE outcome per
+ * pack id the ask's scope selected — classified before any eligibility filter, so a missing
+ * tools bundle, an all-unavailable selection or an empty candidate list can never erase them.
+ */
+export interface ExternalRetrievalOutput {
+  candidates: Array<Omit<RetrievedChunk, 'label'>>
+  outcomes: KnowledgePackOutcome[]
+}
 
 /** Chunk text stored on a citation snippet is capped to keep citations_json small. */
 export const SNIPPET_MAX_CHARS = 600
@@ -251,8 +282,9 @@ interface ChunkRow {
  *  3. FTS5 keyword-search the corpus (`topKInitial`, embedder-visibility-scoped),
  *  4. fuse the two ranked lists by reciprocal rank (RRF, hybrid.ts),
  *  5. join candidates back to `chunks` for text + source label + page/section,
- *  6. rerank the candidates when a reranker is available (reorder by relevance;
- *     a rerank failure falls back to the fused order — never breaks asking),
+ *  6. rerank the candidates when a reranker is available (reorder by relevance; a rerank
+ *     failure falls back to the fused order — never breaks asking — and, with an archive
+ *     arm, to the same round-robin interleave the reranker-absent path uses, M3),
  *  7. dedup by document/page (keep the best-ranked chunk per page),
  *  8. trim to `topKFinal` while respecting `maxContextTokens` (approx token counter),
  *  9. assign `[S1] [S2] …` labels and resolve `Citation[]`.
@@ -281,15 +313,17 @@ export async function retrieve(
   externalArm?: ExternalRetrievalArm | null
 ): Promise<RetrievalResult> {
   const s = normalizeScope(scope)
-  // Knowledge packs (ZIM wave, live-demo finding 2026-09-05): a scope that selects packs
-  // but NO document sources means "answer from the packs" — the document arms are skipped.
-  // Without this, the empty composed doc-scope fell through to its historical whole-corpus
-  // meaning and unrelated documents (an invoice) claimed the topKFinal slots of a
-  // packs-only ask. Any document source keeps the arms: a ticked collection or hand-picked
-  // doc makes collectionIds/documentIds non-null in resolveScope, and chat attachments are
-  // always unioned into documentIds before this runs.
-  const packsOnly =
-    externalArm != null && (s.packIds?.length ?? 0) > 0 && s.collectionIds == null && s.documentIds == null
+  // Knowledge packs (#301 P4, finding M10, ruling D4): the EXPLICIT deny-all document scope —
+  // the user turned "Search my documents" off and no file is attached to this chat, so
+  // `resolveScope` set `noDocuments`. Both document arms are then skipped BEFORE the question
+  // is embedded: no query-embed round trip, no resident-vector cache load, no FTS query. This
+  // is correctness, not an optimisation — an empty document scope must not fall through to its
+  // historical whole-corpus meaning and let unrelated documents (the live demo's invoice) claim
+  // the topKFinal slots of a packs-only ask. The flag is the ONLY trigger: `{ packIds }` with
+  // null/empty ids and no flag still means "all documents AND those packs" (D4 rejected
+  // redefining the legacy empty scope — the 88be37ec `packsOnly` derivation is superseded).
+  // With an attachment the scope resolves to exactly that file instead, so the arms run.
+  const noDocuments = s.noDocuments === true
 
   // Mismatch guard: only search vectors tagged with the active embedder's id.
   // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
@@ -299,9 +333,11 @@ export async function retrieve(
     embeddingModelId: embedder.id,
     documentIds: s.documentIds ?? null,
     collectionIds: s.collectionIds ?? null,
-    includeArchived: s.includeArchived
+    includeArchived: s.includeArchived,
+    // Deny-all also inside the index (the resident fast path bypasses the SQL builder).
+    ...(noDocuments ? { noDocuments: true as const } : {})
   })
-  const vectorHits = packsOnly
+  const vectorHits = noDocuments
     ? []
     : (await index.searchText(question, settings.topKInitial, signal)).filter(
         (hit) => hit.score >= settings.minSimilarity
@@ -310,7 +346,7 @@ export async function retrieve(
   // Scoped to chunks VISIBLE to the active embedder so the keyword path can
   // never surface a document vector search couldn't — the re-index honesty story
   // (staleEmbeddings / corpusNeedsReindex / REINDEX_NEEDED_ANSWER) is unchanged.
-  const keywordHits = packsOnly
+  const keywordHits = noDocuments
     ? []
     : keywordSearchChunks(db, question, settings.topKInitial, {
         embeddingModelId: embedder.id,
@@ -360,21 +396,53 @@ export async function retrieve(
   // (so the cross-encoder scores archive and document chunks on one scale). Arm failure
   // is logged and swallowed: an unplugged pack drive must never break asking.
   let externalCount = 0
+  // #301 P4 (finding M6, plan §9.21 (e)4): undefined until an arm actually ran, so the no-arm
+  // path returns a `RetrievalResult` with NO `packOutcomes` key at all and the pre-change
+  // fixture still compares equal (L6). An arm that ran always contributes an array — possibly
+  // one whose every entry is `skipped`/`failed`.
+  let packOutcomes: KnowledgePackOutcome[] | undefined
   if (externalArm) {
     try {
       const external = await externalArm(question, signal)
-      externalCount = external.length
-      candidates.push(...external)
+      externalCount = external.candidates.length
+      candidates.push(...external.candidates)
+      packOutcomes = external.outcomes
     } catch (err) {
+      // #301 P4 (T09): a cancellation is NEVER a fallback. An `AbortError` — from the ask's
+      // own signal or thrown by the arm — propagates out of `retrieve()` unchanged, so the
+      // caller ends the turn instead of resolving with a quietly documents-only answer that
+      // claims to have consulted the packs. Every OTHER arm failure stays swallowed here (an
+      // unplugged pack drive must not break asking).
+      if (isAbortError(err, signal)) throw err
       log.warn('Knowledge-pack retrieval unavailable for this question', {
         error: err instanceof Error ? err.message : String(err)
       })
+      // The arm owes one outcome per selected pack and threw before producing any — an
+      // UNEXPECTED failure (the service classifies every expected one into an outcome). Rather
+      // than let the ask claim nothing was selected, synthesise the honest fallback for every
+      // id the scope carries. No title (the lookup itself may be what failed) and no path,
+      // filename or error text — the reason CODE is the whole diagnostic (§9.21 (e)1).
+      packOutcomes = (s.packIds ?? []).map((packId) => ({
+        packId,
+        title: null,
+        status: 'failed' as const,
+        reason: 'search-failed' as const,
+        found: 0,
+        admitted: 0
+      }))
     }
   }
 
   // Rerank between fusion and dedup: the cross-encoder rescoring decides which chunk
   // represents a page BEFORE the dedup collapse. A failing reranker logs and keeps
   // the fused order — a quality pass must never turn into an error for the user.
+  //
+  // #301 P4 (finding M3): `reranked` records whether a reranker actually RANKED these
+  // candidates. The interleave below used to hang off an `else if`, so a provisioned but
+  // FAILING reranker took the catch path and kept the fused order — with the archive
+  // candidates appended last, `topKFinal` then trimmed every one of them away. It now runs
+  // whenever no ranking happened, absent and threw alike.
+  let reranked = false
   if (reranker && candidates.length > 0) {
     try {
       const scores = new Map(
@@ -387,17 +455,22 @@ export async function retrieve(
         .map((c, i) => ({ ...c, score: scores.get(i) ?? c.score, fusedRank: i }))
         .sort((a, b) => b.score - a.score || a.fusedRank - b.fusedRank)
         .map(({ fusedRank: _unused, ...c }) => c)
+      reranked = true
     } catch (err) {
+      // T09 again: an aborted ask must not be dressed up as "the reranker was unavailable".
+      if (isAbortError(err, signal)) throw err
       log.warn('Reranker unavailable for this question — using fused order', {
         error: err instanceof Error ? err.message : String(err)
       })
     }
-  } else if (externalCount > 0 && candidates.length > externalCount) {
-    // No reranker to merge the two scales, and external candidates were appended AFTER
-    // every fused document candidate — a straight trim to topKFinal would then always
-    // drop the archive chunks. Round-robin interleave document/archive candidates so both
-    // sources reach the budget trim in their own rank order. (With a reranker this branch
-    // is dead: relevance decides.)
+  }
+  if (!reranked && externalCount > 0 && candidates.length > externalCount) {
+    // No reranker RANKED the two scales (absent, or provisioned and threw), and external
+    // candidates were appended AFTER every fused document candidate — a straight trim to
+    // topKFinal would then always drop the archive chunks. Round-robin interleave
+    // document/archive candidates so both sources reach the budget trim in their own rank
+    // order. (After a successful rerank this is dead: relevance decides. With no arm
+    // `externalCount === 0`, so the no-arm pipeline is byte-identical — L6's fixture.)
     const docs = candidates.slice(0, candidates.length - externalCount)
     const ext = candidates.slice(candidates.length - externalCount)
     const merged: typeof candidates = []
@@ -461,7 +534,10 @@ export async function retrieve(
           chunkId: c.chunkId
         }
   )
-  return { chunks, citations }
+  // The key is SPREAD IN only when an arm ran (#301 P4): `{ chunks, citations }` stays the exact
+  // object shape the no-arm fixture was captured from — an always-present `packOutcomes:
+  // undefined` would be an extra own property.
+  return { chunks, citations, ...(packOutcomes ? { packOutcomes } : {}) }
 }
 
 /**
@@ -658,6 +734,9 @@ export interface WholeDocChunksDeps {
   answerPrefix?: string
   /** Share-safe (or other app-authored) block for the reduce USER turn — never the system prompt. */
   extraReduceBlock?: string
+  /** Knowledge packs (#301 P4, plan §9.21 (e)5): the `skipped / mode` outcomes persisted with the
+   *  answer — a whole-document rescue reads the DOCUMENT and never queries a pack. */
+  packOutcomes?: KnowledgePackOutcome[]
 }
 
 /**
@@ -711,6 +790,7 @@ export async function answerWholeDocFromChunks(deps: WholeDocChunksDeps): Promis
     onToken: deps.onToken,
     onCompactionStart: deps.onCompactionStart,
     answerPrefix: deps.answerPrefix,
+    packOutcomes: deps.packOutcomes,
     sourceTexts,
     citations,
     chunksCovered: total,
@@ -1549,6 +1629,33 @@ export function wholeDocumentFitBudgetTokens(
 }
 
 /**
+ * The `skipped / mode` outcomes for an answer path that reads DOCUMENTS ONLY and never queries a
+ * pack — the whole-document read, both compare paths and the grounded-DATA narration (#301 P4,
+ * finding M6; plan §9.21 (e)5). Without them such an answer would silently look like "the packs
+ * you ticked found nothing", which is a different and untrue claim.
+ *
+ * A DB-only title lookup (`packTitles`, no disk, no sidecar): an id with no registration row
+ * keeps a null title and renders as "a removed pack". Returns undefined for an empty selection
+ * so the persisted column stays NULL on every pack-less chat — the byte-unchanged path.
+ */
+export function modePackOutcomes(
+  db: Db,
+  packIds: readonly string[] | null | undefined
+): KnowledgePackOutcome[] | undefined {
+  const ids = [...new Set(packIds ?? [])]
+  if (ids.length === 0) return undefined
+  const titles = packTitles(db, ids)
+  return ids.map((packId) => ({
+    packId,
+    title: titles.get(packId) ?? null,
+    status: 'skipped' as const,
+    reason: 'mode' as const,
+    found: 0,
+    admitted: 0
+  }))
+}
+
+/**
  * Retrieve grounded context for the last user turn of `conversationId`, stream a cited
  * answer from `runtime`, and persist the assistant message WITH its `Citation[]`
  * (→ `messages.citations_json`). The triggering user message must already be in history.
@@ -1580,6 +1687,13 @@ export async function generateGroundedAnswer(
   let chunks: RetrievedChunk[]
   let citations: Citation[]
   let coverage: CoverageInfo | undefined
+  // Knowledge packs (#301 P4, finding M6; plan §9.21 (e)5): the per-pack outcomes this answer
+  // carries. The relevance path takes them from `retrieve` (the arm classified every selected
+  // pack); the whole-document / compare paths fill in `skipped / mode` for the same ids, because
+  // "we read the document instead" is an honest answer the user is owed and silence is not.
+  // Only a COMPOSITE scope carries packs — the legacy `scopeDocumentIds` array cannot.
+  const scopePackIds = opts.scope?.packIds ?? null
+  let packOutcomes: KnowledgePackOutcome[] | undefined
   // When a single whole-document read overflowed the budget (no rescue tree), the grounded prompt
   // carries an explicit model-facing notice: it names how many sections were provided vs total and
   // forbids asserting an absence beyond the provided beginning (audit §2.2). Null ⇒ no notice.
@@ -1597,6 +1711,13 @@ export async function generateGroundedAnswer(
   // `labelA`/`labelB` name the pair (title + import date) so the prompt states the A→B direction
   // WITHOUT asserting which is the old/new version (audit §5.1).
   let compareDiff: { redlineText: string; changesText: string; labelA: string; labelB: string; truncated: boolean } | null = null
+  if (opts.wholeDocument || opts.wholeDocumentCompare) {
+    // Both document-reading modes make the SAME honest disclosure: this answer read the
+    // document(s), so the ticked packs took no part in it (plan §9.21 (e)5). Computed before the
+    // branch so the map-reduce rescues below — which persist their own message and return early
+    // — carry it too.
+    packOutcomes = modePackOutcomes(db, scopePackIds)
+  }
   if (opts.wholeDocument) {
     const budget = wholeDocumentFitBudgetTokens(contextTokens, question, opts.skill)
     const whole = retrieveWholeDocument(db, opts.wholeDocument.documentId, budget)
@@ -1624,7 +1745,9 @@ export async function generateGroundedAnswer(
         // Phase 3 (§5): fire the 'analysis' progress notice when the rescue runs a real map loop.
         onCompactionStart: opts.onCompactionStart,
         // W2 (§2.1): carry the auto-narrow scope notice into the tree rescue path too.
-        answerPrefix: opts.answerPrefix
+        answerPrefix: opts.answerPrefix,
+        // #301 P4: the rescue persists its own message, so the `skipped / mode` outcomes ride with it.
+        packOutcomes
       })
       if (viaTree) return viaTree
       const viaChunks = await answerWholeDocFromChunks({
@@ -1640,6 +1763,8 @@ export async function generateGroundedAnswer(
         // Phase 3 (§5): same 'analysis' progress notice for the no-tree chunk map-reduce path.
         onCompactionStart: opts.onCompactionStart,
         answerPrefix: opts.answerPrefix,
+        // #301 P4: same disclosure on the no-tree chunk rescue — it too reads only the document.
+        packOutcomes,
         // Share-safe parity: the chunk map-reduce covers the WHOLE document, so the verdict gate is NOT
         // applied (truncated=false) — the low-risk verdict is legitimately allowed. Rides in the reduce
         // USER turn (never the system prompt). Closes the tree-path share-safe residual for gap-band docs.
@@ -1723,6 +1848,10 @@ export async function generateGroundedAnswer(
     )
     chunks = r.chunks
     citations = r.citations
+    // #301 P4 (finding M6): the arm's per-pack verdicts for THIS ask, exactly as classified — a
+    // snapshot, so a later scope change or another chat's ask can never rewrite this answer's
+    // record. Undefined when no arm ran (no pack in scope), which persists as NULL.
+    packOutcomes = r.packOutcomes
     // D72 (#24): stamp a real `relevance` CoverageInfo so every grounded answer can show a
     // coverage fraction ("based on N of M sections") — the relevance path used to leave this
     // undefined ⇒ persisted NULL ⇒ only the flat honesty label. `chunksCovered` = the distinct
@@ -1763,7 +1892,11 @@ export async function generateGroundedAnswer(
     return appendMessage(db, {
       conversationId,
       role: 'assistant',
-      content: answer
+      content: answer,
+      // #301 P4 (plan §9.21 (e)5): the no-context answer carries the outcomes TOO — "nothing
+      // relevant was found" and "your three packs were all unavailable" are different facts, and
+      // the generic fixed answer is exactly the turn where the user most needs to see which.
+      packOutcomes
     })
   }
 
@@ -1901,6 +2034,10 @@ export async function generateGroundedAnswer(
     // only when no branch set it (never on a persisted grounded turn — an empty retrieval returns
     // above), and Transcript.tsx renders a NULL turn with the flat relevance label (legacy fallback).
     coverage,
+    // #301 P4 (finding M6): one honest per-pack outcome for every pack this ask's scope selected —
+    // the arm's verdicts on the relevance path, `skipped / mode` on the whole-document / compare
+    // paths (which read documents and never query a pack). Undefined ⇒ NULL (no pack in scope).
+    packOutcomes,
     skillId: skillFence ? (opts.skill?.installId ?? null) : null,
     // Auto-fire provenance rides with the stamp (S13c) — only when the fence was placed (§22-A5).
     autoFired: skillFence ? opts.skill?.autoFired === true : false,
@@ -1925,6 +2062,14 @@ export interface GroundedDataAnswerOptions {
   /** W2 scope notice (audit §2.1): streamed + persisted BEFORE the model answer when the scope was
    *  auto-narrowed to this document. Absent ⇒ no prefix. */
   answerPrefix?: string
+  /**
+   * Knowledge packs (#301 P4, finding M6; plan §9.21 (e)5): the per-pack outcomes to persist with
+   * this answer — always `skipped / mode`, because this path narrates a deterministic extraction
+   * from DOCUMENTS and never queries a pack. Passed IN rather than derived: these options carry no
+   * scope (the context is a fixed data block, not a retrieval), so the caller that resolved the
+   * scope (`registerRagIpc`) builds them with `modePackOutcomes`. Absent ⇒ NULL (no pack ticked).
+   */
+  packOutcomes?: KnowledgePackOutcome[]
 }
 
 /**
@@ -2036,6 +2181,9 @@ export async function generateGroundedDataAnswer(
     // truth = the deterministic extractor, never the model's prose).
     citations: data.citations,
     coverage: data.coverage,
+    // #301 P4: the honest "this answer read your documents' extracted data — the ticked packs took
+    // no part in it" record, built by the caller (these options carry no scope).
+    packOutcomes: opts.packOutcomes,
     skillId: skillFence ? (opts.skill?.installId ?? null) : null,
     autoFired: skillFence ? opts.skill?.autoFired === true : false,
     truncated: finishReason === 'length'

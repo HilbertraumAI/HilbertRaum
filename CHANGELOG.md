@@ -55,6 +55,15 @@ from its first public `1.0.0` release onward.
   whatever answers on that port. One privacy limit to know: other programs running under
   your own user account can read the enabled packs while the workspace is unlocked, through
   the pack server, which has no password of its own; locking or quitting the app stops it.
+- **Answer from knowledge packs alone, and see what each one did.** A new **Search my
+  documents** toggle in the sources picker lets you answer from ticked knowledge packs
+  only — files attached to the chat are still used either way — and every answer now
+  shows a "Knowledge packs:" line reporting whether each ticked pack was searched, and why
+  not when it wasn't (over the pack limit, no full-text search index, timed out, …), even
+  when nothing was cited. Search is now shared fairly across up to 12 ticked packs within
+  a time limit, so one slow or empty pack no longer crowds out the others, and a pack with
+  no full-text search index is now detected and skipped instead of returning nothing on
+  every question.
 - **Each finished chat answer now shows how fast it was generated.** A small line under the
   answer reads, for example, "42 tok/s · 1.8 s to first token · 615 tokens": the model's decode
   speed as reported by the AI engine, how long you waited for the first word, and how many

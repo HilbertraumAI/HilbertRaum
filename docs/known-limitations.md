@@ -2411,9 +2411,37 @@ reports and phase plans were working papers; their full text lives in git histor
   served library until it is renamed, rather than answering under the winner's name (the
   panel does not yet say so — the collision surface is P6's; the pack simply contributes nothing). The real-tool check that our computed map still matches a
   pinned kiwix-serve build is P7's (T19), not assumed here.
-- **Every enabled in-scope pack is searched for every ask**, regardless of language —
-  a German question against an English pack simply scores poorly. The reranker sorts it
-  out when present; without one, expect occasional off-language chunks.
+- **At most twelve packs take part in one ask, and not every candidate they find is
+  used.** Ticking a 13th pack is refused; an older or hand-edited selection above the
+  12-pack limit is trimmed in title order, with a per-answer note that it was not
+  searched. Of the up to 24 archive candidates admitted per ask, each ticked pack's share
+  is decided round-robin, in title order, only after every pack has finished searching —
+  a short or empty pack's unused share goes to the others — and at most two packs are
+  searched at a time, under a twenty-second limit for the whole question (a pack cut off
+  mid-search is reported as "failed: timed out", one never reached in time as "not
+  searched: out of time for this question"). None of this considers language: a German question against an
+  English pack simply scores poorly; the reranker sorts it out when present, and without
+  one, expect occasional off-language chunks. Every ticked pack gets one line in the
+  "Knowledge packs:" note under the answer — searched (and how much it contributed) or
+  not searched/failed with a short reason — even on an answer that cites nothing at all;
+  an older answer, from before this note existed, says "outcome not recorded" instead.
+- **Whether a pack can be searched is confirmed only by asking it, once.** A ZIM
+  archive's own metadata tag is a hint only. The app confirms full-text search capability
+  with one request to the pack server (cached against the archive file and the
+  kiwix-tools build, so a replaced file or a new tools install re-checks automatically,
+  and Refresh re-runs it too); until that check completes, the pack is treated as
+  searchable. A 404, a timeout, a malformed reply, or a reply observed across a
+  pack-server restart never confirms "no" — only a clean, positive or negative reply
+  does. A pack confirmed to have no full-text index is skipped for asking ("not searched:
+  no full-text index") but stays fully readable in the article viewer, which never
+  consults this check.
+- **Turning off "Search my documents" does not affect files attached to the chat.**
+  With the toggle off, a chat answers only from its ticked knowledge packs plus any files
+  you attached directly to it — a project selection or a hand-picked document is dropped,
+  an attachment is not. The plain, empty "All documents" selection is unaffected by this
+  feature and still means the whole document corpus. Turning documents back on, or
+  picking a collection or a document while off, resets to the ordinary all-documents (or
+  attachments-only) behavior — there is no separate "restore my previous selection" step.
 - **Content licensing is the user’s call.** Registration accepts any readable ZIM;
   nothing checks the archive’s license terms (relevant only for redistribution, not
   for private use).

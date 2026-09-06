@@ -27,6 +27,23 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-06 — BUILD_STATE §5 item 21 (c)/(h) retired verbatim (P4)
+
+Collapsed to one-line pointers in `BUILD_STATE.md` §5 item 21 at the ZIM knowledge-packs wave's
+Phase 4 records step (#301), to make room under the §5 500-line budget. Full text as it stood
+before the collapse:
+
+(c) **Evidence review identity for archive citations — DONE in P2** (2026-09-05, #301 review
+H2/M11): unresolved by construction, pack id + article path exported through HTML/PDF/Markdown;
+residual = "Open article" from a review row (owner: P6, after P3b).
+
+(h) **R-7 (P3b, 2026-09-06) — closed with recorded limits:** the dedicated `zim-transient/`
+cleanup is tested with the actual filenames in both workspace modes (startup / session start),
+and at lock, quit, failed registration, superseded rebuild and an unconfirmed manager child on
+the real encrypted vault (`zim-ipc-session.test.ts`, `zim-transients.test.ts`); limits in
+`known-limitations.md`: an unconfirmed child's file waits for the next session start, a file a
+stray process holds open is left and reported.
+
 
 ## Retired `BUILD_STATE.md` SECTIONS (moved 2026-08-20)
 

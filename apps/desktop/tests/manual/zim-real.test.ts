@@ -87,7 +87,7 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
       const arm = svc.makeArm(db, [pack.id])
       expect(arm).not.toBeNull()
       const t0 = performance.now()
-      const candidates = await arm!(query)
+      const { candidates } = await arm!(query)
       const ms = performance.now() - t0
       expect(candidates.length).toBeGreaterThan(0)
       const first = candidates[0]!

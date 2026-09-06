@@ -897,6 +897,16 @@ export interface Message {
   tokenCount?: number | null
   citations?: Citation[]
   /**
+   * Knowledge packs (#301 P4, findings M6/M7; owner ruling §7): the per-pack outcomes of the
+   * ask that produced this assistant turn — one per pack id the ask's scope selected, persisted
+   * in `messages.pack_outcomes_json` (additive, tolerant parse like `citations`). Present on
+   * every grounded answer whose scope selected packs, INCLUDING zero-citation and no-context
+   * answers and the whole-document / compare paths (`reason: 'mode'`). Undefined on legacy rows
+   * and on turns whose scope selected no pack — the renderer shows an explicit "outcome not
+   * recorded" line only when such a legacy turn cites an archive.
+   */
+  packOutcomes?: KnowledgePackOutcome[]
+  /**
    * The skill that shaped this assistant turn (skills plan §8.2/DS16) — the install_id stamped at
    * generation. SKA-38 (skills audit 2026-07-03, U6): this is the RAW persisted `messages.skill_id`,
    * present even when the skill was later DELETED (so the glyph + the "answer without it" undo survive
@@ -1827,7 +1837,85 @@ export interface KnowledgePack {
    * article under this pack's title.
    */
   unavailableReason: 'missing' | 'identity-mismatch' | null
+  /**
+   * Whether the archive carries a full-text (Xapian) index the sidecar can search (#301 P4,
+   * finding M7, plan §2.5). CONFIRMED only by a validated `/suggest` probe run from the end of
+   * a reconciliation: `'yes'` / `'no'`; `'unknown'` until then and again whenever the file's
+   * size/mtime or the tool fingerprint changes (the verdict is cached against them). A 404, a
+   * timeout, a malformed body or a response observed across a server change NEVER confirm
+   * `'no'`. Unknown packs are searched like `'yes'`; a confirmed-`'no'` pack is skipped by the
+   * ask with the outcome `not-searchable` but stays readable in the article viewer. Optional
+   * on the type so pre-P4 fixtures stay valid — absent reads as `'unknown'`.
+   */
+  searchable?: 'yes' | 'no' | 'unknown'
+  /** The archive's own `_ftindex` tag as kiwix-manage reported it — a HINT only (never sets
+   *  `searchable`, never affects eligibility). `null` when the archive carries no such tag. */
+  searchableHint?: 'yes' | 'no' | null
   addedAt: string
+}
+
+/**
+ * The most packs one chat may select (#301 P4, finding M8, owner ruling 2026-09-05 — plan §7).
+ * ONE constant read by the scope popover (the 13th tick is refused), the chip, the retrieval arm
+ * and the outcomes: a persisted selection above it (older data, hand-edited settings) is trimmed
+ * deterministically in `title COLLATE NOCASE, id` order and every trimmed pack gets the per-ask
+ * outcome `selection-limit`. With `MAX_EXTERNAL_CANDIDATES = 24` this makes the `N > 24`
+ * allocation branch unreachable, so it is not implemented.
+ */
+export const MAX_SELECTED_PACKS = 12
+
+/** What happened to ONE selected pack during ONE ask (#301 P4, findings M6/M7/M8). */
+export type KnowledgePackOutcomeStatus = 'searched' | 'skipped' | 'failed'
+
+/**
+ * WHY a selected pack was not searched (`skipped`) or its search did not complete (`failed`).
+ * CODES ONLY — the copy lives in the renderer; never a path, a filename, a status text or a
+ * tool's stderr. `selection-limit`: beyond `MAX_SELECTED_PACKS` in title order · `removed`: no
+ * (live) registration for the persisted id · `disabled` · `file-missing` / `identity-mismatch`:
+ * `KnowledgePack.unavailableReason` · `not-served`: a serving-name collision loser
+ * (`ServedLibrary.excluded`) · `not-searchable`: confirmed no full-text index · `tools-missing`
+ * · `mode`: a whole-document / compare answer, which reads the document only and never queries
+ * packs · `search-failed`: `/search` answered non-200 (a 404 is ambiguous — never persisted as a
+ * capability) or the request failed · `read-failed`: every article fetch of a pack with hits
+ * failed · `timeout`: the pack's request was cut by the per-ask deadline mid-flight · `deadline`:
+ * the pack was never started before the per-ask deadline · `server-restarted`: the request guard
+ * discarded both attempts (`StaleServerError`).
+ */
+export type KnowledgePackOutcomeReason =
+  | 'selection-limit'
+  | 'removed'
+  | 'disabled'
+  | 'file-missing'
+  | 'identity-mismatch'
+  | 'not-served'
+  | 'not-searchable'
+  | 'tools-missing'
+  | 'mode'
+  | 'search-failed'
+  | 'read-failed'
+  | 'timeout'
+  | 'deadline'
+  | 'server-restarted'
+
+/**
+ * The per-ask outcome of one selected pack (#301 P4, findings M6/M7/M8; owner ruling §7:
+ * persisted with the answer message as additive JSON — `messages.pack_outcomes_json`). Every
+ * pack id the ask's resolved scope selected gets exactly one, classified BEFORE any eligibility
+ * filter, so a missing tools bundle, an all-unavailable selection or an empty candidate list can
+ * never erase them. `found` = candidates the pack produced; `admitted` = candidates that entered
+ * the ranking after the round-robin admission (a pack with `found > 0 && admitted === 0` was
+ * searched but budget-truncated). `reason` is null exactly when `status === 'searched'`. `title`
+ * is the pack's title as known at ask time (null for an id with no registration row at all —
+ * rendered as "a removed pack"). Legacy messages carry no outcomes (`Message.packOutcomes`
+ * undefined) and the renderer says so explicitly rather than inventing one.
+ */
+export interface KnowledgePackOutcome {
+  packId: string
+  title: string | null
+  status: KnowledgePackOutcomeStatus
+  reason: KnowledgePackOutcomeReason | null
+  found: number
+  admitted: number
 }
 
 /**
@@ -1919,6 +2007,18 @@ export interface DocumentScope {
    * persisted before this field parse unchanged.
    */
   packIds?: string[]
+  /**
+   * Knowledge packs (#301 P4, finding M10, owner ruling D4): the user's EXPLICIT choice to
+   * answer without the document corpus — "packs only". Additive and NEVER derived from an
+   * empty selection: `{ collectionIds: [], documentIds: [] }` without this flag still means
+   * the whole corpus (the legacy meaning), and `{ …, packIds: ['p'] }` without it means
+   * "all documents AND pack p". Only the literal `true` is ever serialized (absent otherwise,
+   * so pre-P4 rows and documents-on scopes serialize byte-identically). Persisted by BOTH
+   * scope owners (`serializeDocumentScope` in chat.ts, `parseDocumentScope` in
+   * collections.ts). Files attached to the chat stay in retrieval regardless — the flag drops
+   * projects and hand-picked documents, never attachments (rag-design §17 D-Z12).
+   */
+  documentsOff?: true
 }
 
 /**
@@ -1946,6 +2046,17 @@ export interface RetrievalScope {
    * `documents`-table sources), which keeps the SQL scope machinery untouched.
    */
   packIds?: string[] | null
+  /**
+   * Knowledge packs (#301 P4, finding M10): the EXPLICIT deny-all document scope — set by
+   * `resolveScope` alone, and only when the stored scope carries `documentsOff` AND no file
+   * is attached to the chat (attachments are unioned into `documentIds` instead, so a chat
+   * with attachments resolves to "exactly the attachments", never to deny-all). Deliberately
+   * a separate flag: `documentIds`/`collectionIds` null/empty keep their whole-corpus meaning
+   * verbatim (ruling D4 rejected overloading them). Every consumer honours it: the one SQL
+   * builder `buildScopeFilter` is fail-closed (`0`), the resident-vector fast path is guarded,
+   * and `retrieve` skips the document arms before embedding the question.
+   */
+  noDocuments?: true
 }
 
 /**

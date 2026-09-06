@@ -73,6 +73,31 @@ export interface KiwixBook {
   mediaCount: number | null
   /** The ZIM path exactly as recorded in the XML (as passed to kiwix-manage). */
   path: string | null
+  /**
+   * The archive's own `tags` attribute, verbatim (`;`-separated, e.g.
+   * `wikipedia;_ftindex:yes;_pictures:no`). Read for the `_ftindex` HINT only
+   * (`ftIndexHint`) — a tag never confirms searchability (#301 P4, finding M7, plan §2.5).
+   */
+  tags: string | null
+}
+
+/**
+ * The archive's `_ftindex` tag as a HINT (#301 P4, finding M7; plan §9.21 (d)2). `_ftindex:yes`
+ * ⇒ `'yes'`, `_ftindex:no` ⇒ `'no'`, a bare legacy `_ftindex` ⇒ `'yes'`, no such tag ⇒ null.
+ *
+ * A hint is stored in `knowledge_packs.ftindex_hint` and NOTHING else: it never sets
+ * `searchable`, never affects an ask's eligibility, and never contradicts a live probe. The
+ * archive says what it believes about itself; only the `/suggest` probe against the running
+ * server establishes what the sidecar can actually search (§2.5 items 1 and 4).
+ */
+export function ftIndexHint(tags: string | null): 'yes' | 'no' | null {
+  if (tags === null) return null
+  for (const raw of tags.split(';')) {
+    const tag = raw.trim().toLowerCase()
+    if (tag === '_ftindex' || tag === '_ftindex:yes') return 'yes'
+    if (tag === '_ftindex:no') return 'no'
+  }
+  return null
 }
 
 /** Parse the `<book …/>` elements out of a kiwix library.xml. Unknown books without
@@ -91,7 +116,8 @@ export function parseLibraryXml(xml: string): KiwixBook[] {
       date: attrValue(attrs, 'date'),
       articleCount: toCount(attrValue(attrs, 'articleCount')),
       mediaCount: toCount(attrValue(attrs, 'mediaCount')),
-      path: decode(attrValue(attrs, 'path'))
+      path: decode(attrValue(attrs, 'path')),
+      tags: decode(attrValue(attrs, 'tags'))
     })
   }
   return books
@@ -151,6 +177,65 @@ export function parseSearchXml(xml: string): KiwixSearchHit[] {
     })
   }
   return hits
+}
+
+// ---- /suggest capability probe --------------------------------------------------
+
+/**
+ * The term the capability probe sends. A NON-EMPTY, short, language-neutral term is used
+ * deliberately: an empty term would make the verdict depend on libkiwix's empty-term handling,
+ * which is not part of the contract we pinned (§2.2). Its only job is to make the server
+ * produce its suggestion envelope — the synthetic `kind:"pattern"` entry, which libkiwix adds
+ * ONLY when the book has a full-text index, is what is read, never the suggestions themselves.
+ */
+export const SUGGEST_PROBE_TERM = 'the'
+
+/**
+ * Ask a running kiwix-serve whether ONE served book can be full-text searched (#301 P4,
+ * finding M7; plan §2.5 and §9.21 (d)4).
+ *
+ *   `'yes'`  — HTTP 200 AND the body parses as a JSON ARRAY containing an entry with
+ *              `kind === 'pattern'` (libkiwix adds that entry only with a Xapian index).
+ *   `'no'`   — HTTP 200 AND a valid JSON array WITHOUT such an entry: the only shape that
+ *              may ever be persisted as "this archive has no full-text index".
+ *   `null`   — UNKNOWN, for everything else: a 404 (ambiguous — unknown name, absent entry),
+ *              any other non-200, a non-array or malformed body, a timeout, a network error.
+ *              Unknown is never written as `'no'`; the pack is simply probed again later.
+ *
+ * Never throws except for the CALLER's own abort (a lock or a cancelled reconcile), which
+ * propagates as the #159 `AbortError` so no verdict is written under a closing session.
+ */
+export async function probeSearchable(
+  port: number,
+  name: string,
+  signal?: AbortSignal,
+  /** Test seam only: the per-request timeout, so the "a timeout stays unknown" leg does not
+   *  have to sit out the client's real 15 s default. Production never passes it. */
+  opts: { timeoutMs?: number } = {}
+): Promise<'yes' | 'no' | null> {
+  const path =
+    `/suggest?content=${encodeURIComponent(name)}` +
+    `&term=${encodeURIComponent(SUGGEST_PROBE_TERM)}&count=1`
+  let res: KiwixResponse
+  try {
+    res = await kiwixGet(port, path, { signal, timeoutMs: opts.timeoutMs })
+  } catch (err) {
+    if (signal?.aborted) throw err // the caller's cancellation, never a capability verdict
+    return null // timeout, network error, over-ceiling body: unknown
+  }
+  if (res.status !== 200) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(res.body)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(parsed)) return null
+  const hasPattern = parsed.some(
+    (entry) =>
+      typeof entry === 'object' && entry !== null && (entry as { kind?: unknown }).kind === 'pattern'
+  )
+  return hasPattern ? 'yes' : 'no'
 }
 
 // ---- /raw article fetch --------------------------------------------------------

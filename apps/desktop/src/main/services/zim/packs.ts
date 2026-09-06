@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { KnowledgePack } from '../../../shared/types'
+import type { KnowledgePack, KnowledgePackOutcome } from '../../../shared/types'
+import { MAX_SELECTED_PACKS } from '../../../shared/types'
 import { type Db, prepareCached } from '../db'
 import { log } from '../logging'
-import { parseLibraryXml, type KiwixBook } from './client'
+import { ftIndexHint, parseLibraryXml, type KiwixBook } from './client'
 import { ZimHeaderError, readZimHeader } from './identity'
 import { KiwixManageError } from './tools'
 
@@ -64,6 +65,13 @@ export interface PackDeps {
    * Throws the `AbortError` the caller propagates. Absent ⇒ no recheck (tests, partial contexts).
    */
   assert?: () => void
+  /**
+   * The kiwix-serve binary's identity as `"<size>:<mtimeMs>"` (#301 P4, finding M7, plan §9.21
+   * (d)3) — the TOOL half of the searchability cache key, so a swapped tools bundle re-probes
+   * every pack. Null when the binary cannot be stat'ed; absent ⇒ no tools revision is mixed in
+   * (tests, partial contexts). The service computes it from `resolveToolPaths().serve`.
+   */
+  toolsFingerprint?: () => string | null
 }
 
 /** Why a registered pack is not usable right now. Stored `'identity_mismatch'`, surfaced
@@ -84,6 +92,9 @@ interface PackRow {
   enabled: number
   unavailable_at: string | null
   unavailable_reason: string | null
+  searchable: string | null
+  searchable_key: string | null
+  ftindex_hint: string | null
   removed_at: string | null
   added_at: string
   updated_at: string
@@ -97,6 +108,15 @@ const fromStoredReason = (stored: string | null): UnavailableReason | null => {
   if (stored === 'missing') return 'missing'
   return null
 }
+
+/** The stored capability verdict as the shared type spells it: NULL reads as `'unknown'`
+ *  (#301 P4, finding M7 — only a validated probe ever writes `'yes'`/`'no'`). */
+const toSearchable = (stored: string | null): 'yes' | 'no' | 'unknown' =>
+  stored === 'yes' || stored === 'no' ? stored : 'unknown'
+
+/** The stored `_ftindex` hint. Anything unexpected reads as "no tag", never as a verdict. */
+const toHint = (stored: string | null): 'yes' | 'no' | null =>
+  stored === 'yes' || stored === 'no' ? stored : null
 
 function rowToPack(row: PackRow, available: boolean, unavailableReason: UnavailableReason | null): KnowledgePack {
   return {
@@ -112,6 +132,8 @@ function rowToPack(row: PackRow, available: boolean, unavailableReason: Unavaila
     available,
     // Available packs never carry a reason, even if a stale one is still in the column.
     unavailableReason: available ? null : unavailableReason,
+    searchable: toSearchable(row.searchable),
+    searchableHint: toHint(row.ftindex_hint),
     addedAt: row.added_at
   }
 }
@@ -182,8 +204,15 @@ export function listPacks(db: Db): KnowledgePack[] {
   )
 }
 
-/** The packs the retrieval arm should query: requested ∩ enabled ∩ identity-resolved, with
- *  each pack's resolved absolute file path. */
+/**
+ * The packs the retrieval arm should query: requested ∩ enabled ∩ identity-resolved, with each
+ * pack's resolved absolute file path.
+ *
+ * ORDERED `title COLLATE NOCASE, id` (#301 P4, finding M8, plan §9.21 (c)2) — the same order
+ * `listPacks` shows and the arm's quota/round-robin allocation is defined over, so which pack
+ * gets the odd candidate of a division is a property of the LIBRARY, not of the row order
+ * SQLite happened to return or of which pack answered first.
+ */
 export function retrievablePacks(
   db: Db,
   zimDir: string,
@@ -191,7 +220,11 @@ export function retrievablePacks(
 ): Array<KnowledgePack & { filePath: string }> {
   if (packIds.length === 0) return []
   const wanted = new Set(packIds)
-  const rows = prepareCached(db, 'SELECT * FROM knowledge_packs WHERE enabled = 1 AND removed_at IS NULL').all() as unknown as PackRow[]
+  const rows = prepareCached(
+    db,
+    `SELECT * FROM knowledge_packs WHERE enabled = 1 AND removed_at IS NULL
+      ORDER BY title COLLATE NOCASE, id`
+  ).all() as unknown as PackRow[]
   const out: Array<KnowledgePack & { filePath: string }> = []
   for (const row of rows) {
     if (!wanted.has(row.id)) continue
@@ -200,6 +233,124 @@ export function retrievablePacks(
     out.push({ ...rowToPack(row, true, null), filePath: resolved.path })
   }
   return out
+}
+
+/**
+ * The stored titles of a set of pack ids — a DB-ONLY read (no disk, no sidecar, no identity
+ * check) used by the answer paths that never query packs but still owe the user one honest
+ * outcome per selected pack (#301 P4, finding M6; plan §9.21 (e)5: the whole-document, compare
+ * and grounded-data `skipped / mode` outcomes).
+ *
+ * TOMBSTONED rows are included deliberately: a pack removed between the ask and the render still
+ * has a title the notice can name. The "a removed pack" fallback is reserved for an id with NO
+ * row at all, which maps to `null` here — exactly what `classifyPackSelection` reports for it.
+ */
+export function packTitles(db: Db, ids: readonly string[]): Map<string, string | null> {
+  const out = new Map<string, string | null>()
+  for (const id of ids) out.set(id, null)
+  if (out.size === 0) return out
+  const rows = prepareCached(db, 'SELECT id, title FROM knowledge_packs').all() as unknown as Array<{
+    id: string
+    title: string
+  }>
+  for (const row of rows) if (out.has(row.id)) out.set(row.id, row.title)
+  return out
+}
+
+/** What one ask's pack selection resolved to (#301 P4, findings M6/M7/M8; plan §9.21 (e)2). */
+export interface PackSelectionClassification {
+  /** The packs the arm may search, in `title COLLATE NOCASE, id` order, with their files. */
+  eligible: Array<KnowledgePack & { filePath: string }>
+  /** ONE outcome per selected id that is NOT eligible. The arm appends the eligible ones' own. */
+  outcomes: KnowledgePackOutcome[]
+}
+
+const notSearchedOutcome = (
+  packId: string,
+  title: string | null,
+  reason: KnowledgePackOutcome['reason']
+): KnowledgePackOutcome => ({ packId, title, status: 'skipped', reason, found: 0, admitted: 0 })
+
+/**
+ * Classify one ask's selected pack ids BEFORE any eligibility filter (#301 P4, findings
+ * M6/M7/M8; plan §9.21 (e)2). Every id the scope carries gets an answer — that is the whole
+ * point: "makeArm returned null" and "the candidate list was empty" can no longer erase a pack
+ * the user ticked.
+ *
+ * In order: the selection is DEDUPED; an id with no row at all is `removed` with a null title
+ * (the renderer says "a removed pack"); the rows are ordered `title COLLATE NOCASE, id` and
+ * everything beyond `MAX_SELECTED_PACKS` is `selection-limit` (the owner's over-cap rule, §7 —
+ * a persisted 13-pack selection from older data or a hand-edited setting is trimmed
+ * deterministically and TOLD SO, never silently); then, per remaining row, a tombstone is
+ * `removed`, `enabled = 0` is `disabled`, an unavailable row is `file-missing` /
+ * `identity-mismatch` from its stored reason, and a CONFIRMED `searchable = 'no'` is
+ * `not-searchable` (unknown and `'yes'` are both searched — nothing is filtered out before its
+ * capability is established, §2.5 item 4).
+ *
+ * Only the survivors have their file resolved (one 80-byte header read each): a trimmed or
+ * disabled pack costs no filesystem work at all. A survivor whose file no longer resolves is
+ * reported with the same `file-missing` / `identity-mismatch` codes the reconcile would use.
+ */
+export function classifyPackSelection(
+  db: Db,
+  zimDir: string,
+  packIds: readonly string[]
+): PackSelectionClassification {
+  const ids = [...new Set(packIds)]
+  if (ids.length === 0) return { eligible: [], outcomes: [] }
+  const wanted = new Set(ids)
+  const rows = (
+    prepareCached(
+      db,
+      'SELECT * FROM knowledge_packs ORDER BY title COLLATE NOCASE, id'
+    ).all() as unknown as PackRow[]
+  ).filter((row) => wanted.has(row.id))
+  const known = new Set(rows.map((row) => row.id))
+
+  const eligible: Array<KnowledgePack & { filePath: string }> = []
+  const outcomes: KnowledgePackOutcome[] = []
+  // An id the registry has never heard of (or whose row was deleted outright): the ask still
+  // owes the user a line about it.
+  for (const id of ids) if (!known.has(id)) outcomes.push(notSearchedOutcome(id, null, 'removed'))
+
+  rows.forEach((row, position) => {
+    if (position >= MAX_SELECTED_PACKS) {
+      outcomes.push(notSearchedOutcome(row.id, row.title, 'selection-limit'))
+      return
+    }
+    if (row.removed_at !== null) {
+      outcomes.push(notSearchedOutcome(row.id, row.title, 'removed'))
+      return
+    }
+    if (row.enabled !== 1) {
+      outcomes.push(notSearchedOutcome(row.id, row.title, 'disabled'))
+      return
+    }
+    if (row.unavailable_at !== null) {
+      const reason = fromStoredReason(row.unavailable_reason) ?? 'missing'
+      outcomes.push(
+        notSearchedOutcome(row.id, row.title, reason === 'missing' ? 'file-missing' : 'identity-mismatch')
+      )
+      return
+    }
+    if (toSearchable(row.searchable) === 'no') {
+      outcomes.push(notSearchedOutcome(row.id, row.title, 'not-searchable'))
+      return
+    }
+    const resolved = resolvePack(zimDir, row)
+    if (resolved.path === null) {
+      outcomes.push(
+        notSearchedOutcome(
+          row.id,
+          row.title,
+          resolved.reason === 'missing' ? 'file-missing' : 'identity-mismatch'
+        )
+      )
+      return
+    }
+    eligible.push({ ...rowToPack(row, true, null), filePath: resolved.path })
+  })
+  return { eligible, outcomes }
 }
 
 /**
@@ -250,15 +401,17 @@ export async function registerPack(db: Db, deps: PackDeps, zimPath: string): Pro
     db,
     `INSERT INTO knowledge_packs
        (id, title, description, language, zim_date, article_count, media_count, size_bytes,
-        leaf, recorded_path, enabled, unavailable_at, unavailable_reason, removed_at, added_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, ?)
+        leaf, recorded_path, enabled, unavailable_at, unavailable_reason, ftindex_hint,
+        removed_at, added_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, NULL, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        title = excluded.title, description = excluded.description,
        language = excluded.language, zim_date = excluded.zim_date,
        article_count = excluded.article_count, media_count = excluded.media_count,
        size_bytes = excluded.size_bytes, leaf = excluded.leaf,
        recorded_path = excluded.recorded_path, unavailable_at = NULL,
-       unavailable_reason = NULL, removed_at = NULL, enabled = 1,
+       unavailable_reason = NULL, ftindex_hint = excluded.ftindex_hint,
+       removed_at = NULL, enabled = 1,
        updated_at = excluded.updated_at`
   ).run(
     uuid,
@@ -271,6 +424,10 @@ export async function registerPack(db: Db, deps: PackDeps, zimPath: string): Pro
     fileSize(zimPath),
     leaf,
     zimPath,
+    // The archive's own `_ftindex` tag — a HINT, never a verdict (#301 P4, M7). `searchable`
+    // and `searchable_key` are deliberately NOT written here: only the reconcile's key pass and
+    // the /suggest probe touch them, so a re-add can never invent a capability.
+    ftIndexHint(book.tags),
     existing?.added_at ?? now,
     now
   )
@@ -421,7 +578,106 @@ export async function reconcile(
     }
   }
 
+  // ---- (iii) the searchability cache key: reset a verdict whose ground moved -------------
+  resetStaleSearchability(db, deps, assert)
+
   return { changed: !sameSignature(before, servedSignature(db)), registered, healed, unavailable }
+}
+
+/**
+ * The fingerprint a searchability verdict is cached against (#301 P4, finding M7, plan §9.21
+ * (d)3): the ARCHIVE's size and mtime plus the kiwix-serve BINARY's size and mtime. A replaced
+ * or truncated file, a healed path that turned out to be a different copy, and a swapped tools
+ * bundle each move it — and the reconcile then resets `searchable` to unknown so the pack is
+ * probed again instead of carrying a stale "no" forever.
+ *
+ * Null when the archive cannot be stat'ed at all (nothing to key a verdict to).
+ */
+function searchableKeyFor(filePath: string, toolsFingerprint: string | null): string | null {
+  let stat
+  try {
+    stat = statSync(filePath)
+  } catch {
+    return null
+  }
+  return `${stat.size}:${stat.mtimeMs}:${toolsFingerprint ?? 'no-tools'}`
+}
+
+/**
+ * Recompute the key for every enabled ∧ available row and RESET the verdict whose key moved
+ * (the reconcile is the ONE write path for capability state — plan §9.17 (d)/§9.21 (d)3).
+ * A row whose key is unchanged is not touched at all, so a no-op Refresh writes nothing.
+ */
+function resetStaleSearchability(db: Db, deps: PackDeps, assert: () => void): void {
+  const fingerprint = deps.toolsFingerprint?.() ?? null
+  const rows = prepareCached(
+    db,
+    `SELECT id, recorded_path, searchable, searchable_key FROM knowledge_packs
+      WHERE enabled = 1 AND removed_at IS NULL AND unavailable_at IS NULL`
+  ).all() as unknown as Array<{
+    id: string
+    recorded_path: string
+    searchable: string | null
+    searchable_key: string | null
+  }>
+  for (const row of rows) {
+    const key = searchableKeyFor(row.recorded_path, fingerprint)
+    if (key === null || key === row.searchable_key) continue
+    assert()
+    prepareCached(
+      db,
+      'UPDATE knowledge_packs SET searchable = NULL, searchable_key = ? WHERE id = ?'
+    ).run(key, row.id)
+  }
+}
+
+/** One pack whose full-text capability is still unknown, with the key its verdict must be
+ *  stored under (the key the reconcile just computed — never one recomputed after the probe,
+ *  which could attribute this verdict to a file that changed meanwhile). */
+export interface UnknownSearchablePack {
+  id: string
+  searchableKey: string | null
+}
+
+/**
+ * The enabled ∧ available packs whose searchability is UNKNOWN (#301 P4, plan §9.21 (d)5) —
+ * the probe list `ZimService.reconcileOnce` runs at the end of a reconciliation. Empty ⇒ the
+ * session never wakes the sidecar for a probe.
+ */
+export function unknownSearchablePacks(db: Db): UnknownSearchablePack[] {
+  const rows = prepareCached(
+    db,
+    `SELECT id, searchable_key FROM knowledge_packs
+      WHERE enabled = 1 AND removed_at IS NULL AND unavailable_at IS NULL AND searchable IS NULL
+      ORDER BY title COLLATE NOCASE, id`
+  ).all() as unknown as Array<{ id: string; searchable_key: string | null }>
+  return rows.map((row) => ({ id: row.id, searchableKey: row.searchable_key }))
+}
+
+/**
+ * Persist confirmed verdicts (#301 P4, plan §9.21 (d)5). Called ONLY after the request guard
+ * ACCEPTED the probe batch and the owning operation asserted again, so a verdict observed
+ * across a server change or a lock is never written. Each verdict is stored together with the
+ * key it was taken under; the write is conditional on that key still being the row's, so a
+ * reconcile that moved the ground while the probe ran wins.
+ */
+export function writeSearchableVerdicts(
+  db: Db,
+  verdicts: ReadonlyArray<{ id: string; verdict: 'yes' | 'no'; searchableKey: string | null }>
+): number {
+  let written = 0
+  for (const entry of verdicts) {
+    const res = prepareCached(
+      db,
+      // `IS` (not `=`) so a row whose key is NULL — a workspace written before the column
+      // existed, probed before the next reconcile keyed it — matches instead of silently
+      // dropping the verdict.
+      `UPDATE knowledge_packs SET searchable = ?
+        WHERE id = ? AND searchable IS NULL AND searchable_key IS ?`
+    ).run(entry.verdict, entry.id, entry.searchableKey)
+    written += Number(res.changes)
+  }
+  return written
 }
 
 /**
@@ -489,8 +745,9 @@ async function insertDiscoveredPack(
     db,
     `INSERT INTO knowledge_packs
        (id, title, description, language, zim_date, article_count, media_count, size_bytes,
-        leaf, recorded_path, enabled, unavailable_at, unavailable_reason, removed_at, added_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, ?)
+        leaf, recorded_path, enabled, unavailable_at, unavailable_reason, ftindex_hint,
+        removed_at, added_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, NULL, ?, ?)
      ON CONFLICT(id) DO NOTHING`
   ).run(
     uuid,
@@ -503,6 +760,7 @@ async function insertDiscoveredPack(
     fileSize(zimPath),
     leaf,
     zimPath,
+    ftIndexHint(book.tags), // the `_ftindex` HINT only — never `searchable` (#301 P4, M7)
     now,
     now
   )

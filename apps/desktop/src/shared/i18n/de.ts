@@ -2459,6 +2459,47 @@ export const de: Record<keyof typeof en, string> = {
   'chat.scope.packNamed': 'Paket: {name}',
   'chat.scope.packCount.one': '{count} Wissenspaket',
   'chat.scope.packCount.other': '{count} Wissenspakete',
+  // Dokumente-Schalter (#301 P4, Befund M10): die ausdrückliche Wahl „aus den Paketen
+  // antworten, nicht aus meinen Dokumenten“. Der Hinweis nennt, was AN bleibt — Dateien im
+  // Chat werden nie verworfen.
+  'chat.scope.documentsToggle': 'Meine Dokumente durchsuchen',
+  'chat.scope.documentsToggleHint':
+    'Aus: Antworten kommen nur aus den angehakten Wissenspaketen. Dateien in diesem Chat werden weiterhin genutzt.',
+  'chat.scope.documentsOffSuffix': 'Dokumente aus',
+  'chat.scope.documentsOffNoPacks': 'keine Quellen — Dokumente einschalten oder ein Wissenspaket anhaken',
+  // D6 (#301 P4, Plan §9.21 (e)8): ein ANGEHAKTES Paket, das nicht mitwirken kann, bleibt
+  // abwählbar und nennt den Grund. Nichts wird versteckt — auch ein aus der Verwaltung
+  // verschwundenes Paket bleibt als abwählbare Zeile sichtbar.
+  'chat.scope.packDisabled': 'deaktiviert',
+  'chat.scope.packRemoved': 'Entferntes Paket',
+  'chat.scope.packLimit.one': 'Bis zu {count} Wissenspaket pro Chat',
+  'chat.scope.packLimit.other': 'Bis zu {count} Wissenspakete pro Chat',
+  // ---- Ergebnisse je Wissenspaket und Frage (#301 P4, Befunde M6/M7 — PackOutcomesNotice) ----
+  // Eine Zeile pro angehaktem Paket: durchsucht mit Fundstellenzahl, oder nicht durchsucht /
+  // fehlgeschlagen mit festem Grund. CODES bilden auf diesen Text ab — nie ein Pfad, ein
+  // Dateiname oder die Fehlerausgabe eines Werkzeugs.
+  'chat.packs.outcome.summary':
+    'Wissenspakete: {searched} durchsucht · {other} nicht durchsucht oder fehlgeschlagen',
+  'chat.packs.outcome.removedPack': 'ein entferntes Paket',
+  'chat.packs.outcome.passages.one': '{count} Fundstelle',
+  'chat.packs.outcome.passages.other': '{count} Fundstellen',
+  'chat.packs.outcome.unknown': 'Wissenspakete: für diese ältere Antwort nicht festgehalten',
+  'chat.packs.outcome.searched': 'durchsucht',
+  'chat.packs.outcome.selection-limit': 'nicht durchsucht: Auswahlgrenze (12 pro Chat)',
+  'chat.packs.outcome.removed': 'nicht durchsucht: Paket entfernt',
+  'chat.packs.outcome.disabled': 'nicht durchsucht: Paket deaktiviert',
+  'chat.packs.outcome.file-missing': 'nicht durchsucht: Datei fehlt',
+  'chat.packs.outcome.identity-mismatch': 'nicht durchsucht: anderes Archiv an diesem Ort',
+  'chat.packs.outcome.not-served': 'nicht durchsucht: Namenskonflikt mit einem anderen Paket',
+  'chat.packs.outcome.not-searchable': 'nicht durchsucht: kein Volltextindex',
+  'chat.packs.outcome.tools-missing': 'nicht durchsucht: kiwix-tools nicht installiert',
+  'chat.packs.outcome.mode': 'nicht durchsucht: Ganzdokument-Antworten lesen nur das Dokument',
+  'chat.packs.outcome.search-failed': 'fehlgeschlagen: Suchfehler',
+  'chat.packs.outcome.read-failed': 'fehlgeschlagen: kein Artikel konnte gelesen werden',
+  'chat.packs.outcome.timeout': 'fehlgeschlagen: Zeitüberschreitung',
+  'chat.packs.outcome.deadline': 'nicht durchsucht: keine Zeit mehr für diese Frage',
+  'chat.packs.outcome.server-restarted':
+    'fehlgeschlagen: der Paketserver wurde während dieser Frage neu gestartet',
   'chat.sources.openArticle': 'Artikel öffnen',
   'chat.article.title': 'Artikel',
   'chat.article.from': 'Aus {archive} - Offline-Kopie',

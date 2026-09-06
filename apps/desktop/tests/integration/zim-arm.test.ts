@@ -7,10 +7,24 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
-import { ragSettingsFrom, retrieve, type RagRetrievalSettings } from '../../src/main/services/rag'
+import {
+  ragSettingsFrom,
+  retrieve,
+  type ExternalRetrievalOutput,
+  type RagRetrievalSettings
+} from '../../src/main/services/rag'
 import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
-import { collectPackCandidates, queryTerms, overlapScore } from '../../src/main/services/zim/arm'
+import {
+  MAX_EXTERNAL_CANDIDATES,
+  allocateCandidates,
+  collectPackCandidates,
+  overlapScore,
+  packQuota,
+  queryTerms,
+  type ExternalCandidate,
+  type PackCandidateList
+} from '../../src/main/services/zim/arm'
 
 // The ZIM retrieval arm end-to-end against a fake kiwix-serve (real sockets — the
 // node:http transport is load-bearing, see client.ts), and the retrieve() seam:
@@ -114,8 +128,22 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())))
 describe('collectPackCandidates', () => {
   it('produces archive candidates: search → fetch → segments → chunker → overlap pick', async () => {
     const packs = [{ id: 'pack-climate', title: 'Klimawandel von Wikipedia' }]
-    const out = await collectPackCandidates(port, packs, 'Wie entsteht Treibhausgas in der Landwirtschaft?')
+    const { candidates: out, outcomes } = await collectPackCandidates(
+      port,
+      packs,
+      'Wie entsteht Treibhausgas in der Landwirtschaft?'
+    )
     expect(out.length).toBeGreaterThan(0)
+    // #301 P4: the arm reports per-pack outcomes beside the candidates (plan §9.21 (c)6).
+    expect(outcomes).toHaveLength(1)
+    expect(outcomes[0]).toMatchObject({
+      packId: 'pack-climate',
+      title: 'Klimawandel von Wikipedia',
+      status: 'searched',
+      reason: null,
+      found: out.length,
+      admitted: out.length
+    })
     const first = out[0]!
     expect(first).toMatchObject({
       documentId: 'zim:pack-climate',
@@ -171,7 +199,11 @@ describe('collectPackCandidates', () => {
   })
 
   it('P1b a per-hit fetch failure is still skipped — only the conversion abort propagates', async () => {
-    const out = await collectPackCandidates(port, [{ id: 'pack-mixed', title: 'Gemischt' }], 'Schwefel Verbrennung')
+    const { candidates: out } = await collectPackCandidates(
+      port,
+      [{ id: 'pack-mixed', title: 'Gemischt' }],
+      'Schwefel Verbrennung'
+    )
     expect(out.length).toBeGreaterThan(0)
     expect(out.every((c) => c.articlePath === 'Schwefel')).toBe(true)
   })
@@ -181,9 +213,98 @@ describe('collectPackCandidates', () => {
       { id: 'pack-broken', title: 'Broken' },
       { id: 'pack-chem', title: 'Chemie von Wikipedia' }
     ]
-    const out = await collectPackCandidates(port, packs, 'Schwefel Verbrennung')
+    const { candidates: out, outcomes } = await collectPackCandidates(port, packs, 'Schwefel Verbrennung')
     expect(out.length).toBeGreaterThan(0)
     expect(out.every((c) => c.packId === 'pack-chem')).toBe(true)
+    // …and the failing pack is REPORTED rather than silently dropped (#301 P4, finding M6):
+    // its `/search` answered HTTP 500, which is `search-failed` for this ask only — never a
+    // persisted capability (a 404 is just as ambiguous, plan §2.2).
+    expect(outcomes.find((o) => o.packId === 'pack-broken')).toMatchObject({
+      title: 'Broken',
+      status: 'failed',
+      reason: 'search-failed',
+      found: 0,
+      admitted: 0
+    })
+    expect(outcomes.find((o) => o.packId === 'pack-chem')).toMatchObject({
+      status: 'searched',
+      reason: null
+    })
+  })
+
+  it('allocateCandidates admits round-robin in pack order, reclaims short packs and is completion-order independent', () => {
+    const candidate = (packId: string, i: number): ExternalCandidate => ({
+      chunkId: `zim:${packId}:A#${i}`,
+      documentId: `zim:${packId}`,
+      text: `${packId} chunk ${i}`,
+      sourceTitle: 'A',
+      pageNumber: null,
+      sectionLabel: null,
+      score: 1,
+      sourceKind: 'archive',
+      packId,
+      archiveTitle: packId,
+      articlePath: 'A'
+    })
+    const list = (packId: string, n: number): PackCandidateList => ({
+      packId,
+      candidates: Array.from({ length: n }, (_, i) => candidate(packId, i))
+    })
+    const shares = (input: PackCandidateList[]): number[] => {
+      const { admitted, admittedPerPack } = allocateCandidates(input)
+      expect(admitted.length).toBeLessThanOrEqual(MAX_EXTERNAL_CANDIDATES)
+      // Every admitted candidate is counted exactly once, and the counts sum to the whole set.
+      expect([...admittedPerPack.values()].reduce((a, b) => a + b, 0)).toBe(admitted.length)
+      return input.map((p) => admittedPerPack.get(p.packId) ?? 0)
+    }
+
+    // N = 1: one pack takes the whole budget, and never more than it.
+    expect(shares([list('p0', 40)])).toEqual([MAX_EXTERNAL_CANDIDATES])
+    expect(shares([list('p0', 5)])).toEqual([5])
+
+    // N = 3 / 7 / 12, every pack long: exactly the quota arithmetic
+    // `floor(24/N) + (i < 24 mod N)`, in PACK ORDER.
+    for (const n of [3, 7, 12]) {
+      const long = Array.from({ length: n }, (_, i) => list(`p${i}`, 30))
+      expect(shares(long), `N = ${n}`).toEqual(
+        Array.from({ length: n }, (_, i) => packQuota(i, n))
+      )
+      expect(allocateCandidates(long).admitted).toHaveLength(MAX_EXTERNAL_CANDIDATES)
+    }
+
+    // Short / empty / long mixed: the short and empty packs' slots are RECLAIMED by the long
+    // ones — the pre-P4 arm instead let the first pack eat the budget before the third was
+    // even searched (finding M8).
+    const mixed = [list('short', 2), list('empty', 0), list('long-a', 30), list('long-b', 30)]
+    const mixedShares = shares(mixed)
+    expect(mixedShares[0]).toBe(2)
+    expect(mixedShares[1]).toBe(0)
+    expect(mixedShares[2]! + mixedShares[3]!).toBe(MAX_EXTERNAL_CANDIDATES - 2)
+    expect(Math.abs(mixedShares[2]! - mixedShares[3]!)).toBeLessThanOrEqual(1)
+
+    // Within one pack, its own rank order is preserved…
+    const admittedOfLongA = allocateCandidates(mixed).admitted.filter((c) => c.packId === 'long-a')
+    expect(admittedOfLongA.map((c) => c.chunkId)).toEqual(
+      admittedOfLongA.map((_, i) => `zim:long-a:A#${i}`)
+    )
+    // …and a pack's FIRST candidate is admitted before any pack's second — the "a late pack's
+    // best hit still reaches the reranker" property, which holds because admission happens
+    // only after every pack settled.
+    const firstRound = allocateCandidates(mixed).admitted.slice(0, 3)
+    expect(firstRound.map((c) => c.packId)).toEqual(['short', 'long-a', 'long-b'])
+
+    // COMPLETION-ORDER INDEPENDENCE: the same packs handed in the same PACK order always
+    // produce the same admitted list, whatever order they finished in — the function reads a
+    // list keyed by pack order and nothing else.
+    const settleOrderA = allocateCandidates(mixed).admitted.map((c) => c.chunkId)
+    const shuffled = [mixed[2]!, mixed[0]!, mixed[3]!, mixed[1]!]
+    const byPackOrderAgain = [shuffled[1]!, shuffled[3]!, shuffled[0]!, shuffled[2]!]
+    expect(allocateCandidates(byPackOrderAgain).admitted.map((c) => c.chunkId)).toEqual(settleOrderA)
+    // A different PACK order is a different (still fair) result — order is the caller's
+    // contract (`retrievablePacks`' `title COLLATE NOCASE, id`), not an accident of timing.
+    expect(allocateCandidates(shuffled).admitted.map((c) => c.chunkId)).not.toEqual(settleOrderA)
+
+    expect(allocateCandidates([])).toEqual({ admitted: [], admittedPerPack: new Map() })
   })
 })
 
@@ -241,6 +362,13 @@ function archiveCandidate(n: number, text: string) {
   }
 }
 
+/** The arm's result shape (#301 P4, plan §9.21 (e)3): `{ candidates, outcomes }`. These cases are
+ *  about the CANDIDATE pipeline (interleave, rerank, scope, citations), so they report no outcomes
+ *  — the outcome contract itself is pinned by the arm/service suites and by T16-a. */
+function testArm(...candidates: Array<ReturnType<typeof archiveCandidate>>): ExternalRetrievalOutput {
+  return { candidates, outcomes: [] }
+}
+
 describe('retrieve() with an external arm', () => {
   it('interleaves document and archive candidates without a reranker and builds archive citations', async () => {
     const db = freshDb()
@@ -249,10 +377,12 @@ describe('retrieve() with an external arm', () => {
       'Treibhausgase entstehen in der Landwirtschaft.',
       'Ganz anderes Thema ohne Bezug.'
     ])
-    const r = await retrieve(db, embedder, 'Treibhausgas Landwirtschaft', SETTINGS, null, null, undefined, async () => [
-      archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'),
-      archiveCandidate(1, 'Weitere Treibhausgase sind Lachgas und CO2.')
-    ])
+    const r = await retrieve(db, embedder, 'Treibhausgas Landwirtschaft', SETTINGS, null, null, undefined, async () =>
+      testArm(
+        archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'),
+        archiveCandidate(1, 'Weitere Treibhausgase sind Lachgas und CO2.')
+      )
+    )
     const kinds = new Set(r.chunks.map((c) => c.sourceKind ?? 'document'))
     expect(kinds).toEqual(new Set(['document', 'archive']))
     // Interleave: the first archive chunk sits at position 2, not appended at the end.
@@ -281,28 +411,45 @@ describe('retrieve() with an external arm', () => {
         return docs.map((text, index) => ({ index, score: text.includes('Methan') ? 10 : 0 }))
       }
     } as Reranker
-    const r = await retrieve(db, embedder, 'Methan', SETTINGS, null, fakeReranker, undefined, async () => [
-      archiveCandidate(0, 'Methan aus der Landwirtschaft.')
-    ])
+    const r = await retrieve(db, embedder, 'Methan', SETTINGS, null, fakeReranker, undefined, async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft.')))
     expect(r.chunks[0]?.sourceKind).toBe('archive')
     expect(r.chunks[0]?.label).toBe('S1')
   })
 
+  // Re-based by P4 (#301, plan §9.21 (a)3, ruling D4) onto the EXPLICIT flag. The live-demo fix
+  // (88be37ec) derived "packs only" from an empty document selection, which redefined the legacy
+  // empty scope and made "all documents AND a pack" inexpressible; the ruled design is the
+  // additive `documentsOff` → `RetrievalScope.noDocuments` flag that `resolveScope` sets. The
+  // counter-assertion below is the rejection, pinned.
   it('a packs-only scope skips the document arms entirely (live-demo finding 2026-09-05)', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
-    // A document that WOULD match the question — it must not surface when the user
-    // selected packs and no document sources (the empty composed doc-scope used to fall
-    // through to whole-corpus, and an invoice claimed the packs-only answer's slots).
+    // A document that WOULD match the question — it must not surface when the user turned
+    // documents off (an unrelated invoice used to claim the packs-only answer's slots).
     await seedDocument(db, embedder, 'invoice.pdf', ['Treibhausgase entstehen in der Landwirtschaft.'])
-    const scope = { packIds: ['pack-1'], collectionIds: null, documentIds: null }
-    const r = await retrieve(db, embedder, 'Treibhausgas', SETTINGS, scope, null, undefined, async () => [
-      archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')
-    ])
+    const scope = { packIds: ['pack-1'], collectionIds: null, documentIds: null, noDocuments: true as const }
+    const r = await retrieve(db, embedder, 'Treibhausgas', SETTINGS, scope, null, undefined, async () =>
+      testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
+    )
     expect(r.chunks.length).toBeGreaterThan(0)
     expect(r.chunks.every((c) => c.sourceKind === 'archive')).toBe(true)
-    // Counter-check: the same scope WITH a collection selected keeps the document arms.
-    const both = await retrieve(
+    // Counter-assertion (D4): the SAME pack selection WITHOUT the flag keeps the document arms —
+    // an empty composed document scope still means the whole corpus, packs are additive.
+    const additive = await retrieve(
+      db,
+      embedder,
+      'Treibhausgas',
+      SETTINGS,
+      { packIds: ['pack-1'], collectionIds: null, documentIds: null },
+      null,
+      undefined,
+      async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
+    )
+    expect(additive.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
+    expect(additive.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
+    // And a ticked collection alongside the flag cannot resurrect the documents either: the
+    // resolved deny-all is fail-closed everywhere (a contradictory spread stays denied).
+    const contradictory = await retrieve(
       db,
       embedder,
       'Treibhausgas',
@@ -310,9 +457,9 @@ describe('retrieve() with an external arm', () => {
       { ...scope, collectionIds: ['some-collection'] },
       null,
       undefined,
-      async () => [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+      async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
     )
-    expect(both.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
+    expect(contradictory.chunks.every((c) => c.sourceKind === 'archive')).toBe(true)
   })
 
   it('a throwing arm never breaks the document ask', async () => {
