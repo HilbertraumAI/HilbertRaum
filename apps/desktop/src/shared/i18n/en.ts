@@ -2434,10 +2434,23 @@ export const en = {
   'chat.packs.outcome.server-restarted': 'failed: the pack server restarted during this question',
   'chat.sources.openArticle': 'Open article',
   'chat.article.title': 'Article',
-  'chat.article.from': 'From {archive} - offline copy',
+  'chat.article.from': 'From {archive} — offline copy',
   'chat.article.loading': 'Loading the article…',
   'chat.article.unavailable': 'This article is not available right now. The pack may be disabled, removed, or its drive unplugged.',
   'chat.article.partial': 'Only the first part of this article could be shown.',
+  // ---- #301 P6 (a11y pass; plan §9.23 (b)4/(b)6 and decision (c)5) — BEGIN -----------------
+  // Reason-specific popover hints. The picker greys an ineligible pack with the SAME reason the
+  // arm's `classifyPackSelection` records, so the row and the per-answer outcome can never tell
+  // different stories. `chat.scope.packUnavailable` above stays the fallback for the pre-P3b
+  // null-reason state; `packNotSearchable` mirrors the arm skipping a confirmed `searchable:'no'`.
+  'chat.scope.packMissing': 'file missing',
+  'chat.scope.packMismatch': 'different archive at this location',
+  'chat.scope.packNotSearchable': 'no full-text index',
+  // The article action's ACCESSIBLE name (the visible text stays the bare "Open article"): an
+  // answer or a review can carry several archive cards, and "Open article" ×5 in a screen
+  // reader's button list names none of them.
+  'chat.sources.openArticleNamed': 'Open article: {title}',
+  // ---- #301 P6 — END ------------------------------------------------------------------------
   'docs.section.sources': 'Reference',
   'docs.section.packs': 'Knowledge packs',
   'packs.add': 'Add packs…',
@@ -2465,16 +2478,27 @@ export const en = {
   'packs.state.enabled': 'Enabled',
   'packs.state.disabled': 'Disabled',
   'packs.state.missing': 'File missing',
-  'packs.state.missingTitle': 'The archive file could not be found - is the drive plugged in?',
+  'packs.state.missingTitle': 'The archive file could not be found — is the drive plugged in?',
   'packs.state.identityMismatch': 'Different archive',
-  'packs.state.identityMismatchTitle': 'The file at this pack’s location is a different archive – remove this pack and add the file again',
+  'packs.state.identityMismatchTitle': 'The file at this pack’s location is a different archive — remove this pack and add the file again',
+  // #301 P6 (plan §9.23 (a) row 5, (c)5): confirmed by the `/suggest` probe at a reconcile's
+  // end (P4 M7) — the pack stays enabled/readable, just skipped by the ask.
+  'packs.state.notSearchable': 'No full-text index',
+  'packs.state.notSearchableTitle':
+    'This archive has no full-text search index. It is skipped when asking, but its articles stay readable.',
   'packs.enable': 'Enable',
   'packs.disable': 'Disable',
   'packs.working': 'Working…',
   'packs.remove': 'Remove',
+  // #301 P6 (plan §9.23 (b)6): accessible names for the per-row action buttons — visible
+  // text stays the plain verb; the name a screen reader announces includes the pack title.
+  'packs.enableNamed': 'Enable {title}',
+  'packs.disableNamed': 'Disable {title}',
+  'packs.removeNamed': 'Remove {title}',
+  'packs.listLabel': 'Knowledge packs',
   'packs.removeTitle': 'Remove this knowledge pack?',
   'packs.removeConfirm': 'Remove pack',
-  'packs.removeBody': 'The pack is removed from HilbertRaum only - the archive file on disk is not touched. Chats that used it simply stop retrieving from it.',
+  'packs.removeBody': 'The pack is removed from HilbertRaum only — the archive file on disk is not touched. Chats that used it simply stop retrieving from it.',
   'chat.scope.docCount.one': '{count} document',
   'chat.scope.docCount.other': '{count} documents',
   'chat.scope.filesInChat.one': '{count} file in this chat',
@@ -3097,7 +3121,9 @@ export const en = {
     '{count} source documents are no longer present in the workspace.',
   'packExport.coverage.acknowledged': 'The reviewer acknowledged this change on {date}.',
   'packExport.section.sources': 'Source register',
-  'packExport.sources.colTitle': 'Document',
+  // #301 P6 (plan §9.23 (c)3 i): renamed from "Document" — the register's first column
+  // header sits over archive rows too.
+  'packExport.sources.colTitle': 'Source',
   'packExport.sources.colType': 'File type',
   // ZIM wave (#294 review M11): the type/availability values an archive row shows instead
   // of a mime type / the generic "cannot be verified" claim.

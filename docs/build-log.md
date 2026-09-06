@@ -27,6 +27,21 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-06 — BUILD_STATE §5 item 20 retired verbatim (P6)
+
+Collapsed to a 3-line pointer in `BUILD_STATE.md` §5 item 20 at the ZIM knowledge-packs wave's
+Phase 6 records step (#301), to make room under the §5 500-line budget. Full text as it stood
+before the collapse:
+
+**#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line — CLOSED
+2026-09-04** (PRs #295, #300, #297, #299 merged — the four stacked PRs; #290/#291/#298 closed;
+every #298 hardware box ticked the same day on the i9-9900X / RTX 3090; the captured b9849
+transcript is pinned as `tests/fixtures/chat-sse-timings-b9849.txt`). Records: `architecture.md`
+"Chat & streaming" → "Per-answer speed line" §1–§3; `benchmark.md` / `model-benchmarks.md` §6.5
+(thresholds deliberately NOT retuned). Narrative: the 2026-09-04 dated entry above; the item text
+as it stood before this collapse is in `docs/build-log.md` (retired verbatim 2026-09-05, ZIM wave
+Phase 0). Residuals: none.
+
 ## 2026-09-06 — BUILD_STATE §5 item 21 (c)/(h) retired verbatim (P4)
 
 Collapsed to one-line pointers in `BUILD_STATE.md` §5 item 21 at the ZIM knowledge-packs wave's

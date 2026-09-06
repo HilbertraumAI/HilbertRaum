@@ -569,7 +569,11 @@ export function ChatScreen({
         try {
           setPacks((await window.api.listKnowledgePacks?.()) ?? [])
         } catch {
-          setPacks([])
+          // #301 P6: a failed REFETCH keeps the list the chat already knows. At the initial
+          // load (above) an empty list is the honest "nothing known yet"; here it would wipe
+          // known-good state on one transient IPC hiccup — and with no packs the Documents
+          // toggle vanishes and a documents-empty chat collapses into the "Add documents"
+          // jump. The next event refetches again.
         }
       })()
     })

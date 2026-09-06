@@ -64,6 +64,14 @@ from its first public `1.0.0` release onward.
   a time limit, so one slow or empty pack no longer crowds out the others, and a pack with
   no full-text search index is now detected and skipped instead of returning nothing on
   every question.
+- **Knowledge-pack review, picker and accessibility polish.** An evidence review that cites
+  a knowledge-pack article now has its own *Open article* button, same as in chat. A
+  greyed-out pack in the sources picker always says why it can't be ticked — file missing,
+  a different archive at that location, disabled, or no full-text search index — and the
+  Knowledge packs panel now shows a "No full-text index" badge on such a pack directly.
+  Enable/Disable/Remove and *Open article* buttons name the pack or article they act on to a
+  screen reader. The evidence-pack export's source column is now labelled "Source" (was
+  "Document"), since it lists both documents and archives.
 - **Each finished chat answer now shows how fast it was generated.** A small line under the
   answer reads, for example, "42 tok/s · 1.8 s to first token · 615 tokens": the model's decode
   speed as reported by the AI engine, how long you waited for the first word, and how many

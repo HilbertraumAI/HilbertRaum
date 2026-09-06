@@ -908,7 +908,8 @@ describe('source-in-context (D-5) — stored extraction only', () => {
     })
     const detail = createEvidenceReviewFromMessage(db, messageId, {})
     // Honest unavailable: there is no workspace document behind an archive article, so the
-    // reader claims nothing (no "Open article" bridge from a review row in this phase).
+    // reader claims nothing (the review row's "Open article", added in #301 P6, goes through
+    // packs:getArticle with the snapshot's pack id + article path — never through this reader).
     expect(getEvidenceSourceContext(db, detail.id, 'S1')).toBeNull()
     // The document source in the same review still resolves its stored context.
     const ctx = getEvidenceSourceContext(db, detail.id, 'S2')!

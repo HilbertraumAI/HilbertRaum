@@ -2399,9 +2399,10 @@ reports and phase plans were working papers; their full text lives in git histor
   never verify or date an archive article — freshness reports it "cannot be verified",
   never "changed" — and that stays a limitation, not a defect. The review, its HTML/PDF
   evidence pack and the Markdown transcript export still record the pack id and article
-  path even though identity is unresolved. A review row has no "Open article" yet — there
-  is no workspace document to open, and the article viewer bridge needs a later wave's
-  locator/serving-map contract. Evidence reviews created on a pre-release knowledge-pack
+  path even though identity is unresolved. A review row's archive citation now opens
+  through the same "Open article" viewer as chat (P6): it resolves by the pack's UUID
+  against the review's own frozen snapshot, so a renamed pack still opens; a removed or
+  currently-unplugged pack says the article is unavailable, same as chat. Evidence reviews created on a pre-release knowledge-pack
   build that cite an archive may carry a wrongly resolved document identity and must be
   re-run; the app never rewrites a frozen review.
 - **Serving names are computed, not read back from the running server.** Every enabled
@@ -2409,7 +2410,8 @@ reports and phase plans were working papers; their full text lives in git histor
   exactly (`identity.ts`); when two packs would compute the SAME name, the smaller UUID
   wins by libkiwix's own ascending-map-order rule and the later pack is excluded from the
   served library until it is renamed, rather than answering under the winner's name (the
-  panel does not yet say so — the collision surface is P6's; the pack simply contributes nothing). The real-tool check that our computed map still matches a
+  panel does not say so — deferred, a served-library fact rather than a pack-row fact; the
+  per-answer note says "not searched: name collision with another pack"). The real-tool check that our computed map still matches a
   pinned kiwix-serve build is P7's (T19), not assumed here.
 - **At most twelve packs take part in one ask, and not every candidate they find is
   used.** Ticking a 13th pack is refused; an older or hand-edited selection above the

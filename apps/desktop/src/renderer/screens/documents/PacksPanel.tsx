@@ -232,52 +232,85 @@ export function PacksPanel(): JSX.Element {
       )}
 
       {packs != null && packs.length > 0 && (
-        <div className="packs-list">
-          {packs.map((p) => (
-            <div key={p.id} className={`card packs-card ${p.available ? '' : 'packs-card-missing'}`}>
-              <div className="packs-card-head">
-                <span className="packs-card-title">{p.title}</span>
-                {p.available ? (
-                  p.enabled ? (
-                    <Badge tone="success" icon="✓">
-                      {t('packs.state.enabled')}
+        <ul className="packs-list" aria-label={t('packs.listLabel')}>
+          {packs.map((p) => {
+            // #301 P6 (plan §9.23 (a) row 5/6, (c)5): a confirmed-`no` searchability verdict
+            // is its OWN badge, shown BESIDE enabled/disabled — a pack can be enabled and
+            // still have no full-text index. Undefined / 'unknown' / 'yes' show nothing.
+            const notSearchable = p.available && p.searchable === 'no'
+            // Reason text reachable without a mouse (guidelines §7): every reason that today
+            // lives only in a Badge `title` tooltip is ALSO rendered as a visible line under
+            // the title row. The tooltip stays for a mouse-hover recap.
+            const reasonText = !p.available
+              ? p.unavailableReason === 'identity-mismatch'
+                ? t('packs.state.identityMismatchTitle')
+                : t('packs.state.missingTitle')
+              : notSearchable
+                ? t('packs.state.notSearchableTitle')
+                : null
+            return (
+              <li key={p.id} className={`card packs-card ${p.available ? '' : 'packs-card-missing'}`}>
+                <div className="packs-card-head">
+                  <span className="packs-card-title">{p.title}</span>
+                  {p.available ? (
+                    p.enabled ? (
+                      <Badge tone="success" icon="✓">
+                        {t('packs.state.enabled')}
+                      </Badge>
+                    ) : (
+                      <Badge tone="neutral" icon="○">
+                        {t('packs.state.disabled')}
+                      </Badge>
+                    )
+                  ) : p.unavailableReason === 'identity-mismatch' ? (
+                    <Badge tone="warning" icon="⚠" title={t('packs.state.identityMismatchTitle')}>
+                      {t('packs.state.identityMismatch')}
                     </Badge>
                   ) : (
-                    <Badge tone="neutral" icon="○">
-                      {t('packs.state.disabled')}
+                    <Badge tone="warning" icon="⚠" title={t('packs.state.missingTitle')}>
+                      {t('packs.state.missing')}
                     </Badge>
-                  )
-                ) : p.unavailableReason === 'identity-mismatch' ? (
-                  <Badge tone="warning" icon="⚠" title={t('packs.state.identityMismatchTitle')}>
-                    {t('packs.state.identityMismatch')}
-                  </Badge>
-                ) : (
-                  <Badge tone="warning" icon="⚠" title={t('packs.state.missingTitle')}>
-                    {t('packs.state.missing')}
-                  </Badge>
-                )}
-              </div>
-              {p.description && <p className="packs-card-desc hint">{p.description}</p>}
-              <p className="packs-card-meta hint">{metaLine(p)}</p>
-              <div className="packs-card-actions">
-                <Button size="sm" disabled={busy !== null || !p.available} onClick={() => void onToggle(p)}>
-                  {busy === p.id ? (
-                    <>
-                      <Spinner /> {t('packs.working')}
-                    </>
-                  ) : p.enabled ? (
-                    t('packs.disable')
-                  ) : (
-                    t('packs.enable')
                   )}
-                </Button>
-                <Button size="sm" className="danger" disabled={busy !== null} onClick={() => setConfirmRemove(p)}>
-                  {t('packs.remove')}
-                </Button>
-              </div>
-            </div>
-          ))}
-        </div>
+                  {notSearchable && (
+                    <Badge tone="neutral" icon="⊘" title={t('packs.state.notSearchableTitle')}>
+                      {t('packs.state.notSearchable')}
+                    </Badge>
+                  )}
+                </div>
+                {reasonText && <p className="packs-card-reason hint">{reasonText}</p>}
+                {p.description && <p className="packs-card-desc hint">{p.description}</p>}
+                <p className="packs-card-meta hint">{metaLine(p)}</p>
+                <div className="packs-card-actions">
+                  <Button
+                    size="sm"
+                    disabled={busy !== null || !p.available}
+                    aria-label={t(p.enabled ? 'packs.disableNamed' : 'packs.enableNamed', { title: p.title })}
+                    onClick={() => void onToggle(p)}
+                  >
+                    {busy === p.id ? (
+                      <>
+                        <Spinner /> {t('packs.working')}
+                      </>
+                    ) : p.enabled ? (
+                      t('packs.disable')
+                    ) : (
+                      t('packs.enable')
+                    )}
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="danger"
+                    disabled={busy !== null}
+                    aria-label={t('packs.removeNamed', { title: p.title })}
+                    onClick={() => setConfirmRemove(p)}
+                  >
+                    {t('packs.remove')}
+                  </Button>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
       )}
 
       <ConfirmDialog

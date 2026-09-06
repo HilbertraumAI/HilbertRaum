@@ -21,6 +21,10 @@ import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/e
 // file-wide afterEach runs assertNoUnexpectedApiCalls() (review FIX-5 — structural, not
 // per-test opt-in) — ANY other window.api call (runtime, rag, network surfaces) in ANY
 // test fails the suite. That is the renderer half of the zero-model/zero-network gate.
+// ONE documented exception since #301 P6: the archive row's "Open article" calls
+// `packs:getArticle` — a local offline-archive read on the main process, still zero model and
+// zero network. The tests that need it stub it EXPLICITLY (last describe in this file), so the
+// structural teeth keep biting on every other surface.
 
 beforeAll(() => {
   Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
@@ -899,6 +903,115 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
     expect(
       within(dialog).getByText(t('en', 'review.sourceContext.excerptHeading'))
     ).toBeInTheDocument()
+    assertNoUnexpectedApiCalls()
+  })
+})
+
+// #301 P6 (plan §9.23 (c)2) — "Open article" from an archive review row, end to end through
+// the screen. This closes the §9.13 residual (BUILD_STATE §5 item 21(c)): P2 left an archive
+// row honestly unavailable because the viewer bridge depended on P3b's locator contract.
+//
+// The load-bearing property is that the review reads its OWN FROZEN snapshot: `packs:getArticle`
+// is called with the snapshot's packId + articlePath, and the header names the snapshot's
+// archive title — whatever the live registry has since been renamed to, and whether or not the
+// pack still exists. These three tests are the rename / delete / unavailable legs of that.
+//
+// `getPackArticle` is the ONE non-`evidence:*` bridge this screen may call (the file rule at the
+// top): a local ZIM read through the main process — no model, no network — supplied explicitly
+// so the structural `assertNoUnexpectedApiCalls()` teeth still bite on everything else.
+describe('ReviewScreen — "Open article" from an archive evidence row (#301 P6, §9.23 (c)2)', () => {
+  /** A review whose single source is a frozen archive citation. */
+  function archiveDetail() {
+    return makeDetail({
+      sources: [
+        {
+          key: 's1',
+          machineLabel: 'S1',
+          kind: 'direct_excerpt',
+          identity: 'unresolved',
+          documentId: null,
+          documentTitle: 'Treibhausgas',
+          documentSha256: null,
+          mimeType: null,
+          pageNumber: null,
+          sectionLabel: 'Landwirtschaft',
+          snippet: 'Methan entsteht in der Landwirtschaft.',
+          sourceChunkId: null,
+          availabilityAtCreation: 'available',
+          sourceKind: 'archive',
+          archiveTitle: 'Klimawandel von Wikipedia',
+          packId: 'uuid-climate',
+          articlePath: 'A/Treibhausgas'
+        }
+      ]
+    })
+  }
+
+  const openArticleName = t('en', 'chat.sources.openArticleNamed', { title: 'Treibhausgas' })
+
+  it('unavailable: the bridge resolves null → the viewer says so, and the review is unchanged', async () => {
+    const getPackArticle = vi.fn(async () => null)
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => archiveDetail()), getPackArticle })
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    fireEvent.click(await screen.findByRole('button', { name: openArticleName }))
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText(t('en', 'chat.article.unavailable'))).toBeInTheDocument()
+    // No invented content, and the frozen card is exactly as it was.
+    expect(screen.getByText('Methan entsteht in der Landwirtschaft.')).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'review.source.archive'))).toBeInTheDocument()
+    assertNoUnexpectedApiCalls()
+  })
+
+  it('renamed pack: the bridge gets the SNAPSHOT locator and the header names the SNAPSHOT archive', async () => {
+    // The live registry has since renamed this pack ("Wikipedia DE 2027"). `packs:getArticle`
+    // resolves by archive UUID, so the article still opens — and the review keeps saying what it
+    // recorded, never what the registry says today.
+    const getPackArticle = vi.fn(async () => ({
+      title: 'Treibhausgas',
+      sections: [{ label: null, text: 'Treibhausgase sind Spurengase.' }],
+      partial: false
+    }))
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => archiveDetail()), getPackArticle })
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    fireEvent.click(await screen.findByRole('button', { name: openArticleName }))
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText('Treibhausgase sind Spurengase.')).toBeInTheDocument()
+    // EXACT call args — the frozen locator, not a live lookup.
+    expect(getPackArticle).toHaveBeenCalledTimes(1)
+    expect(getPackArticle).toHaveBeenCalledWith('uuid-climate', 'A/Treibhausgas')
+    // The attribution names the snapshot's archive title…
+    expect(
+      within(dialog).getByText(
+        t('en', 'chat.article.from', { archive: 'Klimawandel von Wikipedia' })
+      )
+    ).toBeInTheDocument()
+    expect(within(dialog).queryByText(/Wikipedia DE 2027/)).toBeNull()
+    // …and IS the dialog's accessible description, with the article title as its name.
+    const descId = dialog.getAttribute('aria-describedby')
+    expect(descId).toBeTruthy()
+    expect(document.getElementById(descId!)).toHaveTextContent(
+      t('en', 'chat.article.from', { archive: 'Klimawandel von Wikipedia' })
+    )
+    expect(dialog).toHaveAccessibleName('Treibhausgas')
+    assertNoUnexpectedApiCalls()
+  })
+
+  it('deleted pack: the row still offers the article, the bridge resolves null, the card is untouched', async () => {
+    // The pack row is gone from the registry entirely. Nothing about the frozen review changes —
+    // the locator, the archive title and the excerpt are all still recorded facts.
+    const getPackArticle = vi.fn(async () => null)
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => archiveDetail()), getPackArticle })
+    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    const button = await screen.findByRole('button', { name: openArticleName })
+    fireEvent.click(button)
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText(t('en', 'chat.article.unavailable'))).toBeInTheDocument()
+    expect(getPackArticle).toHaveBeenCalledWith('uuid-climate', 'A/Treibhausgas')
+    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'common.close') }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // Still there, still named, still openable — a deleted pack does not erase the row.
+    expect(screen.getByRole('button', { name: openArticleName })).toBeInTheDocument()
+    expect(screen.getByText('Klimawandel von Wikipedia · Landwirtschaft')).toBeInTheDocument()
     assertNoUnexpectedApiCalls()
   })
 })

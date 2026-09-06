@@ -191,4 +191,42 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(listKnowledgePacks).toHaveBeenCalledTimes(2)
   })
+
+  it('a failed REFETCH keeps the pack list the chat already knows (#301 P6)', async () => {
+    // One transient IPC failure on a packs:changed event must not wipe known-good state:
+    // before P6 the catch reset the list to [], which also removed the Documents toggle and
+    // could collapse a documents-empty chat into the "Add documents" jump.
+    const user = userEvent.setup()
+    const docConv = conv()
+    const emitter = packsEventEmitter()
+    let listCalls = 0
+    const listKnowledgePacks = vi.fn(async () => {
+      listCalls++
+      if (listCalls === 2) throw new Error('transient IPC failure')
+      return [pack()]
+    })
+    stubApi({
+      listConversations: vi.fn(async () => [docConv]),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [docInfo('d1', 'contract.pdf')]),
+      listCollections: vi.fn(async () => [collection({})]),
+      listAttachments: vi.fn(async () => []),
+      listKnowledgePacks,
+      onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByText('Doc Q&A'))
+    await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(1))
+    await user.click(await screen.findByRole('button', { name: /answering from/i }))
+    expect(await screen.findByRole('checkbox', { name: /Klimawandel von Wikipedia/ })).toBeInTheDocument()
+
+    // The refetch this event triggers throws — the mounted popover must still list the pack.
+    act(() => emitter.emit({ epoch: 1, revision: 1, refreshing: false, reason: 'reconcile-end' }))
+    await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(2))
+    // A later successful refetch proves the subscription is still alive after the failure.
+    act(() => emitter.emit({ epoch: 2, revision: 2, refreshing: false, reason: 'mutation' }))
+    await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(3))
+    expect(screen.getByRole('checkbox', { name: /Klimawandel von Wikipedia/ })).toBeInTheDocument()
+  })
 })

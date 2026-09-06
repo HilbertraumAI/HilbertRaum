@@ -713,11 +713,13 @@ Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
    the sources picker to answer only from the ticked knowledge packs — files you attached
    directly to this chat are still used either way.
 5. **Read the source:** answers cite pack articles like documents; *Open article* on a
-   citation shows the article text offline.
+   citation shows the article text offline — also from an evidence review's archive row.
 6. **See what each pack did:** under an answer, a “Knowledge packs:” line lists every
    ticked pack — searched (and how much it contributed), or not searched/failed with a
    short reason, such as over the 12-pack limit, no full-text search index, or the pack
-   server restarted mid-question.
+   server restarted mid-question. In the sources picker, a greyed-out pack always says why
+   it can't be ticked — file missing, a different archive at that location, disabled, or no
+   full-text search index; the panel itself shows a "No full-text index" badge on such a pack.
 
 Everything stays on this computer: the pack server listens on 127.0.0.1 only and asking
 never leaves this machine. One limit to know: While the workspace is unlocked and a

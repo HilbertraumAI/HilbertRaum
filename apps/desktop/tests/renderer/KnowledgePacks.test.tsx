@@ -1,18 +1,28 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
+import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { PacksPanel } from '../../src/renderer/screens/documents/PacksPanel'
-import { ArticleModal } from '../../src/renderer/chat/ArticleModal'
+import { ArticleModal, type ArticleTarget } from '../../src/renderer/chat/ArticleModal'
+import { PackOutcomesNotice } from '../../src/renderer/chat/PackOutcomesNotice'
 import { ScopePopover } from '../../src/renderer/chat/ScopePopover'
-import { I18nProvider } from '../../src/renderer/i18n'
+import { SourcesDisclosure } from '../../src/renderer/chat/SourcesDisclosure'
+import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
+import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
+import { t as tr, tCount as trCount, type UiLanguage } from '../../src/shared/i18n'
 import type {
+  Citation,
   Collection,
+  Conversation,
   DocumentInfo,
   DocumentScope,
   KnowledgePack,
-  KnowledgePacksChangedEvent
+  KnowledgePackOutcome,
+  KnowledgePackOutcomeReason,
+  KnowledgePacksChangedEvent,
+  RuntimeStatus
 } from '../../src/shared/types'
 import { MAX_SELECTED_PACKS } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
@@ -58,6 +68,15 @@ function pack(over: Partial<KnowledgePack> = {}): KnowledgePack {
     ...over
   }
 }
+
+beforeAll(() => {
+  // T18-a leg (f) mounts the real ChatScreen, whose transcript scrolls on mount.
+  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
+    configurable: true,
+    writable: true,
+    value: () => {}
+  })
+})
 
 afterEach(() => {
   cleanup()
@@ -211,6 +230,40 @@ describe('PacksPanel', () => {
     expect(screen.queryByText('Knowledge pack added')).not.toBeInTheDocument()
   })
 
+  // #301 P6 (plan §9.23, task 6(e)): the same four failure reasons in German — the DE catalog
+  // carries its own mapped banner text, never a raw reason code or manager detail.
+  it.each([
+    ['not-a-zim', 'Die gewählte Datei ist kein lesbares ZIM-Archiv.'],
+    ['tools-missing', /kiwix-tools-Programme sind auf diesem Laufwerk nicht installiert/],
+    [
+      'manager',
+      'Das Archiv konnte nicht von kiwix-manage gelesen werden. Prüfe, ob die Datei vollständig ist, und versuch es noch einmal.'
+    ],
+    ['other', 'Das Archiv konnte nicht hinzugefügt werden.']
+  ] as const)('add flow (DE): failure (%s) shows the German reason banner', async (reason, expected) => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    const addKnowledgePacks = vi.fn(async () => ({
+      outcome: 'failure' as const,
+      added: [],
+      failed: 1,
+      failureReason: reason
+    }))
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [],
+      addKnowledgePacks
+    })
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('Noch keine Wissenspakete')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Pakete hinzufügen…' }))
+    expect(await screen.findByText(expected)).toBeInTheDocument()
+  })
+
   it('remove asks for confirmation and says the file is untouched', async () => {
     const removeKnowledgePack = vi.fn(async () => undefined)
     stubApi({
@@ -224,7 +277,9 @@ describe('PacksPanel', () => {
         <PacksPanel />
       </I18nProvider>
     )
-    await user.click(await screen.findByRole('button', { name: 'Remove' }))
+    // #301 P6 (plan §9.23 (b)6): the button's accessible name now includes the pack title
+    // (`packs.removeNamed`) — the visible text is still the plain "Remove".
+    await user.click(await screen.findByRole('button', { name: 'Remove Klimawandel von Wikipedia' }))
     expect(await screen.findByText(/archive file on disk is not touched/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Remove pack' }))
     await waitFor(() => expect(removeKnowledgePack).toHaveBeenCalledWith('uuid-climate'))
@@ -313,6 +368,165 @@ describe('PacksPanel', () => {
       </I18nProvider>
     )
     expect(await screen.findByText('Different archive')).toBeInTheDocument()
+  })
+
+  // #301 P6 (plan §9.23 (a) rows 5/6, (c)5): the NEW no-full-text-index badge shows BESIDE
+  // the enabled/disabled badge (a pack can be both), never for unknown/yes/undefined.
+  it('shows the no-full-text-index badge and its reason line beside the enabled badge; absent for unknown/yes/undefined', async () => {
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ id: 'p-no', title: 'No-index pack', searchable: 'no' }),
+        pack({ id: 'p-unknown', title: 'Unknown pack', searchable: 'unknown' }),
+        pack({ id: 'p-yes', title: 'Yes pack', searchable: 'yes' }),
+        pack({ id: 'p-undef', title: 'Undefined pack', searchable: undefined })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('No-index pack')).toBeInTheDocument()
+    // Exactly ONE pack (searchable: 'no') carries the badge and its visible reason line.
+    expect(screen.getAllByText('No full-text index')).toHaveLength(1)
+    expect(
+      screen.getByText(
+        'This archive has no full-text search index. It is skipped when asking, but its articles stay readable.'
+      )
+    ).toBeInTheDocument()
+    // Every pack still carries its enabled badge — the two badges sit BESIDE each other.
+    expect(screen.getAllByText('Enabled')).toHaveLength(4)
+  })
+
+  it('shows the no-full-text-index badge and reason line in German', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [pack({ id: 'p-no', title: 'Paket ohne Index', searchable: 'no' })]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('Kein Volltextindex')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Dieses Archiv hat keinen Volltextindex. Beim Fragen wird es übersprungen, seine Artikel bleiben aber lesbar.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  // #301 P6 (plan §9.23 (b)3/7): the panel's reason text for missing / identity-mismatch is
+  // reachable WITHOUT a mouse — a visible line under the title row, not only a Badge tooltip.
+  it('renders the missing/identity-mismatch reason text visibly (EN + DE), not only in a Badge tooltip', async () => {
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ id: 'p-missing', title: 'Missing pack', available: false, unavailableReason: 'missing' }),
+        pack({
+          id: 'p-mismatch',
+          title: 'Mismatch pack',
+          available: false,
+          unavailableReason: 'identity-mismatch'
+        })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText(/archive file could not be found/)).toBeInTheDocument()
+    expect(screen.getByText(/is a different archive/)).toBeInTheDocument()
+  })
+
+  it('renders the missing/identity-mismatch reason text visibly in German', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ id: 'p-missing', title: 'Fehlendes Paket', available: false, unavailableReason: 'missing' }),
+        pack({
+          id: 'p-mismatch',
+          title: 'Abweichendes Paket',
+          available: false,
+          unavailableReason: 'identity-mismatch'
+        })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText(/Archivdatei wurde nicht gefunden/)).toBeInTheDocument()
+    expect(screen.getByText(/ist ein anderes Archiv/)).toBeInTheDocument()
+  })
+
+  // #301 P6 (plan §9.23 (b)7): `.packs-list` is an ARIA list — one listitem per pack.
+  it('renders the packs list with list/listitem roles, one listitem per pack', async () => {
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [pack(), pack({ id: 'p2', title: 'Second pack' })]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    const list = await screen.findByRole('list', { name: 'Knowledge packs' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+  })
+
+  // #301 P6 (plan §9.23 (b)6): the per-row Enable/Disable/Remove buttons get an accessible
+  // name that includes the pack title — the VISIBLE text stays the plain verb.
+  it('names the per-row Enable/Disable/Remove buttons with the pack title', async () => {
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ enabled: true }),
+        pack({ id: 'p-off', title: 'Off pack', enabled: false })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    await screen.findByText('Klimawandel von Wikipedia')
+    expect(screen.getByRole('button', { name: 'Disable Klimawandel von Wikipedia' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Enable Off pack' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove Klimawandel von Wikipedia' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove Off pack' })).toBeInTheDocument()
+    // Visible text is unchanged — still the plain verb, never the pack title inline.
+    expect(screen.getAllByText('Remove')).toHaveLength(2)
+  })
+
+  it('names the per-row Enable/Disable/Remove buttons with the pack title in German', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ enabled: true }),
+        pack({ id: 'p-off', title: 'Anderes Paket', enabled: false })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    await screen.findByText('Klimawandel von Wikipedia')
+    expect(
+      screen.getByRole('button', { name: 'Klimawandel von Wikipedia deaktivieren' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Anderes Paket aktivieren' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Klimawandel von Wikipedia entfernen' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Anderes Paket entfernen' })).toBeInTheDocument()
   })
 })
 
@@ -595,7 +809,10 @@ describe('ScopePopover — knowledge packs', () => {
     expect(gone).toBeEnabled()
     expect(off).toBeChecked()
     expect(off).toBeEnabled()
-    expect(screen.getByText('not available')).toBeInTheDocument()
+    // #301 P6 (plan §9.23 (c)5): the hint names the RECORDED reason, not a generic
+    // "not available" — the row now says what the per-answer outcome will say.
+    expect(screen.getByText('file missing')).toBeInTheDocument()
+    expect(screen.queryByText('not available')).not.toBeInTheDocument()
     expect(screen.getByText('disabled')).toBeInTheDocument()
     await user.click(gone)
     expect(emitted.at(-1)?.packIds).toEqual(['uuid-off'])
@@ -703,4 +920,624 @@ describe('ArticleModal', () => {
     )
     expect(await screen.findByText(/not available right now/)).toBeInTheDocument()
   })
+})
+
+// =========================================================================================
+// T18-a (#301 P6) — the AUTOMATED half of the T18 acceptance row, per plan §9.23. One test
+// with lettered legs (the T16-a pattern), each asserting by ROLE / accessible NAME /
+// announced STATE — never by class, never by snapshot. The visual half (T18-b: both themes,
+// a 900 px window, 200 % zoom, real screenshots) is the owner's and is recorded separately;
+// nothing below claims appearance a token test already holds.
+// =========================================================================================
+
+/** Regex-escape, so a 200-character non-ASCII title can be used inside a name matcher. */
+function esc(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * The accessible name a pack row composes: the title, plus its short reason hint when it has
+ * one (§9.23 (b)4 — the pack's own reason deliberately stays INSIDE the label, so "…, checkbox,
+ * not checked, dimmed" is never announced without its cause).
+ */
+function rowName(title: string, hint?: string): RegExp {
+  return new RegExp(`^${esc(title)}\\s*${hint ? esc(hint) : ''}$`)
+}
+
+/** A 200-character non-ASCII title (§9.23 (d)): German compounds + CJK, deliberately no emoji. */
+const LONG_TITLE = ((): string => {
+  const chunk = 'Überwachungsverordnungsdurchführungsbestimmung-気候変動に関する政府間パネルの報告書-'
+  let out = ''
+  while (out.length < 200) out += chunk
+  return out.slice(0, 200)
+})()
+
+/** Every reason code in `KnowledgePackOutcomeReason` — leg (g) renders EN copy for all 14. */
+const ALL_REASONS: readonly KnowledgePackOutcomeReason[] = [
+  'selection-limit',
+  'removed',
+  'disabled',
+  'file-missing',
+  'identity-mismatch',
+  'not-served',
+  'not-searchable',
+  'tools-missing',
+  'mode',
+  'search-failed',
+  'read-failed',
+  'timeout',
+  'deadline',
+  'server-restarted'
+]
+
+const T18_COLLECTIONS: Collection[] = [
+  {
+    id: 'lib',
+    name: 'Library',
+    type: 'library',
+    description: null,
+    builtin: true,
+    color: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    archivedAt: null
+  } as Collection
+]
+
+function t18Doc(over: Partial<DocumentInfo> = {}): DocumentInfo {
+  return {
+    id: 'd1',
+    title: 'contract.pdf',
+    originalPath: null,
+    mimeType: 'application/pdf',
+    sizeBytes: 10,
+    status: 'indexed',
+    errorMessage: null,
+    chunkCount: 1,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    ...over
+  } as DocumentInfo
+}
+
+/** The archive citation the "Open article" legs open. */
+const T18_CITATION: Citation = {
+  label: 'S1',
+  sourceTitle: 'Treibhausgas',
+  pageNumber: null,
+  section: 'Landwirtschaft',
+  snippet: 'Methan entsteht in der Landwirtschaft.',
+  sourceKind: 'archive',
+  packId: 'uuid-climate',
+  archiveTitle: 'Klimawandel von Wikipedia',
+  articlePath: 'A/Treibhausgas'
+}
+
+/** Citation card + the shared viewer, wired the way `ChatScreen` wires them (leg (d)). */
+function ArticleHarness({ citation = T18_CITATION }: { citation?: Citation }): JSX.Element {
+  const [target, setTarget] = useState<ArticleTarget | null>(null)
+  return (
+    <I18nProvider>
+      <SourcesDisclosure
+        citations={[citation]}
+        onOpenArticle={(c) =>
+          setTarget({ packId: c.packId!, articlePath: c.articlePath!, archiveTitle: c.archiveTitle })
+        }
+      />
+      <ArticleModal target={target} onClose={() => setTarget(null)} />
+    </I18nProvider>
+  )
+}
+
+/** A live scope beside a PERSISTED outcome set (leg (g), inventory row 34). */
+function NoticeHarness({ outcomes }: { outcomes: KnowledgePackOutcome[] }): JSX.Element {
+  const [scope, setScope] = useState<DocumentScope>({ collectionIds: [], documentIds: [] })
+  return (
+    <I18nProvider>
+      <ScopePopover
+        docs={[t18Doc()]}
+        collections={T18_COLLECTIONS}
+        packs={[pack()]}
+        scope={scope}
+        onChangeScope={setScope}
+      />
+      <PackOutcomesNotice outcomes={outcomes} />
+    </I18nProvider>
+  )
+}
+
+function t18Conversation(): Conversation {
+  return {
+    id: 'c1',
+    title: 'Doc Q&A',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    modelId: null,
+    mode: 'documents',
+    scopeDocumentIds: null,
+    collectionId: null,
+    scope: { collectionIds: [], documentIds: [] }
+  } as Conversation
+}
+
+const T18_RUNTIME: RuntimeStatus = {
+  running: true,
+  modelId: 'm1',
+  port: 1234,
+  healthy: true,
+  message: 'ok'
+}
+
+describe('T18 — knowledge-pack UI acceptance (#301 P6, plan §9.23)', () => {
+  it(
+    'T18 every pack state in both languages, empty source set, long labels, keyboard-only modal / popover (focus trap, Escape, focus restoration), disabled controls not selectable, live refresh and per-answer notices',
+    async () => {
+      // ---- (a) every pack state, EN and DE (inventory rows 16, 20-24) ---------------------
+      for (const lang of ['en', 'de'] as UiLanguage[]) {
+        const T = (k: Parameters<typeof tr>[1]): string => tr(lang, k)
+        window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, lang)
+        stubApi({})
+        const user = userEvent.setup()
+        render(
+          <I18nProvider>
+            <ScopePopover
+              docs={[t18Doc()]}
+              collections={T18_COLLECTIONS}
+              packs={[
+                pack({ id: 'p-ok', title: 'Pack tickable' }),
+                pack({ id: 'p-off', title: 'Pack disabled', enabled: false }),
+                pack({
+                  id: 'p-missing',
+                  title: 'Pack missing',
+                  available: false,
+                  unavailableReason: 'missing'
+                }),
+                pack({
+                  id: 'p-mismatch',
+                  title: 'Pack mismatch',
+                  available: false,
+                  unavailableReason: 'identity-mismatch'
+                }),
+                // The pre-P3b generic state: unavailable with NO recorded reason.
+                pack({
+                  id: 'p-generic',
+                  title: 'Pack generic',
+                  available: false,
+                  unavailableReason: null
+                }),
+                pack({ id: 'p-noindex', title: 'Pack noindex', searchable: 'no' }),
+                // Searchability the probe has not settled is searched like yes — no hint.
+                pack({ id: 'p-unknown', title: 'Pack unknown', searchable: 'unknown' }),
+                pack({ id: 'p-sel-off', title: 'Pack selected disabled', enabled: false })
+              ]}
+              scope={{ collectionIds: [], documentIds: [], packIds: ['p-sel-off', 'p-vanished'] }}
+              onChangeScope={() => {}}
+            />
+          </I18nProvider>
+        )
+        await user.click(screen.getByRole('button'))
+        // Group semantics (§9.23 (b)3): both blocks are labelled groups, not bare checkbox runs.
+        expect(
+          await screen.findByRole('group', { name: T('chat.scope.packsTitle') })
+        ).toBeInTheDocument()
+        expect(screen.getByRole('group', { name: T('chat.scope.sourcesTitle') })).toBeInTheDocument()
+        // The Documents toggle: NAME is the short label, the caveat is the DESCRIPTION (b)4.
+        const docsBox = screen.getByRole('checkbox', { name: T('chat.scope.documentsToggle') })
+        expect(docsBox).toHaveAccessibleName(T('chat.scope.documentsToggle'))
+        expect(docsBox).toHaveAccessibleDescription(T('chat.scope.documentsToggleHint'))
+        expect(docsBox).toBeChecked()
+        // Tickable, and searchability-unknown is tickable too (absence of a hint is pinned).
+        for (const title of ['Pack tickable', 'Pack unknown']) {
+          const box = screen.getByRole('checkbox', { name: rowName(title) })
+          expect(box, title).toBeEnabled()
+          expect(box, title).not.toBeChecked()
+        }
+        // Every ineligible reason, announced in the name and disabled while unselected (D6).
+        const reasons: Array<[string, string]> = [
+          ['Pack disabled', T('chat.scope.packDisabled')],
+          ['Pack missing', T('chat.scope.packMissing')],
+          ['Pack mismatch', T('chat.scope.packMismatch')],
+          ['Pack generic', T('chat.scope.packUnavailable')],
+          ['Pack noindex', T('chat.scope.packNotSearchable')]
+        ]
+        for (const [title, hint] of reasons) {
+          const box = screen.getByRole('checkbox', { name: rowName(title, hint) })
+          expect(box, `${title} / ${lang}`).toBeDisabled()
+          expect(box, `${title} / ${lang}`).not.toBeChecked()
+        }
+        // A SELECTED ineligible pack keeps its reason AND stays deselectable (D6).
+        const selectedOff = screen.getByRole('checkbox', {
+          name: rowName('Pack selected disabled', T('chat.scope.packDisabled'))
+        })
+        expect(selectedOff).toBeChecked()
+        expect(selectedOff).toBeEnabled()
+        // A persisted id with no row: named, ticked, clearable — never silently dropped.
+        const removed = screen.getByRole('checkbox', { name: T('chat.scope.packRemoved') })
+        expect(removed).toBeChecked()
+        expect(removed).toBeEnabled()
+        // Nothing is at the cap here, so no limit line and no cap description anywhere.
+        expect(
+          screen.queryByText(trCount(lang, 'chat.scope.packLimit', MAX_SELECTED_PACKS))
+        ).toBeNull()
+        cleanup()
+
+        // …and the cap state (row 24): the line shows ONCE and every cap-refused box is
+        // DESCRIBED by it, so the reason for the refusal is announced with the state (b)5.
+        const many = Array.from({ length: MAX_SELECTED_PACKS + 1 }, (_, i) =>
+          pack({ id: `cap-${i}`, title: `Cap pack ${String(i).padStart(2, '0')}` })
+        )
+        render(
+          <I18nProvider>
+            <ScopePopover
+              docs={[t18Doc()]}
+              collections={T18_COLLECTIONS}
+              packs={many}
+              scope={{
+                collectionIds: [],
+                documentIds: [],
+                packIds: many.slice(0, MAX_SELECTED_PACKS).map((k) => k.id)
+              }}
+              onChangeScope={() => {}}
+            />
+          </I18nProvider>
+        )
+        await user.click(screen.getByRole('button'))
+        const limitLine = trCount(lang, 'chat.scope.packLimit', MAX_SELECTED_PACKS)
+        expect(await screen.findByText(limitLine)).toBeInTheDocument()
+        expect(screen.getAllByText(limitLine)).toHaveLength(1)
+        const capped = screen.getByRole('checkbox', { name: rowName('Cap pack 12') })
+        expect(capped).toBeDisabled()
+        expect(capped).toHaveAccessibleDescription(limitLine)
+        // A pack that IS selected is not refused, so it carries no cap description.
+        const inside = screen.getByRole('checkbox', { name: rowName('Cap pack 00') })
+        expect(inside).toBeEnabled()
+        expect(inside).not.toHaveAccessibleDescription(limitLine)
+        cleanup()
+        window.localStorage.clear()
+      }
+
+      // ---- (b) empty source sets (inventory rows 18, 19, 25, 26; §9.23 (e)) ---------------
+      stubApi({})
+      const userB = userEvent.setup()
+      // Documents off with nothing ticked: the chip NAMES the state — and IS the trigger.
+      render(
+        <I18nProvider>
+          <ScopePopover
+            docs={[t18Doc()]}
+            collections={T18_COLLECTIONS}
+            packs={[pack()]}
+            scope={{ collectionIds: [], documentIds: [], documentsOff: true }}
+            onChangeScope={() => {}}
+          />
+        </I18nProvider>
+      )
+      const emptyChip = screen.getByRole('button')
+      expect(emptyChip).toHaveTextContent(tr('en', 'chat.scope.documentsOffNoPacks'))
+      await userB.click(emptyChip)
+      expect(
+        await screen.findByRole('group', { name: tr('en', 'chat.scope.packsTitle') })
+      ).toBeInTheDocument()
+      cleanup()
+
+      // Documents off with ONLY attachments (row 19): the file is named, the tail is honest.
+      render(
+        <I18nProvider>
+          <ScopePopover
+            docs={[]}
+            collections={T18_COLLECTIONS}
+            packs={[pack()]}
+            attachments={[t18Doc({ id: 'a1', title: 'notes.pdf' })]}
+            scope={{ collectionIds: [], documentIds: [], documentsOff: true }}
+            onChangeScope={() => {}}
+          />
+        </I18nProvider>
+      )
+      expect(screen.getByRole('button')).toHaveTextContent(
+        `notes.pdf · ${tr('en', 'chat.scope.documentsOffSuffix')}`
+      )
+      cleanup()
+
+      // A pack-only corpus keeps the picker (row 25) — the source control stays reachable.
+      render(
+        <I18nProvider>
+          <ScopePopover
+            docs={[]}
+            collections={T18_COLLECTIONS}
+            packs={[pack()]}
+            scope={{ collectionIds: [], documentIds: [] }}
+            onChangeScope={() => {}}
+          />
+        </I18nProvider>
+      )
+      await userB.click(screen.getByRole('button'))
+      expect(
+        await screen.findByRole('checkbox', { name: rowName('Klimawandel von Wikipedia') })
+      ).toBeEnabled()
+      cleanup()
+
+      // Nothing at all (row 26): the ONE state with no picker, because there is nothing to pick.
+      render(
+        <I18nProvider>
+          <ScopePopover
+            docs={[]}
+            collections={T18_COLLECTIONS}
+            packs={[]}
+            scope={null}
+            onChangeScope={() => {}}
+          />
+        </I18nProvider>
+      )
+      const jump = screen.getByRole('button')
+      expect(jump).toHaveTextContent(tr('en', 'chat.scope.none'))
+      await userB.click(jump)
+      expect(screen.queryByRole('group', { name: tr('en', 'chat.scope.packsTitle') })).toBeNull()
+      cleanup()
+
+      // ---- (c) long labels: the FULL 200-character title is the accessible name -----------
+      expect(LONG_TITLE).toHaveLength(200)
+      stubApi({})
+      const userC = userEvent.setup()
+      render(
+        <I18nProvider>
+          <ScopePopover
+            docs={[]}
+            collections={T18_COLLECTIONS}
+            packs={[pack({ id: 'p-long', title: LONG_TITLE })]}
+            scope={{ collectionIds: [], documentIds: [] }}
+            onChangeScope={() => {}}
+          />
+        </I18nProvider>
+      )
+      await userC.click(screen.getByRole('button'))
+      expect(await screen.findByRole('checkbox', { name: LONG_TITLE })).toHaveAccessibleName(
+        LONG_TITLE
+      )
+      cleanup()
+
+      stubApi({
+        getPackArticle: async () => ({
+          title: LONG_TITLE,
+          sections: [{ label: null, text: 'Ein Absatz.' }],
+          partial: false
+        })
+      })
+      render(
+        <I18nProvider>
+          <ArticleModal
+            target={{ packId: 'uuid-climate', articlePath: 'A/x', archiveTitle: 'Wikipedia' }}
+            onClose={() => {}}
+          />
+        </I18nProvider>
+      )
+      expect(await screen.findByRole('dialog', { name: LONG_TITLE })).toHaveAccessibleName(
+        LONG_TITLE
+      )
+      cleanup()
+
+      render(
+        <NoticeHarness
+          outcomes={[
+            {
+              packId: 'p-long',
+              title: LONG_TITLE,
+              status: 'searched',
+              reason: null,
+              found: 1,
+              admitted: 1
+            }
+          ]}
+        />
+      )
+      await userC.click(screen.getByRole('button', { name: /Knowledge packs:/ }))
+      expect(screen.getByText(LONG_TITLE)).toBeInTheDocument()
+      cleanup()
+
+      // ---- (d) keyboard only: popover Escape/restoration, modal trap/Escape/restoration ----
+      stubApi({})
+      const userD = userEvent.setup()
+      render(
+        <I18nProvider>
+          <ScopePopover
+            docs={[t18Doc()]}
+            collections={T18_COLLECTIONS}
+            packs={[pack()]}
+            scope={{ collectionIds: [], documentIds: [] }}
+            onChangeScope={() => {}}
+          />
+        </I18nProvider>
+      )
+      const trigger = screen.getByRole('button')
+      trigger.focus()
+      expect(document.activeElement).toBe(trigger)
+      await userD.keyboard('{Enter}')
+      await screen.findByRole('group', { name: tr('en', 'chat.scope.packsTitle') })
+      // Tab moves onto a row control INSIDE the popover…
+      await userD.tab()
+      expect(document.activeElement?.tagName).toBe('INPUT')
+      expect(document.activeElement).toHaveAttribute('type', 'checkbox')
+      // …Escape closes it and focus is BACK on the chip that opened it.
+      await userD.keyboard('{Escape}')
+      await waitFor(() =>
+        expect(screen.queryByRole('group', { name: tr('en', 'chat.scope.packsTitle') })).toBeNull()
+      )
+      expect(document.activeElement).toBe(trigger)
+      cleanup()
+
+      stubApi({
+        getPackArticle: async () => ({
+          title: 'Treibhausgas',
+          sections: [{ label: null, text: 'Treibhausgase sind Spurengase.' }],
+          partial: false
+        })
+      })
+      render(<ArticleHarness />)
+      await userD.click(screen.getByRole('button', { name: /Sources/ }))
+      const openBtn = screen.getByRole('button', {
+        name: tr('en', 'chat.sources.openArticleNamed', { title: 'Treibhausgas' })
+      })
+      // The visible text stays the bare action; the NAME carries the article (b)6.
+      expect(openBtn).toHaveTextContent(tr('en', 'chat.sources.openArticle'))
+      openBtn.focus()
+      await userD.keyboard('{Enter}')
+      const dialog = await screen.findByRole('dialog')
+      await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
+      // Focus TRAP: repeated Tab never leaves the dialog.
+      for (let i = 0; i < 6; i++) {
+        await userD.tab()
+        expect(dialog.contains(document.activeElement), `tab ${i}`).toBe(true)
+      }
+      await userD.keyboard('{Escape}')
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      expect(document.activeElement).toBe(openBtn)
+      cleanup()
+
+      // ---- (e) disabled controls are not selectable (§9.23 (b)9) --------------------------
+      stubApi({})
+      const userE = userEvent.setup()
+      const emitted: DocumentScope[] = []
+      const capPacks = [
+        ...Array.from({ length: MAX_SELECTED_PACKS }, (_, i) =>
+          pack({ id: `e-${i}`, title: `Sel pack ${String(i).padStart(2, '0')}` })
+        ),
+        pack({ id: 'e-extra', title: 'Cap refused pack' }),
+        pack({ id: 'e-noindex', title: 'Index-less pack', searchable: 'no' })
+      ]
+      render(
+        <I18nProvider>
+          <ScopePopover
+            docs={[t18Doc()]}
+            collections={T18_COLLECTIONS}
+            packs={capPacks}
+            scope={{
+              collectionIds: [],
+              documentIds: [],
+              packIds: capPacks.slice(0, MAX_SELECTED_PACKS).map((k) => k.id)
+            }}
+            onChangeScope={(next) => emitted.push(next)}
+          />
+        </I18nProvider>
+      )
+      await userE.click(screen.getByRole('button'))
+      const capRefused = await screen.findByRole('checkbox', { name: rowName('Cap refused pack') })
+      const ineligible = screen.getByRole('checkbox', {
+        name: rowName('Index-less pack', tr('en', 'chat.scope.packNotSearchable'))
+      })
+      expect(capRefused).toBeDisabled()
+      expect(ineligible).toBeDisabled()
+      await userE.click(capRefused)
+      await userE.click(ineligible)
+      // REFUSED at the source — not accepted here and trimmed somewhere downstream.
+      expect(emitted).toEqual([])
+      cleanup()
+
+      // ---- (f) live refresh through the real event (§9.23 (f); rows 5, 35) ----------------
+      // A searchability verdict arrives on the SAME `packs:changed` refetch as everything
+      // else, so a mounted popover must grey the row with its new reason — with no navigation.
+      const emitter = packsEventEmitter()
+      let listCalls = 0
+      const listKnowledgePacks = vi.fn(async () => {
+        listCalls++
+        return listCalls === 1 ? [pack()] : [pack({ searchable: 'no' })]
+      })
+      stubApi({
+        listConversations: vi.fn(async () => [t18Conversation()]),
+        getRuntimeStatus: vi.fn(async () => T18_RUNTIME),
+        listMessages: vi.fn(async () => []),
+        listDocuments: vi.fn(async () => [t18Doc()]),
+        listCollections: vi.fn(async () => T18_COLLECTIONS),
+        listAttachments: vi.fn(async () => []),
+        listKnowledgePacks,
+        onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
+      })
+      const userF = userEvent.setup()
+      render(<ChatScreen onNavigate={() => {}} />)
+      await userF.click(await screen.findByText('Doc Q&A'))
+      await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(1))
+      await userF.click(await screen.findByRole('button', { name: /answering from/i }))
+      expect(
+        await screen.findByRole('checkbox', { name: rowName('Klimawandel von Wikipedia') })
+      ).toBeEnabled()
+
+      act(() => emitter.emit({ epoch: 2, revision: 1, refreshing: false, reason: 'reconcile-end' }))
+      await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(2))
+      const greyedName = rowName(
+        'Klimawandel von Wikipedia',
+        tr('en', 'chat.scope.packNotSearchable')
+      )
+      expect(await screen.findByRole('checkbox', { name: greyedName })).toBeDisabled()
+
+      // An OLDER epoch (an old session's late announcement) refetches nothing. Proved without
+      // a sleep: a newer event follows it, and the total call count shows the old one was
+      // dropped rather than merely slow.
+      act(() => emitter.emit({ epoch: 1, revision: 9, refreshing: false, reason: 'reconcile-end' }))
+      act(() => emitter.emit({ epoch: 3, revision: 3, refreshing: false, reason: 'reconcile-end' }))
+      await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(3))
+      expect(listKnowledgePacks).toHaveBeenCalledTimes(3)
+      expect(screen.getByRole('checkbox', { name: greyedName })).toBeDisabled()
+      cleanup()
+
+      // ---- (g) per-answer notices (rows 29-34): every reason code, and row 34's independence -
+      stubApi({})
+      const userG = userEvent.setup()
+      const outcomes: KnowledgePackOutcome[] = [
+        {
+          packId: 'ok',
+          title: 'Klimawandel von Wikipedia',
+          status: 'searched',
+          reason: null,
+          found: 3,
+          admitted: 2
+        },
+        ...ALL_REASONS.map((reason, i) => ({
+          packId: `p-${reason}`,
+          title: `Pack ${i}`,
+          status: (reason === 'search-failed' ||
+          reason === 'read-failed' ||
+          reason === 'timeout' ||
+          reason === 'server-restarted'
+            ? 'failed'
+            : 'skipped') as KnowledgePackOutcome['status'],
+          reason,
+          found: 0,
+          admitted: 0
+        }))
+      ]
+      render(<NoticeHarness outcomes={outcomes} />)
+      const summary = screen.getByRole('button', {
+        name: new RegExp(
+          esc(tr('en', 'chat.packs.outcome.summary', { searched: 1, other: ALL_REASONS.length }))
+        )
+      })
+      expect(summary).toHaveAttribute('aria-expanded', 'false')
+      await userG.click(summary)
+      expect(summary).toHaveAttribute('aria-expanded', 'true')
+      // One list, one item per selected pack — "list, 15 items" is the announced structure.
+      expect(screen.getByRole('list')).toBeInTheDocument()
+      expect(screen.getAllByRole('listitem')).toHaveLength(outcomes.length)
+      expect(screen.getByText(tr('en', 'chat.packs.outcome.searched'))).toBeInTheDocument()
+      expect(screen.getByText(trCount('en', 'chat.packs.outcome.passages', 2))).toBeInTheDocument()
+      for (const reason of ALL_REASONS) {
+        expect(
+          screen.getByText(tr('en', `chat.packs.outcome.${reason}` as 'chat.packs.outcome.searched')),
+          reason
+        ).toBeInTheDocument()
+      }
+      // Row 34: the notice reads the PERSISTED message, never the live scope. Change the scope
+      // underneath it — tick a pack — and nothing about the answer's outcomes may move.
+      await userG.click(screen.getByRole('button', { name: /answering from|using/i }))
+      await userG.click(
+        await screen.findByRole('checkbox', { name: rowName('Klimawandel von Wikipedia') })
+      )
+      await userG.keyboard('{Escape}')
+      expect(summary).toHaveAttribute('aria-expanded', 'true')
+      expect(summary).toHaveTextContent(
+        tr('en', 'chat.packs.outcome.summary', { searched: 1, other: ALL_REASONS.length })
+      )
+      expect(screen.getAllByRole('listitem')).toHaveLength(outcomes.length)
+      expect(screen.getByText(tr('en', 'chat.packs.outcome.deadline'))).toBeInTheDocument()
+    },
+    // A ceiling on a hang, never a proof (the T16-a precedent): these legs mount the real
+    // ChatScreen and drive two portalled overlays with real userEvent timing.
+    120_000
+  )
 })

@@ -29,6 +29,18 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 6 — design and frontend review: T18-a implemented, review "Open article" added.**_
+PacksPanel/ScopePopover/SourcesDisclosure/ArticleModal/EvidencePane/ReviewScreen reviewed for copy, structure, a11y and visuals over the states P1–P5
+produced; no scope/outcome/lifecycle semantics changed. Closed: T18-a (the seven-leg UI acceptance row, `KnowledgePacks.test.tsx`); the §5 item 21(c)
+residual — a review row's archive citation now opens through the shared "Open article" viewer (frozen-snapshot locator; renamed/removed/unavailable
+all handled); the P2 copy items (register header "Document"→"Source", archive SHA cell, Markdown locator labels stay English — accepted); house
+dashes (EN —, DE –) across four keys. New: the "No full-text index" badge, reason-specific greyed-row hints in the picker, named pack/article action
+buttons, `role="group"` checkbox blocks, `Modal.describedBy`. Decisions: the collision surface (`ServedLibrary.excluded`) stays OUT of the panel — a
+served-library, not a pack-row, fact; deferred to P7 (a `packs:status` addition) — the per-answer "name collision" row already covers it; the source
+popover stays non-modal (Radix's modal variant aria-hides its own trigger chip and locks transcript scroll). Residuals: T18-b (owner's real-visual
+leg) pending — owner; the collision-surface follow-up; small PacksPanel residuals — all registered at P7 (§5 item 21(k)). Record:
+`design-guidelines.md` §11.15; `rag-design.md` §17 module map. Suite on this machine: 419 / 6,060 (5,980 / 79), exit 0 = +1 file / +25 tests over the head c3ea5581 (418 / 6,035, recounted here; its one failure was the known zim-client 8 MiB load flake); typecheck + build green; T18-b orchestrator pre-check in real Electron (both themes/languages, panel + picker) recorded in the inventory row — the owner's sign-off stays pending.
+
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 4 — retrieval honesty: review M3 / M6 / M7 / M8 / M10 closed.**_
 An explicit, additive `documentsOff` flag (never derived from emptiness) makes packs-only scope expressible again, superseding the
 2026-09-05 interim fix; `resolveScope`'s deny-all keeps chat attachments in scope, is fail-closed through `buildScopeFilter` and the
@@ -702,13 +714,8 @@ open round's item stays the last block of §5.)
       touched; `FullSuiteGuard` cannot see dropped individual tests.
 
 20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line — CLOSED
-    2026-09-04** (PRs #295, #300, #297, #299 merged — the four stacked PRs; #290/#291/#298 closed;
-    every #298 hardware box ticked the same day on the i9-9900X / RTX 3090; the captured b9849
-    transcript is pinned as `tests/fixtures/chat-sse-timings-b9849.txt`). Records: `architecture.md`
-    "Chat & streaming" → "Per-answer speed line" §1–§3; `benchmark.md` / `model-benchmarks.md` §6.5
-    (thresholds deliberately NOT retuned). Narrative: the 2026-09-04 dated entry above; the item text
-    as it stood before this collapse is in `docs/build-log.md` (retired verbatim 2026-09-05, ZIM wave
-    Phase 0). Residuals: none.
+    2026-09-04** (PRs #295/#300/#297/#299; #290/#291/#298 closed). Records: `architecture.md`
+    "Per-answer speed line" §1–§3, `benchmark.md` / `model-benchmarks.md` §6.5. Text as it stood: `docs/build-log.md`, retired 2026-09-06 (P6). Residuals: none.
 
 ---
 21. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable
@@ -740,6 +747,10 @@ open round's item stays the last block of §5.)
     interleave, fair pack allocation under a per-ask deadline, refreshable searchability and per-ask
     pack outcomes; record: rag-design D-Z4/D-Z11/D-Z12. Residuals: none new. Still owed: the Documents
     toggle / outcome-notice visual pass (P6, T18), the `/suggest` probe's real-tool check (P7, T19).
+    (k) **P6 closed (2026-09-06):** T18-a implemented (the design/frontend review row); the 21(c)
+    "Open article from a review" residual closed. Record: design-guidelines §11.15. Still owed: T18-b
+    (the owner's visual leg), the collision-surface follow-up ((c)1 above), the small PacksPanel
+    residuals — P7 registers all three.
 
 ## 6. Open issues / risks
 

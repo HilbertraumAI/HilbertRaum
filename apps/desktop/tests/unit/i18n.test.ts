@@ -209,6 +209,27 @@ describe('German typography — quotation marks (design-guidelines §7 "Typograp
   })
 })
 
+describe('house dashes — knowledge-pack copy (#301 P6, plan §9.23 (c)4)', () => {
+  // EN sentence-level breaks use the em dash "—", DE uses the en dash "–"; a bare ASCII
+  // hyphen standing in for either (space-hyphen-space) is a typo, not a house-style choice.
+  const PREFIXES = ['packs.', 'chat.scope.', 'chat.packs.', 'chat.article.']
+
+  it('no value under packs./chat.scope./chat.packs./chat.article. contains " - " in EN or DE', () => {
+    const offenders: string[] = []
+    for (const catalog of [
+      ['en', en] as const,
+      ['de', de] as const
+    ]) {
+      const [lang, table] = catalog
+      for (const [key, value] of Object.entries(table)) {
+        if (!PREFIXES.some((p) => key.startsWith(p))) continue
+        if (value.includes(' - ')) offenders.push(`${lang}:${key}: ${value}`)
+      }
+    }
+    expect(offenders, 'bare " - " where a house dash (— EN / – DE) belongs').toEqual([])
+  })
+})
+
 describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
   it('both catalogs carry the same keys with no empty values', () => {
     expect(Object.keys(de).sort()).toEqual(Object.keys(en).sort())
