@@ -43,8 +43,8 @@ from its first public `1.0.0` release onward.
   stops the pack server and removes its small generated index file. Opening an alias article
   (a redirect entry — about half of a Wikipedia archive's titles) shows the article it points
   to instead of an error. A large article that the bundled Windows pack server occasionally
-  fails to answer is re-requested instead of being reported as unavailable or dropped from the
-  answer. Known limit on Windows: an archive can only be added from a path
+  delivers only in part is re-requested instead of being reported as unavailable or dropped from
+  the answer. Known limit on Windows: an archive can only be added from a path
   without umlauts or accents (the bundled kiwix-manage cannot read such paths) — the drive's
   `zim/` folder always works.
 - **Evidence reviews now name the knowledge pack, not a same-named document.** Reviewing an

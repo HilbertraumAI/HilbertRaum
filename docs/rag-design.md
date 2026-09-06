@@ -2861,9 +2861,13 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   is retried the same way, and the request guard's lifecycle retry is untouched (a stall never
   reaches the server's lifecycle). The other routes (`/suggest`, `/search`, the health probe) are
   unchanged — the stall was measured on `/raw` bodies only. Tests: `zim-client.test.ts` describe
-  "fetchArticleHtml retries a stalled /raw read (#301 P7 T19)" (seven legs + two `kiwixGet` legs),
-  the `zim-ipc-session` leg "T19 an article whose first /raw read is never answered still opens…",
-  the `zim-arm` leg "… an article whose first read is never answered keeps its chunks"; reporting
+  "fetchArticleHtml retries a stalled /raw read (#301 P7 T19)" (eight legs — a never-answered
+  attempt, three cut-short attempts, the caller's abort, a cut-short body retried with the partial
+  body discarded, a mid-body socket error NOT retried, completed statuses untouched, the redirect
+  hop, the other routes — plus two `kiwixGet` classification legs), the `zim-ipc-session` leg
+  "T19 an article whose first /raw read is cut short still opens whole…" (a paragraph past the cut
+  reaches the viewer), the `zim-arm` leg "… an article whose first read is cut short keeps its
+  chunks"; reporting
   it upstream rides the P8 issue #339 (the pinned bundle is P8's).
 - **Not run here — the owner's legs (pending):** the relocated drive with persisted citations
   (K: → another letter, in Electron), live lock / unlock / failed lock with a running pack
