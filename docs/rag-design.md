@@ -2527,7 +2527,13 @@ offline article viewer. Files are registered in place, never copied.
   The citation locator stays `packId + articlePath`: the route is resolved against the
   CURRENT serving map on every read, never carried as a stored hint, so old citations,
   renamed files, restarts and drive-letter changes all resolve correctly and a renderer
-  can never select another pack. An `EVENTS.knowledgePacksChanged` (`packs:changed`)
+  can never select another pack. A `/raw` read that answers a **redirect status** (a ZIM
+  alias entry — kiwix-serve 3.8.1 sends `302 Location: /content/<book>/<target>` and does
+  **not** follow archive redirects; P7 T19) is followed **exactly one hop, same book only**
+  (`client.ts` `redirectTargetFor`): another book's name, an absolute-URL / protocol-relative /
+  relative location, a second redirect, or a target the entry-key contract refuses all
+  resolve to the honest `null`, never another book's text; the stored locator is unchanged by
+  the hop. An `EVENTS.knowledgePacksChanged` (`packs:changed`)
   broadcast — `{ epoch, revision, refreshing, reason }` — reaches every window on
   reconcile start/end and on register/remove/enable, emitted only after the producing
   operation's `assert()` so a pass that finished under an old epoch announces nothing;
@@ -2738,7 +2744,7 @@ in the panel is registered on the P9 successor issue (opened at the #294 merge; 
 
 Run by the maintainer on the **i9-14900K** (Windows 11 26200, Node 24.19.0, Vitest 3.2.6; Smart
 App Control permissive that day) on the P7 records tree (the integration head 11463dd9 + master
-ddd704ad) — **the orchestrator's real-tool run, not the owner's sign-off**. Tools: **kiwix-tools
+ddd704ad; the redirect leg re-run with the T19 fix a4967594 in the tree) — **the orchestrator's real-tool run, not the owner's sign-off**. Tools: **kiwix-tools
 3.8.1 win-x86_64** at `K:\runtime\kiwix-tools\win` (`--version`: libkiwix 14.1.1, libzim 9.4.0,
 libxapian 1.4.23, libcurl 8.4.0; ICU 74 DLLs; the three exes Authenticode-signed by Association
 Kiwix — `model-policy.md`'s inventory has every hash; no install marker ⇒ the verifier's
@@ -2785,7 +2791,8 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
 - **Entry paths (L4/L5):** a real umlaut article `CO2-Preis_mit_Klimaprämie` opens (12 sections);
   literal-percent (`CO2-%C3%84quivalent`) and literal-plus keys → 404 → `null` (no double
   decoding); a dot segment is refused by `assertArticlePath` before any request.
-  **Finding 1 (fixed in the P7 fix PR `feat/zim-p7-fix-raw-redirect`):** `CO2-Äquivalent`,
+  **Finding 1 (FIXED — `client.ts` `fetchArticleHtml` / `redirectTargetFor`, merged into this
+  branch at `a4967594`; tests T19-b / T19-c):** `CO2-Äquivalent`,
   `CO2-Äquivalente`, `CO2-Ausstoß`, `CO2-Fußabdruck` are ZIM **redirect entries** (aliases —
   roughly half of a Wikipedia ZIM's entries); kiwix-serve answers them under `/raw` with
   `302 Location: /content/<book>/<target>` (targets `Treibhauspotential`, `Kohlenstoffdioxid`,
@@ -2839,18 +2846,26 @@ renderer-review record) so the citations stay resolvable after the plan file is 
 | §2.4 | D-Z11 (the ZIM header layout) |
 | §2.5 | D-Z11 (searchability detection) |
 | §9.11 | D-Z3 |
+| §9.17 (b) | D-Z8 (the lock / failed-lock transient-cleanup policy) |
+| §9.19 (e) | D-Z13 (injected `platform` through `tools.ts` argv and `transients.ts` `samePath`) |
+| §9.19 (f) | D-Z13 + [`security-model.md`](security-model.md) "kiwix-serve — the one unauthenticated sidecar" (the R-9 mirror sentence, pinned by T17-b) |
+| §9.21 (a) | D-Z12 (documents-off scope resolution) |
+| §9.21 (b) | D-Z4 (reranker-failure interleave and abort discipline) |
+| §0.3 | the required-check inventory (`tests/fixtures/zim/required-checks.json`) + its `repo-hygiene.test.ts` validator |
+| §2.2 | D-Z1 / D-Z11 (the pinned kiwix-serve routes + the `/suggest` contract); "Real acceptance (T19, P7)" above for the observed behaviour |
 | §5.1 (P1) | D-Z3 |
-| §5.2 (P2) | D-Z5 |
-| §5.3a (P3a) | D-Z10 |
-| §5.3b (P3b) | D-Z8 / D-Z10 / D-Z11 |
 | §5.4 (P4) | D-Z4 / D-Z11 / D-Z12 |
-| §5.5 (P5) | D-Z13 |
-| §5.6 (P6) | [`design-guidelines.md`](design-guidelines.md) §11.15 |
-| §5.7 (P7) | this legend |
 
-`plan §7` / `§8` / `§10` / `§11` / `§9.1` / `§9.3` / `§9.4` / other `§5.x` citations found in
-`evidence-pack/**`, `skills/**`, the vision (image-understanding) code, `doctasks/**` and
-their tests belong to OLDER, unrelated working papers (the EP-1 spec, the Skills plan, the
-image-understanding plan) — each already resolves through its own legend (this file's EP-1
-record above; the Skills and image-understanding design records) — and are **not** resolved
-by this table.
+Inside the ZIM-wave files (`services/zim/**`, `ipc/registerZimIpc.ts`, `renderer/chat/ScopePopover.tsx`,
+`renderer/chat/PackOutcomesNotice.tsx`, `renderer/screens/documents/PacksPanel.tsx`, the ZIM
+parts of `shared/types.ts`, and their tests) a bare **`§7` / `ruling §7`** means this plan's
+**owner-decisions table** — the rulings D1–D6, `MAX_SELECTED_PACKS = 12`, the outcome-persistence
+and saved-review policies — all recorded in D-Z4 / D-Z12 / D-Z13 and BUILD_STATE §5 item 21.
+The one exception inside a ZIM file is `zim-prompt-framing.test.ts`'s `plan §8`, which is the
+#228 excerpt-framing eval paper (residual R-5, D-Z14). Everywhere **outside** those files, a
+`plan §7` / `§8` / `§10` / `§11` / `§9.1` / `§9.3` / `§9.4` / other `§5.x` citation (evidence-pack,
+skills, vision, doctasks, translation, context-compaction, chat/db/context, the shared IPC/type
+files, the i18n catalogs and their tests) belongs to an OLDER, unrelated working paper — the EP-1
+spec, the Skills plan, the image-understanding plan, the context-compaction and translation
+plans — and resolves through that paper's own legend (this file's EP-1 record above; the Skills
+and image-understanding design records in `architecture.md`), **not** through this table.

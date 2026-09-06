@@ -1526,7 +1526,9 @@ schedules a background reconciliation and returns `{ started: boolean }` at once
 completion arrives via the `packs:changed` event, not the return value) · `packs:status`
 (`KnowledgePackStatus = { toolsInstalled, refreshing, revision }` — additive over the P3a
 `{ toolsInstalled }` shape) · `packs:getArticle` (`PackArticle | null` — plain sectioned
-TEXT, never HTML; `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
+TEXT, never HTML; the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM
+alias entry with `302 → /content/<book>/<target>` (P7 T19) — while a cross-book, chained or
+contract-refused target returns `null` and the locator does not change; `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
 stopped short of the whole article — input cap, work budget or unterminated markup —
 Phase 1, PR #294 review H1; the modal shows a hint line instead of presenting the partial
 text as complete; a refused entry key (empty, > 2048 chars, a control character, a `.`/`..`

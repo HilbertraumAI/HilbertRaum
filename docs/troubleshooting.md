@@ -615,6 +615,13 @@ a different archive than the one you registered — the app checks the file's bu
 identity, never just its name or path, so it will not silently serve the wrong content under
 an old title.
 
+### An answer says a pack was "not searched: name collision with another pack"
+
+Two packs whose **file names** are the same (in different folders) would ask the pack server for
+the same address, so only one of them can be served — the app keeps one and leaves the other out
+rather than answering from the wrong archive. Rename one of the two `.zim` files so their names
+differ, then press **Refresh** under *Documents → Knowledge packs*.
+
 ### "No full-text index" vs. zero hits vs. "search failed" / "server restarted"
 
 These look similar but mean different things:

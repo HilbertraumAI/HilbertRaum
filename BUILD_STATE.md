@@ -30,7 +30,7 @@
 > named in §5's branch analysis still carry unmerged work.
 
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — Phases 0–6 CLOSED, Phase 7 (records, real acceptance, merge) in progress.**_
-The PR's review remediation — three High + eleven Medium + nine Low findings — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;
+The PR's review remediation — 28 findings (H1–H4, M1–M11, L1–L9 with L10 withdrawn, DOC-1–DOC-4; three assessed High, H3 and DOC-1/DOC-2 Medium) — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;
 master merged in at P0 (`bfdb514a`) and again at P7 (`ddd704ad`). Durable records: `rag-design.md` §17 D-Z1–D-Z14 (with a §-anchor legend),
 `data-contracts.md` "Knowledge packs", `security-model.md` "kiwix-serve — the one unauthenticated sidecar", `design-guidelines.md` §11.15. Correction to
 the 2026-09-04 MVP entry below: its "Suite green (5660+)" and "no-arm path byte-identical, pinned" were the PR author's own claims — P0 replaced the
@@ -38,7 +38,9 @@ tautological byte-identity test with a fixture captured from master `bfdb514a` (
 411/5,841 → P1 5,854 → P1b 5,866 → P2 5,870 → P3a 5,918 → P3b 5,958 → P5 6,001 → P4 6,035 → P6 6,060 (5,980 / 79). Phase PRs (verified via `gh pr list
 --state merged --base feat/zim-knowledge-packs`): #304 P0, #305 P1, #306 P1b, #307 P2, #309 P3a, #316 P3b, #317 P5, #328 P4, #336 P6. The ten per-phase
 dated entries (P0–P6 + the 2026-09-04 MVP entry) are verbatim in `docs/build-log.md` under the 2026-09-06 P7 heading.
-Suite on the merged tree / final head: _filled by the orchestrator_.
+P7 (2026-09-06, this machine): master merged in (`f3d45517`, baseline 421 / 6,170 (6,088 / 79 / 2 = the preamble budget + the known OCR load race, green alone)); the T19 real-tool run found
+a redirect-entry defect (fix `a4967594`, +10 tests) and the stale last assertion of the real smoke; final code tree `bcff9a17`: build + typecheck green, **421 files / 6,180 tests (6,100 passed
+/ 79 skipped), exit 0** — the later commits are records-only; the Opus review found no defect candidate; T19's owner legs + T18-b pending — owner.
 
 _2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), ready for merge
 (owner squash-merge; keep the branch):** searchable On this drive / Browse views, task/family
@@ -618,10 +620,10 @@ open round's item stays the last block of §5.)
     class `gpuMode: off` would be the better default.
     (f) **D2 parser hardware gate — CLOSED (re-ruled P1b).** Gate is the per-slice main-thread stall (≤5 ms on the i7-8550U); cooperative slicing shipped, `DEFAULT_SLICE_WORK` = 16 Ki, T02-c recorded
     (laptop leg 3, 16 Ki); P7 re-check via the 14900K P-core ÷ 3 proxy (laptop not re-run — not within 20% of a gate). Record: rag-design D-Z3.
-    (g) **R-1 registered (P3a, 2026-09-05) — still open until (a):** `kiwix-manage` on a hashless install marker runs as `skip-legacy` (one logged warning) — no integrity claim for the manager until
-    (a) proves install hashes for serve AND manage. Record: rag-design D-Z10.
+    (g) **R-1 registered (P3a, 2026-09-05) — still open until (a):** `kiwix-manage` on a hashless install marker runs as `skip-legacy` (one logged warning) — no integrity claim for the manager
+    until (a) proves install hashes for serve AND manage. Record: rag-design D-Z10.
     (h) **R-7 — CLOSED with recorded limits (P3b).** Record: known-limitations `zim-transient/` bullet.
-    (i) **R-9 accepted (P5, 2026-09-06):** kiwix-serve is the one sidecar without request authentication; bounded by the `withServer` alive/generation guard + one admitted retry; recorded in
+    (i) **R-9 accepted (owner ruling 2026-09-05; recorded by P5 on 2026-09-06):** kiwix-serve is the one sidecar without request authentication; bounded by the `withServer` alive/generation guard + one admitted retry; recorded in
     security-model / PRIVACY / known-limitations. R-8 (`--urlRootLocation`) stays a documented unused option.
     (j) **P4 — CLOSED (2026-09-06):** M3/M6/M7/M8/M10 — effective documents-off scope, reranker-failure interleave, fair pack allocation under a per-ask deadline, refreshable searchability, per-ask
     pack outcomes. Record: rag-design D-Z4/D-Z11/D-Z12.
@@ -632,7 +634,9 @@ open round's item stays the last block of §5.)
     accepted deviation: the ScopePopover is non-modal (design-guidelines §11.15 decision 1, P6); T18-b (the owner's real-visual leg) — pending, owner; T19 the owner's Electron/drive legs (relocated
     drive with persisted citations, live lock/unlock/failed lock, offline ask + viewer) — pending, owner (the orchestrator's machine legs are recorded in rag-design §17 "Real acceptance"); R-1 open
     until P8 (the acceptance bundle has no install marker ⇒ `skip-legacy`); R-2 multipart unsupported; R-4 Authenticode — result recorded at P7 in model-policy.md; R-6 → P9; R-9 accepted
-    (2026-09-05).
+    (2026-09-05). From P7's T19: kiwix-manage 3.8.1 refuses non-ASCII archive paths on Windows (registration-only — kiwix-serve serves such a file from UTF-8 XML; documented in
+    known-limitations / troubleshooting; a reason-specific message or metadata without kiwix-manage — P9); the retrieval-quality levers L1 (title-index `/suggest` arm), L2
+    (`ARTICLES_PER_PACK` scaling with archive size), L3 (question→keywords rewrite before `/search`) — P9 (L4, the aggregation-question expectation, landed in known-limitations).
 
 ## 6. Open issues / risks
 
