@@ -799,7 +799,14 @@ answer latch; a placement observation (after its persist, or after the skipped p
 locked); the moved-drive restore, the upgrade seed and the new-machine backfill in
 `prepareFirstBenchmark`; every GPU probe write (`probeAndPersistGpu`: a completed probe, incl.
 an empty device list, so "Try GPU again" pushes through it, and the EMPTY probe persisted when the
-probe cannot run or threw — PR #308 decision 6 — so the tile and the ★ drop a stale card at once)
+probe cannot run or threw — PR #308 decision 6 — so the tile and the ★ drop a stale card at once;
+and, since issue #323 (2026-09-06), the refresh a completed chat-engine install triggers:
+`EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall`, which re-runs the
+same `probeAndPersistGpu` — cache invalidated first, the same admission / unlock-epoch checks —
+only when this machine's eligible probe lists no device, so a benchmark run before the binary
+existed no longer leaves the RAM-only answer frozen until a manual re-check; an eligible probe
+with a device, a whisper-only install, or a failed one refreshes nothing, and the check itself
+is never re-run)
 and, before it, "Try GPU again" clearing `gpuAutoDisabled` / `gpuLastError` — that write pushes
 on its own (PR #303 P10, A-D1), so the processor-forced rows and verdict clear as soon as the
 flags do, without waiting for the probe; the re-probe's own write then pushes a second time

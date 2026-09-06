@@ -172,7 +172,14 @@ shape-checked — on WRITE and on READ**, by the pure normalizers in
   `probeAndPersistGpu` that reaches the write persists this session's stamped answer — a probe
   that cannot run (no binary) or that threw writes `{ devices: [], probedAt, machineKey }` like an
   empty successful probe (PR #308 audit decision 6; an empty stamped result re-stamps no old
-  device), each only after the admission + unlock-epoch re-check.
+  device), each only after the admission + unlock-epoch re-check. **Installing the chat engine
+  refreshes it** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `registerEngineIpc`
+  → `refreshGpuProbeAfterRuntimeInstall` (registerBenchmarkIpc.ts) re-runs `probeAndPersistGpu`
+  (cache invalidated first; the same admission / epoch checks and push) when a `llama_cpp` install
+  reaches `done` and this machine's ELIGIBLE probe lists no device — the empty stamped probe of a
+  benchmark run before the binary existed, a missing probe, or a foreign-stamped one; an eligible
+  probe that already lists a device is left alone, a whisper-only / failed / cancelled install
+  changes nothing, and the benchmark itself is never re-run.
 
 On WRITE, garbage is IGNORED (a `lastBenchmark` that normalizes to nothing leaves the previous
 result standing — the convention every mistyped value here follows; `null` is still the explicit

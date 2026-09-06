@@ -29,9 +29,9 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-09-06 — **Follow-up wave on `feat/performance-screen` (#303), one commit per issue, ledger
-`tmp/followups-303-ledger.md`:** #325 closed (GPU-off tile never falls back to a recorded card; Copy
-report carries the live pick; "Running on the graphics card right now." line — visual unverified)._
+_2026-09-06 — **Follow-up wave on `feat/performance-screen` (#303), one commit per issue, ledger `tmp/followups-303-ledger.md`:**
+#325 closed `4293f95f` (GPU-off tile never falls back to a recorded card; Copy report carries the live pick; "Running on the
+graphics card right now." line — visual unverified); #323 closed (a completed chat-engine install re-runs the probe refresh when this machine's eligible probe is empty)._
 
 _2026-09-06 — **PR #308 audit remediation (`feat/vram-aware-picker`, stacked on #303):** R1–R6 closed —
 P1 sync (`7aae2716`), P2 budget device + next-start class (`81661c69`), P2a empty-probe persistence

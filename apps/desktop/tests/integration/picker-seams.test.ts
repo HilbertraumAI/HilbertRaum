@@ -1,7 +1,9 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { stringify } from 'yaml'
 
 // The two seams the chat recommendation leaves the main process through — the benchmark
 // (`runAndPersistBenchmark` → `BenchmarkResult.recommendedModelId` / `.gpu` / `.gpuVramMb`)
@@ -44,7 +46,11 @@ vi.mock('../../src/main/services/settings', async (importOriginal) => {
 })
 
 import { buildPerformanceSnapshot, maybeRunFirstBenchmark, runAndPersistBenchmark } from '../../src/main/ipc/registerBenchmarkIpc'
+import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
+import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { pickerMemoryFor, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
+import { writeRuntimeMarker, type FetchFn } from '../../src/main/services/assets'
+import { EngineDownloadManager, hostRuntimeArch, hostRuntimeOs, type ExtractFn } from '../../src/main/services/runtime-download'
 import { detectSystem } from '../../src/main/services/benchmark'
 import { openDatabase } from '../../src/main/services/db'
 import { discoverManifests, machineRamGb, weightsMib } from '../../src/main/services/models'
@@ -55,7 +61,7 @@ import { getSettings, seedSettings, updateSettings } from '../../src/main/servic
 import { IPC } from '../../src/shared/ipc'
 import type { AppContext } from '../../src/main/services/context'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
-import type { AppSettings, GpuDevice, ModelInfo } from '../../src/shared/types'
+import type { AppSettings, EngineDownloadJob, GpuDevice, ModelInfo, RuntimeStatus } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -495,4 +501,169 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
     expect(snap.placement.model?.sizeOnDiskGb).toBe(6.5)
     expect(snap.placement.vramMb).toBe(8192)
   })
+})
+
+// Issue #323 — a benchmark run BEFORE the runtime is installed persists the empty stamped probe
+// (decision 6: honest "no card"), and that answer used to stay frozen until a manual re-check.
+// Installing the runtime now re-runs the once-per-session probe refresh (the same
+// `probeAndPersistGpu` path `prepareFirstBenchmark` / "Try GPU again" use) without re-running
+// the benchmark, and leaves an already-eligible probe that lists a device alone. Exercised at
+// the REAL seam: the `engine:download` handler with an injected manager whose fake fetch /
+// extract drop the binary onto the drive.
+describe('picker seams: the runtime installed after a benchmark refreshes the GPU probe (#323)', () => {
+  const ARCHIVE = 'llama-server-release-archive-bytes'
+  const ARCHIVE_SHA = createHash('sha256').update(ARCHIVE).digest('hex')
+  const okFetch = (async () =>
+    new Response(ARCHIVE, { status: 200, headers: { 'content-length': String(ARCHIVE.length) } })) as unknown as FetchFn
+  /** Drops the family-correct binary (the platform is pinned to win32 by `beforeAll`). */
+  const dropBinary: ExtractFn = async (_archive, destDir) => {
+    const name = destDir.includes('whisper.cpp') ? 'whisper-cli.exe' : llamaServerBinaryName()
+    writeFileSync(join(destDir, name), 'binary')
+  }
+  const STOPPED: RuntimeStatus = { running: false, modelId: null, port: null, healthy: false, message: '' }
+
+  /** A copy of the catalog plus a `runtime-sources.yaml` pinned to the fake archive. */
+  function engineManifests(families: Array<'llama_cpp' | 'whisper_cpp'> = ['llama_cpp'], sha = ARCHIVE_SHA): string {
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-picker-seams-manifests-'))
+    cpSync(MANIFESTS, dir, { recursive: true })
+    const sources: Record<string, unknown> = {}
+    for (const family of families) {
+      sources[family] = {
+        version: 'btest',
+        builds: [
+          {
+            os: hostRuntimeOs(),
+            arch: hostRuntimeArch(),
+            backend: 'cpu',
+            url: `https://example.test/${family}.zip`,
+            sha256: sha,
+            extract_to: `runtime/${family === 'whisper_cpp' ? 'whisper.cpp' : 'llama.cpp'}/${hostRuntimeOs()}`
+          }
+        ]
+      }
+    }
+    writeFileSync(join(dir, 'runtime-sources.yaml'), stringify(sources))
+    return dir
+  }
+
+  /** Register the engine IPC over the fixture, start the install through the handler, wait for it to settle. */
+  async function installRuntime(f: Fixture, manifests: string, extract: ExtractFn = dropBinary): Promise<EngineDownloadJob> {
+    const ctx = f.ctx as unknown as { manifestsDir: string; runtime: { status: () => RuntimeStatus } }
+    ctx.manifestsDir = manifests
+    ctx.runtime.status = () => STOPPED
+    ipcState.handlers.clear()
+    const manager = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: extract })
+    registerEngineIpc(f.ctx, manager)
+    const { result } = await invoke(handlers, IPC.downloadEngine)
+    const started = result as EngineDownloadJob
+    await vi.waitFor(() => expect(['done', 'failed', 'cancelled']).toContain(manager.get(started.jobId).status), { timeout: 5000 })
+    return manager.get(started.jobId)
+  }
+
+  /** A fresh install: no binary on the drive, a benchmark already run → the empty stamped probe. */
+  async function freshInstall(): Promise<{ f: Fixture; ranAt: string; probedAt: string }> {
+    const f = fixture({ probeReturns: [CARD8] })
+    rmSync(llamaServerDir(f.ctx.paths.rootPath), { recursive: true, force: true })
+    const bench = await runAndPersistBenchmark(f.ctx)
+    expect(bench.recommendedModelId).toBe(RAM_PICK)
+    expect(f.probe).not.toHaveBeenCalled()
+    const empty = getSettings(f.ctx.db).gpuProbe
+    expect(empty?.devices).toEqual([])
+    expect(empty?.machineKey).toBe(machineKey(detectSystem()))
+    expect(await liveStar(f.ctx)).toBe(RAM_PICK)
+    return { f, ranAt: bench.ranAt, probedAt: empty?.probedAt ?? '' }
+  }
+
+  afterEach(() => setPerformanceChangedSink(null))
+
+  it('installing the runtime re-probes and persists this machine’s card, pushes, and moves the ★ — without re-running the check', async () => {
+    const { f, ranAt, probedAt } = await freshInstall()
+    const pushes = vi.fn()
+    setPerformanceChangedSink(pushes)
+    const job = await installRuntime(f, engineManifests())
+    expect(job.status).toBe('done')
+    await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([CARD8]))
+    const probe = getSettings(f.ctx.db).gpuProbe
+    expect(probe?.machineKey).toBe(machineKey(detectSystem()))
+    expect(Date.parse(probe?.probedAt ?? '')).toBeGreaterThanOrEqual(Date.parse(probedAt))
+    expect(f.probe).toHaveBeenCalledTimes(1)
+    expect(f.ctx.probeGpu?.invalidate).toHaveBeenCalledTimes(1)
+    expect(pushes).toHaveBeenCalled()
+    // The benchmark itself is NOT re-run: the saved result stands, only the probe moved.
+    expect(getSettings(f.ctx.db).lastBenchmark?.ranAt).toBe(ranAt)
+    expect(await liveStar(f.ctx)).toBe(CARD8_PICK)
+    const snap = buildPerformanceSnapshot(f.ctx)
+    expect(snap.recommendation?.modelId).toBe(CARD8_PICK)
+    expect(snap.currentGpu?.name).toBe(CARD8.name)
+    expect(snap.current?.ranAt).toBe(ranAt)
+  })
+
+  it.each([
+    ['unstamped (legacy, eligible under G3)', undefined],
+    ['stamped for this machine', 'here']
+  ])('a machine that had a binary all along keeps its eligible probe untouched by a re-install — %s', async (_how, stamp) => {
+    const f = fixture({ probeReturns: [ARL, RTX5060], persisted: [CARD8] })
+    if (stamp) updateSettings(f.ctx.db, { gpuProbe: { devices: [CARD8], probedAt: '2026-08-20T00:00:00Z', machineKey: machineKey(detectSystem()) } })
+    const before = getSettings(f.ctx.db).gpuProbe
+    const pushes = vi.fn()
+    setPerformanceChangedSink(pushes)
+    // The fixture's marker-less binary makes the install proceed (not "already current").
+    const job = await installRuntime(f, engineManifests())
+    expect(job.status).toBe('done')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(f.probe).not.toHaveBeenCalled()
+    expect(f.ctx.probeGpu?.invalidate).not.toHaveBeenCalled()
+    expect(getSettings(f.ctx.db).gpuProbe).toEqual(before)
+    expect(pushes).not.toHaveBeenCalled()
+  })
+
+  it('a voice-engine-only install changes no llama binary and refreshes nothing', async () => {
+    // The chat engine is present AND current (binary + marker), so of the two families only
+    // whisper installs; the empty stamped probe is this machine's honest earlier answer.
+    const f = fixture({ probeReturns: [CARD8] })
+    const empty = { devices: [], probedAt: '2026-08-20T00:00:00Z', machineKey: machineKey(detectSystem()) }
+    updateSettings(f.ctx.db, { gpuProbe: empty })
+    writeRuntimeMarker(llamaServerDir(f.ctx.paths.rootPath), { version: 'btest', backend: 'cpu', os: hostRuntimeOs(), arch: hostRuntimeArch() })
+    const job = await installRuntime(f, engineManifests(['llama_cpp', 'whisper_cpp']))
+    expect(job.status).toBe('done')
+    expect(job.binaryPath).toContain('whisper')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(f.probe).not.toHaveBeenCalled()
+    expect(getSettings(f.ctx.db).gpuProbe).toEqual(empty)
+  })
+
+  it('a failed install (checksum mismatch) refreshes nothing', async () => {
+    const { f, probedAt } = await freshInstall()
+    const job = await installRuntime(f, engineManifests(['llama_cpp'], createHash('sha256').update('some other archive').digest('hex')))
+    expect(job.status).toBe('failed')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(f.probe).not.toHaveBeenCalled()
+    expect(getSettings(f.ctx.db).gpuProbe).toEqual({ devices: [], probedAt, machineKey: machineKey(detectSystem()) })
+  })
+
+  it('a workspace locked while the install ran admits no refresh: nothing probed, nothing written', async () => {
+    const { f, probedAt } = await freshInstall()
+    const gate = deferredGate()
+    const lockThenExtract: ExtractFn = async (archive, destDir) => {
+      // The install started unlocked (the gate passed); the workspace locks before it completes.
+      ;(f.ctx.workspace as { isUnlocked: () => boolean }).isUnlocked = () => false
+      await gate.promise
+      await dropBinary(archive, destDir, new AbortController().signal)
+    }
+    const pending = installRuntime(f, engineManifests(), lockThenExtract)
+    gate.resolve()
+    const job = await pending
+    expect(job.status).toBe('done')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(f.probe).not.toHaveBeenCalled()
+    expect(getSettings(f.ctx.db).gpuProbe).toEqual({ devices: [], probedAt, machineKey: machineKey(detectSystem()) })
+  })
+
+  function deferredGate(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void
+    const promise = new Promise<void>((res) => {
+      resolve = res
+    })
+    return { promise, resolve }
+  }
 })

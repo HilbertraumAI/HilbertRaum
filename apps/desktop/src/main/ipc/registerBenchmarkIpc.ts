@@ -33,7 +33,7 @@ import {
 import { latestModelPlacement, setModelPlacementObserver } from '../services/runtime/placement'
 import { latestEffectiveReadBySource } from '../services/read-speed'
 import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
-import { gpuUsefulForProfile, isUsefulDevice } from '../../shared/gpu-rules'
+import { eligibleGpuProbe, gpuUsefulForProfile, isUsefulDevice } from '../../shared/gpu-rules'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { discoverManifests, graphicsBudgetMib, launchContextTokens, weightsMib } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
@@ -662,6 +662,41 @@ export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
   notifyPerformanceChanged()
   await probeAndPersistGpu(ctx)
   return getSettings(ctx.db)
+}
+
+/**
+ * The chat engine was just installed (issue #323; wired by `registerEngineIpc` through
+ * `EngineDownloadManager.onInstalled`). A benchmark run BEFORE the binary existed could not
+ * probe and persisted an EMPTY stamped probe (PR #308 decision 6) — honest then, but frozen:
+ * nothing re-ran the probe until the next unlock (`prepareFirstBenchmark`), the next check or
+ * "Try GPU again", so the recommendation stayed RAM-only on a machine that may have a usable
+ * card. This re-runs the same once-per-session refresh those paths use (`probeAndPersistGpu`:
+ * its own admission + unlock-epoch re-check before the write, the `performance:changed` push
+ * after it) — the benchmark itself is NOT re-run, the saved result stands.
+ *
+ * Left alone: this machine's ELIGIBLE probe (`eligibleGpuProbe` — stamped here, or unstamped
+ * under G3) when it already lists a device — a machine that had a binary all along keeps the
+ * answer it has (a re-install over a marker-less binary, or an upgrade, is not a reason to
+ * re-probe here). A foreign-stamped probe, no probe, or the empty stamped probe all refresh.
+ * The session cache is invalidated first: an entry cached under the old binary path must not
+ * answer for the new one. Never throws; resolves true when a refresh ran.
+ */
+export async function refreshGpuProbeAfterRuntimeInstall(ctx: AppContext): Promise<boolean> {
+  try {
+    if (!workspaceAdmitsWork(ctx.workspace)) {
+      log.info('Chat engine installed while the workspace is locked; the GPU probe refresh waits for the next unlock')
+      return false
+    }
+    const eligible = eligibleGpuProbe(getSettings(ctx.db).gpuProbe, machineKey(detectSystem()))
+    if (eligible && eligible.devices.length > 0) return false
+    log.info('Chat engine installed: refreshing the GPU probe for this computer')
+    ctx.probeGpu?.invalidate?.()
+    await probeAndPersistGpu(ctx)
+    return true
+  } catch (err) {
+    log.warn('GPU probe refresh after the engine install failed', String(err))
+    return false
+  }
 }
 
 /**
