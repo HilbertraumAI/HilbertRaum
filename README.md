@@ -37,8 +37,9 @@
   and can be scoped to your library, a project, a section, specific documents, or the files
   attached to a chat.
 - 📚 **Knowledge packs (optional).** Register ZIM archives — such as an offline Wikipedia — as
-  per-chat sources searched alongside your documents. Needs the kiwix-tools binaries placed
-  on the drive; the app downloads nothing.
+  per-chat sources searched alongside your documents. Needs the kiwix-tools binaries (GPL-3.0-or-later)
+  on the drive — the app offers to install them in-app with your consent, the first time you need
+  them, or you can place them yourself.
 - 🖼️ **Image understanding.** Ask questions about a picture with a local vision model. The analysis
   history is encrypted at rest and can be deleted.
 - 🎙️ **Audio and voice.** Transcribe audio files with Whisper, dictate prompts, and OCR scanned pages.
@@ -130,8 +131,12 @@ checksums. If no release is listed yet, build from source below; the result is t
 - The download is the app only. A working chat needs two more downloads, both offered on the
   **AI Model** screen inside the app: the AI engine (the `llama.cpp` runtime; the screen shows
   an install banner until it is present, and without it started models run in demo mode with
-  simulated answers) and an AI model of your choice. Every download asks first and is
-  SHA-256-verified. Repo users can instead provision everything up front with step 2 below.
+  simulated answers) and an AI model of your choice. A third download is optional: the
+  kiwix-tools binaries (GPL-3.0-or-later) that power offline knowledge packs, offered from the
+  **Knowledge packs** panel's tools-missing notice or a mirror on the **AI Model** screen, only
+  once you ask for it. The only things the app ever downloads are AI models, the AI engine and
+  the optional knowledge-pack tools — each one only after you confirm it, each one verified
+  before use. Repo users can instead provision everything up front with step 2 below.
 - **Windows:** the build is unsigned for now, so SmartScreen shows "Windows protected your PC".
   Click **More info → Run anyway**.
 - **macOS:** the `.app` is unsigned too. If Gatekeeper blocks the first launch, allow it under
@@ -200,14 +205,16 @@ what is already there. You can also fetch piecemeal (`fetch-models` / `fetch-run
 > `-WithAssets` skips it with a note; build it from source as described in
 > [`docs/packaging.md`](docs/packaging.md).
 
-> `runtime-sources.yaml` is pinned to a real `llama.cpp` release (b9849, bumped from b9585 on
-> 2026-07-01 as the Qwen3.5 compatibility gate) with real per-OS URLs and SHA-256 checksums
-> from the official GitHub Releases API digest metadata. `fetch-runtime` downloads, verifies,
-> extracts (zip and tar.gz), and flattens the binaries for all three OSes from any host. Model
-> weight URLs are real Hugging Face links, and the bundled manifests carry real pinned SHA-256
-> hashes (captured from verified downloads with `verify-models --generate`), so `fetch-models`
-> checks every weight against them. To bump the runtime later, see
-> [`docs/model-policy.md`](docs/model-policy.md).
+> `runtime-sources.yaml` pins all three sidecar families — `llama.cpp`, `whisper.cpp`, and the
+> optional `kiwix-tools` — plus the OCR language-file block, each with real per-OS URLs and
+> SHA-256 checksums. The `llama.cpp` block is pinned to a real release (b9849, bumped from b9585
+> on 2026-07-01 as the Qwen3.5 compatibility gate) from the official GitHub Releases API digest
+> metadata. `fetch-runtime` downloads, verifies, extracts (zip and tar.gz), and flattens the
+> binaries for all three OSes from any host — `fetch-runtime --family kiwix_tools` fetches the
+> optional knowledge-pack tools the same way. Model weight URLs are real Hugging Face links, and
+> the bundled manifests carry real pinned SHA-256 hashes (captured from verified downloads with
+> `verify-models --generate`), so `fetch-models` checks every weight against them. To bump a
+> runtime later, see [`docs/model-policy.md`](docs/model-policy.md).
 
 ### 3. Point the app at your models
 
@@ -385,6 +392,21 @@ slice at a time, add tests, keep `npm run typecheck` clean, and update the docs 
 their own licenses (see [`docs/model-policy.md`](docs/model-policy.md)). Third-party notices
 for the npm packages bundled into packaged builds:
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+**Native sidecars — a separate license class.** The `llama.cpp`/`whisper.cpp` runtimes and the
+OCR language data are permissively licensed (MIT and Apache-2.0, respectively). The optional
+`kiwix-tools` sidecar is different: it is copyleft (GPL-3.0-or-later), statically linked against
+GPL-2.0-or-later-with-GPL-3.0-or-later-files libzim and GPL-2.0-or-later Xapian, plus
+LGPL-2.1-or-later libmicrohttpd. It is not linked into HilbertRaum — the app spawns it as a
+separate program and talks to it over loopback HTTP — so HilbertRaum's own GPL-3.0-or-later
+licensing is unaffected either way (see [`docs/model-policy.md`](docs/model-policy.md) "Sidecar
+binaries — kiwix-tools"). A preloaded Kit that ships the kiwix-tools binaries carries their
+complete corresponding source in `runtime/kiwix-tools/source/` — that is the rule a shipping Kit
+follows, not a claim that the bundle exists in this repository today. A commercial build that
+cannot carry these source archives must not ship kiwix-tools; the app then shows the panel's
+tools-missing hint and the user installs the family in-app (their download, their consent). Full
+notices and the per-component license table: [`DRIVE-NOTICES.md`](DRIVE-NOTICES.md) and
+[`docs/model-policy.md`](docs/model-policy.md).
 
 Our promise: the HilbertRaum core is free software and will stay under GPL-3.0-or-later, in
 every version we publish here, forever. To fund its open development, we additionally offer

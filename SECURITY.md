@@ -53,9 +53,10 @@ HilbertRaum is a **local-first, offline** application. Full details live in
   the audit trail, the log, or a support export.
 - **No model weights or user data in version control.**
 - **Engine binaries re-hashed before every spawn** — each bundled `llama-server` (chat + translation
-  sidecars), whisper, and GPU-probe binary is verified against its recorded install hash immediately
-  before it is executed. A packaged build refuses to spawn a tampered binary and falls back; dev
-  builds are inert. Downloaded model files are separately checksum-verified before first use.
+  sidecars), whisper, GPU-probe, and (when installed) the optional `kiwix-serve`/`kiwix-manage`
+  binary is verified against its recorded install hash immediately before it is executed. A
+  packaged build refuses to spawn a tampered binary and falls back; dev builds are inert. Downloaded
+  model files are separately checksum-verified before first use.
 - **User skill packs are treated as untrusted input** — a drop-in `SKILL.md` pack is third-party
   content, so it is size-gated on import (over-cap packs are rejected) and its tools run through the
   same audited bridge with a **frozen document scope they cannot widen**.
@@ -78,7 +79,8 @@ HilbertRaum is a **local-first, offline** application. Full details live in
 - **Fail-closed packaged policy** — a packaged commercial build enforces its `policy.json` strictly,
   regardless of the user setting. A policy can only *restrict*: e.g. it may disable model downloads
   entirely (drives ship with downloads permitted by default, so this is an available restriction, not
-  the shipped default).
+  the shipped default). The same download gate also covers the AI engine and the optional
+  knowledge-pack tools — there is no separate policy key for either.
 
 ## Known limitations
 - Offline enforcement in the MVP is by **design + policy/UX**, not a hard OS-level firewall.

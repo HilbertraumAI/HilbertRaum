@@ -331,6 +331,10 @@ from its first public `1.0.0` release onward.
   fractions, roots, Greek letters and signs are written out, and lowered or raised characters sit
   on the line — CO2, m2, Fe3+ — which is how you type them when searching. Anything unreadable is
   left as it was. Passages saved in earlier evidence reviews keep the older form.
+- **The privacy notice and Settings screen now name every optional download.** The wording in
+  Settings → Privacy & data and the Privacy notice now says the internet-access setting also
+  covers the AI engine and the optional knowledge-pack tools, not only models, since one setting
+  and one confirmation dialog already covered all three; nothing about what is allowed changed.
 
 ## [0.1.59] — 2026-08-21
 

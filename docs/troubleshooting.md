@@ -596,8 +596,13 @@ just happened. The app can simply ask again.
 ### The panel says kiwix-tools are missing
 
 Knowledge packs are served by two small programs from the Kiwix project, kiwix-serve and
-kiwix-manage (the pinned bundle also carries kiwix-search, which the app does not use). Until
-the in-app install step lands (#339), place them on the drive yourself.
+kiwix-manage. The Knowledge packs panel (and a mirror row on the AI Model screen) offers to
+install them for you: a dialog states the download size, the GPL-3.0-or-later license and the
+source (`download.kiwix.org`), and asks you to accept the license before it fetches and
+SHA-256-verifies the pinned kiwix-tools 3.8.1 release for your platform. That install needs
+**Settings → Allow internet access for model downloads and updates** to be on (it is on by
+default) and a drive policy that permits downloads.
+
 
 **Preferred: run the fetch script.** From the repository, against the drive:
 

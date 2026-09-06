@@ -2447,18 +2447,19 @@ reports and phase plans were working papers; their full text lives in git histor
 
 ## Knowledge packs — ZIM archives ([`rag-design.md`](rag-design.md) §17)
 
-- **No user-reachable install of kiwix-tools exists yet.** The `kiwix_tools` family is now in
-  `runtime-sources.yaml`, the in-app engine installer and the commercial-drive sell gate (#339
-  P8-1) — but `downloadEngine()` still takes no arguments and no UI offers the family, so nothing
-  a user can click actually fetches it yet; that consent step is P8-2. Until then, the drive
-  scripts' own `--family kiwix_tools` support (P8-3, PR #355) is the recommended way in — see
-  [`troubleshooting.md`](troubleshooting.md) "The panel says kiwix-tools are missing" for the
-  exact command and the manual-unzip fallback. A hand-placed bundle carries no install marker and
-  is replaced **wholesale** by the first in-app install once P8-2 ships (the installer pre-cleans
-  the family's directory before extracting) — so a manually provisioned drive is not stranded, it
-  is simply superseded the first time someone installs the family from inside the app. Manually
-  provisioned packs (the binaries correctly placed, archives registered) already work end to end
-  today; only the in-app install step is missing.
+- **A hand-placed kiwix-tools bundle carries no install marker.** The `kiwix_tools` family can
+  now be installed from inside the app (the Knowledge-packs panel's tools-missing notice, or the
+  mirror row on the AI Model screen, #339 P8-2) or via `fetch-runtime --family kiwix_tools`
+  (#339 P8-3) — both write a `.hilbertraum-runtime.json` marker hashing every required file, so
+  `kiwix-serve`/`kiwix-manage` verify normally before every spawn. Unzipping the archive under
+  `runtime/kiwix-tools/<os>/` by hand still works as a last-resort fallback, but leaves no
+  marker, so it resolves through the hashless `skip-legacy` verifier path (residual R-1) instead
+  of integrity verification — and it is replaced **wholesale** the first time someone installs
+  the family from inside the app or the script (the installer pre-cleans the family's directory
+  before extracting), so a manually provisioned drive is not stranded, only superseded. The
+  in-app install needs **Settings → Allow internet access for model downloads and updates** on
+  and a drive policy that permits downloads (the same gate models and the engine use). Linux and
+  macOS builders without the in-app path use the script.
 - **On Windows, an archive can only be added from a path made of ASCII characters.** The
   pinned `kiwix-manage` 3.8.1 refuses to read a file whose folder or file name contains an
   umlaut, an accent or any other non-ASCII character ("Cannot add ZIM … to the library.") — a

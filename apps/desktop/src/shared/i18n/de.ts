@@ -1296,8 +1296,9 @@ export const de: Record<keyof typeof en, string> = {
   'settings.network.title': 'Privatsphäre & Offline-Modus',
   'settings.network.allow': 'Internetzugriff für Modell-Downloads und Updates erlauben',
   'settings.network.hint':
-    'Standardmäßig aus. Solange das aus ist, stellt die App keinerlei Internetverbindung ' +
-    'her. Eingeschaltet ermöglicht es nur Modell-Downloads über den KI-Modell-Bereich — ' +
+    'Standardmäßig an, damit eine frische Installation gleich Modelle herunterladen kann. ' +
+    'Ausgeschaltet stellt die App keinerlei Internetverbindung her. Eingeschaltet ermöglicht ' +
+    'es Downloads für Modelle, die KI-Engine und die optionalen Wissenspaket-Werkzeuge — ' +
     'jeder Download fragt zuerst nach deiner Bestätigung, und eine Laufwerksrichtlinie ' +
     'kann Downloads ganz deaktiviert lassen. Deine Fragen und Dokumente verlassen dieses ' +
     'Gerät in keinem Fall.',
@@ -1574,7 +1575,8 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.statement.online':
     'HilbertRaum führt das KI-Modell auf deinem Laptop aus. Deine Fragen, ' +
     'Dokumente, Embeddings und Chat-Verläufe bleiben lokal — auch mit aktiviertem ' +
-    'Internetzugriff nutzen nur Modell-Downloads das Netzwerk.',
+    'Internetzugriff nutzen nur Downloads (Modelle, die KI-Engine und die optionalen ' +
+    'Wissenspaket-Werkzeuge) das Netzwerk.',
   'privacy.statement.noUploads':
     'Diese App sendet deine Daten an keine Cloud-KI-Anbieter. Es gibt keine Uploads von ' +
     'Fragen, Dokumenten oder Embeddings, keine Telemetrie, keine Analytik und keine ' +
@@ -1584,7 +1586,8 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.networkState.disabledByPolicy': 'Netzwerkzugriff durch Richtlinie deaktiviert.',
   'privacy.networkState.offDefault': 'Der Offline-Modus ist an (Netzwerk standardmäßig aus).',
   'privacy.networkState.enabled':
-    'Internetzugriff ist für Modell-Downloads und Updates aktiviert.',
+    'Internetzugriff ist für Downloads aktiviert: Modelle, die KI-Engine und die optionalen ' +
+    'Wissenspaket-Werkzeuge.',
   'privacy.network.noFiles': 'Keine Fragen oder Dateien verlassen dieses Gerät.',
   'privacy.network.effective': 'Effektiver Zustand',
   'privacy.network.effectiveOffline': 'Offline (keine Internetzugriffe)',
@@ -1599,10 +1602,11 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.network.telemetryValue':
     'Nichts verlässt dieses Gerät — es gibt kein Tracking, das man abschalten müsste',
   'privacy.network.hint':
-    'Die App warnt vor jeder Internetaktion. Das Internet nutzt sie einzig zum Herunterladen ' +
-    'oder Aktualisieren von Modellen — standardmäßig aus und nur über den Allgemein-Tab ' +
-    'aktivierbar. Eine Laufwerksrichtlinie kann das komplett deaktivieren. Die lokale API ' +
-    'weiter unten ist eine getrennte, freiwillige Funktion, die nie ins Internet geht.',
+    'Die App warnt vor jeder Internetaktion. Sie lädt einzig KI-Modelle, die KI-Engine und ' +
+    'die optionalen Wissenspaket-Werkzeuge herunter — jeweils erst nach deiner Bestätigung ' +
+    'und jeweils vor der Nutzung geprüft. Das ist standardmäßig an und über den ' +
+    'Allgemein-Tab abschaltbar. Eine Laufwerksrichtlinie kann das komplett deaktivieren. Die ' +
+    'lokale API weiter unten ist eine getrennte, freiwillige Funktion, die nie ins Internet geht.',
   'privacy.data.title': 'Wo deine Daten liegen',
   'privacy.data.driveRoot': 'Laufwerksstamm',
   'privacy.data.workspace': 'Arbeitsbereich',

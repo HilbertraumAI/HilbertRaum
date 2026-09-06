@@ -16,8 +16,10 @@ Each YAML file here describes one model. Manifests are committed to git; **model
 - `translation/` — document-translation models (TranslateGemma 12B Instruct Q4_K_M; drives the
   Translate screen's sidecar)
 - `vision/` — vision models (Qwen2.5-VL 3B Instruct Q4; GGUF + mmproj projector)
-- `runtime-sources.yaml` — the `llama-server` sidecar download manifest (Phase 12). **Not a model
-  manifest** (it is excluded from model discovery); validated by `shared/runtime-sources.ts`.
+- `runtime-sources.yaml` — the sidecar/asset download manifest (Phase 12): the `llama-server`
+  (`llama_cpp`), `whisper_cpp`, and optional `kiwix_tools` sidecar families, plus the OCR
+  language-file block. **Not a model manifest** (it is excluded from model discovery); validated
+  by `shared/runtime-sources.ts`.
 
 Manifests are **YAML**, discovered recursively and validated at startup (invalid files are skipped
 and logged, not fatal). See [`../docs/model-policy.md`](../docs/model-policy.md) for the field
