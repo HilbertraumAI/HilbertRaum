@@ -603,7 +603,7 @@ ICU DLLs (`icudt74.dll`, `icuin74.dll`, `icuio74.dll`, `icutu74.dll`, `icuuc74.d
 right beside `kiwix-serve.exe` and `kiwix-manage.exe` — kiwix-serve won't start without them.
 The version is pinned; a different kiwix-tools release is not supported.
 
-### "The archive could not be read by kiwix-manage" — but the file is fine
+### "kiwix-manage cannot read an archive whose … name contains …"
 
 On Windows the pinned kiwix-manage cannot open an archive whose folder or file name contains an
 umlaut, an accent or any other non-ASCII character (for example a file under

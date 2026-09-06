@@ -2464,12 +2464,11 @@ reports and phase plans were working papers; their full text lives in git histor
   pinned `kiwix-manage` 3.8.1 refuses to read a file whose folder or file name contains an
   umlaut, an accent or any other non-ASCII character ("Cannot add ZIM … to the library.") — a
   limit of the tool's own path handling, found on real tools at P7 (`rag-design.md` §17 "Real
-  acceptance"). The panel reports the add as failed with the generic "could not be read by
-  kiwix-manage" message; the workaround is to put the file in the drive's `zim/` folder or any
-  other path without such characters (a Windows user folder such as `C:\Users\Jörg\Downloads`
-  hits this). Serving is not affected — a pack registered from an ASCII path stays readable and
-  searchable. A reason-specific message, or reading the archive's metadata without
-  `kiwix-manage`, is on the P9 successor issue #340.
+  acceptance"). The panel now names the cause and the workaround; the workaround is to put the
+  file in the drive's `zim/` folder or any other path without such characters (a Windows user
+  folder such as `C:\Users\Jörg\Downloads` hits this). Serving is not affected — a pack
+  registered from an ASCII path stays readable and searchable. (#340, decided 2026-09-06: a
+  reason-specific message; the archive's metadata is still read through `kiwix-manage`.)
 - **A redirect entry (an alias title) opens the article it points to — one hop, same pack.**
   About half of a Wikipedia ZIM's entries are redirects; `kiwix-serve` answers them with a 302
   rather than the target's bytes, and the viewer follows exactly one such hop inside the same

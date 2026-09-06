@@ -309,6 +309,11 @@ from its first public `1.0.0` release onward.
   A failed automatic check on a computer this drive doesn't recognize now tries again once each
   time you unlock, rather than repeatedly for the rest of that session; Check again on the
   Performance page always works right away in the meantime.
+- **Adding a knowledge pack from a path with an umlaut or accent on Windows now names the cause.**
+  On Windows, kiwix-manage cannot read an archive whose folder or file name contains a non-ASCII
+  character; the panel used to show the generic "could not be read by kiwix-manage" message, and
+  now tells you to move the file to a path made of ASCII characters — the drive's `zim/` folder
+  is simplest — and add it again.
 
 ## [0.1.59] — 2026-08-21
 

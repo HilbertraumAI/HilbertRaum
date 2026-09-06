@@ -240,6 +240,10 @@ interface HarnessOptions {
   failReEncrypt?: boolean
   /** Shorten the ZIM settle bound (5 s in production) through the registry seam on ctx. */
   settleBoundMs?: number
+  /** `registerZimIpc`'s platform seam (#340) — defaults to `process.platform` like production;
+   *  pin it to drive the win32-only `'path-unsupported'` classification independently of the
+   *  host running the suite. */
+  platform?: NodeJS.Platform
 }
 
 async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness> {
@@ -493,7 +497,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       auditCalls.push({ type, message, metadata })
   } as unknown as AppContext
 
-  registerZimIpc(ctx)
+  registerZimIpc(ctx, { platform: opts.platform })
   registerWorkspaceIpc(ctx)
 
   const full: SessionHarness = {
@@ -1875,6 +1879,50 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       }
     } finally {
       await h.close()
+    }
+  })
+})
+
+// #340 (owner ruling 2026-09-06, option M): the pinned kiwix-manage 3.8.1 refuses to read an
+// archive whose path holds a non-ASCII character, and on Windows the panel used to show only
+// the generic "manager" copy. `classifyAddFailure` (registerZimIpc.ts) now maps that refusal to
+// 'path-unsupported' — but ONLY when the platform is win32 AND the tool actually ran and exited
+// non-zero (a real `KiwixManageError` of `kind: 'exit'`, produced here by the fake manageSpawn
+// child exiting 1, exactly like the existing 'manager' DTO legs above).
+describe('packs:add classifies a non-ASCII-path manager refusal as path-unsupported on win32 only (#340)', () => {
+  it('win32 + non-ASCII path + manager exit => path-unsupported; the same fixture on linux stays manager', async () => {
+    const win = await sessionHarness({ platform: 'win32' })
+    try {
+      const badPath = win.addPackFile('Jörg-test.zim')
+      win.hooks.manage = async (_libraryXmlPath: string, zimPath: string) => {
+        throw new Error(`Cannot add ZIM ${zimPath} to the library.`)
+      }
+      dialogState.paths = [badPath]
+      dialogState.canceled = false
+      const { result } = await invoke(handlers, IPC.addKnowledgePacks)
+      const dto = result as KnowledgePackAddResult
+      expect(dto.outcome).toBe('failure')
+      expect(dto.failed).toBe(1)
+      expect(dto.failureReason).toBe('path-unsupported')
+      // The reason code is a CODE — never the path itself.
+      expect(JSON.stringify(dto)).not.toContain(badPath)
+    } finally {
+      await win.close()
+    }
+
+    const linux = await sessionHarness({ platform: 'linux' })
+    try {
+      const badPath = linux.addPackFile('Jörg-test.zim')
+      linux.hooks.manage = async (_libraryXmlPath: string, zimPath: string) => {
+        throw new Error(`Cannot add ZIM ${zimPath} to the library.`)
+      }
+      dialogState.paths = [badPath]
+      dialogState.canceled = false
+      const { result } = await invoke(handlers, IPC.addKnowledgePacks)
+      const dto = result as KnowledgePackAddResult
+      expect(dto.failureReason).toBe('manager')
+    } finally {
+      await linux.close()
     }
   })
 })

@@ -1736,9 +1736,13 @@ CI are unaffected.
 `packs:add` (native picker + registration in ONE main-side handler — no renderer-supplied
 archive path exists on this surface; returns `KnowledgePackAddResult` (#301 P5, finding L1):
 `{ outcome: 'cancelled' | 'success' | 'partial' | 'failure', added: KnowledgePack[], failed:
-number, failureReason: 'not-a-zim' | 'tools-missing' | 'manager' | 'other' | null }` — the
-invariants of §9.19 (c)1 in one sentence; codes only, never a path or a tool's stderr; a lock
-landing mid-add still REJECTS with the friendly locked copy) · `packs:remove`
+number, failureReason: 'not-a-zim' | 'tools-missing' | 'manager' | 'path-unsupported' | 'other' |
+null }` — the invariants of §9.19 (c)1 in one sentence; codes only, never a path or a tool's
+stderr; a lock landing mid-add still REJECTS with the friendly locked copy. `'path-unsupported'`
+(#340, owner ruling 2026-09-06, option M) is set ONLY when the platform is win32 AND the
+archive's path holds a non-ASCII character AND the manager actually ran and exited non-zero (a
+`KiwixManageError` of `kind: 'exit'`) — a spawn/verify/timeout failure, or any other platform,
+still classifies as `'manager'`) · `packs:remove`
 (tombstone, file untouched) · `packs:setEnabled` · `packs:refresh` (#301 P3b, finding L7 —
 schedules a background reconciliation and returns `{ started: boolean }` at once;
 completion arrives via the `packs:changed` event, not the return value) · `packs:status`
