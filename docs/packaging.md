@@ -448,6 +448,10 @@ prepare-drive  --force            # commercial policy (encrypted, plaintext off,
 fetch-models   --accept-license   # verified weights (a SOLD drive needs an approved, redistributable license — spec §13)
 fetch-runtime                     # verified llama.cpp sidecar builds: per OS the default (Vulkan/Metal)
                                   # + the pure-CPU safety net on win/linux
+[--kiwix-source-dir <dir>]        # OPTIONAL, un-numbered (#339 P8-4): install the kiwix-tools
+                                  # corresponding-source bundle (SOURCE FIRST), then fetch the
+                                  # kiwix_tools binaries for every Kit platform. Omitted = this
+                                  # Kit ships no kiwix-tools at all.
 package + sign + notarize         # MANUAL — secrets never in the repo (pass --app-artifact / --skip-package)
 copy launcher + portable app + user docs -> drive root
 verify-models  --generate         # capture real hashes -> config/checksums.json
@@ -465,11 +469,13 @@ final check: THE canonical gate — node apps/desktop/out/tools/assert-commercia
 .\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -Platforms win-x64 -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe
 .\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -DryRun        # print the plan; the gate still runs and prints its verdict
 .\scripts\build-commercial-drive.ps1 -Target E:\ -VerifyOnly                    # only the gate, against the drive as it is
+.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -KiwixSourceDir D:\kiwix-source-archive -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe -Platforms win-x64
 ```
 ```bash
 # macOS / Linux (--app-artifact repeats, one per platform in --platforms)
 scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --platforms mac-arm64,linux-x64 \
-    --app-artifact ./apps/desktop/release/HilbertRaum-0.1.0-mac-arm64.app.zip --app-artifact ./apps/desktop/release/HilbertRaum-0.1.0.AppImage
+    --app-artifact ./apps/desktop/release/HilbertRaum-0.1.0-mac-arm64.app.zip --app-artifact ./apps/desktop/release/HilbertRaum-0.1.0.AppImage \
+    --kiwix-source-dir ~/kiwix-source-archive
 ```
 
 The builders **refuse to proceed** when a differently named `HilbertRaum-*` artifact (or an extracted
@@ -479,6 +485,22 @@ find two). `--platforms` declares the platforms the kit is sold for (default all
 requires the artifact + launcher for each and none for any other. Every `fetch-runtime` run gets
 `--commercial` (#234): a placeholder hash is refused **before** any download, a hashless install marker
 is re-fetched instead of skipped, and the marker records the binary hash only after a verified archive.
+
+**The corresponding-source bundle (a preloaded Kit only, #339 P8-4).** `-KiwixSourceDir` /
+`--kiwix-source-dir <archive dir>` is an OPTIONAL, un-numbered step that runs right after the OCR
+fetch: it points at a maintainer-local directory holding the five pinned kiwix-tools copyleft
+source tarballs (never committed to this repo) and runs `scripts/install-kiwix-source-bundle.mjs`,
+which copies + re-verifies each archive against `runtime-sources.yaml`'s `kiwix_tools.source_bundle`
+pin into `runtime/kiwix-tools/source/` and writes a generated `SOURCES.md` there. **SOURCE FIRST:**
+only once that succeeds does the builder run `fetch-runtime --family kiwix_tools` for the three Kit
+platforms (win-x64, mac-arm64, linux-x64 — explicit `-Os`/`-Arch` each, never inherited from the
+yaml's build order), so a failed or aborted install can never leave kiwix-tools binaries on the
+drive without their source. Omitting the flag means this Kit ships **no kiwix-tools at all**: a
+commercial build that cannot carry the source archives must not ship the binaries; the buyer
+installs the (unbundled) family in-app instead — their own download, their own consent. The sell
+gate's `checkSourceBundle` (`assertCommercialDrive`) fails a drive that carries any kiwix_tools
+binary — including a hand-placed, marker-less one — without a complete, hash-matching bundle plus
+a non-empty `SOURCES.md` beside it.
 
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
 plaintext off, models must verify, **no phone-home** — model downloads are a permitted user action,

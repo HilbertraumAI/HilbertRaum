@@ -1588,6 +1588,18 @@ whole renderer-visible surface.
   (`parseEngineDownloadRequest` — an unknown name, an empty list, a duplicate or a non-object
   rejects with `main.engine.badRequest`) and passes `kiwixToolsActive` from the per-family
   sidecar PID registry (P8-1 R-e), so the install is refused while a pack is being served.
+  **#339 P8-4 additions (the corresponding-source bundle; declarative pin + a sell-gate check —
+  no IPC, no preload):** `model-manifests/runtime-sources.yaml` gains a `source_bundle:` key
+  under `kiwix_tools:` (dir + a `files:` list, `recipe_url`, optional `recipe_commit`) —
+  `shared/runtime-sources.ts` types it as `RuntimeSourceFile { component, version, license, name,
+  sha256, sizeBytes?, url }` and `RuntimeSourceBundle { dir, files, recipeUrl?, recipeCommit? }`,
+  with `RuntimeSources.sourceBundle?: RuntimeSourceBundle`. Additive/forward-compatible: an app
+  built before P8-4 ignores the unknown key. Unlike `builds[].sha256`, every `files[].sha256` MUST
+  be a real digest — a placeholder cannot discharge a corresponding-source duty, so the validator
+  refuses one. `CommercialAssertion`'s `checks` record gains `kiwixSourceBundle: boolean`
+  (fail-closed and marker-independent: true when no `kiwix_tools` binary is on the drive OR the
+  bundle is complete and hash-matching; false only with a recorded problem — a hand-placed,
+  marker-less binary still triggers the check).
   `EngineStatus` gains `optionalFamilies?: EngineOptionalFamily[]` = `{ family, version,
   sizeBytes: number | null, url, license, installed }` — what the dialog states, read from the
   pinned yaml (`version`, `url`, the new per-build `size_bytes`, validated as a positive

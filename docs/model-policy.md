@@ -763,24 +763,30 @@ binaries:
 | `xapian-core-1.4.23.tar.xz` | 3,024,644 | `30d3518172084f310dab86d262b512718a7f9a13635aaa1a188e61dc26b2288c` | `https://oligarchy.co.uk/xapian/1.4.23/` |
 | `libmicrohttpd-0.9.76.tar.gz` | 2,199,858 | `f0b1547b5a42a6c0f724e8e1c1cb5ce9c4c35fb495e7d780b9930d35011ceb4c` | `https://dev.kiwix.org/kiwix-build/` (a GNU mirror carries the same release) |
 
-All five are **in hand**, archived by the maintainer outside the repo, **not yet on any drive**
-— the on-drive bundle (proposed `runtime/kiwix-tools/source/`) is **P8-4**, pending the owner's
-layout ruling (plan §3 item 2).
+All five are **in hand**, archived by the maintainer outside the repo. The on-drive bundle lands
+at `runtime/kiwix-tools/source/` (the owner's layout ruling, 2026-09-06, **#339 P8-4**):
+`scripts/install-kiwix-source-bundle.mjs` copies, re-verifies and writes a generated `SOURCES.md`;
+`build-commercial-drive --kiwix-source-dir <archive dir>` runs it, SOURCE FIRST, before fetching
+the `kiwix_tools` binaries; and `assertCommercialDrive`'s `checkSourceBundle`
+(`checks.kiwixSourceBundle`) fails the sell gate when any `kiwix_tools` binary — a hand-placed,
+marker-less one included — is present without a complete, hash-matching bundle.
 
 **License-review record — kiwix-tools 3.8.1 runtime assets (status: PENDING the owner's review;
 nothing here authorizes conveyance):** kiwix-tools is the product's **first copyleft third-party
 native binary** — every prior sidecar (llama.cpp, whisper.cpp, the OCR traineddata) is permissive,
 and both llama.cpp review records above say "no new license class enters the product"; that
 sentence does not hold for kiwix-tools, and this record says so plainly rather than repeating it.
-Five components above are copyleft; on a preloaded Kit their corresponding-source duty is meant
-to be discharged by the P8-4 source bundle next to the binaries, and GPL-3.0-or-later text is
-meant to be satisfied by cross-referencing the drive's own root `LICENSE` (HilbertRaum is itself
-GPL-3.0-or-later) rather than inlining the ~35 KB text a second time — both are proposals for the
-owner to confirm, not settled here. Open for the owner: the GPL-3.0-via-root-`LICENSE`
-cross-reference itself; the libmicrohttpd version-from-recipe pin (not observable from the
-binary, so it rests on trusting the kiwix-build history); Authenticode/code-signing inspection
-of the mac/linux archives (R-4's remaining leg — win is done, above); and the consent (P8-2) and
-source-bundle (P8-4) rulings that gate any conveyance (plan §3).
+Five components above are copyleft; on a preloaded Kit their corresponding-source duty **is
+discharged** by the P8-4 source bundle at `runtime/kiwix-tools/source/` next to the binaries
+(#339 P8-4 — `scripts/install-kiwix-source-bundle.mjs` + the `checkSourceBundle` sell-gate leg).
+GPL-3.0-or-later text is proposed to be satisfied by cross-referencing the drive's own root
+`LICENSE` (HilbertRaum is itself GPL-3.0-or-later) rather than inlining the ~35 KB text a second
+time — **owner confirmation pending** on that cross-reference specifically; not settled here.
+Open for the owner: the GPL-3.0-via-root-`LICENSE` cross-reference itself (confirmation pending);
+the libmicrohttpd version-from-recipe pin (not observable from the binary, so it rests on
+trusting the kiwix-build history); Authenticode/code-signing inspection of the mac/linux archives
+(R-4's remaining leg — win is done, above); and the consent (P8-2) ruling that gates any
+conveyance.
 
 > **To bump the release:** pick a new tag from the
 > [kiwix/kiwix-tools releases](https://github.com/kiwix/kiwix-tools/releases) (the GitHub release

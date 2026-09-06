@@ -61,21 +61,6 @@ function fence(text) {
   return `${f}\n${text}\n${f}`
 }
 
-// #339 P8-1: the five copyleft components of the kiwix-tools 3.8.1 build whose complete
-// corresponding source a preloaded Kit must carry, with the SHA-256 of each pinned source
-// archive (from tmp/339-kiwix-provisioning-plan.md §2, read from the kiwix-build recipe
-// pins and the upstream release directories). P8-4 (#339) moves this to
-// runtime-sources.yaml `source_bundle:` and reads it from there; the DIRECTORY is pending
-// the owner's layout ruling on #339.
-const KIWIX_SOURCE_DIR = 'runtime/kiwix-tools/source/'
-const KIWIX_SOURCE_ARCHIVES = [
-  ['kiwix-tools-3.8.1.tar.xz', 'dd769c9bd3d75b59ad9e451b128187b128da6a10b1241bb2d0325fe4aafe51a3'],
-  ['libkiwix-14.1.1.tar.xz', 'e232f42bba33561493e2d7318c3be60d8508e83a8891a8358135519dedc5ff5a'],
-  ['libzim-9.4.0.tar.xz', '7fa374f4714b23c43afa3fb406d7e21c483d77e8218895e1408e2f037969b6ea'],
-  ['xapian-core-1.4.23.tar.xz', '30d3518172084f310dab86d262b512718a7f9a13635aaa1a188e61dc26b2288c'],
-  ['libmicrohttpd-0.9.76.tar.gz', 'f0b1547b5a42a6c0f724e8e1c1cb5ce9c4c35fb495e7d780b9930d35011ceb4c']
-]
-
 /** Recursively list *.yaml/*.yml under dir in deterministic order. */
 function walkYaml(dir) {
   const out = []
@@ -131,6 +116,22 @@ export function buildDriveNotices(repoRoot) {
       throw new Error(`runtime-sources.yaml: family ${family} has no version`)
     }
     return v
+  }
+  // #339 P8-4: the corresponding-source bundle pin — the single source of truth for the
+  // "Complete corresponding source" section below (dir + the five archives' component,
+  // version, grant, name and SHA-256). Never hardcoded here: a stale/absent pin must fail
+  // the build loudly rather than regenerate a notice file that quietly drops the record.
+  const kiwixSourceBundle = runtimeSources.kiwix_tools?.source_bundle
+  if (
+    !kiwixSourceBundle ||
+    typeof kiwixSourceBundle.dir !== 'string' ||
+    !Array.isArray(kiwixSourceBundle.files) ||
+    kiwixSourceBundle.files.length === 0
+  ) {
+    throw new Error(
+      'runtime-sources.yaml: kiwix_tools.source_bundle is missing or malformed — the ' +
+        'corresponding-source record cannot be generated without it (scripts/lib/drive-notices.mjs)'
+    )
   }
 
   // --- Model manifests (one attribution line per manifest, ALL roles) ---
@@ -326,15 +327,19 @@ export function buildDriveNotices(repoRoot) {
   lines.push('Five of the components above are copyleft — kiwix-tools, libkiwix, libzim, Xapian and')
   lines.push('libmicrohttpd — so the complete corresponding source for the binaries on this drive is')
   lines.push('provided with them. On a preloaded HilbertRaum Kit the upstream source archives sit in')
-  lines.push(`the \`${KIWIX_SOURCE_DIR}\` directory of this drive (layout per the owner's ruling on`)
-  lines.push('issue #339), each verifiable against the SHA-256 recorded here:')
+  lines.push(`the \`${kiwixSourceBundle.dir}/\` directory of this drive, each verifiable against the`)
+  lines.push('SHA-256 recorded here, alongside a generated `SOURCES.md` record of the same table:')
   lines.push('')
   lines.push('```')
-  const kiwixNameWidth = Math.max(...KIWIX_SOURCE_ARCHIVES.map(([name]) => name.length)) + 3
-  for (const [name, sha] of KIWIX_SOURCE_ARCHIVES) {
-    lines.push(`${name.padEnd(kiwixNameWidth)}${sha}`)
+  const kiwixNameWidth = Math.max(...kiwixSourceBundle.files.map((f) => String(f.name).length)) + 3
+  for (const f of kiwixSourceBundle.files) {
+    lines.push(`${String(f.name).padEnd(kiwixNameWidth)}${f.sha256}`)
   }
   lines.push('```')
+  lines.push('')
+  lines.push('A commercial build that cannot carry these source archives must not ship kiwix-tools; the')
+  lines.push("app then shows the panel's tools-missing hint and the user installs the family in-app")
+  lines.push('(their download, their consent).')
   lines.push('')
   lines.push('If you obtained these programs by installing them from inside HilbertRaum instead,')
   lines.push('they were downloaded from the Kiwix project\'s own server at the URLs pinned in')
