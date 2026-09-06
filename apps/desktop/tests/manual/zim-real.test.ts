@@ -111,18 +111,43 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
         readFileSync(join(__dirname, '..', 'fixtures', 'zim', 'quality-questions-de.json'), 'utf8')
       ) as {
         packUuid: string
-        questions: Array<{ question: string; expectedTitles: string[]; rawHit: boolean; answerable: boolean }>
+        questions: Array<{
+          question: string
+          expectedTitles: string[]
+          rawHit: boolean
+          answerable: boolean
+          group?: string
+          /** #340 L3-b: logged through the arm, never asserted — the lever is not built. */
+          measuredOnly?: boolean
+        }>
       }
       if (pack.id === fixture.packUuid) {
         const misses: string[] = []
-        for (const q of fixture.questions.filter((x) => x.answerable)) {
+        const asserted = fixture.questions.filter((x) => x.answerable && !x.measuredOnly)
+        for (const q of asserted) {
           const { candidates: found } = await arm!(q.question)
           const titles = [...new Set(found.map((c) => c.sourceTitle))].slice(0, 5)
           if (!q.expectedTitles.some((t) => titles.includes(t))) misses.push(`${q.question} → ${titles.join(' | ')}`)
         }
         // eslint-disable-next-line no-console
-        console.info(`[zim-real] quality fixture: ${fixture.questions.filter((x) => x.answerable).length - misses.length}/${fixture.questions.filter((x) => x.answerable).length} answerable questions hit@5`)
+        console.info(`[zim-real] quality fixture: ${asserted.length - misses.length}/${asserted.length} answerable questions hit@5`)
         expect(misses).toEqual([])
+        // #340 L3-b: the list / superlative shape, measured through the app's arm as it ships
+        // and LOGGED only (the concept-expansion lever is an open owner question, not code).
+        const measured = fixture.questions.filter((x) => x.answerable && x.measuredOnly)
+        let hits = 0
+        for (const q of measured) {
+          const { candidates: found } = await arm!(q.question)
+          const titles = [...new Set(found.map((c) => c.sourceTitle))].slice(0, 5)
+          const hit = q.expectedTitles.some((t) => titles.includes(t))
+          if (hit) hits++
+          // eslint-disable-next-line no-console
+          console.info(`[zim-real] ${q.group ?? 'measured'} ${hit ? 'HIT ' : 'miss'} ${q.question} → ${titles.join(' | ')}`)
+        }
+        if (measured.length > 0) {
+          // eslint-disable-next-line no-console
+          console.info(`[zim-real] ${measured[0]!.group ?? 'measured'} questions through the arm: ${hits}/${measured.length} hit@5 (logged, not asserted)`)
+        }
       } else {
         // eslint-disable-next-line no-console
         console.info('[zim-real] quality fixture: the registered archive is not the fixture pack — not measured')
