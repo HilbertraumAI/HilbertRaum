@@ -1168,6 +1168,30 @@ packs at `reconcile-end` / `mutation` only, never at `reconcile-start`. The coll
 §17 D-Z16 (`packs:status.excluded` → the "Not served" badge naming the winner). Tests:
 `KnowledgePacks.test.tsx` ("#340 nits …", the chip-state leg), `ChatPacksRefresh.test.tsx`.
 
+**P8-2 consent surfaces (2026-09-06, #339):** the owner's ruling on the "kiwix-tools not
+installed" notice gained TWO entry points to the same optional-family install — the
+Knowledge-packs panel notice's own "Install the knowledge-pack tools…" button, and a mirror row
+on the Models screen ("Knowledge-pack tools: not installed · Install…", shown only while
+`EngineStatus.missingOptionalFamilies` names `kiwix_tools`). Both open the SAME
+`KnowledgePackToolsDialog` — deliberately the model-download confirm's shape (`<dl class="kv">`
+of Size / License / From, a hint line, a REQUIRED acknowledgement checkbox that disables Start
+download until ticked) rather than a new pattern, because this download carries the same two
+facts a model download does — a network fetch and a licence to accept — and a user who has
+already learned one dialog shape should not have to learn a second. The facts (size, licence,
+source URL) are typed off `EngineOptionalFamily`, never copy, so the dialog cannot state
+something the pinned build doesn't back. The acknowledgement is required for the same reason a
+model's is: this is the one place kiwix-tools' GPL-3.0-or-later terms are surfaced at all. The
+network gate reuses the Models screen's own copy verbatim (`lib/downloadGate.ts`, extracted from
+`ModelsScreen.tsx` so the two surfaces read one computation) — "disabled by policy" and "turn it
+on in Settings" must never diverge by entry point. The Models-screen row is a `<p className=
+"hint">`-styled block, not a `Banner`, deliberately lighter than the chat/voice engine banners
+above it — the tools are optional in a way the chat engine is not, and the row must read as
+secondary. `lib/useKnowledgePackToolsInstall.ts` is the shared poll/cancel/remembered-job hook
+(mirroring `ModelsScreen.tsx`'s own engine-job handling) — it fetches `getEngineStatus`/
+`getPolicy` lazily, only while the affordance is actually needed, so a workspace with the tools
+already installed makes neither call. Tests: `KnowledgePacks.test.tsx` ("#339 P8-2: …" legs),
+`ModelsScreen.test.tsx` ("ModelsScreen — knowledge-pack tools row" describe block).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

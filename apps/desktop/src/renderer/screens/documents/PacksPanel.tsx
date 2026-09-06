@@ -6,8 +6,19 @@ import type {
 } from '@shared/types'
 import type { KnowledgePackCollision } from '@shared/types'
 import type { MessageKey } from '@shared/i18n'
-import { Badge, Button, ConfirmDialog, EmptyState, ErrorBanner, Spinner, useToast } from '../../components'
+import {
+  Badge,
+  Button,
+  ConfirmDialog,
+  EmptyState,
+  ErrorBanner,
+  KnowledgePackToolsDialog,
+  Progress,
+  Spinner,
+  useToast
+} from '../../components'
 import { friendlyIpcError } from '../../lib/errors'
+import { useKnowledgePackToolsInstall } from '../../lib/useKnowledgePackToolsInstall'
 import { useT } from '../../i18n'
 
 // Knowledge packs management (ZIM wave) — the Documents screen's "Knowledge packs"
@@ -65,6 +76,14 @@ function formatSize(tCount: ReturnType<typeof useT>['tCount'], bytes: number | n
   return `${Math.max(1, Math.round(bytes / (1024 * 1024)))} MB`
 }
 
+/** The tools-install job's download percentage, or null with no known total (indeterminate) —
+ *  same shape as ModelsScreen's own engine-download progress. */
+function toolsPct(job: { receivedBytes: number; totalBytes: number | null }): number | null {
+  return job.totalBytes && job.totalBytes > 0
+    ? Math.min(100, Math.round((job.receivedBytes / job.totalBytes) * 100))
+    : null
+}
+
 export function PacksPanel(): JSX.Element {
   const { t, tCount, lang } = useT()
   const showToast = useToast()
@@ -77,6 +96,16 @@ export function PacksPanel(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'add' | 'refresh' | string | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<KnowledgePack | null>(null)
+  // #339 P8-2 (the owner's ruling): the "kiwix-tools not installed" notice's own install action.
+  // The hook only fetches getEngineStatus/getPolicy while the tools are actually missing — a
+  // workspace whose tools are already installed never makes these calls (KnowledgePacks.test.tsx
+  // leg (d)). `refresh()` on `done` makes the notice disappear even before the packs:changed
+  // broadcast's own refetch lands.
+  const [toolsDialogOpen, setToolsDialogOpen] = useState(false)
+  const toolsInstall = useKnowledgePackToolsInstall(!toolsInstalled, () => {
+    showToast(t('packs.tools.doneToast'))
+    void refresh()
+  })
   const mountedRef = useRef(true)
   // Ignore an event whose epoch is below the last one seen — an old session's late
   // announcement (0 before anything has been observed; a real epoch starts at 1).
@@ -217,9 +246,43 @@ export function PacksPanel(): JSX.Element {
       <ErrorBanner message={error} t={t} />
 
       {!toolsInstalled && (
-        <p className="hint packs-tools-hint">
-          <span aria-hidden="true">○</span> {t('packs.toolsMissing')}
-        </p>
+        <div className="packs-tools-hint">
+          <p className="hint">
+            <span aria-hidden="true">○</span> {t('packs.toolsMissing')}
+          </p>
+          {toolsInstall.live && toolsInstall.job ? (
+            <div className="download-progress">
+              <Progress
+                label={
+                  toolsInstall.job.status === 'extracting'
+                    ? t('packs.tools.extracting')
+                    : toolsInstall.job.status === 'verifying'
+                      ? t('packs.tools.verifying')
+                      : toolsPct(toolsInstall.job) != null
+                        ? t('packs.tools.progress', { pct: toolsPct(toolsInstall.job)! })
+                        : t('packs.tools.downloadingNoTotal')
+                }
+                value={toolsPct(toolsInstall.job) != null ? toolsInstall.job.receivedBytes : undefined}
+                max={toolsPct(toolsInstall.job) != null ? (toolsInstall.job.totalBytes ?? undefined) : undefined}
+              />
+              <Button size="sm" onClick={() => void toolsInstall.cancel()}>
+                {t('models.download.cancel')}
+              </Button>
+            </div>
+          ) : toolsInstall.job?.status === 'failed' ? (
+            <div className="download-progress">
+              <p className="hint">{t('packs.tools.failed')}</p>
+              {toolsInstall.job.error && <p className="hint">{toolsInstall.job.error}</p>}
+              <Button size="sm" variant="primary" onClick={() => setToolsDialogOpen(true)}>
+                {t('models.engine.retry')}
+              </Button>
+            </div>
+          ) : (
+            <Button size="sm" variant="primary" onClick={() => setToolsDialogOpen(true)}>
+              {t('packs.tools.install')}
+            </Button>
+          )}
+        </div>
       )}
 
       <div className="actions">
@@ -364,6 +427,21 @@ export function PacksPanel(): JSX.Element {
       >
         {t('packs.removeBody')}
       </ConfirmDialog>
+
+      {toolsInstall.family && (
+        <KnowledgePackToolsDialog
+          open={toolsDialogOpen}
+          family={toolsInstall.family}
+          downloadsEnabled={toolsInstall.downloadsEnabled}
+          blockedReason={toolsInstall.blockedReason}
+          onConfirm={() => {
+            setToolsDialogOpen(false)
+            void toolsInstall.start()
+          }}
+          onCancel={() => setToolsDialogOpen(false)}
+          t={t}
+        />
+      )}
     </div>
   )
 }

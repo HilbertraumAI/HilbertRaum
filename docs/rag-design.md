@@ -2772,6 +2772,39 @@ offline article viewer. Files are registered in place, never copied.
   the raw result); `zim-query-rewrite.test.ts` pins the rewrite; `zim-arm.test.ts` the retry;
   the manual smoke replays the fixture when the registered archive is that pack and asserts
   every answerable question hits.
+- **D-Z19 — the kiwix-tools consent step (#339 P8-2, owner ruling 2026-09-06).** The optional
+  `kiwix_tools` family (D-Z17) becomes reachable from inside the app through ONE consent
+  dialog with two entry points: the Knowledge-packs panel's "kiwix-tools not installed" notice
+  gains an "Install the knowledge-pack tools…" action, and the AI Model screen shows a quiet
+  mirror row ("Knowledge-pack tools: not installed · Install…") — the engine banner was
+  rejected as a surface because it renders only while `llama_cpp` / `whisper_cpp` is missing.
+  The dialog is the model-download `ConfirmDialog` shape — Size / License / From rows, a hint,
+  and a REQUIRED licence acknowledgement (the confirm stays disabled until it is ticked) — and
+  states facts from the pin, never from copy: `EngineStatus.optionalFamilies[]` carries the
+  yaml's `version`, the host build's `url` and its new per-build `size_bytes` (a label, never an
+  integrity input — a malformed value reads as unknown rather than failing the file), and the
+  licence string from the CODE-side `SidecarFamilySpec.license` (`GPL-3.0-or-later`; a
+  user-writable drive yaml cannot change what the user is asked to accept). `installed` there
+  means every declared file, the panel's own `toolsInstalled` rule. Confirming sends
+  `downloadEngine({ families: ['kiwix_tools'] })` — the channel is unchanged, the PAYLOAD is new
+  (`EngineDownloadRequest`): absent = the default install (required families only — the
+  argument-less "Install the AI engine" button still never fetches kiwix, D-Z17), the list is
+  validated in main against the code's own family names, and a payload mixing an optional
+  family with a required one is refused so the acknowledgement always travels with the family
+  alone. The main handler also passes `kiwixToolsActive` from the per-family sidecar PID registry
+  (P8-1 R-e: a kiwix-serve / kiwix-manage child refuses the re-install with friendly copy), and
+  after a completed kiwix install runs ONE background `ZimService.reconcile` — the searchability
+  key carries the tools fingerprint (D-Z11 / D-Z15), so every pack is re-probed with the new
+  bundle and the panel learns the result through `packs:changed`; the hook is skipped when the
+  workspace no longer admits work. The network gate is REUSED, not extended
+  (`policy.network.allowModelDownloads ∧ allowNetwork`, the owner's ruling: no new policy key —
+  the surfaced copy says "engine and knowledge-pack tools", P8-5). Tests:
+  `engine-consent-ipc.test.ts` (the explicit request installs kiwix alone and reconciles once;
+  the argument-less call never fetches it; malformed and mixed payloads are refused before any
+  gate; the PID-registry refusal; `optionalFamilies` from the pin; the every-file `installed`),
+  `preload-engine.test.ts` (no payload when absent), `KnowledgePacks.test.tsx` /
+  `ModelsScreen.test.tsx` (the two surfaces, the required acknowledgement, the gate-off reason).
+  Record of the UI: design-guidelines §11.15 "P8-2 consent surfaces".
 
   **2026-09-06 amendment, #353 — the document-frequency ladder.** The length-based `retry`
   cannot help a pattern whose kept terms are ALL already `RETRY_MIN_TERM_CHARS` or longer: a

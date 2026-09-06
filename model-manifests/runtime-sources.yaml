@@ -150,6 +150,9 @@ kiwix_tools:
       backend: cpu
       url: https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip
       sha256: fcd01ed2b93e9a68632c7863c83b9f66bf64406a66357be1df7b8b75596f3e45
+      # size_bytes (#339 P8-2): the pinned archive's size, shown by the consent dialog before
+      # any request is made. Measured with the SHA-256 (docs/model-policy.md).
+      size_bytes: 18301924
       extract_to: runtime/kiwix-tools/win
       # The win zip is FLAT (eight files, no top folder): three exes + these five DLLs.
       # The exes do not start without them.
@@ -159,18 +162,21 @@ kiwix_tools:
       backend: cpu
       url: https://download.kiwix.org/release/kiwix-tools/kiwix-tools_macos-arm64-3.8.1.tar.gz
       sha256: 222e8398ca50ac005a7e92cf0116e0c83e3c44c79cab0bb7f6537943d517e8d3
+      size_bytes: 10254751
       extract_to: runtime/kiwix-tools/mac
     - os: mac
       arch: x64
       backend: cpu
       url: https://download.kiwix.org/release/kiwix-tools/kiwix-tools_macos-x86_64-3.8.1.tar.gz
       sha256: 70219e56f7c274e1fc0db8487abdcc91bde9a6f2923958894c0c81ee24b06c01
+      size_bytes: 10768392
       extract_to: runtime/kiwix-tools/mac
     - os: linux
       arch: x64
       backend: cpu
       url: https://download.kiwix.org/release/kiwix-tools/kiwix-tools_linux-x86_64-3.8.1.tar.gz
       sha256: 46557f9a3c3eaada2556a957cf5bc662c07dc6286e8924e04fa3a173f83ff6dd
+      size_bytes: 21503420
       extract_to: runtime/kiwix-tools/linux
 
 # OCR LANGUAGE DATA (Phase 38, D32): a NEW ASSET CLASS on this yaml — plain verified

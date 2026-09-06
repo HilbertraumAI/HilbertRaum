@@ -1553,7 +1553,7 @@ charter-required index so a contributor consulting the declared source of truth 
 whole renderer-visible surface.
 
 - **Engine (llama.cpp/whisper.cpp sidecar) downloader** — `getEngineStatus(): Promise<EngineStatus>`
-  (`installed`/`available`/`version`/`backend`/`missingFamilies`), `downloadEngine(): Promise<EngineDownloadJob>`,
+  (`installed`/`available`/`version`/`backend`/`missingFamilies`), `downloadEngine(request?: EngineDownloadRequest): Promise<EngineDownloadJob>`,
   `getEngineJob(jobId)`, `cancelEngineDownload(jobId)` (a UI caller since #144; `verifying`/
   `extracting` are cancellable states — F-33). `EngineDownloadJob` =
   `{ jobId, status: queued|downloading|verifying|extracting|done|failed|cancelled, receivedBytes,
@@ -1579,8 +1579,25 @@ whole renderer-visible surface.
   grandfathered positional params (`platforms`, `appVersion`); the gate's `checks` record gains
   `optionalRuntimesConsistent: boolean` (an optional family is either fully provisioned — every
   declared file present, hashed and matching — or entirely absent; never folded into
-  `runtimeCurrent`/`runtimeHashed`). **No new IPC channel** (the count stays 145) and **no
-  preload change** — `missingOptionalFamilies` and the gate additions ride the existing
+  `runtimeCurrent`/`runtimeHashed`).
+  **#339 P8-2 additions (the consent step; the channel is unchanged, its PAYLOAD is new):**
+  `downloadEngine` takes an OPTIONAL `EngineDownloadRequest = { families?: string[] }`. Absent
+  (the preload sends NO payload — pinned by `preload-engine.test.ts`) = the default install,
+  required families only. `{ families: ['kiwix_tools'] }` is the ONLY way the optional family is
+  ever fetched; the main handler validates the payload against the code's family names
+  (`parseEngineDownloadRequest` — an unknown name, an empty list, a duplicate or a non-object
+  rejects with `main.engine.badRequest`) and passes `kiwixToolsActive` from the per-family
+  sidecar PID registry (P8-1 R-e), so the install is refused while a pack is being served.
+  `EngineStatus` gains `optionalFamilies?: EngineOptionalFamily[]` = `{ family, version,
+  sizeBytes: number | null, url, license, installed }` — what the dialog states, read from the
+  pinned yaml (`version`, `url`, the new per-build `size_bytes`, validated as a positive
+  integer, `RuntimeBuild.sizeBytes?`) and from the CODE-side `SidecarFamilySpec.license`
+  (`GPL-3.0-or-later` for kiwix_tools) — never from copy or from the drive's user-writable yaml.
+  After a job that installed `kiwix_tools` completes, the main side runs ONE background
+  `ZimService.reconcile` (the searchability key carries the tools fingerprint, D-Z11/D-Z15) and
+  the panel learns the result through `packs:changed`; the network gate is unchanged
+  (`policy.network.allowModelDownloads ∧ allowNetwork`). **P8-1 shipped no IPC channel** (the
+  count stays 145) and **no preload change** — `missingOptionalFamilies` and the gate additions ride the existing
   `engineStatus` payload / the existing assert-tool call, unread by the renderer until the
   consent step (#339 P8-2).
 - **Image understanding (vision)** — `imageGetStatus(): Promise<VisionStatus>`,

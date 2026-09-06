@@ -296,6 +296,13 @@ export interface SidecarFamilySpec {
    * request installs it.
    */
   optional?: boolean
+  /**
+   * The licence the consent dialog asks the user to acknowledge before an OPTIONAL family is
+   * fetched (#339 P8-2), SPDX-style. CODE-side on purpose: a user-writable drive yaml must not
+   * be able to change what the user is told they are accepting. Required families carry none —
+   * their permissive licences ride the notices files, not a consent step.
+   */
+  license?: string
 }
 
 /**
@@ -310,7 +317,12 @@ export const SIDECAR_FAMILY_SPECS: readonly SidecarFamilySpec[] = [
     family: 'kiwix_tools',
     binaryBase: KIWIX_SERVE_BINARY_BASE,
     alsoRequired: [KIWIX_MANAGE_BINARY_BASE],
-    optional: true
+    optional: true,
+    // The grant as read from the pinned source trees (docs/model-policy.md "Sidecar binaries —
+    // kiwix-tools"): kiwix-tools + libkiwix GPL-3.0-or-later, statically linked against
+    // GPL-2.0-or-later (libzim with GPL-3.0-or-later files, Xapian) and LGPL-2.1-or-later
+    // (libmicrohttpd) — the combined work is GPL-3.0-or-later.
+    license: 'GPL-3.0-or-later'
   }
 ]
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, KnowledgePackToolsDialog, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
 import {
   groupModelVariants,
   matchesModelSearch,
@@ -12,7 +12,9 @@ import {
   isModelOnDrive,
   orderPickerModels
 } from '../lib/modelAvailability'
+import { computeDownloadGate } from '../lib/downloadGate'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
+import { useKnowledgePackToolsInstall } from '../lib/useKnowledgePackToolsInstall'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
@@ -220,6 +222,15 @@ export function ModelsScreen(): JSX.Element {
   const [engine, setEngine] = useState<EngineStatus | null>(null)
   const [engineJob, setEngineJob] = useState<EngineDownloadJob | null>(rememberedEngineJob)
   const engineJobRef = useRef<EngineDownloadJob | null>(rememberedEngineJob)
+  // #339 P8-2 (the owner's ruling): the quiet "knowledge-pack tools" row below the two engine
+  // banners — the SAME confirm dialog/hook the Knowledge-packs panel notice uses, so the two
+  // entry points can never present different facts. Only fetches its own getEngineStatus/
+  // getPolicy while `packToolsMissing` is true (the hook's lazy-load contract).
+  const [packToolsDialogOpen, setPackToolsDialogOpen] = useState(false)
+  const packToolsMissing = engine?.missingOptionalFamilies?.includes('kiwix_tools') ?? false
+  const packToolsInstall = useKnowledgePackToolsInstall(packToolsMissing, () => {
+    void runAndSurface(refresh, (m) => mountedRef.current && setError(m))
+  })
   // Mounted flag (audit FE-4): refresh() and the download/engine polls below resolve async; a
   // parked tick can land AFTER unmount (clearing the interval doesn't abort the in-flight
   // promise). Guard every setState behind this so ModelsScreen joins the uniform FE-4 discipline.
@@ -495,18 +506,21 @@ export function ModelsScreen(): JSX.Element {
   // Download gates: the drive policy is the ceiling, the Settings toggle the
   // switch. The copy distinguishes the two — "disabled by policy" vs. "turn it on in
   // Settings" — reusing the PolicyStatus distinction the Privacy & data tab makes.
-  const downloadsAllowedByPolicy = policy?.policy.network.allowModelDownloads ?? false
-  const downloadsEnabled = downloadsAllowedByPolicy && (policy?.allowNetworkSetting ?? false)
-  const downloadsBlockedReason = !downloadsAllowedByPolicy
-    ? t('models.downloads.blockedByPolicy')
-    : !(policy?.allowNetworkSetting ?? false)
-      ? t('models.downloads.enableInSettings')
-      : null
+  // #339 P8-2: extracted to `lib/downloadGate.ts` so the knowledge-pack tools install (same
+  // gate, same copy) can never diverge from this screen's own engine/model download gate.
+  const { downloadsEnabled, blockedReason: downloadsBlockedReason } = computeDownloadGate(policy, t)
   // A withdrawn source (#196) is NOT downloadable — the network-gate banner above the list
   // must not appear for a screen whose only "missing" models can never be fetched anyway.
   const anyDownloadable = models.some(
     (m) => m.download && !m.download.withdrawn && (m.state === 'missing' || m.state === 'checksum_failed')
   )
+
+  // #339 P8-2: the knowledge-pack tools install job's download percentage, same shape as the
+  // engine banner's own `pct` (see `engineBanner` below).
+  const packToolsPct =
+    packToolsInstall.job && packToolsInstall.job.totalBytes && packToolsInstall.job.totalBytes > 0
+      ? Math.min(100, Math.round((packToolsInstall.job.receivedBytes / packToolsInstall.job.totalBytes) * 100))
+      : null
 
   // Retry (panel, terminal result only): resolve the EXACT model id from the current list and run
   // it through the same confirmation as every other download — the same gates, the same license
@@ -1011,6 +1025,49 @@ export function ModelsScreen(): JSX.Element {
           installKey: 'models.voiceEngine.install'
         })}
 
+      {/* #339 P8-2 (the owner's ruling): a QUIET row for the OPTIONAL knowledge-pack tools —
+          visually lighter than the two engine banners above (a hint line, not a Banner) — shown
+          only while `missingOptionalFamilies` names `kiwix_tools` (never when installed or
+          absent from the field, e.g. an older main). "Install…" opens the SAME consent dialog
+          the Knowledge-packs panel's own notice opens. */}
+      {engine && packToolsMissing && (
+        <div className="packs-tools-hint">
+          <p className="hint">{t('models.packTools.row')}</p>
+          {packToolsInstall.live && packToolsInstall.job ? (
+            <div className="download-progress">
+              <Progress
+                label={
+                  packToolsInstall.job.status === 'extracting'
+                    ? t('packs.tools.extracting')
+                    : packToolsInstall.job.status === 'verifying'
+                      ? t('packs.tools.verifying')
+                      : packToolsPct != null
+                        ? t('packs.tools.progress', { pct: packToolsPct })
+                        : t('packs.tools.downloadingNoTotal')
+                }
+                value={packToolsPct != null ? packToolsInstall.job.receivedBytes : undefined}
+                max={packToolsPct != null ? (packToolsInstall.job.totalBytes ?? undefined) : undefined}
+              />
+              <Button size="sm" onClick={() => void packToolsInstall.cancel()}>
+                {t('models.download.cancel')}
+              </Button>
+            </div>
+          ) : packToolsInstall.job?.status === 'failed' ? (
+            <div className="download-progress">
+              <p className="hint">{t('packs.tools.failed')}</p>
+              {packToolsInstall.job.error && <p className="hint">{packToolsInstall.job.error}</p>}
+              <Button size="sm" onClick={() => setPackToolsDialogOpen(true)}>
+                {t('models.engine.retry')}
+              </Button>
+            </div>
+          ) : (
+            <Button size="sm" onClick={() => setPackToolsDialogOpen(true)}>
+              {t('models.packTools.install')}
+            </Button>
+          )}
+        </div>
+      )}
+
       {models.length === 0 && (
         <EmptyState
           title={t('models.empty.title')}
@@ -1208,6 +1265,21 @@ export function ModelsScreen(): JSX.Element {
       <ErrorBanner message={error} t={t} />
 
       {confirming && confirmDialog(confirming)}
+
+      {packToolsInstall.family && (
+        <KnowledgePackToolsDialog
+          open={packToolsDialogOpen}
+          family={packToolsInstall.family}
+          downloadsEnabled={packToolsInstall.downloadsEnabled}
+          blockedReason={packToolsInstall.blockedReason}
+          onConfirm={() => {
+            setPackToolsDialogOpen(false)
+            void packToolsInstall.start()
+          }}
+          onCancel={() => setPackToolsDialogOpen(false)}
+          t={t}
+        />
+      )}
     </div>
   )
 }

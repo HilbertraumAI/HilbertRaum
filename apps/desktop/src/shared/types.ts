@@ -4,6 +4,7 @@
 
 import { t, type UiLanguageSetting } from './i18n'
 import type { SkillKind, SkillNoteRef, SkillPermissions, SkillTrustedLevel } from './skill-manifest'
+import type { RuntimeFamily } from './runtime-sources'
 export type { SkillNoteRef } from './skill-manifest'
 
 export type HardwareProfile = 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'
@@ -684,6 +685,39 @@ export interface EngineStatus {
    * Optional on the type so an older renderer simply ignores it.
    */
   missingOptionalFamilies?: string[]
+  /**
+   * Every OPTIONAL family with a host build, as the consent surface needs it (#339 P8-2): what
+   * the dialog states — size, licence, source — comes from the pinned sources, never from copy.
+   * `license` is the CODE-side family spec's string (a drive's user-writable yaml cannot change
+   * what the user is asked to acknowledge). Optional on the type: an older renderer ignores it.
+   */
+  optionalFamilies?: EngineOptionalFamily[]
+}
+
+/** One optional sidecar family as the consent dialog presents it (#339 P8-2). */
+export interface EngineOptionalFamily {
+  /** The family key (`kiwix_tools`). */
+  family: string
+  /** Pinned upstream release (the yaml's `version`). */
+  version: string
+  /** The host build's archive size from the yaml's `size_bytes`, or null when the pin has none. */
+  sizeBytes: number | null
+  /** The pinned download URL of the host build — the dialog shows its host. */
+  url: string
+  /** The licence the user acknowledges (SPDX-style, e.g. `GPL-3.0-or-later`). */
+  license: string
+  /** True when the family's primary binary is on the drive. */
+  installed: boolean
+}
+
+/**
+ * The `downloadEngine` IPC payload (#339 P8-2). Absent / `{}` = the DEFAULT install (every
+ * missing REQUIRED family — never an optional one). `families` restricts the job to the named
+ * families and is the ONLY way an optional family (`kiwix_tools`) is ever fetched: the renderer
+ * sends it from the consent dialog after the user acknowledged the licence.
+ */
+export interface EngineDownloadRequest {
+  families?: RuntimeFamily[]
 }
 
 // ---- Image understanding (vision) — image-understanding plan §9.3 ----

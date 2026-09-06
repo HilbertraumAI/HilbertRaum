@@ -11,6 +11,10 @@ export { ErrorBanner, type ErrorBannerProps } from './ErrorBanner'
 export { ErrorBoundary, type ErrorBoundaryProps } from './ErrorBoundary'
 export { ToastProvider, useToast, TOAST_DURATION_MS } from './Toast'
 export { Modal, ConfirmDialog, type ModalProps, type ConfirmDialogProps } from './Dialog'
+export {
+  KnowledgePackToolsDialog,
+  type KnowledgePackToolsDialogProps
+} from './KnowledgePackToolsDialog'
 export { SegmentedControl, type SegmentedControlProps, type SegmentedOption } from './SegmentedControl'
 export { Switch, type SwitchProps } from './Switch'
 export { Chip, type ChipProps } from './Chip'

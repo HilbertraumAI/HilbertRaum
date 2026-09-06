@@ -59,6 +59,12 @@ export interface RuntimeBuild {
    * marker. Absent (every llama / whisper build) = nothing beyond the executables.
    */
   runtimeFiles?: string[]
+  /**
+   * The archive's size in bytes as pinned with its SHA-256 (#339 P8-2) — what the consent
+   * dialog shows BEFORE any request is made (the engine job's `totalBytes` only exists once
+   * the download started). A label, never an integrity input: absent OR malformed = unknown.
+   */
+  sizeBytes?: number
 }
 
 export interface RuntimeSources {
@@ -260,6 +266,13 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
           })
         }
       }
+      // #339 P8-2: the pinned archive size the consent dialog shows — a LABEL, never an
+      // integrity input (the download is verified by SHA-256 alone). So a malformed value is
+      // treated as "unknown" rather than failing the file: a typo in a dialog figure must not
+      // disable every engine install on the drive (review finding, 2026-09-06).
+      const sizeRaw = b['size_bytes']
+      const sizeBytes =
+        typeof sizeRaw === 'number' && Number.isInteger(sizeRaw) && sizeRaw > 0 ? sizeRaw : undefined
       if (
         typeof osRaw === 'string' &&
         OS_KEYS.includes(osRaw as RuntimeOs) &&
@@ -278,7 +291,8 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
           url: url.trim(),
           sha256: shaRaw.trim().toLowerCase(),
           extractTo: extractTo.trim(),
-          ...(runtimeFiles && runtimeFiles.length > 0 ? { runtimeFiles } : {})
+          ...(runtimeFiles && runtimeFiles.length > 0 ? { runtimeFiles } : {}),
+          ...(sizeBytes !== undefined ? { sizeBytes } : {})
         })
       }
     })
