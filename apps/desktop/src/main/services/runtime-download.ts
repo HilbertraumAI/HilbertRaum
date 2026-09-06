@@ -8,6 +8,7 @@ import { tMain } from './i18n'
 import type { EngineDownloadJob, EngineStatus } from '../../shared/types'
 import {
   validateRuntimeSources,
+  type RuntimeFamily,
   type RuntimeOs,
   type RuntimeBuild,
   type RuntimeSources,
@@ -17,12 +18,13 @@ import {
   downloadToFile,
   markerBinaryKey,
   planRuntimeDownload,
+  requiredInstallFiles,
   runtimeInstallCurrent,
   selectRuntimeBuild,
   verifyDownloadedFile,
   writeRuntimeMarker,
   ENGINE_DOWNLOAD_MAX_BYTES,
-  WHISPER_BINARY_BASE,
+  SIDECAR_FAMILY_SPECS,
   type FetchFn,
   type RuntimeDownloadPlan
 } from './assets'
@@ -41,30 +43,25 @@ import { assertDownloadAllowed, type DownloadGates } from './downloads'
 // flatten → install marker). The network (`fetchImpl`) and extraction (`extractImpl`,
 // default `tar -xf`) are injected seams so the unit suite stays zero-network/zero-shell.
 //
-// FAMILIES: today llama_cpp (chat) + whisper_cpp (transcription). To add a future engine,
-// list it in `ENGINE_FAMILIES` with its runtime-sources block name + binary base name and
-// add the matching `<family>:` block to runtime-sources.yaml — everything else (status,
-// install, the Models-screen banner) generalizes automatically. (See docs/packaging.md.)
+// FAMILIES: llama_cpp (chat) + whisper_cpp (transcription) + kiwix_tools (the knowledge-pack
+// tools, OPTIONAL — #339 P8-1). To add a future engine, list its spec in
+// `SIDECAR_FAMILY_SPECS` (`services/assets.ts` — the ONE registry the installer and the
+// commercial-drive gate share) and add the matching `<family>:` block to runtime-sources.yaml;
+// a family that ships more than one file declares `executables` / `runtime_files` there.
+// Everything else (status, install, the Models-screen banner) generalizes automatically.
+// (See docs/packaging.md.)
+//
+// An OPTIONAL family is never part of the default install selection and never counted in
+// readiness — `downloadEngine` takes no arguments, so "install everything missing" must not
+// be able to reach a copyleft, separately-consented family. Only an explicit
+// `families: ['kiwix_tools']` installs it; the consent surface that sends it is P8-2.
 //
 // Gates are identical to the model downloader (policy ceiling ∧ the allowNetwork setting),
 // re-checked here in the main process. One engine download (covering all missing families)
 // runs at a time.
 
-/** The engine families this installer knows how to fetch. */
-export type EngineFamily = 'llama_cpp' | 'whisper_cpp'
-
-interface FamilySpec {
-  family: EngineFamily
-  /** The sidecar's executable base name (`llama-server` / `whisper-cli`). */
-  binaryBase: string
-}
-
-// Order matters: llama_cpp (the chat engine — the one whose absence forces demo mode) is
-// installed first, then whisper_cpp. `engineStatus.version/backend` report the first family.
-const ENGINE_FAMILIES: FamilySpec[] = [
-  { family: 'llama_cpp', binaryBase: 'llama-server' },
-  { family: 'whisper_cpp', binaryBase: WHISPER_BINARY_BASE }
-]
+/** The engine families this installer knows how to fetch (= the yaml's build families). */
+export type EngineFamily = RuntimeFamily
 
 /** Map the Node platform to a runtime-sources OS key (mirrors `llamaOsDir`). */
 export function hostRuntimeOs(platform: NodeJS.Platform = process.platform): RuntimeOs {
@@ -90,9 +87,9 @@ function loadSourcesResult(manifestsDir: string): RuntimeSourcesResult | null {
   }
 }
 
-/** The `{ version, builds }` block for one family (llama_cpp → `sources`, whisper_cpp → `whisper`). */
+/** The `{ version, builds }` block for one family — the keyed map, so this never enumerates. */
 function familyBlock(result: RuntimeSourcesResult, family: EngineFamily): RuntimeSources | undefined {
-  return family === 'whisper_cpp' ? result.whisper : result.sources
+  return result.families?.[family]
 }
 
 /**
@@ -119,6 +116,8 @@ interface EnginePlan {
   version: string
   build: RuntimeBuild
   plan: RuntimeDownloadPlan
+  /** From the CODE spec (`SIDECAR_FAMILY_SPECS`), never from the drive's yaml (#339 P8-1). */
+  optional: boolean
 }
 
 /**
@@ -135,20 +134,26 @@ function availableEngines(
   const result = manifestsDir ? loadSourcesResult(manifestsDir) : null
   if (!result) return []
   const out: EnginePlan[] = []
-  for (const spec of ENGINE_FAMILIES) {
+  for (const spec of SIDECAR_FAMILY_SPECS) {
     const sources = familyBlock(result, spec.family)
     if (!sources) continue
     const build = selectHostBuild(sources, platform, arch)
     if (!build) continue
-    const plan = planRuntimeDownload(rootPath, build, sources.version, spec.binaryBase)
-    out.push({ family: spec.family, version: sources.version, build, plan })
+    const plan = planRuntimeDownload(rootPath, build, sources.version, spec.binaryBase, {
+      alsoRequired: spec.alsoRequired,
+      declaredExecutables: sources.executables
+    })
+    out.push({ family: spec.family, version: sources.version, build, plan, optional: spec.optional === true })
   }
   return out
 }
 
 /**
  * Read-only status for the renderer's "install the engine" surface. `installed` is true
- * only when EVERY fetchable engine's binary is present; `missingFamilies` lists the rest.
+ * only when EVERY fetchable REQUIRED engine's binary is present; `missingFamilies` lists the
+ * required ones still missing. An OPTIONAL family (#339 P8-1, kiwix_tools) is never a
+ * readiness prerequisite: it is reported in `missingOptionalFamilies` and nowhere else, so no
+ * consumer of `missingFamilies` can ever offer to fetch it without its own consent step.
  * `version`/`backend` report the chat engine (llama_cpp) for the banner copy.
  */
 export function engineStatus(
@@ -158,14 +163,17 @@ export function engineStatus(
   arch: string = process.arch
 ): EngineStatus {
   const engines = availableEngines(rootPath, manifestsDir, platform, arch)
-  const missing = engines.filter((e) => !existsSync(e.plan.binaryPath))
-  const llama = engines.find((e) => e.family === 'llama_cpp') ?? engines[0]
+  const required = engines.filter((e) => !e.optional)
+  const missingRequired = required.filter((e) => !existsSync(e.plan.binaryPath))
+  const missingOptional = engines.filter((e) => e.optional && !existsSync(e.plan.binaryPath))
+  const llama = required.find((e) => e.family === 'llama_cpp') ?? required[0]
   return {
-    installed: engines.length > 0 && missing.length === 0,
-    available: engines.length > 0,
+    installed: required.length > 0 && missingRequired.length === 0,
+    available: required.length > 0,
     version: llama?.version ?? null,
     backend: llama?.build.backend ?? null,
-    missingFamilies: missing.map((e) => e.family)
+    missingFamilies: missingRequired.map((e) => e.family),
+    missingOptionalFamilies: missingOptional.map((e) => e.family)
   }
 }
 
@@ -346,6 +354,13 @@ export interface StartEngineDownloadOptions {
    * `registeredSidecarPids('whisper_cpp').length > 0`.
    */
   whisperActive?: boolean
+  /**
+   * #339 P8-1: true while a `kiwix-serve` / `kiwix-manage` child is executing from
+   * `runtime/kiwix-tools/<os>/`. A kiwix_tools (re-)install pre-cleans that dir — on Windows
+   * it would fail against the live file lock (the F-32 precedent) — so it is refused while
+   * one runs. The IPC layer passes `registeredSidecarPids('kiwix_tools').length > 0` (P8-2).
+   */
+  kiwixToolsActive?: boolean
   platform?: NodeJS.Platform
   arch?: string
 }
@@ -409,10 +424,15 @@ export class EngineDownloadManager {
     if (engines.length === 0) {
       throw new Error(tMain('main.engine.noHostBuild'))
     }
-    // Install the requested families (default: all), minus any already current per marker.
+    // Install the requested families, minus any already current per marker. The DEFAULT
+    // selection is every missing REQUIRED family — an OPTIONAL family (kiwix_tools, #339 P8-1)
+    // is never in it: `downloadEngine` takes no arguments, so "install everything missing"
+    // must not be able to reach a copyleft, separately-consented family. Only an explicit
+    // `families: ['kiwix_tools']` installs it (the consent step is P8-2), and `e.optional`
+    // comes from the CODE spec, never from the drive's user-writable yaml.
     const wanted = opts.families
     const installs = engines.filter(
-      (e) => (!wanted || wanted.includes(e.family)) && !runtimeInstallCurrent(e.plan)
+      (e) => (wanted ? wanted.includes(e.family) : !e.optional) && !runtimeInstallCurrent(e.plan)
     )
     if (installs.length === 0) {
       throw new Error(tMain('main.engine.alreadyInstalled'))
@@ -429,6 +449,9 @@ export class EngineDownloadManager {
     }
     if (installs.some((e) => e.family === 'whisper_cpp') && opts.whisperActive) {
       throw new Error(tMain('main.engine.transcriptionRunning'))
+    }
+    if (installs.some((e) => e.family === 'kiwix_tools') && opts.kiwixToolsActive) {
+      throw new Error(tMain('main.engine.knowledgePackToolsRunning'))
     }
 
     const job: EngineDownloadJob = {
@@ -657,29 +680,44 @@ export class EngineDownloadManager {
       }
       await rm(plan.zipDest, { force: true })
 
-      if (!existsSync(plan.binaryPath)) {
+      // #339 P8-1: the completeness check covers EVERY file the plan requires — the family's
+      // executables (the code floor ∪ the yaml's `executables`) and the build's `runtime_files`
+      // — after the flatten, so a tarball whose secondary executables were nested elsewhere
+      // fails loudly instead of installing half a bundle. The basenames are pinned artifact
+      // names, never user content.
+      const requiredFiles = requiredInstallFiles(plan)
+      const missingFiles = requiredFiles.filter((p) => !existsSync(p))
+      if (missingFiles.length > 0) {
         job.status = 'failed'
         job.error = tMain('main.engine.binaryMissing')
-        this.deps.log?.('Engine extraction finished but the binary is missing', {
-          extractTo: plan.extractTo
+        this.deps.log?.('Engine extraction finished but required files are missing', {
+          extractTo: plan.extractTo,
+          missing: missingFiles.map((p) => basename(p))
         })
         return 'failed'
       }
       if (plan.os !== 'win') {
-        try {
-          chmodSync(plan.binaryPath, 0o755)
-        } catch {
-          /* best-effort; a non-executable bit surfaces on the next start */
+        for (const p of plan.binaryPaths) {
+          try {
+            chmodSync(p, 0o755)
+          } catch {
+            /* best-effort; a non-executable bit surfaces on the next start */
+          }
         }
       }
-      // Record the extracted binary's own SHA-256 so it can be re-hashed before spawn
-      // (vuln-scan B). Best-effort: a hashing failure must not fail an otherwise-good
-      // install — the marker is simply written without the hash (→ verifier skip-legacy).
+      // Record every installed file's own SHA-256 so each executable can be re-hashed before
+      // spawn (vuln-scan B) and the sell gate can check the runtime files too. Best-effort at
+      // FAMILY granularity: a hashing failure must not fail an otherwise-good install — the
+      // marker is then written with NO map at all (→ verifier skip-legacy for every binary),
+      // never a partial one, so the verifier and the sell gate can never disagree about one
+      // install (#339 P8-1).
       let binaries: Record<string, string> | undefined
       try {
-        binaries = { [markerBinaryKey(plan.extractTo, plan.binaryPath)]: await sha256File(plan.binaryPath) }
+        const entries: Record<string, string> = {}
+        for (const p of requiredFiles) entries[markerBinaryKey(plan.extractTo, p)] = await sha256File(p)
+        binaries = entries
       } catch (err) {
-        this.deps.log?.('Could not hash the installed binary for the marker', { error: String(err) })
+        this.deps.log?.('Could not hash the installed files for the marker', { error: String(err) })
       }
       writeRuntimeMarker(plan.extractTo, {
         version: plan.version,
@@ -689,10 +727,11 @@ export class EngineDownloadManager {
         ...(binaries ? { binaries } : {})
       })
       // CODE-12 (full-audit 2026-07-11): drop the binary-verifier's session-cached verdict
-      // for the path we just replaced — a stale pre-install verdict (the `mismatch` after a
-      // tamper repair, or an `ok` hashed from the OLD bytes) must not apply to the new
-      // binary until app restart. The next spawn re-hashes against the fresh marker.
-      invalidateBinaryVerification(plan.binaryPath)
+      // for every executable we just replaced — a stale pre-install verdict (the `mismatch`
+      // after a tamper repair, or an `ok` hashed from the OLD bytes) must not apply to the new
+      // binary until app restart. The next spawn re-hashes against the fresh marker. Runtime
+      // files are never spawned, so they hold no cached verdict.
+      for (const p of plan.binaryPaths) invalidateBinaryVerification(p)
       this.deps.log?.('Engine installed', { binaryPath: plan.binaryPath })
       return 'done'
     } catch (err) {

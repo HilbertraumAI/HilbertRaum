@@ -16,6 +16,19 @@ export type RuntimeOs = 'win' | 'mac' | 'linux'
 const OS_KEYS: RuntimeOs[] = ['win', 'mac', 'linux']
 
 /**
+ * The `{ version, builds }` sidecar families this yaml can declare (#339 P8-1). `ocr` is NOT
+ * one of them — it is a different asset class (`files`, not `builds`) with its own field.
+ * `kiwix_tools` (kiwix-serve + kiwix-manage, the knowledge-pack tools) is the third; it is
+ * the first family that ships MORE THAN ONE executable and, on Windows, required non-executable
+ * runtime files (the ICU DLLs) — hence the `executables` / `runtime_files` keys below.
+ */
+export type RuntimeFamily = 'llama_cpp' | 'whisper_cpp' | 'kiwix_tools'
+
+/** A plain filename: one path segment, no separators, no drive/UNC syntax — the same rule the
+ *  downloader applies to archive basenames (`services/assets.ts` `ARCHIVE_NAME_RULE`). */
+const PLAIN_FILE_NAME = /^[A-Za-z0-9._-]{1,128}$/
+
+/**
  * The platforms a kit can be sold for — one release artifact + launcher each (#233).
  * The sell gate takes the platforms a kit is DECLARED for and requires the app for each;
  * the builder scripts re-spell this list (script-drift.test.ts keeps them in sync).
@@ -39,12 +52,35 @@ export interface RuntimeBuild {
   sha256: string
   /** Drive-relative dir to extract into, e.g. `runtime/llama.cpp/win`. */
   extractTo: string
+  /**
+   * Non-executable files the family's executables cannot start without, relative to
+   * `extract_to`, plain filenames only (#339 P8-1): the five ICU DLLs of the kiwix-tools
+   * Windows bundle. Every entry must exist after extraction and is hashed into the install
+   * marker. Absent (every llama / whisper build) = nothing beyond the executables.
+   */
+  runtimeFiles?: string[]
 }
 
 export interface RuntimeSources {
   /** Pinned upstream release tag (`ggml-org/llama.cpp` b-tag or `ggml-org/whisper.cpp` v-tag). */
   version: string
   builds: RuntimeBuild[]
+  /**
+   * Declarative (#339 P8-1): the family is never part of the default engine install and never
+   * counted in readiness — only an explicit per-family request installs it. The LOAD-BEARING
+   * copy of this flag is the code-side family spec (`services/assets.ts`
+   * `SIDECAR_FAMILY_SPECS`): a drive's yaml is user-writable and must not be able to promote a
+   * family into the argument-less "Install the AI engine" path. The yaml key is validated and
+   * asserted to agree with the code.
+   */
+  optional?: boolean
+  /**
+   * Executable base names (no OS suffix — `sidecarBinaryName` adds `.exe` on win) the family
+   * ships when it ships MORE THAN ONE (#339 P8-1): `[kiwix-serve, kiwix-manage, kiwix-search]`.
+   * Every entry must exist after extraction and is hashed into the install marker. Absent =
+   * the family ships exactly the one binary its code-side spec names (the llama / whisper shape).
+   */
+  executables?: string[]
 }
 
 /**
@@ -80,6 +116,13 @@ export interface RuntimeSourcesResult {
    * Same forward-compatibility contract as `whisper_cpp:`.
    */
   ocr?: OcrSources
+  /**
+   * Every `{ version, builds }` family the file declares, keyed by its yaml name (#339 P8-1).
+   * `llama_cpp` and `whisper_cpp` are the SAME objects as `sources` / `whisper` (aliases, kept
+   * so no existing reader moves); `kiwix_tools` is reachable only here. Consumers that must
+   * never go blind to a new family (the installer's family lookup, the drift nets) iterate this.
+   */
+  families?: Partial<Record<RuntimeFamily, RuntimeSources>>
   errors: string[]
 }
 
@@ -105,6 +148,50 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
   const version = block['version']
   if (typeof version !== 'string' || version.trim() === '') {
     errors.push(`"${prefix}.version" is required and must be a non-empty string`)
+  }
+
+  // #339 P8-1: the family-level keys. `optional` is declarative (see `RuntimeSources.optional`);
+  // `executables` are base names — no separator, no `.exe`/`.dll` (the OS suffix is added by
+  // `sidecarBinaryName`; a `.exe` here would spell `kiwix-serve.exe.exe` on win and a wrong
+  // name on mac), unique, non-empty when present.
+  const optionalRaw = block['optional']
+  let optional: boolean | undefined
+  let familyKeysOk = true
+  if (optionalRaw !== undefined) {
+    if (typeof optionalRaw !== 'boolean') {
+      errors.push(`"${prefix}.optional" must be true or false when present`)
+      familyKeysOk = false
+    } else optional = optionalRaw
+  }
+  const executablesRaw = block['executables']
+  const executables: string[] = []
+  if (executablesRaw !== undefined) {
+    if (!Array.isArray(executablesRaw) || executablesRaw.length === 0) {
+      errors.push(`"${prefix}.executables" must be a non-empty list of unique names when present`)
+      familyKeysOk = false
+    } else {
+      executablesRaw.forEach((e, i) => {
+        if (
+          typeof e !== 'string' ||
+          !PLAIN_FILE_NAME.test(e) ||
+          e === '.' ||
+          e === '..' ||
+          /\.(exe|dll)$/i.test(e)
+        ) {
+          errors.push(
+            `"${prefix}.executables[${i}]" must be a plain executable base name with no path separator or extension`
+          )
+          familyKeysOk = false
+          return
+        }
+        if (executables.includes(e)) {
+          errors.push(`"${prefix}.executables" must be a non-empty list of unique names when present`)
+          familyKeysOk = false
+          return
+        }
+        executables.push(e)
+      })
+    }
   }
 
   const buildsRaw = block['builds']
@@ -145,6 +232,34 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
       } else if (isUnsafeDrivePath(extractTo.trim())) {
         errors.push(`${where}.extract_to must be a drive-relative path with no "..", leading slash, or drive letter`)
       }
+      // #339 P8-1: per-build required non-executable files — plain filenames, unique, and never
+      // one of the family's executables (in either spelling), which are declared separately.
+      const runtimeFilesRaw = b['runtime_files']
+      let runtimeFiles: string[] | undefined
+      let runtimeFilesOk = true
+      if (runtimeFilesRaw !== undefined) {
+        if (!Array.isArray(runtimeFilesRaw)) {
+          errors.push(`${where}.runtime_files must be a list of plain filenames when present`)
+          runtimeFilesOk = false
+        } else {
+          const seenFiles = new Set<string>()
+          runtimeFiles = []
+          runtimeFilesRaw.forEach((f, j) => {
+            if (typeof f !== 'string' || !PLAIN_FILE_NAME.test(f) || f === '.' || f === '..') {
+              errors.push(`${where}.runtime_files[${j}] must be a plain filename`)
+              runtimeFilesOk = false
+              return
+            }
+            if (seenFiles.has(f) || executables.includes(f) || executables.some((e) => `${e}.exe` === f)) {
+              errors.push(`${where}.runtime_files[${j}] duplicates another required file`)
+              runtimeFilesOk = false
+              return
+            }
+            seenFiles.add(f)
+            runtimeFiles!.push(f)
+          })
+        }
+      }
       if (
         typeof osRaw === 'string' &&
         OS_KEYS.includes(osRaw as RuntimeOs) &&
@@ -153,7 +268,8 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
         typeof url === 'string' &&
         typeof shaRaw === 'string' &&
         typeof extractTo === 'string' &&
-        !isUnsafeDrivePath(extractTo.trim())
+        !isUnsafeDrivePath(extractTo.trim()) &&
+        runtimeFilesOk
       ) {
         builds.push({
           os: osRaw as RuntimeOs,
@@ -161,7 +277,8 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
           backend: backend.trim(),
           url: url.trim(),
           sha256: shaRaw.trim().toLowerCase(),
-          extractTo: extractTo.trim()
+          extractTo: extractTo.trim(),
+          ...(runtimeFiles && runtimeFiles.length > 0 ? { runtimeFiles } : {})
         })
       }
     })
@@ -179,8 +296,13 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
     seen.add(key)
   }
 
-  if (typeof version !== 'string' || version.trim() === '' || builds.length === 0) return null
-  return { version: version.trim(), builds }
+  if (typeof version !== 'string' || version.trim() === '' || builds.length === 0 || !familyKeysOk) return null
+  return {
+    version: version.trim(),
+    builds,
+    ...(optional !== undefined ? { optional } : {}),
+    ...(executables.length > 0 ? { executables } : {})
+  }
 }
 
 /** Validate the `ocr:` block (`{ version, files: [{lang,url,sha256,dest}] }`). */
@@ -258,6 +380,12 @@ function validateOcrFamily(
  *     version: 4.0.0_best_int
  *     files:
  *       - { lang, url, sha256, dest }
+ *   kiwix_tools:        # OPTIONAL third sidecar family (#339): optional + multi-file
+ *     version: '3.8.1'
+ *     optional: true
+ *     executables: [kiwix-serve, kiwix-manage, kiwix-search]
+ *     builds:
+ *       - { os, arch, backend, url, sha256, extract_to, runtime_files? }
  *
  * Unknown sibling keys are ignored (forward compatibility: an older app on a
  * newer drive parses the file unchanged).
@@ -298,14 +426,32 @@ export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
     }
   }
 
+  // The kiwix_tools block (#339 P8-1) is OPTIONAL like whisper_cpp, and fully validated when
+  // present — before this family existed a raw `kiwix_tools:` block was silently ignored by
+  // the forward-compatibility rule while the notices generator threw on it; now both guards
+  // point the same way.
+  let kiwix: RuntimeSources | null = null
+  const kiwixRaw = raw['kiwix_tools']
+  if (kiwixRaw !== undefined) {
+    if (!isObject(kiwixRaw)) {
+      errors.push('"kiwix_tools" must be a mapping (version + builds) when present')
+    } else {
+      kiwix = validateFamily(kiwixRaw, 'kiwix_tools', errors)
+    }
+  }
+
   if (errors.length > 0 || !sources) {
     return { ok: false, errors }
   }
 
+  const families: Partial<Record<RuntimeFamily, RuntimeSources>> = { llama_cpp: sources }
+  if (whisper) families.whisper_cpp = whisper
+  if (kiwix) families.kiwix_tools = kiwix
   return {
     ok: true,
     errors: [],
     sources,
+    families,
     ...(whisper ? { whisper } : {}),
     ...(ocr ? { ocr } : {})
   }

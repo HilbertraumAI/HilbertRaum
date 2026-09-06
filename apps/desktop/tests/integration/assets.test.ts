@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, win32 } from 'node:path'
+import { basename, join, win32 } from 'node:path'
 import { parse } from 'yaml'
 import {
   archiveNameFromUrl,
@@ -10,6 +10,7 @@ import {
   selectRuntimeBuild,
   selectRuntimeBuilds,
   planRuntimeDownload,
+  requiredInstallFiles,
   verifyDownloadedFile,
   downloadToFile,
   fetchAndVerify,
@@ -580,6 +581,54 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
 })
 
 describe('planRuntimeDownload', () => {
+  // #339 P8-1: the required file set of a multi-file family — the code floor (the spec's
+  // `alsoRequired`) ∪ the yaml's `executables` ∪ the build's `runtime_files`, every path
+  // resolved INSIDE the extract dir; a one-binary family gets exactly what it got before.
+  it('resolves every declared executable and runtime file inside the extract dir', () => {
+    const root = tempDir('hilbertraum-rt-')
+    const build = {
+      os: 'win' as const,
+      arch: 'x64',
+      backend: 'cpu',
+      url: 'https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip',
+      sha256: 'fcd01ed2b93e9a68632c7863c83b9f66bf64406a66357be1df7b8b75596f3e45',
+      extractTo: 'runtime/kiwix-tools/win',
+      runtimeFiles: ['icudt74.dll', 'icuuc74.dll']
+    }
+    const plan = planRuntimeDownload(root, build, '3.8.1', 'kiwix-serve', {
+      alsoRequired: ['kiwix-manage'],
+      declaredExecutables: ['kiwix-serve', 'kiwix-manage', 'kiwix-search']
+    })
+    const dir = join(root, 'runtime', 'kiwix-tools', 'win')
+    expect(plan.binaryPath).toBe(join(dir, 'kiwix-serve.exe'))
+    expect(plan.binaryPaths).toEqual([
+      join(dir, 'kiwix-serve.exe'),
+      join(dir, 'kiwix-manage.exe'),
+      join(dir, 'kiwix-search.exe')
+    ])
+    expect(plan.runtimeFilePaths).toEqual([join(dir, 'icudt74.dll'), join(dir, 'icuuc74.dll')])
+    expect(requiredInstallFiles(plan)).toEqual([...plan.binaryPaths, ...plan.runtimeFilePaths])
+    // The floor holds without a yaml declaration, and a mac build carries no suffix.
+    const mac = planRuntimeDownload(
+      root,
+      { ...build, os: 'mac', arch: 'arm64', extractTo: 'runtime/kiwix-tools/mac', runtimeFiles: undefined },
+      '3.8.1',
+      'kiwix-serve',
+      { alsoRequired: ['kiwix-manage'] }
+    )
+    expect(mac.binaryPaths.map((p) => basename(p))).toEqual(['kiwix-serve', 'kiwix-manage'])
+    expect(mac.runtimeFilePaths).toEqual([])
+  })
+
+  it('adds no extra required files for llama_cpp or whisper_cpp (the one-binary shape is unchanged)', () => {
+    const root = tempDir('hilbertraum-rt-')
+    const build = selectRuntimeBuild(runtimeSources(), { os: 'win', arch: 'x64' })!
+    const plan = planRuntimeDownload(root, build, 'b9196')
+    expect(plan.binaryPaths).toEqual([plan.binaryPath])
+    expect(plan.runtimeFilePaths).toEqual([])
+    expect(requiredInstallFiles(plan)).toEqual([plan.binaryPath])
+  })
+
   it('resolves the extraction dir + binary path under the drive root', () => {
     const root = tempDir('hilbertraum-rt-')
     const build = selectRuntimeBuild(runtimeSources(), { os: 'win', arch: 'x64' })!
