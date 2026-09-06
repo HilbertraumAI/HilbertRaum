@@ -201,6 +201,12 @@ export interface ZimServiceDeps {
    * timeout leaves the pack unknown" leg does not sit out the client's real 15 s default.
    */
   probeTimeoutMs?: number
+  /**
+   * The per-ATTEMPT timeout of a `/raw` article read (`ARTICLE_READ_TIMEOUT_MS`, #301 P7 T19 —
+   * the stall retry). Test seam only, so a "the first read stalled" leg costs milliseconds
+   * instead of the real 4 s. Production never sets it.
+   */
+  articleTimeoutMs?: number
 }
 
 /**
@@ -1335,7 +1341,7 @@ export class ZimService {
           question,
           deadline.signal,
           library.names,
-          { askSignal: op.signal }
+          { askSignal: op.signal, articleTimeoutMs: this.deps.articleTimeoutMs }
         )
         return { candidates: produced.candidates, outcomes: [...outcomes, ...produced.outcomes] }
       })
@@ -1425,7 +1431,9 @@ export class ZimService {
         // a collision loser returns the honest "unavailable" null, not another book's text.
         const name = library.names.get(packId)
         if (name === undefined) return null
-        return fetchArticleHtml(library.port, name, articlePath, op.signal)
+        return fetchArticleHtml(library.port, name, articlePath, op.signal, {
+          timeoutMs: this.deps.articleTimeoutMs
+        })
       })
       op.assert()
       // Null covers all three honest "unavailable" cases: nothing to serve, an unmapped pack,
