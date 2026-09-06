@@ -595,9 +595,9 @@ just happened. The app can simply ask again.
 
 ### The panel says kiwix-tools are missing
 
-Knowledge packs are served by three small programs from the Kiwix project, kiwix-serve,
-kiwix-manage and kiwix-search. Until the provisioning wave adds an in-app installer (an
-in-app install step is being added, #339), place them on the drive yourself.
+Knowledge packs are served by two small programs from the Kiwix project, kiwix-serve and
+kiwix-manage (the pinned bundle also carries kiwix-search, which the app does not use). Until
+the in-app install step lands (#339), place them on the drive yourself.
 
 **Preferred: run the fetch script.** From the repository, against the drive:
 
