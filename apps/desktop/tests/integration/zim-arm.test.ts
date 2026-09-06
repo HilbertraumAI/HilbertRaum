@@ -17,6 +17,7 @@ import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import {
   ARTICLES_PER_PACK,
+  DF_PROBE_TIMEOUT_MS,
   MAX_EXTERNAL_CANDIDATES,
   allocateCandidates,
   collectPackCandidates,
@@ -79,6 +80,37 @@ function totalsXml(total: number): string {
     `<opensearch:totalResults>${total}</opensearch:totalResults></channel></rss>`
   )
 }
+
+// #353 review fix 1: 8 kept content words (none a stop/frame word, all >= RETRY_MIN_TERM_CHARS
+// so there is no length-based retry) — one MORE than DF_PROBE_MAX_TERMS, so the last two never
+// get probed at all. They must still survive the narrowed re-search: narrowing the FULL term
+// list (not just the probed prefix) is exactly the bug this fixes.
+const DF8_QUESTION =
+  'Alphaterm Betaterm Gammaterm Deltaterm Epsilonterm Zetaterm Etaterm Thetaterm'
+const DF8_TOTALS: Record<string, number> = {
+  Alphaterm: 10,
+  Betaterm: 0, // the only zero — the term the ladder must drop
+  Gammaterm: 20,
+  Deltaterm: 5,
+  Epsilonterm: 15,
+  Zetaterm: 30
+  // Etaterm, Thetaterm: past DF_PROBE_MAX_TERMS — never probed, must still survive.
+}
+const DF8_NARROWED_PATTERN = 'Alphaterm Gammaterm Deltaterm Epsilonterm Zetaterm Etaterm Thetaterm'
+
+/** #353 review fix 4: set true the instant the fixture receives an in-flight probe for
+ *  `pack-df-abort`, which never answers it — the test aborts the ask once this flips. */
+let dfAbortProbeSeen = false
+
+/** Poll until `cond()` is true or `rounds` are exhausted (real loopback I/O, never a sleep of a
+ *  fixed guessed duration) — used only for the #353 abort-during-probe leg below. */
+async function waitUntilTrue(cond: () => boolean, rounds = 400): Promise<boolean> {
+  for (let i = 0; i < rounds; i++) {
+    if (cond()) return true
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  return cond()
+}
 /**
  * Article titles whose NEXT `/raw` read the fake sidecar CUTS SHORT — the measured kiwix-serve
  * 3.8.1 stall (#301 P7 T19): the 200, an honest `Content-Length` and most of the body arrive,
@@ -133,6 +165,38 @@ beforeAll(async () => {
           res.writeHead(500)
           res.end('boom')
           return
+        }
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(searchXml(`book-${book}`, []))
+        return
+      }
+      // #353 review fix 1: 8 kept terms, only the first 6 probed, one of THOSE is df 0 — the
+      // narrowed re-search must carry all 7 survivors, including the two never probed.
+      if (book === 'pack-df8') {
+        if (pageLength === '1') {
+          res.writeHead(200, { 'content-type': 'application/xml' })
+          res.end(totalsXml(DF8_TOTALS[pattern] ?? 0))
+          return
+        }
+        const titles = pattern === DF8_NARROWED_PATTERN ? ['Alphaterm'] : []
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(searchXml(`book-${book}`, titles))
+        return
+      }
+      // #353 review fix 3: every probe stalls forever — `DF_PROBE_TIMEOUT_MS` (not the client's
+      // 15 s default) must be what ends it, fail-soft, within a few seconds.
+      if (book === 'pack-df-timeout') {
+        if (pageLength === '1') return // never answered — the client's own probe timeout fires
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(searchXml(`book-${book}`, []))
+        return
+      }
+      // #353 review fix 4: the first probe is seen but never answered — the test aborts the ask
+      // once it lands, so the abort must win over the probe, never surface as an empty list.
+      if (book === 'pack-df-abort') {
+        if (pageLength === '1') {
+          dfAbortProbeSeen = true
+          return // never answered — the ask's own abort is what ends this
         }
         res.writeHead(200, { 'content-type': 'application/xml' })
         res.end(searchXml(`book-${book}`, []))
@@ -360,11 +424,18 @@ describe('collectPackCandidates', () => {
     expect(searchPatterns).toEqual(['Treibhausgas Treibhauspotential'])
     expect(climate.candidates.length).toBeGreaterThan(0)
 
-    // Zero hits and NO narrower pattern to try (every kept term is long): exactly one search,
-    // an honest empty result.
+    // Zero hits and NO narrower pattern to try (every kept term is long): no length-based
+    // retry — but the #353 ladder still has two terms to work with, so this leg now issues
+    // ONE search plus TWO document-frequency probes (this fixture never answers
+    // `opensearch:totalResults`, so both probes resolve unknown and nothing is narrowed — an
+    // honest empty result, not a second search).
     searchPatterns.length = 0
+    allSearchRequests.length = 0
     const none = await collectPackCandidates(port, [{ id: 'pack-retry', title: 'Retry' }], 'Warum steigt der Meeresspiegel?')
     expect(searchPatterns).toEqual(['steigt Meeresspiegel'])
+    const noneRequests = allSearchRequests.filter((r) => r.book === 'pack-retry')
+    expect(noneRequests.map((r) => r.pattern)).toEqual(['steigt Meeresspiegel', 'steigt', 'Meeresspiegel'])
+    expect(noneRequests.map((r) => r.pageLength)).toEqual([String(ARTICLES_PER_PACK), '1', '1'])
     expect(none.candidates).toEqual([])
     expect(none.outcomes[0]).toMatchObject({ packId: 'pack-retry', status: 'searched', found: 0 })
   })
@@ -427,6 +498,89 @@ describe('collectPackCandidates', () => {
     // second probe, no narrowed re-search.
     expect(failRequests.map((r) => r.pattern)).toEqual(['Xenongehalt Betonwerte', 'Xenongehalt'])
     expect(failRequests.map((r) => r.pageLength)).toEqual([String(ARTICLES_PER_PACK), '1'])
+  })
+
+  // #353 review fix 1 (CORRECTNESS): `narrowByFrequency` must narrow the FULL kept-term list,
+  // not just the probed prefix — otherwise a pattern longer than `DF_PROBE_MAX_TERMS` silently
+  // drops its un-probed tail (which could be the question's subject) instead of keeping it.
+  it('#353 a pattern longer than DF_PROBE_MAX_TERMS keeps its un-probed terms in the narrowed re-search', async () => {
+    allSearchRequests.length = 0
+    const { candidates, outcomes } = await collectPackCandidates(
+      port,
+      [{ id: 'pack-df8', title: 'Eight terms' }],
+      DF8_QUESTION
+    )
+    expect(candidates.length).toBeGreaterThan(0)
+    expect(outcomes[0]).toMatchObject({ packId: 'pack-df8', status: 'searched', reason: null })
+
+    const requests = allSearchRequests.filter((r) => r.book === 'pack-df8')
+    expect(requests.map((r) => r.pattern)).toEqual([
+      'Alphaterm Betaterm Gammaterm Deltaterm Epsilonterm Zetaterm Etaterm Thetaterm', // stage 1
+      'Alphaterm', // 6 probes — Etaterm/Thetaterm are past the cap and never probed
+      'Betaterm',
+      'Gammaterm',
+      'Deltaterm',
+      'Epsilonterm',
+      'Zetaterm',
+      DF8_NARROWED_PATTERN // Betaterm (df 0) dropped; Etaterm AND Thetaterm both survive
+    ])
+    expect(requests.map((r) => r.pageLength)).toEqual([
+      String(ARTICLES_PER_PACK),
+      '1',
+      '1',
+      '1',
+      '1',
+      '1',
+      '1',
+      String(ARTICLES_PER_PACK)
+    ])
+  })
+
+  // #353 review fix 3 (DEADLINE): a probe must not sit out the client's 15 s default under the
+  // arm's 20 s per-ask deadline — `DF_PROBE_TIMEOUT_MS` bounds it to a few seconds instead.
+  it('#353 a probe that never answers ends the ladder fail-soft within DF_PROBE_TIMEOUT_MS, not the 15 s default', async () => {
+    const startedAt = Date.now()
+    const { candidates, outcomes } = await collectPackCandidates(
+      port,
+      [{ id: 'pack-df-timeout', title: 'Stalled probe' }],
+      'Erkläre Xenongehalt Betonwerte'
+    )
+    const elapsedMs = Date.now() - startedAt
+    expect(candidates).toEqual([])
+    expect(outcomes[0]).toMatchObject({
+      packId: 'pack-df-timeout',
+      status: 'searched',
+      reason: null,
+      found: 0
+    })
+    // Comfortably above DF_PROBE_TIMEOUT_MS (scheduling slack) and comfortably below the
+    // client's old 15 s default — proves the SHORT budget fired, not the long one.
+    expect(elapsedMs).toBeGreaterThanOrEqual(DF_PROBE_TIMEOUT_MS)
+    expect(elapsedMs).toBeLessThan(10_000)
+  }, 15_000)
+
+  // #353 review fix 4 (TESTS): an ask aborted while a document-frequency probe is in flight must
+  // reject with the abort — mirroring the existing P1b "an aborted ask signal propagates" leg —
+  // never resolve to an empty candidate list.
+  it('#353 an ask aborted while a probe is in flight rejects, never resolves to an empty list', async () => {
+    dfAbortProbeSeen = false
+    const ac = new AbortController()
+    const pending = collectPackCandidates(
+      port,
+      [{ id: 'pack-df-abort', title: 'Abort probe' }],
+      'Erkläre Xenongehalt Betonwerte',
+      ac.signal
+    )
+    expect(await waitUntilTrue(() => dfAbortProbeSeen)).toBe(true)
+    ac.abort()
+    const err = await pending.then(
+      () => {
+        throw new Error('expected the aborted ask to reject, but it resolved')
+      },
+      (e: unknown) => e
+    )
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).name).toBe('AbortError')
   })
 
   it('isolates a failing pack — the healthy pack still contributes', async () => {

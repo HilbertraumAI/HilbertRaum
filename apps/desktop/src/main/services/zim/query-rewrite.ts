@@ -28,9 +28,16 @@
 // deliberately (libzim 9.4.0's Xapian query parser, see above). `narrowByFrequency` is the pure
 // decision at the bottom of that last-resort ladder: given each term's own archive-wide hit
 // COUNT (`arm.ts` probes it via `client.ts` `searchPackTotal`, `pageLength=1`, up to
-// `DF_PROBE_MAX_TERMS` terms), it picks the one term most likely responsible and returns the
-// pattern without it — or null when there is nothing left to try or nothing worth dropping.
-// `docs/rag-design.md` §17 D-Z18 carries the amendment record.
+// `DF_PROBE_MAX_TERMS` of them — every term beyond that cap is simply never probed and is KEPT,
+// same as any other term `narrowByFrequency` was not told a count for), it picks the one term
+// most likely responsible and returns the pattern without it — or null when there is nothing
+// left to try or nothing worth dropping. A probe that THROWS (a non-200, a timeout) abandons the
+// whole ladder before `narrowByFrequency` is even called — it never turns into an "unknown"
+// entry — so the only terms that can be genuinely "unknown" to it are ones past the cap or ones
+// whose own probe resolved with no parseable total. `docs/rag-design.md` §17 D-Z18 carries the
+// amendment record. `searchPattern` reports `terms`/`retryTerms` alongside `pattern`/`retry` so
+// the ladder probes the TOKENS Xapian actually saw, never a naive re-split of the pattern string
+// (which would probe raw punctuation for a fallback like "Was ist das?").
 
 /** German + English function words (articles, pronouns, prepositions, auxiliaries, …). */
 const STOP_WORDS = new Set<string>(
@@ -76,9 +83,16 @@ export const RETRY_MIN_TERM_CHARS = 5
 export interface SearchRewrite {
   /** The pattern to send first: the question's content words, original spelling and order. */
   pattern: string
+  /** `pattern`'s own kept terms, in order — the tokens Xapian actually receives, never a
+   *  re-split of the joined string (punctuation-free by construction, unlike `pattern.split(' ')`
+   *  on a raw-fallback question). Empty exactly when `pattern` IS the raw-question fallback
+   *  (#353: the ladder reads this instead of re-tokenizing, and a length < 2 skips it for free). */
+  terms: string[]
   /** A narrower pattern to try ONCE when `pattern` finds nothing, or null when it would be the
    *  same query (or empty): the kept terms of `RETRY_MIN_TERM_CHARS` or more characters. */
   retry: string | null
+  /** `retry`'s own kept terms, in the same order as `terms` — empty when `retry` is null. */
+  retryTerms: string[]
   /** True when the strip changed the question (false = the raw question is the pattern). */
   rewritten: boolean
 }
@@ -98,11 +112,11 @@ export function searchPattern(question: string): SearchRewrite {
     seen.add(key)
     kept.push(token)
   }
-  if (kept.length === 0) return { pattern: raw, retry: null, rewritten: false }
+  if (kept.length === 0) return { pattern: raw, terms: [], retry: null, retryTerms: [], rewritten: false }
   const pattern = kept.join(' ')
   const longer = kept.filter((t) => t.length >= RETRY_MIN_TERM_CHARS)
   const retry = kept.length >= 2 && longer.length > 0 && longer.length < kept.length ? longer.join(' ') : null
-  return { pattern, retry, rewritten: pattern !== raw }
+  return { pattern, terms: kept, retry, retryTerms: retry !== null ? longer : [], rewritten: pattern !== raw }
 }
 
 /** How many of the last pattern's terms the #353 document-frequency ladder probes, at most — a
@@ -112,9 +126,11 @@ export const DF_PROBE_MAX_TERMS = 6
 /**
  * #353: which term the document-frequency ladder should drop, given each term's archive-wide
  * hit COUNT (`df`, from `client.ts` `searchPackTotal`, `pageLength=1`). A term ABSENT from `df`
- * — its probe failed, or it was never sent (the `DF_PROBE_MAX_TERMS` cap) — is KEPT and never
- * treated as the lowest: dropping a term we know nothing about could just as easily remove the
- * one word that mattered.
+ * — never sent because it was past the `DF_PROBE_MAX_TERMS` cap, or its own probe resolved with
+ * no parseable total — is KEPT and never treated as the lowest: dropping a term we know nothing
+ * about could just as easily remove the one word that mattered. (A probe that THROWS — a
+ * non-200, a timeout — abandons the whole ladder before this function is ever called; it is not
+ * how a term ends up "absent" here.)
  *
  * Rule: drop every term whose df is exactly 0 (Xapian's AND can never find it — a typo or a
  * word truly absent from the archive); when no term has df 0, drop the SINGLE lowest-df term

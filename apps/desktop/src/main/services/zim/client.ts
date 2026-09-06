@@ -234,19 +234,23 @@ export function parseSearchTotal(xml: string): number | null {
  * `pageLength=1` — the smallest page that still makes kiwix-serve compute and report the total.
  * This is the document-frequency PROBE the #353 ladder uses to narrow a pattern that found
  * nothing (`arm.ts` `runPack`, `query-rewrite.ts` `narrowByFrequency`). Same failure contract as
- * `searchPack`: throws on a non-200 status; resolves `null` when the response lacks (or does not
- * parse) `<opensearch:totalResults>`.
+ * `searchPack`: throws on a non-200 status OR a timeout; resolves `null` when the response lacks
+ * (or does not parse) `<opensearch:totalResults>`.
  */
 export async function searchPackTotal(
   port: number,
   bookUuid: string,
   pattern: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** The probe's own per-request timeout (`arm.ts` `DF_PROBE_TIMEOUT_MS`) — deliberately
+   *  shorter than `DEFAULT_TIMEOUT_MS`, so one stalled probe cannot sit out the client's whole
+   *  15 s default under the arm's single 20 s per-ask deadline. Production always sets it. */
+  opts: { timeoutMs?: number } = {}
 ): Promise<number | null> {
   const path =
     `/search?books.id=${encodeURIComponent(bookUuid)}` +
     `&pattern=${encodeURIComponent(pattern)}&format=xml&pageLength=1`
-  const res = await kiwixGet(port, path, { signal })
+  const res = await kiwixGet(port, path, { signal, timeoutMs: opts.timeoutMs })
   if (res.status !== 200) {
     throw new Error(`kiwix-serve search failed (HTTP ${res.status})`)
   }

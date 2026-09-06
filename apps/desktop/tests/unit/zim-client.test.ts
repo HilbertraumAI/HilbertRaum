@@ -332,6 +332,20 @@ describe('parseSearchTotal / searchPackTotal (#353 document-frequency ladder)', 
     ).toBeNull()
   })
 
+  it('parses an explicit 0 as the number 0, never as absent', () => {
+    expect(
+      parseSearchTotal('<rss><channel><opensearch:totalResults>0</opensearch:totalResults></channel></rss>')
+    ).toBe(0)
+  })
+
+  it('parses the total across whitespace/newline padding inside the element', () => {
+    expect(
+      parseSearchTotal(
+        '<rss><channel><opensearch:totalResults>\n   42  \n</opensearch:totalResults></channel></rss>'
+      )
+    ).toBe(42)
+  })
+
   it('requests pageLength=1 on the same /search route and returns the parsed total', async () => {
     requestLog.length = 0
     await expect(searchPackTotal(port, 'uuid-1', 'Treibhausgas')).resolves.toBe(301)

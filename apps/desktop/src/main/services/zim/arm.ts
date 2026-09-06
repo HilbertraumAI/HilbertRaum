@@ -56,6 +56,15 @@ export const PACK_SEARCH_CONCURRENCY = 2
  * budget, while a long sequence of timeouts still ends.
  */
 export const EXTERNAL_RETRIEVAL_DEADLINE_MS = 20_000
+/**
+ * The per-probe timeout for the #353 document-frequency ladder (`client.ts` `searchPackTotal`).
+ * NEW for this stage — it does not change `EXTERNAL_RETRIEVAL_DEADLINE_MS` or any existing
+ * `/search` or `/raw` timeout. A probe asks for one small number; letting it sit out the
+ * client's 15 s default (`DEFAULT_TIMEOUT_MS`) under the arm's single 20 s per-ask deadline
+ * would let one stalled probe starve every pack still waiting for its turn at
+ * `PACK_SEARCH_CONCURRENCY`, so probes get a short budget of their own instead.
+ */
+export const DF_PROBE_TIMEOUT_MS = 3_000
 
 export interface ArmPack {
   /** knowledge_packs.id (ZIM UUID) — the books.id search filter. */
@@ -195,21 +204,24 @@ export async function collectPackCandidates(
   //   2. once, the narrower `retry` (the kept terms of five or more characters) when it differs;
   //   3. the #353 document-frequency LADDER — stage 2's length threshold cannot help a pattern
   //      whose every term is already that long (a rare or misspelled five-plus-character word).
-  //      When the last pattern tried still has two or more terms, probe each term's own
-  //      archive-wide hit count (`searchPackTotal`, pageLength=1, up to `DF_PROBE_MAX_TERMS`
-  //      terms, sequentially) and search once more without the term `narrowByFrequency` picks
-  //      as the likely culprit. A probe (or the narrowed search) failing ends the ladder without
-  //      a verdict: stages 1–2 already answered honestly at zero, so the pack stays `searched`
-  //      with 0 found rather than `search-failed` (`docs/rag-design.md` §17 D-Z18 amendment).
+  //      When the last pattern tried still has two or more terms (`rewrite.terms` / `retryTerms`
+  //      — the tokens Xapian actually saw, never a re-split of the pattern string), probe up to
+  //      `DF_PROBE_MAX_TERMS` of them for their own archive-wide hit count (`searchPackTotal`,
+  //      pageLength=1, `DF_PROBE_TIMEOUT_MS` each, sequentially) and narrow the FULL term list —
+  //      not just the probed prefix, so a pattern longer than the cap keeps its untouched tail —
+  //      with `narrowByFrequency`, then search once more when it returns a pattern. A probe (or
+  //      the narrowed search) failing ends the ladder without a verdict: stages 1–2 already
+  //      answered honestly at zero, so the pack stays `searched` with 0 found rather than
+  //      `search-failed` (`docs/rag-design.md` §17 D-Z18 amendment).
   const rewrite = searchPattern(question)
   async function runPack(item: PackWork): Promise<void> {
     const { pack } = item
     let hits
-    let lastPattern = rewrite.pattern
+    let lastTerms = rewrite.terms
     try {
       hits = await searchPack(port, pack.id, rewrite.pattern, ARTICLES_PER_PACK, signal)
       if (hits.length === 0 && rewrite.retry !== null) {
-        lastPattern = rewrite.retry
+        lastTerms = rewrite.retryTerms
         hits = await searchPack(port, pack.id, rewrite.retry, ARTICLES_PER_PACK, signal)
       }
     } catch (err) {
@@ -220,16 +232,24 @@ export async function collectPackCandidates(
       return
     }
     if (hits.length === 0) {
-      const terms = lastPattern.split(/\s+/).filter((t) => t.length > 0)
-      if (terms.length >= 2) {
-        const probeTerms = terms.slice(0, DF_PROBE_MAX_TERMS)
+      const patternTerms = lastTerms
+      // Empty exactly when the last pattern tried was the raw-question fallback (no kept
+      // terms) — this also skips a single-term pattern, which `narrowByFrequency` could never
+      // narrow anyway.
+      if (patternTerms.length >= 2) {
+        const probeTerms = patternTerms.slice(0, DF_PROBE_MAX_TERMS)
         const df = new Map<string, number>()
         try {
           for (const term of probeTerms) {
-            const total = await searchPackTotal(port, pack.id, term, signal)
+            const total = await searchPackTotal(port, pack.id, term, signal, {
+              timeoutMs: DF_PROBE_TIMEOUT_MS
+            })
             if (total !== null) df.set(term, total)
           }
-          const narrowed = narrowByFrequency(probeTerms, df)
+          // The FULL term list, not just `probeTerms`: a term past the cap was never probed,
+          // so it has no `df` entry and `narrowByFrequency` keeps it — exactly like any other
+          // unprobed term, never silently dropped.
+          const narrowed = narrowByFrequency(patternTerms, df)
           if (narrowed !== null) {
             hits = await searchPack(port, pack.id, narrowed, ARTICLES_PER_PACK, signal)
           }
