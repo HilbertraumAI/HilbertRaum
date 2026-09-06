@@ -137,7 +137,7 @@ export interface ModelManifest {
    * estimate (`estimateGraphicsNeedMib` in services/models.ts; model-benchmarks.md §6.6,
    * PR #308 audit decision 11). Optional in YAML (`estimated_context_cache_gib`, number ≥ 0);
    * absent → the picker books its 0.5 GiB default. Config-derived (`tmp/PR-308-check-kv.json`
-   * at the time of writing); the GGUF-header estimate (BUILD_STATE §5 item 21 (e)) retires it.
+   * at the time of writing); the GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
    */
   estimatedContextCacheGib?: number
   licenseReview: LicenseReview

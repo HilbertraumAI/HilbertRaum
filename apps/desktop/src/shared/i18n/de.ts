@@ -1763,6 +1763,8 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.evidence_review_ready': 'Nachweis-Prüfung als fertig markiert',
   'diag.audit.evidence_review_deleted': 'Nachweis-Prüfung gelöscht',
   'diag.audit.evidence_pack_exported': 'Nachweispaket exportiert',
+  'diag.audit.knowledge_pack_added': 'Wissenspaket hinzugefügt',
+  'diag.audit.knowledge_pack_removed': 'Wissenspaket entfernt',
   'diag.accel.gpuFallbackName': 'Grafikkarte',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Eingebauter Demo-Modus',
@@ -2534,6 +2536,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportLog': 'Diagnose-Logs speichern',
   'main.dialog.filterDocuments': 'Dokumente',
   'main.dialog.filterAll': 'Alle Dateien',
+  'main.zim.unavailable': 'Wissenspakete sind in dieser Sitzung nicht verfügbar.',
+  'main.zim.dialogTitle': 'Wissenspakete hinzufügen',
+  'main.zim.filterZim': 'ZIM-Archive',
   'main.dialog.chooseImage': 'Bild auswählen',
   'main.dialog.filterImages': 'Bilder',
   // #120 Punkt 4: die IPC-Ablehnungstexte des Bild-Moduls (fast toter Text — der Renderer zeigt
@@ -2658,6 +2663,111 @@ export const de: Record<keyof typeof en, string> = {
   'chat.scope.projectNamed': 'Projekt: {name}',
   'chat.scope.projectCount.one': '{count} Projekt',
   'chat.scope.projectCount.other': '{count} Projekte',
+  // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
+  'chat.scope.packsTitle': 'Wissenspakete',
+  'chat.scope.packUnavailable': 'nicht verfügbar',
+  'chat.scope.packNamed': 'Paket: {name}',
+  'chat.scope.packCount.one': '{count} Wissenspaket',
+  'chat.scope.packCount.other': '{count} Wissenspakete',
+  // Dokumente-Schalter (#301 P4, Befund M10): die ausdrückliche Wahl „aus den Paketen
+  // antworten, nicht aus meinen Dokumenten“. Der Hinweis nennt, was AN bleibt — Dateien im
+  // Chat werden nie verworfen.
+  'chat.scope.documentsToggle': 'Meine Dokumente durchsuchen',
+  'chat.scope.documentsToggleHint':
+    'Aus: Antworten kommen nur aus den angehakten Wissenspaketen. Dateien in diesem Chat werden weiterhin genutzt.',
+  'chat.scope.documentsOffSuffix': 'Dokumente aus',
+  'chat.scope.documentsOffNoPacks': 'keine Quellen — Dokumente einschalten oder ein Wissenspaket anhaken',
+  // D6 (#301 P4, Plan §9.21 (e)8): ein ANGEHAKTES Paket, das nicht mitwirken kann, bleibt
+  // abwählbar und nennt den Grund. Nichts wird versteckt — auch ein aus der Verwaltung
+  // verschwundenes Paket bleibt als abwählbare Zeile sichtbar.
+  'chat.scope.packDisabled': 'deaktiviert',
+  'chat.scope.packRemoved': 'Entferntes Paket',
+  'chat.scope.packLimit.one': 'Bis zu {count} Wissenspaket pro Chat',
+  'chat.scope.packLimit.other': 'Bis zu {count} Wissenspakete pro Chat',
+  // ---- Ergebnisse je Wissenspaket und Frage (#301 P4, Befunde M6/M7 — PackOutcomesNotice) ----
+  // Eine Zeile pro angehaktem Paket: durchsucht mit Fundstellenzahl, oder nicht durchsucht /
+  // fehlgeschlagen mit festem Grund. CODES bilden auf diesen Text ab — nie ein Pfad, ein
+  // Dateiname oder die Fehlerausgabe eines Werkzeugs.
+  'chat.packs.outcome.summary':
+    'Wissenspakete: {searched} durchsucht · {other} nicht durchsucht oder fehlgeschlagen',
+  'chat.packs.outcome.removedPack': 'ein entferntes Paket',
+  'chat.packs.outcome.passages.one': '{count} Fundstelle',
+  'chat.packs.outcome.passages.other': '{count} Fundstellen',
+  'chat.packs.outcome.unknown': 'Wissenspakete: für diese ältere Antwort nicht festgehalten',
+  'chat.packs.outcome.searched': 'durchsucht',
+  'chat.packs.outcome.selection-limit': 'nicht durchsucht: Auswahlgrenze (12 pro Chat)',
+  'chat.packs.outcome.removed': 'nicht durchsucht: Paket entfernt',
+  'chat.packs.outcome.disabled': 'nicht durchsucht: Paket deaktiviert',
+  'chat.packs.outcome.file-missing': 'nicht durchsucht: Datei fehlt',
+  'chat.packs.outcome.identity-mismatch': 'nicht durchsucht: anderes Archiv an diesem Ort',
+  'chat.packs.outcome.not-served': 'nicht durchsucht: Namenskonflikt mit einem anderen Paket',
+  'chat.packs.outcome.not-searchable': 'nicht durchsucht: kein Volltextindex',
+  'chat.packs.outcome.tools-missing': 'nicht durchsucht: kiwix-tools nicht installiert',
+  'chat.packs.outcome.mode': 'nicht durchsucht: Ganzdokument-Antworten lesen nur das Dokument',
+  'chat.packs.outcome.search-failed': 'fehlgeschlagen: Suchfehler',
+  'chat.packs.outcome.read-failed': 'fehlgeschlagen: kein Artikel konnte gelesen werden',
+  'chat.packs.outcome.timeout': 'fehlgeschlagen: Zeitüberschreitung',
+  'chat.packs.outcome.deadline': 'nicht durchsucht: keine Zeit mehr für diese Frage',
+  'chat.packs.outcome.server-restarted':
+    'fehlgeschlagen: der Paketserver wurde während dieser Frage neu gestartet',
+  'chat.sources.openArticle': 'Artikel öffnen',
+  'chat.article.title': 'Artikel',
+  'chat.article.from': 'Aus {archive} – Offline-Kopie',
+  'chat.article.loading': 'Artikel wird geladen…',
+  'chat.article.unavailable': 'Dieser Artikel ist gerade nicht verfügbar. Das Paket ist möglicherweise deaktiviert, entfernt oder das Laufwerk nicht angeschlossen.',
+  'chat.article.partial': 'Nur der erste Teil dieses Artikels konnte angezeigt werden.',
+  // ---- #301 P6 (a11y pass; plan §9.23 (b)4/(b)6 and decision (c)5) — BEGIN -----------------
+  'chat.scope.packMissing': 'Datei fehlt',
+  'chat.scope.packMismatch': 'anderes Archiv an diesem Ort',
+  'chat.scope.packNotSearchable': 'kein Volltextindex',
+  'chat.sources.openArticleNamed': 'Artikel öffnen: {title}',
+  // ---- #301 P6 — END ------------------------------------------------------------------------
+  'docs.section.sources': 'Nachschlagewerke',
+  'docs.section.packs': 'Wissenspakete',
+  'packs.add': 'Pakete hinzufügen…',
+  'packs.addBusy': 'Wird hinzugefügt…',
+  'packs.refresh': 'Aktualisieren',
+  'packs.lead': 'ZIM-Archive (zum Beispiel eine Offline-Wikipedia), aus denen der Chat antworten kann. Dateien werden an Ort und Stelle genutzt und nie kopiert; Archive in den zim-Ordner des Laufwerks legen oder hier hinzufügen.',
+  'packs.loading': 'Pakete werden geladen…',
+  'packs.refreshing': 'Laufwerk wird nach Paketen durchsucht…',
+  'packs.emptyTitle': 'Noch keine Wissenspakete',
+  'packs.emptyLine': 'Ein ZIM-Archiv hinzufügen oder in den zim-Ordner des Laufwerks kopieren und diese Ansicht erneut öffnen.',
+  'packs.toolsMissing': 'Die kiwix-tools-Programme sind auf diesem Laufwerk nicht installiert; Pakete können daher nicht hinzugefügt oder durchsucht werden. Der Installationsschritt steht im Benutzerhandbuch.',
+  'packs.addedToast.one': 'Wissenspaket hinzugefügt',
+  'packs.addedToast.other': '{count} Wissenspakete hinzugefügt',
+  // #301 P5, Fund L1 (Plan §9.19 (c)3): die Ergebnisse des typisierten Hinzufügen-DTOs.
+  'packs.addPartial': '{failed} von {total} Archiven konnten nicht hinzugefügt werden.',
+  'packs.addFailed.notAZim': 'Die gewählte Datei ist kein lesbares ZIM-Archiv.',
+  'packs.addFailed.toolsMissing': 'Die kiwix-tools-Programme sind auf diesem Laufwerk nicht installiert; Pakete können daher nicht hinzugefügt oder durchsucht werden. Der Installationsschritt steht im Benutzerhandbuch.',
+  'packs.addFailed.manager': 'Das Archiv konnte nicht von kiwix-manage gelesen werden. Prüfe, ob die Datei vollständig ist, und versuch es noch einmal.',
+  'packs.addFailed.other': 'Das Archiv konnte nicht hinzugefügt werden.',
+  'packs.removedToast': 'Wissenspaket entfernt',
+  'packs.articleCount.one': '{count} Artikel',
+  'packs.articleCount.other': '{count} Artikel',
+  'packs.state.enabled': 'Aktiv',
+  'packs.state.disabled': 'Deaktiviert',
+  'packs.state.missing': 'Datei fehlt',
+  'packs.state.missingTitle': 'Die Archivdatei wurde nicht gefunden – ist das Laufwerk angeschlossen?',
+  'packs.state.identityMismatch': 'Anderes Archiv',
+  'packs.state.identityMismatchTitle': 'Die Datei an diesem Speicherort ist ein anderes Archiv – dieses Paket entfernen und die Datei erneut hinzufügen',
+  // #301 P6 (Plan §9.23 (a) Zeile 5, (c)5): durch die `/suggest`-Sondierung am Ende eines
+  // Abgleichs bestätigt (P4 M7) — das Paket bleibt aktiv/lesbar, wird bei der Frage nur übersprungen.
+  'packs.state.notSearchable': 'Kein Volltextindex',
+  'packs.state.notSearchableTitle':
+    'Dieses Archiv hat keinen Volltextindex. Beim Fragen wird es übersprungen, seine Artikel bleiben aber lesbar.',
+  'packs.enable': 'Aktivieren',
+  'packs.disable': 'Deaktivieren',
+  'packs.working': 'Wird ausgeführt…',
+  'packs.remove': 'Entfernen',
+  // #301 P6 (Plan §9.23 (b)6): barrierefreie Namen für die Aktionsschaltflächen je Zeile —
+  // der sichtbare Text bleibt das einfache Verb; der vorgelesene Name nennt den Pakettitel.
+  'packs.enableNamed': '{title} aktivieren',
+  'packs.disableNamed': '{title} deaktivieren',
+  'packs.removeNamed': '{title} entfernen',
+  'packs.listLabel': 'Wissenspakete',
+  'packs.removeTitle': 'Dieses Wissenspaket entfernen?',
+  'packs.removeConfirm': 'Paket entfernen',
+  'packs.removeBody': 'Das Paket wird nur aus HilbertRaum entfernt – die Archivdatei auf dem Datenträger bleibt unangetastet. Chats, die es genutzt haben, greifen einfach nicht mehr darauf zu.',
   'chat.scope.docCount.one': '{count} Dokument',
   'chat.scope.docCount.other': '{count} Dokumente',
   'chat.scope.filesInChat.one': '{count} Datei in diesem Chat',
@@ -2971,6 +3081,10 @@ export const de: Record<keyof typeof en, string> = {
   'review.source.kind.whole_document_provenance': 'Herkunft: Gesamtdokument-Analyse',
   'review.source.kind.structured_record': 'Extrahierter Datensatz',
   'review.source.unresolved': 'Quelle konnte nicht eindeutig zugeordnet werden',
+  // ZIM-Welle (#294 review M11): abweichend von der obigen Dokument-Aussage — ein
+  // Archivartikel war von vornherein keinem Arbeitsbereich-Dokument zuzuordnen.
+  'review.source.archive':
+    'Artikel aus einem Wissenspaket – Identität und Inhalt lassen sich nicht gegen den Arbeitsbereich prüfen',
   'review.source.missingAtCreation': 'Quelle war beim Anlegen dieser Prüfung nicht verfügbar',
   // P4-Frische-Hinweise pro Quelle (Spec §15.4/§15.5).
   'review.source.changed': 'Das Quelldokument hat sich seit dem Anlegen dieser Prüfung geändert',
@@ -3052,6 +3166,11 @@ export const de: Record<keyof typeof en, string> = {
   'review.summary.sourcesUnresolved.one': '{count} Quelle konnte nicht eindeutig zugeordnet werden',
   'review.summary.sourcesUnresolved.other':
     '{count} Quellen konnten nicht eindeutig zugeordnet werden',
+  // ZIM-Welle (#294 review M11): Archive sind oben ausgeschlossen — eigene, getrennte Zahl.
+  'review.summary.sourcesArchive.one':
+    '{count} Quelle ist ein Artikel aus einem Wissenspaket und lässt sich nicht gegen den Arbeitsbereich prüfen',
+  'review.summary.sourcesArchive.other':
+    '{count} Quellen sind Artikel aus Wissenspaketen und lassen sich nicht gegen den Arbeitsbereich prüfen',
   'review.summary.sourcesMissing.one':
     '{count} Quelle war beim Anlegen dieser Prüfung nicht verfügbar',
   'review.summary.sourcesMissing.other':
@@ -3173,11 +3292,18 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.evidence.kindStructured': 'Strukturierter Extraktionsdatensatz',
   'packExport.evidence.page': 'Seite {n}',
   'packExport.evidence.sectionLabel': 'Abschnitt',
+  // ZIM-Welle (#294 review M11): Zeile mit dem Wissenspaket + der mono-Zeile mit dem Locator.
+  'packExport.evidence.archive': 'Wissenspaket',
+  'packExport.evidence.packId': 'Paket-ID',
+  'packExport.evidence.article': 'Artikel',
   'packExport.evidence.excerpt': 'Gespeicherter Auszug',
   'packExport.evidence.noExcerpt': 'Für diese Quelle wurde kein Auszug gespeichert.',
   'packExport.evidence.relations': 'Prüfer-Einordnungen',
   'packExport.evidence.identityUnresolved':
     'Die Identität dieses Quelldokuments konnte nicht gegen den Arbeitsbereich verifiziert werden.',
+  // M11: abweichend von der obigen Dokument-Aussage — nie beide auf derselben Karte.
+  'packExport.evidence.archiveIdentity':
+    'Diese Quelle ist ein Artikel aus einem Wissenspaket (ZIM-Archiv), kein Dokument aus dem Arbeitsbereich. Identität und Inhalt werden nicht gegen den Arbeitsbereich geprüft; die Paket-ID und der Artikelpfad identifizieren die Quelle.',
   'packExport.evidence.missingAtCreation':
     'Dieses Quelldokument fehlte bereits im Arbeitsbereich, als die Prüfung angelegt wurde.',
   // P4-Zustände zum Exportzeitpunkt (Spec §15.4/§15.5).
@@ -3219,8 +3345,12 @@ export const de: Record<keyof typeof en, string> = {
     '{count} Quelldokumente sind nicht mehr im Arbeitsbereich vorhanden.',
   'packExport.coverage.acknowledged': 'Die prüfende Person hat diese Änderung am {date} bestätigt.',
   'packExport.section.sources': 'Quellenregister',
-  'packExport.sources.colTitle': 'Dokument',
+  // #301 P6 (Plan §9.23 (c)3 i): von "Dokument" umbenannt — die erste Spaltenüberschrift des
+  // Registers steht auch über Archivzeilen.
+  'packExport.sources.colTitle': 'Quelle',
   'packExport.sources.colType': 'Dateityp',
+  // ZIM-Welle (#294 review M11): Typ-/Verfügbarkeitswerte für eine Archivzeile.
+  'packExport.sources.typeArchive': 'Artikel aus einem Wissenspaket (ZIM-Archiv)',
   'packExport.sources.colSha': 'SHA-256 zum Prüfzeitpunkt',
   'packExport.sources.colAvailability': 'Verfügbarkeit beim Anlegen der Prüfung',
   'packExport.sources.colAvailabilityExport': 'Verfügbarkeit beim Export',
@@ -3228,6 +3358,7 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.sources.availabilityMissing': 'Fehlte',
   'packExport.sources.availabilityChanged': 'Seit der Prüfung geändert',
   'packExport.sources.availabilityUnknown': 'Nicht überprüfbar',
+  'packExport.sources.availabilityArchive': 'Archivartikel – nicht gegen den Arbeitsbereich prüfbar',
   'packExport.sources.hashExcluded': 'Über Exportoptionen ausgeschlossen',
   'packExport.sources.pathNote':
     'Ursprüngliche Dateipfade sind in einem Nachweispaket niemals enthalten.',

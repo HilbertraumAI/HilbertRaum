@@ -153,6 +153,15 @@ export interface VectorIndexOptions {
    * globally excluded from default retrieval (plan C1).
    */
   includeArchived?: boolean
+  /**
+   * Knowledge packs (#301 P4, finding M10): the resolved deny-all document scope
+   * (`RetrievalScope.noDocuments`). Set it and the index returns NOTHING — `search()` answers
+   * `[]` before either scan and the resident fast path is disabled. The guard has to live here,
+   * not only in `buildScopeFilter`: `canIterateResident()` bypasses the SQL builder entirely
+   * (no ids + no archived documents ⇒ iterate the whole resident map), so without it a
+   * documents-off ask would still be answered from the whole corpus.
+   */
+  noDocuments?: boolean
 }
 
 export class VectorIndex {
@@ -160,6 +169,7 @@ export class VectorIndex {
   private readonly documentIds: string[] | null
   private readonly collectionIds: string[] | null
   private readonly includeArchived: boolean
+  private readonly noDocuments: boolean
 
   constructor(
     private readonly db: Db,
@@ -173,11 +183,16 @@ export class VectorIndex {
     const colls = options?.collectionIds
     this.collectionIds = colls && colls.length > 0 ? colls : null
     this.includeArchived = options?.includeArchived ?? false
+    this.noDocuments = options?.noDocuments === true
   }
 
   /** Rank stored chunks by cosine similarity to `queryVector`; return the top `topK`. */
   search(queryVector: Float32Array, topK: number): VectorSearchHit[] {
     if (topK <= 0) return []
+    // Deny-all document scope (#301 P4, M10): return before EITHER scan, so a direct vector
+    // caller honours it too — the scoped scan would return nothing anyway (`buildScopeFilter`
+    // is fail-closed below), but the resident fast path would happily scan the whole map.
+    if (this.noDocuments) return []
     // P2 (full-audit-2026-06-30): when there is NO document/collection scope and the archived
     // exclusion removes nothing, the model-id-filtered resident map already IS the candidate set,
     // so iterate it directly and skip the per-query `SELECT chunk_id` marshal entirely. Any real
@@ -239,7 +254,10 @@ export class VectorIndex {
       {
         documentIds: this.documentIds,
         collectionIds: this.collectionIds,
-        includeArchived: this.includeArchived
+        includeArchived: this.includeArchived,
+        // Deny-all (#301 P4, M10): `search()` already returned above, so this only matters if a
+        // future caller reaches the scoped scan directly — the builder is fail-closed (`0`).
+        ...(this.noDocuments ? { noDocuments: true as const } : {})
       },
       'c.document_id'
     )
@@ -279,6 +297,10 @@ export class VectorIndex {
    * `documents` table (≪ the chunk count it saves marshalling), only on the otherwise-eligible path.
    */
   private canIterateResident(): boolean {
+    // Deny-all document scope (#301 P4, M10): the resident map is never the candidate set —
+    // the candidate set is empty. (`search()` short-circuits before this, so this is the
+    // belt-and-braces half of the guard for any future direct caller of the scan pair.)
+    if (this.noDocuments) return false
     if (this.documentIds !== null || this.collectionIds !== null) return false
     if (this.includeArchived) return true
     return !this.hasArchivedDocuments()

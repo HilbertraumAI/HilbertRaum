@@ -27,6 +27,14 @@ import { segmentAnswerBlocks } from './segment'
 //    answers) pins the row; a legacy citation resolves by EXACT title match only when the
 //    match is unique — zero or multiple matches → `identity: 'unresolved'` (distinct from
 //    a resolved-but-deleted source, which is `availabilityAtCreation: 'missing'`).
+//  - An ARCHIVE citation (`sourceKind: 'archive'` — a ZIM knowledge-pack article; PR #294
+//    review H2) names no `documents` row at all: it is ALWAYS unresolved, with no document
+//    id, hash, mime type or availability claim, and no `documents` query runs for it. The
+//    marker is checked BEFORE both resolution branches, so a library document that happens
+//    to share the article's title can never lend it an identity — and stale or malformed
+//    data carrying a `documentId` alongside the marker cannot either. Its locator
+//    (`packId` + `articlePath`) and `archiveTitle` are frozen as display provenance and
+//    stable identity, independent of resolution (#294 review M11).
 //  - Generation metadata is synthesized from the conversation row + injected app/catalog
 //    facts (plan §1.3); every field optional — absent renders "Unavailable", never invented
 //    (spec §20.2/§25.5).
@@ -139,7 +147,20 @@ export function buildEvidenceSourceSnapshots(
     let documentSha256: string | null = null
     let mimeType: string | null = null
 
-    if (c.documentId) {
+    // PR #294 review H2 — the archive marker is checked FIRST and wins outright: an archive
+    // citation names an article inside a registered ZIM pack, never a `documents` row, so
+    // neither the document-id branch nor the legacy title branch may run for it (a same-titled
+    // library document would otherwise hand it that document's id and SHA-256, and freshness
+    // would hash-compare a document that was never the source). Never read `c.documentId` on
+    // an archive citation, even when stale or malformed data supplies one.
+    const isArchive = c.sourceKind === 'archive'
+    if (isArchive) {
+      identity = 'unresolved'
+      documentId = null
+      documentSha256 = null
+      mimeType = null
+      availability = null
+    } else if (c.documentId) {
       // Post-Phase-0 citation: the id pins identity even when the row is gone (a deleted
       // source is a RESOLVED identity that is missing — spec §25.2, never "unresolved").
       identity = 'resolved'
@@ -180,7 +201,14 @@ export function buildEvidenceSourceSnapshots(
       sectionLabel: c.section ?? null,
       snippet: c.snippet ?? null,
       sourceChunkId: c.chunkId ?? null,
-      availabilityAtCreation: identity === 'resolved' ? availability : null
+      availabilityAtCreation: identity === 'resolved' ? availability : null,
+      // Knowledge packs (#294 review H2/M11): present on EVERY snapshot, like `pageNumber`
+      // — `sourceKind` classifies the source, the three locators carry the archive's stable
+      // identity + display provenance and are null for document sources.
+      sourceKind: isArchive ? 'archive' : 'document',
+      archiveTitle: isArchive ? (c.archiveTitle ?? null) : null,
+      packId: isArchive ? (c.packId ?? null) : null,
+      articlePath: isArchive ? (c.articlePath ?? null) : null
     }
   })
 }

@@ -16,6 +16,10 @@ import type {
   BenchmarkResult,
   ChatOptions,
   Collection,
+  KnowledgePack,
+  KnowledgePackAddResult,
+  KnowledgePackStatus,
+  KnowledgePacksChangedEvent,
   ContextUsage,
   Conversation,
   ConversationSearchResult,
@@ -535,6 +539,39 @@ const api = {
 
   // ---- Document organization — collections (projects + built-ins, plan §16) ----
   /** All collections (built-ins first, then projects by name). */
+  // ---- Knowledge packs (ZIM wave; handlers in registerZimIpc.ts) ----
+  /** Registered packs, DATABASE-ONLY (#301 P3b, finding L7) — no drive discovery, no
+   *  filesystem probe; a session-start pass or an explicit `refreshKnowledgePacks()` is what
+   *  heals availability. */
+  listKnowledgePacks: (): Promise<KnowledgePack[]> => ipcRenderer.invoke(IPC.listKnowledgePacks),
+  /** Native .zim picker + registration in one main-side call — the typed outcome DTO (#301 P5,
+   *  finding L1): `'cancelled'` (dialog dismissed/empty), `'success'`, `'partial'` (a mixed
+   *  batch — the archives that DID register are in `added`), or `'failure'`. Never throws for an
+   *  admitted per-file failure any more. */
+  addKnowledgePacks: (): Promise<KnowledgePackAddResult> => ipcRenderer.invoke(IPC.addKnowledgePacks),
+  /** Remove a registration (the archive file is never touched). */
+  removeKnowledgePack: (id: string): Promise<void> => ipcRenderer.invoke(IPC.removeKnowledgePack, id),
+  /** Enable/disable a pack. */
+  setKnowledgePackEnabled: (id: string, enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke(IPC.setKnowledgePackEnabled, id, enabled),
+  /** Whether kiwix-tools is installed, and whether a reconciliation pass is running. */
+  getKnowledgePackStatus: (): Promise<KnowledgePackStatus> =>
+    ipcRenderer.invoke(IPC.getKnowledgePackStatus),
+  /** Kick off a background reconciliation (drive discovery + availability heal); returns at
+   *  once — completion arrives via `onKnowledgePacksChanged`. */
+  refreshKnowledgePacks: (): Promise<{ started: boolean }> =>
+    ipcRenderer.invoke(IPC.refreshKnowledgePacks),
+  /** One pack article as plain sectioned text for the citation viewer; null = unavailable. */
+  getPackArticle: (
+    packId: string,
+    articlePath: string
+  ): Promise<{
+    title: string
+    sections: Array<{ label: string | null; text: string }>
+    /** True when only the first part of the article could be converted. */
+    partial: boolean
+  } | null> =>
+    ipcRenderer.invoke(IPC.getPackArticle, packId, articlePath),
   listCollections: (): Promise<Collection[]> => ipcRenderer.invoke(IPC.listCollections),
   /** Create a project. */
   createCollection: (
@@ -796,6 +833,13 @@ const api = {
     const handler = (_e: unknown, p: ModelVerifyProgress) => cb(p)
     ipcRenderer.on(EVENTS.modelVerifyProgress, handler)
     return () => ipcRenderer.removeListener(EVENTS.modelVerifyProgress, handler)
+  },
+  /** Subscribe to knowledge-pack set changes (#301 P3b, finding L7) — reconciliation
+   *  start/end and mutations (register/remove/enable), broadcast to every window. */
+  onKnowledgePacksChanged: (cb: (event: KnowledgePacksChangedEvent) => void): (() => void) => {
+    const handler = (_e: unknown, event: KnowledgePacksChangedEvent) => cb(event)
+    ipcRenderer.on(EVENTS.knowledgePacksChanged, handler)
+    return () => ipcRenderer.removeListener(EVENTS.knowledgePacksChanged, handler)
   }
 }
 

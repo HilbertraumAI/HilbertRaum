@@ -662,6 +662,54 @@ upstream):
 | `ocr/deu.traineddata.gz` | `306c4280d0cbed46fbff727486bd43b92730181bae80f56941a091f363bdf28b` | 1.27 MB |
 | `ocr/eng.traineddata.gz` | `45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91` | 2.82 MB |
 
+## Sidecar binaries — kiwix-tools (knowledge packs, #301)
+
+**Status: INVENTORY, not clearance (D5 part 1; plan §6.1).** Nothing here authorizes shipping
+kiwix-tools inside a commercial Kit — P8 confirms every grant before any conveyance.
+
+The pinned acceptance bundle used for the #301 knowledge-packs wave is **kiwix-tools 3.8.1,
+win-x86_64** (zip MD5 `95f953f726aac8f320c7038f85785df9`, verified against the upstream
+published `.md5`). Its own `--version` output reports **libkiwix 14.1.1, libzim 9.4.0,
+libxapian 1.4.23, libcurl 8.4.0**. Files: `kiwix-serve.exe`, `kiwix-manage.exe`,
+`kiwix-search.exe`, `icudt74.dll`, `icuin74.dll`, `icuio74.dll`, `icutu74.dll`, `icuuc74.dll`
+— no separate `libmicrohttpd` DLL ships in this bundle, consistent with it being statically
+linked into `kiwix-serve` (to be confirmed against source at P8).
+
+Grants, as published upstream (per upstream COPYING/LICENSE, to be confirmed at P8):
+
+| Component | License |
+|---|---|
+| kiwix-tools | GPL-3.0-or-later |
+| libkiwix | GPL-3.0-or-later |
+| libzim | GPL-2.0-or-later |
+| Xapian (libxapian) | GPL-2.0-or-later |
+| libcurl | the curl license (MIT-style) |
+| ICU | the Unicode/ICU license |
+| libmicrohttpd | LGPL-2.1-or-later (statically linked into `kiwix-serve`) |
+| docopt (kiwix-tools dependency) | to inventory at P8 |
+| libzim's compression libraries (zlib, xz/liblzma, zstd) | to inventory at P8 |
+
+Authenticode (inspected 2026-09-06 on Windows 11 with `Get-AuthenticodeSignature`; residual R-4
+answered for this build): `kiwix-serve.exe`, `kiwix-manage.exe` and `kiwix-search.exe` are
+**Valid**, signer `CN=Association Kiwix, O=Association Kiwix, L=Lausanne, S=Canton of Vaud, C=CH`;
+the five ICU DLLs are **NotSigned**. zip SHA-256
+`FCD01ED2B93E9A68632C7863C83B9F66BF64406A66357BE1DF7B8B75596F3E45` (18,301,924 B). Per-file
+SHA-256: `kiwix-serve.exe` `619ECCC76C112A57538E3CEB001D75E71CAF5A040171B2C1399C4D19F8E9BC95`,
+`kiwix-manage.exe` `43E9A19D3BF66D6D158A187B1799AEE75B1797C06F8F17C6DD2BDEBAE56E177C`,
+`kiwix-search.exe` `EBE683AB03D50BC6893E6D69D7F1753E5FD6EBDF89488ADFFD900574C24CDBB9`,
+`icudt74.dll` `CE6F56B89F3C7163A166210977642559C87033B579FF129C61443DE57FBD771B`,
+`icuin74.dll` `A80EFBE7966ECD99A86B9F1694BAD6995C8B43FEBC1B42FBFF5A3F5E9A6E36FF`,
+`icuio74.dll` `FEBDA93002C9E70A2DEE1DA316A799B5416A6EC5430FA88AA9AF82BBA3ADA0A6`,
+`icutu74.dll` `E533BD62973D215F5306B24C2BD473CC3B161C7F88819812284EE18132CA9560`,
+`icuuc74.dll` `0E3EC2D0D821B6244B78129334AED0E7EBE3CDE51F00D2FF77170C4900AF7F67`.
+Source tarballs: **NOT in hand** — P8 obtains them (B19 aggregation reasoning: a preloaded
+Kit that ships these GPL binaries must carry their corresponding source alongside the
+binaries).
+
+Placement on the drive is **manual** until the provisioning wave (P8): unzip the whole
+bundle under `runtime/kiwix-tools/<os>/`. The hashless install marker resolves through the
+`skip-legacy` verifier path (residual R-1) rather than integrity verification.
+
 ## The vision role + mmproj projector (image understanding, Phases V1–V5)
 
 The `vision` role powers the **Images** screen (design record: [`architecture.md`](architecture.md)

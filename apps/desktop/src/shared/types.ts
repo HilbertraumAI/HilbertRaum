@@ -904,6 +904,19 @@ export interface Citation {
   /** EP-1 Phase 0 — the cited chunk's id (`chunks.id`), where cheaply available at
    *  construction. Same additive/back-compat rules as `documentId`. */
   chunkId?: string | null
+  /**
+   * Knowledge packs (ZIM wave): 'archive' marks a citation whose source is a registered
+   * ZIM archive, NOT a `documents` row — `documentId` is then absent by construction, so
+   * the evidence-pack resolver must not read it as a deleted document. Absent/'document'
+   * ⇒ the classic document citation. Additive forever, like the EP-1 fields.
+   */
+  sourceKind?: 'document' | 'archive'
+  /** Archive citations only: the registered pack's id (`knowledge_packs.id`, the ZIM UUID). */
+  packId?: string | null
+  /** Archive citations only: the pack's display title (e.g. "Klimawandel von Wikipedia"). */
+  archiveTitle?: string | null
+  /** Archive citations only: the article path within the archive (opens the article viewer). */
+  articlePath?: string | null
 }
 
 export interface Message {
@@ -914,6 +927,16 @@ export interface Message {
   createdAt: string
   tokenCount?: number | null
   citations?: Citation[]
+  /**
+   * Knowledge packs (#301 P4, findings M6/M7; owner ruling §7): the per-pack outcomes of the
+   * ask that produced this assistant turn — one per pack id the ask's scope selected, persisted
+   * in `messages.pack_outcomes_json` (additive, tolerant parse like `citations`). Present on
+   * every grounded answer whose scope selected packs, INCLUDING zero-citation and no-context
+   * answers and the whole-document / compare paths (`reason: 'mode'`). Undefined on legacy rows
+   * and on turns whose scope selected no pack — the renderer shows an explicit "outcome not
+   * recorded" line only when such a legacy turn cites an archive.
+   */
+  packOutcomes?: KnowledgePackOutcome[]
   /**
    * The skill that shaped this assistant turn (skills plan §8.2/DS16) — the install_id stamped at
    * generation. SKA-38 (skills audit 2026-07-03, U6): this is the RAW persisted `messages.skill_id`,
@@ -1813,6 +1836,171 @@ export function generatedStaleness(
   return changed ? { stale: true, reason: 'source-changed' } : NOT_STALE
 }
 
+/**
+ * A registered ZIM knowledge pack as surfaced over IPC (a `knowledge_packs` row plus the
+ * availability recomputed at list time). Packs are external archive FILES (offline
+ * Wikipedia etc.) registered in place — never copied into the workspace (they are
+ * multi-GB, public, and read-only; the copy-into-workspace rule is for user documents).
+ */
+export interface KnowledgePack {
+  /** The archive's UUID (ZIM header, via kiwix-manage) — stable across re-registration. */
+  id: string
+  title: string
+  description: string | null
+  /** ISO-639 code as recorded in the archive (e.g. "deu", "eng"). */
+  language: string | null
+  /** Archive build date, `YYYY-MM-DD`. */
+  zimDate: string | null
+  articleCount: number | null
+  sizeBytes: number | null
+  /** File basename — resolution tries `<drive>/zim/<leaf>` first (portable). */
+  leaf: string
+  enabled: boolean
+  /** False when the archive could not be resolved at the last reconciliation (the file is
+   *  gone, or a file with that name is no longer this archive). */
+  available: boolean
+  /**
+   * WHY it is unavailable (#301 P3b, finding M5) — `null` whenever `available` is true.
+   * `'missing'`: no file at the drive-relative location or the recorded path.
+   * `'identity-mismatch'`: a file IS there, but its ZIM header carries a different archive
+   * UUID — the pack was replaced or overwritten, so old citations still name the archive that
+   * was registered and the viewer reports it as unavailable rather than reading a stranger's
+   * article under this pack's title.
+   */
+  unavailableReason: 'missing' | 'identity-mismatch' | null
+  /**
+   * Whether the archive carries a full-text (Xapian) index the sidecar can search (#301 P4,
+   * finding M7, plan §2.5). CONFIRMED only by a validated `/suggest` probe run from the end of
+   * a reconciliation: `'yes'` / `'no'`; `'unknown'` until then and again whenever the file's
+   * size/mtime or the tool fingerprint changes (the verdict is cached against them). A 404, a
+   * timeout, a malformed body or a response observed across a server change NEVER confirm
+   * `'no'`. Unknown packs are searched like `'yes'`; a confirmed-`'no'` pack is skipped by the
+   * ask with the outcome `not-searchable` but stays readable in the article viewer. Optional
+   * on the type so pre-P4 fixtures stay valid — absent reads as `'unknown'`.
+   */
+  searchable?: 'yes' | 'no' | 'unknown'
+  /** The archive's own `_ftindex` tag as kiwix-manage reported it — a HINT only (never sets
+   *  `searchable`, never affects eligibility). `null` when the archive carries no such tag. */
+  searchableHint?: 'yes' | 'no' | null
+  addedAt: string
+}
+
+/**
+ * The most packs one chat may select (#301 P4, finding M8, owner ruling 2026-09-05 — plan §7).
+ * ONE constant read by the scope popover (the 13th tick is refused), the chip, the retrieval arm
+ * and the outcomes: a persisted selection above it (older data, hand-edited settings) is trimmed
+ * deterministically in `title COLLATE NOCASE, id` order and every trimmed pack gets the per-ask
+ * outcome `selection-limit`. With `MAX_EXTERNAL_CANDIDATES = 24` this makes the `N > 24`
+ * allocation branch unreachable, so it is not implemented.
+ */
+export const MAX_SELECTED_PACKS = 12
+
+/** What happened to ONE selected pack during ONE ask (#301 P4, findings M6/M7/M8). */
+export type KnowledgePackOutcomeStatus = 'searched' | 'skipped' | 'failed'
+
+/**
+ * WHY a selected pack was not searched (`skipped`) or its search did not complete (`failed`).
+ * CODES ONLY — the copy lives in the renderer; never a path, a filename, a status text or a
+ * tool's stderr. `selection-limit`: beyond `MAX_SELECTED_PACKS` in title order · `removed`: no
+ * (live) registration for the persisted id · `disabled` · `file-missing` / `identity-mismatch`:
+ * `KnowledgePack.unavailableReason` · `not-served`: a serving-name collision loser
+ * (`ServedLibrary.excluded`) · `not-searchable`: confirmed no full-text index · `tools-missing`
+ * · `mode`: a whole-document / compare answer, which reads the document only and never queries
+ * packs · `search-failed`: `/search` answered non-200 (a 404 is ambiguous — never persisted as a
+ * capability) or the request failed · `read-failed`: every article fetch of a pack with hits
+ * failed · `timeout`: the pack's request was cut by the per-ask deadline mid-flight · `deadline`:
+ * the pack was never started before the per-ask deadline · `server-restarted`: the request guard
+ * discarded both attempts (`StaleServerError`).
+ */
+export type KnowledgePackOutcomeReason =
+  | 'selection-limit'
+  | 'removed'
+  | 'disabled'
+  | 'file-missing'
+  | 'identity-mismatch'
+  | 'not-served'
+  | 'not-searchable'
+  | 'tools-missing'
+  | 'mode'
+  | 'search-failed'
+  | 'read-failed'
+  | 'timeout'
+  | 'deadline'
+  | 'server-restarted'
+
+/**
+ * The per-ask outcome of one selected pack (#301 P4, findings M6/M7/M8; owner ruling §7:
+ * persisted with the answer message as additive JSON — `messages.pack_outcomes_json`). Every
+ * pack id the ask's resolved scope selected gets exactly one, classified BEFORE any eligibility
+ * filter, so a missing tools bundle, an all-unavailable selection or an empty candidate list can
+ * never erase them. `found` = candidates the pack produced; `admitted` = candidates that entered
+ * the ranking after the round-robin admission (a pack with `found > 0 && admitted === 0` was
+ * searched but budget-truncated). `reason` is null exactly when `status === 'searched'`. `title`
+ * is the pack's title as known at ask time (null for an id with no registration row at all —
+ * rendered as "a removed pack"). Legacy messages carry no outcomes (`Message.packOutcomes`
+ * undefined) and the renderer says so explicitly rather than inventing one.
+ */
+export interface KnowledgePackOutcome {
+  packId: string
+  title: string | null
+  status: KnowledgePackOutcomeStatus
+  reason: KnowledgePackOutcomeReason | null
+  found: number
+  admitted: number
+}
+
+/**
+ * Why one archive of a `packs:add` batch was not registered (#301 P5, finding L1, plan §9.19
+ * (c)). NEVER free text — the raw manager stderr/path stays in the protected diagnostic log
+ * only (`log.warn`), never on this DTO, never in the audit.
+ */
+export type KnowledgePackAddFailureReason = 'not-a-zim' | 'tools-missing' | 'manager' | 'other'
+
+/**
+ * The result of `packs:add` (#301 P5, finding L1, plan §9.19 (c)) — replaces the old
+ * `KnowledgePack[] | null` bridge shape, which could not distinguish "the user cancelled the
+ * dialog" from "every chosen archive failed" and silently discarded the successes of a MIXED
+ * batch. Invariants: `'cancelled'` ⇒ `added=[]`, `failed=0`, `failureReason=null` (the dialog
+ * was dismissed or chose nothing); `'success'` ⇒ `added.length >= 1`, `failed=0`; `'partial'` ⇒
+ * `added.length >= 1 AND failed >= 1` (a mixed batch — the archives that DID register are
+ * returned, never discarded); `'failure'` ⇒ `added=[]`, `failed >= 1`. `failureReason` is the
+ * code of the FIRST failure and is `null` only for `'cancelled'`.
+ */
+export interface KnowledgePackAddResult {
+  outcome: 'cancelled' | 'success' | 'partial' | 'failure'
+  added: KnowledgePack[]
+  failed: number
+  failureReason: KnowledgePackAddFailureReason | null
+}
+
+/**
+ * `packs:status` result (#301 P3b, finding L7) — additive over the P3a `{ toolsInstalled }`
+ * shape. `refreshing` is true while a reconciliation pass is running (session start or an
+ * explicit `packs:refresh`); `revision` is the service's pack-set counter, so a caller can tell
+ * a status read apart from a `packs:changed` event carrying the same fields.
+ */
+export interface KnowledgePackStatus {
+  toolsInstalled: boolean
+  refreshing: boolean
+  revision: number
+}
+
+/**
+ * The payload of `EVENTS.knowledgePacksChanged` (`packs:changed`, #301 P3b, plan §9.17 (e)3) —
+ * broadcast to every window when the registered pack set's effective state changes
+ * (`reconcile-start`/`reconcile-end`) or a mutation lands (register/remove/enable, `'mutation'`).
+ * A consumer ignores an event whose `epoch` is BELOW the last one it saw (an old session's late
+ * announcement) and clears its state on lock (the App unmounts the screens then).
+ */
+export interface KnowledgePacksChangedEvent {
+  /** The unlock epoch the producing operation captured; 0 when no admission seam exists (tests
+   *  / a partial context) — never a real session's epoch, which starts above zero. */
+  epoch: number
+  revision: number
+  refreshing: boolean
+  reason: 'reconcile-start' | 'reconcile-end' | 'mutation'
+}
+
 /** A collection as surfaced over IPC (a `collections` row). */
 export interface Collection {
   id: string
@@ -1843,6 +2031,25 @@ export interface DocumentScope {
   documentIds: string[]
   /** Include `lifecycle='archived'` documents. Default false. */
   includeArchived?: boolean
+  /**
+   * Knowledge packs (ZIM wave): registered packs this chat also retrieves from, by
+   * `knowledge_packs.id`. Absent/empty ⇒ packs OFF for this chat (opt-in per chat — a
+   * pack adds query-time latency, so it is never silently included). Additive: rows
+   * persisted before this field parse unchanged.
+   */
+  packIds?: string[]
+  /**
+   * Knowledge packs (#301 P4, finding M10, owner ruling D4): the user's EXPLICIT choice to
+   * answer without the document corpus — "packs only". Additive and NEVER derived from an
+   * empty selection: `{ collectionIds: [], documentIds: [] }` without this flag still means
+   * the whole corpus (the legacy meaning), and `{ …, packIds: ['p'] }` without it means
+   * "all documents AND pack p". Only the literal `true` is ever serialized (absent otherwise,
+   * so pre-P4 rows and documents-on scopes serialize byte-identically). Persisted by BOTH
+   * scope owners (`serializeDocumentScope` in chat.ts, `parseDocumentScope` in
+   * collections.ts). Files attached to the chat stay in retrieval regardless — the flag drops
+   * projects and hand-picked documents, never attachments (rag-design §17 D-Z12).
+   */
+  documentsOff?: true
 }
 
 /**
@@ -1864,6 +2071,23 @@ export interface RetrievalScope {
    * merged into `documentIds`). Gates the filename auto-scope skip (plan §10.1 rule 5 / N2).
    */
   hasExplicitDocSelection?: boolean
+  /**
+   * Knowledge packs (ZIM wave): pack ids whose archives the ZIM retrieval arm queries.
+   * Consumed ONLY by that arm — `buildScopeFilter` ignores it (packs are not
+   * `documents`-table sources), which keeps the SQL scope machinery untouched.
+   */
+  packIds?: string[] | null
+  /**
+   * Knowledge packs (#301 P4, finding M10): the EXPLICIT deny-all document scope — set by
+   * `resolveScope` alone, and only when the stored scope carries `documentsOff` AND no file
+   * is attached to the chat (attachments are unioned into `documentIds` instead, so a chat
+   * with attachments resolves to "exactly the attachments", never to deny-all). Deliberately
+   * a separate flag: `documentIds`/`collectionIds` null/empty keep their whole-corpus meaning
+   * verbatim (ruling D4 rejected overloading them). Every consumer honours it: the one SQL
+   * builder `buildScopeFilter` is fail-closed (`0`), the resident-vector fast path is guarded,
+   * and `retrieve` skips the document arms before embedding the question.
+   */
+  noDocuments?: true
 }
 
 /**
@@ -2771,6 +2995,12 @@ export type AuditEventType =
   | 'evidence_review_ready'
   | 'evidence_review_deleted'
   | 'evidence_pack_exported'
+  // Knowledge packs (ZIM wave): registration lifecycle. Metadata is IDS/COUNTS ONLY —
+  // the pack id (archive UUID), sizeBytes, articleCount. The pack TITLE and FILENAME are
+  // content by the export rule (they name what the user reads), exactly like document
+  // filenames — never in message or metadata.
+  | 'knowledge_pack_added'
+  | 'knowledge_pack_removed'
 
 /** One audit-log entry (a `runtime_events` row), newest-first over the IPC surface. */
 export interface AuditEvent {
@@ -2960,6 +3190,25 @@ export interface EvidenceSourceSnapshot {
   snippet?: string | null
   sourceChunkId?: string | null
   availabilityAtCreation?: 'available' | 'missing' | null
+  /**
+   * Knowledge packs (ZIM wave, P2 — PR #294 review H2/M11): 'archive' marks a source whose
+   * citation named an article inside a registered ZIM archive, NOT a `documents` row. Such a
+   * source is ALWAYS `identity: 'unresolved'` with null `documentId`/`documentSha256`/`mimeType` —
+   * there is no workspace document to resolve or hash-compare, even when stale or malformed
+   * data also supplies a document id (the resolver and the read whitelist both enforce it).
+   * The three locator fields below are the source's display provenance AND its stable
+   * identity for exports (the pack UUID + entry path), independent of resolution.
+   * Absent/'document' ⇒ the classic document source. Additive: snapshot JSON written before
+   * this field existed reads as 'document' (saved reviews from pre-merge ZIM builds are
+   * disposable — no detection or migration; CHANGELOG).
+   */
+  sourceKind?: 'document' | 'archive'
+  /** Archive sources only: the registered pack's display title (e.g. "Wikipedia (DE)"). */
+  archiveTitle?: string | null
+  /** Archive sources only: the registered pack's id (`knowledge_packs.id`, the ZIM UUID). */
+  packId?: string | null
+  /** Archive sources only: the article's entry path within the archive. */
+  articlePath?: string | null
 }
 
 /**

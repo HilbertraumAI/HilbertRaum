@@ -1,0 +1,42 @@
+<!-- synthetic fixture written for HilbertRaum on 2026-09-05; models the HTML shape produced by zimit/warc2zim web-archive ZIMs, from public knowledge of the zimit/warc2zim replay format (a wombat.js URL-rewriting shim inlined in the page, warc2zim's raw capture of crawled response bodies); no third-party text is included; license: GPL-3.0-or-later (repository license) -->
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<title>Field notes on offline archives</title>
+<link rel="stylesheet" href="https://example.org/assets/site.css">
+<script>
+  var wombatState = "wombat-never-shown";
+  function rewriteUrl(u) {
+    if (u.indexOf("</div>") > -1) { return u; }
+    if (u.indexOf("<!--") > -1) { return u; }
+    var depth = 1;
+    if (depth < 2) { return u; }
+    return u;
+  }
+</script>
+<!--[if IE]>
+<p>ie-never-shown</p>
+<![endif]-->
+<noscript><p>noscript-never-shown</p></noscript>
+</head>
+<body>
+<style>.zimit-banner::before { content: "zimit-banner-never-shown"; }</style>
+<![CDATA[cdata-never-shown]]>
+<header>
+<svg viewBox="0 0 24 24"><title>svg-never-shown</title><path d="M4 4h16v16H4z"></path></svg>
+<h1>Field notes on offline archives</h1>
+</header>
+<main>
+<p>A capture tool visits every page like an ordinary browser would, but the crawler stores every response body exactly as served, with no rewriting applied to the archived bytes themselves. Rewriting only happens at replay time, inside the browser, which keeps the stored copy trustworthy as a record of what the origin server actually returned.</p>
+<p>See the <a href="https://example.org/notes/2024/archive?utm_source=x&amp;id=7">archive index</a> or write to <a href="mailto:archivist@example.org">archivist@example.org</a> with questions. Bulk exports are published on the first of each month and include a manifest listing every captured URL alongside its response status and content type.</p>
+<p>Before relying on an archived page for a citation, check the capture timestamp shown in the banner; a page can change substantially between the date it was crawled and the date it is read back offline.</p>
+<pre>curl -s "https://example.org/notes/2024/archive" | jq '.entries | length'</pre>
+</main>
+<footer>
+<p>Field notes compiled by a café-hosted reading group – not affiliated with any upstream crawler project.</p>
+<p>Corrections and additions are welcome; open an issue against the notes repository rather than emailing patches directly, so the discussion stays searchable for the next reader who hits the same question.</p>
+<p>Archived snapshots referenced above were captured with a standard crawler configuration: same-origin scope, a modest per-host rate limit, and a fixed depth cutoff to avoid runaway link-following on calendar or search-result pages.</p>
+<p>Replay rewrites absolute and relative links so they resolve against the archive rather than the live origin; anything the rewriter cannot confidently classify is left untouched and served as captured, which occasionally surfaces a stray absolute URL pointing back at the original site.</p>
+</footer>
+</body>
+</html>

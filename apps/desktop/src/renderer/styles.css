@@ -1224,6 +1224,28 @@ code, pre, kbd { font-family: var(--font-mono); }
   text-align: left;
 }
 
+/* Per-answer knowledge-pack outcomes (#301 P4, M6/M7): a quiet collapsed note under the answer
+   saying what happened to each ticked pack. Deliberately understated — it reports state, it is
+   not an alert (guidelines §9). P6 owns the visual pass; this keeps it legible until then. */
+.pack-outcomes { margin-top: 8px; font-size: var(--text-sm); }
+.pack-outcomes-summary { color: var(--text-muted); }
+.pack-outcomes-toggle {
+  background: transparent;
+  border: none;
+  color: var(--link);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: left;
+  /* #301 P6 (plan §9.23 (d)): WCAG 2.5.8 minimum target, shared with .source-card-open —
+     stays link-styled, never a loud button. */
+  min-height: 24px;
+}
+.pack-outcomes-rows { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.pack-outcome-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.pack-outcome-title { font-weight: 500; word-break: break-word; }
+.pack-outcome-state, .pack-outcome-count { color: var(--text-muted); }
+
 /* Composer (guidelines §3/§6): centered with the transcript; auto-grow input,
    one Send/Stop button, quiet footer row. */
 .composer { display: flex; flex-direction: column; gap: 6px; max-width: 720px; width: 100%; margin: 0 auto; }
@@ -1541,12 +1563,22 @@ code, pre, kbd { font-family: var(--font-mono); }
   background: var(--surface); color: var(--text); font-size: 14px;
 }
 /* Scope picker — multi-select source rows (plan §13.2) */
-.scope-footer-wrap { display: inline-flex; align-items: center; gap: 8px; }
+.scope-footer-wrap { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+/* #301 P6 (plan §9.23 (d)): the "Answering from: …" chip ellipsises a long pack title at a
+   narrow width instead of overflowing the composer footer (the label stays the button's full
+   accessible name). The trigger itself may shrink; the icon and the caret never do. */
+.scope-footer-wrap .footer-menu-btn { min-width: 0; max-width: 100%; }
+.scope-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scope-dangling { font-size: 12px; }
 .scope-sources { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
 .scope-source-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; cursor: pointer; }
-.scope-source-name { color: var(--text); }
+/* #301 P6 (plan §9.23 (d)): a long / non-ASCII 200-char title wraps inside the 360px popover
+   instead of forcing it wider. */
+.scope-source-name { color: var(--text); overflow-wrap: anywhere; min-width: 0; }
 .scope-source-hint { color: var(--text-muted); font-size: var(--text-xs); }
+/* #301 P6: the Documents toggle's hint left the <label> (it must not be part of the checkbox's
+   accessible name), so it is a block sibling — indent it under the label text. */
+.scope-documents-toggle .scope-source-hint { margin-left: 22px; }
 .scope-specific-toggle { background: none; border: none; cursor: pointer; text-align: left; }
 /* Conversation list — creation-anchor project sections (plan §13.4) */
 .chat-proj-group-label { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 8px 10px 2px; font-weight: 600; }
@@ -2557,7 +2589,6 @@ code, pre, kbd { font-family: var(--font-mono); }
 .progress { display: flex; flex-direction: column; gap: 6px; flex: 1 1 220px; min-width: 160px; }
 .progress-label { font-size: var(--text-sm); line-height: var(--line-sm); color: var(--text-muted); }
 .progress progress { width: 100%; height: 8px; accent-color: var(--accent); }
-
 /* ---- Performance screen (design-guidelines §2, the machine group; benchmark.md
    "Performance screen"): the hardware check's answer as three tiles, then the figures
    observed in real use, then one row per other computer the drive has been in. ---- */
@@ -2599,3 +2630,48 @@ code, pre, kbd { font-family: var(--font-mono); }
 .perf-models .perf-row { padding: 8px 0; }
 .perf-models-summary { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .perf-models-summary-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--text-sm); line-height: var(--line-sm); }
+/* ---- Knowledge packs (ZIM wave) --------------------------------------------------- */
+/* Scope popover: the packs source group gets a little separation from the doc sources. */
+.scope-packs { margin-top: 8px; }
+
+/* Source card: the quiet "Open article" affordance on archive citations (link-styled,
+   like .sources-review — never a loud button inside the disclosure). */
+.source-card-open {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: auto;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  /* #301 P6 (plan §9.23 (d)): WCAG 2.5.8 minimum target — stays link-styled, never a loud
+     button; shared with .pack-outcomes-toggle below. */
+  min-height: 24px;
+}
+.source-card-open:hover { text-decoration: underline; }
+
+/* Packs management panel (Documents screen). Cards reuse the shared .card chrome. */
+.packs-panel { display: flex; flex-direction: column; gap: 12px; max-width: 1000px; }
+/* `.packs-list` is a <ul> (#301 P6, plan §9.23 (b)7 — list semantics); reset native list
+   chrome so the visual stays the plain stacked-card layout it was as a <div>. */
+.packs-list { display: flex; flex-direction: column; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.packs-card { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; }
+/* #301 P6 (plan §9.23 (d)): a 200-char title plus two badges (enabled/disabled AND the
+   no-full-text-index badge) wraps instead of overflowing the card. */
+.packs-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.packs-card-title { font-weight: 500; overflow-wrap: anywhere; }
+.packs-card-missing .packs-card-title { color: var(--text-muted); }
+/* #301 P6 (plan §9.23 (b)/(c)5): the same reason text a Badge only carried in its `title`
+   tooltip, now also visible and reachable without a mouse. */
+.packs-card-reason { margin: 0; }
+.packs-card-desc { margin: 0; }
+.packs-card-meta { margin: 0; }
+.packs-card-actions { display: flex; gap: 8px; margin-top: 4px; }
+.packs-tools-hint { margin: 0; }
+
+/* Offline article viewer: readable measure inside the wide modal; scrolls in the modal. */
+.pack-article { display: flex; flex-direction: column; gap: 8px; }
+.pack-article-source { margin: 0; }
+.pack-article-body { max-width: 68ch; }
+.pack-article-heading { font-size: var(--text-md); margin: 14px 0 4px; }
+.pack-article-para { margin: 0 0 10px; white-space: pre-wrap; }

@@ -12,6 +12,7 @@ import {
   type ConversationSearchResult,
   type CoverageInfo,
   type DocumentScope,
+  type KnowledgePackOutcome,
   type Message,
   type SkillOffer
 } from '../../shared/types'
@@ -181,10 +182,21 @@ function normalizeScope(ids: string[] | null | undefined): string[] | null {
 /** Serialize a composite scope for `scope_v2_json` (null clears it). Empty scope persists. */
 function serializeDocumentScope(scope: DocumentScope | null | undefined): string | null {
   if (!scope) return null
+  const packIds = (scope.packIds ?? []).filter((x) => typeof x === 'string' && x.length > 0)
   return JSON.stringify({
     collectionIds: scope.collectionIds ?? [],
     documentIds: scope.documentIds ?? [],
-    ...(scope.includeArchived ? { includeArchived: true } : {})
+    ...(scope.includeArchived ? { includeArchived: true } : {}),
+    // Knowledge packs (ZIM wave): persisted only when selected, so pre-wave rows and
+    // pack-less scopes serialize byte-identically to before.
+    ...(packIds.length > 0 ? { packIds } : {}),
+    // #301 P4 (finding M10, ruling D4): the user's EXPLICIT "answer without my documents"
+    // choice. ONLY the literal `true` is ever written, so every documents-on scope — and every
+    // pre-P4 row — serializes to exactly the same JSON string as before. It is NEVER derived
+    // from an empty selection: `{collectionIds: [], documentIds: [], packIds: ['p']}` without
+    // the flag still means "all documents AND pack p". `parseDocumentScope` (collections.ts,
+    // the reading owner's explicit whitelist) reads it back.
+    ...(scope.documentsOff === true ? { documentsOff: true } : {})
   })
 }
 
@@ -226,6 +238,9 @@ interface MessageRow {
   has_result_table?: number | null
   /** Issue #80 (wave R80) — JSON-serialized `SkillOffer` (id + title + provenance), or NULL (no offer). */
   skill_offer_json?: string | null
+  /** #301 P4 — JSON-serialized `KnowledgePackOutcome[]` (this ask's per-pack verdicts), or NULL
+   *  (a pre-migration row, or an ask whose scope selected no knowledge pack). */
+  pack_outcomes_json?: string | null
 }
 
 /**
@@ -244,6 +259,16 @@ function isCitation(v: unknown): v is Citation {
   // row without them passes unchanged; a malformed value rejects the element like the rest.
   if (c.documentId != null && typeof c.documentId !== 'string') return false
   if (c.chunkId != null && typeof c.chunkId !== 'string') return false
+  // Knowledge packs (ZIM wave, #294 review M11): the four archive fields follow the SAME
+  // tolerant-but-typed rule. Without this the locator flowed untyped to consumers that
+  // assume strings (the Markdown export's `.replace`, the chat/review cards) — exactly the
+  // L6 hazard the guards above exist to close.
+  // A non-string kind is malformed; an UNKNOWN string (a newer build's kind) is kept and reads as
+  // a document downstream (every consumer tests `=== 'archive'`) — the tolerant direction.
+  if (c.sourceKind != null && typeof c.sourceKind !== 'string') return false
+  if (c.packId != null && typeof c.packId !== 'string') return false
+  if (c.archiveTitle != null && typeof c.archiveTitle !== 'string') return false
+  if (c.articlePath != null && typeof c.articlePath !== 'string') return false
   return true
 }
 
@@ -338,6 +363,87 @@ function serializeSkillOffer(offer: SkillOffer | null | undefined): string | nul
   }
 }
 
+/** The `KnowledgePackOutcomeStatus` values a stored row may carry (the write side's whole range). */
+const PACK_OUTCOME_STATUSES = new Set<string>(['searched', 'skipped', 'failed'])
+/** The `KnowledgePackOutcomeReason` codes a stored row may carry. A row with an UNKNOWN code — a
+ *  newer build's reason, or a hand-edited value — is DROPPED rather than shown: the renderer maps
+ *  codes to fixed copy, and an unmapped code would render as a blank or raw line. */
+const PACK_OUTCOME_REASONS = new Set<string>([
+  'selection-limit',
+  'removed',
+  'disabled',
+  'file-missing',
+  'identity-mismatch',
+  'not-served',
+  'not-searchable',
+  'tools-missing',
+  'mode',
+  'search-failed',
+  'read-failed',
+  'timeout',
+  'deadline',
+  'server-restarted'
+])
+
+/** Coerce a stored count defensively: a finite, non-negative INTEGER, else 0. A hand-edited
+ *  `-3`, `1e9.5`, `"7"` or `NaN` must never reach the renderer's plural formatting. */
+function packOutcomeCount(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 0
+  return Math.max(0, Math.floor(v))
+}
+
+/**
+ * Parse stored per-ask knowledge-pack outcomes (#301 P4, findings M6/M7): a JSON array of
+ * `KnowledgePackOutcome`, else undefined. A TOLERANT WHITELIST in the `parseCitations` /
+ * `parseCoverage` tradition — a malformed payload must never break rendering a conversation, and
+ * an element that does not match the shape is DROPPED rather than flowed untyped to the renderer
+ * (the L6 hazard). Exported for the persistence tests and for any consumer that reads
+ * `messages.pack_outcomes_json` directly, so no second parser can drift from this one.
+ */
+export function parsePackOutcomes(json: string | null | undefined): KnowledgePackOutcome[] | undefined {
+  if (!json) return undefined
+  try {
+    const v = JSON.parse(json) as unknown
+    if (!Array.isArray(v)) return undefined
+    const valid: KnowledgePackOutcome[] = []
+    for (const el of v) {
+      if (typeof el !== 'object' || el === null) continue
+      const o = el as Record<string, unknown>
+      if (typeof o.packId !== 'string' || o.packId.length === 0) continue
+      if (typeof o.status !== 'string' || !PACK_OUTCOME_STATUSES.has(o.status)) continue
+      // `reason` is null exactly for `searched`; any other value must be a KNOWN code.
+      const reason = o.reason ?? null
+      if (reason !== null && (typeof reason !== 'string' || !PACK_OUTCOME_REASONS.has(reason))) continue
+      const title = o.title ?? null
+      if (title !== null && typeof title !== 'string') continue
+      valid.push({
+        packId: o.packId,
+        title: title as string | null,
+        status: o.status as KnowledgePackOutcome['status'],
+        reason: reason as KnowledgePackOutcome['reason'],
+        found: packOutcomeCount(o.found),
+        admitted: packOutcomeCount(o.admitted)
+      })
+    }
+    return valid.length > 0 ? valid : undefined
+  } catch {
+    // A malformed payload must never break rendering a conversation — drop the outcomes.
+    return undefined
+  }
+}
+
+/** Serialize outcomes for `messages.pack_outcomes_json` (the write side of `parsePackOutcomes`).
+ *  Null/omitted/empty ⇒ NULL; a value that cannot stringify degrades to NULL — best-effort like
+ *  `serializeCoverage`, because a metadata fault must never block persisting the ANSWER. */
+function serializePackOutcomes(outcomes: KnowledgePackOutcome[] | null | undefined): string | null {
+  if (!outcomes || outcomes.length === 0) return null
+  try {
+    return JSON.stringify(outcomes)
+  } catch {
+    return null
+  }
+}
+
 function rowToMessage(r: MessageRow): Message {
   const citations = parseCitations(r.citations_json)
   const coverage = parseCoverage(r.coverage_json)
@@ -368,7 +474,10 @@ function rowToMessage(r: MessageRow): Message {
     // that don't compute the EXISTS) → undefined, so older rows and other readers are byte-identical.
     hasResultTable: r.has_result_table === 1 ? true : undefined,
     // #80: the per-answer actionable skill offer — undefined on every row without one (tolerant parse).
-    skillOffer: parseSkillOffer(r.skill_offer_json)
+    skillOffer: parseSkillOffer(r.skill_offer_json),
+    // #301 P4: the ask's per-pack outcomes — undefined on every legacy row and every turn whose
+    // scope selected no pack (tolerant whitelist; a malformed payload reads as undefined).
+    packOutcomes: parsePackOutcomes(r.pack_outcomes_json)
   }
 }
 
@@ -727,6 +836,13 @@ export interface AppendMessageInput {
    * ordinary answer stays byte-identical). Structural only (id + title + provenance), never content.
    */
   skillOffer?: SkillOffer | null
+  /**
+   * Knowledge packs (#301 P4, findings M6/M7; owner ruling plan §7) — ONE per-ask outcome for every
+   * pack id the ask's resolved scope selected, persisted to `messages.pack_outcomes_json`. Assistant
+   * rows only; omitted/null/empty ⇒ NULL, so every pack-less chat stays byte-identical. Serialized
+   * BEST-EFFORT like coverage: a fault degrades to NULL and never blocks persisting the answer.
+   */
+  packOutcomes?: KnowledgePackOutcome[] | null
 }
 
 /** Append a message and bump the conversation's updated_at. */
@@ -743,6 +859,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   const truncated = input.truncated === true
   // #80: best-effort like coverage — a serialization fault degrades to NULL, never blocks the answer.
   const skillOfferJson = serializeSkillOffer(input.skillOffer)
+  // #301 P4: same best-effort posture — the ANSWER must persist even if the metadata cannot.
+  const packOutcomesJson = serializePackOutcomes(input.packOutcomes)
   const msg: Message = {
     id: randomUUID(),
     conversationId: input.conversationId,
@@ -755,12 +873,15 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     autoFired,
     coverage: input.coverage ?? undefined,
     truncated: truncated ? true : undefined,
-    skillOffer: skillOfferJson != null ? (input.skillOffer ?? undefined) : undefined
+    skillOffer: skillOfferJson != null ? (input.skillOffer ?? undefined) : undefined,
+    // Mirrors the row: undefined when nothing was written (no pack in scope, or a serialization
+    // fault), so the returned Message and a later `listMessages` read agree.
+    packOutcomes: packOutcomesJson != null ? (input.packOutcomes ?? undefined) : undefined
   }
   prepareCached(
     db,
-    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json, truncated, skill_offer_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json, truncated, skill_offer_json, pack_outcomes_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     msg.id,
     msg.conversationId,
@@ -773,7 +894,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     autoFired ? 1 : null,
     coverageJson,
     truncated ? 1 : null,
-    skillOfferJson
+    skillOfferJson,
+    packOutcomesJson
   )
   prepareCached(db, 'UPDATE conversations SET updated_at = ? WHERE id = ?').run(
     now,
@@ -876,6 +998,10 @@ export interface DeletedMessage {
    *  the snapshot silently stripped the offer row on BOTH restore legs (F2 + CB-2) — the exact class
    *  the result-table capture below exists for. */
   readonly skillOfferJson: string | null
+  /** #301 P4 — the per-ask knowledge-pack outcomes, captured VERBATIM as stored (the same class as
+   *  `skillOfferJson`: omit it and a regenerate that later restores the prior reply would silently
+   *  strip the answer's pack record). Replayed byte-identically by `restoreMessage`. */
+  readonly packOutcomesJson: string | null
   /** The message's result tables, oldest-first. Empty for the common table-less answer. */
   readonly resultTables: readonly DeletedResultTable[]
 }
@@ -895,6 +1021,7 @@ interface DeletedMessageRow {
   covers_through_rowid: number | null
   truncated: number | null
   skill_offer_json: string | null
+  pack_outcomes_json: string | null
 }
 
 interface ResultTableRow {
@@ -968,7 +1095,7 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
     .prepare(
       `SELECT id, conversation_id, role, content, created_at, token_count, citations_json,
               skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated,
-              skill_offer_json
+              skill_offer_json, pack_outcomes_json
        FROM messages WHERE conversation_id = ? AND kind IS NOT 'compaction'
        ORDER BY created_at DESC, rowid DESC LIMIT 1`
     )
@@ -997,6 +1124,7 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
     coversThroughRowid: row.covers_through_rowid,
     truncated: row.truncated,
     skillOfferJson: row.skill_offer_json,
+    packOutcomesJson: row.pack_outcomes_json,
     resultTables: tableRows.map((t) => ({
       id: t.id,
       messageId: t.message_id,
@@ -1031,8 +1159,8 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     `INSERT INTO messages
        (id, conversation_id, role, content, created_at, token_count, citations_json,
         skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated,
-        skill_offer_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        skill_offer_json, pack_outcomes_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     m.id,
     m.conversationId,
@@ -1047,7 +1175,8 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     m.kind,
     m.coversThroughRowid,
     m.truncated,
-    m.skillOfferJson
+    m.skillOfferJson,
+    m.packOutcomesJson
   )
   if (m.resultTables.length === 0) return
   try {
@@ -1214,7 +1343,42 @@ export function exportTranscript(db: Db, conversationId: string): { title: strin
       for (const c of m.citations) {
         const where =
           c.pageNumber != null ? `, p. ${c.pageNumber}` : c.section ? `, ${c.section}` : ''
-        lines.push(`- [${c.label}] ${c.sourceTitle}${where}`)
+        if (c.sourceKind === 'archive') {
+          // ZIM wave (#294 review M11): preserve archive provenance — the pack title and
+          // the stable pack UUID/entry-path locator — even though identity stays unresolved
+          // (H2). Missing locator values are OMITTED, never invented; `\r`/`\n` are stripped
+          // from every untrusted locator field so a hostile value cannot break the line.
+          const clean = (v: string | null | undefined): string | null => {
+            const stripped = (v ?? '').replace(/[\r\n]+/g, ' ').trim()
+            return stripped.length > 0 ? stripped : null
+          }
+          const archiveTitle = clean(c.archiveTitle)
+          const packId = clean(c.packId)
+          const articlePath = clean(c.articlePath)
+          const locator: string[] = []
+          if (archiveTitle) locator.push(`knowledge pack: ${archiveTitle}`)
+          if (packId) locator.push(`pack id ${packId}`)
+          if (articlePath) locator.push(`article ${articlePath}`)
+          const suffix = locator.length > 0 ? ` — ${locator.join('; ')}` : ''
+          lines.push(`- [${c.label}] ${c.sourceTitle}${where}${suffix}`)
+        } else {
+          lines.push(`- [${c.label}] ${c.sourceTitle}${where}`)
+        }
+      }
+    }
+    // Knowledge packs (#301 P4, findings M6/M7): what happened to every pack this ask selected —
+    // AFTER the "Sources:" block, or on its own when the answer cited nothing (a zero-citation or
+    // no-context answer is exactly where "your three packs were all unavailable" matters most).
+    // English machine text like the rest of the export; `\r`/`\n` are stripped from the stored
+    // title the way the M11 archive locator line strips them, so no value can break the line.
+    if (m.packOutcomes && m.packOutcomes.length > 0) {
+      lines.push('')
+      lines.push('Knowledge packs:')
+      for (const o of m.packOutcomes) {
+        const title = (o.title ?? '').replace(/[\r\n]+/g, ' ').trim()
+        const name = title.length > 0 ? title : `pack ${o.packId}`
+        const reason = o.reason ? ` (${o.reason})` : ''
+        lines.push(`- ${name}: ${o.status}${reason} — ${o.admitted} passage(s)`)
       }
     }
     lines.push('')

@@ -30,7 +30,8 @@ export function SourcesDisclosure({
   citations,
   mode,
   onReview,
-  reviewDisabled
+  reviewDisabled,
+  onOpenArticle
 }: {
   citations: Citation[]
   /** The answer's coverage mode; any whole-document mode (≠ relevance) renders as provenance. */
@@ -41,6 +42,9 @@ export function SourcesDisclosure({
   /** Same streaming gate as the action row (`actionsDisabled` — review FIX-6): the footer
    *  entry must not open a review while a reply is streaming. */
   reviewDisabled?: boolean
+  /** Knowledge packs (ZIM wave): opens the offline article viewer for an ARCHIVE citation.
+   *  Absent ⇒ archive cards render read-only (optional-callback gating, like onReview). */
+  onOpenArticle?: (citation: Citation) => void
 }): JSX.Element {
   // tCount for the provenance labels (full-audit 2026-07-11 CODE-8): a one-section document
   // ("— 1 section") and a one-section reveal tail ("and 1 more section") are both reachable.
@@ -95,9 +99,30 @@ export function SourcesDisclosure({
                   <span className="source-card-where">
                     {t('chat.sources.page', { page: c.pageNumber })}
                   </span>
+                ) : c.sourceKind === 'archive' ? (
+                  // An archive (knowledge-pack) citation names its pack alongside the section,
+                  // so "Treibhausgas — Landwirtschaft" is attributed to the offline archive it
+                  // came from, not mistaken for an imported document.
+                  <span className="source-card-where">
+                    {[c.archiveTitle, c.section].filter(Boolean).join(' · ')}
+                  </span>
                 ) : c.section ? (
                   <span className="source-card-where">{c.section}</span>
                 ) : null}
+                {c.sourceKind === 'archive' && c.packId && c.articlePath && onOpenArticle && (
+                  <button
+                    type="button"
+                    className="source-card-open"
+                    // #301 P6 (plan §9.23 (b)6): the visible text stays the bare "Open article"
+                    // (it sits inside a card that already names its article), but an answer can
+                    // carry several archive cards — so the ACCESSIBLE name carries the article
+                    // title, and a screen reader's button list distinguishes them.
+                    aria-label={t('chat.sources.openArticleNamed', { title: c.sourceTitle })}
+                    onClick={() => onOpenArticle(c)}
+                  >
+                    {t('chat.sources.openArticle')}
+                  </button>
+                )}
               </div>
               {c.snippet && <div className="source-card-snippet">{c.snippet}</div>}
             </div>

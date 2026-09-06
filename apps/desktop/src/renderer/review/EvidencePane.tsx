@@ -48,6 +48,8 @@ function matchesSourceFilter(source: EvidenceSourceSnapshot, q: string, t: I18n[
     source.documentTitle.toLowerCase().includes(q) ||
     (source.snippet ?? '').toLowerCase().includes(q) ||
     (source.sectionLabel ?? '').toLowerCase().includes(q) ||
+    // ZIM wave (#294 review M11): the knowledge-pack title is a searchable card fact too.
+    (source.archiveTitle ?? '').toLowerCase().includes(q) ||
     (source.machineLabel ?? '').toLowerCase().includes(q) ||
     (source.machineLabel != null &&
       formatCitationLabel(t, source.machineLabel).toLowerCase().includes(q)) ||
@@ -66,6 +68,7 @@ export function EvidencePane({
   onUnlink,
   onSetRelation,
   onOpenContext,
+  onOpenArticle,
   t,
   tCount
 }: {
@@ -85,6 +88,15 @@ export function EvidencePane({
   onSetRelation: (itemId: string, evidenceKey: string, relation: Relation | null) => void
   /** P4 (D-5): open the source-in-context modal for one snapshot key. */
   onOpenContext?: (evidenceKey: string) => void
+  /**
+   * #301 P6 (plan §9.23 (c)2, the §9.13 review-context residual): open the offline article
+   * viewer for an ARCHIVE snapshot. The caller reads the FROZEN snapshot's own
+   * `packId`/`articlePath` — never a live registry lookup, so a renamed pack still opens
+   * (`packs:getArticle` resolves by UUID) and a deleted one yields the honest unavailable
+   * state instead of silently opening a different archive. Absent ⇒ no button
+   * (optional-callback gating, like `onOpenContext`).
+   */
+  onOpenArticle?: (source: EvidenceSourceSnapshot) => void
   t: I18n['t']
   tCount: I18n['tCount']
 }): JSX.Element {
@@ -186,6 +198,7 @@ export function EvidencePane({
           onUnlink={onUnlink}
           onSetRelation={onSetRelation}
           onOpenContext={onOpenContext}
+          onOpenArticle={onOpenArticle}
           t={t}
         />
       ))}
@@ -222,6 +235,7 @@ function EvidenceCard({
   onUnlink,
   onSetRelation,
   onOpenContext,
+  onOpenArticle,
   t
 }: {
   source: EvidenceSourceSnapshot
@@ -233,6 +247,7 @@ function EvidenceCard({
   onUnlink: (itemId: string, evidenceKey: string) => void
   onSetRelation: (itemId: string, evidenceKey: string, relation: Relation | null) => void
   onOpenContext?: (evidenceKey: string) => void
+  onOpenArticle?: (source: EvidenceSourceSnapshot) => void
   t: I18n['t']
 }): JSX.Element {
   const relationId = useId()
@@ -257,7 +272,22 @@ function EvidenceCard({
           : null
   // D-5: context resolves through the snapshotted documentId — only resolved sources can
   // offer it (an unresolved identity has no document to read; main refuses it too).
-  const canOpenContext = onOpenContext != null && source.identity === 'resolved' && !!source.documentId
+  // M11: an archive source is unresolved by construction, so this is already unreachable
+  // for it — and stays so (#301 P6 changes nothing here): an archive has no workspace
+  // document to show in context. The article viewer below is the archive's own affordance.
+  const canOpenContext =
+    onOpenContext != null &&
+    source.identity === 'resolved' &&
+    !!source.documentId &&
+    source.sourceKind !== 'archive'
+  // #301 P6 (plan §9.23 (c)2, closing the §9.13 residual / BUILD_STATE §5 item 21(c)): the
+  // archive row's "Open article". Gated on the FROZEN snapshot carrying both locator fields —
+  // a pre-P2 row has neither and renders no button rather than a control that cannot work.
+  const canOpenArticle =
+    onOpenArticle != null &&
+    source.sourceKind === 'archive' &&
+    !!source.packId &&
+    !!source.articlePath
   return (
     <div className="source-card review-source-card">
       <div className="source-card-head">
@@ -269,6 +299,12 @@ function EvidenceCard({
           <span className="source-card-where">
             {t('chat.sources.page', { page: source.pageNumber })}
           </span>
+        ) : source.sourceKind === 'archive' ? (
+          // ZIM wave (#294 review M11): the knowledge pack alongside the section, exactly
+          // like SourcesDisclosure.tsx renders the same fields for a chat citation card.
+          <span className="source-card-where">
+            {[source.archiveTitle, source.sectionLabel].filter(Boolean).join(' · ')}
+          </span>
         ) : source.sectionLabel ? (
           <span className="source-card-where">{source.sectionLabel}</span>
         ) : null}
@@ -278,10 +314,18 @@ function EvidenceCard({
         <span className="review-source-kind">{t(`review.source.kind.${source.kind}`)}</span>
         {/* Honest identity/availability states (spec §13.5/§25.2): the CREATION-TIME facts
             the snapshot recorded; the P4 freshness badge below adds the CURRENT state. */}
-        {source.identity === 'unresolved' && (
+        {/* M11: an archive card gets its OWN badge — distinct wording from the legacy
+            document "identity could not be determined" claim — and never both. */}
+        {source.sourceKind === 'archive' ? (
           <span className="review-source-state">
-            <span aria-hidden="true">?</span> {t('review.source.unresolved')}
+            <span aria-hidden="true">?</span> {t('review.source.archive')}
           </span>
+        ) : (
+          source.identity === 'unresolved' && (
+            <span className="review-source-state">
+              <span aria-hidden="true">?</span> {t('review.source.unresolved')}
+            </span>
+          )
         )}
         {source.availabilityAtCreation === 'missing' && (
           <span className="review-source-state">
@@ -298,6 +342,20 @@ function EvidenceCard({
         <div className="review-source-context-action">
           <button type="button" className="msg-action" onClick={() => onOpenContext(source.key)}>
             {t('review.sourceContext.open')}
+          </button>
+        </div>
+      )}
+      {canOpenArticle && (
+        <div className="review-source-context-action">
+          <button
+            type="button"
+            className="msg-action"
+            // Named like the chat card's twin (§9.23 (b)6): the visible word pair stays short,
+            // the accessible name says WHICH article — a review pane can list many.
+            aria-label={t('chat.sources.openArticleNamed', { title: source.documentTitle })}
+            onClick={() => onOpenArticle(source)}
+          >
+            {t('chat.sources.openArticle')}
           </button>
         </div>
       )}

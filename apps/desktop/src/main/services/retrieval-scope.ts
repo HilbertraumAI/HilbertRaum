@@ -32,11 +32,22 @@ export interface ScopeFilter {
  *
  * Returns `null` when the scope imposes no filter at all (empty union AND archived
  * included) — i.e. the explicit "All documents" / legacy whole-corpus path stays unfiltered.
+ *
+ * Knowledge packs (#301 P4, finding M10): `noDocuments` — the explicit deny-all document scope
+ * `resolveScope` sets when the user turned documents off and no file is attached to the chat —
+ * short-circuits to the constant-false predicate `0` BEFORE any other logic. Checked first
+ * deliberately: a narrowing spread (`{ ...scope, documentIds: [x] }`) that leaves the flag set
+ * is a contradiction, and the fail-closed reading is the honest one. Every consumer of this
+ * builder (the scoped vector scan, keyword search, `documentsInScope`, the re-index check, the
+ * extraction aggregates, the `registerRagIpc` routing helpers) denies all documents through
+ * this single line — no per-consumer flag handling exists or is wanted.
  */
 export function buildScopeFilter(
   scope: RetrievalScope | null | undefined,
   docIdExpr: string
 ): ScopeFilter | null {
+  if (scope?.noDocuments) return { sql: '0', params: [] }
+
   const conditions: string[] = []
   const params: (string | number)[] = []
 

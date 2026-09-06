@@ -676,7 +676,7 @@ override, interpolated into all three partial-offload sentences as `{margin}` GB
 literal "1 GB" they used to hard-code; and `CARD_FREE_SLACK_MB = 1536`, how much of the card may
 already be in use and still count as "free at start" (it was a renderer-local literal beside the
 hard-coded margin). Change either constant and the copy follows. Whether the app should
-trade that margin for a full offload is an owner decision (BUILD_STATE §5 item 21 (f)). Units: every size on the
+trade that margin for a full offload is an owner decision (BUILD_STATE §5 item 22 (f)). Units: every size on the
 screen is GiB (RAM, VRAM, the buffers), so the manifest's decimal "size on disk" is converted
 once in the snapshot (19.8 GB → 18.4; display-only — the verdict gets the unrounded weights via
 `weightsMib`). Before the first start → an ESTIMATE (the copy says so and that the context cache is
@@ -695,7 +695,7 @@ outside the catalog on a card is 'unknown' (no cache term). Unified and cpu are 
 weights against the budget with 8 % headroom → 'gpu'/'cpu' or 'too_large'. An observed start
 always wins over the estimate. 'too_large' offers "Choose a smaller model" (AI Model). Pills: On
 GPU / Partly on GPU / On processor / Too large / Not measured. Phase 2 (not built): the
-context-cache estimate from the GGUF header (BUILD_STATE §5 item 21 (e)).
+context-cache estimate from the GGUF header (BUILD_STATE §5 item 22 (e)).
 
 **Where the measurement lives, in the copy** (PR #303 audit L8 and owner gate (c)). A placement
 record is per model id in the DRIVE's settings (`settings.modelPlacements`) and is read back only
@@ -766,7 +766,7 @@ weights are no longer counted against RAM; on `unified` the full sum, with the c
 "memory" and the "Fits" / "Too much at once" pill comparing against the unified budget rather
 than RAM. What
 the app should DO about the start-order contention (force translation to the processor while chat
-holds the card, or reclaim the card when translation goes idle) is an owner decision (§5 item 21
+holds the card, or reclaim the card when translation goes idle) is an owner decision (§5 item 22
 (g)).
 
 **Other computers this drive has been used on.** The history minus the key behind the currently

@@ -10,6 +10,7 @@ import type { Translator } from './translation'
 import type { CachedGpuProbe } from './runtime/gpu'
 import type { AuditRecorder } from './audit'
 import type { DocTaskManager } from './doctasks'
+import type { ZimService } from './zim'
 import type { SkillRegistry } from './skills/registry'
 import type { VisionService } from './vision'
 import type { TrustedSenders } from '../ipc/guarded-handle'
@@ -126,6 +127,21 @@ export interface AppContext {
    * later phases re-run it post-unlock; tests drive `reconcileSkills`/the handle directly.
    */
   skills?: SkillRegistry
+  /**
+   * Knowledge packs (ZIM wave): the registry + kiwix-serve sidecar facade. Optional so
+   * partial test contexts stay valid; absent ⇒ the feature reads "not installed" and the
+   * ask path never builds a ZIM arm. Quit calls `stop()` with the other sidecars.
+   */
+  zim?: ZimService
+  /**
+   * Knowledge-pack operation registry (#301, finding H4) — a SECOND instance of the
+   * `plaintextOps` contract, dedicated to the ZIM operations (an ask's arm, an article read,
+   * a registration incl. the native picker wait, the reconciliation). Separate from
+   * `plaintextOps` so the lock/quit ZIM settle is its own bounded step and the paths it
+   * tracks are only `zim-transient/` files, never a document transient. Optional so partial
+   * test contexts stay valid; absent ⇒ the service's operations are local no-ops.
+   */
+  zimOps?: PlaintextOpsRegistry
   /**
    * Image-understanding (vision) sidecar orchestrator: a SEPARATE lazy llama-server with the
    * mmproj projector (image-understanding plan §10). Optional so partial test contexts stay

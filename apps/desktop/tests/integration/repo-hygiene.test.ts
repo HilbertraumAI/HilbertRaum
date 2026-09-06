@@ -668,3 +668,202 @@ describe('repo hygiene — every ipcMain.handle under src/main/ipc goes through 
     expect(offenders).toEqual([])
   })
 })
+
+// ZIM knowledge packs (PR #294 → #301), plan §0.3 item 5: the wave's acceptance matrix is a checked-in
+// INVENTORY (`tests/fixtures/zim/required-checks.json`), not a memory. A row is one named automated test
+// or one piece of required manual evidence; its status says whether the case exists yet. What this net
+// protects against is the quiet way an acceptance gate goes green: a pending case represented by a
+// passing dummy, a `.skip`/`.todo` left in a required suite, an `it.fails` baseline nobody listed (so
+// nobody is forced to flip it), or a test renamed away from the inventory that now names nothing.
+// Style matches the rest of this file — readdir walks + regexes over source text, no test-runner API.
+describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 → #301, plan §0.3 item 5)', () => {
+  const desktopRoot = process.cwd()
+  const repoRoot = join(desktopRoot, '..', '..')
+  const inventoryPath = join(desktopRoot, 'tests', 'fixtures', 'zim', 'required-checks.json')
+  type Status = 'implemented' | 'baseline-pending' | 'pending' | 'manual-evidence'
+  interface Row {
+    id: string
+    tid: string
+    gate: 'P7' | 'P8'
+    phase: string
+    findings: string[]
+    status: Status
+    file?: string
+    test?: string
+    evidence?: string
+    note?: string
+  }
+  const STATUSES: ReadonlySet<string> = new Set(['implemented', 'baseline-pending', 'pending', 'manual-evidence'])
+  const rows = (): Row[] => (JSON.parse(readFileSync(inventoryPath, 'utf8')) as { checks: Row[] }).checks
+  const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  /** `it('name'` / `it.fails('name'` / `test(…` — any quote style; reports whether the match is `.fails`. */
+  const findTest = (source: string, name: string): { found: boolean; fails: boolean } => {
+    const re = new RegExp('\\b(?:it|test)(\\.fails)?\\(\\s*([\'"`])' + escapeRe(name) + '\\2')
+    const m = re.exec(source)
+    return { found: m !== null, fails: m !== null && m[1] !== undefined }
+  }
+  const walkTests = (dir: string): string[] => {
+    const out: string[] = []
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      if (entry.isDirectory()) out.push(...walkTests(p))
+      else if (/\.test\.tsx?$/.test(entry.name)) out.push(p)
+    }
+    return out
+  }
+  const rel = (p: string): string => p.slice(desktopRoot.length + 1).split('\\').join('/')
+  const basename = (p: string): string => rel(p).split('/').pop() ?? ''
+
+  it('parses; four statuses only; unique ids; every T01–T19 has a P7-gated row, every T20 row is P8-gated', () => {
+    const all = rows()
+    expect(all.length).toBeGreaterThan(0)
+    const ids = all.map((r) => r.id)
+    expect(new Set(ids).size, 'duplicate row ids').toBe(ids.length)
+    const bad = all.filter(
+      (r) =>
+        !/^T(0[1-9]|1\d|20)$/.test(r.tid) ||
+        !STATUSES.has(r.status) ||
+        !['P7', 'P8'].includes(r.gate) ||
+        typeof r.phase !== 'string' ||
+        !Array.isArray(r.findings)
+    )
+    expect(bad.map((r) => r.id)).toEqual([])
+    const present = new Set(all.map((r) => r.tid))
+    const required = Array.from({ length: 19 }, (_, i) => `T${String(i + 1).padStart(2, '0')}`)
+    expect(required.filter((t) => !present.has(t)), 'T-IDs with no row at all').toEqual([])
+    expect(all.filter((r) => r.tid !== 'T20' && r.gate !== 'P7').map((r) => r.id)).toEqual([])
+    expect(all.filter((r) => r.tid === 'T20' && r.gate !== 'P8').map((r) => r.id)).toEqual([])
+  })
+
+  it('every implemented / baseline-pending row names a test that exists, in the named file, in the matching form', () => {
+    const problems: string[] = []
+    for (const r of rows()) {
+      if (r.status !== 'implemented' && r.status !== 'baseline-pending') continue
+      if (!r.file || !r.test) {
+        problems.push(`${r.id}: needs file + test`)
+        continue
+      }
+      const p = join(desktopRoot, r.file)
+      if (!existsSync(p)) {
+        problems.push(`${r.id}: ${r.file} does not exist`)
+        continue
+      }
+      const { found, fails } = findTest(readFileSync(p, 'utf8'), r.test)
+      if (!found) problems.push(`${r.id}: no it()/test() named "${r.test}" in ${r.file}`)
+      else if (r.status === 'implemented' && fails) problems.push(`${r.id}: listed implemented but is it.fails`)
+      else if (r.status === 'baseline-pending' && !fails)
+        problems.push(`${r.id}: listed baseline-pending but is a plain it — flip the inventory row`)
+    }
+    expect(problems).toEqual([])
+  })
+
+  it('every pending row names its planned home and is not secretly already there; every manual-evidence row records evidence or its pending owner', () => {
+    const problems: string[] = []
+    for (const r of rows()) {
+      if (r.status === 'pending') {
+        if (!r.file || !r.test || !/^P\d/.test(r.phase)) problems.push(`${r.id}: pending needs file + test + owning phase`)
+        else if (existsSync(join(desktopRoot, r.file)) && findTest(readFileSync(join(desktopRoot, r.file), 'utf8'), r.test).found)
+          problems.push(`${r.id}: listed pending but a test with that exact name exists — update the status`)
+      }
+      if (r.status === 'manual-evidence' && !(typeof r.evidence === 'string' && r.evidence.trim().length > 20))
+        problems.push(`${r.id}: manual-evidence needs a real evidence pointer or "pending — <owner>"`)
+    }
+    expect(problems).toEqual([])
+  })
+
+  it('no ZIM test file carries .skip/.todo/.only, and every it.fails in the ZIM suites is a listed baseline-pending row', () => {
+    const all = rows()
+    const listedFiles = new Set(all.filter((r) => r.file).map((r) => r.file as string))
+    // This file is itself listed (the L2 / plural-pair rows) but its regexes and messages spell the
+    // patterns they hunt for, so the net skips it — it holds no tests of the ZIM feature anyway.
+    const zimFiles = walkTests(join(desktopRoot, 'tests')).filter(
+      (p) => basename(p) !== 'repo-hygiene.test.ts' && (/zim/i.test(basename(p)) || listedFiles.has(rel(p)))
+    )
+    expect(zimFiles.length).toBeGreaterThan(5) // the walk really walked
+    const baselines = new Set(all.filter((r) => r.status === 'baseline-pending').map((r) => `${r.file}::${r.test}`))
+    const problems: string[] = []
+    for (const p of zimFiles) {
+      const src = readFileSync(p, 'utf8')
+      const focus = /\b(?:it|test|describe)\.(?:skip|todo|only)\(/.exec(src)
+      if (focus) problems.push(`${rel(p)}: ${focus[0]}`)
+      const failsRe = /\b(?:it|test)\.fails\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g
+      for (let m = failsRe.exec(src); m !== null; m = failsRe.exec(src)) {
+        const key = `${rel(p)}::${m[2]}`
+        if (!baselines.has(key)) problems.push(`${rel(p)}: it.fails("${m[2]}") is not a baseline-pending inventory row`)
+      }
+    }
+    expect(problems).toEqual([])
+  })
+
+  it('the drive zim/ dir is git-ignored, anchored like /runtime/ (PR #294 L2)', () => {
+    const lines = readFileSync(join(repoRoot, '.gitignore'), 'utf8').split(/\r?\n/)
+    expect(lines).toContain('/zim/')
+    // Anchored ONLY — a bare `zim/` would un-track apps/desktop/src/main/services/zim/ (the /runtime/ bug).
+    expect(lines.filter((l) => /^\/?zim\/?$/.test(l.trim()))).toEqual(['/zim/'])
+  })
+
+  it('EN/DE chat.scope.projectCount.one/.other are adjacent lines again (PR #294 review INFO, split plural pair)', () => {
+    for (const lang of ['en', 'de']) {
+      const lines = readFileSync(join(desktopRoot, 'src', 'shared', 'i18n', `${lang}.ts`), 'utf8').split(/\r?\n/)
+      const one = lines.findIndex((l) => l.includes("'chat.scope.projectCount.one'"))
+      const other = lines.findIndex((l) => l.includes("'chat.scope.projectCount.other'"))
+      expect(one, `${lang}: .one present`).toBeGreaterThan(-1)
+      expect(other, `${lang}: .other directly follows .one`).toBe(one + 1)
+    }
+  })
+
+  it('T17 security-model.md carries the kiwix-serve exception to the per-spawn-key claim and the R-9 wording is present in security-model.md, PRIVACY.md and known-limitations.md', () => {
+    // #301 P5, findings DOC-1 / M1: the pre-P5 text claimed EVERY sidecar's own HTTP port is
+    // closed by the per-spawn API key. kiwix-serve has no such key (it implements no request
+    // authentication upstream), so that claim must be carved out by name, not just qualified by
+    // a new subsection sitting beside unqualified prose (plan §9.19 (f)1-2).
+    const paragraphContains = (text: string, startMarker: string, needle: string): boolean => {
+      const start = text.indexOf(startMarker)
+      if (start === -1) return false
+      const end = text.indexOf('\n\n', start)
+      const para = end === -1 ? text.slice(start) : text.slice(start, end)
+      return para.includes(needle)
+    }
+    const securityModel = readFileSync(join(repoRoot, 'docs', 'security-model.md'), 'utf8')
+    const privacy = readFileSync(join(repoRoot, 'PRIVACY.md'), 'utf8')
+    const knownLimitations = readFileSync(join(repoRoot, 'docs', 'known-limitations.md'), 'utf8')
+    const userGuide = readFileSync(join(repoRoot, 'docs', 'user-guide.md'), 'utf8')
+    // Markdown source soft-wraps a long sentence across lines; collapse whitespace runs to a
+    // single space on both sides so a wrapped quote still counts as verbatim.
+    const oneLine = (s: string): string => s.replace(/\s+/g, ' ')
+
+    expect(
+      paragraphContains(securityModel, '**Sidecar requests are authenticated', 'kiwix-serve'),
+      'the "Sidecar requests are authenticated" paragraph must name kiwix-serve as the exception'
+    ).toBe(true)
+    expect(
+      paragraphContains(securityModel, "**The sidecars' own HTTP ports**", 'kiwix-serve'),
+      'the "sidecars\' own HTTP ports … closed by the per-spawn key" item must carve out kiwix-serve'
+    ).toBe(true)
+    expect(
+      /^#### kiwix-serve — the one unauthenticated sidecar/m.test(securityModel),
+      'security-model.md must carry the dedicated kiwix-serve subsection heading'
+    ).toBe(true)
+    expect(securityModel.includes('R-9'), 'security-model.md must record residual R-9').toBe(true)
+    expect(knownLimitations.includes('R-9'), 'known-limitations.md must record residual R-9').toBe(true)
+
+    // The one user-facing R-9 sentence (plan §9.19 (f)3), VERBATIM across every mirror.
+    const sentence =
+      'While the workspace is unlocked and a knowledge pack has been used in a chat, other ' +
+      'programs running under your own user account on this computer can read the enabled ' +
+      'packs through the pack server, which has no password of its own; locking or quitting ' +
+      'stops it.'
+    expect(oneLine(privacy).includes(sentence), 'PRIVACY.md must quote the R-9 sentence verbatim').toBe(true)
+    expect(
+      oneLine(knownLimitations).includes(sentence),
+      'known-limitations.md must quote the R-9 sentence verbatim'
+    ).toBe(true)
+    expect(oneLine(userGuide).includes(sentence), 'user-guide.md must quote the R-9 sentence verbatim').toBe(
+      true
+    )
+    expect(
+      oneLine(securityModel).includes(sentence),
+      'security-model.md must quote the R-9 sentence verbatim (the counterpart it introduces)'
+    ).toBe(true)
+  })
+})

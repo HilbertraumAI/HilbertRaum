@@ -1,0 +1,38 @@
+<!-- synthetic fixture written for HilbertRaum on 2026-09-05; models the HTML shape produced by Kiwix's Stack Exchange "sotoki" ZIMs, from public knowledge of the sotoki static-site generator's per-question page layout (a question block, an accepted-answer block, vote/user-info tables); no third-party text is included; license: GPL-3.0-or-later (repository license) -->
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<title>How do I bound lookahead in a hand-rolled HTML scanner?</title>
+<script>var seState = "se-script-never-shown";</script>
+</head>
+<body>
+<div class="question">
+<h1>How do I bound lookahead in a hand-rolled HTML scanner?</h1>
+<table class="votes"><tbody><tr><td>se-vote-table-never-shown</td></tr></tbody></table>
+<div class="post-text">
+<p>I am writing a hand-rolled scanner over raw HTML and I keep re-scanning the same tail of the buffer on malformed input. What is the right bound? My working rule is: the scanner must never search the same suffix twice, no matter how many unclosed tags precede it.</p>
+<p>A naive version calls <code>indexOf('&gt;')</code> from the current tag-start position every time a candidate tag begins, which is fine for well-formed input but degrades badly once the input contains a long run of unclosed angle brackets with no terminator anywhere nearby.</p>
+<pre><code>while (i &lt; len) {
+  var j = input.indexOf('&gt;', i);
+  if (j === -1) break;
+  i = j + 1;
+}</code></pre>
+<span class="badge">homework</span>
+<span class="badge">performance</span>
+</div>
+<!-- se-comment-never-shown -->
+<div class="answer accepted">
+<div class="post-text">
+<p>Track a low-water mark instead of re-searching: remember the position of the last failed search and never let the next scan start before it, even across separate unclosed constructs.</p>
+<p>Concretely: keep a single cursor that only moves forward. When a lookahead fails to find its terminator before the end of input, advance the cursor to the end and stop, rather than restarting the search from the next candidate start position — that restart is exactly what turns linear work into quadratic work.</p>
+</div>
+<table class="user-info"><tbody><tr><td>José – reputation redacted</td></tr></tbody></table>
+</div>
+<div class="comments">
+<p>Nice write-up. Worth adding: the same low-water-mark trick applies to unterminated comments and unterminated script/style bodies, not just unclosed tags — anywhere a lookahead can fail to find its terminator.</p>
+<p>Agreed, and it is worth instrumenting the bound directly rather than trusting a wall-clock benchmark: count actual scan steps or characters examined per input character, and assert that count stays within a small constant factor as input size grows.</p>
+<p>One more edge case worth a test: an attribute value that itself contains an unescaped angle bracket inside a properly quoted string should not confuse the cursor either — the quote-awareness has to compose with the low-water mark, not bypass it.</p>
+</div>
+</div>
+</body>
+</html>

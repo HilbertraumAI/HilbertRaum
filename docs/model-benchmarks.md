@@ -656,7 +656,7 @@ merge gate (decision G3).
 6,144 MiB `discrete` gate on Vulkan (an RTX 4050 Laptop: 5,921 MiB) — so the "6 GB" row above
 describes only a card that reports AT OR ABOVE the gate (an RTX 2060: 6,144 MiB); a 6 GB laptop
 card below the gate is a RAM machine on the next start (`nextStartMemory` → `cpu`), same as
-today. Whether to lower the gate is an owner call (§5 item 21 (k)).
+today. Whether to lower the gate is an owner call (§5 item 22 (k)).
 
 **Thresholds** (`estimateGraphicsNeedMib`, every RANKED chat manifest, raw MiB; "fits from" =
 ⌈need⌉; the boundary is asserted on both sides in `committed-catalog.test.ts`):

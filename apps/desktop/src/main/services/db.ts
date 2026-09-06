@@ -583,6 +583,45 @@ CREATE TABLE IF NOT EXISTS evidence_exports (
   FOREIGN KEY (review_id) REFERENCES evidence_reviews(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_exports_review ON evidence_exports(review_id);
+
+-- Knowledge packs (ZIM wave): registered external ZIM archives the chat can retrieve from
+-- via the kiwix-serve sidecar. Like skills, a derived index over on-disk files — the id
+-- is the archive's own UUID (read by kiwix-manage at registration), so a re-registration
+-- of the same archive is an upsert and the id survives a DB rebuild. The FILE is never
+-- copied (multi-GB, public, read-only — the deliberate exception to the stored-copy rule,
+-- rag-design ZIM record): leaf + recorded_path follow the stored-copy resolution shape
+-- (drive-relative zim/<leaf> first, recorded path second; ingestion/stored-copy.ts
+-- precedent), and a missing file marks unavailable_at — never a blind delete. Metadata
+-- columns are pack-level facts from the archive header (title/description/language/counts):
+-- they name what the user reads, so they are CONTENT for audit/export purposes (ids/counts
+-- only in runtime_events) but plain rows here inside the encrypted workspace DB.
+-- No FK from conversations into this table: a chat's scope stores pack ids in
+-- scope_v2_json and a removed pack degrades to "not retrieved from" (the skills C3 rule).
+CREATE TABLE IF NOT EXISTS knowledge_packs (
+  id             TEXT PRIMARY KEY,          -- ZIM archive UUID (natural key; stable across re-adds/rebuilds)
+  title          TEXT NOT NULL,
+  description    TEXT,
+  language       TEXT,                      -- archive-declared ISO code ("deu", "eng")
+  zim_date       TEXT,                      -- archive build date YYYY-MM-DD
+  article_count  INTEGER,
+  media_count    INTEGER,
+  size_bytes     INTEGER,
+  leaf           TEXT NOT NULL,             -- file BASENAME (portable resolution: <drive>/zim/<leaf> first)
+  recorded_path  TEXT NOT NULL,             -- path as registered (fallback resolution; may be absolute)
+  enabled        INTEGER NOT NULL,          -- 0/1 (a disabled pack stays registered but is never queried)
+  unavailable_at TEXT,                      -- NULL = file present at last look; ISO stamp = vanished (never blind-deleted)
+  removed_at     TEXT,                      -- tombstone: user removed the registration. The ROW stays so
+                                            -- drive auto-discovery (keyed by leaf) cannot resurrect a
+                                            -- deliberately removed pack; an explicit re-add clears it.
+  searchable     TEXT,                      -- CONFIRMED full-text capability: 'yes' | 'no'; NULL = unknown (never probed,
+                                            -- or the cache key below moved). Only a validated /suggest probe writes it.
+  searchable_key TEXT,                      -- the fingerprint the verdict was taken under: <size>:<mtimeMs> of the archive
+                                            -- plus the kiwix-serve binary's <size>:<mtimeMs>. A different key resets the verdict.
+  ftindex_hint   TEXT,                      -- the archive's own _ftindex tag ('yes' | 'no'; NULL = no tag) — a HINT only:
+                                            -- it never sets searchable and never affects an ask's eligibility.
+  added_at       TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT
@@ -1128,6 +1167,12 @@ function applyPragmasAndMigrations(db: Db): void {
   // ordinary answer and every pre-migration row). Additive + nullable, STRUCTURAL only (never the
   // question or document text, §22-M1); an older app ignores the column and renders no offer.
   ensureColumn(db, 'messages', 'skill_offer_json', 'skill_offer_json TEXT')
+  // Knowledge packs (#301 P4, findings M6/M7; owner ruling plan §7) — the per-ask PACK OUTCOMES of
+  // an assistant turn: a JSON array of `KnowledgePackOutcome` (packId + title + status + reason
+  // code + found/admitted counts), or NULL (a pre-migration row, or an ask whose scope selected no
+  // pack). Additive + nullable, so no `SCHEMA_VERSION` bump and an older app simply ignores the
+  // column and renders no notice. CODE-only diagnostics — never a path, a filename or stderr.
+  ensureColumn(db, 'messages', 'pack_outcomes_json', 'pack_outcomes_json TEXT')
   // EP-1 Phase 4 (spec §15.5/§28.6): the acknowledged-drift record — JSON
   // { acknowledgedAt, fingerprint } written by acknowledgeEvidenceReviewFreshness; NULL =
   // never acknowledged. Additive + nullable so P0–P3 workspaces open unchanged; the ack is
@@ -1199,6 +1244,31 @@ function applyPragmasAndMigrations(db: Db): void {
   // geometry reader); 'suspect-confirmed' = the retry ALSO read soup (final — the handler stops
   // retrying and refuses confident figures). A provenance flag — never logged/audited/exported.
   ensureColumn(db, 'invoices', 'text_quality', 'text_quality TEXT')
+  // WHY a knowledge pack is unavailable (#301 P3b, finding M5). Additive + nullable, so
+  // SCHEMA_VERSION stays put (the P0 posture for additive migrations): NULL = available, or a
+  // workspace written before this column existed (the next reconcile fills it in);
+  // 'missing' = no candidate file at either location; 'identity_mismatch' = a file IS there but
+  // its 80-byte header carries a different archive UUID — a materially different state, because
+  // old citations still point at the registered archive and the viewer must say so. A reason
+  // CODE, never a path or a title: it rides `KnowledgePack.unavailableReason` to the panel badge.
+  ensureColumn(db, 'knowledge_packs', 'unavailable_reason', 'unavailable_reason TEXT')
+  // Knowledge-pack SEARCHABILITY (#301 P4, finding M7, plan §9.21 (d)1). Three additive,
+  // nullable columns — SCHEMA_VERSION stays put, and a workspace written before them reads
+  // every pack as "unknown" until the next reconciliation probes it.
+  //   searchable      — 'yes' | 'no', CONFIRMED only by a validated /suggest probe; NULL =
+  //                     unknown, which is what a 404, a timeout, a malformed body or a response
+  //                     observed across a server change leaves behind. An unknown pack is
+  //                     searched like a 'yes'; a confirmed 'no' is skipped by the ask (outcome
+  //                     `not-searchable`) but stays readable in the article viewer.
+  //   searchable_key  — the fingerprint that verdict was taken under (archive size/mtime plus
+  //                     the kiwix-serve binary's size/mtime). The reconcile resets `searchable`
+  //                     to NULL whenever the key moves, so a replaced file or a swapped tools
+  //                     bundle is re-probed instead of trusting a stale "no".
+  //   ftindex_hint    — the archive's own `_ftindex` tag ('yes' | 'no'; NULL = no tag), a HINT
+  //                     recorded at registration/discovery that never sets `searchable`.
+  ensureColumn(db, 'knowledge_packs', 'searchable', 'searchable TEXT')
+  ensureColumn(db, 'knowledge_packs', 'searchable_key', 'searchable_key TEXT')
+  ensureColumn(db, 'knowledge_packs', 'ftindex_hint', 'ftindex_hint TEXT')
   // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
   // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
   // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.

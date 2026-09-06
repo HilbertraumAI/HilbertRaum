@@ -1,0 +1,31 @@
+<!-- synthetic fixture written for HilbertRaum on 2026-09-05; models the HTML shape produced by DevDocs scraper ZIMs, from public knowledge of the DevDocs.io static-site scraper output bundled into ZIM archives (a `_sidebar` navigation, `_page`-wrapped entry content, and an `_attribution` footer line per entry); no third-party text is included; license: GPL-3.0-or-later (repository license) -->
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<title>Array.prototype.flatMap()</title>
+<style>._sidebar-icon { color: devdocs-style-never-shown }</style>
+</head>
+<body>
+<nav class="_sidebar"><ul><li>devdocs-nav-never-shown</li></ul></nav>
+<div class="_page _mdn">
+<h1>Array.prototype.flatMap()</h1>
+<p>The <code>flatMap()</code> method maps each element and flattens the result by one level in a single traversal, avoiding a separate <code>map()</code> then <code>flat()</code> pass.</p>
+<dl>
+<dt>callback</dt>
+<dd>Function that produces an element of the new array, taking three arguments: the current element, its index and the array being traversed.</dd>
+<dt>thisArg <span class="optional">Optional</span></dt>
+<dd>Value to use as <code>this</code> when executing <code>callback</code>. Ignored when <code>callback</code> is an arrow function, since arrow functions do not bind their own <code>this</code>.</dd>
+</dl>
+<pre data-language="js">arr.flatMap(x =&gt; [x, x * 2])</pre>
+<p>The result array is a new array; the original array is left unmodified. Depth is fixed at one level, unlike <code>flat(depth)</code>, which accepts an arbitrary depth argument.</p>
+<table class="standard-table"><tbody><tr><th>Browser</th><td>compat-table-never-shown</td></tr><tr><th>Node.js</th><td>Supported</td></tr></tbody></table>
+<p>A naïve implementation loops twice – once to map, once to flatten; flatMap does both in a single pass, and engines can special-case the combined operation for a modest speedup on large arrays.</p>
+<p>Related methods worth comparing: <code>map()</code> alone (no flattening), <code>flat()</code> alone (no mapping), and <code>reduce()</code> combined with <code>concat()</code> (the pre-flatMap idiom most codebases used before broad engine support landed).</p>
+<p>A common use is expanding each input item into zero, one, or several output items in a single step: return an empty array to drop an item, a one-element array to keep it unchanged, or a multi-element array to expand it, all from the same callback without a separate filter pass.</p>
+<pre data-language="js">// drop falsy values, duplicate the rest
+[1, 0, 2, null, 3].flatMap(x =&gt; x ? [x, x] : [])</pre>
+<p>Specification: defined in the current ECMAScript language specification under the Array.prototype section; the method reads the array's <code>length</code> once at the start and does not observe elements appended to the array by the callback during iteration, matching the behaviour of <code>map()</code> and <code>forEach()</code>.</p>
+<p class="_attribution">Adapted for offline use; original entry maintained upstream.</p>
+</div>
+</body>
+</html>

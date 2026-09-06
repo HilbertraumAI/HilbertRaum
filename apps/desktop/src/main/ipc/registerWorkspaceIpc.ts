@@ -11,6 +11,7 @@ import {
 import { prepareFirstBenchmark, scheduleFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { maybeStartLocalApi } from '../services/local-api/lifecycle'
+import { startKnowledgePackSession } from '../services/zim/session'
 import { inFlightStreams, awaitInFlightStreamsSettled } from './inflight'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { isWorkspaceNewerError } from '../services/db'
@@ -111,6 +112,49 @@ async function settleAndSweepPlaintextOps(ctx: AppContext): Promise<void> {
   }
 }
 
+/**
+ * The knowledge-pack twin of the step above (#301, findings H4/M4). Await the aborted ZIM
+ * operations within the SAME 5 s bound, shred whatever `library.<n>.xml` / `meta-<n>/library.xml`
+ * an operation that could not cancel still tracks, then run the dedicated `zim-transient/`
+ * cleanup. Runs while `ctx.db` is open and AFTER `zim.suspend()` took the sidecar down, so
+ * nothing is publishing into that directory any more.
+ *
+ * Failure policy (plan §9.17 (b)): the LOCK PROCEEDS. A file still tracked by a live operation
+ * at the bound is shredded under it (its child is settled or unconfirmed by then); a file
+ * belonging to a child that could NOT be confirmed dead is kept — a possibly-live process may
+ * still write it — reported, and removed by the next session start. The log then says "NOT
+ * confirmed", never "complete", and carries counts only: no pack title, no path.
+ */
+async function settleAndCleanZimTransients(ctx: AppContext): Promise<void> {
+  const ops = ctx.zimOps
+  const zim = ctx.zim
+  if (!ops && !zim) return
+  try {
+    if (ops) {
+      const settled = await ops.awaitSettled(LOCK_TASK_SETTLE_TIMEOUT_MS)
+      if (!settled) {
+        log.warn('Lock: knowledge-pack operations still running at the settle bound — sweeping', {
+          live: ops.size()
+        })
+      }
+      const swept = ops.sweepRegistered()
+      if (swept > 0) log.info('Lock: swept registered knowledge-pack transients', { swept })
+    }
+    const report = zim?.cleanupTransients('lock')
+    if (!report) return
+    if (report.confirmed) log.info('Lock: ZIM transients cleaned')
+    else
+      log.warn('Lock: ZIM cleanup NOT confirmed', {
+        kept: report.kept,
+        unknownEntries: report.unknownEntries,
+        unsettledOps: report.unsettledOps,
+        unconfirmedChildren: report.unconfirmedChildren
+      })
+  } catch (err) {
+    log.error('Error settling knowledge-pack operations on lock', String(err))
+  }
+}
+
 export function registerWorkspaceIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
   ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
@@ -148,6 +192,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       void scheduleFirstBenchmark(ctx, firstBenchmark, autoStarted)
       // Post-unlock seam for the local API (policy ∧ setting gated; D3/D7).
       maybeStartLocalApi(ctx)
+      // Knowledge packs (#301, finding L7; owner ruling D3): clean this workspace's ZIM
+      // transients and reconcile the drive folder ONCE per session — scheduled, never on the
+      // unlock's critical path (a 30 s manager spawn must not sit between the password and
+      // the workspace).
+      startKnowledgePackSession(ctx)
       return { ok: true, state }
     } catch (err) {
       // instanceof PLUS the name: the production rollup bundle can contain a second,
@@ -252,6 +301,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // Third post-unlock seam (create runs the same sequence as unlock): a re-created
         // vault that restored `localApiEnabled: true` starts the endpoint here.
         maybeStartLocalApi(ctx)
+        // …and the third knowledge-pack session seam (#301, D3): a re-created vault may sit on
+        // a drive that already holds archives, so this session reconciles them too.
+        startKnowledgePackSession(ctx)
         return { ok: true, state }
       } catch (err) {
         // #247: the database already on disk (a plaintext workspace, or the file a create
@@ -427,6 +479,17 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   } catch {
     /* best-effort */
   }
+  // #301 (H4): and every knowledge-pack operation — an ask's arm, an article read, a parked
+  // native-picker wait, a running reconciliation. Its OWN try: two registries sharing one
+  // `catch` would make whichever runs second silently optional. The signals fire now, so each
+  // operation has the whole teardown to unwind before the bounded settle below; a picker that
+  // resolves after this stays refused for good (the op signal never un-aborts), which is why
+  // the picker wait is an operation and not merely an epoch check.
+  try {
+    ctx.zimOps?.abortAll()
+  } catch {
+    /* best-effort */
+  }
   // The local API dies FIRST (local-api wave, D7): its stop() aborts active + queued
   // external streams and closes every socket, so no outside caller can reach the model
   // (or hold a stream open) while the sidecars below are torn down and the vault
@@ -459,6 +522,13 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     // and kills the child; the orchestrator rebuilds a fresh runtime (cold start) on the next
     // analyze, so this needs no `suspend()`/latch distinction (the runtime instance is discarded).
     ctx.vision?.stop() ?? Promise.resolve(),
+    // The kiwix-serve sidecar (#301, finding M4) holds open handles on every enabled archive
+    // and a live loopback port serving the user's whole library, so it dies here with the
+    // others. `suspend()` (not `stop()`): bounded by the server's own SIGTERM → 2 s → SIGKILL
+    // → 3 s per child and deliberately NON-LATCHING — a failed lock must admit a new ask at
+    // once, so there is no flag that only an unlock could clear. It also aborts the shared
+    // start, so every waiter rejects instead of consuming a publication from the old session.
+    ctx.zim?.suspend() ?? Promise.resolve(),
     // The TranslateGemma sidecar (TG wave) keeps recent source/translation text in its KV cache,
     // so it too must die before the vault re-encrypts. `suspend()` (not `stop()`): the runtime
     // instance is held on ctx for the session (unlike vision's rebuilt-per-analyze runtime), so
@@ -486,6 +556,12 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   // whatever `.parse*` transient a parser that cannot cancel still holds. Only registered paths
   // are touched, never a stored copy.
   await settleAndSweepPlaintextOps(ctx)
+  // #301 (H4/M4): the same for the knowledge-pack operations — settle within the same bound,
+  // shred what a build or a registration that could not cancel still tracks, then remove the
+  // workspace's `zim-transient/` contents. The library XML names every enabled pack's title and
+  // absolute path in plaintext, so it must be gone before the vault re-encrypts. Best-effort by
+  // construction: the lock never fails or hangs because of a pack.
+  await settleAndCleanZimTransients(ctx)
   // RAG-6 (Wave P4) — SECURITY purge: drop the resident decoded-vector cache from main-process
   // RAM. The vectors are derived from chunk text, so like the sidecars' in-memory recent text
   // they must not linger after the vault re-encrypts. The staleness signature does NOT cover
