@@ -30,7 +30,7 @@ import {
 } from '../../src/main/services/collections'
 import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS, MAX_SELECTED_PACKS } from '../../src/shared/types'
-import type { Citation, EvidencePackOptions, EvidenceSourceSnapshot } from '../../src/shared/types'
+import type { Citation, EvidencePackOptions, EvidenceSourceSnapshot, KnowledgePack } from '../../src/shared/types'
 import {
   appendMessage,
   createConversation,
@@ -52,7 +52,8 @@ import { getEvidenceReview, parseSourceSnapshots } from '../../src/main/services
 import { buildEvidencePackModel } from '../../src/main/services/evidence-pack/pack-model'
 import { escapeHtml, renderEvidencePackHtml } from '../../src/main/services/evidence-pack/render-html'
 import { EVIDENCE_PACK_OPTION_DEFAULTS } from '../../src/shared/evidence-review'
-import { t } from '../../src/shared/i18n'
+import { t, tCount as tCountShared } from '../../src/shared/i18n'
+import type { I18n } from '../../src/renderer/i18n'
 import {
   ARTICLES_PER_PACK,
   MAX_EXTERNAL_CANDIDATES,
@@ -1392,18 +1393,30 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
     // deny-all renders as the packs phrase plus the honest "documents off" tail, and with no
     // pack ticked it names the state instead of a corpus. (The popover's own emit/tick cases
     // are pinned in tests/renderer/KnowledgePacks.test.tsx.)
-    const tt = ((key: string, params?: Record<string, string | number>) =>
-      t('en', key as never, params as never)) as unknown as Parameters<typeof scopeSources>[2]
-    const tCount = ((key: string, count: number) =>
-      t('en', `${key}.${count === 1 ? 'one' : 'other'}` as never, { count } as never)) as unknown as Parameters<
-      typeof scopeSources
-    >[3]
+    // Typed through the shared i18n module (the renderer's `I18n` binds these to a language the
+    // same way) — no casts, so the F-41 `as never` ratchet stays where it is.
+    const tt: I18n['t'] = (key, params) => t('en', key, params)
+    const tCount: I18n['tCount'] = (keyBase, count, params) => tCountShared('en', keyBase, count, params)
+    const pack: KnowledgePack = {
+      id: 'p1',
+      title: 'Wikipedia (DE)',
+      description: null,
+      language: 'deu',
+      zimDate: null,
+      articleCount: null,
+      sizeBytes: null,
+      leaf: 'wikipedia_de.zim',
+      enabled: true,
+      available: true,
+      unavailableReason: null,
+      addedAt: '2026-09-06T00:00:00.000Z'
+    }
     const chip = scopeSources(
       { collectionIds: [], documentIds: [], packIds: ['p1'], documentsOff: true },
       [],
       tt,
       tCount,
-      [{ id: 'p1', title: 'Wikipedia (DE)' } as never]
+      [pack]
     )
     expect(chip).toBe(`Pack: Wikipedia (DE) · ${t('en', 'chat.scope.documentsOffSuffix')}`)
     expect(
