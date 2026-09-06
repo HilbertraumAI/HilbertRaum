@@ -71,6 +71,12 @@ export interface CollectPackCandidatesOptions {
    * `AbortError`, never an outcome). Absent ⇒ every abort is treated as a cancellation.
    */
   askSignal?: AbortSignal
+  /**
+   * The per-ATTEMPT `/raw` timeout of the stall retry (`ARTICLE_READ_TIMEOUT_MS`, #301 P7 T19).
+   * Test seam only, so the "one article's first read stalls" leg does not sit out the real 4 s.
+   * Production never sets it.
+   */
+  articleTimeoutMs?: number
 }
 
 /** One pack's produced candidates, in the pack's own rank order (search hit order). */
@@ -207,7 +213,9 @@ export async function collectPackCandidates(
       attempted++
       let html: string | null
       try {
-        html = await fetchArticleHtml(port, expected ?? hit.urlId, hit.articlePath, signal)
+        html = await fetchArticleHtml(port, expected ?? hit.urlId, hit.articlePath, signal, {
+          timeoutMs: opts.articleTimeoutMs
+        })
       } catch (err) {
         if (aborted()) return noteAbort(err)
         continue

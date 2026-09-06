@@ -1,4 +1,5 @@
 import http from 'node:http'
+import { log } from '../logging'
 import { combineSignals } from '../runtime/sidecar'
 import { attrValue, decodeEntities } from './html'
 
@@ -28,22 +29,71 @@ export interface KiwixResponse {
 }
 
 /**
+ * The rejection of a `kiwixGet` whose OWN per-request timeout fired (#301 P7 T19) — NEVER a
+ * caller abort, which keeps rejecting with the caller's own reason so the #159 `AbortError`
+ * convention, the ask deadline and the lock are unchanged.
+ *
+ * Purely additive: every existing caller still just sees "the request rejected" on a timeout
+ * (`probeSearchable` → unknown, the `serve.ts` health probe → not healthy, `searchPack` → the
+ * arm's `search-failed`). Only `fetchArticleHtml` reads the class — to separate "this attempt's
+ * own timer elapsed before the body completed" (retryable) from a socket error, an over-ceiling
+ * body or a completed HTTP status (not retryable). `headersReceived` / `bytesReceived` are
+ * DIAGNOSTIC ONLY: the measured kiwix-serve fault arrives with both of them set.
+ */
+export class KiwixTimeoutError extends Error {
+  /** The per-request budget that elapsed. */
+  readonly timeoutMs: number
+  /** True when the server had already sent response headers when the budget elapsed. */
+  readonly headersReceived: boolean
+  /** Body bytes received before the budget elapsed (the truncation point of a T19 stall). */
+  readonly bytesReceived: number
+  constructor(timeoutMs: number, headersReceived: boolean, bytesReceived: number) {
+    super(
+      `kiwix-serve did not answer within ${timeoutMs} ms` +
+        (headersReceived
+          ? ` (headers received, ${bytesReceived} body bytes, incomplete)`
+          : ' (no response headers)')
+    )
+    this.name = 'KiwixTimeoutError'
+    this.timeoutMs = timeoutMs
+    this.headersReceived = headersReceived
+    this.bytesReceived = bytesReceived
+  }
+}
+
+/**
  * GET one path from the sidecar. Resolves with status + UTF-8 body (non-2xx included —
  * the caller maps statuses); rejects on network error, timeout, caller abort, or an
- * over-ceiling body.
+ * over-ceiling body. A timeout rejects with `KiwixTimeoutError`; a caller abort rejects
+ * with whatever the caller's signal aborted with.
  */
 export function kiwixGet(
   port: number,
   path: string,
   opts: { timeoutMs?: number; signal?: AbortSignal } = {}
 ): Promise<KiwixResponse> {
-  const combined = combineSignals(opts.signal, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const combined = combineSignals(opts.signal, timeoutMs)
   return new Promise<KiwixResponse>((resolve, reject) => {
+    let headersReceived = false
+    let size = 0
+    /**
+     * Classify a transport failure. `combineSignals` aborts the combined signal for exactly two
+     * reasons — the caller's signal, or its own timer — so "the combined signal fired while the
+     * CALLER's did not" is the timeout, and the caller's abort keeps precedence in the race.
+     */
+    const fail = (err: unknown): void => {
+      if (combined.signal.aborted && opts.signal?.aborted !== true) {
+        reject(new KiwixTimeoutError(timeoutMs, headersReceived, size))
+        return
+      }
+      reject(err)
+    }
     const req = http.get(
       { host: '127.0.0.1', port, path, agent, signal: combined.signal },
       (res) => {
+        headersReceived = true
         const chunks: Buffer[] = []
-        let size = 0
         res.on('data', (chunk: Buffer) => {
           size += chunk.length
           if (size > MAX_BODY_BYTES) {
@@ -61,10 +111,10 @@ export function kiwixGet(
             ...(typeof location === 'string' ? { location } : {})
           })
         })
-        res.on('error', reject)
+        res.on('error', fail)
       }
     )
-    req.on('error', reject)
+    req.on('error', fail)
   }).finally(() => combined.clear())
 }
 
@@ -362,6 +412,69 @@ function redirectTargetFor(name: string, location: string | undefined): string |
 }
 
 /**
+ * The per-ATTEMPT budget of one `/raw` article read, and how many attempts it gets.
+ *
+ * #301 P7 T19: kiwix-serve 3.8.1 (win-x86_64) cuts ~5–20 % of `/raw` reads above ~80 KB short —
+ * the status line and most of the body arrive, the last part never does; the per-attempt timeout
+ * detects it and the read is retried on a fresh connection. Client- and thread-count-independent,
+ * and the truncation point is the same for a given entry every time (Treibhauseffekt stops at
+ * 195,590 of 234,141 bytes). Measurement: `docs/rag-design.md` §17 "Real acceptance (T19, P7)".
+ *
+ * 4 s is a STALL DETECTOR, not a throughput bound: a healthy loopback read of a 700 KB entry
+ * takes ~10–80 ms on the measurement machine (a stalling one delivers its truncated body in
+ * 3–6 ms and then hangs), and a 1 MiB article off a USB drive on the i7-8550U reference is
+ * still far under a second. Three attempts × 4 s = 12 s worst case — under the client's old
+ * 15 s default and under the 20 s per-ask deadline — while three consecutive stalls have
+ * probability ≈ 0.1–0.8 %.
+ */
+export const ARTICLE_READ_TIMEOUT_MS = 4_000
+/** Total `/raw` attempts per request, the first one included (see `ARTICLE_READ_TIMEOUT_MS`). */
+export const ARTICLE_READ_ATTEMPTS = 3
+
+/**
+ * One `/raw` read with the stall retry (#301 P7 T19). The retryable signature is exactly one
+ * thing: THIS ATTEMPT'S OWN TIMER elapsed before the body completed — whether or not headers and
+ * part of the body had already arrived. The measured fault arrives WITH both (200, a
+ * `Content-Length`, and ~85 % of the bytes in 3–6 ms, then silence), so a partial body is the
+ * normal case, not the exception; the partial body is discarded and the whole entry is read
+ * again on a fresh connection (the module agent is `keepAlive: false`).
+ *
+ * NEVER retried when: the caller's signal aborted — checked first, its reason propagates at once
+ * (the ask deadline, a cancellation, a lock: the H4 contract); a non-timeout socket error ended
+ * the attempt; the body went over `MAX_BODY_BYTES`; or any HTTP status completed
+ * (200/404/redirect/other — existing semantics stand).
+ *
+ * This lives INSIDE one request-guard window (`ZimService.withServer`, index.ts): the server
+ * tuple cannot change across a stall that never reached the server's lifecycle, so the guard's
+ * single admitted lifecycle retry is untouched and no double-retry semantics arise.
+ */
+async function readRawArticle(
+  port: number,
+  path: string,
+  signal: AbortSignal | undefined,
+  timeoutMs: number
+): Promise<KiwixResponse> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await kiwixGet(port, path, { signal, timeoutMs })
+    } catch (err) {
+      if (signal?.aborted === true) throw err
+      if (!(err instanceof KiwixTimeoutError)) throw err
+      if (attempt >= ARTICLE_READ_ATTEMPTS) throw err
+      // No path and no serving name (finding L1): the route class plus the truncation shape is
+      // all a log line may carry — enough to recognise the T19 fault in a diagnostics tail.
+      log.warn('kiwix-serve cut a knowledge-pack article read short — retrying', {
+        route: 'raw',
+        attempt,
+        timeoutMs,
+        headersReceived: err.headersReceived,
+        bytesReceived: err.bytesReceived
+      })
+    }
+  }
+}
+
+/**
  * Fetch one article's raw HTML. 404 → null (entry vanished between search and fetch,
  * or the pack file changed underneath us — a skip, not a failure); other non-200 → throws.
  *
@@ -375,20 +488,27 @@ function redirectTargetFor(name: string, location: string | undefined): string |
  * A second redirect, another book, or a target the entry-key contract refuses ⇒ the honest
  * "unavailable" null. The locator is unchanged by the hop — a citation stays
  * `packId + articlePath` (`docs/rag-design.md` §17 D-Z11).
+ *
+ * Both requests — the first AND the redirect hop's — go through `readRawArticle`, so either
+ * one may be retried on the T19 stall signature (see `ARTICLE_READ_TIMEOUT_MS`).
  */
 export async function fetchArticleHtml(
   port: number,
   name: string,
   articlePath: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** Test seam only: the per-ATTEMPT timeout, so the stall legs need not sit out the real 4 s
+   *  (mirrors `probeSearchable`'s `opts.timeoutMs`). Production never passes it. */
+  opts: { timeoutMs?: number } = {}
 ): Promise<string | null> {
-  const res = await kiwixGet(port, rawContentPath(name, articlePath), { signal })
+  const timeoutMs = opts.timeoutMs ?? ARTICLE_READ_TIMEOUT_MS
+  const res = await readRawArticle(port, rawContentPath(name, articlePath), signal, timeoutMs)
   if (res.status === 404) return null
   if (REDIRECT_STATUSES.has(res.status)) {
     const target = redirectTargetFor(name, res.location)
     if (target === null) return null
     // Exactly ONE more request, under the same signal: a chain is bounded, not followed.
-    const hop = await kiwixGet(port, rawContentPath(name, target), { signal })
+    const hop = await readRawArticle(port, rawContentPath(name, target), signal, timeoutMs)
     if (hop.status === 200) return hop.body
     if (hop.status === 404 || REDIRECT_STATUSES.has(hop.status)) return null
     throw new Error(`kiwix-serve article fetch failed (HTTP ${hop.status})`)

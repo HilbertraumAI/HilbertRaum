@@ -57,6 +57,15 @@ function bigArticleHtml(): string {
 }
 /** Set by the fake sidecar once the big article's body has been written. */
 let bigArticleServed = false
+/**
+ * Article titles whose NEXT `/raw` read the fake sidecar CUTS SHORT — the measured kiwix-serve
+ * 3.8.1 stall (#301 P7 T19): the 200, an honest `Content-Length` and most of the body arrive,
+ * then the connection hangs and the last part never does. The title is removed as it fires, so
+ * the retry finds the article served whole, exactly as the real server behaves.
+ */
+const stallOnce = new Set<string>()
+/** Every article title the fake sidecar was asked for over `/raw`, in order. */
+const rawReads: string[] = []
 
 function searchXml(bookUrlId: string, titles: string[]): string {
   const items = titles
@@ -92,6 +101,7 @@ beforeAll(async () => {
     }
     if (url.pathname.startsWith('/raw/')) {
       const article = decodeURIComponent(url.pathname.split('/content/')[1] ?? '').replace(/_/g, ' ')
+      rawReads.push(article)
       // One article whose fetch fails: the arm must skip THAT HIT and keep the others.
       if (article === 'Kaputt') {
         res.writeHead(500)
@@ -106,14 +116,24 @@ beforeAll(async () => {
         bigArticleServed = true
         return
       }
+      const body = articleHtml(article, [
+        ['Landwirtschaft', `${article} entsteht durch Methan aus der Landwirtschaft.`],
+        ['Industrie', `${article} in der Industrie stammt aus Verbrennung.`],
+        ['Trivia', 'Ein Abschnitt ohne die gesuchten Begriffe.']
+      ])
+      // #301 P7 T19: the 200 and an honest `Content-Length`, then only ~85 % of the body —
+      // the connection hangs and the last part never arrives. The client's per-attempt timeout
+      // ends it, and the retry (the title is already consumed) reads the article whole.
+      if (stallOnce.delete(article)) {
+        res.writeHead(200, {
+          'content-type': 'text/html',
+          'content-length': String(Buffer.byteLength(body))
+        })
+        res.write(body.slice(0, Math.floor(body.length * 0.85)))
+        return
+      }
       res.writeHead(200, { 'content-type': 'text/html' })
-      res.end(
-        articleHtml(article, [
-          ['Landwirtschaft', `${article} entsteht durch Methan aus der Landwirtschaft.`],
-          ['Industrie', `${article} in der Industrie stammt aus Verbrennung.`],
-          ['Trivia', 'Ein Abschnitt ohne die gesuchten Begriffe.']
-        ])
-      )
+      res.end(body)
       return
     }
     res.writeHead(404)
@@ -157,6 +177,42 @@ describe('collectPackCandidates', () => {
     expect(first.articlePath).toBe('Treibhausgas')
     // The overlap picker prefers the section naming the query terms.
     expect(first.text).toContain('Landwirtschaft')
+  })
+
+  it('#301 P7 T19 an article whose first read is cut short keeps its chunks', async () => {
+    // Before the stall retry, kiwix-serve 3.8.1 (win-x86_64) cutting a `/raw` read short cost
+    // the ask that article ENTIRELY and silently: `fetchArticleHtml` rejected on the timeout and
+    // the arm's per-hit `continue` swallowed it (a measured ask returned 16 of 20 passages after
+    // 40 s). The retry makes the stall invisible to the ask — and the truncated body is
+    // discarded, so no half-article's chunks reach the answer either.
+    const packs = [{ id: 'pack-climate', title: 'Klimawandel von Wikipedia' }]
+    const question = 'Wie entsteht Treibhausgas in der Landwirtschaft?'
+    const { candidates: unstalled } = await collectPackCandidates(port, packs, question)
+
+    rawReads.length = 0
+    stallOnce.add('Treibhausgas') // the top hit — the one that used to disappear
+    const { candidates, outcomes } = await collectPackCandidates(
+      port,
+      packs,
+      question,
+      undefined,
+      undefined,
+      // Shrunk for this leg only; the shipped per-attempt budget is 4 s.
+      { articleTimeoutMs: 300 }
+    )
+
+    expect(stallOnce.size).toBe(0) // the stall really fired
+    // Same candidates, in the same order, as the run where nothing stalled.
+    expect(candidates.map((c) => c.chunkId)).toEqual(unstalled.map((c) => c.chunkId))
+    expect(candidates.some((c) => c.sourceTitle === 'Treibhausgas')).toBe(true)
+    expect(outcomes[0]).toMatchObject({
+      packId: 'pack-climate',
+      status: 'searched',
+      reason: null,
+      found: candidates.length
+    })
+    // Exactly ONE extra read, of the stalled article alone — the other hit is fetched once.
+    expect(rawReads).toEqual(['Treibhausgas', 'Treibhausgas', 'Treibhauspotential'])
   })
 
   it('P1b an aborted ask signal propagates out of collectPackCandidates instead of an empty list', async () => {

@@ -4,7 +4,10 @@ import type { AddressInfo } from 'node:net'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  ARTICLE_READ_ATTEMPTS,
+  ARTICLE_READ_TIMEOUT_MS,
   ArticlePathError,
+  KiwixTimeoutError,
   MAX_ARTICLE_PATH_CHARS,
   SUGGEST_PROBE_TERM,
   assertArticlePath,
@@ -70,10 +73,31 @@ const requestLog: string[] = []
  * What the fixture answers on a `/raw/` request (#301 P7 T19): a status, optional response
  * headers (a redirect's `Location`) and a body; null falls through to the default article
  * fixtures below, so every pre-existing `/raw` test is untouched.
+ *
+ * The `stall` variants reproduce the T19 fault and the failure it must NOT be confused with:
+ *   `'truncated'` — 200 + `Content-Length` + MOST of the body within a few ms, then the
+ *                   connection hangs and the last part never arrives. This is the MEASURED
+ *                   kiwix-serve 3.8.1 (win-x86_64) shape: every stall of the 120-read capture
+ *                   looked like this, cutting a given entry at the same byte every time.
+ *   `'silent'`    — accepted, and nothing sent at all — not even headers. The same class of
+ *                   failure (the attempt's own timer elapses before the body completes), kept
+ *                   as its own leg so the retry cannot come to depend on headers arriving.
+ *   `'reset'`     — 200 + part of the body, then the SOCKET IS DESTROYED. A real network
+ *                   error, not a stall: it must NOT be retried.
+ * The two hanging variants end only when the client gives up (its per-attempt timeout).
  */
-let rawHook:
-  | ((url: string) => { status: number; headers?: Record<string, string>; body: string } | null)
-  | null = null
+type RawStall =
+  | { stall: 'silent' }
+  | { stall: 'truncated'; partial: string; total: number }
+  | { stall: 'reset'; partial: string }
+type RawFixtureAnswer = { status: number; headers?: Record<string, string>; body: string } | RawStall
+let rawHook: ((url: string) => RawFixtureAnswer | null) | null = null
+/**
+ * Every hanging `/raw` URL whose connection the CLIENT tore down (it gave up). A leg asserts
+ * `toContain`, never an exact list: the server sees a socket close on its own schedule, so a
+ * previous leg's teardown can still land here.
+ */
+const parkedClosedByClient: string[] = []
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
@@ -126,6 +150,29 @@ beforeAll(async () => {
     }
     if (req.url?.startsWith('/raw/')) {
       const answer = rawHook?.(req.url) ?? null
+      if (answer && 'stall' in answer) {
+        const url = req.url
+        if (answer.stall === 'silent') {
+          // `writableFinished` is false exactly when the client tore the connection down first —
+          // the proof that the retry opened a FRESH socket rather than reusing a stuck one.
+          res.on('close', () => {
+            if (!res.writableFinished) parkedClosedByClient.push(url)
+          })
+          return // nothing is ever sent
+        }
+        if (answer.stall === 'reset') {
+          res.writeHead(200, { 'content-type': 'text/html' })
+          res.write(answer.partial, () => res.destroy()) // a real socket error mid-body
+          return
+        }
+        res.on('close', () => {
+          if (!res.writableFinished) parkedClosedByClient.push(url)
+        })
+        // The measured shape: a complete, HONEST `Content-Length`, then only part of the body.
+        res.writeHead(200, { 'content-type': 'text/html', 'content-length': String(answer.total) })
+        res.write(answer.partial) // …and the rest never comes
+        return
+      }
       if (answer) {
         res.writeHead(answer.status, { 'content-type': 'text/html', ...answer.headers })
         res.end(answer.body)
@@ -181,6 +228,35 @@ describe('kiwixGet', () => {
 
   it('times out on a server that never responds', async () => {
     await expect(kiwixGet(port, '/slow', { timeoutMs: 100 })).rejects.toThrow()
+  })
+
+  // #301 P7 T19: the timeout rejection now CARRIES its classification, so `fetchArticleHtml`
+  // can tell the kiwix-serve stall (nothing received at all) from a timeout mid-body. Every
+  // other caller still just sees a rejection — kiwixGet itself never retries anything.
+  it('rejects a timeout as a KiwixTimeoutError that records no headers were received', async () => {
+    const before = requestCount
+    let caught: unknown
+    await kiwixGet(port, '/slow', { timeoutMs: 100 }).catch((err: unknown) => {
+      caught = err
+    })
+    expect(caught).toBeInstanceOf(KiwixTimeoutError)
+    expect((caught as KiwixTimeoutError).name).toBe('KiwixTimeoutError')
+    expect((caught as KiwixTimeoutError).headersReceived).toBe(false)
+    expect((caught as KiwixTimeoutError).timeoutMs).toBe(100)
+    // The retry is the /raw route's alone: a non-article request is tried exactly once.
+    expect(requestCount - before).toBe(1)
+  })
+
+  it('a caller abort still rejects with the abort, never with the timeout error', async () => {
+    const ac = new AbortController()
+    const pending = kiwixGet(port, '/slow', { signal: ac.signal, timeoutMs: 60_000 })
+    ac.abort()
+    let caught: unknown
+    await pending.catch((err: unknown) => {
+      caught = err
+    })
+    expect(caught).not.toBeInstanceOf(KiwixTimeoutError)
+    expect((caught as Error).name).toBe('AbortError')
   })
 
   it('aborts on the caller signal', async () => {
@@ -401,6 +477,182 @@ describe('fetchArticleHtml follows one same-book redirect (#301 P7 T19)', () => 
       /article fetch failed \(HTTP 500\)/
     )
     expect(rawLog()).toEqual([ALIAS_URL, TARGET_URL])
+  })
+})
+
+// ------------------------------------------------------------------------------------------
+// #301 P7 T19: kiwix-serve 3.8.1 (win-x86_64) CUTS ~5–20 % of `/raw` reads of entries above
+// ~80 KB SHORT — the status line, a `Content-Length` and most of the body arrive within 3–6 ms,
+// then the connection hangs and the last part never comes (Treibhauseffekt always stops at
+// 195,590 of 234,141 bytes) — while the server stays alive and answers the next request
+// normally. Client-, thread-count- and pause-independent, so it is the sidecar's behaviour, not
+// ours. The per-attempt timeout detects it and the read is retried on a fresh connection;
+// nothing else is retried (`docs/rag-design.md` §17 "Real acceptance").
+// ------------------------------------------------------------------------------------------
+describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
+  const NAME = 'wikipedia_de_climate-change_nopic_2026-07'
+  const ENTRY = 'Treibhauseffekt' // one of the measured stallers (234 KB)
+  const ALIAS = 'CO2-Äquivalent'
+  const HTML = '<html><body><p>Treibhauseffekt</p></body></html>'
+  /** The measured fault, to scale: the last ~15 % of the entry never arrives. */
+  const TRUNCATED_PARTIAL = HTML.slice(0, Math.floor(HTML.length * 0.85))
+  const TRUNCATED: RawStall = {
+    stall: 'truncated',
+    partial: TRUNCATED_PARTIAL,
+    total: Buffer.byteLength(HTML)
+  }
+  const raw = (encodedKey: string): string => `/raw/${NAME}/content/${encodedKey}`
+  const ENTRY_URL = raw('Treibhauseffekt')
+  const ALIAS_URL = raw('CO2-%C3%84quivalent')
+  /** The shrunk per-attempt budget (the production one is `ARTICLE_READ_TIMEOUT_MS` = 4 s).
+   *  Long enough that a healthy loopback answer lands inside it even under fork load. */
+  const STALL_TIMEOUT_MS = 300
+  /** A generous ceiling that still proves the read did NOT sit out a 15 s default. */
+  const ALL_ATTEMPTS_BUDGET_MS = 5_000
+
+  /** Answers `url` with `queue.shift()` on each request, so "stalls once, then answers" is
+   *  expressed as a list rather than as a counter each leg has to re-invent. */
+  const installQueues = (queues: Record<string, RawFixtureAnswer[]>): void => {
+    rawHook = (url) => queues[url]?.shift() ?? { status: 404, body: 'not found' }
+  }
+  const rawLog = (): string[] => requestLog.filter((u) => u.startsWith('/raw/'))
+  const read = (signal?: AbortSignal): Promise<string | null> =>
+    fetchArticleHtml(port, NAME, ENTRY, signal, { timeoutMs: STALL_TIMEOUT_MS })
+
+  beforeEach(() => {
+    requestLog.length = 0
+    parkedClosedByClient.length = 0
+  })
+  afterEach(() => {
+    rawHook = null
+  })
+
+  it('the shipped constants are a stall detector, not a throughput bound', () => {
+    expect(ARTICLE_READ_TIMEOUT_MS).toBe(4_000)
+    expect(ARTICLE_READ_ATTEMPTS).toBe(3)
+    // The whole ladder must fit inside the 20 s per-ask deadline with room to spare.
+    expect(ARTICLE_READ_TIMEOUT_MS * ARTICLE_READ_ATTEMPTS).toBeLessThan(15_000)
+  })
+
+  it('(a) a first attempt that is never answered at all is retried on a fresh connection', async () => {
+    installQueues({ [ENTRY_URL]: [{ stall: 'silent' }, { status: 200, body: HTML }] })
+    await expect(read()).resolves.toBe(HTML)
+    expect(rawLog()).toEqual([ENTRY_URL, ENTRY_URL])
+    // The stalled socket was torn down by the CLIENT, so attempt 2 really is a new connection.
+    expect(parkedClosedByClient).toContain(ENTRY_URL)
+  })
+
+  it('(b) three cut-short attempts reject as the timeout, and stop at three', async () => {
+    installQueues({ [ENTRY_URL]: [TRUNCATED, TRUNCATED, TRUNCATED, { status: 200, body: HTML }] })
+    const started = Date.now()
+    let caught: unknown
+    await read().catch((err: unknown) => {
+      caught = err
+    })
+    expect(caught).toBeInstanceOf(KiwixTimeoutError)
+    expect((caught as KiwixTimeoutError).name).toBe('KiwixTimeoutError')
+    // The partial body is on the error as diagnosis, never as a result.
+    expect((caught as KiwixTimeoutError).headersReceived).toBe(true)
+    expect((caught as KiwixTimeoutError).bytesReceived).toBe(Buffer.byteLength(TRUNCATED_PARTIAL))
+    // A fourth answering entry sits in the queue: the bound is the code's, not the fixture's.
+    expect(rawLog()).toEqual([ENTRY_URL, ENTRY_URL, ENTRY_URL])
+    expect(rawLog()).toHaveLength(ARTICLE_READ_ATTEMPTS)
+    expect(Date.now() - started).toBeLessThan(ALL_ATTEMPTS_BUDGET_MS)
+  })
+
+  it('(c) the caller aborting during attempt 2 rejects at once, with no attempt 3', async () => {
+    const ac = new AbortController()
+    const reason = new Error('the ask was cancelled')
+    let seen = 0
+    rawHook = (url) => {
+      if (url !== ENTRY_URL) return { status: 404, body: 'not found' }
+      // Abort as the SECOND attempt arrives: the request is in flight and stalled, which is
+      // exactly the window the retry would otherwise cover.
+      if (++seen === 2) ac.abort(reason)
+      return TRUNCATED
+    }
+    let caught: unknown
+    await read(ac.signal).catch((err: unknown) => {
+      caught = err
+    })
+    expect(caught).not.toBeInstanceOf(KiwixTimeoutError)
+    expect((caught as Error).name).toBe('AbortError')
+    expect((caught as Error).cause).toBe(reason)
+    expect(rawLog()).toEqual([ENTRY_URL, ENTRY_URL])
+  })
+
+  it('(d) headers plus a partial body then a hang IS retried, and the partial body is discarded', async () => {
+    // THE measured signature (`tmp/zim-wave/p7/t19-raw-stall4-headers.log`, 120 reads): every
+    // stall carried the 200 and most of the entry, then the last part never arrived. The whole
+    // read starts over on a fresh connection — a truncated article is never handed to the app.
+    installQueues({ [ENTRY_URL]: [TRUNCATED, { status: 200, body: HTML }] })
+    const html = await read()
+    expect(html).toBe(HTML)
+    expect(html).not.toBe(TRUNCATED_PARTIAL)
+    expect(rawLog()).toEqual([ENTRY_URL, ENTRY_URL])
+    expect(parkedClosedByClient).toContain(ENTRY_URL)
+  })
+
+  it('(d2) a mid-body SOCKET ERROR is not a stall: it is not retried', async () => {
+    // The retryable signature is "this attempt's own timer elapsed", nothing wider. A connection
+    // the server tears down mid-body is a real network failure and keeps its existing semantics.
+    installQueues({
+      [ENTRY_URL]: [{ stall: 'reset', partial: TRUNCATED_PARTIAL }, { status: 200, body: HTML }]
+    })
+    let caught: unknown
+    await read().catch((err: unknown) => {
+      caught = err
+    })
+    expect(caught).toBeInstanceOf(Error)
+    expect(caught).not.toBeInstanceOf(KiwixTimeoutError)
+    expect(rawLog()).toEqual([ENTRY_URL])
+  })
+
+  it('(e) an answered attempt keeps its existing semantics and is never retried', async () => {
+    for (const answer of [
+      { status: 404, body: 'not found' },
+      { status: 500, body: 'boom' },
+      { status: 302, headers: { location: '/content/other_book/x' }, body: '' }
+    ] as const) {
+      requestLog.length = 0
+      installQueues({ [ENTRY_URL]: [answer, { status: 200, body: HTML }] })
+      const pending = read()
+      if (answer.status === 500) {
+        await expect(pending).rejects.toThrow(/article fetch failed \(HTTP 500\)/)
+      } else {
+        await expect(pending, String(answer.status)).resolves.toBeNull()
+      }
+      expect(rawLog(), String(answer.status)).toEqual([ENTRY_URL])
+    }
+  })
+
+  it('(f) the redirect hop is retried the same way', async () => {
+    installQueues({
+      [ALIAS_URL]: [{ status: 302, headers: { location: `/content/${NAME}/Treibhauseffekt` }, body: '' }],
+      [ENTRY_URL]: [TRUNCATED, { status: 200, body: HTML }]
+    })
+    await expect(
+      fetchArticleHtml(port, NAME, ALIAS, undefined, { timeoutMs: STALL_TIMEOUT_MS })
+    ).resolves.toBe(HTML)
+    expect(rawLog()).toEqual([ALIAS_URL, ENTRY_URL, ENTRY_URL])
+    expect(parkedClosedByClient).toContain(ENTRY_URL)
+  })
+
+  it('(g) the other routes are untouched: /suggest and /search are tried exactly once', async () => {
+    // The stall retry is scoped to `/raw`; a probe timeout is still one request and an unknown.
+    suggestHook = () => 'park'
+    requestLog.length = 0
+    await expect(
+      probeSearchable(port, 'parked', undefined, { timeoutMs: STALL_TIMEOUT_MS })
+    ).resolves.toBeNull()
+    expect(requestLog.filter((u) => u.startsWith('/suggest'))).toHaveLength(1)
+    suggestHook = null
+
+    // …and a search still makes exactly one request per call (it answers here; the point is
+    // that nothing in the search path grew a retry).
+    requestLog.length = 0
+    await expect(searchPack(port, 'uuid-1', 'Treibhausgas', 5)).resolves.toHaveLength(2)
+    expect(requestLog.filter((u) => u.startsWith('/search'))).toHaveLength(1)
   })
 })
 
