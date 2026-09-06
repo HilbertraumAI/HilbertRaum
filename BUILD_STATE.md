@@ -60,7 +60,16 @@ skips while locked, and survives a throwing observer). P9 wrote the durable reco
 §1–§5 (decisions, a 63-row disposition matrix, the design as built, what is not verified, a §-anchor
 legend) — plus user-guide §5a "Performance", the privacy inventories in `PRIVACY.md` /
 `security-model.md`, the known-limitations block, the `architecture.md` supersession notes, and the
-DR11 host-conditional assertion turned into a fixed expectation._
+DR11 host-conditional assertion turned into a fixed expectation. P10 cross-reviewed the candidate `07dd9085` (Opus over the Fable phases, Fable
+over the Opus phases, both over the Sonnet docs and the P0 delta inventory): no user-facing defect;
+four low main-process items, one schema hardening gap, a keyboard focus loss after "Check again" and
+issue #327 (the Diagnostics acceleration line bypassing the eligible-probe rule, filed by the PR #308
+review against this branch) repaired with fail-before/pass-after tests; the audit probes re-run at the
+candidate pass every main-process case (22 / 2 superseded by design / 1 retired); HW3 performed live
+over CDP — EN/DE, light/dark, 880/1024/1280 px, the German rail at weight 600, a real Tab walk and
+Enter activation all passed; a synthetic moved-drive restart verified M2/M4/P7 end to end. Blocked
+legs (screen-reader announcements; a first-run, chat or model-load while mounted — no runtime here)
+carried into the follow-up issues._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -721,7 +730,7 @@ open round's item stays the last block of §5.)
     P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ✅ H1/L8/M5-residual schemas +
     launch context; P5 ✅ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
     P6 ✅ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ✅ L1/SD2 auto-start sequencing;
-    P8 ✅ T7/T8/T11/TH1/TH2; P9 ✅ D1–D5/L4/L5 docs — durable record `docs/benchmark.md` "Audit remediation record — PR #303" §1–§5; P10 ☐ cross-review + the local half of (c);
+    P8 ✅ T7/T8/T11/TH1/TH2; P9 ✅ D1–D5/L4/L5 docs — durable record `docs/benchmark.md` "Audit remediation record — PR #303" §1–§5; P10 ✅ cross-review + the local half of (c) (repairs in the commit after `07dd9085`);
     P11 ☐ close-out issues. Residual (c) above is the audit's HW1–HW3 acceptance; (a)–(g) stand.
 
 ---

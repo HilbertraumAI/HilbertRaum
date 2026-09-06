@@ -2763,7 +2763,9 @@ adds is the safety machinery:
   unless `HILBERTRAUM_GPU_SMOKE` points at a provisioned drive**.
 - **The Phase-16 surface** on top of the ladder: Settings' "Use GPU acceleration" toggle binds
   `gpuMode 'auto' | 'off'` (default ON). The Settings "Diagnostics (advanced)" tab shows the **Acceleration** line (live
-  `RuntimeStatus.backend`/`gpuName` while running, else the persisted `settings.gpuProbe`), the
+  `RuntimeStatus.backend`/`gpuName` while running, else the snapshot's `currentGpu` — this
+  machine's ELIGIBLE probe as `performance:get` resolves it, never `settings.gpuProbe` read raw;
+  see benchmark.md "One eligible source" and issue #327), the
   **runtime build** line (`getRuntimeInstall` IPC `runtime:install` → the `.hilbertraum-runtime.json`
   marker), and the compatibility-mode notice with **"Try GPU again"** — a dedicated IPC
   (`gpu:try-again`) that clears `gpuAutoDisabled`/`gpuLastError`, invalidates the session probe

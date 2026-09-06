@@ -29,6 +29,7 @@ import type { Db } from '../../src/main/services/db'
 import { machineKey, resetPerformanceForTests, upsertHistory } from '../../src/main/services/performance'
 import {
   latestEffectiveRead,
+  latestEffectiveReadBySource,
   recordChecksumRead,
   recordModelLoadRead,
   resetEffectiveReadForTests,
@@ -593,5 +594,47 @@ describe('unchanged #110: the slow-read warning tracks the eligible sample only'
     // …while the foreign entry keeps its own, untouched.
     const kept = getSettings(db).benchmarkHistory.find((e) => e.cpuModel === foreign.cpuModel) as BenchmarkResult
     expect(kept.warnings).toEqual([slowReadWarning(70)])
+  })
+})
+
+describe('strictly increasing sample timestamps (A-D4): same-millisecond samples stay distinct to the persister', () => {
+  /** Both destinations this machine's, the observer registered, the clock FROZEN at one instant. */
+  function frozenSession(): { db: Db; frozen: Date } {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const mine = hereResult()
+    updateSettings(db, { lastBenchmark: mine, benchmarkHistory: [mine] })
+    registerModelIpc(ctxWith(root, db))
+    const frozen = new Date('2026-09-06T12:00:00.000Z')
+    setReadSpeedClockForTests(() => frozen) // the same reading for every sample
+    return { db, frozen }
+  }
+
+  it('a model load in the same millisecond as the checksum before it reaches BOTH destinations', () => {
+    const { db, frozen } = frozenSession()
+    recordChecksumRead(3_000_000_000, 30_000, 'hash-first')
+    const first = getSettings(db).lastBenchmark?.effectiveRead
+    expect(first).toMatchObject({ modelId: 'hash-first', at: frozen.toISOString() })
+
+    // Outranks the checksum — but it used to carry the SAME `at`, so the handled memo (and each
+    // destination's "already carries this sample" check) read it as the one already written.
+    loadSample('load-second')
+
+    const s = getSettings(db)
+    expect(s.lastBenchmark?.effectiveRead).toMatchObject({ modelId: 'load-second', source: 'model_load' })
+    expect(s.benchmarkHistory[0].effectiveRead).toMatchObject({ modelId: 'load-second', source: 'model_load' })
+    expect(s.lastBenchmark!.effectiveRead!.at > first!.at).toBe(true)
+  })
+
+  it('a checksum in the same millisecond as the model load before it is a distinct, lower-ranked sample: both destinations keep the load', () => {
+    const { db } = frozenSession()
+    loadSample('load-first')
+    recordChecksumRead(3_000_000_000, 30_000, 'hash-second')
+
+    const s = getSettings(db)
+    expect(s.lastBenchmark?.effectiveRead?.modelId).toBe('load-first')
+    expect(s.benchmarkHistory[0].effectiveRead?.modelId).toBe('load-first')
+    // The observed rows still tell the two apart.
+    expect(latestEffectiveReadBySource('checksum')!.at > latestEffectiveReadBySource('model_load')!.at).toBe(true)
   })
 })

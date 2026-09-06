@@ -2208,6 +2208,11 @@ export const en = {
     'so the recommended model was moved down one size tier to keep answers quick on this ' +
     'computer.',
   'main.benchmark.locked': 'Workspace is locked. Unlock it to run the benchmark.',
+  // PR #303 audit A-D2: the late-write guard's refusal — the legs finished, but the workspace
+  // was locked (or locked and re-opened) meanwhile, so nothing was written. One message for both.
+  'main.benchmark.lockedDuringRun':
+    'The workspace was locked while the benchmark ran, so the result was not saved. Run the ' +
+    'benchmark again.',
 
   // EMISSION set (D-L5): ephemeral strings localized at the emission site via tMain()
   // — IPC throws, runtime notices, preflight problems, task-status errors, dialog

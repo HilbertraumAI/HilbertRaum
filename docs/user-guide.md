@@ -247,8 +247,9 @@ fast."* — and four tiles below it each carry a rating word, never just a colou
 - **Speed** — tokens per second, with the model and date it was measured. A reading counted from
   streamed chunks rather than the model's own timing is marked **Approximate**, so you can tell a
   precise figure from a rough one.
-- **Memory** — your RAM, the profile it puts you in (Tiny, Lite, Balanced, or Pro), and the model
-  that fits together with the context size it launches with.
+- **Memory** — your RAM and processor, and the profile it puts you in (Tiny, Lite, Balanced, or
+  Pro). Whether your model fits, and with which context size, is the *Your model* row below,
+  never this tile.
 - **Graphics memory** — your graphics card's memory and whether it is **Usable** or **Small**, or
   whether you have **None**. A built-in chip that shares memory with the rest of the computer (an
   Intel Iris Xe, for example) is marked **Integrated, shared memory** — models still run on the
@@ -258,11 +259,11 @@ fast."* — and four tiles below it each carry a rating word, never just a colou
   its source and date. It says **Pending** until either has happened once.
 
 Two actions sit under the tiles: **Check again** re-runs the check right now; if nothing has
-measured your speed yet and your recommended model is already installed, the button instead
-reads **Start … and measure**, so getting your first reading and starting your model is one
-click. **Copy report** puts everything above into your clipboard for a support message, and
-always says which computer it describes, so a report copied on a different laptop is never
-mistaken for this one's.
+measured your speed yet and your recommended model is already installed, a second button,
+**Start … and measure**, appears beside it, so getting your first reading and starting your
+model is one click. **Copy report** puts everything above into your clipboard for a support
+message, and always says which computer it describes, so a report copied on a different laptop
+is never mistaken for this one's.
 
 **Your model.** A row under the tiles about the model you actually have selected. Before its
 first start on this computer it is an estimate from the file size alone, and the note says the
@@ -280,7 +281,7 @@ you start it here once more.
 **Models on this computer.** A card listing every model the app can hold — chat, translation,
 images, document search (its ranking and index models), and voice — one row each, so you can see
 what is actually using the graphics card right now versus what always runs on the processor by
-design (document search and voice, always; images, usually). A row reads **loaded** only once
+design (document search, voice and images, always). A row reads **loaded** only once
 that service is actually running and ready, not while it is still starting. Two totals sit below
 the rows: the card total (what is resident on the graphics card, against its memory) and the
 processor total (what loading everything at once would take from RAM).

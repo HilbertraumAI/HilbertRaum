@@ -10,7 +10,8 @@ import { join } from 'node:path'
 //    name and memory travel together into the benchmark result, the fold-in, `currentGpu`
 //    and the VRAM budget — on a hybrid [iGPU, dGPU] box that is the dGPU, never devices[0];
 //  - the probe write: no binary or a rejecting probe writes nothing; an empty result is written
-//    stamped; a probe that outlives a lock or its workspace session writes nothing;
+//    stamped; a probe that outlives a lock or its workspace session writes nothing — and "Try
+//    GPU again" pushes as soon as it clears the flags, whether or not the probe then writes (A-D1);
 //  - the rows say where a model runs under the CURRENT configuration (DR1), the free/working
 //    figures are attributed to the selected device (DR2), and the "everything at once" total
 //    is class-aware (DR5);
@@ -226,31 +227,38 @@ describe('probe identity (M8.3, G3)', () => {
 })
 
 describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => {
-  it('no binary for this OS: nothing is written, a foreign probe stays exactly as it was, nothing is pushed', async () => {
+  /** What a push saw (A-D1): the flags as written by then, the probe as it stood. */
+  const flagsAndProbe = (db: Db) => () => {
+    const s = getSettings(db)
+    return { gpuAutoDisabled: s.gpuAutoDisabled, gpuLastError: s.gpuLastError, gpuProbe: s.gpuProbe }
+  }
+
+  it('no binary for this OS: the probe writes nothing and a foreign probe stays exactly as it was; the flag clear alone pushes, once (A-D1)', async () => {
     const root = freshRoot()
     const db = seededDb(root)
     const foreign = probe([RTX], FOREIGN_KEY)
-    updateSettings(db, { gpuProbe: foreign })
-    const spy = performanceChangedSpy()
+    updateSettings(db, { gpuProbe: foreign, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
+    const spy = performanceChangedSpy(flagsAndProbe(db))
 
     await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => [IRIS]) }))
 
     expect(getSettings(db).gpuProbe).toEqual(foreign)
-    expect(spy).not.toHaveBeenCalled()
+    // One push — the cleared flags were already written when it fired; no probe write followed.
+    expect(spy.mock.results.map((r) => r.value)).toEqual([{ gpuAutoDisabled: false, gpuLastError: null, gpuProbe: foreign }])
   })
 
-  it('a rejecting probe: nothing is written, the old devices are untouched (never re-stamped as local)', async () => {
+  it('a rejecting probe: nothing is written, the old devices are untouched (never re-stamped as local); the flag clear alone pushes (A-D1)', async () => {
     const root = freshRoot()
     const db = seededDb(root)
     withBinary(root)
     const foreign = probe([RTX], FOREIGN_KEY)
-    updateSettings(db, { gpuProbe: foreign })
-    const spy = performanceChangedSpy()
+    updateSettings(db, { gpuProbe: foreign, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
+    const spy = performanceChangedSpy(flagsAndProbe(db))
 
     await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => { throw new Error('driver wedged') }) }))
 
     expect(getSettings(db).gpuProbe).toEqual(foreign)
-    expect(spy).not.toHaveBeenCalled()
+    expect(spy.mock.results.map((r) => r.value)).toEqual([{ gpuAutoDisabled: false, gpuLastError: null, gpuProbe: foreign }])
   })
 
   it('an EMPTY result replaces the old devices with the current, stamped, empty probe — and pushes', async () => {
@@ -266,9 +274,8 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     expect(written.devices).toEqual([])
     expect(written.machineKey).toBe(here())
     expect(Number.isNaN(new Date(written.probedAt).getTime())).toBe(false)
-    // Pushed once, after the write.
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy.mock.results[0].value).toEqual(written)
+    // Pushed after the flag clear (the old probe still in place) and again after the write (A-D1).
+    expect(spy.mock.results.map((r) => r.value)).toEqual([probe([RTX], FOREIGN_KEY), written])
   })
 
   it('a probe-only refresh writes the devices stamped with this machine and pushes', async () => {
@@ -280,7 +287,7 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     const settings = await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => [IRIS, RTX]) }))
 
     expect(settings.gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: here() })
-    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledTimes(2) // the flag clear, then the write (A-D1)
   })
 
   it('a probe that resolves after the workspace locked writes nothing', async () => {
@@ -303,7 +310,7 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     await run
 
     expect(getSettings(db).gpuProbe).toEqual(before)
-    expect(spy).not.toHaveBeenCalled()
+    expect(spy).toHaveBeenCalledTimes(1) // the flag clear, before the lock (A-D1); the late result adds nothing
   })
 
   it('a probe that outlives its workspace session (a lock AND a re-unlock) writes nothing', async () => {
@@ -326,7 +333,7 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     await run
 
     expect(getSettings(db).gpuProbe).toEqual(before)
-    expect(spy).not.toHaveBeenCalled()
+    expect(spy).toHaveBeenCalledTimes(1) // the flag clear only (A-D1); the stale result adds nothing
 
     // The control: the same session, the same probe → written.
     const again = deferred<GpuDevice[]>()
@@ -335,7 +342,7 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     again.resolve([IRIS, RTX])
     await run2
     expect(getSettings(db).gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: here() })
-    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledTimes(3) // + the flag clear and the write
   })
 })
 
@@ -477,8 +484,14 @@ describe('free/compute attribution to the selected device (DR2)', () => {
     expect(p.verdict).toMatchObject({ kind: 'partial', freeAtStartMb: null, workingMb: null })
   })
 
-  it('a lone device, or a record without rows, attributes as it always did', () => {
-    expect(withLog([rtxRow], [RTX]).verdict).toMatchObject({ freeAtStartMb: 15_000, workingMb: 3160 })
+  it('a lone row: the selected device’s own figures when it is that device, null when it is not (A-D3)', () => {
+    // The dGPU alone in the log, the dGPU selected: the row answers, not the legacy summary.
+    expect(withLog([rtxRow], [RTX]).verdict).toMatchObject({ freeAtStartMb: 2703, workingMb: 2860 })
+    // An iGPU-only log beside a selected dGPU: never the iGPU’s free memory under the dGPU’s budget.
+    expect(withLog([irisRow], [IRIS, RTX]).verdict).toMatchObject({ kind: 'partial', freeAtStartMb: null, workingMb: null })
+  })
+
+  it('a record persisted before the rows existed attributes as it always did', () => {
     expect(withLog(undefined, [IRIS, RTX]).verdict).toMatchObject({ freeAtStartMb: 15_000, workingMb: 3160 })
   })
 })

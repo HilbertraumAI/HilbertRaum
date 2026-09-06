@@ -3,6 +3,7 @@ import type {
   DriveStatus,
   ModelsPolicy,
   NetworkPolicy,
+  PerformanceSnapshot,
   PolicyStatus,
   PrivacyPolicy,
   WorkspacePolicy
@@ -46,6 +47,49 @@ export function driveStatus(over: Partial<DriveStatus> = {}): DriveStatus {
     arch: 'x64',
     ...over
   } as DriveStatus
+}
+
+/**
+ * A complete `PerformanceSnapshot` for a machine that has never been checked — nothing
+ * measured, nothing observed, no eligible graphics device. Sibling of the two above.
+ *
+ * Its reason to exist outside the Performance screen's own richer builder: since #327 the
+ * Diagnostics "Acceleration" line reads its device from `currentGpu` here, not from
+ * `settings.gpuProbe`, so every suite that renders the Diagnostics tab needs a typed
+ * `performance:get` reply. Override `currentGpu` to name a card.
+ */
+export function performanceSnapshot(over: Partial<PerformanceSnapshot> = {}): PerformanceSnapshot {
+  return {
+    current: null,
+    currentMachine: true,
+    otherMachines: [],
+    currentGpu: null,
+    running: false,
+    placement: {
+      memoryClass: 'cpu',
+      ramMb: null,
+      vramMb: null,
+      model: null,
+      recommendedContextTokens: null,
+      observed: null,
+      observedMismatch: null,
+      verdict: {
+        kind: 'unknown',
+        needMb: null,
+        estimated: true,
+        budgetMb: null,
+        freeAtStartMb: null,
+        workingMb: null,
+        spillMb: null,
+        gpuLayers: null,
+        totalLayers: null
+      },
+      models: [],
+      totals: { ramAllMb: null, bothOnCard: false }
+    },
+    observed: { lastAnswer: null, lastModelLoad: null, lastChecksum: null },
+    ...over
+  }
 }
 
 /**

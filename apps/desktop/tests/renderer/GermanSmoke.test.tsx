@@ -352,6 +352,12 @@ describe('German render smokes (Phase 40)', () => {
       }),
       getRuntimeInstall: vi.fn(async () => {
         throw new Error('no install')
+      }),
+      // #327: the Acceleration line reads its device from the snapshot. Failing here too keeps
+      // this smoke's premise — every read fails, the tab still renders — and covers the
+      // best-effort fallback to the CPU wording in German.
+      getPerformance: vi.fn(async () => {
+        throw new Error('no snapshot')
       })
     })
     render(german(<DiagnosticsTab />))

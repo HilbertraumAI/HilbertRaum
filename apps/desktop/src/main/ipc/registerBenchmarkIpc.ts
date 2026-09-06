@@ -215,13 +215,16 @@ async function runBenchmarkAndPersist(
   // AND a re-unlock look exactly like "still unlocked" — only the session epoch tells that stale
   // run apart. Refused ⇒ nothing is written and the caller's `finally` still releases the span
   // and pushes the idle signal.
+  // Both refusals are USER emissions (the Diagnostics button shows them), so they are localized
+  // like the sibling `main.benchmark.locked` (A-D2, D-L5): one calm message for both cases —
+  // the log lines keep the two apart.
   if (!workspaceAdmitsWork(ctx.workspace)) {
     log.info('Benchmark finished after the workspace locked; result not persisted')
-    throw new Error('The workspace is locked — the benchmark result was not saved')
+    throw new Error(tMain('main.benchmark.lockedDuringRun'))
   }
   if (epoch !== undefined && ctx.workspace.unlockEpoch?.() !== epoch) {
     log.info('Benchmark outlived its workspace session; result not persisted')
-    throw new Error('The workspace was locked and re-opened — the benchmark result was not saved')
+    throw new Error(tMain('main.benchmark.lockedDuringRun'))
   }
 
   // M6: the drive and speed legs above take seconds, and a model start or a cold hash can
@@ -594,7 +597,7 @@ export function maybeRunFirstBenchmark(ctx: AppContext): Promise<FirstBenchmarkO
  * "Try GPU again" (Diagnostics): clearing the flags alone is not enough —
  * a probe that timed out once (cold/wedged driver) stays cached for the session and
  * would keep labeling a now-working GPU machine as CPU. Invalidate the cache, clear
- * the flags, re-probe + persist, and hand the renderer the fresh settings.
+ * the flags (and push — A-D1), re-probe + persist, and hand the renderer the fresh settings.
  *
  * #182: the session latch that switches the speculative rung off after one bad attempt is
  * the same shape of sticky, hardware-derived "no" — this button is the user asking for the
@@ -605,6 +608,13 @@ export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
   ctx.probeGpu?.invalidate?.()
   clearSpeculativeSuppression()
   updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null })
+  // The cleared flags are snapshot inputs of their own (`cpuOnly` → the resident rows, the
+  // effective class, the verdict), so this write pushes right here (PR #303 audit A-D1): the
+  // probe's own push follows only a SUCCESSFUL probe write, and with no binary for this OS or a
+  // rejecting probe the screen used to keep its processor-forced rows until something else
+  // pushed. A second push after a successful re-probe is idempotent — the renderer serialises
+  // its refetches.
+  notifyPerformanceChanged()
   await probeAndPersistGpu(ctx)
   return getSettings(ctx.db)
 }

@@ -7,7 +7,7 @@ import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type BenchmarkResult, type RuntimeStatus } from '../../src/shared/types'
 import { normalizeBenchmarkResult } from '../../src/shared/benchmark-schema'
 import { stubApi } from '../helpers/renderer'
-import { appStatus, driveStatus } from '../helpers/status'
+import { appStatus, driveStatus, performanceSnapshot } from '../helpers/status'
 
 // Diagnostics copy/save: the per-card "Copy" buttons (App & runtime, Hardware benchmark,
 // Logs) hand technical details to support without retyping, and "Save to file…" writes the
@@ -69,6 +69,9 @@ function stubDiagnostics(
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getRuntimeInstall: vi.fn(async () => null),
     getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: bench })),
+    // #327: the Acceleration line (on screen and in the App & runtime report) takes its device
+    // from the snapshot's eligible probe, not from `settings.gpuProbe` — this box has none.
+    getPerformance: vi.fn(async () => performanceSnapshot()),
     copyToClipboard: vi.fn(async (text: string) => {
       lastCopied = text
       return true

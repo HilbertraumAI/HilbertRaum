@@ -103,18 +103,20 @@ export function memoryClassOf(platform: string, arch: string, devices: GpuDevice
 /**
  * The free-at-start and working-buffer figures of ONE device — the SELECTED one (PR #303
  * audit DR2). The parser keeps the `device_info` rows (`ModelPlacement.devices`, label ↔ name)
- * with the compute buffer reserved on each. A record with a single GPU row, or one persisted
- * before the rows existed, attributes exactly as before (the first row's free figure, the
- * summed compute). With several rows the figures belong to the row whose name is the selected
- * device's; when that device is not in the log — or none was selected — both stay null,
- * because a dGPU's spill must never be explained with the iGPU's free memory.
+ * with the compute buffer reserved on each. Only a record persisted BEFORE the rows existed
+ * (`devices` absent) attributes as it always did — the first row's free figure, the summed
+ * compute — because that summary is all it carries. With rows, one or several, the figures
+ * belong to the row whose name is the selected device's; when that device is not in the log —
+ * an iGPU-only log beside a selected dGPU (A-D3), or a log without a `device_info` block — or
+ * none was selected, both stay null, because a dGPU's spill must never be explained with the
+ * iGPU's free memory. A lone row used to be trusted whatever it was called; it is not.
  */
 export function attributedGpuFigures(
   observed: ModelPlacement,
   gpuName: string | null
 ): { freeAtStartMb: number | null; workingMb: number | null } {
   const rows = observed.devices
-  if (rows == null || rows.length < 2) {
+  if (rows == null) {
     return { freeAtStartMb: observed.gpuFreeAtStartMb ?? null, workingMb: observed.gpuComputeMb ?? null }
   }
   const row = gpuName == null ? undefined : rows.find((d) => d.name === gpuName)

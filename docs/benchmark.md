@@ -275,6 +275,11 @@ sample stays **un-handled** (a benchmark is never fabricated just to store it); 
 is set only after a successful write to every eligible destination, scoped to the workspace DB
 handle and the machine key, so a failed write, a locked workspace, a lock/unlock, or a drive on
 another computer re-evaluates on the next observer call or the post-start/list/verify retry.
+A sample is identified by its `at` throughout — the handled memo, each destination's "already
+carries it" check, the ranking's tie order — so `read-speed.ts` stamps `at` **strictly increasing
+per process**: a clock reading that repeats or runs backwards is bumped to the previous accepted
+sample's `at` + 1 ms (A-D4; a model load landing in the same millisecond as the checksum before
+it used to read as the same sample, and the memo dropped it).
 A sample-only update never touches `ranAt` — it is not a new run. Only the slow-read warning is
 re-keyed; every other warning is a benchmark-time fact.
 
@@ -512,6 +517,12 @@ lets `--fit` decide. The same `displayDevice` rule also NAMES a GPU start
 Diagnostics "Acceleration" line's "\<name\> (GPU available)"; both took `devices[0]`, so a hybrid
 box credited the iGPU for work the dGPU did. Label only: rung selection, `--fit` and the "never
 -ngl" policy are untouched, and nothing that ENUMERATES the probe's devices is filtered.
+The Diagnostics line reads that device from the snapshot's `currentGpu` (`performance:get`), not
+from `settings.gpuProbe` (#327): the renderer has no `hereKey`, so applying `eligibleGpuProbe`
+there was impossible and the line skipped the machine-stamp check — a probe stamped for another
+computer had Diagnostics announcing a card the Performance screen correctly said this machine
+does not have. `currentGpu` null (no eligible probe, no device, or a failed read) is the plain
+"CPU" wording; a running GPU runtime still wins over both.
 **Configured execution (DR1)**: the verdict is asked for the EFFECTIVE
 class — `cpu` when `gpuMode: 'off'` or `gpuAutoDisabled` forces the processor, or when the
 matching observed start landed on the CPU backend — so the estimate reads "Will run on the
@@ -520,10 +531,11 @@ the snapshot's `memoryClass` stays the hardware class (the tiles describe the ma
 **Free/compute attribution (DR2)**: the parser keeps every GPU row of the `device_info` block
 with the compute buffer reserved on it (`ModelPlacement.devices`, label ↔ name, filed by label),
 and `attributedGpuFigures` takes `freeAtStartMb` / `workingMb` from the row whose name is the
-selected device's — a lone row, or a record persisted before the rows existed, attributes as
+selected device's — with one row as much as with several (A-D3: an iGPU-only log beside a
+selected dGPU attributes nothing); only a record persisted before the rows existed attributes as
 before (the first row's free figure, the summed compute); when the selected device is not in the
-log both stay null and the copy falls back to the plain partial-offload sentence, never
-explaining a dGPU's spill with the iGPU's free memory.
+log, or none is selected, both stay null and the copy falls back to the plain partial-offload
+sentence, never explaining a dGPU's spill with the iGPU's free memory.
 **The context it launches with** is resolved main-side by the launch path's own helper,
 `launchContextTokens(settings, manifest)` — the user's `contextTokensOverride`, else the manifest's
 `recommended_context_tokens` when it states one, else `settings.contextTokens`. The screen used to
@@ -687,7 +699,10 @@ the persister applies the ranking per destination); a retry persist that actuall
 answer latch; a placement observation (after its persist, or after the skipped persist while
 locked); the moved-drive restore, the upgrade seed and the new-machine backfill in
 `prepareFirstBenchmark`; a completed GPU probe write (`probeAndPersistGpu`, incl. an empty
-device list, so "Try GPU again" pushes through it); the chat runtime's transitions
+device list) and, before it, "Try GPU again" clearing `gpuAutoDisabled` / `gpuLastError` — that
+write pushes on its own (A-D1), so the processor-forced rows and verdict clear even when the
+re-probe cannot run (no binary for this OS, a rejecting probe), and a successful re-probe simply
+pushes a second time; the chat runtime's transitions
 (`RuntimeManager.onChange` — starting, ready, stopped, subscribed in `initBackend`);
 resident-sidecar transitions for the "Models on this computer" rows (`onResidencyChange` on
 `E5Embedder`, `LlamaReranker`, `TranslationRuntime`, `VisionRuntime` forwarded by
@@ -840,7 +855,7 @@ guess.
 | L4 | documented limitation (this phase) | Retained-hardware-records inventory, in user words and in the security/privacy inventories. | `security-model.md` SEC-N2; `PRIVACY.md` "What data is stored, and where"; `user-guide.md` §10 |
 | L5 | documented limitation (this phase) | Fingerprint-collision, RAM-rounding and OS/arch-split limitations. | `known-limitations.md` "Performance screen and per-computer history (PR #303 audit)" |
 | L6 | fixed P6 `9f703b87` | `speedIsApprox`/`speedBasisNote`/`buildReport` are the single provenance source for the Copy report and the Other-computers rows. | `PerformanceScreen.test.tsx` "L6: the report preserves the approximation qualifier and the chunk window"; "L6: an other-computer row measured from chunks reads \"Approximate\", never Good or Slow" |
-| L7 | pre-wave fix pinned P1 `5121af46` | `placementVerdict` already returned `kind:'unknown'` for an all-null reading at `ce741533`; the owner gate kept that shape and P1 pinned it plus the renderer's no-"all  layers" rendering. | `performance.test.ts` "an EMPTY reading is unknown on a gpu backend and cpu on a cpu backend, never a measured \"On GPU\"" |
+| L7 | pre-wave fix pinned P1 `5121af46` | `placementVerdict` already returned `kind:'unknown'` for an all-null reading at `ce741533`; the owner gate kept that shape and P1 pinned it plus the renderer's no-"all  layers" rendering. | `performance.test.ts` "an EMPTY reading is unknown on a gpu backend and cpu on a cpu backend, never a measured \"On GPU\""; `PerformanceScreen.test.tsx` "an observed start whose log said nothing reads as Not measured, never \"all  layers on the GPU\"" |
 | L8 | fixed P4 `9530b2a5` (schema) + P6 `9f703b87` (copy) + P8 `4baec2be` (wiring) | `normalizeModelPlacement`/`normalizeModelPlacements` validate the map; `perf.model.unknown`/`perf.model.perDrive` name "on this computer" and the per-drive replacement rule; the ladder-to-persister path is now tested end to end. | `performance-schema.test.ts` "T10 / L8: `{ m: {} }` is not a placement map, and a `{}` record never reaches the verdict"; `placement-wiring.test.ts` "a ladder start lands in settings through the registered observer, end to end" |
 | H1 | fixed P4 `9530b2a5` | `shared/benchmark-schema.ts` validates `lastBenchmark`/`benchmarkHistory`/`modelPlacements` field by field on both `getSettings` and `updateSettings`. | `performance-schema.test.ts` "H1: a `{}` history entry is neither stored nor exposed as another computer"; "H1: a partially valid history keeps the real machines and drops the blobs" |
 | D1 | fixed P9 (this phase) | New Performance section covering the verdict, tiles, Your model, Models on this computer, Check again/Start and measure, observed rows, Other computers, and privacy. | `user-guide.md` §5a "Performance" |
@@ -878,10 +893,10 @@ guess.
 | HW3 | pending P10 | EN/DE layout, both themes, German rail at font weight 600, keyboard/announcements. Not attempted at this HEAD (§4). | — |
 | HW4 | follow-up issue #TBD-I4 | Hybrid `[iGPU, dGPU]` Vulkan order and Apple Silicon unified memory: synthetic fixtures only. | — |
 | DR1 | fixed P5 `be177a34` | Chat/translation "on the card" rows now respect `gpuMode`, `gpuAutoDisabled` and the matching observed backend, not the hardware class alone. | `performance-gpu.test.ts` "gpuMode 'off': both rows say cpu, the verdict is the processor estimate against RAM, bothOnCard is false — the hardware class is untouched"; "a matching start OBSERVED on the CPU backend puts the chat row on the processor and judges it against RAM" |
-| DR2 | fixed P5 `be177a34` | `ModelPlacement.devices` keeps every GPU row of the `device_info` block; `attributedGpuFigures` matches by device name, never the first row's. | `performance.test.ts` "keeps every GPU row of a hybrid device_info block with its own compute buffer, by label (DR2)"; `performance-gpu.test.ts` "a hybrid log: the figures are the selected dGPU's, by name — never the first row's" |
+| DR2 | fixed P5 `be177a34` | `ModelPlacement.devices` keeps every GPU row of the `device_info` block; `attributedGpuFigures` matches by device name, never the first row's. | `placement-parser.test.ts` "keeps every GPU row of a hybrid device_info block with its own compute buffer, by label (DR2)"; `performance-gpu.test.ts` "a hybrid log: the figures are the selected dGPU's, by name — never the first row's" |
 | DR3 | verify-only | No code change (the sidecar's own redaction and in-memory tail cap already apply). Folded into issue #TBD-I1's acceptance criteria: the captured log must show verbosity 4 printing the load lines and no request content. | — |
 | DR4 | fixed P6 `9f703b87` | `FIT_TARGET_MARGIN_MB`/`CARD_FREE_SLACK_MB` are named constants in `shared/performance-rules.ts`, interpolated into the copy instead of a hard-coded "1 GB". | `PerformanceScreen.test.tsx` "DR4: all three partial copies state the runtime margin from the shared constant, never a literal" |
-| DR5 | fixed P5 `be177a34` (owner ruling) | `loadedAtOnceMb` sums per memory class — see §1's third gate ruling. | `performance-gpu.test.ts` "discrete: the chat adds its OBSERVED partial-offload spill; an estimate, a full offload or an unknown split add 0"; "cpu class: every row counts" |
+| DR5 | fixed P5 `be177a34` (owner ruling) | `loadedAtOnceMb` sums per memory class — see §1's third gate ruling. | `performance.test.ts` "discrete: the chat adds its OBSERVED partial-offload spill; an estimate, a full offload or an unknown split add 0"; `performance-gpu.test.ts` "cpu class: every row counts" |
 | DR6 | fixed P3 `3fbc51d0` | The chat row's `loaded` flag comes from `chatModelResident()` (runtime state), not `active() != null`. | `performance-ipc.test.ts` "the chat row is \"loaded\" only once the ACTIVE model is running and ready (DR6)" |
 | DR7 | fixed P9 (this phase), with DX2 | "Three cards" corrected to "Four cards". | `benchmark.md` "Performance screen" (this file) |
 | DR8 | fixed P1 `5121af46` | `skills.title` (EN/DE), orphaned once `SkillsScreen.tsx` was deleted, removed ahead of the master merge that added the unused-i18n-key guard. | `shared/i18n/en.ts`, `de.ts` (no `skills.title` key) |
@@ -889,6 +904,29 @@ guess.
 | DR10 | verify-only, no action | The optional `isLoaded()` interface members compile safely for every mock/fake implementation; no Electron import added to a service module. | `apps/desktop/src/main/services/*` (interface definitions) |
 | DR11 | fixed P9 (the docs commit) | Planned for P8 but missed there, caught by the P9 doc review: the resident-rows test asserted `bothOnCard` against `memoryClass !== 'cpu'` — host-conditional by construction, and wrong on an Apple Silicon host (probe-less class `unified`) where it would have demanded `true` for a model the stub runtime never marks resident. Now a fixed `false`. | `performance-ipc.test.ts` "lists every model the app can hold, with liveness from each service and the totals" |
 | R1–R15 | superseded | Corrections to the fix-plan's own first draft, folded into the phase briefs before P1–P8 executed. Each correction's actual resolution is verifiable from the finding row it corrects: R1→M3, R2→M1, R3→M8, R4→H1, R5→M2/M6, R6→L1, R7→L8, R8→the DR1–DR11 rows, R9/R10/R14→procedural (phase sequencing, no doc-visible artifact), R11/R12→§4 (P10, not yet run), R13→this record, R15→M7's doc sentence and SD2's row. | see the cross-referenced rows |
+
+#### Repair rounds after the P10 cross-review
+
+Findings from the two independent reviewers (A = Opus, B = Fable; see "Independent review" in the
+working ledger, not reproduced here) and the orchestrator's own HW3 mounted-screen checks, fixed
+in the repair round(s) that followed candidate `07dd9085`. IDs keep each reviewer's own prefix
+(`A-`, `B-`) or the finding's own tag; none renumbers or replaces an R1–R15 row or an original
+audit row above.
+
+| ID | Disposition | Facts as fixed | Evidence |
+|---|---|---|---|
+| A-D1 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | `tryGpuAgain` now pushes `performance:changed` right after it clears `gpuAutoDisabled`/`gpuLastError`, before the re-probe, so the cleared flags reach the screen even when the re-probe cannot run; the probe's own successful-write push follows as a second, idempotent notification. | `performance-notify.test.ts` `it.each`: "\"Try GPU again\" pushes the cleared flags even when the probe cannot run — %s (A-D1)" (cases "no binary for this OS (the probe is never called)", "a rejecting probe") |
+| A-D2 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | The late-write guard's rejection (a lock, a lock in progress, or a lock-and-re-unlock landing between the benchmark legs and the persist) now throws the localized `tMain('main.benchmark.lockedDuringRun')` message (new EN/DE pair), never a raw English string; the pre-run refusal keeps its own separate `main.benchmark.locked` key. | `first-benchmark-scheduler.test.ts` describe "the late-write guard (runAndPersistBenchmark)": `it.each` "%s between the legs and the persist: rejects, writes nothing, the idle push still follows the release" (cases "a lock completed", "a lock under way (DB open, latch armed)"); "a lock AND a re-unlock between the legs and the persist: rejects (the epoch moved); the same session persists"; "through the scheduler, a refused late persist is a \"failed\" outcome" |
+| A-D3 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | `attributedGpuFigures` falls back to the legacy first-device figures only when `rows == null` (a placement persisted before per-device rows existed); with any `devices` array present — one row or several — it matches strictly by the selected device's name, returning nulls rather than another device's figures on a mismatch or no selection. | `performance.test.ts` "a lone row that IS the selected device: its own figures, not the legacy summary (A-D3)"; "a lone row that is NOT the selected device (an iGPU-only log beside a selected dGPU), or none selected: null (A-D3)" |
+| A-D4 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | `read-speed.ts`'s `record()` stamps samples from a monotonically increasing clock: a reading at or before the previously accepted sample's `at` is bumped forward by 1 ms, so two real samples landing in the same millisecond stay distinct to every downstream identity check (`persistedSampleMemo`, `effectiveReadPatch`, `mergeSampleIntoResult`); rejected samples never advance the clock. | `read-speed.test.ts` describe "strictly increasing sample timestamps (PR #303 audit A-D4)"; `performance-persistence.test.ts` describe "strictly increasing sample timestamps (A-D4): same-millisecond samples stay distinct to the persister" — "a model load in the same millisecond as the checksum before it reaches BOTH destinations"; "a checksum in the same millisecond as the model load before it is a distinct, lower-ranked sample: both destinations keep the load" |
+| B-G1 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | `hasMachineIdentity` now requires `os` and `arch` to be non-empty alongside `cpuModel`/`ramGb` (not just the latter two), so a record missing OS/arch normalizes to a valid dated observation but never yields a half key (`machineKey` null, dropped from history, kept only as an unkeyed current record); `cpuCores === 0` still counts as identity present (a legitimate `os.cpus()` result) — it just cannot veto one. | `benchmark-schema.test.ts` describe "hasMachineIdentity — every field a real detection fills, or none (B-G1)": "a record without os/arch has no identity: machineKey null, dropped from history, kept as an unkeyed current record"; "each identity field is required on its own — os, arch, cpuModel, ramGb"; "a zero core count still identifies a machine: os.cpus() can legitimately be empty" |
+| HW3-focus | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | The busy branch still renders its own subtree (a disabled "Running…" button), so the focused node is unmounted during a run; the screen now REMEMBERS that an own action ("Check again" or "Start … and measure") was activated and, on the busy→idle edge, RESTORES focus to the idle "Check again" button (edge-triggered, once). A run this window did NOT start never moves focus. Mid-run the active element is the body — the tests assert exactly that — and focus returns to "Check again" only, never to "Start … and measure". | `PerformanceScreen.test.tsx` describe "PerformanceScreen: focus survives the run": "returns focus to \"Check again\" after a run this window started"; "returns focus after \"Start … and measure\" too — to the action the idle row keeps"; "a run this window did NOT start never steals focus" |
+| #327 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | The Diagnostics "Acceleration" line now names the device from the Performance snapshot's eligible `currentGpu` (the same machine-eligible, stamped source `shared/gpu-rules.ts` selects for the screen) instead of the raw probe's `devices[0]`, so a probe stamped for another computer, or a failed snapshot read, leaves the line on the honest CPU wording instead of naming a foreign card. | `GpuSurface.test.tsx` "#327: a probe stamped for ANOTHER computer names no card — the line says CPU"; "#327: a failed performance read leaves the line on the CPU wording, never a throw" |
+| B-D1 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | `docs/user-guide.md` §5a's "Memory" bullet no longer claims the tile shows which model fits; it now names RAM, processor and the profile only, and points the fit/context claim at the "Your model" row below it (the fit claim was removed from the tile itself at `db7e816a`, M5). | `user-guide.md` §5a "Performance" ("Memory" bullet) |
+| B-D2 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | The DR2 and DR5 rows above now cite the file that actually holds the quoted test (DR2's hybrid-rows title is in `placement-parser.test.ts`, not `performance.test.ts`; DR5's discrete-spill title is in `performance.test.ts`, not `performance-gpu.test.ts`). | `docs/benchmark.md` §2 DR2, DR5 rows (this file) |
+| B-D3 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | `docs/user-guide.md` §5a now describes "Start … and measure" as a second button appearing beside "Check again" (never a replacement), and the "Models on this computer" parenthetical names document search, voice AND images as always processor-pinned by design (the vision row's `device` is hardcoded `'cpu'` in `registerBenchmarkIpc.ts`). | `user-guide.md` §5a "Performance" |
+| B-D4 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | §3 P8's parenthetical no longer calls `4baec2be` "current HEAD" (P9's `07dd9085` is the HEAD at review time); the renderer header comment "Three cards:" → "Four cards" (the four named), the renderer test file's top-of-file comment "three tiles" → "four tiles", and the one stale test title "the three tiles with ratings" → "the four tiles with ratings" — all in this repair round. | `docs/benchmark.md` §3 P8 (this file); `PerformanceScreen.test.tsx` "renders the verdict, the four tiles with ratings, and the context the pick assumes" |
+| B-G2 | fixed in the P10 repair commit (the commit after `07dd9085` on this branch) | The L7 row above now cites its renderer half alongside the main-process test; the §5 legend now points DR3 at the "Observed first" paragraph and `security-model.md`'s verbosity note instead of the loosely-resolving "§3 P1". | `docs/benchmark.md` §2 L7 row, §5 legend (this file) |
 
 ### §3 Design as built
 
@@ -942,7 +980,7 @@ measurement, bounded by `FIRST_BENCHMARK_SETTLE_TIMEOUT_MS`, one continuation on
 attempt per unlock epoch). Doc: "Scheduling behind the auto-start", "One automatic attempt per
 unlock session", "The late-write guard" above.
 
-**P8** (`4baec2be`, current HEAD) closed the remaining wiring and hygiene gaps:
+**P8** (`4baec2be`, P8's commit) closed the remaining wiring and hygiene gaps:
 `placement-wiring.test.ts` (the ladder-to-persister path), `answer-speed-wiring.test.ts`, a
 shared `closePerformanceFixture()` teardown, and a strengthened `upsertHistory` assertion.
 Test-only; no doc section of its own.
@@ -959,6 +997,10 @@ Test-only; no doc section of its own.
   rail label at font weight 600, keyboard focus/disabled actions and announcements. Not
   attempted at this HEAD — P8 is the last completed implementation phase; independent review
   (P10) and closeout (P11) have not run.
+- **HW3-focus**: the keyboard-focus-after-a-run fix (`PerformanceScreen.test.tsx` "PerformanceScreen:
+  focus survives the run") is verified in jsdom only. The one live, CDP-driven Enter-key check
+  recorded for this wave predates the fix, so the corrected behaviour has not yet been
+  re-verified in the running app.
 - **HW4** (follow-up issue #TBD-I4): a hybrid `[iGPU, dGPU]` Vulkan enumeration order and Apple
   Silicon `unified` memory. P5's device-pairing logic is exercised only by synthetic
   two-device fixtures.
@@ -975,7 +1017,9 @@ For a citation to an ID that is not self-explanatory from §2 alone:
 - **M1, M3, L3, DR6, N2, SD1, T1, T3, T4, T5** → §3 P3; doc: "Push, not poll", "The screen's
   half of that contract", "Progress", "Observed while you worked."
 - **M2, M4, M6, L2, T2** → §3 P2; doc: "Persistence", "History per machine."
-- **M7, L7, T9 (fixtures), T10 (L7 half), DR3** → §3 P1; doc: "Observed first."
+- **M7, L7, T9 (fixtures), T10 (L7 half)** → §3 P1; doc: "Observed first."
+- **DR3** → doc: the "Observed first" paragraph under "Your model" (this file) and
+  `docs/security-model.md`'s "The chat sidecar's `-lv 4` verbosity" paragraph — not §3 P1.
 - **H1, L8 (schema half), T10 (L8 half), M5 (residual)** → §3 P4; doc: "Schemas and legacy
   records", "Your model" (context/configuration-match paragraphs).
 - **M8, N1, N3, DR1, DR2, DR5, DR10, T12** → §3 P5; doc: "Your model" (One eligible source,

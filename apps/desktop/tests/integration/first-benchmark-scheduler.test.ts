@@ -56,6 +56,7 @@ import { maybeAutoStartActiveModel } from '../../src/main/ipc/registerModelIpc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
+import { t } from '../../src/shared/i18n'
 import { detectSystem, type RunBenchmarkDeps } from '../../src/main/services/benchmark'
 import type { AppContext } from '../../src/main/services/context'
 import type { Db } from '../../src/main/services/db'
@@ -738,6 +739,10 @@ describe('SD2: one automatic attempt per unlock session', () => {
 })
 
 describe('the late-write guard (runAndPersistBenchmark)', () => {
+  // A-D2: the refusal is the localized emission — one message for a completed lock, a lock under
+  // way and a lock-and-re-unlock (the log lines tell them apart), never a raw English string.
+  const notSaved = t('en', 'main.benchmark.lockedDuringRun')
+
   it.each([
     ['a lock completed', (ws: ReturnType<typeof sessionWorkspace>) => ws.completeLock()],
     ['a lock under way (DB open, latch armed)', (ws: ReturnType<typeof sessionWorkspace>) => ws.beginLock()]
@@ -753,7 +758,7 @@ describe('the late-write guard (runAndPersistBenchmark)', () => {
       runAndPersistBenchmark(ctx, (step) => {
         if (step === 'done') lock(ws) // lands after the probes, right before the persist
       })
-    ).rejects.toThrow(/locked/)
+    ).rejects.toThrow(notSaved)
 
     expect(getSettings(db).lastBenchmark).toEqual(foreign)
     expect(getSettings(db).benchmarkHistory).toEqual([foreign])
@@ -775,7 +780,7 @@ describe('the late-write guard (runAndPersistBenchmark)', () => {
           ws.completeUnlock() // both flags read exactly as before; only the epoch tells
         }
       })
-    ).rejects.toThrow(/re-opened/)
+    ).rejects.toThrow(notSaved)
     expect(getSettings(db).lastBenchmark).toEqual(foreign)
 
     // The control: the same session, the same run → written.

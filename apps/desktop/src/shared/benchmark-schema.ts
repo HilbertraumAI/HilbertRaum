@@ -32,6 +32,11 @@ import {
 // screens read "absent" as "not recorded" and say so in their copy, so fabricating a `null`
 // there would turn "we never measured this" into "we measured nothing".
 //
+// Identity is the one ALL-OR-NOTHING part of that policy (`hasMachineIdentity`, B-G1): a record
+// either carries every field a real detection always fills — os, arch, cpuModel, ramGb — or it
+// carries no identity at all. Half a key is worse than none: it names a machine that cannot
+// exist, so the per-machine history would keep it for good, unmatched by any real computer.
+//
 // `settings.gpuProbe` joined them with P5 (`normalizeGpuProbe` / `normalizeGpuDevice`, below):
 // it keeps its top-level object gate in `updateSettings` and is validated the same way on both
 // sides, so the memory class, the VRAM budget and the graphics tile never read a junk device.
@@ -92,13 +97,32 @@ function isoOrNull(value: unknown): string | null {
 }
 
 /**
- * Whether a result carries an identity `machineKey` can key on: a non-empty `cpuModel` AND a
- * positive `ramGb`. The single definition of "usable identity", so the fingerprint and the
- * validator can never disagree about which records are keyed.
+ * Whether a result carries an identity `machineKey` can key on: EVERY field the key is built
+ * from that a real detection always fills — a non-empty `os`, a non-empty `arch`, a non-empty
+ * `cpuModel` and a positive `ramGb`. The single definition of "usable identity", so the
+ * fingerprint and the validator can never disagree about which records are keyed.
+ *
+ * ALL FOUR, not just the CPU and the RAM (PR #303 audit remediation B-G1). `cpuModel` + `ramGb`
+ * alone let a HALF identity through: `{ ranAt, cpuModel: 'x', ramGb: 16 }` normalizes to
+ * `os: ''`, `arch: ''` and keyed as `'||x|0|16'` — a phantom machine `normalizeBenchmarkHistory`
+ * files and keeps forever, because `detectSystem` always reports a real `os.platform()` /
+ * `os.arch()`, so no living computer can ever produce that key to overwrite or match it. Such a
+ * record now has NO identity: it stays a valid unkeyed record (the G3 tolerance policy — a
+ * reader may still show it as "this machine, identity unknown") but it never enters the
+ * per-machine history.
+ *
+ * `cpuCores` is deliberately NOT required: `os.cpus()` returns an empty array on some platforms
+ * (a documented Node behaviour), so a real machine can legitimately record `cpuCores: 0`. It
+ * still takes part in the key — two otherwise identical machines that differ in core count are
+ * different machines — it just cannot disqualify one.
  */
 export function hasMachineIdentity(fields: MachineIdentity | null | undefined): boolean {
   if (!fields) return false
   return (
+    typeof fields.os === 'string' &&
+    fields.os.length > 0 &&
+    typeof fields.arch === 'string' &&
+    fields.arch.length > 0 &&
     typeof fields.cpuModel === 'string' &&
     fields.cpuModel.length > 0 &&
     typeof fields.ramGb === 'number' &&
@@ -110,8 +134,10 @@ export function hasMachineIdentity(fields: MachineIdentity | null | undefined): 
  * Fingerprint of the computer a result belongs to: OS, arch, CPU model + cores, and RAM
  * rounded to whole GB (`os.totalmem()` can drift by a few MB between boots of the same
  * machine; the Models screen rounds the same way). Returns null when the result carries no
- * usable identity (a detection failure, or a blob persisted before these fields were reliably
- * filled), so callers treat "unknown" as "keep what we have", never as "moved".
+ * usable identity (`hasMachineIdentity` — a detection failure, or a blob persisted before these
+ * fields were reliably filled), so callers treat "unknown" as "keep what we have", never as
+ * "moved". It never emits a key with an empty segment where a real detection would have one
+ * (B-G1): `'||x|0|16'` would be a machine nothing can ever match.
  *
  * Lives here rather than in `services/performance.ts` (which re-exports it, so every existing
  * import site is unchanged) because the history validator has to key on exactly this and the
@@ -169,7 +195,9 @@ export function normalizeEffectiveRead(raw: unknown): EffectiveReadSample | null
  * returns null for it: it is never filed in the history and never fabricates a key.
  *
  * FIELD RULES: identity fields present but malformed (a non-string `cpuModel`, negative/NaN
- * cores or RAM) normalize to the unknown values, never to half an identity; every numeric
+ * cores or RAM) normalize to the unknown values, never to half an identity — and a record
+ * missing ANY of os / arch / cpuModel / ramGb is unkeyed outright (`hasMachineIdentity`,
+ * B-G1) rather than keyed on the empty repairs; every numeric
  * figure is finite and >= 0 or null (`cpuCores` a whole count); an unknown/mistyped `profile`
  * on a dated record reads as `'UNKNOWN'` rather than dropping a real measurement; `warnings`
  * keeps its string elements only. The optional fields `gpuVramMb`, `speedBasis`,

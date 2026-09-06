@@ -66,9 +66,26 @@ let observer: (() => void) | null = null
  * sample" check, the handled memo, the ranking's tie order — so two samples recorded within ONE
  * millisecond would read as one. Real loads and hashes take seconds; a test recording two in a
  * row on a fast runner does not (PR #303 P5 CI: the fast sample after a slow one was ignored
- * on ubuntu/Node 24), so tests install a monotonic clock through the seam below.
+ * on ubuntu/Node 24). `nextSampleAt` therefore never hands out a repeated `at` (A-D4, below);
+ * tests that need to READ specific timestamps still install a clock through the seam below.
  */
 let clock: () => Date = () => new Date()
+/**
+ * The previous ACCEPTED sample's `at`, epoch ms (PR #303 audit A-D4). Because `at` is the
+ * sample's identity, two samples must never share one: a clock that repeats or runs backwards
+ * (a coarse timer, a time step, a checksum landing in the same millisecond as a model load) is
+ * bumped to the previous sample's `at` + 1 ms — strictly increasing for the life of the process,
+ * whatever the clock says. A sample the floors reject never advances it.
+ */
+let lastAcceptedAtMs: number | null = null
+
+/** The next sample's `at`: the clock, bumped past the previous accepted sample when it repeats or runs backwards. */
+function nextSampleAt(): string {
+  let ms = clock().getTime()
+  if (lastAcceptedAtMs != null && ms <= lastAcceptedAtMs) ms = lastAcceptedAtMs + 1
+  lastAcceptedAtMs = ms
+  return new Date(ms).toISOString()
+}
 
 /** MB/s from a byte count + elapsed ms (MB = 1e6 bytes), one decimal — the single
  *  definition shared with `measureDriveSpeed` (benchmark.ts imports it from here).
@@ -110,7 +127,7 @@ function record(
     ms: Math.round(ms),
     source,
     modelId,
-    at: clock().toISOString()
+    at: nextSampleAt()
   }
   latestBySource[source] = candidate
   if (preferCandidate(candidate, latest)) latest = candidate
@@ -207,14 +224,15 @@ export function setEffectiveReadObserver(cb: (() => void) | null): void {
   observer = cb
 }
 
-/** Test seam: clear the session latch, suppression, and observer. */
 /** Test seam: the clock every recorded sample is stamped with (null restores the wall clock). */
 export function setReadSpeedClockForTests(fn: (() => Date) | null): void {
   clock = fn ?? (() => new Date())
 }
 
+/** Test seam: clear the session latch, the timestamp memo, suppression, clock and observer. */
 export function resetEffectiveReadForTests(): void {
   clock = () => new Date()
+  lastAcceptedAtMs = null
   latest = null
   latestBySource.model_load = null
   latestBySource.checksum = null

@@ -28,6 +28,23 @@ import { latestAnswerSpeed, recordAnswerSpeed, resetPerformanceForTests } from '
 import type { AppContext } from '../../src/main/services/context'
 import type { AnswerSpeed } from '../../src/shared/ipc'
 
+// B-T8 (PR #303 audit remediation, P10 cross-review): the pin used to require the exact literal
+// shape `const X = ctx as AppContext … setAnswerSpeedObserver((speed) => observeAnswerSpeed(X,
+// speed))`, so an unrelated refactor (a renamed local, an added guard clause, a block-bodied
+// callback) could break a pin that never caught a real regression. The regex below only
+// requires: `setAnswerSpeedObserver(` given a one-parameter callback (parens optional, any
+// name) whose body — expression or block — calls `observeAnswerSpeed(` somewhere inside it. The
+// "not vacuous" test further down proves the regex still tells correctly-wired code from
+// mis-wired code, without pinning to a literal string; index.ts itself is never edited to prove
+// it — a mutated COPY of the read slice stands in.
+const WIRING_PIN_RE = /setAnswerSpeedObserver\(\s*\(?\s*\w+\s*\)?\s*=>\s*(?:\{[\s\S]*?)?observeAnswerSpeed\(/
+
+/** Strips line and block comments before a "never calls X directly" check, so an explanatory
+ *  comment that merely names the forbidden call cannot trip a pin that only cares about real code. */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+}
+
 describe('wiring pin: initBackend routes chat-stream speed through observeAnswerSpeed', () => {
   const mainDir = join(__dirname, '../../src/main')
   const indexSrc = readFileSync(join(mainDir, 'index.ts'), 'utf8')
@@ -41,13 +58,17 @@ describe('wiring pin: initBackend routes chat-stream speed through observeAnswer
   })
 
   it('setAnswerSpeedObserver, inside initBackend, is given a callback that calls observeAnswerSpeed', () => {
-    expect(initBackendSrc).toMatch(
-      /const (\w+) = ctx as AppContext[\s\S]*?setAnswerSpeedObserver\(\s*\(speed\)\s*=>\s*observeAnswerSpeed\(\1,\s*speed\)\)/
-    )
+    expect(initBackendSrc).toMatch(WIRING_PIN_RE)
+  })
+
+  it('the regex is not vacuous: a COPY of the slice with observeAnswerSpeed swapped for recordAnswerSpeed fails it', () => {
+    const mutated = initBackendSrc.replace(/observeAnswerSpeed\(/, 'recordAnswerSpeed(')
+    expect(mutated).not.toBe(initBackendSrc) // guard: the swap actually changed something
+    expect(mutated).not.toMatch(WIRING_PIN_RE)
   })
 
   it('recordAnswerSpeed is never called directly from index.ts (only reachable via observeAnswerSpeed)', () => {
-    expect(indexSrc).not.toMatch(/\brecordAnswerSpeed\(/)
+    expect(stripComments(indexSrc)).not.toMatch(/\brecordAnswerSpeed\(/)
   })
 })
 

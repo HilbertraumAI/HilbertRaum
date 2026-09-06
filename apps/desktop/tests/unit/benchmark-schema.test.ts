@@ -33,8 +33,8 @@ import {
 //
 // Everything else is repair-not-reject: a figure that cannot be trusted becomes null, an
 // identity that cannot be trusted becomes the unknown one (so `machineKey` returns null rather
-// than half a key), and the optional legacy fields keep their ABSENCE, which the screens read
-// as "not recorded".
+// than half a key — B-G1 requires os, arch, cpuModel and ramGb together), and the optional
+// legacy fields keep their ABSENCE, which the screens read as "not recorded".
 
 /** A complete, healthy result — the shape a real run persists. */
 function complete(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
@@ -134,6 +134,42 @@ describe('normalizeBenchmarkResult — the legacy profile-only blob (G3)', () =>
     // Unknown identity ⇒ no key ⇒ it is never filed under a machine and never fabricates one.
     expect(machineKey(r)).toBeNull()
     expect(hasMachineIdentity(r)).toBe(false)
+  })
+})
+
+// B-G1 (PR #303 audit remediation): identity is all-or-nothing. `hasMachineIdentity` used to
+// ask only for `cpuModel` + `ramGb`, so a record with no `os`/`arch` normalized to `os: ''`,
+// `arch: ''` and keyed as `'||x|0|16'` — a phantom the history filed and kept forever, because
+// `detectSystem` always reports a real platform and arch, so no living computer could produce
+// that key to match or replace it.
+describe('hasMachineIdentity — every field a real detection fills, or none (B-G1)', () => {
+  it('a record without os/arch has no identity: machineKey null, dropped from history, kept as an unkeyed current record', () => {
+    const half = { ranAt: '2026-09-05T00:00:00Z', cpuModel: 'x', ramGb: 16 }
+    const r = normalizeBenchmarkResult(half)
+    // Still a VALID record — the tolerance policy keeps a dated observation (G3) …
+    expect(r).not.toBeNull()
+    expect(r).toMatchObject({ os: '', arch: '', cpuModel: 'x', ramGb: 16 })
+    // … but it identifies no machine, so it can never be keyed on.
+    expect(hasMachineIdentity(r)).toBe(false)
+    expect(machineKey(r)).toBeNull()
+    // And it never enters the per-machine history beside the real computers.
+    const history = normalizeBenchmarkHistory([half, complete()])
+    expect(history.map((e) => e.cpuModel)).toEqual([complete().cpuModel])
+  })
+
+  it('each identity field is required on its own — os, arch, cpuModel, ramGb', () => {
+    expect(hasMachineIdentity(complete())).toBe(true)
+    for (const missing of [{ os: '' }, { arch: '' }, { cpuModel: '' }, { ramGb: 0 }]) {
+      expect(hasMachineIdentity(complete(missing))).toBe(false)
+      expect(machineKey(complete(missing))).toBeNull()
+    }
+  })
+
+  it('a zero core count still identifies a machine: os.cpus() can legitimately be empty', () => {
+    // The one detected field that may be 0 on a real computer, so it must not disqualify one —
+    // it still takes part in the key, it just cannot veto it.
+    expect(hasMachineIdentity(complete({ cpuCores: 0 }))).toBe(true)
+    expect(machineKey(complete({ cpuCores: 0 }))).toBe('win32|x64|Intel Core i7-1260P|0|16')
   })
 })
 
