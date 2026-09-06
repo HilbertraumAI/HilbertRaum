@@ -22,6 +22,7 @@ import { perfMark, perfMs } from './perf'
 import { recordChecksumRead } from './read-speed'
 import type { Db } from './db'
 import { getSettings, updateSettings } from './settings'
+import { SLOW_TOKENS_PER_SECOND } from '../../shared/performance-rules'
 
 // Model manager (spec §7.4): discover manifests, verify checksums, compute model
 // states, recommend by hardware profile, and select the active chat/embedding model.
@@ -800,8 +801,10 @@ export interface PickerSpeedSignal {
 
 /** A loaded-model probe STRICTLY below this steps the recommendation down one size tier
  *  (model-benchmarks.md §6.5). Distinct from `VERY_LOW_TOKENS_PER_SECOND` (3), which steps
- *  the legacy PROFILE down — the two thresholds serve different surfaces on purpose. */
-export const SLOW_PICK_TOKENS_PER_SECOND = 5
+ *  the legacy PROFILE down — the two thresholds serve different surfaces on purpose. The value
+ *  is `shared/performance-rules.ts`' `SLOW_TOKENS_PER_SECOND` (PR #303 audit N3): the
+ *  Performance screen's "Slow" speed rating is this very gate, never a re-typed copy. */
+export const SLOW_PICK_TOKENS_PER_SECOND = SLOW_TOKENS_PER_SECOND
 
 /** The comfortable-stage ordering (§6.2): capacity first, then rank, then disk size. */
 function comfortableOrder(a: ModelManifest, b: ModelManifest): number {

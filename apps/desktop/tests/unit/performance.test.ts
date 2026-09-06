@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
+  attributedGpuFigures,
   findMachine,
   latestAnswerSpeed,
+  loadedAtOnceMb,
   machineKey,
   memoryBudgetMb,
   memoryClassOf,
@@ -11,7 +13,13 @@ import {
   resetPerformanceForTests,
   upsertHistory
 } from '../../src/main/services/performance'
-import { MAX_BENCHMARK_HISTORY, type BenchmarkResult, type ModelPlacement } from '../../src/shared/types'
+import {
+  MAX_BENCHMARK_HISTORY,
+  type BenchmarkResult,
+  type ModelPlacement,
+  type PlacementVerdict,
+  type ResidentModelRow
+} from '../../src/shared/types'
 
 // The Performance screen's model (benchmark.md "History per machine"): one result per
 // computer, keyed by a fingerprint that survives a reboot (rounded RAM) and that an OLD
@@ -209,5 +217,113 @@ describe('placementVerdict', () => {
   it('is unknown without a size or a budget', () => {
     expect(placementVerdict({ memoryClass: 'discrete', ramMb: null, vramMb: null, sizeOnDiskGb: 5.8, observed: null }).kind).toBe('unknown')
     expect(placementVerdict({ memoryClass: 'cpu', ramMb: 16_000, vramMb: null, sizeOnDiskGb: 0, observed: null }).kind).toBe('unknown')
+  })
+})
+
+// ---- Free/compute attribution to the SELECTED device (PR #303 audit DR2) ----
+
+describe('attributedGpuFigures', () => {
+  const iris = { label: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, freeMb: 15_000, computeMb: 300 }
+  const rtx = { label: 'Vulkan1', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_822, freeMb: 2703, computeMb: 2860 }
+  const record = (over: Partial<ModelPlacement> = {}): ModelPlacement => ({
+    modelId: 'm', contextTokens: 8192, backend: 'gpu', gpuLayers: 62, totalLayers: 66,
+    gpuModelMb: 17_600, cpuModelMb: 1750, gpuKvMb: 512, cpuKvMb: null, metalMaxWorkingSetMb: null,
+    // The legacy summary fields: the FIRST row's free figure, the compute summed over both.
+    gpuFreeAtStartMb: 15_000, gpuComputeMb: 3160,
+    machineKey: null, at: '2026-09-05T00:00:00Z', ...over
+  })
+
+  it('a record without rows (persisted before they existed) attributes as it always did', () => {
+    expect(attributedGpuFigures(record(), 'NVIDIA GeForce RTX 3090')).toEqual({ freeAtStartMb: 15_000, workingMb: 3160 })
+    expect(attributedGpuFigures(record({ gpuFreeAtStartMb: null }), null)).toEqual({ freeAtStartMb: null, workingMb: 3160 })
+  })
+
+  it('a lone device attributes as before, whatever it is called', () => {
+    const lone = record({ devices: [{ ...rtx }], gpuFreeAtStartMb: 2703, gpuComputeMb: 2860 })
+    expect(attributedGpuFigures(lone, 'NVIDIA GeForce RTX 3090')).toEqual({ freeAtStartMb: 2703, workingMb: 2860 })
+    expect(attributedGpuFigures(lone, 'some other name')).toEqual({ freeAtStartMb: 2703, workingMb: 2860 })
+  })
+
+  it('several rows: the selected device by NAME — never the first row', () => {
+    const hybrid = record({ devices: [iris, rtx] })
+    expect(attributedGpuFigures(hybrid, 'NVIDIA GeForce RTX 3090')).toEqual({ freeAtStartMb: 2703, workingMb: 2860 })
+    expect(attributedGpuFigures(hybrid, 'Intel(R) Iris(R) Xe Graphics')).toEqual({ freeAtStartMb: 15_000, workingMb: 300 })
+  })
+
+  it('several rows and the selected device absent from the log, or none selected: null, not a guess', () => {
+    const hybrid = record({ devices: [iris, rtx] })
+    expect(attributedGpuFigures(hybrid, 'NVIDIA GeForce RTX 3080 Ti')).toEqual({ freeAtStartMb: null, workingMb: null })
+    expect(attributedGpuFigures(hybrid, null)).toEqual({ freeAtStartMb: null, workingMb: null })
+  })
+
+  it('placementVerdict carries the attributed figures (the renderer explains a spill with them)', () => {
+    const observed = record({ devices: [iris, rtx] })
+    const byName = placementVerdict({ memoryClass: 'discrete', ramMb: 16_077, vramMb: 24_822, sizeOnDiskGb: 18.4, observed, gpuName: 'NVIDIA GeForce RTX 3090' })
+    expect(byName).toMatchObject({ kind: 'partial', freeAtStartMb: 2703, workingMb: 2860, spillMb: 1750 })
+    const unnamed = placementVerdict({ memoryClass: 'discrete', ramMb: 16_077, vramMb: 24_822, sizeOnDiskGb: 18.4, observed })
+    expect(unnamed).toMatchObject({ kind: 'partial', freeAtStartMb: null, workingMb: null })
+  })
+})
+
+// ---- "Everything loaded at once" against the processor (PR #303 audit DR5, owner ruling) ----
+
+describe('loadedAtOnceMb', () => {
+  const row = (over: Partial<ResidentModelRow>): ResidentModelRow => ({
+    role: 'vision', modelId: 'm', sizeOnDiskGb: 1, device: 'cpu', loaded: false, lifetime: 'idle',
+    gpuLayers: null, totalLayers: null, ...over
+  })
+  /** A card machine: chat and translation on the card, the translation live with 20 of 49 layers offloaded. */
+  const rows: ResidentModelRow[] = [
+    row({ role: 'chat', modelId: 'chat', sizeOnDiskGb: 5.4, device: 'gpu', loaded: true, lifetime: 'session' }),
+    row({ role: 'translation', modelId: 'tr', sizeOnDiskGb: 6.8, device: 'gpu', loaded: true, gpuLayers: 20, totalLayers: 49 }),
+    row({ role: 'vision', sizeOnDiskGb: 3.0 }),
+    row({ role: 'reranker', sizeOnDiskGb: 1.1, lifetime: 'session' }),
+    row({ role: 'embeddings', sizeOnDiskGb: 0.2, lifetime: 'session' }),
+    row({ role: 'transcriber', sizeOnDiskGb: 0.5, lifetime: 'per-use' })
+  ]
+  const estimate: PlacementVerdict = { kind: 'gpu', needMb: 5530, estimated: true, budgetMb: 24_576, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
+  const withTranslation = (over: Partial<ResidentModelRow>): ResidentModelRow[] => rows.map((r) => (r.role === 'translation' ? { ...r, ...over } : r))
+  const pinnedMb = (3.0 + 1.1 + 0.2 + 0.5) * 1024
+  const translationSpillMb = 6.8 * 1024 * (1 - 20 / 49)
+  const everythingMb = Math.round((5.4 + 6.8 + 3.0 + 1.1 + 0.2 + 0.5) * 1024)
+
+  it('cpu class: every row runs from RAM — the plain sum', () => {
+    const cpuRows = rows.map((r) => ({ ...r, device: 'cpu' as const }))
+    expect(loadedAtOnceMb({ memoryClass: 'cpu', rows: cpuRows, verdict: { ...estimate, kind: 'cpu', budgetMb: 16_384 } })).toBe(everythingMb)
+  })
+
+  it('discrete: the processor rows plus the live translation spill from its split; the card-resident weights are not counted', () => {
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows, verdict: estimate })).toBe(Math.round(pinnedMb + translationSpillMb))
+  })
+
+  it('discrete: a not-live or all-on-card translation contributes 0, and so does one without a reported split', () => {
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withTranslation({ loaded: false, gpuLayers: null, totalLayers: null }), verdict: estimate })).toBe(Math.round(pinnedMb))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withTranslation({ gpuLayers: 49, totalLayers: 49 }), verdict: estimate })).toBe(Math.round(pinnedMb))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withTranslation({ gpuLayers: null, totalLayers: null }), verdict: estimate })).toBe(Math.round(pinnedMb))
+  })
+
+  it('discrete: the chat adds its OBSERVED partial-offload spill; an estimate, a full offload or an unknown split add 0', () => {
+    const quiet = withTranslation({ loaded: false, gpuLayers: null, totalLayers: null })
+    const observedPartial: PlacementVerdict = { ...estimate, kind: 'partial', estimated: false, needMb: 19_862, spillMb: 2100, gpuLayers: 62, totalLayers: 66 }
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: observedPartial })).toBe(Math.round(pinnedMb + 2100))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: { ...observedPartial, estimated: true } })).toBe(Math.round(pinnedMb))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: { ...estimate, estimated: false, kind: 'gpu' } })).toBe(Math.round(pinnedMb))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: { ...estimate, estimated: false, kind: 'unknown' } })).toBe(Math.round(pinnedMb))
+  })
+
+  it('discrete: a chat or translation row that says cpu (by configuration or observation) counts in full', () => {
+    const chatOnCpu = rows.map((r) => (r.role === 'chat' ? { ...r, device: 'cpu' as const } : r))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: chatOnCpu, verdict: { ...estimate, kind: 'cpu' } })).toBe(Math.round(pinnedMb + 5.4 * 1024 + translationSpillMb))
+    const bothOnCpu = rows.map((r) => ({ ...r, device: 'cpu' as const }))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: bothOnCpu, verdict: { ...estimate, kind: 'cpu' } })).toBe(everythingMb)
+  })
+
+  it('unified: one pool — the full sum, whatever the rows say', () => {
+    expect(loadedAtOnceMb({ memoryClass: 'unified', rows, verdict: { ...estimate, budgetMb: 36_864 } })).toBe(everythingMb)
+  })
+
+  it('null when no row has a size', () => {
+    expect(loadedAtOnceMb({ memoryClass: 'cpu', rows: [row({ role: 'chat', modelId: null, sizeOnDiskGb: null })], verdict: estimate })).toBeNull()
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: [], verdict: estimate })).toBeNull()
   })
 })

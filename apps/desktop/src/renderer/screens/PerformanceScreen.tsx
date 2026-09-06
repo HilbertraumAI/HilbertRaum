@@ -6,6 +6,8 @@ import { friendlyIpcError } from '../lib/errors'
 import { fmt1 } from '../lib/format'
 import type { UiLanguage } from '@shared/i18n'
 import { isHardwareProfile } from '@shared/benchmark-schema'
+import { isUsefulDevice, looksIntegrated, USABLE_VRAM_MB } from '@shared/gpu-rules'
+import { SLOW_READ_MBPS, SLOW_TOKENS_PER_SECOND } from '@shared/performance-rules'
 import type {
   BenchmarkProgressStep,
   BenchmarkResult,
@@ -13,7 +15,8 @@ import type {
   HardwareProfile,
   ModelInfo,
   PerformanceSnapshot,
-  PlacementKind
+  PlacementKind,
+  ResidentModelRow
 } from '@shared/types'
 
 // The Performance screen (design-guidelines §2, the machine group; benchmark.md
@@ -35,14 +38,10 @@ import type {
 // screen re-reads `performance:get`. So the observed rows, the loaded/not-loaded pills and the
 // running state stay current while the screen is open, including for a benchmark another window
 // (or the first-run path) started.
-
-/** Below this a measured decode speed reads "Slow" (the picker's own #95 step-down gate). */
-const SLOW_TOKENS_PER_SECOND = 5
-/** The honest-read threshold the slow-read warning uses (benchmark.ts SLOW_EFFECTIVE_READ_MBPS). */
-const SLOW_READ_MBPS = 100
-/** Below this much graphics memory the runtime's GPU gate keeps models on the processor
- *  (runtime/gpu.ts GPU_BUMP_MIN_VRAM_MB, 6 GiB). */
-const USABLE_VRAM_MB = 6144
+//
+// The rating thresholds (`SLOW_TOKENS_PER_SECOND`, `SLOW_READ_MBPS`) and the "usable card" rule
+// (`isUsefulDevice`, `USABLE_VRAM_MB`) are IMPORTED from the shared modules the main services
+// rate by — never re-declared here (PR #303 audit N3 / M8).
 
 /** A card counts as "free at start" when at most this much was in use (desktop, other apps). */
 const CARD_FREE_SLACK_MB = 1536
@@ -126,15 +125,52 @@ function profileTone(profile: BenchmarkResult['profile'] | undefined): Tone {
   return profileOf(profile) === 'UNKNOWN' ? 'neutral' : 'accent'
 }
 
+/**
+ * What the graphics tile (and the Copy report) has to say — resolved ONCE from the snapshot
+ * (PR #303 audit M8 / N1). For the computer the app is on, the ELIGIBLE probe's device
+ * (`snap.currentGpu`, selected and rated main-side by the shared rules) is the freshest truth
+ * and wins; a result from another computer has only what its own check recorded. `name` and
+ * `mb` always describe one device. The rating never comes from the memory figure alone: the
+ * `useful` flag main computed for the live device, else the shared `isUsefulDevice` rule over
+ * the recorded name + memory — so an integrated device reporting 16 GB of shared memory is
+ * "Integrated", never "Usable".
+ */
+type GraphicsFigure =
+  | { kind: 'pending' }
+  | { kind: 'notRecorded' }
+  | { kind: 'none' }
+  | { kind: 'device'; mb: number; name: string | null; useful: boolean; integrated: boolean }
+
+function graphicsFigure(bench: BenchmarkResult | null, snap: PerformanceSnapshot | null): GraphicsFigure {
+  if (!bench) return { kind: 'pending' }
+  const live = snap?.currentMachine ? snap.currentGpu : null
+  const mb = live?.totalMb ?? bench.gpuVramMb ?? null
+  const name = live?.name ?? bench.gpu ?? null
+  if (mb == null || mb <= 0) {
+    // A foreign result that merely predates the field: the app never probed that machine for
+    // it, so it claims nothing either way (N1). An explicit null IS a recorded "nothing".
+    return snap && !snap.currentMachine && !('gpuVramMb' in bench) ? { kind: 'notRecorded' } : { kind: 'none' }
+  }
+  const useful = typeof live?.useful === 'boolean' ? live.useful : isUsefulDevice({ name: name ?? '', totalMb: mb })
+  return { kind: 'device', mb, name, useful, integrated: !useful && name != null && looksIntegrated(name) }
+}
+
 /** Plain-text rendering of the "This computer" card for the Copy button (mirrors the
  *  Diagnostics report shape so support sees the same figures either way). */
 function buildReport(
   bench: BenchmarkResult,
+  graphics: GraphicsFigure,
   models: ModelInfo[],
   contextTokens: number | null,
   t: I18n['t'],
   lang: UiLanguage
 ): string {
+  const graphicsLine =
+    graphics.kind === 'device'
+      ? `${vramGb(graphics.mb, lang)} ${t(graphics.integrated ? 'perf.tile.graphics.unitShared' : 'perf.tile.graphics.unit')} (${graphics.name ?? ''})`
+      : graphics.kind === 'notRecorded'
+        ? t('perf.rating.notRecorded')
+        : t('perf.rating.none')
   const lines = [
     t('perf.card.title'),
     `${t('perf.tile.speed')}: ${
@@ -147,9 +183,7 @@ function buildReport(
     }`,
     `${t('perf.tile.memory')}: ${bench.ramGb > 0 ? `${fmt1Safe(bench.ramGb, lang)} ${t('perf.tile.memory.unit')}` : t('diag.app.unknown')}`,
     `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')}`,
-    `${t('perf.tile.graphics')}: ${
-      bench.gpuVramMb != null ? `${vramGb(bench.gpuVramMb, lang)} ${t('perf.tile.graphics.unit')} (${bench.gpu ?? ''})` : t('perf.rating.none')
-    }`,
+    `${t('perf.tile.graphics')}: ${graphicsLine}`,
     `${t('perf.tile.drive')}: ${
       bench.effectiveRead ? `${fmtNumSafe(bench.effectiveRead.mbps, lang)} ${t('perf.tile.drive.unit')}` : t('perf.tile.drive.none')
     }`,
@@ -208,9 +242,6 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const toast = useToast()
   const [snap, setSnap] = useState<PerformanceSnapshot | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
-  // The stored GPU probe, the graphics tile's last-resort figure (the snapshot normally folds
-  // it into `current` main-side; this covers a main process older than that seam).
-  const [probedGpu, setProbedGpu] = useState<{ name: string; totalMb: number } | null>(null)
   const [runtimeModelId, setRuntimeModelId] = useState<string | null>(null)
   /** A check THIS window started ("Check again" / "Start … and measure"). Kept apart from the
    *  snapshot's `running`, which is the backend's benchmark occupancy span and is true for runs
@@ -255,23 +286,17 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   }, [])
 
   /** The cheap metadata the actions read, re-read with every snapshot: which model is up (the
-   *  "Start … and measure" offer, the speed step's label) and the active context pick. NOT
-   *  `listModels` — that is a name lookup, mount-only. Fire-and-forget under the read's stamp,
-   *  so a slow reply neither stalls the snapshot nor overwrites a newer one. */
+   *  "Start … and measure" offer, the speed step's label). NOT `listModels` — that is a name
+   *  lookup, mount-only. Fire-and-forget under the read's stamp, so a slow reply neither stalls
+   *  the snapshot nor overwrites a newer one. The graphics figure is NOT read here: the raw
+   *  `settings.gpuProbe` could belong to another computer, so the snapshot's eligible
+   *  `currentGpu` is the only probe source this screen has (PR #303 audit M8.3). */
   const refreshMeta = useCallback((gen: number): void => {
     const fresh = (): boolean => mountedRef.current && gen === genRef.current
     void window.api
       .getRuntimeStatus()
       .then((r) => {
         if (fresh()) setRuntimeModelId(r.running ? r.modelId : null)
-      })
-      .catch(() => {})
-    void window.api
-      .getSettings()
-      .then((s) => {
-        if (!fresh()) return
-        const d = s.gpuProbe?.devices?.[0]
-        setProbedGpu(d ? { name: d.name, totalMb: d.totalMb } : null)
       })
       .catch(() => {})
   }, [])
@@ -492,33 +517,44 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     )
   }
 
+  const graphics = graphicsFigure(bench, snap)
+
   /** Graphics memory decides what runs accelerated, so it stands beside RAM as its own
-   *  tile. The result's own figure wins; a result persisted before the field existed falls
-   *  back to the live probe, but only for the computer the app is on right now. */
+   *  tile. One figure (`graphicsFigure`): the eligible probe's device for this computer, else
+   *  what the result recorded; rated by the shared "usable" rule. A device rated not usable is
+   *  named honestly — an integrated one by its shared memory, a small discrete one by its
+   *  size — and never called "Usable"; a foreign result that never recorded the field says so. */
   function graphicsTile(): JSX.Element {
-    const live = snap?.currentMachine ? (snap.currentGpu ?? probedGpu) : null
-    const mb = bench?.gpuVramMb ?? live?.totalMb ?? null
-    const name = bench?.gpu ?? live?.name ?? null
-    if (mb == null || mb <= 0) {
+    if (graphics.kind !== 'device') {
+      const [sub, pill] =
+        graphics.kind === 'pending'
+          ? [t('perf.notChecked'), t('perf.rating.pending')]
+          : graphics.kind === 'notRecorded'
+            ? [t('perf.tile.graphics.notRecorded'), t('perf.rating.notRecorded')]
+            : [t('perf.tile.graphics.none'), t('perf.rating.none')]
+      return <Tile label={t('perf.tile.graphics')} value={null} sub={sub} pill={pill} tone="neutral" />
+    }
+    const { mb, name, useful, integrated } = graphics
+    if (integrated) {
       return (
         <Tile
           label={t('perf.tile.graphics')}
-          value={null}
-          sub={bench ? t('perf.tile.graphics.none') : t('perf.notChecked')}
-          pill={bench ? t('perf.rating.none') : t('perf.rating.pending')}
+          value={vramGb(mb, lang)}
+          unit={t('perf.tile.graphics.unitShared')}
+          sub={[name, t('perf.tile.graphics.integrated')].filter(Boolean).join(' · ')}
+          pill={t('perf.rating.integrated')}
           tone="neutral"
         />
       )
     }
-    const usable = mb >= USABLE_VRAM_MB
     return (
       <Tile
         label={t('perf.tile.graphics')}
         value={vramGb(mb, lang)}
         unit={t('perf.tile.graphics.unit')}
-        sub={usable ? (name ?? '') : [name, t('perf.tile.graphics.small', { min: Math.round(USABLE_VRAM_MB / 1024) })].filter(Boolean).join(' · ')}
-        pill={usable ? t('perf.rating.usable') : t('perf.rating.small')}
-        tone={usable ? 'success' : 'warning'}
+        sub={useful ? (name ?? '') : [name, t('perf.tile.graphics.small', { min: Math.round(USABLE_VRAM_MB / 1024) })].filter(Boolean).join(' · ')}
+        pill={useful ? t('perf.rating.usable') : t('perf.rating.small')}
+        tone={useful ? 'success' : 'warning'}
       />
     )
   }
@@ -638,18 +674,30 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     )
   }
 
-  /** "Models on this computer": every model the app can hold, where it runs, and whether it is
-   *  resident now, then the two shared budgets (the card, the processor's RAM). */
+  /** "Models on this computer": every model the app can hold, where it runs under the current
+   *  configuration, and whether it is resident now, then the two shared budgets (the card, the
+   *  processor's memory). The card line appears only while a row actually goes to the card;
+   *  the processor line compares the class-aware total (main-side, DR5) against RAM — on
+   *  Apple Silicon against the unified budget, and the copy says "memory", not "RAM". */
   function modelsCard(): JSX.Element {
     const p = snap?.placement
     if (!p) return <></>
     const gbOf = (v: number | null): string => (v == null ? '' : fmt1(v, lang))
     const chatRow = p.models.find((r) => r.role === 'chat')
     const trRow = p.models.find((r) => r.role === 'translation')
+    const anyOnCard = chatRow?.device === 'gpu' || trRow?.device === 'gpu'
     const vram = p.vramMb != null ? fmt1(p.vramMb / 1024, lang) : null
-    const ramGb = p.ramMb != null ? fmt1(p.ramMb / 1024, lang) : null
+    const unifiedPool = p.memoryClass === 'unified'
+    const againstMb = unifiedPool ? (p.verdict.budgetMb ?? p.ramMb) : p.ramMb
+    const againstGb = againstMb != null ? fmt1(againstMb / 1024, lang) : null
     const sumGb = p.totals.ramAllMb != null ? fmt1(p.totals.ramAllMb / 1024, lang) : null
-    const tooMuch = p.totals.ramAllMb != null && p.ramMb != null && p.totals.ramAllMb > p.ramMb
+    const tooMuch = p.totals.ramAllMb != null && againstMb != null && p.totals.ramAllMb > againstMb
+    /** Where a row runs, in words: the pinned roles say "by design"; chat and translation on
+     *  the processor are there because of the machine or the configuration, and say just that. */
+    const deviceCopy = (r: ResidentModelRow): string =>
+      r.device === 'cpu' && (r.role === 'chat' || r.role === 'translation')
+        ? t('perf.models.device.processor')
+        : t(`perf.models.device.${r.device}`)
     return (
       <div className="card">
         <h2 style={{ marginBottom: 2 }}>{t('perf.models.title')}</h2>
@@ -668,7 +716,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
               </div>
               <div className="perf-row-sub">
                 {[
-                  t(`perf.models.device.${r.device}`),
+                  deviceCopy(r),
                   t(`perf.models.lifetime.${r.lifetime}`),
                   r.gpuLayers != null && r.totalLayers != null
                     ? t('perf.models.split', { gpuLayers: String(r.gpuLayers), layers: String(r.totalLayers) })
@@ -688,7 +736,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           ))}
         </div>
         <div className="perf-models-summary">
-          {p.memoryClass !== 'cpu' && vram && chatRow && trRow && (
+          {p.memoryClass !== 'cpu' && vram && chatRow && trRow && anyOnCard && (
             <div className="perf-models-summary-line">
               <span>
                 {t('perf.models.card', { chat: gbOf(chatRow.sizeOnDiskGb), translation: gbOf(trRow.sizeOnDiskGb), vram })}
@@ -697,9 +745,13 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
               {p.totals.bothOnCard && <Badge tone="warning">{t('perf.place.partial')}</Badge>}
             </div>
           )}
-          {sumGb && ramGb && (
+          {sumGb && againstGb && (
             <div className="perf-models-summary-line">
-              <span>{t('perf.models.ram', { sum: sumGb, ram: ramGb })}</span>
+              <span>
+                {unifiedPool
+                  ? t('perf.models.memory', { sum: sumGb, budget: againstGb })
+                  : t('perf.models.ram', { sum: sumGb, ram: againstGb })}
+              </span>
               <Badge tone={tooMuch ? 'warning' : 'success'}>{tooMuch ? t('perf.models.ramTooMuch') : t('perf.models.ramOk')}</Badge>
             </div>
           )}
@@ -787,7 +839,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 <Button
                   variant="ghost"
                   title={t('diag.copyTitle')}
-                  onClick={() => copyReport(buildReport(bench, models, contextTokens, t, lang))}
+                  onClick={() => copyReport(buildReport(bench, graphics, models, contextTokens, t, lang))}
                 >
                   {t('perf.copy')}
                 </Button>
@@ -900,7 +952,11 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                       : t('perf.others.rowNoSpeed', { model: name })}
                   </div>
                   <div className="perf-row-sub">
-                    {entry.gpuVramMb != null && entry.gpuVramMb > 0
+                    {/* A recorded card is listed as VRAM only when the shared rule rates it usable:
+                        an integrated device's shared figure is not graphics memory (M8.1). */}
+                    {entry.gpuVramMb != null &&
+                    entry.gpuVramMb > 0 &&
+                    isUsefulDevice({ name: entry.gpu ?? '', totalMb: entry.gpuVramMb })
                       ? t('perf.others.subGpu', {
                           cpu: entry.cpuModel || t('perf.unknownCpu'),
                           ram: fmt1Safe(entry.ramGb, lang),

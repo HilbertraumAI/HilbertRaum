@@ -7,6 +7,8 @@ import type {
   BenchmarkProgressStep,
   BenchmarkResult,
   GpuDevice,
+  GpuProbeResult,
+  MemoryClass,
   ModelPlacement,
   PerformanceSnapshot,
   ResidentModelRow
@@ -19,6 +21,7 @@ import { backfillOutgoing, historyEquals, mergeSampleIntoResult } from '../servi
 import {
   findMachine,
   latestAnswerSpeed,
+  loadedAtOnceMb,
   machineKey,
   memoryClassOf,
   otherMachines,
@@ -29,7 +32,7 @@ import {
 import { latestModelPlacement, setModelPlacementObserver } from '../services/runtime/placement'
 import { latestEffectiveReadBySource } from '../services/read-speed'
 import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
-import { gpuUsefulForProfile } from '../services/runtime/gpu'
+import { displayDevice, eligibleGpuProbe, gpuUsefulForProfile, primaryUsefulDevice } from '../../shared/gpu-rules'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { discoverManifests, launchContextTokens } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
@@ -47,11 +50,37 @@ import { log } from '../services/logging'
 // `getAppStatus().hardwareProfile` read the real, detected profile instead of a stub.
 
 /**
+ * The benchmark's GPU summary for a device list: ONE device's name and memory, paired
+ * (`displayDevice` — the first useful discrete device, else the first listed), and the bump
+ * eligibility over ALL devices (`gpuUsefulForProfile`, unchanged — owner decision G4).
+ */
+function gpuSummary(devices: readonly GpuDevice[]): GpuBenchmarkInput {
+  const shown = displayDevice(devices)
+  return {
+    name: shown?.device.name ?? null,
+    useful: gpuUsefulForProfile(devices),
+    totalMb: shown?.device.totalMb ?? null
+  }
+}
+
+/**
  * Run the (session-cached) GPU probe on the drive's own `llama-server` and persist the
  * result to `settings.gpuProbe` (architecture.md GPU record §5.4) — so Diagnostics +
  * profile classification have device info without re-probing every launch. The probe
  * stays OUT of benchmark.ts (which keeps zero `child_process`); the summary is injected.
  * Never throws: no binary / no devices / probe failure → a null-name, not-useful input.
+ *
+ * The persisted probe is STAMPED with this machine's key (PR #303 audit M8.3, owner decision
+ * G3): a drive moved to a machine whose probe cannot run (no binary for that OS) used to keep
+ * the previous machine's devices, and they decided the memory class, the VRAM budget and the
+ * graphics tile there. Readers go through `eligibleGpuProbe`. The write rules: no binary or a
+ * REJECTING probe → no write (the old devices are never re-stamped as local, whatever they
+ * are); a probe that resolves — an EMPTY list included, which is the probe's own "nothing
+ * usable" answer (`probeGpuDevices` maps its failures to `[]` by contract) — replaces the old
+ * result with the current stamped one and notifies. The key and the session epoch are captured
+ * BEFORE the await, and admission is re-checked after it: a probe that outlives a lock, or a
+ * lock and a re-unlock, never writes into a session it was not admitted to (the AUD-03 seam
+ * `startModelRuntime` uses; a stand-in workspace without the counter skips the epoch half).
  */
 async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   let devices: GpuDevice[] = []
@@ -60,8 +89,18 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
       isDev: ctx.isDev
     })
     if (binPath && ctx.probeGpu) {
+      const hereKey = machineKey(detectSystem())
+      const epoch = ctx.workspace?.unlockEpoch?.()
       devices = await ctx.probeGpu(binPath)
-      updateSettings(ctx.db, { gpuProbe: { devices, probedAt: new Date().toISOString() } })
+      if (!workspaceAdmitsWork(ctx.workspace)) {
+        log.info('GPU probe finished after the workspace locked; result not persisted')
+        return gpuSummary(devices)
+      }
+      if (epoch !== undefined && ctx.workspace.unlockEpoch?.() !== epoch) {
+        log.info('GPU probe outlived its workspace session; result not persisted')
+        return gpuSummary(devices)
+      }
+      updateSettings(ctx.db, { gpuProbe: { devices, probedAt: new Date().toISOString(), machineKey: hereKey } })
       // The graphics tile and the memory class read this probe: an empty device list is a
       // result too (the tile flips to "None"), so the write notifies either way.
       notifyPerformanceChanged()
@@ -69,11 +108,7 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   } catch (err) {
     log.warn('GPU probe failed (benchmark continues without it)', String(err))
   }
-  return {
-    name: devices[0]?.name ?? null,
-    useful: gpuUsefulForProfile(devices),
-    totalMb: devices[0]?.totalMb ?? null
-  }
+  return gpuSummary(devices)
 }
 
 /**
@@ -289,17 +324,27 @@ function chatModelResident(ctx: AppContext, activeId: string | null): boolean {
   return activeId == null || status.modelId === activeId
 }
 
-/** The "Your model" block: the active model against this computer's memory. */
+/**
+ * The "Your model" block: the active model against this computer's memory. `probe` is the
+ * ELIGIBLE probe (`eligibleGpuProbe` — this machine's or unstamped, never a known-foreign
+ * one): the memory class, the VRAM budget and the selected device all come from it, and from
+ * nothing else (PR #303 audit M8, one source).
+ */
 function buildPlacement(
   ctx: AppContext,
   settings: AppSettings,
   here: string | null,
-  ramGb: number
+  ramGb: number,
+  probe: GpuProbeResult | null
 ): PerformanceSnapshot['placement'] {
-  const devices = settings.gpuProbe?.devices ?? []
+  const devices = probe?.devices ?? []
   const memoryClass = memoryClassOf(process.platform, process.arch, devices)
   const ramMb = ramGb > 0 ? Math.round(ramGb * 1024) : null
-  const vramMb = devices[0]?.totalMb ?? null
+  // The SELECTED device (the first useful discrete one): its memory is the budget, its name
+  // the join key for the observed free/working figures. An integrated-only box has no VRAM
+  // budget at all — its shared figure is not the card's own (M8.1).
+  const selected = primaryUsefulDevice(devices)
+  const vramMb = selected?.totalMb ?? null
   const activeId = settings.activeModelId
   const manifests: ModelManifest[] = ctx.manifestsDir
     ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
@@ -325,24 +370,60 @@ function buildPlacement(
     }
   }
   const recommendedContextTokens = contextFor(settings.lastBenchmark?.recommendedModelId ?? null)
+  // The session latch wins (this start), else the persisted record; either counts only for
+  // the active model on THIS machine (an unknown machine on either side is accepted).
+  const latched = latestModelPlacement()
+  const candidate = activeId
+    ? latched?.modelId === activeId
+      ? latched
+      : (settings.modelPlacements[activeId] ?? null)
+    : null
+  const mine =
+    candidate && (here == null || candidate.machineKey == null || candidate.machineKey === here) ? candidate : null
+  // MEASURED EVIDENCE MUST MATCH THE CONFIGURATION (PR #303 audit). A placement is a
+  // measurement of ONE start: this model, this machine (above), with a specific context and on
+  // a specific backend. Change the context size, or force the processor after a GPU start, and
+  // the stored buffers describe a run the app would no longer perform — presenting them as
+  // "measured" would state a fit the current settings never asked for. The record is KEPT (the
+  // next matching start restores it, and it is still the truth about that start); the row falls
+  // back to the weights-only estimate, and the mismatch travels with the snapshot so the copy
+  // can say when the earlier measurement was taken. A configuration that forces the processor
+  // (`gpuMode: 'off'`, or the auto-disable after a GPU failure) admits only a `cpu` record; an
+  // 'auto' configuration admits either, because the ladder itself decides per start.
+  const cpuOnly = settings.gpuMode === 'off' || settings.gpuAutoDisabled
+  const matchesConfig = (p: ModelPlacement): boolean =>
+    p.contextTokens === (model?.contextTokens ?? null) && (!cpuOnly || p.backend === 'cpu')
+  const observed = mine && matchesConfig(mine) ? mine : null
+  const observedMismatch =
+    mine && !matchesConfig(mine) ? { contextTokens: mine.contextTokens, backend: mine.backend, at: mine.at } : null
   // Every model the app can hold (benchmark.md "Models on this computer"): chat and translation
-  // auto-fit onto the card (on a machine with one); images, document search and voice are pinned
-  // to the processor by design (contention immunity; vision/runtime.ts, embeddings/e5.ts,
-  // reranker/llama.ts). Liveness comes from each service's own handle; whisper is a CLI that
-  // runs only while transcribing.
+  // auto-fit onto the card; images, document search and voice are pinned to the processor by
+  // design (contention immunity; vision/runtime.ts, embeddings/e5.ts, reranker/llama.ts).
+  // Liveness comes from each service's own handle; whisper is a CLI that runs only while
+  // transcribing.
+  //
+  // CAPABILITY IS NOT EXECUTION (PR #303 audit DR1): the memory class says the machine HAS a
+  // usable card; whether chat and translation actually go there depends on the configuration
+  // and on what was observed. Chat says 'cpu' when the class is cpu, when the GPU is switched
+  // off or auto-disabled, or when the matching observed start landed on the CPU backend;
+  // translation says 'cpu' under the same class/config, or when its sidecar's posture is the
+  // forced `--device none` (`deviceStatus().device === 'cpu'`, the session fallback latch).
   const byRole = (role: ModelManifest['role']): ModelManifest | undefined => manifests.find((m) => m.role === role)
   const embeddingsManifest = settings.activeEmbeddingModelId
     ? (manifests.find((m) => m.id === settings.activeEmbeddingModelId) ?? byRole('embeddings'))
     : byRole('embeddings')
-  const gpuDevice: ResidentModelRow['device'] = memoryClass === 'cpu' ? 'cpu' : 'gpu'
+  const cardEligible = memoryClass !== 'cpu' && !cpuOnly
+  const chatDevice: ResidentModelRow['device'] = cardEligible && observed?.backend !== 'cpu' ? 'gpu' : 'cpu'
   const translation = ctx.translator?.deviceStatus?.() ?? null
+  const translationDevice: ResidentModelRow['device'] = cardEligible && translation?.device !== 'cpu' ? 'gpu' : 'cpu'
+  const chatResident = chatModelResident(ctx, activeId)
   const allRows: ResidentModelRow[] = [
     {
       role: 'chat',
       modelId: activeId,
       sizeOnDiskGb: model?.sizeOnDiskGb ?? null,
-      device: gpuDevice,
-      loaded: chatModelResident(ctx, activeId),
+      device: chatDevice,
+      loaded: chatResident,
       lifetime: 'session',
       gpuLayers: null,
       totalLayers: null
@@ -351,7 +432,7 @@ function buildPlacement(
       role: 'translation',
       modelId: byRole('translation')?.id ?? null,
       sizeOnDiskGb: gib(byRole('translation')),
-      device: gpuDevice,
+      device: translationDevice,
       loaded: translation?.live ?? false,
       lifetime: 'idle',
       gpuLayers: translation?.live ? translation.gpuLayers : null,
@@ -399,37 +480,35 @@ function buildPlacement(
     }
   ]
   const rows = allRows.filter((r) => r.role === 'chat' || r.modelId != null)
-  const sizes = rows.map((r) => r.sizeOnDiskGb).filter((x): x is number => x != null)
+  // The verdict is asked for the EFFECTIVE class: a configuration that forces the processor
+  // gets the RAM estimate ("Will run on the processor"), never "Should fit in graphics memory"
+  // for a card the start would not use (DR1); a matching start OBSERVED on the CPU backend
+  // (the ladder fell through under 'auto') is judged against RAM too, as its row says.
+  // `memoryClassOf` — the profile bump's gate — and the snapshot's `memoryClass` (the
+  // hardware, which the tiles describe) are unchanged (G4).
+  const effectiveClass: MemoryClass = cpuOnly || observed?.backend === 'cpu' ? 'cpu' : memoryClass
+  const verdict = placementVerdict({
+    memoryClass: effectiveClass,
+    ramMb,
+    vramMb,
+    sizeOnDiskGb: model?.sizeOnDiskGb ?? null,
+    observed,
+    gpuName: selected?.name ?? null
+  })
+  // Both on the card (the start-order contention): only rows that SAY 'gpu', with the chat
+  // model resident and its observed start actually on the GPU with layers offloaded (no
+  // observation under a GPU-eligible configuration counts too), and the translation sidecar
+  // live with layers on the card — a live sidecar at 0 offloaded layers is not on the card.
+  const chatOnCard =
+    chatDevice === 'gpu' &&
+    chatResident &&
+    (observed == null || (observed.backend === 'gpu' && (observed.gpuLayers ?? 0) > 0))
+  const translationOnCard =
+    translationDevice === 'gpu' && (translation?.live ?? false) && (translation?.gpuLayers ?? 0) > 0
   const totals = {
-    ramAllMb: sizes.length === 0 ? null : Math.round(sizes.reduce((a, b) => a + b, 0) * 1024),
-    bothOnCard: gpuDevice === 'gpu' && rows[0].loaded && (rows.find((r) => r.role === 'translation')?.loaded ?? false)
+    ramAllMb: loadedAtOnceMb({ memoryClass, rows, verdict }),
+    bothOnCard: chatOnCard && translationOnCard
   }
-  // The session latch wins (this start), else the persisted record; either counts only for
-  // the active model on THIS machine (an unknown machine on either side is accepted).
-  const latched = latestModelPlacement()
-  const candidate = activeId
-    ? latched?.modelId === activeId
-      ? latched
-      : (settings.modelPlacements[activeId] ?? null)
-    : null
-  const mine =
-    candidate && (here == null || candidate.machineKey == null || candidate.machineKey === here) ? candidate : null
-  // MEASURED EVIDENCE MUST MATCH THE CONFIGURATION (PR #303 audit). A placement is a
-  // measurement of ONE start: this model, this machine (above), with a specific context and on
-  // a specific backend. Change the context size, or force the processor after a GPU start, and
-  // the stored buffers describe a run the app would no longer perform — presenting them as
-  // "measured" would state a fit the current settings never asked for. The record is KEPT (the
-  // next matching start restores it, and it is still the truth about that start); the row falls
-  // back to the weights-only estimate, and the mismatch travels with the snapshot so the copy
-  // can say when the earlier measurement was taken. A configuration that forces the processor
-  // (`gpuMode: 'off'`, or the auto-disable after a GPU failure) admits only a `cpu` record; an
-  // 'auto' configuration admits either, because the ladder itself decides per start.
-  const cpuOnly = settings.gpuMode === 'off' || settings.gpuAutoDisabled
-  const matchesConfig = (p: ModelPlacement): boolean =>
-    p.contextTokens === (model?.contextTokens ?? null) && (!cpuOnly || p.backend === 'cpu')
-  const observed = mine && matchesConfig(mine) ? mine : null
-  const observedMismatch =
-    mine && !matchesConfig(mine) ? { contextTokens: mine.contextTokens, backend: mine.backend, at: mine.at } : null
   return {
     memoryClass,
     ramMb,
@@ -438,7 +517,7 @@ function buildPlacement(
     recommendedContextTokens,
     observed,
     observedMismatch,
-    verdict: placementVerdict({ memoryClass, ramMb, vramMb, sizeOnDiskGb: model?.sizeOnDiskGb ?? null, observed }),
+    verdict,
     models: rows,
     totals
   }
@@ -466,27 +545,34 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
   const here = machineKey(sys)
   const current = settings.lastBenchmark
   const currentKey = machineKey(current)
-  const probed = settings.gpuProbe?.devices[0]
+  // ONE source for every graphics figure (PR #303 audit M8, owner decisions G3/G4): the probe
+  // when it is this machine's — stamped here, or unstamped (a legacy probe, unverifiable until
+  // a local refresh replaces it) — and NOTHING when it is stamped with another machine's key.
+  // Of it, ONE device: the first useful discrete one, else the first listed with `useful:
+  // false` (`displayDevice`), its name and memory always paired.
+  const probe = eligibleGpuProbe(settings.gpuProbe, here)
+  const shown = displayDevice(probe?.devices ?? [])
   // An unknown identity on either side reads as "this machine": the moved-drive check in
   // maybeRunFirstBenchmark makes the same call, so the two never contradict each other.
   const currentMachine = here == null || currentKey == null || here === currentKey
   // A result persisted before `gpuVramMb` existed (or one whose probe came back empty) gets
-  // the live probe's figure folded in, for THIS machine only: the graphics tile must not
-  // wait for a re-run when the app already knows the card.
+  // the eligible probe's device folded in — name AND memory, from the same device, so an old
+  // iGPU name is never paired with a dGPU's figure — for THIS machine only: the graphics tile
+  // must not wait for a re-run when the app already knows the card.
   const filled =
-    current && current.gpuVramMb == null && currentMachine && probed
-      ? { ...current, gpuVramMb: probed.totalMb, gpu: current.gpu ?? probed.name }
+    current && current.gpuVramMb == null && currentMachine && shown
+      ? { ...current, gpu: shown.device.name, gpuVramMb: shown.device.totalMb }
       : current
   return {
     current: filled,
-    currentGpu: probed ? { name: probed.name, totalMb: probed.totalMb } : null,
+    currentGpu: shown ? { name: shown.device.name, totalMb: shown.device.totalMb, useful: shown.useful } : null,
     currentMachine,
     otherMachines: otherMachines(settings.benchmarkHistory, currentKey ?? here),
     // The benchmark's OWN span, read directly (M1): `modelBusyLane` answers "chat" first, so a
     // permitted foreground answer used to hide a held benchmark span and the screen re-enabled
     // its button mid-run.
     running: ctx.runtime.occupancy.held('benchmark'),
-    placement: buildPlacement(ctx, settings, here, sys.ramGb),
+    placement: buildPlacement(ctx, settings, here, sys.ramGb, probe),
     observed: {
       lastAnswer: latestAnswerSpeed(),
       lastModelLoad: latestEffectiveReadBySource('model_load'),

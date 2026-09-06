@@ -2756,9 +2756,12 @@ adds is the safety machinery:
   marker), and the compatibility-mode notice with **"Try GPU again"** — a dedicated IPC
   (`gpu:try-again`) that clears `gpuAutoDisabled`/`gpuLastError`, invalidates the session probe
   cache, and re-probes + persists (hidden while the toggle is OFF, where it would do nothing).
-  The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful }`
+  The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful, totalMb }`
   (`gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated → the conservative `classifyProfile`
-  bump); `benchmark.ts` itself keeps **zero `child_process`**. `maybeRunFirstBenchmark`
+  bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, re-exported by
+  `runtime/gpu.ts`, so the Performance screen rates a device by the same definition — `name` and
+  `totalMb` are one selected device's, `displayDevice`); `benchmark.ts` itself keeps **zero
+  `child_process`**. `maybeRunFirstBenchmark`
   additionally refreshes `settings.gpuProbe` once per session even when a benchmark already
   exists, so a drive moved between machines re-labels itself.
 - **`services/embeddings/e5.ts`** — `E5Embedder implements Embedder`, the real backend behind the same
@@ -3071,7 +3074,7 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 |---|---|
 | `gpuMode: 'auto' \| 'off'` (user intent; Settings toggle) | `AppSettings` (encrypted DB) |
 | `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder; cleared by "Try GPU again" |
-| `gpuProbe` (devices + `probedAt`) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself |
+| `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`) |
 | Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) |
 
 "Try GPU again" is the dedicated `gpu:try-again` IPC: clears the flags **and** invalidates the

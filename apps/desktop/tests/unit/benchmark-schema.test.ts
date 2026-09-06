@@ -6,12 +6,21 @@ import {
   normalizeBenchmarkHistory,
   normalizeBenchmarkResult,
   normalizeEffectiveRead,
+  normalizeGpuDevice,
+  normalizeGpuProbe,
   normalizeModelPlacement,
   normalizeModelPlacements,
+  normalizePlacementDevice,
   normalizeSpeedBasis,
   UNKNOWN_RAN_AT
 } from '../../src/shared/benchmark-schema'
-import { MAX_BENCHMARK_HISTORY, type BenchmarkResult, type ModelPlacement } from '../../src/shared/types'
+import {
+  MAX_BENCHMARK_HISTORY,
+  type BenchmarkResult,
+  type GpuDevice,
+  type GpuProbeResult,
+  type ModelPlacement
+} from '../../src/shared/types'
 
 // The structural validators for the persisted benchmark records (PR #303 audit H1 / L8, owner
 // decision G7). These pin the two rules everything else rests on:
@@ -310,6 +319,71 @@ describe('normalizeModelPlacement', () => {
     const withFree = normalizeModelPlacement({ ...placement(), gpuFreeAtStartMb: 20_000, gpuComputeMb: 'x' })!
     expect(withFree.gpuFreeAtStartMb).toBe(20_000)
     expect(withFree.gpuComputeMb).toBeNull()
+  })
+
+  it('keeps the device rows (DR2): valid rows survive, junk rows drop, absence stays absent, a non-array reads as none', () => {
+    const rtx = { label: 'Vulkan1', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_822, freeMb: 2703, computeMb: 2860 }
+    expect('devices' in normalizeModelPlacement(placement())!).toBe(false)
+    const rows = normalizeModelPlacement({
+      ...placement(),
+      devices: [rtx, {}, { label: 'Vulkan0' }, { label: 'x', name: 'y', totalMb: 'lots', freeMb: -1, computeMb: null }, 'nope']
+    })!
+    expect(rows.devices).toEqual([rtx, { label: 'x', name: 'y', totalMb: null, freeMb: null, computeMb: null }])
+    expect(normalizeModelPlacement({ ...placement(), devices: 'x' })!.devices).toEqual([])
+  })
+})
+
+describe('normalizeGpuDevice / normalizeGpuProbe (P5: settings.gpuProbe)', () => {
+  const rtx: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_576, freeMb: 20_000 }
+
+  it('a device needs a non-empty name and a finite total; id and free are repaired', () => {
+    expect(normalizeGpuDevice(rtx)).toEqual(rtx)
+    expect(normalizeGpuDevice({ name: 'x', totalMb: 1 })).toEqual({ id: '', name: 'x', totalMb: 1, freeMb: 0 })
+    for (const junk of [null, 'x', {}, { name: '', totalMb: 1 }, { name: 'x' }, { name: 'x', totalMb: 'big' }, { name: 'x', totalMb: -1 }]) {
+      expect(normalizeGpuDevice(junk)).toBeNull()
+    }
+  })
+
+  it('drops junk devices and keeps the real ones; an all-junk list is an EMPTY probe, not no probe', () => {
+    const probe = normalizeGpuProbe({ devices: [{}, rtx, 'x', { name: 'y', totalMb: NaN }], probedAt: '2026-09-05T00:00:00Z' })
+    expect(probe).toEqual({ devices: [rtx], probedAt: '2026-09-05T00:00:00Z' })
+    expect(normalizeGpuProbe({ devices: [{}, 42], probedAt: '2026-09-05T00:00:00Z' })).toEqual({ devices: [], probedAt: '2026-09-05T00:00:00Z' })
+  })
+
+  it('is null for anything without a devices array; an unparseable date reads as unknown', () => {
+    for (const junk of [null, 'x', {}, { devices: 'x' }, { devices: { 0: rtx } }, []]) {
+      expect(normalizeGpuProbe(junk)).toBeNull()
+    }
+    expect(normalizeGpuProbe({ devices: [rtx], probedAt: 'yesterday-ish' })?.probedAt).toBe(UNKNOWN_RAN_AT)
+  })
+
+  it('G3: a legacy unstamped probe stays UNSTAMPED — never acquires a key', () => {
+    const legacy: GpuProbeResult = { devices: [rtx], probedAt: '2026-06-01T00:00:00Z' }
+    const out = normalizeGpuProbe(legacy)!
+    expect('machineKey' in out).toBe(false)
+    expect(out).toEqual(legacy)
+  })
+
+  it('keeps a foreign stamp as data (the reader decides eligibility), and a malformed one as null', () => {
+    const foreign = normalizeGpuProbe({ devices: [rtx], probedAt: '2026-06-01T00:00:00Z', machineKey: 'linux|x64|Other|8|16' })!
+    expect(foreign.machineKey).toBe('linux|x64|Other|8|16')
+    expect(normalizeGpuProbe({ devices: [], probedAt: '2026-06-01T00:00:00Z', machineKey: 42 })!.machineKey).toBeNull()
+    expect(normalizeGpuProbe({ devices: [], probedAt: '2026-06-01T00:00:00Z', machineKey: null })!.machineKey).toBeNull()
+  })
+})
+
+describe('normalizePlacementDevice', () => {
+  it('requires the two join keys and repairs the figures', () => {
+    expect(normalizePlacementDevice({ label: 'Vulkan0', name: 'Card', totalMb: 1, freeMb: 'x', computeMb: 2.5 })).toEqual({
+      label: 'Vulkan0',
+      name: 'Card',
+      totalMb: 1,
+      freeMb: null,
+      computeMb: 2.5
+    })
+    for (const junk of [null, 'x', {}, { label: 'Vulkan0' }, { name: 'Card' }, { label: '', name: 'Card' }]) {
+      expect(normalizePlacementDevice(junk)).toBeNull()
+    }
   })
 })
 

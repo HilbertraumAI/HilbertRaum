@@ -22,12 +22,26 @@ IPC: `runBenchmark()` (`benchmark:run`) in
 2. **GPU** ([`architecture.md`](architecture.md) GPU record §5.1/§8): the IPC layer runs
    the **session-cached `llama-server --list-devices` probe** on the drive's own sidecar binary
    (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws) and
-   **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful }`).
+   **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful, totalMb }`
+   — `name` and `totalMb` describe ONE device, the one `displayDevice` in `shared/gpu-rules.ts`
+   selects: the first useful discrete device, else the first listed; `useful` is
+   `gpuUsefulForProfile` over ALL devices, unchanged by the PR #303 audit — owner decision G4).
    `benchmark.ts` itself keeps its **zero-`child_process` purity** — it never probes. The probe
-   result is also persisted to `settings.gpuProbe` for Diagnostics. With no binary / no devices /
-   a failed probe, `gpu` stays `null` and nothing blocks. The persisted probe is additionally
-   refreshed **once per session** in the background (even when a benchmark already exists), so a
-   drive moved to another machine re-labels itself; Diagnostics' "Try GPU again"
+   result is also persisted to `settings.gpuProbe` for Diagnostics, **stamped with `machineKey`**
+   since the PR #303 audit (M8.3, owner decision G3): a probe stamped with another machine's key
+   supplies nothing to the Performance screen (a drive moved to a machine whose probe cannot run
+   — no binary for that OS — used to keep the previous machine's devices as if they were local:
+   they decided the memory class, the VRAM budget and the graphics tile there); an UNSTAMPED
+   probe from an older build stays eligible, unverifiable until a successful local refresh
+   replaces it, and is never re-stamped. Write rules (`probeAndPersistGpu`): no binary or a
+   rejecting probe writes nothing; a probe that resolves — an empty list included, which is the
+   probe's own "nothing usable" answer — replaces the old result with the current stamped one and
+   pushes `performance:changed`; the key and the workspace session epoch are captured before the
+   probe and admission is re-checked after it (the AUD-03 seam `startModelRuntime` uses), so a
+   probe that outlives a lock, or a lock and a re-unlock, never writes. With no binary / no
+   devices / a failed probe, `gpu` stays `null` and nothing blocks. The persisted probe is
+   additionally refreshed **once per session** in the background (even when a benchmark already
+   exists), so a drive moved to another machine re-labels itself; Diagnostics' "Try GPU again"
    (`gpu:try-again` IPC) invalidates the session cache and re-probes immediately.
 3. **Drive speed** (`measureDriveSpeed`): writes a small temp file
    (`DRIVE_PROBE_BYTES = 8 MB` of random bytes) **inside the workspace**, times a sequential
@@ -358,14 +372,24 @@ screen answers the user's question in plain words. Three cards:
    colour alone: Speed (decode tokens/s, the measured model and date; "Approximate" on a
    chunk-basis result), Memory (RAM, the profile as the pill, the model the RAM fits together with
    the context it launches with: the user's `contextTokensOverride` or the model's recommended
-   window, plus CPU), Graphics memory (`BenchmarkResult.gpuVramMb`, the primary probed device's
-   total MiB recorded at benchmark time so the history rows carry it too; "Usable" at or above the
-   runtime's 6 GiB GPU gate, "Small" below it with the plain consequence "models run on the
-   processor", "None" without a device; a result persisted before the field existed, or whose probe
-   came back empty, gets the stored `settings.gpuProbe` figure folded in by
-   `buildPerformanceSnapshot`, for the current machine only, and the screen keeps
-   `PerformanceSnapshot.currentGpu` plus the settings probe as last-resort fallbacks, so the
-   tile never waits for a re-run), Drive (`effectiveRead` with its source and date; "Pending" until a model start measured
+   window, plus CPU), Graphics memory (`BenchmarkResult.gpuVramMb` with `gpu`: ONE device's
+   memory and name, recorded at benchmark time so the history rows carry it too — the device
+   `displayDevice` selects. The rating is the shared `isUsefulDevice` rule of
+   `shared/gpu-rules.ts` — the same 6 GiB + not-integrated gate the profile bump and the memory
+   class use, never the memory figure alone (PR #303 audit M8.1): "Usable" for a useful discrete
+   card, "Small" for a discrete card under 6 GiB with the plain consequence "models run on the
+   processor", "Integrated" for an integrated device — its figure shown as "GB shared" with the
+   copy "integrated, shared memory: models run on the processor", never blamed on size — and
+   "None" without a device. For the computer the app is on, the ELIGIBLE probe's device
+   (`PerformanceSnapshot.currentGpu`, with its `useful` flag) is the freshest truth and wins; a
+   result persisted before the field existed, or whose probe came back empty, gets that device
+   folded in by `buildPerformanceSnapshot` — name AND memory together, never an old iGPU name
+   with a dGPU's figure — for the current machine only, and an already-mixed older row (an iGPU
+   name and figure recorded by the old `devices[0]` rule) is replaced by the next local check.
+   The screen never reads the raw `settings.gpuProbe`: it could be another machine's (M8.3). A
+   result from ANOTHER computer that predates the field says "Not recorded" — the app never
+   probed that machine for it (N1) — while an explicit `null` is a recorded "None"; its
+   other-computers row lists VRAM only for a usable card), Drive (`effectiveRead` with its source and date; "Pending" until a model start measured
    it). Actions: **Check again** (or **Start \<model\> and measure** when speed is unmeasured,
    the recommended model is installed and nothing runs: `useModel` then `runBenchmark`), **Change
    context size** (opens AI Model, the one place the context is set), **Copy report**. A "Why this
@@ -379,6 +403,28 @@ card (the runtime's own 6 GiB, not-integrated gate) whose VRAM is the budget; `u
 Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
 `recommendedMaxWorkingSetSize` when the load log printed it, else 75 % of RAM (the Memory tile is
 labelled "Unified memory" and the graphics tile is hidden); `cpu` = no usable card, budget = RAM.
+**One eligible source** (PR #303 audit M8, owner decisions G3/G4): the class, the VRAM budget
+(`placement.vramMb`), the device the copy names and the observed free/working figures all come
+from the ELIGIBLE `settings.gpuProbe` (`eligibleGpuProbe` in `shared/gpu-rules.ts`: stamped with
+this machine's key, or unstamped; a probe stamped elsewhere supplies nothing — the class comes
+from `memoryClassOf(platform, arch, [])`, so `cpu` or `unified`, with no budget, no `currentGpu`
+and no fold-in) and, of it, ONE device: `primaryUsefulDevice`, the first useful discrete one — on
+a hybrid `[iGPU, dGPU]` box the dGPU, where `devices[0]` used to hand the class to the dGPU but
+the budget and the name to the iGPU. An integrated-only box has no VRAM budget at all (its shared
+figure is not the card's own). `memoryClassOf` itself and the hardware-profile bump
+(`gpuUsefulForProfile`) are unchanged — as is the runtime, which still never passes `-ngl` and
+lets `--fit` decide. **Configured execution (DR1)**: the verdict is asked for the EFFECTIVE
+class — `cpu` when `gpuMode: 'off'` or `gpuAutoDisabled` forces the processor, or when the
+matching observed start landed on the CPU backend — so the estimate reads "Will run on the
+processor from RAM", never "Should fit in graphics memory" for a card the start would not use;
+the snapshot's `memoryClass` stays the hardware class (the tiles describe the machine).
+**Free/compute attribution (DR2)**: the parser keeps every GPU row of the `device_info` block
+with the compute buffer reserved on it (`ModelPlacement.devices`, label ↔ name, filed by label),
+and `attributedGpuFigures` takes `freeAtStartMb` / `workingMb` from the row whose name is the
+selected device's — a lone row, or a record persisted before the rows existed, attributes as
+before (the first row's free figure, the summed compute); when the selected device is not in the
+log both stay null and the copy falls back to the plain partial-offload sentence, never
+explaining a dGPU's spill with the iGPU's free memory.
 **The context it launches with** is resolved main-side by the launch path's own helper,
 `launchContextTokens(settings, manifest)` — the user's `contextTokensOverride`, else the manifest's
 `recommended_context_tokens` when it states one, else `settings.contextTokens`. The screen used to
@@ -434,8 +480,13 @@ header, and a VRAM-aware ★ picker (today's picker is RAM-best-fit).
 owner direction, placed BELOW "Observed while you worked" because what the machine actually did
 outranks what it could hold): the card is shared and the processor's RAM is shared, so the screen lists EVERY model
 the app can hold, one row per role (`PerformanceSnapshot.placement.models`, `ResidentModelRow`):
-chat and translation auto-fit onto the card (`device: 'gpu'`; `'cpu'` on a machine without a
-usable card), images / document search (reranker + embedder) / voice are pinned to the processor
+chat and translation auto-fit onto the card (`device: 'gpu'`) — under the CURRENT configuration
+(PR #303 audit DR1; the memory class alone used to decide): the row says `'cpu'` on a machine
+without a usable card, when the GPU is switched off (`gpuMode: 'off'`) or auto-disabled, when the
+chat's matching observed start landed on the CPU backend, or when the translation sidecar's
+posture is the forced `--device none` (`deviceStatus().device === 'cpu'`, its session fallback
+latch); the copy then says "processor", not "processor, by design" — images / document search
+(reranker + embedder) / voice are pinned to the processor
 by design (`--device none`, see vision/runtime.ts, embeddings/e5.ts, reranker/llama.ts; whisper is
 a CLI) and say so. Lifetime: chat / reranker / embedder stay for the session, translation and
 vision unload after their idle window, whisper runs only while transcribing. Liveness comes from
@@ -445,9 +496,21 @@ each service's own handle (`isLoaded()` on `E5Embedder`, `LlamaReranker`, `Visio
 `active() != null` or the placement latch, which is recorded before the #109 warm-up finishes
 (PR #303 audit DR6: a loading model reads "not loaded" until it is ready)); the translation
 row carries its observed layer split when live. Two summary lines: the card (chat + translation
-sizes against VRAM, with the START-ORDER warning when both are resident: whichever started second
-got the leftovers and runs slower; stop and start it once the other has unloaded) and the
-processor (everything loadable at once against RAM, "Too much at once" when it exceeds it). What
+sizes against VRAM, shown only while a row actually goes to the card, with the START-ORDER
+warning when both are resident on it — `bothOnCard` needs both rows to say `'gpu'`, the active
+chat model resident with its observed start on the GPU and at least one layer offloaded (or no
+observation under a GPU-eligible configuration), and the translation sidecar live with layers on
+the card; a live sidecar at 0 offloaded layers, or a chat observed on the CPU, is not "both":
+whichever started second got the leftovers and runs slower; stop and start it once the other has
+unloaded) and the processor: everything loadable at once against RAM, **class-aware since the PR
+#303 audit (DR5, owner ruling; `loadedAtOnceMb` in `services/performance.ts`)** — on the `cpu`
+class every row's size; on `discrete` the rows that run on the processor plus the active model's
+OBSERVED partial-offload spill (the CPU-side model + cache bytes of a measured partial start; an
+estimate, a full offload or an unknown split add 0) plus the live translation sidecar's spill
+(size × the share of layers off the card; not live or all on the card → 0), so card-resident
+weights are no longer counted against RAM; on `unified` the full sum, with the copy saying
+"memory" and the "Fits" / "Too much at once" pill comparing against the unified budget rather
+than RAM. What
 the app should DO about the start-order contention (force translation to the processor while chat
 holds the card, or reclaim the card when translation goes idle) is an owner decision (§5 item 21
 (g)).
@@ -471,7 +534,9 @@ holds the card, or reclaim the card when translation goes idle) is an owner deci
    first, each with its speed/model, CPU/RAM/date and rating pills ("Slow drive" under 100 MB/s).
 
 **Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
-in `registerBenchmarkIpc.ts`): `current`, `currentMachine`, `currentGpu`, `otherMachines`,
+in `registerBenchmarkIpc.ts`): `current`, `currentMachine`, `currentGpu` (`{ name, totalMb,
+useful } | null` — the eligible probe's display device, one device's name and memory),
+`otherMachines`,
 `running` (the `benchmark` occupancy span read directly, `occupancy.held('benchmark')` — not
 through `modelBusyLane`, which answers "chat" first and hid a held span behind a permitted
 foreground answer, PR #303 audit M1), `placement` (memory class, RAM/VRAM, the active model, the

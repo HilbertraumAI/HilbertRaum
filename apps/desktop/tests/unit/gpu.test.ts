@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   parseListDevices,
-  looksIntegrated,
   probeGpuDevices,
   createCachedGpuProbe
 } from '../../src/main/services/runtime/gpu'
@@ -87,30 +86,8 @@ describe('parseListDevices', () => {
   })
 })
 
-describe('looksIntegrated', () => {
-  it.each([
-    // Integrated → true (the bump must NOT fire)
-    ['Intel(R) Iris(R) Xe Graphics', true],
-    ['Intel(R) UHD Graphics 630', true],
-    ['Intel(R) HD Graphics 520', true],
-    ['AMD Radeon(TM) Graphics', true],
-    ['AMD Radeon Vega 8', true],
-    // Audit fix: names real Linux/RADV + Meteor-Lake drivers report (these used to
-    // slip through and could bump the profile on shared-memory APUs).
-    ['AMD Radeon Graphics (RADV REMBRANDT)', true],
-    ['AMD Radeon(TM) 780M Graphics', true],
-    ['AMD Radeon Vega 8 Graphics (RADV RAVEN)', true],
-    ['Intel(R) Arc(TM) Graphics', true],
-    // Discrete → false (eligible for the bump)
-    ['NVIDIA GeForce RTX 3080 Ti', false],
-    ['AMD Radeon RX 6700 XT', false],
-    ['NVIDIA GeForce GTX 1660', false],
-    ['AMD Radeon RX 7800 XT (RADV NAVI32)', false],
-    ['Intel(R) Arc(TM) A770 Graphics', false]
-  ])('%s → %s', (name, integrated) => {
-    expect(looksIntegrated(name)).toBe(integrated)
-  })
-})
+// The `looksIntegrated` name table moved to tests/unit/gpu-rules.test.ts with the rule itself
+// (shared/gpu-rules.ts, PR #303 audit M8 / N3); that file also pins this module's re-exports.
 
 // ---- probeGpuDevices (fake spawn — no real binary, no GPU) -------------------------
 

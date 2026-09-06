@@ -45,8 +45,43 @@ describe('createPlacementParser', () => {
       // The first GPU row of device_info, never the CPU row.
       gpuFreeAtStartMb: 22900,
       // GPU-side working buffers only (the host compute buffer is not card memory).
-      gpuComputeMb: 2860
+      gpuComputeMb: 2860,
+      // Every GPU row of device_info, label ↔ name (DR2). The compute buffer is filed by LABEL:
+      // this handwritten fixture's buffer lines say CUDA0, a label the device block never
+      // listed, so nothing is filed on Vulkan0 — the summed figure above still counts it.
+      devices: [{ label: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24822, freeMb: 22900, computeMb: null }]
     })
+  })
+
+  it('keeps every GPU row of a hybrid device_info block with its own compute buffer, by label (DR2)', () => {
+    const p = createPlacementParser()
+    p.onStderrData(
+      [
+        '0.00.132.667 I device_info:',
+        '0.00.137.024 I   - Vulkan0 : Intel(R) Iris(R) Xe Graphics (16384 MiB, 15000 MiB free)',
+        '0.00.137.030 I   - Vulkan1 : NVIDIA GeForce RTX 3090 (24822 MiB, 2703 MiB free)',
+        '0.00.137.033 I   - CPU     : Intel(R) Core(TM) i7-1260P (16077 MiB, 9000 MiB free)',
+        'load_tensors: offloaded 62/66 layers to GPU',
+        'sched_reserve:      Vulkan1 compute buffer size =  2860.00 MiB',
+        'sched_reserve:      Vulkan0 compute buffer size =   300.00 MiB',
+        'sched_reserve:  Vulkan_Host compute buffer size =    40.00 MiB',
+        ''
+      ].join('\n')
+    )
+    const r = p.reading()
+    expect(r.devices).toEqual([
+      { label: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16384, freeMb: 15000, computeMb: 300 },
+      { label: 'Vulkan1', name: 'NVIDIA GeForce RTX 3090', totalMb: 24822, freeMb: 2703, computeMb: 2860 }
+    ])
+    // The legacy summary fields keep their meaning: the FIRST row's free figure, the sum over
+    // every GPU device — which is exactly why a hybrid box needs the rows (the dGPU's spill
+    // must not be explained with the iGPU's 15 GB free).
+    expect(r.gpuFreeAtStartMb).toBe(15000)
+    expect(r.gpuComputeMb).toBe(3160)
+    // A name with its own parentheses survives the row parse.
+    const q = createPlacementParser()
+    q.onStderrData('  - Vulkan0 : Intel(R) UHD Graphics 630 (CFL GT2) (8000 MiB, 7000 MiB free)\n')
+    expect(q.reading().devices).toEqual([{ label: 'Vulkan0', name: 'Intel(R) UHD Graphics 630 (CFL GT2)', totalMb: 8000, freeMb: 7000, computeMb: null }])
   })
 
   it('reassembles lines split across chunks and sums several devices', () => {
@@ -116,10 +151,12 @@ describe('createPlacementParser', () => {
     expect(p.reading().gpuModelMb).toBeNull()
   })
 
-  it('stays all-null on a log without those lines (a forced-CPU start)', () => {
+  it('stays all-null on a log without those lines (a forced-CPU start), with no device rows', () => {
     const p = createPlacementParser()
     p.onStderrData('main: server is listening on http://127.0.0.1:1234\n')
-    expect(Object.values(p.reading()).every((v) => v === null)).toBe(true)
+    const { devices, ...figures } = p.reading()
+    expect(devices).toEqual([])
+    expect(Object.values(figures).every((v) => v === null)).toBe(true)
   })
 })
 

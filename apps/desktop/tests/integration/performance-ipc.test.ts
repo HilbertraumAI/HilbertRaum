@@ -253,9 +253,12 @@ describe('buildPerformanceSnapshot', () => {
       gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, freeMb: 20000 }], probedAt: '2026-09-05T00:00:00Z' }
     })
     const snap = buildPerformanceSnapshot(ctxWith(root, db))
-    expect(snap.currentGpu).toEqual({ name: 'NVIDIA GeForce RTX 3090', totalMb: 24576 })
-    // The result predates gpuVramMb: the probe's figure is folded in for THIS machine…
+    // P5: the display device carries the shared rule's verdict (an RTX 3090 is usable).
+    expect(snap.currentGpu).toEqual({ name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, useful: true })
+    // The result predates gpuVramMb: the probe's device is folded in for THIS machine, name and
+    // memory together…
     expect(snap.current?.gpuVramMb).toBe(24576)
+    expect(snap.current?.gpu).toBe('NVIDIA GeForce RTX 3090')
   })
 
   it('does not fold the live probe into another computer\'s result', () => {

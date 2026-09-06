@@ -6,10 +6,11 @@ import type {
   MemoryClass,
   ModelPlacement,
   ObservedAnswerSpeed,
-  PlacementVerdict
+  PlacementVerdict,
+  ResidentModelRow
 } from '../../shared/types'
 import { machineKey } from '../../shared/benchmark-schema'
-import { gpuUsefulForProfile } from './runtime/gpu'
+import { gpuUsefulForProfile } from '../../shared/gpu-rules'
 
 // The Performance screen's model (benchmark.md "Performance screen"): one benchmark result
 // per COMPUTER the drive has been used on, and the session's observed figures. Pure
@@ -89,12 +90,35 @@ export const ESTIMATE_HEADROOM = 0.92
 
 /**
  * How this computer's memory is organised for a model. Apple Silicon (darwin + arm64) is one
- * unified pool; a usable discrete card (the runtime's own 6 GiB, not-integrated gate) has its
- * own memory; everything else runs from RAM.
+ * unified pool; a usable discrete card (the runtime's own 6 GiB, not-integrated gate — the
+ * shared `gpuUsefulForProfile`, unchanged by the PR #303 audit, G4) has its own memory;
+ * everything else runs from RAM. The HARDWARE class: the caller passes the effective class
+ * (`cpu` when the configuration forces the processor) to `placementVerdict` itself.
  */
 export function memoryClassOf(platform: string, arch: string, devices: GpuDevice[]): MemoryClass {
   if (platform === 'darwin' && arch === 'arm64') return 'unified'
   return gpuUsefulForProfile(devices) ? 'discrete' : 'cpu'
+}
+
+/**
+ * The free-at-start and working-buffer figures of ONE device — the SELECTED one (PR #303
+ * audit DR2). The parser keeps the `device_info` rows (`ModelPlacement.devices`, label ↔ name)
+ * with the compute buffer reserved on each. A record with a single GPU row, or one persisted
+ * before the rows existed, attributes exactly as before (the first row's free figure, the
+ * summed compute). With several rows the figures belong to the row whose name is the selected
+ * device's; when that device is not in the log — or none was selected — both stay null,
+ * because a dGPU's spill must never be explained with the iGPU's free memory.
+ */
+export function attributedGpuFigures(
+  observed: ModelPlacement,
+  gpuName: string | null
+): { freeAtStartMb: number | null; workingMb: number | null } {
+  const rows = observed.devices
+  if (rows == null || rows.length < 2) {
+    return { freeAtStartMb: observed.gpuFreeAtStartMb ?? null, workingMb: observed.gpuComputeMb ?? null }
+  }
+  const row = gpuName == null ? undefined : rows.find((d) => d.name === gpuName)
+  return { freeAtStartMb: row?.freeMb ?? null, workingMb: row?.computeMb ?? null }
 }
 
 /** The memory the fit question is asked against, MiB. */
@@ -126,6 +150,11 @@ const sum = (...xs: Array<number | null>): number | null => {
  * weights alone against the budget with headroom; a discrete card that cannot hold them
  * still runs the model if RAM can take the rest ('partial'), and beyond RAM + VRAM it is
  * 'too_large'. A model larger than RAM on a CPU or unified machine is 'too_large' as well.
+ *
+ * `memoryClass` is the EFFECTIVE class: the caller passes `cpu` when the configuration forces
+ * the processor (`gpuMode: 'off'`, `gpuAutoDisabled`), so the estimate never promises the card
+ * a start would not use (PR #303 audit DR1). `gpuName` names the selected device so the
+ * observed free/working figures are attributed to it (`attributedGpuFigures`, DR2).
  */
 export function placementVerdict(input: {
   memoryClass: MemoryClass
@@ -133,17 +162,19 @@ export function placementVerdict(input: {
   vramMb: number | null
   sizeOnDiskGb: number | null
   observed: ModelPlacement | null
+  gpuName?: string | null
 }): PlacementVerdict {
   const { memoryClass, ramMb, vramMb, sizeOnDiskGb, observed } = input
   const budgetMb = memoryBudgetMb(memoryClass, ramMb, vramMb, observed)
   if (observed) {
     const needMb = sum(observed.gpuModelMb, observed.cpuModelMb, observed.gpuKvMb, observed.cpuKvMb)
+    const figures = attributedGpuFigures(observed, input.gpuName ?? null)
     const base = {
       needMb,
       estimated: false,
       budgetMb,
-      freeAtStartMb: observed.gpuFreeAtStartMb ?? null,
-      workingMb: observed.gpuComputeMb ?? null,
+      freeAtStartMb: figures.freeAtStartMb,
+      workingMb: figures.workingMb,
       gpuLayers: observed.gpuLayers,
       totalLayers: observed.totalLayers
     }
@@ -171,4 +202,51 @@ export function placementVerdict(input: {
   }
   if (fits) return { ...est, kind: memoryClass === 'unified' ? 'gpu' : 'cpu', needMb }
   return { ...est, kind: 'too_large', needMb }
+}
+
+/**
+ * What everything loadable at once would take from the PROCESSOR's memory, MiB (benchmark.md
+ * "Models on this computer"; PR #303 audit DR5, owner ruling). The old figure summed every
+ * row, so on a graphics-card machine the chat and translation weights that live ON THE CARD
+ * were counted against RAM and the pill said "Too much at once" for a machine that was fine.
+ *
+ *  - `cpu` class: every row runs from RAM — the plain sum.
+ *  - `discrete`: the rows that run on the processor (pinned by design, or `'cpu'` by
+ *    configuration/observation) at full size, plus what the card-resident rows spill: the
+ *    active model's OBSERVED partial-offload spill (`verdict.spillMb`, the CPU-side model +
+ *    cache bytes of a measured partial start; an estimate, a full offload and an unknown split
+ *    contribute 0) and the translation sidecar's live spill (size × the share of layers off the
+ *    card, from its reported split; not live, no split, or every layer on the card → 0).
+ *  - `unified`: one pool, so the full sum — the copy says "memory" and the pill compares
+ *    against the unified budget, not RAM.
+ *
+ * null when no row has a size (nothing installed).
+ */
+export function loadedAtOnceMb(input: {
+  memoryClass: MemoryClass
+  rows: readonly ResidentModelRow[]
+  verdict: PlacementVerdict
+}): number | null {
+  const { memoryClass, rows, verdict } = input
+  let total: number | null = null
+  for (const row of rows) {
+    if (row.sizeOnDiskGb == null) continue
+    const sizeMb = row.sizeOnDiskGb * 1024
+    let mb: number
+    if (memoryClass === 'unified' || row.device === 'cpu') {
+      mb = sizeMb
+    } else if (row.role === 'chat') {
+      mb = verdict.kind === 'partial' && !verdict.estimated ? (verdict.spillMb ?? 0) : 0
+    } else if (row.role === 'translation') {
+      const onCard =
+        row.loaded && row.gpuLayers != null && row.totalLayers != null && row.totalLayers > 0
+          ? Math.min(1, row.gpuLayers / row.totalLayers)
+          : null
+      mb = onCard == null ? 0 : sizeMb * (1 - onCard)
+    } else {
+      mb = sizeMb
+    }
+    total = (total ?? 0) + mb
+  }
+  return total == null ? null : Math.round(total)
 }

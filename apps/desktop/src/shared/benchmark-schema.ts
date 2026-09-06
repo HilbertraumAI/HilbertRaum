@@ -2,8 +2,11 @@ import {
   MAX_BENCHMARK_HISTORY,
   type BenchmarkResult,
   type EffectiveReadSample,
+  type GpuDevice,
+  type GpuProbeResult,
   type HardwareProfile,
-  type ModelPlacement
+  type ModelPlacement,
+  type PlacementDevice
 } from './types'
 
 // Structural validation for the persisted benchmark records (PR #303 audit H1 / L8, owner
@@ -29,8 +32,9 @@ import {
 // screens read "absent" as "not recorded" and say so in their copy, so fabricating a `null`
 // there would turn "we never measured this" into "we measured nothing".
 //
-// P5 slots `normalizeGpuProbe`/`normalizeGpuDevice` in beside these (`settings.gpuProbe` still
-// passes through the top-level object gate only); the helpers below are shaped for it.
+// `settings.gpuProbe` joined them with P5 (`normalizeGpuProbe` / `normalizeGpuDevice`, below):
+// it keeps its top-level object gate in `updateSettings` and is validated the same way on both
+// sides, so the memory class, the VRAM budget and the graphics tile never read a junk device.
 
 /** Every `HardwareProfile` value as a runtime set — the type alone cannot validate JSON. */
 const HARDWARE_PROFILES: ReadonlySet<string> = new Set<HardwareProfile>([
@@ -266,7 +270,57 @@ export function normalizeModelPlacement(raw: unknown, expectedModelId?: string):
   }
   if ('gpuFreeAtStartMb' in raw) placement.gpuFreeAtStartMb = figure(raw.gpuFreeAtStartMb)
   if ('gpuComputeMb' in raw) placement.gpuComputeMb = figure(raw.gpuComputeMb)
+  if ('devices' in raw) {
+    // Present but unusable reads as "recorded, nothing usable" (`[]`), like the two figures above.
+    placement.devices = Array.isArray(raw.devices)
+      ? raw.devices.map(normalizePlacementDevice).filter((d): d is PlacementDevice => d != null)
+      : []
+  }
   return placement
+}
+
+/**
+ * One `device_info` row of a placement record (`PlacementDevice`) or null: the `label` and the
+ * `name` are the join keys (both non-empty strings), the three figures finite >= 0 or null.
+ */
+export function normalizePlacementDevice(raw: unknown): PlacementDevice | null {
+  if (!isRecord(raw)) return null
+  const label = typeof raw.label === 'string' && raw.label.length > 0 ? raw.label : null
+  const name = typeof raw.name === 'string' && raw.name.length > 0 ? raw.name : null
+  if (label == null || name == null) return null
+  return { label, name, totalMb: figure(raw.totalMb), freeMb: figure(raw.freeMb), computeMb: figure(raw.computeMb) }
+}
+
+/**
+ * One probed device (`GpuDevice`) or null. A non-empty string `name` and a finite `totalMb`
+ * are REQUIRED — the two fields every usefulness rule reads (`shared/gpu-rules.ts`); `id`
+ * keeps its string or reads as `''`, `freeMb` a finite figure or 0 (the persisted probe never
+ * feeds the free-VRAM check — the start ladder reads the live probe for that).
+ */
+export function normalizeGpuDevice(raw: unknown): GpuDevice | null {
+  if (!isRecord(raw)) return null
+  const name = typeof raw.name === 'string' && raw.name.length > 0 ? raw.name : null
+  const totalMb = figure(raw.totalMb)
+  if (name == null || totalMb == null) return null
+  return { id: text(raw.id), name, totalMb, freeMb: figure(raw.freeMb) ?? 0 }
+}
+
+/**
+ * `AppSettings.gpuProbe` (PR #303 audit P5) or null. `devices` must be an array — junk items are
+ * dropped, and an all-junk list is an EMPTY probe ("the probe ran and enumerated nothing usable"
+ * is a result in its own right); `probedAt` keeps a parseable date or reads as `UNKNOWN_RAN_AT`.
+ * `machineKey` (M8.3, owner decision G3) is a string or null and is set ONLY when the raw object
+ * has the key: an unstamped legacy probe must never acquire a key it did not have — readers
+ * tell "unstamped, unverifiable" from "stamped elsewhere" by exactly that absence.
+ */
+export function normalizeGpuProbe(raw: unknown): GpuProbeResult | null {
+  if (!isRecord(raw) || !Array.isArray(raw.devices)) return null
+  const probe: GpuProbeResult = {
+    devices: raw.devices.map(normalizeGpuDevice).filter((d): d is GpuDevice => d != null),
+    probedAt: isoOrNull(raw.probedAt) ?? UNKNOWN_RAN_AT
+  }
+  if ('machineKey' in raw) probe.machineKey = textOrNull(raw.machineKey)
+  return probe
 }
 
 /**

@@ -57,7 +57,17 @@ the legacy profile-only record survives as an unknown-identity result with an em
 print as "unknown"; unkeyed entries never enter history; `launchContextTokens` resolves the displayed
 context (a zero-context manifest shows the settings default, never "0-token"); a stored placement counts as
 measured only when its context and backend match the current configuration (`placement.observedMismatch`
-otherwise, one EN/DE line); the screen and Diagnostics format a bad record as "–", never a throw._
+otherwise, one EN/DE line); the screen and Diagnostics format a bad record as "–", never a throw.
+**P5:** M8/N1/N3 + DR1/DR2/DR5 — one machine-eligible GPU source: `settings.gpuProbe` stamped with
+`machineKey` (validated on read/write; a known-foreign probe supplies nothing, an unstamped legacy one
+stays eligible under G3), `shared/gpu-rules.ts` (`isUsefulDevice`, `primaryUsefulDevice`,
+`displayDevice`, `eligibleGpuProbe`; the profile bump re-exports it unchanged, G4) and
+`shared/performance-rules.ts` (the speed/read thresholds, no renderer copies), one paired name +
+memory for the tile, the benchmark record, the budget, `currentGpu` and the fold-in, no raw-settings
+fallback in the screen; the resident rows' device follows the configuration (GPU off / auto-disabled /
+observed CPU / translation `--device none`), the RAM total is class-aware (owner ruling), the free and
+working figures are attributed to the selected device by name (`ModelPlacement.devices`), and the tile
+says "Integrated, shared memory" / "Not recorded" where it used to say "Usable" / "No usable card"._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -716,7 +726,7 @@ open round's item stays the last block of §5.)
     `_Host` prose, item 20 archived, `skills.title` orphan removed after the master merge;
     P2 ✅ M2/M4/M6/L2 persistence (identity before ranking, upgrade backfill, mid-run samples);
     P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ✅ H1/L8/M5-residual schemas +
-    launch context; P5 ☐ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
+    launch context; P5 ✅ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
     P6 ☐ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ☐ L1/SD2 auto-start sequencing;
     P8 ☐ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c);
     P11 ☐ close-out issues. Residual (c) above is the audit's HW1–HW3 acceptance; (a)–(g) stand.

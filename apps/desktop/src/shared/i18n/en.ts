@@ -1829,6 +1829,9 @@ export const en = {
   'perf.models.none': 'No model installed for this.',
   'perf.models.device.gpu': 'graphics card',
   'perf.models.device.cpu': 'processor, by design',
+  // Chat / translation on the processor because of the machine or the configuration (no usable
+  // card, GPU switched off or auto-disabled, an observed CPU start) — not a design pin.
+  'perf.models.device.processor': 'processor',
   'perf.models.loaded': 'loaded now',
   'perf.models.notLoaded': 'not loaded',
   'perf.models.lifetime.session': 'stays loaded',
@@ -1839,6 +1842,8 @@ export const en = {
   'perf.models.cardBoth':
     'Both are on the card right now. Whichever started second got what was left and runs slower; stop and start it once the other has unloaded.',
   'perf.models.ram': 'Everything loaded at once needs about {sum} GB of {ram} GB RAM.',
+  // Apple Silicon: one pool for everything, compared against what Metal lets models take.
+  'perf.models.memory': 'Everything loaded at once needs about {sum} GB of the {budget} GB of unified memory available to models.',
   'perf.models.ramTooMuch': 'Too much at once',
   'perf.models.ramOk': 'Fits',
   'perf.place.gpu': 'On GPU',
@@ -1850,8 +1855,17 @@ export const en = {
   'perf.tile.graphics.unit': 'GB VRAM',
   'perf.tile.graphics.none': 'No usable graphics card. Models run on the processor.',
   'perf.tile.graphics.small': 'Under {min} GB: models run on the processor.',
+  // An integrated device (shared system memory): named with its figure, never rated "Usable"
+  // and never blamed on size — the memory is not the card's own (PR #303 audit M8.1).
+  'perf.tile.graphics.integrated': 'Integrated, shared memory: models run on the processor.',
+  'perf.tile.graphics.unitShared': 'GB shared',
+  // A result from ANOTHER computer that predates the graphics figure: the app never probed
+  // that machine for it, so it claims nothing either way (PR #303 audit N1).
+  'perf.tile.graphics.notRecorded': 'That check did not record the graphics card.',
   'perf.rating.usable': 'Usable',
   'perf.rating.small': 'Small',
+  'perf.rating.integrated': 'Integrated',
+  'perf.rating.notRecorded': 'Not recorded',
   'perf.rating.none': 'None',
   'perf.others.subGpu': '{cpu}, {ram} GB RAM, {vram} GB VRAM · {when}',
   'perf.tile.drive': 'Drive',
