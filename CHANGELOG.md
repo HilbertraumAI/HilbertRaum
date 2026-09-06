@@ -140,6 +140,14 @@ from its first public `1.0.0` release onward.
   the panel used to show both as simply "Enabled", with the reason visible only in the note under
   an answer. The later pack now carries a "Not served" badge and a line naming the pack that keeps
   the name, with the fix (rename one file).
+- **Questions find the right knowledge-pack articles more often.** The pack server's search
+  requires every word of the question to appear in an article, and a Wikipedia archive treats
+  "which", "role", "plays" and the like as ordinary words — so "Which role does permafrost
+  play?" used to miss the Permafrost article. The app now searches the packs for the question's
+  content words only (the question itself is still what the answer is written from), and asks
+  once more with fewer words when the first search finds nothing. On the German climate archive
+  used for testing this took the questions that found their article from six of nine to nine
+  of nine.
 - **A knowledge pack you just added is checked for full-text search right away.** Until now the
   check ran only when you unlocked or pressed Refresh, so a pack added through *Add packs…* (or
   enabled after being added) showed no "No full-text index" badge until then, and a question asked

@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -101,6 +101,32 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
         `[zim-real] ${basename(zimFile)}: ${candidates.length} candidates in ${ms.toFixed(0)} ms ` +
           `(first: "${first.sourceTitle}" › ${first.sectionLabel ?? '—'})`
       )
+
+      // #340 L3 (D-Z18): the retrieval-quality fixture, replayed only when the registered archive
+      // IS the fixture's pack (the expected titles are that pack's). Every answerable question
+      // must reach one of its expected articles among the top five the arm searched — the
+      // measured 9/9 of the rewrite (the raw question managed 6/9). Another archive is not a
+      // measurement of this fixture, and says so.
+      const fixture = JSON.parse(
+        readFileSync(join(__dirname, '..', 'fixtures', 'zim', 'quality-questions-de.json'), 'utf8')
+      ) as {
+        packUuid: string
+        questions: Array<{ question: string; expectedTitles: string[]; rawHit: boolean; answerable: boolean }>
+      }
+      if (pack.id === fixture.packUuid) {
+        const misses: string[] = []
+        for (const q of fixture.questions.filter((x) => x.answerable)) {
+          const { candidates: found } = await arm!(q.question)
+          const titles = [...new Set(found.map((c) => c.sourceTitle))].slice(0, 5)
+          if (!q.expectedTitles.some((t) => titles.includes(t))) misses.push(`${q.question} → ${titles.join(' | ')}`)
+        }
+        // eslint-disable-next-line no-console
+        console.info(`[zim-real] quality fixture: ${fixture.questions.filter((x) => x.answerable).length - misses.length}/${fixture.questions.filter((x) => x.answerable).length} answerable questions hit@5`)
+        expect(misses).toEqual([])
+      } else {
+        // eslint-disable-next-line no-console
+        console.info('[zim-real] quality fixture: the registered archive is not the fixture pack — not measured')
+      }
 
       // The viewer read — routed from the CURRENT serving map, never a filename-stem guess
       // (#301 P3b finding L4).
