@@ -13,6 +13,10 @@ recommended_min_ram_gb: 14
 recommended_ram_gb: 24
 recommendation_rank: 2  # Phase-29 12-14B WINNER (beats Qwen3 14B on every axis) — preferred at tier
 recommended_context_tokens: 8192
+# Context cache at 8k under the app launch (b9849 defaults: 4 unified slots, ubatch 2048): 512 MiB
+# full-attention + 1,920 MiB sliding-window cells (40 layers x 6,144 cells) = 2.375 GiB; the
+# picker's graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit decision 11).
+estimated_context_cache_gib: 2.4
 supports_thinking_mode: true  # Phase-29 run #2: thinking-quality check passed (Deep 8/8 = Balanced 8/8, real reasoning) → flipped
 supports_tools: false
 local_path: models/chat/gemma4-12b-it-qat-q4.gguf

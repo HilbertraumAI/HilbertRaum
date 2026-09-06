@@ -460,11 +460,20 @@ export interface GpuBenchmarkInput {
    * `{ useful: true, memoryClass: 'cpu' }` is a valid input — a card present, the GPU off.
    */
   useful: boolean
-  /** Total memory of the budget device in MiB (→ `BenchmarkResult.gpuVramMb`); absent/null = unknown. */
+  /**
+   * Total memory of the budget device in MiB (→ `BenchmarkResult.gpuVramMb`, the graphics tile's
+   * figure); absent/null = unknown. NOT the picker's input — that is `budgetMb`.
+   */
   totalMb?: number | null
   /**
+   * The graphics-memory BUDGET of the budget device in raw MiB (`graphicsBudgetMib` in
+   * services/models.ts: the probe's free figure, else total − 1024; PR #308 audit decision 10)
+   * — what the §6.6 rule-C pick is judged against. Absent/null = unknown → the RAM pick.
+   */
+  budgetMb?: number | null
+  /**
    * The computer's memory class for the next start (services/performance.ts
-   * `nextStartMemory`): 'discrete' makes the chat pick graphics-memory-best-fit (§6.6);
+   * `nextStartMemory`): 'discrete' makes the chat pick rule C against `budgetMb` (§6.6);
    * absent → 'cpu', the RAM pick.
    */
   memoryClass?: MemoryClass
@@ -564,12 +573,13 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   // so the Diagnostics card and the Models screen ★ agree within one run.
   const ramRounded = Math.round(sys.ramGb)
   const speedSignal = { tokensPerSecond, measuredModelId }
-  // §6.6: on a discrete card the pick is by graphics memory (the model has to fit the card
-  // to run at card speed); unified memory and no-card machines keep the RAM pick.
+  // §6.6 rule C: on a discrete card the RAM pick stands where it fits the card's BUDGET (free
+  // memory, else total − 1024 — decision 10), else the best eligible model; unified memory and
+  // no-card machines keep the RAM pick. `totalMb` stays the tile's figure, never the budget.
   const memory = {
     memoryClass: deps.gpu?.memoryClass ?? 'cpu',
     ramGb: ramRounded,
-    vramMb: deps.gpu?.totalMb ?? null
+    budgetMb: deps.gpu?.budgetMb ?? null
   } as const
   const ramPick = recommendChatModelId(deps.manifests, memory, speedSignal)
   // Did the signal actually move the pick? Feeds the named §6.5 warning below.

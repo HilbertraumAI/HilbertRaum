@@ -22,8 +22,10 @@ import {
   recommendModelIdByRam,
   recommendModelIdByVram,
   recommendChatModelId,
+  estimateGraphicsNeedMib,
   fitsGraphicsMemory,
-  weightsGib,
+  graphicsBudgetMib,
+  weightsMib,
   SLOW_PICK_TOKENS_PER_SECOND,
   discoverManifests,
   findManifestById,
@@ -692,56 +694,133 @@ describe('recommendModelId', () => {
   })
 })
 
-// Post-MVP: "which model do we recommend?" is a RAM question first. Best fit = the
-// §6.6 (2026-09-05): on a discrete card the chat pick is graphics-memory-best-fit. The model
-// has to FIT THE CARD (weights + the runtime's working buffers + the context cache + the fit's
-// 1 GiB margin) to run at card speed; RAM stays a hard gate; the order among fitting models is
-// the RAM picker's (tier, rank, size) so tier ratifications carry over.
-describe('recommendModelIdByVram / recommendChatModelId (§6.6)', () => {
+// §6.6 RULE C (PR #308 audit, 2026-09-06; decisions 1, 2, 7, 10, 11): on a discrete card the
+// established RAM pick stands wherever it FITS THE CARD's budget (weights + 15 % working buffers
+// + the model's context cache + the fit's 1 GiB margin, all in raw MiB); where it does not, the
+// highest-RANKED eligible model (ties by tier, then size) takes over; where nothing is eligible
+// the RAM pick stands as the documented partial-offload fallback. RAM stays a hard gate, and the
+// §6.5 step-down is confined to the eligible pool on both ends (R1/R2).
+describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
   const tiny = asManifest({ id: 'tiny', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 3 })
+  const small12 = asManifest({ id: 'small12', size_on_disk_gb: 3.3, recommended_min_ram_gb: 8, recommended_ram_gb: 12, recommendation_rank: 3 })
   const mid = asManifest({ id: 'mid', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3 })
+  const g12 = asManifest({ id: 'g12', size_on_disk_gb: 7.0, recommended_min_ram_gb: 14, recommended_ram_gb: 24, recommendation_rank: 2 })
   const big = asManifest({ id: 'big', size_on_disk_gb: 19.8, recommended_min_ram_gb: 23, recommended_ram_gb: 32, recommendation_rank: 3 })
   const huge = asManifest({ id: 'huge', size_on_disk_gb: 22.2, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 1 })
   const all = [tiny, mid, big, huge]
+  const slowOn = (id: string) => ({ tokensPerSecond: SLOW_PICK_TOKENS_PER_SECOND - 1, measuredModelId: id })
 
-  it('fitsGraphicsMemory: weights in GiB + 15 % working + 0.5 GiB cache + 1 GiB margin ≤ card', () => {
-    // 19.8 decimal GB = 18.44 GiB; needs 18.44 * 1.15 + 1.5 = 22.7 GiB (the rig's measured need).
-    expect(weightsGib(big)).toBeCloseTo(18.44, 1)
-    expect(fitsGraphicsMemory(big, 24.2)).toBe(true)
-    expect(fitsGraphicsMemory(big, 22)).toBe(false)
-    expect(fitsGraphicsMemory(mid, 8)).toBe(true) // 5.59 * 1.15 + 1.5 = 7.9
-    expect(fitsGraphicsMemory(mid, 6)).toBe(false)
+  it('estimateGraphicsNeedMib: unrounded weights MiB × 1.15 + the cache term × 1024 + the 1,024 MiB margin', () => {
+    // 6.0 decimal GB = 5,722.0 MiB of weights; with the 0.5 GiB default cache: 8,116.3 MiB.
+    expect(weightsMib(mid)).toBeCloseTo(5722.0, 0)
+    expect(estimateGraphicsNeedMib(mid)).toBeCloseTo(8116.3, 0)
+    expect(fitsGraphicsMemory(mid, 8117)).toBe(true)
+    expect(fitsGraphicsMemory(mid, 8116)).toBe(false)
+    // 19.8 GB → 18,882.8 MiB; 23,251.2 MiB with the default cache (the rig's 22.7 GiB).
+    expect(estimateGraphicsNeedMib(big)).toBeCloseTo(23251.2, 0)
+    expect(fitsGraphicsMemory(big, 24 * 1024)).toBe(true)
+    expect(fitsGraphicsMemory(big, 23_000)).toBe(false)
+    // Decision 11: a manifest's own cache figure replaces the 0.5 GiB default — 0.4 GiB on the
+    // 9B-shaped model reads 8,013.9; 1.1 GiB on the 27B-shaped one reads 23,865.6.
+    const mid04 = asManifest({ id: 'mid04', size_on_disk_gb: 6.0, estimated_context_cache_gib: 0.4 })
+    const big11 = asManifest({ id: 'big11', size_on_disk_gb: 19.8, estimated_context_cache_gib: 1.1 })
+    expect(estimateGraphicsNeedMib(mid04)).toBeCloseTo(8013.9, 0)
+    expect(estimateGraphicsNeedMib(big11)).toBeCloseTo(23865.6, 0)
+    // A zero cache figure is honoured (not treated as absent).
+    const zero = asManifest({ id: 'zero', size_on_disk_gb: 6.0, estimated_context_cache_gib: 0 })
+    expect(estimateGraphicsNeedMib(zero)).toBeCloseTo(8116.3 - 512, 0)
   })
 
-  it('picks the best model that fits the card, in the RAM picker\'s tier/rank order', () => {
-    expect(recommendModelIdByVram(all, 24, 64)).toBe('big') // huge (rank 1) ties on tier, loses on rank
-    expect(recommendModelIdByVram(all, 32, 64)).toBe('big')
-    expect(recommendModelIdByVram(all, 16, 64)).toBe('mid')
-    expect(recommendModelIdByVram(all, 8, 64)).toBe('mid')
-    expect(recommendModelIdByVram(all, 6, 64)).toBe('tiny')
+  it('graphicsBudgetMib (decision 10): the probe\'s free figure, else total − 1,024; null with no device', () => {
+    expect(graphicsBudgetMib({ totalMb: 8273, freeMb: 7504 })).toBe(7504)
+    expect(graphicsBudgetMib({ totalMb: 8273 } as { totalMb: number; freeMb: number })).toBe(7249)
+    expect(graphicsBudgetMib({ totalMb: 8273, freeMb: Number.NaN })).toBe(7249)
+    expect(graphicsBudgetMib(null)).toBeNull()
+    expect(graphicsBudgetMib(undefined)).toBeNull()
+  })
+
+  it('the RAM pick stands wherever the card can hold it (rule C step 2, the established recommendation wins)', () => {
+    // RAM 64 → base = big (rank 3 beats huge's rank 1 in the 32 tier); it fits 24,000 MiB.
+    expect(recommendModelIdByRam(all, 64)).toBe('big')
+    expect(recommendModelIdByVram(all, 24_000, 64)).toBe('big')
+    // RAM 24 in a catalog whose 24 tier is g12 (rank 2): g12 is the RAM pick and it fits a 12 GiB
+    // budget (9,213 MiB) — so it STAYS, though a rank-3 mid also fits (decision 2 applies only
+    // where the RAM pick does not fit).
+    const withG12 = [...all, g12]
+    expect(recommendModelIdByRam(withG12, 24)).toBe('g12')
+    expect(recommendModelIdByVram(withG12, 12_288, 24)).toBe('g12')
+  })
+
+  it('where the RAM pick does not fit, the fallback is RANK-first, then tier, then size (not the RAM picker\'s tier-first)', () => {
+    // RAM 32 → base = big (23,251 MiB) does not fit 12,288: the eligible pool is g12 (rank 2,
+    // tier 24), mid (rank 3, tier 16), tiny (rank 3, tier 16) → rank first → mid over g12,
+    // then size breaks the mid/tiny tie.
+    const withG12 = [...all, g12]
+    expect(recommendModelIdByVram(withG12, 12_288, 32)).toBe('mid')
+    expect(recommendModelIdByVram(all, 23_000, 64)).toBe('mid')
+    expect(recommendModelIdByVram(all, 8_000, 64)).toBe('tiny') // mid needs 8,116
+    // The ranked-only guard carries over: a rank-0 model is eligible only when no ranked one is.
+    const rank0 = asManifest({ id: 'rank0', size_on_disk_gb: 1.3, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 0 })
+    expect(recommendModelIdByVram([...all, rank0], 8_000, 64)).toBe('tiny')
+    expect(recommendModelIdByVram([...all, rank0], 4_000, 64)).toBe('rank0')
   })
 
   it('RAM stays a hard gate: never a model the Models screen would refuse to start', () => {
-    // A 24 GB card in a 16 GB box: big needs 23 GB RAM minimum → mid.
-    expect(recommendModelIdByVram(all, 24, 16)).toBe('mid')
+    // A 24 GiB budget in a 16 GB box: big needs 23 GB RAM minimum → the RAM pick mid stands.
+    expect(recommendModelIdByVram(all, 24_000, 16)).toBe('mid')
+    // …and the fallback pool honours the floor too: RAM 12, budget 24,000 → base = small12
+    // (the 12 tier) fits → stands; mid (min 12) would be admissible but is not the RAM pick.
+    expect(recommendModelIdByVram([...all, small12], 24_000, 12)).toBe('small12')
   })
 
-  it('falls back to the RAM pick when nothing fits the card at all', () => {
+  it('unknown RAM keeps the floor open (the pre-rule-C card-path semantics): the best fitting model by rank', () => {
+    for (const ram of [Number.NaN, 0, -1]) {
+      expect(recommendModelIdByVram(all, 24_000, ram), `ram=${ram}`).toBe('big')
+      expect(recommendModelIdByVram(all, 8_000, ram), `ram=${ram}`).toBe('tiny')
+      expect(recommendModelIdByVram(all, 4_000, ram), `ram=${ram}`).toBeNull()
+    }
+  })
+
+  it('nothing eligible → the RAM pick stands as the documented no-fit fallback, and never steps', () => {
+    expect(recommendModelIdByVram(all, 4_000, 64)).toBe(recommendModelIdByRam(all, 64))
+    expect(recommendModelIdByVram(all, 4_000, 64, 'chat', slowOn('big'))).toBe('big')
     const onlyBig = [big, huge]
-    expect(recommendModelIdByVram(onlyBig, 8, 64)).toBe(recommendModelIdByRam(onlyBig, 64))
+    expect(recommendModelIdByVram(onlyBig, 8_000, 64)).toBe(recommendModelIdByRam(onlyBig, 64))
+    // An unknown / non-positive budget is the RAM path outright (with the signal, as before).
     expect(recommendModelIdByVram(all, Number.NaN, 64)).toBe(recommendModelIdByRam(all, 64))
+    expect(recommendModelIdByVram(all, 0, 64, 'chat', slowOn('big'))).toBe(recommendModelIdByRam(all, 64, 'chat', slowOn('big')))
   })
 
-  it('applies the §6.5 speed step-down on the card pick too', () => {
-    const slow = { tokensPerSecond: SLOW_PICK_TOKENS_PER_SECOND - 1, measuredModelId: 'big' }
-    expect(recommendModelIdByVram(all, 24, 64, 'chat', slow)).toBe('mid')
+  it('§6.5 step-down applies ONCE to the candidate, within the eligible pool on both ends (R1/R2)', () => {
+    // A right-sized crawl on the eligible candidate steps to the next eligible ranked tier.
+    expect(recommendModelIdByVram(all, 24_000, 64, 'chat', slowOn('big'))).toBe('mid')
+    // R2: a crawl on a model the card CANNOT hold (huge, 25,883 MiB) says nothing → keep.
+    expect(recommendModelIdByVram(all, 24_000, 64, 'chat', slowOn('huge'))).toBe('big')
+    // R2 again: candidate is the fallback mid; the crawl was on big (not eligible) → keep.
+    expect(recommendModelIdByVram(all, 23_000, 64, 'chat', slowOn('big'))).toBe('mid')
+    // R1: the destination must be eligible. Budget 5,000: tiny (4,717) is the candidate; the
+    // lower tier small12 needs 5,155 → not eligible → keep tiny (pre-rule-C code stepped there).
+    const withSmall = [...all, small12]
+    expect(recommendModelIdByVram(withSmall, 5_000, 64)).toBe('tiny')
+    expect(recommendModelIdByVram(withSmall, 5_000, 64, 'chat', slowOn('tiny'))).toBe('tiny')
+    expect(recommendModelIdByVram(withSmall, 5_200, 64, 'chat', slowOn('tiny'))).toBe('small12')
+    // R1 (RAM side): RAM 20 → base mid; a crawl on big (oversized for the pick's tier) → keep.
+    expect(recommendModelIdByVram(all, 24_000, 20, 'chat', slowOn('big'))).toBe('mid')
   })
 
-  it('recommendChatModelId dispatches: discrete → card, unified / cpu / unknown card → RAM', () => {
-    expect(recommendChatModelId(all, { memoryClass: 'discrete', ramGb: 64, vramMb: 8 * 1024 })).toBe('mid')
-    expect(recommendChatModelId(all, { memoryClass: 'unified', ramGb: 64, vramMb: null })).toBe('big')
-    expect(recommendChatModelId(all, { memoryClass: 'cpu', ramGb: 64, vramMb: null })).toBe('big')
-    expect(recommendChatModelId(all, { memoryClass: 'discrete', ramGb: 64, vramMb: null })).toBe('big')
+  it('recommendChatModelId dispatches: discrete + budget → rule C; unified / cpu / unknown budget → RAM, byte-identical', () => {
+    expect(recommendChatModelId(all, { memoryClass: 'discrete', ramGb: 64, budgetMb: 8 * 1024 })).toBe('mid')
+    expect(recommendChatModelId(all, { memoryClass: 'discrete', ramGb: 64, budgetMb: 8_000 })).toBe('tiny')
+    // Known budget on the other classes is ignored — the RAM pick, exactly as with none.
+    for (const budgetMb of [24 * 1024, 8_000, null]) {
+      expect(recommendChatModelId(all, { memoryClass: 'unified', ramGb: 64, budgetMb }), `unified ${budgetMb}`).toBe('big')
+      expect(recommendChatModelId(all, { memoryClass: 'cpu', ramGb: 64, budgetMb }), `cpu ${budgetMb}`).toBe('big')
+      expect(recommendChatModelId(all, { memoryClass: 'cpu', ramGb: 64, budgetMb }, slowOn('big')), `cpu slow ${budgetMb}`).toBe(
+        recommendModelIdByRam(all, 64, 'chat', slowOn('big'))
+      )
+    }
+    expect(recommendChatModelId(all, { memoryClass: 'discrete', ramGb: 64, budgetMb: null })).toBe('big')
+    expect(recommendChatModelId(all, { memoryClass: 'discrete', ramGb: 64, budgetMb: 0 })).toBe('big')
   })
 })
 

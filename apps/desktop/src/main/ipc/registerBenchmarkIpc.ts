@@ -29,7 +29,7 @@ import { latestEffectiveReadBySource } from '../services/read-speed'
 import { EVENTS } from '../../shared/ipc'
 import { gpuUsefulForProfile } from '../services/runtime/gpu'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
-import { discoverManifests } from '../services/models'
+import { discoverManifests, graphicsBudgetMib } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -102,6 +102,9 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
     // the next START — see `GpuBenchmarkInput.useful`.
     useful: gpuUsefulForProfile(devices),
     totalMb: next.device?.totalMb ?? null,
+    // The picker's budget (decision 10): the device's free figure, else total − 1024 — the same
+    // `graphicsBudgetMib` call `pickerMemoryFor` makes for the Models ★.
+    budgetMb: graphicsBudgetMib(next.device),
     memoryClass: next.memoryClass
   }
 }

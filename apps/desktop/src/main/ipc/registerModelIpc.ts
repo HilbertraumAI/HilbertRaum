@@ -19,6 +19,7 @@ import {
   computeInstallState,
   createSettingsHashStore,
   discoverManifests,
+  graphicsBudgetMib,
   invalidateChecksum,
   launchContextTokens,
   machineRamGb,
@@ -62,7 +63,7 @@ import { perfMark, perfMs } from '../services/perf'
  * make, so the Models ★ and the benchmark can never name different cards. Exported so the seam
  * test can pin what the `listModels` handler feeds `buildModelList`.
  */
-export function pickerMemoryFor(s: AppSettings): Pick<BuildModelListOptions, 'memoryClass' | 'machineVramMb'> {
+export function pickerMemoryFor(s: AppSettings): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb'> {
   const next = nextStartMemory({
     platform: process.platform,
     arch: process.arch,
@@ -70,7 +71,9 @@ export function pickerMemoryFor(s: AppSettings): Pick<BuildModelListOptions, 'me
     gpuMode: s.gpuMode,
     gpuAutoDisabled: s.gpuAutoDisabled
   })
-  return { memoryClass: next.memoryClass, machineVramMb: next.device?.totalMb ?? null }
+  // The budget is the device's FREE figure (else total − 1024), raw MiB — decision 10; the same
+  // `graphicsBudgetMib` call `probeAndPersistGpu` makes for the benchmark.
+  return { memoryClass: next.memoryClass, graphicsBudgetMb: graphicsBudgetMib(next.device) }
 }
 
 function developerLeniency(ctx: AppContext, s: AppSettings): boolean {

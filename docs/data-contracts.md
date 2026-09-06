@@ -354,6 +354,15 @@ flag list is code-owned; extras are appended last in `buildArgs`, so a free-form
 override `--host`). The ladder gates the rung on a probed GPU with the weight's bytes +
 `MTP_VRAM_HEADROOM_MB` free, and forced-CPU rungs never carry the flags. Design record:
 `architecture.md` "MTP speculative decoding".
+✅ **Graphics-memory cache term (PR #308 audit decision 11, 2026-09-06):** manifest
+`estimated_context_cache_gib` (optional; a number ≥ 0 — wrong type or a negative value is a
+validation error, never a silent default) → `ModelManifest.estimatedContextCacheGib?: number`
+(ABSENT when omitted; the 0.5 GiB default is the picker's, `VRAM_DEFAULT_CONTEXT_CACHE_GIB`). It is
+the per-model context-cache term of `estimateGraphicsNeedMib` (services/models.ts, §6.6 rule C):
+the cache the runtime allocates at the model's recommended window under the app's launch (b9849
+defaults, four unified slots, ubatch 2048). Carried by exactly the seven decision models (Gemma 4
+12B 2.4, 26B-A4B 1.5, E2B 0.1, Qwen3.8 27B UD-Q4/Q5 1.1, Qwen3.5 9B 0.4, 4B 0.3; pinned in
+`committed-catalog.test.ts`); the GGUF-header estimate (BUILD_STATE §5 item 21 (e)) retires it.
 
 ### Document ingestion (Phase 4 live)
 ✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
@@ -483,13 +492,30 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 - **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
   throws (failed probe → `''`/`0`); `detectSystem` itself always reports `gpu: null` — the
   REAL probe lives in `runtime/gpu.ts` and is **injected** by the IPC layer (Phase 16:
-  `RunBenchmarkDeps.gpu: { name, useful, totalMb?, memoryClass? }`), keeping this module
+  `RunBenchmarkDeps.gpu: { name, useful, totalMb?, budgetMb?, memoryClass? }`), keeping this module
   `child_process`-free. `name` / `totalMb` are the **budget device's** (`nextStartMemory` in
-  `services/performance.ts`, PR #308 audit decisions 6/9). `useful` and `memoryClass` answer
-  different questions: `useful` = `gpuUsefulForProfile` over ALL probed devices (the hardware
+  `services/performance.ts`, PR #308 audit decisions 6/9); `totalMb` is the graphics TILE's figure
+  (→ `BenchmarkResult.gpuVramMb`), never the picker's input. **`budgetMb`** (P3, decision 10) is
+  the picker's input: `graphicsBudgetMib(device)` = the probe's `freeMb`, else `totalMb − 1024`
+  (`GRAPHICS_IDLE_ALLOWANCE_MIB`), raw MiB; absent/null → the RAM pick. `useful` and `memoryClass`
+  answer different questions: `useful` = `gpuUsefulForProfile` over ALL probed devices (the hardware
   carries a usable card; the profile bump), `memoryClass` = the NEXT start's class (honours
   `gpuMode` / `gpuAutoDisabled`, names one budget device), so `{ useful: true, memoryClass: 'cpu' }`
   is a valid input — a card present, the GPU switched off.
+- **`PickerMemory`** (`services/models.ts`) — `{ memoryClass, ramGb, budgetMb: number | null }`, the
+  input of `recommendChatModelId(manifests, memory, speedSignal?)`: `discrete` with a positive
+  `budgetMb` → **§6.6 rule C** (`recommendModelIdByVram(manifests, budgetMib, ramGb, role, signal)`:
+  the RAM pick stands where `fitsGraphicsMemory(m, budgetMib)` — `estimateGraphicsNeedMib(m)` =
+  unrounded weights MiB × 1.15 + (`estimatedContextCacheGib` ?? 0.5) × 1024 + 1,024 — AND
+  `recommendedMinRamGb ≤ ramGb`; else the highest-RANKED eligible model, ties by tier then size,
+  ranked-only guard; else the RAM pick (partial-offload fallback); the §6.5 step-down applies once,
+  confined to the eligible pool on both ends); every other class, or no budget → the RAM pick,
+  byte-identical to `recommendModelIdByRam`. Both seams build it from ONE decision: `pickerMemoryFor(s)`
+  (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb`) and
+  `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb`), each calling `graphicsBudgetMib` on
+  `nextStartMemory`'s device. `weightsMib(m)` is the shared unrounded GB → MiB conversion the
+  Performance pre-start estimate reuses (decision 8). The committed grid, thresholds and the seven
+  cache terms are pinned in `committed-catalog.test.ts` ("§6.6 rule C").
 - **`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })`** — pure; spec §11.3
   thresholds + the conservative Phase-16 GPU bump (`gpuUseful` is precomputed by
   `gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated) + low-tok/sec downgrade; invalid

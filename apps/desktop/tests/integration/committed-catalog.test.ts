@@ -5,6 +5,9 @@ import { join } from 'node:path'
 import {
   buildModelList,
   discoverManifests,
+  estimateGraphicsNeedMib,
+  fitsGraphicsMemory,
+  graphicsBudgetMib,
   manifestFiles,
   resolveManifestsDir,
   recommendChatModelId,
@@ -124,40 +127,8 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
     }
   })
 
-  // §6.6 (2026-09-05): on a discrete card the pick is by graphics memory. Pinned per card size
-  // against the committed catalog (with RAM ample, so only the card decides).
-  it('recommends by graphics memory on a discrete card (real manifests, §6.6)', () => {
-    const chat = committedManifests()
-    const onCard = (vramGb: number, ramGb = 64): string | null =>
-      recommendChatModelId(chat, { memoryClass: 'discrete', ramGb, vramMb: vramGb * 1024 })
-    expect(onCard(6)).toBe('qwen3.5-4b-ud-q4kxl')
-    expect(onCard(8)).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(onCard(12)).toBe('gemma4-12b-it-qat-q4')
-    expect(onCard(16)).toBe('gemma4-12b-it-qat-q4')
-    expect(onCard(24)).toBe('qwen3.8-27b-ud-q5km')
-    expect(onCard(32)).toBe('qwen3.8-27b-ud-q5km')
-    expect(onCard(48, 128)).toBe('qwen3.8-27b-ud-q5km')
-    // The card decides, not the RAM: an 8 GB card in a 32 GB box still gets the 9B, where the
-    // RAM picker would send the 27B to a partial offload.
-    expect(onCard(8, 32)).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(recommendModelIdByRam(chat, 32, 'chat')).toBe('qwen3.8-27b-ud-q5km')
-    // RAM stays a hard gate: a 24 GB card in a 16 GB box cannot run the 27B (min RAM 23).
-    expect(onCard(24, 16)).not.toBe('qwen3.8-27b-ud-q5km')
-  })
-
-  it('the card pick NEVER lands on an opt-in / loser / rank-0 model either (§6.3 carries over)', () => {
-    const chat = committedManifests()
-    for (const vram of [6, 8, 12, 16, 20, 24, 32, 48, 96]) {
-      for (const ram of [16, 32, 64, 128]) {
-        const id = recommendChatModelId(chat, { memoryClass: 'discrete', ramGb: ram, vramMb: vram * 1024 })
-        expect(id, `card=${vram} ram=${ram}`).not.toBe('qwen3-30b-a3b-q4')
-        expect(id, `card=${vram} ram=${ram}`).not.toBe('granite-4.1-8b-q4')
-        expect(id, `card=${vram} ram=${ram}`).not.toBe('qwen3.5-35b-a3b-ud-q4kxl')
-        expect(id, `card=${vram} ram=${ram}`).not.toBe('qwen3.8-27b-q6')
-        expect(id, `card=${vram} ram=${ram}`).not.toBe('qwen3.8-27b-ud-q6k')
-      }
-    }
-  })
+  // §6.6 on a discrete card: rule C since the PR #308 audit — see the dedicated
+  // "§6.6 rule C" block below (the 30-point grid, the thresholds, R1/R2, the sweep).
 
   it('keeps the existing incumbents in the catalog (no model removed)', () => {
     const ids = new Set(committedManifests().map((m) => m.id))
@@ -170,6 +141,278 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
       'qwen3-30b-a3b-q4'
     ]) {
       expect(ids.has(id), `${id} still present`).toBe(true)
+    }
+  })
+})
+
+// §6.6 RULE C (PR #308 audit, adopted 2026-09-06; decisions 1, 2, 4, 7, 10, 11): on a discrete
+// card the RAM pick stands wherever it fits the card's BUDGET — the probe's free memory (else
+// total − 1,024), raw MiB — against `estimateGraphicsNeedMib` (weights × 1.15 + the manifest's
+// context-cache term + the 1 GiB fit margin); where it does not, the highest-ranked eligible
+// model; where nothing is eligible, the RAM pick (partial offload). The §6.5 step-down is
+// confined to the eligible pool (R1/R2). Every figure below is pinned against the COMMITTED
+// catalog so a manifest edit that moves a star fails CI, not a user's drive. The grid and the
+// thresholds are the numbers model-benchmarks.md §6.6 states; the 8 GB row and the Gemma / MoE
+// bands are predicted, not yet verified on hardware (G3).
+describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit)', () => {
+  const SHORT: Record<string, string> = {
+    'qwen3.5-4b-ud-q4kxl': '4B',
+    'gemma4-e2b-it-qat-q4': 'E2B',
+    'qwen3.5-9b-ud-q4kxl': '9B',
+    'gemma4-12b-it-qat-q4': 'G12',
+    'gemma4-26b-a4b-it-qat-q4': 'MoE',
+    'qwen3.8-27b-ud-q4km': 'Q4',
+    'qwen3.8-27b-ud-q5km': 'Q5'
+  }
+  const RAM_COLUMNS = [8, 12, 16, 24, 32]
+  /** The grid's free-memory convention: nominal GiB × 1024 − 1,024 MiB of idle desktop use (D3 median). */
+  const freeMbOf = (nominalGb: number): number => nominalGb * 1024 - 1024
+  const onCard = (chat: ModelManifest[], budgetMb: number, ramGb: number, signal?: { tokensPerSecond: number; measuredModelId: string }) =>
+    recommendChatModelId(chat, { memoryClass: 'discrete', ramGb, budgetMb }, signal)
+  const crawlOn = (measuredModelId: string) => ({ tokensPerSecond: 4, measuredModelId })
+  const fitsBoth = (m: ModelManifest, budgetMb: number, ramGb: number): boolean =>
+    fitsGraphicsMemory(m, budgetMb) && m.recommendedMinRamGb <= ramGb
+
+  // (j) Decision 11: the seven config-derived cache terms (tmp/PR-308-check-kv.json,
+  // `serverDefaultsVariant`: four unified slots, ubatch 2048; the 4B's figure is its 4,096-token
+  // window). EXACTLY these seven carry the field; every other manifest defaults to 0.5 GiB.
+  const CACHE_GIB: Record<string, number> = {
+    'gemma4-12b-it-qat-q4': 2.4,
+    'gemma4-26b-a4b-it-qat-q4': 1.5,
+    'gemma4-e2b-it-qat-q4': 0.1,
+    'qwen3.8-27b-ud-q4km': 1.1,
+    'qwen3.8-27b-ud-q5km': 1.1,
+    'qwen3.5-9b-ud-q4kxl': 0.4,
+    'qwen3.5-4b-ud-q4kxl': 0.3
+  }
+  it('pins the seven estimated_context_cache_gib values, and that no other manifest carries the field', () => {
+    const all = committedManifests()
+    const byId = Object.fromEntries(all.map((m) => [m.id, m]))
+    for (const [id, gib] of Object.entries(CACHE_GIB)) {
+      expect(byId[id], id).toBeDefined()
+      expect(byId[id].estimatedContextCacheGib, `${id} cache GiB`).toBe(gib)
+    }
+    const carriers = all.filter((m) => m.estimatedContextCacheGib !== undefined).map((m) => m.id).sort()
+    expect(carriers).toEqual(Object.keys(CACHE_GIB).sort())
+  })
+
+  // (e) The per-model thresholds in raw MiB (`estimateGraphicsNeedMib`, every ranked chat model):
+  // the smallest whole-MiB budget each fits, pinned as the literal the §6.6 table states, with
+  // the boundary asserted on both sides through `fitsGraphicsMemory`.
+  const THRESHOLD_MIB: Record<string, number> = {
+    'qwen3-4b-instruct-2507-q4': 4278,
+    'qwen3-4b-instruct-q4': 4278,
+    'qwen3.5-4b-ud-q4kxl': 4512,
+    'gemma4-e2b-it-qat-q4': 4746,
+    'qwen3-8b-instruct-q4': 7020,
+    'ministral3-8b-instruct-2512-q4': 7239,
+    'qwen3.5-9b-ud-q4kxl': 8014,
+    'gemma4-12b-it-qat-q4': 11159,
+    'qwen3-14b-instruct-q4': 11407,
+    'gemma4-26b-a4b-it-qat-q4': 18353,
+    'qwen3.6-27b-q4': 19961,
+    'qwen3.8-27b-ud-q4km': 20247,
+    'qwen3.6-27b-q5': 22923,
+    'qwen3.8-27b-ud-q5km': 23866,
+    'qwen3.5-35b-a3b-ud-q4kxl': 25884
+  }
+  it('pins every ranked chat model\'s graphics-memory threshold in raw MiB (boundary on both sides)', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    const ranked = chat.filter((m) => m.recommendationRank > 0).map((m) => m.id).sort()
+    expect(ranked).toEqual(Object.keys(THRESHOLD_MIB).sort())
+    for (const m of chat.filter((m) => m.recommendationRank > 0)) {
+      const t = THRESHOLD_MIB[m.id]
+      expect(Math.ceil(estimateGraphicsNeedMib(m)), `${m.id} need`).toBe(t)
+      expect(fitsGraphicsMemory(m, t), `${m.id} fits at ${t}`).toBe(true)
+      expect(fitsGraphicsMemory(m, t - 1), `${m.id} does not fit at ${t - 1}`).toBe(false)
+    }
+    // The two figures the decisions turn on, spelled out: the 9B needs 8,014 (0.4 GiB cache) —
+    // under a nominal 8 GiB but over what an idle 8 GB card has FREE; Gemma 12B 11,159 (2.4 GiB
+    // cache) = 10.9 GiB, where the PR's flat 0.5 GiB read 9.0 GiB.
+    expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeLessThan(8192)
+    expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeGreaterThan(8192 - 1024)
+    expect(THRESHOLD_MIB['gemma4-12b-it-qat-q4']).toBeGreaterThan(10 * 1024)
+    expect(THRESHOLD_MIB['gemma4-12b-it-qat-q4']).toBeLessThan(11 * 1024)
+  })
+
+  // (d) The 30-point grid on the free-memory basis: cards {6, 8, 12, 16, 20, 24} GB as
+  // `freeMb` = nominal × 1024 − 1,024 (idle desktop use; also what a probe without a free figure
+  // yields for a card reporting its nominal total) × RAM {8, 12, 16, 24, 32}. Reference for the
+  // CHANGE (not the pin): the total-basis rule-C grid in the audit's a7 read 9B on the 8 GB row
+  // from RAM 16, Q4 on the 20 GB row from RAM 24 and Q5 at 24 GB / RAM 32; on the free basis the
+  // 8 GB row is the 4B (the 9B's 8,014 MiB exceeds ≈ 7.2 GiB free), the 20 GB row is the 9B (Q4's
+  // 20,247 exceeds 19,456) and the 24 GB row is Q4 throughout (Q5's 23,866 exceeds 23,552).
+  const GRID: Array<[cardGb: number, picks: string]> = [
+    [6, '4B / E2B / 4B / 4B / 4B'],
+    [8, '4B / E2B / 4B / 4B / 4B'],
+    [12, '4B / E2B / 9B / 9B / 9B'],
+    [16, '4B / E2B / 9B / 9B / 9B'],
+    [20, '4B / E2B / 9B / 9B / 9B'],
+    [24, '4B / E2B / 9B / Q4 / Q4']
+  ]
+  it('pins the 30-point rule-C grid on the free-memory basis (RAM 8 / 12 / 16 / 24 / 32)', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    // The RAM baseline the grid is read against.
+    expect(RAM_COLUMNS.map((ram) => SHORT[recommendModelIdByRam(chat, ram, 'chat') ?? ''] ?? '?').join(' / ')).toBe('4B / E2B / 9B / Q4 / Q5')
+    for (const [card, picks] of GRID) {
+      const row = RAM_COLUMNS.map((ram) => {
+        const id = onCard(chat, freeMbOf(card), ram)
+        return SHORT[id ?? ''] ?? id
+      }).join(' / ')
+      expect(row, `${card} GB card (${freeMbOf(card)} MiB free)`).toBe(picks)
+    }
+  })
+
+  // (h) Catalog property over the same grid: every star resolves, is ranked, and passes both
+  // gates — the card and the RAM floor. (Replaces the earlier five-id denylist: a property, not
+  // a list that a new rank-0 manifest could slip past.)
+  it('every grid star resolves to a ranked model that fits the card AND passes the RAM floor', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    for (const [card] of GRID) {
+      for (const ram of RAM_COLUMNS) {
+        const budget = freeMbOf(card)
+        const id = onCard(chat, budget, ram)
+        const m = chat.find((x) => x.id === id)
+        expect(m, `card=${card} ram=${ram} → ${id}`).toBeDefined()
+        expect(m!.recommendationRank, `card=${card} ram=${ram} → ${id} rank`).toBeGreaterThan(0)
+        expect(fitsBoth(m!, budget, ram), `card=${card} ram=${ram} → ${id} eligible`).toBe(true)
+      }
+    }
+  })
+
+  // (f) Decision 10 on the audit's own machine: the GTX 1070 Ti reports 8,273 MiB total /
+  // 7,504 free on Windows Vulkan. By free memory the star is the 4B; a probe WITHOUT a free
+  // figure falls back to total − 1,024 = 7,249 → the 4B too. Public `--list-devices` lines
+  // (audit D1/D3) pinned beside it, in the picks the free basis gives them.
+  it('judges the fit against the probe\'s free memory, else total − 1,024 (decision 10; the 1070 Ti case)', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    const gtx1070ti = { totalMb: 8273, freeMb: 7504 }
+    expect(graphicsBudgetMib(gtx1070ti)).toBe(7504)
+    expect(onCard(chat, graphicsBudgetMib(gtx1070ti)!, 16)).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(onCard(chat, graphicsBudgetMib(gtx1070ti)!, 32)).toBe('qwen3.5-4b-ud-q4kxl')
+    const noFree = { totalMb: 8273 } as { totalMb: number; freeMb: number }
+    expect(graphicsBudgetMib(noFree)).toBe(7249)
+    expect(onCard(chat, graphicsBudgetMib(noFree)!, 16)).toBe('qwen3.5-4b-ud-q4kxl')
+    // By TOTAL the same card would have starred the 9B (8,014 ≤ 8,273) — the finding behind decision 10.
+    expect(onCard(chat, 8273, 16)).toBe('qwen3.5-9b-ud-q4kxl')
+    // Public lines: RTX 5060 8,151 / 7,573 free (Linux Vulkan) → 4B; RTX 3080 Ti 11,912 / 11,640
+    // (CUDA) → 9B (Gemma 12B's 11,159 fits too but ranks below); RTX 3090 24,575 / 23,332 (CUDA)
+    // → Q4 at RAM 32 (Q5's 23,866 does not fit); RTX 2060 6,144 / 5,136 → 4B.
+    expect(onCard(chat, 7573, 32)).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(onCard(chat, 11_640, 32)).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(onCard(chat, 23_332, 32)).toBe('qwen3.8-27b-ud-q4km')
+    expect(onCard(chat, 5136, 32)).toBe('qwen3.5-4b-ud-q4kxl')
+  })
+
+  // (a) R1: the speed step-down can no longer escape the RAM floor or the card. The audit's two
+  // counterexamples (both stepped MoE → Q4 at the PR head: min RAM 21 > 20; 20,247 MiB > 17 GiB).
+  it('R1: a slow sample never steps to a model over the RAM floor or off the card', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    const q4 = 'qwen3.8-27b-ud-q4km'
+    // RAM 20 / 20 GiB budget: base = 9B (fits, stands); a crawl on the MoE (in the pool but a
+    // tier above) keeps it; a crawl on the 9B itself steps to the E2B — never Q4.
+    expect(onCard(chat, 20 * 1024, 20)).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(onCard(chat, 20 * 1024, 20, crawlOn('gemma4-26b-a4b-it-qat-q4'))).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(onCard(chat, 20 * 1024, 20, crawlOn('qwen3.5-9b-ud-q4kxl'))).toBe('gemma4-e2b-it-qat-q4')
+    for (const measured of chat) {
+      const id = onCard(chat, 20 * 1024, 20, crawlOn(measured.id))
+      expect(id, `measured=${measured.id}`).not.toBe(q4)
+      expect(chat.find((m) => m.id === id)!.recommendedMinRamGb, `measured=${measured.id} RAM floor`).toBeLessThanOrEqual(20)
+    }
+    // RAM 64 / 17 GiB budget: base = Q5 does not fit → 9B; no sample moves it onto Q4.
+    expect(onCard(chat, 17 * 1024, 64)).toBe('qwen3.5-9b-ud-q4kxl')
+    for (const measured of chat) {
+      const id = onCard(chat, 17 * 1024, 64, crawlOn(measured.id))
+      expect(id, `measured=${measured.id}`).not.toBe(q4)
+      expect(fitsGraphicsMemory(chat.find((m) => m.id === id)!, 17 * 1024), `measured=${measured.id} fits`).toBe(true)
+    }
+  })
+
+  // (c) R2: a crawl measured on a model the card cannot hold says nothing about the fitting pick.
+  it('R2: a crawl on a card-oversized model leaves the fitting pick unchanged', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    // RAM 24 / 12 GiB budget: base = Q4 (20,247 MiB) does not fit → the 9B (rank 3; Gemma 12B fits
+    // at 11,159 but ranks 2). A 4 tok/s sample on the manually started Q4 is not in the eligible
+    // pool → the 9B stays. (At the PR head the card pick here was Gemma 12B and the Q4 crawl
+    // lowered it to the 9B — the audit's A2 reproduction; under rule C no oversized sample moves it.)
+    expect(onCard(chat, 12 * 1024, 24)).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(onCard(chat, 12 * 1024, 24, crawlOn('qwen3.8-27b-ud-q4km'))).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(onCard(chat, 12 * 1024, 24, crawlOn('gemma4-26b-a4b-it-qat-q4'))).toBe('qwen3.5-9b-ud-q4kxl')
+    // …while a crawl on the 9B itself (right-sized, eligible) steps to the E2B as §6.5 intends.
+    expect(onCard(chat, 12 * 1024, 24, crawlOn('qwen3.5-9b-ud-q4kxl'))).toBe('gemma4-e2b-it-qat-q4')
+  })
+
+  // (b) The sweep invariant (the audit's A1 with its expectation inverted): budgets 6–32 GiB in
+  // 0.5 GiB steps × RAM 8–64, a 4 tok/s sample on the initial pick at every point. Every result
+  // is eligible (fits the card AND passes the RAM floor) or equals the documented no-fit fallback
+  // (the RAM pick without a signal). Eligibility is evaluated once per point.
+  it('sweep: every stepped result is eligible or the documented no-fit fallback (3,021 points)', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    const byId = new Map(chat.map((m) => [m.id, m]))
+    const started = Date.now()
+    let points = 0
+    const violations: string[] = []
+    for (let budget = 6 * 1024; budget <= 32 * 1024; budget += 512) {
+      for (let ram = 8; ram <= 64; ram++) {
+        points++
+        const base = recommendModelIdByRam(chat, ram, 'chat')
+        const first = onCard(chat, budget, ram)
+        const stepped = first ? onCard(chat, budget, ram, crawlOn(first)) : null
+        for (const id of [first, stepped]) {
+          const m = id ? byId.get(id) : undefined
+          const ok = m != null && (fitsBoth(m, budget, ram) || id === base)
+          if (!ok) violations.push(`budget=${budget} ram=${ram} first=${first} stepped=${stepped}`)
+        }
+      }
+    }
+    expect(points).toBe(3021)
+    expect(violations).toEqual([])
+    expect(Date.now() - started).toBeLessThan(2000)
+  })
+
+  // (k) Unknown RAM on the card path keeps the pre-rule-C `ramOk` semantics: the floor is open,
+  // the card alone decides, in rank order. With no ranked model fitting, the ranked-only guard
+  // falls through to a rank-0 fit exactly as it did before (a card under ~4.5 GiB free).
+  it('unknown RAM (NaN / 0) on the card path: the floor is open, the card decides', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    for (const ram of [Number.NaN, 0]) {
+      expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram} RAM pick`).toBeNull()
+      expect(onCard(chat, 24_000, ram), `ram=${ram} 24,000`).toBe('qwen3.8-27b-ud-q5km')
+      expect(onCard(chat, 7168, ram), `ram=${ram} 7,168`).toBe('qwen3.5-4b-ud-q4kxl')
+      expect(onCard(chat, 4000, ram), `ram=${ram} 4,000`).toBe('qwen3.5-2b-ud-q4kxl')
+    }
+    // The same rank-0 fall-through with KNOWN RAM: nothing ranked fits 4,000 MiB, so the guard
+    // admits the 2B (rank 0) rather than the no-fit fallback — the pre-rule-C card path did too.
+    expect(onCard(chat, 4000, 16)).toBe('qwen3.5-2b-ud-q4kxl')
+  })
+
+  // (g) Unified / cpu with a KNOWN budget, and a legacy call without a class: the RAM pick,
+  // byte-identical to the RAM picker (T-item 4).
+  it('cpu / unified with a known 24 GiB budget, and no class at all, return the RAM pick', async () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    for (const ram of [8, 12, 16, 24, 32, 64]) {
+      const ramPick = recommendModelIdByRam(chat, ram, 'chat')
+      expect(recommendChatModelId(chat, { memoryClass: 'cpu', ramGb: ram, budgetMb: 24 * 1024 }), `cpu ram=${ram}`).toBe(ramPick)
+      expect(recommendChatModelId(chat, { memoryClass: 'unified', ramGb: ram, budgetMb: 24 * 1024 }), `unified ram=${ram}`).toBe(ramPick)
+      const slow = { tokensPerSecond: 4, measuredModelId: ramPick }
+      expect(recommendChatModelId(chat, { memoryClass: 'cpu', ramGb: ram, budgetMb: 24 * 1024 }, slow), `cpu slow ram=${ram}`).toBe(
+        recommendModelIdByRam(chat, ram, 'chat', slow)
+      )
+    }
+    const manifestsDir = resolveManifestsDir(process.cwd())
+    if (!manifestsDir) throw new Error('could not locate model-manifests from the repo')
+    const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-catalog-rulec-'))
+    try {
+      const star = async (extra: Partial<Parameters<typeof buildModelList>[0]>) => {
+        const { models } = await buildModelList({ manifestsDir, rootPath, profile: 'BALANCED', developerMode: false, machineRamGb: 32, ...extra })
+        return models.find((m) => m.role === 'chat' && m.recommended)?.id
+      }
+      expect(await star({})).toBe('qwen3.8-27b-ud-q5km')
+      expect(await star({ memoryClass: 'cpu', graphicsBudgetMb: 24 * 1024 })).toBe('qwen3.8-27b-ud-q5km')
+      expect(await star({ memoryClass: 'discrete', graphicsBudgetMb: 7168 })).toBe('qwen3.5-4b-ud-q4kxl')
+      expect(await star({ memoryClass: 'discrete', graphicsBudgetMb: 23_332 })).toBe('qwen3.8-27b-ud-q4km')
+    } finally {
+      rmSync(rootPath, { recursive: true, force: true })
     }
   })
 })

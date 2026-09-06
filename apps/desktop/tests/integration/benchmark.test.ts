@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { mkdtempSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -39,6 +39,15 @@ import type {
   RuntimeTimings
 } from '../../src/main/services/runtime'
 import type { GpuDevice } from '../../src/shared/types'
+
+// A switchable RAM pin (PR #308 audit plan T-item 3): the §6.6 seam test below needs the machine
+// RAM to be a KNOWN input, not the host's — the rest of this file keeps the real figure (the
+// switch is null outside that block, and the mock passes through to the real `totalmem`).
+const ramState = vi.hoisted(() => ({ totalmemBytes: null as number | null }))
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>()
+  return { ...actual, totalmem: () => ramState.totalmemBytes ?? actual.totalmem() }
+})
 
 function freshDb(): Db {
   return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-bench-')), 'test.sqlite'))
@@ -199,18 +208,53 @@ describe('runBenchmark GPU injection (Phase 16)', () => {
 
 // ---- Recommendation selection per profile (real manifests) ----------------------
 
-describe('runBenchmark picks by graphics memory on a discrete card (§6.6)', () => {
-  it('a 24 GB card gets the 27B; an 8 GB card gets the 9B; without a class the RAM pick stands', async () => {
+// §6.6 rule C (PR #308 audit): the benchmark feeds the picker the budget device's BUDGET
+// (`GpuBenchmarkInput.budgetMb` = free memory, else total − 1,024), never the total — the total
+// stays the graphics tile's figure (`gpuVramMb`). RAM is PINNED to 32 GB here so every
+// expectation is unconditional (the earlier host-conditional `if (ramGb >= …)` pair hid the
+// assertions on small CI hosts).
+describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C; RAM pinned to 32 GB)', () => {
+  beforeEach(() => {
+    ramState.totalmemBytes = 32 * 1024 ** 3
+  })
+  afterEach(() => {
+    ramState.totalmemBytes = null
+  })
+
+  it('24 GB card → the 27B Q4 (Q5 does not fit the free budget); 8 GB card → the 4B; no class → the RAM pick', async () => {
     const manifests = realManifests()
     const base = { workspacePath: workspace(), manifests, runtime: null }
-    const big = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, memoryClass: 'discrete' } })
-    const small = await runBenchmark({ ...base, gpu: { name: 'RTX 3050', useful: true, totalMb: 8192, memoryClass: 'discrete' } })
+    // RTX 3090 as the Windows rig reports it (24,822 total); a probe without a free figure →
+    // total − 1,024 = 23,798 MiB. Q5 needs 23,866 → Q4 (20,247) is the highest-ranked fit.
+    const big = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, budgetMb: 24_822 - 1024, memoryClass: 'discrete' } })
+    // An idle 8 GB card: 7,168 MiB free → the 9B's 8,014 does not fit → the 4B.
+    const small = await runBenchmark({ ...base, gpu: { name: 'RTX 3050', useful: true, totalMb: 8192, budgetMb: 7168, memoryClass: 'discrete' } })
     const none = await runBenchmark({ ...base, gpu: null })
-    // The test host's RAM decides the RAM gate; the card decides the tier when RAM is ample.
-    if (big.ramGb >= 24) expect(big.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
-    if (small.ramGb >= 12) expect(small.recommendedModelId).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(none.recommendedModelId).toBe(recommendModelIdByRam(manifests, Math.round(none.ramGb), 'chat'))
+    expect(big.ramGb).toBe(32)
+    expect(big.recommendedModelId).toBe('qwen3.8-27b-ud-q4km')
+    expect(small.recommendedModelId).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(none.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
+    expect(none.recommendedModelId).toBe(recommendModelIdByRam(manifests, 32, 'chat'))
+    // The tile keeps the TOTAL; the pick used the budget.
     expect(big.gpuVramMb).toBe(24_822)
+    expect(small.gpuVramMb).toBe(8192)
+  })
+
+  it('a discrete class without a budget figure, or a cpu class with one, is the RAM pick (byte-identical)', async () => {
+    const manifests = realManifests()
+    const base = { workspacePath: workspace(), manifests, runtime: null }
+    const noBudget = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, memoryClass: 'discrete' } })
+    const cpuWithBudget = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, budgetMb: 23_798, memoryClass: 'cpu' } })
+    expect(noBudget.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
+    expect(cpuWithBudget.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
+    expect(noBudget.gpuVramMb).toBe(24_822)
+  })
+
+  it('the free figure decides, not the total: 8,192 total with 8,100 free holds the 9B', async () => {
+    const manifests = realManifests()
+    const base = { workspacePath: workspace(), manifests, runtime: null }
+    const roomy = await runBenchmark({ ...base, gpu: { name: 'RTX 3070', useful: true, totalMb: 8192, budgetMb: 8100, memoryClass: 'discrete' } })
+    expect(roomy.recommendedModelId).toBe('qwen3.5-9b-ud-q4kxl')
   })
 })
 

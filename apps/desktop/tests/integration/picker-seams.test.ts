@@ -62,11 +62,21 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 const MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 
 // The committed catalog's answers at RAM 32 (benchmark.md table; audit §7 item 2): the RAM pick
-// is the 27B Q5; an 8 GiB card fits the 9B (needs 8,117 MiB by the PR's estimate).
+// is the 27B Q5. Since rule C on the free-memory basis (P3, decisions 10/11) an 8 GiB card with
+// ≈ 7.5–8.0 GiB FREE does not hold the 9B (8,014 MiB with its 0.4 GiB cache term), so the card
+// pick is the 4B — still divergent from the RAM pick, which is what the mutation guards need.
 const RAM_PICK = 'qwen3.8-27b-ud-q5km'
-const CARD8_PICK = 'qwen3.5-9b-ud-q4kxl'
+const CARD8_PICK = 'qwen3.5-4b-ud-q4kxl'
+const CARD8_ROOMY_PICK = 'qwen3.5-9b-ud-q4kxl'
 
 const CARD8: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 8000 }
+// The same card with 8,100 MiB free: holds the 9B — the witness that the seams feed the FREE
+// figure (by total − 1,024 it would read 7,168 and give the 4B).
+const CARD8_ROOMY: GpuDevice = { ...CARD8, freeMb: 8100 }
+// N8 / decision 3: the 6 GB laptop class reports under the 6,144 MiB gate on Vulkan (RTX 4050
+// Laptop, audit D1) and never reaches the card path; an RTX 2060 reports exactly 6,144 and does.
+const RTX4050_LAPTOP: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 4050 Laptop GPU', totalMb: 5921, freeMb: 5153 }
+const RTX2060: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 2060', totalMb: 6144, freeMb: 5136 }
 // A hybrid laptop as the pinned b9849 Vulkan build lists it (audit R6): the iGPU first.
 const ARL: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Graphics (ARL)', totalMb: 11577, freeMb: 8251 }
 const RTX5060: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 5060', totalMb: 8151, freeMb: 7573 }
@@ -132,7 +142,7 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     expect(process.arch).toBe('x64')
   })
 
-  it('8 GiB card → the 9B on the benchmark AND the Models ★; no card → the RAM pick on both', async () => {
+  it('8 GiB card → the 4B on the benchmark AND the Models ★; no card → the RAM pick on both', async () => {
     const withCard = fixture({ probeReturns: [CARD8] })
     const bench = await runAndPersistBenchmark(withCard.ctx)
     expect(bench.recommendedModelId).toBe(CARD8_PICK)
@@ -140,7 +150,8 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     expect(bench.gpuVramMb).toBe(8192)
     expect(getSettings(withCard.ctx.db).gpuProbe?.devices).toEqual([CARD8])
     expect(await liveStar(withCard.ctx)).toBe(CARD8_PICK)
-    expect(pickerMemoryFor(getSettings(withCard.ctx.db))).toEqual({ memoryClass: 'discrete', machineVramMb: 8192 })
+    // The budget is the probe's FREE figure (decision 10), raw MiB — not the total the tile shows.
+    expect(pickerMemoryFor(getSettings(withCard.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 8000 })
 
     const noCard = fixture({ probeReturns: [] })
     const benchNoCard = await runAndPersistBenchmark(noCard.ctx)
@@ -148,7 +159,33 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     expect(benchNoCard.gpu).toBeNull()
     expect(benchNoCard.gpuVramMb).toBeNull()
     expect(await liveStar(noCard.ctx)).toBe(RAM_PICK)
-    expect(pickerMemoryFor(getSettings(noCard.ctx.db))).toEqual({ memoryClass: 'cpu', machineVramMb: null })
+    expect(pickerMemoryFor(getSettings(noCard.ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
+  })
+
+  it('the FREE figure decides on both seams: the same 8 GiB card with 8,100 MiB free holds the 9B', async () => {
+    const { ctx } = fixture({ probeReturns: [CARD8_ROOMY] })
+    const bench = await runAndPersistBenchmark(ctx)
+    expect(bench.recommendedModelId).toBe(CARD8_ROOMY_PICK)
+    expect(bench.gpuVramMb).toBe(8192) // the tile still shows the total
+    expect(await liveStar(ctx)).toBe(CARD8_ROOMY_PICK)
+    expect(pickerMemoryFor(getSettings(ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 8100 })
+  })
+
+  it('N8 gate boundary: 5,921 MiB (RTX 4050 Laptop) stays a RAM machine; 6,144 (RTX 2060) reaches the card path', async () => {
+    const laptop = fixture({ probeReturns: [RTX4050_LAPTOP] })
+    const benchLaptop = await runAndPersistBenchmark(laptop.ctx)
+    expect(pickerMemoryFor(getSettings(laptop.ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
+    expect(benchLaptop.recommendedModelId).toBe(RAM_PICK)
+    expect(benchLaptop.gpu).toBeNull()
+    expect(await liveStar(laptop.ctx)).toBe(RAM_PICK)
+
+    const desktop = fixture({ probeReturns: [RTX2060] })
+    const benchDesktop = await runAndPersistBenchmark(desktop.ctx)
+    expect(pickerMemoryFor(getSettings(desktop.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 5136 })
+    expect(benchDesktop.recommendedModelId).toBe(CARD8_PICK) // the 4B: 4,512 MiB fits 5,136
+    expect(benchDesktop.gpu).toBe(RTX2060.name)
+    expect(benchDesktop.gpuVramMb).toBe(6144)
+    expect(await liveStar(desktop.ctx)).toBe(CARD8_PICK)
   })
 
   it('a hybrid laptop gives the same pick in either device order, and every surface names the RTX', async () => {
@@ -208,7 +245,7 @@ describe('picker seams: the next start honours the GPU flags (decision 6)', () =
     expect(snap.placement.memoryClass).toBe('cpu')
     expect(snap.placement.vramMb).toBeNull()
     expect(snap.currentGpu).toBeNull()
-    expect(pickerMemoryFor(getSettings(ctx.db))).toEqual({ memoryClass: 'cpu', machineVramMb: null })
+    expect(pickerMemoryFor(getSettings(ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
   })
 
   it('a placement OBSERVED on the card stays observed after the GPU is switched off (a toggle restarts nothing)', () => {
