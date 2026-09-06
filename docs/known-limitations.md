@@ -2407,10 +2407,11 @@ reports and phase plans were working papers; their full text lives in git histor
   pack (P7 fix). A redirect to another pack, a chain of redirects, or a target that fails the
   entry-key rules shows the honest "article unavailable" state instead — never another pack's
   text.
-- **The pinned Windows pack server sometimes never answers a large article read.** kiwix-serve
-  3.8.1 (win-x86_64) leaves roughly one in ten to twenty reads of an article larger than about
-  80 KB without any response — measured against the raw server with no app code, with two
-  different HTTP clients and every thread setting; small entries never stall (P7 real acceptance,
+- **The pinned Windows pack server sometimes cuts a large article read short.** kiwix-serve
+  3.8.1 (win-x86_64) cuts roughly one in ten to twenty reads of an article larger than about
+  80 KB short — the response starts normally and the last part of the body never arrives —
+  measured against the raw server with no app code, with two different HTTP clients and every
+  thread setting; small entries never stall (P7 real acceptance,
   `rag-design.md` §17 "Real acceptance" finding 3; an upstream defect, tracked for the
   provisioning wave on #339). The app detects a stalled read with a short timeout (4 s per attempt) and
   retries it on a fresh connection, up to three attempts (P7 fix; `ARTICLE_READ_TIMEOUT_MS` /

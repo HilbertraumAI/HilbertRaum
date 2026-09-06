@@ -2842,18 +2842,22 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   (the client's timeout, logged `Pack article read failed {"error":"AbortError"}`) and then showed
   the unavailable state while kiwix-serve stayed alive. Isolated against a raw kiwix-serve with no
   app code (`t19-raw-stall*.log`): a `GET /raw/<book>/content/<entry>` of any entry above ~80 KB
-  **never receives a response** — no headers, zero bytes — on ~5–20 % of attempts (84 KB 2/40,
-  211 KB 4/40, 234 KB 2–8 per 40–60, 294 KB 6/40, 508 KB 8/40, 707 KB 4/40) while a 24 KB entry
-  never stalled in 180 reads; the same with `curl.exe`, with keep-alive on or off, with
-  `--threads 1 / 4 / 16`, with 0 / 400 / 2500 ms between reads; the successful responses carry
-  `Content-Length` + `Connection: close`; the next request is answered normally. In the app a
+  **stops short** on ~5–20 % of attempts — the `200` status line, `Content-Length` and most of
+  the body arrive within a few milliseconds, then the last part never does (always the same cut
+  for a given entry: 195,590 of 234,141 B for `Treibhauseffekt`, 456,710 of 508,338 B for
+  `Klimawandel`, 260,870 of 294,238 B for `Treibhausgas`) and the connection simply hangs
+  (84 KB 2/40, 211 KB 4/40, 234 KB 2–8 per 40–60, 294 KB 6/40, 508 KB 8/40, 707 KB 4/40) while
+  a 24 KB entry never stalled in 180 reads; the same with `curl.exe`, with keep-alive on or off,
+  with `--threads 1 / 4 / 16`, with 0 / 400 / 2500 ms between reads; the successful responses
+  carry `Content-Length` + `Connection: close`; the next request is answered normally. In the app a
   stalled read cost the viewer 15 s → "unavailable" and the ask arm one silently skipped article
   (a real ask took 40 s and returned 16 instead of 20 passages). Mitigation (fix PR 2, commit
   0eb79f1f): `fetchArticleHtml` reads through `readRawArticle` with `ARTICLE_READ_TIMEOUT_MS =
-  4_000` and `ARTICLE_READ_ATTEMPTS = 3` — a retry ONLY when an attempt's own timer elapsed with
-  nothing received (`KiwixTimeoutError.headersReceived === false`), on a fresh connection; the
-  caller's own abort (the ask deadline, a cancellation, a lock) is rethrown at once, a mid-body
-  timeout stays an error, any HTTP status keeps its existing semantics, the redirect hop's request
+  4_000` and `ARTICLE_READ_ATTEMPTS = 3` — a retry ONLY when an attempt's own timer elapsed before the body
+  completed (`KiwixTimeoutError` — whether the cut came before the headers or, as measured,
+  mid-body), on a fresh connection; the caller's own abort (the ask deadline, a cancellation, a
+  lock) is rethrown at once, a non-timeout socket error and the over-ceiling body stay errors,
+  any HTTP status that completes keeps its existing semantics, the redirect hop's request
   is retried the same way, and the request guard's lifecycle retry is untouched (a stall never
   reaches the server's lifecycle). The other routes (`/suggest`, `/search`, the health probe) are
   unchanged — the stall was measured on `/raw` bodies only. Tests: `zim-client.test.ts` describe
