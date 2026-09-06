@@ -697,10 +697,11 @@ const QWEN38_FAMILY_IDS = [
   'qwen3.8-27b-ud-q6k'
 ]
 
-// The audited manifest, verbatim from `git show 883f5e40:model-manifests/chat/
-// qwen3.8-flash-next-ud-q4kxl.yaml` (backticks escaped for the template literal; nothing else
-// changed). It is SCHEMA-VALID — that is the point: the guard has to catch a manifest the
-// validator accepts, in an isolated temp catalog, never in the real `model-manifests/` tree.
+// The audited manifest, from `git show 883f5e40:model-manifests/chat/
+// qwen3.8-flash-next-ud-q4kxl.yaml` (backticks escaped for the template literal); verbatim YAML
+// keys/values; a few private-context comment lines trimmed (P6). It is SCHEMA-VALID — that is
+// the point: the guard has to catch a manifest the validator accepts, in an isolated temp
+// catalog, never in the real `model-manifests/` tree.
 const FLASH_NEXT_MANIFEST_YAML = `
 id: qwen3.8-flash-next-ud-q4kxl
 display_name: Qwen3.8-Flash-Next 125B-A6B (UD-Q4_K_XL)
@@ -713,17 +714,13 @@ runtime: llama_cpp
 # redistribution, but clause 2 requires a separate Qwen license for any commercial "AI Work
 # Assistant" business (a product "primarily designed for AI-assisted coding or office
 # productivity"). Whether HilbertRaum's document skills fall under that definition is an open
-# legal question, hence \`license_review.status: pending\` and no bundling. See
-# offline-intelligence-private/legal/ for the review once it exists.
+# legal question, hence \`license_review.status: pending\` and no bundling.
 license: qwen-community-1.0
 # Four shards, 111,334,654,784 bytes total (HF LFS sizes, matched on disk 2026-09-04).
 size_on_disk_gb: 111.3
 # MoE: 125B total / ~6B active, plus a ~51 GB N-gram/PLE embedding table (\`ple_ngram_embd\`).
-# The weight lives in RAM, not VRAM: the measured setup on the i9-9900X / RTX 3090 / 125 GB rig
-# (2026-08-28) keeps 40 expert layers on the CPU (\`-ncmoe 40\`) and the N-gram table in RAM
-# (\`-ot ple_ngram_embd=CPU\`) for 21.6 GiB VRAM, pp512 83.9 t/s, tg128 12.7 t/s. With 125 GB the
-# Q4 shards no longer fit the page cache completely (light NVMe paging on long sessions); 64 GB
-# machines cannot run it at all. Memory \`qwen38-flash-next-first-bench\` has the full sweep.
+# The weight lives in RAM, not VRAM. With 125 GB the Q4 shards no longer fit the page cache
+# completely (light NVMe paging on long sessions); 64 GB machines cannot run it at all.
 recommended_min_ram_gb: 120
 recommended_ram_gb: 128
 # Rank 0 = selectable, never auto-recommended: the RAM tier is out of reach for the target

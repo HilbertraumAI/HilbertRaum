@@ -1368,7 +1368,9 @@ screen now keeps the active chat model pinned above a compact library of alterna
   Images and Voice. Reset/empty states are explicit, and the active model remains visible.
 - **Variant identity:** renderer-only, strip a recognized terminal quantization label from the
   display name, then key by role + family + runtime + remaining name. Preserve sizes, instruction
-  revisions, generations, and QAT identity; unrecognized suffixes are not stripped. No manifest,
+  revisions, generations, and QAT identity; suffixes that do not look like a quantization label
+  are not stripped, but a `Q<digit>…` token is always treated as one — recorded, not endorsed
+  (e.g. `Q4KM-beta` merges with `Q4_K_M`), in `model-library.test.ts`. No manifest,
   IPC, recommender, or runtime identifiers change. Exact names/actions remain on every row.
 - **Groups:** one variant stays visible (the FACE, below); a keyboard-accessible button with
   `aria-expanded` reveals the rest, and expanding lists every other variant exactly once in its
