@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { join } from 'node:path'
 
 // The Performance screen's main-side seams (benchmark.md "History per machine" /
@@ -22,6 +22,7 @@ vi.mock('electron', () => ({
 import {
   buildPerformanceSnapshot,
   maybeRunFirstBenchmark,
+  resetFirstBenchmarkForTests,
   runAndPersistBenchmark
 } from '../../src/main/ipc/registerBenchmarkIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
@@ -37,6 +38,7 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/ma
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import type { BenchmarkProgressStep, BenchmarkResult, EffectiveReadSample, RuntimeStatus } from '../../src/shared/types'
 import {
+  closePerformanceFixture,
   ctxWith,
   freshRoot,
   hereResult,
@@ -50,9 +52,15 @@ beforeEach(() => {
   resetPerformanceForTests()
   resetEffectiveReadForTests()
   resetModelPlacementForTests()
+  resetFirstBenchmarkForTests()
   setPerformanceChangedSink(null)
   inFlightStreams.clear()
 })
+
+// TH2: every root/DB this file's tests create goes through the fixture's `freshRoot`/
+// `seededDb`, so the shared teardown (module resets + DB close + temp-dir removal) applies
+// cleanly here — nothing in this file's own `beforeEach` above conflicts with it.
+afterEach(closePerformanceFixture)
 
 /** A persisted model-load sample (the shape the Drive tile shows; never an observed row). */
 const persistedLoad: EffectiveReadSample = {
@@ -114,11 +122,11 @@ describe('maybeRunFirstBenchmark: the moved-drive check', () => {
     const known = hereResult()
     updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, known] })
 
-    maybeRunFirstBenchmark(ctxWith(root, db))
+    // The restore is synchronous inside `prepareFirstBenchmark` (before `scheduleFirstBenchmark`
+    // even runs), so the outcome — 'not-needed', nothing was owed — is already the settlement;
+    // no need to poll for it.
+    await expect(maybeRunFirstBenchmark(ctxWith(root, db))).resolves.toBe('not-needed')
 
-    await vi.waitFor(() => {
-      expect(getSettings(db).lastBenchmark?.ranAt).toBe(known.ranAt)
-    })
     // Restored, not re-measured: the entry is byte-identical and the history untouched.
     expect(getSettings(db).lastBenchmark).toEqual(known)
     expect(getSettings(db).benchmarkHistory).toHaveLength(2)
@@ -130,11 +138,11 @@ describe('maybeRunFirstBenchmark: the moved-drive check', () => {
     const foreign = result()
     updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign] })
 
-    maybeRunFirstBenchmark(ctxWith(root, db))
+    // P7: the call resolves once the measurement actually lands — await it directly instead of
+    // polling for the persisted state it guarantees on 'ran'.
+    await expect(maybeRunFirstBenchmark(ctxWith(root, db))).resolves.toBe('ran')
 
-    await vi.waitFor(() => {
-      expect(machineKey(getSettings(db).lastBenchmark)).toBe(machineKey(detectSystem()))
-    })
+    expect(machineKey(getSettings(db).lastBenchmark)).toBe(machineKey(detectSystem()))
     const history = getSettings(db).benchmarkHistory
     expect(history).toHaveLength(2)
     expect(history.some((e) => e.cpuModel === foreign.cpuModel)).toBe(true)
@@ -144,13 +152,16 @@ describe('maybeRunFirstBenchmark: the moved-drive check', () => {
     const root = freshRoot()
     const db = seededDb(root)
     updateSettings(db, { lastBenchmark: { profile: 'BALANCED' } as unknown as BenchmarkResult })
+    const ctx = ctxWith(root, db)
 
-    maybeRunFirstBenchmark(ctxWith(root, db))
+    // P7: the call now returns the scheduler's outcome, so await it directly instead of a fixed
+    // sleep hoping a wrongful background run would have landed by then.
+    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('not-needed')
 
-    // Give a background run every chance to (wrongly) land, then assert it did not.
-    await new Promise((r) => setTimeout(r, 300))
     expect((getSettings(db).lastBenchmark as unknown as { profile: string }).profile).toBe('BALANCED')
     expect(getSettings(db).benchmarkHistory).toEqual([])
+    // No measurement ran at all: the benchmark's own occupancy span was never taken.
+    expect(ctx.runtime.occupancy.held('benchmark')).toBe(false)
   })
 })
 
@@ -359,8 +370,12 @@ describe('buildPerformanceSnapshot', () => {
     // Sizes are GiB from the manifests' decimal GB; the total sums every row.
     const sum = rows.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0), 0)
     expect(snap.placement.totals.ramAllMb).toBe(Math.round(sum * 1024))
-    // Both on the card only counts on a machine WITH a card (this test host has no probe → cpu class).
-    expect(snap.placement.totals.bothOnCard).toBe(snap.placement.memoryClass !== 'cpu')
+    // DR11 (PR #303 audit remediation, P9): a FIXED expectation, never one derived from the host.
+    // The fixture's runtime stub has no ready `status()`, so the chat model is not resident and
+    // "both on the card" is false on every host — including an Apple Silicon one, where the
+    // probe-less class is `unified` and the old `memoryClass !== 'cpu'` form would have demanded
+    // `true` for a model that is not even loaded.
+    expect(snap.placement.totals.bothOnCard).toBe(false)
   })
 
   it('carries the LIVE recommendation, built from the same inputs the listModels handler feeds buildModelList', () => {

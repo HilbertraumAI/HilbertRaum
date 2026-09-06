@@ -20,9 +20,11 @@ import { FIT_TARGET_MARGIN_MB } from '../../src/shared/performance-rules'
 import { stubApi } from '../helpers/renderer'
 
 // The Performance screen (design-guidelines §2, benchmark.md "Performance screen"): the
-// check's answer as a verdict + three tiles, the observed rows, the other computers, and
-// the two actions that lead somewhere (AI Model for the pick / context size, Diagnostics
-// for the raw table). Copy is plain and encouraging: no "benchmark", no hardware shaming.
+// check's answer as a verdict + four tiles (speed, memory, graphics memory, drive — the
+// graphics tile folds into one unified tile on Apple Silicon), the observed rows, the other
+// computers, and the two actions that lead somewhere (AI Model for the pick / context size,
+// Diagnostics for the raw table). Copy is plain and encouraging: no "benchmark", no hardware
+// shaming.
 
 afterEach(() => {
   cleanup()
@@ -232,7 +234,7 @@ function mountScreen() {
 }
 
 describe('PerformanceScreen: the check as an answer', () => {
-  it('renders the verdict, the three tiles with ratings, and the context the pick assumes', async () => {
+  it('renders the verdict, the four tiles with ratings, and the context the pick assumes', async () => {
     install(snapshot())
     renderScreen()
     expect(await screen.findByText(/Runs Qwen3\.5 9B \(UD-Q4_K_XL\) at about 12 tokens per second\./)).toBeInTheDocument()
@@ -812,6 +814,67 @@ describe('PerformanceScreen: actions', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
     expect(await screen.findByText(/Check failed: .*busy/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument()
+  })
+})
+
+// Keyboard focus across the busy swap (HW3; design-guidelines §6). The busy branch renders a
+// different subtree — the steps list and a disabled "Running…" button — so the action button a
+// keyboard user just activated is UNMOUNTED and the active element falls back to <body>: the
+// user is dropped out of the screen mid-task. The screen puts focus back on the primary action
+// when the run IT started ends, and only then.
+describe('PerformanceScreen: focus survives the run', () => {
+  it('returns focus to "Check again" after a run this window started', async () => {
+    const run = deferred<BenchmarkResult>()
+    const { api } = install(snapshot(), { runBenchmark: vi.fn(() => run.promise) })
+    renderScreen()
+    const button = await screen.findByRole('button', { name: 'Check again' })
+    button.focus()
+    expect(document.activeElement).toBe(button)
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(api.runBenchmark).toHaveBeenCalledTimes(1))
+    // The busy branch has replaced the actions row: the focused node is gone.
+    expect(screen.getByRole('button', { name: 'Running…' })).toBeDisabled()
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => {
+      run.resolve(result())
+    })
+    const back = await screen.findByRole('button', { name: 'Check again' })
+    expect(document.activeElement).toBe(back)
+  })
+
+  it('returns focus after "Start … and measure" too — to the action the idle row keeps', async () => {
+    const run = deferred<BenchmarkResult>()
+    const { api } = install(snapshot({ current: result({ tokensPerSecond: null, measuredModelId: null, speedBasis: null }) }), {
+      getRuntimeStatus: vi.fn(async () => STOPPED_STATUS),
+      runBenchmark: vi.fn(() => run.promise)
+    })
+    renderScreen()
+    const start = await screen.findByRole('button', { name: 'Start Qwen3.5 9B (UD-Q4_K_XL) and measure' })
+    start.focus()
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(api.runBenchmark).toHaveBeenCalledTimes(1))
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => {
+      run.resolve(result())
+    })
+    const back = await screen.findByRole('button', { name: 'Check again' })
+    expect(document.activeElement).toBe(back)
+  })
+
+  it('a run this window did NOT start never steals focus', async () => {
+    // Another window (or the first-run path) takes the lane and releases it. Nothing here was
+    // activated, so the caret stays wherever the user left it — on the link they were reading.
+    const { api, pushes } = install(snapshot({ running: true }))
+    mountScreen()
+    await screen.findByRole('button', { name: 'Running…' })
+    const elsewhere = screen.getByRole('button', { name: 'Open Diagnostics' })
+    elsewhere.focus()
+    expect(document.activeElement).toBe(elsewhere)
+    api.getPerformance.mockResolvedValue(snapshot({ running: false }))
+    await pushChanged(pushes)
+    await screen.findByRole('button', { name: 'Check again' })
+    expect(document.activeElement).toBe(elsewhere)
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Check again' }))
   })
 })
 

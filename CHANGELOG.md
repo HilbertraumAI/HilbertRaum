@@ -47,6 +47,23 @@ from its first public `1.0.0` release onward.
   model follows the machine. While a check runs you see its steps instead of a plain "Running…"
   button, and if no model has run yet the page offers to start the recommended one and measure.
   The technical table stays on Settings → Diagnostics. English and German.
+- **A new computer's first check never borrows another computer's drive-speed reading.**
+  Plugging this drive into a computer it hasn't seen before measures that computer's own read
+  speed from scratch; a warning about a slow drive, or the lack of one, always reflects this
+  computer, never whichever computer the drive was in last.
+- **The Performance page refreshes itself and stays precise about what it measured.** It updates
+  in place the moment a check finishes, a model starts, or a file is verified, with no need to
+  leave and come back. A speed reading counted from streamed chunks rather than the model's own
+  timing is marked Approximate everywhere it appears, including another computer's row and the
+  copied report, which also always names the computer it describes. The graphics-memory tile
+  says plainly when a chip's memory is Integrated and shared with the rest of the computer, and
+  shows Not recorded, instead of guessing, for a computer this drive visited before the check
+  could record its card. When a model only partly fits in graphics memory, the explanation now
+  states the exact safety margin the AI engine reserves. After a check you started with the
+  keyboard, focus returns to Check again.
+- **Checking your computer's speed no longer competes with starting a model.** The automatic
+  first-time check now waits for a model that is already starting up to finish loading before it
+  measures your drive, instead of reading and loading at the same time.
 - **Each finished chat answer now shows how fast it was generated.** A small line under the
   answer reads, for example, "42 tok/s · 1.8 s to first token · 615 tokens": the model's decode
   speed as reported by the AI engine, how long you waited for the first word, and how many
@@ -209,6 +226,10 @@ from its first public `1.0.0` release onward.
   privacy notice and the security documentation now also say which small things live outside the
   drive: display preferences in the computer's browser profile, and anything you copy on its
   clipboard.
+- **A drive on an unfamiliar computer keeps checking itself until it succeeds, once per unlock.**
+  A failed automatic check on a computer this drive doesn't recognize now tries again once each
+  time you unlock, rather than repeatedly for the rest of that session; Check again on the
+  Performance page always works right away in the meantime.
 
 ## [0.1.59] — 2026-08-21
 

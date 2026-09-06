@@ -7,7 +7,7 @@ import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { resolveNavTarget } from '../../src/renderer/navigation'
 import { DEFAULT_SETTINGS, type PolicyStatus, type WorkspaceStateInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
-import { appStatus, driveStatus, makePolicyStatus } from '../helpers/status'
+import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '../helpers/status'
 
 // Information architecture (guidelines §2, rail rework 2026-09-05): three rail groups
 // (Chat · Documents · Translate · Images ‖ AI Model · Performance ‖ Settings), Home behind
@@ -341,6 +341,8 @@ describe('SettingsScreen — tabs (Phase 26)', () => {
         message: 'Stopped'
       })),
       getRuntimeInstall: vi.fn(async () => null),
+      // #327: the Acceleration line reads its device from the snapshot, not settings.gpuProbe.
+      getPerformance: vi.fn(async () => performanceSnapshot()),
       getLogTail: vi.fn(async () => [])
     })
   }

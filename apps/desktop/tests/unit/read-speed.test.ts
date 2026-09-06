@@ -10,6 +10,7 @@ import {
   recordModelLoadRead,
   resetEffectiveReadForTests,
   setEffectiveReadObserver,
+  setReadSpeedClockForTests,
   suppressNextModelLoadSample,
   throughputMbps
 } from '../../src/main/services/read-speed'
@@ -168,5 +169,44 @@ describe('per-source latches (the Performance screen\'s observed rows)', () => {
   it('starts empty and clears with the test reset', () => {
     expect(latestEffectiveReadBySource('model_load')).toBeNull()
     expect(latestEffectiveReadBySource('checksum')).toBeNull()
+  })
+})
+
+describe('strictly increasing sample timestamps (PR #303 audit A-D4)', () => {
+  beforeEach(() => resetEffectiveReadForTests())
+
+  it('two samples under a frozen clock get distinct, increasing `at` values (ISO strings, 1 ms apart)', () => {
+    setReadSpeedClockForTests(() => new Date('2026-09-06T12:00:00.000Z'))
+    recordChecksumRead(6_000_000_000, 60_000, 'first')
+    const first = latestEffectiveReadBySource('checksum')!.at
+    recordChecksumRead(6_000_000_000, 60_000, 'second')
+    const second = latestEffectiveReadBySource('checksum')!.at
+    expect(first).toBe('2026-09-06T12:00:00.000Z')
+    expect(second).toBe('2026-09-06T12:00:00.001Z')
+  })
+
+  it('a clock that runs backwards is bumped past the previous accepted sample; a rejected sample never reaches the clock', () => {
+    const readings = ['2026-09-06T12:00:05.000Z', '2026-09-06T12:00:01.000Z', '2026-09-06T12:00:09.000Z']
+    let reads = 0
+    setReadSpeedClockForTests(() => new Date(readings[reads++]))
+    recordChecksumRead(6_000_000_000, 60_000, 'a')
+    recordChecksumRead(MIN_READ_SAMPLE_BYTES - 1, 60_000, 'rejected-by-floor')
+    const a = latestEffectiveReadBySource('checksum')!.at
+    recordChecksumRead(6_000_000_000, 60_000, 'b') // the clock says 4 s EARLIER than a
+    const b = latestEffectiveReadBySource('checksum')!.at
+    recordChecksumRead(6_000_000_000, 60_000, 'c') // the clock is ahead again: taken as is
+    const c = latestEffectiveReadBySource('checksum')!.at
+    expect([a, b, c]).toEqual(['2026-09-06T12:00:05.000Z', '2026-09-06T12:00:05.001Z', '2026-09-06T12:00:09.000Z'])
+    expect(reads).toBe(3)
+  })
+
+  it('a checksum in the same millisecond as a model load is a distinct sample in the per-source latches; the ranked latch keeps the load', () => {
+    setReadSpeedClockForTests(() => new Date('2026-09-06T12:00:00.000Z'))
+    recordModelLoadRead('/ignored.gguf', 10_000, 'load', 6_000_000_000)
+    recordChecksumRead(6_000_000_000, 60_000, 'hash')
+    const load = latestEffectiveReadBySource('model_load')!
+    const hash = latestEffectiveReadBySource('checksum')!
+    expect(hash.at > load.at).toBe(true)
+    expect(latestEffectiveRead()).toBe(load)
   })
 })

@@ -743,7 +743,9 @@ password recovery — are documented in
 - `getSettings` does not type-guard stored JSON values (the privacy-critical network path is
   double-gated by the policy AND). The write gate in `updateSettings` now also rejects `null` for
   non-nullable keys and shape-checks the null-default keys (bounded strings for the model ids /
-  `gpuLastError`, plain objects for `lastBenchmark`/`gpuProbe`), and the checksum-cache reader
+  `gpuLastError`; `lastBenchmark`/`benchmarkHistory`/`gpuProbe`/`modelPlacements` are VALIDATED
+  field by field on read and write since the PR #303 audit, not merely shape-checked as plain
+  objects — `shared/benchmark-schema.ts`, H1/L8, owner decision G7), and the checksum-cache reader
   degrades a pre-existing corrupted row to a cache miss (BE-1, full-audit 2026-07-10).
 - `expandPaths` follows directory symlinks during import expansion.
 - Sidecar port selection has a small TOCTOU window between `findFreePort()` and the spawn.
@@ -2293,6 +2295,59 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   inference — a driver can enumerate fine and crash on the first compute submit. That case is
   handled by the crash auto-fallback (one CPU restart + a friendly notice); the in-flight reply
   is lost, same as today's crash handling.
+
+### Performance screen and per-computer history (PR #303 audit)
+
+- **Identical hardware collides on one key.** Two computers with the same CPU model, core count,
+  RAM rounded to whole GB, OS and architecture share one `machineKey`: their results overwrite
+  each other, and the twin never appears under "Other computers."
+- **The RAM-rounding boundary can split one machine into two.** `ramGb` is already rounded to
+  0.1 GB by `detectSystem`; the key rounds again to whole GB, so a BIOS or iGPU
+  memory-reservation change that moves a machine across a whole-GB boundary reads as a different
+  computer.
+- **An OS or architecture change splits a machine too** — a dual-boot switch or a 32→64-bit
+  reinstall reads as a new computer, not the same one.
+- **GPU, driver/backend, context size and USB port are not part of the key.** A stored result can
+  be stale for any of these without the app treating the machine as new.
+- **Unknown identity stays eligible as "this machine" (G3).** A legacy record with no identity, or
+  one where hardware detection failed, is treated as compatible with whatever computer is running
+  now — a compatibility policy, not proof the data actually describes it.
+- **A value misattributed before this fix is corrected only by a fresh check on that computer.**
+  The app cannot retroactively distinguish an old mixed-identity record from a genuine one; it can
+  only replace it going forward.
+- **One placement record per model per DRIVE, not per computer.** `modelPlacements` keeps a
+  single entry per model id: starting that model on another computer replaces the entry, and back
+  on the first computer the "Your model" row shows the estimate again until the model starts
+  there once more. Entries are never pruned when a model is uninstalled; the only bound is the
+  256 KB JSON-string cap on the whole settings blob.
+- **An integrated GPU's shared memory is never graphics memory.** The Graphics memory tile and
+  the memory-class estimate both treat an integrated chip's reported memory as shared system RAM,
+  never as a usable VRAM budget, however large the reported number.
+- **The observed rows are app-lifetime latches, not a log.** They survive a workspace lock/unlock
+  and are cleared only by an app restart, and only a finished chat answer latches — a local-API
+  answer never passes through the chat observer, so it never appears there.
+- **The moved-drive re-check repeats at every unlock, not indefinitely within one session.** A key
+  mismatch schedules exactly one automatic attempt per unlock: a machine where the check keeps
+  failing (no compatible runtime binary, a drive-probe error) retries at the next unlock rather
+  than looping in the same session, and a manual **Check again** always ends the re-check
+  immediately.
+- **A model start that never settles defers the automatic check to the next launch** instead of
+  waiting indefinitely or measuring an unfinished load.
+- **A manual (non-automatic) model start already in flight is not awaited by the scheduler.** Only
+  the automatic auto-start is sequenced ahead of the benchmark; a manual start and an automatic
+  check can still overlap on a very slow drive (tracked as issue #334).
+- **A GPU probe that times out internally persists as an empty stamped probe** — indistinguishable
+  from a machine that genuinely has no usable graphics device until a later probe succeeds.
+- **One `performance:get` read costs about 100 ms in the dev build** (a synchronous manifest scan
+  alongside settings and system detection) — measured once during development, not on slow
+  removable media; a cache is a follow-up if it proves to matter (issue #333).
+- **The silent re-check has no Home-screen notice yet.** The moved-drive re-check above runs with
+  no visible sign beyond Performance itself refreshing; a Home notice while it is pending is
+  tracked in BUILD_STATE §5 item 21 (a).
+- **Remaining hardware acceptance not yet performed:** a real two-computer round trip on an
+  encrypted drive (including an upgraded workspace with no history yet), a captured real
+  partial-offload load log from the pinned build, a hybrid iGPU+dGPU device-order check, and
+  Apple Silicon unified-memory behaviour.
 
 ## Speculative decoding (MTP — [`architecture.md`](architecture.md) "MTP speculative decoding" record)
 

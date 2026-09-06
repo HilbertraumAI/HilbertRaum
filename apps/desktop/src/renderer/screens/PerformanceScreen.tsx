@@ -25,7 +25,8 @@ import type {
 } from '@shared/types'
 
 // The Performance screen (design-guidelines §2, the machine group; benchmark.md
-// "Performance screen"). Three cards:
+// "Performance screen"). Four cards — "This computer", "Observed while you worked", "Models on
+// this computer", "Other computers":
 //   1. "This computer": the hardware check's answer as a verdict line + four tiles (speed,
 //      memory, graphics memory, drive) and the one action, "Check again". While a check runs, the steps show
 //      as they land (EVENTS.benchmarkProgress) instead of an opaque "Running…" button. The model
@@ -330,6 +331,12 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const ownActionRef = useRef(false)
   /** `running` of the last applied snapshot: its false → true edge is a run starting. */
   const backendRunningRef = useRef(false)
+  /** Set when THIS window starts a check from the action button; consumed by the focus effect
+   *  once the idle actions row is back. Never set for a run another window started (HW3). */
+  const restoreFocusRef = useRef(false)
+  /** The idle branch's "Check again" / "Check this computer" button — the node the busy branch
+   *  unmounts under a keyboard user. */
+  const checkButtonRef = useRef<HTMLButtonElement | null>(null)
 
   const applySnapshot = useCallback((next: PerformanceSnapshot): void => {
     // Verbatim, never merged with the previous value: the screen follows the backend out of a
@@ -440,6 +447,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
 
   const runCheck = useCallback(async (): Promise<void> => {
     ownActionRef.current = true
+    restoreFocusRef.current = true
     setOwnActionInFlight(true)
     setActionError(null)
     setDoneSteps([])
@@ -461,6 +469,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const startAndMeasure = useCallback(
     async (modelId: string): Promise<void> => {
       ownActionRef.current = true
+      restoreFocusRef.current = true
       setOwnActionInFlight(true)
       setActionError(null)
       setDoneSteps([])
@@ -494,6 +503,21 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const backendRunning = snap?.running ?? false
   /** What the card shows as busy: a run anywhere on this machine, or this window's own action. */
   const busy = backendRunning || ownActionInFlight
+
+  // Keyboard focus across the busy swap (HW3; design-guidelines §6). The busy branch renders a
+  // DIFFERENT subtree — the steps list plus a disabled "Running…" button — so the action button
+  // a keyboard user just activated is UNMOUNTED and the active element falls back to <body>:
+  // the user is dropped out of the screen mid-task and has to tab in from the top again. When
+  // the run THIS window started ends and the idle actions row mounts again, put focus back on
+  // the primary action. The flag is set only by `runCheck` / `startAndMeasure` and cleared as
+  // it is consumed, so a run this window did not start (another window, the first-run path)
+  // ends without ever moving the caret out from under whatever the user is doing here.
+  useEffect(() => {
+    if (busy || !restoreFocusRef.current) return
+    restoreFocusRef.current = false
+    checkButtonRef.current?.focus()
+  }, [busy])
+
   // Both failures can stand at once; the read failure is the one with a retry.
   const bannerMessage =
     [
@@ -924,7 +948,9 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                   {t('perf.startAndMeasure', { model: recommended.displayName })}
                 </Button>
               ) : null}
-              <Button onClick={() => void runCheck()}>{bench ? t('perf.checkAgain') : t('perf.check')}</Button>
+              <Button ref={checkButtonRef} onClick={() => void runCheck()}>
+                {bench ? t('perf.checkAgain') : t('perf.check')}
+              </Button>
               <Button variant="ghost" onClick={() => onNavigate('models')}>
                 {t('perf.contextSize')}
               </Button>

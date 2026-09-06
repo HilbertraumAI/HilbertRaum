@@ -73,15 +73,19 @@ describe('machineKey', () => {
 
 describe('upsertHistory', () => {
   it('replaces the entry for the same machine, newest first, keeps other machines', () => {
-    const office = result({ cpuModel: 'i9-13900K', cpuCores: 32, ramGb: 64, ranAt: '2026-09-02T00:00:00Z' })
+    const office = result({ cpuModel: 'i9-13900K', cpuCores: 32, ramGb: 64, ranAt: '2026-09-02T00:00:00Z', tokensPerSecond: 41 })
     const laptopOld = result({ ranAt: '2026-08-01T00:00:00Z', tokensPerSecond: 4 })
     const laptopNew = result({ ranAt: '2026-09-04T00:00:00Z', tokensPerSecond: 12 })
     const history = upsertHistory(upsertHistory([], laptopOld), office)
     expect(history.map((e) => e.ranAt)).toEqual([office.ranAt, laptopOld.ranAt])
     const next = upsertHistory(history, laptopNew)
-    expect(next.map((e) => e.tokensPerSecond)).toEqual([12, null].map((v) => v ?? office.tokensPerSecond))
     expect(next).toHaveLength(2)
+    // Identities AND order: laptopNew replaces laptopOld and leads; office (a distinct
+    // tokensPerSecond, so this can't pass by coincidence) is untouched, second.
     expect(next[0]).toBe(laptopNew)
+    expect(next[1]).toBe(office)
+    expect(next.map((e) => e.cpuModel)).toEqual([laptopNew.cpuModel, office.cpuModel])
+    expect(next.map((e) => e.tokensPerSecond)).toEqual([12, 41])
   })
 
   it('caps at MAX_BENCHMARK_HISTORY, dropping the oldest OTHER machines, never the new one', () => {
@@ -411,10 +415,18 @@ describe('attributedGpuFigures', () => {
     expect(attributedGpuFigures(record({ gpuFreeAtStartMb: null }), null)).toEqual({ freeAtStartMb: null, workingMb: 3160 })
   })
 
-  it('a lone device attributes as before, whatever it is called', () => {
-    const lone = record({ devices: [{ ...rtx }], gpuFreeAtStartMb: 2703, gpuComputeMb: 2860 })
+  it('a lone row that IS the selected device: its own figures, not the legacy summary (A-D3)', () => {
+    // The summary fields deliberately differ from the row's, so the assertion knows which answered.
+    const lone = record({ devices: [{ ...rtx }], gpuFreeAtStartMb: 15_000, gpuComputeMb: 3160 })
     expect(attributedGpuFigures(lone, 'NVIDIA GeForce RTX 3090')).toEqual({ freeAtStartMb: 2703, workingMb: 2860 })
-    expect(attributedGpuFigures(lone, 'some other name')).toEqual({ freeAtStartMb: 2703, workingMb: 2860 })
+  })
+
+  it('a lone row that is NOT the selected device (an iGPU-only log beside a selected dGPU), or none selected: null (A-D3)', () => {
+    const igpuOnly = record({ devices: [{ ...iris }], gpuFreeAtStartMb: 15_000, gpuComputeMb: 300 })
+    expect(attributedGpuFigures(igpuOnly, 'NVIDIA GeForce RTX 3090')).toEqual({ freeAtStartMb: null, workingMb: null })
+    expect(attributedGpuFigures(igpuOnly, null)).toEqual({ freeAtStartMb: null, workingMb: null })
+    // Rows present but empty (a log without a device_info block): nothing to attribute either.
+    expect(attributedGpuFigures(record({ devices: [], gpuFreeAtStartMb: null }), 'NVIDIA GeForce RTX 3090')).toEqual({ freeAtStartMb: null, workingMb: null })
   })
 
   it('several rows: the selected device by NAME — never the first row', () => {

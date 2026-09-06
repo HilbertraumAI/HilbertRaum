@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { t } from '../../src/shared/i18n'
 
 // Benchmark persistence on a drive that TRAVELS (benchmark.md "Persistence" / "History per
@@ -29,6 +29,7 @@ import type { Db } from '../../src/main/services/db'
 import { machineKey, resetPerformanceForTests, upsertHistory } from '../../src/main/services/performance'
 import {
   latestEffectiveRead,
+  latestEffectiveReadBySource,
   recordChecksumRead,
   recordModelLoadRead,
   resetEffectiveReadForTests,
@@ -38,7 +39,7 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/ma
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { MAX_BENCHMARK_HISTORY, type BenchmarkProgressStep, type BenchmarkResult, type EffectiveReadSample } from '../../src/shared/types'
-import { ctxWith, freshRoot, hereResult, result, seededDb } from '../helpers/performance-fixture'
+import { closePerformanceFixture, ctxWith, freshRoot, hereResult, result, seededDb } from '../helpers/performance-fixture'
 
 /** A model-load sample measured on some other computer (slow enough to carry the #110 warning). */
 const foreignSample: EffectiveReadSample = {
@@ -105,6 +106,12 @@ beforeEach(() => {
   let tick = Date.parse('2026-09-06T10:00:00.000Z')
   setReadSpeedClockForTests(() => new Date((tick += 1000)))
 })
+
+// TH2: this file's own beforeEach doesn't reset model-placement/first-benchmark state or the
+// notify sink because it never touches them directly — the shared teardown adding those resets
+// (on top of closing the DBs/removing the roots every test's `freshRoot`/`seededDb` created) is
+// a pure addition, nothing here relies on their being left dirty between tests.
+afterEach(closePerformanceFixture)
 
 describe('identity before ranking (M2)', () => {
   it('a NEW computer does not inherit a foreign persisted model-load sample, nor its warning', async () => {
@@ -198,11 +205,11 @@ describe('upgrade backfill (M4)', () => {
     if (dropRow) db.prepare("DELETE FROM settings WHERE key = 'benchmarkHistory'").run()
     expect(getSettings(db).benchmarkHistory).toEqual([])
 
-    maybeRunFirstBenchmark(ctxWith(root, db))
+    // TH2: a direct call with an obtainable handle — await the scheduler's own outcome (P7)
+    // instead of polling for the state it guarantees on 'ran'.
+    await expect(maybeRunFirstBenchmark(ctxWith(root, db))).resolves.toBe('ran')
 
-    await vi.waitFor(() => {
-      expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
-    })
+    expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
     const history = getSettings(db).benchmarkHistory
     expect(history).toHaveLength(2)
     expect(history.filter((e) => machineKey(e) === machineKey(foreign))).toHaveLength(1)
@@ -327,13 +334,17 @@ describe('upgrade backfill (M4)', () => {
     const foreign = result()
     updateSettings(db, { lastBenchmark: foreign })
 
-    maybeRunFirstBenchmark(ctxWith(root, db))
+    // TH2: `prepareFirstBenchmark`'s synchronous seeding runs as part of evaluating this call's
+    // argument, before `maybeRunFirstBenchmark` returns its (still-pending) outcome promise — so
+    // capturing that promise here and asserting the synchronous seed on the very next line is
+    // exactly as ordered as the original unawaited call was, and the trailing wait can now await
+    // the concrete outcome instead of polling for it.
+    const outcome = maybeRunFirstBenchmark(ctxWith(root, db))
 
     // Seeded synchronously, before the background run can replace the headline.
     expect(getSettings(db).benchmarkHistory).toEqual([foreign])
-    await vi.waitFor(() => {
-      expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
-    })
+    await expect(outcome).resolves.toBe('ran')
+    expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
     const history = getSettings(db).benchmarkHistory
     expect(history).toHaveLength(2)
     expect(history.filter((e) => machineKey(e) === machineKey(foreign))).toHaveLength(1)
@@ -583,5 +594,47 @@ describe('unchanged #110: the slow-read warning tracks the eligible sample only'
     // …while the foreign entry keeps its own, untouched.
     const kept = getSettings(db).benchmarkHistory.find((e) => e.cpuModel === foreign.cpuModel) as BenchmarkResult
     expect(kept.warnings).toEqual([slowReadWarning(70)])
+  })
+})
+
+describe('strictly increasing sample timestamps (A-D4): same-millisecond samples stay distinct to the persister', () => {
+  /** Both destinations this machine's, the observer registered, the clock FROZEN at one instant. */
+  function frozenSession(): { db: Db; frozen: Date } {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const mine = hereResult()
+    updateSettings(db, { lastBenchmark: mine, benchmarkHistory: [mine] })
+    registerModelIpc(ctxWith(root, db))
+    const frozen = new Date('2026-09-06T12:00:00.000Z')
+    setReadSpeedClockForTests(() => frozen) // the same reading for every sample
+    return { db, frozen }
+  }
+
+  it('a model load in the same millisecond as the checksum before it reaches BOTH destinations', () => {
+    const { db, frozen } = frozenSession()
+    recordChecksumRead(3_000_000_000, 30_000, 'hash-first')
+    const first = getSettings(db).lastBenchmark?.effectiveRead
+    expect(first).toMatchObject({ modelId: 'hash-first', at: frozen.toISOString() })
+
+    // Outranks the checksum — but it used to carry the SAME `at`, so the handled memo (and each
+    // destination's "already carries this sample" check) read it as the one already written.
+    loadSample('load-second')
+
+    const s = getSettings(db)
+    expect(s.lastBenchmark?.effectiveRead).toMatchObject({ modelId: 'load-second', source: 'model_load' })
+    expect(s.benchmarkHistory[0].effectiveRead).toMatchObject({ modelId: 'load-second', source: 'model_load' })
+    expect(s.lastBenchmark!.effectiveRead!.at > first!.at).toBe(true)
+  })
+
+  it('a checksum in the same millisecond as the model load before it is a distinct, lower-ranked sample: both destinations keep the load', () => {
+    const { db } = frozenSession()
+    loadSample('load-first')
+    recordChecksumRead(3_000_000_000, 30_000, 'hash-second')
+
+    const s = getSettings(db)
+    expect(s.lastBenchmark?.effectiveRead?.modelId).toBe('load-first')
+    expect(s.benchmarkHistory[0].effectiveRead?.modelId).toBe('load-first')
+    // The observed rows still tell the two apart.
+    expect(latestEffectiveReadBySource('checksum')!.at > latestEffectiveReadBySource('model_load')!.at).toBe(true)
   })
 })

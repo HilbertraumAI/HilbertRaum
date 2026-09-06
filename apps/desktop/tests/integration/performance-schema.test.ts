@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -39,7 +39,7 @@ import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import { recordModelPlacement, resetModelPlacementForTests } from '../../src/main/services/runtime/placement'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppSettings, BenchmarkResult, ModelPlacement } from '../../src/shared/types'
-import { ctxWith, freshRoot, hereResult, result, seededDb } from '../helpers/performance-fixture'
+import { closePerformanceFixture, ctxWith, freshRoot, hereResult, result, seededDb } from '../helpers/performance-fixture'
 
 beforeEach(() => {
   resetPerformanceForTests()
@@ -47,6 +47,9 @@ beforeEach(() => {
   resetModelPlacementForTests()
   setPerformanceChangedSink(null)
 })
+
+// TH2: every root/DB in this file comes from the fixture's `freshRoot`/`seededDb`.
+afterEach(closePerformanceFixture)
 
 const here = (): string | null => machineKey(detectSystem())
 
@@ -164,11 +167,10 @@ describe('rows that bypassed the write gate are validated on READ', () => {
     expect(snap.placement.observed).toBeNull()
 
     // `lastBenchmark` reads as null, so this is a first run: the background benchmark lands a
-    // real, keyed result over the junk row.
-    maybeRunFirstBenchmark(ctx)
-    await vi.waitFor(() => {
-      expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
-    })
+    // real, keyed result over the junk row. TH2: await the scheduler's own outcome (P7) instead
+    // of polling for the state it guarantees on 'ran'.
+    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('ran')
+    expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
   })
 
   it('a corrupt row does not cost the records beside it', () => {

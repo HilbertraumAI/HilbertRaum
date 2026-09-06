@@ -7,7 +7,7 @@ import { I18nProvider } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AppStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
-import { driveStatus } from '../helpers/status'
+import { driveStatus, performanceSnapshot } from '../helpers/status'
 
 // Audit FE-8 — diagnostics copy must be fully localized: a benchmark failure routes through
 // friendlyIpcError (no raw Electron transport / Error-class prefix in the localized line), and
@@ -58,6 +58,8 @@ function stubDiag(
       healthy: false,
       message: 'Stopped'
     })),
+    // #327: the Acceleration line reads its device from the snapshot, not settings.gpuProbe.
+    getPerformance: vi.fn(async () => performanceSnapshot()),
     runBenchmark: (over.runBenchmark ?? vi.fn()),
     tryGpuAgain: (over.tryGpuAgain ?? vi.fn())
   })

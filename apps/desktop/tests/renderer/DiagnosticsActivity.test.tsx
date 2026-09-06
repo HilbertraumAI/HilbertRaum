@@ -6,7 +6,7 @@ import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AuditEvent, type RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
-import { appStatus, driveStatus } from '../helpers/status'
+import { appStatus, driveStatus, performanceSnapshot } from '../helpers/status'
 
 // Phase 19: the "Activity" panel over the audit log — on-demand load, the client-side
 // type filter, the load-more cursor, and the export action. Friendly §11.4 copy; the
@@ -38,6 +38,8 @@ function stubDiagnostics(overrides: Record<string, ReturnType<typeof vi.fn>>): v
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getRuntimeInstall: vi.fn(async () => null),
     getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+    // #327: the Acceleration line reads its device from the snapshot, not settings.gpuProbe.
+    getPerformance: vi.fn(async () => performanceSnapshot()),
     ...overrides
   })
 }

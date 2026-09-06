@@ -2228,6 +2228,9 @@ export const de: Record<keyof typeof en, string> = {
     'Sekunde, daher wurde die Modell-Empfehlung eine Größenstufe herabgesetzt, damit ' +
     'Antworten auf diesem Computer schnell bleiben.',
   'main.benchmark.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um den Benchmark auszuführen.',
+  'main.benchmark.lockedDuringRun':
+    'Der Arbeitsbereich wurde während des Benchmarks gesperrt, daher wurde das Ergebnis nicht ' +
+    'gespeichert. Führe den Benchmark noch einmal aus.',
 
   // Emission set (D-L5): localized at the emission site via tMain().
   // #236: die native Rückfrage, bevor ein http(s)-Link aus einer Antwort oder einem

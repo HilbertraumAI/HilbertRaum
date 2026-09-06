@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -46,7 +46,8 @@ import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { notifyPerformanceChanged, setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
-import { latestAnswerSpeed, resetPerformanceForTests } from '../../src/main/services/performance'
+import { detectSystem } from '../../src/main/services/benchmark'
+import { latestAnswerSpeed, machineKey, resetPerformanceForTests } from '../../src/main/services/performance'
 import {
   latestEffectiveRead,
   recordChecksumRead,
@@ -60,9 +61,17 @@ import { llamaServerBinaryName, llamaServerDir, type ChildProcessLike } from '..
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { VisionService, type VisionAnalyzer, type VisionStreamEmitter } from '../../src/main/services/vision'
 import { EVENTS, IPC } from '../../src/shared/ipc'
-import type { BenchmarkProgressStep, ImageAnalyzeRequest, VisionStatus } from '../../src/shared/types'
+import type { BenchmarkProgressStep, GpuDevice, GpuProbeResult, ImageAnalyzeRequest, VisionStatus } from '../../src/shared/types'
 import { invoke, makeEvent } from '../helpers/ipc'
-import { ctxWith, freshRoot, hereResult, performanceChangedSpy, result, seededDb } from '../helpers/performance-fixture'
+import {
+  closePerformanceFixture,
+  ctxWith,
+  freshRoot,
+  hereResult,
+  performanceChangedSpy,
+  result,
+  seededDb
+} from '../helpers/performance-fixture'
 
 const here = () => {
   const root = freshRoot()
@@ -74,6 +83,15 @@ const here = () => {
 /** 3 GB in 10 s: a 300 MB/s model-load sample. */
 const loadSample = (modelId: string): void => recordModelLoadRead('unused', 10_000, modelId, 3_000_000_000)
 
+/** A placeholder llama-server so `probeAndPersistGpu` resolves a binary; the injected probe never spawns it. */
+const plantBinary = (root: string): void => {
+  const dir = llamaServerDir(root)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, llamaServerBinaryName()), '')
+}
+
+const RTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_576, freeMb: 22_000 }
+
 beforeEach(() => {
   electronState.handlers.clear()
   electronState.windows.length = 0
@@ -82,6 +100,11 @@ beforeEach(() => {
   resetEffectiveReadForTests()
   resetModelPlacementForTests()
 })
+
+// TH2: every root/DB here is minted through the fixture's `freshRoot`/`seededDb` (via this
+// file's own `here()` helper) — the shared teardown's extra resets (first-benchmark's memo,
+// the two observer setters) are additions this file never depended on being left dirty.
+afterEach(closePerformanceFixture)
 
 describe('IPC controls', () => {
   it('performance:get refuses a locked workspace and an untrusted sender', () => {
@@ -311,16 +334,55 @@ describe('restore, seed and probe writes', () => {
 
   it('a completed GPU probe — even an empty one — pushes after its write ("Try GPU again")', async () => {
     const { root, ctx, db } = here()
-    // A placeholder binary so the probe resolves a path; the injected probe never spawns it.
-    const dir = llamaServerDir(root)
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, llamaServerBinaryName()), '')
+    plantBinary(root)
     ctx.probeGpu = Object.assign(async () => [], { invalidate: () => undefined })
     const spy = performanceChangedSpy(() => getSettings(db).gpuProbe?.devices ?? null)
 
     await tryGpuAgain(ctx)
 
-    expect(spy.mock.results.map((r) => r.value)).toEqual([[]])
+    // The flag clear pushes first (nothing probed yet, A-D1), the probe write second.
+    expect(spy.mock.results.map((r) => r.value)).toEqual([null, []])
+  })
+
+  const cannotRun: Array<[label: string, binary: boolean, probeImpl: () => Promise<GpuDevice[]>]> = [
+    ['no binary for this OS (the probe is never called)', false, async () => [RTX]],
+    [
+      'a rejecting probe',
+      true,
+      async () => {
+        throw new Error('driver wedged')
+      }
+    ]
+  ]
+
+  it.each(cannotRun)('"Try GPU again" pushes the cleared flags even when the probe cannot run — %s (A-D1)', async (_label, binary, probeImpl) => {
+    const { root, ctx, db } = here()
+    const before: GpuProbeResult = { devices: [RTX], probedAt: '2026-09-05T00:00:00Z', machineKey: machineKey(detectSystem()) }
+    updateSettings(db, { gpuProbe: before, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
+    if (binary) plantBinary(root)
+    ctx.probeGpu = Object.assign(probeImpl, { invalidate: () => undefined })
+    const chatDevice = (): string => buildPerformanceSnapshot(ctx).placement.models.find((r) => r.role === 'chat')!.device
+    // The auto-disable forces the processor: the chat row says so before the button is pressed.
+    expect(chatDevice()).toBe('cpu')
+    const spy = performanceChangedSpy(() => ({
+      gpuAutoDisabled: getSettings(db).gpuAutoDisabled,
+      gpuLastError: getSettings(db).gpuLastError,
+      chat: chatDevice()
+    }))
+
+    await tryGpuAgain(ctx)
+
+    // Two pushes. The first is the flag clear alone and already reads the cleared flags through
+    // the snapshot (the card re-armed) — without it the screen kept the processor-forced rows
+    // until something else pushed. The second is the probe write: a probe that cannot run
+    // persists the EMPTY stamped probe (PR #308 decision 6), so the chat row is back on the
+    // processor — now because no card is recorded, not because of the flags.
+    expect(spy.mock.results.map((r) => r.value)).toEqual([
+      { gpuAutoDisabled: false, gpuLastError: null, chat: 'gpu' },
+      { gpuAutoDisabled: false, gpuLastError: null, chat: 'cpu' }
+    ])
+    // `before` is replaced by this session's empty stamped answer, never re-stamped.
+    expect(getSettings(db).gpuProbe).toMatchObject({ devices: [], machineKey: before.machineKey })
   })
 })
 
