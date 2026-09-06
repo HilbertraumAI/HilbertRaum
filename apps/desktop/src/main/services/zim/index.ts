@@ -1,18 +1,23 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
-import type { KnowledgePack, KnowledgePacksChangedEvent } from '../../../shared/types'
+import type {
+  KnowledgePack,
+  KnowledgePackOutcome,
+  KnowledgePacksChangedEvent
+} from '../../../shared/types'
 import type { Db } from '../db'
 import { log } from '../logging'
 import { resolveZimDir } from '../drive'
 import type { BinaryVerifyResult } from '../binary-verifier'
-import type { SpawnFn } from '../runtime/sidecar'
-import type { ExternalRetrievalArm } from '../rag'
-import { collectPackCandidates } from './arm'
-import { fetchArticleHtml } from './client'
+import { combineSignals, type SpawnFn } from '../runtime/sidecar'
+import type { ExternalRetrievalArm, ExternalRetrievalOutput } from '../rag'
+import { EXTERNAL_RETRIEVAL_DEADLINE_MS, collectPackCandidates } from './arm'
+import { fetchArticleHtml, probeSearchable } from './client'
 import { zimArticleToSegmentsAsync } from './html'
 import {
+  classifyPackSelection,
   listPacks,
   reconcile,
   registerPack,
@@ -20,7 +25,9 @@ import {
   retrievablePacks,
   servedCandidates,
   setPackEnabled,
+  unknownSearchablePacks,
   writeLibraryXml,
+  writeSearchableVerdicts,
   type PackDeps
 } from './packs'
 import { computeServedSet, type ServingNameCollision } from './identity'
@@ -177,6 +184,23 @@ export interface ZimServiceDeps {
   forceKillWaitMs?: number
   /** Where `library.<build>.xml` files are written (default: a fresh OS temp dir). */
   libraryDir?: string
+  /**
+   * The kiwix-serve binary's identity for the searchability cache key (#301 P4, finding M7).
+   * Production computes `"<size>:<mtimeMs>"` from the resolved binary; a test injects it to
+   * pin the "the tools bundle changed ⇒ re-probe" leg without touching a real file.
+   */
+  toolsFingerprint?: () => string | null
+  /**
+   * The per-ask archive deadline (`EXTERNAL_RETRIEVAL_DEADLINE_MS`, plan §9.21 (c)5) — the ONLY
+   * override seam for it, so a test can drive the timeout/deadline outcomes in milliseconds
+   * instead of waiting twenty seconds. Production never sets it.
+   */
+  externalDeadlineMs?: number
+  /**
+   * The per-request timeout of the `/suggest` capability probe. Test seam only, so the "a
+   * timeout leaves the pack unknown" leg does not sit out the client's real 15 s default.
+   */
+  probeTimeoutMs?: number
 }
 
 /**
@@ -413,6 +437,22 @@ export class ZimService {
     return this.resolveToolPaths() !== null
   }
 
+  /** `"<size>:<mtimeMs>"` of the kiwix-serve binary, or null when it cannot be stat'ed
+   *  (tools missing, or an injected seam that says so). Identity, not integrity — the
+   *  pre-spawn verifier owns integrity; this only has to MOVE when the bundle moves. */
+  private toolsFingerprint(): string | null {
+    const injected = this.deps.toolsFingerprint
+    if (injected) return injected()
+    const tools = this.resolveToolPaths()
+    if (!tools) return null
+    try {
+      const stat = statSync(tools.serve)
+      return `${stat.size}:${stat.mtimeMs}`
+    } catch {
+      return null
+    }
+  }
+
   private resolveToolPaths(): { serve: string; manage: string } | null {
     if (this.deps.resolveTools) return this.deps.resolveTools()
     const serve = resolveKiwixServePath(this.opts.rootPath, this.opts.platform, this.opts.env, {
@@ -444,6 +484,10 @@ export class ZimService {
       },
       onUncertain: (path) => this.keptPaths.add(path),
       assert: op ? () => op.assert() : undefined,
+      // The TOOL half of the searchability cache key (#301 P4, finding M7): a swapped
+      // kiwix-tools bundle invalidates every verdict, because "this archive has no full-text
+      // index" is a statement about a binary as much as about a file.
+      toolsFingerprint: () => this.toolsFingerprint(),
       manageAdd: async (libraryXmlPath, zimPath, perCallSignal) => {
         if (!tools) throw new Error('kiwix-tools is not installed')
         await kiwixManageAdd(tools.manage, libraryXmlPath, zimPath, spawnFn, {
@@ -536,12 +580,71 @@ export class ZimService {
       )
       op.assert()
       if (report.changed) this.invalidateLibrary()
+      // The capability probe runs at the END of the pass (#301 P4, finding M7; plan §9.21
+      // (d)5) — after the reconcile has settled availability and the served set, and BEFORE
+      // `reconcile-end`, so the panel refetches ONCE and already sees the verdicts.
+      await this.probeUnknownSearchability(db, op)
       // AFTER the assert: a pass that finished under an old epoch wrote nothing above and must
       // announce nothing either. `refreshing` is still true when a Refresh queued a rerun.
       this.emitPacksChanged(op, 'reconcile-end', this.runAgain)
     } finally {
       op.release()
     }
+  }
+
+  /**
+   * Confirm the full-text capability of every enabled ∧ available pack whose `searchable` is
+   * still unknown (#301 P4, finding M7; plan §2.5 and §9.21 (d)5). Runs at the end of a
+   * reconciliation, under the SAME `zim-reconcile` operation, because `reconcile()` is the one
+   * write path for capability state.
+   *
+   * Cost, deliberately accepted: a session whose registered packs are all already confirmed
+   * costs NOTHING (the list is empty and the sidecar is never woken); a session with one
+   * unknown pack costs one background sidecar start (~0.8 s) at its reconcile.
+   *
+   * Nothing is written unless the request guard ACCEPTED the batch and the operation asserts
+   * again afterwards: a `StaleServerError` (both attempts observed across a lifecycle change)
+   * leaves every verdict unknown — a response that may not even have come from our child must
+   * never become a persisted "this archive cannot be searched" — and an `AbortError` (lock,
+   * quit, a new epoch) propagates without a write. `null` (unknown) verdicts are skipped, so a
+   * 404, a timeout or a malformed body simply means "ask again next time".
+   */
+  private async probeUnknownSearchability(db: Db, op: ZimOp): Promise<void> {
+    const pending = unknownSearchablePacks(db)
+    if (pending.length === 0) return
+    let verdicts: Array<{ id: string; verdict: 'yes' | 'no'; searchableKey: string | null }> | null
+    try {
+      verdicts = await this.withServer(db, op, async (library) => {
+        const found: Array<{ id: string; verdict: 'yes' | 'no'; searchableKey: string | null }> = []
+        // Sequential on purpose: this is background work at session start, and one book at a
+        // time keeps it off the critical path of anything the user is waiting for.
+        for (const pack of pending) {
+          const name = library.names.get(pack.id)
+          // An excluded collision loser or a pack that stopped resolving is not served under
+          // any name — it stays unknown rather than being probed under someone else's.
+          if (name === undefined) continue
+          const verdict = await probeSearchable(library.port, name, op.signal, {
+            timeoutMs: this.deps.probeTimeoutMs
+          })
+          if (verdict !== null) found.push({ id: pack.id, verdict, searchableKey: pack.searchableKey })
+        }
+        return found
+      })
+    } catch (err) {
+      if (err instanceof StaleServerError) {
+        // Reason class only, never a port or a path. Unknown stays unknown; the next Refresh
+        // or session start probes again.
+        log.warn('Knowledge-pack searchability probe discarded — the pack server changed', {
+          reason: err.reason
+        })
+        return
+      }
+      throw err // an AbortError (lock / quit / cancelled reconcile) propagates, unwritten
+    }
+    if (verdicts === null || verdicts.length === 0) return
+    // The LAST recheck before the only capability write there is.
+    op.assert()
+    writeSearchableVerdicts(db, verdicts)
   }
 
   /**
@@ -1146,9 +1249,147 @@ export class ZimService {
   // ---- retrieval + viewer -------------------------------------------------------
 
   /**
+   * ONE ask against the knowledge packs (#301 P4, findings M6/M7/M8; plan §9.21 (c)/(e)2) —
+   * candidates AND one outcome per selected pack id, so nothing the user ticked can vanish
+   * silently.
+   *
+   * The order is deliberate:
+   *
+   *   1. `classifyPackSelection` FIRST, before any eligibility filter and before the tools
+   *      check — a missing kiwix-tools bundle must still produce outcomes ("makeArm = null or
+   *      an empty array cannot erase them"), and it produces them WITHOUT waking a sidecar;
+   *   2. the per-ask DEADLINE is combined with the ask signal ONCE, OUTSIDE the request guard,
+   *      so the guard's single admitted retry inherits the REMAINING time and `op.assert()`
+   *      (which reads `op.signal`) can never mistake the deadline for a cancellation;
+   *   3. everything the sidecar is asked runs inside ONE `withServer` callback that derives its
+   *      pack list from the `library` it was handed (plan §9.19 (a)4), so a retry after a
+   *      discarded attempt re-classifies under the CURRENT revision.
+   *
+   * `StaleServerError` (both attempts discarded) becomes one honest per-pack outcome and the
+   * ask continues with what the document arm found; an `AbortError` — a cancelled ask, a lock,
+   * a new epoch — always propagates and is never converted into an outcome or a fallback.
+   */
+  async runArm(
+    db: Db,
+    packIds: readonly string[] | null | undefined,
+    question: string,
+    signal?: AbortSignal,
+    opts: { propagateStaleServerError?: boolean } = {}
+  ): Promise<ExternalRetrievalOutput> {
+    const ids = [...new Set(packIds ?? [])]
+    if (ids.length === 0) return { candidates: [], outcomes: [] }
+    const upfront = classifyPackSelection(db, this.zimDir, ids)
+    if (!this.toolsInstalled()) {
+      log.warn('Knowledge packs in scope but kiwix-tools is not installed — skipping the ZIM arm')
+      return {
+        candidates: [],
+        outcomes: [...upfront.outcomes, ...skippedOutcomes(upfront.eligible, 'tools-missing')]
+      }
+    }
+    // Nothing survived the classification (every selected pack removed, disabled, unavailable
+    // or confirmed unsearchable): the outcomes are the whole answer, and no sidecar is woken.
+    if (upfront.eligible.length === 0) return { candidates: [], outcomes: upfront.outcomes }
+    // The whole arm is ONE registered operation with the ask's signal as its parent, so a lock
+    // (`zimOps.abortAll()`) cancels it exactly like a cancelled ask does. The op's signal — not
+    // the raw ask signal — reaches the library preparation, the sidecar start and the HTTP
+    // calls, and admission/epoch are rechecked after every await (H4).
+    const op = this.beginOp('zim-ask', signal)
+    const deadline = combineSignals(
+      op.signal,
+      this.deps.externalDeadlineMs ?? EXTERNAL_RETRIEVAL_DEADLINE_MS
+    )
+    try {
+      op.assert()
+      // The search + fetch batch is ONE guard window (#301 P5, finding M1; plan §9.19 (a)3):
+      // a death noticed only afterwards cannot tell our child's candidates from a port
+      // squatter's, so the batch is discarded and retried as a unit rather than per call.
+      const result = await this.withServer(db, op, async (library) => {
+        // Re-classified INSIDE the callback, per attempt: the retry re-enters under the
+        // CURRENT revision, and a pack removed, disabled or vanished during the first attempt
+        // must not be searched again from a list captured before it.
+        const attempt = classifyPackSelection(db, this.zimDir, ids)
+        const servable: typeof attempt.eligible = []
+        const outcomes: KnowledgePackOutcome[] = [...attempt.outcomes]
+        for (const pack of attempt.eligible) {
+          if (library.names.has(pack.id)) {
+            servable.push(pack)
+            continue
+          }
+          // A pack the served library does not carry is SKIPPED rather than searched under a
+          // name that belongs to another book (findings M5/L4): `not-served` when an earlier
+          // UUID owns its serving name, `file-missing` when it simply stopped resolving
+          // between the classification and the build.
+          const collision = library.excluded.some((e) => e.packId === pack.id)
+          outcomes.push({
+            packId: pack.id,
+            title: pack.title,
+            status: 'skipped',
+            reason: collision ? 'not-served' : 'file-missing',
+            found: 0,
+            admitted: 0
+          })
+        }
+        if (servable.length === 0) return { candidates: [], outcomes }
+        const produced = await collectPackCandidates(
+          library.port,
+          servable,
+          question,
+          deadline.signal,
+          library.names,
+          { askSignal: op.signal }
+        )
+        return { candidates: produced.candidates, outcomes: [...outcomes, ...produced.outcomes] }
+      })
+      // Before the CONTENT return: a lock that landed during the fetches must not hand
+      // archive text back into the prompt of a session that is closing.
+      op.assert()
+      if (result === null) {
+        // `ensureServer` had nothing to hand out: no tools (re-checked above, so not this) or
+        // nothing servable at all — the eligible packs' files stopped resolving.
+        return {
+          candidates: [],
+          outcomes: [...upfront.outcomes, ...skippedOutcomes(upfront.eligible, 'file-missing')]
+        }
+      }
+      return result
+    } catch (err) {
+      if (err instanceof StaleServerError && opts.propagateStaleServerError !== true) {
+        // An ORDINARY error, not a cancellation: the session still admits the work, so the ask
+        // continues and every eligible pack says "the pack server restarted during this
+        // question" instead of silently contributing nothing.
+        return {
+          candidates: [],
+          outcomes: [
+            ...upfront.outcomes,
+            ...upfront.eligible.map((pack) => ({
+              packId: pack.id,
+              title: pack.title,
+              status: 'failed' as const,
+              reason: 'server-restarted' as const,
+              found: 0,
+              admitted: 0
+            }))
+          ]
+        }
+      }
+      throw err
+    } finally {
+      deadline.clear()
+      op.release()
+    }
+  }
+
+  /**
    * The external retrieval arm for one ask, or null when packs cannot contribute
    * (no ids in scope, tools missing, or nothing retrievable). The arm starts the
    * sidecar lazily on first use; `retrieve` isolates any failure it throws.
+   *
+   * A THIN WRAPPER over `runArm` for now (#301 P4, plan §9.21 (e)3): the outcome half is
+   * produced but not yet carried, because `ExternalRetrievalArm` still returns a bare candidate
+   * array and `retrieve` has no `packOutcomes` producer wired. The outcomes step replaces this
+   * with the object shape and drops the null returns — the outcomes must exist even when
+   * nothing is retrievable — and `propagateStaleServerError` goes with it: it preserves the
+   * CURRENT contract in which a twice-discarded attempt rejects the ask's arm (T17-a).
    */
   makeArm(db: Db, packIds: readonly string[] | null | undefined): ExternalRetrievalArm | null {
     if (!packIds || packIds.length === 0) return null
@@ -1158,43 +1399,9 @@ export class ZimService {
     }
     const packs = retrievablePacks(db, this.zimDir, packIds)
     if (packs.length === 0) return null
-    return async (question, signal) => {
-      // The whole arm is ONE registered operation with the ask's signal as its parent, so a
-      // lock (`zimOps.abortAll()`) cancels it exactly like a cancelled ask does. The op's
-      // signal — not the raw ask signal — reaches the library preparation, the sidecar start
-      // and the HTTP calls, and admission/epoch are rechecked after every await (H4).
-      const op = this.beginOp('zim-ask', signal)
-      try {
-        op.assert()
-        // The search + fetch batch is ONE guard window (#301 P5, finding M1; plan §9.19 (a)3):
-        // a death noticed only afterwards cannot tell our child's candidates from a port
-        // squatter's, so the batch is discarded and retried as a unit rather than per call.
-        const candidates = await this.withServer(db, op, async (library) => {
-          // Re-queried INSIDE the callback, per attempt: the retry re-enters under the
-          // CURRENT revision, and a pack removed, disabled or vanished during the first
-          // attempt must not be searched again from a list captured before it.
-          const current = retrievablePacks(db, this.zimDir, packIds)
-          // A pack the served library does not carry — a collision loser, or one whose file
-          // stopped resolving between `retrievablePacks` and the build — is SKIPPED rather
-          // than searched under a name that belongs to another book (findings M5/L4).
-          const servable = current.filter((p) => library.names.has(p.id))
-          if (servable.length === 0) return []
-          return collectPackCandidates(
-            library.port,
-            servable,
-            question,
-            op.signal,
-            library.names
-          )
-        })
-        // Before the CONTENT return: a lock that landed during the fetches must not hand
-        // archive text back into the prompt of a session that is closing.
-        op.assert()
-        return candidates ?? []
-      } finally {
-        op.release()
-      }
-    }
+    return async (question, signal) =>
+      (await this.runArm(db, packIds, question, signal, { propagateStaleServerError: true }))
+        .candidates
   }
 
   /**
@@ -1249,6 +1456,21 @@ export class ZimService {
       op.release()
     }
   }
+}
+
+/** One `skipped` outcome per pack, for the states that skip the sidecar entirely. */
+function skippedOutcomes(
+  packs: ReadonlyArray<{ id: string; title: string }>,
+  reason: 'tools-missing' | 'file-missing'
+): KnowledgePackOutcome[] {
+  return packs.map((pack) => ({
+    packId: pack.id,
+    title: pack.title,
+    status: 'skipped',
+    reason,
+    found: 0,
+    admitted: 0
+  }))
 }
 
 /** The caller-facing view of one published configuration (the XML path stays internal). */

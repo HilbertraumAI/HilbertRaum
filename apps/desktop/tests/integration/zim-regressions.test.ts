@@ -1,9 +1,9 @@
 import { describe, it, expect, afterAll, beforeAll } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtempSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder, VectorIndex, encodeVector, type Embedder } from '../../src/main/services/embeddings'
@@ -28,7 +28,7 @@ import {
   resolveScope
 } from '../../src/main/services/collections'
 import type { Reranker } from '../../src/main/services/reranker'
-import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import { DEFAULT_SETTINGS, MAX_SELECTED_PACKS } from '../../src/shared/types'
 import type { Citation, EvidencePackOptions, EvidenceSourceSnapshot } from '../../src/shared/types'
 import {
   appendMessage,
@@ -37,6 +37,11 @@ import {
   getConversation,
   setScope
 } from '../../src/main/services/chat'
+import { ZimService } from '../../src/main/services/zim'
+import { readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
+import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
+import { ServeFakeChild, serveGate, type ServeGate } from '../helpers/zim-fakes'
+import { packUuid, writeZimFixture } from '../helpers/zim-header'
 import {
   buildEvidenceSourceSnapshots,
   createEvidenceReviewFromMessage
@@ -47,7 +52,13 @@ import { buildEvidencePackModel } from '../../src/main/services/evidence-pack/pa
 import { escapeHtml, renderEvidencePackHtml } from '../../src/main/services/evidence-pack/render-html'
 import { EVIDENCE_PACK_OPTION_DEFAULTS } from '../../src/shared/evidence-review'
 import { t } from '../../src/shared/i18n'
-import { collectPackCandidates, type ExternalCandidate } from '../../src/main/services/zim/arm'
+import {
+  ARTICLES_PER_PACK,
+  MAX_EXTERNAL_CANDIDATES,
+  collectPackCandidates,
+  packQuota,
+  type ExternalCandidate
+} from '../../src/main/services/zim/arm'
 // The chip/footer phrase is a PURE function of the stored scope (no React state), so the node
 // test can pin "the chip agrees with the resolved scope" (T10) directly against it.
 import { scopeSources } from '../../src/renderer/chat/ScopePopover'
@@ -1473,7 +1484,12 @@ describe('M8 — per-pack allocation', () => {
 
   beforeAll(async () => {
     searched.length = 0
-    out = await collectPackCandidates(port, packs, 'Wie entsteht Treibhausgas in der Landwirtschaft?')
+    const produced = await collectPackCandidates(
+      port,
+      packs,
+      'Wie entsteht Treibhausgas in der Landwirtschaft?'
+    )
+    out = produced.candidates
   })
 
   it('prerequisite: the arm searched at least one pack and produced candidates', () => {
@@ -1482,7 +1498,437 @@ describe('M8 — per-pack allocation', () => {
     expect(out.every((c) => c.sourceKind === 'archive')).toBe(true)
   })
 
-  it.fails('M8 three productive packs are all searched', () => {
+  // FLIPPED from `it.fails` to `it` by #301 P4 (plan §9.21 (c), §0.3 item 2). The inverted
+  // baseline was demonstrated RED against the repaired arm first — "Expect test to fail" on
+  // 2026-09-06 — and only then flipped, so a green here is the fix, not a broken fixture.
+  it('M8 three productive packs are all searched', () => {
     expect(searched).toContain('pack-C')
   })
+})
+
+// ---- T15 — allocation, concurrency, the selection cap, the deadline and abort (P4, M8) ---
+//
+// The M8 case above proves only that a third pack is reached. This one is the whole contract of
+// plan §9.21 (c): WHICH candidates are admitted (not merely which packs were searched), that the
+// answer does not depend on which pack happened to finish first, that at most two packs are in
+// flight, that a persisted 13-pack selection is trimmed in title order and told so, that the
+// per-ask deadline truncates instead of hanging, and that an abort stops the work dead.
+//
+// Everything ordering-related is established with controlled promises (entered/release pairs on
+// the fixture server) and counters, never with a sleep.
+
+describe('T15 — fair allocation, bounded concurrency, the selection cap, the deadline and abort (P4, M8)', () => {
+  let t15Server: http.Server
+  let t15Port = 0
+  /** How each book answers `/search`. */
+  const t15Behaviour = new Map<string, 'long' | 'short' | 'empty' | 'fail'>()
+  /** Serving name per book id — a hit's `urlId` must equal the published name for that pack. */
+  const t15Names = new Map<string, string>()
+  /** Every request path the fixture received, in arrival order. */
+  let t15Requests: string[] = []
+  /** The `books.id` of every `/search`, in arrival order. */
+  let t15Searches: string[] = []
+  /** The concurrency oracle: handlers currently inside the fixture, and the maximum seen. */
+  let t15InFlight = 0
+  let t15MaxInFlight = 0
+  /** Per-request parking. Returning a promise holds the RESPONSE until it resolves. */
+  let t15Hold: ((kind: 'search' | 'raw', book: string) => Promise<void> | undefined) | null = null
+
+  const t15Reset = (): void => {
+    t15Requests = []
+    t15Searches = []
+    t15InFlight = 0
+    t15MaxInFlight = 0
+    t15Hold = null
+  }
+  /** One event-loop turn through the TIMER and POLL phases, so real loopback I/O has a chance
+   *  to land: a `setImmediate` spin completes hundreds of rounds in microseconds and would
+   *  "prove" that a socket never answered. Used to let already-scheduled work run before a
+   *  "nothing more happened" assertion — never as the proof of an ordering (the gates do that). */
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 1))
+  const waitUntil = async (cond: () => boolean, rounds = 500): Promise<boolean> => {
+    for (let i = 0; i < rounds; i++) {
+      if (cond()) return true
+      await tick()
+    }
+    return cond()
+  }
+
+  beforeAll(async () => {
+    t15Server = http.createServer((req, res) => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+      t15Requests.push(`${url.pathname}${url.search}`)
+      t15InFlight++
+      t15MaxInFlight = Math.max(t15MaxInFlight, t15InFlight)
+      const leave = (): void => {
+        t15InFlight--
+      }
+      if (url.pathname === '/search') {
+        const book = url.searchParams.get('books.id') ?? ''
+        t15Searches.push(book)
+        const send = (): void => {
+          leave()
+          const behaviour = t15Behaviour.get(book) ?? 'long'
+          if (behaviour === 'fail') {
+            res.writeHead(500)
+            res.end('boom')
+            return
+          }
+          const titles =
+            behaviour === 'empty'
+              ? []
+              : behaviour === 'short'
+                ? [`${book} Artikel 0`]
+                : Array.from({ length: ARTICLES_PER_PACK }, (_, i) => `${book} Artikel ${i}`)
+          res.writeHead(200, { 'content-type': 'application/xml' })
+          res.end(searchXml(t15Names.get(book) ?? `book-${book}`, titles))
+        }
+        const held = t15Hold?.('search', book)
+        if (held) void held.then(send)
+        else send()
+        return
+      }
+      if (url.pathname.startsWith('/raw/')) {
+        const article = decodeURIComponent(url.pathname.split('/content/')[1] ?? '').replace(/_/g, ' ')
+        const book = article.split(' Artikel')[0] ?? ''
+        const send = (): void => {
+          leave()
+          res.writeHead(200, { 'content-type': 'text/html' })
+          res.end(longArticleHtml(article))
+        }
+        const held = t15Hold?.('raw', book)
+        if (held) void held.then(send)
+        else send()
+        return
+      }
+      leave()
+      res.writeHead(404)
+      res.end()
+    })
+    await new Promise<void>((resolve) => t15Server.listen(0, '127.0.0.1', resolve))
+    t15Port = (t15Server.address() as AddressInfo).port
+  })
+
+  afterAll(() => new Promise<void>((resolve) => t15Server.close(() => resolve())))
+
+  /** N packs named so their `title COLLATE NOCASE, id` order IS their array order. */
+  const t15Packs = (n: number, prefix = 'pk'): Array<{ id: string; title: string }> =>
+    Array.from({ length: n }, (_, i) => {
+      const id = `${prefix}-${String(i).padStart(2, '0')}`
+      t15Behaviour.set(id, 'long')
+      t15Names.set(id, `book-${id}`)
+      return { id, title: `Pack ${id}` }
+    })
+
+  /** A REAL `ZimService` over a real temp DB with fake children, the fixture server as its
+   *  sidecar, and (optionally) a tiny per-ask deadline — the P3a/P3b harness shape. */
+  function t15Service(opts: { externalDeadlineMs?: number } = {}): {
+    db: Db
+    zimDir: string
+    svc: ZimService
+    addPack(leaf: string): Promise<string>
+    close(): Promise<void>
+  } {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-t15-'))
+    const zimDir = join(root, 'zim')
+    mkdirSync(zimDir, { recursive: true })
+    const libraryDir = join(root, 'library')
+    mkdirSync(libraryDir, { recursive: true })
+    const db = openDatabase(join(root, 'test.sqlite'))
+    let pid = 6100
+    const spawn: SpawnFn = () => new ServeFakeChild(pid++, 'exit-on-sigterm')
+    const manageSpawn: SpawnFn = (_command, args) => {
+      const libraryXmlPath = args[0] as string
+      const zimPath = args[2] as string
+      const child = new ServeFakeChild(pid++, 'exit-on-sigterm')
+      queueMicrotask(() => {
+        if (child.killed) return
+        const leaf = basename(zimPath)
+        appendFileSync(
+          libraryXmlPath,
+          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" ` +
+            `title="Title of ${leaf}" description="Test archive" language="deu" ` +
+            `date="2026-07-01" articleCount="41" mediaCount="7" />\n`
+        )
+        child.emit('exit', 0, null)
+      })
+      return child
+    }
+    const svc = new ZimService({
+      rootPath: root,
+      isDev: true,
+      deps: {
+        resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
+        spawn,
+        manageSpawn,
+        findPort: async () => t15Port,
+        probe: async () => true,
+        verifyBinary: async () => 'ok',
+        healthTimeoutMs: 1_000,
+        healthIntervalMs: 1,
+        killGraceMs: 5,
+        forceKillWaitMs: 5,
+        libraryDir,
+        externalDeadlineMs: opts.externalDeadlineMs
+      }
+    })
+    return {
+      db,
+      zimDir,
+      svc,
+      addPack: async (leaf) => {
+        const file = writeZimFixture(join(zimDir, leaf), packUuid('7f7f7f7f', leaf.slice(0, 6)), {
+          trailing: `body of ${leaf}`
+        })
+        const pack = await svc.registerPack(db, file)
+        t15Behaviour.set(pack.id, 'short')
+        t15Names.set(pack.id, servingNameFor(file))
+        return pack.id
+      },
+      close: async () => {
+        await svc.stop()
+      }
+    }
+  }
+
+  const QUESTION = 'Wie entsteht Treibhausgas in der Landwirtschaft?'
+
+  it("T15 1 / 3 / 7 / 12 packs and a 13-pack persisted selection with short / empty / long / failed packs and varied completion order: search participation AND candidate admission are fair, at most 24 candidates, MAX_SELECTED_PACKS = 12 enforced in the popover and by trimming with a 'not searched: selection limit' outcome, concurrency ≤ 2, a late most-relevant hit reaches the reranker, no work after abort", async () => {
+    // ---- (1) 1 / 3 / 7 / 12 PRODUCTIVE PACKS: the quota arithmetic, in pack order --------
+    for (const n of [1, 3, 7, 12]) {
+      t15Reset()
+      const packs = t15Packs(n, `n${n}`)
+      const { candidates, outcomes } = await collectPackCandidates(t15Port, packs, QUESTION)
+      // EVERY pack is searched — the M8 defect was that the budget ran out first.
+      expect(t15Searches.sort(), `N = ${n}`).toEqual(packs.map((p) => p.id).sort())
+      expect(candidates.length, `N = ${n}`).toBeLessThanOrEqual(MAX_EXTERNAL_CANDIDATES)
+      expect(outcomes, `N = ${n}`).toHaveLength(n)
+      for (const [i, pack] of packs.entries()) {
+        const outcome = outcomes.find((o) => o.packId === pack.id)!
+        expect(outcome, `N = ${n} pack ${i}`).toMatchObject({
+          title: pack.title,
+          status: 'searched',
+          reason: null
+        })
+        // Each pack fetched articles only until it held its provisional quota, and admission
+        // gave it exactly that (or everything it had, when the archive was shorter).
+        expect(outcome.admitted, `N = ${n} pack ${i}`).toBe(
+          Math.min(outcome.found, packQuota(i, n))
+        )
+        expect(outcome.admitted, `N = ${n} pack ${i}`).toBeGreaterThan(0)
+        expect(
+          candidates.filter((c) => c.packId === pack.id),
+          `N = ${n} pack ${i}`
+        ).toHaveLength(outcome.admitted)
+      }
+      // With more material than budget, the budget is spent to the last slot.
+      if (n >= 3) expect(candidates, `N = ${n}`).toHaveLength(MAX_EXTERNAL_CANDIDATES)
+      // A single pack is bounded by ARTICLES_PER_PACK, not by the 24-candidate ceiling.
+      if (n === 1) {
+        expect(t15Requests.filter((r) => r.startsWith('/raw/'))).toHaveLength(ARTICLES_PER_PACK)
+      }
+    }
+
+    // ---- (2) SHORT / EMPTY / FAILED PACKS: their slots are reclaimed, and they are REPORTED
+    {
+      t15Reset()
+      const packs = t15Packs(7, 'mix')
+      t15Behaviour.set(packs[1]!.id, 'short')
+      t15Behaviour.set(packs[3]!.id, 'empty')
+      t15Behaviour.set(packs[5]!.id, 'fail')
+      const { candidates, outcomes } = await collectPackCandidates(t15Port, packs, QUESTION)
+      const outcomeOf = (i: number) => outcomes.find((o) => o.packId === packs[i]!.id)!
+      // A pack whose `/search` answered 500 is a FAILED pack for this ask — not a silent
+      // absence, which is exactly what the pre-P4 arm produced.
+      expect(outcomeOf(5)).toMatchObject({ status: 'failed', reason: 'search-failed', found: 0, admitted: 0 })
+      // Zero hits is a SUCCESSFUL search (§2.5 item 4), never a failure.
+      expect(outcomeOf(3)).toMatchObject({ status: 'searched', reason: null, found: 0, admitted: 0 })
+      expect(outcomeOf(1)).toMatchObject({ status: 'searched', reason: null })
+      expect(outcomeOf(1).found).toBeGreaterThan(0)
+      // The four productive packs all reached the candidate set…
+      for (const i of [0, 2, 4, 6]) expect(outcomeOf(i).admitted).toBeGreaterThan(0)
+      // …and every empty/failed pack's slots went to them: nothing was left unused while a
+      // productive pack still had fetched material waiting.
+      expect(candidates.length).toBeLessThanOrEqual(MAX_EXTERNAL_CANDIDATES)
+      expect(candidates.length).toBe(outcomes.reduce((sum, o) => sum + o.admitted, 0))
+      for (const outcome of outcomes) expect(outcome.admitted).toBe(
+        Math.min(outcome.found, outcome.admitted || outcome.found)
+      )
+      // The failed and empty packs were still ASKED — participation is not silently skipped.
+      expect(t15Searches.sort()).toEqual(packs.map((p) => p.id).sort())
+    }
+
+    // ---- (3) VARIED COMPLETION ORDER + CONCURRENCY ≤ 2 + THE LATE BEST HIT --------------
+    // Every `/search` is parked and released LAST-IN-FIRST-OUT, so packs finish in a
+    // different order than they started. The admitted set must be byte-identical to the
+    // unparked run: assembly reads the PACK order, never the settle order.
+    let baseline: string[] = []
+    {
+      t15Reset()
+      const packs = t15Packs(7, 'ord')
+      baseline = (await collectPackCandidates(t15Port, packs, QUESTION)).candidates.map(
+        (c) => c.chunkId
+      )
+      expect(t15MaxInFlight).toBeGreaterThan(0)
+    }
+    {
+      t15Reset()
+      const packs = t15Packs(7, 'ord')
+      const arrival: string[] = []
+      const released: string[] = []
+      // Each search is held until the SECOND worker's search has also entered, and the pair is
+      // then answered last-in-first-out — a genuine entered/release pair, not a delay.
+      let parked: { book: string; gate: ServeGate<void> } | null = null
+      const release = (entry: { book: string; gate: ServeGate<void> }): void => {
+        released.push(entry.book)
+        entry.gate.release()
+      }
+      t15Hold = (kind, book) => {
+        if (kind !== 'search') return undefined
+        arrival.push(book)
+        const entry = { book, gate: serveGate<void>() }
+        if (parked) {
+          const first = parked
+          parked = null
+          release(entry) // the LATER arrival is answered FIRST
+          release(first)
+        } else if (arrival.length === packs.length) {
+          release(entry) // the last, unpaired pack
+        } else {
+          parked = entry
+        }
+        return entry.gate.wait()
+      }
+      const { candidates, outcomes } = await collectPackCandidates(t15Port, packs, QUESTION)
+      // The release order really WAS different from the arrival order…
+      expect(released).toHaveLength(arrival.length)
+      expect(released).not.toEqual(arrival)
+      // …and the result is exactly the same as the unparked run.
+      expect(candidates.map((c) => c.chunkId)).toEqual(baseline)
+      // Bounded concurrency: two packs in flight, never a third (the parked server is what
+      // makes this observable — with instant responses the counter would rarely exceed 1).
+      expect(t15MaxInFlight).toBe(2)
+      // The LATE pack — the last one released — still has its best hit admitted, because
+      // admission happens only after every pack settled. Its first candidate is in the first
+      // round of the round-robin, ahead of every other pack's second.
+      const late = released[released.length - 1]!
+      const lateIndex = packs.findIndex((p) => p.id === late)
+      expect(outcomes.find((o) => o.packId === late)!.admitted).toBeGreaterThan(0)
+      const firstRound = candidates.slice(0, packs.length).map((c) => c.packId)
+      expect(firstRound).toContain(late)
+      expect(candidates.find((c) => c.packId === late)!.chunkId).toBe(
+        baseline[lateIndex] // its top hit, in its own position in the first round
+      )
+    }
+
+    // ---- (4) A PERSISTED 13-PACK SELECTION: trimmed in title order, and TOLD SO ---------
+    // Driven the way a real ask is: the scope is persisted on a conversation, resolved by
+    // `resolveScope`, and handed to the REAL service — no hand-made pack list anywhere.
+    {
+      const h = t15Service()
+      try {
+        t15Reset()
+        const ids: string[] = []
+        for (let i = 1; i <= MAX_SELECTED_PACKS + 1; i++) {
+          ids.push(await h.addPack(`p${String(i).padStart(2, '0')}.zim`))
+        }
+        const conv = createConversation(h.db, { title: 'Cap' })
+        setScope(h.db, conv.id, { collectionIds: [], documentIds: [], packIds: ids })
+        const scope = resolveScope(h.db, conv.id)
+        expect(scope.packIds).toHaveLength(MAX_SELECTED_PACKS + 1)
+
+        const { candidates, outcomes } = await h.svc.runArm(h.db, scope.packIds, QUESTION)
+        expect(outcomes).toHaveLength(MAX_SELECTED_PACKS + 1) // every id gets an answer
+        // `title COLLATE NOCASE, id` puts "Title of p13.zim" last, so THAT is the pack the cap
+        // trims — deterministically, whatever order the ids were persisted in.
+        const trimmed = outcomes.filter((o) => o.reason === 'selection-limit')
+        expect(trimmed).toHaveLength(1)
+        expect(trimmed[0]).toMatchObject({
+          packId: ids[MAX_SELECTED_PACKS]!,
+          title: 'Title of p13.zim',
+          status: 'skipped',
+          found: 0,
+          admitted: 0
+        })
+        // …and it was never searched: the cap is applied BEFORE any request goes out.
+        expect(t15Searches).not.toContain(ids[MAX_SELECTED_PACKS]!)
+        expect(new Set(t15Searches).size).toBe(MAX_SELECTED_PACKS)
+        expect(outcomes.filter((o) => o.status === 'searched')).toHaveLength(MAX_SELECTED_PACKS)
+        // The global budget still holds across twelve packs, two candidates each.
+        expect(candidates.length).toBeLessThanOrEqual(MAX_EXTERNAL_CANDIDATES)
+        expect(candidates).toHaveLength(MAX_EXTERNAL_CANDIDATES)
+        expect(outcomes.reduce((sum, o) => sum + o.admitted, 0)).toBe(candidates.length)
+      } finally {
+        await h.close()
+      }
+    }
+
+    // ---- (5) THE PER-ASK DEADLINE truncates and the ask still answers -------------------
+    {
+      const h = t15Service({ externalDeadlineMs: 150 })
+      try {
+        t15Reset()
+        const ids: string[] = []
+        for (let i = 1; i <= 5; i++) ids.push(await h.addPack(`d${i}.zim`))
+        // Nothing is ever released: every search hangs, so the deadline is the only way out.
+        t15Hold = (kind) => (kind === 'search' ? new Promise<void>(() => {}) : undefined)
+        const { candidates, outcomes } = await h.svc.runArm(h.db, ids, QUESTION)
+        // The ask RESOLVES — a truncated archive arm must not fail the question.
+        expect(candidates).toEqual([])
+        expect(outcomes).toHaveLength(5)
+        // The two packs that were in flight when the deadline fired are `timeout`; the three
+        // that were never started are `deadline`. Both are `skipped`/`failed` with a reason —
+        // never a silent absence.
+        const timedOut = outcomes.filter((o) => o.reason === 'timeout')
+        const notStarted = outcomes.filter((o) => o.reason === 'deadline')
+        expect(timedOut).toHaveLength(2)
+        expect(timedOut.every((o) => o.status === 'failed')).toBe(true)
+        expect(notStarted).toHaveLength(3)
+        expect(notStarted.every((o) => o.status === 'skipped')).toBe(true)
+        expect(new Set(t15Searches).size).toBe(2) // only the two in-flight packs were asked
+        t15Hold = null
+      } finally {
+        await h.close()
+      }
+    }
+
+    // ---- (6) NO WORK AFTER ABORT -------------------------------------------------------
+    {
+      const h = t15Service()
+      try {
+        t15Reset()
+        const ids: string[] = []
+        for (let i = 1; i <= 4; i++) ids.push(await h.addPack(`a${i}.zim`))
+        const gates: Array<ServeGate<void>> = []
+        t15Hold = (kind) => {
+          if (kind !== 'search') return undefined
+          const gate = serveGate<void>()
+          gates.push(gate)
+          return gate.wait()
+        }
+        const ctrl = new AbortController()
+        const asking = h.svc.runArm(h.db, ids, QUESTION, ctrl.signal)
+        // Handled so an abort rejection never becomes an unhandled rejection.
+        const settled = asking.then(
+          () => null,
+          (err: unknown) => err
+        )
+        // Both workers are really inside a parked request before the abort — the entered half
+        // of the entered/release pair.
+        expect(await waitUntil(() => gates.length >= 2)).toBe(true)
+        const requestsAtAbort = t15Requests.length
+        ctrl.abort() // the user cancelled the ask
+        t15Hold = null
+        for (const gate of gates) gate.release()
+        const err = await settled
+        // A cancellation is an AbortError, NEVER an outcome and never a partial answer.
+        expect(err).toMatchObject({ name: 'AbortError' })
+        for (let i = 0; i < 20; i++) await tick()
+        expect(t15Requests).toHaveLength(requestsAtAbort) // not one request after the abort
+      } finally {
+        t15Hold = null
+        await h.close()
+      }
+    }
+  }, 60_000)
 })

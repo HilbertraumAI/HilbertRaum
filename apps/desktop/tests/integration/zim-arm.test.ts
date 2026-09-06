@@ -10,7 +10,16 @@ import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
 import { ragSettingsFrom, retrieve, type RagRetrievalSettings } from '../../src/main/services/rag'
 import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
-import { collectPackCandidates, queryTerms, overlapScore } from '../../src/main/services/zim/arm'
+import {
+  MAX_EXTERNAL_CANDIDATES,
+  allocateCandidates,
+  collectPackCandidates,
+  overlapScore,
+  packQuota,
+  queryTerms,
+  type ExternalCandidate,
+  type PackCandidateList
+} from '../../src/main/services/zim/arm'
 
 // The ZIM retrieval arm end-to-end against a fake kiwix-serve (real sockets — the
 // node:http transport is load-bearing, see client.ts), and the retrieve() seam:
@@ -114,8 +123,22 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())))
 describe('collectPackCandidates', () => {
   it('produces archive candidates: search → fetch → segments → chunker → overlap pick', async () => {
     const packs = [{ id: 'pack-climate', title: 'Klimawandel von Wikipedia' }]
-    const out = await collectPackCandidates(port, packs, 'Wie entsteht Treibhausgas in der Landwirtschaft?')
+    const { candidates: out, outcomes } = await collectPackCandidates(
+      port,
+      packs,
+      'Wie entsteht Treibhausgas in der Landwirtschaft?'
+    )
     expect(out.length).toBeGreaterThan(0)
+    // #301 P4: the arm reports per-pack outcomes beside the candidates (plan §9.21 (c)6).
+    expect(outcomes).toHaveLength(1)
+    expect(outcomes[0]).toMatchObject({
+      packId: 'pack-climate',
+      title: 'Klimawandel von Wikipedia',
+      status: 'searched',
+      reason: null,
+      found: out.length,
+      admitted: out.length
+    })
     const first = out[0]!
     expect(first).toMatchObject({
       documentId: 'zim:pack-climate',
@@ -171,7 +194,11 @@ describe('collectPackCandidates', () => {
   })
 
   it('P1b a per-hit fetch failure is still skipped — only the conversion abort propagates', async () => {
-    const out = await collectPackCandidates(port, [{ id: 'pack-mixed', title: 'Gemischt' }], 'Schwefel Verbrennung')
+    const { candidates: out } = await collectPackCandidates(
+      port,
+      [{ id: 'pack-mixed', title: 'Gemischt' }],
+      'Schwefel Verbrennung'
+    )
     expect(out.length).toBeGreaterThan(0)
     expect(out.every((c) => c.articlePath === 'Schwefel')).toBe(true)
   })
@@ -181,9 +208,98 @@ describe('collectPackCandidates', () => {
       { id: 'pack-broken', title: 'Broken' },
       { id: 'pack-chem', title: 'Chemie von Wikipedia' }
     ]
-    const out = await collectPackCandidates(port, packs, 'Schwefel Verbrennung')
+    const { candidates: out, outcomes } = await collectPackCandidates(port, packs, 'Schwefel Verbrennung')
     expect(out.length).toBeGreaterThan(0)
     expect(out.every((c) => c.packId === 'pack-chem')).toBe(true)
+    // …and the failing pack is REPORTED rather than silently dropped (#301 P4, finding M6):
+    // its `/search` answered HTTP 500, which is `search-failed` for this ask only — never a
+    // persisted capability (a 404 is just as ambiguous, plan §2.2).
+    expect(outcomes.find((o) => o.packId === 'pack-broken')).toMatchObject({
+      title: 'Broken',
+      status: 'failed',
+      reason: 'search-failed',
+      found: 0,
+      admitted: 0
+    })
+    expect(outcomes.find((o) => o.packId === 'pack-chem')).toMatchObject({
+      status: 'searched',
+      reason: null
+    })
+  })
+
+  it('allocateCandidates admits round-robin in pack order, reclaims short packs and is completion-order independent', () => {
+    const candidate = (packId: string, i: number): ExternalCandidate => ({
+      chunkId: `zim:${packId}:A#${i}`,
+      documentId: `zim:${packId}`,
+      text: `${packId} chunk ${i}`,
+      sourceTitle: 'A',
+      pageNumber: null,
+      sectionLabel: null,
+      score: 1,
+      sourceKind: 'archive',
+      packId,
+      archiveTitle: packId,
+      articlePath: 'A'
+    })
+    const list = (packId: string, n: number): PackCandidateList => ({
+      packId,
+      candidates: Array.from({ length: n }, (_, i) => candidate(packId, i))
+    })
+    const shares = (input: PackCandidateList[]): number[] => {
+      const { admitted, admittedPerPack } = allocateCandidates(input)
+      expect(admitted.length).toBeLessThanOrEqual(MAX_EXTERNAL_CANDIDATES)
+      // Every admitted candidate is counted exactly once, and the counts sum to the whole set.
+      expect([...admittedPerPack.values()].reduce((a, b) => a + b, 0)).toBe(admitted.length)
+      return input.map((p) => admittedPerPack.get(p.packId) ?? 0)
+    }
+
+    // N = 1: one pack takes the whole budget, and never more than it.
+    expect(shares([list('p0', 40)])).toEqual([MAX_EXTERNAL_CANDIDATES])
+    expect(shares([list('p0', 5)])).toEqual([5])
+
+    // N = 3 / 7 / 12, every pack long: exactly the quota arithmetic
+    // `floor(24/N) + (i < 24 mod N)`, in PACK ORDER.
+    for (const n of [3, 7, 12]) {
+      const long = Array.from({ length: n }, (_, i) => list(`p${i}`, 30))
+      expect(shares(long), `N = ${n}`).toEqual(
+        Array.from({ length: n }, (_, i) => packQuota(i, n))
+      )
+      expect(allocateCandidates(long).admitted).toHaveLength(MAX_EXTERNAL_CANDIDATES)
+    }
+
+    // Short / empty / long mixed: the short and empty packs' slots are RECLAIMED by the long
+    // ones — the pre-P4 arm instead let the first pack eat the budget before the third was
+    // even searched (finding M8).
+    const mixed = [list('short', 2), list('empty', 0), list('long-a', 30), list('long-b', 30)]
+    const mixedShares = shares(mixed)
+    expect(mixedShares[0]).toBe(2)
+    expect(mixedShares[1]).toBe(0)
+    expect(mixedShares[2]! + mixedShares[3]!).toBe(MAX_EXTERNAL_CANDIDATES - 2)
+    expect(Math.abs(mixedShares[2]! - mixedShares[3]!)).toBeLessThanOrEqual(1)
+
+    // Within one pack, its own rank order is preserved…
+    const admittedOfLongA = allocateCandidates(mixed).admitted.filter((c) => c.packId === 'long-a')
+    expect(admittedOfLongA.map((c) => c.chunkId)).toEqual(
+      admittedOfLongA.map((_, i) => `zim:long-a:A#${i}`)
+    )
+    // …and a pack's FIRST candidate is admitted before any pack's second — the "a late pack's
+    // best hit still reaches the reranker" property, which holds because admission happens
+    // only after every pack settled.
+    const firstRound = allocateCandidates(mixed).admitted.slice(0, 3)
+    expect(firstRound.map((c) => c.packId)).toEqual(['short', 'long-a', 'long-b'])
+
+    // COMPLETION-ORDER INDEPENDENCE: the same packs handed in the same PACK order always
+    // produce the same admitted list, whatever order they finished in — the function reads a
+    // list keyed by pack order and nothing else.
+    const settleOrderA = allocateCandidates(mixed).admitted.map((c) => c.chunkId)
+    const shuffled = [mixed[2]!, mixed[0]!, mixed[3]!, mixed[1]!]
+    const byPackOrderAgain = [shuffled[1]!, shuffled[3]!, shuffled[0]!, shuffled[2]!]
+    expect(allocateCandidates(byPackOrderAgain).admitted.map((c) => c.chunkId)).toEqual(settleOrderA)
+    // A different PACK order is a different (still fair) result — order is the caller's
+    // contract (`retrievablePacks`' `title COLLATE NOCASE, id`), not an accident of timing.
+    expect(allocateCandidates(shuffled).admitted.map((c) => c.chunkId)).not.toEqual(settleOrderA)
+
+    expect(allocateCandidates([])).toEqual({ admitted: [], admittedPerPack: new Map() })
   })
 })
 

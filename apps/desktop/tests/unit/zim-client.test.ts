@@ -6,12 +6,15 @@ import { join } from 'node:path'
 import {
   ArticlePathError,
   MAX_ARTICLE_PATH_CHARS,
+  SUGGEST_PROBE_TERM,
   assertArticlePath,
   encodeArticlePath,
   fetchArticleHtml,
+  ftIndexHint,
   kiwixGet,
   parseLibraryXml,
   parseSearchXml,
+  probeSearchable,
   searchPack
 } from '../../src/main/services/zim/client'
 
@@ -21,6 +24,40 @@ import {
 
 let server: http.Server
 let port = 0
+/** A port nothing listens on (bound, read, then closed) — the "the sidecar is gone" leg. */
+let closedPort = 0
+/**
+ * What the fixture answers on `/suggest` (#301 P4, finding M7): a `KiwixResponse`-shaped pair,
+ * `'park'` for "accept the request and never answer", or null for 404. Installed per test so
+ * the probe matrix is explicit at its call site.
+ */
+let suggestHook: ((url: string) => { status: number; body: string } | 'park' | null) | null = null
+
+/** The `/suggest` bodies of the probe matrix, keyed by the `content` (serving name). */
+const SUGGEST_FIXTURES: Record<string, { status: number; body: string } | 'park' | null> = {
+  // libkiwix appends the synthetic `kind:"pattern"` entry ONLY for a book with a full-text
+  // index — that entry, not the suggestions around it, is the whole verdict.
+  indexed: {
+    status: 200,
+    body: JSON.stringify([
+      { value: 'Treibhausgas', label: 'Treibhausgas', kind: 'path', path: 'A/Treibhausgas' },
+      { value: 'the', label: 'containing "the"...', kind: 'pattern' }
+    ])
+  },
+  'index-less': {
+    status: 200,
+    body: JSON.stringify([
+      { value: 'Treibhausgas', label: 'Treibhausgas', kind: 'path', path: 'A/Treibhausgas' }
+    ])
+  },
+  'empty-array': { status: 200, body: '[]' },
+  'four-oh-four': { status: 404, body: 'not found' },
+  'server-error': { status: 500, body: 'boom' },
+  'bad-json': { status: 200, body: '{ this is not json' },
+  'json-object': { status: 200, body: JSON.stringify({ kind: 'pattern' }) },
+  // A body that merely CONTAINS the word must not be read as the entry.
+  'pattern-in-a-string': { status: 200, body: '"kind: pattern"' }
+}
 /** Mirrors client.ts MAX_BODY_BYTES (8 MiB) — kept literal here so the test pins the shipped ceiling. */
 const CEILING_BYTES = 8 * 1024 * 1024
 /** Every request the fixture server received — used to prove the L5 contract rejects a
@@ -31,6 +68,18 @@ beforeAll(async () => {
   server = http.createServer((req, res) => {
     requestCount++
     if (req.url?.startsWith('/slow')) return // never responds — timeout leg
+    if (req.url?.startsWith('/suggest')) {
+      const answer = suggestHook?.(req.url) ?? null
+      if (answer === 'park') return // accepted, never answered
+      if (answer === null) {
+        res.writeHead(404)
+        res.end('not found')
+        return
+      }
+      res.writeHead(answer.status, { 'content-type': 'application/json' })
+      res.end(answer.body)
+      return
+    }
     // Body-ceiling fixtures (PR #294 review INFO / plan T01): kiwixGet rejects a body of
     // MORE than 8 MiB and accepts one of exactly 8 MiB. Streamed in 1 MiB writes so the
     // ceiling is hit mid-stream, the way a pathological entry would arrive.
@@ -78,6 +127,12 @@ beforeAll(async () => {
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   port = (server.address() as AddressInfo).port
+  // A real ephemeral port that is then CLOSED: a connection to it is refused by the OS, which
+  // is what "the sidecar died before the probe went out" looks like from the client side.
+  const dead = http.createServer()
+  await new Promise<void>((resolve) => dead.listen(0, '127.0.0.1', resolve))
+  closedPort = (dead.address() as AddressInfo).port
+  await new Promise<void>((resolve) => dead.close(() => resolve()))
 })
 
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())))
@@ -282,10 +337,89 @@ describe('parseLibraryXml', () => {
       date: '2026-08-02',
       articleCount: 340,
       mediaCount: 178,
-      path: 'zim\\wikipedia_en_ray-charles_maxi_2026-08.zim'
+      path: 'zim\\wikipedia_en_ray-charles_maxi_2026-08.zim',
+      tags: null
     })
     expect(books[1]?.title).toBe('Käfer & Co')
     expect(books[1]?.articleCount).toBeNull()
+  })
+
+  it('reads the tags attribute and maps _ftindex to a hint — never to a verdict (#301 P4, finding M7)', () => {
+    const book = (tags: string): string => `<book id="x" title="T" tags="${tags}" />`
+    const tagsOf = (xml: string): string | null => parseLibraryXml(xml)[0]?.tags ?? null
+    expect(tagsOf(book('wikipedia;_ftindex:yes;_pictures:no'))).toBe(
+      'wikipedia;_ftindex:yes;_pictures:no'
+    )
+    // Entity-encoded tag values survive the same decode as every other attribute.
+    expect(tagsOf('<book id="x" tags="wikipedia_f&#228;r;_ftindex:no" />')).toBe(
+      'wikipedia_fär;_ftindex:no'
+    )
+    expect(parseLibraryXml('<book id="x" title="T" />')[0]?.tags).toBeNull()
+
+    // The hint mapping itself (plan §9.21 (d)2).
+    expect(ftIndexHint('wikipedia;_ftindex:yes;_pictures:no')).toBe('yes')
+    expect(ftIndexHint('_ftindex:no')).toBe('no')
+    expect(ftIndexHint('wikipedia;_ftindex')).toBe('yes') // the bare legacy tag
+    expect(ftIndexHint(' _FTINDEX:YES ; other')).toBe('yes') // trimmed, case-insensitive
+    expect(ftIndexHint('wikipedia;_pictures:no')).toBeNull()
+    expect(ftIndexHint('')).toBeNull()
+    expect(ftIndexHint(null)).toBeNull()
+    // A tag that merely CONTAINS the word is not the tag.
+    expect(ftIndexHint('has_ftindex;ftindex:yes')).toBeNull()
+  })
+})
+
+describe('probeSearchable — the /suggest capability probe (#301 P4, finding M7, plan §2.5)', () => {
+  it('confirms yes only on a 200 JSON array carrying a kind:"pattern" entry, and no only on a 200 array without one', async () => {
+    const requested: string[] = []
+    suggestHook = (url) => {
+      requested.push(url)
+      const name = new URL(url, 'http://127.0.0.1').searchParams.get('content') ?? ''
+      return SUGGEST_FIXTURES[name] ?? null
+    }
+    try {
+      // 200 + an array WITH the synthetic pattern entry (libkiwix adds it only with an index).
+      await expect(probeSearchable(port, 'indexed')).resolves.toBe('yes')
+      // 200 + a valid array WITHOUT one: the ONLY shape that may be persisted as "no".
+      await expect(probeSearchable(port, 'index-less')).resolves.toBe('no')
+      // …an empty array is that same shape.
+      await expect(probeSearchable(port, 'empty-array')).resolves.toBe('no')
+      // Everything else stays UNKNOWN — a 404 is ambiguous (§2.2), and so is a body that is
+      // not a JSON array, whatever it contains.
+      await expect(probeSearchable(port, 'four-oh-four')).resolves.toBeNull()
+      await expect(probeSearchable(port, 'server-error')).resolves.toBeNull()
+      await expect(probeSearchable(port, 'bad-json')).resolves.toBeNull()
+      await expect(probeSearchable(port, 'json-object')).resolves.toBeNull()
+      await expect(probeSearchable(port, 'pattern-in-a-string')).resolves.toBeNull()
+
+      // The URL contract: the serving NAME encoded once, a non-empty fixed term, count=1.
+      expect(requested[0]).toBe(`/suggest?content=indexed&term=${SUGGEST_PROBE_TERM}&count=1`)
+      const unicode = 'gro%C3%9F wiki+1'
+      await probeSearchable(port, unicode)
+      expect(requested[requested.length - 1]).toBe(
+        `/suggest?content=${encodeURIComponent(unicode)}&term=${SUGGEST_PROBE_TERM}&count=1`
+      )
+    } finally {
+      suggestHook = null
+    }
+  })
+
+  it('a timeout and a network error are unknown, and only the caller’s own abort throws', async () => {
+    suggestHook = () => 'park' // the server accepts the request and never answers
+    try {
+      // A timeout is UNKNOWN, never "no": the archive said nothing at all.
+      await expect(probeSearchable(port, 'parked', undefined, { timeoutMs: 100 })).resolves.toBeNull()
+      const ac = new AbortController()
+      const pending = probeSearchable(port, 'parked', ac.signal)
+      ac.abort()
+      // The caller's cancellation (a lock, a cancelled reconcile) propagates instead — a probe
+      // that straddled it must never write anything.
+      await expect(pending).rejects.toThrow()
+    } finally {
+      suggestHook = null
+    }
+    // Nothing listening at all (the sidecar died between publication and probe): also unknown.
+    await expect(probeSearchable(closedPort, 'anything')).resolves.toBeNull()
   })
 })
 

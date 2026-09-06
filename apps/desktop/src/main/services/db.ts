@@ -613,6 +613,12 @@ CREATE TABLE IF NOT EXISTS knowledge_packs (
   removed_at     TEXT,                      -- tombstone: user removed the registration. The ROW stays so
                                             -- drive auto-discovery (keyed by leaf) cannot resurrect a
                                             -- deliberately removed pack; an explicit re-add clears it.
+  searchable     TEXT,                      -- CONFIRMED full-text capability: 'yes' | 'no'; NULL = unknown (never probed,
+                                            -- or the cache key below moved). Only a validated /suggest probe writes it.
+  searchable_key TEXT,                      -- the fingerprint the verdict was taken under: <size>:<mtimeMs> of the archive
+                                            -- plus the kiwix-serve binary's <size>:<mtimeMs>. A different key resets the verdict.
+  ftindex_hint   TEXT,                      -- the archive's own _ftindex tag ('yes' | 'no'; NULL = no tag) — a HINT only:
+                                            -- it never sets searchable and never affects an ask's eligibility.
   added_at       TEXT NOT NULL,
   updated_at     TEXT NOT NULL
 );
@@ -1240,6 +1246,23 @@ function applyPragmasAndMigrations(db: Db): void {
   // old citations still point at the registered archive and the viewer must say so. A reason
   // CODE, never a path or a title: it rides `KnowledgePack.unavailableReason` to the panel badge.
   ensureColumn(db, 'knowledge_packs', 'unavailable_reason', 'unavailable_reason TEXT')
+  // Knowledge-pack SEARCHABILITY (#301 P4, finding M7, plan §9.21 (d)1). Three additive,
+  // nullable columns — SCHEMA_VERSION stays put, and a workspace written before them reads
+  // every pack as "unknown" until the next reconciliation probes it.
+  //   searchable      — 'yes' | 'no', CONFIRMED only by a validated /suggest probe; NULL =
+  //                     unknown, which is what a 404, a timeout, a malformed body or a response
+  //                     observed across a server change leaves behind. An unknown pack is
+  //                     searched like a 'yes'; a confirmed 'no' is skipped by the ask (outcome
+  //                     `not-searchable`) but stays readable in the article viewer.
+  //   searchable_key  — the fingerprint that verdict was taken under (archive size/mtime plus
+  //                     the kiwix-serve binary's size/mtime). The reconcile resets `searchable`
+  //                     to NULL whenever the key moves, so a replaced file or a swapped tools
+  //                     bundle is re-probed instead of trusting a stale "no".
+  //   ftindex_hint    — the archive's own `_ftindex` tag ('yes' | 'no'; NULL = no tag), a HINT
+  //                     recorded at registration/discovery that never sets `searchable`.
+  ensureColumn(db, 'knowledge_packs', 'searchable', 'searchable TEXT')
+  ensureColumn(db, 'knowledge_packs', 'searchable_key', 'searchable_key TEXT')
+  ensureColumn(db, 'knowledge_packs', 'ftindex_hint', 'ftindex_hint TEXT')
   // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
   // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
   // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.

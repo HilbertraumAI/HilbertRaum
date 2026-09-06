@@ -1,4 +1,5 @@
-import type { RetrievedChunk } from '../rag'
+import type { KnowledgePackOutcome } from '../../../shared/types'
+import type { ExternalRetrievalOutput, RetrievedChunk } from '../rag'
 import { CHUNK_DEFAULTS, chunkSegments } from '../ingestion/chunker'
 import { fetchArticleHtml, searchPack } from './client'
 import { zimArticleToSegmentsAsync } from './html'
@@ -10,47 +11,192 @@ import { zimArticleToSegmentsAsync } from './html'
 // No embeddings, no persistence: the reranker downstream is what turns Xapian recall
 // into precision (rag-design ZIM record; spike 2026-08-22 measured 82–165 ms for
 // search + 5 article fetches end-to-end).
+//
+// FAIRNESS, CONCURRENCY, DEADLINE (#301 P4, finding M8; plan §9.21 (c)). The pre-P4 arm
+// walked the packs in DB order and stopped at the first 24 candidates, so pack A exhausted
+// the budget and pack C was never even searched (reproduced: 24 = 20 A + 4 B). Now:
+//
+//   1. the packs arrive in ONE deterministic order (`retrievablePacks` orders by
+//      `title COLLATE NOCASE, id`), and every decision below is taken in THAT order —
+//      never in completion order, so a slow pack cannot change the result;
+//   2. each pack gets a provisional quota `q_i` (`packQuota`) that only bounds ITS FETCHING:
+//      articles are fetched in hit order until the pack holds `q_i` candidates (at most
+//      `ARTICLES_PER_PACK` articles, at most `CHUNKS_PER_ARTICLE` chunks per article);
+//   3. at most `PACK_SEARCH_CONCURRENCY` packs are searched at a time, each worker doing one
+//      pack's search then fetches then conversions sequentially under the signal it was handed;
+//   4. ADMISSION happens only after every pack settled (`allocateCandidates`): round-robin in
+//      pack order, one candidate per pack per round in the pack's own rank order, until
+//      `MAX_EXTERNAL_CANDIDATES` are admitted or every pack is exhausted. A short, empty or
+//      failed pack's slots are RECLAIMED by the others (bounded by what they already fetched —
+//      a reclaim never triggers a further request), and a pack that finished last still gets
+//      its best hit in front of another pack's second-best.
+//
+// The per-ask DEADLINE is NOT created here: `ZimService.runArm` combines the ask signal with
+// `EXTERNAL_RETRIEVAL_DEADLINE_MS` once per ask (outside the request guard, so the one admitted
+// retry inherits the remaining time) and hands the combined signal in, together with the ask's
+// own signal as `opts.askSignal`. That pair is what lets this module tell a CANCELLATION (the
+// user's, or a lock) from the DEADLINE: a cancellation rethrows the `AbortError` and reports
+// nothing, while the deadline keeps everything already assembled and reports `timeout` for the
+// pack that was in flight and `deadline` for the packs never started.
 
-/** Top articles fetched per pack per question. */
+/** Top articles fetched per pack per question (an UPPER bound, not a quota). */
 export const ARTICLES_PER_PACK = 5
 /** Chunks kept per article (query-term overlap picks them; the reranker re-scores). */
 export const CHUNKS_PER_ARTICLE = 4
-/** Global candidate ceiling across all packs — mirrors the document arm's ≤2×topKInitial scale. */
+/** Global candidate ceiling across all packs — mirrors the document arm's 2x topKInitial scale. */
 export const MAX_EXTERNAL_CANDIDATES = 24
+/** How many packs are searched at a time (plan §9.21 (c)4). */
+export const PACK_SEARCH_CONCURRENCY = 2
+/**
+ * The whole archive arm's budget for ONE ask (plan §9.21 (c)5), shared by the request guard's
+ * attempt and its single admitted retry. Above the client's 15 s per-request timeout, so one
+ * hung request cannot swallow the entire budget, while a long sequence of timeouts still ends.
+ */
+export const EXTERNAL_RETRIEVAL_DEADLINE_MS = 20_000
 
 export interface ArmPack {
   /** knowledge_packs.id (ZIM UUID) — the books.id search filter. */
   id: string
-  /** Pack display title → Citation.archiveTitle. */
+  /** Pack display title → Citation.archiveTitle and the outcome's `title`. */
   title: string
 }
 
 export type ExternalCandidate = Omit<RetrievedChunk, 'label'>
 
+export interface CollectPackCandidatesOptions {
+  /**
+   * The ask's OWN signal (`op.signal`), when the caller handed in a combined deadline signal as
+   * `signal`. It is the only way to tell the two aborts apart: when `signal` fired but this one
+   * did not, the per-ask deadline elapsed (an outcome), otherwise the ask was cancelled (an
+   * `AbortError`, never an outcome). Absent ⇒ every abort is treated as a cancellation.
+   */
+  askSignal?: AbortSignal
+}
+
+/** One pack's produced candidates, in the pack's own rank order (search hit order). */
+export interface PackCandidateList {
+  packId: string
+  candidates: readonly ExternalCandidate[]
+}
+
+/** What `allocateCandidates` decided: the admitted candidates and each pack's share. */
+export interface CandidateAllocation {
+  admitted: ExternalCandidate[]
+  admittedPerPack: Map<string, number>
+}
+
 /**
- * Produce candidates for one question across the given packs on a running sidecar.
- * A single pack failing (vanished mid-session, index quirk) is skipped — the other
- * packs and the document arm still answer.
+ * The provisional per-pack fetch quota (plan §9.21 (c)3): `floor(24 / N)` plus one for the
+ * first `24 mod N` packs IN PACK ORDER. It bounds how much a pack FETCHES, not what it is
+ * admitted: the round-robin below reclaims a short pack's share for the others.
+ */
+export function packQuota(index: number, total: number): number {
+  if (total <= 0) return 0
+  const base = Math.floor(MAX_EXTERNAL_CANDIDATES / total)
+  return base + (index < MAX_EXTERNAL_CANDIDATES % total ? 1 : 0)
+}
+
+/**
+ * Admit candidates fairly across the packs (plan §9.21 (c)3). Round-robin in PACK ORDER, one
+ * candidate per pack per round in that pack's own rank order, until `MAX_EXTERNAL_CANDIDATES`
+ * are admitted or every pack is exhausted.
+ *
+ * Pure and completion-order independent BY CONSTRUCTION: it reads a list built from the pack
+ * order the caller was handed, never the order in which the packs happened to finish, so the
+ * same per-pack material always yields the same admitted set.
+ */
+export function allocateCandidates(perPack: readonly PackCandidateList[]): CandidateAllocation {
+  const admitted: ExternalCandidate[] = []
+  const admittedPerPack = new Map<string, number>()
+  for (const pack of perPack) {
+    if (!admittedPerPack.has(pack.packId)) admittedPerPack.set(pack.packId, 0)
+  }
+  const cursors = perPack.map(() => 0)
+  let progressed = true
+  while (admitted.length < MAX_EXTERNAL_CANDIDATES && progressed) {
+    progressed = false
+    for (let i = 0; i < perPack.length; i++) {
+      if (admitted.length >= MAX_EXTERNAL_CANDIDATES) break
+      const list = perPack[i]!.candidates
+      const cursor = cursors[i]!
+      if (cursor >= list.length) continue
+      cursors[i] = cursor + 1
+      admitted.push(list[cursor]!)
+      const id = perPack[i]!.packId
+      admittedPerPack.set(id, (admittedPerPack.get(id) ?? 0) + 1)
+      progressed = true
+    }
+  }
+  return { admitted, admittedPerPack }
+}
+
+/** How one pack's search ended, before admission was computed. */
+type PackSettlement = 'searched' | 'search-failed' | 'read-failed'
+
+interface PackWork {
+  pack: ArmPack
+  quota: number
+  /** A worker picked this pack up (so a deadline hitting now is a `timeout`, not a `deadline`). */
+  started: boolean
+  /** The pack ran to its own end (its outcome is `settlement`, whatever happens afterwards). */
+  settled: boolean
+  settlement: PackSettlement
+  candidates: ExternalCandidate[]
+}
+
+/**
+ * Produce candidates for one question across the given packs on a running sidecar, plus one
+ * outcome per pack (plan §9.21 (c)/(e)2). A single pack failing (vanished mid-session, index
+ * quirk, every article unreadable) is reported as ITS OWN outcome — the other packs and the
+ * document arm still answer.
+ *
+ * The packs must arrive in the deterministic order the allocation is defined over
+ * (`retrievablePacks`' `title COLLATE NOCASE, id`); the caller owns that ordering.
  */
 export async function collectPackCandidates(
   port: number,
   packs: readonly ArmPack[],
   question: string,
   signal?: AbortSignal,
-  names?: ReadonlyMap<string, string>
-): Promise<ExternalCandidate[]> {
+  names?: ReadonlyMap<string, string>,
+  opts: CollectPackCandidatesOptions = {}
+): Promise<ExternalRetrievalOutput> {
   const terms = queryTerms(question)
-  const out: ExternalCandidate[] = []
-  for (const pack of packs) {
-    if (out.length >= MAX_EXTERNAL_CANDIDATES) break
+  const work: PackWork[] = packs.map((pack, i) => ({
+    pack,
+    quota: packQuota(i, packs.length),
+    started: false,
+    settled: false,
+    settlement: 'searched',
+    candidates: []
+  }))
+
+  /** The first abort a request or a conversion raised — rethrown verbatim for a cancellation. */
+  let abortFailure: unknown
+  const aborted = (): boolean => signal?.aborted === true
+  const noteAbort = (err: unknown): void => {
+    if (abortFailure === undefined) abortFailure = err
+  }
+
+  async function runPack(item: PackWork): Promise<void> {
+    const { pack } = item
     let hits
     try {
       hits = await searchPack(port, pack.id, question, ARTICLES_PER_PACK, signal)
-    } catch {
-      continue // this pack only; never the whole ask
+    } catch (err) {
+      if (aborted()) return noteAbort(err)
+      // Non-200 (a 404 included — ambiguous, never a capability verdict) or a network error.
+      item.settlement = 'search-failed'
+      item.settled = true
+      return
     }
+    let attempted = 0
+    let read = 0
     for (const hit of hits) {
-      if (out.length >= MAX_EXTERNAL_CANDIDATES) break
+      // Article requests are DERIVED FROM NEED (plan §9.21 (c)3): once the pack holds its
+      // provisional quota, the remaining hits are not fetched at all.
+      if (item.candidates.length >= item.quota) break
+      if (attempted >= ARTICLES_PER_PACK) break
       // The published serving map (`Published.names`, #301 P3b/L4) is the route authority. A
       // hit whose parsed `urlId` is not the name this pack is served under is SKIPPED —
       // defensive within one generation: the search was filtered by `books.id`, so a
@@ -58,25 +204,34 @@ export async function collectPackCandidates(
       // fetching it would label another archive's text with this pack's title.
       const expected = names?.get(pack.id)
       if (expected !== undefined && hit.urlId !== expected) continue
+      attempted++
       let html: string | null
       try {
         html = await fetchArticleHtml(port, expected ?? hit.urlId, hit.articlePath, signal)
-      } catch {
+      } catch (err) {
+        if (aborted()) return noteAbort(err)
         continue
       }
-      if (!html) continue
+      if (html === null) continue // 404: the entry vanished between search and fetch
+      read++
       // Cooperatively sliced (P1b): the main thread is handed back between slices and the
-      // ask signal is honoured at every slice boundary. Deliberately OUTSIDE the per-hit
-      // catch above — a fetch failure skips one article, but an abort must propagate out of
-      // collectPackCandidates rather than be swallowed into an empty candidate list.
-      const article = await zimArticleToSegmentsAsync(html, { signal })
+      // signal is honoured at every slice boundary. An abort here is the ask's or the
+      // deadline's and is classified below; any other converter failure costs this ONE
+      // article, never the pack's outcome and never the other packs'.
+      let article
+      try {
+        article = await zimArticleToSegmentsAsync(html, { signal })
+      } catch (err) {
+        if (aborted()) return noteAbort(err)
+        continue
+      }
       const chunks = chunkSegments(article.segments, CHUNK_DEFAULTS)
       const scored = chunks
         .map((c, i) => ({ c, i, overlap: overlapScore(c.text, terms) }))
         .sort((a, b) => b.overlap - a.overlap || a.i - b.i)
         .slice(0, CHUNKS_PER_ARTICLE)
       for (const { c, i, overlap } of scored) {
-        out.push({
+        item.candidates.push({
           chunkId: `zim:${pack.id}:${hit.articlePath}#${i}`,
           documentId: `zim:${pack.id}`,
           text: c.text,
@@ -91,8 +246,64 @@ export async function collectPackCandidates(
         })
       }
     }
+    // Hits existed and every single fetch of them failed: a materially different state from
+    // "searched, nothing relevant" — the pack IS searchable, its articles were not readable.
+    item.settlement = attempted > 0 && read === 0 ? 'read-failed' : 'searched'
+    item.settled = true
   }
-  return out.slice(0, MAX_EXTERNAL_CANDIDATES)
+
+  // A pool of `PACK_SEARCH_CONCURRENCY` workers over the ordered queue. Each worker takes the
+  // next pack and does its search, fetches and conversions sequentially, so at most two packs
+  // are ever in flight, whatever the pack count.
+  let next = 0
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      if (aborted()) return
+      const index = next++
+      if (index >= work.length) return
+      const item = work[index]!
+      item.started = true
+      await runPack(item)
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(PACK_SEARCH_CONCURRENCY, work.length) }, () => worker())
+  )
+
+  // A cancellation is NEVER an outcome (plan §9.21 (c)5): the ask was aborted, or the workspace
+  // locked, and the caller must see the `AbortError`. Only the deadline degrades to outcomes.
+  if (aborted() && isCancellation(opts.askSignal)) {
+    throw abortFailure ?? new DOMException('The knowledge-pack ask was cancelled', 'AbortError')
+  }
+
+  const allocation = allocateCandidates(
+    work.map((item) => ({ packId: item.pack.id, candidates: item.candidates }))
+  )
+  const outcomes: KnowledgePackOutcome[] = work.map((item) => {
+    const base = {
+      packId: item.pack.id,
+      title: item.pack.title,
+      found: item.candidates.length,
+      admitted: allocation.admittedPerPack.get(item.pack.id) ?? 0
+    }
+    if (!item.settled) {
+      // The deadline caught it: in flight ⇒ `timeout`, never picked up ⇒ `deadline`.
+      return item.started
+        ? { ...base, status: 'failed' as const, reason: 'timeout' as const }
+        : { ...base, status: 'skipped' as const, reason: 'deadline' as const }
+    }
+    if (item.settlement === 'searched') {
+      return { ...base, status: 'searched' as const, reason: null }
+    }
+    return { ...base, status: 'failed' as const, reason: item.settlement }
+  })
+  return { candidates: allocation.admitted, outcomes }
+}
+
+/** True when the abort came from the ask itself (a cancellation) rather than the deadline. */
+function isCancellation(askSignal: AbortSignal | undefined): boolean {
+  if (askSignal === undefined) return true // no deadline was combined in: it can only be the ask
+  return askSignal.aborted
 }
 
 /** Distinct lowercase query terms of ≥3 letters/digits (unicode-aware). */
