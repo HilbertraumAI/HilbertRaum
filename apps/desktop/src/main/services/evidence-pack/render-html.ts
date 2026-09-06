@@ -486,11 +486,17 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
               : src.availabilityAtCreation === 'available'
                 ? s('packExport.sources.availabilityAvailable')
                 : unavailable
-      const sha = !model.options.includeDocumentHashes
-        ? s('packExport.sources.hashExcluded')
-        : src.documentSha256
-          ? `<span class="mono">${esc(src.documentSha256)}</span>`
-          : unavailable
+      // #301 P6 (plan §9.23 (c)3 ii): an archive never had a hash to exclude — its SHA cell
+      // is the honest "unavailable" string regardless of `includeDocumentHashes` (that flag
+      // only ever suppresses a REAL document hash; before this fix a hash-excluded export
+      // wrongly reused the "Excluded by export options" copy for an archive row too).
+      const sha = src.sourceKind === 'archive'
+        ? unavailable
+        : !model.options.includeDocumentHashes
+          ? s('packExport.sources.hashExcluded')
+          : src.documentSha256
+            ? `<span class="mono">${esc(src.documentSha256)}</span>`
+            : unavailable
       // M11: the type column names the archive kind instead of a (nonexistent) mime type —
       // no hash exists for an archive article either, so `sha` above already falls through
       // to the existing `unavailable` string (never invented).

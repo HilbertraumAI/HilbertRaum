@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PacksPanel } from '../../src/renderer/screens/documents/PacksPanel'
 import { ArticleModal } from '../../src/renderer/chat/ArticleModal'
 import { ScopePopover } from '../../src/renderer/chat/ScopePopover'
-import { I18nProvider } from '../../src/renderer/i18n'
+import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import type {
   Collection,
@@ -211,6 +211,40 @@ describe('PacksPanel', () => {
     expect(screen.queryByText('Knowledge pack added')).not.toBeInTheDocument()
   })
 
+  // #301 P6 (plan §9.23, task 6(e)): the same four failure reasons in German — the DE catalog
+  // carries its own mapped banner text, never a raw reason code or manager detail.
+  it.each([
+    ['not-a-zim', 'Die gewählte Datei ist kein lesbares ZIM-Archiv.'],
+    ['tools-missing', /kiwix-tools-Programme sind auf diesem Laufwerk nicht installiert/],
+    [
+      'manager',
+      'Das Archiv konnte nicht von kiwix-manage gelesen werden. Prüfe, ob die Datei vollständig ist, und versuch es noch einmal.'
+    ],
+    ['other', 'Das Archiv konnte nicht hinzugefügt werden.']
+  ] as const)('add flow (DE): failure (%s) shows the German reason banner', async (reason, expected) => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    const addKnowledgePacks = vi.fn(async () => ({
+      outcome: 'failure' as const,
+      added: [],
+      failed: 1,
+      failureReason: reason
+    }))
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [],
+      addKnowledgePacks
+    })
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('Noch keine Wissenspakete')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Pakete hinzufügen…' }))
+    expect(await screen.findByText(expected)).toBeInTheDocument()
+  })
+
   it('remove asks for confirmation and says the file is untouched', async () => {
     const removeKnowledgePack = vi.fn(async () => undefined)
     stubApi({
@@ -224,7 +258,9 @@ describe('PacksPanel', () => {
         <PacksPanel />
       </I18nProvider>
     )
-    await user.click(await screen.findByRole('button', { name: 'Remove' }))
+    // #301 P6 (plan §9.23 (b)6): the button's accessible name now includes the pack title
+    // (`packs.removeNamed`) — the visible text is still the plain "Remove".
+    await user.click(await screen.findByRole('button', { name: 'Remove Klimawandel von Wikipedia' }))
     expect(await screen.findByText(/archive file on disk is not touched/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Remove pack' }))
     await waitFor(() => expect(removeKnowledgePack).toHaveBeenCalledWith('uuid-climate'))
@@ -313,6 +349,165 @@ describe('PacksPanel', () => {
       </I18nProvider>
     )
     expect(await screen.findByText('Different archive')).toBeInTheDocument()
+  })
+
+  // #301 P6 (plan §9.23 (a) rows 5/6, (c)5): the NEW no-full-text-index badge shows BESIDE
+  // the enabled/disabled badge (a pack can be both), never for unknown/yes/undefined.
+  it('shows the no-full-text-index badge and its reason line beside the enabled badge; absent for unknown/yes/undefined', async () => {
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ id: 'p-no', title: 'No-index pack', searchable: 'no' }),
+        pack({ id: 'p-unknown', title: 'Unknown pack', searchable: 'unknown' }),
+        pack({ id: 'p-yes', title: 'Yes pack', searchable: 'yes' }),
+        pack({ id: 'p-undef', title: 'Undefined pack', searchable: undefined })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('No-index pack')).toBeInTheDocument()
+    // Exactly ONE pack (searchable: 'no') carries the badge and its visible reason line.
+    expect(screen.getAllByText('No full-text index')).toHaveLength(1)
+    expect(
+      screen.getByText(
+        'This archive has no full-text search index. It is skipped when asking, but its articles stay readable.'
+      )
+    ).toBeInTheDocument()
+    // Every pack still carries its enabled badge — the two badges sit BESIDE each other.
+    expect(screen.getAllByText('Enabled')).toHaveLength(4)
+  })
+
+  it('shows the no-full-text-index badge and reason line in German', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [pack({ id: 'p-no', title: 'Paket ohne Index', searchable: 'no' })]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('Kein Volltextindex')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Dieses Archiv hat keinen Volltextindex. Beim Fragen wird es übersprungen, seine Artikel bleiben aber lesbar.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  // #301 P6 (plan §9.23 (b)3/7): the panel's reason text for missing / identity-mismatch is
+  // reachable WITHOUT a mouse — a visible line under the title row, not only a Badge tooltip.
+  it('renders the missing/identity-mismatch reason text visibly (EN + DE), not only in a Badge tooltip', async () => {
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ id: 'p-missing', title: 'Missing pack', available: false, unavailableReason: 'missing' }),
+        pack({
+          id: 'p-mismatch',
+          title: 'Mismatch pack',
+          available: false,
+          unavailableReason: 'identity-mismatch'
+        })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText(/archive file could not be found/)).toBeInTheDocument()
+    expect(screen.getByText(/is a different archive/)).toBeInTheDocument()
+  })
+
+  it('renders the missing/identity-mismatch reason text visibly in German', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ id: 'p-missing', title: 'Fehlendes Paket', available: false, unavailableReason: 'missing' }),
+        pack({
+          id: 'p-mismatch',
+          title: 'Abweichendes Paket',
+          available: false,
+          unavailableReason: 'identity-mismatch'
+        })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText(/Archivdatei wurde nicht gefunden/)).toBeInTheDocument()
+    expect(screen.getByText(/ist ein anderes Archiv/)).toBeInTheDocument()
+  })
+
+  // #301 P6 (plan §9.23 (b)7): `.packs-list` is an ARIA list — one listitem per pack.
+  it('renders the packs list with list/listitem roles, one listitem per pack', async () => {
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [pack(), pack({ id: 'p2', title: 'Second pack' })]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    const list = await screen.findByRole('list', { name: 'Knowledge packs' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+  })
+
+  // #301 P6 (plan §9.23 (b)6): the per-row Enable/Disable/Remove buttons get an accessible
+  // name that includes the pack title — the VISIBLE text stays the plain verb.
+  it('names the per-row Enable/Disable/Remove buttons with the pack title', async () => {
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ enabled: true }),
+        pack({ id: 'p-off', title: 'Off pack', enabled: false })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    await screen.findByText('Klimawandel von Wikipedia')
+    expect(screen.getByRole('button', { name: 'Disable Klimawandel von Wikipedia' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Enable Off pack' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove Klimawandel von Wikipedia' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove Off pack' })).toBeInTheDocument()
+    // Visible text is unchanged — still the plain verb, never the pack title inline.
+    expect(screen.getAllByText('Remove')).toHaveLength(2)
+  })
+
+  it('names the per-row Enable/Disable/Remove buttons with the pack title in German', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ enabled: true }),
+        pack({ id: 'p-off', title: 'Anderes Paket', enabled: false })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    await screen.findByText('Klimawandel von Wikipedia')
+    expect(
+      screen.getByRole('button', { name: 'Klimawandel von Wikipedia deaktivieren' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Anderes Paket aktivieren' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Klimawandel von Wikipedia entfernen' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Anderes Paket entfernen' })).toBeInTheDocument()
   })
 })
 

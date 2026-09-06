@@ -2502,7 +2502,7 @@ export const de: Record<keyof typeof en, string> = {
     'fehlgeschlagen: der Paketserver wurde während dieser Frage neu gestartet',
   'chat.sources.openArticle': 'Artikel öffnen',
   'chat.article.title': 'Artikel',
-  'chat.article.from': 'Aus {archive} - Offline-Kopie',
+  'chat.article.from': 'Aus {archive} – Offline-Kopie',
   'chat.article.loading': 'Artikel wird geladen…',
   'chat.article.unavailable': 'Dieser Artikel ist gerade nicht verfügbar. Das Paket ist möglicherweise deaktiviert, entfernt oder das Laufwerk nicht angeschlossen.',
   'chat.article.partial': 'Nur der erste Teil dieses Artikels konnte angezeigt werden.',
@@ -2531,16 +2531,27 @@ export const de: Record<keyof typeof en, string> = {
   'packs.state.enabled': 'Aktiv',
   'packs.state.disabled': 'Deaktiviert',
   'packs.state.missing': 'Datei fehlt',
-  'packs.state.missingTitle': 'Die Archivdatei wurde nicht gefunden - ist das Laufwerk angeschlossen?',
+  'packs.state.missingTitle': 'Die Archivdatei wurde nicht gefunden – ist das Laufwerk angeschlossen?',
   'packs.state.identityMismatch': 'Anderes Archiv',
   'packs.state.identityMismatchTitle': 'Die Datei an diesem Speicherort ist ein anderes Archiv – dieses Paket entfernen und die Datei erneut hinzufügen',
+  // #301 P6 (Plan §9.23 (a) Zeile 5, (c)5): durch die `/suggest`-Sondierung am Ende eines
+  // Abgleichs bestätigt (P4 M7) — das Paket bleibt aktiv/lesbar, wird bei der Frage nur übersprungen.
+  'packs.state.notSearchable': 'Kein Volltextindex',
+  'packs.state.notSearchableTitle':
+    'Dieses Archiv hat keinen Volltextindex. Beim Fragen wird es übersprungen, seine Artikel bleiben aber lesbar.',
   'packs.enable': 'Aktivieren',
   'packs.disable': 'Deaktivieren',
   'packs.working': 'Wird ausgeführt…',
   'packs.remove': 'Entfernen',
+  // #301 P6 (Plan §9.23 (b)6): barrierefreie Namen für die Aktionsschaltflächen je Zeile —
+  // der sichtbare Text bleibt das einfache Verb; der vorgelesene Name nennt den Pakettitel.
+  'packs.enableNamed': '{title} aktivieren',
+  'packs.disableNamed': '{title} deaktivieren',
+  'packs.removeNamed': '{title} entfernen',
+  'packs.listLabel': 'Wissenspakete',
   'packs.removeTitle': 'Dieses Wissenspaket entfernen?',
   'packs.removeConfirm': 'Paket entfernen',
-  'packs.removeBody': 'Das Paket wird nur aus HilbertRaum entfernt - die Archivdatei auf dem Datenträger bleibt unangetastet. Chats, die es genutzt haben, greifen einfach nicht mehr darauf zu.',
+  'packs.removeBody': 'Das Paket wird nur aus HilbertRaum entfernt – die Archivdatei auf dem Datenträger bleibt unangetastet. Chats, die es genutzt haben, greifen einfach nicht mehr darauf zu.',
   'chat.scope.docCount.one': '{count} Dokument',
   'chat.scope.docCount.other': '{count} Dokumente',
   'chat.scope.filesInChat.one': '{count} Datei in diesem Chat',
@@ -3118,7 +3129,9 @@ export const de: Record<keyof typeof en, string> = {
     '{count} Quelldokumente sind nicht mehr im Arbeitsbereich vorhanden.',
   'packExport.coverage.acknowledged': 'Die prüfende Person hat diese Änderung am {date} bestätigt.',
   'packExport.section.sources': 'Quellenregister',
-  'packExport.sources.colTitle': 'Dokument',
+  // #301 P6 (Plan §9.23 (c)3 i): von "Dokument" umbenannt — die erste Spaltenüberschrift des
+  // Registers steht auch über Archivzeilen.
+  'packExport.sources.colTitle': 'Quelle',
   'packExport.sources.colType': 'Dateityp',
   // ZIM-Welle (#294 review M11): Typ-/Verfügbarkeitswerte für eine Archivzeile.
   'packExport.sources.typeArchive': 'Artikel aus einem Wissenspaket (ZIM-Archiv)',
