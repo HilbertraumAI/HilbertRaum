@@ -1831,6 +1831,30 @@ export interface KnowledgePack {
 }
 
 /**
+ * Why one archive of a `packs:add` batch was not registered (#301 P5, finding L1, plan §9.19
+ * (c)). NEVER free text — the raw manager stderr/path stays in the protected diagnostic log
+ * only (`log.warn`), never on this DTO, never in the audit.
+ */
+export type KnowledgePackAddFailureReason = 'not-a-zim' | 'tools-missing' | 'manager' | 'other'
+
+/**
+ * The result of `packs:add` (#301 P5, finding L1, plan §9.19 (c)) — replaces the old
+ * `KnowledgePack[] | null` bridge shape, which could not distinguish "the user cancelled the
+ * dialog" from "every chosen archive failed" and silently discarded the successes of a MIXED
+ * batch. Invariants: `'cancelled'` ⇒ `added=[]`, `failed=0`, `failureReason=null` (the dialog
+ * was dismissed or chose nothing); `'success'` ⇒ `added.length >= 1`, `failed=0`; `'partial'` ⇒
+ * `added.length >= 1 AND failed >= 1` (a mixed batch — the archives that DID register are
+ * returned, never discarded); `'failure'` ⇒ `added=[]`, `failed >= 1`. `failureReason` is the
+ * code of the FIRST failure and is `null` only for `'cancelled'`.
+ */
+export interface KnowledgePackAddResult {
+  outcome: 'cancelled' | 'success' | 'partial' | 'failure'
+  added: KnowledgePack[]
+  failed: number
+  failureReason: KnowledgePackAddFailureReason | null
+}
+
+/**
  * `packs:status` result (#301 P3b, finding L7) — additive over the P3a `{ toolsInstalled }`
  * shape. `refreshing` is true while a reconciliation pass is running (session start or an
  * explicit `packs:refresh`); `revision` is the service's pack-set counter, so a caller can tell

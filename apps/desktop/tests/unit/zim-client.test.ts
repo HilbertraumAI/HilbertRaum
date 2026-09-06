@@ -4,6 +4,9 @@ import type { AddressInfo } from 'node:net'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  ArticlePathError,
+  MAX_ARTICLE_PATH_CHARS,
+  assertArticlePath,
   encodeArticlePath,
   fetchArticleHtml,
   kiwixGet,
@@ -20,9 +23,13 @@ let server: http.Server
 let port = 0
 /** Mirrors client.ts MAX_BODY_BYTES (8 MiB) — kept literal here so the test pins the shipped ceiling. */
 const CEILING_BYTES = 8 * 1024 * 1024
+/** Every request the fixture server received — used to prove the L5 contract rejects a
+ *  hazardous key BEFORE any HTTP request (#301 P5, finding L5). */
+let requestCount = 0
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
+    requestCount++
     if (req.url?.startsWith('/slow')) return // never responds — timeout leg
     // Body-ceiling fixtures (PR #294 review INFO / plan T01): kiwixGet rejects a body of
     // MORE than 8 MiB and accepts one of exactly 8 MiB. Streamed in 1 MiB writes so the
@@ -158,6 +165,102 @@ describe('fetchArticleHtml', () => {
 
   it('maps 404 to null (entry vanished is a skip, not a failure)', async () => {
     await expect(fetchArticleHtml(port, 'missing', 'missing')).resolves.toBeNull()
+  })
+
+  it('throws ArticlePathError for a dot-segment key BEFORE any HTTP request (#301 P5, finding L5)', async () => {
+    const before = requestCount
+    await expect(fetchArticleHtml(port, 'book', 'A/../x')).rejects.toThrow(ArticlePathError)
+    expect(requestCount).toBe(before)
+  })
+})
+
+describe('assertArticlePath / encodeArticlePath — the L5 entry-key contract (#301 P5, plan §9.19 (b))', () => {
+  it('rejects an empty key', () => {
+    expect(() => assertArticlePath('')).toThrow(ArticlePathError)
+    try {
+      assertArticlePath('')
+      expect.unreachable()
+    } catch (err) {
+      expect(err).toBeInstanceOf(ArticlePathError)
+      expect((err as InstanceType<typeof ArticlePathError>).reason).toBe('empty')
+      expect((err as Error).message).toBe('empty')
+    }
+  })
+
+  it('rejects a key longer than MAX_ARTICLE_PATH_CHARS UTF-16 code units', () => {
+    const tooLong = 'A/' + 'x'.repeat(MAX_ARTICLE_PATH_CHARS)
+    expect(tooLong.length).toBeGreaterThan(MAX_ARTICLE_PATH_CHARS)
+    try {
+      assertArticlePath(tooLong)
+      expect.unreachable()
+    } catch (err) {
+      expect((err as InstanceType<typeof ArticlePathError>).reason).toBe('too-long')
+    }
+    // Exactly at the bound is fine.
+    const atBound = 'A/' + 'x'.repeat(MAX_ARTICLE_PATH_CHARS - 2)
+    expect(atBound.length).toBe(MAX_ARTICLE_PATH_CHARS)
+    expect(() => assertArticlePath(atBound)).not.toThrow()
+  })
+
+  it('rejects any C0 control character or DEL, never echoing the path in the message', () => {
+    for (const bad of [String.fromCharCode(0), String.fromCharCode(9), String.fromCharCode(31), String.fromCharCode(127)]) {
+      const path = `A/x${bad}y`
+      try {
+        assertArticlePath(path)
+        expect.unreachable()
+      } catch (err) {
+        expect((err as InstanceType<typeof ArticlePathError>).reason).toBe('control')
+        expect((err as Error).message).toBe('control')
+        expect((err as Error).message).not.toContain(path)
+      }
+    }
+  })
+
+  it('rejects a `.` or `..` SEGMENT anywhere, but allows a segment that merely starts with dots', () => {
+    for (const path of ['A/../x', '../A', 'A/.', '.', 'A/b/../c']) {
+      try {
+        assertArticlePath(path)
+        expect.unreachable(`expected ${path} to be rejected`)
+      } catch (err) {
+        expect((err as InstanceType<typeof ArticlePathError>).reason).toBe('dot-segment')
+      }
+    }
+    // Compatibility: a segment that merely STARTS with dots is a legal entry name.
+    expect(() => assertArticlePath('A/..foo')).not.toThrow()
+    expect(() => assertArticlePath('A/.hidden')).not.toThrow()
+  })
+
+  it('rejects a lone surrogate as unencodable', () => {
+    const loneSurrogate = `A/${String.fromCharCode(0xd800)}`
+    try {
+      assertArticlePath(loneSurrogate)
+      expect.unreachable()
+    } catch (err) {
+      expect((err as InstanceType<typeof ArticlePathError>).reason).toBe('unencodable')
+    }
+  })
+
+  it('keeps the whole compatibility list allowed, each encoding without throwing and round-tripping per segment', () => {
+    const compatible = [
+      'A/https://example.com/a//b', // empty segments — zimit-era URL-shaped keys
+      'A/one:two?three#four%25plus+amp&eq=space five', // URL-shaped punctuation + space
+      'A/Über_ß_' + String.fromCharCode(0x00e9), // Unicode
+      'A/a%2Fb', // an already-encoded slash inside one segment
+      'Treibhausgas', // namespace-less key
+      '-/style.css',
+      'I/img.png',
+      'A/Foo.', // trailing dot
+      'A/..foo', // starts with dots, not exactly ".."
+      'A/.hidden' // starts with a dot, not exactly "."
+    ]
+    for (const key of compatible) {
+      expect(() => assertArticlePath(key)).not.toThrow()
+      const decoded = encodeArticlePath(key)
+        .split('/')
+        .map(decodeURIComponent)
+        .join('/')
+      expect(decoded).toBe(key)
+    }
   })
 })
 

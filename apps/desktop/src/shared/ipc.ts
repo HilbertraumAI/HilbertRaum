@@ -251,8 +251,10 @@ export const IPC = {
    *  new drive files and heals availability — `KnowledgePack[]`. */
   listKnowledgePacks: 'packs:list',
   /** Open the native .zim picker AND register the chosen archives (dialog + registration in ONE
-   *  main-side handler — no renderer-supplied path ever reaches registration). Returns the packs
-   *  added, or null when the dialog was cancelled. */
+   *  main-side handler — no renderer-supplied path ever reaches registration). Returns the typed
+   *  `KnowledgePackAddResult` DTO (#301 P5, finding L1): cancelled/success/partial/failure, the
+   *  packs actually added, the failure count and a failure-reason CODE — never raw manager
+   *  stderr or a path. */
   addKnowledgePacks: 'packs:add',
   /** Remove a registration (never touches the archive file). */
   removeKnowledgePack: 'packs:remove',

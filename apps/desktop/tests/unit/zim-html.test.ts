@@ -791,9 +791,11 @@ describe('decodeEntities', () => {
 })
 
 // Full real-article sanity checks against uncommitted mwoffliner output. Run with
-// HILBERTRAUM_ZIM_FIXTURES=<dir containing *.html raw kiwix-serve articles> — the
+// HILBERTRAUM_ZIM_FIXTURES_DIR=<dir containing *.html raw kiwix-serve articles> — the
 // committed fixture pins the contract; this leg pins realism (manual-smoke convention).
-const realDir = process.env.HILBERTRAUM_ZIM_FIXTURES
+// (#301 P5, finding L8, plan §9.19 (d)1: renamed from HILBERTRAUM_ZIM_FIXTURES for the
+// HILBERTRAUM_<FEATURE>_<KIND> naming convention the rest of the ZIM env vars follow.)
+const realDir = process.env.HILBERTRAUM_ZIM_FIXTURES_DIR
 describe.runIf(!!realDir && existsSync(realDir!))('real mwoffliner articles', () => {
   for (const name of ['kontaktverfahren.html', 'treibhausgas.html', 'georgia.html']) {
     it(`extracts clean sectioned text from ${name}`, () => {

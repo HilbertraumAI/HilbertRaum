@@ -2483,7 +2483,7 @@ unconfirmed with its PID and file kept; test T06 walks `kiwix-manage`'s verifier
 outcomes (match/mismatch/hashless), PID registration bounded to the child's lifetime,
 and timeout/abort settling only after a terminal state — `zim-arm/zim-ipc`
 (integration), `KnowledgePacks.test.tsx` (renderer, incl. the `partial`-hint case);
-real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
+real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES_DIR`).
 `zim-ipc-session.test.ts` (integration, NEW, P3b) drives the REAL service + registry over
 the real vault harness: test T07 walks lock-during-picker/discovery/registration/rebuild/
 start/probe/HTTP-read, each proving no post-lock write or content response and a clean

@@ -450,7 +450,10 @@ export class ZimService {
           signal: perCallSignal ?? signal,
           verifyBinary: this.deps.verifyBinary,
           killGraceMs: this.deps.killGraceMs,
-          forceKillWaitMs: this.deps.forceKillWaitMs
+          forceKillWaitMs: this.deps.forceKillWaitMs,
+          // #301 P5, finding L9: injected, not read from `process.platform`, so the native
+          // separator normalization is pinned in tests independently of the host.
+          platform: this.opts.platform
         })
       }
     }

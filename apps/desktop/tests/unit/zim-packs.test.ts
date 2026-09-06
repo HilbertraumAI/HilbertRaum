@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -17,6 +18,8 @@ import {
   writeLibraryXml,
   type PackDeps
 } from '../../src/main/services/zim/packs'
+import { ZimService } from '../../src/main/services/zim'
+import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { malformedZimFixture, packUuid, writeZimFixture } from '../helpers/zim-header'
 
 // Registry over a REAL temp database (the collections-ipc harness precedent). The kiwix-manage
@@ -378,5 +381,81 @@ describe('knowledge-pack registry', () => {
     expect(healing.healed).toBeGreaterThan(0)
     expect(userColumns(db)).toEqual(userStateBefore) // byte-identical across the whole pass
     warn.mockRestore()
+  })
+})
+
+describe('ZimService.packDeps — injected platform reaches kiwix-manage argv (#301 P5, finding L9, plan §9.19 (e))', () => {
+  class FakeManageChild extends EventEmitter implements ChildProcessLike {
+    pid = 4242
+    killed = false
+    stderr = new EventEmitter()
+    kill(): boolean {
+      this.killed = true
+      return true
+    }
+  }
+
+  /** One registration through a REAL `ZimService`, `platform` as given, a fake `manageSpawn`
+   *  that records argv and answers as a successful kiwix-manage. `zimPath` is passed through
+   *  a forward-slash form regardless of the test host, so a passing assertion actually proves
+   *  `opts.platform` (not the host's `process.platform`) drove the normalization. */
+  async function registerAndCaptureArgv(
+    platform: NodeJS.Platform,
+    zimPath: string
+  ): Promise<{ command: string; args: string[] }> {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-svc-platform-'))
+    const db = openDatabase(join(root, 'test.sqlite'))
+    const calls: Array<{ command: string; args: string[] }> = []
+    const manageSpawn: SpawnFn = (command, args) => {
+      const child = new FakeManageChild()
+      calls.push({ command, args: args as string[] })
+      // Answer as a successful kiwix-manage: append the `<book>` element the real binary would
+      // (the manager's `id` must equal the header uuid or registration fails).
+      queueMicrotask(() => {
+        const libraryXmlPath = args[0] as string
+        appendFileSync(
+          libraryXmlPath,
+          `<book id="${U.alpha}" path="${zimPath.replace(/\\/g, '/')}" title="Title" ` +
+            `description="Test" language="deu" date="2026-07-01" articleCount="1" mediaCount="0" />\n`
+        )
+        child.emit('exit', 0, null)
+      })
+      return child
+    }
+    const svc = new ZimService({
+      rootPath: root,
+      isDev: true,
+      platform,
+      deps: {
+        resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
+        manageSpawn,
+        verifyBinary: async () => 'ok'
+      }
+    })
+    const pack = await svc.registerPack(db, zimPath)
+    expect(pack.id).toBe(U.alpha)
+    expect(calls).toHaveLength(1)
+    return calls[0]!
+  }
+
+  it('normalizes a forward-slash zim path to backslashes when the service is constructed with platform: win32', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-svc-platform-src-'))
+    const zimDir = join(root, 'zim')
+    mkdirSync(zimDir, { recursive: true })
+    const forwardSlashFile = addZimFile(zimDir, 'platform-pin.zim', U.alpha).replace(/\\/g, '/')
+    const { args } = await registerAndCaptureArgv('win32', forwardSlashFile)
+    expect(args[1]).toBe('add')
+    expect(args[2]).not.toContain('/')
+    expect(args[2]?.includes('\\')).toBe(true)
+  })
+
+  it('leaves a forward-slash zim path unchanged when the service is constructed with platform: linux — proves opts.platform, not the host default, drives it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-svc-platform-src2-'))
+    const zimDir = join(root, 'zim')
+    mkdirSync(zimDir, { recursive: true })
+    const forwardSlashFile = addZimFile(zimDir, 'platform-pin-2.zim', U.alpha).replace(/\\/g, '/')
+    const { args } = await registerAndCaptureArgv('linux', forwardSlashFile)
+    expect(args[1]).toBe('add')
+    expect(args[2]).toBe(forwardSlashFile)
   })
 })

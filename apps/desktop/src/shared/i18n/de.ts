@@ -2329,7 +2329,6 @@ export const de: Record<keyof typeof en, string> = {
   'main.zim.unavailable': 'Wissenspakete sind in dieser Sitzung nicht verfügbar.',
   'main.zim.dialogTitle': 'Wissenspakete hinzufügen',
   'main.zim.filterZim': 'ZIM-Archive',
-  'main.zim.addFailed': 'Das Archiv konnte nicht hinzugefügt werden: {reason}',
   'main.dialog.chooseImage': 'Bild auswählen',
   'main.dialog.filterImages': 'Bilder',
   // #120 Punkt 4: die IPC-Ablehnungstexte des Bild-Moduls (fast toter Text — der Renderer zeigt
@@ -2479,6 +2478,12 @@ export const de: Record<keyof typeof en, string> = {
   'packs.toolsMissing': 'Die kiwix-tools-Programme sind auf diesem Laufwerk nicht installiert; Pakete können daher nicht hinzugefügt oder durchsucht werden. Der Installationsschritt steht im Benutzerhandbuch.',
   'packs.addedToast.one': 'Wissenspaket hinzugefügt',
   'packs.addedToast.other': '{count} Wissenspakete hinzugefügt',
+  // #301 P5, Fund L1 (Plan §9.19 (c)3): die Ergebnisse des typisierten Hinzufügen-DTOs.
+  'packs.addPartial': '{failed} von {total} Archiven konnten nicht hinzugefügt werden.',
+  'packs.addFailed.notAZim': 'Die gewählte Datei ist kein lesbares ZIM-Archiv.',
+  'packs.addFailed.toolsMissing': 'Die kiwix-tools-Programme sind auf diesem Laufwerk nicht installiert; Pakete können daher nicht hinzugefügt oder durchsucht werden. Der Installationsschritt steht im Benutzerhandbuch.',
+  'packs.addFailed.manager': 'Das Archiv konnte nicht von kiwix-manage gelesen werden. Prüfe, ob die Datei vollständig ist, und versuch es noch einmal.',
+  'packs.addFailed.other': 'Das Archiv konnte nicht hinzugefügt werden.',
   'packs.removedToast': 'Wissenspaket entfernt',
   'packs.articleCount.one': '{count} Artikel',
   'packs.articleCount.other': '{count} Artikel',

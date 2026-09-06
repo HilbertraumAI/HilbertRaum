@@ -83,12 +83,33 @@ describe('kiwixManageAdd', () => {
     const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn)
     queueMicrotask(() => child.emit('exit', 0, null))
     await expect(done).resolves.toBeUndefined()
-    // Paths are normalized to the platform's separator before spawn (kiwix-manage on
-    // Windows rejects forward-slash absolute paths), so assert shape, not separators.
     expect(calls[0]?.command).toBe('/bin/kiwix-manage')
     expect(calls[0]?.args[1]).toBe('add')
-    expect(calls[0]?.args[0]?.endsWith('library.xml')).toBe(true)
-    expect(calls[0]?.args[2]?.endsWith('a.zim')).toBe(true)
+  })
+
+  // #301 P5, finding L9 (plan §9.19 (e)): `platform` is injected, not read from
+  // `process.platform`, so both native-separator branches are pinned independently of the
+  // host running the test — replaces the earlier "assert shape, not separators" hedge.
+  it('normalizes forward-slash argv paths to backslashes when platform is win32', async () => {
+    const { spawn, calls, child } = fakeSpawn()
+    const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/dir/library.xml', '/zim/sub/a.zim', spawn, {
+      platform: 'win32'
+    })
+    queueMicrotask(() => child.emit('exit', 0, null))
+    await expect(done).resolves.toBeUndefined()
+    expect(calls[0]?.args[0]).toBe('\\lib\\dir\\library.xml')
+    expect(calls[0]?.args[2]).toBe('\\zim\\sub\\a.zim')
+  })
+
+  it('leaves forward-slash argv paths unchanged when platform is linux', async () => {
+    const { spawn, calls, child } = fakeSpawn()
+    const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/dir/library.xml', '/zim/sub/a.zim', spawn, {
+      platform: 'linux'
+    })
+    queueMicrotask(() => child.emit('exit', 0, null))
+    await expect(done).resolves.toBeUndefined()
+    expect(calls[0]?.args[0]).toBe('/lib/dir/library.xml')
+    expect(calls[0]?.args[2]).toBe('/zim/sub/a.zim')
   })
 
   it('rejects with the stderr tail on a non-zero exit', async () => {

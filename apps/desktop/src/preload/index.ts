@@ -16,6 +16,7 @@ import type {
   ChatOptions,
   Collection,
   KnowledgePack,
+  KnowledgePackAddResult,
   KnowledgePackStatus,
   KnowledgePacksChangedEvent,
   ContextUsage,
@@ -521,10 +522,15 @@ const api = {
   // ---- Document organization — collections (projects + built-ins, plan §16) ----
   /** All collections (built-ins first, then projects by name). */
   // ---- Knowledge packs (ZIM wave; handlers in registerZimIpc.ts) ----
-  /** Registered packs (availability recomputed; drive zim/ auto-discovery runs first). */
+  /** Registered packs, DATABASE-ONLY (#301 P3b, finding L7) — no drive discovery, no
+   *  filesystem probe; a session-start pass or an explicit `refreshKnowledgePacks()` is what
+   *  heals availability. */
   listKnowledgePacks: (): Promise<KnowledgePack[]> => ipcRenderer.invoke(IPC.listKnowledgePacks),
-  /** Native .zim picker + registration in one main-side call; null = cancelled. */
-  addKnowledgePacks: (): Promise<KnowledgePack[] | null> => ipcRenderer.invoke(IPC.addKnowledgePacks),
+  /** Native .zim picker + registration in one main-side call — the typed outcome DTO (#301 P5,
+   *  finding L1): `'cancelled'` (dialog dismissed/empty), `'success'`, `'partial'` (a mixed
+   *  batch — the archives that DID register are in `added`), or `'failure'`. Never throws for an
+   *  admitted per-file failure any more. */
+  addKnowledgePacks: (): Promise<KnowledgePackAddResult> => ipcRenderer.invoke(IPC.addKnowledgePacks),
   /** Remove a registration (the archive file is never touched). */
   removeKnowledgePack: (id: string): Promise<void> => ipcRenderer.invoke(IPC.removeKnowledgePack, id),
   /** Enable/disable a pack. */
