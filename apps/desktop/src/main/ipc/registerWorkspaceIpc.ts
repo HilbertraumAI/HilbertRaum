@@ -425,7 +425,22 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // The condition is deliberate: disarm only while the workspace is genuinely still open.
       // A lock that already closed the DB must KEEP the latch (`isUnlocked()` reports locked by
       // then, and the next unlock clears it).
-      if (ctx.workspace.isUnlocked()) ctx.workspace.cancelLock()
+      if (ctx.workspace.isUnlocked()) {
+        ctx.workspace.cancelLock()
+        // #344: the teardown above stopped every sidecar BEFORE the vault re-encrypted, and a
+        // failed lock never reaches the post-unlock seam that brings the two EAGER ones back —
+        // the workspace stays open, but the chat runtime is stopped (`runtime.stop()`; Chat then
+        // shows "No model is running" until the user re-starts it on the AI Model screen) and an
+        // opted-in local API is down (`localApi.stop()`, "restarted only by the post-unlock
+        // seam"). Everything else the teardown suspended comes back lazily on its next use
+        // (embedder, reranker, transcriber, OCR, translator, vision, kiwix-serve — the #301
+        // P3b/P5 non-latching pattern), so nothing more needs re-arming. Re-run exactly the two
+        // post-unlock restarts, AFTER the disarm (both check `workspaceAdmitsWork()` first) and
+        // fire-and-forget, so the handler still rejects at once with the friendly copy below.
+        // No new session, no epoch bump, no benchmark scheduling: a failed lock is not an unlock.
+        maybeStartLocalApi(ctx)
+        void maybeAutoStartActiveModel(ctx)
+      }
       throw err
     }
   })

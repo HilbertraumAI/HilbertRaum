@@ -79,6 +79,17 @@ import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-
 import { performShutdown } from '../../src/main/shutdown'
 import { t } from '../../src/shared/i18n'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
+import { startModelRuntime } from '../../src/main/ipc/registerModelIpc'
+import { RuntimeManager } from '../../src/main/services/runtime'
+import { createMockRuntime } from '../../src/main/services/runtime/mock'
+import { createConversation, listMessages } from '../../src/main/services/chat'
+import { updateSettings } from '../../src/main/services/settings'
+import type { LocalApiServer } from '../../src/main/services/local-api/server'
+import type { Message } from '../../src/shared/types'
+
+/** The repo's manifest tree, so the REAL `startModelRuntime` install gate runs (#344 leg). */
+const REPO_MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
@@ -163,6 +174,14 @@ interface HarnessOptions {
    * registry seam on ctx, so the sweep-bounded cases do not wait out the real constant.
    */
   settleBoundMs?: number
+  /**
+   * #344: the REAL `RuntimeManager` (its `stop()`/`start()`/`active()` lifecycle is what the
+   * failed-lock re-arm acts on) plus the repo manifests + a dev context, so the real
+   * `startModelRuntime` install gate resolves the owner's model to the mock fallback. Also
+   * registers the chat IPC so the ask goes through `assertChatStreamReady`, the guard that
+   * refused the owner's question.
+   */
+  chatEngine?: { runtime: RuntimeManager; localApi: LocalApiServer }
 }
 
 async function harness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -245,13 +264,14 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     workspace: ctrl,
     // `shutdown` is the quit path's runtime latch — present so the quit teardown runs the same
     // shape it does in production (a missing method there would throw into a best-effort catch).
-    runtime: {
+    runtime: opts.chatEngine?.runtime ?? {
       stop: async () => {},
       shutdown: () => {},
       isShutdown: () => false,
       activeModelId: () => null,
       active: () => null
     },
+    ...(opts.chatEngine ? { localApi: opts.chatEngine.localApi } : {}),
     embedder: {
       ...fakeEmbedder,
       suspend: (): Promise<void> => {
@@ -268,8 +288,8 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     },
     translator,
     ocrEngine: opts.ocrEngine ?? null,
-    manifestsDir: null,
-    isDev: false
+    manifestsDir: opts.chatEngine ? REPO_MANIFESTS : null,
+    isDev: opts.chatEngine !== undefined
   } as unknown as AppContext
 
   // The plaintext-operation registry (#237), as `main/index.ts` wires it; optionally with the
@@ -308,6 +328,7 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   registerTranslateIpc(ctx, ctx.translateJobs)
   registerImagesIpc(ctx, ctx.vision)
   registerDocsIpc(ctx)
+  if (opts.chatEngine) registerChatIpc(ctx)
 
   return {
     ctrl,
@@ -504,6 +525,74 @@ describe('admission during the lock teardown (AUD-02)', () => {
     expect(result).toMatchObject({ jobId: expect.any(String) })
     h.ctx.docTasks?.cancelAllDocTasks()
     await h.ctx.docTasks?.awaitActiveTaskSettled()
+  })
+
+  // #344 (the owner's T19 leg (vii) on the real K: drive): the teardown stops EVERY sidecar before
+  // the vault re-encrypts, and a failed lock never reaches the post-unlock seam that brings the two
+  // EAGER ones back — the chat runtime (`runtime.stop()`) and an opted-in local API
+  // (`localApi.stop()`). The latch disarmed and every content surface admitted work again (the case
+  // above), but the next question met `assertChatStreamReady`'s "No AI model is running" until the
+  // user re-started the model by hand. Everything else the teardown suspended restarts lazily on
+  // its next use (the #301 P3b/P5 non-latching pattern); these two need the restart re-run.
+  //
+  // Real vault, real handler, the real failure seam, the REAL `RuntimeManager` lifecycle and the
+  // real `startModelRuntime` install gate (the owner's model resolves to the mock fallback in a dev
+  // context, so no weights are needed); the ask goes through the real chat IPC. The oracle is the
+  // RESULT — an assistant reply after the failed lock, the local API running again — never a call
+  // count; the wait is bounded, never a fixed sleep. Reverting the two re-arm lines in the lock
+  // handler's catch turns this red at the second ask (verified by hand before the fix landed).
+  it('a FAILED lock re-arms the chat engine and the local API — an ask through the chat path answers again, in the SAME session (#344)', async () => {
+    const runtime = new RuntimeManager((opts) => createMockRuntime(opts))
+    // A state-holding local-API stand-in: `stop()` is the teardown's call, `applySettings` the
+    // post-unlock seam's — exactly the two the real server exposes to the lock lifecycle.
+    let apiRunning = false
+    const localApi = {
+      stop: async () => {
+        apiRunning = false
+      },
+      applySettings: async (next: { shouldRun: boolean }) => {
+        apiRunning = next.shouldRun
+      }
+    } as unknown as LocalApiServer
+    const h = await harness({ failReEncrypt: true, chatEngine: { runtime, localApi } })
+    const modelId = 'gemma4-e2b-it-qat-q4'
+    updateSettings(h.ctrl.requireDb(), { activeModelId: modelId, autoStartActiveModel: true, localApiEnabled: true })
+
+    // A session in use: the model up through the real start path, the API on, one answer given.
+    await startModelRuntime(h.ctx, modelId)
+    await localApi.applySettings({ shouldRun: true })
+    expect(runtime.activeModelId()).toBe(modelId)
+    const conv = createConversation(h.ctrl.requireDb(), {})
+    const first = (await invoke(handlers, IPC.sendChatMessage, conv.id, 'before the lock')).result as Message
+    expect(first.role).toBe('assistant')
+    const epochBefore = h.ctrl.unlockEpoch()
+
+    // The lock runs its whole teardown — the runtime and the API are stopped — then fails at the
+    // re-encrypt and rejects with the friendly copy; the workspace is genuinely open again.
+    await expect(invoke(handlers, IPC.lockWorkspace)).rejects.toThrow(t('en', 'main.workspace.lockFailed'))
+    expect(h.ctrl.isUnlocked()).toBe(true)
+    expect(h.ctrl.isLocking()).toBe(false)
+    expect(workspaceAdmitsWork(h.ctrl)).toBe(true)
+
+    // The re-arm is the post-unlock restart, fire-and-forget: the model comes back in the
+    // background (the mock start is quick; a real one takes the load window, which is why the
+    // Chat screen keeps polling `runtime:status` until it flips), the API at once.
+    expect(await waitUntil(() => runtime.activeModelId() === modelId, 400)).toBe(true)
+    expect(apiRunning).toBe(true)
+    // …in the SAME session: no new unlock epoch — a failed lock is not an unlock.
+    expect(h.ctrl.unlockEpoch()).toBe(epochBefore)
+
+    // The property that matters, driven through the real chat path: the next question answers.
+    const second = (await invoke(handlers, IPC.sendChatMessage, conv.id, 'after the failed lock')).result as Message
+    expect(second.role).toBe('assistant')
+    expect(second.content).toContain('after the failed lock')
+    expect(listMessages(h.ctrl.requireDb(), conv.id).map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'user',
+      'assistant'
+    ])
+    await runtime.stop()
   })
 
   // A throw ANYWHERE between arming the latch and `lock()` must disarm it too. Arming a latch
