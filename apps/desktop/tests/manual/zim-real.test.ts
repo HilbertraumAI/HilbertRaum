@@ -4,6 +4,7 @@ import { basename, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { ZimService } from '../../src/main/services/zim'
+import { searchPackTotal } from '../../src/main/services/zim/client'
 import { readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
 import { kiwixServeBinaryName, kiwixToolsDir } from '../../src/main/services/zim/tools'
 import { zimSmokeEnv } from '../helpers/zim-smoke-env'
@@ -101,6 +102,25 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
         `[zim-real] ${basename(zimFile)}: ${candidates.length} candidates in ${ms.toFixed(0)} ms ` +
           `(first: "${first.sourceTitle}" › ${first.sectionLabel ?? '—'})`
       )
+
+      // #353 review fix 6: the ladder's whole premise — that a REAL kiwix-serve 3.8.1 emits
+      // `<opensearch:totalResults>` for `format=xml` and honours `pageLength=1` — was proven only
+      // against this repo's own fixture servers until now. Ask the real sidecar directly.
+      const totalStart = performance.now()
+      const knownTotal = await searchPackTotal(library!.port, pack.id, query)
+      const knownMs = performance.now() - totalStart
+      const inventedWord = 'qzxvwtrkp'
+      const inventedStart = performance.now()
+      const inventedTotal = await searchPackTotal(library!.port, pack.id, inventedWord)
+      const inventedMs = performance.now() - inventedStart
+      // eslint-disable-next-line no-console
+      console.info(
+        `[zim-real] searchPackTotal: "${query}" → ${String(knownTotal)} (${knownMs.toFixed(0)} ms); ` +
+          `"${inventedWord}" → ${String(inventedTotal)} (${inventedMs.toFixed(0)} ms)`
+      )
+      expect(knownTotal).not.toBeNull()
+      expect(knownTotal!).toBeGreaterThan(0)
+      expect(inventedTotal).toBe(0)
 
       // #340 L3 (D-Z18): the retrieval-quality fixture, replayed only when the registered archive
       // IS the fixture's pack (the expected titles are that pack's). Every answerable question

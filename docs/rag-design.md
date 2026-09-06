@@ -2731,6 +2731,47 @@ offline article viewer. Files are registered in place, never copied.
   the manual smoke replays the fixture when the registered archive is that pack and asserts
   every answerable question hits.
 
+  **2026-09-06 amendment, #353 — the document-frequency ladder.** The length-based `retry`
+  cannot help a pattern whose kept terms are ALL already `RETRY_MIN_TERM_CHARS` or longer: a
+  single pack-rare or misspelled five-plus-character word (`"eigenschaftn"`) still ANDs the
+  query to zero, and libzim 9.4.0's Xapian parser has no boolean flag to drop one term
+  deliberately (no `OR`, no `-term` exclusion — see the parser facts above). `searchPattern` now
+  reports `terms` / `retryTerms` alongside `pattern` / `retry` — the KEPT TOKENS themselves, not
+  the joined string — so the ladder never re-tokenizes a pattern (which would probe raw
+  punctuation for a raw-fallback question like "Was ist das?"; `terms` is empty exactly for that
+  fallback, which also skips the ladder for free). When stages 1–2 both find nothing and the
+  last pattern tried still has two or more terms, `arm.ts` `runPack` probes up to
+  `query-rewrite.ts` `DF_PROBE_MAX_TERMS = 6` of them for their own archive-wide hit COUNT —
+  `client.ts` `searchPackTotal(port, bookUuid, term, signal, { timeoutMs })`, the same `/search`
+  route with `pageLength=1` (the smallest page that still makes kiwix-serve compute and report
+  `<opensearch:totalResults>`, parsed by the new `parseSearchTotal`) — sequentially, each capped
+  at `arm.ts` `DF_PROBE_TIMEOUT_MS = 3_000` (a NEW, SHORTER budget for this stage alone — it
+  changes no existing `/search` or `/raw` timeout — so one stalled probe cannot sit out the
+  client's 15 s default under the arm's single 20 s per-ask deadline). The PURE decision,
+  `narrowByFrequency(terms, df)`, is always called with the FULL kept-term list, never just the
+  probed prefix: drop every term whose count is exactly 0 (Xapian can never find it); when no
+  term has 0, drop the single lowest-count term instead (ties broken by dropping the LAST such
+  term, so an earlier subject word survives); a term absent from `df` — past the
+  `DF_PROBE_MAX_TERMS` cap, or its own probe resolved with no parseable total — is kept and
+  never treated as the lowest, so a pattern longer than the cap keeps its un-probed tail rather
+  than losing it. (A probe that THROWS — a non-200, a timeout — abandons the whole ladder before
+  `narrowByFrequency` is ever called; it is not how a term becomes "absent" there.) When a
+  pattern survives, the pack is searched once more with it. FAIL-SOFT throughout: a probe (or
+  the narrowed search) failing — a non-200, a timeout, a network error — ends the ladder with no
+  verdict, and the pack keeps the honest zero stages 1–2 already found (`'searched'`, never
+  `'search-failed'` — the searches that mattered all succeeded). Sequential, not concurrent, and
+  bounded to 6 terms: at most 7 extra loopback requests for a pack that was already going to
+  answer "not found". `zim-client.test.ts` pins `parseSearchTotal` / `searchPackTotal`;
+  `zim-query-rewrite.test.ts` pins `narrowByFrequency` and the `terms` / `retryTerms` split;
+  `zim-arm.test.ts` pins the request sequence (pattern → probes with `pageLength=1` → narrowed),
+  a pattern longer than `DF_PROBE_MAX_TERMS` keeping its un-probed tail, the probe-failure and
+  probe-timeout fail-soft legs, and an ask aborted mid-probe rejecting rather than resolving
+  empty. **Real-tool verification (2026-09-06):** the ladder's premise — that kiwix-serve 3.8.1
+  emits `<opensearch:totalResults>` for `format=xml` and honours `pageLength=1` — held against
+  the real Windows binaries and the pinned climate archive (`tests/manual/zim-real.test.ts`,
+  `HILBERTRAUM_ZIM_SMOKE=1` against K:): `searchPackTotal(port, pack.id, "Treibhausgas")` → 301
+  (17 ms), the invented word `"qzxvwtrkp"` → 0 (15 ms); the quality fixture still hit 9/9.
+
 ### Module map
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work

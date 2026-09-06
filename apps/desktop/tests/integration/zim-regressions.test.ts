@@ -1587,7 +1587,12 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
       }
       if (url.pathname === '/search') {
         const book = url.searchParams.get('books.id') ?? ''
-        t15Searches.push(book)
+        // #353: a zero-hit pack's document-frequency ladder probes with `pageLength=1` — those
+        // are extra `/search` requests for the same book, not a second "was this pack asked at
+        // all" participation event, so they are excluded here (this fixture carries no
+        // `opensearch:totalResults`, so every probe just resolves unknown and changes nothing
+        // about which pack gets searched or admitted).
+        if (url.searchParams.get('pageLength') !== '1') t15Searches.push(book)
         const send = (): void => {
           leave()
           const behaviour = t15Behaviour.get(book) ?? 'long'
@@ -1778,6 +1783,15 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
       )
       // The failed and empty packs were still ASKED — participation is not silently skipped.
       expect(t15Searches.sort()).toEqual(packs.map((p) => p.id).sort())
+      // #353 review fix 4: the empty pack's zero-hit, two-term pattern also runs the
+      // document-frequency ladder — pin the exact probe count instead of relying on this
+      // fixture never emitting `opensearch:totalResults` (which is what keeps both probes
+      // "unknown" and the pack's outcome honestly at zero, asserted above).
+      const emptyPackId = packs[3]!.id
+      const emptyProbes = t15Requests.filter(
+        (r) => r.startsWith('/search') && r.includes(`books.id=${emptyPackId}`) && r.endsWith('pageLength=1')
+      )
+      expect(emptyProbes).toHaveLength(2) // 'Treibhausgas' and 'Landwirtschaft', sequentially
     }
 
     // ---- (3) VARIED COMPLETION ORDER + CONCURRENCY ≤ 2 + THE LATE BEST HIT --------------
