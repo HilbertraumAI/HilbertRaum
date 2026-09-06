@@ -5,13 +5,16 @@ import {
   machineKey,
   memoryBudgetMb,
   memoryClassOf,
+  nextStartMemory,
   otherMachines,
   placementVerdict,
   recordAnswerSpeed,
   resetPerformanceForTests,
+  selectBudgetDevice,
   upsertHistory
 } from '../../src/main/services/performance'
-import { MAX_BENCHMARK_HISTORY, type BenchmarkResult, type ModelPlacement } from '../../src/shared/types'
+import { GPU_BUMP_MIN_VRAM_MB } from '../../src/main/services/runtime/gpu'
+import { MAX_BENCHMARK_HISTORY, type BenchmarkResult, type GpuDevice, type ModelPlacement } from '../../src/shared/types'
 
 // The Performance screen's model (benchmark.md "History per machine"): one result per
 // computer, keyed by a fingerprint that survives a reboot (rounded RAM) and that an OLD
@@ -140,6 +143,76 @@ describe('memoryClassOf / memoryBudgetMb', () => {
     const withMetal = { metalMaxWorkingSetMb: 40_000 } as ModelPlacement
     expect(memoryBudgetMb('unified', 49_152, null, withMetal)).toBe(40_000)
     expect(memoryBudgetMb('cpu', 16_000, null, null)).toBe(16_000)
+  })
+})
+
+// ---- The budget device and the next start's class (PR #308 audit, decisions 6 and 9) ----
+
+// A hybrid laptop as the pinned b9849 Vulkan build lists it: the Arrow-Lake iGPU FIRST, with
+// 11.3 GiB of shared RAM as its "total", the RTX 5060 second (the audit's R6 reproduction).
+const ARL: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Graphics (ARL)', totalMb: 11577, freeMb: 8251 }
+const RTX5060: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 5060', totalMb: 8151, freeMb: 7573 }
+const SMALL: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, freeMb: 3900 }
+const CARD8: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 8000 }
+
+describe('selectBudgetDevice', () => {
+  it('picks the LARGEST usable card, never the first device the driver listed', () => {
+    // Intel first (the real driver order) and NVIDIA first give the same answer.
+    expect(selectBudgetDevice([ARL, RTX5060])).toBe(RTX5060)
+    expect(selectBudgetDevice([RTX5060, ARL])).toBe(RTX5060)
+    // Two discrete cards: the bigger one is the budget, whichever is listed first.
+    expect(selectBudgetDevice([SMALL, CARD8])).toBe(CARD8)
+    expect(selectBudgetDevice([CARD8, SMALL])).toBe(CARD8)
+  })
+
+  it('returns null for an integrated-only machine, an empty probe, or only sub-gate cards', () => {
+    expect(selectBudgetDevice([ARL])).toBeNull()
+    expect(selectBudgetDevice([IRIS])).toBeNull()
+    expect(selectBudgetDevice([])).toBeNull()
+    expect(selectBudgetDevice([SMALL])).toBeNull()
+  })
+
+  it('reuses the runtime\'s 6 GiB gate at its exact boundary (N8): 5,921 MiB is out, 6,144 is in', () => {
+    expect(GPU_BUMP_MIN_VRAM_MB).toBe(6144)
+    // What a 6 GB laptop card actually reports (the assumptions check's N8 figure).
+    const laptop6 = { ...CARD8, name: 'NVIDIA GeForce RTX 3050 Laptop GPU', totalMb: 5921 }
+    expect(selectBudgetDevice([laptop6])).toBeNull()
+    const exactly = { ...laptop6, totalMb: 6144 }
+    expect(selectBudgetDevice([exactly])).toBe(exactly)
+  })
+})
+
+describe('nextStartMemory', () => {
+  const win = { platform: 'win32', arch: 'x64', gpuMode: 'auto' as const, gpuAutoDisabled: false }
+
+  it('discrete with the budget device when a usable card is listed, cpu with no device otherwise', () => {
+    expect(nextStartMemory({ ...win, devices: [ARL, RTX5060] })).toEqual({ memoryClass: 'discrete', device: RTX5060 })
+    expect(nextStartMemory({ ...win, devices: [RTX5060, ARL] })).toEqual({ memoryClass: 'discrete', device: RTX5060 })
+    expect(nextStartMemory({ ...win, devices: [ARL] })).toEqual({ memoryClass: 'cpu', device: null })
+    expect(nextStartMemory({ ...win, devices: [] })).toEqual({ memoryClass: 'cpu', device: null })
+  })
+
+  it('GPU off in Settings, or auto-disabled after a crash, makes the next start cpu even with a card present', () => {
+    expect(nextStartMemory({ ...win, devices: [CARD8], gpuMode: 'off' })).toEqual({ memoryClass: 'cpu', device: null })
+    expect(nextStartMemory({ ...win, devices: [CARD8], gpuAutoDisabled: true })).toEqual({ memoryClass: 'cpu', device: null })
+  })
+
+  it('Apple Silicon is unified regardless of the probe or the flags, naming the Metal pool device', () => {
+    const m2 = { id: 'Metal0', name: 'Apple M2 Pro', totalMb: 21845, freeMb: 20000 }
+    expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'arm64', devices: [m2] })).toEqual({ memoryClass: 'unified', device: m2 })
+    expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'arm64', devices: [] })).toEqual({ memoryClass: 'unified', device: null })
+    expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'arm64', devices: [m2], gpuMode: 'off' }).memoryClass).toBe('unified')
+    // An Intel Mac is not unified memory.
+    expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'x64', devices: [] }).memoryClass).toBe('cpu')
+  })
+
+  it('memoryClassOf is the flags-at-default wrapper: same class as nextStartMemory with GPU on', () => {
+    for (const devices of [[ARL, RTX5060], [ARL], [CARD8], [], [IRIS]]) {
+      expect(memoryClassOf('win32', 'x64', devices)).toBe(nextStartMemory({ ...win, devices }).memoryClass)
+    }
+    // …so the hybrid laptop is discrete by the RTX, and an integrated-only one is cpu.
+    expect(memoryClassOf('linux', 'x64', [ARL, RTX5060])).toBe('discrete')
+    expect(memoryClassOf('linux', 'x64', [ARL])).toBe('cpu')
   })
 })
 

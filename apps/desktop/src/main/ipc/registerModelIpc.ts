@@ -24,10 +24,11 @@ import {
   machineRamGb,
   manifestFiles,
   selectModel,
-  weightPath
+  weightPath,
+  type BuildModelListOptions
 } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
-import { memoryClassOf } from '../services/performance'
+import { nextStartMemory } from '../services/performance'
 import {
   latestEffectiveRead,
   preferCandidate,
@@ -54,6 +55,24 @@ import { perfMark, perfMs } from '../services/perf'
  * (`require_sha256_match: true` / `allow_unverified_models: false`) unverified weights
  * are rejected no matter what the toggle says; this also disables the mock fallback.
  */
+/**
+ * The memory inputs the chat ★ pick goes by (§6.6; PR #308 audit decisions 6 and 9): the class
+ * and the BUDGET device for the NEXT start, read through `nextStartMemory` from the persisted
+ * probe and the two GPU flags — the same call `probeAndPersistGpu` and the Performance screen
+ * make, so the Models ★ and the benchmark can never name different cards. Exported so the seam
+ * test can pin what the `listModels` handler feeds `buildModelList`.
+ */
+export function pickerMemoryFor(s: AppSettings): Pick<BuildModelListOptions, 'memoryClass' | 'machineVramMb'> {
+  const next = nextStartMemory({
+    platform: process.platform,
+    arch: process.arch,
+    devices: s.gpuProbe?.devices ?? [],
+    gpuMode: s.gpuMode,
+    gpuAutoDisabled: s.gpuAutoDisabled
+  })
+  return { memoryClass: next.memoryClass, machineVramMb: next.device?.totalMb ?? null }
+}
+
 function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
   const { policy } = loadPolicy(ctx.paths.configPath, undefined, { isDev: ctx.isDev })
   const developer = s.developerMode || ctx.isDev
@@ -364,8 +383,7 @@ export function registerModelIpc(ctx: AppContext): void {
       machineRamGb: machineRamGb(),
       // §6.6: the ★ pick goes by graphics memory on a discrete card, the SAME rule
       // runBenchmark applies, so the Performance screen and the Models screen agree.
-      memoryClass: memoryClassOf(process.platform, process.arch, s.gpuProbe?.devices ?? []),
-      machineVramMb: s.gpuProbe?.devices[0]?.totalMb ?? null,
+      ...pickerMemoryFor(s),
       // §6.5 signal-aware step-down (issue #95): feed the persisted Diagnostics pairing
       // (tok/s + the model that produced it, issue #52) into the chat recommendation.
       // Derived fresh from lastBenchmark on every call — stateless, never compounds.

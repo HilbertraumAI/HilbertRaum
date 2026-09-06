@@ -122,8 +122,10 @@ foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `c
 wins; a commercial `policy.json` can force it back off), `workspaceMode:'plaintext_dev'`,
 `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
 (JSON `BenchmarkResult | null`, default `null`) — the persisted hardware profile lives here.
-**The performance wave (2026-09-05) added `BenchmarkResult.gpuVramMb`** (primary probed device's
-total MiB, optional; absent on older results) **and `benchmarkHistory`** (`BenchmarkResult[]`, default `[]`,
+**The performance wave (2026-09-05) added `BenchmarkResult.gpuVramMb`** (the budget device's
+total MiB, optional; absent on older results; since the PR #308 audit `gpu` / `gpuVramMb` name
+the budget device `nextStartMemory` selects for the NEXT start — null with the GPU off or
+auto-disabled even when a card is probed — never the first device listed) **and `benchmarkHistory`** (`BenchmarkResult[]`, default `[]`,
 one entry per computer keyed by `machineKey`, capped at `MAX_BENCHMARK_HISTORY = 8`; the write
 gate keeps plain-object elements only; since the PR #303 audit an outgoing `lastBenchmark` from
 another computer is backfilled into it before being replaced, the cap evicts the oldest OTHER
@@ -481,7 +483,13 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 - **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
   throws (failed probe → `''`/`0`); `detectSystem` itself always reports `gpu: null` — the
   REAL probe lives in `runtime/gpu.ts` and is **injected** by the IPC layer (Phase 16:
-  `RunBenchmarkDeps.gpu: { name, useful }`), keeping this module `child_process`-free.
+  `RunBenchmarkDeps.gpu: { name, useful, totalMb?, memoryClass? }`), keeping this module
+  `child_process`-free. `name` / `totalMb` are the **budget device's** (`nextStartMemory` in
+  `services/performance.ts`, PR #308 audit decisions 6/9). `useful` and `memoryClass` answer
+  different questions: `useful` = `gpuUsefulForProfile` over ALL probed devices (the hardware
+  carries a usable card; the profile bump), `memoryClass` = the NEXT start's class (honours
+  `gpuMode` / `gpuAutoDisabled`, names one budget device), so `{ useful: true, memoryClass: 'cpu' }`
+  is a valid input — a card present, the GPU switched off.
 - **`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })`** — pure; spec §11.3
   thresholds + the conservative Phase-16 GPU bump (`gpuUseful` is precomputed by
   `gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated) + low-tok/sec downgrade; invalid
@@ -540,7 +548,9 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   `settings.lastBenchmark` + `settings.benchmarkHistory`, returns the result, and streams
   `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window. `performance:get`
   returns the `PerformanceSnapshot` the Performance screen renders (`current`, `currentMachine`,
-  `currentGpu`, `otherMachines`, `running`, `placement: { memoryClass, ramMb, vramMb, model,
+  `currentGpu` — the budget device for the next start, `{ name, totalMb }` or null, the same
+  device `BenchmarkResult.gpu` and the `listModels` ★ go by, never `settings.gpuProbe.devices[0]` —,
+  `otherMachines`, `running`, `placement: { memoryClass, ramMb, vramMb, model,
   observed, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }`, `observed: { lastAnswer, lastModelLoad, lastChecksum }`; the
   observed figures are session-only latches, never persisted). Registered in `initBackend()`;
   exposed on preload `api.runBenchmark` / `api.getPerformance` / `api.onBenchmarkProgress`.

@@ -1,6 +1,7 @@
 import { MAX_BENCHMARK_HISTORY } from '../../shared/types'
 import type { AnswerSpeed } from '../../shared/ipc'
 import type {
+  AppSettings,
   BenchmarkResult,
   GpuDevice,
   MemoryClass,
@@ -8,7 +9,7 @@ import type {
   ObservedAnswerSpeed,
   PlacementVerdict
 } from '../../shared/types'
-import { gpuUsefulForProfile } from './runtime/gpu'
+import { GPU_BUMP_MIN_VRAM_MB, looksIntegrated } from './runtime/gpu'
 
 // The Performance screen's model (benchmark.md "Performance screen"): one benchmark result
 // per COMPUTER the drive has been used on, and the session's observed figures. Pure
@@ -91,13 +92,82 @@ export const UNIFIED_BUDGET_SHARE = 0.75
 export const ESTIMATE_HEADROOM = 0.92
 
 /**
- * How this computer's memory is organised for a model. Apple Silicon (darwin + arm64) is one
- * unified pool; a usable discrete card (the runtime's own 6 GiB, not-integrated gate) has its
- * own memory; everything else runs from RAM.
+ * The BUDGET device (PR #308 audit, decision 9): the one card whose memory the chat pick,
+ * the placement verdict and the graphics tile are measured against. The LARGEST device that
+ * passes the runtime's own usable-card gate (≥ `GPU_BUMP_MIN_VRAM_MB` and not integrated by
+ * name), never `devices[0]`: the pinned Vulkan build lists an integrated GPU beside the
+ * discrete one in DRIVER order, so on a hybrid laptop the first device is as often the iGPU
+ * reporting 11–36 GiB of shared RAM as it is the card. Null when no device passes (an
+ * integrated-only laptop, a sub-6 GiB card, an empty probe).
  */
-export function memoryClassOf(platform: string, arch: string, devices: GpuDevice[]): MemoryClass {
-  if (platform === 'darwin' && arch === 'arm64') return 'unified'
-  return gpuUsefulForProfile(devices) ? 'discrete' : 'cpu'
+export function selectBudgetDevice(devices: readonly GpuDevice[]): GpuDevice | null {
+  let best: GpuDevice | null = null
+  for (const device of devices) {
+    if (device.totalMb < GPU_BUMP_MIN_VRAM_MB || looksIntegrated(device.name)) continue
+    if (best == null || device.totalMb > best.totalMb) best = device
+  }
+  return best
+}
+
+/** What `nextStartMemory` needs: the platform, the probed devices and the two GPU flags. */
+export interface NextStartMemoryInput {
+  platform: string
+  arch: string
+  devices: readonly GpuDevice[]
+  /** The user's Settings toggle (`AppSettings.gpuMode`). */
+  gpuMode: AppSettings['gpuMode']
+  /** The ladder's crash-fallback latch (`AppSettings.gpuAutoDisabled`). */
+  gpuAutoDisabled: boolean
+}
+
+/** How the NEXT model start will see this computer's memory: the class and the budget device. */
+export interface NextStartMemory {
+  memoryClass: MemoryClass
+  /**
+   * The budget device (`selectBudgetDevice`) on a `discrete` machine; the Metal pool's device
+   * (the largest one listed) on `unified`; null on `cpu` — including when a card IS present
+   * but the next start will not use it (GPU off, auto-disabled).
+   */
+  device: GpuDevice | null
+}
+
+/**
+ * How this computer's memory is organised for the NEXT model start (PR #308 audit, decisions
+ * 6 and 9): Apple Silicon (darwin + arm64) is one unified pool; with the GPU switched off in
+ * Settings or auto-disabled after a crash the ladder skips every GPU rung, so the next start
+ * runs from RAM whatever the probe lists (class `cpu`, no device); otherwise a usable discrete
+ * card — the budget device — has its own memory, and everything else runs from RAM.
+ *
+ * This is the ONE place class and device are decided; `probeAndPersistGpu`, `listModels`,
+ * `buildPlacement` and the graphics tile all read it, so the Performance screen and the Models
+ * screen can never name different cards. Observed placements are NOT overridden here: a
+ * running GPU model stays observed on the GPU after the toggle flips (a settings change never
+ * restarts it); this describes the next start only.
+ */
+export function nextStartMemory(input: NextStartMemoryInput): NextStartMemory {
+  const { platform, arch, devices, gpuMode, gpuAutoDisabled } = input
+  if (platform === 'darwin' && arch === 'arm64') {
+    // One Metal device is the pool itself; the gate below (a "not integrated" name check)
+    // does not apply to it, so name the largest device listed, without the gate.
+    let pool: GpuDevice | null = null
+    for (const device of devices) {
+      if (pool == null || device.totalMb > pool.totalMb) pool = device
+    }
+    return { memoryClass: 'unified', device: pool }
+  }
+  if (gpuMode === 'off' || gpuAutoDisabled) return { memoryClass: 'cpu', device: null }
+  const device = selectBudgetDevice(devices)
+  return device ? { memoryClass: 'discrete', device } : { memoryClass: 'cpu', device: null }
+}
+
+/**
+ * The memory class with the GPU flags at their defaults (GPU on, not auto-disabled) — a thin
+ * wrapper over `nextStartMemory` for callers that hold no settings. Production consumers pass
+ * the flags through `nextStartMemory` instead, so a switched-off card never classes a machine
+ * `discrete`.
+ */
+export function memoryClassOf(platform: string, arch: string, devices: readonly GpuDevice[]): MemoryClass {
+  return nextStartMemory({ platform, arch, devices, gpuMode: 'auto', gpuAutoDisabled: false }).memoryClass
 }
 
 /** The memory the fit question is asked against, MiB. */

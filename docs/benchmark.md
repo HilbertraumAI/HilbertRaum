@@ -328,12 +328,14 @@ screen answers the user's question in plain words. Three cards:
    colour alone: Speed (decode tokens/s, the measured model and date; "Approximate" on a
    chunk-basis result), Memory (RAM, the profile as the pill, the model the RAM fits together with
    the context it launches with: the user's `contextTokensOverride` or the model's recommended
-   window, plus CPU), Graphics memory (`BenchmarkResult.gpuVramMb`, the primary probed device's
-   total MiB recorded at benchmark time so the history rows carry it too; "Usable" at or above the
-   runtime's 6 GiB GPU gate, "Small" below it with the plain consequence "models run on the
-   processor", "None" without a device; a result persisted before the field existed, or whose probe
-   came back empty, gets the stored `settings.gpuProbe` figure folded in by
-   `buildPerformanceSnapshot`, for the current machine only, and the screen keeps
+   window, plus CPU), Graphics memory (`BenchmarkResult.gpuVramMb`, the **budget device's**
+   total MiB recorded at benchmark time so the history rows carry it too — since the PR #308
+   audit `BenchmarkResult.gpu` / `gpuVramMb` and `PerformanceSnapshot.currentGpu` all name the
+   budget device `nextStartMemory` selects, below, never the first device the driver listed;
+   "Usable" at or above the runtime's 6 GiB GPU gate, "Small" below it with the plain
+   consequence "models run on the processor", "None" without a device; a result persisted before
+   the field existed, or whose probe came back empty, gets the stored `settings.gpuProbe` figure
+   folded in by `buildPerformanceSnapshot`, for the current machine only, and the screen keeps
    `PerformanceSnapshot.currentGpu` plus the settings probe as last-resort fallbacks, so the
    tile never waits for a re-run), Drive (`effectiveRead` with its source and date; "Pending" until a model start measured
    it). Actions: **Check again** (or **Start \<model\> and measure** when speed is unmeasured,
@@ -344,11 +346,25 @@ screen answers the user's question in plain words. Three cards:
 **Your model** (a row under the tiles; 2026-09-05, owner direction): whether the ACTIVE model fits
 is not a property of RAM or of VRAM alone, so neither tile says it. The row names the model, its
 size on disk and the context it launches with, then gives one verdict against this computer's
-**memory class** (`memoryClassOf` in `services/performance.ts`): `discrete` = a usable graphics
-card (the runtime's own 6 GiB, not-integrated gate) whose VRAM is the budget; `unified` = Apple
-Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
+**memory class** (`nextStartMemory` in `services/performance.ts`; `memoryClassOf` is its
+flags-at-default wrapper): `discrete` = a usable graphics card whose VRAM is the budget;
+`unified` = Apple Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
 `recommendedMaxWorkingSetSize` when the load log printed it, else 75 % of RAM (the Memory tile is
 labelled "Unified memory" and the graphics tile is hidden); `cpu` = no usable card, budget = RAM.
+**Which card** (PR #308 audit, decision 9): the **budget device** is the LARGEST probed device
+that passes the runtime's own gate (≥ 6 GiB and not integrated by name, `selectBudgetDevice`),
+never `devices[0]` — the pinned Vulkan build lists an integrated GPU beside the discrete one in
+driver order, so on a hybrid laptop the first device is as often the iGPU reporting 11–36 GiB of
+shared RAM as it is the card; `looksIntegrated` knows the current names (`Intel(R) Graphics (ARL)`,
+`Arc(TM) 1xxV`, `Radeon 780M/890M Graphics`, `Radeon 8060S Graphics`). The same helper feeds
+`probeAndPersistGpu` (so `BenchmarkResult.gpu` / `gpuVramMb` name it), the `listModels` ★ and
+this row, so the Performance and Models screens can never mean different cards. **Next start,
+not hardware** (decision 6): with the GPU switched off in Settings (`gpuMode: 'off'`) or
+auto-disabled after a crash (`gpuAutoDisabled`) the ladder skips every GPU rung, so the class is
+`cpu` for the next start, the budget is RAM and the ★ is the RAM pick, whatever the probe lists;
+the probe itself is still persisted (Diagnostics lists the card, "Try GPU again" re-arms it), and
+a placement OBSERVED on the card stays observed — a settings change never restarts a running
+model, so the row keeps reporting what the last start did.
 **Observed first**: after a start, llama.cpp's own load log says where the model landed, and the
 chat ladder now reads it (`runtime/placement.ts`, one parser per attempt, fed by the sidecar's
 `onStderrData`; the chat server runs with `-lv 4` because the pinned build prints these lines

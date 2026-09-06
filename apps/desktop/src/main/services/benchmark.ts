@@ -445,15 +445,27 @@ export function upsertSlowReadWarning(warnings: string[], effectiveReadMbps: num
 
 /** The GPU probe summary INJECTED into the benchmark (architecture.md GPU record §5.1/§8). */
 export interface GpuBenchmarkInput {
-  /** Display name of the primary probed device (→ `BenchmarkResult.gpu`). */
+  /**
+   * Display name of the BUDGET device (→ `BenchmarkResult.gpu`): the card the next start will
+   * fit against (`nextStartMemory` in services/performance.ts), not the first device listed.
+   * Null when the next start has no card — no device, an integrated-only machine, or the GPU
+   * switched off / auto-disabled.
+   */
   name: string | null
-  /** Pre-computed bump eligibility (`gpuUsefulForProfile` over the probed devices). */
+  /**
+   * Pre-computed PROFILE-BUMP eligibility (`gpuUsefulForProfile` over ALL probed devices,
+   * GPU record §8): does the hardware carry a usable card at all. Deliberately NOT the same
+   * question as `memoryClass`: the bump describes the machine, the class describes the NEXT
+   * START (it honours `gpuMode` / `gpuAutoDisabled` and names one budget device), so
+   * `{ useful: true, memoryClass: 'cpu' }` is a valid input — a card present, the GPU off.
+   */
   useful: boolean
-  /** Total memory of the primary device in MiB (→ `BenchmarkResult.gpuVramMb`); absent/null = unknown. */
+  /** Total memory of the budget device in MiB (→ `BenchmarkResult.gpuVramMb`); absent/null = unknown. */
   totalMb?: number | null
   /**
-   * The computer's memory class (services/performance.ts `memoryClassOf`): 'discrete' makes
-   * the chat pick graphics-memory-best-fit (§6.6); absent → 'cpu', the RAM pick.
+   * The computer's memory class for the next start (services/performance.ts
+   * `nextStartMemory`): 'discrete' makes the chat pick graphics-memory-best-fit (§6.6);
+   * absent → 'cpu', the RAM pick.
    */
   memoryClass?: MemoryClass
 }

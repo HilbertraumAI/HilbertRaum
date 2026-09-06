@@ -18,10 +18,11 @@ import {
   findMachine,
   latestAnswerSpeed,
   machineKey,
-  memoryClassOf,
+  nextStartMemory,
   otherMachines,
   placementVerdict,
-  upsertHistory
+  upsertHistory,
+  type NextStartMemory
 } from '../services/performance'
 import { latestModelPlacement, setModelPlacementObserver } from '../services/runtime/placement'
 import { latestEffectiveReadBySource } from '../services/read-speed'
@@ -49,9 +50,16 @@ import { log } from '../services/logging'
  * profile classification have device info without re-probing every launch. The probe
  * stays OUT of benchmark.ts (which keeps zero `child_process`); the summary is injected.
  * Never throws: no binary / no devices / probe failure → a null-name, not-useful input.
+ *
+ * The summary names the BUDGET device for the next start (`nextStartMemory`, PR #308 audit
+ * decisions 6 and 9), never `devices[0]`: the class and the card honour `gpuMode` /
+ * `gpuAutoDisabled`, and the same helper feeds `listModels` and the Performance screen, so
+ * `BenchmarkResult.gpu` / `gpuVramMb` and the Models ★ agree on which card they mean.
  */
 async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   let devices: GpuDevice[] = []
+  let gpuMode: AppSettings['gpuMode'] = 'auto'
+  let gpuAutoDisabled = false
   try {
     const binPath = resolveLlamaServerPath(ctx.paths.rootPath, process.platform, process.env, {
       isDev: ctx.isDev
@@ -60,15 +68,32 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
       devices = await ctx.probeGpu(binPath)
       updateSettings(ctx.db, { gpuProbe: { devices, probedAt: new Date().toISOString() } })
     }
+    // Read the flags AFTER the probe persisted: `tryGpuAgain` clears `gpuAutoDisabled` right
+    // before it re-probes, and the summary must describe the start that follows that click.
+    ;({ gpuMode, gpuAutoDisabled } = getSettings(ctx.db))
   } catch (err) {
     log.warn('GPU probe failed (benchmark continues without it)', String(err))
   }
+  const next = nextStartMemory({ platform: process.platform, arch: process.arch, devices, gpuMode, gpuAutoDisabled })
   return {
-    name: devices[0]?.name ?? null,
+    name: next.device?.name ?? null,
+    // The profile bump looks at the HARDWARE (every probed device); the class below looks at
+    // the next START — see `GpuBenchmarkInput.useful`.
     useful: gpuUsefulForProfile(devices),
-    totalMb: devices[0]?.totalMb ?? null,
-    memoryClass: memoryClassOf(process.platform, process.arch, devices)
+    totalMb: next.device?.totalMb ?? null,
+    memoryClass: next.memoryClass
   }
+}
+
+/** The next start's memory class and budget device, from the persisted probe and the GPU flags. */
+function nextStartMemoryFor(settings: AppSettings): NextStartMemory {
+  return nextStartMemory({
+    platform: process.platform,
+    arch: process.arch,
+    devices: settings.gpuProbe?.devices ?? [],
+    gpuMode: settings.gpuMode,
+    gpuAutoDisabled: settings.gpuAutoDisabled
+  })
 }
 
 /**
@@ -265,12 +290,14 @@ function buildPlacement(
   ctx: AppContext,
   settings: AppSettings,
   here: string | null,
-  ramGb: number
+  ramGb: number,
+  memory: NextStartMemory
 ): PerformanceSnapshot['placement'] {
-  const devices = settings.gpuProbe?.devices ?? []
-  const memoryClass = memoryClassOf(process.platform, process.arch, devices)
+  // The class and the card are the NEXT start's (GPU off / auto-disabled → cpu, no card); the
+  // observed placement below is what the LAST start did and is kept as an observation.
+  const { memoryClass } = memory
   const ramMb = ramGb > 0 ? Math.round(ramGb * 1024) : null
-  const vramMb = devices[0]?.totalMb ?? null
+  const vramMb = memory.device?.totalMb ?? null
   const activeId = settings.activeModelId
   const manifests: ModelManifest[] = ctx.manifestsDir
     ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
@@ -400,7 +427,10 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
   // last start on this drive went.
   const persistedLoad =
     current?.effectiveRead?.source === 'model_load' ? current.effectiveRead : null
-  const probed = settings.gpuProbe?.devices[0]
+  // The BUDGET device for the next start (decision 9), the same one `probeAndPersistGpu` and
+  // `listModels` name — never the first device the driver happened to list.
+  const memory = nextStartMemoryFor(settings)
+  const probed = memory.device
   // An unknown identity on either side reads as "this machine": the moved-drive check in
   // maybeRunFirstBenchmark makes the same call, so the two never contradict each other.
   const currentMachine = here == null || currentKey == null || here === currentKey
@@ -417,7 +447,7 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
     currentMachine,
     otherMachines: otherMachines(settings.benchmarkHistory, currentKey ?? here),
     running: modelBusyLane(ctx) === 'benchmark',
-    placement: buildPlacement(ctx, settings, here, sys.ramGb),
+    placement: buildPlacement(ctx, settings, here, sys.ramGb, memory),
     observed: {
       lastAnswer: latestAnswerSpeed(),
       lastModelLoad: latestEffectiveReadBySource('model_load') ?? persistedLoad,

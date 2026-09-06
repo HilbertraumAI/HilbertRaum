@@ -62,7 +62,18 @@ export function looksIntegrated(name: string): boolean {
   //   - "AMD Radeon(TM) 780M Graphics" and other "...Graphics"-suffixed APU names
   //   - "AMD Radeon Vega 8 Graphics", "Vega 11" APUs (also catches old discrete
   //     RX Vega 56/64 — an accepted false positive; see the bias note above)
-  return /iris|uhd|intel\(r\) (hd|arc.*integrated)|arc\(tm\) graphics|radeon(\(tm\))? graphics|radeon.*graphics$|vega \d+/i.test(
+  // PR #308 audit (decision 9, finding R6) — the current-generation integrated names the
+  // pinned b9849 Vulkan build reports, none of which the patterns above matched (so a hybrid
+  // laptop's 11–36 GiB of SHARED memory read as a discrete card on every consumer):
+  //   - "Intel(R) Graphics (ARL)" / "(LNL)"   (Arrow/Lunar-Lake iGPU: the bare "Graphics"
+  //     form with the platform code in parentheses)
+  //   - "Intel(R) Arc(TM) 140V GPU (16GB)"    (Lunar-Lake "Arc 1xxV" iGPU; a discrete Arc is
+  //     "Arc(TM) A770" / "A750" and must NOT match)
+  //   - "AMD Radeon 780M Graphics (RADV PHOENIX)", "890M … (RADV GFX1150)" (RADV APU names
+  //     WITHOUT "(TM)" and WITH a trailing driver tag, which `radeon.*graphics$` misses) and
+  //     the Strix Halo "AMD Radeon 8060S Graphics (RADV GFX1151)"; the discrete laptop
+  //     "AMD Radeon RX 7700S" carries "RX" and no "Graphics" and must NOT match
+  return /iris|uhd|intel\(r\) (hd|arc.*integrated)|intel\(r\) graphics \(|arc\(tm\) graphics|arc\(tm\) 1\d{2}v|radeon(\(tm\))? graphics|radeon(\(tm\))? \d{3,4}[ms] graphics|radeon.*graphics$|vega \d+/i.test(
     name
   )
 }
