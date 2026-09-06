@@ -40,7 +40,7 @@ validates entry keys (2048-char bound); the real-tool smoke is fail-closed on `H
 carves out both `kiwix-serve` exceptions by name and records accepted residual R-9 (mirrored in
 PRIVACY/known-limitations/user-guide). Record: rag-design D-Z10 (request-guard paragraph),
 security-model "kiwix-serve — the one unauthenticated sidecar". T17-a / T17-b implemented. Suite on
-this machine: <COUNTS>; typecheck + build green; real kiwix-tools not installed here.
+this machine: 417 / 6,001 (5,921 / 79) = +1 file / +43 tests over the head 194b28ec (416 / 5,958, recounted here); typecheck + build green; real kiwix-tools not installed here.
 
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 3b — session boundary, lock, identity, discovery: review
 H4 / M4 / M5 / L3 / L4 / L7 closed.**_ Every pack operation captures the unlock epoch and re-asserts admission/epoch/
