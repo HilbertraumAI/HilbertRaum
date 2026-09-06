@@ -25,7 +25,9 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful }`).
    `benchmark.ts` itself keeps its **zero-`child_process` purity** — it never probes. The probe
    result is also persisted to `settings.gpuProbe` for Diagnostics. With no binary / no devices /
-   a failed probe, `gpu` stays `null` and nothing blocks. The persisted probe is additionally
+   a failed probe, `gpu` stays `null` and nothing blocks — and since the PR #308 audit (decision 6)
+   all three persist the same **empty** probe (`{ devices: [], probedAt }`), so a card recorded
+   on a previous machine never outlives a refresh that could not see it. The persisted probe is additionally
    refreshed **once per session** in the background (even when a benchmark already exists), so a
    drive moved to another machine re-labels itself; Diagnostics' "Try GPU again"
    (`gpu:try-again` IPC) invalidates the session cache and re-probes immediately.

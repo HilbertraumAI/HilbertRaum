@@ -3071,7 +3071,7 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 |---|---|
 | `gpuMode: 'auto' \| 'off'` (user intent; Settings toggle) | `AppSettings` (encrypted DB) |
 | `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder; cleared by "Try GPU again" |
-| `gpuProbe` (devices + `probedAt`) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself |
+| `gpuProbe` (devices + `probedAt`) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself. Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt }`) exactly like an empty successful probe, so a card from a previous machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device |
 | Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) |
 
 "Try GPU again" is the dedicated `gpu:try-again` IPC: clears the flags **and** invalidates the

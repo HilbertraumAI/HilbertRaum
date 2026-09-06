@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -28,8 +28,22 @@ vi.mock('node:os', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:os')>()),
   totalmem: () => 32 * 1024 ** 3
 }))
+// P2a: a switch that makes the settings store refuse `gpuProbe` writes only — the witness that
+// the probe helper's catch-branch persistence cannot throw out of the benchmark. Off by default
+// (pass-through to the real module).
+const settingsState = vi.hoisted(() => ({ refuseGpuProbeWrites: false }))
+vi.mock('../../src/main/services/settings', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/services/settings')>()
+  return {
+    ...actual,
+    updateSettings: (...args: Parameters<typeof actual.updateSettings>): ReturnType<typeof actual.updateSettings> => {
+      if (settingsState.refuseGpuProbeWrites && 'gpuProbe' in (args[1] ?? {})) throw new Error('settings store refused the write')
+      return actual.updateSettings(...args)
+    }
+  }
+})
 
-import { buildPerformanceSnapshot, runAndPersistBenchmark } from '../../src/main/ipc/registerBenchmarkIpc'
+import { buildPerformanceSnapshot, maybeRunFirstBenchmark, runAndPersistBenchmark } from '../../src/main/ipc/registerBenchmarkIpc'
 import { pickerMemoryFor, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { detectSystem } from '../../src/main/services/benchmark'
 import { openDatabase } from '../../src/main/services/db'
@@ -234,5 +248,118 @@ describe('picker seams: the next start honours the GPU flags (decision 6)', () =
     expect(settings.gpuProbe?.devices).toEqual([CARD8])
     expect(await liveStar(ctx)).toBe(CARD8_PICK)
     expect(buildPerformanceSnapshot(ctx).placement.memoryClass).toBe('discrete')
+  })
+})
+
+describe('picker seams: a probe that cannot run or that threw persists an EMPTY probe (P2a, decision 6; audit A5/A5b/A5c)', () => {
+  // The audit's stale-card fixture: a drive that left a machine with an 8 GiB RTX 3070 and a
+  // pre-PR saved Q5 result, now on a computer where the probe cannot say anything.
+  const STALE_AT = '2026-08-20T00:00:00Z'
+  function staleCard(opts: { binary: boolean; probe?: () => Promise<GpuDevice[]> }): Fixture {
+    const f = fixture({ probeReturns: [], persisted: [CARD8] })
+    updateSettings(f.ctx.db, {
+      lastBenchmark: {
+        ...detectSystem(),
+        gpu: CARD8.name,
+        gpuVramMb: CARD8.totalMb,
+        driveReadMbps: null,
+        driveWriteMbps: null,
+        tokensPerSecond: null,
+        measuredModelId: null,
+        profile: 'PRO',
+        recommendedModelId: RAM_PICK,
+        warnings: [],
+        ranAt: STALE_AT
+      }
+    })
+    if (!opts.binary) rmSync(llamaServerDir(f.ctx.paths.rootPath), { recursive: true, force: true })
+    if (opts.probe) f.probe.mockImplementation(opts.probe)
+    return f
+  }
+
+  async function expectEmptyProbeAndRamPickOnBothSeams(f: Fixture): Promise<void> {
+    // The badge would have said 9B from the stale card before the run…
+    expect(await liveStar(f.ctx)).toBe(CARD8_PICK)
+    const bench = await runAndPersistBenchmark(f.ctx)
+    const probe = getSettings(f.ctx.db).gpuProbe
+    // …the run replaces the stale card with THIS session's (empty) probe, freshly stamped…
+    expect(probe?.devices).toEqual([])
+    expect(probe?.probedAt).not.toBe(STALE_AT)
+    expect(Date.parse(probe?.probedAt ?? '')).toBeGreaterThan(Date.parse(STALE_AT))
+    // …so the benchmark and the Models ★ agree on the RAM pick, and no surface names a card.
+    expect(bench.recommendedModelId).toBe(RAM_PICK)
+    expect(bench.gpu).toBeNull()
+    expect(bench.gpuVramMb).toBeNull()
+    expect(await liveStar(f.ctx)).toBe(RAM_PICK)
+    const snap = buildPerformanceSnapshot(f.ctx)
+    expect(snap.currentGpu).toBeNull()
+    expect(snap.placement.memoryClass).toBe('cpu')
+    expect(snap.current?.gpuVramMb).toBeNull()
+  }
+
+  it('no binary → the probe never runs, yet `gpuProbe` becomes { devices: [], probedAt } (A5)', async () => {
+    const f = staleCard({ binary: false })
+    await expectEmptyProbeAndRamPickOnBothSeams(f)
+    expect(f.probe).not.toHaveBeenCalled()
+  })
+
+  it('the probe throws → the same empty probe is persisted and the run still completes (A5b)', async () => {
+    const f = staleCard({
+      binary: true,
+      probe: async () => {
+        throw new Error('probe exploded')
+      }
+    })
+    await expectEmptyProbeAndRamPickOnBothSeams(f)
+    expect(f.probe).toHaveBeenCalledTimes(1)
+  })
+
+  it('the probe returns [] → the same empty probe (the control, A5c: this path was already right)', async () => {
+    const f = staleCard({ binary: true })
+    await expectEmptyProbeAndRamPickOnBothSeams(f)
+    expect(f.probe).toHaveBeenCalledTimes(1)
+  })
+
+  it('a successful probe still persists its devices (unchanged path)', async () => {
+    const f = staleCard({ binary: true, probe: async () => [ARL, RTX5060] })
+    const bench = await runAndPersistBenchmark(f.ctx)
+    expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([ARL, RTX5060])
+    expect(getSettings(f.ctx.db).gpuProbe?.probedAt).not.toBe(STALE_AT)
+    expect(bench.recommendedModelId).toBe(CARD8_PICK)
+    expect(bench.gpu).toBe(RTX5060.name)
+  })
+
+  it('the session refresh (maybeRunFirstBenchmark) clears a stale card the same way when the binary is gone', async () => {
+    const f = staleCard({ binary: false })
+    maybeRunFirstBenchmark(f.ctx)
+    await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([]))
+    expect(getSettings(f.ctx.db).gpuProbe?.probedAt).not.toBe(STALE_AT)
+    // Same machine, already benchmarked: the saved result is kept, not re-run (A4 unchanged)…
+    await new Promise((r) => setTimeout(r, 200))
+    expect(getSettings(f.ctx.db).lastBenchmark?.ranAt).toBe(STALE_AT)
+    // …and the badge now reads the RAM pick, in step with the saved result.
+    expect(await liveStar(f.ctx)).toBe(RAM_PICK)
+  })
+
+  it('the empty-probe write itself failing (thrown path, store refuses) never escapes: the run still completes', async () => {
+    const f = staleCard({
+      binary: true,
+      probe: async () => {
+        throw new Error('probe exploded')
+      }
+    })
+    settingsState.refuseGpuProbeWrites = true
+    try {
+      // Both the probe AND the catch branch's own persistence write throw; the benchmark must
+      // still return (the helper's contract: never throws), with the in-memory empty device list.
+      const bench = await runAndPersistBenchmark(f.ctx)
+      expect(bench.recommendedModelId).toBe(RAM_PICK)
+      expect(bench.gpu).toBeNull()
+      // The refused write means the stale card is still on disk — the residual this test pins:
+      // the store's refusal, not the probe, is what keeps it (a locked workspace re-probes on unlock).
+      expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([CARD8])
+    } finally {
+      settingsState.refuseGpuProbeWrites = false
+    }
   })
 })

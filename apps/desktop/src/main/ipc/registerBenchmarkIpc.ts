@@ -55,24 +55,45 @@ import { log } from '../services/logging'
  * decisions 6 and 9), never `devices[0]`: the class and the card honour `gpuMode` /
  * `gpuAutoDisabled`, and the same helper feeds `listModels` and the Performance screen, so
  * `BenchmarkResult.gpu` / `gpuVramMb` and the Models ★ agree on which card they mean.
+ *
+ * A probe that CANNOT run (no binary resolves, no session probe) or that THREW persists an
+ * EMPTY probe (`{ devices: [], probedAt }`), exactly as an empty successful probe does (PR #308
+ * audit decision 6, findings R3/R5; GPU record §5.4): a card persisted on a previous machine
+ * or before the runtime was removed used to survive both paths, so the Models ★ kept a card
+ * pick while this benchmark reported the RAM pick. Now every path leaves `settings.gpuProbe`
+ * describing THIS session's probe, and the badge, the benchmark and the tile read one record.
  */
 async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   let devices: GpuDevice[] = []
   let gpuMode: AppSettings['gpuMode'] = 'auto'
   let gpuAutoDisabled = false
+  const persistProbe = (list: GpuDevice[]): void => {
+    updateSettings(ctx.db, { gpuProbe: { devices: list, probedAt: new Date().toISOString() } })
+  }
   try {
     const binPath = resolveLlamaServerPath(ctx.paths.rootPath, process.platform, process.env, {
       isDev: ctx.isDev
     })
-    if (binPath && ctx.probeGpu) {
-      devices = await ctx.probeGpu(binPath)
-      updateSettings(ctx.db, { gpuProbe: { devices, probedAt: new Date().toISOString() } })
-    }
-    // Read the flags AFTER the probe persisted: `tryGpuAgain` clears `gpuAutoDisabled` right
-    // before it re-probes, and the summary must describe the start that follows that click.
-    ;({ gpuMode, gpuAutoDisabled } = getSettings(ctx.db))
+    if (binPath && ctx.probeGpu) devices = await ctx.probeGpu(binPath)
+    persistProbe(devices)
   } catch (err) {
     log.warn('GPU probe failed (benchmark continues without it)', String(err))
+    devices = []
+    // The thrown path persists the same empty probe; its own write must not escape either
+    // (a workspace locked mid-run throws from `ctx.db`) — this function never throws.
+    try {
+      persistProbe([])
+    } catch (persistErr) {
+      log.warn('Could not persist the empty GPU probe', String(persistErr))
+    }
+  }
+  // Read the flags AFTER the probe persisted: `tryGpuAgain` clears `gpuAutoDisabled` right
+  // before it re-probes, and the summary must describe the start that follows that click. An
+  // unreadable settings row (locked) falls back to the GPU-on defaults.
+  try {
+    ;({ gpuMode, gpuAutoDisabled } = getSettings(ctx.db))
+  } catch {
+    /* defaults */
   }
   const next = nextStartMemory({ platform: process.platform, arch: process.arch, devices, gpuMode, gpuAutoDisabled })
   return {
