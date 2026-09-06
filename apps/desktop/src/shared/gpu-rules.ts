@@ -44,7 +44,18 @@ export function looksIntegrated(name: string): boolean {
   //   - "AMD Radeon(TM) 780M Graphics" and other "...Graphics"-suffixed APU names
   //   - "AMD Radeon Vega 8 Graphics", "Vega 11" APUs (also catches old discrete
   //     RX Vega 56/64 — an accepted false positive; see the bias note above)
-  return /iris|uhd|intel\(r\) (hd|arc.*integrated)|arc\(tm\) graphics|radeon(\(tm\))? graphics|radeon.*graphics$|vega \d+/i.test(
+  // PR #308 audit (decision 9, finding R6) — the current-generation integrated names the
+  // pinned b9849 Vulkan build reports, none of which the patterns above matched (so a hybrid
+  // laptop's 11–36 GiB of SHARED memory read as a discrete card on every consumer):
+  //   - "Intel(R) Graphics (ARL)" / "(LNL)"   (Arrow/Lunar-Lake iGPU: the bare "Graphics"
+  //     form with the platform code in parentheses)
+  //   - "Intel(R) Arc(TM) 140V GPU (16GB)"    (Lunar-Lake "Arc 1xxV" iGPU; a discrete Arc is
+  //     "Arc(TM) A770" / "A750" and must NOT match)
+  //   - "AMD Radeon 780M Graphics (RADV PHOENIX)", "890M … (RADV GFX1150)" (RADV APU names
+  //     WITHOUT "(TM)" and WITH a trailing driver tag, which `radeon.*graphics$` misses) and
+  //     the Strix Halo "AMD Radeon 8060S Graphics (RADV GFX1151)"; the discrete laptop
+  //     "AMD Radeon RX 7700S" carries "RX" and no "Graphics" and must NOT match
+  return /iris|uhd|intel\(r\) (hd|arc.*integrated)|intel\(r\) graphics \(|arc\(tm\) graphics|arc\(tm\) 1\d{2}v|radeon(\(tm\))? graphics|radeon(\(tm\))? \d{3,4}[ms] graphics|radeon.*graphics$|vega \d+/i.test(
     name
   )
 }
@@ -68,20 +79,33 @@ export function gpuUsefulForProfile(devices: readonly GpuDeviceLike[]): boolean 
 }
 
 /**
- * The device every recorded figure is taken from: the FIRST useful device in enumeration
- * order, or null when none is useful. On a hybrid `[iGPU, dGPU]` box this is the dGPU — the
- * old `devices[0]` was the iGPU's shared figure (M8.2). Its `name` and `totalMb` are always
- * paired: a reader never combines one device's name with another's memory.
+ * The device every recorded figure is taken from — the BUDGET device: the LARGEST useful
+ * device (PR #308 audit decision 9, `selectBudgetDevice` in `services/performance.ts` is this
+ * very function), or null when none is useful. On a hybrid `[iGPU, dGPU]` box this is the
+ * dGPU — the old `devices[0]` was the iGPU's shared figure (M8.2) — and with two usable cards
+ * the bigger one, whichever the driver listed first (the PR #303 P5 rule took the first useful
+ * device; the two were unified at the #303/#308 merge so the tile, `currentGpu`, the benchmark
+ * record, the placement budget and the Models ★ have exactly one answer to "which card"). Its
+ * `name` and `totalMb` are always paired: a reader never combines one device's name with
+ * another's memory.
  */
 export function primaryUsefulDevice<T extends GpuDeviceLike>(devices: readonly T[]): T | null {
-  return devices.find(isUsefulDevice) ?? null
+  let best: T | null = null
+  for (const device of devices) {
+    if (!isUsefulDevice(device)) continue
+    if (best == null || device.totalMb > best.totalMb) best = device
+  }
+  return best
 }
 
 /**
  * What a screen may SHOW: the primary useful device (`useful: true`), else the first listed
  * device with `useful: false` — an integrated or small device is named with its memory figure
  * so the copy can say "integrated, shared memory" honestly, never implying acceleration. Null
- * with no device at all.
+ * with no device at all. Since the #303/#308 merge the snapshot's `currentGpu` and the
+ * benchmark record name the budget device only (`nextStartMemory`, null with no usable card or
+ * the GPU switched off); this rule remains the shared definition of an honest fallback for a
+ * reader that wants to name an unusable device.
  */
 export function displayDevice<T extends GpuDeviceLike>(devices: readonly T[]): { device: T; useful: boolean } | null {
   const primary = primaryUsefulDevice(devices)

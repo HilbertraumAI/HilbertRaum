@@ -289,9 +289,16 @@ describe('the context on the screen is the context the runtime would launch with
     updateSettings(db, { contextTokensOverride: 131_072 })
     expect(buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir: dir })).placement.recommendedContextTokens).toBe(131_072)
 
-    // Nothing recommended ⇒ nothing to state.
+    // The figure follows the LIVE recommendation (PR #308 decision 8), not the id saved with
+    // the check: a result that saved no pick still states the live pick's context…
     updateSettings(db, { lastBenchmark: hereResult({ recommendedModelId: null }) })
-    expect(buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir: dir })).placement.recommendedContextTokens).toBeNull()
+    const live = buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir: dir }))
+    expect(live.recommendation?.modelId).toBe('ctx-model')
+    expect(live.placement.recommendedContextTokens).toBe(131_072)
+    // …and without a catalog there is no live pick ⇒ nothing to state.
+    const none = buildPerformanceSnapshot(ctxWith(root, db))
+    expect(none.recommendation).toBeNull()
+    expect(none.placement.recommendedContextTokens).toBeNull()
   })
 })
 

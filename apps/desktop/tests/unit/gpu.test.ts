@@ -3,9 +3,10 @@ import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  createCachedGpuProbe,
+  looksIntegrated,
   parseListDevices,
-  probeGpuDevices,
-  createCachedGpuProbe
+  probeGpuDevices
 } from '../../src/main/services/runtime/gpu'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 
@@ -86,8 +87,52 @@ describe('parseListDevices', () => {
   })
 })
 
-// The `looksIntegrated` name table moved to tests/unit/gpu-rules.test.ts with the rule itself
-// (shared/gpu-rules.ts, PR #303 audit M8 / N3); that file also pins this module's re-exports.
+describe('looksIntegrated', () => {
+  it.each([
+    // Integrated → true (the bump must NOT fire)
+    ['Intel(R) Iris(R) Xe Graphics', true],
+    ['Intel(R) UHD Graphics 630', true],
+    ['Intel(R) HD Graphics 520', true],
+    ['AMD Radeon(TM) Graphics', true],
+    ['AMD Radeon Vega 8', true],
+    // Audit fix: names real Linux/RADV + Meteor-Lake drivers report (these used to
+    // slip through and could bump the profile on shared-memory APUs).
+    ['AMD Radeon Graphics (RADV REMBRANDT)', true],
+    ['AMD Radeon(TM) 780M Graphics', true],
+    ['AMD Radeon Vega 8 Graphics (RADV RAVEN)', true],
+    ['Intel(R) Arc(TM) Graphics', true],
+    // PR #308 audit (decision 9, R6): the current-generation names the pinned b9849 Vulkan
+    // build reports for integrated parts — none matched before, so a hybrid laptop's iGPU
+    // (11–36 GiB of SHARED memory) read as a discrete card on every consumer.
+    ['Intel(R) Graphics (ARL)', true],
+    ['Intel(R) Graphics (LNL)', true],
+    ['Intel(R) Arc(TM) 140V GPU (16GB)', true],
+    ['Intel(R) Iris(R) Xe Graphics (TGL GT2)', true],
+    ['Intel(R) UHD Graphics 770', true],
+    ['AMD Radeon 780M Graphics (RADV PHOENIX)', true],
+    ['AMD Radeon Graphics (RADV RENOIR)', true],
+    ['AMD Radeon 890M Graphics (RADV GFX1150)', true],
+    ['AMD Radeon 8060S Graphics (RADV GFX1151)', true],
+    // Discrete → false (eligible for the bump)
+    ['NVIDIA GeForce RTX 3080 Ti', false],
+    ['AMD Radeon RX 6700 XT', false],
+    ['NVIDIA GeForce GTX 1660', false],
+    ['AMD Radeon RX 7800 XT (RADV NAVI32)', false],
+    ['Intel(R) Arc(TM) A770 Graphics', false],
+    // The discrete forms the new patterns must keep OUT (pinned as negatives): the model-
+    // numbered Arc A-series, the laptop "RX ...S", the RTX line, and Apple's Metal device.
+    ['Intel(R) Arc(tm) A770 Graphics (DG2)', false],
+    ['Intel(R) Arc(TM) A750 Graphics', false],
+    ['AMD Radeon RX 7700S (RADV NAVI33)', false],
+    ['AMD Radeon RX 7700S', false],
+    ['AMD Radeon RX 7900 XTX (RADV NAVI31)', false],
+    ['NVIDIA GeForce RTX 5060', false],
+    ['NVIDIA GeForce RTX 3090', false],
+    ['Apple M2', false]
+  ])('%s → %s', (name, integrated) => {
+    expect(looksIntegrated(name)).toBe(integrated)
+  })
+})
 
 // ---- probeGpuDevices (fake spawn — no real binary, no GPU) -------------------------
 

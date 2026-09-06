@@ -153,10 +153,13 @@ describe('IPC controls', () => {
     })
 
     // At 'done' the probes are complete but nothing is persisted, the span is still held, and
-    // only the run-start push has gone out.
-    expect(atDone).toEqual([{ held: true, persisted: false, pushes: 1 }])
-    // The two pushes bracket the run: start (span held, nothing persisted) and idle (both done).
+    // only the run-start push and the GPU-probe write's push have gone out (a root without a
+    // binary persists an EMPTY probe, PR #308 decision 6, and every probe write pushes).
+    expect(atDone).toEqual([{ held: true, persisted: false, pushes: 2 }])
+    // The pushes bracket the run: start (span held, nothing persisted), the probe write (same
+    // state) and idle (both done).
     expect(spy.mock.results.map((r) => r.value)).toEqual([
+      { held: true, persisted: false },
       { held: true, persisted: false },
       { held: false, persisted: true }
     ])
@@ -216,7 +219,9 @@ describe('the notifier', () => {
       })
     ).rejects.toThrow(/locked/)
 
-    expect(spy.mock.results.map((r) => r.value)).toEqual([true, false])
+    // Start, the empty GPU-probe write (no binary on this root), then the release after the
+    // failed persist.
+    expect(spy.mock.results.map((r) => r.value)).toEqual([true, true, false])
     expect(ctx.runtime.occupancy.held('benchmark')).toBe(false)
     expect(root).toBeTruthy()
   })
@@ -302,7 +307,7 @@ describe('session latches', () => {
 })
 
 describe('restore, seed and probe writes', () => {
-  it('the moved-drive restore pushes once, synchronously (a root without a binary probes nothing)', async () => {
+  it('the moved-drive restore pushes once, synchronously, after the empty-probe write of a root without a binary', async () => {
     const { ctx, db } = here()
     const foreign = result()
     const known = hereResult()
@@ -311,17 +316,20 @@ describe('restore, seed and probe writes', () => {
 
     maybeRunFirstBenchmark(ctx)
 
-    expect(spy.mock.results.map((r) => r.value)).toEqual([known.ranAt])
-    await new Promise<void>((r) => setImmediate(r)) // let the void probe settle: it wrote nothing
-    expect(spy).toHaveBeenCalledTimes(1)
+    // The session probe runs first and, with no binary, persists an EMPTY probe synchronously
+    // (PR #308 decision 6) — its push still sees the outgoing result; the restore's push follows.
+    expect(spy.mock.results.map((r) => r.value)).toEqual([foreign.ranAt, known.ranAt])
+    await new Promise<void>((r) => setImmediate(r)) // let the void probe settle: nothing more
+    expect(spy).toHaveBeenCalledTimes(2)
   })
 
-  it('the same-machine upgrade seed pushes once', () => {
+  it('the same-machine upgrade seed pushes once, after the empty-probe write', () => {
     const { ctx, db } = here()
     updateSettings(db, { lastBenchmark: hereResult() })
     const spy = performanceChangedSpy(() => getSettings(db).benchmarkHistory.length)
     maybeRunFirstBenchmark(ctx)
-    expect(spy.mock.results.map((r) => r.value)).toEqual([1])
+    // [empty-probe write (history still empty), seed]
+    expect(spy.mock.results.map((r) => r.value)).toEqual([0, 1])
   })
 
   it('a completed GPU probe — even an empty one — pushes after its write ("Try GPU again")', async () => {
@@ -364,11 +372,17 @@ describe('restore, seed and probe writes', () => {
 
     await tryGpuAgain(ctx)
 
-    // At least one push, and the first already reads the cleared flags through the snapshot —
-    // without it the screen kept the processor-forced rows until something else pushed.
-    expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1)
-    expect(spy.mock.results[0].value).toEqual({ gpuAutoDisabled: false, gpuLastError: null, chat: 'gpu' })
-    expect(getSettings(db).gpuProbe).toEqual(before) // the probe itself wrote nothing
+    // Two pushes. The first is the flag clear alone and already reads the cleared flags through
+    // the snapshot (the card re-armed) — without it the screen kept the processor-forced rows
+    // until something else pushed. The second is the probe write: a probe that cannot run
+    // persists the EMPTY stamped probe (PR #308 decision 6), so the chat row is back on the
+    // processor — now because no card is recorded, not because of the flags.
+    expect(spy.mock.results.map((r) => r.value)).toEqual([
+      { gpuAutoDisabled: false, gpuLastError: null, chat: 'gpu' },
+      { gpuAutoDisabled: false, gpuLastError: null, chat: 'cpu' }
+    ])
+    // `before` is replaced by this session's empty stamped answer, never re-stamped.
+    expect(getSettings(db).gpuProbe).toMatchObject({ devices: [], machineKey: before.machineKey })
   })
 })
 

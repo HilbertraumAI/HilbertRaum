@@ -1940,14 +1940,17 @@ export interface BenchmarkResult {
   ramGb: number
   gpu: string | null
   /**
-   * Total memory in MiB of the SAME device `gpu` names — the one `displayDevice`
-   * (`shared/gpu-rules.ts`) selected from the `--list-devices` probe at benchmark time: the
-   * first useful discrete device, else the first listed one (an integrated device's SHARED
-   * figure, which readers rate with `isUsefulDevice` and never call "VRAM"). null with no
-   * device. Optional: absent on results persisted before the field existed; the snapshot
-   * folds this machine's eligible probe in for the current machine, and the screen says "Not
-   * recorded" for another machine's. Graphics memory decides what runs accelerated, so it gets
-   * its own tile beside RAM.
+   * Total memory in MiB of the SAME device `gpu` names — the BUDGET device `nextStartMemory`
+   * (services/performance.ts) selected from the `--list-devices` probe at benchmark time: the
+   * largest usable card by the `shared/gpu-rules.ts` rule (PR #308 audit decision 9, unified
+   * with the PR #303 audit M8.2 pairing at the merge of the two). null with no usable device,
+   * or with the GPU switched off / auto-disabled (the next start runs from RAM). A result
+   * persisted by the old `devices[0]` rule may name an integrated device's SHARED figure —
+   * readers rate every recorded figure with `isUsefulDevice` and never call that "VRAM".
+   * Optional: absent on results persisted before the field existed; the snapshot folds this
+   * machine's eligible probe in for the current machine, and the screen says "Not recorded"
+   * for another machine's. Graphics memory decides what runs accelerated, so it gets its own
+   * tile beside RAM.
    */
   gpuVramMb?: number | null
   /**
@@ -2149,6 +2152,18 @@ export interface ResidentModelRow {
 }
 
 /**
+ * The LIVE chat recommendation for the NEXT start (benchmark.md "Recommendation"; PR #308 audit
+ * decision 8): what the Models screen stars right now, computed from the persisted probe, the GPU
+ * flags, this machine's RAM and the persisted speed signal — never a figure saved at check time.
+ */
+export interface LiveRecommendation {
+  /** The ★ model id (`recommendChatModelId`), or null when nothing in the catalog matches. */
+  modelId: string | null
+  /** The memory the pick was judged against: the card's budget (`discrete`), the unified pool, or RAM. */
+  basis: MemoryClass
+}
+
+/**
  * Everything the Performance screen renders, in one read (`performance:get`).
  * `current` is `settings.lastBenchmark`; `otherMachines` is the history minus the current
  * machine's entry; the `observed` figures come from real use (a finished chat answer, a
@@ -2156,17 +2171,28 @@ export interface ResidentModelRow {
  */
 export interface PerformanceSnapshot {
   current: BenchmarkResult | null
+  /**
+   * The live recommendation, through the SAME inputs the `listModels` ★ uses
+   * (`liveChatRecommendation` in registerModelIpc.ts), so the verdict sentence and the
+   * "Start … and measure" target can never disagree with the Models screen. `current.recommendedModelId`
+   * stays what it was at the time of the check (historical). Null when the app has no catalog.
+   */
+  recommendation: LiveRecommendation | null
   /** True when `current` was measured on the computer the app is running on right now. */
   currentMachine: boolean
   otherMachines: BenchmarkResult[]
   /**
-   * The device this machine's ELIGIBLE probe shows (`settings.gpuProbe` when it is stamped
-   * with this machine's key or unstamped — never a probe stamped with another machine's;
-   * `eligibleGpuProbe` + `displayDevice` in `shared/gpu-rules.ts`): the first useful discrete
-   * device with `useful: true`, else the first listed device with `useful: false` (an
-   * integrated or small device, named with its memory so the tile can say so without implying
-   * acceleration). `name` and `totalMb` always describe the SAME device. Null with no
-   * eligible probe or no device. The screen never falls back to the raw settings probe.
+   * The BUDGET device for the next start, from this machine's ELIGIBLE probe (`settings.gpuProbe`
+   * when it is stamped with this machine's key or unstamped — never a probe stamped with another
+   * machine's; `eligibleGpuProbe` in `shared/gpu-rules.ts`, then `nextStartMemoryFor` in
+   * services/performance.ts): the largest usable card, the same device `BenchmarkResult.gpu`,
+   * the placement budget and the Models ★ go by (PR #308 audit decision 9 merged with PR #303
+   * audit M8). `useful` is the shared `isUsefulDevice` verdict on it (true for a discrete card
+   * by construction; the Metal pool device on unified memory is rated by the same predicate).
+   * `name` and `totalMb` always describe the SAME device. Null with no eligible probe, no
+   * usable device (an integrated-only machine: the tile reads "No usable graphics card"), or
+   * the GPU switched off / auto-disabled (the tile names the cause). The screen never falls
+   * back to the raw settings probe.
    */
   currentGpu: { name: string; totalMb: number; useful: boolean } | null
   /**

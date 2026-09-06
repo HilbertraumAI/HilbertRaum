@@ -87,7 +87,7 @@ describe('gpuUsefulForProfile — unchanged semantics (G4)', () => {
   })
 })
 
-describe('primaryUsefulDevice — the device every figure comes from', () => {
+describe('primaryUsefulDevice — the device every figure comes from (the budget device)', () => {
   it('is null with no device, an integrated-only list, or a small card', () => {
     expect(primaryUsefulDevice([])).toBeNull()
     expect(primaryUsefulDevice([IRIS])).toBeNull()
@@ -100,8 +100,11 @@ describe('primaryUsefulDevice — the device every figure comes from', () => {
     expect(primaryUsefulDevice([GTX, IRIS, RTX])).toBe(RTX)
   })
 
-  it('with two usable cards the first listed wins', () => {
-    expect(primaryUsefulDevice([RX, RTX])).toBe(RX)
+  it('with two usable cards the LARGER one wins, whichever the driver listed first (PR #308 decision 9)', () => {
+    // The #303 P5 rule took the first useful device; unified with #308's `selectBudgetDevice`
+    // at the merge of the two, so the tile, the record, the budget and the Models ★ agree.
+    expect(primaryUsefulDevice([RX, RTX])).toBe(RTX)
+    expect(primaryUsefulDevice([RTX, RX])).toBe(RTX)
   })
 })
 

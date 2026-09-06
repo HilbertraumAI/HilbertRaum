@@ -123,8 +123,10 @@ wins; a commercial `policy.json` can force it back off), `workspaceMode:'plainte
 `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
 (JSON `BenchmarkResult | null`, default `null`) — the persisted hardware profile lives here.
 **The performance wave (2026-09-05) added `BenchmarkResult.gpuVramMb`** (the total MiB of the
-SAME device `gpu` names — since the PR #303 audit P5 the device `displayDevice` in
-`shared/gpu-rules.ts` selects, the first useful discrete one else the first listed; optional;
+SAME device `gpu` names — the BUDGET device `nextStartMemory` selects for the NEXT start (the
+largest usable card by the `shared/gpu-rules.ts` rule; PR #308 audit decision 9 unified with the
+PR #303 audit P5 pairing rule at the merge of the two) — null with the GPU off or auto-disabled or
+on an integrated-only machine even when a device is probed, never the first device listed; optional;
 absent on older results) **and `benchmarkHistory`** (`BenchmarkResult[]`, default `[]`,
 one entry per computer keyed by `machineKey`, capped at `MAX_BENCHMARK_HISTORY = 8`; the write
 gate keeps plain-object elements only; since the PR #303 audit an outgoing `lastBenchmark` from
@@ -166,7 +168,11 @@ shape-checked — on WRITE and on READ**, by the pure normalizers in
   computer the probe ran on, written by `probeAndPersistGpu` — a string or `null`, kept ABSENT
   when the stored probe has none: an unstamped legacy probe is never re-stamped, readers
   (`eligibleGpuProbe` in `shared/gpu-rules.ts`) treat it as eligible until a local refresh
-  replaces it, and a probe stamped with another machine's key supplies nothing.
+  replaces it, and a probe stamped with another machine's key supplies nothing. Every path of
+  `probeAndPersistGpu` that reaches the write persists this session's stamped answer — a probe
+  that cannot run (no binary) or that threw writes `{ devices: [], probedAt, machineKey }` like an
+  empty successful probe (PR #308 audit decision 6; an empty stamped result re-stamps no old
+  device), each only after the admission + unlock-epoch re-check.
 
 On WRITE, garbage is IGNORED (a `lastBenchmark` that normalizes to nothing leaves the previous
 result standing — the convention every mistyped value here follows; `null` is still the explicit
@@ -200,7 +206,9 @@ qwen2.5-vl vision, in `model-manifests/{chat,embeddings,reranker,transcriber,tra
 `model-policy.md` is the authoritative catalog and manifest count — this doc no longer restates a
 hard total (the number drifted twice, see DOC-3/F-20).
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
-`verifyChecksum`, `computeInstallState`, `recommendModelId`, `buildModelList`, `selectModel`.
+`verifyChecksum`, `computeInstallState`, `recommendChatModelId` (dispatching to
+`recommendModelIdByRam` / `recommendModelIdByVram`; `recommendModelId` is the legacy
+profile-based fallback — PR #308 §6.6), `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
 `shared/types.ts`. `local_path` resolved against the **drive root**.
 ✅ **`services/runtime/`** — `ModelRuntime` interface + `RuntimeManager` (single active runtime,
@@ -396,6 +404,15 @@ flag list is code-owned; extras are appended last in `buildArgs`, so a free-form
 override `--host`). The ladder gates the rung on a probed GPU with the weight's bytes +
 `MTP_VRAM_HEADROOM_MB` free, and forced-CPU rungs never carry the flags. Design record:
 `architecture.md` "MTP speculative decoding".
+✅ **Graphics-memory cache term (PR #308 audit decision 11, 2026-09-06):** manifest
+`estimated_context_cache_gib` (optional; a number ≥ 0 — wrong type or a negative value is a
+validation error, never a silent default) → `ModelManifest.estimatedContextCacheGib?: number`
+(ABSENT when omitted; the 0.5 GiB default is the picker's, `VRAM_DEFAULT_CONTEXT_CACHE_GIB`). It is
+the per-model context-cache term of `estimateGraphicsNeedMib` (services/models.ts, §6.6 rule C):
+the cache the runtime allocates at the model's recommended window under the app's launch (b9849
+defaults, four unified slots, ubatch 2048). Carried by exactly the seven decision models (Gemma 4
+12B 2.4, 26B-A4B 1.5, E2B 0.1, Qwen3.8 27B UD-Q4/Q5 1.1, Qwen3.5 9B 0.4, 4B 0.3; pinned in
+`committed-catalog.test.ts`); the GGUF-header estimate (BUILD_STATE §5 item 21 (e)) retires it.
 
 ### Document ingestion (Phase 4 live)
 ✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
@@ -525,9 +542,30 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 - **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
   throws (failed probe → `''`/`0`); `detectSystem` itself always reports `gpu: null` — the
   REAL probe lives in `runtime/gpu.ts` and is **injected** by the IPC layer (Phase 16:
-  `RunBenchmarkDeps.gpu: GpuBenchmarkInput = { name, useful, totalMb? }` — `totalMb` added by
-  the performance wave, feeds `BenchmarkResult.gpuVramMb`), keeping this module
-  `child_process`-free.
+  `RunBenchmarkDeps.gpu: { name, useful, totalMb?, budgetMb?, memoryClass? }`), keeping this module
+  `child_process`-free. `name` / `totalMb` are the **budget device's** (`nextStartMemory` in
+  `services/performance.ts`, PR #308 audit decisions 6/9); `totalMb` is the graphics TILE's figure
+  (→ `BenchmarkResult.gpuVramMb`), never the picker's input. **`budgetMb`** (P3, decision 10) is
+  the picker's input: `graphicsBudgetMib(device)` = the probe's `freeMb`, else `totalMb − 1024`
+  (`GRAPHICS_IDLE_ALLOWANCE_MIB`), raw MiB; absent/null → the RAM pick. `useful` and `memoryClass`
+  answer different questions: `useful` = `gpuUsefulForProfile` over ALL probed devices (the hardware
+  carries a usable card; the profile bump), `memoryClass` = the NEXT start's class (honours
+  `gpuMode` / `gpuAutoDisabled`, names one budget device), so `{ useful: true, memoryClass: 'cpu' }`
+  is a valid input — a card present, the GPU switched off.
+- **`PickerMemory`** (`services/models.ts`) — `{ memoryClass, ramGb, budgetMb: number | null }`, the
+  input of `recommendChatModelId(manifests, memory, speedSignal?)`: `discrete` with a positive
+  `budgetMb` → **§6.6 rule C** (`recommendModelIdByVram(manifests, budgetMib, ramGb, role, signal)`:
+  the RAM pick stands where `fitsGraphicsMemory(m, budgetMib)` — `estimateGraphicsNeedMib(m)` =
+  unrounded weights MiB × 1.15 + (`estimatedContextCacheGib` ?? 0.5) × 1024 + 1,024 — AND
+  `recommendedMinRamGb ≤ ramGb`; else the highest-RANKED eligible model, ties by tier then size,
+  ranked-only guard; else the RAM pick (partial-offload fallback); the §6.5 step-down applies once,
+  confined to the eligible pool on both ends); every other class, or no budget → the RAM pick,
+  byte-identical to `recommendModelIdByRam`. Both seams build it from ONE decision: `pickerMemoryFor(s)`
+  (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb`) and
+  `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb`), each calling `graphicsBudgetMib` on
+  `nextStartMemory`'s device. `weightsMib(m)` is the shared unrounded GB → MiB conversion the
+  Performance pre-start estimate reuses (decision 8). The committed grid, thresholds and the seven
+  cache terms are pinned in `committed-catalog.test.ts` ("§6.6 rule C").
 - **`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })`** — pure; spec §11.3
   thresholds + the conservative Phase-16 GPU bump (`gpuUseful` is precomputed by
   `gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated) + low-tok/sec downgrade; invalid
@@ -580,43 +618,62 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   secondary broken-media check with unchanged copy. Warnings warn, never block. Preflight feeds
   probe figures only and binds its note by exact canonical-English match.
 - **`runBenchmark(deps)`** → `BenchmarkResult` (the existing `shared/types.ts` shape):
-  detection + drive + optional tokens/sec + `classifyProfile` + `recommendModelId` + warnings +
+  detection + drive + optional tokens/sec + `classifyProfile` + `recommendChatModelId` + warnings +
   the injected `effectiveRead`.
 - **`ipc/registerBenchmarkIpc.ts`** — `runBenchmark()` (`benchmark:run`); runs it, persists to
   `settings.lastBenchmark` + `settings.benchmarkHistory`, returns the result, and streams
   `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window — a step only when it
   succeeded (`'drive'` only on a successful probe, `'speed'` only on an obtained reading,
   `'done'` always, and `'done'` PRECEDES the persist and the occupancy release). `performance:get`
-  returns the `PerformanceSnapshot` the Performance screen renders (`current`, `currentMachine`,
-  `currentGpu`, `otherMachines`, `running` (the `benchmark` occupancy span, read directly),
+  returns the `PerformanceSnapshot` the Performance screen renders (`current`,
+  **`recommendation: LiveRecommendation | null`** = `{ modelId: string | null; basis: MemoryClass }`
+  — the LIVE chat pick for the next start (PR #308 audit decision 8), computed by
+  `liveChatRecommendation(settings, manifests)` in registerModelIpc.ts from the same inputs the
+  `listModels` handler feeds `buildModelList`: `pickerMemoryFor(s)`, `machineRamGb()`,
+  `speedSignalFor(s)` (the persisted `{ tokensPerSecond, measuredModelId }` pairing; the handler
+  calls the same function), `basis` = the memory class the pick was judged against; null only
+  without a catalog; `current.recommendedModelId` is the historical figure and is never rewritten —,
+  `currentMachine`,
+  `currentGpu` — the budget device for the next start, `{ name, totalMb, useful }` or null, the same
+  device `BenchmarkResult.gpu` and the `listModels` ★ go by, never `settings.gpuProbe.devices[0]` —,
+  `otherMachines`, `running` (the `benchmark` occupancy span, read directly),
   `placement: { memoryClass, ramMb, vramMb, model, recommendedContextTokens, observed,
-  observedMismatch, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }`,
-  `observed: { lastAnswer, lastModelLoad, lastChecksum }`). **P5 (M8 / DR1 / DR5)**:
-  `currentGpu` is `{ name, totalMb, useful } | null` — the ELIGIBLE probe's display device
-  (`eligibleGpuProbe` + `displayDevice`, `shared/gpu-rules.ts`: the first useful discrete device
-  with `useful: true`, else the first listed with `useful: false`, so an integrated or small
-  device is named without implying acceleration; `name` and `totalMb` always describe one
-  device; null with no eligible probe or no device — the screen never falls back to the raw
-  settings probe); `current` gets that device folded in (name and memory together) only for the
-  current machine and only when it predates `gpuVramMb`; `placement.vramMb` is the selected
-  device's memory (null with no useful device); `ResidentModelRow.device` is where a row runs
-  under the CURRENT configuration (`'cpu'` for chat/translation when the class is cpu, the GPU is
-  off/auto-disabled, the matching observed start was on the CPU backend, or the translation
-  sidecar's posture is `--device none`); `totals.ramAllMb` is class-aware (`loadedAtOnceMb`:
-  every row on `cpu`; processor rows + the observed chat spill + the live translation spill on
-  `discrete`; the full sum on `unified`, compared against the unified budget) and
-  `totals.bothOnCard` requires both rows on the card with observed layers. The verdict is asked
-  for the EFFECTIVE class (`cpu` when the configuration forces the processor or the observed start
-  was CPU) while `placement.memoryClass` stays the hardware class. Two `placement` fields were added by
+  observedMismatch, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }` (the
+  pre-start `verdict` on a discrete card is `estimateGraphicsNeedMib(manifest) ≤
+  graphicsBudgetMib(device)` — the picker's fit — with `needMb` = the unrounded weights and
+  `budgetMb` = the card's total; `PlacementVerdictInput` in services/performance.ts carries
+  `graphicsBudgetMb`, `manifest` and the base's `gpuName` for it),
+  `observed: { lastAnswer, lastModelLoad, lastChecksum }`). **P5 (M8 / DR1 / DR5), merged with
+  PR #308 decisions 6/9**: `currentGpu` is `{ name, totalMb, useful } | null` — the ELIGIBLE
+  probe's BUDGET device for the next start (`eligibleGpuProbe`, `shared/gpu-rules.ts`, then
+  `nextStartMemoryFor` in services/performance.ts: the largest usable card, `useful` = the shared
+  `isUsefulDevice` verdict on it; `name` and `totalMb` always describe one device; null with no
+  eligible probe, no usable device, or the GPU switched off / auto-disabled — the screen never
+  falls back to the raw settings probe, and reads `getSettings` for the two GPU flags only);
+  `current` gets that device folded in (name and memory together) only for the current machine
+  and only when it predates `gpuVramMb`; `placement.memoryClass` and `placement.vramMb` are the
+  NEXT start's (`cpu` / null when the flags force the processor, whatever the probe lists — the
+  same answer `pickerMemoryFor` gives the Models ★); `ResidentModelRow.device` is where a row
+  runs under the CURRENT configuration (`'cpu'` for chat/translation under a `cpu` class — no
+  usable card, GPU off / auto-disabled — or when the matching observed start was on the CPU
+  backend, or the translation sidecar's posture is `--device none`); `totals.ramAllMb` is
+  class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the observed chat spill +
+  the live translation spill on `discrete`; the full sum on `unified`, compared against the
+  unified budget) and `totals.bothOnCard` requires both rows on the card with observed layers.
+  The verdict is asked for the EFFECTIVE class (the next start's, and `cpu` when the observed
+  start was CPU). Two `placement` fields were added by
   the PR #303 audit P4: **`recommendedContextTokens`** (`number | null`) is the context the
-  RECOMMENDED model would launch with, resolved main-side by the launch path's own
+  RECOMMENDED model would launch with — the live `recommendation.modelId`, the model the screen's
+  CTA starts, never the id saved with the check (PR #308 decision 8 on top of #303 M5) — resolved
+  main-side by the launch path's own
   `launchContextTokens` — the screen used to recompute it with `??` and showed a "0-token context"
   for a manifest stating no window, while the runtime starts such a model on
   `settings.contextTokens` (M5 residual); **`observedMismatch`**
   (`{ contextTokens, backend, at } | null`) reports a stored/latched placement that is real but
   does not describe the current configuration (a different context size, or a GPU measurement
   under a forced-CPU configuration) — the record is kept, `observed` goes `null` so the row falls
-  back to the weights-only ESTIMATE the current settings would actually produce, and the copy
+  back to the weights-only ESTIMATE the current settings would actually produce (on a discrete
+  card that estimate is the picker's fit above), and the copy
   dates the earlier measurement instead of presenting it as the fit.
   The observed figures are SESSION latches only — session = the main-process lifetime (they
   survive a workspace lock/unlock, an app restart clears them) — and never fall back to a
@@ -632,7 +689,8 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   mutation — a benchmark run taking / releasing its span (the release push, after the persist,
   is the idle signal; a busy-refused run emits nothing), every accepted read-speed sample
   (including a ranked loser), the answer latch, a placement observation, the restore / seed /
-  backfill / GPU-probe writes, chat-runtime transitions (`RuntimeManager.onChange`),
+  backfill / GPU-probe writes (every `probeAndPersistGpu` write, the empty probe of a probe that
+  could not run or threw included), chat-runtime transitions (`RuntimeManager.onChange`),
   resident-sidecar transitions (`onResidencyChange` on the embedder, reranker, translation and
   vision runtimes), and the snapshot's settings keys (`PERFORMANCE_SETTINGS_KEYS`) — and never
   from a getter. The read stays gated; the event carries nothing to gate. Preload:

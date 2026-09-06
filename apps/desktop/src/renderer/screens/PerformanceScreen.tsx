@@ -29,7 +29,10 @@ import type {
 // this computer", "Other computers":
 //   1. "This computer": the hardware check's answer as a verdict line + four tiles (speed,
 //      memory, graphics memory, drive) and the one action, "Check again". While a check runs, the steps show
-//      as they land (EVENTS.benchmarkProgress) instead of an opaque "Running…" button.
+//      as they land (EVENTS.benchmarkProgress) instead of an opaque "Running…" button. The model
+//      the verdict and the "Start … and measure" offer name is `snapshot.recommendation` — the
+//      LIVE pick the AI Model screen stars; the result's saved pick is history, labelled
+//      "Recommended at the time of the check" where it differs.
 //   2. "Observed while you worked": real figures from normal use (the last finished answer,
 //      the last model start, the last full file check). The ROWS are session latches; of the
 //      figures behind them only the answer speed is never persisted — the read samples do
@@ -240,7 +243,8 @@ function buildReport(
       bench.effectiveRead ? `${fmtNumSafe(bench.effectiveRead.mbps, lang)} ${t('perf.tile.drive.unit')}` : t('perf.tile.drive.none')
     }`,
     `${t('diag.bench.profile')}: ${bench.profile}`,
-    `${t('diag.bench.recommended')}: ${bench.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : t('diag.bench.noMatch')}`
+    // The result's own pick is what the check said then; the live one is on the screen.
+    `${t('perf.recommendation.atCheckTime')}: ${bench.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : t('diag.bench.noMatch')}`
   ]
   if (contextTokens != null) lines.push(`${t('models.context.title')}: ${t('models.tech.contextValue', { count: contextTokens.toLocaleString(lang) })}`)
   lines.push(`${t('diag.bench.lastRun')}: ${fmtDateTime(bench.ranAt, lang)}`)
@@ -294,6 +298,9 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const toast = useToast()
   const [snap, setSnap] = useState<PerformanceSnapshot | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
+  // The GPU is switched off in Settings or auto-disabled after a crash: the next start runs from
+  // RAM whatever card the probe lists, and the graphics tile says so instead of "no card".
+  const [gpuOff, setGpuOff] = useState(false)
   const [runtimeModelId, setRuntimeModelId] = useState<string | null>(null)
   /** A check THIS window started ("Check again" / "Start … and measure"). Kept apart from the
    *  snapshot's `running`, which is the backend's benchmark occupancy span and is true for runs
@@ -348,13 +355,21 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
    *  lookup, mount-only. Fire-and-forget under the read's stamp, so a slow reply neither stalls
    *  the snapshot nor overwrites a newer one. The graphics figure is NOT read here: the raw
    *  `settings.gpuProbe` could belong to another computer, so the snapshot's eligible
-   *  `currentGpu` is the only probe source this screen has (PR #303 audit M8.3). */
+   *  `currentGpu` is the only probe source this screen has (PR #303 audit M8.3); the settings
+   *  read below takes ONLY the two GPU flags, for the tile's "acceleration is off" sub-line. */
   const refreshMeta = useCallback((gen: number): void => {
     const fresh = (): boolean => mountedRef.current && gen === genRef.current
     void window.api
       .getRuntimeStatus()
       .then((r) => {
         if (fresh()) setRuntimeModelId(r.running ? r.modelId : null)
+      })
+      .catch(() => {})
+    void window.api
+      .getSettings()
+      .then((s) => {
+        if (!fresh()) return
+        setGpuOff(s.gpuMode === 'off' || s.gpuAutoDisabled)
       })
       .catch(() => {})
   }, [])
@@ -511,11 +526,17 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     ]
       .filter(Boolean)
       .join(' ') || null
-  const recommended = bench?.recommendedModelId
-    ? models.find((m) => m.id === bench.recommendedModelId) ?? null
-    : null
-  const recommendedName = bench?.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : null
-  // The context the recommended model would launch with, resolved MAIN-SIDE by the launch
+  // The LIVE pick (the same one the AI Model screen stars), never the id saved with the check:
+  // a fresh probe, a flipped GPU toggle or a new speed sample moves it without a re-run. The
+  // saved `recommendedModelId` is history and is labelled as such where it still shows.
+  const live = snap?.recommendation ?? null
+  const recommended = live?.modelId ? models.find((m) => m.id === live.modelId) ?? null : null
+  const recommendedName = live?.modelId ? modelName(live.modelId, models, t) : null
+  const atCheckTimeName =
+    bench?.recommendedModelId && live && bench.recommendedModelId !== live.modelId
+      ? modelName(bench.recommendedModelId, models, t)
+      : null
+  // The context the LIVE recommended model would launch with, resolved MAIN-SIDE by the launch
   // path's own helper (PR #303 audit M5 residual): recomputing it here with `??` over the
   // catalog entry showed a "0-token context" for a model whose manifest states no recommended
   // window, while the runtime starts such a model on the settings default.
@@ -535,8 +556,8 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     if (bench.tokensPerSecond != null) {
       return t('perf.verdict.speed', { model: speedModelName, tps: fmtNumSafe(bench.tokensPerSecond, lang) }) + drive
     }
-    if (recommendedName) {
-      return t('perf.verdict.noSpeed', { model: recommendedName, ram: fmt1Safe(bench.ramGb, lang) }) + drive
+    if (recommendedName && live) {
+      return t('perf.verdict.noSpeed', { model: recommendedName, basis: t(`perf.basis.${live.basis}`) }) + drive
     }
     return t('perf.verdict.noRecommendation') + drive
   }
@@ -595,10 +616,15 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const graphics = graphicsFigure(bench, snap)
 
   /** Graphics memory decides what runs accelerated, so it stands beside RAM as its own
-   *  tile. One figure (`graphicsFigure`): the eligible probe's device for this computer, else
-   *  what the result recorded; rated by the shared "usable" rule. A device rated not usable is
-   *  named honestly — an integrated one by its shared memory, a small discrete one by its
-   *  size — and never called "Usable"; a foreign result that never recorded the field says so. */
+   *  tile. One figure (`graphicsFigure`): `snapshot.currentGpu` — the BUDGET device for the
+   *  next start, the same card the Models ★ goes by, for the computer the app is on right now
+   *  — else what the result recorded; rated by the shared "usable" rule. Never the stored
+   *  probe's first device: on a hybrid laptop that is as often the iGPU's shared-RAM figure
+   *  (PR #308 audit decision 9). A device rated not usable is named honestly — an integrated
+   *  one (a recorded name) by its shared memory, a small discrete one by its size — and never
+   *  called "Usable"; a foreign result that never recorded the field says so; with the GPU
+   *  switched off or auto-disabled and no card for the next start, the copy names the cause
+   *  instead of a missing card. */
   function graphicsTile(): JSX.Element {
     if (graphics.kind !== 'device') {
       const [sub, pill] =
@@ -606,7 +632,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           ? [t('perf.notChecked'), t('perf.rating.pending')]
           : graphics.kind === 'notRecorded'
             ? [t('perf.tile.graphics.notRecorded'), t('perf.rating.notRecorded')]
-            : [t('perf.tile.graphics.none'), t('perf.rating.none')]
+            : [gpuOff ? t('perf.tile.graphics.off') : t('perf.tile.graphics.none'), t('perf.rating.none')]
       return <Tile label={t('perf.tile.graphics')} value={null} sub={sub} pill={pill} tone="neutral" />
     }
     const { mb, name, useful, integrated } = graphics
@@ -904,6 +930,11 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
         ) : (
           <>
             <p className="perf-verdict">{verdict()}</p>
+            {atCheckTimeName && (
+              <p className="hint">
+                {t('perf.recommendation.atCheckTime')}: {atCheckTimeName}
+              </p>
+            )}
             <div className="perf-tiles" style={unified ? { gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' } : undefined}>
               {speedTile()}
               {memoryTile()}

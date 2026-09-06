@@ -31,6 +31,10 @@ recommendation_rank: 3
 # 8192 here because this field is the SAFE LOCAL RUNTIME context budget for normal laptops, not
 # the theoretical model maximum. Revisit only after KV-cache/RAM budgeting + a long-context eval.
 recommended_context_tokens: 8192
+# Context cache at 8k under the app launch (b9849 defaults: 4 unified slots): 256 MiB full-attention
+# KV (8 layers x 4 heads x 256) + 4 x 48 MiB recurrent state = 0.438 GiB (no SWA cache); the
+# picker's graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit decision 11).
+estimated_context_cache_gib: 0.4
 # Qwen3.5 0.8B/2B/4B/9B have reasoning DISABLED by default in unsloth's llama.cpp examples
 # unless `enable_thinking=true`; the chat template still honours the switch, so the Deep answer
 # mode applies. Verify the live runtime behaviour by smoke test (BUILD_STATE Qwen3.5 wave).

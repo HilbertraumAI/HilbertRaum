@@ -184,6 +184,16 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **On a computer with a graphics card, the recommended chat model only changes when your
+  computer's usual RAM-based pick would not fit on the card.** A model only runs at card speed
+  when it fits the card, so the star pick on the AI Model screen and the check on the Performance
+  page now check whether the RAM-based pick also fits the graphics card's current free memory
+  (with room for the runtime's working buffers); if it does, nothing changes, and if it does not,
+  the best model that does fit takes its place. RAM is still respected either way: a model that
+  needs more RAM than the computer has is never recommended. The graphics card that counts is the
+  single largest one that is not a shared on-chip graphics chip; a shared on-chip chip, and
+  graphics acceleration switched off in Settings, are both treated as having no card, which keeps
+  the RAM-based pick — as do Apple Silicon computers.
 - **Every request from the app window to the main process now checks where it came from.**
   Only the app's own window can invoke the internal commands (opening documents, reading
   settings, running the models); a request from anywhere else is refused before it runs. Nothing

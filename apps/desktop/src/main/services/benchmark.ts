@@ -18,10 +18,11 @@ import type {
   BenchmarkProgressStep,
   BenchmarkResult,
   EffectiveReadSample,
-  HardwareProfile
+  HardwareProfile,
+  MemoryClass
 } from '../../shared/types'
 import type { ModelRuntime, RuntimeTimings } from './runtime'
-import { recommendModelId, recommendModelIdByRam } from './models'
+import { recommendChatModelId, recommendModelId } from './models'
 import { SLOW_READ_MBPS, VERY_LOW_TOKENS_PER_SECOND } from '../../shared/performance-rules'
 
 // Hardware benchmarker (spec §7.3, §11). Detects RAM/CPU/OS, measures drive
@@ -451,17 +452,44 @@ export function upsertSlowReadWarning(warnings: string[], effectiveReadMbps: num
 
 /**
  * The GPU probe summary INJECTED into the benchmark (architecture.md GPU record §5.1/§8).
- * `name` and `totalMb` describe ONE device — the one `displayDevice` in `shared/gpu-rules.ts`
- * selects (the first useful discrete device, else the first listed) — so a recorded result
- * never pairs one device's name with another's memory (PR #303 audit M8.2).
+ * `name`, `totalMb` and `budgetMb` describe ONE device — the BUDGET device `nextStartMemory`
+ * in services/performance.ts selects (the largest usable card by the shared
+ * `shared/gpu-rules.ts` rule; PR #308 audit decision 9 unified with PR #303 audit M8.2) — so a
+ * recorded result never pairs one device's name with another's memory.
  */
 export interface GpuBenchmarkInput {
-  /** Display name of the selected device (→ `BenchmarkResult.gpu`). */
+  /**
+   * Display name of the BUDGET device (→ `BenchmarkResult.gpu`): the card the next start will
+   * fit against (`nextStartMemory` in services/performance.ts), not the first device listed.
+   * Null when the next start has no card — no device, an integrated-only machine, or the GPU
+   * switched off / auto-disabled.
+   */
   name: string | null
-  /** Pre-computed bump eligibility (`gpuUsefulForProfile` over ALL probed devices — unchanged, G4). */
+  /**
+   * Pre-computed PROFILE-BUMP eligibility (`gpuUsefulForProfile` over ALL probed devices,
+   * GPU record §8): does the hardware carry a usable card at all. Deliberately NOT the same
+   * question as `memoryClass`: the bump describes the machine, the class describes the NEXT
+   * START (it honours `gpuMode` / `gpuAutoDisabled` and names one budget device), so
+   * `{ useful: true, memoryClass: 'cpu' }` is a valid input — a card present, the GPU off.
+   */
   useful: boolean
-  /** Total memory of the SAME device in MiB (→ `BenchmarkResult.gpuVramMb`); absent/null = unknown. */
+  /**
+   * Total memory of the budget device in MiB (→ `BenchmarkResult.gpuVramMb`, the graphics tile's
+   * figure); absent/null = unknown. NOT the picker's input — that is `budgetMb`.
+   */
   totalMb?: number | null
+  /**
+   * The graphics-memory BUDGET of the budget device in raw MiB (`graphicsBudgetMib` in
+   * services/models.ts: the probe's free figure, else total − 1024; PR #308 audit decision 10)
+   * — what the §6.6 rule-C pick is judged against. Absent/null = unknown → the RAM pick.
+   */
+  budgetMb?: number | null
+  /**
+   * The computer's memory class for the next start (services/performance.ts
+   * `nextStartMemory`): 'discrete' makes the chat pick rule C against `budgetMb` (§6.6);
+   * absent → 'cpu', the RAM pick.
+   */
+  memoryClass?: MemoryClass
 }
 
 export interface RunBenchmarkDeps {
@@ -572,10 +600,17 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   // so the Diagnostics card and the Models screen ★ agree within one run.
   const ramRounded = Math.round(sys.ramGb)
   const speedSignal = { tokensPerSecond, measuredModelId }
-  const ramPick = recommendModelIdByRam(deps.manifests, ramRounded, 'chat', speedSignal)
+  // §6.6 rule C: on a discrete card the RAM pick stands where it fits the card's BUDGET (free
+  // memory, else total − 1024 — decision 10), else the best eligible model; unified memory and
+  // no-card machines keep the RAM pick. `totalMb` stays the tile's figure, never the budget.
+  const memory = {
+    memoryClass: deps.gpu?.memoryClass ?? 'cpu',
+    ramGb: ramRounded,
+    budgetMb: deps.gpu?.budgetMb ?? null
+  } as const
+  const ramPick = recommendChatModelId(deps.manifests, memory, speedSignal)
   // Did the signal actually move the pick? Feeds the named §6.5 warning below.
-  const recommendationLowered =
-    ramPick !== recommendModelIdByRam(deps.manifests, ramRounded, 'chat')
+  const recommendationLowered = ramPick !== recommendChatModelId(deps.manifests, memory)
   const recommendedModelId = ramPick ?? recommendModelId(deps.manifests, profile, 'chat')
   const warnings = buildWarnings({
     profile,

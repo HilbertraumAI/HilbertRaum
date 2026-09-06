@@ -1768,8 +1768,15 @@ export const en = {
   // every figure under it (PR #303 audit L6). Names the machine the result recorded.
   'perf.report.otherComputer': 'Another computer: {cpu}, {ram} GB RAM',
   'perf.verdict.speed': 'Runs {model} at about {tps} tokens per second.',
+  // The LIVE recommendation (PerformanceSnapshot.recommendation), named with the memory it was
+  // judged against: the card's graphics memory, the unified pool, or RAM (perf.basis.*).
   'perf.verdict.noSpeed':
-    '{model} is the best fit for {ram} GB of memory. Speed is measured once a model has run.',
+    '{model} is the best fit for this computer’s {basis}. Speed is measured once a model has run.',
+  'perf.basis.discrete': 'graphics memory',
+  'perf.basis.unified': 'unified memory',
+  'perf.basis.cpu': 'RAM',
+  // The saved result's own pick, shown only where it differs from the live one (historical).
+  'perf.recommendation.atCheckTime': 'Recommended at the time of the check',
   'perf.verdict.noRecommendation': 'No model in the catalog matches this computer yet.',
   'perf.verdict.notChecked':
     'A quick check measures memory, drive speed and, once a model runs, generation speed.',
@@ -1875,6 +1882,8 @@ export const en = {
   'perf.tile.graphics': 'Graphics memory',
   'perf.tile.graphics.unit': 'GB VRAM',
   'perf.tile.graphics.none': 'No usable graphics card. Models run on the processor.',
+  // A card may be present: the GPU is switched off in Settings or auto-disabled after a crash.
+  'perf.tile.graphics.off': 'Graphics acceleration is off. Models run on the processor.',
   'perf.tile.graphics.small': 'Under {min} GB: models run on the processor.',
   // An integrated device (shared system memory): named with its figure, never rated "Usable"
   // and never blamed on size — the memory is not the card's own (PR #303 audit M8.1).

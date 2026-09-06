@@ -327,9 +327,12 @@ describe('prepareFirstBenchmark: the cheap half', () => {
     updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, known] })
     const spy = performanceChangedSpy(() => getSettings(db).lastBenchmark?.ranAt)
     expect(prepareFirstBenchmark(ctxWith(root, db))).toMatchObject({ run: null, attempted: false })
-    // Restored — and pushed — before the call returns: nothing to await.
+    // Restored — and pushed — before the call returns: nothing to await. Two pushes, in order:
+    // the once-per-session probe refresh of a root without a binary persists the EMPTY stamped
+    // probe (PR #308 decision 6; `lastBenchmark` is still the foreign one when it fires), then
+    // the restore.
     expect(getSettings(db).lastBenchmark).toEqual(known)
-    expect(spy.mock.results.map((r) => r.value)).toEqual([known.ranAt])
+    expect(spy.mock.results.map((r) => r.value)).toEqual([foreign.ranAt, known.ranAt])
 
     const legacy = seededDb(root)
     updateSettings(legacy, { lastBenchmark: { profile: 'BALANCED' } as unknown as BenchmarkResult })
@@ -360,7 +363,8 @@ describe('prepareFirstBenchmark: the cheap half', () => {
     expect(decision).toMatchObject({ run: 'new-machine', attempted: false, hereKey: here() })
     // Seeded synchronously (M4), with its push, before any measurement.
     expect(getSettings(db).benchmarkHistory).toEqual([foreign])
-    expect(spy.mock.results.map((r) => r.value)).toEqual([[foreign.cpuModel]])
+    // [the empty-probe write of a root without a binary (history still empty), the seed]
+    expect(spy.mock.results.map((r) => r.value)).toEqual([[], [foreign.cpuModel]])
     expect(runBenchmarkSpy).not.toHaveBeenCalled()
 
     await expect(scheduleFirstBenchmark(ctx, decision, Promise.resolve())).resolves.toBe('ran')
@@ -446,7 +450,10 @@ describe('behind a pending model start', () => {
     // L1's second half: the leg saw the runtime the start brought up, not the null captured earlier.
     expect(runBenchmarkSpy.mock.calls[0][0].runtime?.modelId).toBe('stub-chat')
     expect(getSettings(db).lastBenchmark).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
-    expect(spy).toHaveBeenCalledTimes(2) // the run's own start + idle pushes
+    // The run's own start push, its probe write (the EMPTY stamped probe of a root without a
+    // binary, PR #308 decision 6) and the idle push; prepare pushed nothing (a first run owes
+    // the probe to the run itself).
+    expect(spy).toHaveBeenCalledTimes(3)
   })
 
   it('a FAILED start still permits the run — without the speed leg', async () => {
@@ -697,8 +704,11 @@ describe('SD2: one automatic attempt per unlock session', () => {
     await expect(scheduleFirstBenchmark(ctx, d1, Promise.resolve())).resolves.toBe('failed')
     expect(runBenchmarkSpy).toHaveBeenCalledTimes(1)
     expect(getSettings(db).lastBenchmark).toEqual(foreign)
-    // The failed run still bracketed itself: the running push, then the idle push after the release.
-    expect(spy.mock.results.map((r) => r.value)).toEqual([true, false])
+    // Four pushes: the once-per-session probe refresh at prepare (the EMPTY stamped probe of a
+    // root without a binary, PR #308 decision 6; no span held), then the failed run still
+    // bracketed itself — the running push, the run's own probe write (held), the idle push
+    // after the release.
+    expect(spy.mock.results.map((r) => r.value)).toEqual([false, true, true, false])
 
     // The same session asks again (a second unlock landing on an already-open workspace, any
     // later caller): no retry.
@@ -762,7 +772,9 @@ describe('the late-write guard (runAndPersistBenchmark)', () => {
 
     expect(getSettings(db).lastBenchmark).toEqual(foreign)
     expect(getSettings(db).benchmarkHistory).toEqual([foreign])
-    expect(spy.mock.results.map((r) => r.value)).toEqual([true, false])
+    // Running, the run's own probe write (the EMPTY stamped probe of a root without a binary,
+    // PR #308 decision 6 — it lands before the lock, with the span held), idle after the release.
+    expect(spy.mock.results.map((r) => r.value)).toEqual([true, true, false])
     expect(ctx.runtime.occupancy.held('benchmark')).toBe(false)
   })
 
@@ -848,7 +860,10 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     expect(unlocked).toMatchObject({ ok: true })
     await rt.startReached
 
-    expect(events).toEqual([`performance:changed → ${known.ranAt}`, 'runtime.start'])
+    // The probe refresh pushes first (the EMPTY stamped probe of a vault root without a binary,
+    // PR #308 decision 6 — `lastBenchmark` still the foreign one), then the restore, both
+    // before the start is invoked.
+    expect(events).toEqual([`performance:changed → ${foreign.ranAt}`, `performance:changed → ${known.ranAt}`, 'runtime.start'])
     expect(getSettings(ctx.db).lastBenchmark).toEqual(known)
     // Nothing owed: the seam scheduled no measurement (no attempt on record for this session).
     expect(prepareFirstBenchmark(ctx)).toMatchObject({ run: null, attempted: false, epoch: ctrl.unlockEpoch() })

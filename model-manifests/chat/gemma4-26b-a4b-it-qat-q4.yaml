@@ -27,6 +27,10 @@ recommended_ram_gb: 32
 # qwen3.5-35b-a3b total-vs-active trade at 4–8 GB less disk/RAM.
 recommendation_rank: 2
 recommended_context_tokens: 8192
+# Context cache at 8k under the app launch (b9849 defaults: 4 unified slots, ubatch 2048): 320 MiB
+# full-attention + 1,200 MiB sliding-window cells = 1.484 GiB; the picker's graphics-fit cache
+# term (model-benchmarks.md §6.6, PR #308 audit decision 11).
+estimated_context_cache_gib: 1.5
 # Thinking VERIFIED PER SIZE 2026-07-30 (§9.3): thinks by default on the raw server (as the
 # 2026-07-23 smoke found); `enable_thinking: false` suppresses cleanly (0 reasoning chars,
 # content intact) — the #50 extract path is safe. Deep vs Balanced on the 8-item set: 8/8 vs

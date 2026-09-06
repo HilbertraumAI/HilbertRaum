@@ -5,6 +5,7 @@ import type { AppContext } from '../services/context'
 import type {
   AppSettings,
   EffectiveReadSample,
+  LiveRecommendation,
   ModelInfo,
   ModelState,
   RuntimeInstallInfo,
@@ -19,14 +20,19 @@ import {
   computeInstallState,
   createSettingsHashStore,
   discoverManifests,
+  graphicsBudgetMib,
   invalidateChecksum,
   launchContextTokens,
   machineRamGb,
   manifestFiles,
+  recommendChatModelId,
   selectModel,
-  weightPath
+  weightPath,
+  type BuildModelListOptions,
+  type PickerSpeedSignal
 } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
+import { nextStartMemoryFor } from '../services/performance'
 import { notifyPerformanceChanged } from './performance-notify'
 import {
   latestEffectiveRead,
@@ -54,6 +60,61 @@ import { perfMark, perfMs } from '../services/perf'
  * (`require_sha256_match: true` / `allow_unverified_models: false`) unverified weights
  * are rejected no matter what the toggle says; this also disables the mock fallback.
  */
+/**
+ * The memory inputs the chat ★ pick goes by (§6.6; PR #308 audit decisions 6 and 9): the class
+ * and the BUDGET device for the NEXT start, read through `nextStartMemoryFor` from the
+ * ELIGIBLE persisted probe (`eligibleGpuProbe`, PR #303 audit M8.3: a probe stamped with
+ * another machine's key supplies nothing, an unstamped legacy one stays eligible) and the two
+ * GPU flags — the same call `probeAndPersistGpu` and the Performance screen make, so the
+ * Models ★ and the benchmark can never name different cards. `hereKey` defaults to this
+ * machine's identity; the seam tests pass it to pin the foreign-probe case. Exported so the
+ * seam test can pin what the `listModels` handler feeds `buildModelList`.
+ */
+export function pickerMemoryFor(
+  s: AppSettings,
+  hereKey: string | null = machineKey(detectSystem())
+): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb'> {
+  const next = nextStartMemoryFor(s, hereKey)
+  // The budget is the device's FREE figure (else total − 1024), raw MiB — decision 10; the same
+  // `graphicsBudgetMib` call `probeAndPersistGpu` makes for the benchmark.
+  return { memoryClass: next.memoryClass, graphicsBudgetMb: graphicsBudgetMib(next.device) }
+}
+
+/**
+ * The §6.5 speed signal the chat ★ goes by (issue #95): the persisted Diagnostics pairing
+ * (tok/s + the model that produced it, issue #52), derived fresh from `lastBenchmark` on every
+ * call — stateless, never compounds. Shared by the `listModels` handler and the Performance
+ * snapshot's live recommendation so both surfaces read one signal.
+ */
+export function speedSignalFor(s: AppSettings): PickerSpeedSignal | null {
+  return s.lastBenchmark
+    ? {
+        tokensPerSecond: s.lastBenchmark.tokensPerSecond,
+        measuredModelId: s.lastBenchmark.measuredModelId ?? null
+      }
+    : null
+}
+
+/**
+ * The LIVE chat recommendation for the next start (PR #308 audit decision 8, finding R4), from
+ * the SAME inputs the `listModels` handler feeds `buildModelList`: `pickerMemoryFor(s)` (class +
+ * budget), `machineRamGb()` (whole GB — `buildModelList` reads `opts.machineRamGb` as is) and
+ * `speedSignalFor(s)`; the two `??` defaults mirror `buildModelList`'s own. `buildPerformanceSnapshot`
+ * returns it as `PerformanceSnapshot.recommendation`, so the Performance verdict and its "Start …
+ * and measure" target can never diverge from the Models ★ — the saved
+ * `lastBenchmark.recommendedModelId` is what the check said at the time and is left untouched.
+ */
+export function liveChatRecommendation(s: AppSettings, manifests: ModelManifest[]): LiveRecommendation {
+  const memory = pickerMemoryFor(s)
+  const basis = memory.memoryClass ?? 'cpu'
+  const modelId = recommendChatModelId(
+    manifests,
+    { memoryClass: basis, ramGb: machineRamGb(), budgetMb: memory.graphicsBudgetMb ?? null },
+    speedSignalFor(s)
+  )
+  return { modelId, basis }
+}
+
 function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
   const { policy } = loadPolicy(ctx.paths.configPath, undefined, { isDev: ctx.isDev })
   const developer = s.developerMode || ctx.isDev
@@ -390,15 +451,14 @@ export function registerModelIpc(ctx: AppContext): void {
       runningModelId: ctx.runtime.activeModelId(),
       hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),
       machineRamGb: machineRamGb(),
+      // §6.6: the ★ pick goes by graphics memory on a discrete card, the SAME rule
+      // runBenchmark applies, so the Performance screen and the Models screen agree.
+      ...pickerMemoryFor(s),
       // §6.5 signal-aware step-down (issue #95): feed the persisted Diagnostics pairing
       // (tok/s + the model that produced it, issue #52) into the chat recommendation.
-      // Derived fresh from lastBenchmark on every call — stateless, never compounds.
-      speedSignal: s.lastBenchmark
-        ? {
-            tokensPerSecond: s.lastBenchmark.tokensPerSecond,
-            measuredModelId: s.lastBenchmark.measuredModelId ?? null
-          }
-        : null,
+      // Derived fresh from lastBenchmark on every call — stateless, never compounds; the same
+      // function feeds the Performance snapshot's live recommendation (`liveChatRecommendation`).
+      speedSignal: speedSignalFor(s),
       // RT-3: the chat path (the workspace gate into Chat) passes lazyVerify so only the
       // active model is hashed on a cold cache — the full corpus of multi-GB GGUFs is
       // hashed only on an explicit Models-screen visit. Display-only; the start gate

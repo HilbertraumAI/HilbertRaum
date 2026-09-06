@@ -6,12 +6,18 @@ import { join } from 'node:path'
 // M8 / N1 / DR1 / DR2 / DR5, owner decisions G3 / G4):
 //  - the persisted probe is STAMPED with the machine it ran on, and a probe stamped with
 //    another machine supplies nothing; an unstamped legacy probe stays eligible (G3);
-//  - of the eligible probe, ONE device is selected (the first useful discrete one) and its
-//    name and memory travel together into the benchmark result, the fold-in, `currentGpu`
-//    and the VRAM budget — on a hybrid [iGPU, dGPU] box that is the dGPU, never devices[0];
-//  - the probe write: no binary or a rejecting probe writes nothing; an empty result is written
-//    stamped; a probe that outlives a lock or its workspace session writes nothing — and "Try
-//    GPU again" pushes as soon as it clears the flags, whether or not the probe then writes (A-D1);
+//  - of the eligible probe, ONE device is selected — the BUDGET device for the next start
+//    (`nextStartMemory`: the largest usable card; PR #308 audit decision 9, unified with this
+//    audit's M8.2 at the merge of the two) — and its name and memory travel together into the
+//    benchmark result, the fold-in, `currentGpu` and the VRAM budget — on a hybrid
+//    [iGPU, dGPU] box that is the dGPU, never devices[0]; an integrated-only box has NO device
+//    for the next start (null everywhere, the RAM pick);
+//  - the probe write: every path persists THIS session's stamped answer — a resolved list
+//    (empty included), no binary and a rejecting probe alike (PR #308 audit decision 6: a
+//    stale same-machine card must not survive a failed refresh; an empty stamped result
+//    re-stamps no old device); a probe that outlives a lock or its workspace session writes
+//    nothing — and "Try GPU again" pushes as soon as it clears the flags, before the probe's
+//    own write pushes again (A-D1);
 //  - the rows say where a model runs under the CURRENT configuration (DR1), the free/working
 //    figures are attributed to the selected device (DR2), and the "everything at once" total
 //    is class-aware (DR5);
@@ -130,19 +136,22 @@ describe('one eligible source: the selected device (M8.2)', () => {
     expect(snap.current?.gpuVramMb).toBe(RTX.totalMb)
   })
 
-  it('an integrated-only probe: currentGpu names it with useful: false, and there is no VRAM budget (M8.1)', () => {
+  it('an integrated-only probe: no budget device — currentGpu is null, no VRAM budget, nothing folded in (M8.1 / PR #308 decision 9)', () => {
     const root = freshRoot()
     const db = seededDb(root)
     updateSettings(db, { lastBenchmark: legacyResult(), gpuProbe: probe([IRIS]) })
 
     const snap = buildPerformanceSnapshot(ctxWith(root, db))
 
-    expect(snap.currentGpu).toEqual({ name: IRIS.name, totalMb: IRIS.totalMb, useful: false })
+    // The #303 P5 rule named the iGPU with `useful: false`; merged with #308, the snapshot
+    // names the BUDGET device only, and an integrated device is not one for any consumer —
+    // the tile reads "No usable graphics card", the ★ is the RAM pick. A RECORDED integrated
+    // device (a legacy or foreign result) still reads "Integrated, shared memory" on screen.
+    expect(snap.currentGpu).toBeNull()
     expect(snap.placement.vramMb).toBeNull()
     expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, [IRIS]))
-    // Folded in as one pair, so the tile can name it honestly.
-    expect(snap.current?.gpu).toBe(IRIS.name)
-    expect(snap.current?.gpuVramMb).toBe(IRIS.totalMb)
+    expect(snap.current?.gpu).toBeNull()
+    expect(snap.current?.gpuVramMb).toBeUndefined()
   })
 
   it('a result that already carries a figure is left alone; a foreign result is never folded', () => {
@@ -175,9 +184,9 @@ describe('one eligible source: the selected device (M8.2)', () => {
     expect(getSettings(db).gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: here() })
 
     const igpu = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeProbe(async () => [IRIS]) }))
-    // The display device is recorded (readers rate it), but it bumps nothing.
-    expect(igpu.gpu).toBe(IRIS.name)
-    expect(igpu.gpuVramMb).toBe(IRIS.totalMb)
+    // No budget device: the record names no card (the next start runs from RAM) and it bumps nothing.
+    expect(igpu.gpu).toBeNull()
+    expect(igpu.gpuVramMb).toBeNull()
     expect(igpu.profile).toBe(classifyProfile(igpu.ramGb, { gpuUseful: false }))
 
     const none = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeProbe(async () => []) }))
@@ -233,21 +242,34 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     return { gpuAutoDisabled: s.gpuAutoDisabled, gpuLastError: s.gpuLastError, gpuProbe: s.gpuProbe }
   }
 
-  it('no binary for this OS: the probe writes nothing and a foreign probe stays exactly as it was; the flag clear alone pushes, once (A-D1)', async () => {
+  it('no binary for this OS: the probe never runs, yet an EMPTY probe stamped with THIS machine replaces the old one — the flag clear pushes first, the write pushes again (A-D1)', async () => {
+    // The #303 P5 rule wrote nothing here so old devices were never re-stamped as local; merged
+    // with #308 (decision 6, findings R3/R5) every path persists this session's answer: the empty
+    // stamped result re-stamps no old device, and a stale SAME-machine card no longer survives a
+    // refresh that could not see it (picker-seams.test.ts pins that case). "Try GPU again" pushes
+    // as soon as it clears the flags (#303 P10, A-D1), so the sequence is TWO pushes: the first
+    // sees the cleared flags and the untouched foreign probe, the second the empty stamped probe.
     const root = freshRoot()
     const db = seededDb(root)
     const foreign = probe([RTX], FOREIGN_KEY)
     updateSettings(db, { gpuProbe: foreign, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
+    const probeFn = vi.fn(async () => [IRIS])
     const spy = performanceChangedSpy(flagsAndProbe(db))
 
-    await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => [IRIS]) }))
+    await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(probeFn) }))
 
-    expect(getSettings(db).gpuProbe).toEqual(foreign)
-    // One push — the cleared flags were already written when it fired; no probe write followed.
-    expect(spy.mock.results.map((r) => r.value)).toEqual([{ gpuAutoDisabled: false, gpuLastError: null, gpuProbe: foreign }])
+    expect(probeFn).not.toHaveBeenCalled()
+    const written = getSettings(db).gpuProbe!
+    expect(written.devices).toEqual([])
+    expect(written.machineKey).toBe(here())
+    expect(Number.isNaN(new Date(written.probedAt).getTime())).toBe(false)
+    expect(spy.mock.results.map((r) => r.value)).toEqual([
+      { gpuAutoDisabled: false, gpuLastError: null, gpuProbe: foreign },
+      { gpuAutoDisabled: false, gpuLastError: null, gpuProbe: written }
+    ])
   })
 
-  it('a rejecting probe: nothing is written, the old devices are untouched (never re-stamped as local); the flag clear alone pushes (A-D1)', async () => {
+  it('a rejecting probe: the same EMPTY stamped probe replaces the old devices (the old ones are never re-stamped as local) — the flag clear pushes first, the write pushes again (A-D1)', async () => {
     const root = freshRoot()
     const db = seededDb(root)
     withBinary(root)
@@ -257,8 +279,13 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
 
     await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => { throw new Error('driver wedged') }) }))
 
-    expect(getSettings(db).gpuProbe).toEqual(foreign)
-    expect(spy.mock.results.map((r) => r.value)).toEqual([{ gpuAutoDisabled: false, gpuLastError: null, gpuProbe: foreign }])
+    const written = getSettings(db).gpuProbe!
+    expect(written.devices).toEqual([])
+    expect(written.machineKey).toBe(here())
+    expect(spy.mock.results.map((r) => r.value)).toEqual([
+      { gpuAutoDisabled: false, gpuLastError: null, gpuProbe: foreign },
+      { gpuAutoDisabled: false, gpuLastError: null, gpuProbe: written }
+    ])
   })
 
   it('an EMPTY result replaces the old devices with the current, stamped, empty probe — and pushes', async () => {
@@ -406,7 +433,7 @@ describe('capability is not execution (DR1)', () => {
     expect(cardMachine({ status: { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' } }).placement.totals.bothOnCard).toBe(false)
   })
 
-  it("gpuMode 'off': both rows say cpu, the verdict is the processor estimate against RAM, bothOnCard is false — the hardware class is untouched", () => {
+  it("gpuMode 'off': both rows say cpu, the verdict is the processor estimate against RAM, bothOnCard is false — and the class is the NEXT start's, cpu", () => {
     const off = cardMachine({ settings: { gpuMode: 'off' } })
     expect(rowOf(off.placement, 'chat').device).toBe('cpu')
     expect(rowOf(off.placement, 'translation').device).toBe('cpu')
@@ -414,9 +441,12 @@ describe('capability is not execution (DR1)', () => {
     expect(off.placement.verdict.kind).not.toBe('gpu')
     expect(off.placement.verdict.estimated).toBe(true)
     expect(off.placement.verdict.budgetMb).toBe(off.placement.ramMb)
-    // Presentation only: the memory class (the profile bump's gate) and the card's memory stay.
-    expect(off.placement.memoryClass).not.toBe('cpu')
-    expect(off.placement.vramMb).toBe(RTX.totalMb)
+    // The #303 P5 rule kept the HARDWARE class here; merged with #308 (decision 6) the snapshot's
+    // class and card describe the next start, which the switched-off card takes no part in —
+    // the same answer `pickerMemoryFor` gives the Models ★ (`memoryClassOf`, the profile bump's
+    // gate, is the unchanged flags-at-default wrapper).
+    expect(off.placement.memoryClass).toBe('cpu')
+    expect(off.placement.vramMb).toBeNull()
   })
 
   it('gpuAutoDisabled: the same', () => {

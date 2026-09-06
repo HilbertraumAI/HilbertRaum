@@ -31,6 +31,10 @@ recommended_ram_gb: 12
 # on a machine where tok/s is the binding constraint it is the ratified speed/quality pick.
 recommendation_rank: 3
 recommended_context_tokens: 8192
+# Context cache at 8k under the app launch (b9849 defaults: 4 unified slots, ubatch 2048): 24 MiB
+# full-attention + 48 MiB sliding-window (only 15 of 35 layers own a cache) = 0.07 GiB; the
+# picker's graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit decision 11).
+estimated_context_cache_gib: 0.1
 # Thinking VERIFIED PER SIZE 2026-07-30 (§9.3): thinks by default on the raw server;
 # `enable_thinking: false` suppresses cleanly (0 reasoning chars, content intact). Deep vs
 # Balanced on the 8-item set: 7/8 vs 8/8 (arithmetic slip on train-arrival) — the flip rule

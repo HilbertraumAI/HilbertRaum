@@ -61,6 +61,7 @@ export function driveStatus(over: Partial<DriveStatus> = {}): DriveStatus {
 export function performanceSnapshot(over: Partial<PerformanceSnapshot> = {}): PerformanceSnapshot {
   return {
     current: null,
+    recommendation: null,
     currentMachine: true,
     otherMachines: [],
     currentGpu: null,

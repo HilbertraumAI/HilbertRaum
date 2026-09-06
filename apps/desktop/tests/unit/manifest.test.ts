@@ -96,6 +96,26 @@ describe('validateManifest', () => {
     expect(res.errors.some((e) => e.includes('supports_thinking_mode'))).toBe(true)
   })
 
+  // PR #308 audit decision 11: the per-model context-cache term of the graphics-memory fit
+  // estimate (model-benchmarks.md §6.6). Optional; absent → the picker's 0.5 GiB default, so
+  // the parsed field is UNDEFINED, not 0.5 — the default is the picker's, not the manifest's.
+  it('parses estimated_context_cache_gib, leaving it undefined when omitted', () => {
+    expect(validateManifest(rawManifest({ estimated_context_cache_gib: 2.4 })).manifest?.estimatedContextCacheGib).toBe(2.4)
+    expect(validateManifest(rawManifest({ estimated_context_cache_gib: 0 })).manifest?.estimatedContextCacheGib).toBe(0)
+    const absent = validateManifest(rawManifest())
+    expect(absent.ok).toBe(true)
+    expect(absent.manifest?.estimatedContextCacheGib).toBeUndefined()
+    expect('estimatedContextCacheGib' in (absent.manifest ?? {})).toBe(false)
+  })
+
+  it('rejects a negative or non-numeric estimated_context_cache_gib (the field moves a recommendation)', () => {
+    for (const value of [-1, 'x', '2.4', true, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+      const res = validateManifest(rawManifest({ estimated_context_cache_gib: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('estimated_context_cache_gib')), String(value)).toBe(true)
+    }
+  })
+
   // Issue #182: `speculative_decoding` is a CLOSED enum on purpose — a free-form argument list
   // would let a hand-edited on-drive manifest inject any llama-server flag (`--host 0.0.0.0`
   // defeats the loopback-only invariant, since extras are appended last and a later flag wins).

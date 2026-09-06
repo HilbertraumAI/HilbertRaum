@@ -87,10 +87,12 @@ polished release is manual release testing: signed installers and a live demo ru
 
 - **A computer** running Windows, macOS, or Linux, with at least **8 GB of RAM**.
 - **Memory decides which model you get.** The app detects your RAM and graphics memory (VRAM)
-  automatically, benchmarks your machine, and recommends the model that fits best. The
-  recommended tiers, based on our benchmarks:
+  automatically, benchmarks your machine, and recommends the model that fits best. On a computer
+  without a usable graphics card the RAM tiers below decide directly; on a computer with one, the
+  recommendation only moves off the RAM tier when that pick would not fit in the card's free
+  memory, and it never recommends a model below the card's RAM floor either way.
 
-  | RAM / VRAM | Recommended model |
+  | RAM (no usable graphics card) | Recommended model |
   |---|---|
   | 8-11 GB | Qwen3.5 4B |
   | 12-15 GB | Gemma 4 E2B |
