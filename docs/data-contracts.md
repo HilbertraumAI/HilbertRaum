@@ -1428,8 +1428,9 @@ whole renderer-visible surface.
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
 The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
-`shared/ipc.ts` (138 channels — the keys of its `IPC` constant; the `STREAM` builders,
-`OCR_RASTER` and `EVENTS` are separate constants, #259) against this file then found **16** that
+`shared/ipc.ts` (145 channels — the keys of its `IPC` constant (138 at the time of this
+sweep, +7 `packs:*` keys added by #301 P7); the `STREAM` builders, `OCR_RASTER` and `EVENTS`
+(now 3, `packs:changed` added) are separate constants, #259) against this file then found **16** that
 appeared under neither their method name nor their channel string — mostly siblings of documented
 calls that arrived one at a time. Listed here so the declared source of truth is complete; each
 one's behaviour stays owned by the design record named beside it.

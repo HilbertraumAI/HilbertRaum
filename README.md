@@ -36,6 +36,9 @@
   answers grounded in your files. Retrieval combines vector and keyword search with a reranker
   and can be scoped to your library, a project, a section, specific documents, or the files
   attached to a chat.
+- 📚 **Knowledge packs (optional).** Register ZIM archives — such as an offline Wikipedia — as
+  per-chat sources searched alongside your documents. Needs the kiwix-tools binaries placed
+  on the drive; the app downloads nothing.
 - 🖼️ **Image understanding.** Ask questions about a picture with a local vision model. The analysis
   history is encrypted at rest and can be deleted.
 - 🎙️ **Audio and voice.** Transcribe audio files with Whisper, dictate prompts, and OCR scanned pages.

@@ -584,6 +584,65 @@ just happened. The app can simply ask again.
 
 ---
 
+## Knowledge packs (ZIM archives)
+
+### The panel says kiwix-tools are missing
+
+Knowledge packs are served by two small programs from the Kiwix project, kiwix-serve and
+kiwix-manage. Until the provisioning wave adds an in-app installer, you place them on the
+drive yourself: download the pinned kiwix-tools 3.8.1 release for your platform and unzip
+the **whole** bundle under `runtime/kiwix-tools/win` (or `mac`/`linux`). On Windows the five
+ICU DLLs (`icudt74.dll`, `icuin74.dll`, `icuio74.dll`, `icutu74.dll`, `icuuc74.dll`) must sit
+right beside `kiwix-serve.exe` and `kiwix-manage.exe` — kiwix-serve won't start without them.
+The version is pinned; a different kiwix-tools release is not supported.
+
+### "The archive could not be read by kiwix-manage" — but the file is fine
+
+On Windows the pinned kiwix-manage cannot open an archive whose folder or file name contains an
+umlaut, an accent or any other non-ASCII character (for example a file under
+`C:\Users\Jörg\Downloads`). Move or copy the file to a path without such characters — the
+drive's own `zim/` folder is the simplest — and add it again. Once registered, the pack works
+normally; only the add step is affected.
+
+### A pack shows "File missing" or "Different archive"
+
+Press **Refresh** under *Documents → Knowledge packs* first — the app only checks the drive
+at unlock and on Refresh, not continuously. "File missing" means neither the drive's `zim/`
+folder nor the file's last known location has a matching file right now — common after
+moving a file registered from outside the drive, or after the drive's letter changed on
+Windows. "Different archive" means a file exists at that location, but its own header names
+a different archive than the one you registered — the app checks the file's built-in
+identity, never just its name or path, so it will not silently serve the wrong content under
+an old title.
+
+### "No full-text index" vs. zero hits vs. "search failed" / "server restarted"
+
+These look similar but mean different things:
+
+- **"No full-text index"** — this archive was not built with a search index. Its articles
+  are still readable one at a time (use *Open article* on a citation), but the app can't
+  search inside it, so it's skipped when answering.
+- **Zero hits** — the pack was searched successfully and nothing matched your question. This
+  is a normal, successful search, not a problem with the pack.
+- **"Search failed" / "the pack server restarted"** — something interrupted the request (the
+  pack server had to restart mid-question, or ran out of time). The answer still uses
+  whatever the other sources found; ask again if you want that pack included.
+
+### "Could not lock the workspace" while a knowledge pack was in use
+
+If a knowledge-pack server was running when you locked or quit, the app stops it and removes
+its generated index as part of locking. If that cleanup itself hits trouble, the app reports
+it honestly rather than claiming success — nothing of yours is lost, and the next session
+starts clean and works normally.
+
+### Can another program on my computer read my packs?
+
+While the workspace is unlocked and a knowledge pack has been used in a chat, other programs
+running under your own user account on this computer can read the enabled packs through the
+pack server, which has no password of its own; locking or quitting stops it.
+
+---
+
 ## Where are my data and logs?
 
 Everything is on the drive:

@@ -378,9 +378,13 @@ observed, one probe interval later. (ii) **Delayed exit notification** — a res
 the operating system's `exit` event for the child has been delivered passes the check; the guard
 yields one macrotask before its second read to let an already-queued event arrive, which narrows
 this window and does not close it. (iii) **Binding a port a live child already holds** — Windows
-permits a second `SO_REUSEADDR` bind unless the first listener set `SO_EXCLUSIVEADDRUSE`, and
-whether kiwix-serve / libmicrohttpd sets it is **not verified here**; it is a check item for the
-real-tool acceptance run (T19) on the pinned binary.
+permits a second `SO_REUSEADDR` bind unless the first listener set `SO_EXCLUSIVEADDRUSE`.
+**Checked on the pinned binary (T19, 2026-09-06, kiwix-tools 3.8.1 win-x86_64, Windows 11):**
+with kiwix-serve listening on its loopback port, a second same-user socket could not take it —
+a plain bind failed with `WSAEADDRINUSE`, a bind with `SO_REUSEADDR` set failed with
+`WSAEACCES` — so this window is **closed on Windows for this build** (the mechanism inside
+libmicrohttpd was not read; the observation is the record). Re-check on a tools pin bump
+(`rag-design.md` §17 "Real acceptance"); windows (i) and (ii) stand.
 
 **The consequence, plainly.** A process that answers on that port during an ask can put text of its
 choosing into the grounded prompt as archive evidence. The prompt's excerpt framing (#293) bounds
@@ -1355,6 +1359,13 @@ worth naming so "everything stays on the drive" is not read as "nothing touches 
   "cloud clipboard", macOS Universal Clipboard) forwards it to other devices if the user has that
   turned on. Owner decision #227 ruled **document only** on 2026-09-03 — no timed clear ships;
   the timer design (generalising the key-copy timer) stays recorded on #250, now closed.
+- **The knowledge-pack (kiwix-serve) loopback port, #301 P5.** While a pack server is
+  running, its port is reachable by any same-user process on this computer — see
+  "kiwix-serve — the one unauthenticated sidecar" above (residual R-9). This is not a
+  storage location: the port answers only while the workspace is unlocked and a pack has
+  been asked about in this session, and closes at lock/quit. The generated library XML it
+  reads (`workspace/zim-transient/`) is INSIDE the workspace, not on the host, so there is
+  nothing of this feature's to look for outside the drive.
 
 ## Malicious-document resource caps (audit M-1/M-2/M-3, 2026-06-13)
 

@@ -29,17 +29,17 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 6 — design and frontend review: T18-a implemented, review "Open article" added.**_
-PacksPanel/ScopePopover/SourcesDisclosure/ArticleModal/EvidencePane/ReviewScreen reviewed for copy, structure, a11y and visuals over the states P1–P5
-produced; no scope/outcome/lifecycle semantics changed. Closed: T18-a (the seven-leg UI acceptance row, `KnowledgePacks.test.tsx`); the §5 item 21(c)
-residual — a review row's archive citation now opens through the shared "Open article" viewer (frozen-snapshot locator; renamed/removed/unavailable
-all handled); the P2 copy items (register header "Document"→"Source", archive SHA cell, Markdown locator labels stay English — accepted); house
-dashes (EN —, DE –) across four keys. New: the "No full-text index" badge, reason-specific greyed-row hints in the picker, named pack/article action
-buttons, `role="group"` checkbox blocks, `Modal.describedBy`. Decisions: the collision surface (`ServedLibrary.excluded`) stays OUT of the panel — a
-served-library, not a pack-row, fact; deferred to P7 (a `packs:status` addition) — the per-answer "name collision" row already covers it; the source
-popover stays non-modal (Radix's modal variant aria-hides its own trigger chip and locks transcript scroll). Residuals: T18-b (owner's real-visual
-leg) pending — owner; the collision-surface follow-up; small PacksPanel residuals — all registered at P7 (§5 item 21(k)). Record:
-`design-guidelines.md` §11.15; `rag-design.md` §17 module map. Suite on this machine: 419 / 6,060 (5,980 / 79), exit 0 = +1 file / +25 tests over the head c3ea5581 (418 / 6,035, recounted here; its one failure was the known zim-client 8 MiB load flake); typecheck + build green; T18-b orchestrator pre-check in real Electron (both themes/languages, panel + picker) recorded in the inventory row — the owner's sign-off stays pending.
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — Phases 0–6 CLOSED, Phase 7 (records, real acceptance, merge) in progress.**_
+The PR's review remediation — three High + eleven Medium + nine Low findings — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;
+master merged in at P0 (`bfdb514a`) and again at P7 (`ddd704ad`). Durable records: `rag-design.md` §17 D-Z1–D-Z14 (with a §-anchor legend),
+`data-contracts.md` "Knowledge packs", `security-model.md` "kiwix-serve — the one unauthenticated sidecar", `design-guidelines.md` §11.15. Correction to
+the 2026-09-04 MVP entry below: its "Suite green (5660+)" and "no-arm path byte-identical, pinned" were the PR author's own claims — P0 replaced the
+tautological byte-identity test with a fixture captured from master `bfdb514a` (L6) and counted 409 / 5,824 at the merge. Per-phase suite deltas: P0
+411/5,841 → P1 5,854 → P1b 5,866 → P2 5,870 → P3a 5,918 → P3b 5,958 → P5 6,001 → P4 6,035 → P6 6,060 (5,980 / 79). Phase PRs (verified via `gh pr list
+--state merged --base feat/zim-knowledge-packs`): #304 P0, #305 P1, #306 P1b, #307 P2, #309 P3a, #316 P3b, #317 P5, #328 P4, #336 P6. The ten per-phase
+dated entries (P0–P6 + the 2026-09-04 MVP entry) are verbatim in `docs/build-log.md` under the 2026-09-06 P7 heading.
+Suite on the merged tree / final head: _filled by the orchestrator_.
+
 _2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), ready for merge
 (owner squash-merge; keep the branch):** searchable On this drive / Browse views, task/family
 filters and expandable quantization groups (`docs/design-guidelines.md` §15, user-guide §5/§6);
@@ -50,128 +50,6 @@ on master as UX-only: Flash-Next (`feat/qwen38-flash-next-manifest`) split out, 
 only, tracked as follow-ups #310/#311/#312 (shards, Flash-Next landing, GPU ladder) plus
 #313/#314 (family filter, renderer-reload recovery) and #315 (review residuals). Final head =
 the PR #302 tip (CI green on every phase); 379 / 5,784 passed, 74 skipped locally._
-
-_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 4 — retrieval honesty: review M3 / M6 / M7 / M8 / M10 closed.**_
-An explicit, additive `documentsOff` flag (never derived from emptiness) makes packs-only scope expressible again, superseding the
-2026-09-05 interim fix; `resolveScope`'s deny-all keeps chat attachments in scope, is fail-closed through `buildScopeFilter` and the
-resident-vector fast path, and `retrieve` skips the document arms before embedding. Document/archive candidates interleave whenever
-no reranker RANKED them — absent or threw — and a cancellation is never turned into a fallback. At most 12 packs run per ask; the 24
-admitted candidates are allocated round-robin in title order after every pack settles, ≤ 2 packs at once, under a 20 s per-ask
-deadline shared with the request guard's one retry. Searchability is confirmed only by a validated `/suggest` probe run at a
-reconcile's end, cached against the file/tool fingerprint; a confirmed-no pack stays readable. Every selected pack gets one
-persisted outcome per ask, shown under the answer even with zero citations, "unknown" on legacy rows; whole-doc/compare answers now
-say packs were not queried. Record: `docs/rag-design.md` §17 D-Z4 (M3/M8/M6 facts), D-Z11 (searchability half), NEW D-Z12 (scope).
-Suite on this machine: 418 / 6,035 (5,955 / 79) = +1 file / +34 tests over the head 31869fc5 (417 / 6,001, recounted here); one full run needed the known 8 MiB-leg retries under a foreign test load; typecheck + build green; real kiwix-tools not installed here.
-
-_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 5 — access boundary and hygiene: review
-M1 / L1 / L5 / L8 / L9 / DOC-1 closed.**_ Every kiwix-serve request from the ask arm and article
-viewer runs inside `ZimService.withServer`: captures the revision/generation/port/alive tuple before
-and after, discards a response observed across a lifecycle change, retries exactly once — only while
-the session still admits the op and eligibility is recomputed under the current revision — else
-`StaleServerError`. `packs:add` answers one typed `KnowledgePackAddResult` (outcome, added packs,
-failure count, a reason code — never a path or a tool's stderr); the one encoder `encodeArticlePath`
-validates entry keys (2048-char bound); the real-tool smoke is fail-closed on `HILBERTRAUM_ZIM_SMOKE`; `platform` is injected throughout `services/zim/`. `security-model.md`
-carves out both `kiwix-serve` exceptions by name and records accepted residual R-9 (mirrored in
-PRIVACY/known-limitations/user-guide). Record: rag-design D-Z10 (request-guard paragraph),
-security-model "kiwix-serve — the one unauthenticated sidecar". T17-a / T17-b implemented. Suite on
-this machine: 417 / 6,001 (5,921 / 79) = +1 file / +43 tests over the head 194b28ec (416 / 5,958, recounted here); typecheck + build green; real kiwix-tools not installed here.
-
-_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 3b — session boundary, lock, identity, discovery: review
-H4 / M4 / M5 / L3 / L4 / L7 closed.**_ Every pack operation captures the unlock epoch and re-asserts admission/epoch/
-cancellation after every await; lock/quit abort the operation registry, suspend/stop the sidecar and clean the
-relocated `<workspacePath>/zim-transient/` (`library.<build>.xml` + `meta-<n>/library.xml`, containment- and
-link-checked; the OS-temp location is gone). A pack's identity is its 80-byte header UUID; `packs:list` is DB-only
-and one serialized reconciliation (session start, new `packs:refresh`) heals paths/availability without ever
-touching `enabled`/`removed_at`, so a user's remove/disable wins over a late pass. Serving names follow the pinned
-libkiwix rule; a collision excludes the later UUID. New `packs:changed` event refreshes `PacksPanel`/`ChatScreen`
-without navigation. Record: `docs/rag-design.md` §17 D-Z8 (relocated dir)/D-Z10 (admission-epoch half)/D-Z11
-(identity, reconciliation, locator — NEW). T07/T08/T11/T12/T13-a implemented. Suite on this machine:
-416 / 5,958 (5,879 / 78) = +4 files / +40 tests over the head 45df38b1 (412 / 5,918, recounted here);
-typecheck + build green; real kiwix-tools not installed here.
-
-_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 3a — server and manager generations: review
-H3 / M2 / M9 closed.**_ `KiwixServer` keeps per-child records whose late callbacks can never touch a newer
-child; `ZimService` owns a monotonic pack revision, ONE generation allocator for library builds and children,
-and one FIFO chain — the only writer of `library.<build>.xml` — publishing a single `{ revision, build,
-generation, port, xml }` tuple only after rechecks at every await. Concurrent asks share one start (a cancelled
-ask stops waiting without cancelling it; pack change / lock / quit abort it); a start failure latches by revision;
-teardown is single-flight and bounded (SIGTERM → 2 s → SIGKILL → 3 s → "not confirmed": PID kept in the crash
-reaper, file kept). `kiwix-manage` runs under the pre-spawn verifier (hashless marker → `skip-legacy`, residual
-R-1), registers its PID, honours abort and settles only after its child is terminal. T05-a / T06-a implemented
-(`zim-service-lifecycle.test.ts`, 22 tests on fake children). Suite on the rebased tree (`527c1143` + P3a):
-412 / 5,918 (5,839 / 78); typecheck + build green; real kiwix-tools not installed here. Record: `docs/rag-design.md`
-§17 D-Z10; P3b consumes `suspend()` + the admission seam + the teardown bound, P5 consumes `serverState()`.
-
-_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 2 — evidence identity and
-provenance (H2, M11).**_ `buildEvidenceSourceSnapshots` guards `sourceKind === 'archive'`
-before the document-id and legacy exact-title branches (same guard at read time): an
-archive citation is always `identity:'unresolved'` with no document id/hash; freshness
-reports `'unverifiable'`. `EvidenceSourceSnapshot` gained four ADDITIVE fields
-(`sourceKind`, `archiveTitle`, `packId`, `articlePath`; absent ⇒ `'document'`; no schema
-migration) carried through the HTML/PDF evidence pack, the Markdown transcript export and
-`EvidencePane`; document sources unchanged. Saved pre-merge reviews are disposable
-(re-run, no migration). Review context stays honest unavailable — no "Open article" yet
-(owner: P6, after P3b). Tests: T03-a flipped `it.fails`→`it`; T03-b/T04-a implemented;
-T04-b RECORDED (real Electron printToPDF ran here: 4-page EN/DE archive PDFs carry archive title,
-pack id, article path and the archive warning). Baselines M3/M8 untouched. Suite: 411 / 5,870 (5,791 / 78), +29 over P0; typecheck + build green. Electron printToPDF ran (Smart App Control probe passed); real kiwix-tools not run.
-
-_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 1b — D2 remedy re-ruled: cooperative
-slicing, not a worker.**_ Why: laptop leg 1 (owner's i7-1185G7, Node 24) failed gate (i) at 55–63 ms vs
-50 while (ii) passed; the scanner loop is the floor, and a worker's blast radius (main rollup entry,
-first-party `asarUnpack`, pool/lifecycle in P3b's boundary, an owner-only packaged-load smoke class)
-was judged larger than slicing's (`html.ts` + two await sites, provable in Vitest). Shipped: the
-`zimArticleSlices` generator (yields every 32 Ki work units and after every 32 Ki-char text piece,
-cut before an `&`), `zimArticleToSegmentsAsync(html, { …, signal? })` (`setImmediate` between slices,
-rejects on abort), the incremental tidy; output byte-identical to P1 on 45 inputs; `arm.ts` propagates
-the ask abort. 14900K P-core: per-slice p95 ≤ 0.99 ms vs the 1.67 ms early-warning third of the 5 ms
-gate (PASS; the raw batch max 2.7 ms is random-index jitter); the 1 MiB sync total rose ≈ 15 % (price
-of divisibility, recorded not gated). The reporter's i7-8550U then ran BOTH: the P1 converter (1 MiB 73–130 ms vs 50, fails every run —
-this core class is 4.6–8× a 14900K P-core) and P1b's Section D at 32 Ki and 16 Ki: per-slice p95
-2.4–2.7 ms at 16 Ki vs the 5 ms bound (PASS; 1 MiB families' max < 3 ms), the batch's residual 6–9 ms
-maxima being random-index GC pauses (now counted by the script). `DEFAULT_SLICE_WORK` = 16 Ki from
-that run; T02-c recorded; the worker stays the fallback only. Suite: 411 / 5,866 (5,787 / 78) — the load-flaky `zim-client` 8 MiB
-legs (one `ECONNRESET` under fork load, green alone) now carry one retry; typecheck clean, build green.
-Pointers: `docs/rag-design.md` §17 D-Z3 "P1b", `scripts/zim-html-perf.mjs` Section D.
-
-_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 1 — parser finding H1 closed: a linear
-forward scanner.**_ `zimArticleToSegments` is now a single-cursor scanner with memoised failed
-lookaheads (every input index examined at most K = 5 times; proof in html.ts's "LINEAR FORWARD
-SCANNER" header) replacing the O(n²) regex tokenizer. New contract: `{ maxChars?, maxWork? }` →
-`{ title, segments, truncated, work }`; never throws; `PackArticle.partial` (main → preload →
-`ArticleModal`) shows a hint line instead of silently presenting a partial article as complete.
-CI oracle is the deterministic `work` counter, never wall-clock; four attributed non-Wikipedia
-fixtures added (T02-a/T02-b implemented). **14900K early warning (plain Node, this machine):**
-P-core 15–16 ms / 29–30 ms vs the ≈17 ms / 50 ms one-third gate (both pass, margin thin on (i));
-E-core fails gate (i). **Owner's i7-1185G7 (Node 24) already FAILS gate (i): 55–63 ms vs 50; gate (ii)
-86–107 vs 150 passes** — superseded the same evening by the D2 re-ruling (Phase 1b entry above).
-Baselines H2/M3/M8 untouched. Suite: 411 / 5,854 (5,775 / 78), +13 over P0; a first run failed only
-the load-sensitive `zim-client` 8 MiB over-ceiling test (green alone) — given a 60 s budget, re-run
-green; typecheck clean, build green. Pointers: `docs/rag-design.md` §17 D-Z3, `scripts/zim-html-perf.mjs`.
-
-_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 0 — integration baseline on the PR's own
-branch `feat/zim-knowledge-packs`.**_ Master `bfdb514a` merged IN (merge commit `3b321571`, no rewrite;
-the two known conflicts resolved — `CHANGELOG.md` both entries kept, `Transcript.tsx` the archive-opening
-and the answer-speed props both kept). Integrated baseline on this machine: 409 files / 5,824 tests
-(5,745 passed / 78 skipped) → after P0 411 / 5,841 (5,762 / 78); typecheck + build green. P0 landed: the
-anchored `/zim/` ignore rule (L2); the PR's §5 item renumbered 20 → **21** (master's finished #290/#291
-item 20 collapsed, narrative to `docs/build-log.md`) + the three in-doc pointers; the #293 excerpt framing
-proven for archive excerpts (T01, `zim-prompt-framing.test.ts`; `EXCERPT_GUARD_LINE` wording KEPT — the
-grounded-QA eval gate could not run here, residual R-5 → recorded at P7 as D-Z14); H2/M3/M8 `it.fails`
-baselines (`zim-regressions.test.ts`, setup outside the inverted bodies; the review's H1 timing case
-dropped — P1 pins it with a work counter); the checked-in required-check inventory
-`tests/fixtures/zim/required-checks.json` + its `repo-hygiene.test.ts` validator; the 8 MiB response
-ceiling tested; the tautological byte-identity test replaced by a fixture captured from master `bfdb514a`
-(L6); the EN/DE `projectCount` plural pair re-joined. Real tools / Electron: not run (Smart App Control,
-exit `0xC0E90002`). Phases 1–7 follow as PRs INTO the branch; #294 alone goes to master and closes #301.
-
-_2026-09-04 — **ZIM knowledge packs — MVP BUILT (feat/zim-knowledge-packs; design
-record: rag-design §17).**_ Offline ZIM archives (e.g. Wikipedia) as opt-in per-chat
-retrieval sources: kiwix-serve as the THIRD sidecar family (spike 2026-08-22 ruled out
-node-libzim on Windows), query-time Xapian search → shared chunker → the existing
-reranker via a new optional external-arm seam in `retrieve()` (no-arm path byte-identical,
-pinned). New: `knowledge_packs` table, `packs:*` IPC, scope `packIds`, archive citations +
-offline article viewer, Documents-screen packs panel, drive `zim/` dir. Deliberate MVP
-cuts + follow-ups in §5 item 21. Suite green (5660+), typecheck green.
 
 _2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the durable ledger
 `docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46
@@ -201,7 +79,9 @@ the full-audit 2026-09-02 remediation round — §5 item 19), and the eleven ent
 ledger `docs/architecture.md` §52), and the five 2026-09-04 Phase F entries (PRs #283–#289) on
 2026-09-04 at the Phase F close-out (PR #292; §52 "Phase F close-out"), and the three closed 2026-09-04
 entries of the #290/#291 wave (PRs #295/#300/#297/#299) and Phase F PR 6 + close-out (#293, #292) on
-2026-09-05 at ZIM Phase 3a (preamble budget) —
+2026-09-05 at ZIM Phase 3a (preamble budget), and the ten ZIM knowledge-packs wave entries
+(Phases 0–6 + the 2026-09-04 MVP entry, PRs #304–#336) on 2026-09-06 at the P7 close-out (preamble
+budget) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
@@ -729,38 +609,30 @@ open round's item stays the last block of §5.)
 
 ---
 21. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable
-    record: [`docs/rag-design.md`](docs/rag-design.md) §17 “Deliberately not built”).**
-    (a) **kiwix_tools provisioning wave** — runtime-sources.yaml block + validator key,
-    ENGINE_FAMILIES + familyBlock branch, fetch-runtime scripts, DRIVE-NOTICES (its
-    knownFamilies gate throws on the new family — needs the pinned GPL-3.0 text +
-    prose), commercial-drive checkFamily, script-drift matrices. Until then binaries are
-    manual (known-limitations). (b) **Tier 2**: persistent import of selected articles
-    into the corpus. (c) evidence identity for archive citations — DONE in P2, record
-    rag-design D-Z5; residual "Open article" from a review → P6.
-    (d) The manual acceptance leg: the airplane-mode demo on a
-    real drive with `wikipedia_de_*` packs + kiwix-tools 3.8.1 (the §17 user story).
-    (e) Observation for item 1b's matrix, measured 2026-09-04 on the i7-8550U + UHD 620:
-    GPU auto-offload gains nothing on pp (56 vs 57 t/s) and LOSES 45 percent on tg
-    (11 vs 19.6) — on this iGPU class `gpuMode: off` would be the better default.
-    (f) **D2 parser hardware gate, re-ruled (P1b)** — gate is now the per-slice main-thread
-    stall (≤5 ms on the i7-8550U); cooperative slicing shipped, 14900K P-core p95 passes
-    early warning; the decisive i7-8550U per-slice figure is still pending (owner, T02-c).
-    (g) **R-1 registered (P3a, 2026-09-05):** `kiwix-manage` on a hashless install marker runs as
-    `skip-legacy` (one logged warning) — no integrity claim for the manager until (a) proves install
-    hashes for serve AND manage; kiwix-serve already had the same tolerance. Record: rag-design D-Z10.
-    (h) R-7 closed with recorded limits in P3b — record known-limitations `zim-transient/` bullet.
-    (i) **R-9 accepted (P5, 2026-09-06):** kiwix-serve is the one sidecar without request authentication
-    (upstream has none); bounded by the `withServer` alive/generation guard + one admitted retry; recorded
-    in security-model / PRIVACY / known-limitations; R-8 (`--urlRootLocation`) stays a documented unused
-    option; R-1 still open until (a).
-    (j) **P4 closed (2026-09-06):** M3/M6/M7/M8/M10 — effective documents-off scope, reranker-failure
-    interleave, fair pack allocation under a per-ask deadline, refreshable searchability and per-ask
-    pack outcomes; record: rag-design D-Z4/D-Z11/D-Z12. Residuals: none new. Still owed: the Documents
-    toggle / outcome-notice visual pass (P6, T18), the `/suggest` probe's real-tool check (P7, T19).
-    (k) **P6 closed (2026-09-06):** T18-a implemented (the design/frontend review row); the 21(c)
-    "Open article from a review" residual closed. Record: design-guidelines §11.15. Still owed: T18-b
-    (the owner's visual leg), the collision-surface follow-up ((c)1 above), the small PacksPanel
-    residuals — P7 registers all three.
+    record: [`docs/rag-design.md`](docs/rag-design.md) §17 "Deliberately not built").**
+    (a) **kiwix_tools provisioning** — P8 successor issue (opened at the #294 merge).
+    (b) **Tier 2** (persistent import of selected articles into the corpus) — P9 successor issue.
+    (c) **Evidence identity for archive citations — CLOSED.** Identity resolution: P2, record rag-design D-Z5; the "Open article from a review" residual: closed P6, record design-guidelines §11.15.
+    (d) **Manual acceptance leg** (airplane-mode demo, `wikipedia_de_*` packs + kiwix-tools 3.8.1) — pending, owner (T19 (viii)).
+    (e) Observation for item 1b's matrix, measured 2026-09-04 on the i7-8550U + UHD 620: GPU auto-offload gains nothing on pp (56 vs 57 t/s) and LOSES 45 percent on tg (11 vs 19.6) — on this iGPU
+    class `gpuMode: off` would be the better default.
+    (f) **D2 parser hardware gate — CLOSED (re-ruled P1b).** Gate is the per-slice main-thread stall (≤5 ms on the i7-8550U); cooperative slicing shipped, `DEFAULT_SLICE_WORK` = 16 Ki, T02-c recorded
+    (laptop leg 3, 16 Ki); P7 re-check via the 14900K P-core ÷ 3 proxy (laptop not re-run — not within 20% of a gate). Record: rag-design D-Z3.
+    (g) **R-1 registered (P3a, 2026-09-05) — still open until (a):** `kiwix-manage` on a hashless install marker runs as `skip-legacy` (one logged warning) — no integrity claim for the manager until
+    (a) proves install hashes for serve AND manage. Record: rag-design D-Z10.
+    (h) **R-7 — CLOSED with recorded limits (P3b).** Record: known-limitations `zim-transient/` bullet.
+    (i) **R-9 accepted (P5, 2026-09-06):** kiwix-serve is the one sidecar without request authentication; bounded by the `withServer` alive/generation guard + one admitted retry; recorded in
+    security-model / PRIVACY / known-limitations. R-8 (`--urlRootLocation`) stays a documented unused option.
+    (j) **P4 — CLOSED (2026-09-06):** M3/M6/M7/M8/M10 — effective documents-off scope, reranker-failure interleave, fair pack allocation under a per-ask deadline, refreshable searchability, per-ask
+    pack outcomes. Record: rag-design D-Z4/D-Z11/D-Z12.
+    (k) **P6 — CLOSED (2026-09-06):** T18-a implemented (design/frontend review); the (c) "Open article from a review" residual closed. Record: design-guidelines §11.15.
+    (l) **P7 residual register (2026-09-06):** the collision surface (`packs:status.excluded` addition — P9 issue; served-library fact, not a pack-row fact — the per-answer "not-served" row covers it
+    today); PacksPanel: an unavailable pack can only be removed, not disabled (low, P9); every row's action buttons disable while one row is busy (low, P9); ChatScreen refetches on both
+    `reconcile-start` and `-end` of one epoch (cosmetic, P9); the pack meta line shows the raw ISO 639-3 code unlabelled (copy nit, P9); `.footer-menu-btn` has no overflow rule of its own (low, P9);
+    accepted deviation: the ScopePopover is non-modal (design-guidelines §11.15 decision 1, P6); T18-b (the owner's real-visual leg) — pending, owner; T19 the owner's Electron/drive legs (relocated
+    drive with persisted citations, live lock/unlock/failed lock, offline ask + viewer) — pending, owner (the orchestrator's machine legs are recorded in rag-design §17 "Real acceptance"); R-1 open
+    until P8 (the acceptance bundle has no install marker ⇒ `skip-legacy`); R-2 multipart unsupported; R-4 Authenticode — result recorded at P7 in model-policy.md; R-6 → P9; R-9 accepted
+    (2026-09-05).
 
 ## 6. Open issues / risks
 

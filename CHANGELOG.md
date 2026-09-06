@@ -40,7 +40,11 @@ from its first public `1.0.0` release onward.
   instantly, and copying a new archive onto the drive shows up after Refresh. A pack
   whose file was replaced by a different archive is now shown as such ("Different
   archive") instead of quietly answering from the wrong one. Locking or quitting the app
-  stops the pack server and removes its small generated index file.
+  stops the pack server and removes its small generated index file. Opening an alias article
+  (a redirect entry — about half of a Wikipedia archive's titles) shows the article it points
+  to instead of an error. Known limit on Windows: an archive can only be added from a path
+  without umlauts or accents (the bundled kiwix-manage cannot read such paths) — the drive's
+  `zim/` folder always works.
 - **Evidence reviews now name the knowledge pack, not a same-named document.** Reviewing an
   answer that cites a knowledge-pack article records the archive, the article and its pack
   id honestly, and shows identity as not verifiable against the workspace instead of

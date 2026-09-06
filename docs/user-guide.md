@@ -739,6 +739,13 @@ Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
    it can't be ticked — file missing, a different archive at that location, disabled, or no
    full-text search index; the panel itself shows a "No full-text index" badge on such a pack.
 
+Removing a pack's registration (the **Remove** button) only forgets it — the file itself is
+never deleted. An article from a pack that has no full-text search index is still readable:
+use *Open article* on it directly, even though that pack is skipped when the app searches.
+Whole-document reads and document comparisons never consult knowledge packs — the answer
+says so. A pack greyed out in an older chat's saved selection (because it's no longer
+available) can still be unticked.
+
 Everything stays on this computer: the pack server listens on 127.0.0.1 only and asking
 never leaves this machine. One limit to know: While the workspace is unlocked and a
 knowledge pack has been used in a chat, other programs running under your own user

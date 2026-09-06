@@ -77,7 +77,12 @@ HILBERTRAUM/
 │                                                #   NOT yet provisioned by the scripts — placed manually (rag-design §17)
 ├── ocr/                                        # OCR language files: {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
 ├── zim/                                        # Knowledge packs: ZIM archives (offline Wikipedia etc.) — PLAIN read-only
-│                                                #   files, auto-discovered; ships EMPTY (rag-design §17; git-ignored)
+│                                                #   files, never copied into the encrypted workspace (not the document
+│                                                #   store); discovered at session start (after unlock/create/plaintext
+│                                                #   start) and on Refresh, never continuously; ships EMPTY (rag-design
+│                                                #   §17; git-ignored). Resolved first at `<drive>/zim/<leaf>`, then at
+│                                                #   the recorded path (an external file, or the same leaf after a
+│                                                #   drive-letter change) — both checked against the archive's header UUID.
 ├── model-manifests/{chat,embeddings,reranker,transcriber,vision,translation}/ # committed YAML (the only model metadata in git)
 │   └── runtime-sources.yaml                     # sidecar download manifest (llama_cpp + whisper_cpp + ocr blocks)
 ├── app-skills/                                 # app-shipped Skills (read-only PLAIN folders; provisioned + asserted, S3/S9)
