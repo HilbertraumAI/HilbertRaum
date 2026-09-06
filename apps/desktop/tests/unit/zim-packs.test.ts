@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, sep } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { log } from '../../src/main/services/logging'
 import { readZimHeader } from '../../src/main/services/zim/identity'
@@ -412,7 +412,11 @@ describe('ZimService.packDeps — injected platform reaches kiwix-manage argv (#
       // Answer as a successful kiwix-manage: append the `<book>` element the real binary would
       // (the manager's `id` must equal the header uuid or registration fails).
       queueMicrotask(() => {
-        const libraryXmlPath = args[0] as string
+        // argv[0] is the PLATFORM-normalised spelling (`\tmp\…` when platform is win32 on a POSIX
+        // host); the real temp library lives at the host-separator spelling, which is where the
+        // service reads the metadata back from. A real kiwix-manage on Windows sees the same file
+        // either way; the fake has to map it back explicitly.
+        const libraryXmlPath = (args[0] as string).split("\\").join(sep)
         appendFileSync(
           libraryXmlPath,
           `<book id="${U.alpha}" path="${zimPath.replace(/\\/g, '/')}" title="Title" ` +
