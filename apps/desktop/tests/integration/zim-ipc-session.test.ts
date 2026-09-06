@@ -176,6 +176,12 @@ interface SessionHooks {
     body: string
   } | null
   /**
+   * Cut ONE response short (#301 P7 T19), the measured kiwix-serve 3.8.1 fault: a 200 with an
+   * HONEST `Content-Length`, then `partial` bytes and a connection that simply hangs — the rest
+   * never arrives. Null answers normally. Runs after `beforeRespond`, before `respond`.
+   */
+  truncate: (url: string) => { partial: string; total: number } | null
+  /**
    * The per-ATTEMPT `/raw` timeout of the stall retry (`ARTICLE_READ_TIMEOUT_MS`, #301 P7 T19).
    * A hook rather than a fixed dep so ONE leg can shrink it: every other article read in this
    * file keeps the shipped 4 s, T07's parked-read-under-lock leg included.
@@ -279,6 +285,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     findPort: async () => httpPort,
     probe: async () => true,
     beforeRespond: async () => undefined,
+    truncate: () => null,
     respond: () => null
   }
   const requests: string[] = []
@@ -290,6 +297,17 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
         await hooks.beforeRespond(url)
       } catch {
         /* a parked response released by teardown still answers */
+      }
+      // #301 P7 T19: the measured stall — headers, an honest length, most of the body, then
+      // silence. Left hanging on purpose; the client's per-attempt timeout is what ends it.
+      const cut = hooks.truncate(url)
+      if (cut) {
+        res.writeHead(200, {
+          'content-type': 'text/html',
+          'content-length': String(cut.total)
+        })
+        res.write(cut.partial) // …and the rest never arrives
+        return
       }
       // The T12 seam: a test that needs per-book / per-entry bytes answers here, so
       // "the viewer fetched the OTHER archive" cannot pass as a success.
@@ -1273,11 +1291,12 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
     }
   })
 
-  it('T19 an article whose first /raw read is never answered still opens: the stall is retried inside the same guard window', async () => {
+  it('T19 an article whose first /raw read is cut short still opens whole: the stall is retried inside the same guard window', async () => {
     // The measured kiwix-serve 3.8.1 (win-x86_64) fault: ~5–20 % of `/raw` reads of an entry
-    // above ~80 KB receive nothing at all — no headers, no bytes — while the server stays
-    // alive and answers the next request normally. Before the retry the viewer showed
-    // "This article is not available right now" after the client's 15 s timeout.
+    // above ~80 KB deliver the 200, a `Content-Length` and most of the body in 3–6 ms and then
+    // hang, the last part never arriving, while the server stays alive and answers the next
+    // request normally. Before the retry the viewer showed "This article is not available
+    // right now"; the truncated body must never be shown as the article either.
     const h = await sessionHarness()
     try {
       const packId = await h.registerPack('klima.zim', '66666666-0000-4000-8000-000000000000')
@@ -1288,19 +1307,17 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const html =
         '<html><body><h1>Treibhauseffekt</h1><p>' +
         'Der Treibhauseffekt beschreibt die Erwärmung der Atmosphäre. '.repeat(40) +
-        '</p></body></html>'
+        '</p><p>Schlussabsatz: der letzte Teil des Artikels.</p></body></html>'
       h.hooks.respond = (url) => (url === entryUrl ? { status: 200, body: html } : null)
       // Shrunk for this leg only: the shipped budget is 4 s per attempt.
       h.hooks.articleTimeoutMs = 300
       let stalls = 0
-      h.hooks.beforeRespond = (url) => {
-        // The FIRST read of this entry is accepted and never answered — the promise is left
-        // pending on purpose, exactly like a socket kiwix-serve never writes to.
-        if (url === entryUrl && stalls === 0) {
-          stalls++
-          return new Promise<void>(() => undefined)
-        }
-        return Promise.resolve()
+      h.hooks.truncate = (url) => {
+        // The FIRST read of this entry is cut at ~85 %: the closing paragraph — the only place
+        // "Schlussabsatz" appears — is in the part that never arrives.
+        if (url !== entryUrl || stalls > 0) return null
+        stalls++
+        return { partial: html.slice(0, Math.floor(html.length * 0.85)), total: Buffer.byteLength(html) }
       }
 
       const mark = h.requests.length
@@ -1309,10 +1326,13 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         sections: Array<{ label: string | null; text: string }>
       } | null
 
-      // The viewer gets the article, not the honest-but-wrong "unavailable" null.
+      // The viewer gets the WHOLE article, not the honest-but-wrong "unavailable" null and not
+      // the truncated body either.
       expect(opened).not.toBeNull()
       expect(opened!.title).toBe('Treibhauseffekt')
-      expect(opened!.sections.map((s) => s.text).join('\n')).toContain('Erwärmung der Atmosphäre')
+      const text = opened!.sections.map((s) => s.text).join('\n')
+      expect(text).toContain('Erwärmung der Atmosphäre')
+      expect(text).toContain('Schlussabsatz')
       // Two reads of the SAME route and nothing else: the retry is a fresh request inside the
       // one request-guard window, so the guard's own lifecycle retry is untouched.
       expect(h.requests.slice(mark).filter((u) => u.startsWith('/raw/'))).toEqual([entryUrl, entryUrl])

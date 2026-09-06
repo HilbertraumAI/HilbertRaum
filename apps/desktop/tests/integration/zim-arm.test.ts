@@ -58,9 +58,10 @@ function bigArticleHtml(): string {
 /** Set by the fake sidecar once the big article's body has been written. */
 let bigArticleServed = false
 /**
- * Article titles whose NEXT `/raw` read the fake sidecar accepts and never answers — the
- * measured kiwix-serve 3.8.1 stall (#301 P7 T19). The title is removed as it fires, so the
- * retry finds the article served normally, exactly as the real server behaves.
+ * Article titles whose NEXT `/raw` read the fake sidecar CUTS SHORT — the measured kiwix-serve
+ * 3.8.1 stall (#301 P7 T19): the 200, an honest `Content-Length` and most of the body arrive,
+ * then the connection hangs and the last part never does. The title is removed as it fires, so
+ * the retry finds the article served whole, exactly as the real server behaves.
  */
 const stallOnce = new Set<string>()
 /** Every article title the fake sidecar was asked for over `/raw`, in order. */
@@ -101,9 +102,6 @@ beforeAll(async () => {
     if (url.pathname.startsWith('/raw/')) {
       const article = decodeURIComponent(url.pathname.split('/content/')[1] ?? '').replace(/_/g, ' ')
       rawReads.push(article)
-      // #301 P7 T19: accepted, then nothing at all — no headers, no bytes. The client's
-      // per-attempt timeout is what ends it, and the retry gets the article below.
-      if (stallOnce.delete(article)) return
       // One article whose fetch fails: the arm must skip THAT HIT and keep the others.
       if (article === 'Kaputt') {
         res.writeHead(500)
@@ -118,14 +116,24 @@ beforeAll(async () => {
         bigArticleServed = true
         return
       }
+      const body = articleHtml(article, [
+        ['Landwirtschaft', `${article} entsteht durch Methan aus der Landwirtschaft.`],
+        ['Industrie', `${article} in der Industrie stammt aus Verbrennung.`],
+        ['Trivia', 'Ein Abschnitt ohne die gesuchten Begriffe.']
+      ])
+      // #301 P7 T19: the 200 and an honest `Content-Length`, then only ~85 % of the body —
+      // the connection hangs and the last part never arrives. The client's per-attempt timeout
+      // ends it, and the retry (the title is already consumed) reads the article whole.
+      if (stallOnce.delete(article)) {
+        res.writeHead(200, {
+          'content-type': 'text/html',
+          'content-length': String(Buffer.byteLength(body))
+        })
+        res.write(body.slice(0, Math.floor(body.length * 0.85)))
+        return
+      }
       res.writeHead(200, { 'content-type': 'text/html' })
-      res.end(
-        articleHtml(article, [
-          ['Landwirtschaft', `${article} entsteht durch Methan aus der Landwirtschaft.`],
-          ['Industrie', `${article} in der Industrie stammt aus Verbrennung.`],
-          ['Trivia', 'Ein Abschnitt ohne die gesuchten Begriffe.']
-        ])
-      )
+      res.end(body)
       return
     }
     res.writeHead(404)
@@ -171,11 +179,12 @@ describe('collectPackCandidates', () => {
     expect(first.text).toContain('Landwirtschaft')
   })
 
-  it('#301 P7 T19 an article whose first read is never answered keeps its chunks', async () => {
-    // Before the stall retry, kiwix-serve 3.8.1 (win-x86_64) leaving a `/raw` read unanswered
-    // cost the ask that article ENTIRELY and silently: `fetchArticleHtml` rejected on the 15 s
-    // timeout and the arm's per-hit `continue` swallowed it (a measured ask returned 16 of 20
-    // passages after 40 s). The retry makes the stall invisible to the ask.
+  it('#301 P7 T19 an article whose first read is cut short keeps its chunks', async () => {
+    // Before the stall retry, kiwix-serve 3.8.1 (win-x86_64) cutting a `/raw` read short cost
+    // the ask that article ENTIRELY and silently: `fetchArticleHtml` rejected on the timeout and
+    // the arm's per-hit `continue` swallowed it (a measured ask returned 16 of 20 passages after
+    // 40 s). The retry makes the stall invisible to the ask — and the truncated body is
+    // discarded, so no half-article's chunks reach the answer either.
     const packs = [{ id: 'pack-climate', title: 'Klimawandel von Wikipedia' }]
     const question = 'Wie entsteht Treibhausgas in der Landwirtschaft?'
     const { candidates: unstalled } = await collectPackCandidates(port, packs, question)
