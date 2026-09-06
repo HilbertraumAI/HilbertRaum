@@ -8142,7 +8142,7 @@ phase moved):
 | **REL-2** | LOW | 8 | #278 | **fixed** — `saveTextExport` wrote with `writeFileSync` on the main thread (the AUD-15 defect one file away). It now shares the async atomic `writeAtomic` tail (`save-export.ts:64`: tmp sibling → short-write check → `fd.sync()` → close → rename; `rm` on failure) with `saveBinaryExport` (`save-export.test.ts:82`). #256 closed. |
 | **REL-3** | LOW | 8 → 3 | #272 | **fixed** — `set -euo pipefail` + `${1:-}`/`${HOME:-}` guards in `start-hilbertraum.sh:14` AND `Start HilbertRaum.command:22` (Q16 default). The review's "no `set -e`" was wrong — `set -e` existed; `-u` and `pipefail` did not. Landed in the Phase 3 launcher PR (the same file), not Phase 8. #257 closed. |
 | **TQ-1** | LOW | 4 | #273 | **fixed** — a `setImmediate`-based `waitUntil` starves the libuv poll phase where fs callbacks land (a real `decryptFileAsync` never left its `.tmp` stage). `lock-admission-race.test.ts` `tick` = `setTimeout(r, 1)` (`:81`); on this Windows host one tick ≈ 15–19 ms (timer coalescing), so the pre-existing 20-tick drains cost ~0.4 s each — ceilings, not sleeps. BUILD_STATE §7 conventions entry (both bullets, with TQ-2's wrapper rule). #258 closed. |
-| **DOC-9** | LOW | 9 → 9a | #280 | **fixed** — `data-contracts.md:1398`: 138 channels = the keys of the `IPC` constant; `STREAM`, `OCR_RASTER` and `EVENTS` are separate constants (the counting rule the "140" had blurred). The frozen `docs/audits/docs-code-comment-audit.md` left alone. #259 closed. |
+| **DOC-9** | LOW | 9 → 9a | #280 | **fixed** — `data-contracts.md:1398`: 138 channels = the keys of the `IPC` constant; `STREAM`, `OCR_RASTER` and `EVENTS` are separate constants (the counting rule the "140" had blurred). The frozen `docs/audits/docs-code-comment-audit.md` left alone. #259 closed. — **145 after #301's seven `packs:*` keys (P7, 2026-09-06)**. |
 | **DOC-10** | LOW | 9 → 9a | #280 | **fixed** — `data-contracts.md:669` `setup-dev` line says `npm ci` (BUILD_STATE §8 L-8 closed; the only `npm install` in `.github/` is the global npm CLI pin). #260 closed. |
 | **DOC-16** (HYPOTHESIS) | LOW | 9 → 9a | #281 | **confirmed at the component → fixed.** `SkillRunBar.tsx`'s write/export confirm read the LIVE `selectedId` (`targets.find(…) ?? targets[0]`), so a target list that changed between open and Run could run the tool on a different document than displayed (sibling defect: a picked document leaving the list silently fell back to `targets[0]`). Now `PendingConfirm { tool, documentId, documentName }` (`:40`) is snapshotted when the dialog opens, `onRun` uses the snapshot, and the dialog names the document (`chat.skill.confirm.target` "Document: {document}", EN+DE; `SkillRunBar.test.tsx:659`); main REFUSES an out-of-scope snapshot id (`main.skills.run.documentOutOfScope`), so the snapshot is never worse than the live binding. The screen-level race is reachable only by timing (the scope-refresh effect unmounts the dialog before a reply lands) — a UX note, no issue. #261 closed. |
 | **REL-11** (A-01) | ACCEPTED (High impact) | — | — | **accepted, recorded.** Whole-file encryption updates `.enc` only on lock/quit, and a torn working file (a live `-wal`) must not replace an intact `.enc`, so a hard kill, drive pull, power cut or OS session end loses every DB change since the prior successful lock — potentially hours of chats, settings, document/image metadata and indexes, and sidecar mutations can leave orphans — while the old encrypted snapshot survives (`security-model.md` "Accepted trade-off"; no periodic checkpoint and no idle auto-lock by explicit design; BUILD_STATE §5 item 9 holds the owner-decision shape of the audit's UX recommendation — idle posture, in-app eject). Named to the user by DOC-6. Cluster 1: SEC-12 (fixed), GAP-1 (documented), REL-8 (fixed), provoked by REL-10 (fixed). #262 closed at close-out. |
@@ -8335,7 +8335,12 @@ residues; (6) path containment — SEC-2 (archive name), BUILD_STATE §8 L-7 (ar
   the worker graph; one tolerated unresolved optional `encoding`); `MAX_DROP_PATHS` 512,
   `DEFAULT_WALK_BUDGET` 50 000 entries / depth 64 / 10 000 ms, `PICKER_TOKEN_CAP` 16 per instance;
   `MAX_SETTINGS_OBJECT_BYTES` 256 KB; `BODY_TOTAL_TIMEOUT_MS` 120 s beside the 30 s idle timer;
-  `SHUTDOWN_OVERALL_DEADLINE_MS` 30 s; IPC surface 138 channels / 137 guarded `handle`s + 2 `on`s;
+  `SHUTDOWN_OVERALL_DEADLINE_MS` 30 s; IPC surface 145 channels / 144 guarded `handle`s + 2
+  `on`s (recounted at P7, #301 — the rule: channels = keys of the `IPC` constant; guarded
+  handles = call sites of the `ipcHandle` wrapper `guardedHandleFor(ctx)` returns, across
+  `src/main/ipc/register*.ts` + `main/index.ts`; `on`s = `ipcMain.on(` call sites over the
+  same files plus `services/ocr/rasterizer.ts` — reproduces master's 138/137/2 exactly, +7
+  for the new `packs:*` keys, all handled, no new `on`);
   clipboard 8 sites in 7 files + the self-clearing key copy; renderer `localStorage` 4 product keys
   (+1 dev-harness); rekey journal `{ version: 1, staged, remove }`; the recovery reason union gained
   `vault_recovery_blocked`; the `AppStatus` gate gained `ocrState`.
@@ -10130,7 +10135,14 @@ D-7-gated Mark ready / Reopen.
 - **Identity unresolved ≠ missing.** A legacy source that cannot be pinned
   (`identity:'unresolved'`: no `documentId`, title 0 or >1 matches) is "could not be
   verified" — distinct from resolved-but-missing ("already missing when created"), and it
-  can NEVER flip to "changed" (it cannot be compared; adversarially pinned).
+  can NEVER flip to "changed" (it cannot be compared; adversarially pinned). **The archive
+  exception (knowledge packs, #301 P2):** `buildEvidenceSourceSnapshots` checks
+  `c.sourceKind === 'archive'` BEFORE this branch and before the document-id branch, so an
+  archive citation is always `identity:'unresolved'` regardless of any stale document id a
+  malformed row might also carry; its freshness reports `'unverifiable'`, never
+  `'changed'`/`'missing'` ([`rag-design.md`](rag-design.md) §17 D-Z5). A review row's archive
+  citation still opens — through "Open article" (P6) — because that resolves by the pack's
+  UUID against the review's own frozen snapshot, not by the unresolved document identity.
 - **Outdated = changed content only.** Positive drift (answer/coverage changed, ≥1 source
   changed) sets the derived `outdated` overlay and gates export behind acknowledge;
   **deletion warns but never gates** (spec §25.2/§28.7 letter). `outdated` is derived,

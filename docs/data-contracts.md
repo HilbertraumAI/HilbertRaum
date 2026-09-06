@@ -1428,8 +1428,9 @@ whole renderer-visible surface.
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
 The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
-`shared/ipc.ts` (138 channels — the keys of its `IPC` constant; the `STREAM` builders,
-`OCR_RASTER` and `EVENTS` are separate constants, #259) against this file then found **16** that
+`shared/ipc.ts` (145 channels — the keys of its `IPC` constant (138 at the time of this
+sweep, +7 `packs:*` keys added by #301 P7); the `STREAM` builders, `OCR_RASTER` and `EVENTS`
+(now 3, `packs:changed` added) are separate constants, #259) against this file then found **16** that
 appeared under neither their method name nor their channel string — mostly siblings of documented
 calls that arrived one at a time. Listed here so the declared source of truth is complete; each
 one's behaviour stays owned by the design record named beside it.
@@ -1525,7 +1526,9 @@ schedules a background reconciliation and returns `{ started: boolean }` at once
 completion arrives via the `packs:changed` event, not the return value) · `packs:status`
 (`KnowledgePackStatus = { toolsInstalled, refreshing, revision }` — additive over the P3a
 `{ toolsInstalled }` shape) · `packs:getArticle` (`PackArticle | null` — plain sectioned
-TEXT, never HTML; `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
+TEXT, never HTML; the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM
+alias entry with `302 → /content/<book>/<target>` (P7 T19) — while a cross-book, chained or
+contract-refused target returns `null` and the locator does not change; `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
 stopped short of the whole article — input cap, work budget or unterminated markup —
 Phase 1, PR #294 review H1; the modal shows a hint line instead of presenting the partial
 text as complete; a refused entry key (empty, > 2048 chars, a control character, a `.`/`..`

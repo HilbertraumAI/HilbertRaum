@@ -117,9 +117,16 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
         expect(known!.title.length).toBeGreaterThan(0)
       }
 
-      // Disable → the arm goes away; the sidecar is invalidated without error.
+      // Disable → the pack is no longer searched, and the ask still gets its outcome (#301 P4,
+      // review M6: `makeArm` returns an arm for every non-empty selection so a disabled pack
+      // reports "not searched: disabled" instead of silently vanishing). Re-aligned at P7 —
+      // the real-tool run found the pre-P4 `toBeNull()` expectation still here (T19).
       svc.setPackEnabled(db, pack.id, false)
-      expect(svc.makeArm(db, [pack.id])).toBeNull()
+      const disabledArm = svc.makeArm(db, [pack.id])
+      expect(disabledArm).not.toBeNull()
+      const after = await disabledArm!(query)
+      expect(after.candidates).toEqual([])
+      expect(after.outcomes.map((o) => [o.packId, o.status, o.reason])).toEqual([[pack.id, 'skipped', 'disabled']])
     },
     120_000
   )

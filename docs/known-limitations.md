@@ -2388,7 +2388,29 @@ reports and phase plans were working papers; their full text lives in git histor
   or the drive scripts — they must be placed manually under `runtime/kiwix-tools/<os>/` — unzip the WHOLE
   kiwix-tools archive there (the Windows build needs its ICU DLLs beside the exes)
   (download kiwix-tools from kiwix.org; §5 item 21 tracks the provisioning wave). Until
-  then the packs panel says so and the feature stays dormant.
+  the provisioning wave adds an in-app installer, the packs panel names what's missing —
+  manually provisioned packs (the binaries correctly placed, archives registered) already
+  work end to end; only the in-app install step is missing.
+- **On Windows, an archive can only be added from a path made of ASCII characters.** The
+  pinned `kiwix-manage` 3.8.1 refuses to read a file whose folder or file name contains an
+  umlaut, an accent or any other non-ASCII character ("Cannot add ZIM … to the library.") — a
+  limit of the tool's own path handling, found on real tools at P7 (`rag-design.md` §17 "Real
+  acceptance"). The panel reports the add as failed with the generic "could not be read by
+  kiwix-manage" message; the workaround is to put the file in the drive's `zim/` folder or any
+  other path without such characters (a Windows user folder such as `C:\Users\Jörg\Downloads`
+  hits this). Serving is not affected — a pack registered from an ASCII path stays readable and
+  searchable. A reason-specific message, or reading the archive's metadata without
+  `kiwix-manage`, is on the P9 successor issue #340.
+- **A redirect entry (an alias title) opens the article it points to — one hop, same pack.**
+  About half of a Wikipedia ZIM's entries are redirects; `kiwix-serve` answers them with a 302
+  rather than the target's bytes, and the viewer follows exactly one such hop inside the same
+  pack (P7 fix). A redirect to another pack, a chain of redirects, or a target that fails the
+  entry-key rules shows the honest "article unavailable" state instead — never another pack's
+  text.
+- **Multipart `.zimaa` archives are unsupported (R-2).** A ZIM split across multiple
+  `.zim<aa|ab|…>` parts is not read by this app; only a single-file `.zim` archive is. This
+  is unsupported AND UNTESTED: no code path explicitly rejects a multipart archive, and no
+  test currently pins that rejection.
 - **Packs ride the RELEVANCE ask path only.** Whole-document reads, compares, and
   doc-task flows are document reads by definition and never consult packs.
 - **A pure-archive answer records no coverage fraction** (there is no document corpus to
@@ -2410,7 +2432,8 @@ reports and phase plans were working papers; their full text lives in git histor
   exactly (`identity.ts`); when two packs would compute the SAME name, the smaller UUID
   wins by libkiwix's own ascending-map-order rule and the later pack is excluded from the
   served library until it is renamed, rather than answering under the winner's name (the
-  panel does not say so — deferred, a served-library fact rather than a pack-row fact; the
+  panel does not say so — deferred to the P9 successor issue #340 (opened at the #294 merge;
+  BUILD_STATE §5 item 21), since it is a served-library fact rather than a pack-row fact; the
   per-answer note says "not searched: name collision with another pack"). The real-tool check that our computed map still matches a
   pinned kiwix-serve build is P7's (T19), not assumed here.
 - **At most twelve packs take part in one ask, and not every candidate they find is
@@ -2423,7 +2446,10 @@ reports and phase plans were working papers; their full text lives in git histor
   mid-search is reported as "failed: timed out", one never reached in time as "not
   searched: out of time for this question"). None of this considers language: a German question against an
   English pack simply scores poorly; the reranker sorts it out when present, and without
-  one, expect occasional off-language chunks. Every ticked pack gets one line in the
+  one, expect occasional off-language chunks. Aggregation or superlative questions ("which
+  scientists are famous Austrians") tend to surface list or enumeration articles rather than
+  a clean answer, because no single passage carries what the question asks for — a
+  retrieval-shape limit, not a defect. Every ticked pack gets one line in the
   "Knowledge packs:" note under the answer — searched (and how much it contributed) or
   not searched/failed with a short reason — even on an answer that cites nothing at all;
   an older answer, from before this note existed, says "outcome not recorded" instead.
@@ -2454,7 +2480,8 @@ reports and phase plans were working papers; their full text lives in git histor
   displayed rather than presenting the partial extraction as the whole article. The
   parser no longer stalls the main process for a whole article (P1b: the conversion is
   cooperatively sliced and abortable on the ask path); the slow-hardware per-slice figure
-  (the i7-8550U reference laptop) is still to be recorded — see
+  (the i7-8550U reference laptop) is now recorded — laptop leg 3 PASSED at
+  `DEFAULT_SLICE_WORK` = 16 Ki, p95 2.4–2.7 ms against the 5 ms bound — see
   [`rag-design.md`](rag-design.md) §17 D-Z3.
 - **A kiwix-serve or kiwix-manage child that cannot be confirmed stopped within the
   teardown bound** (SIGTERM → SIGKILL → a bounded wait — ≈5 s total for kiwix-serve,

@@ -124,9 +124,12 @@ for (const leg of LEGS) {
         const out = text(r)
         expect(r.status, out).toBe(1)
         expect(out).toContain('NOT SELLABLE')
-        expect(out).toContain('assert-commercial-drive')
-        // The verdict is the canonical gate's: it names the missing platform artifacts.
-        expect(out).toMatch(/no app artifact/i)
+        expect(out).toContain('Canonical gate:')
+        // An EMPTY target has no drive declaration, so the canonical gate reports
+        // missing policy/manifests rather than platform-specific app artifacts.
+        // The tool filename is not part of either script's successful invocation output.
+        expect(out).toContain('config/policy.json missing')
+        expect(out).toContain('model-manifests missing on the drive')
         expect(out).not.toMatch(/^\s*SELLABLE:/m)
         expect(out).not.toContain('Done. Test the drive')
       })
