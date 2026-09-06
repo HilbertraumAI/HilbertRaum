@@ -567,7 +567,7 @@ consumer machine.
    model ranked FIRST by `recommendation_rank`, then by RAM tier, then by size (the §6.3
    ranked-only guard: it admits a rank-0 model only when nothing ranked fits at all, at very small
    budgets — an owner-open question carried over from the RAM-only picker that the card path
-   now inherits too; filed as a follow-up issue at the PR #308 close-out). With nothing eligible at all the RAM pick stands unchanged — the
+   now inherits too; issue #326). With nothing eligible at all the RAM pick stands unchanged — the
    documented no-fit fallback (the model partially offloads).
 7. The §6.5 speed step-down applies to the card pick exactly as to the RAM pick, with the
    step-down's destination filtered through the same card eligibility (§6.5's single-step
@@ -602,7 +602,7 @@ Gemma 12B and MoE at every budget where either would otherwise fit), but the EST
 model" row shows for a model of that size on a card in that range must still be right, and that
 has not been checked against a real start. No model could be started on the machine available for
 this audit (Smart App Control); the hardware protocol is `tmp/PR-308-assumptions-check.md` §4,
-tracked as issue I1 (number filled at close-out; WP5 legs 2–3). WP5 is explicitly **not** a
+tracked as issue #318 (WP5 legs 2–3, 6–7). WP5 is explicitly **not** a
 merge gate (decision G3).
 
 **The 6 GB row (N8).** Every 6 GB laptop card seen for this audit reports BELOW the runtime's
@@ -624,12 +624,12 @@ today. Whether to lower the gate is an owner call (§5 item 21 (k)).
 | qwen3.8-27b-ud-q4km | 3 | 20,246.4 | 20,247 |
 | qwen3.8-27b-ud-q5km | 3 | 23,865.6 | 23,866 |
 
-(Unranked models sharing a tier with a ranked one above — `qwen3-4b-instruct-2507-q4`,
+(Lower-ranked models sharing a tier with a ranked one above — `qwen3-4b-instruct-2507-q4`,
 `qwen3-4b-instruct-q4`, `qwen3-8b-instruct-q4`, `ministral3-8b-instruct-2512-q4`,
 `qwen3-14b-instruct-q4`, `qwen3.6-27b-q4`, `qwen3.6-27b-q5`, `qwen3.5-35b-a3b-ud-q4kxl` — never
 win rule C's rank-first fallback against the ranked model at the same tier and are omitted here;
 their raw needs are pinned alongside these in the same test. The rank-0 fall-through, when
-reached at a very small budget: `qwen3.5-2b-ud-q4kxl` 2,962 MiB, `qwen3.5-0.8b-q6` 2,300 MiB.)
+reached at a very small budget: `qwen3.5-2b-ud-q4kxl` 2,962 MiB, `qwen3.5-0.8b-q6` 2,304 MiB.)
 
 Both consumers build the picker's `PickerMemory` from ONE decision — `pickerMemoryFor` in
 `registerModelIpc.ts` and `probeAndPersistGpu` in `registerBenchmarkIpc.ts`, both calling
