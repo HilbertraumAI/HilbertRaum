@@ -315,8 +315,9 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
 
   it('every .one plural key has its .other partner and vice versa (tCount contract)', () => {
     // Key parity is asserted above, so checking the English key set covers both catalogs.
-    // A trailing ".other" alone is not proof of a plural ('models.section.other' is a
-    // section name) — a plural variant is one that interpolates {count}.
+    // A trailing ".other" alone is not proof of a plural (a key could just as well be a plain
+    // label that happens to end in "...other") — a plural variant is one that interpolates
+    // {count}.
     const keys = new Set(Object.keys(en) as MessageKey[])
     for (const key of keys) {
       if (key.endsWith('.one')) {

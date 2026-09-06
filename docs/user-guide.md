@@ -121,22 +121,32 @@ blocks you.
 
 ## 5. Pick and start a model
 
-1. Open **AI Model**. Your current model (if one is selected) is shown first; the rest are
-   below as alternatives, each with a plain-language note on its size and speed. When a list
-   mixes both kinds, it is split into **On this drive — ready to use** and **Available to
-   download** (not-yet-downloaded cards also look quieter), so you can tell at a glance what
-   works right now and what would cost a download first. The file paths, checksums, and other
-   internals are tucked behind each card's **Technical details** — you never need them for
-   everyday use.
+1. Open **AI Model**. Your current model stays at the top. The **Model library** below defaults
+   to **On this drive** when models are installed; **Browse models** shows the full catalog of
+   alternatives, including downloads. Search by name, family, or exact variant, and filter by
+   task or family. Task groups are Chat, Document search (including rerankers), Translation,
+   Images, and Voice. Each compact row shows the purpose, storage size, minimum memory,
+   status, and available action. Expand **Technical details** for its description, automatic-use
+   explanation, paths, and verification controls.
+   Quantization variants of the same model share one entry. The installed/recommended choice
+   leads — and where several versions are equally good picks, the one you can actually download
+   is the one shown; **Show all variants** reveals the other exact versions. A group that contains
+   a version the app **can't verify** opens by itself, and whichever way you set a group it stays
+   that way. Search also finds collapsed variants. The current model is only shown at the top and
+   is not counted again in the library.
 2. You'll see the models on your drive with a status:
    - **Installed** — ready to use.
    - **Recommended** — the largest model that runs comfortably in this computer's memory.
    - **Not downloaded** — the model file isn't on the drive (see Troubleshooting).
    - **Needs ≥N GB RAM** — this computer has less memory than the model's minimum, so it
      can't be selected or started here. Pick a smaller model — quality stays great.
-   - **Can't verify** — the file is present but its checksum didn't match; re-download it.
+   - **Can't verify** — the file is present but its checksum didn't match. The model stays listed
+     under **On this drive** with its **Download** action, so you can repair it without hunting
+     through the catalog; if it is one of several variants of the same model, that group opens
+     automatically so the damaged version is visible straight away. (If the publisher has since
+     withdrawn the file, the row explains that instead of offering a download.)
    - **Unsupported** — this model can't run on this computer/build.
-3. Click a downloaded model, then **Use this model** — this makes it your model *and* starts it, so
+3. Click **Use this model** on a downloaded model's row — this makes it your model *and* starts it, so
    you can go straight to chatting. The first start of a model can take a little while as it loads
    into memory.
 
@@ -169,8 +179,16 @@ internet for, and it never happens by itself:
    from. If the model's license hasn't been pre-reviewed, you'll also tick a box accepting it.
    Like every link in the app, the license link opens in your browser only after you confirm
    the small dialog that shows its site and address (§6).
-3. The download shows its progress on the model's card; you can **Cancel** any time. A
+3. The download shows its progress in a panel just above the list of models, so a search, a
+   filter or a collapsed group of variants can never hide it; you can **Cancel** any time. A
    cancelled or interrupted download **resumes where it stopped** when you start it again.
+   If a download **fails**, or finishes without a checksum the app can verify, the result stays
+   in that panel — named, with **Retry download** and **Dismiss** — until you act on it. It
+   survives searching and filtering, and it is still there when you leave the **AI Model** screen
+   and come back. **Retry download** re-opens the same confirmation (size, license, address) for
+   exactly that model; it is greyed out with the reason when downloads are switched off or the
+   file is no longer offered. **Dismiss** clears the panel and puts the result back on the model's
+   own card, where its Resume button is.
 4. The file is checksum-verified before the app will use it — a corrupted download is
    discarded automatically, never silently kept.
 

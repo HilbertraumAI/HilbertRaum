@@ -40,6 +40,16 @@ served-library, not a pack-row, fact; deferred to P7 (a `packs:status` addition)
 popover stays non-modal (Radix's modal variant aria-hides its own trigger chip and locks transcript scroll). Residuals: T18-b (owner's real-visual
 leg) pending — owner; the collision-surface follow-up; small PacksPanel residuals — all registered at P7 (§5 item 21(k)). Record:
 `design-guidelines.md` §11.15; `rag-design.md` §17 module map. Suite on this machine: 419 / 6,060 (5,980 / 79), exit 0 = +1 file / +25 tests over the head c3ea5581 (418 / 6,035, recounted here; its one failure was the known zim-client 8 MiB load flake); typecheck + build green; T18-b orchestrator pre-check in real Electron (both themes/languages, panel + picker) recorded in the inventory row — the owner's sign-off stays pending.
+_2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), ready for merge
+(owner squash-merge; keep the branch):** searchable On this drive / Browse views, task/family
+filters and expandable quantization groups (`docs/design-guidelines.md` §15, user-guide §5/§6);
+F2 keeps a failed/unverified download's named result with Retry/Dismiss; F3 keeps repair-state
+models visible and auto-expands their groups; F5 fronts a tied group with an obtainable variant;
+a catalog guard plus F7 cleanup retire dead keys/CSS and add an unused-i18n-key guard. Rebuilt
+on master as UX-only: Flash-Next (`feat/qwen38-flash-next-manifest`) split out, contained here
+only, tracked as follow-ups #310/#311/#312 (shards, Flash-Next landing, GPU ladder) plus
+#313/#314 (family filter, renderer-reload recovery) and #315 (review residuals). Final head =
+the PR #302 tip (CI green on every phase); 379 / 5,784 passed, 74 skipped locally._
 
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 4 — retrieval honesty: review M3 / M6 / M7 / M8 / M10 closed.**_
 An explicit, additive `documentsOff` flag (never derived from emptiness) makes packs-only scope expressible again, superseding the
