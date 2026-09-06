@@ -76,6 +76,9 @@ export interface ZimCleanupOptions {
    * session-start pass, when its process is gone or has been reaped.
    */
   keep?: ReadonlySet<string>
+  /** Case-folding rule for the containment compare (#301 P5, finding L9): injected so both
+   *  branches are testable on any host; production passes the service's `platform`. */
+  platform?: NodeJS.Platform
 }
 
 const LIBRARY_BUILD_NAME = /^library\.\d+\.xml$/
@@ -92,9 +95,10 @@ function emptyReport(confirmed: boolean): ZimCleanupReport {
   }
 }
 
-/** Windows paths differ only in case; every other platform compares exactly. */
-function samePath(a: string, b: string): boolean {
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+/** Windows paths differ only in case; every other platform compares exactly. `platform` is
+ *  injected (#301 P5, finding L9) so the two branches are pinned independently of the host. */
+export function samePath(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
 /** True when `keep` names this entry itself or anything inside it (a meta dir may be kept
@@ -261,7 +265,7 @@ export function cleanupZimTransients(
   try {
     const resolved = realpathSync(transientDir)
     const expected = join(realpathSync(workspacePath), ZIM_TRANSIENT_DIR_NAME)
-    if (!samePath(resolved, expected)) {
+    if (!samePath(resolved, expected, opts.platform)) {
       log.warn('ZIM transient cleanup refused: the transient directory resolves outside the workspace')
       return emptyReport(false)
     }

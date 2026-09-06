@@ -1121,7 +1121,7 @@ export class ZimService {
     // link refusal); a test seam or the OS-temp fallback has no workspace to be contained by.
     const base = basename(dir) === ZIM_TRANSIENT_DIR_NAME ? dirname(dir) : null
     const report = base
-      ? cleanupZimTransients(dir, base, { keep: this.keptPaths })
+      ? cleanupZimTransients(dir, base, { keep: this.keptPaths, platform: this.opts.platform })
       : sweepZimTransientDir(dir, { keep: this.keptPaths })
     log.info('Knowledge-pack transient cleanup', {
       reason,

@@ -66,7 +66,7 @@ import { registerZimIpc } from '../../src/main/ipc/registerZimIpc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { IPC } from '../../src/shared/ipc'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import type { PrivacyPolicy } from '../../src/shared/types'
+import type { KnowledgePackAddResult, PrivacyPolicy } from '../../src/shared/types'
 import {
   WorkspaceController,
   createEncryptedVaultOnDisk,
@@ -174,6 +174,9 @@ interface SessionHarness {
   /** Every `packs:changed` notice emitted by ANY `ZimService` this harness created (the main
    *  `svc` and every `newService()`), in order — the `notify` seam (#301 P3b, plan §9.17 (e)3). */
   notices: ZimPacksChangedNotice[]
+  /** Every `ctx.audit(...)` call the real handlers made (#301 P5 — the DTO legs assert that a
+   *  failed file audits nothing and that no title / path ever rides the audit). */
+  auditCalls: Array<{ type: string; message: string; metadata: unknown }>
   /** Arm the gated sidecar boundary so the NEXT lock/quit parks inside its teardown. */
   armLockGate(): void
   suspendEntered(): boolean
@@ -380,6 +383,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
   }
   const releaseSuspend = (): void => releaseCurrent()
 
+  const auditCalls: SessionHarness['auditCalls'] = []
   const ctx = {
     trustedSenders: ANY_SENDER,
     paths: { rootPath: root, configPath: join(root, 'config'), workspacePath, dbPath: vp.dbPath },
@@ -413,7 +417,9 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     manifestsDir: null,
     isDev: true,
     zim: svc,
-    zimOps
+    zimOps,
+    audit: (type: string, message: string, metadata: unknown) =>
+      auditCalls.push({ type, message, metadata })
   } as unknown as AppContext
 
   registerZimIpc(ctx)
@@ -466,6 +472,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
         updated_at: string
       }>,
     notices,
+    auditCalls,
     armLockGate,
     suspendEntered: () => suspendEntered,
     releaseSuspend,
@@ -752,7 +759,9 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         dialogState.gate = null
         dialogState.paths = [h.addPackFile('added-after-failed-lock.zim')]
         const { result } = await invoke(handlers, IPC.addKnowledgePacks)
-        expect(Array.isArray(result) && result.length).toBe(1)
+        // #301 P5 (L1): `packs:add` answers the typed DTO, not a bare array.
+        expect((result as KnowledgePackAddResult).outcome).toBe('success')
+        expect((result as KnowledgePackAddResult).added).toHaveLength(1)
         expect(h.packRows()).toHaveLength(2)
 
         // …and a new ask restarts the suspended sidecar (a cold start, no latch).
@@ -1589,8 +1598,106 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         h.ctrl.unlock('right-password')
       }
 
-      // --- L5 legs (agent B) ---
-      // --- DTO legs (agent B) ---
+      // --- L5 legs (#301 P5, finding L5; plan §9.19 (b)) — the entry-key contract runs FIRST inside
+      // the one encoder, so a hazardous key is refused before any HTTP request; the compatibility
+      // keys each issue exactly one /raw request with the expected per-segment encoding.
+      {
+        const l5 = await sessionHarness()
+        try {
+          const alpha = await l5.registerPack('alpha-l5.zim')
+          l5.requests.length = 0
+          const hazardous = [
+            'A/../B', // a dot segment
+            'A/x' + String.fromCharCode(0) + 'y', // a C0 control
+            'A/' + 'x'.repeat(2049), // over MAX_ARTICLE_PATH_CHARS = 2048
+            '' // empty
+          ]
+          for (const badPath of hazardous) {
+            const res = await invoke(handlers, IPC.getPackArticle, alpha, badPath)
+            expect(res.result, `hazardous key ${JSON.stringify(badPath.slice(0, 12))}`).toBeNull()
+          }
+          expect(l5.requests.filter((u) => u.startsWith('/raw/'))).toHaveLength(0)
+
+          const compatible = [
+            'A/https://example.com/a//b', // empty segments — zimit-era URL-shaped keys
+            'A/one:two?three#four%25plus+amp&eq=space five', // URL-shaped punctuation + space
+            'A/a%2Fb', // an already-encoded slash inside one segment
+            'Treibhausgas', // namespace-less
+            '-/style.css',
+            'I/img.png',
+            'A/Foo.', // trailing dot
+            'A/..foo', // starts with dots, not exactly ".."
+            'A/.hidden' // starts with a dot, not exactly "."
+          ]
+          for (const key of compatible) {
+            l5.requests.length = 0
+            const res = await invoke(handlers, IPC.getPackArticle, alpha, key)
+            expect(res.result, `compatible key ${key}`).not.toBeNull()
+            const rawRequests = l5.requests.filter((u) => u.startsWith('/raw/'))
+            expect(rawRequests).toHaveLength(1)
+            expect(rawRequests[0]).toContain(`/content/${encodeArticlePath(key)}`)
+          }
+        } finally {
+          await l5.close()
+        }
+      }
+      // --- DTO legs (#301 P5, finding L1; plan §9.19 (c)) — the REAL handler + REAL service + the
+      // fake kiwix-manage child failing one of two files with a sentinel PATH on its stderr:
+      // cancelled / MIXED / all-fail, observed only through the public IPC result and the audit.
+      {
+        const dto = await sessionHarness()
+        try {
+          dto.hooks.manage = async () => undefined
+          dialogState.paths = []
+          dialogState.canceled = true
+          const cancelled = await invoke(handlers, IPC.addKnowledgePacks)
+          expect(cancelled.result).toEqual({ outcome: 'cancelled', added: [], failed: 0, failureReason: null })
+          dialogState.canceled = false
+
+          const SENTINEL_LEAF = 'XSENTINEL_T17_DTO_MIXED_leaf.zim'
+          const goodPath = dto.addPackFile('good-t17-dto.zim')
+          const badPath = dto.addPackFile(SENTINEL_LEAF)
+          dto.hooks.manage = async (_libraryXmlPath: string, zimPath: string) => {
+            if (zimPath === badPath) throw new Error(`Cannot add ZIM ${zimPath} to the library.`)
+          }
+          dialogState.paths = [goodPath, badPath]
+          const mixed = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+          expect(mixed.outcome).toBe('partial')
+          expect(mixed.added).toHaveLength(1)
+          expect(mixed.added[0]?.leaf).toBe('good-t17-dto.zim')
+          expect(mixed.failed).toBe(1)
+          // The fake child exits 1 with that stderr, so the REAL kiwixManageAdd rejects with a
+          // KiwixManageError — classified as the manager's failure, a CODE.
+          expect(mixed.failureReason).toBe('manager')
+          const mixedJson = JSON.stringify(mixed)
+          expect(mixedJson).not.toContain('XSENTINEL_T17_DTO_MIXED')
+          expect(mixedJson).not.toContain(badPath)
+          expect(mixedJson).not.toContain('Cannot add ZIM')
+          const added = dto.auditCalls.filter((c) => c.type === 'knowledge_pack_added')
+          expect(added).toHaveLength(1) // the failed file audits nothing
+          expect(JSON.stringify(dto.auditCalls)).not.toContain('XSENTINEL_T17_DTO_MIXED')
+          expect(JSON.stringify(dto.auditCalls)).not.toContain('good-t17-dto')
+
+          const allBadA = dto.addPackFile('all-fail-t17-a.zim')
+          const allBadB = dto.addPackFile('all-fail-t17-b.zim')
+          dto.hooks.manage = async (_libraryXmlPath: string, zimPath: string) => {
+            throw new Error(`Cannot add ZIM ${zimPath} to the library.`)
+          }
+          dialogState.paths = [allBadA, allBadB]
+          const allFail = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+          expect(allFail.outcome).toBe('failure') // resolves — no throw
+          expect(allFail.added).toHaveLength(0)
+          expect(allFail.failed).toBe(2)
+          expect(allFail.failureReason).toBe('manager')
+          const allFailJson = JSON.stringify(allFail)
+          expect(allFailJson).not.toContain('all-fail-t17-a.zim')
+          expect(allFailJson).not.toContain('all-fail-t17-b.zim')
+          expect(dto.auditCalls.filter((c) => c.type === 'knowledge_pack_added')).toHaveLength(1)
+          dto.hooks.manage = async () => undefined
+        } finally {
+          await dto.close()
+        }
+      }
     } finally {
       await h.close()
     }
