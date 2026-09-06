@@ -1,17 +1,41 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PacksPanel } from '../../src/renderer/screens/documents/PacksPanel'
 import { ArticleModal } from '../../src/renderer/chat/ArticleModal'
 import { ScopePopover } from '../../src/renderer/chat/ScopePopover'
 import { I18nProvider } from '../../src/renderer/i18n'
-import type { Collection, DocumentInfo, DocumentScope, KnowledgePack } from '../../src/shared/types'
+import type {
+  Collection,
+  DocumentInfo,
+  DocumentScope,
+  KnowledgePack,
+  KnowledgePacksChangedEvent
+} from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Knowledge packs (ZIM wave) renderer surfaces: the PacksPanel management list, the
 // ScopePopover pack sources (incl. packIds preservation on unrelated toggles), and the
 // offline ArticleModal's honest states.
+
+/** A controllable `onKnowledgePacksChanged` stand-in (#301 P3b, finding L7): the test holds
+ *  `emit` and calls it whenever the "main process" would broadcast the event. */
+function packsEventEmitter(): {
+  onKnowledgePacksChanged: (cb: (event: KnowledgePacksChangedEvent) => void) => () => void
+  emit: (event: KnowledgePacksChangedEvent) => void
+} {
+  let cb: ((event: KnowledgePacksChangedEvent) => void) | null = null
+  return {
+    onKnowledgePacksChanged: (fn) => {
+      cb = fn
+      return () => {
+        cb = null
+      }
+    },
+    emit: (event) => cb?.(event)
+  }
+}
 
 function pack(over: Partial<KnowledgePack> = {}): KnowledgePack {
   return {
@@ -41,7 +65,7 @@ afterEach(() => {
 describe('PacksPanel', () => {
   it('lists packs with state badges and meta; missing file shows the honest badge', async () => {
     stubApi({
-      getKnowledgePackStatus: async () => ({ toolsInstalled: true }),
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
         pack(),
         pack({ id: 'uuid-gone', title: 'Chemie von Wikipedia', available: false, enabled: true })
@@ -60,7 +84,7 @@ describe('PacksPanel', () => {
 
   it('shows the tools-missing hint and disables adding when kiwix-tools is absent', async () => {
     stubApi({
-      getKnowledgePackStatus: async () => ({ toolsInstalled: false }),
+      getKnowledgePackStatus: async () => ({ toolsInstalled: false, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => []
     })
     render(
@@ -79,7 +103,7 @@ describe('PacksPanel', () => {
       return [pack()]
     })
     stubApi({
-      getKnowledgePackStatus: async () => ({ toolsInstalled: true }),
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => (added ? [pack()] : []),
       addKnowledgePacks
     })
@@ -98,7 +122,7 @@ describe('PacksPanel', () => {
   it('remove asks for confirmation and says the file is untouched', async () => {
     const removeKnowledgePack = vi.fn(async () => undefined)
     stubApi({
-      getKnowledgePackStatus: async () => ({ toolsInstalled: true }),
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [pack()],
       removeKnowledgePack
     })
@@ -112,6 +136,91 @@ describe('PacksPanel', () => {
     expect(await screen.findByText(/archive file on disk is not touched/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Remove pack' }))
     await waitFor(() => expect(removeKnowledgePack).toHaveBeenCalledWith('uuid-climate'))
+  })
+
+  // #301 P3b, finding L7: DB-only list, live refresh state, and the pack-update event.
+  it('shows the refreshing line while status.refreshing, and a reconcile-end event clears it and refetches', async () => {
+    const emitter = packsEventEmitter()
+    let listCalls = 0
+    const listKnowledgePacks = vi.fn(async () => {
+      listCalls++
+      return listCalls === 1 ? [] : [pack()]
+    })
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: true, revision: 0 }),
+      listKnowledgePacks,
+      onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('Checking the drive for packs…')).toBeInTheDocument()
+    act(() => emitter.emit({ epoch: 1, revision: 1, refreshing: false, reason: 'reconcile-end' }))
+    await waitFor(() =>
+      expect(screen.queryByText('Checking the drive for packs…')).not.toBeInTheDocument()
+    )
+    expect(await screen.findByText('Klimawandel von Wikipedia')).toBeInTheDocument()
+    expect(listKnowledgePacks).toHaveBeenCalledTimes(2)
+  })
+
+  it('Refresh calls packs:refresh', async () => {
+    const refreshKnowledgePacks = vi.fn(async () => ({ started: true }))
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [pack()],
+      refreshKnowledgePacks
+    })
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    await user.click(await screen.findByRole('button', { name: 'Refresh' }))
+    expect(refreshKnowledgePacks).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a packs:changed event whose epoch is below the last one seen', async () => {
+    const emitter = packsEventEmitter()
+    const listKnowledgePacks = vi.fn(async () => [pack()])
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks,
+      onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    await screen.findByText('Klimawandel von Wikipedia')
+    expect(listKnowledgePacks).toHaveBeenCalledTimes(1)
+    // A newer epoch first advances what counts as "last seen"…
+    act(() => emitter.emit({ epoch: 5, revision: 2, refreshing: false, reason: 'mutation' }))
+    await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(2))
+    // …then an OLDER epoch (an old session's late announcement) must change nothing: no
+    // refetch, and the refreshing line never appears from a stale reconcile-start.
+    act(() => emitter.emit({ epoch: 3, revision: 3, refreshing: true, reason: 'reconcile-start' }))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(listKnowledgePacks).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText('Checking the drive for packs…')).not.toBeInTheDocument()
+  })
+
+  it('shows the identity-mismatch badge for a pack replaced by a different archive', async () => {
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ available: false, unavailableReason: 'identity-mismatch' })
+      ]
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('Different archive')).toBeInTheDocument()
   })
 })
 

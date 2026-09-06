@@ -2,7 +2,7 @@ import { BrowserWindow, dialog } from 'electron'
 import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { KnowledgePack } from '../../shared/types'
+import type { KnowledgePack, KnowledgePackStatus } from '../../shared/types'
 import type { PackArticle } from '../services/zim'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
@@ -33,8 +33,24 @@ export function registerZimIpc(ctx: AppContext): void {
     return ctx.zim
   }
 
-  ipcHandle(IPC.getKnowledgePackStatus, (): { toolsInstalled: boolean } => {
-    return { toolsInstalled: ctx.zim?.toolsInstalled() ?? false }
+  ipcHandle(IPC.getKnowledgePackStatus, (): KnowledgePackStatus => {
+    const svc = ctx.zim
+    if (!svc) return { toolsInstalled: false, refreshing: false, revision: 0 }
+    return { toolsInstalled: svc.toolsInstalled(), refreshing: svc.refreshing(), revision: svc.revision() }
+  })
+
+  // Kick off a background reconciliation pass (#301 P3b, finding L7, plan §9.17 (e)2). Never
+  // awaited here — the handler returns at once and completion arrives via the `packs:changed`
+  // event, so a slow drive-file pass never blocks the "Refresh" click. Best-effort: a reconcile
+  // failure is logged, not thrown, because the caller already got its `{ started: true }`.
+  ipcHandle(IPC.refreshKnowledgePacks, (): { started: boolean } => {
+    requireUnlocked()
+    zim()
+      .reconcile(ctx.db)
+      .catch((err) => {
+        log.warn('Knowledge-pack refresh failed', String(err))
+      })
+    return { started: true }
   })
 
   // DATABASE-ONLY (#301 P3b, finding L7). This handler used to run a full drive discovery

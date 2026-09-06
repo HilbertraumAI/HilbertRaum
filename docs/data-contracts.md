@@ -1509,27 +1509,41 @@ CI are unaffected.
 ### Knowledge packs (ZIM wave live — rag-design §17)
 
 **Channels (`packs:` namespace, registerZimIpc.ts; all requireUnlocked except `packs:status`):**
-`packs:list` (drive `zim/` auto-discovery first → `KnowledgePack[]`) · `packs:add`
-(native picker + registration in ONE main-side handler — no renderer-supplied archive
-path exists on this surface; `KnowledgePack[] | null`) · `packs:remove` (tombstone,
-file untouched) · `packs:setEnabled` · `packs:status` (`{ toolsInstalled }`) ·
-`packs:getArticle` (`PackArticle | null` — plain sectioned TEXT, never HTML;
-`PackArticle` adds `partial: boolean`, true when `html.ts`'s converter stopped short of
-the whole article — input cap, work budget or unterminated markup — Phase 1, PR #294
-review H1; the modal shows a hint line instead of presenting the partial text as
-complete).
+`packs:list` (DB-ONLY — no filesystem probe, no availability write; `KnowledgePack[]`) ·
+`packs:add` (native picker + registration in ONE main-side handler — no renderer-supplied
+archive path exists on this surface; `KnowledgePack[] | null`) · `packs:remove`
+(tombstone, file untouched) · `packs:setEnabled` · `packs:refresh` (#301 P3b, finding L7 —
+schedules a background reconciliation and returns `{ started: boolean }` at once;
+completion arrives via the `packs:changed` event, not the return value) · `packs:status`
+(`KnowledgePackStatus = { toolsInstalled, refreshing, revision }` — additive over the P3a
+`{ toolsInstalled }` shape) · `packs:getArticle` (`PackArticle | null` — plain sectioned
+TEXT, never HTML; `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
+stopped short of the whole article — input cap, work budget or unterminated markup —
+Phase 1, PR #294 review H1; the modal shows a hint line instead of presenting the partial
+text as complete).
+
+**Event `EVENTS.knowledgePacksChanged`** (`packs:changed`, #301 P3b, finding L7) — an
+EVENT, not an invoke (the `EVENTS.modelVerifyProgress` shape above, but broadcast to
+EVERY window via `BrowserWindow.getAllWindows()`, not just the calling one):
+`KnowledgePacksChangedEvent = { epoch, revision, refreshing, reason: 'reconcile-start' |
+'reconcile-end' | 'mutation' }`, emitted by `ZimService` only AFTER the producing
+operation's `assert()` — a pass finishing under an old epoch announces nothing. Producers:
+the reconcile (start/end) and `registerPack`/`removePack`/`setPackEnabled` (`'mutation'`).
+Consumers subscribe via preload `onKnowledgePacksChanged(cb)` and ignore an event whose
+`epoch` is below the last one seen.
 
 **Shapes (shared/types.ts):** `KnowledgePack` (id = archive UUID, title, language,
-zimDate, articleCount, sizeBytes, leaf, enabled, available, addedAt);
-`DocumentScope.packIds?: string[]` / `RetrievalScope.packIds?` (additive — a pack-less
-scope serializes byte-identically; consumed only by the ZIM retrieval arm, never by
-`buildScopeFilter`); `Citation` additive archive fields (`sourceKind: 'archive'`,
-`packId`, `archiveTitle`, `articlePath`; archive citations carry NO documentId/chunkId).
-Evidence review snapshots persist the same four fields as `sourceKind`/`archiveTitle`/
-`packId`/`articlePath` in `source_snapshot_json` (P2, review H2/M11, #301): an archive
-citation is always `identity:'unresolved'` on write and read, and the pack id + article
-path survive into the HTML/PDF evidence pack and the Markdown transcript export even
-though identity is never resolved.
+zimDate, articleCount, sizeBytes, leaf, enabled, available, `unavailableReason: 'missing'
+| 'identity-mismatch' | null` — additive, #301 P3b finding M5; null whenever `available`
+is true, addedAt); `DocumentScope.packIds?: string[]` / `RetrievalScope.packIds?`
+(additive — a pack-less scope serializes byte-identically; consumed only by the ZIM
+retrieval arm, never by `buildScopeFilter`); `Citation` additive archive fields
+(`sourceKind: 'archive'`, `packId`, `archiveTitle`, `articlePath`; archive citations carry
+NO documentId/chunkId). Evidence review snapshots persist the same four fields as
+`sourceKind`/`archiveTitle`/`packId`/`articlePath` in `source_snapshot_json` (P2, review
+H2/M11, #301): an archive citation is always `identity:'unresolved'` on write and read,
+and the pack id + article path survive into the HTML/PDF evidence pack and the Markdown
+transcript export even though identity is never resolved.
 
 **Table `knowledge_packs`** (db.ts SCHEMA): id PK (ZIM UUID) · title/description/
 language/zim_date/article_count/media_count/size_bytes · leaf + recorded_path
@@ -1552,3 +1566,19 @@ crash restart) never reuse a value. Library files are named `library.<build>.xml
 under the service's temp library directory. `ZimService.serverState(): { revision,
 build, generation, port, alive } | null` is the read P5's request guard consumes
 before and after a request; no IPC channel changed.
+
+**Session, identity and discovery (P3b, #301, findings H4/M4/M5/L3/L4/L7 — full record:
+rag-design §17 D-Z8/D-Z10/D-Z11):** every pack operation captures the unlock epoch and
+re-asserts admission/epoch/cancellation after every await; lock/quit abort the registry
+and clean `<workspacePath>/zim-transient/` (`library.<build>.xml` + `meta-<n>/library.xml`,
+plaintext while present). A pack's identity is its header UUID (bytes 8–23), checked on
+every resolve; `packs:list` is DB-only, and one serialized reconciliation (session start,
+`packs:refresh`) heals paths/availability and registers unknown UUIDs WITHOUT touching
+`enabled`/`removed_at` — a user's remove/disable always wins over a late pass. Serving
+names follow the pinned libkiwix rule; a collision keeps the ascending-UUID winner and
+excludes the loser. The citation locator stays `packId + articlePath`, resolved against
+the current serving map on every read.
+
+**Lock-channel inventory:** `ipc-lock-coverage.test.ts`'s `registerZimIpc` group gained
+`packs:refresh` as a DB-touching (non-exempt) channel; `packs:status` remains the sole
+exempt channel (in-memory service state only).

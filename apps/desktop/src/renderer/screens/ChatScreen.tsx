@@ -12,6 +12,7 @@ import {
   type DocumentScope,
   type EvidenceReviewSummary,
   type KnowledgePack,
+  type KnowledgePacksChangedEvent,
   type Message,
   type RunnableTool,
   type RuntimeStatus,
@@ -552,6 +553,27 @@ export function ChatScreen({
       void checkRuntime().catch(() => undefined)
     })
   }, [checkRuntime])
+
+  // #301 P3b, finding L7: `packs` is loaded once on mount (above) and `packs:list` is
+  // DB-only — a file dropped into the drive's `zim/` folder or a Refresh in the Documents
+  // panel would otherwise never reach an already-mounted Chat's ScopePopover without a
+  // navigation round trip. Refetch on every reconciliation/mutation event; ignore one whose
+  // epoch is below the last seen (an old session's late announcement — 0 before anything has
+  // been observed, a real epoch starts at 1).
+  const lastPacksEpochRef = useRef(0)
+  useEffect(() => {
+    return window.api.onKnowledgePacksChanged?.((event: KnowledgePacksChangedEvent) => {
+      if (event.epoch < lastPacksEpochRef.current) return
+      lastPacksEpochRef.current = event.epoch
+      void (async () => {
+        try {
+          setPacks((await window.api.listKnowledgePacks?.()) ?? [])
+        } catch {
+          setPacks([])
+        }
+      })()
+    })
+  }, [])
 
   // Context-window meter + transcript summary marker (context-compaction §5.1/§5.3). Both are
   // resting-state reads, refreshed on conversation switch and after each completed turn (live is

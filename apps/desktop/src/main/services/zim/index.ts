@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
-import type { KnowledgePack } from '../../../shared/types'
+import type { KnowledgePack, KnowledgePacksChangedEvent } from '../../../shared/types'
 import type { Db } from '../db'
 import { log } from '../logging'
 import { resolveZimDir } from '../drive'
@@ -168,22 +168,19 @@ export interface ZimServiceOptions {
   transientDir?: string
   /**
    * Broadcast one pack-set change to every window (#301 P3b, plan §9.17 (e)3 — wired in
-   * `main/index.ts` like `notifyRenderer`). ABSENT ⇒ `emitPacksChanged` is a no-op, which is
-   * every test and partial context today: step 3 of P3b adds the `packs:changed` channel, the
-   * preload subscription and the `mutation` producers. Emitted only AFTER an `assert()`, so a
-   * reconcile finishing under an old epoch writes nothing and announces nothing.
+   * `main/index.ts` like `notifyRenderer`, over `EVENTS.knowledgePacksChanged`). ABSENT ⇒
+   * `emitPacksChanged` is a no-op (every test and partial context that does not wire it). Emitted
+   * only AFTER an `assert()`, so a reconcile finishing under an old epoch writes nothing and
+   * announces nothing.
    */
-  notify?: (notice: ZimPacksChangedNotice) => void
+  notify?: (notice: KnowledgePacksChangedEvent) => void
 }
 
-/** The payload of the pack-set update event (plan §9.17 (e)3). */
-export interface ZimPacksChangedNotice {
-  /** The unlock epoch the producing operation captured; a consumer ignores an older one. */
-  epoch: number | null
-  revision: number
-  refreshing: boolean
-  reason: 'reconcile-start' | 'reconcile-end' | 'mutation'
-}
+/** The payload of the pack-set update event (plan §9.17 (e)3) — an alias of the shared
+ *  `KnowledgePacksChangedEvent` (shared/types.ts), which is what actually crosses the
+ *  `packs:changed` IPC event; kept as its own name here because every producer in this file
+ *  reads more clearly against a service-scoped type. */
+export type ZimPacksChangedNotice = KnowledgePacksChangedEvent
 
 /**
  * One registered knowledge-pack operation (plan §9.17 (a)3). `assert()` throws the #159
@@ -441,6 +438,9 @@ export class ZimService {
       )
       own.assert()
       this.invalidateLibrary()
+      // Mutation producer (plan §9.17 (e)3): AFTER the assert, so a registration that finished
+      // under an old epoch (the op above would have thrown) never announces itself.
+      this.emitPacksChanged(own, 'mutation', this.refreshing())
       return pack
     } finally {
       if (!op) own.release()
@@ -510,8 +510,10 @@ export class ZimService {
     reason: ZimPacksChangedNotice['reason'],
     refreshing: boolean
   ): void {
+    // `op.epoch` is `null` only when no admission seam is wired (tests, a partial context) —
+    // the shared event type is a plain `number` (0 in that case), never a real session's epoch.
     this.opts.notify?.({
-      epoch: op.epoch,
+      epoch: op.epoch ?? 0,
       revision: this.packRevision,
       refreshing,
       reason
@@ -525,7 +527,12 @@ export class ZimService {
     try {
       op.assert()
       const removed = removePack(db, id)
-      if (removed) this.invalidateLibrary()
+      if (removed) {
+        this.invalidateLibrary()
+        // Mutation producer (plan §9.17 (e)3) — only on a REAL change, like reconcile's own
+        // `report.changed` gate; a no-op remove (unknown id) announces nothing.
+        this.emitPacksChanged(op, 'mutation', this.refreshing())
+      }
       return removed
     } finally {
       op.release()
@@ -537,7 +544,10 @@ export class ZimService {
     try {
       op.assert()
       const changed = setPackEnabled(db, id, enabled)
-      if (changed) this.invalidateLibrary()
+      if (changed) {
+        this.invalidateLibrary()
+        this.emitPacksChanged(op, 'mutation', this.refreshing())
+      }
       return changed
     } finally {
       op.release()

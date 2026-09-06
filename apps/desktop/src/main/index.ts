@@ -64,6 +64,7 @@ import {
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
+import type { KnowledgePacksChangedEvent } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { findManifestById, launchContextTokens, resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
@@ -281,6 +282,14 @@ function initBackend(): void {
       win.webContents.send(EVENTS.runtimeNotice, message)
     }
     log.info('Runtime notice', { message })
+  }
+  // #301 P3b, finding L7 (plan §9.17 (e)3): the pack-set update broadcast — the
+  // `notifyRenderer` shape, guarded per-window since a pack change can land between a window
+  // closing and its BrowserWindow instance being dropped from `getAllWindows()`.
+  const notifyKnowledgePacksChanged = (event: KnowledgePacksChangedEvent): void => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(EVENTS.knowledgePacksChanged, event)
+    }
   }
   // The crash handler needs the manager and the manager's factory needs the handler —
   // late-bind through a ref.
@@ -563,7 +572,8 @@ function initBackend(): void {
     ops: zimOps,
     // #301 (L3/M4): the transient library builds live inside the workspace, not in the host's
     // temp directory, so lock / quit / session start own them.
-    transientDir: zimTransientDir(paths.workspacePath)
+    transientDir: zimTransientDir(paths.workspacePath),
+    notify: notifyKnowledgePacksChanged
   })
   // The vision sidecar orchestrator (image-understanding plan §10). Built here — not inside
   // registerImagesIpc — so the workspace-lock + quit teardown paths can reach it via `ctx.vision`.

@@ -16,6 +16,8 @@ import type {
   ChatOptions,
   Collection,
   KnowledgePack,
+  KnowledgePackStatus,
+  KnowledgePacksChangedEvent,
   ContextUsage,
   Conversation,
   ConversationSearchResult,
@@ -528,9 +530,13 @@ const api = {
   /** Enable/disable a pack. */
   setKnowledgePackEnabled: (id: string, enabled: boolean): Promise<void> =>
     ipcRenderer.invoke(IPC.setKnowledgePackEnabled, id, enabled),
-  /** Whether the kiwix-tools binaries are installed (feature availability). */
-  getKnowledgePackStatus: (): Promise<{ toolsInstalled: boolean }> =>
+  /** Whether kiwix-tools is installed, and whether a reconciliation pass is running. */
+  getKnowledgePackStatus: (): Promise<KnowledgePackStatus> =>
     ipcRenderer.invoke(IPC.getKnowledgePackStatus),
+  /** Kick off a background reconciliation (drive discovery + availability heal); returns at
+   *  once — completion arrives via `onKnowledgePacksChanged`. */
+  refreshKnowledgePacks: (): Promise<{ started: boolean }> =>
+    ipcRenderer.invoke(IPC.refreshKnowledgePacks),
   /** One pack article as plain sectioned text for the citation viewer; null = unavailable. */
   getPackArticle: (
     packId: string,
@@ -803,6 +809,13 @@ const api = {
     const handler = (_e: unknown, p: ModelVerifyProgress) => cb(p)
     ipcRenderer.on(EVENTS.modelVerifyProgress, handler)
     return () => ipcRenderer.removeListener(EVENTS.modelVerifyProgress, handler)
+  },
+  /** Subscribe to knowledge-pack set changes (#301 P3b, finding L7) — reconciliation
+   *  start/end and mutations (register/remove/enable), broadcast to every window. */
+  onKnowledgePacksChanged: (cb: (event: KnowledgePacksChangedEvent) => void): (() => void) => {
+    const handler = (_e: unknown, event: KnowledgePacksChangedEvent) => cb(event)
+    ipcRenderer.on(EVENTS.knowledgePacksChanged, handler)
+    return () => ipcRenderer.removeListener(EVENTS.knowledgePacksChanged, handler)
   }
 }
 

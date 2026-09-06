@@ -103,8 +103,11 @@ const MODULES: Array<{
   { name: 'registerRagIpc', register: registerRagIpc, exempt: new Set<string>() },
   { name: 'registerBenchmarkIpc', register: registerBenchmarkIpc, exempt: new Set<string>() },
   { name: 'registerCollectionsIpc', register: registerCollectionsIpc, exempt: new Set<string>() },
-  // Knowledge packs (ZIM wave): every registration/read channel is DB-backed; only the
-  // tools-installed probe is workspace-agnostic (binary presence on disk).
+  // Knowledge packs (ZIM wave): every registration/read/mutation channel is DB-backed; only the
+  // tools-installed + refreshing status probe is workspace-agnostic (in-memory service state).
+  // `packs:refresh` (#301 P3b, finding L7) schedules a DB-touching reconciliation and is
+  // therefore NOT exempt — `requireUnlocked()` is its first statement like every other handler
+  // here, so it is covered automatically by the loop below.
   {
     name: 'registerZimIpc',
     register: registerZimIpc,

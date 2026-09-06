@@ -75,6 +75,7 @@ function fakeZimService(db: () => Db, zimDir: string): unknown {
       await packs.reconcile(d, deps)
     },
     refreshing: () => false,
+    revision: () => 0,
     registerPack: (d: Db, p: string) => packs.registerPack(d, deps, p),
     removePack: (d: Db, id: string) => packs.removePack(d, id),
     setPackEnabled: (d: Db, id: string, enabled: boolean) => packs.setPackEnabled(d, id, enabled),
@@ -207,8 +208,44 @@ describe('packs IPC', () => {
       workspace: { isUnlocked: () => true }
     } as unknown as AppContext)
     expect((await invoke(handlers, IPC.getKnowledgePackStatus)).result).toEqual({
-      toolsInstalled: false
+      toolsInstalled: false,
+      refreshing: false,
+      revision: 0
     })
+  })
+
+  // #301 P3b, finding L7 (plan §9.17 (e)2-3): packs:refresh schedules a reconciliation and
+  // returns at once; packs:status carries the refreshing flag; packs:list never triggers
+  // discovery — it is asserted here as a spy on the same fake service the harness already
+  // drives (the real single-flight/serialization behaviour is zim-ipc-session.test.ts's T13-a).
+  it('refresh returns { started: true } and calls reconcile exactly once', async () => {
+    const h = makeHarness()
+    const svc = h.ctx.zim as unknown as { reconcile: (db: Db) => Promise<void> }
+    const reconcileSpy = vi.spyOn(svc, 'reconcile')
+    const { result } = await invoke(handlers, IPC.refreshKnowledgePacks)
+    expect(result).toEqual({ started: true })
+    // Fire-and-forget: the handler must not await the reconciliation before resolving.
+    expect(reconcileSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('status reports the refreshing flag from the service', async () => {
+    const h = makeHarness()
+    const svc = h.ctx.zim as unknown as { refreshing: () => boolean }
+    const spy = vi.spyOn(svc, 'refreshing').mockReturnValue(true)
+    expect((await invoke(handlers, IPC.getKnowledgePackStatus)).result).toMatchObject({
+      refreshing: true
+    })
+    spy.mockRestore()
+  })
+
+  it('list never calls reconcile or discovery, even with unregistered files on the drive', async () => {
+    const h = makeHarness()
+    addZimFile(h.zimDir, 'never-discovered.zim')
+    const svc = h.ctx.zim as unknown as { reconcile: (db: Db) => Promise<void> }
+    const reconcileSpy = vi.spyOn(svc, 'reconcile')
+    const before = (await invoke(handlers, IPC.listKnowledgePacks)).result as KnowledgePack[]
+    expect(before.map((p) => p.leaf)).not.toContain('never-discovered.zim')
+    expect(reconcileSpy).not.toHaveBeenCalled()
   })
 
   it('getPackArticle rejects malformed args with null, never a throw', async () => {

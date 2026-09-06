@@ -80,7 +80,7 @@ import type { Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { createPlaintextOps, type PlaintextOpsRegistry } from '../../src/main/services/ingestion/plaintext-ops'
 import { registeredSidecarPids, type SpawnFn } from '../../src/main/services/runtime/sidecar'
-import { ZimService, type ServedLibrary } from '../../src/main/services/zim'
+import { ZimService, type ServedLibrary, type ZimPacksChangedNotice } from '../../src/main/services/zim'
 import { readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
 import { encodeArticlePath } from '../../src/main/services/zim/client'
 import { packUuid, writeZimFixture } from '../helpers/zim-header'
@@ -170,7 +170,10 @@ interface SessionHarness {
   addPackFile(leaf: string, uuid?: string): string
   registerPack(leaf: string, uuid?: string): Promise<string>
   transientEntries(): string[]
-  packRows(): Array<{ id: string; enabled: number; updated_at: string }>
+  packRows(): Array<{ id: string; enabled: number; removed_at: string | null; updated_at: string }>
+  /** Every `packs:changed` notice emitted by ANY `ZimService` this harness created (the main
+   *  `svc` and every `newService()`), in order — the `notify` seam (#301 P3b, plan §9.17 (e)3). */
+  notices: ZimPacksChangedNotice[]
   /** Arm the gated sidecar boundary so the NEXT lock/quit parks inside its teardown. */
   armLockGate(): void
   suspendEntered(): boolean
@@ -330,6 +333,10 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       ? zimOpsReal
       : { ...zimOpsReal, awaitSettled: (ms) => zimOpsReal.awaitSettled(Math.min(ms, bound)) }
 
+  // The `notify` seam (#301 P3b, plan §9.17 (e)3): every notice from EVERY ZimService this
+  // harness creates (the main `svc` and any `newService()`), in emission order.
+  const notices: ZimPacksChangedNotice[] = []
+
   const makeService = (rootOverride?: string): ZimService =>
     new ZimService({
       rootPath: rootOverride ?? root,
@@ -340,6 +347,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       },
       ops: zimOps,
       transientDir,
+      notify: (event) => notices.push(event),
       deps: {
         resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
         spawn: serveSpawn,
@@ -450,8 +458,14 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     packRows: () =>
       ctrl
         .requireDb()
-        .prepare('SELECT id, enabled, updated_at FROM knowledge_packs ORDER BY id')
-        .all() as unknown as Array<{ id: string; enabled: number; updated_at: string }>,
+        .prepare('SELECT id, enabled, removed_at, updated_at FROM knowledge_packs ORDER BY id')
+        .all() as unknown as Array<{
+        id: string
+        enabled: number
+        removed_at: string | null
+        updated_at: string
+      }>,
+    notices,
     armLockGate,
     suspendEntered: () => suspendEntered,
     releaseSuspend,
@@ -1147,6 +1161,132 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
           .map((p) => p.trim())
           .filter(Boolean)
       ).toEqual(['packId: string', 'articlePath: string'])
+    } finally {
+      await h.close()
+    }
+  })
+
+  // ---------------------------------------------------------------------------------------
+  // T13 — packs:list, refresh serialization, the pack-update event, remove/disable winning
+  // (#301 P3b, finding L7; plan §9.17 (e))
+  // ---------------------------------------------------------------------------------------
+  it('T13 packs:list performs no discovery or filesystem writes; startup reconciliation and explicit Refresh are serialized; the update event reaches a mounted Chat and old-epoch events are ignored; a user remove / disable wins over late metadata', async () => {
+    const h = await sessionHarness()
+    try {
+      // ---- (1) packs:list is DATABASE-ONLY: a dropped, unregistered file triggers no manager
+      //      spawn and no write — `listPacks` never reads tools state or the drive at all, so
+      //      this covers both the "no tools" and the "tools installed" shapes of the row. -----
+      h.addPackFile('never-discovered.zim')
+      const rowsBefore = h.packRows()
+      const buildAddsBefore = h.buildAdds.length
+      const metaAddsBefore = h.metaAdds.length
+      const listed = (await invoke(handlers, IPC.listKnowledgePacks)).result as unknown[]
+      expect(listed).toEqual([])
+      expect(h.packRows()).toEqual(rowsBefore) // byte-for-byte, INCLUDING updated_at
+      expect(h.buildAdds.length).toBe(buildAddsBefore) // no serve-library manager spawn
+      expect(h.metaAdds.length).toBe(metaAddsBefore) // no registration manager spawn
+
+      // ---- (2) a parked session-start reconcile + two packs:refresh calls: exactly ONE run
+      //      in flight and exactly ONE coalesced rerun after release, never a third pass ------
+      const manageGate = serveGate<void>()
+      h.hooks.manage = () => manageGate.wait()
+      const noticesAtStep2 = h.notices.length
+      const parkedStartP = keepHandled(h.svc.reconcile(h.db()))
+      await manageGate.entered
+      // Two explicit Refresh calls while the pass is in flight: the single-flight latch
+      // (`runAgain`) coalesces them into exactly ONE more pass, however many Refreshes arrived.
+      const refresh1P = invoke(handlers, IPC.refreshKnowledgePacks)
+      const refresh2P = invoke(handlers, IPC.refreshKnowledgePacks)
+      expect((await refresh1P).result).toEqual({ started: true })
+      expect((await refresh2P).result).toEqual({ started: true })
+      const metaAddsAtPark = h.metaAdds.length
+      manageGate.release()
+      await parkedStartP
+      for (let i = 0; i < 20; i++) await tick() // drain the coalesced rerun
+      // The rerun finds `never-discovered.zim` ALREADY registered by the parked pass, so it
+      // spawns no second manager call — proof there was no THIRD, uncoalesced pass either.
+      expect(h.metaAdds.length).toBe(metaAddsAtPark)
+      const reconcileStarts = h.notices
+        .slice(noticesAtStep2)
+        .filter((n) => n.reason === 'reconcile-start')
+      const reconcileEnds = h.notices
+        .slice(noticesAtStep2)
+        .filter((n) => n.reason === 'reconcile-end')
+      expect(reconcileStarts).toHaveLength(2) // the parked pass + exactly one coalesced rerun
+      expect(reconcileEnds).toHaveLength(2)
+
+      // ---- (3) the notify seam: reconcile-start then reconcile-end carry the CURRENT epoch,
+      //      never an old one — a lock parked mid-reconcile emits its reconcile-start but NEVER
+      //      a reconcile-end (the post-manager assert throws first) and writes nothing; the new
+      //      session's own pass emits both, under the NEW epoch, and its write lands. ----------
+      h.addPackFile('discovered-across-lock.zim')
+      const epochBeforeLock = h.ctrl.unlockEpoch()
+      const lockManageGate = serveGate<void>()
+      h.hooks.manage = () => lockManageGate.wait()
+      const noticesAtStep3 = h.notices.length
+      const parkedAcrossLockP = keepHandled(h.svc.reconcile(h.db()))
+      await lockManageGate.entered
+      const { lockP } = await parkedLock(h)
+      const rowsInLock = h.packRows()
+      h.hooks.manage = async () => undefined
+      lockManageGate.release()
+      await expectAbortError(parkedAcrossLockP)
+      expect(h.packRows()).toEqual(rowsInLock) // the parked pass wrote nothing
+      h.releaseSuspend()
+      await lockP
+      const parkedWindowNotices = h.notices.slice(noticesAtStep3)
+      expect(parkedWindowNotices.map((n) => n.reason)).toEqual(['reconcile-start'])
+      expect(parkedWindowNotices[0]?.epoch).toBe(epochBeforeLock)
+
+      h.ctrl.unlock('right-password')
+      const epochAfterUnlock = h.ctrl.unlockEpoch()
+      expect(epochAfterUnlock).not.toBe(epochBeforeLock)
+      const noticesAtStep3b = h.notices.length
+      const metaAddsBeforeNewSession = h.metaAdds.length
+      await h.svc.reconcile(h.db())
+      const newSessionNotices = h.notices.slice(noticesAtStep3b)
+      expect(newSessionNotices.map((n) => n.reason)).toEqual(['reconcile-start', 'reconcile-end'])
+      expect(newSessionNotices.every((n) => n.epoch === epochAfterUnlock)).toBe(true)
+      // The new session's own pass is the one that actually registers the file the parked,
+      // aborted pass never got to.
+      expect(h.metaAdds.length).toBe(metaAddsBeforeNewSession + 1)
+      expect(h.metaAdds.slice(-1)).toEqual(['discovered-across-lock.zim'])
+
+      // ---- (4) packs:remove / packs:setEnabled(false) issued while a reconcile is parked WIN:
+      //      after release the rows stay tombstoned / disabled, and the columns the reconcile
+      //      does not own (`enabled`, `removed_at`) — nor even touch when nothing else about
+      //      the row changed (`updated_at`) — were never rewritten by the late pass. -----------
+      const alphaId = await h.registerPack('alpha-t13.zim')
+      const betaId = await h.registerPack('beta-t13.zim')
+      h.addPackFile('gamma-t13.zim') // unregistered — the pass has real work to park inside
+      const gammaGate = serveGate<void>()
+      h.hooks.manage = () => gammaGate.wait()
+      const mutationRaceP = keepHandled(h.svc.reconcile(h.db()))
+      await gammaGate.entered
+
+      await invoke(handlers, IPC.removeKnowledgePack, alphaId)
+      await invoke(handlers, IPC.setKnowledgePackEnabled, betaId, false)
+      const rowById = (id: string): { enabled: number; removed_at: string | null; updated_at: string } =>
+        h.packRows().find((r) => r.id === id)!
+      const alphaAfterMutation = rowById(alphaId)
+      const betaAfterMutation = rowById(betaId)
+      expect(alphaAfterMutation.removed_at).not.toBeNull()
+      expect(betaAfterMutation.enabled).toBe(0)
+
+      h.hooks.manage = async () => undefined
+      gammaGate.release()
+      await mutationRaceP
+
+      const alphaAfterReconcile = rowById(alphaId)
+      const betaAfterReconcile = rowById(betaId)
+      expect(alphaAfterReconcile.removed_at).toBe(alphaAfterMutation.removed_at)
+      expect(betaAfterReconcile.enabled).toBe(0)
+      // Never rewritten by the late pass: neither the columns the reconcile does not own…
+      expect(alphaAfterReconcile.updated_at).toBe(alphaAfterMutation.updated_at)
+      expect(betaAfterReconcile.updated_at).toBe(betaAfterMutation.updated_at)
+      // …and gamma — the file the pass actually had work for — DID get registered, proving the
+      // pass really ran to completion rather than the assertions above passing vacuously.
+      expect(h.metaAdds).toContain('gamma-t13.zim')
     } finally {
       await h.close()
     }

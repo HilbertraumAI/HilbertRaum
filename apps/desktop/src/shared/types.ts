@@ -1830,6 +1830,34 @@ export interface KnowledgePack {
   addedAt: string
 }
 
+/**
+ * `packs:status` result (#301 P3b, finding L7) — additive over the P3a `{ toolsInstalled }`
+ * shape. `refreshing` is true while a reconciliation pass is running (session start or an
+ * explicit `packs:refresh`); `revision` is the service's pack-set counter, so a caller can tell
+ * a status read apart from a `packs:changed` event carrying the same fields.
+ */
+export interface KnowledgePackStatus {
+  toolsInstalled: boolean
+  refreshing: boolean
+  revision: number
+}
+
+/**
+ * The payload of `EVENTS.knowledgePacksChanged` (`packs:changed`, #301 P3b, plan §9.17 (e)3) —
+ * broadcast to every window when the registered pack set's effective state changes
+ * (`reconcile-start`/`reconcile-end`) or a mutation lands (register/remove/enable, `'mutation'`).
+ * A consumer ignores an event whose `epoch` is BELOW the last one it saw (an old session's late
+ * announcement) and clears its state on lock (the App unmounts the screens then).
+ */
+export interface KnowledgePacksChangedEvent {
+  /** The unlock epoch the producing operation captured; 0 when no admission seam exists (tests
+   *  / a partial context) — never a real session's epoch, which starts above zero. */
+  epoch: number
+  revision: number
+  refreshing: boolean
+  reason: 'reconcile-start' | 'reconcile-end' | 'mutation'
+}
+
 /** A collection as surfaced over IPC (a `collections` row). */
 export interface Collection {
   id: string

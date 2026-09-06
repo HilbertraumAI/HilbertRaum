@@ -21,7 +21,9 @@ From the root, these paths are derived and created (idempotently) on first run:
 │   │                      # mode); a clean quit checkpoints + removes them in BOTH modes (#51) —
 │   │                      # sidecars present at rest mean the last session ended uncleanly
 │   ├── documents/         # stored copies of imported files (<id><ext>.enc in encrypted mode)
-│   └── images/            # saved image-analysis history copies (<id><ext>.enc in encrypted mode)
+│   ├── images/            # saved image-analysis history copies (<id><ext>.enc in encrypted mode)
+│   └── zim-transient/     # generated library XML for the knowledge-pack server (plaintext while
+│                          #   present; removed at lock/quit/session start — #301 P3b)
 ├── app-skills/            # app-shipped Skills (read-only, PLAIN folders — NOT encrypted; Skills S3/S9)
 │   └── <id>/SKILL.md      #   non-secret product content, provisioned like model-manifests
 ├── user-skills/           # user-installed/dropped-in Skills (read-write, PLAIN folders — NOT encrypted; S3)
