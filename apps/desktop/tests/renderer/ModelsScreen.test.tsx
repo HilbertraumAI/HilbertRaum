@@ -6,10 +6,13 @@ import {
   ModelsScreen,
   __resetModelsScreenMemoryForTests
 } from '../../src/renderer/screens/ModelsScreen'
+import { __resetKnowledgePackToolsInstallForTests } from '../../src/renderer/lib/useKnowledgePackToolsInstall'
 import {
   DEFAULT_SETTINGS,
   type AppStatus,
   type DownloadJob,
+  type EngineDownloadJob,
+  type EngineOptionalFamily,
   type EngineStatus,
   type ModelInfo,
   type PolicyStatus,
@@ -85,6 +88,10 @@ afterEach(cleanup)
 // start from a known state instead of inheriting whatever the previous case left behind.
 beforeEach(() => {
   __resetModelsScreenMemoryForTests()
+  // #339 P8-2: the knowledge-pack tools install hook keeps its job in MODULE state too (the
+  // same remembered-job pattern) — reset it alongside so a live/failed job from one test never
+  // leaks into the next.
+  __resetKnowledgePackToolsInstallForTests()
 })
 
 describe('ModelsScreen — download gates (plan §6.1: explain WHY, policy vs Settings)', () => {
@@ -2120,5 +2127,128 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
       'aria-expanded',
       'true'
     )
+  })
+})
+
+// #339 P8-2 (the owner's ruling, 2026-09-06): the Models screen's quiet "knowledge-pack tools"
+// row — the same consent dialog the Knowledge-packs panel notice opens — and the existing
+// engine-install action's own argument-less `downloadEngine()` call, unchanged by this feature.
+describe('ModelsScreen — knowledge-pack tools row (#339 P8-2)', () => {
+  function engineOptionalFamily(over: Partial<EngineOptionalFamily> = {}): EngineOptionalFamily {
+    return {
+      family: 'kiwix_tools',
+      version: '3.8.1',
+      sizeBytes: 18301924,
+      url: 'https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-i686-3.8.1.zip',
+      license: 'GPL-3.0-or-later',
+      installed: false,
+      ...over
+    }
+  }
+
+  function engineWithMissingTools(over: Partial<EngineStatus> = {}): EngineStatus {
+    return {
+      installed: true,
+      available: true,
+      version: '1.0.0',
+      backend: 'cpu',
+      missingFamilies: [],
+      missingOptionalFamilies: ['kiwix_tools'],
+      optionalFamilies: [engineOptionalFamily()],
+      ...over
+    }
+  }
+
+  it('missingOptionalFamilies names kiwix_tools → the quiet row and Install… render and open the consent dialog', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listModels: vi.fn(async () => []),
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
+      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
+      getAppStatus: vi.fn(async () => appStatus),
+      getEngineStatus: vi.fn(async () => engineWithMissingTools())
+    })
+    render(<ModelsScreen />)
+    expect(await screen.findByText('Knowledge-pack tools: not installed')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Install…' }))
+    expect(await screen.findByText('Install the knowledge-pack tools?')).toBeInTheDocument()
+  })
+
+  it('an installed family (missingOptionalFamilies empty) shows no row', async () => {
+    stubApi({
+      listModels: vi.fn(async () => []),
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
+      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
+      getAppStatus: vi.fn(async () => appStatus),
+      getEngineStatus: vi.fn(async () =>
+        engineWithMissingTools({
+          missingOptionalFamilies: [],
+          optionalFamilies: [engineOptionalFamily({ installed: true })]
+        })
+      )
+    })
+    render(<ModelsScreen />)
+    expect(await screen.findByRole('heading', { name: 'AI Model' })).toBeInTheDocument()
+    // Give the (idle) hook effect a tick to have run, then assert the row never appears.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(screen.queryByText('Knowledge-pack tools: not installed')).not.toBeInTheDocument()
+  })
+
+  // An `optionalFamilies`-less / `missingOptionalFamilies`-less EngineStatus (an older main) must
+  // render exactly like "absent" — never a crash, never a phantom row.
+  it('an EngineStatus with neither field (an older main) shows no row', async () => {
+    stubApi({
+      listModels: vi.fn(async () => []),
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
+      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
+      getAppStatus: vi.fn(async () => appStatus),
+      getEngineStatus: vi.fn(async () => ({
+        installed: true,
+        available: true,
+        version: '1.0.0',
+        backend: 'cpu',
+        missingFamilies: []
+      }))
+    })
+    render(<ModelsScreen />)
+    expect(await screen.findByRole('heading', { name: 'AI Model' })).toBeInTheDocument()
+    expect(screen.queryByText('Knowledge-pack tools: not installed')).not.toBeInTheDocument()
+  })
+
+  // SH-1-style regression guard for #339 P8-2: the pre-existing "Install AI engine" banner
+  // action must keep calling the argument-less default install — only the NEW consent dialog
+  // is allowed to pass `{ families: ['kiwix_tools'] }`.
+  it('the existing "Install AI engine" action still calls downloadEngine with NO arguments', async () => {
+    const user = userEvent.setup()
+    const downloadEngine = vi.fn(async () => ({
+      jobId: 'e1',
+      status: 'cancelled' as const,
+      receivedBytes: 0,
+      totalBytes: null,
+      unverified: false,
+      binaryPath: null,
+      error: null
+    }))
+    stubApi({
+      listModels: vi.fn(async () => []),
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
+      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
+      getAppStatus: vi.fn(async () => appStatus),
+      getEngineStatus: vi.fn(
+        async (): Promise<EngineStatus> => ({
+          installed: false,
+          available: true,
+          version: null,
+          backend: null,
+          missingFamilies: ['llama_cpp']
+        })
+      ),
+      downloadEngine
+    })
+    render(<ModelsScreen />)
+    await user.click(await screen.findByRole('button', { name: 'Install AI engine' }))
+    expect(downloadEngine).toHaveBeenCalledTimes(1)
+    expect(downloadEngine).toHaveBeenCalledWith()
+    expect(downloadEngine.mock.calls[0]).toHaveLength(0)
   })
 })

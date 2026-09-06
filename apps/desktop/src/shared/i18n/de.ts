@@ -1191,6 +1191,12 @@ export const de: Record<keyof typeof en, string> = {
     'Chat- und Dokumentantworten funktionieren auf diesem Laufwerk bereits. Die Sprach-Engine ist ' +
     'optional — installiere sie nur, wenn du Nachrichten per Mikrofon diktieren möchtest.',
   'models.voiceEngine.install': 'Sprach-Engine installieren',
+  // #339 P8-2: ein ruhiger Hinweis (leichter als die beiden Engine-Banner oben) für die
+  // OPTIONALEN Wissenspaket-Werkzeuge (kiwix_tools) — nur sichtbar, solange
+  // `missingOptionalFamilies` sie nennt. „Installieren…“ öffnet denselben Bestätigungsdialog
+  // wie der Hinweis im Wissenspakete-Panel (`KnowledgePackToolsDialog.tsx`).
+  'models.packTools.row': 'Wissenspaket-Werkzeuge: nicht installiert',
+  'models.packTools.install': 'Installieren…',
   'models.ram.needs': 'Braucht mindestens {min} GB RAM',
   'models.ram.machine': ' — dieser Computer hat etwa {ram} GB',
   'models.ram.advice': '. Wähle ein kleineres Modell — die Qualität bleibt top.',
@@ -2741,6 +2747,28 @@ export const de: Record<keyof typeof en, string> = {
   'packs.emptyTitle': 'Noch keine Wissenspakete',
   'packs.emptyLine': 'Ein ZIM-Archiv hinzufügen oder in den zim-Ordner des Laufwerks kopieren und diese Ansicht erneut öffnen.',
   'packs.toolsMissing': 'Die kiwix-tools-Programme sind auf diesem Laufwerk nicht installiert; Pakete können daher nicht hinzugefügt oder durchsucht werden. Der Installationsschritt steht in der Fehlerbehebung unter „Das Panel meldet, dass kiwix-tools fehlen“.',
+  // #339 P8-2 (die Entscheidung des Owners, 2026-09-06): die Installations-Aktion des Panel-
+  // Hinweises — derselbe Bestätigungsdialog wie bei einem Modell-Download
+  // (`KnowledgePackToolsDialog.tsx`); Bestätigen ruft `downloadEngine({ families: ['kiwix_tools'] })`.
+  'packs.tools.install': 'Wissenspaket-Werkzeuge installieren…',
+  'packs.tools.confirm.title': 'Wissenspaket-Werkzeuge installieren?',
+  'packs.tools.confirm.explain':
+    'kiwix-tools {version} — die Programme, die Wissenspakete (ZIM-Archive) bereitstellen — ' +
+    'werden vom Server des Kiwix-Projekts heruntergeladen und vor der Nutzung geprüft. Sie ' +
+    'sind optional: Chat und Dokumente funktionieren auch ohne sie.',
+  'packs.tools.confirm.hint':
+    'Der Download wird vor der Nutzung geprüft, und nichts über dich oder deine Dokumente wird ' +
+    'gesendet. Die Werkzeuge werden nur für Wissenspakete gebraucht.',
+  'packs.tools.confirm.ack':
+    'Ich habe die {license}-Lizenzbedingungen von kiwix-tools gelesen und akzeptiere sie',
+  'packs.tools.confirm.start': 'Download starten',
+  'packs.tools.sizeUnknown': 'unbekannt',
+  'packs.tools.progress': 'Wissenspaket-Werkzeuge werden installiert… {pct} %',
+  'packs.tools.downloadingNoTotal': 'Wissenspaket-Werkzeuge werden installiert…',
+  'packs.tools.verifying': 'Wissenspaket-Werkzeuge werden geprüft…',
+  'packs.tools.extracting': 'Wissenspaket-Werkzeuge werden entpackt…',
+  'packs.tools.failed': 'Installation der Wissenspaket-Werkzeuge fehlgeschlagen.',
+  'packs.tools.doneToast': 'Wissenspaket-Werkzeuge installiert',
   'packs.addedToast.one': 'Wissenspaket hinzugefügt',
   'packs.addedToast.other': '{count} Wissenspakete hinzugefügt',
   // #301 P5, Fund L1 (Plan §9.19 (c)3): die Ergebnisse des typisierten Hinzufügen-DTOs.

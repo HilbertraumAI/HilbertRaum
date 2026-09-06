@@ -1158,6 +1158,12 @@ export const en = {
     'Chat and document answers already work on this drive. The voice engine is optional — ' +
     'install it only if you want to dictate messages with your microphone.',
   'models.voiceEngine.install': 'Install voice engine',
+  // #339 P8-2: a quiet row (lighter than the two engine banners above) for the OPTIONAL
+  // knowledge-pack tools (kiwix_tools) — shown only while `missingOptionalFamilies` names it.
+  // "Install…" opens the SAME consent dialog the Knowledge-packs panel's own notice opens
+  // (`KnowledgePackToolsDialog.tsx`).
+  'models.packTools.row': 'Knowledge-pack tools: not installed',
+  'models.packTools.install': 'Install…',
   // RAM-gate copy, composed of full clauses (spec §11.4 — never "your hardware is bad").
   'models.ram.needs': 'Needs at least {min} GB RAM',
   'models.ram.machine': ' — this computer has about {ram} GB',
@@ -2717,6 +2723,28 @@ export const en = {
   'packs.emptyTitle': 'No knowledge packs yet',
   'packs.emptyLine': 'Add a ZIM archive, or copy one into the drive’s zim folder and reopen this view.',
   'packs.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See Troubleshooting → “The panel says kiwix-tools are missing” for the install step.',
+  // #339 P8-2 (the owner's ruling, 2026-09-06): the panel notice's own install action — the SAME
+  // consent dialog shape as a model download (`KnowledgePackToolsDialog.tsx`), confirming calls
+  // `downloadEngine({ families: ['kiwix_tools'] })`. `sizeUnknown` covers a pin with no
+  // `size_bytes`; `downloadingNoTotal`/`verifying`/`extracting` mirror `models.engine.*`.
+  'packs.tools.install': 'Install the knowledge-pack tools…',
+  'packs.tools.confirm.title': 'Install the knowledge-pack tools?',
+  'packs.tools.confirm.explain':
+    'kiwix-tools {version} — the programs that serve knowledge packs (ZIM archives) — will be ' +
+    'downloaded from the Kiwix project’s server and verified before use. They are optional: ' +
+    'chat and documents work without them.',
+  'packs.tools.confirm.hint':
+    'The download is verified before it is used, and nothing about you or your documents is ' +
+    'sent. The tools are needed only for knowledge packs.',
+  'packs.tools.confirm.ack': 'I have read and accept the {license} license terms of kiwix-tools',
+  'packs.tools.confirm.start': 'Start download',
+  'packs.tools.sizeUnknown': 'unknown',
+  'packs.tools.progress': 'Installing the knowledge-pack tools… {pct} %',
+  'packs.tools.downloadingNoTotal': 'Installing the knowledge-pack tools…',
+  'packs.tools.verifying': 'Verifying the knowledge-pack tools…',
+  'packs.tools.extracting': 'Unpacking the knowledge-pack tools…',
+  'packs.tools.failed': 'Installing the knowledge-pack tools failed.',
+  'packs.tools.doneToast': 'Knowledge-pack tools installed',
   'packs.addedToast.one': 'Knowledge pack added',
   'packs.addedToast.other': '{count} knowledge packs added',
   // #301 P5, finding L1 (plan §9.19 (c)3): the typed add-result DTO's outcomes. `addPartial` is
