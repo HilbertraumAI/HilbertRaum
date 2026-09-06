@@ -438,8 +438,8 @@ screen answers the user's question in plain words. Three cards:
    on the current machine). A result from ANOTHER computer that predates the field says "Not
    recorded" — the app never probed that machine for it (N1) — while an explicit `null` is a
    recorded "None"; its other-computers row lists VRAM only for a usable card), Drive
-   (`effectiveRead` with its source and date; "Pending" until a model start measured
-   it). The verdict sentence and the **Start \<model\> and measure** offer name the **live**
+   (`effectiveRead` with its source and date; "Pending" until a model start **or a full file
+   check** measured it — both produce a sample, so the empty state credits both, PR #303 audit N4). The verdict sentence and the **Start \<model\> and measure** offer name the **live**
    recommendation (`PerformanceSnapshot.recommendation`, see "Recommendation" above — the same pick
    the AI Model screen stars), never the id saved with the result; where the saved
    `recommendedModelId` differs it is shown under the verdict as "Recommended at the time of the
@@ -448,6 +448,22 @@ screen answers the user's question in plain words. Three cards:
    context size** (opens AI Model, the one place the context is set), **Copy report**. A "Why this
    model?" link to AI Model was tried and dropped (2026-09-05, owner: it led nowhere useful). A
    result measured on another computer says so.
+
+**Speed provenance travels with the figure** (PR #303 audit L6): a decode figure is never shown
+without HOW it was measured, on every surface, not just the Speed tile. `BenchmarkResult.speedBasis`
+(#291) decides: `basis: 'timings'` is the runtime's own decode window and is named as such ("over
+N tokens" — `diag.bench.tokensOver`, the wording Diagnostics already uses); `basis: 'chunks'` and
+an ABSENT basis (every result persisted before the field existed, all of them chunk-based) are
+marked with the tile's own qualifier, "Approximate: counted chunks, not runtime timings", plus
+"N chunks" when the record carries the window. A legacy result with no basis gets NO window — the
+app never invents one. Two consequences beyond the tile: the **Copy report** carries the qualifier
+in the Speed line and heads itself "This computer" only when `snapshot.currentMachine` — otherwise
+"Another computer: \<cpu\>, \<ram\> GB RAM", because the report is pasted into a support message
+where the old heading misattributed every figure under it; and an **other-computer row** whose
+figure is approximate is rated with the neutral "Approximate" pill (`perf.rating.approx`, neutral
+tone) instead of Good/Slow, with the qualifier appended to its sub line. Good/Slow is a claim
+about the machine, and a chunk count over wall time (prefill included) cannot support one.
+`speedIsApprox` / `speedBasisNote` in `PerformanceScreen.tsx` are the single source for all three.
 **Your model** (a row under the tiles; 2026-09-05, owner direction): whether the ACTIVE model fits
 is not a property of RAM or of VRAM alone, so neither tile says it. The row names the model, its
 size on disk and the context it launches with, then gives one verdict against this computer's
@@ -476,7 +492,12 @@ at all (its shared figure is not the card's own): null everywhere, the RAM pick.
 it), `pickerMemoryFor` (the `listModels` ★ and the live recommendation) and this row, so the
 Performance and Models screens can never mean different cards. `memoryClassOf` itself and the
 hardware-profile bump (`gpuUsefulForProfile`) are unchanged — as is the runtime, which still never
-passes `-ngl` and lets `--fit` decide. **Next start, not hardware** (decision 6, with #303's DR1):
+passes `-ngl` and lets `--fit` decide. The same `displayDevice` rule (which prefers the budget device)
+also NAMES a GPU start (`RuntimeStatus.gpuName`, set in `runtime/factory.ts` — the Chat runtime
+hint) and the Diagnostics "Acceleration" line's "<name> (GPU available)" since PR #303 P6; both
+took `devices[0]`, so a hybrid box credited the iGPU for work the dGPU did. Label only: rung
+selection, `--fit` and the "never -ngl" policy are untouched, and nothing that ENUMERATES the
+probe's devices is filtered. **Next start, not hardware** (decision 6, with #303's DR1):
 with the GPU switched off in Settings (`gpuMode: 'off'`) or auto-disabled after a crash
 (`gpuAutoDisabled`) the ladder skips every GPU rung, so the class is `cpu` for the next start
 (`nextStartMemory` says so as `cpuForced`), the budget is RAM and the ★ is the RAM pick, whatever
@@ -538,8 +559,14 @@ was not empty at start: the parser also reads the `device_info` "N MiB free" fig
 (`gpuFreeAtStartMb`), and, with the `sched_reserve` compute-buffer line (`gpuComputeMb`), the copy tells the two
 cases apart: a card that was NOT free at start ("only N GB was free, restart once the card is
 free") versus a card that WAS free, where the fit's own reservations are the reason (model +
-cache + working buffers + the fixed 1 GiB `--fit-target` margin came within a whole layer of the
-free memory, and the fit moves whole layers, ~430 MB each on a 27B). Whether the app should
+cache + working buffers + the fixed `--fit-target` margin came within a whole layer of the
+free memory, and the fit moves whole layers, ~430 MB each on a 27B). **Both figures behind that
+split are NAMED CONSTANTS in `shared/performance-rules.ts`** (PR #303 audit DR4):
+`FIT_TARGET_MARGIN_MB = 1024`, llama.cpp's `--fit-target` default which the app does not
+override, interpolated into all three partial-offload sentences as `{margin}` GB instead of the
+literal "1 GB" they used to hard-code; and `CARD_FREE_SLACK_MB = 1536`, how much of the card may
+already be in use and still count as "free at start" (it was a renderer-local literal beside the
+hard-coded margin). Change either constant and the copy follows. Whether the app should
 trade that margin for a full offload is an owner decision (BUILD_STATE §5 item 21 (f)). Units: every size on the
 screen is GiB (RAM, VRAM, the buffers), so the manifest's decimal "size on disk" is converted
 once in the snapshot (19.8 GB → 18.4; display-only — the verdict gets the unrounded weights via
@@ -560,6 +587,21 @@ weights against the budget with 8 % headroom → 'gpu'/'cpu' or 'too_large'. An 
 always wins over the estimate. 'too_large' offers "Choose a smaller model" (AI Model). Pills: On
 GPU / Partly on GPU / On processor / Too large / Not measured. Phase 2 (not built): the
 context-cache estimate from the GGUF header (BUILD_STATE §5 item 21 (e)).
+
+**Where the measurement lives, in the copy** (PR #303 audit L8 and owner gate (c)). A placement
+record is per model id in the DRIVE's settings (`settings.modelPlacements`) and is read back only
+on the machine that wrote it, so the row says so rather than leaving the user to infer it: the
+estimate reads "Where the model lands is measured the first time it starts **on this computer**"
+(`perf.model.unknown`), and under any estimate a hint adds the drive rule once —
+"The drive keeps one record per model, so a start on another computer replaces the one measured
+here" (`perf.model.perDrive`; suppressed when `observedMismatch` is set, because that note says
+something more specific about the same record). The two 'unknown' states are no longer one
+sentence: an ESTIMATE unknown keeps the first-start wording, while an OBSERVED unknown
+(`estimated: false` — the start happened and the log said nothing) reads "The runtime did not
+report where the model landed" (`perf.model.unknownObserved`), since telling a user to start the
+model when they already did invites a restart that changes nothing. The 'gpu' branch renders the
+layer count only when it has one (`totalLayers == null` → the estimate wording), so no state can
+render "all {layers} layers on the GPU" with nothing where the count belongs.
 
 **Models on this computer** (a card between the observed rows and the other computers; 2026-09-05,
 owner direction, placed BELOW "Observed while you worked" because what the machine actually did
@@ -614,9 +656,13 @@ holds the card, or reclaim the card when translation goes idle) is an owner deci
    samples persist SEPARATELY into the benchmark records (`effectiveRead` on `lastBenchmark`
    and this machine's history entry, `persistEffectiveRead`; that persistence is unchanged by
    the push model) where the Drive tile shows them with their own source and date. The
-   observed rows are presentation-only latches on top of that.
+   observed rows are presentation-only latches on top of that — and the card's hint copy says
+   exactly that split (PR #303 audit L8), so "these rows last for this session" is never read as
+   "none of this is kept": only the answer figure and the latches are session-only.
 3. **Other computers this drive has been used on**: the history minus this machine, newest
-   first, each with its speed/model, CPU/RAM/date and rating pills ("Slow drive" under 100 MB/s).
+   first, each with its speed/model, CPU/RAM/date and rating pills ("Slow drive" under 100 MB/s;
+   the speed pill is Good/Slow only for a runtime-timings figure — see "Speed provenance travels
+   with the figure" above — and the neutral "Approximate" otherwise).
 
 **Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
 in `registerBenchmarkIpc.ts`): `current`, `recommendation` (the live pick, see "Recommendation"),
@@ -686,7 +732,10 @@ when the leg was skipped as busy — `warnSpeedSkipped` — and not when the pro
 the PROBES are complete: it precedes the persist and the occupancy release, so it is not the
 idle signal — the terminal `performance:changed` after both is. The IPC handler forwards the
 steps to the requesting window only, as `benchmark:progress`, and the screen shows a step
-list instead of an opaque "Running…" button. The first-run path passes no callback.
+list instead of an opaque "Running…" button. The first-run path passes no callback. The drive
+step is labelled **"Drive speed"**, not "Drive write speed" (PR #303 audit N5): the step's write
+probe is one input, and the tile the user reads next to it reports MB/s *read* — naming the step
+after the write leg contradicted the figure it leads to.
 
 
 ## Perf marks (opt-in, `HILBERTRAUM_PERF_LOG=1`)

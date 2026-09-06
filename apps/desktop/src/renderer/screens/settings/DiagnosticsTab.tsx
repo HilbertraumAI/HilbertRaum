@@ -5,6 +5,7 @@ import { localizeServerCopy } from '../../lib/displayMap'
 import { friendlyIpcError, runAndSurface } from '../../lib/errors'
 import { fmt1 } from '../../lib/format'
 import { formatSize } from '../documents/format'
+import { displayDevice } from '@shared/gpu-rules'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
   AppSettings,
@@ -89,6 +90,12 @@ function auditLabel(type: AuditEventType, t: I18n['t']): string {
  * The "Acceleration" line (architecture.md GPU record §8): the live backend when a
  * model is running, else what the cached probe says this machine offers. Friendly
  * tone — CPU is presented as normal, never degraded.
+ *
+ * The name is the shared `displayDevice`'s (PR #303 audit M8.2 / P5 residual), the same device
+ * the ladder now labels a GPU start with and the Performance screen shows: on a hybrid
+ * [iGPU, dGPU] box the dGPU, where `devices[0]` named the iGPU. It is a LABEL — nothing about
+ * which devices the runtime may use changes, and the probe's full device list is unfiltered
+ * everywhere it is enumerated.
  */
 function accelerationLabel(
   runtime: RuntimeStatus | null,
@@ -101,8 +108,8 @@ function accelerationLabel(
     if (runtime.backend === 'mock') return t('diag.accel.mock')
     return t('diag.accel.cpu')
   }
-  const probed = settings?.gpuProbe?.devices ?? []
-  if (probed.length > 0) return t('diag.accel.gpuAvailable', { name: probed[0].name })
+  const shown = displayDevice(settings?.gpuProbe?.devices ?? [])
+  if (shown) return t('diag.accel.gpuAvailable', { name: shown.device.name })
   return t('diag.accel.cpu')
 }
 

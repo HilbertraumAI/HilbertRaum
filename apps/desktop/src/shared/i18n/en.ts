@@ -1763,6 +1763,10 @@ export const en = {
   'perf.notChecked': 'Not checked yet',
   'perf.otherMachine':
     'This result was measured on a different computer. Check again to measure this one.',
+  // The Copy report's first line when the result on screen is NOT this machine's: the report
+  // travels into a support message, where a heading of "This computer" would misattribute
+  // every figure under it (PR #303 audit L6). Names the machine the result recorded.
+  'perf.report.otherComputer': 'Another computer: {cpu}, {ram} GB RAM',
   'perf.verdict.speed': 'Runs {model} at about {tps} tokens per second.',
   // The LIVE recommendation (PerformanceSnapshot.recommendation), named with the memory it was
   // judged against: the card's graphics memory, the unified pool, or RAM (perf.basis.*).
@@ -1782,6 +1786,10 @@ export const en = {
   'perf.tile.speed.unit': 'tokens / s',
   'perf.tile.speed.sub': 'Measured with {model} on {when}',
   'perf.tile.speed.approx': 'Approximate: counted chunks, not runtime timings',
+  // The #291 window a chunk-basis figure covers. The timings basis reuses
+  // `diag.bench.tokensOver` ("over {tokens} tokens") so the Copy report, the other-computer
+  // rows and Diagnostics all word that fact identically.
+  'perf.tile.speed.chunks': '{chunks} chunks',
   'perf.tile.speed.none': 'Not measured yet',
   'perf.tile.speed.noneHint': 'Start a model, then check again',
   'perf.tile.memory': 'Memory',
@@ -1799,15 +1807,17 @@ export const en = {
   'perf.model.partial':
     'Graphics memory holds {budget} GB: {gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. Answers slower.',
   // With the free figure: why a card that would hold the model still spilled (something else
-  // held part of it at start, plus the runtime's fixed 1 GB safety margin).
+  // held part of it at start, plus the runtime's fixed safety margin). `{margin}` is
+  // `FIT_TARGET_MARGIN_MB` in GB (shared/performance-rules.ts) — never a literal, so the
+  // three sentences below can never drift from the constant (PR #303 audit DR4).
   'perf.model.partialFree':
-    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM: only {free} GB of the card\u2019s {budget} GB was free when the model started, and the runtime keeps a 1 GB safety margin. Answers slower. Restart the model once the card is free.',
+    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM: only {free} GB of the card\u2019s {budget} GB was free when the model started, and the runtime keeps a {margin} GB safety margin. Answers slower. Restart the model once the card is free.',
   // The card WAS free: the fit still moved whole layers off because model + cache + working
-  // buffers + its fixed 1 GB margin came within a layer of the free memory.
+  // buffers + its fixed margin came within a layer of the free memory.
   'perf.model.partialMargin':
-    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. The card was free ({free} of {budget} GB), but the runtime also sets aside {working} GB of working buffers and a 1 GB safety margin, and moves whole layers off the card when the sum gets close. Answers slower.',
+    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. The card was free ({free} of {budget} GB), but the runtime also sets aside {working} GB of working buffers and a {margin} GB safety margin, and moves whole layers off the card when the sum gets close. Answers slower.',
   'perf.model.partialMarginNoWorking':
-    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. The card was free ({free} of {budget} GB), but the runtime also sets aside working buffers and a 1 GB safety margin, and moves whole layers off the card when the sum gets close. Answers slower.',
+    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. The card was free ({free} of {budget} GB), but the runtime also sets aside working buffers and a {margin} GB safety margin, and moves whole layers off the card when the sum gets close. Answers slower.',
   'perf.model.partialEstimate':
     'Graphics memory holds {budget} GB: about {spill} GB will run from RAM. Answers slower.',
   'perf.model.cpu': 'Runs on the processor from RAM ({budget} GB).',
@@ -1815,7 +1825,18 @@ export const en = {
   'perf.model.unified': 'Fits in unified memory ({ram} GB, up to {budget} GB available to the model).',
   'perf.model.unifiedEstimate': 'Should fit in unified memory ({ram} GB, up to {budget} GB available to the model).',
   'perf.model.tooLarge': 'Too large for this computer ({budget} GB available). Pick a smaller model.',
-  'perf.model.unknown': 'Where the model lands is measured on its first start.',
+  // Nothing measured yet: the ESTIMATE variant. It names the computer the measurement is taken
+  // on, because a placement is only ever read back on the machine that recorded it (PR #303
+  // audit L8) — the same rule `perf.model.measuredOther` states for the context/backend.
+  'perf.model.unknown': 'Where the model lands is measured the first time it starts on this computer.',
+  // A start WAS observed and the log said nothing about the offload (a build below log
+  // verbosity 4): honest about the runtime's silence, never "measured on its first start",
+  // which would invite a restart that changes nothing (PR #303 audit, owner gate (c)).
+  'perf.model.unknownObserved': 'The runtime did not report where the model landed.',
+  // Under any estimate: one record per model lives on the DRIVE, so it follows the drive, not
+  // the computer. A start on another computer replaces it and the row falls back here.
+  'perf.model.perDrive':
+    'The drive keeps one record per model, so a start on another computer replaces the one measured here.',
   // The stored measurement describes a start with a DIFFERENT context size, or a GPU start on a
   // configuration that now forces the processor: the verdict above it is the estimate for the
   // current settings, and this dates the measurement rather than letting the two contradict.
@@ -1882,7 +1903,9 @@ export const en = {
   'perf.tile.drive.load': 'From a model load on {when}, {gb} GB read',
   'perf.tile.drive.hash': 'From a file check on {when}, {gb} GB read',
   'perf.tile.drive.none': 'Not measured yet',
-  'perf.tile.drive.noneHint': 'Measured by the first model start',
+  // N4: a full file check measures the read speed too (`source: 'checksum'`), so the empty
+  // state must not promise only a model start.
+  'perf.tile.drive.noneHint': 'Measured by the first model start or file check',
   'perf.rating.good': 'Good',
   'perf.rating.slow': 'Slow',
   'perf.rating.fast': 'Fast',
@@ -1908,12 +1931,18 @@ export const en = {
   'perf.loadFailed': 'Could not read the latest figures: {error}',
   'perf.retry': 'Try again',
   'perf.step.system': 'Hardware detected',
-  'perf.step.drive': 'Drive write speed',
+  // N5: the step measures the drive, and the tile beside it reports "MB/s read" — calling the
+  // step "write speed" contradicted the figure it leads to.
+  'perf.step.drive': 'Drive speed',
   'perf.step.speed': 'Generation speed with {model}',
   'perf.step.speedSkipped': 'Generation speed (no model running, skipped)',
   'perf.step.hint': 'About half a minute. You can keep using the app.',
   'perf.observed.title': 'Observed while you worked',
-  'perf.observed.hint': 'Real figures from normal use, not a test prompt. They refresh on their own.',
+  // The rows are session latches, but the READ samples behind them are also persisted into the
+  // benchmark records (the Drive tile above shows them with their own source and date). The
+  // copy says which half is session-only so it never reads as "none of this is kept" (L8).
+  'perf.observed.hint':
+    'Real figures from normal use, not a test prompt. These rows last for this session; the read speeds they show are also kept with the drive figures above.',
   'perf.observed.none': 'Nothing observed yet this session. Ask the model something, or start it.',
   'perf.observed.answer': 'Last answer: {tps} tokens / s, first token after {ttft} s',
   'perf.observed.answerSub': '{model}, {when}, {tokens} tokens',

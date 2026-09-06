@@ -16,6 +16,7 @@ import { createMockRuntime } from './mock'
 import { createLlamaRuntime } from './llama'
 import { createPlacementParser, recordModelPlacement } from './placement'
 import { probeGpuDevices } from './gpu'
+import { displayDevice } from '../../../shared/gpu-rules'
 import { startModelPrefetch, type ModelPrefetch } from './prefetch'
 import { isNextModelLoadSuppressed, recordModelLoadRead } from '../read-speed'
 import {
@@ -455,7 +456,11 @@ class LadderRuntime implements ModelRuntime {
         // what names the backend for the UI. Empty probe ⇒ this start IS CPU mode.
         const devices = await probePromise
         this.backend = devices.length > 0 ? 'gpu' : 'cpu'
-        this.gpuName = devices[0]?.name ?? null
+        // LABEL ONLY (PR #303 audit M8.2 / P5 residual): the device a reader may SHOW is the
+        // shared `displayDevice` one — the first USEFUL discrete device, else the first listed.
+        // On a hybrid [iGPU, dGPU] box `devices[0]` named the iGPU while the model actually ran
+        // on the dGPU. Rung selection, `--fit` and the "never -ngl" policy are untouched.
+        this.gpuName = displayDevice(devices)?.device.name ?? null
       } else {
         this.backend = 'cpu'
         this.gpuName = null

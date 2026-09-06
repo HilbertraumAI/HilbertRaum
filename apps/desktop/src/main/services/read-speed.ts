@@ -60,6 +60,15 @@ const latestBySource: Record<EffectiveReadSample['source'], EffectiveReadSample 
 }
 let suppressNextModelLoad = false
 let observer: (() => void) | null = null
+/**
+ * The clock a sample's `at` comes from. A sample is identified by that ISO timestamp (millisecond
+ * resolution) everywhere downstream — the persister's per-destination "already carries this
+ * sample" check, the handled memo, the ranking's tie order — so two samples recorded within ONE
+ * millisecond would read as one. Real loads and hashes take seconds; a test recording two in a
+ * row on a fast runner does not (PR #303 P5 CI: the fast sample after a slow one was ignored
+ * on ubuntu/Node 24), so tests install a monotonic clock through the seam below.
+ */
+let clock: () => Date = () => new Date()
 
 /** MB/s from a byte count + elapsed ms (MB = 1e6 bytes), one decimal — the single
  *  definition shared with `measureDriveSpeed` (benchmark.ts imports it from here).
@@ -101,7 +110,7 @@ function record(
     ms: Math.round(ms),
     source,
     modelId,
-    at: new Date().toISOString()
+    at: clock().toISOString()
   }
   latestBySource[source] = candidate
   if (preferCandidate(candidate, latest)) latest = candidate
@@ -199,7 +208,13 @@ export function setEffectiveReadObserver(cb: (() => void) | null): void {
 }
 
 /** Test seam: clear the session latch, suppression, and observer. */
+/** Test seam: the clock every recorded sample is stamped with (null restores the wall clock). */
+export function setReadSpeedClockForTests(fn: (() => Date) | null): void {
+  clock = fn ?? (() => new Date())
+}
+
 export function resetEffectiveReadForTests(): void {
+  clock = () => new Date()
   latest = null
   latestBySource.model_load = null
   latestBySource.checksum = null

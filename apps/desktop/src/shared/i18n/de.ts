@@ -1806,6 +1806,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.notChecked': 'Noch nicht geprüft',
   'perf.otherMachine':
     'Dieses Ergebnis wurde auf einem anderen Computer gemessen. Prüfe erneut, um diesen zu messen.',
+  // Die erste Zeile des kopierten Berichts, wenn das Ergebnis NICHT von diesem Rechner stammt.
+  'perf.report.otherComputer': 'Anderer Computer: {cpu}, {ram} GB RAM',
   'perf.verdict.speed': 'Führt {model} mit etwa {tps} Token pro Sekunde aus.',
   // perf.basis.* stehen im Dativ nach "zum" — sie werden nur in diesem Satz verwendet.
   'perf.verdict.noSpeed':
@@ -1823,6 +1825,9 @@ export const de: Record<keyof typeof en, string> = {
   'perf.tile.speed.unit': 'Token / Sek.',
   'perf.tile.speed.sub': 'Gemessen mit {model} am {when}',
   'perf.tile.speed.approx': 'Ungefähr: gezählte Chunks, nicht die Laufzeit-Messung',
+  // #291: das Fenster, über das eine Chunk-basierte Zahl gilt (die Laufzeit-Messung nutzt
+  // `diag.bench.tokensOver`).
+  'perf.tile.speed.chunks': '{chunks} Chunks',
   'perf.tile.speed.none': 'Noch nicht gemessen',
   'perf.tile.speed.noneHint': 'Starte ein Modell und prüfe dann erneut',
   'perf.tile.memory': 'Arbeitsspeicher',
@@ -1839,12 +1844,14 @@ export const de: Record<keyof typeof en, string> = {
   'perf.model.gpuEstimate': 'Sollte in den Grafikspeicher passen ({budget} GB).',
   'perf.model.partial':
     'Der Grafikspeicher fasst {budget} GB: {gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM. Antworten langsamer.',
+  // `{margin}` ist `FIT_TARGET_MARGIN_MB` in GB (shared/performance-rules.ts), nie ein
+  // Literal — PR #303 Audit DR4.
   'perf.model.partialFree':
-    '{gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM: Beim Start des Modells waren nur {free} GB der {budget} GB der Karte frei, und die Laufzeit hält 1 GB Sicherheitsreserve. Antworten langsamer. Starte das Modell neu, sobald die Karte frei ist.',
+    '{gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM: Beim Start des Modells waren nur {free} GB der {budget} GB der Karte frei, und die Laufzeit hält {margin} GB Sicherheitsreserve. Antworten langsamer. Starte das Modell neu, sobald die Karte frei ist.',
   'perf.model.partialMargin':
-    '{gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM. Die Karte war frei ({free} von {budget} GB), aber die Laufzeit reserviert zusätzlich {working} GB Arbeitspuffer und 1 GB Sicherheitsreserve und verschiebt ganze Schichten von der Karte, wenn die Summe knapp wird. Antworten langsamer.',
+    '{gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM. Die Karte war frei ({free} von {budget} GB), aber die Laufzeit reserviert zusätzlich {working} GB Arbeitspuffer und {margin} GB Sicherheitsreserve und verschiebt ganze Schichten von der Karte, wenn die Summe knapp wird. Antworten langsamer.',
   'perf.model.partialMarginNoWorking':
-    '{gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM. Die Karte war frei ({free} von {budget} GB), aber die Laufzeit reserviert zusätzlich Arbeitspuffer und 1 GB Sicherheitsreserve und verschiebt ganze Schichten von der Karte, wenn die Summe knapp wird. Antworten langsamer.',
+    '{gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM. Die Karte war frei ({free} von {budget} GB), aber die Laufzeit reserviert zusätzlich Arbeitspuffer und {margin} GB Sicherheitsreserve und verschiebt ganze Schichten von der Karte, wenn die Summe knapp wird. Antworten langsamer.',
   'perf.model.partialEstimate':
     'Der Grafikspeicher fasst {budget} GB: etwa {spill} GB werden aus dem RAM laufen. Antworten langsamer.',
   'perf.model.cpu': 'Läuft auf dem Prozessor aus dem RAM ({budget} GB).',
@@ -1852,7 +1859,13 @@ export const de: Record<keyof typeof en, string> = {
   'perf.model.unified': 'Passt in den gemeinsamen Speicher ({ram} GB, bis zu {budget} GB für das Modell verfügbar).',
   'perf.model.unifiedEstimate': 'Sollte in den gemeinsamen Speicher passen ({ram} GB, bis zu {budget} GB für das Modell verfügbar).',
   'perf.model.tooLarge': 'Zu groß für diesen Computer ({budget} GB verfügbar). Wähle ein kleineres Modell.',
-  'perf.model.unknown': 'Wo das Modell landet, wird beim ersten Start gemessen.',
+  // Schätzung: nennt den Computer, auf dem gemessen wird (PR #303 Audit L8).
+  'perf.model.unknown': 'Wo das Modell landet, wird beim ersten Start auf diesem Computer gemessen.',
+  // Ein Start wurde beobachtet, das Log sagte aber nichts (Owner-Entscheidung (c)).
+  'perf.model.unknownObserved': 'Die Laufzeit hat nicht gemeldet, wo das Modell gelandet ist.',
+  // Ein Datensatz pro Modell liegt auf dem LAUFWERK, nicht auf dem Computer.
+  'perf.model.perDrive':
+    'Das Laufwerk behält einen Datensatz pro Modell, ein Start auf einem anderen Computer ersetzt also den hier gemessenen.',
   'perf.model.measuredOther':
     'Früher mit einem Kontext von {context} Token am {when} gemessen; die Schätzung oben gilt für die aktuellen Einstellungen.',
   'perf.model.choose': 'Kleineres Modell wählen',
@@ -1908,7 +1921,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.tile.drive.load': 'Aus einem Modellstart am {when}, {gb} GB gelesen',
   'perf.tile.drive.hash': 'Aus einer Dateiprüfung am {when}, {gb} GB gelesen',
   'perf.tile.drive.none': 'Noch nicht gemessen',
-  'perf.tile.drive.noneHint': 'Wird beim ersten Modellstart gemessen',
+  // N4: eine vollständige Dateiprüfung misst sie ebenfalls.
+  'perf.tile.drive.noneHint': 'Wird beim ersten Modellstart oder bei der ersten Dateiprüfung gemessen',
   'perf.rating.good': 'Gut',
   'perf.rating.slow': 'Langsam',
   'perf.rating.fast': 'Schnell',
@@ -1932,12 +1946,16 @@ export const de: Record<keyof typeof en, string> = {
   'perf.loadFailed': 'Die aktuellen Werte konnten nicht gelesen werden: {error}',
   'perf.retry': 'Erneut versuchen',
   'perf.step.system': 'Hardware erkannt',
-  'perf.step.drive': 'Schreibgeschwindigkeit des Laufwerks',
+  // N5: die Kachel daneben zeigt „MB/s lesen“ — der Schritt darf nicht „Schreiben“ heißen.
+  'perf.step.drive': 'Laufwerksgeschwindigkeit',
   'perf.step.speed': 'Generierungsgeschwindigkeit mit {model}',
   'perf.step.speedSkipped': 'Generierungsgeschwindigkeit (kein Modell läuft, übersprungen)',
   'perf.step.hint': 'Etwa eine halbe Minute. Du kannst die App weiter benutzen.',
   'perf.observed.title': 'Während der Arbeit beobachtet',
-  'perf.observed.hint': 'Echte Werte aus dem normalen Gebrauch, kein Test-Prompt. Sie aktualisieren sich von selbst.',
+  // Die Zeilen sind Sitzungs-Latches, die Lese-Messwerte dahinter werden aber zusätzlich in den
+  // Benchmark-Datensätzen gespeichert (Laufwerkskachel oben) — L8.
+  'perf.observed.hint':
+    'Echte Werte aus dem normalen Gebrauch, kein Test-Prompt. Diese Zeilen gelten für diese Sitzung; die gezeigten Lesegeschwindigkeiten werden zusätzlich bei den Laufwerkswerten oben gespeichert.',
   'perf.observed.none': 'In dieser Sitzung noch nichts beobachtet. Frag das Modell etwas oder starte es.',
   'perf.observed.answer': 'Letzte Antwort: {tps} Token / Sek., erstes Token nach {ttft} s',
   'perf.observed.answerSub': '{model}, {when}, {tokens} Token',

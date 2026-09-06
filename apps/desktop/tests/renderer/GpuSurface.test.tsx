@@ -20,6 +20,8 @@ import { stubApi } from '../helpers/renderer'
 // the toggle. Friendly copy only — these tests also pin that no scary words leak in.
 
 const RTX = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
+/** A hybrid laptop's FIRST enumerated device: integrated, reporting shared system memory. */
+const IRIS = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16384, freeMb: 12000 }
 
 function settings(over: Partial<AppSettings> = {}): AppSettings {
   return { ...DEFAULT_SETTINGS, ...over }
@@ -100,6 +102,26 @@ describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () =
     expect(
       await screen.findByText('NVIDIA GeForce RTX 3080 Ti (GPU available)')
     ).toBeInTheDocument()
+  })
+
+  it('names the DISPLAY device on a hybrid box, not the first enumerated one (PR #303 audit M8.2)', async () => {
+    // A hybrid laptop enumerates the iGPU first while the model runs on the dGPU. The line
+    // credits the device the shared `displayDevice` rule selects — the same one the start
+    // ladder labels a GPU start with. Device SELECTION is untouched; this is a label.
+    stubDiagnostics({
+      settings: settings({ gpuProbe: { devices: [IRIS, RTX], probedAt: '2026-06-10T00:00:00Z' } })
+    })
+    renderDiagnostics()
+    expect(await screen.findByText('NVIDIA GeForce RTX 3080 Ti (GPU available)')).toBeInTheDocument()
+    expect(screen.queryByText(/Iris/)).not.toBeInTheDocument()
+  })
+
+  it('still names an integrated-only machine rather than falling silent', async () => {
+    stubDiagnostics({
+      settings: settings({ gpuProbe: { devices: [IRIS], probedAt: '2026-06-10T00:00:00Z' } })
+    })
+    renderDiagnostics()
+    expect(await screen.findByText('Intel(R) Iris(R) Xe Graphics (GPU available)')).toBeInTheDocument()
   })
 
   it('reads simply "CPU" with no GPU probed (never scary copy)', async () => {

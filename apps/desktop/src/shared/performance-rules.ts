@@ -24,3 +24,21 @@ export const VERY_LOW_TOKENS_PER_SECOND = 3
  * margin on both sides; checksum-pass samples stay above it on any healthy SSD.
  */
 export const SLOW_READ_MBPS = 100
+
+/**
+ * The safety margin (MiB) llama.cpp's `--fit` keeps free on the card: the `--fit-target`
+ * default of 1 GiB, which the app never overrides (it passes neither `-ngl` nor
+ * `--fit-target` — architecture.md GPU record §5.2). The "Your model" partial-offload copy
+ * names it, so the figure lives here rather than as a literal in three catalog strings
+ * (PR #303 audit DR4): change the constant and every sentence follows.
+ */
+export const FIT_TARGET_MARGIN_MB = 1024
+
+/**
+ * How much of the card may already be in use and still count as "free at start" (MiB). Above
+ * this the partial-offload copy blames what else held the card; below it the fit's own
+ * reservations (working buffers + `FIT_TARGET_MARGIN_MB`) are the reason. Read by the
+ * Performance screen's "Your model" row (PR #303 audit DR4 — it used to be a renderer-local
+ * literal beside the hard-coded margin).
+ */
+export const CARD_FREE_SLACK_MB = 1536

@@ -8,15 +8,22 @@ import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
+import { PerformanceScreen } from '../../src/renderer/screens/PerformanceScreen'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
 import { makeDetail, makeFreshness, stubReviewApi } from '../helpers/evidenceReview'
 import { PrivacyTab } from '../../src/renderer/screens/settings/PrivacyTab'
 import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsTab'
-import { Banner, CoverageMeter, PasswordField, type Translator } from '../../src/renderer/components'
+import { Banner, CoverageMeter, PasswordField, ToastProvider, type Translator } from '../../src/renderer/components'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
-import { DEFAULT_SETTINGS, type AppStatus, type RuntimeStatus } from '../../src/shared/types'
+import {
+  DEFAULT_SETTINGS,
+  type AppStatus,
+  type ModelInfo,
+  type PerformanceSnapshot,
+  type RuntimeStatus
+} from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Phase-40 German render smokes (i18n record §5): one per migrated screen. Each renders
@@ -47,6 +54,52 @@ const runningStatus: RuntimeStatus = {
   port: 1234,
   healthy: true,
   message: 'ok'
+}
+
+/** A complete `performance:get` reply for the Performance smoke (PR #303 audit T6): a discrete
+ *  card, an active model with an 8,192-token context (the localized number the smoke asserts)
+ *  and no observation yet, so the "Your model" row shows the estimate copy. Every field the
+ *  screen dereferences unguarded is present — `models`, `totals`, `recommendedContextTokens`,
+ *  `observedMismatch`, `currentGpu`, `observed`. */
+function perfSnapshot(): PerformanceSnapshot {
+  return {
+    current: {
+      os: 'win32',
+      arch: 'x64',
+      cpuModel: 'Intel Core i7-1260P',
+      cpuCores: 12,
+      ramGb: 15.7,
+      gpu: null,
+      gpuVramMb: null,
+      driveReadMbps: null,
+      driveWriteMbps: 312,
+      tokensPerSecond: 12,
+      speedBasis: { basis: 'timings', tokens: 64 },
+      measuredModelId: 'qwen',
+      effectiveRead: null,
+      profile: 'LITE',
+      recommendedModelId: 'qwen',
+      warnings: [],
+      ranAt: '2026-09-04T14:02:00Z'
+    },
+    currentMachine: true,
+    currentGpu: null,
+    otherMachines: [],
+    running: false,
+    placement: {
+      memoryClass: 'discrete',
+      ramMb: 16_077,
+      vramMb: 24_822,
+      model: { id: 'qwen', sizeOnDiskGb: 5.8, contextTokens: 8192 },
+      recommendedContextTokens: 8192,
+      observed: null,
+      observedMismatch: null,
+      verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null },
+      models: [],
+      totals: { ramAllMb: null, bothOnCard: false }
+    },
+    observed: { lastAnswer: null, lastModelLoad: null, lastChecksum: null }
+  }
 }
 
 function german(node: ReactNode): JSX.Element {
@@ -310,6 +363,35 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getByRole('heading', { name: t('de', 'diag.activity.title') })
     ).toBeInTheDocument()
+  })
+
+  it('PerformanceScreen renders German (PR #303 audit T6)', async () => {
+    stubApi({
+      getPerformance: vi.fn(async () => perfSnapshot()),
+      listModels: vi.fn(async () => [
+        { id: 'qwen', displayName: 'Qwen', state: 'installed', recommended: true, recommendedContextTokens: 8192 }
+      ] as unknown as ModelInfo[]),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+      onPerformanceChanged: vi.fn(() => () => {}),
+      onBenchmarkProgress: vi.fn(() => () => {})
+    })
+    render(
+      german(
+        <ToastProvider>
+          <PerformanceScreen onNavigate={() => {}} />
+        </ToastProvider>
+      )
+    )
+
+    expect(await screen.findByRole('heading', { name: t('de', 'perf.title') })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: t('de', 'perf.card.title') })).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'perf.model.title'))).toBeInTheDocument()
+    // The context size flows through the German locale's number format ("8.192", not "8,192").
+    expect(screen.getByText(/8\.192/)).toBeInTheDocument()
+    // Nothing English leaks past t() — the EN heading of the same card must be absent.
+    expect(screen.queryByText(t('en', 'perf.card.title'))).not.toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'perf.model.title'))).not.toBeInTheDocument()
   })
 
   it('shared components render their built-in copy from a received t (plan §5 ⑤)', () => {
