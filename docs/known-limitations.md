@@ -2326,12 +2326,12 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   waiting indefinitely or measuring an unfinished load.
 - **A manual (non-automatic) model start already in flight is not awaited by the scheduler.** Only
   the automatic auto-start is sequenced ahead of the benchmark; a manual start and an automatic
-  check can still overlap on a very slow drive (tracked as issue #TBD-I6).
+  check can still overlap on a very slow drive (tracked as issue #334).
 - **A GPU probe that times out internally persists as an empty stamped probe** — indistinguishable
   from a machine that genuinely has no usable graphics device until a later probe succeeds.
 - **One `performance:get` read costs about 100 ms in the dev build** (a synchronous manifest scan
   alongside settings and system detection) — measured once during development, not on slow
-  removable media; a cache is a follow-up if it proves to matter (issue #TBD-I5).
+  removable media; a cache is a follow-up if it proves to matter (issue #333).
 - **The silent re-check has no Home-screen notice yet.** The moved-drive re-check above runs with
   no visible sign beyond Performance itself refreshing; a Home notice while it is pending is
   tracked in BUILD_STATE §5 item 21 (a).

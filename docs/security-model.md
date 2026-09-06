@@ -2138,7 +2138,7 @@ sidecar-logging posture above ("Sidecar requests are authenticated"): stderr is 
 only, capped at `STDERR_TAIL_MAX = 4000` characters
 (`main/services/runtime/sidecar.ts`), redacted at the drain before it is ever read
 (`redactSidecarSecrets`), and never written to disk — it surfaces only inside a crash notice. No
-code changed to add this line; the wave's own open acceptance item (issue #TBD-I1) is that a
+code changed to add this line; the wave's own open acceptance item (issue #329) is that a
 captured log from the pinned build must show verbosity 4 printing the load lines and no
 request/prompt content.
 

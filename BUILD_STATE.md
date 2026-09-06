@@ -69,7 +69,12 @@ candidate pass every main-process case (22 / 2 superseded by design / 1 retired)
 over CDP — EN/DE, light/dark, 880/1024/1280 px, the German rail at weight 600, a real Tab walk and
 Enter activation all passed; a synthetic moved-drive restart verified M2/M4/P7 end to end. Blocked
 legs (screen-reader announcements; a first-run, chat or model-load while mounted — no runtime here)
-carried into the follow-up issues._
+carried into the follow-up issues. P11 closed the wave without a source change: follow-up
+issues #329–#334 (a real partial-offload log, the two-computer round trip, the blocked HW3 legs,
+hybrid / Apple Silicon hardware, the slow-media read cost, slow-USB sequencing) and #335 (temp-root
+hygiene in other suites), the record's issue and commit references filled, the changelog entry,
+the keyboard-focus repair re-verified live in the dev app. Merge is the owner's call; the branch
+stays._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -730,8 +735,8 @@ open round's item stays the last block of §5.)
     P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ✅ H1/L8/M5-residual schemas +
     launch context; P5 ✅ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
     P6 ✅ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ✅ L1/SD2 auto-start sequencing;
-    P8 ✅ T7/T8/T11/TH1/TH2; P9 ✅ D1–D5/L4/L5 docs — durable record `docs/benchmark.md` "Audit remediation record — PR #303" §1–§5; P10 ✅ cross-review + the local half of (c) (repairs in the commit after `07dd9085`);
-    P11 ☐ close-out issues. Residual (c) above is the audit's HW1–HW3 acceptance; (a)–(g) stand.
+    P8 ✅ T7/T8/T11/TH1/TH2; P9 ✅ D1–D5/L4/L5 docs — durable record `docs/benchmark.md` "Audit remediation record — PR #303" §1–§5; P10 ✅ cross-review + the local half of (c) (repairs `ab01e14b`);
+    P11 ✅ close-out: issues #329–#334 (open acceptance) + #335 (temp-root hygiene elsewhere), record / changelog final. Residual (c) above is the audit's HW1–HW3 acceptance (→ #329–#334); (a)–(g) stand.
 
 ---
 
