@@ -700,6 +700,17 @@ function servedSignature(db: Db): Map<string, string> {
   return new Map(rows.map((r) => [r.id, r.recorded_path]))
 }
 
+/**
+ * The registry's own view of the served set — every enabled ∧ available ∧ non-tombstoned row
+ * with its recorded path — for the collision surface BETWEEN library builds (#340, D-Z16). No
+ * disk probe: the serving name depends only on the file's leaf (D-Z11), which the
+ * `<drive>/zim/<leaf>` and recorded-path candidates share, so this equals the build's own
+ * `computeServedSet` input up to files that vanished since the last reconciliation.
+ */
+export function servedRegistryRows(db: Db): Array<{ id: string; path: string }> {
+  return [...servedSignature(db)].map(([id, path]) => ({ id, path }))
+}
+
 function sameSignature(a: Map<string, string>, b: Map<string, string>): boolean {
   if (a.size !== b.size) return false
   for (const [id, path] of a) if (b.get(id) !== path) return false

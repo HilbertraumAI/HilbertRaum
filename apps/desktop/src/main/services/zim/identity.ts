@@ -1,4 +1,5 @@
 import { closeSync, openSync, readSync } from 'node:fs'
+import type { KnowledgePackCollision } from '../../../shared/types'
 
 // ZIM ARCHIVE IDENTITY and the SERVING-NAME MAP (#301 P3b, findings M5 and L4; plan §9.17 (d)).
 //
@@ -130,12 +131,10 @@ export function servingNameFor(path: string, platform: NodeJS.Platform = process
   return name
 }
 
-/** One pack excluded from the served library because an earlier book already owns its name. */
-export interface ServingNameCollision {
-  packId: string
-  /** The pack id that KEEPS the name (the smaller UUID — libkiwix's own first-wins rule). */
-  collidesWith: string
-}
+/** One pack excluded from the served library because an earlier book already owns its name
+ *  (`collidesWith` KEEPS it — the smaller UUID, libkiwix's own first-wins rule). The shared
+ *  shape since #340 (D-Z16): `packs:status.excluded` carries it to the panel. */
+export type ServingNameCollision = KnowledgePackCollision
 
 export interface ServedNameSet {
   /** pack id → the name kiwix-serve will answer to. Winners only. */

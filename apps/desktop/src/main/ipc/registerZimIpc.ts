@@ -58,8 +58,16 @@ export function registerZimIpc(ctx: AppContext): void {
 
   ipcHandle(IPC.getKnowledgePackStatus, (): KnowledgePackStatus => {
     const svc = ctx.zim
-    if (!svc) return { toolsInstalled: false, refreshing: false, revision: 0 }
-    return { toolsInstalled: svc.toolsInstalled(), refreshing: svc.refreshing(), revision: svc.revision() }
+    if (!svc) return { toolsInstalled: false, refreshing: false, revision: 0, excluded: null }
+    // In-memory reads only — this is the ONE lock-exempt `packs:*` channel. `excluded` (#340,
+    // D-Z16) is the service's last computed collision list, copied for the wire.
+    const excluded = svc.excluded()
+    return {
+      toolsInstalled: svc.toolsInstalled(),
+      refreshing: svc.refreshing(),
+      revision: svc.revision(),
+      excluded: excluded === null ? null : excluded.map((e) => ({ packId: e.packId, collidesWith: e.collidesWith }))
+    }
   })
 
   // Kick off a background reconciliation pass (#301 P3b, finding L7, plan §9.17 (e)2). Never

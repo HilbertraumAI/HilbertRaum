@@ -1983,6 +1983,21 @@ export interface KnowledgePackStatus {
   toolsInstalled: boolean
   refreshing: boolean
   revision: number
+  /**
+   * The packs left OUT of the served library because an earlier archive (the smaller UUID —
+   * libkiwix's own first-wins rule, rag-design D-Z11) already owns their serving name (#340,
+   * D-Z16). A served-library fact, not a pack-row fact: computed from the registry at every
+   * reconciliation and mutation, and from the resolved set at every library build. Additive;
+   * absent (an older main) or `null` (nothing computed yet this session) both read "not known".
+   */
+  excluded?: KnowledgePackCollision[] | null
+}
+
+/** One pack excluded from the served library because an earlier book already owns its name. */
+export interface KnowledgePackCollision {
+  packId: string
+  /** The pack id that KEEPS the name. */
+  collidesWith: string
 }
 
 /**

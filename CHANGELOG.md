@@ -130,6 +130,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The knowledge-packs panel now says when two packs clash on a file name.** Two archives with
+  the same file name in different folders cannot both be served — only the earlier one is — and
+  the panel used to show both as simply "Enabled", with the reason visible only in the note under
+  an answer. The later pack now carries a "Not served" badge and a line naming the pack that keeps
+  the name, with the fix (rename one file).
 - **A knowledge pack you just added is checked for full-text search right away.** Until now the
   check ran only when you unlocked or pressed Refresh, so a pack added through *Add packs…* (or
   enabled after being added) showed no "No full-text index" badge until then, and a question asked

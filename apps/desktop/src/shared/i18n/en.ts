@@ -2734,6 +2734,13 @@ export const en = {
   'packs.state.notSearchable': 'No full-text index',
   'packs.state.notSearchableTitle':
     'This archive has no full-text search index. It is skipped when asking, but its articles stay readable.',
+  // #340 (rag-design D-Z16): a served-library fact from `packs:status.excluded` — two files
+  // compute the same serving name, and libkiwix keeps only the earlier archive.
+  'packs.state.notServed': 'Not served',
+  'packs.state.notServedTitle':
+    'Its file name clashes with “{title}”, so only that pack is served — rename this file to use both.',
+  'packs.state.notServedTitleUnknown':
+    'Its file name clashes with another pack’s, so only that pack is served — rename this file to use both.',
   'packs.enable': 'Enable',
   'packs.disable': 'Disable',
   'packs.working': 'Working…',

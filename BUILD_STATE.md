@@ -113,7 +113,9 @@ the failure; red with the fix reverted). Docs: troubleshooting "Could not lock t
 post-registration searchability probe (`fix/340-post-registration-probe`, stacked on step 1; paper `tmp/340-residuals.md`):** `ZimService.scheduleSearchabilityProbe` — once per completed
 `packs:add` batch and on enable, the reconcile's key pass first, the same guarded probe and conditional write, a `'mutation'` notice after a verdict; record rag-design **D-Z15**; test
 `zim-ipc-session` "#340 …" (four legs, red without the trigger). Owner questions (b) non-ASCII message vs metadata and (c) LaTeX strip / normalise / render posted on #340 — their
-code waits. Next: 21(l) `packs:status.excluded`, the UI nits, then #339, then #340 capabilities._
+code waits. **Step 3 — 21(l) the collision surface (`feat/340-packs-status-excluded`, stacked on step 2):** `KnowledgePackStatus.excluded?` from the service's memory (registry
+recompute at reconcile end + every mutation, the build authoritative, reset on suspend; the exempt channel never reads the DB), a "Not served" badge naming the winner on the
+loser's row; record rag-design **D-Z16**; tests `zim-ipc-session` "#340 packs:status.excluded …", `KnowledgePacks.test.tsx`. Next: the UI nits, then #339, then #340 capabilities._
 
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — WAVE CLOSED: Phases 0–7 complete, #294 MERGED to master (`92e86a07`, 16:12 UTC), #301 closed by the merge.**_
 The PR's review remediation — 28 findings (H1–H4, M1–M11, L1–L9 with L10 withdrawn, DOC-1–DOC-4; three assessed High, H3 and DOC-1/DOC-2 Medium) — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;
@@ -716,8 +718,7 @@ open round's item stays the last block of §5.)
     (j) **P4 — CLOSED (2026-09-06):** M3/M6/M7/M8/M10 — effective documents-off scope, reranker-failure interleave, fair pack allocation under a per-ask deadline, refreshable searchability, per-ask
     pack outcomes. Record: rag-design D-Z4/D-Z11/D-Z12.
     (k) **P6 — CLOSED (2026-09-06):** T18-a implemented (design/frontend review); the (c) "Open article from a review" residual closed. Record: design-guidelines §11.15.
-    (l) **P7 residual register (2026-09-06):** the collision surface (`packs:status.excluded` addition — P9 issue; served-library fact, not a pack-row fact — the per-answer "not-served" row covers it
-    today); PacksPanel: an unavailable pack can only be removed, not disabled (low, P9); every row's action buttons disable while one row is busy (low, P9); ChatScreen refetches on both
+    (l) **P7 residual register (2026-09-06):** the collision surface — CLOSED, follow-up wave step 3 (`packs:status.excluded`, rag-design D-Z16; the per-answer "not-served" row stays); PacksPanel: an unavailable pack can only be removed, not disabled (low, P9); every row's action buttons disable while one row is busy (low, P9); ChatScreen refetches on both
     `reconcile-start` and `-end` of one epoch (cosmetic, P9); the pack meta line shows the raw ISO 639-3 code unlabelled (copy nit, P9); `.footer-menu-btn` has no overflow rule of its own (low, P9);
     accepted deviation: the ScopePopover is non-modal (design-guidelines §11.15 decision 1, P6); T18-b — RECORDED 2026-09-06 (run by the orchestrator at the owner's request in real Electron against the real packs; rag-design §17 "Real acceptance" → "T18-b"; it surfaced T19 finding 3: kiwix-serve 3.8.1 win-x86_64 cuts ~5–20 % of large /raw reads short (the body's last part never arrives) — upstream, mitigated by the P7 fix PR 2, upstream report on #339); T19 the owner's Electron/drive legs — (vi) the relocated drive with
     persisted citations and (vii) live lock/unlock/failed lock PASSED 2026-09-06 on the real K: drive (rag-design §17 "Real acceptance" → "The owner's legs"; observations: a failed lock leaves the chat

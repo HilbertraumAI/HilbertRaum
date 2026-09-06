@@ -1719,8 +1719,12 @@ landing mid-add still REJECTS with the friendly locked copy) · `packs:remove`
 (tombstone, file untouched) · `packs:setEnabled` · `packs:refresh` (#301 P3b, finding L7 —
 schedules a background reconciliation and returns `{ started: boolean }` at once;
 completion arrives via the `packs:changed` event, not the return value) · `packs:status`
-(`KnowledgePackStatus = { toolsInstalled, refreshing, revision }` — additive over the P3a
-`{ toolsInstalled }` shape) · `packs:getArticle` (`PackArticle | null` — plain sectioned
+(`KnowledgePackStatus = { toolsInstalled, refreshing, revision, excluded? }` — additive over the P3a
+`{ toolsInstalled }` shape; `excluded?: KnowledgePackCollision[] | null` (#340, rag-design D-Z16)
+is the served library's collision losers `{ packId, collidesWith }` from the service's memory —
+recomputed from the registry at every reconciliation and mutation, from the resolved set at every
+library build, `null` until this session computed one and after a lock; absent on an older main —
+never a database read, so the channel stays lock-exempt) · `packs:getArticle` (`PackArticle | null` — plain sectioned
 TEXT, never HTML; the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM
 alias entry with `302 → /content/<book>/<target>` (P7 T19) — while a cross-book, chained or
 contract-refused target returns `null` and the locator does not change; a `/raw` read that
@@ -1868,4 +1872,5 @@ matrix (the `zim-real` row) for the full input table.
 
 **Lock-channel inventory:** `ipc-lock-coverage.test.ts`'s `registerZimIpc` group gained
 `packs:refresh` as a DB-touching (non-exempt) channel; `packs:status` remains the sole
-exempt channel (in-memory service state only).
+exempt channel (in-memory service state only — its `excluded` field, #340, is the service's
+cached list, never a query). The IPC surface is unchanged by the follow-up wave: 145 channels.

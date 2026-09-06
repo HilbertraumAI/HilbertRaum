@@ -2651,6 +2651,30 @@ offline article viewer. Files are registered in place, never copied.
   yes/no with ONE sidecar start and no Refresh; the next Refresh issues no `/suggest`; enable
   after a never-probed registration; a lock landing mid-probe writes nothing and the next
   session's reconcile confirms). Red with the IPC trigger removed.
+- **D-Z16 — the collision surface in the panel (follow-up wave, 2026-09-06; #340, the P6
+  decision (c)1 residual).** A serving-name collision loser (D-Z11: an earlier UUID owns the name,
+  the later pack is left out of the library XML) was enabled and available in the panel with
+  nothing to say why an ask reported it `not-served`. It is a served-library fact, not a
+  `KnowledgePack` row field, and `packs:status` is the ONE lock-exempt `packs:*` channel — in-memory
+  service state, never a database read — so the list rides that channel from memory:
+  `KnowledgePackStatus.excluded?: KnowledgePackCollision[] | null` (additive, optional; absent =
+  an older main, `null` = nothing computed yet this session), `KnowledgePackCollision = { packId,
+  collidesWith }` in `shared/types.ts` (`identity.ts`'s `ServingNameCollision` is now its alias).
+  `ZimService.lastExcluded` is recomputed under the producing operation and before its
+  `packs:changed` notice (so the panel's refetch sees it) at every reconciliation end and every
+  mutation from the REGISTRY (`servedRegistryRows`: enabled ∧ available ∧ non-tombstoned rows
+  with `recorded_path`; no disk probe — the reconcile writes the resolved winner there and the
+  serving name depends only on the leaf, so this equals the build's own input up to files that
+  vanished since the last pass), set from the disk-resolved set at every library build
+  (authoritative), and reset to null by `suspend()` so a locked workspace's list never outlives
+  it on the exempt channel. The panel shows a "Not served" badge plus a visible line naming the
+  pack that keeps the name (or a generic line when the list no longer knows it) on the LOSER's
+  row only; the picker keeps relying on the per-answer `not-served` outcome. No new channel (the
+  145-channel count stands), no preload change. Tests: `zim-ipc-session` "#340 packs:status.excluded
+  …" (null → [] → the larger UUID after a same-leaf registration → cleared by disabling → the build
+  agrees → null after a lock → recomputed by the next session), `KnowledgePacks.test.tsx` (badge +
+  winner named; stale winner; null / absent status show nothing), `zim-ipc` (the fake reports
+  null).
 
 ### Module map
 
@@ -2760,11 +2784,10 @@ over archive citations (they resolve as honest 'unresolved'); packs on the whole
 for non-Wikimedia ZIMs. Serving names are computed
 by the pinned libkiwix 14.1 rule (D-Z11) rather than read back from the running server —
 the real-tool check of that mapping is P7's (T19), not assumed. The name-collision surface
-(D-Z11's "excludes every later same-name book") is deliberately not shown on the
-`PacksPanel` row (P6): it is a property of the served library, computed at build time, not
-a `KnowledgePack` field — the per-answer outcome's `not-served` row already tells the user
-"not searched: name collision with another pack"; a `packs:status` addition to surface it
-in the panel is registered on the P9 successor issue #340 (BUILD_STATE §5 item 21).
+(D-Z11's "excludes every later same-name book") was deliberately not shown on the
+`PacksPanel` row at P6 — a served-library fact, not a `KnowledgePack` field — and is surfaced since
+the follow-up wave through `packs:status.excluded` (D-Z16, #340); the per-answer outcome's
+`not-served` row still says "not searched: name collision with another pack".
 
 ### Real acceptance (T19, P7 — the machine-drivable legs, 2026-09-06)
 
