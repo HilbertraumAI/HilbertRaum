@@ -95,6 +95,28 @@ import {
 // book. `listPacks` is a pure database read; the one filesystem pass is `reconcile()`, which is
 // single-flight and runs at session start and on an explicit Refresh.
 //
+// THE REQUEST GUARD (#301 P5, finding M1; plan §9.19 (a)). Every request the ask arm and the
+// article viewer send to kiwix-serve runs inside `withServer(db, op, request)`. It captures the
+// published tuple — revision, generation, port, alive — BEFORE the request and reads it again
+// AFTER the response, and a response observed across a change of that tuple is DISCARDED
+// whatever it contained, including a successful body: the port may have been answered by a
+// process that is not our child. The whole attempt is discarded, not merely the failed call
+// inside it — the arm's search-and-fetch batch is one guard window, because candidates
+// collected before an unnoticed death cannot be told apart from a squatter's. A discarded
+// attempt is retried EXACTLY ONCE, and only while the same unlocked session still admits the
+// operation and it was not cancelled; the retry re-enters from `ensureServer`, so eligibility is
+// recomputed under the CURRENT revision and the callback is handed the NEW `ServedLibrary` (a
+// caller must therefore derive its pack list inside the callback, never from a list captured
+// before the first attempt). A second discard rejects with `StaleServerError` — an ORDINARY
+// error, so a caller can turn it into an honest per-ask outcome, while every admission or
+// cancellation refusal stays the #159 `AbortError`.
+//
+// What the guard is NOT: it detects an OBSERVED LIFECYCLE CHANGE of this app's own child; it
+// does not authenticate the server, because kiwix-serve has no request authentication upstream
+// (owner ruling D1(a), residual R-9). The windows it leaves — the initial bind race, a delayed
+// `exit` notification, and a same-user process that can bind a port a live child already holds —
+// are named in `docs/security-model.md` "kiwix-serve — the one unauthenticated sidecar".
+//
 // TRANSIENT FILES (#301 P3b, findings L3/M4, residual R-7; plan §9.17 (c)). Nothing about the
 // user's pack collection persists outside the workspace database EXCEPT the transient library
 // builds under `<workspacePath>/zim-transient/` — `library.<build>.xml` (served builds) and
@@ -115,6 +137,25 @@ class StaleBuildError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'StaleBuildError'
+  }
+}
+
+/** Why the request guard discarded an attempt (#301 P5, plan §9.19 (a)4). */
+export type StaleServerReason = 'child-died' | 'generation-changed' | 'unpublished'
+
+/**
+ * Two consecutive attempts were both observed across a lifecycle change of the pack server
+ * (#301 P5, finding M1). Deliberately an ORDINARY error, never an `AbortError`: the workspace
+ * still admits the work, so the caller reports "the pack server restarted during this question"
+ * rather than treating it as a cancellation. `retrieve()`'s arm catch swallows it and the
+ * `packs:getArticle` handler's catch turns it into the viewer's honest "unavailable" null.
+ */
+export class StaleServerError extends Error {
+  readonly reason: StaleServerReason
+  constructor(reason: StaleServerReason, message: string) {
+    super(message)
+    this.name = 'StaleServerError'
+    this.reason = reason
   }
 }
 
@@ -671,6 +712,86 @@ export class ZimService {
     throw new Error('The knowledge-pack set kept changing while the library server was starting')
   }
 
+  /**
+   * Run ONE kiwix-serve request batch under the alive/generation guard (#301 P5, finding M1;
+   * plan §9.19 (a)). Resolves the callback's value, or null when there is nothing to serve —
+   * the callers' existing "no packs / no tools" null.
+   *
+   * One attempt is:
+   *
+   *   assert → ensureServer → capture `serverState()` → request(library) → assert →
+   *   one macrotask yield → re-read `serverState()` → accept or discard
+   *
+   * The BEFORE tuple must already be alive and describe the very library that was handed out
+   * (a child that died between publication and this read is a lifecycle change *before* the
+   * request), otherwise the attempt is spent without issuing anything. The AFTER tuple must be
+   * alive and carry the same generation, revision and port; anything else discards the attempt
+   * whatever it produced. An ordinary failure of the request itself — an HTTP 500, a parse
+   * error — under a live, unchanged generation is NOT a lifecycle change: it is rethrown
+   * unchanged so the arm's per-pack catch and the viewer's null keep their meaning.
+   *
+   * The single macrotask yield is a best-effort NARROWING, not a proof: it lets an `exit`
+   * event already queued for the child be delivered before the second read. A death whose
+   * notification has not been queued yet still passes, which is one of the residual R-9
+   * windows recorded in `docs/security-model.md`.
+   */
+  async withServer<T>(
+    db: Db,
+    op: ZimOp,
+    request: (library: ServedLibrary) => Promise<T>
+  ): Promise<T | null> {
+    // Exactly two: the attempt, and the ONE admitted retry of plan §9.19 (a)4.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      op.assert()
+      const library = await this.ensureServer(db, op.signal, op)
+      op.assert()
+      if (library === null) return null
+
+      const before = this.serverState()
+      if (!isLiveTuple(before, library)) {
+        // The child was already gone when the request was about to go out. The attempt is
+        // SPENT — nothing was asked, but the retry budget is the same one, because a caller
+        // that could loop here would be a spin loop against a server that keeps dying.
+        if (attempt === 0 && this.retryAdmitted(op)) continue
+        throw staleServerError(staleReasonAgainst(before, library))
+      }
+
+      let value: T
+      let failure: unknown
+      let rejected = false
+      try {
+        value = await request(library)
+      } catch (err) {
+        rejected = true
+        failure = err
+        value = undefined as unknown as T
+      }
+      // Cancellation and the closing session always win over the response, however it ended.
+      op.assert()
+      // One macrotask, so an `exit` already queued for our child is observed before we decide.
+      await yieldMacrotask()
+      const after = this.serverState()
+      if (isSameTuple(after, before)) {
+        if (rejected) throw failure
+        return value
+      }
+      // A lifecycle change across the response: the whole attempt goes, successful body
+      // included — on this port that body may not have come from our child at all.
+      if (attempt === 0 && this.retryAdmitted(op)) continue
+      throw staleServerError(staleReasonAgainst(after, before))
+    }
+    /* c8 ignore next 2 -- the loop either returns, continues once, or throws above. */
+    throw staleServerError('generation-changed')
+  }
+
+  /** May the discarded attempt be retried? Only while the SAME admitted session still wants
+   *  it; a lock, a lock + unlock (new epoch), a cancelled ask or a stopped service make
+   *  `assert()` throw the `AbortError`, which propagates INSTEAD of the retry. */
+  private retryAdmitted(op: ZimOp): boolean {
+    op.assert()
+    return true
+  }
+
   private capture(signal: AbortSignal | undefined): Captured {
     return {
       revision: this.packRevision,
@@ -1042,25 +1163,31 @@ export class ZimService {
       const op = this.beginOp('zim-ask', signal)
       try {
         op.assert()
-        const library = await this.ensureServer(db, op.signal, op)
-        op.assert()
-        if (library === null) return []
-        // A pack the served library does not carry — a collision loser, or one whose file
-        // stopped resolving between `retrievablePacks` and the build — is SKIPPED rather than
-        // searched under a name that belongs to another book (findings M5/L4).
-        const servable = packs.filter((p) => library.names.has(p.id))
-        if (servable.length === 0) return []
-        const candidates = await collectPackCandidates(
-          library.port,
-          servable,
-          question,
-          op.signal,
-          library.names
-        )
+        // The search + fetch batch is ONE guard window (#301 P5, finding M1; plan §9.19 (a)3):
+        // a death noticed only afterwards cannot tell our child's candidates from a port
+        // squatter's, so the batch is discarded and retried as a unit rather than per call.
+        const candidates = await this.withServer(db, op, async (library) => {
+          // Re-queried INSIDE the callback, per attempt: the retry re-enters under the
+          // CURRENT revision, and a pack removed, disabled or vanished during the first
+          // attempt must not be searched again from a list captured before it.
+          const current = retrievablePacks(db, this.zimDir, packIds)
+          // A pack the served library does not carry — a collision loser, or one whose file
+          // stopped resolving between `retrievablePacks` and the build — is SKIPPED rather
+          // than searched under a name that belongs to another book (findings M5/L4).
+          const servable = current.filter((p) => library.names.has(p.id))
+          if (servable.length === 0) return []
+          return collectPackCandidates(
+            library.port,
+            servable,
+            question,
+            op.signal,
+            library.names
+          )
+        })
         // Before the CONTENT return: a lock that landed during the fetches must not hand
         // archive text back into the prompt of a session that is closing.
         op.assert()
-        return candidates
+        return candidates ?? []
       } finally {
         op.release()
       }
@@ -1080,21 +1207,27 @@ export class ZimService {
     const op = this.beginOp('zim-article')
     try {
       op.assert()
-      const packs = retrievablePacks(db, this.zimDir, [packId])
-      const pack = packs[0]
-      if (!pack) return null
-      const library = await this.ensureServer(db, op.signal, op)
+      // Cheap pre-check: an unknown, removed or unresolvable pack is refused without waking
+      // the sidecar at all. The authoritative, per-attempt check is inside the guard below.
+      if (retrievablePacks(db, this.zimDir, [packId]).length === 0) return null
+      // The fetch runs under the request guard (#301 P5, finding M1; plan §9.19 (a)6): a body
+      // observed across a child death, a restart or an invalidation is discarded and the read
+      // is retried once under the new generation.
+      const html = await this.withServer(db, op, async (library) => {
+        // Re-checked per attempt: the retry recomputes eligibility under the current revision.
+        if (retrievablePacks(db, this.zimDir, [packId]).length === 0) return null
+        // The route comes from the CURRENT serving map — never from the filename stem (finding
+        // L4: libkiwix ≥ 14 slugifies case, accents, spaces and `+`). This is also why the
+        // citation locator needs no URL hint: an old citation, a renamed file, a restart and a
+        // drive-letter change all resolve here, and a pack that is unmapped or was excluded as
+        // a collision loser returns the honest "unavailable" null, not another book's text.
+        const name = library.names.get(packId)
+        if (name === undefined) return null
+        return fetchArticleHtml(library.port, name, articlePath, op.signal)
+      })
       op.assert()
-      if (library === null) return null
-      // The route comes from the CURRENT serving map — never from the filename stem (finding
-      // L4: libkiwix ≥ 14 slugifies case, accents, spaces and `+`). This is also why the
-      // citation locator needs no URL hint: an old citation, a renamed file, a restart and a
-      // drive-letter change all resolve here, and a pack that is unmapped or was excluded as a
-      // collision loser returns the honest "unavailable" null instead of another book's text.
-      const name = library.names.get(packId)
-      if (name === undefined) return null
-      const html = await fetchArticleHtml(library.port, name, articlePath, op.signal)
-      op.assert()
+      // Null covers all three honest "unavailable" cases: nothing to serve, an unmapped pack,
+      // and a 404 from the archive.
       if (html === null) return null
       // Sliced like the ask path (P1b) so a big article cannot stall the main process while
       // the viewer opens.
@@ -1128,6 +1261,65 @@ function servedLibraryOf(pub: Extract<Published, { kind: 'served' }>): ServedLib
 
 function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === 'AbortError'
+}
+
+/** One macrotask (#301 P5, plan §9.19 (a)2). `setImmediate` runs after the I/O callbacks of
+ *  this turn, so a child `exit` the event loop has already queued is delivered before the
+ *  post-request read of `serverState()`. A narrowing, never a proof — see residual R-9. */
+function yieldMacrotask(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve)
+  })
+}
+
+/** The published tuple is alive AND describes exactly the library this attempt was handed. */
+function isLiveTuple(
+  state: ZimServerState | null,
+  library: ServedLibrary
+): state is ZimServerState {
+  return (
+    state !== null &&
+    state.alive &&
+    state.generation === library.generation &&
+    state.revision === library.revision &&
+    state.port === library.port
+  )
+}
+
+/** Nothing about our own child moved across the response. */
+function isSameTuple(after: ZimServerState | null, before: ZimServerState): boolean {
+  return (
+    after !== null &&
+    after.alive &&
+    after.generation === before.generation &&
+    after.revision === before.revision &&
+    after.port === before.port
+  )
+}
+
+/** Classify WHAT changed, for the caller's outcome copy and the log — never a port or a path. */
+function staleReasonAgainst(
+  state: ZimServerState | null,
+  reference: { generation: number; revision: number; port: number }
+): StaleServerReason {
+  if (state === null) return 'unpublished'
+  if (!state.alive) return 'child-died'
+  if (
+    state.generation !== reference.generation ||
+    state.revision !== reference.revision ||
+    state.port !== reference.port
+  ) {
+    return 'generation-changed'
+  }
+  /* c8 ignore next -- only reached if a caller classifies an unchanged, live tuple. */
+  return 'generation-changed'
+}
+
+function staleServerError(reason: StaleServerReason): StaleServerError {
+  return new StaleServerError(
+    reason,
+    `The knowledge-pack server changed during the request (${reason})`
+  )
 }
 
 /**
