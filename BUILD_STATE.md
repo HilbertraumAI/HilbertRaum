@@ -119,7 +119,8 @@ loser's row; record rag-design **D-Z16**; tests `zim-ipc-session` "#340 packs:st
 on step 3; record design-guidelines §11.15 "Follow-up wave"):** per-row busy, an unavailable pack can be disabled, the language NAME in the meta line, the chip's "(disabled)" /
 "(not available)" state, `.footer-menu-btn`'s own shrink rule, no `reconcile-start` refetch. **Step 5 — #339 P8-1** (`feat/339-p8-1-kiwix-family`, design paper
 `tmp/339-p8-1-design.md`): the `kiwix_tools` family contract landed (record rag-design **D-Z17**); the consent step and the source-bundle code still wait on the owner's rulings.
-Next: #340 capabilities; (b)/(c) wait for the owner._
+**Step 6 — #340 L3** (`feat/340-l3-search-rewrite`, paper `tmp/340-capabilities-plan.md` C1): the question → `/search` pattern rewrite (record rag-design **D-Z18**; measured on the real
+K: pack raw-server 6/9 → 9/9 hit@5; fixture `quality-questions-de.json`, replayed by the manual smoke). Next: L1 / L2 (owner questions first), then C2–C4; (b)/(c) wait for the owner._
 
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — WAVE CLOSED: Phases 0–7 complete, #294 MERGED to master (`92e86a07`, 16:12 UTC), #301 closed by the merge.**_
 The PR's review remediation — 28 findings (H1–H4, M1–M11, L1–L9 with L10 withdrawn, DOC-1–DOC-4; three assessed High, H3 and DOC-1/DOC-2 Medium) — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;

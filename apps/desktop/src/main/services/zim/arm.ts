@@ -3,6 +3,7 @@ import type { ExternalRetrievalOutput, RetrievedChunk } from '../rag'
 import { CHUNK_DEFAULTS, chunkSegments } from '../ingestion/chunker'
 import { fetchArticleHtml, searchPack } from './client'
 import { zimArticleToSegmentsAsync } from './html'
+import { searchPattern } from './query-rewrite'
 
 // Query-time candidate production for the ZIM retrieval arm (knowledge packs).
 // Per pack: Xapian full-text search (the archive's own index — the keyword stage we
@@ -186,11 +187,19 @@ export async function collectPackCandidates(
     if (abortFailure === undefined) abortFailure = err
   }
 
+  // #340 L3 (D-Z18): Xapian ANDs every word of the pattern, so the question's function and
+  // frame words are stripped before the search; the ORIGINAL question stays the reranker's
+  // query and the chunk picker's `terms`. A first search that finds nothing is retried ONCE
+  // with the narrower pattern (the kept terms of five or more characters) when that differs.
+  const rewrite = searchPattern(question)
   async function runPack(item: PackWork): Promise<void> {
     const { pack } = item
     let hits
     try {
-      hits = await searchPack(port, pack.id, question, ARTICLES_PER_PACK, signal)
+      hits = await searchPack(port, pack.id, rewrite.pattern, ARTICLES_PER_PACK, signal)
+      if (hits.length === 0 && rewrite.retry !== null) {
+        hits = await searchPack(port, pack.id, rewrite.retry, ARTICLES_PER_PACK, signal)
+      }
     } catch (err) {
       if (aborted()) return noteAbort(err)
       // Non-200 (a 404 included — ambiguous, never a capability verdict) or a network error.

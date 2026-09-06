@@ -2525,7 +2525,7 @@ reports and phase plans were working papers; their full text lives in git histor
   a short or empty pack's unused share goes to the others — and at most two packs are
   searched at a time, under a twenty-second limit for the whole question (a pack cut off
   mid-search is reported as "failed: timed out", one never reached in time as "not
-  searched: out of time for this question"). None of this considers language: a German question against an
+  searched: out of time for this question"). The pack server ANDs every word of the search pattern, so the app sends only the question's content words (function and question-frame words stripped, `rag-design.md` §17 D-Z18) and retries once with fewer words when nothing is found; a question whose every content word must appear in one article can still miss. None of this considers language: a German question against an
   English pack simply scores poorly; the reranker sorts it out when present, and without
   one, expect occasional off-language chunks. Aggregation or superlative questions ("which
   scientists are famous Austrians") tend to surface list or enumeration articles rather than

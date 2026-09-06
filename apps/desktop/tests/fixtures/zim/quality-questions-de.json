@@ -1,0 +1,16 @@
+{
+  "$comment": "#340 L3 (rag-design §17 D-Z18): the retrieval-quality fixture measured 2026-09-06 against the real pack wikipedia_de_climate-change_nopic_2026-07 (header UUID d30cd05e-b9ae-b7c2-52d7-c2b308e56554, 4102 articles) on kiwix-tools 3.8.1 win-x86_64 with no app code (raw /search, pageLength 5). `expectedTitles` lists the article titles that count as a hit@5 (any one of them among the top five). `rawHit` records whether the RAW question found one (the pre-L3 behaviour) and `answerable` whether the pack holds such an article at all. The manual smoke (tests/manual/zim-real.test.ts) replays this file when the registered archive is this pack and asserts every answerable question hits with the L3 rewrite; the unit suite zim-query-rewrite.test.ts pins the patterns. Raw evidence: ai_drive-archive/zim-wave-2026-09/evidence/l3-2026-09-06/.",
+  "packUuid": "d30cd05e-b9ae-b7c2-52d7-c2b308e56554",
+  "questions": [
+    { "question": "Welche Rolle spielt Methan beim Treibhauseffekt?", "expectedTitles": ["Treibhauseffekt", "Treibhausgas"], "rawHit": true, "answerable": true },
+    { "question": "Wie hoch ist die CO2-Konzentration in der Atmosphäre?", "expectedTitles": ["Keeling-Kurve", "Kohlenstoffdioxid"], "rawHit": true, "answerable": true },
+    { "question": "Was ist das Pariser Abkommen?", "expectedTitles": ["Übereinkommen von Paris"], "rawHit": true, "answerable": true },
+    { "question": "Warum steigt der Meeresspiegel?", "expectedTitles": ["Meeresspiegelanstieg seit 1850"], "rawHit": false, "answerable": true },
+    { "question": "Was bedeutet Klimasensitivität?", "expectedTitles": ["Klimasensitivität"], "rawHit": true, "answerable": true },
+    { "question": "Welche Folgen hat die globale Erwärmung für die Landwirtschaft?", "expectedTitles": ["Folgen der globalen Erwärmung"], "rawHit": true, "answerable": true },
+    { "question": "Was sind Kipppunkte im Klimasystem?", "expectedTitles": ["Kippelemente im Erdklimasystem"], "rawHit": true, "answerable": true },
+    { "question": "Welche Rolle spielt der Permafrost?", "expectedTitles": ["Permafrost"], "rawHit": false, "answerable": true },
+    { "question": "Wie funktioniert der Emissionshandel?", "expectedTitles": ["EU-Emissionshandel", "Emissionsrechtehandel"], "rawHit": false, "answerable": true },
+    { "question": "Was ist der Unterschied zwischen Wetter und Klima?", "expectedTitles": ["Klima"], "rawHit": false, "answerable": false }
+  ]
+}

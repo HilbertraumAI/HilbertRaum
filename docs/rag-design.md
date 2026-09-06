@@ -2706,6 +2706,31 @@ offline article viewer. Files are registered in place, never copied.
   support (P8-3), the on-drive corresponding-source bundle (P8-4), and the network-inventory
   prose (P8-5) — see "Deliberately not built" below.
 
+- **D-Z18 — the question → `/search` pattern rewrite (#340 L3, follow-up wave, 2026-09-06).**
+  The pinned kiwix-serve hands the pattern to libzim 9.4.0's Xapian query parser
+  (`search.cpp`): default operator **AND**, `STEM_ALL` with the archive's stemmer, the archive's
+  own stopper, and no boolean / phrase / wildcard flags — every question word the archive does
+  not stop is ANDed in, and the pinned German Wikipedia archives stop next to nothing
+  (`welche`, `rolle`, `spielt` each return hits on their own). Measured on the real climate pack
+  (raw server, ten German questions, hit@5, evidence
+  `ai_drive-archive/zim-wave-2026-09/evidence/l3-2026-09-06/`): the raw question 6 of 9
+  answerable; function words stripped 7 of 9 (AND still kept `rolle spielt`, `funktioniert`);
+  question-FRAME words stripped too **9 of 9**, never worse (Meeresspiegelanstieg, Permafrost,
+  EU-Emissionshandel recovered). `services/zim/query-rewrite.ts` `searchPattern(question)` keeps
+  the content words in their original spelling and order (`CO2-Konzentration`, `1850` — Xapian
+  stems and folds itself), drops the words of two CONSERVATIVE German + English lists applied
+  together (function words; frame words such as *Rolle spielt / funktioniert / bedeutet /
+  Unterschied zwischen*, *what is the role of / how does … work*), falls back to the raw question
+  when nothing survives, and offers a `retry` — the kept terms of `RETRY_MIN_TERM_CHARS = 5` or
+  more, only when that differs from the first pattern. `arm.ts` sends the pattern to `/search`
+  and, on ZERO hits with a retry available, asks once more (one extra ~100 ms request instead of
+  a "not found" the archive would have answered). The ORIGINAL question stays the reranker's
+  query, the prompt's question and the chunk picker's `queryTerms`; no constant of D-Z4 changes.
+  Fixture `tests/fixtures/zim/quality-questions-de.json` (the ten questions, expected titles,
+  the raw result); `zim-query-rewrite.test.ts` pins the rewrite; `zim-arm.test.ts` the retry;
+  the manual smoke replays the fixture when the registered archive is that pack and asserts
+  every answerable question hits.
+
 ### Module map
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work

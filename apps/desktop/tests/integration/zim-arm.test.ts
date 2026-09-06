@@ -57,6 +57,8 @@ function bigArticleHtml(): string {
 }
 /** Set by the fake sidecar once the big article's body has been written. */
 let bigArticleServed = false
+/** Every `/search` pattern the fixture server received, in order (#340 L3). */
+const searchPatterns: string[] = []
 /**
  * Article titles whose NEXT `/raw` read the fake sidecar CUTS SHORT — the measured kiwix-serve
  * 3.8.1 stall (#301 P7 T19): the 200, an honest `Content-Length` and most of the body arrive,
@@ -87,6 +89,7 @@ beforeAll(async () => {
         res.end('boom')
         return
       }
+      searchPatterns.push(url.searchParams.get('pattern') ?? '')
       const titles =
         book === 'pack-climate'
           ? ['Treibhausgas', 'Treibhauspotential']
@@ -94,7 +97,13 @@ beforeAll(async () => {
             ? ['Grossartikel']
             : book === 'pack-mixed'
               ? ['Kaputt', 'Schwefel']
-              : ['Schwefel']
+              : book === 'pack-retry'
+                ? // #340 L3: a book that answers ONLY the narrower retry pattern — the first
+                  // (broader) pattern finds nothing, the way an ANDed short generic word does.
+                  url.searchParams.get('pattern') === 'wirkt'
+                  ? ['Schwefel']
+                  : []
+                : ['Schwefel']
       res.writeHead(200, { 'content-type': 'application/xml' })
       res.end(searchXml(`book-${book}`, titles))
       return
@@ -249,9 +258,25 @@ describe('collectPackCandidates', () => {
     }
     setImmediate(cancelWhenServed)
 
-    await expect(
-      collectPackCandidates(port, [{ id: 'pack-big', title: 'Gross' }], 'Treibhausgas Landwirtschaft', signal)
-    ).rejects.toBe(reason)
+    // The PROPERTY this leg pins: an aborted ask REJECTS — it never resolves to an empty list.
+    // Which abort it rejects with is a scheduling fact, not the contract: the converter rejects
+    // with `signal.reason` at its next slice boundary, but since the P7 stall retry the client
+    // re-reads `signal.aborted` after an attempt and `combineSignals` reads it when the next
+    // request is created, so under load the transport can observe the cancellation first and
+    // reject with Node's own `AbortError` (seen three times on 2026-09-06 after heavy runs,
+    // never in isolation). Both are the ask's abort; neither is an empty list.
+    const err = await collectPackCandidates(
+      port,
+      [{ id: 'pack-big', title: 'Gross' }],
+      'Treibhausgas Landwirtschaft',
+      signal
+    ).then(
+      () => {
+        throw new Error('expected the aborted ask to reject, but it resolved')
+      },
+      (e: unknown) => e
+    )
+    expect(err === reason || (err instanceof Error && err.name === 'AbortError'), String(err)).toBe(true)
   })
 
   it('P1b a per-hit fetch failure is still skipped — only the conversion abort propagates', async () => {
@@ -262,6 +287,38 @@ describe('collectPackCandidates', () => {
     )
     expect(out.length).toBeGreaterThan(0)
     expect(out.every((c) => c.articlePath === 'Schwefel')).toBe(true)
+  })
+
+  // #340 L3 (D-Z18): the question's function and frame words never reach Xapian (it ANDs every
+  // word), and a first search that finds nothing is retried ONCE with the narrower pattern.
+  it('sends the rewritten pattern to /search and retries once, narrower, when the first search finds nothing', async () => {
+    searchPatterns.length = 0
+    const { candidates, outcomes } = await collectPackCandidates(
+      port,
+      [{ id: 'pack-retry', title: 'Retry' }],
+      'Wie wirkt CO2 auf das Eis?' // → 'wirkt CO2 Eis', retry 'wirkt'
+    )
+    expect(searchPatterns).toEqual(['wirkt CO2 Eis', 'wirkt'])
+    expect(candidates.length).toBeGreaterThan(0)
+    expect(outcomes[0]).toMatchObject({ packId: 'pack-retry', status: 'searched', found: candidates.length })
+
+    // An ordinary question: the frame words are gone, ONE search, no retry when it hits.
+    searchPatterns.length = 0
+    const climate = await collectPackCandidates(
+      port,
+      [{ id: 'pack-climate', title: 'Klima' }],
+      'Welche Rolle spielt das Treibhausgas beim Treibhauspotential?'
+    )
+    expect(searchPatterns).toEqual(['Treibhausgas Treibhauspotential'])
+    expect(climate.candidates.length).toBeGreaterThan(0)
+
+    // Zero hits and NO narrower pattern to try (every kept term is long): exactly one search,
+    // an honest empty result.
+    searchPatterns.length = 0
+    const none = await collectPackCandidates(port, [{ id: 'pack-retry', title: 'Retry' }], 'Warum steigt der Meeresspiegel?')
+    expect(searchPatterns).toEqual(['steigt Meeresspiegel'])
+    expect(none.candidates).toEqual([])
+    expect(none.outcomes[0]).toMatchObject({ packId: 'pack-retry', status: 'searched', found: 0 })
   })
 
   it('isolates a failing pack — the healthy pack still contributes', async () => {
