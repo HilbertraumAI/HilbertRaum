@@ -1086,6 +1086,31 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Models ----
   'models.title': 'KI-Modell',
+  'models.library.title': 'Modellbibliothek',
+  'models.library.view': 'Ansicht der Modellbibliothek',
+  'models.library.onDrive': 'Auf diesem Laufwerk',
+  'models.library.browse': 'Modelle entdecken',
+  'models.library.search': 'Modelle suchen',
+  'models.library.searchPlaceholder': 'Name, Familie oder Variante…',
+  'models.library.task': 'Aufgabe',
+  'models.library.allTasks': 'Alle Aufgaben',
+  'models.library.family': 'Familie',
+  'models.library.allFamilies': 'Alle Familien',
+  'models.library.chat': 'Chat',
+  'models.library.translation': 'Übersetzung',
+  'models.library.images': 'Bilder',
+  'models.library.voice': 'Spracheingabe',
+  'models.library.memory': 'Mindestarbeitsspeicher: {size}',
+  'models.library.clear': 'Filter zurücksetzen',
+  'models.library.showVariants': 'Alle Varianten anzeigen ({count})',
+  'models.library.hideVariants': 'Weniger Varianten anzeigen ({count})',
+  'models.library.results.one': '{count} passende Variante',
+  'models.library.results.other': '{count} passende Varianten',
+  'models.library.noMatches': 'Keine Modelle passen zu diesen Filtern. Versuche eine andere Suche oder setze die Filter zurück.',
+  'models.library.noneInstalled': 'Auf diesem Laufwerk sind noch keine Modelle einsatzbereit.',
+  'models.library.onlyActive': 'Dein installiertes Modell steht oben. Im Katalog findest du weitere Modelle.',
+  'models.library.noAlternatives': 'Dieser Katalog enthält keine weiteren Modelle.',
+  'models.library.download': 'Aktueller Modelldownload',
   'models.lead':
     'Das KI-Modell beantwortet deine Fragen, vollständig auf diesem Gerät. Alles wird vor ' +
     'der Verwendung geprüft, und nichts wird ohne deine ausdrückliche Bestätigung ' +
@@ -1132,6 +1157,14 @@ export const de: Record<keyof typeof en, string> = {
   'models.download.titled': '{name} herunterladen ({size})',
   'models.download.resume': 'Download fortsetzen',
   'models.download.start': 'Herunterladen',
+  // F2: Ein fehlgeschlagener oder ungeprüfter Download behält ein benanntes Ergebnis mit
+  // eigenen Wiederherstellungsaktionen über der Ergebnisliste (design-guidelines §15).
+  'models.download.failed': 'Der Download von {name} ist fehlgeschlagen.',
+  'models.download.retry': 'Download erneut versuchen',
+  'models.download.dismiss': 'Ausblenden',
+  'models.download.retryUnavailable':
+    'Dieses Modell wird hier nicht mehr zum Download angeboten und kann aus diesem Ergebnis ' +
+    'nicht erneut gestartet werden. Blende es aus oder suche das Modell in der Bibliothek.',
   // #196: Der Anbieter hat genau diese Datei entfernt.
   'models.download.withdrawn':
     'Nicht mehr zum Download verfügbar: Der Anbieter hat genau diese Datei entfernt ' +
@@ -1241,13 +1274,7 @@ export const de: Record<keyof typeof en, string> = {
   'models.empty.lineBefore': 'Lege YAML-Manifeste unter ',
   'models.empty.lineAfter': ' auf dem Laufwerk ab.',
   'models.section.yourModel': 'Dein KI-Modell',
-  'models.section.otherModels': 'Weitere Modelle',
-  'models.section.choose': 'Wähle dein KI-Modell',
   'models.section.docSearch': 'Dokumentsuche',
-  'models.section.other': 'Sonstiges',
-  // #35: die sichtbare Grenze installiert/herunterzuladen in einem gemischten Abschnitt.
-  'models.group.onDrive': 'Auf diesem Laufwerk – sofort nutzbar',
-  'models.group.toDownload': 'Zum Herunterladen verfügbar',
 
   // ---- Settings ----
   'settings.title': 'Einstellungen',

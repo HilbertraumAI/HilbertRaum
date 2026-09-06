@@ -34,6 +34,14 @@ from its first public `1.0.0` release onward.
   is saved, so older answers show no line after a restart — and only for plain chat answers with
   the real AI engine (not for document answers, and not for a stopped answer). English and German.
 
+- **A searchable model library:** switch between models on this drive and the full catalog,
+  filter by task or family, and expand quantization variants under one model entry. Compact
+  rows keep model actions visible; descriptions and technical details expand when needed. A
+  failed or unverifiable download keeps its named result, with Retry and Dismiss, above the
+  list; models the app can't verify stay listed under On this drive and their group opens
+  automatically; when several variants are equally good picks, the group shows one you can
+  actually download.
+
 ### Fixed
 
 - **The speed figure on Settings → Diagnostics is now the model's real decode speed.** The

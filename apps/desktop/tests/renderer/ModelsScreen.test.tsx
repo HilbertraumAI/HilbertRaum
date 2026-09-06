@@ -1,20 +1,26 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { act, render, screen, cleanup, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
+import {
+  ModelsScreen,
+  __resetModelsScreenMemoryForTests
+} from '../../src/renderer/screens/ModelsScreen'
 import {
   DEFAULT_SETTINGS,
   type AppStatus,
   type DownloadJob,
+  type EngineStatus,
   type ModelInfo,
   type PolicyStatus,
   type RuntimeStatus
 } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
-import { stubApi } from '../helpers/renderer'
-import { makePolicyStatus } from '../helpers/status'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { appStatus as appStatusFixture, makePolicyStatus } from '../helpers/status'
+import { groupModelVariants, variantGroupFace } from '../../src/renderer/lib/modelLibrary'
+import { orderPickerModels } from '../../src/renderer/lib/modelAvailability'
 
 // Phase 18 — the Models screen download surface: the gate states (why downloads are
 // unavailable: policy vs. Settings), the per-download confirmation (license
@@ -73,6 +79,13 @@ function stub(opts: {
 }
 
 afterEach(cleanup)
+
+// The screen deliberately keeps the download job, its model's name and any dismissed result in
+// MODULE state so leaving and re-entering the screen resumes/restores them. Tests must therefore
+// start from a known state instead of inheriting whatever the previous case left behind.
+beforeEach(() => {
+  __resetModelsScreenMemoryForTests()
+})
 
 describe('ModelsScreen — download gates (plan §6.1: explain WHY, policy vs Settings)', () => {
   it('disables Download and explains when the drive policy denies downloads', async () => {
@@ -196,7 +209,7 @@ describe('ModelsScreen — "AI Model" reframe (Phase 26, guidelines §2)', () =>
     await screen.findByText('Active Model')
 
     expect(screen.getByText('Your AI model')).toBeInTheDocument()
-    expect(screen.getByText('Other models')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Model library' })).toBeInTheDocument()
     // DOM order: the active model's card precedes the picker.
     const titles = [...document.querySelectorAll('.model-title')].map((el) => el.textContent)
     expect(titles).toEqual(['Active Model', 'Other Model'])
@@ -477,13 +490,8 @@ describe('ModelsScreen — one "Use this model" action (beta #27, D70 collapse)'
   })
 })
 
-// Issue #35: installed models and models that still need a multi-GB download used to sit
-// in ONE flat list, distinguishable only by the small state badge — the picker's
-// installed-first sort was invisible. Mixed sections now split into two labeled groups
-// ("On this drive — ready to use" / "Available to download"), and not-yet-downloaded
-// cards render visually muted (.model-card-missing).
-describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
-  it('labels both groups and keeps installed models first when the picker is mixed', async () => {
+describe('ModelsScreen — installed and catalog library views', () => {
+  it('defaults to on-drive models; Browse includes downloads with installed models first', async () => {
     stub({
       models: [
         model({ id: 'a-installed', displayName: 'A Installed', state: 'installed' }),
@@ -494,18 +502,15 @@ describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
     render(<ModelsScreen />)
     await screen.findByText('A Installed')
 
-    expect(screen.getByText(t('en', 'models.group.onDrive'))).toBeInTheDocument()
-    expect(screen.getByText(t('en', 'models.group.toDownload'))).toBeInTheDocument()
-    // Reading order: the on-drive label, its cards (manifest order preserved), the
-    // download label, then the not-yet-downloaded card.
-    const flow = [...document.querySelectorAll('.model-group-title, .model-title')].map(
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByText('B Missing')).not.toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole('radio', { name: 'Browse models' }))
+    const flow = [...document.querySelectorAll('.model-title')].map(
       (el) => el.textContent
     )
     expect(flow).toEqual([
-      t('en', 'models.group.onDrive'),
       'A Installed',
       'C Installed',
-      t('en', 'models.group.toDownload'),
       'B Missing'
     ])
   })
@@ -519,8 +524,11 @@ describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
     })
     render(<ModelsScreen />)
     await screen.findByText('A Installed')
-    expect(screen.queryByText(t('en', 'models.group.onDrive'))).not.toBeInTheDocument()
-    expect(screen.queryByText(t('en', 'models.group.toDownload'))).not.toBeInTheDocument()
+    // The old full-card picker's installed/needs-download subheading (#35) was removed with it
+    // (PR #302 F7) — confirm neither its retired literal copy nor its CSS hook still renders.
+    expect(screen.queryByText('On this drive — ready to use')).not.toBeInTheDocument()
+    expect(screen.queryByText('Available to download')).not.toBeInTheDocument()
+    expect(document.querySelector('.model-group-title')).not.toBeInTheDocument()
   })
 
   it('mutes not-yet-downloaded cards (.model-card-missing) so installed ones stand out', async () => {
@@ -532,6 +540,7 @@ describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
     })
     render(<ModelsScreen />)
     await screen.findByText('A Installed')
+    await userEvent.setup().click(screen.getByRole('radio', { name: 'Browse models' }))
     const cards = [...document.querySelectorAll('.model-card')]
     const missingCard = cards.find((c) => c.textContent?.includes('B Missing'))
     const installedCard = cards.find((c) => c.textContent?.includes('A Installed'))
@@ -559,9 +568,102 @@ describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
     })
     render(<ModelsScreen />)
     await screen.findByText('Embedder Installed')
-    expect(screen.getByText(t('en', 'models.section.docSearch'))).toBeInTheDocument()
-    expect(screen.getByText(t('en', 'models.group.onDrive'))).toBeInTheDocument()
-    expect(screen.getByText(t('en', 'models.group.toDownload'))).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: t('en', 'models.section.docSearch') })).toBeInTheDocument()
+    expect(screen.queryByText('Embedder Missing')).not.toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole('radio', { name: 'Browse models' }))
+    expect(screen.getByText('Embedder Missing')).toBeInTheDocument()
+  })
+})
+
+describe('ModelsScreen — search, tasks and model variants', () => {
+  it('starts in Browse on a fresh drive and expands exact variants with the recommended one first', async () => {
+    const user = userEvent.setup()
+    stub({ models: [
+      model({ id: 'qwen-q4', displayName: 'Qwen3.8 27B Q4_K_M' }),
+      model({ id: 'qwen-ud', displayName: 'Qwen3.8 27B UD-Q4_K_M', recommended: true }),
+      model({ id: 'qwen-q6', displayName: 'Qwen3.8 27B Q6_K' })
+    ] })
+    render(<ModelsScreen />)
+    expect(await screen.findByRole('radio', { name: 'Browse models' })).toHaveAttribute('aria-checked', 'true')
+    const group = within(screen.getByRole('region', { name: 'Qwen3.8 27B' }))
+    expect(group.getByText('Qwen3.8 27B UD-Q4_K_M')).toBeVisible()
+    expect(group.queryByText('Qwen3.8 27B Q4_K_M')).not.toBeInTheDocument()
+    const expand = group.getByRole('button', { name: 'Show all variants (3)' })
+    expand.focus()
+    await user.keyboard('{Enter}')
+    expect(expand).toHaveAttribute('aria-expanded', 'true')
+    expect(group.getByText('Qwen3.8 27B Q4_K_M')).toBeVisible()
+    // Each variant's action still targets its exact catalog id.
+    await user.click(within(group.getByText('Qwen3.8 27B Q6_K').closest('.model-card') as HTMLElement)
+      .getByRole('button', { name: 'Download' }))
+    expect(screen.getByRole('dialog')).toHaveTextContent('Qwen3.8 27B Q6_K')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+    await user.click(expand)
+    expect(group.queryByText('Qwen3.8 27B Q6_K')).not.toBeInTheDocument()
+    // A search finds a collapsed variant directly, without first expanding its group.
+    await user.type(screen.getByRole('searchbox', { name: 'Search models' }), 'qwen Q6')
+    expect(screen.getByText('Qwen3.8 27B Q6_K')).toBeVisible()
+    expect(screen.queryByText('Qwen3.8 27B UD-Q4_K_M')).not.toBeInTheDocument()
+  })
+
+  it('combines task, family and case-insensitive search; reset restores results and keeps the active model pinned', async () => {
+    const user = userEvent.setup()
+    stub({ activeModelId: 'active', models: [
+      model({ id: 'active', displayName: 'Active model', state: 'running' }),
+      model({ id: 'embed', displayName: 'Document embedder', family: 'e5', role: 'embeddings', state: 'installed' }),
+      model({ id: 'rerank', displayName: 'Document reranker', family: 'bge', role: 'reranker', state: 'installed' }),
+      model({ id: 'voice', displayName: 'Voice model', family: 'whisper', role: 'transcriber', state: 'installed' })
+    ] })
+    render(<ModelsScreen />)
+    await screen.findByText('Active model')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'documents')
+    expect(screen.getByText('Document embedder')).toBeVisible()
+    expect(screen.getByText('Document reranker')).toBeVisible()
+    expect(screen.queryByText('Voice model')).not.toBeInTheDocument()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Family' }), 'bge')
+    await user.type(screen.getByRole('searchbox'), 'RERANK')
+    expect(screen.getByText('Document reranker')).toBeVisible()
+    expect(screen.queryByText('Document embedder')).not.toBeInTheDocument()
+    await user.type(screen.getByRole('searchbox'), ' xyz')
+    expect(screen.getByText(/No models match/)).toBeVisible()
+    expect(screen.getByText('Active model')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }))
+    expect(screen.getByText('Voice model')).toBeVisible()
+    expect(screen.getByText('Document embedder')).toBeVisible()
+  })
+
+  it('does not hide an installed variant when this computer has too little memory', async () => {
+    stub({ models: [model({ state: 'installed', insufficientRam: true })] })
+    render(<ModelsScreen />)
+    expect(await screen.findByRole('button', { name: 'Use this model' })).toBeDisabled()
+    expect(screen.getByText('Qwen3 4B Instruct')).toBeVisible()
+  })
+
+  it('keeps a filtered-out download cancellable and preserves the chosen view', async () => {
+    const user = userEvent.setup()
+    const downloading = model({ id: 'filtered-download', displayName: 'Filtered download Q4' })
+    let currentJob: DownloadJob = {
+      jobId: 'filtered-job', modelId: downloading.id, status: 'downloading',
+      receivedBytes: 10, totalBytes: 1000, unverified: false, error: null
+    }
+    stub({ models: [downloading], downloadModel: vi.fn(async () => currentJob),
+      getDownloadJob: vi.fn(async () => currentJob) })
+    const cancel = vi.fn(async () => {
+      currentJob = { ...currentJob, status: 'cancelled' }
+      return currentJob
+    })
+    window.api.cancelDownload = cancel
+    render(<ModelsScreen />)
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    await user.click(screen.getByRole('radio', { name: 'On this drive' }))
+    await user.type(screen.getByRole('searchbox'), 'no match')
+    const progress = within(screen.getByRole('region', { name: 'Current model download' }))
+    expect(progress.getByText(downloading.displayName)).toBeVisible()
+    await user.click(progress.getByRole('button', { name: 'Cancel download' }))
+    expect(cancel).toHaveBeenCalledWith('filtered-job')
+    expect(screen.queryByRole('region', { name: 'Current model download' })).not.toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute('aria-checked', 'true')
   })
 })
 
@@ -581,7 +683,7 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
   it('offers the 65,536 and 131,072 rungs — the old 32k ceiling dead-ended long-document workflows', async () => {
     stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4' })
     render(<ModelsScreen />)
-    const select = await screen.findByRole('combobox')
+    const select = await screen.findByRole('combobox', { name: /Context window for answers/ })
     expect(within(select).getByRole('option', { name: '65,536 tokens' })).toBeInTheDocument()
     expect(within(select).getByRole('option', { name: '131,072 tokens' })).toBeInTheDocument()
   })
@@ -591,7 +693,7 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
       model({ state: 'installed', recommendedContextTokens: 98_304 })
     ])
     render(<ModelsScreen />)
-    const select = await screen.findByRole('combobox')
+    const select = await screen.findByRole('combobox', { name: /Context window for answers/ })
     // "Auto" is often the LARGEST choice in the list; naming its resolved size stops it
     // reading as a small default (issue #43).
     expect(within(select).getByRole('option', { name: /Automatic.*98,304/ })).toBeInTheDocument()
@@ -637,7 +739,7 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
     // BLANK. It now gets an extra option in the same label style, selected.
     stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4', contextTokensOverride: 24_576 })
     render(<ModelsScreen />)
-    const select = (await screen.findByRole('combobox')) as HTMLSelectElement
+    const select = (await screen.findByRole('combobox', { name: /Context window for answers/ })) as HTMLSelectElement
     const option = within(select).getByRole('option', {
       name: t('en', 'models.tech.contextValue', { count: (24_576).toLocaleString('en') })
     }) as HTMLOptionElement
@@ -648,13 +750,13 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
   it('shows the honest memory warning for a big fixed pick — and not for a small one', async () => {
     stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4', contextTokensOverride: 131_072 })
     render(<ModelsScreen />)
-    await screen.findByRole('combobox')
+    await screen.findByRole('combobox', { name: /Context window for answers/ })
     expect(document.querySelector('.context-size-warning')).not.toBeNull()
     cleanup()
 
     stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4', contextTokensOverride: 8192 })
     render(<ModelsScreen />)
-    await screen.findByRole('combobox')
+    await screen.findByRole('combobox', { name: /Context window for answers/ })
     expect(document.querySelector('.context-size-warning')).toBeNull()
   })
 })
@@ -912,5 +1014,1111 @@ describe('ModelsScreen — the licence link names its host and is https-only (#2
     )
     expect(dialog.queryByRole('link', { name: /read the license/ })).not.toBeInTheDocument()
     expect(dialog.getByText(/apache-2\.0/)).toBeInTheDocument() // the licence name still shows
+  })
+})
+
+// PR #302 fix wave P3 (audit finding F2, gate B1): a download that FAILS, or completes without a
+// verifiable checksum, used to lose its independent panel at exactly the moment the user needed
+// it — the result then only lived on the model's own row, which a search, a task/family/view
+// filter or a collapsed variant group may be hiding. The panel now keeps a NAMED result with
+// Retry / Dismiss until the user acts, a new download is accepted, or the download ends verified
+// or cancelled. The first seven cases are ports of the audit's `model-library.probe.tsx`; the
+// rest pin the lifecycle, gating and stale-response contract of the fix.
+describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B1)', () => {
+  const REGION = 'Current model download'
+  const RETRY = t('en', 'models.download.retry')
+  const DISMISS = t('en', 'models.download.dismiss')
+
+  function variant(id: string, displayName: string, over: Partial<ModelInfo> = {}): ModelInfo {
+    return model({ id, displayName, family: 'qwen3.8', ...over })
+  }
+
+  function jobOf(jobId: string, modelId: string, over: Partial<DownloadJob> = {}): DownloadJob {
+    return {
+      jobId,
+      modelId,
+      status: 'downloading',
+      receivedBytes: 10,
+      totalBytes: 1000,
+      unverified: false,
+      error: null,
+      ...over
+    }
+  }
+
+  // Typed idle fixtures instead of `... as never` payload casts (F-41 ratchet): the engine has
+  // every family installed (no installer banner) and nothing is starting.
+  const idleEngine: EngineStatus = {
+    installed: true,
+    available: true,
+    version: null,
+    backend: null,
+    missingFamilies: []
+  }
+  const idleRuntime: RuntimeStatus = {
+    running: false,
+    modelId: null,
+    startingModelId: null,
+    port: null,
+    healthy: false,
+    message: ''
+  }
+
+  /** Every bridge method the screen actually calls, so `assertNoUnexpectedApiCalls` has teeth. */
+  function stubLive(opts: {
+    models: () => ModelInfo[]
+    job?: () => DownloadJob
+    policy?: () => PolicyStatus
+    activeModelId?: string | null
+    downloadModel?: (id: string, o?: { licenseAccepted?: boolean }) => Promise<DownloadJob>
+    getDownloadJob?: (jobId: string) => Promise<DownloadJob>
+    listModels?: () => Promise<ModelInfo[]>
+    useModel?: ReturnType<typeof vi.fn>
+  }): {
+    listModels: ReturnType<typeof vi.fn>
+    downloadModel: ReturnType<typeof vi.fn>
+    getDownloadJob: ReturnType<typeof vi.fn>
+  } {
+    const listModels = vi.fn(opts.listModels ?? (async () => opts.models()))
+    const downloadModel = vi.fn(opts.downloadModel ?? (async () => opts.job!()))
+    const getDownloadJob = vi.fn(opts.getDownloadJob ?? (async () => opts.job!()))
+    stubApi({
+      listModels,
+      getSettings: vi.fn(async () => ({
+        ...DEFAULT_SETTINGS,
+        activeModelId: opts.activeModelId ?? null
+      })),
+      getPolicy: vi.fn(async () =>
+        (opts.policy ?? (() => policyStatus({ downloadsAllowed: true, settingOn: true })))()
+      ),
+      getAppStatus: vi.fn(async () => appStatus),
+      getEngineStatus: vi.fn(async () => idleEngine),
+      getRuntimeStatus: vi.fn(async () => idleRuntime),
+      onModelVerifyProgress: vi.fn(() => () => {}),
+      downloadModel,
+      getDownloadJob,
+      ...(opts.useModel ? { useModel: opts.useModel } : {})
+    })
+    return { listModels, downloadModel, getDownloadJob }
+  }
+
+  const panel = (): ReturnType<typeof within> =>
+    within(screen.getByRole('region', { name: REGION }))
+
+  /** The `.model-card` for a display name — never the panel's own <strong> heading. */
+  function cardFor(displayName: string): HTMLElement {
+    const card = screen
+      .getAllByText(displayName)
+      .map((el) => el.closest('.model-card'))
+      .find((el): el is HTMLElement => el != null)
+    expect(card).toBeTruthy()
+    return card as HTMLElement
+  }
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((r) => {
+      resolve = r
+    })
+    return { promise, resolve }
+  }
+
+  afterEach(() => {
+    cleanup()
+    assertNoUnexpectedApiCalls()
+  })
+
+  // ---- Ported audit probes (`model-library.probe.tsx`) -----------------------------------------
+
+  it.each(['search', 'collapsed group'] as const)(
+    'keeps a failed download visible after hiding its row via %s',
+    async (hide) => {
+      const user = userEvent.setup()
+      const first = variant(`f1-${hide}`, 'Result group Q4_K_M')
+      const second = variant(`f2-${hide}`, 'Result group Q6_K')
+      let current = jobOf(`failed-${hide}`, second.id)
+      const api = stubLive({ models: () => [first, second], job: () => current })
+      render(<ModelsScreen />)
+
+      await user.click(await screen.findByRole('button', { name: 'Show all variants (2)' }))
+      await user.click(within(cardFor(second.displayName)).getByRole('button', { name: 'Download' }))
+      await user.click(screen.getByRole('button', { name: 'Start download' }))
+      await screen.findByRole('region', { name: REGION })
+      if (hide === 'search') await user.type(screen.getByRole('searchbox'), 'no match')
+      else await user.click(screen.getByRole('button', { name: 'Show fewer variants (2)' }))
+
+      current = { ...current, status: 'failed', error: `download failed (${hide})` }
+      await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+      // The result names its model and carries its own recovery actions, wherever it renders.
+      expect(panel().getByText(`download failed (${hide})`)).toBeVisible()
+      expect(panel().getByText(second.displayName)).toBeVisible()
+      expect(panel().getByRole('button', { name: RETRY })).toBeEnabled()
+      expect(panel().getByRole('button', { name: DISMISS })).toBeEnabled()
+    }
+  )
+
+  it.each(['search', 'collapsed group'] as const)(
+    'keeps an unverified completion warning visible through %s',
+    async (hide) => {
+      const user = userEvent.setup()
+      const first = variant(`u1-${hide}`, 'Unverified group Q4_K_M')
+      let second = variant(`u2-${hide}`, 'Unverified group Q6_K')
+      let current = jobOf(`unverified-${hide}`, second.id)
+      const api = stubLive({ models: () => [first, second], job: () => current })
+      render(<ModelsScreen />)
+
+      await user.click(await screen.findByRole('button', { name: 'Show all variants (2)' }))
+      await user.click(within(cardFor(second.displayName)).getByRole('button', { name: 'Download' }))
+      await user.click(screen.getByRole('button', { name: 'Start download' }))
+      await screen.findByRole('region', { name: REGION })
+      if (hide === 'search') await user.type(screen.getByRole('searchbox'), 'no match')
+      else await user.click(screen.getByRole('button', { name: 'Show fewer variants (2)' }))
+
+      second = { ...second, state: 'installed' }
+      current = { ...current, status: 'done', unverified: true, receivedBytes: 1000 }
+      await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+      expect(panel().getByText('verify-models --generate')).toBeVisible()
+      expect(panel().getByText(second.displayName)).toBeVisible()
+      expect(panel().getByRole('button', { name: DISMISS })).toBeEnabled()
+    }
+  )
+
+  it('sends the exact expanded variant ID and its own license acknowledgement to downloadModel', async () => {
+    const user = userEvent.setup()
+    const first = variant('q4-action-control', 'Action control Q4_K_M')
+    const second = variant('q6-action-control', 'Action control Q6_K', {
+      download: {
+        url: 'https://example.test/q6.gguf',
+        sizeBytes: 1000,
+        licenseUrl: 'https://example.test/license',
+        licenseApproved: false
+      }
+    })
+    const api = stubLive({
+      models: () => [first, second],
+      job: () => jobOf('action-control', second.id, { status: 'cancelled' })
+    })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Show all variants (2)' }))
+    await user.click(within(cardFor(second.displayName)).getByRole('button', { name: 'Download' }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByRole('button', { name: 'Start download' })).toBeDisabled()
+    expect(api.downloadModel).not.toHaveBeenCalled()
+    await user.click(dialog.getByRole('checkbox'))
+    await user.click(dialog.getByRole('button', { name: 'Start download' }))
+    expect(api.downloadModel).toHaveBeenCalledExactlyOnceWith(second.id, { licenseAccepted: true })
+  })
+
+  it('sends the exact expanded installed variant ID to useModel', async () => {
+    const user = userEvent.setup()
+    const first = variant('q4-use-control', 'Use control Q4_K_M', { state: 'installed' })
+    const second = variant('q6-use-control', 'Use control Q6_K', { state: 'installed' })
+    const useModel = vi.fn(async () => idleRuntime)
+    stubLive({ models: () => [first, second], useModel })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Show all variants (2)' }))
+    await user.click(
+      within(cardFor(second.displayName)).getByRole('button', { name: t('en', 'models.use') })
+    )
+    expect(useModel).toHaveBeenCalledExactlyOnceWith(second.id)
+  })
+
+  it('preserves Browse and finds the installed model after a filtered verified completion', async () => {
+    const user = userEvent.setup()
+    let entry = variant('completion-control', 'Completed model Q4')
+    let current = jobOf('completion-control-job', entry.id)
+    const api = stubLive({ models: () => [entry], job: () => current })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    await user.type(screen.getByRole('searchbox'), 'no match')
+
+    entry = { ...entry, state: 'installed' }
+    current = { ...current, status: 'done', receivedBytes: 1000 }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+    // A VERIFIED completion needs no result surface — today's behaviour is preserved exactly.
+    expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Browse models' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }))
+    expect(screen.getByRole('button', { name: t('en', 'models.use') })).toBeEnabled()
+  })
+
+  // ---- Hiding controls beyond search / collapse -------------------------------------------------
+
+  it.each(['task', 'family', 'view'] as const)(
+    'keeps a failed result visible when the %s filter hides its row',
+    async (control) => {
+      const user = userEvent.setup()
+      const chatModel = variant(`hidden-${control}`, `Hidden chat model ${control}`)
+      const other = model({
+        id: `other-${control}`,
+        displayName: `Other embedder ${control}`,
+        family: 'e5',
+        role: 'embeddings'
+      })
+      let current = jobOf(`hide-${control}`, chatModel.id)
+      const api = stubLive({ models: () => [chatModel, other], job: () => current })
+      render(<ModelsScreen />)
+
+      await screen.findByText(chatModel.displayName)
+      await user.click(
+        within(cardFor(chatModel.displayName)).getByRole('button', { name: 'Download' })
+      )
+      await user.click(screen.getByRole('button', { name: 'Start download' }))
+      current = { ...current, status: 'failed', error: `hidden by ${control}` }
+      await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+      if (control === 'task') {
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'documents')
+      } else if (control === 'family') {
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Family' }), 'e5')
+      } else {
+        await user.click(screen.getByRole('radio', { name: 'On this drive' }))
+      }
+
+      // No ROW carries the model any more — only the panel does.
+      const rows = [...document.querySelectorAll('.model-card')]
+      expect(rows.some((row) => row.textContent?.includes(chatModel.displayName))).toBe(false)
+      expect(panel().getByText(`hidden by ${control}`)).toBeVisible()
+      expect(panel().getByText(chatModel.displayName)).toBeVisible()
+      expect(panel().getByRole('button', { name: RETRY })).toBeInTheDocument()
+    }
+  )
+
+  // ---- Structural: one panel node, one always-mounted alert node --------------------------------
+
+  it('keeps the SAME panel and alert nodes across the live → failed transition', async () => {
+    const user = userEvent.setup()
+    const entry = variant('same-node', 'Same node model')
+    let current = jobOf('same-node-job', entry.id)
+    const api = stubLive({ models: () => [entry], job: () => current })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    const region = await screen.findByRole('region', { name: REGION })
+    const alert = within(region).getByRole('alert')
+    // Mounted and EMPTY during progress: a live region that only appears at failure is not
+    // reliably announced (the SH-2 / M-U1 discipline applied to the download panel).
+    expect(alert).toBeInTheDocument()
+    expect(alert).toHaveTextContent('')
+
+    current = { ...current, status: 'failed', error: 'the connection dropped' }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+    expect(screen.getByRole('region', { name: REGION })).toBe(region)
+    expect(within(region).getByRole('alert')).toBe(alert)
+    expect(alert).toHaveTextContent('the connection dropped')
+  })
+
+  // ---- Refresh at the terminal transition -------------------------------------------------------
+
+  it.each(['as installed', 'not at all'] as const)(
+    'keeps the named result when the refresh returns the model %s',
+    async (how) => {
+      const user = userEvent.setup()
+      let entry = variant(
+        `refresh-${how === 'as installed' ? 'installed' : 'gone'}`,
+        'Refreshed model Q4'
+      )
+      let listed: ModelInfo[] = [entry]
+      let current = jobOf(`refresh-job-${how === 'as installed' ? 'installed' : 'gone'}`, entry.id)
+      const api = stubLive({ models: () => listed, job: () => current })
+      render(<ModelsScreen />)
+
+      await user.click(await screen.findByRole('button', { name: 'Download' }))
+      await user.click(screen.getByRole('button', { name: 'Start download' }))
+
+      entry = { ...entry, state: 'installed' }
+      listed = how === 'as installed' ? [entry] : []
+      current = { ...current, status: 'failed', error: 'checksum mismatch after retry' }
+      await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+      expect(panel().getByText('Refreshed model Q4')).toBeVisible()
+      expect(panel().getByText('checksum mismatch after retry')).toBeVisible()
+      if (how === 'not at all') {
+        // No retry target left: explained, not a button that could only fail.
+        expect(panel().getByRole('button', { name: RETRY })).toBeDisabled()
+        expect(panel().getByText(t('en', 'models.download.retryUnavailable'))).toBeVisible()
+      }
+    }
+  )
+
+  it('keeps the result and shows the friendly error when the completion refresh rejects', async () => {
+    const user = userEvent.setup()
+    const entry = variant('refresh-reject', 'Refresh reject model')
+    let failRefresh = false
+    let current = jobOf('refresh-reject-job', entry.id)
+    stubLive({
+      models: () => [entry],
+      job: () => current,
+      listModels: async () => {
+        if (failRefresh) {
+          throw new Error("Error invoking remote method 'models:list': Error: refresh exploded")
+        }
+        return [entry]
+      }
+    })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    failRefresh = true
+    current = { ...current, status: 'failed', error: 'server closed the connection' }
+
+    expect(
+      await screen.findByText('refresh exploded', undefined, { timeout: 3000 })
+    ).toBeInTheDocument()
+    expect(panel().getByText('server closed the connection')).toBeVisible()
+    expect(panel().getByText(entry.displayName)).toBeVisible()
+  })
+
+  // ---- Dismiss ----------------------------------------------------------------------------------
+
+  it('Dismiss drops the panel and hands the row back its own recovery UI', async () => {
+    const user = userEvent.setup()
+    const entry = variant('dismiss-model', 'Dismiss model Q4')
+    let current = jobOf('dismiss-job', entry.id)
+    const api = stubLive({ models: () => [entry], job: () => current })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    current = { ...current, status: 'failed', error: 'disk full' }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+    // While the panel owns the job the row does not repeat the outcome.
+    expect(within(cardFor(entry.displayName)).queryByText('disk full')).not.toBeInTheDocument()
+
+    await user.click(panel().getByRole('button', { name: DISMISS }))
+    expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument()
+    const row = within(cardFor(entry.displayName))
+    expect(row.getByRole('button', { name: t('en', 'models.download.resume') })).toBeEnabled()
+    expect(row.getByText('disk full')).toBeVisible()
+  })
+
+  it('a dismissed result does not come back on a re-render or a remount', async () => {
+    const user = userEvent.setup()
+    const entry = variant('dismiss-sticky', 'Dismiss sticky Q4')
+    let current = jobOf('dismiss-sticky-job', entry.id)
+    const api = stubLive({ models: () => [entry], job: () => current })
+    const view = render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    current = { ...current, status: 'failed', error: 'gone for good' }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+    await user.click(panel().getByRole('button', { name: DISMISS }))
+
+    // A re-render driven by a filter change must not resurrect it…
+    await user.click(screen.getByRole('radio', { name: 'Browse models' }))
+    expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument()
+
+    // …and neither must leaving and re-entering the screen (the dismissal is remembered by id).
+    view.unmount()
+    render(<ModelsScreen />)
+    await screen.findByText(entry.displayName)
+    expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument()
+    expect(screen.getByText('gone for good')).toBeVisible() // the row still explains it
+  })
+
+  // ---- Retry ------------------------------------------------------------------------------------
+
+  it('Retry opens the existing confirmation for the exact variant; cancelling keeps the result', async () => {
+    const user = userEvent.setup()
+    const first = variant('retry-q4', 'Retry group Q4_K_M')
+    const second = variant('retry-q6', 'Retry group Q6_K', {
+      download: {
+        url: 'https://example.test/retry-q6.gguf',
+        sizeBytes: 1000,
+        licenseUrl: 'https://licenses.example.test/q6/LICENSE',
+        licenseApproved: true
+      }
+    })
+    let current = jobOf('retry-dialog-job', second.id)
+    const api = stubLive({ models: () => [first, second], job: () => current })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Show all variants (2)' }))
+    await user.click(within(cardFor(second.displayName)).getByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    current = { ...current, status: 'failed', error: 'retry me' }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+    await user.click(panel().getByRole('button', { name: RETRY }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(screen.getByRole('dialog')).toHaveTextContent(second.displayName)
+    expect(dialog.getByText('https://example.test/retry-q6.gguf')).toBeInTheDocument()
+    expect(dialog.getByRole('link', { name: /read the license/ })).toHaveAttribute(
+      'href',
+      'https://licenses.example.test/q6/LICENSE'
+    )
+    await user.click(dialog.getByRole('button', { name: 'Cancel' }))
+    expect(api.downloadModel).toHaveBeenCalledTimes(1) // the original start only
+    expect(panel().getByText('retry me')).toBeVisible()
+  })
+
+  it('a rejected retry keeps the result and surfaces the friendly error', async () => {
+    const user = userEvent.setup()
+    const entry = variant('retry-reject', 'Retry reject Q4')
+    let current = jobOf('retry-reject-job', entry.id)
+    let rejectNext = false
+    const api = stubLive({
+      models: () => [entry],
+      job: () => current,
+      downloadModel: async () => {
+        if (rejectNext) {
+          throw new Error("Error invoking remote method 'models:download': Error: start refused")
+        }
+        return current
+      }
+    })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    current = { ...current, status: 'failed', error: 'first attempt failed' }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+    rejectNext = true
+    await user.click(panel().getByRole('button', { name: RETRY }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+
+    expect(await screen.findByText('start refused')).toBeInTheDocument()
+    expect(panel().getByText('first attempt failed')).toBeVisible()
+  })
+
+  it('a successful retry re-asks for the licence, reuses the exact id and replaces the panel', async () => {
+    const user = userEvent.setup()
+    const entry = variant('retry-ok', 'Retry ok Q4', {
+      download: {
+        url: 'https://example.test/retry-ok.gguf',
+        sizeBytes: 1000,
+        licenseUrl: 'https://example.test/license',
+        licenseApproved: false
+      }
+    })
+    let current = jobOf('retry-ok-job-1', entry.id)
+    const api = stubLive({
+      models: () => [entry],
+      job: () => current,
+      downloadModel: async () => current
+    })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    current = { ...current, status: 'failed', error: 'first attempt failed' }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+    await user.click(panel().getByRole('button', { name: RETRY }))
+    // The acknowledgement is RESET — a retry never silently accepts a pending license.
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByRole('checkbox')).not.toBeChecked()
+    expect(dialog.getByRole('button', { name: 'Start download' })).toBeDisabled()
+    current = jobOf('retry-ok-job-2', entry.id)
+    await user.click(dialog.getByRole('checkbox'))
+    await user.click(dialog.getByRole('button', { name: 'Start download' }))
+
+    expect(api.downloadModel).toHaveBeenCalledTimes(2)
+    expect(api.downloadModel).toHaveBeenLastCalledWith(entry.id, { licenseAccepted: true })
+    // The accepted job REPLACES the result: live progress, and the old failure is gone.
+    expect(panel().getByRole('button', { name: 'Cancel download' })).toBeInTheDocument()
+    expect(screen.queryByText('first attempt failed')).not.toBeInTheDocument()
+  })
+
+  it('disables Retry with the policy reason when downloads are gated at the refresh', async () => {
+    const user = userEvent.setup()
+    const entry = variant('retry-gated', 'Retry gated Q4')
+    let current = jobOf('retry-gated-job', entry.id)
+    let allowed = true
+    const api = stubLive({
+      models: () => [entry],
+      job: () => current,
+      policy: () => policyStatus({ downloadsAllowed: allowed, settingOn: true })
+    })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    allowed = false
+    current = { ...current, status: 'failed', error: 'network went away' }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+    const retry = panel().getByRole('button', { name: RETRY })
+    expect(retry).toBeDisabled()
+    expect(retry).toHaveAttribute('title', t('en', 'models.downloads.blockedByPolicy'))
+    expect(panel().getByText('network went away')).toBeVisible()
+  })
+
+  it('disables Retry and explains when the download was withdrawn at the refresh (#196)', async () => {
+    const user = userEvent.setup()
+    let entry = variant('retry-withdrawn', 'Retry withdrawn Q4')
+    let current = jobOf('retry-withdrawn-job', entry.id)
+    const api = stubLive({ models: () => [entry], job: () => current })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    entry = {
+      ...entry,
+      download: { ...entry.download!, withdrawn: '2026-09-01: upstream deleted the file' }
+    }
+    current = { ...current, status: 'failed', error: 'HTTP 404' }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+    expect(panel().getByRole('button', { name: RETRY })).toBeDisabled()
+    expect(panel().getByText(/No longer available for download/)).toBeVisible()
+    expect(panel().getByText('HTTP 404')).toBeVisible()
+  })
+
+  // ---- A retained result must never behave like a live job --------------------------------------
+
+  it('never blocks another model: Download and Use stay enabled, and a new job replaces the result', async () => {
+    const user = userEvent.setup()
+    const failing = variant('stale-failing', 'Stale failing Q4')
+    const another = model({
+      id: 'stale-other',
+      displayName: 'Another downloadable model',
+      family: 'gemma'
+    })
+    const installed = model({
+      id: 'stale-installed',
+      displayName: 'Another installed model',
+      family: 'phi',
+      state: 'installed'
+    })
+    let current = jobOf('stale-failing-job', failing.id)
+    const api = stubLive({
+      models: () => [failing, another, installed],
+      job: () => current,
+      downloadModel: async (id) => {
+        if (id === another.id) current = jobOf('stale-new-job', id)
+        return current
+      },
+      useModel: vi.fn(async () => idleRuntime)
+    })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('radio', { name: 'Browse models' }))
+    await user.click(within(cardFor(failing.displayName)).getByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    current = { ...current, status: 'failed', error: 'stale result' }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+    // The ONLY gate on other rows is still a LIVE job (`JOB_LIVE`) — a retained result is not one.
+    expect(
+      within(cardFor(another.displayName)).getByRole('button', { name: 'Download' })
+    ).toBeEnabled()
+    expect(
+      within(cardFor(installed.displayName)).getByRole('button', { name: t('en', 'models.use') })
+    ).toBeEnabled()
+
+    await user.click(within(cardFor(another.displayName)).getByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    expect(panel().getByText(another.displayName)).toBeVisible()
+    expect(screen.queryByText('stale result')).not.toBeInTheDocument()
+  })
+
+  it('ignores a late poll response for a job that is no longer current', async () => {
+    const user = userEvent.setup()
+    const first = variant('late-first', 'Late first Q4')
+    const second = model({ id: 'late-second', displayName: 'Late second model', family: 'gemma' })
+    const late = deferred<DownloadJob>()
+    const firstFailed = jobOf('late-job-1', first.id, { status: 'failed', error: 'late failure' })
+    let currentSecond = jobOf('late-job-2', second.id)
+    let firstPolls = 0
+    const api = stubLive({
+      models: () => [first, second],
+      getDownloadJob: async (jobId) => {
+        if (jobId === 'late-job-1') {
+          firstPolls += 1
+          // The FIRST poll never settles until the test releases it; the second reports the
+          // failure, so the panel reaches its terminal state with one response still in flight.
+          return firstPolls === 1 ? late.promise : firstFailed
+        }
+        return currentSecond
+      },
+      downloadModel: async (id) => {
+        if (id === second.id) {
+          currentSecond = jobOf('late-job-2', second.id)
+          return currentSecond
+        }
+        return jobOf('late-job-1', first.id)
+      }
+    })
+    render(<ModelsScreen />)
+
+    await screen.findByText(first.displayName)
+    await user.click(within(cardFor(first.displayName)).getByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    await waitFor(() => expect(panel().getByText('late failure')).toBeVisible(), { timeout: 4000 })
+
+    await user.click(within(cardFor(second.displayName)).getByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    expect(panel().getByText(second.displayName)).toBeVisible()
+
+    late.resolve(firstFailed)
+    await act(async () => {
+      await late.promise
+    })
+    // The stale response must not resurrect the replaced result.
+    expect(screen.queryByText('late failure')).not.toBeInTheDocument()
+    expect(panel().getByText(second.displayName)).toBeVisible()
+    expect(api.listModels).toHaveBeenCalled()
+  })
+
+  // ---- Remembered job across ordinary screen navigation -----------------------------------------
+
+  it('shows the named result on return when the download failed while the screen was away', async () => {
+    const user = userEvent.setup()
+    const entry = variant('away-model', 'Away model Q4')
+    let current = jobOf('away-job', entry.id)
+    stubLive({ models: () => [entry], job: () => current })
+    const view = render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    await screen.findByRole('region', { name: REGION })
+
+    view.unmount() // leaving the screen; the job keeps running in the main process
+    current = { ...current, status: 'failed', error: 'failed while away' }
+
+    render(<ModelsScreen />) // …and coming back resumes the remembered job and shows its result
+    await waitFor(() => expect(panel().getByText('failed while away')).toBeVisible(), {
+      timeout: 3000
+    })
+    expect(panel().getByText(entry.displayName)).toBeVisible()
+    expect(panel().getByRole('button', { name: RETRY })).toBeEnabled()
+  })
+
+  // ---- Automatic roles share the surface --------------------------------------------------------
+
+  it('names the result for an automatic-role download (embeddings) in the default view', async () => {
+    const user = userEvent.setup()
+    const embedder = model({
+      id: 'auto-embedder',
+      displayName: 'Document embedder (E5)',
+      family: 'e5',
+      role: 'embeddings'
+    })
+    let current = jobOf('auto-embedder-job', embedder.id)
+    const api = stubLive({ models: () => [embedder], job: () => current })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    current = { ...current, status: 'failed', error: 'embedder download failed' }
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+    expect(panel().getByText('embedder download failed')).toBeVisible()
+    expect(panel().getByText(embedder.displayName)).toBeVisible()
+  })
+
+  // ---- EN + DE ----------------------------------------------------------------------------------
+
+  it('renders the failed result, Retry and Dismiss from the German catalog (D-L8)', async () => {
+    const user = userEvent.setup()
+    const entry = variant('de-model', 'DE Modell Q4')
+    let current = jobOf('de-job', entry.id)
+    const api = stubLive({ models: () => [entry], job: () => current })
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    try {
+      render(
+        <I18nProvider>
+          <ModelsScreen />
+        </I18nProvider>
+      )
+      await user.click(await screen.findByRole('button', { name: t('de', 'models.download.start') }))
+      await user.click(screen.getByRole('button', { name: t('de', 'models.confirm.start') }))
+      current = { ...current, status: 'failed', error: 'Verbindung abgebrochen' }
+      await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2), { timeout: 3000 })
+
+      const de = within(screen.getByRole('region', { name: t('de', 'models.library.download') }))
+      expect(
+        de.getByText(t('de', 'models.download.failed', { name: entry.displayName }))
+      ).toBeVisible()
+      expect(de.getByText('Verbindung abgebrochen')).toBeVisible()
+      expect(de.getByRole('button', { name: t('de', 'models.download.retry') })).toBeEnabled()
+      expect(de.getByRole('button', { name: t('de', 'models.download.dismiss') })).toBeEnabled()
+    } finally {
+      window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
+    }
+  })
+})
+
+describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)', () => {
+  // Typed idle fixtures instead of `... as never` payload casts (F-41 ratchet).
+  const idleEngine: EngineStatus = {
+    installed: true,
+    available: true,
+    version: null,
+    backend: null,
+    missingFamilies: []
+  }
+  const idleRuntime: RuntimeStatus = {
+    running: false,
+    modelId: null,
+    startingModelId: null,
+    port: null,
+    healthy: false,
+    message: ''
+  }
+
+  const OBTAINABLE = {
+    url: 'https://example.test/weights.gguf',
+    sizeBytes: 1000,
+    licenseUrl: 'https://example.test/license',
+    licenseApproved: true
+  }
+  const WITHDRAWN = { ...OBTAINABLE, withdrawn: 'the publisher removed the pinned file' }
+
+  function variant(id: string, displayName: string, over: Partial<ModelInfo> = {}): ModelInfo {
+    return model({ id, displayName, family: 'qwen3.8', download: OBTAINABLE, ...over })
+  }
+
+  /** Every bridge method the screen calls, so `assertNoUnexpectedApiCalls` has teeth. */
+  function stubLibrary(opts: {
+    models: () => ModelInfo[]
+    activeModelId?: string | null
+    machineRamGb?: number
+    useModel?: ReturnType<typeof vi.fn>
+  }): { listModels: ReturnType<typeof vi.fn> } {
+    const listModels = vi.fn(async () => opts.models())
+    stubApi({
+      listModels,
+      getSettings: vi.fn(async () => ({
+        ...DEFAULT_SETTINGS,
+        activeModelId: opts.activeModelId ?? null
+      })),
+      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
+      getAppStatus: vi.fn(async () => appStatusFixture({ machineRamGb: opts.machineRamGb ?? 32 })),
+      getEngineStatus: vi.fn(async () => idleEngine),
+      getRuntimeStatus: vi.fn(async () => idleRuntime),
+      onModelVerifyProgress: vi.fn(() => () => {}),
+      ...(opts.useModel ? { useModel: opts.useModel } : {})
+    })
+    return { listModels }
+  }
+
+  function cardFor(displayName: string): HTMLElement {
+    const card = screen
+      .getAllByText(displayName)
+      .map((el) => el.closest('.model-card'))
+      .find((el): el is HTMLElement => el != null)
+    expect(card, `a .model-card for ${displayName}`).toBeTruthy()
+    return card as HTMLElement
+  }
+
+  /** Titles of the cards rendered inside one variant group, in DOM order. */
+  function groupTitles(name: string): string[] {
+    const region = screen.getByRole('region', { name })
+    return [...region.querySelectorAll('.model-title')].map((el) => el.textContent ?? '')
+  }
+
+  afterEach(() => {
+    cleanup()
+    assertNoUnexpectedApiCalls()
+  })
+
+  // ---- Ported audit probes (`model-library.probe.tsx`, F3) --------------------------------------
+
+  it.each(['different model', 'sibling variant'] as const)(
+    'shows a damaged %s in the default drive view so it can be repaired',
+    async (kind) => {
+      const active = variant('active', 'Active model', { state: 'running' })
+      const healthy = variant('healthy', 'Repair control Q4_K_M', { state: 'installed' })
+      const damaged = variant(
+        'damaged',
+        kind === 'sibling variant' ? 'Repair control Q6_K' : 'Damaged model',
+        { state: 'checksum_failed' }
+      )
+      stubLibrary({ models: () => [active, healthy, damaged], activeModelId: active.id })
+      render(<ModelsScreen />)
+      await screen.findByText(active.displayName)
+
+      // The default view is On this drive; the damaged model is ON the drive (its files are
+      // there, they just failed verification) and its whole recovery action lives on this row.
+      expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute(
+        'aria-checked',
+        'true'
+      )
+      // The sibling case must NOT need "Show all variants" first: a group holding a damaged
+      // member starts expanded (C1).
+      expect(screen.getByText(damaged.displayName)).toBeVisible()
+      expect(
+        within(cardFor(damaged.displayName)).getByRole('button', { name: 'Download' })
+      ).toBeEnabled()
+      expect(within(cardFor(damaged.displayName)).getByText('Can’t verify')).toBeVisible()
+    }
+  )
+
+  it('finds the damaged model by its exact name while On this drive is selected', async () => {
+    const healthy = variant('healthy', 'Healthy model', { state: 'installed' })
+    const damaged = variant('damaged', 'Damaged model Q6_K', { state: 'checksum_failed' })
+    stubLibrary({ models: () => [healthy, damaged] })
+    render(<ModelsScreen />)
+    await screen.findByText(healthy.displayName)
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+
+    // On the reviewed head this reported "No models match" — the search ran over a list the view
+    // filter had already emptied of repair states.
+    await userEvent.setup().type(screen.getByRole('searchbox'), damaged.displayName)
+    expect(screen.getByText(damaged.displayName)).toBeVisible()
+    expect(screen.queryByText(/No models match/)).not.toBeInTheDocument()
+  })
+
+  it.each(['embeddings', 'reranker', 'translation', 'vision', 'transcriber'] as const)(
+    'lists a damaged %s model in the default view with its Download action',
+    async (role) => {
+      const chat = variant('chat-installed', 'Chat model', { state: 'installed' })
+      const damaged = variant(`damaged-${role}`, `Damaged ${role} model`, {
+        role,
+        family: role,
+        state: 'checksum_failed'
+      })
+      stubLibrary({ models: () => [chat, damaged] })
+      render(<ModelsScreen />)
+      await screen.findByText(damaged.displayName)
+
+      expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute(
+        'aria-checked',
+        'true'
+      )
+      const card = within(cardFor(damaged.displayName))
+      expect(card.getByRole('button', { name: 'Download' })).toBeEnabled()
+      // Automatic roles never gain Select/Start from being visible here.
+      expect(card.queryByRole('button', { name: 'Use this model' })).not.toBeInTheDocument()
+    }
+  )
+
+  it('keeps the withdrawn explanation — never a promised Download — on a damaged withdrawn row', async () => {
+    const healthy = variant('healthy', 'Healthy model', { state: 'installed' })
+    const damaged = variant('damaged-withdrawn', 'Withdrawn damaged model', {
+      state: 'checksum_failed',
+      download: WITHDRAWN
+    })
+    stubLibrary({ models: () => [healthy, damaged] })
+    render(<ModelsScreen />)
+    await screen.findByText(damaged.displayName)
+
+    const card = within(cardFor(damaged.displayName))
+    expect(card.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument()
+    expect(
+      card.getByText(t('en', 'models.download.withdrawn', { reason: WITHDRAWN.withdrawn }))
+    ).toBeVisible()
+  })
+
+  it('a damaged-only drive still starts in Browse, and On this drive lists the damaged row', async () => {
+    const damaged = variant('damaged-only', 'Only damaged model', { state: 'checksum_failed' })
+    stubLibrary({ models: () => [damaged] })
+    render(<ModelsScreen />)
+    await screen.findByText(damaged.displayName)
+
+    // The INITIAL view choice is unchanged: it asks whether anything is usable right now
+    // (`isModelInstalled`), and a model that fails its checksum is not.
+    expect(screen.getByRole('radio', { name: 'Browse models' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    await userEvent.setup().click(screen.getByRole('radio', { name: 'On this drive' }))
+    expect(screen.getByText(damaged.displayName)).toBeVisible()
+    expect(screen.queryByText(t('en', 'models.library.noneInstalled'))).not.toBeInTheDocument()
+  })
+
+  it('still shows the "only your active model" empty state when nothing else is on the drive', async () => {
+    const active = variant('active', 'Active model', { state: 'installed' })
+    stubLibrary({ models: () => [active], activeModelId: active.id })
+    render(<ModelsScreen />)
+    await screen.findByText(active.displayName)
+
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    expect(screen.getByText(t('en', 'models.library.onlyActive'))).toBeVisible()
+  })
+
+  it('keeps the active model pinned above the library, listed exactly once', async () => {
+    const active = variant('active', 'Active model', { state: 'running' })
+    const damaged = variant('damaged', 'Damaged model', { state: 'checksum_failed' })
+    stubLibrary({ models: () => [active, damaged], activeModelId: active.id })
+    render(<ModelsScreen />)
+    await screen.findByText(active.displayName)
+
+    expect([...document.querySelectorAll('.model-title')].map((el) => el.textContent)).toEqual([
+      'Active model',
+      'Damaged model'
+    ])
+    expect(screen.getAllByText('Active model')).toHaveLength(1)
+  })
+
+  // ---- Default expansion vs. the user's explicit toggle (C1) ------------------------------------
+
+  it('expands the group on its own when a refresh introduces damage', async () => {
+    const healthy = variant('pair-q4', 'Refresh pair Q4_K_M', { state: 'installed' })
+    const sibling = variant('pair-q6', 'Refresh pair Q6_K', { state: 'installed' })
+    let damagedYet = false
+    const useModel = vi.fn(async () => idleRuntime)
+    stubLibrary({
+      models: () =>
+        damagedYet ? [healthy, { ...sibling, state: 'checksum_failed' as const }] : [healthy, sibling],
+      useModel
+    })
+    render(<ModelsScreen />)
+    await screen.findByText(healthy.displayName)
+
+    // Healthy pair: collapsed, so only the face shows.
+    expect(screen.getByRole('button', { name: 'Show all variants (2)' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+    expect(screen.queryByText(sibling.displayName)).not.toBeInTheDocument()
+
+    // Any refresh (here: the row's own Use action) re-derives expansion from the new states.
+    damagedYet = true
+    await userEvent.setup().click(
+      within(cardFor(healthy.displayName)).getByRole('button', { name: 'Use this model' })
+    )
+    await waitFor(() => expect(screen.getByText(sibling.displayName)).toBeVisible())
+    expect(screen.getByRole('button', { name: 'Show fewer variants (2)' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(useModel).toHaveBeenCalledExactlyOnceWith(healthy.id)
+  })
+
+  it('an explicit collapse survives a refresh and a filter change — and re-expansion works', async () => {
+    const user = userEvent.setup()
+    const healthy = variant('toggle-q4', 'Toggle pair Q4_K_M', { state: 'installed' })
+    const damaged = variant('toggle-q6', 'Toggle pair Q6_K', { state: 'checksum_failed' })
+    const useModel = vi.fn(async () => idleRuntime)
+    const api = stubLibrary({ models: () => [healthy, damaged], useModel })
+    render(<ModelsScreen />)
+    await screen.findByText(damaged.displayName)
+
+    // Starts expanded because of the damaged member; the user disagrees.
+    await user.click(screen.getByRole('button', { name: 'Show fewer variants (2)' }))
+    expect(screen.queryByText(damaged.displayName)).not.toBeInTheDocument()
+
+    // A refresh must not re-open what the user closed, even though the damage is still there.
+    await user.click(
+      within(cardFor(healthy.displayName)).getByRole('button', { name: 'Use this model' })
+    )
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2))
+    expect(screen.queryByText(damaged.displayName)).not.toBeInTheDocument()
+
+    // Nor a filter change: the choice is keyed by the stable group key.
+    await user.type(screen.getByRole('searchbox'), 'toggle')
+    expect(screen.queryByText(damaged.displayName)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show all variants (2)' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+
+    // And re-expanding still works.
+    await user.click(screen.getByRole('button', { name: 'Show all variants (2)' }))
+    expect(screen.getByText(damaged.displayName)).toBeVisible()
+  })
+
+  // ---- The rendered group face (F5) ------------------------------------------------------------
+
+  it('renders the variantGroupFace choice on the collapsed card, and every variant once when expanded', async () => {
+    const tie = { state: 'missing' as const, recommended: false, insufficientRam: true }
+    const models = [
+      variant('tie-q4km', 'Tie group Q4_K_M', { ...tie, download: WITHDRAWN }),
+      variant('tie-udq4kxl', 'Tie group UD-Q4_K_XL', { ...tie, download: OBTAINABLE }),
+      variant('tie-q4ks', 'Tie group Q4_K_S', { ...tie, download: WITHDRAWN }),
+      variant('tie-q6k', 'Tie group Q6_K', { ...tie, download: OBTAINABLE }),
+      variant('tie-q80', 'Tie group Q8_0', { ...tie, download: OBTAINABLE }),
+      variant('tie-udq6kxl', 'Tie group UD-Q6_K_XL', { ...tie, download: OBTAINABLE })
+    ]
+    stubLibrary({ models: () => models })
+    render(<ModelsScreen />)
+    await screen.findByRole('region', { name: 'Tie group' })
+
+    // The selector's answer, computed independently from the same inputs the screen receives.
+    const group = groupModelVariants(orderPickerModels(models)).find((g) => g.name === 'Tie group')
+    const face = variantGroupFace(group!)
+    expect(face.displayName).toBe('Tie group UD-Q4_K_XL')
+
+    // Collapsed: the DOM shows exactly that member — not the withdrawn catalog-first one.
+    expect(groupTitles('Tie group')).toEqual([face.displayName])
+    expect(screen.queryByText('Tie group Q4_K_M')).not.toBeInTheDocument()
+    expect(group!.models[0].displayName).toBe('Tie group Q4_K_M') // the sort is untouched
+
+    // Expanded: face first, then every other variant exactly once in its original order.
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Show all variants (6)' }))
+    expect(groupTitles('Tie group')).toEqual([
+      'Tie group UD-Q4_K_XL',
+      'Tie group Q4_K_M',
+      'Tie group Q4_K_S',
+      'Tie group Q6_K',
+      'Tie group Q8_0',
+      'Tie group UD-Q6_K_XL'
+    ])
+    expect(new Set(groupTitles('Tie group')).size).toBe(models.length)
+  })
+
+  // ---- O1 / O5 — the RAM badge and the heading outline ------------------------------------------
+
+  it('shows the ⚠ RAM badge and its full hint while Technical details is closed (O1)', async () => {
+    const tight = variant('ram-gated', 'RAM gated model', {
+      state: 'installed',
+      insufficientRam: true,
+      recommendedMinRamGb: 24
+    })
+    stubLibrary({ models: () => [tight], machineRamGb: 8 })
+    render(<ModelsScreen />)
+    await screen.findByText(tight.displayName)
+
+    expect((document.querySelector('details.tech-details') as HTMLDetailsElement).open).toBe(false)
+    // The BADGE itself (the disabled Use action carries the same hint as its title).
+    const badge = within(cardFor(tight.displayName)).getByText('Needs ≥24 GB RAM')
+    expect(badge).toBeVisible()
+    expect(badge.className).toContain('pill-warning')
+    expect(badge).toHaveAttribute(
+      'title',
+      t('en', 'models.ram.needs', { min: 24 }) +
+        t('en', 'models.ram.machine', { ram: 8 }) +
+        t('en', 'models.ram.advice')
+    )
+  })
+
+  it('nests the heading outline h2 → h3 (task) → h4 (group) and toggles aria-expanded (O5)', async () => {
+    const models = [
+      variant('outline-q4', 'Outline group Q4_K_M'),
+      variant('outline-q6', 'Outline group Q6_K')
+    ]
+    stubLibrary({ models: () => models })
+    render(<ModelsScreen />)
+    await screen.findByRole('region', { name: 'Outline group' })
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Model library' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 3, name: 'Chat' })).toBeInTheDocument()
+    const groupHeading = screen.getByRole('heading', { level: 4, name: 'Outline group' })
+    expect(groupHeading).toBeInTheDocument()
+    // No heading skips a level and the group heading is not a sibling-rank h3 any more.
+    expect(screen.queryByRole('heading', { level: 3, name: 'Outline group' })).not.toBeInTheDocument()
+
+    const toggle = screen.getByRole('button', { name: 'Show all variants (2)' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.setup().click(toggle)
+    expect(screen.getByRole('button', { name: 'Show fewer variants (2)' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
   })
 })

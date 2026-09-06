@@ -1055,6 +1055,31 @@ export const en = {
 
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',
+  'models.library.title': 'Model library',
+  'models.library.view': 'Model library view',
+  'models.library.onDrive': 'On this drive',
+  'models.library.browse': 'Browse models',
+  'models.library.search': 'Search models',
+  'models.library.searchPlaceholder': 'Name, family, or variant…',
+  'models.library.task': 'Task',
+  'models.library.allTasks': 'All tasks',
+  'models.library.family': 'Family',
+  'models.library.allFamilies': 'All families',
+  'models.library.chat': 'Chat',
+  'models.library.translation': 'Translation',
+  'models.library.images': 'Images',
+  'models.library.voice': 'Voice',
+  'models.library.memory': 'Minimum memory: {size}',
+  'models.library.clear': 'Clear filters',
+  'models.library.showVariants': 'Show all variants ({count})',
+  'models.library.hideVariants': 'Show fewer variants ({count})',
+  'models.library.results.one': '{count} matching variant',
+  'models.library.results.other': '{count} matching variants',
+  'models.library.noMatches': 'No models match these filters. Try another search or clear the filters.',
+  'models.library.noneInstalled': 'No models are ready to use on this drive yet.',
+  'models.library.onlyActive': 'Your installed model is shown above. Browse the catalog to find alternatives.',
+  'models.library.noAlternatives': 'There are no other models in this catalog.',
+  'models.library.download': 'Current model download',
   'models.lead':
     'The AI model answers your questions, entirely on this device. Everything is verified ' +
     'before use, and nothing is downloaded without your explicit confirmation.',
@@ -1098,6 +1123,15 @@ export const en = {
   'models.download.titled': 'Download {name} ({size})',
   'models.download.resume': 'Resume download',
   'models.download.start': 'Download',
+  // F2: a failed or unverified download keeps a NAMED result above the results list, with its
+  // own recovery actions, until the user acts on it — filters and collapsed groups can no
+  // longer swallow the outcome (design-guidelines §15 "Terminal download results").
+  'models.download.failed': 'Downloading {name} failed.',
+  'models.download.retry': 'Retry download',
+  'models.download.dismiss': 'Dismiss',
+  'models.download.retryUnavailable':
+    'This model is no longer offered for download here, so it cannot be retried from this ' +
+    'result. Dismiss it, or look for the model in the library.',
   // #196: the publisher removed the exact file this manifest pins. Sentence case, no blame,
   // and it says what still works — this card is read by someone deciding what to install.
   'models.download.withdrawn':
@@ -1198,13 +1232,7 @@ export const en = {
   'models.empty.lineBefore': 'Add YAML manifests under ',
   'models.empty.lineAfter': ' on the drive.',
   'models.section.yourModel': 'Your AI model',
-  'models.section.otherModels': 'Other models',
-  'models.section.choose': 'Choose your AI model',
   'models.section.docSearch': 'Document search',
-  'models.section.other': 'Other',
-  // #35: the explicit installed/needs-download boundary inside a mixed picker section.
-  'models.group.onDrive': 'On this drive — ready to use',
-  'models.group.toDownload': 'Available to download',
 
   // ---- Settings (SettingsScreen.tsx — chrome + the General tab) ----
   'settings.title': 'Settings',
