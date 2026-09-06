@@ -83,6 +83,9 @@ function perfSnapshot(): PerformanceSnapshot {
       ranAt: '2026-09-04T14:02:00Z'
     },
     currentMachine: true,
+    // The live pick equals the saved one here, so the smoke's copy carries no "at the time of the
+    // check" label (PR #308: `PerformanceSnapshot.recommendation`).
+    recommendation: { modelId: 'qwen', basis: 'discrete' },
     currentGpu: null,
     otherMachines: [],
     running: false,
