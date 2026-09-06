@@ -2887,7 +2887,7 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   fail) → the "Could not lock the workspace — it stays open and your data is safe" banner, the
   pack server gone, and after re-selecting the model a third pack question answered with citations
   (pack work is admitted again — the non-latching recovery); then a normal lock and unlock with the
-  chat intact. **Observation (not a pack defect, its own follow-up):** the lock teardown stops the
+  chat intact. **Observation (not a pack defect — issue #344):** the lock teardown stops the
   chat engine (`ctx.runtime.stop()`) and only the post-unlock seam restarts it, so after a FAILED
   lock the app asks for a model again before the next question. **(vi) the relocated drive with
   persisted citations — PASSED.** Quit, `Set-Partition K → M`, launched with `M:\`, unlocked: the
