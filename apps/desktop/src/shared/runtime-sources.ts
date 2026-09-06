@@ -67,6 +67,40 @@ export interface RuntimeBuild {
   sizeBytes?: number
 }
 
+/** One pinned copyleft source archive of a family's corresponding-source bundle (#339 P8-4). */
+export interface RuntimeSourceFile {
+  /** Upstream project name, e.g. `libzim` — record-only (SOURCES.md / DRIVE-NOTICES). */
+  component: string
+  /** Upstream release, e.g. `9.4.0` — record-only. */
+  version: string
+  /** The grant EXACTLY as the pinned source tree states it (docs/model-policy.md) — record-only. */
+  license: string
+  /** Archive filename inside the bundle dir; a plain filename, the gate's lookup key. */
+  name: string
+  /** Expected SHA-256 (lower-case hex). A placeholder is REFUSED at parse time — see the validator. */
+  sha256: string
+  /** Upstream byte length, when recorded — informational only, never gated. */
+  sizeBytes?: number
+  url: string
+}
+
+/**
+ * The complete corresponding source a preloaded Kit must carry beside a family's COPYLEFT
+ * binaries (#339 P8-4, owner ruling 2026-09-06). ONE directory per drive, OS-independent.
+ * `assertCommercialDrive` fails a drive that carries ANY of the family's executables — a
+ * hand-placed, marker-less bundle included — while this directory is missing, incomplete,
+ * hash-mismatched or without its SOURCES.md.
+ */
+export interface RuntimeSourceBundle {
+  /** Drive-relative directory, e.g. `runtime/kiwix-tools/source`. Escape-guarded at parse. */
+  dir: string
+  files: RuntimeSourceFile[]
+  /** The upstream build recipe the binaries were produced from (record-only). */
+  recipeUrl?: string
+  /** The recipe commit, when one is pinned (record-only; absent = not pinned). */
+  recipeCommit?: string
+}
+
 export interface RuntimeSources {
   /** Pinned upstream release tag (`ggml-org/llama.cpp` b-tag or `ggml-org/whisper.cpp` v-tag). */
   version: string
@@ -87,6 +121,12 @@ export interface RuntimeSources {
    * the family ships exactly the one binary its code-side spec names (the llama / whisper shape).
    */
   executables?: string[]
+  /**
+   * The family's COPYLEFT corresponding-source bundle (#339 P8-4). Present only for a family
+   * whose binaries are copyleft (today: `kiwix_tools`). Absent = nothing to carry. An app built
+   * before this key ignores it (unknown sibling keys are never rejected).
+   */
+  sourceBundle?: RuntimeSourceBundle
 }
 
 /**
@@ -149,6 +189,125 @@ function isUnsafeDrivePath(p: string): boolean {
   return p.includes('..') || /^[\\/]/.test(p) || /^[A-Za-z]:/.test(p)
 }
 
+/**
+ * Validate a family's `source_bundle:` block (#339 P8-4). Returns `undefined` when the key is
+ * absent (nothing to carry), the bundle when valid, and `null` — with errors appended — when
+ * present but malformed. Stricter than a build pin in one deliberate way: every `sha256` must be
+ * a REAL digest (`builds[].sha256` may be a placeholder), because the sell gate compares the
+ * on-drive archives against these values and a placeholder cannot discharge a corresponding-
+ * source duty.
+ */
+function validateSourceBundle(
+  raw: unknown,
+  prefix: string,
+  errors: string[]
+): RuntimeSourceBundle | null | undefined {
+  if (raw === undefined) return undefined
+  if (!isObject(raw)) {
+    errors.push(`"${prefix}" must be a mapping (dir + files) when present`)
+    return null
+  }
+  let ok = true
+  const dirRaw = raw['dir']
+  if (typeof dirRaw !== 'string' || dirRaw.trim() === '') {
+    errors.push(`"${prefix}.dir" is required and must be a non-empty string`)
+    ok = false
+  } else if (isUnsafeDrivePath(dirRaw.trim())) {
+    errors.push(`"${prefix}.dir" must be a drive-relative path with no "..", leading slash, or drive letter`)
+    ok = false
+  }
+  const recipeUrlRaw = raw['recipe_url']
+  if (recipeUrlRaw !== undefined && (typeof recipeUrlRaw !== 'string' || !isHttpsUrl(recipeUrlRaw))) {
+    errors.push(`"${prefix}.recipe_url" must be an https:// URL when present`)
+    ok = false
+  }
+  const recipeCommitRaw = raw['recipe_commit']
+  if (recipeCommitRaw !== undefined && (typeof recipeCommitRaw !== 'string' || recipeCommitRaw.trim() === '')) {
+    errors.push(`"${prefix}.recipe_commit" must be a non-empty string when present`)
+    ok = false
+  }
+  const filesRaw = raw['files']
+  const files: RuntimeSourceFile[] = []
+  if (!Array.isArray(filesRaw) || filesRaw.length === 0) {
+    errors.push(`"${prefix}.files" is required and must be a non-empty list`)
+    ok = false
+  } else {
+    const names = new Set<string>()
+    filesRaw.forEach((f, i) => {
+      const where = `${prefix}.files[${i}]`
+      if (!isObject(f)) {
+        errors.push(`"${where}" must be a mapping`)
+        ok = false
+        return
+      }
+      let entryOk = true
+      const text = (key: 'component' | 'version' | 'license'): string => {
+        const v = f[key]
+        if (typeof v !== 'string' || v.trim() === '') {
+          errors.push(`"${where}.${key}" is required and must be a non-empty string`)
+          entryOk = false
+          return ''
+        }
+        return v.trim()
+      }
+      const component = text('component')
+      const version = text('version')
+      const license = text('license')
+      const name = f['name']
+      if (typeof name !== 'string' || !PLAIN_FILE_NAME.test(name) || name === '.' || name === '..') {
+        errors.push(`"${where}.name" must be a plain filename with no path separator`)
+        entryOk = false
+      } else if (name.toLowerCase() === 'sources.md') {
+        errors.push(`"${where}.name" must not be SOURCES.md — the record file is generated, not a pinned archive`)
+        entryOk = false
+      } else if (names.has(name)) {
+        errors.push(`"${prefix}.files" must not list the same archive twice`)
+        entryOk = false
+      } else names.add(name)
+      const sha = f['sha256']
+      if (typeof sha !== 'string' || !isRealSha256(sha)) {
+        errors.push(
+          `"${where}.sha256" must be a real lower-case SHA-256 — a placeholder cannot discharge a corresponding-source duty`
+        )
+        entryOk = false
+      }
+      const url = f['url']
+      if (typeof url !== 'string' || !isHttpsUrl(url)) {
+        errors.push(`"${where}.url" is required and must be an https:// URL`)
+        entryOk = false
+      }
+      const size = f['size_bytes']
+      let sizeBytes: number | undefined
+      if (size !== undefined) {
+        if (typeof size !== 'number' || !Number.isInteger(size) || size <= 0) {
+          errors.push(`"${where}.size_bytes" must be a positive integer when present`)
+          entryOk = false
+        } else sizeBytes = size
+      }
+      if (!entryOk) {
+        ok = false
+        return
+      }
+      files.push({
+        component,
+        version,
+        license,
+        name: name as string,
+        sha256: (sha as string).toLowerCase(),
+        url: (url as string).trim(),
+        ...(sizeBytes !== undefined ? { sizeBytes } : {})
+      })
+    })
+  }
+  if (!ok) return null
+  return {
+    dir: (dirRaw as string).trim(),
+    files,
+    ...(typeof recipeUrlRaw === 'string' ? { recipeUrl: recipeUrlRaw.trim() } : {}),
+    ...(typeof recipeCommitRaw === 'string' ? { recipeCommit: recipeCommitRaw.trim() } : {})
+  }
+}
+
 /** Validate one `{ version, builds[] }` family block, appending errors under `prefix.…`. */
 function validateFamily(block: Record<string, unknown>, prefix: string, errors: string[]): RuntimeSources | null {
   const version = block['version']
@@ -199,6 +358,10 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
       })
     }
   }
+  // #339 P8-4: the corresponding-source bundle. All-or-nothing like `executables`: a malformed
+  // compliance pin fails the whole file loudly rather than silently dropping the record.
+  const sourceBundle = validateSourceBundle(block['source_bundle'], `${prefix}.source_bundle`, errors)
+  if (sourceBundle === null) familyKeysOk = false
 
   const buildsRaw = block['builds']
   const builds: RuntimeBuild[] = []
@@ -315,7 +478,8 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
     version: version.trim(),
     builds,
     ...(optional !== undefined ? { optional } : {}),
-    ...(executables.length > 0 ? { executables } : {})
+    ...(executables.length > 0 ? { executables } : {}),
+    ...(sourceBundle ? { sourceBundle } : {})
   }
 }
 
@@ -399,7 +563,12 @@ function validateOcrFamily(
  *     optional: true
  *     executables: [kiwix-serve, kiwix-manage, kiwix-search]
  *     builds:
- *       - { os, arch, backend, url, sha256, extract_to, runtime_files? }
+ *       - { os, arch, backend, url, sha256, extract_to, runtime_files?, size_bytes? }
+ *     source_bundle:    # #339 P8-4: the copyleft corresponding source a preloaded Kit carries
+ *       dir: runtime/kiwix-tools/source
+ *       recipe_url?: https://…      # recipe_commit? when one is pinned
+ *       files:
+ *         - { component, version, license, name, sha256 (REAL), size_bytes?, url }
  *
  * Unknown sibling keys are ignored (forward compatibility: an older app on a
  * newer drive parses the file unchanged).

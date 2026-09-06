@@ -395,6 +395,17 @@ export interface CommercialAssertion {
      */
     optionalRuntimesConsistent: boolean
     /**
+     * A COPYLEFT sidecar family that is present on the drive carries its complete
+     * corresponding source (#339 P8-4, owner ruling 2026-09-06). Fail-closed and
+     * MARKER-INDEPENDENT: any declared executable of `kiwix_tools` existing under any
+     * platform's extract dir — a hand-placed bundle included — requires the yaml's
+     * `source_bundle` directory with every pinned archive present, hash-matching, and a
+     * non-empty SOURCES.md beside them. True when no such binary is on the drive (a Kit may
+     * deliberately ship none) and true for a complete bundle. Named for kiwix_tools because
+     * it is the only family with a `source_bundle` today.
+     */
+    kiwixSourceBundle: boolean
+    /**
      * Every pinned OCR language file is present + sha256-verified (opt-in:
      * true when no `ocrSources` were passed).
      */
@@ -582,6 +593,7 @@ export async function assertCommercialDrive(
   let runtimeCurrent = true
   let runtimeHashed = true
   let optionalRuntimesConsistent = true
+  let kiwixSourceBundle = true
   // ONE family list, ONE code path (#339 P8-1): the two grandfathered positionals first, then
   // every family the caller passes by name. The CODE spec (`SIDECAR_FAMILY_SPECS`) supplies the
   // required file set — the same one the installer produced — and decides required vs optional.
@@ -701,7 +713,86 @@ export async function assertCommercialDrive(
       }
     }
   }
-  for (const family of families) await checkFamily(family)
+
+  /**
+   * The corresponding-source bundle of a COPYLEFT family (#339 P8-4, owner ruling
+   * 2026-09-06). Invariant: no executable of the family on the drive ⇒ not applicable ⇒ pass,
+   * and nothing under the bundle dir is even read. Presence is FILE-based, never marker-based —
+   * a hand-placed, marker-less bundle conveys the binaries just the same — and counts only the
+   * executables (`plan.binaryPaths`): a stray ICU DLL is not "shipping kiwix-tools". With a
+   * binary present the yaml must declare the bundle, the directory must exist, every pinned
+   * archive must be there with a matching SHA-256, and a non-empty SOURCES.md must sit beside
+   * them. Extra files in the directory are neither a failure nor a warning: the duty is "the
+   * source is there", and `source/` is on no spawn or launcher path. One cause, one message.
+   */
+  const checkSourceBundle = async ({ sources, label: familyLabel, spec }: (typeof families)[number]): Promise<void> => {
+    const L = `${familyLabel} source bundle`
+    const fail = (message: string): void => {
+      problems.push(message)
+      kiwixSourceBundle = false
+    }
+    let present = false
+    for (const build of sources.builds) {
+      let plan: RuntimeDownloadPlan
+      try {
+        plan = planRuntimeDownload(rootPath, build, sources.version, spec.binaryBase, {
+          alsoRequired: spec.alsoRequired,
+          declaredExecutables: sources.executables
+        })
+      } catch {
+        continue // checkFamily already reported the tampered path
+      }
+      if (plan.binaryPaths.some((p) => existsSync(p) && statSync(p).isFile())) {
+        present = true
+        break
+      }
+    }
+    if (!present) return
+    const bundle = sources.sourceBundle
+    if (!bundle) {
+      if (spec.family !== 'kiwix_tools') return // no copyleft duty is declared for this family
+      fail(
+        `${L}: the drive's runtime-sources.yaml declares no source_bundle for ${familyLabel} while its ` +
+          'binaries are on this drive — a Kit that conveys these copyleft binaries must pin their ' +
+          'complete corresponding source; re-run prepare-drive to copy the current manifests, or ship no kiwix-tools'
+      )
+      return
+    }
+    const dir = join(rootPath, ...bundle.dir.split('/'))
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+      fail(
+        `${L}: ${bundle.dir}/ is missing while ${familyLabel} binaries are on this drive — a preloaded ` +
+          'Kit conveying these copyleft binaries must carry their complete corresponding source; run ' +
+          'build-commercial-drive with --kiwix-source-dir <archive dir>, or ship no kiwix-tools'
+      )
+      return
+    }
+    for (const file of bundle.files) {
+      const p = join(dir, file.name)
+      if (!existsSync(p) || !statSync(p).isFile()) {
+        fail(
+          `${L}: ${file.name} missing from ${bundle.dir}/ — re-run build-commercial-drive with ` +
+            '--kiwix-source-dir <archive dir> (it copies and re-verifies every pinned archive)'
+        )
+      } else if ((await sha256File(p)).toLowerCase() !== file.sha256.toLowerCase()) {
+        fail(
+          `${L}: ${file.name} does not match the SHA-256 pinned in runtime-sources.yaml — the archive was ` +
+            'modified or is the wrong release; re-copy it from the pinned upstream URL'
+        )
+      }
+    }
+    const record = join(dir, 'SOURCES.md')
+    if (!existsSync(record) || !statSync(record).isFile() || statSync(record).size === 0) {
+      fail(
+        `${L}: SOURCES.md missing or empty in ${bundle.dir}/ — regenerate the bundle with ` +
+          'scripts/install-kiwix-source-bundle.mjs (it records each component, version, grant, SHA-256 and upstream URL)'
+      )
+    }
+  }
+  for (const family of families) {
+    await checkFamily(family)
+    await checkSourceBundle(family)
+  }
 
   // --- OCR language files present + verified (opt-in) ---
   // Plain files: the hash IS the install state (no marker — mirrors planOcrDownloads).
@@ -850,6 +941,7 @@ export async function assertCommercialDrive(
       runtimeCurrent,
       runtimeHashed,
       optionalRuntimesConsistent,
+      kiwixSourceBundle,
       ocrAssetsVerified,
       appSkillsPresent,
       userSkillsEmpty,

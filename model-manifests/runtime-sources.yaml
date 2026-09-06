@@ -137,13 +137,64 @@ whisper_cpp:
 # (kiwix-tools, libkiwix), statically linked against GPL-2.0-or-later (libzim "with
 # GPL-3.0-or-later files", Xapian) and LGPL-2.1-or-later (libmicrohttpd). DRIVE-NOTICES.md
 # carries the grants + the corresponding-source record; a preloaded Kit must carry the source
-# archives (P8-4). To bump: re-download every asset, re-verify its MD5 against the upstream
+# archives — pinned in source_bundle: below and enforced by the sell gate (P8-4). To bump: re-download every asset, re-verify its MD5 against the upstream
 # sidecar, recompute each SHA-256, re-read the COPYING/headers of the source trees, and
 # promote it here together with a fresh licence review.
 kiwix_tools:
   version: '3.8.1'
   optional: true
   executables: [kiwix-serve, kiwix-manage, kiwix-search]
+  # COMPLETE CORRESPONDING SOURCE (#339 P8-4, owner ruling 2026-09-06). Five of this build's
+  # components are copyleft, so a preloaded Kit that CONVEYS these binaries must carry their
+  # corresponding source beside them. ONE directory per drive, OS-independent (the source is the
+  # same whichever platform's binaries the Kit ships). This block is the single source of truth:
+  # the sell gate hashes against it (checks.kiwixSourceBundle), scripts/install-kiwix-source-bundle.mjs
+  # copies + verifies against it and generates SOURCES.md from it, and scripts/lib/drive-notices.mjs
+  # prints the DRIVE-NOTICES record from it. The tarballs are NEVER in this repo (maintainer-local
+  # archive). A commercial build that cannot carry these archives must not ship kiwix-tools at all.
+  # Grants are the exact wording read from the pinned source trees (docs/model-policy.md) — libzim
+  # is "GPL-2.0-or-later, with GPL-3.0-or-later files", never "all GPL-3". No kiwix-build recipe
+  # commit is pinned (recipe_url only): the recipe state at the 3.8.1 build date is the owner's
+  # open review item, and a guessed commit would be worse than none.
+  source_bundle:
+    dir: runtime/kiwix-tools/source
+    recipe_url: https://github.com/kiwix/kiwix-build
+    files:
+      - component: kiwix-tools
+        version: '3.8.1'
+        license: GPL-3.0-or-later
+        name: kiwix-tools-3.8.1.tar.xz
+        sha256: dd769c9bd3d75b59ad9e451b128187b128da6a10b1241bb2d0325fe4aafe51a3
+        size_bytes: 531416
+        url: https://download.kiwix.org/release/kiwix-tools/kiwix-tools-3.8.1.tar.xz
+      - component: libkiwix
+        version: '14.1.1'
+        license: GPL-3.0-or-later, with one GPL-2.0-or-later file
+        name: libkiwix-14.1.1.tar.xz
+        sha256: e232f42bba33561493e2d7318c3be60d8508e83a8891a8358135519dedc5ff5a
+        size_bytes: 1123600
+        url: https://download.kiwix.org/release/libkiwix/libkiwix-14.1.1.tar.xz
+      - component: libzim
+        version: '9.4.0'
+        license: GPL-2.0-or-later, with GPL-3.0-or-later files
+        name: libzim-9.4.0.tar.xz
+        sha256: 7fa374f4714b23c43afa3fb406d7e21c483d77e8218895e1408e2f037969b6ea
+        size_bytes: 217752
+        url: https://download.openzim.org/release/libzim/libzim-9.4.0.tar.xz
+      - component: xapian-core
+        version: '1.4.23'
+        license: GPL-2.0-or-later
+        name: xapian-core-1.4.23.tar.xz
+        sha256: 30d3518172084f310dab86d262b512718a7f9a13635aaa1a188e61dc26b2288c
+        size_bytes: 3024644
+        url: https://oligarchy.co.uk/xapian/1.4.23/xapian-core-1.4.23.tar.xz
+      - component: libmicrohttpd
+        version: '0.9.76'
+        license: LGPL-2.1-or-later
+        name: libmicrohttpd-0.9.76.tar.gz
+        sha256: f0b1547b5a42a6c0f724e8e1c1cb5ce9c4c35fb495e7d780b9930d35011ceb4c
+        size_bytes: 2199858
+        url: https://dev.kiwix.org/kiwix-build/libmicrohttpd-0.9.76.tar.gz
   builds:
     - os: win
       arch: x64

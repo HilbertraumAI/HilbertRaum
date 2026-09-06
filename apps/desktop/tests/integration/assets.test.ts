@@ -613,6 +613,32 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
     const sizes = Object.fromEntries(kiwix!.builds.map((b) => [`${b.os}/${b.arch}`, b.sizeBytes]))
     expect(sizes).toEqual({ 'win/x64': 18_301_924, 'mac/arm64': 10_254_751, 'mac/x64': 10_768_392, 'linux/x64': 21_503_420 })
   })
+
+  it('the committed kiwix_tools pin carries the five-archive source_bundle with real hashes and the exact grant wording (#339 P8-4)', () => {
+    const raw = parse(
+      readFileSync(join(process.cwd(), '..', '..', 'model-manifests', 'runtime-sources.yaml'), 'utf8')
+    )
+    const bundle = validateRuntimeSources(raw).families?.kiwix_tools?.sourceBundle
+    expect(bundle?.dir).toBe('runtime/kiwix-tools/source')
+    expect(bundle?.recipeUrl).toBe('https://github.com/kiwix/kiwix-build')
+    expect(bundle?.recipeCommit).toBeUndefined() // none is pinned — never invented
+    expect(bundle?.files.map((f) => `${f.component} ${f.version}`)).toEqual([
+      'kiwix-tools 3.8.1',
+      'libkiwix 14.1.1',
+      'libzim 9.4.0',
+      'xapian-core 1.4.23',
+      'libmicrohttpd 0.9.76'
+    ])
+    for (const f of bundle?.files ?? []) {
+      expect(isRealSha256(f.sha256), f.name).toBe(true)
+      expect(f.url.startsWith('https://'), f.name).toBe(true)
+      expect(f.sizeBytes, f.name).toBeGreaterThan(0)
+    }
+    // The grants as the source trees state them — libzim is never "all GPL-3".
+    expect(bundle?.files.find((f) => f.component === 'libzim')?.license).toBe('GPL-2.0-or-later, with GPL-3.0-or-later files')
+    expect(bundle?.files.find((f) => f.component === 'libmicrohttpd')?.license).toBe('LGPL-2.1-or-later')
+    expect(bundle?.files.find((f) => f.component === 'kiwix-tools')?.license).toBe('GPL-3.0-or-later')
+  })
 })
 
 describe('planRuntimeDownload', () => {

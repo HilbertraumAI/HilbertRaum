@@ -204,6 +204,7 @@ describe('assertCommercialDrive', () => {
       runtimeCurrent: true,
       runtimeHashed: true,
       optionalRuntimesConsistent: true, // #339 P8-1
+      kiwixSourceBundle: true, // #339 P8-4
       ocrAssetsVerified: true,
       appSkillsPresent: true,
       userSkillsEmpty: true,
@@ -220,7 +221,7 @@ describe('assertCommercialDrive', () => {
   // `optionalRuntimesConsistent` and never touches `runtimeCurrent` / `runtimeHashed`.
   describe('the optional kiwix_tools family (#339 P8-1)', () => {
     const KIWIX_FILES = ['kiwix-serve.exe', 'kiwix-manage.exe', 'kiwix-search.exe', 'icudt74.dll', 'icuuc74.dll']
-    const kiwixSources = (): RuntimeSources => {
+    const kiwixSources = (opts: { declare?: boolean } = {}): RuntimeSources => {
       const res = validateRuntimeSources({
         llama_cpp: {
           version: 'b1',
@@ -230,6 +231,24 @@ describe('assertCommercialDrive', () => {
           version: '3.8.1',
           optional: true,
           executables: ['kiwix-serve', 'kiwix-manage', 'kiwix-search'],
+          // #339 P8-4: the corresponding-source bundle rides every fixture — with binaries on
+          // the drive the gate requires it, so a fixture without it is the 'undeclared' leg.
+          ...(opts.declare === false
+            ? {}
+            : {
+                source_bundle: {
+                  dir: 'runtime/kiwix-tools/source',
+                  recipe_url: 'https://github.com/kiwix/kiwix-build',
+                  files: BUNDLE_FILES.map((name) => ({
+                    component: name.replace(/-[0-9].*$/, ''),
+                    version: '1',
+                    license: 'GPL-3.0-or-later',
+                    name,
+                    sha256: sha(`source of ${name}`),
+                    url: `https://example.test/${name}`
+                  }))
+                }
+              }),
           builds: [
             {
               os: 'win',
@@ -250,7 +269,8 @@ describe('assertCommercialDrive', () => {
     }
     const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
     /** A full, hashed kiwix install on win (all five files) and on mac (the arm64 build's three). */
-    function provisionKiwix(root: string, over: { omit?: string; hashless?: boolean; tamper?: string; macArch?: string } = {}): void {
+    function provisionKiwix(root: string, over: { omit?: string; hashless?: boolean; tamper?: string; macArch?: string; noBundle?: boolean } = {}): void {
+      if (!over.noBundle) provisionBundle(root)
       const win = join(root, 'runtime', 'kiwix-tools', 'win')
       mkdirSync(win, { recursive: true })
       const binaries: Record<string, string> = {}
@@ -316,6 +336,109 @@ describe('assertCommercialDrive', () => {
       // …and never the REQUIRED families' flags.
       expect(res.checks.runtimeCurrent).toBe(true)
       expect(res.checks.runtimeHashed).toBe(true)
+    })
+
+    // #339 P8-4: the corresponding-source bundle. Presence is FILE-based (a marker-less,
+    // hand-placed executable triggers the check); no binary ⇒ not applicable ⇒ pass.
+    const BUNDLE_FILES = ['kiwix-tools-3.8.1.tar.xz', 'libkiwix-14.1.1.tar.xz', 'libzim-9.4.0.tar.xz', 'xapian-core-1.4.23.tar.xz', 'libmicrohttpd-0.9.76.tar.gz']
+    function provisionBundle(root: string, over: { omit?: string; tamper?: string; noRecord?: boolean; extra?: boolean } = {}): void {
+      const dir = join(root, 'runtime', 'kiwix-tools', 'source')
+      mkdirSync(dir, { recursive: true })
+      for (const name of BUNDLE_FILES) {
+        if (name === over.omit) continue
+        writeFileSync(join(dir, name), over.tamper === name ? 'tampered' : `source of ${name}`)
+      }
+      if (!over.noRecord) writeFileSync(join(dir, 'SOURCES.md'), '# Complete corresponding source\n')
+      if (over.extra) writeFileSync(join(dir, 'libzim-9.4.0.tar.xz.md5'), 'd7cb45cff5b8d08439f8f2502e794aae\n')
+    }
+    async function gateWithBundle(root: string, chat: ModelManifest, opts: { declare?: boolean } = {}) {
+      return assertCommercialDrive(root, [chat], null, null, null, { ...kit(), families: { kiwix_tools: kiwixSources(opts) } })
+    }
+    const bundleProblems = (problems: string[]): string[] => problems.filter((p) => /source bundle/.test(p))
+
+    it('T20 the kiwix-tools corresponding-source bundle: binaries with a complete bundle pass, while a missing directory, a missing archive, a wrong hash, a missing SOURCES.md and an undeclared source_bundle each fail with their own message, a marker-less hand-placed executable still triggers the check, and a drive with no kiwix binaries is not applicable', async () => {
+      // (a) binaries + a complete bundle (+ an unpinned .md5 sidecar, which is neither a
+      // failure nor a warning: the duty is "the source is there").
+      {
+        const { root, chat } = sellable('hilbertraum-commercial-src-ok-')
+        provisionKiwix(root, { noBundle: true })
+        provisionBundle(root, { extra: true })
+        const res = await gateWithBundle(root, chat)
+        expect(res.problems).toEqual([])
+        expect(res.ok).toBe(true)
+        expect(res.checks.kiwixSourceBundle).toBe(true)
+      }
+      // (b) binaries + no directory: ONE problem, not five.
+      {
+        const { root, chat } = sellable('hilbertraum-commercial-src-nodir-')
+        provisionKiwix(root, { noBundle: true })
+        const res = await gateWithBundle(root, chat)
+        expect(res.ok).toBe(false)
+        expect(res.checks.kiwixSourceBundle).toBe(false)
+        expect(bundleProblems(res.problems)).toHaveLength(1)
+        expect(bundleProblems(res.problems)[0]).toMatch(/runtime\/kiwix-tools\/source\/ is missing while kiwix_tools binaries are on this drive/)
+        expect(res.checks.optionalRuntimesConsistent).toBe(true) // the binaries themselves are fine
+      }
+      // (c) one hash differs.
+      {
+        const { root, chat } = sellable('hilbertraum-commercial-src-hash-')
+        provisionKiwix(root, { noBundle: true })
+        provisionBundle(root, { tamper: 'libzim-9.4.0.tar.xz' })
+        const res = await gateWithBundle(root, chat)
+        expect(res.checks.kiwixSourceBundle).toBe(false)
+        expect(bundleProblems(res.problems)).toEqual([expect.stringMatching(/libzim-9\.4\.0\.tar\.xz does not match the SHA-256 pinned/)])
+        expect(res.checks.optionalRuntimesConsistent).toBe(true)
+      }
+      // (d) a marker-less, hand-placed kiwix-serve.exe alone: the source check fires WITHOUT a
+      // marker (fail-closed), and the half-install fires too.
+      {
+        const { root, chat } = sellable('hilbertraum-commercial-src-hand-')
+        mkdirSync(join(root, 'runtime', 'kiwix-tools', 'win'), { recursive: true })
+        writeFileSync(join(root, 'runtime', 'kiwix-tools', 'win', 'kiwix-serve.exe'), 'hand-placed')
+        const res = await gateWithBundle(root, chat)
+        expect(res.checks.kiwixSourceBundle).toBe(false)
+        expect(bundleProblems(res.problems)[0]).toMatch(/is missing while kiwix_tools binaries are on this drive/)
+        expect(res.checks.optionalRuntimesConsistent).toBe(false)
+      }
+      // (e) no binaries, no bundle: not applicable.
+      {
+        const { root, chat } = sellable('hilbertraum-commercial-src-none-')
+        const res = await gateWithBundle(root, chat)
+        expect(res.ok).toBe(true)
+        expect(res.checks.kiwixSourceBundle).toBe(true)
+        expect(bundleProblems(res.problems)).toEqual([])
+      }
+      // (f) a bundle without binaries is harmless.
+      {
+        const { root, chat } = sellable('hilbertraum-commercial-src-only-')
+        provisionBundle(root)
+        const res = await gateWithBundle(root, chat)
+        expect(res.ok).toBe(true)
+        expect(res.checks.kiwixSourceBundle).toBe(true)
+      }
+      // (g) an archive missing, (h) SOURCES.md missing — each its own message.
+      {
+        const { root, chat } = sellable('hilbertraum-commercial-src-gap-')
+        provisionKiwix(root, { noBundle: true })
+        provisionBundle(root, { omit: 'libkiwix-14.1.1.tar.xz', noRecord: true })
+        const res = await gateWithBundle(root, chat)
+        expect(res.checks.kiwixSourceBundle).toBe(false)
+        expect(bundleProblems(res.problems)).toEqual([
+          expect.stringMatching(/libkiwix-14\.1\.1\.tar\.xz missing from runtime\/kiwix-tools\/source\//),
+          expect.stringMatching(/SOURCES\.md missing or empty in runtime\/kiwix-tools\/source\//)
+        ])
+      }
+      // (i) the drive's yaml declares no source_bundle while the binaries are there.
+      {
+        const { root, chat } = sellable('hilbertraum-commercial-src-undeclared-')
+        provisionKiwix(root)
+        const res = await gateWithBundle(root, chat, { declare: false })
+        expect(res.checks.kiwixSourceBundle).toBe(false)
+        expect(bundleProblems(res.problems)).toEqual([expect.stringMatching(/declares no source_bundle for kiwix_tools while its binaries are on this drive/)])
+        // …and never the REQUIRED families' flags, in any leg.
+        expect(res.checks.runtimeCurrent).toBe(true)
+        expect(res.checks.runtimeHashed).toBe(true)
+      }
     })
 
     it('the two macOS kiwix_tools builds are checked once against the single mac install dir, by the marker\'s arch', async () => {

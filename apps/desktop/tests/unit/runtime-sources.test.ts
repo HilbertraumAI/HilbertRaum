@@ -282,6 +282,73 @@ describe('validateRuntimeSources', () => {
       }
     })
 
+    // #339 P8-4: the corresponding-source bundle a preloaded Kit carries beside the copyleft binaries.
+    const bundleFile = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+      component: 'libzim',
+      version: '9.4.0',
+      license: 'GPL-2.0-or-later, with GPL-3.0-or-later files',
+      name: 'libzim-9.4.0.tar.xz',
+      sha256: '7fa374f4714b23c43afa3fb406d7e21c483d77e8218895e1408e2f037969b6ea',
+      size_bytes: 217752,
+      url: 'https://download.openzim.org/release/libzim/libzim-9.4.0.tar.xz',
+      ...over
+    })
+    const withBundle = (bundle: unknown): ReturnType<typeof validateRuntimeSources> =>
+      validateRuntimeSources({
+        ...base(),
+        kiwix_tools: { version: '3.8.1', optional: true, executables: ['kiwix-serve', 'kiwix-manage'], builds: [kiwixBuild], source_bundle: bundle }
+      })
+
+    it('T20 the kiwix_tools source_bundle block validates with dir plus five component/version/grant/real-sha256/url files, and rejects a placeholder hash, a path escape, a duplicate or non-plain archive name and a SOURCES.md entry', () => {
+      const five = [
+        bundleFile({ component: 'kiwix-tools', version: '3.8.1', license: 'GPL-3.0-or-later', name: 'kiwix-tools-3.8.1.tar.xz', sha256: 'a'.repeat(64), url: 'https://download.kiwix.org/release/kiwix-tools/kiwix-tools-3.8.1.tar.xz', size_bytes: undefined }),
+        bundleFile({ component: 'libkiwix', version: '14.1.1', license: 'GPL-3.0-or-later, with one GPL-2.0-or-later file', name: 'libkiwix-14.1.1.tar.xz', sha256: 'b'.repeat(64), url: 'https://download.kiwix.org/release/libkiwix/libkiwix-14.1.1.tar.xz' }),
+        bundleFile(),
+        bundleFile({ component: 'xapian-core', version: '1.4.23', license: 'GPL-2.0-or-later', name: 'xapian-core-1.4.23.tar.xz', sha256: 'c'.repeat(64), url: 'https://oligarchy.co.uk/xapian/1.4.23/xapian-core-1.4.23.tar.xz' }),
+        bundleFile({ component: 'libmicrohttpd', version: '0.9.76', license: 'LGPL-2.1-or-later', name: 'libmicrohttpd-0.9.76.tar.gz', sha256: 'd'.repeat(64), url: 'https://dev.kiwix.org/kiwix-build/libmicrohttpd-0.9.76.tar.gz' })
+      ]
+      const ok = withBundle({ dir: 'runtime/kiwix-tools/source', recipe_url: 'https://github.com/kiwix/kiwix-build', files: five })
+      expect(ok.errors).toEqual([])
+      const bundle = ok.families?.kiwix_tools?.sourceBundle
+      expect(bundle?.dir).toBe('runtime/kiwix-tools/source')
+      expect(bundle?.recipeUrl).toBe('https://github.com/kiwix/kiwix-build')
+      expect(bundle?.recipeCommit).toBeUndefined()
+      expect(bundle?.files.map((f) => f.name)).toEqual(five.map((f) => f['name']))
+      expect(bundle?.files[0]?.sizeBytes).toBeUndefined()
+      expect(bundle?.files[2]).toEqual({
+        component: 'libzim',
+        version: '9.4.0',
+        license: 'GPL-2.0-or-later, with GPL-3.0-or-later files',
+        name: 'libzim-9.4.0.tar.xz',
+        sha256: '7fa374f4714b23c43afa3fb406d7e21c483d77e8218895e1408e2f037969b6ea',
+        sizeBytes: 217752,
+        url: 'https://download.openzim.org/release/libzim/libzim-9.4.0.tar.xz'
+      })
+      // Absent = nothing to carry (the llama / whisper shape); an older app ignores the key.
+      expect(validateRuntimeSources({ ...base(), kiwix_tools: { version: '3.8.1', builds: [kiwixBuild] } }).families?.kiwix_tools?.sourceBundle).toBeUndefined()
+
+      const rejected: Array<[string, unknown, RegExp]> = [
+        ['a placeholder hash', { dir: 'runtime/kiwix-tools/source', files: [bundleFile({ sha256: 'PLACEHOLDER' })] }, /sha256.*placeholder cannot discharge/],
+        ['a path escape in dir', { dir: '../source', files: [bundleFile()] }, /source_bundle\.dir/],
+        ['an absolute dir', { dir: '/runtime/source', files: [bundleFile()] }, /source_bundle\.dir/],
+        ['a duplicate archive name', { dir: 'runtime/kiwix-tools/source', files: [bundleFile(), bundleFile()] }, /must not list the same archive twice/],
+        ['a non-plain archive name', { dir: 'runtime/kiwix-tools/source', files: [bundleFile({ name: 'sub/libzim.tar.xz' })] }, /files\[0\]\.name/],
+        ['a SOURCES.md entry', { dir: 'runtime/kiwix-tools/source', files: [bundleFile({ name: 'sources.md' })] }, /must not be SOURCES\.md/],
+        ['a missing grant', { dir: 'runtime/kiwix-tools/source', files: [bundleFile({ license: '' })] }, /files\[0\]\.license/],
+        ['a cleartext url', { dir: 'runtime/kiwix-tools/source', files: [bundleFile({ url: 'http://x.test/a.tar.xz' })] }, /files\[0\]\.url/],
+        ['a bad size', { dir: 'runtime/kiwix-tools/source', files: [bundleFile({ size_bytes: -1 })] }, /files\[0\]\.size_bytes/],
+        ['an empty files list', { dir: 'runtime/kiwix-tools/source', files: [] }, /source_bundle\.files/],
+        ['a cleartext recipe_url', { dir: 'runtime/kiwix-tools/source', recipe_url: 'http://x.test', files: [bundleFile()] }, /recipe_url/],
+        ['a non-mapping block', 'runtime/kiwix-tools/source', /must be a mapping/]
+      ]
+      for (const [what, bundle, message] of rejected) {
+        const res = withBundle(bundle)
+        expect(res.ok, what).toBe(false)
+        expect(res.families?.kiwix_tools, what).toBeUndefined() // all-or-nothing, like executables
+        expect(res.errors.some((e) => message.test(e)), `${what}: ${res.errors.join(' | ')}`).toBe(true)
+      }
+    })
+
     // #339 P8-2: the pinned archive size the consent dialog shows before any request is made.
     it('reads a positive-integer size_bytes per build and treats anything else as unknown — never as a file error', () => {
       const ok = validateRuntimeSources({
