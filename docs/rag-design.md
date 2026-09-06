@@ -2932,6 +2932,28 @@ the real-tool check of that mapping is P7's (T19), not assumed. The name-collisi
 the follow-up wave through `packs:status.excluded` (D-Z16, #340); the per-answer outcome's
 `not-served` row still says "not searched: name collision with another pack".
 
+**Owner rulings of 2026-09-06 (#339 / #340, the open-issues wave) — what is deliberately NOT
+built, and why.** *L2* — `ARTICLES_PER_PACK` stays 5 for every pack: the measured failures of
+the list shape were not helped by hits 6–10, and one selected pack already gets the whole
+24-candidate quota, so a longer page only adds `/raw` reads on the stall-prone route (D-Z13).
+*L1* — the title-index `/suggest` arm stays unbuilt and an index-less pack keeps "not searched:
+no full-text index": alone it is prefix-bound (no title match for "österreichische
+Wissenschaftler"); paired with a synthesised "Liste …" prefix it is part of L3-b. *L3-b* —
+concept expansion through a model call: MEASURED, not built (fixture `quality-questions-de.json`
+`group: list`, replayed by the smoke and logged, never asserted; K: climate pack, 2026-09-06:
+raw question 0/6, the shipped rewrite 2/6 through the arm — the failures return 13–40 wrong
+hits, so neither the zero-hit retry nor the #353 ladder fires — a hand-written concept-expanded
+query 4/6, `/suggest` with a synthesised "Liste …" prefix 6/6). The open owner question on #340:
+spend the model call on every pack-scoped ask, only on a question-SHAPE trigger (superlatives,
+"welche … gibt es"; "weak by hit count" cannot work), or not at all. *C2* — link expansion not
+until the upstream `/raw` cut-short fix ships (it doubles traffic on the defect route). *C3* —
+Tier-2 import: ruled (a), a "Save article to my documents" button in the article viewer FIRST,
+the citation card later; not built in this wave. *C4* — acquisition from Kiwix catalogs: ruled
+later, after the consent surface (D-Z19) has settled. *#339 items 3–6* — readiness never depends
+on `kiwix_tools` and `kiwix-search` stays installed-but-unused, both as built (D-Z17); the
+upstream report is the owner's to file (a Linux stall probe was asked of humaniser first);
+`MAX_SELECTED_PACKS`, the ask deadline and the `/raw` retry constants are untouched.
+
 ### Real acceptance (T19, P7 — the machine-drivable legs, 2026-09-06)
 
 Run by the maintainer on the **i9-14900K** (Windows 11 26200, Node 24.19.0, Vitest 3.2.6; Smart
