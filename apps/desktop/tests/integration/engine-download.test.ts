@@ -9,7 +9,9 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { stringify } from 'yaml'
+import { parse as parseYaml, stringify } from 'yaml'
+import { isRealSha256 } from '../../src/shared/manifest'
+import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 import {
   EngineDownloadManager,
   engineStatus,
@@ -30,7 +32,8 @@ import {
   runtimeMarkerPath,
   verifyDownloadedFile,
   writeRuntimeMarker,
-  ENGINE_DOWNLOAD_MAX_BYTES
+  ENGINE_DOWNLOAD_MAX_BYTES,
+  SIDECAR_FAMILY_SPECS
 } from '../../src/main/services/assets'
 import type { FetchFn } from '../../src/main/services/assets'
 import {
@@ -550,6 +553,296 @@ describe('re-install invalidates the binary-verifier session cache (full-audit 2
     } finally {
       _resetBinaryVerificationForTests()
     }
+  })
+})
+
+// ---- #339 P8-1 — kiwix_tools, the OPTIONAL two-executable family (T20-a) --------------------
+//
+// The contract this suite pins: an optional family is NEVER in the default install selection
+// (the argument-less `downloadEngine` must not be able to fetch a copyleft, separately-consented
+// family), never counted in readiness; an install must produce EVERY declared file (serve,
+// manage, search + the Windows ICU DLLs) and hash every one of them into the marker, so both
+// spawn seams verify (R-1 closes) and the sell gate can check the runtime files. Fake fetch +
+// fake extract as above; the fixture yaml is ours, so it declares `runtime_files` on every
+// host (the committed yaml keeps them win-only) — the DLL legs then run on the Linux CI leg too.
+
+const KIWIX_DIR = (rootPath: string): string => join(rootPath, 'runtime', 'kiwix-tools', HOST_OS)
+const hostName = (base: string): string => (HOST_OS === 'win' ? `${base}.exe` : base)
+const KIWIX_SERVE = hostName('kiwix-serve')
+const KIWIX_MANAGE = hostName('kiwix-manage')
+const KIWIX_SEARCH = hostName('kiwix-search')
+const KIWIX_DLLS = ['icudt74.dll', 'icuuc74.dll']
+const KIWIX_FILES = [KIWIX_SERVE, KIWIX_MANAGE, KIWIX_SEARCH, ...KIWIX_DLLS]
+
+/** A drive whose yaml pins the chat engine AND the optional kiwix_tools family for this host. */
+function makeKiwixDrive(opts: { optionalKey?: boolean; executables?: string[] } = {}): {
+  rootPath: string
+  manifestsDir: string
+} {
+  const rootPath = mkdtempSync(join(tmpdir(), 'hr-engine-root-'))
+  const manifestsDir = mkdtempSync(join(tmpdir(), 'hr-engine-manifests-'))
+  const yaml = stringify({
+    llama_cpp: {
+      version: 'btest',
+      builds: [
+        {
+          os: HOST_OS,
+          arch: HOST_ARCH,
+          backend: 'cpu',
+          url: 'https://example.test/llama-server.zip',
+          sha256: REAL_SHA,
+          extract_to: `runtime/llama.cpp/${HOST_OS}`
+        }
+      ]
+    },
+    kiwix_tools: {
+      version: '3.8.1',
+      ...(opts.optionalKey === false ? {} : { optional: true }),
+      executables: opts.executables ?? ['kiwix-serve', 'kiwix-manage', 'kiwix-search'],
+      builds: [
+        {
+          os: HOST_OS,
+          arch: HOST_ARCH,
+          backend: 'cpu',
+          url: 'https://example.test/kiwix-tools.zip',
+          sha256: REAL_SHA,
+          extract_to: `runtime/kiwix-tools/${HOST_OS}`,
+          runtime_files: KIWIX_DLLS
+        }
+      ]
+    }
+  })
+  writeFileSync(join(manifestsDir, 'runtime-sources.yaml'), yaml)
+  return { rootPath, manifestsDir }
+}
+
+/** The flat-zip shape: every file at the extract root; `omit` drops one (a broken bundle). */
+const kiwixExtract =
+  (omit: string | null = null): ExtractFn =>
+  async (_archive, destDir) => {
+    if (destDir.includes('llama.cpp')) {
+      await writeFile(join(destDir, BIN_NAME), 'binary')
+      return
+    }
+    for (const f of KIWIX_FILES) {
+      if (f === omit) continue
+      await writeFile(join(destDir, f), `bytes of ${f}`)
+    }
+  }
+
+/** The tarball shape: one top folder holding the three executables (no runtime files). */
+const nestedKiwixExtract: ExtractFn = async (_archive, destDir) => {
+  const nested = join(destDir, `kiwix-tools_${HOST_OS}-x86_64-3.8.1`)
+  await mkdir(nested, { recursive: true })
+  for (const f of [KIWIX_SERVE, KIWIX_MANAGE, KIWIX_SEARCH]) await writeFile(join(nested, f), `bytes of ${f}`)
+  for (const f of KIWIX_DLLS) await writeFile(join(nested, f), `bytes of ${f}`)
+}
+
+const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
+
+async function installKiwix(
+  rootPath: string,
+  manifestsDir: string,
+  extractImpl: ExtractFn = kiwixExtract()
+): Promise<EngineDownloadJob> {
+  const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl })
+  const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['kiwix_tools'] })
+  return runToEnd(mgr, started.jobId)
+}
+
+describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)', () => {
+  it('T20 kiwix_tools family: both executable hashes checked, the optional family never breaks core-engine readiness, per-platform artifacts / digests / notices / source record complete, script-drift matrices green', async () => {
+    const { rootPath, manifestsDir } = makeKiwixDrive()
+    // Readiness before anything is installed: the chat engine is what is missing; kiwix is
+    // reported apart, never as a prerequisite.
+    const before = engineStatus(rootPath, manifestsDir)
+    expect(before.installed).toBe(false)
+    expect(before.missingFamilies).toEqual(['llama_cpp'])
+    expect(before.missingOptionalFamilies).toEqual(['kiwix_tools'])
+
+    // The DEFAULT install (the argument-less IPC's shape) fetches the chat engine only.
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: kiwixExtract() })
+    const defaultJob = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
+    expect(defaultJob.status).toBe('done')
+    expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME))).toBe(true)
+    expect(existsSync(join(KIWIX_DIR(rootPath), KIWIX_SERVE))).toBe(false)
+    const afterChat = engineStatus(rootPath, manifestsDir)
+    expect(afterChat.installed).toBe(true) // ready WITHOUT the optional family
+    expect(afterChat.missingFamilies).toEqual([])
+    expect(afterChat.missingOptionalFamilies).toEqual(['kiwix_tools'])
+    // …and a second default run has nothing left to do — it does not reach for kiwix.
+    await expect(mgr.start({ rootPath, manifestsDir, gates: ALLOW })).rejects.toThrow(/already installed/i)
+
+    // The explicit request installs it: every declared file lands and every one is hashed.
+    const job = await installKiwix(rootPath, manifestsDir)
+    expect(job.status).toBe('done')
+    const dir = KIWIX_DIR(rootPath)
+    for (const f of KIWIX_FILES) expect(existsSync(join(dir, f)), f).toBe(true)
+    const marker = JSON.parse(readFileSync(runtimeMarkerPath(dir), 'utf8'))
+    expect(marker).toMatchObject({ version: '3.8.1', backend: 'cpu', os: HOST_OS })
+    expect(marker.binaries).toEqual(Object.fromEntries(KIWIX_FILES.map((f) => [f, sha(`bytes of ${f}`)])))
+
+    // BOTH spawn seams now verify against a recorded hash — no skip-legacy (R-1 closes).
+    _resetBinaryVerificationForTests()
+    initBinaryVerification(false)
+    try {
+      await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_SERVE))).resolves.toBe('ok')
+      await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_MANAGE))).resolves.toBe('ok')
+    } finally {
+      _resetBinaryVerificationForTests()
+    }
+    const after = engineStatus(rootPath, manifestsDir)
+    expect(after.installed).toBe(true)
+    expect(after.missingFamilies).toEqual([])
+    expect(after.missingOptionalFamilies).toEqual([])
+
+    // The COMMITTED pin: four per-platform artifacts with real digests, the family optional in
+    // the yaml exactly as the code spec says, and the notices carrying the family + its
+    // corresponding-source record (the drift and notices suites pin the matrices and the text).
+    const repoRoot = join(__dirname, '..', '..', '..', '..')
+    const shipped = validateRuntimeSources(parseYaml(readFileSync(join(repoRoot, 'model-manifests', 'runtime-sources.yaml'), 'utf8')))
+    expect(shipped.errors).toEqual([])
+    const kiwix = shipped.families?.kiwix_tools
+    expect(kiwix?.version).toBe('3.8.1')
+    expect(kiwix?.optional).toBe(true)
+    expect(kiwix?.executables).toEqual(['kiwix-serve', 'kiwix-manage', 'kiwix-search'])
+    expect(kiwix?.builds.map((b) => `${b.os}/${b.arch}`)).toEqual(['win/x64', 'mac/arm64', 'mac/x64', 'linux/x64'])
+    for (const b of kiwix?.builds ?? []) {
+      expect(isRealSha256(b.sha256), b.url).toBe(true)
+      expect(b.url.startsWith('https://download.kiwix.org/release/kiwix-tools/')).toBe(true)
+    }
+    expect(kiwix?.builds[0]?.runtimeFiles).toEqual(['icudt74.dll', 'icuin74.dll', 'icuio74.dll', 'icutu74.dll', 'icuuc74.dll'])
+    expect(SIDECAR_FAMILY_SPECS.find((s) => s.family === 'kiwix_tools')?.optional).toBe(true)
+    const notices = readFileSync(join(repoRoot, 'DRIVE-NOTICES.md'), 'utf8')
+    expect(notices).toContain('runtime-family: kiwix_tools 3.8.1')
+    expect(notices).toContain('### kiwix-tools 3.8.1 — GPL-3.0-or-later')
+    expect(notices).toContain('#### Complete corresponding source')
+  })
+
+  it('whisper_cpp keeps its non-optional semantics (a missing whisper-cli still makes installed false)', () => {
+    const { rootPath, manifestsDir } = makeMultiFamilyDrive()
+    const status = engineStatus(rootPath, manifestsDir)
+    expect(status.installed).toBe(false)
+    expect(status.missingFamilies.sort()).toEqual(['llama_cpp', 'whisper_cpp'])
+    expect(status.missingOptionalFamilies).toEqual([])
+  })
+
+  it('a drive yaml that drops optional:true still cannot put kiwix_tools in the default selection (the code-side floor)', async () => {
+    const { rootPath, manifestsDir } = makeKiwixDrive({ optionalKey: false })
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: kiwixExtract() })
+    const job = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
+    expect(job.status).toBe('done')
+    expect(existsSync(join(KIWIX_DIR(rootPath), KIWIX_SERVE))).toBe(false)
+    expect(engineStatus(rootPath, manifestsDir).missingOptionalFamilies).toEqual(['kiwix_tools'])
+  })
+
+  it.each([KIWIX_SERVE, KIWIX_MANAGE, KIWIX_DLLS[0]!])(
+    'a kiwix_tools install fails when %s is missing from the archive — no marker, nothing current',
+    async (missing) => {
+      const { rootPath, manifestsDir } = makeKiwixDrive()
+      const job = await installKiwix(rootPath, manifestsDir, kiwixExtract(missing))
+      expect(job.status).toBe('failed')
+      expect(job.error).toMatch(/engine/i)
+      expect(existsSync(runtimeMarkerPath(KIWIX_DIR(rootPath)))).toBe(false)
+      // Still installable: the next request runs again rather than "already installed".
+      const again = await installKiwix(rootPath, manifestsDir)
+      expect(again.status).toBe('done')
+    }
+  )
+
+  it('a kiwix_tools archive whose SHA-256 does not match installs nothing and writes no marker', async () => {
+    const { rootPath, manifestsDir } = makeKiwixDrive()
+    const badFetch = (async () =>
+      new Response('not the pinned bytes', { status: 200 })) as unknown as FetchFn
+    const mgr = new EngineDownloadManager({ fetchImpl: badFetch, extractImpl: kiwixExtract() })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['kiwix_tools'] })
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.status).toBe('failed')
+    expect(existsSync(join(KIWIX_DIR(rootPath), KIWIX_SERVE))).toBe(false)
+    expect(existsSync(runtimeMarkerPath(KIWIX_DIR(rootPath)))).toBe(false)
+  })
+
+  it('a cancel during a kiwix_tools extraction leaves no marker and the next job re-installs cleanly', async () => {
+    const { rootPath, manifestsDir } = makeKiwixDrive()
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: async (archive, destDir) => {
+        await gate
+        await kiwixExtract()(archive, destDir)
+      }
+    })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['kiwix_tools'] })
+    const start = Date.now()
+    while (mgr.get(started.jobId).status !== 'extracting') {
+      if (Date.now() - start > 5000) throw new Error('never extracting')
+      await new Promise((r) => setTimeout(r, 2))
+    }
+    mgr.cancel(started.jobId)
+    release()
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
+    expect(existsSync(runtimeMarkerPath(KIWIX_DIR(rootPath)))).toBe(false)
+    const again = await installKiwix(rootPath, manifestsDir)
+    expect(again.status).toBe('done')
+    expect(existsSync(runtimeMarkerPath(KIWIX_DIR(rootPath)))).toBe(true)
+  })
+
+  it('re-installing kiwix_tools after a tamper re-hashes every executable and clears the verifier cache for both', async () => {
+    const { rootPath, manifestsDir } = makeKiwixDrive()
+    const dir = KIWIX_DIR(rootPath)
+    await mkdir(dir, { recursive: true })
+    for (const f of KIWIX_FILES) await writeFile(join(dir, f), 'tampered')
+    writeRuntimeMarker(dir, {
+      version: 'old',
+      backend: 'cpu',
+      os: HOST_OS,
+      arch: HOST_ARCH,
+      binaries: Object.fromEntries(KIWIX_FILES.map((f) => [f, sha(`bytes of ${f}`)]))
+    })
+    _resetBinaryVerificationForTests()
+    initBinaryVerification(false)
+    try {
+      await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_SERVE))).resolves.toBe('mismatch')
+      await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_MANAGE))).resolves.toBe('mismatch')
+      expect((await installKiwix(rootPath, manifestsDir)).status).toBe('done')
+      await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_SERVE))).resolves.toBe('ok')
+      await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_MANAGE))).resolves.toBe('ok')
+    } finally {
+      _resetBinaryVerificationForTests()
+    }
+  })
+
+  it('the kiwix_tools tarball shape is flattened so all three executables and the runtime files land at the extract root', async () => {
+    const { rootPath, manifestsDir } = makeKiwixDrive()
+    const job = await installKiwix(rootPath, manifestsDir, nestedKiwixExtract)
+    expect(job.status).toBe('done')
+    for (const f of KIWIX_FILES) expect(existsSync(join(KIWIX_DIR(rootPath), f)), f).toBe(true)
+    expect(existsSync(join(KIWIX_DIR(rootPath), `kiwix-tools_${HOST_OS}-x86_64-3.8.1`, KIWIX_SERVE))).toBe(false)
+  })
+
+  it('a hashing failure writes the marker with no binaries map at all, never a partial one', async () => {
+    const { rootPath, manifestsDir } = makeKiwixDrive()
+    // `kiwix-search` lands as a DIRECTORY: it exists, so the completeness check passes, but
+    // hashing it throws — the whole map must then be dropped, not just that entry.
+    const job = await installKiwix(rootPath, manifestsDir, async (archive, destDir) => {
+      await kiwixExtract(KIWIX_SEARCH)(archive, destDir)
+      if (!destDir.includes('llama.cpp')) await mkdir(join(destDir, KIWIX_SEARCH), { recursive: true })
+    })
+    expect(job.status).toBe('done')
+    const marker = JSON.parse(readFileSync(runtimeMarkerPath(KIWIX_DIR(rootPath)), 'utf8'))
+    expect(marker).toEqual({ version: '3.8.1', backend: 'cpu', os: HOST_OS, arch: HOST_ARCH })
+  })
+
+  it('a kiwix_tools install is refused while a kiwix_tools sidecar child is registered', async () => {
+    const { rootPath, manifestsDir } = makeKiwixDrive()
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: kiwixExtract() })
+    await expect(
+      mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['kiwix_tools'], kiwixToolsActive: true })
+    ).rejects.toThrow(/knowledge-pack tools/i)
+    // The chat engine is unaffected by that flag.
+    const job = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW, kiwixToolsActive: true })).jobId)
+    expect(job.status).toBe('done')
   })
 })
 

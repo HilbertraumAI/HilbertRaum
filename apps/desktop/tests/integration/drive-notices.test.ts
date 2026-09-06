@@ -55,7 +55,7 @@ describe('DRIVE-NOTICES.md ships and stays fresh (LIC-1)', () => {
       readFileSync(join(REPO_ROOT, 'model-manifests', 'runtime-sources.yaml'), 'utf8')
     ) as Record<string, { version?: string }>
     const families = Object.keys(sources)
-    expect(families.length).toBeGreaterThanOrEqual(3) // llama_cpp + whisper_cpp + ocr today
+    expect(families.length).toBeGreaterThanOrEqual(4) // llama_cpp + whisper_cpp + ocr + kiwix_tools today
     const text = readFileSync(NOTICES, 'utf8')
     for (const family of families) {
       expect(
@@ -101,5 +101,23 @@ describe('DRIVE-NOTICES.md ships and stays fresh (LIC-1)', () => {
     expect(text).toContain("This software is provided 'as-is'")
     // And the sibling notice files are referenced by name.
     expect(text).toContain('THIRD-PARTY-NOTICES.md')
+  })
+
+  it('carries the kiwix-tools copyleft section, the GPL-2.0 / LGPL-2.1 texts and the corresponding-source record', () => {
+    const text = readFileSync(NOTICES, 'utf8')
+    expect(text).toContain('### kiwix-tools 3.8.1 — GPL-3.0-or-later')
+    expect(text).toContain('GPL-2.0-or-later, with GPL-3.0-or-later files')
+    expect(text).toContain('runtime/kiwix-tools/source/')
+    // The GPL-2.0 and LGPL-2.1 texts are inlined (kiwix-tools' first copyleft binaries).
+    expect(text).toContain('GNU GENERAL PUBLIC LICENSE')
+    expect(text).toContain('Version 2, June 1991')
+    expect(text).toContain('GNU LESSER GENERAL PUBLIC LICENSE')
+    expect(text).toContain('Version 2.1, February 1999')
+    // Every pinned source-archive SHA-256 for the complete-corresponding-source record.
+    expect(text).toContain('dd769c9bd3d75b59ad9e451b128187b128da6a10b1241bb2d0325fe4aafe51a3')
+    expect(text).toContain('e232f42bba33561493e2d7318c3be60d8508e83a8891a8358135519dedc5ff5a')
+    expect(text).toContain('7fa374f4714b23c43afa3fb406d7e21c483d77e8218895e1408e2f037969b6ea')
+    expect(text).toContain('30d3518172084f310dab86d262b512718a7f9a13635aaa1a188e61dc26b2288c')
+    expect(text).toContain('f0b1547b5a42a6c0f724e8e1c1cb5ce9c4c35fb495e7d780b9930d35011ceb4c')
   })
 })

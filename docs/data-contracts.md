@@ -1560,6 +1560,29 @@ whole renderer-visible surface.
   totalBytes|null, unverified, binaryPath|null, error|null }`. This doc is the living home of
   these two types (previously only `docs/packaging.md` + the frozen build-log described them);
   gating (policy ∧ setting) mirrors the model downloader (Phase 18 above).
+  **#339 P8-1 additions (the `kiwix_tools` family contract; the family contract only — no IPC
+  change):** `shared/runtime-sources.ts` `RuntimeSources` gains `optional?: boolean` (declarative;
+  the code-side `SidecarFamilySpec.optional` in `services/assets.ts` is load-bearing — a
+  user-writable drive yaml cannot promote an optional family into the default install) and
+  `executables?: string[]` (base names; `[0]` is the primary binary; a family absent this key
+  ships the single binary its spec names, the llama/whisper shape); `RuntimeBuild` gains
+  `runtimeFiles?: string[]` (per build — non-executable files the executables need, e.g. the
+  Windows ICU DLLs); `RuntimeSourcesResult` gains `families?: Partial<Record<RuntimeFamily,
+  RuntimeSources>>` (a keyed map covering every family; `sources`/`whisper` stay as aliases into
+  the same objects — no existing reader moves). `EngineStatus` gains `missingOptionalFamilies?:
+  string[]` (additive/optional; an optional family with a host build but no binary — never folded
+  into `installed` or `missingFamilies`, and never fetched by the argument-less `downloadEngine`).
+  The install marker's `binaries` map (unchanged shape, `Record<string, string>`) now holds one
+  entry per declared file for a multi-file family — every executable plus every `runtimeFiles`
+  entry, hashed all-or-nothing. `CommercialGateOptions` (the sell-gate options object) gains
+  `families?: Partial<Record<RuntimeFamily, RuntimeSources | null>>` for families beyond the two
+  grandfathered positional params (`platforms`, `appVersion`); the gate's `checks` record gains
+  `optionalRuntimesConsistent: boolean` (an optional family is either fully provisioned — every
+  declared file present, hashed and matching — or entirely absent; never folded into
+  `runtimeCurrent`/`runtimeHashed`). **No new IPC channel** (the count stays 145) and **no
+  preload change** — `missingOptionalFamilies` and the gate additions ride the existing
+  `engineStatus` payload / the existing assert-tool call, unread by the renderer until the
+  consent step (#339 P8-2).
 - **Image understanding (vision)** — `imageGetStatus(): Promise<VisionStatus>`,
   `imageChooseImage()` (opaque token + name + sizeBytes; the path stays in main, D2),
   `imageReadBytes(token)`, `imageAnalyze(req: ImageAnalyzeRequest): Promise<ImageJob>`,

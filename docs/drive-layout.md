@@ -73,8 +73,12 @@ HILBERTRAUM/
 ├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family: the whisper-cli transcriber
 │   └── .hilbertraum-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
 ├── models/{chat,embeddings,reranker,transcriber,vision,translation}/ # weights (git-ignored; transcriber/ = whisper GGML .bin; vision/ = the GGUF + its mmproj projector, image understanding V1–V5; translation/ = TranslateGemma GGUF, TG wave)
-├── runtime/kiwix-tools/{win,mac,linux}/        # THIRD sidecar family: kiwix-serve + kiwix-manage (knowledge packs).
-│                                                #   NOT yet provisioned by the scripts — placed manually (rag-design §17)
+├── runtime/kiwix-tools/{win,mac,linux}/        # THIRD sidecar family: kiwix-serve + kiwix-manage + kiwix-search
+│   └── .hilbertraum-runtime.json                       #   (knowledge packs; OPTIONAL — never a readiness prerequisite). Install
+│                                                #   marker: a hash per executable + per ICU DLL (win only). An in-app install
+│                                                #   writes it (#339 P8-1); no user-reachable install exists yet (P8-2); the
+│                                                #   drive scripts follow in P8-3 — until then the bundle is placed manually
+│                                                #   (rag-design §17 D-Z17)
 ├── ocr/                                        # OCR language files: {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
 ├── zim/                                        # Knowledge packs: ZIM archives (offline Wikipedia etc.) — PLAIN read-only
 │                                                #   files, never copied into the encrypted workspace (not the document
@@ -84,7 +88,7 @@ HILBERTRAUM/
 │                                                #   the recorded path (an external file, or the same leaf after a
 │                                                #   drive-letter change) — both checked against the archive's header UUID.
 ├── model-manifests/{chat,embeddings,reranker,transcriber,vision,translation}/ # committed YAML (the only model metadata in git)
-│   └── runtime-sources.yaml                     # sidecar download manifest (llama_cpp + whisper_cpp + ocr blocks)
+│   └── runtime-sources.yaml                     # sidecar download manifest (llama_cpp + whisper_cpp + kiwix_tools + ocr blocks)
 ├── app-skills/                                 # app-shipped Skills (read-only PLAIN folders; provisioned + asserted, S3/S9)
 ├── user-skills/                                # user Skills (read-write PLAIN folders) — EMPTY on a sold drive
 ├── workspace/                                  # hilbertraum.sqlite (encrypted or plaintext) — EMPTY on a sold drive

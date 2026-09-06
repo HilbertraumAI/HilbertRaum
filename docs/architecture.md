@@ -3445,6 +3445,32 @@ honesty); the install is **idempotent via the marker** (`runtimeInstallCurrent`)
 download). **CI exercises only the injected seams — the real fetch + `tar` extraction of the
 pinned build is a manual smoke (like the GPU/PAID harnesses).**
 
+**Addendum — #339 P8-1, optional, multi-file families (2026-09-06).** `runtime-sources.yaml`
+gained a third build family, `kiwix_tools`, that differs from `llama_cpp`/`whisper_cpp` in two
+ways the installer and the sell gate both had to learn: it is **optional**, and it ships **more
+than one required file**. An optional family is never part of the default selection
+(`downloadEngine()` still takes no arguments) and never counted toward `installed`/
+`missingFamilies` — only an explicit `families: [...]` request installs it, and its presence/
+absence surfaces separately (`EngineStatus.missingOptionalFamilies`). A multi-file family's
+required set is the code-side floor (the primary binary plus any `alsoRequired` names a
+`SidecarFamilySpec` declares) **unioned with** the yaml's own `executables` and `runtime_files`
+lists — the floor is what a user-writable drive yaml can never lower, the yaml is what code
+cannot know in advance (an ICU DLL name carries its major version). After extraction the
+installer runs a completeness check over that declared set before treating the install as
+successful, and hashes every file into the `.hilbertraum-runtime.json` marker **all-or-nothing**
+(a partial hash map is never written — a hashing failure leaves the family on the hashless
+`skip-legacy` verifier path rather than reporting some files "hashed" and others not). The sell
+gate mirrors the same declared-file set for its own presence/hash checks
+(`optionalRuntimesConsistent`). Why the yaml's `optional` flag is declarative rather than
+load-bearing: `runtime-sources.yaml` ships on a user-writable drive, so if the on-disk flag
+controlled the default selection, deleting one line from it would let the argument-less
+"Install the AI engine" button silently fetch a separately-consented, copyleft binary — the
+code-side `SidecarFamilySpec.optional` is the one that actually decides, and a test asserts the
+two agree for every shipped family. Record: `docs/model-policy.md` "Sidecar binaries —
+kiwix-tools" (the license side), `docs/data-contracts.md` (the type-level shape),
+`docs/rag-design.md` §17 D-Z17 (the family contract from the knowledge-packs side, including the
+R-1 closure statement).
+
 ## Diagnostics & transcript export (audit round)
 - `getRuntimeStatus` (read-only runtime health), `getLogTail` (tail of the local `app.log`), and
   `exportConversation` (spec §7.6 transcript export via the OS save dialog) round out spec §7.11/§7.6.

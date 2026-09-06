@@ -107,6 +107,72 @@ whisper_cpp:
       sha256: b07ea0b1b4115a38e1a7b07debf581f0b77d999925f8acb8f39d322b0ba0a822
       extract_to: runtime/whisper.cpp/win
 
+# THIRD SIDECAR FAMILY (#339, P8-1): kiwix-tools — the knowledge-pack (ZIM) tools.
+# ADDITIVE block; an app from before #339 reads only llama_cpp/whisper_cpp/ocr and ignores
+# this (the whisper_cpp forward-compatibility contract). TWO NEW KEYS this family
+# introduces, both validated by shared/runtime-sources.ts:
+#   optional: true      — the family is NEVER part of the default engine install and never
+#                         counted in engineStatus().installed. Only an explicit
+#                         families: ['kiwix_tools'] installs it (the code-side FamilySpec is
+#                         the load-bearing copy of this flag; the yaml key is declarative and
+#                         asserted to agree — a drive's yaml must not be able to promote a
+#                         family into the "Install the AI engine" button).
+#   executables: [...]  — the family ships MORE THAN ONE executable. Base names, no OS
+#                         suffix (`sidecarBinaryName` adds `.exe` on win). The FIRST entry is
+#                         the primary binary (plan.binaryPath). Every entry is required to
+#                         exist after extraction and is hashed into the install marker.
+#   runtime_files: [...] (per build) — non-executable files the executables cannot start
+#                         without. Windows only here: the five ICU DLLs. Verbatim filenames
+#                         (they already carry their extension and the ICU major version).
+#
+# PINNED RELEASE: 3.8.1 (upstream build 2025-12-02). The kiwix download server is the only
+# binary distribution for 3.8.1 (the GitHub release carries source archives only) and it
+# publishes MD5 sidecars only (`<file>.md5`) — there is no `.sha256`. So, exactly like
+# whisper_cpp above, the sha256 values were COMPUTED FROM FRESH DOWNLOADS on 2026-09-06 whose
+# upstream MD5 matched the published sidecar (per-file provenance: docs/model-policy.md
+# "Sidecar binaries — kiwix-tools"). download.kiwix.org 301s to mirror.download.kiwix.org;
+# the downloader follows redirects manually and re-validates every hop (assets.ts
+# assertSafeDownloadUrl, MAX_REDIRECTS = 5), so the canonical host is pinned here.
+# LICENSE: this is the product's FIRST copyleft third-party native binary — GPL-3.0-or-later
+# (kiwix-tools, libkiwix), statically linked against GPL-2.0-or-later (libzim "with
+# GPL-3.0-or-later files", Xapian) and LGPL-2.1-or-later (libmicrohttpd). DRIVE-NOTICES.md
+# carries the grants + the corresponding-source record; a preloaded Kit must carry the source
+# archives (P8-4). To bump: re-download every asset, re-verify its MD5 against the upstream
+# sidecar, recompute each SHA-256, re-read the COPYING/headers of the source trees, and
+# promote it here together with a fresh licence review.
+kiwix_tools:
+  version: '3.8.1'
+  optional: true
+  executables: [kiwix-serve, kiwix-manage, kiwix-search]
+  builds:
+    - os: win
+      arch: x64
+      backend: cpu
+      url: https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip
+      sha256: fcd01ed2b93e9a68632c7863c83b9f66bf64406a66357be1df7b8b75596f3e45
+      extract_to: runtime/kiwix-tools/win
+      # The win zip is FLAT (eight files, no top folder): three exes + these five DLLs.
+      # The exes do not start without them.
+      runtime_files: [icudt74.dll, icuin74.dll, icuio74.dll, icutu74.dll, icuuc74.dll]
+    - os: mac
+      arch: arm64
+      backend: cpu
+      url: https://download.kiwix.org/release/kiwix-tools/kiwix-tools_macos-arm64-3.8.1.tar.gz
+      sha256: 222e8398ca50ac005a7e92cf0116e0c83e3c44c79cab0bb7f6537943d517e8d3
+      extract_to: runtime/kiwix-tools/mac
+    - os: mac
+      arch: x64
+      backend: cpu
+      url: https://download.kiwix.org/release/kiwix-tools/kiwix-tools_macos-x86_64-3.8.1.tar.gz
+      sha256: 70219e56f7c274e1fc0db8487abdcc91bde9a6f2923958894c0c81ee24b06c01
+      extract_to: runtime/kiwix-tools/mac
+    - os: linux
+      arch: x64
+      backend: cpu
+      url: https://download.kiwix.org/release/kiwix-tools/kiwix-tools_linux-x86_64-3.8.1.tar.gz
+      sha256: 46557f9a3c3eaada2556a957cf5bc662c07dc6286e8924e04fa3a173f83ff6dd
+      extract_to: runtime/kiwix-tools/linux
+
 # OCR LANGUAGE DATA (Phase 38, D32): a NEW ASSET CLASS on this yaml — plain verified
 # files, no extraction, no per-OS variance. ADDITIVE block (the whisper_cpp
 # forward-compatibility contract). The drive carries ONLY these traineddata files;

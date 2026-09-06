@@ -676,6 +676,14 @@ export interface EngineStatus {
   backend: string | null
   /** Engine families with a host build but no binary yet (e.g. `llama_cpp`, `whisper_cpp`). */
   missingFamilies: string[]
+  /**
+   * OPTIONAL families (never a readiness prerequisite) with a host build but no binary yet —
+   * today `kiwix_tools` (#339 P8-1). Never counted in `installed`, never listed in
+   * `missingFamilies`, and never fetched by the argument-less `downloadEngine` IPC: an optional
+   * family installs only on an explicit per-family request (the consent step, #339 P8-2).
+   * Optional on the type so an older renderer simply ignores it.
+   */
+  missingOptionalFamilies?: string[]
 }
 
 // ---- Image understanding (vision) — image-understanding plan §9.3 ----

@@ -12,6 +12,15 @@ import {
 import { spawn as nodeSpawn } from 'node:child_process'
 import { kiwixGet } from './client'
 
+/** One `log.warn` per process for a hashless install marker (#339 P8-1, R-1) — never per
+ *  start, and never with a path (the sentinel rule). */
+let warnedServeSkipLegacy = false
+
+/** Test-only: let each test see its own first-warn behaviour. */
+export function _resetKiwixServeSkipLegacyWarnForTests(): void {
+  warnedServeSkipLegacy = false
+}
+
 // kiwix-serve sidecar lifecycle (knowledge packs). A compact sibling of LlamaServer
 // (runtime/sidecar.ts) — same seams (injectable spawn/port/probe for tests), same
 // pre-spawn verification, same crash-reap registration — minus everything model-specific
@@ -323,8 +332,16 @@ export class KiwixServer {
     const generation = this.allocateGeneration()
     // Same pre-spawn integrity rule as every sidecar: a packaged-build tamper refuses
     // to spawn; dev/legacy installs resolve skip-* and proceed (binary-verifier.ts).
-    if ((await this.verifyFn(this.opts.binPath)) === 'mismatch') {
+    const verdict = await this.verifyFn(this.opts.binPath)
+    if (verdict === 'mismatch') {
       throw new Error('kiwix-serve failed pre-spawn integrity verification')
+    }
+    // #339 P8-1: an in-app install records a hash for kiwix-serve, so `skip-legacy` now means
+    // exactly one thing — a bundle placed by hand with no marker. Say so once per process, the
+    // way `tools.ts` does for kiwix-manage, so the R-1 closure is auditable for BOTH binaries.
+    if (verdict === 'skip-legacy' && !warnedServeSkipLegacy) {
+      warnedServeSkipLegacy = true
+      log.warn('hashless install marker — kiwix-serve integrity not verified (a hand-placed bundle; R-1)')
     }
     // Recheck 1 (plan §9.15 item 1) — after the verification.
     if (signal.aborted) throw abortError('kiwix-serve start aborted after verification')

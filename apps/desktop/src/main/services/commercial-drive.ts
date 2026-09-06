@@ -1,11 +1,13 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
 import {
   isKitPlatform,
   KIT_PLATFORMS,
   type KitPlatform,
   type OcrSources,
+  type RuntimeBuild,
+  type RuntimeFamily,
   type RuntimeSources
 } from '../../shared/runtime-sources'
 import { isCommercialPolicy, loadPolicy } from './policy'
@@ -14,8 +16,10 @@ import {
   planOcrDownloads,
   planRuntimeDownload,
   readRuntimeMarker,
-  runtimeBinaryPresent,
-  WHISPER_BINARY_BASE
+  requiredInstallFiles,
+  sidecarFamilySpec,
+  type RuntimeDownloadPlan,
+  type SidecarFamilySpec
 } from './assets'
 import { sha256File } from './models'
 import { verifyDriveModels, listSkillFolders, type ModelVerifyResult } from './drive'
@@ -276,6 +280,14 @@ export const KIT_PLATFORM_SPECS: Record<KitPlatform, KitPlatformSpec> = {
 export interface CommercialGateOptions {
   platforms: KitPlatform[]
   appVersion: string
+  /**
+   * #339 P8-1: build families beyond the two grandfathered positionals (`runtimeSources` =
+   * llama_cpp, `whisperSources` = whisper_cpp), keyed by yaml family name. Every FUTURE family
+   * goes here; the positionals are frozen. The code-side spec (`SIDECAR_FAMILY_SPECS`) decides
+   * whether a family is required (`runtimeCurrent` / `runtimeHashed`) or optional
+   * (`optionalRuntimesConsistent`). A null entry is "not declared on this drive".
+   */
+  families?: Partial<Record<RuntimeFamily, RuntimeSources | null>>
 }
 
 interface FoundAppArtifact {
@@ -372,6 +384,16 @@ export interface CommercialAssertion {
      * marker fails here, not in `runtimeCurrent`.
      */
     runtimeHashed: boolean
+    /**
+     * An OPTIONAL runtime family (kiwix_tools, #339 P8-1) is either FULLY provisioned — every
+     * declared executable and required runtime file present, the marker current, every hash
+     * recorded and still matching — or ENTIRELY absent. A half-installed optional family fails
+     * the drive: the app would spawn it. True when no optional family is passed, and true for a
+     * Kit that deliberately ships without knowledge-pack tools. Never folds into
+     * `runtimeCurrent` / `runtimeHashed`, which keep their exact meaning for the required
+     * families.
+     */
+    optionalRuntimesConsistent: boolean
     /**
      * Every pinned OCR language file is present + sha256-verified (opt-in:
      * true when no `ocrSources` were passed).
@@ -559,70 +581,127 @@ export async function assertCommercialDrive(
   // check runs for the whisper family (binary `whisper-cli`) when its pin is passed.
   let runtimeCurrent = true
   let runtimeHashed = true
-  const checkFamily = async (sources: RuntimeSources, family: string, binaryBase: string): Promise<void> => {
+  let optionalRuntimesConsistent = true
+  // ONE family list, ONE code path (#339 P8-1): the two grandfathered positionals first, then
+  // every family the caller passes by name. The CODE spec (`SIDECAR_FAMILY_SPECS`) supplies the
+  // required file set — the same one the installer produced — and decides required vs optional.
+  const families: Array<{ sources: RuntimeSources; label: string; spec: SidecarFamilySpec }> = []
+  const addFamily = (family: RuntimeFamily, sources: RuntimeSources | null | undefined, label: string): void => {
+    if (!sources || families.some((f) => f.spec.family === family)) return
+    const spec = sidecarFamilySpec(family)
+    if (!spec) {
+      runtimeCurrent = false
+      problems.push(`${label}: unknown runtime family "${family}" — the app cannot verify what it cannot spawn`)
+      return
+    }
+    families.push({ sources, label, spec })
+  }
+  addFamily('llama_cpp', runtimeSources, 'runtime')
+  addFamily('whisper_cpp', whisperSources, 'whisper')
+  for (const [family, sources] of Object.entries(opts?.families ?? {})) {
+    addFamily(family as RuntimeFamily, sources, family)
+  }
+
+  const checkFamily = async ({ sources, label: familyLabel, spec }: (typeof families)[number]): Promise<void> => {
+    const optional = spec.optional === true
+    const fail = (kind: 'current' | 'hashed', message: string): void => {
+      problems.push(message)
+      if (optional) optionalRuntimesConsistent = false
+      else if (kind === 'current') runtimeCurrent = false
+      else runtimeHashed = false
+    }
+    // Group the builds by extract dir: the two macOS kiwix_tools builds share ONE dir, and a
+    // host installs one of them — each dir is checked once, against the build the marker's
+    // `arch` names (else the first). Every llama / whisper build is its own group, so their
+    // checks are byte-identical to before.
+    const groups = new Map<string, RuntimeBuild[]>()
     for (const build of sources.builds) {
-      const label = `${family} build ${build.os}/${build.arch} ${build.backend}`
+      const list = groups.get(build.extractTo) ?? []
+      list.push(build)
+      groups.set(build.extractTo, list)
+    }
+    for (const builds of groups.values()) {
       // planRuntimeDownload escape-guards extract_to (the yaml on the DRIVE is
       // user-writable) — a tampered path is a failed check, not a crash.
-      let binaryOk = false
-      let extractTo: string
-      let binaryPath: string
-      try {
-        const plan = planRuntimeDownload(rootPath, build, sources.version, binaryBase)
-        extractTo = plan.extractTo
-        binaryPath = plan.binaryPath
-        binaryOk = runtimeBinaryPresent(plan)
-      } catch (err) {
-        runtimeCurrent = false
-        problems.push(`${label}: ${err instanceof Error ? err.message : String(err)}`)
+      const plans: Array<{ build: RuntimeBuild; plan: RuntimeDownloadPlan }> = []
+      let planFailed = false
+      for (const build of builds) {
+        try {
+          plans.push({
+            build,
+            plan: planRuntimeDownload(rootPath, build, sources.version, spec.binaryBase, {
+              alsoRequired: spec.alsoRequired,
+              declaredExecutables: sources.executables
+            })
+          })
+        } catch (err) {
+          fail('current', `${familyLabel} build ${build.os}/${build.arch} ${build.backend}: ${err instanceof Error ? err.message : String(err)}`)
+          planFailed = true
+        }
+      }
+      if (planFailed || plans.length === 0) continue
+      const marker = readRuntimeMarker(plans[0]!.plan.extractTo)
+      const { build, plan } = plans.find((p) => marker !== null && p.build.arch === marker.arch) ?? plans[0]!
+      const label = `${familyLabel} build ${build.os}/${build.arch} ${build.backend}`
+      const required = requiredInstallFiles(plan)
+      const present = required.filter((p) => existsSync(p) && statSync(p).isFile())
+      // An optional family that is ENTIRELY absent — no marker, none of its files — is not a
+      // defect: a Kit may deliberately ship without the knowledge-pack tools.
+      if (optional && marker === null && present.length === 0) continue
+      const missing = required.filter((p) => !present.includes(p))
+      // A marker alone is not an install: every declared file must exist too (mirrors
+      // runtimeInstallCurrent — a half-deleted or half-installed family must fail the gate).
+      if (missing.length > 0) {
+        const names = missing.map((p) => basename(p))
+        fail(
+          'current',
+          missing.length === 1 && missing[0] === plan.binaryPath
+            ? `${label}: ${spec.binaryBase} binary missing under ${build.extractTo} — run fetch-runtime for this build`
+            : `${label}: missing under ${build.extractTo}: ${names.join(', ')} — run fetch-runtime for this build`
+        )
         continue
       }
-      const marker = readRuntimeMarker(extractTo)
-      // A marker alone is not an install: the binary must exist too (mirrors
-      // runtimeInstallCurrent — a half-deleted install must fail the sell gate).
-      if (!binaryOk) {
-        runtimeCurrent = false
-        problems.push(
-          `${label}: ${binaryBase} binary missing under ${build.extractTo} — ` +
-            'run fetch-runtime for this build'
-        )
-      } else if (!marker) {
-        runtimeCurrent = false
-        problems.push(
+      if (!marker) {
+        fail(
+          'current',
           `${label}: no .hilbertraum-runtime.json ` +
             `install marker under ${build.extractTo} — run fetch-runtime for this build`
         )
-      } else if (marker.version !== sources.version || marker.backend !== build.backend) {
-        runtimeCurrent = false
-        problems.push(
+        continue
+      }
+      if (marker.version !== sources.version || marker.backend !== build.backend) {
+        fail(
+          'current',
           `${label}: installed ` +
             `${marker.version}/${marker.backend} does not match the pinned ` +
             `${sources.version}/${build.backend} — re-run fetch-runtime`
         )
-      } else {
-        // Version + backend match — now require the marker to carry the binary's SHA-256
-        // and to MATCH the on-disk binary (#234). A sold drive must ship this
-        // hash so the app can re-verify it before spawn; a hashless marker (an older
-        // fetch-runtime, or an unverified archive) fails the gate and must be re-fetched.
-        const expected = marker.binaries?.[markerBinaryKey(extractTo, binaryPath)]
+        continue
+      }
+      // Version + backend match — now require the marker to carry EVERY file's SHA-256 and
+      // each to MATCH the on-disk bytes (#234). A sold drive must ship these hashes so the app
+      // can re-verify each executable before spawn; a hashless marker (an older fetch-runtime,
+      // or an unverified archive) fails the gate and must be re-fetched.
+      for (const p of required) {
+        const name = basename(p)
+        const expected = marker.binaries?.[markerBinaryKey(plan.extractTo, p)]
         if (!expected) {
-          runtimeHashed = false
-          problems.push(
-            `${label}: install marker records no SHA-256 for ${binaryBase} — re-run ` +
+          fail(
+            'hashed',
+            `${label}: install marker records no SHA-256 for ${name} — re-run ` +
               'fetch-runtime --commercial so the binary can be re-verified before spawn'
           )
-        } else if ((await sha256File(binaryPath)).toLowerCase() !== expected.toLowerCase()) {
-          runtimeHashed = false
-          problems.push(
-            `${label}: ${binaryBase} does not match the SHA-256 recorded in the install ` +
+        } else if ((await sha256File(p)).toLowerCase() !== expected.toLowerCase()) {
+          fail(
+            'hashed',
+            `${label}: ${name} does not match the SHA-256 recorded in the install ` +
               'marker — the binary or the marker was modified after install; re-run fetch-runtime --commercial'
           )
         }
       }
     }
   }
-  if (runtimeSources) await checkFamily(runtimeSources, 'runtime', 'llama-server')
-  if (whisperSources) await checkFamily(whisperSources, 'whisper', WHISPER_BINARY_BASE)
+  for (const family of families) await checkFamily(family)
 
   // --- OCR language files present + verified (opt-in) ---
   // Plain files: the hash IS the install state (no marker — mirrors planOcrDownloads).
@@ -770,6 +849,7 @@ export async function assertCommercialDrive(
       noUserData,
       runtimeCurrent,
       runtimeHashed,
+      optionalRuntimesConsistent,
       ocrAssetsVerified,
       appSkillsPresent,
       userSkillsEmpty,

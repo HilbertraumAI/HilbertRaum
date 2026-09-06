@@ -203,6 +203,7 @@ describe('assertCommercialDrive', () => {
       noUserData: true,
       runtimeCurrent: true,
       runtimeHashed: true,
+      optionalRuntimesConsistent: true, // #339 P8-1
       ocrAssetsVerified: true,
       appSkillsPresent: true,
       userSkillsEmpty: true,
@@ -210,6 +211,125 @@ describe('assertCommercialDrive', () => {
       platformMatrixDeclared: true,
       appArtifactsPresent: true,
       launchersPresent: true
+    })
+  })
+
+  // #339 P8-1: the OPTIONAL kiwix_tools family rides `opts.families`. It is either FULLY
+  // provisioned — every executable and required runtime file present, the marker current,
+  // every hash recorded and matching — or ENTIRELY absent; anything in between fails
+  // `optionalRuntimesConsistent` and never touches `runtimeCurrent` / `runtimeHashed`.
+  describe('the optional kiwix_tools family (#339 P8-1)', () => {
+    const KIWIX_FILES = ['kiwix-serve.exe', 'kiwix-manage.exe', 'kiwix-search.exe', 'icudt74.dll', 'icuuc74.dll']
+    const kiwixSources = (): RuntimeSources => {
+      const res = validateRuntimeSources({
+        llama_cpp: {
+          version: 'b1',
+          builds: [{ os: 'win', arch: 'x64', backend: 'cpu', url: 'https://example.test/l.zip', sha256: 'a'.repeat(64), extract_to: 'runtime/llama.cpp/win' }]
+        },
+        kiwix_tools: {
+          version: '3.8.1',
+          optional: true,
+          executables: ['kiwix-serve', 'kiwix-manage', 'kiwix-search'],
+          builds: [
+            {
+              os: 'win',
+              arch: 'x64',
+              backend: 'cpu',
+              url: 'https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip',
+              sha256: 'fcd01ed2b93e9a68632c7863c83b9f66bf64406a66357be1df7b8b75596f3e45',
+              extract_to: 'runtime/kiwix-tools/win',
+              runtime_files: ['icudt74.dll', 'icuuc74.dll']
+            },
+            { os: 'mac', arch: 'arm64', backend: 'cpu', url: 'https://example.test/m-arm64.tar.gz', sha256: 'b'.repeat(64), extract_to: 'runtime/kiwix-tools/mac' },
+            { os: 'mac', arch: 'x64', backend: 'cpu', url: 'https://example.test/m-x64.tar.gz', sha256: 'c'.repeat(64), extract_to: 'runtime/kiwix-tools/mac' }
+          ]
+        }
+      })
+      if (!res.families?.kiwix_tools) throw new Error('fixture invalid: ' + res.errors.join(', '))
+      return res.families.kiwix_tools
+    }
+    const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
+    /** A full, hashed kiwix install on win (all five files) and on mac (the arm64 build's three). */
+    function provisionKiwix(root: string, over: { omit?: string; hashless?: boolean; tamper?: string; macArch?: string } = {}): void {
+      const win = join(root, 'runtime', 'kiwix-tools', 'win')
+      mkdirSync(win, { recursive: true })
+      const binaries: Record<string, string> = {}
+      for (const f of KIWIX_FILES) {
+        if (f === over.omit) continue
+        writeFileSync(join(win, f), over.tamper === f ? 'tampered' : `bytes of ${f}`)
+        binaries[f] = sha(`bytes of ${f}`)
+      }
+      writeRuntimeMarker(win, { version: '3.8.1', backend: 'cpu', os: 'win', arch: 'x64', ...(over.hashless ? {} : { binaries }) })
+      const mac = join(root, 'runtime', 'kiwix-tools', 'mac')
+      mkdirSync(mac, { recursive: true })
+      const macBinaries: Record<string, string> = {}
+      for (const f of ['kiwix-serve', 'kiwix-manage', 'kiwix-search']) {
+        writeFileSync(join(mac, f), `mac bytes of ${f}`)
+        macBinaries[f] = sha(`mac bytes of ${f}`)
+      }
+      writeRuntimeMarker(mac, { version: '3.8.1', backend: 'cpu', os: 'mac', arch: over.macArch ?? 'arm64', binaries: macBinaries })
+    }
+    async function gate(root: string, chat: ModelManifest) {
+      return assertCommercialDrive(root, [chat], null, null, null, { ...kit(), families: { kiwix_tools: kiwixSources() } })
+    }
+    function sellable(prefix: string): { root: string; chat: ModelManifest } {
+      const root = tempDir(prefix)
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      provisionApp(root)
+      return { root, chat }
+    }
+
+    it('a fully provisioned kiwix_tools family passes the gate (every executable and runtime file hashed and matching)', async () => {
+      const { root, chat } = sellable('hilbertraum-commercial-kiwix-ok-')
+      provisionKiwix(root)
+      const res = await gate(root, chat)
+      expect(res.problems).toEqual([])
+      expect(res.ok).toBe(true)
+      expect(res.checks.optionalRuntimesConsistent).toBe(true)
+    })
+
+    it('a drive carrying no kiwix_tools files at all is still sellable (an optional family may be absent)', async () => {
+      const { root, chat } = sellable('hilbertraum-commercial-kiwix-absent-')
+      const res = await gate(root, chat)
+      expect(res.ok).toBe(true)
+      expect(res.checks.optionalRuntimesConsistent).toBe(true)
+      // …and a null entry means "not declared on this drive" — nothing to check.
+      const none = await assertCommercialDrive(root, [chat], null, null, null, { ...kit(), families: { kiwix_tools: null } })
+      expect(none.ok).toBe(true)
+    })
+
+    it.each([
+      ['missing kiwix-manage', { omit: 'kiwix-manage.exe' }, /missing under runtime\/kiwix-tools\/win: kiwix-manage\.exe/],
+      ['missing an ICU DLL', { omit: 'icuuc74.dll' }, /missing under runtime\/kiwix-tools\/win: icuuc74\.dll/],
+      ['a hashless marker', { hashless: true }, /records no SHA-256 for kiwix-serve\.exe/],
+      ['one tampered file', { tamper: 'kiwix-manage.exe' }, /kiwix-manage\.exe does not match the SHA-256 recorded/]
+    ] as const)('a half-installed kiwix_tools family fails optionalRuntimesConsistent — %s', async (_name, over, message) => {
+      const { root, chat } = sellable('hilbertraum-commercial-kiwix-half-')
+      provisionKiwix(root, over)
+      const res = await gate(root, chat)
+      expect(res.ok).toBe(false)
+      expect(res.checks.optionalRuntimesConsistent).toBe(false)
+      expect(res.problems.some((p) => message.test(p)), res.problems.join('\n')).toBe(true)
+      // …and never the REQUIRED families' flags.
+      expect(res.checks.runtimeCurrent).toBe(true)
+      expect(res.checks.runtimeHashed).toBe(true)
+    })
+
+    it('the two macOS kiwix_tools builds are checked once against the single mac install dir, by the marker\'s arch', async () => {
+      const { root, chat } = sellable('hilbertraum-commercial-kiwix-mac-')
+      provisionKiwix(root, { macArch: 'x64' }) // the x86_64 build is the one installed
+      const res = await gate(root, chat)
+      expect(res.ok).toBe(true)
+      // A mac dir whose marker names an arch with no build falls back to the first build and
+      // is still one check, not two: no "missing" problem for the other architecture.
+      const other = sellable('hilbertraum-commercial-kiwix-mac2-')
+      provisionKiwix(other.root, { macArch: 'arm64' })
+      const res2 = await gate(other.root, other.chat)
+      expect(res2.ok).toBe(true)
+      expect(res2.problems.filter((p) => /mac/.test(p))).toEqual([])
     })
   })
 

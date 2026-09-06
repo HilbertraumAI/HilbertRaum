@@ -752,15 +752,16 @@ these harnesses prove the *current* pin (the drive's previous binary was b9585).
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
 | `zim-real` | `HILBERTRAUM_ZIM_SMOKE` | real `kiwix-manage` registration, the real `kiwix-serve` sidecar, Xapian search, the offline article viewer read — fully offline. **FAIL-CLOSED (#301 P5, finding L8):** requested with a missing/invalid tools dir, either binary absent, a non-ZIM file or an unset query **FAILS** the run instead of silently skipping it |
 
-**Manual install of the pinned kiwix-tools bundle (until P8).** `zim-real`'s tools directory
+**Manual install of the pinned kiwix-tools bundle (until P8-3).** `zim-real`'s tools directory
 is not fetched by any script yet: download the pinned **kiwix-tools 3.8.1, win-x86_64** zip
 (see `model-policy.md` "Sidecar binaries — kiwix-tools" for the exact bundle/hashes) and
 unzip the WHOLE archive under `runtime/kiwix-tools/<os>/` (Windows needs its five ICU DLLs
-beside the two exes). There is no install marker for this family, so it resolves through the
-hashless `skip-legacy` verifier path (residual R-1) rather than integrity verification. The
-provisioning wave (P8) adds the fetch script, the `runtime-sources.yaml` block,
-DRIVE-NOTICES and the commercial-drive checks that make this automatic — none of that lands
-here.
+beside the two exes). A hand-placed bundle like this has no install marker and resolves
+through the hashless `skip-legacy` verifier path (residual R-1) rather than integrity
+verification; an in-app install (the family contract landed at #339 P8-1) writes that marker
+instead, and both `kiwix-serve` and `kiwix-manage` then verify normally — but no user-reachable
+install exists yet (the consent step is P8-2). The drive scripts' own `--family kiwix_tools`
+support is P8-3 — none of that lands here.
 
 **Optional harness *inputs* (point a harness at a specific artifact).** Distinct from the on-switch
 env vars in the table above, several harnesses additionally read an **artifact-pointer input**,

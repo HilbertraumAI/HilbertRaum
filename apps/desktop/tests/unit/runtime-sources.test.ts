@@ -226,10 +226,95 @@ describe('validateRuntimeSources', () => {
     expect(ocr.errors.some((e) => e.includes('ocr.files[0].url'))).toBe(true)
   })
 
+  // #339 P8-1: the third family — optional, multi-executable, per-build runtime files.
+  describe('kiwix_tools family block (#339 P8-1)', () => {
+    const kiwixBuild = {
+      os: 'win',
+      arch: 'x64',
+      backend: 'cpu',
+      url: 'https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip',
+      sha256: 'fcd01ed2b93e9a68632c7863c83b9f66bf64406a66357be1df7b8b75596f3e45',
+      extract_to: 'runtime/kiwix-tools/win',
+      runtime_files: ['icudt74.dll', 'icuuc74.dll']
+    }
+    const base = () => ({
+      llama_cpp: {
+        version: 'b1',
+        builds: [{ os: 'win', arch: 'x64', backend: 'cpu', url: 'https://x.test/l.zip', sha256: 'a'.repeat(64), extract_to: 'runtime/llama.cpp/win' }]
+      }
+    })
+
+    it('validates a kiwix_tools family block (optional, executables, per-build runtime_files)', () => {
+      const res = validateRuntimeSources({
+        ...base(),
+        kiwix_tools: {
+          version: '3.8.1',
+          optional: true,
+          executables: ['kiwix-serve', 'kiwix-manage', 'kiwix-search'],
+          builds: [kiwixBuild, { ...kiwixBuild, os: 'mac', arch: 'arm64', url: 'https://x.test/m.tar.gz', extract_to: 'runtime/kiwix-tools/mac', runtime_files: undefined }]
+        }
+      })
+      expect(res.errors).toEqual([])
+      const k = res.families?.kiwix_tools
+      expect(k?.version).toBe('3.8.1')
+      expect(k?.optional).toBe(true)
+      expect(k?.executables).toEqual(['kiwix-serve', 'kiwix-manage', 'kiwix-search'])
+      expect(k?.builds[0]?.runtimeFiles).toEqual(['icudt74.dll', 'icuuc74.dll'])
+      expect(k?.builds[1]?.runtimeFiles).toBeUndefined()
+    })
+
+    it('rejects an executables list that is empty, duplicated, or carries a separator or extension', () => {
+      for (const executables of [[], ['kiwix-serve', 'kiwix-serve'], ['bin/kiwix-serve'], ['kiwix-serve.exe'], ['icu.dll'], ['..']]) {
+        const res = validateRuntimeSources({ ...base(), kiwix_tools: { version: '3.8.1', executables, builds: [kiwixBuild] } })
+        expect(res.ok, JSON.stringify(executables)).toBe(false)
+        expect(res.errors.some((e) => e.includes('kiwix_tools.executables')), JSON.stringify(executables)).toBe(true)
+      }
+    })
+
+    it('rejects a runtime_files entry that is not a plain filename or duplicates a required file', () => {
+      for (const runtime_files of [['sub/icu.dll'], ['..'], ['icuuc74.dll', 'icuuc74.dll'], ['kiwix-serve'], ['kiwix-serve.exe'], 'icuuc74.dll']) {
+        const res = validateRuntimeSources({
+          ...base(),
+          kiwix_tools: { version: '3.8.1', executables: ['kiwix-serve', 'kiwix-manage'], builds: [{ ...kiwixBuild, runtime_files }] }
+        })
+        expect(res.ok, JSON.stringify(runtime_files)).toBe(false)
+        expect(res.errors.some((e) => e.includes('runtime_files')), JSON.stringify(runtime_files)).toBe(true)
+      }
+    })
+
+    it('rejects a non-boolean optional flag and a non-mapping block', () => {
+      const bad = validateRuntimeSources({ ...base(), kiwix_tools: { version: '3.8.1', optional: 'yes', builds: [kiwixBuild] } })
+      expect(bad.ok).toBe(false)
+      expect(bad.errors.some((e) => e.includes('kiwix_tools.optional'))).toBe(true)
+      const notMap = validateRuntimeSources({ ...base(), kiwix_tools: 'x' })
+      expect(notMap.ok).toBe(false)
+      expect(notMap.errors[0]).toContain('"kiwix_tools" must be a mapping')
+    })
+
+    it('exposes every build family through result.families, with sources/whisper as the same objects', () => {
+      const res = validateRuntimeSources({
+        ...base(),
+        whisper_cpp: { version: 'w1', builds: [{ os: 'win', arch: 'x64', backend: 'cpu', url: 'https://x.test/w.zip', sha256: 'b'.repeat(64), extract_to: 'runtime/whisper.cpp/win' }] },
+        kiwix_tools: { version: '3.8.1', optional: true, executables: ['kiwix-serve', 'kiwix-manage'], builds: [kiwixBuild] }
+      })
+      expect(res.ok).toBe(true)
+      expect(Object.keys(res.families ?? {}).sort()).toEqual(['kiwix_tools', 'llama_cpp', 'whisper_cpp'])
+      expect(res.families?.llama_cpp).toBe(res.sources)
+      expect(res.families?.whisper_cpp).toBe(res.whisper)
+      // No kiwix block → no key, and the two aliases still hold.
+      const two = validateRuntimeSources(base())
+      expect(Object.keys(two.families ?? {})).toEqual(['llama_cpp'])
+      expect(two.families?.llama_cpp).toBe(two.sources)
+    })
+  })
+
   it('every entry of the shipped runtime-sources.yaml still validates', () => {
     const file = join(__dirname, '..', '..', '..', '..', 'model-manifests', 'runtime-sources.yaml')
     const res = validateRuntimeSources(parse(readFileSync(file, 'utf8')))
     expect(res.errors).toEqual([])
     expect(res.ok).toBe(true)
+    // #339 P8-1: the shipped kiwix_tools block is optional with all four pinned builds.
+    expect(res.families?.kiwix_tools?.optional).toBe(true)
+    expect(res.families?.kiwix_tools?.builds).toHaveLength(4)
   })
 })

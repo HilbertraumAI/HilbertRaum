@@ -4,7 +4,7 @@ import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, posix, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest, type ModelRole } from '../../shared/manifest'
-import type { OcrSources, RuntimeBuild, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
+import type { OcrSources, RuntimeBuild, RuntimeFamily, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
 import {
   beginChecksumInstrumentation,
   mmprojPath,
@@ -243,6 +243,14 @@ export interface RuntimeDownloadPlan {
   extractTo: string
   /** Absolute path of the extracted `llama-server[.exe]`. */
   binaryPath: string
+  /**
+   * EVERY executable this install must produce, absolute, `[0] === binaryPath` (#339 P8-1).
+   * `[binaryPath]` for a one-binary family; the kiwix family lists serve, manage and search.
+   * Each is required after extraction and hashed into the install marker.
+   */
+  binaryPaths: string[]
+  /** Every non-executable required file (the build's `runtime_files`), absolute; `[]` for most. */
+  runtimeFilePaths: string[]
   /** Expected SHA-256 of the zip (may be a placeholder). */
   sha256: string
   /** True when the zip hash is still a placeholder. */
@@ -261,6 +269,55 @@ export function runtimeBinaryName(os: RuntimeOs): string {
 
 /** The whisper family's CLI binary (`runtime/whisper.cpp/<os>/`). */
 export const WHISPER_BINARY_BASE = 'whisper-cli'
+
+/** The kiwix-tools family's two spawned executables (`runtime/kiwix-tools/<os>/`, #339 P8-1).
+ *  `services/zim/tools.ts` derives its resolver names from these — one spelling for the
+ *  installer, the sell gate and the spawn seams. */
+export const KIWIX_SERVE_BINARY_BASE = 'kiwix-serve'
+export const KIWIX_MANAGE_BINARY_BASE = 'kiwix-manage'
+
+/**
+ * One sidecar family the in-app installer and the commercial-drive gate both read (#339 P8-1) —
+ * ONE registry, so the two can never disagree about which files an install must produce.
+ */
+export interface SidecarFamilySpec {
+  family: RuntimeFamily
+  /** The primary executable's base name (`plan.binaryPath`). */
+  binaryBase: string
+  /**
+   * Further executables the family ALWAYS ships — the code-side floor a user-writable drive
+   * yaml cannot lower (SEC-4). The yaml's `executables` may add to it (`kiwix-search`), never
+   * remove from it.
+   */
+  alsoRequired?: readonly string[]
+  /**
+   * The LOAD-BEARING copy of "optional" (the yaml's `optional: true` is declarative): never in
+   * the default install selection, never counted in readiness. Only an explicit per-family
+   * request installs it.
+   */
+  optional?: boolean
+}
+
+/**
+ * Install order preserved: llama_cpp (the chat engine, whose absence forces demo mode) first,
+ * then whisper_cpp, then the optional kiwix_tools. `engineStatus.version/backend` report the
+ * first REQUIRED family.
+ */
+export const SIDECAR_FAMILY_SPECS: readonly SidecarFamilySpec[] = [
+  { family: 'llama_cpp', binaryBase: 'llama-server' },
+  { family: 'whisper_cpp', binaryBase: WHISPER_BINARY_BASE },
+  {
+    family: 'kiwix_tools',
+    binaryBase: KIWIX_SERVE_BINARY_BASE,
+    alsoRequired: [KIWIX_MANAGE_BINARY_BASE],
+    optional: true
+  }
+]
+
+/** The spec for a family, or undefined for an unknown one. */
+export function sidecarFamilySpec(family: RuntimeFamily): SidecarFamilySpec | undefined {
+  return SIDECAR_FAMILY_SPECS.find((s) => s.family === family)
+}
 
 /** Resolve a drive-relative dir, rejecting `..`/absolute escapes (like `weightPath`). */
 function resolveWithinRoot(rootPath: string, relPath: string): string {
@@ -309,7 +366,14 @@ export function planRuntimeDownload(
   rootPath: string,
   build: RuntimeBuild,
   version: string,
-  binaryBase = 'llama-server'
+  binaryBase = 'llama-server',
+  /**
+   * #339 P8-1: the rest of the family's required file set. `alsoRequired` is the code-side
+   * floor (the spec's further executables), `declaredExecutables` the yaml's `executables`
+   * list; the build's own `runtime_files` come from `build`. The required set is their union,
+   * so an edited drive yaml can ADD requirements but never drop a spawned executable.
+   */
+  files: { alsoRequired?: readonly string[]; declaredExecutables?: readonly string[] } = {}
 ): RuntimeDownloadPlan {
   const extractTo = resolveWithinRoot(rootPath, build.extractTo)
   // Name the downloaded archive after the URL's basename so a .tar.gz (the format the
@@ -323,6 +387,16 @@ export function planRuntimeDownload(
   )
   const zipDest = resolveWithinRoot(extractTo, archiveName)
   const binaryPath = join(extractTo, sidecarBinaryName(binaryBase, build.os))
+  // Executables: the primary first, then the floor, then the yaml's declarations — deduped
+  // by base name so a name listed in both stays one file. Every name is resolved INSIDE the
+  // extract dir (a plain name cannot escape it; the validator guarantees plainness, and
+  // `resolveWithinRoot` is the belt to that brace).
+  const bases: string[] = [binaryBase]
+  for (const b of [...(files.alsoRequired ?? []), ...(files.declaredExecutables ?? [])]) {
+    if (!bases.includes(b)) bases.push(b)
+  }
+  const binaryPaths = bases.map((b) => resolveWithinRoot(extractTo, sidecarBinaryName(b, build.os)))
+  const runtimeFilePaths = (build.runtimeFiles ?? []).map((f) => resolveWithinRoot(extractTo, f))
   return {
     version,
     os: build.os,
@@ -332,9 +406,20 @@ export function planRuntimeDownload(
     zipDest,
     extractTo,
     binaryPath,
+    binaryPaths,
+    runtimeFilePaths,
     sha256: build.sha256,
     placeholderHash: !isRealSha256(build.sha256)
   }
+}
+
+/** Every file an install must produce (#339 P8-1): the executables, then the runtime files. */
+export function requiredInstallFiles(plan: RuntimeDownloadPlan): string[] {
+  const out: string[] = []
+  for (const p of [plan.binaryPath, ...plan.binaryPaths, ...plan.runtimeFilePaths]) {
+    if (!out.includes(p)) out.push(p)
+  }
+  return out
 }
 
 // ---- OCR language files (the `ocr:` asset class) ------------------------------------
@@ -848,9 +933,14 @@ export function formatAssetPlan(
   return lines.join('\n')
 }
 
-/** True when a runtime binary is already extracted at the planned path (idempotent skip). */
+/**
+ * True when EVERY file the install must produce is present (idempotent skip). For a
+ * one-binary family this is exactly the old single-file check; for kiwix_tools (#339 P8-1) it
+ * is serve + manage + search + the Windows ICU DLLs — a half-installed family is not "present",
+ * so `runtimeInstallCurrent` re-installs it without a further edit.
+ */
 export function runtimeBinaryPresent(plan: RuntimeDownloadPlan): boolean {
-  return existsSync(plan.binaryPath) && statSync(plan.binaryPath).isFile()
+  return requiredInstallFiles(plan).every((p) => existsSync(p) && statSync(p).isFile())
 }
 
 // ---- Runtime install marker (.hilbertraum-runtime.json) ------------------------------------
@@ -877,6 +967,11 @@ export interface RuntimeInstallMarker {
    * OPTIONAL: legacy markers (pre-2026-06-21 drives, or those written by an older
    * fetch-runtime) omit it, and the verifier then tolerates the binary (skip + log)
    * rather than refusing to start.
+   * A multi-file family (#339 P8-1, kiwix_tools) records EVERY executable it ships
+   * (`kiwix-serve.exe`, `kiwix-manage.exe`, `kiwix-search.exe`) plus its required runtime
+   * files (`icuuc74.dll`, …) — all-or-nothing, so the verifier and the sell gate never
+   * disagree about one install. The reader/writer contract is unchanged: a reader looks up
+   * the keys it knows and ignores the rest.
    */
   binaries?: Record<string, string>
 }

@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { log } from '../logging'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
+import { KIWIX_MANAGE_BINARY_BASE, KIWIX_SERVE_BINARY_BASE } from '../assets'
 import {
   llamaOsDir,
   registerSidecarChild,
@@ -16,19 +17,24 @@ import {
 // (transcriber/cli.ts): on-drive `runtime/kiwix-tools/<os>/`, dev-only env
 // override, packaged builds resolve only from the drive (security audit M-5).
 //
-// MVP scope note: the family is NOT yet wired into runtime-sources.yaml / the
-// in-app engine downloader / DRIVE-NOTICES generation — the binaries are placed
-// manually (or by a future provisioning wave). Absence is a first-class state:
-// every consumer reports "kiwix-tools not installed" instead of failing.
+// Provisioning (#339 P8-1): `kiwix_tools` is a real, OPTIONAL family of runtime-sources.yaml
+// and the in-app installer (`services/runtime-download.ts`) — an install writes the
+// `.hilbertraum-runtime.json` marker with a hash for BOTH executables, so the pre-spawn
+// verifier below answers `ok` / `mismatch` for each of them. A bundle placed by hand is still
+// supported and has no marker: it resolves `skip-legacy` (one logged warning per binary per
+// process) — the legacy-drive path that verdict is named for. Absence stays a first-class
+// state: every consumer reports "kiwix-tools not installed" instead of failing. The consent
+// surface that requests the install is P8-2; the drive scripts follow in P8-3.
 
-/** Platform-specific `kiwix-serve` executable name. */
+/** Platform-specific `kiwix-serve` executable name — derived from the installer's base name so
+ *  the resolver, the installer and the sell gate can never spell it differently. */
 export function kiwixServeBinaryName(platform: NodeJS.Platform = process.platform): string {
-  return platform === 'win32' ? 'kiwix-serve.exe' : 'kiwix-serve'
+  return platform === 'win32' ? `${KIWIX_SERVE_BINARY_BASE}.exe` : KIWIX_SERVE_BINARY_BASE
 }
 
-/** Platform-specific `kiwix-manage` executable name. */
+/** Platform-specific `kiwix-manage` executable name (see `kiwixServeBinaryName`). */
 export function kiwixManageBinaryName(platform: NodeJS.Platform = process.platform): string {
-  return platform === 'win32' ? 'kiwix-manage.exe' : 'kiwix-manage'
+  return platform === 'win32' ? `${KIWIX_MANAGE_BINARY_BASE}.exe` : KIWIX_MANAGE_BINARY_BASE
 }
 
 /** Directory that holds the kiwix sidecar family: `runtime/kiwix-tools/<os>/`. */

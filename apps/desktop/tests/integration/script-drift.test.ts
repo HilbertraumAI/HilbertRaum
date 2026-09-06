@@ -70,13 +70,31 @@ describe('TS ↔ shell-script drift (drive layout)', () => {
 
 describe('TS ↔ shell-script drift (runtime build matrix)', () => {
   // The canonical matrix = `runtime-sources.yaml` (the same file the app + assets.ts read).
-  function canonicalBuilds(): Set<string> {
+  // Family-driven over `parsed.families` (#339 P8-1) rather than hand-enumerated per-family
+  // reads, so a FIFTH family can never again go unnoticed by this net the way `kiwix_tools`
+  // did before this change. An OPTIONAL family (kiwix_tools) is excluded by default: the
+  // drive builders do not provision it yet (that is P8-3), so including it here would redden
+  // this PR for work it deliberately does not do — `includeOptional: true` is how the
+  // "the builders skip exactly the optional families" test below still keeps that carve-out
+  // honest.
+  function canonicalBuilds(opts: { includeOptional?: boolean } = {}): Set<string> {
     const parsed = validateRuntimeSources(parseYaml(read('model-manifests/runtime-sources.yaml')))
     expect(parsed.errors, `runtime-sources.yaml must validate: ${parsed.errors.join('; ')}`).toEqual([])
     const set = new Set<string>()
-    for (const b of parsed.sources!.builds) set.add(`llama_cpp|${b.backend}|${b.extractTo}`)
-    if (parsed.whisper) {
-      for (const b of parsed.whisper.builds) set.add(`whisper_cpp|${b.backend}|${b.extractTo}`)
+    for (const [family, block] of Object.entries(parsed.families ?? {})) {
+      if (block!.optional && !opts.includeOptional) continue
+      for (const b of block!.builds) set.add(`${family}|${b.backend}|${b.extractTo}`)
+    }
+    return set
+  }
+
+  /** The families runtime-sources.yaml marks `optional: true` today. */
+  function optionalFamilies(): Set<string> {
+    const parsed = validateRuntimeSources(parseYaml(read('model-manifests/runtime-sources.yaml')))
+    expect(parsed.errors, `runtime-sources.yaml must validate: ${parsed.errors.join('; ')}`).toEqual([])
+    const set = new Set<string>()
+    for (const [family, block] of Object.entries(parsed.families ?? {})) {
+      if (block!.optional) set.add(family)
     }
     return set
   }
@@ -104,7 +122,10 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
     expect(end, 'the runtime-assert matrix loop in build-commercial-drive.sh is not closed').toBeGreaterThan(start)
     const rows = [...src.slice(start, end).matchAll(/"([^"|]+)\|([^"|]+)\|([^"|]+)\|([^"|]+)"/g)]
     expect(rows.length, 'expected the runtime-assert matrix rows in build-commercial-drive.sh').toBeGreaterThan(0)
-    const FAMILIES: Record<string, string> = { llama: 'llama_cpp', whisper: 'whisper_cpp' }
+    // `kiwix` is pre-registered (#339 P8-1) even though the drive builders don't yet emit a
+    // matrix row for it (that lands in P8-3) — so P8-3 only has to add rows here, never touch
+    // this mapping.
+    const FAMILIES: Record<string, string> = { llama: 'llama_cpp', whisper: 'whisper_cpp', kiwix: 'kiwix_tools' }
     return rows.map((m) => {
       const family = FAMILIES[m[1]]
       expect(
@@ -138,6 +159,23 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
     const asMap = (rows: { dir: string; bin: string }[]): Record<string, string> =>
       Object.fromEntries(rows.map((r) => [r.dir, r.bin]))
     expect(asMap(shMatrix())).toEqual(asMap(ps1Matrix()))
+  })
+
+  // #339 P8-1 R-c: the two comparisons above deliberately exclude optional families
+  // (kiwix_tools) because the drive builders don't provision them yet (P8-3). That carve-out
+  // must not become a permanent, silent blind spot: this test asserts the SET of families the
+  // builder matrices skip is EXACTLY the set the yaml marks optional — no more (a required
+  // family accidentally excluded would hide from both matrix comparisons above) and no less
+  // (an optional family a builder DOES provision would mean the carve-out is stale).
+  it('the runtime-sources families the drive builders skip are exactly the optional ones', () => {
+    const allFamilies = canonicalBuilds({ includeOptional: true })
+    const coveredFamilies = new Set([...ps1Matrix(), ...shMatrix()].map((r) => r.family))
+    const skipped = new Set(
+      [...new Set([...allFamilies].map((entry) => entry.split('|')[0]))].filter(
+        (family) => !coveredFamilies.has(family)
+      )
+    )
+    expect(skipped).toEqual(optionalFamilies())
   })
 })
 
