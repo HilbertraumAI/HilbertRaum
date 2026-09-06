@@ -1076,6 +1076,58 @@ is unusable here — it renders a mock preview harness with no theme support beh
 
 ---
 
+### 11.15 Knowledge-pack UI review — design record (IMPLEMENTED 2026-09-06, #301 P6)
+
+_The design/frontend review pass over the knowledge-packs feature (PR #294 → #301, Phase 6):
+copy, structure, a11y and visuals over states the earlier phases had already produced. No
+scope/outcome/lifecycle semantics changed. Code comments cite this section as **§11.15**._
+
+**Decisions + the facts they rest on:**
+
+1. **A source picker's popover stays non-modal, by rule.** Radix's `modal` Popover aria-hides
+   everything outside it — including its own trigger chip, the "Answering from…" readout — and
+   locks background scroll; that broke two existing navigation tests outright. A popover
+   anchored to a visible, meaningful trigger (§3 chat layout; §9 focus management) stays a
+   non-modal `Popover.Root` (Escape closes, focus returns to the trigger, nothing outside is
+   hidden). A true dialog (`ArticleModal`) keeps its real focus trap — the difference is
+   deliberate, recorded so the next popover doesn't "fix" it into a trap.
+2. **A reason that lives only in a tooltip does not exist for a screen reader.** Every greyed
+   picker row carried its reason (disabled / file missing / different archive / no full-text
+   index) as hover-only `title` text; §9 requires state to be announced, not just visible, so a
+   reason must sit in the accessible tree — name or description, never a bare `title`.
+3. **Pack-named action buttons in a list**, per §9: Enable/Disable/Remove per pack and "Open
+   article" per citation need an accessible name that says which row — "Enable {pack title}",
+   not "Enable" ×N (visible label text unchanged, naming rides `aria-label`).
+4. **`role="group"` for a block of related checkboxes** — the documents-sources and
+   knowledge-packs blocks are each a labelled group, not a bag of checkboxes; rows stay native
+   `<label><input type="checkbox">` so name/checked/disabled announce for free.
+5. **Description vs. name for a long hint:** a control's accessible name stays short; a long
+   hint (e.g. the Documents toggle's) belongs in `aria-describedby`, not the `<label>` text.
+6. **House dash rule (repo-wide): EN sentence breaks use the em dash `—`; DE uses the en dash
+   `–`.** A handful of pre-existing keys used a bare hyphen; repaired here (§7).
+7. **A late-confirmed capability still needs a badge, not only an outcome note** — "no
+   full-text index" (confirmed by an async probe) now shows as a badge beside enabled/disabled
+   on the pack's own row, not only in the per-answer "not searched" line.
+
+**As built:** `Modal` gained an additive `describedBy?: string` prop (the ConfirmDialog pattern)
+so `ArticleModal`'s "From <archive> — offline copy" line is the dialog's accessible
+*description*. `PacksPanel` is `<ul aria-label>`/`<li>`, the new `packs.state.notSearchable`
+badge, a visible reason line for missing/mismatch/not-searchable, named `aria-label`s on
+Enable/Disable/Remove. `ScopePopover` gives both checkbox blocks `role="group"`, moves the
+Documents hint to `aria-describedby`, describes cap-refused checkboxes by the limit line, adds a
+reason-specific hint per ineligibility reason (stays non-modal per decision 1). Named "Open
+article" on `SourcesDisclosure` and the evidence-review row. House dashes repaired across
+`chat.article.from`, `packs.state.missingTitle`, `packs.removeBody`,
+`packs.state.identityMismatchTitle`. Role tokens only, no literal colour (`--accent` for "Open
+article", §4.3), plus wrap/ellipsis/24px-target rules pinned by `tests/unit/zim-ui-layout-rules.test.ts`.
+
+**Verification:** the new acceptance test (`KnowledgePacks.test.tsx`, T18-a) plus the existing
+pack/popover/review renderer suites and `token-contrast.test.ts` all green; a real Electron
+visual pass in both themes/languages is recorded separately (T18-b) — renderer mocks alone don't
+close visual acceptance (§11.4's standing caveat).
+
+---
+
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)
 
 _Branch `chat-ui-polish`. A focused, **renderer-only** calm/premium pass on the Chat screen +

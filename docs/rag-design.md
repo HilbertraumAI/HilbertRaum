@@ -2587,9 +2587,11 @@ fail-closed under deny-all, D-Z12, P4) and `services/embeddings/index.ts` /
 `services/rag/hybrid.ts` (the `noDocuments` resident-vector and keyword-scan guards,
 D-Z12, P4).
 Renderer: `documents/PacksPanel.tsx`, ScopePopover pack sources (the Documents toggle, the
-12-pack cap, D6 — D-Z12, P4), SourcesDisclosure "Open
+12-pack cap, D6 — D-Z12, P4; reason-specific greyed-row hints and non-modal-popover a11y,
+P6), SourcesDisclosure "Open
 article", `chat/ArticleModal.tsx`, NEW `chat/PackOutcomesNotice.tsx` (the per-answer
-outcomes notice, D-Z4, P4). Shapes: [`data-contracts.md`](data-contracts.md)
+outcomes notice, D-Z4, P4), `review/EvidencePane.tsx` + `screens/ReviewScreen.tsx` ("Open
+article" from an evidence-review archive row, NEW, P6). Shapes: [`data-contracts.md`](data-contracts.md)
 "Knowledge packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit) —
 `zim-html` runs four attributed synthetic non-Wikipedia fixtures under
 `tests/fixtures/zim/` (Parsoid data-mw, zimit/warc2zim, DevDocs, Stack Exchange/sotoki)
@@ -2642,6 +2644,14 @@ varied completion order, the concurrency-2 and deadline bounds); `zim-ipc-sessio
 — T16-a (twelve outcome legs over the real vault harness: all failed, zero hits, missing
 tools, removed/disabled selection, mixed, all fetches failed, two concurrent chats, a
 mid-ask scope change, reload, regenerate/restore, export, whole-doc/compare `mode`).
+P6 (2026-09-06; design and frontend review) by file: `KnowledgePacks.test.tsx` — T18-a (the
+UI acceptance row, seven legs (a)–(g): every pack/scope/outcome state in both languages,
+empty source sets, 200-character non-ASCII titles, popover/modal keyboard + focus-trap +
+Escape + restoration, disabled controls emit nothing, the live searchability refresh, the
+outcomes notice over every reason code); `ReviewEvidencePane.test.tsx` / `ReviewScreen.test.tsx`
+(the review-row "Open article": unavailable/renamed/deleted); NEW
+`tests/unit/zim-ui-layout-rules.test.ts` (the wrap/ellipsis/24px-target CSS rules); `i18n.test.ts`
+(the house-dash repairs).
 
 ### Deliberately not built (MVP cut; §5 item 21 tracks the follow-ups)
 
@@ -2652,4 +2662,9 @@ over archive citations (they resolve as honest 'unresolved'); packs on the whole
 / compare paths (disclosed per answer as `mode`, not queried — P4); quality guarantees
 for non-Wikimedia ZIMs. Serving names are computed
 by the pinned libkiwix 14.1 rule (D-Z11) rather than read back from the running server —
-the real-tool check of that mapping is P7's (T19), not assumed.
+the real-tool check of that mapping is P7's (T19), not assumed. The name-collision surface
+(D-Z11's "excludes every later same-name book") is deliberately not shown on the
+`PacksPanel` row (P6): it is a property of the served library, computed at build time, not
+a `KnowledgePack` field — the per-answer outcome's `not-served` row already tells the user
+"not searched: name collision with another pack"; a `packs:status` addition to surface it
+in the panel is registered for P7.
