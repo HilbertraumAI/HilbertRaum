@@ -2848,9 +2848,19 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   `--threads 1 / 4 / 16`, with 0 / 400 / 2500 ms between reads; the successful responses carry
   `Content-Length` + `Connection: close`; the next request is answered normally. In the app a
   stalled read cost the viewer 15 s → "unavailable" and the ask arm one silently skipped article
-  (a real ask took 40 s and returned 16 instead of 20 passages). Mitigation: a short per-read
-  timeout with a bounded retry on a fresh connection, never on the caller's own abort (fix PR 2);
-  reporting it upstream rides the P8 issue #339 (the pinned bundle is P8's).
+  (a real ask took 40 s and returned 16 instead of 20 passages). Mitigation (fix PR 2, commit
+  0eb79f1f): `fetchArticleHtml` reads through `readRawArticle` with `ARTICLE_READ_TIMEOUT_MS =
+  4_000` and `ARTICLE_READ_ATTEMPTS = 3` — a retry ONLY when an attempt's own timer elapsed with
+  nothing received (`KiwixTimeoutError.headersReceived === false`), on a fresh connection; the
+  caller's own abort (the ask deadline, a cancellation, a lock) is rethrown at once, a mid-body
+  timeout stays an error, any HTTP status keeps its existing semantics, the redirect hop's request
+  is retried the same way, and the request guard's lifecycle retry is untouched (a stall never
+  reaches the server's lifecycle). The other routes (`/suggest`, `/search`, the health probe) are
+  unchanged — the stall was measured on `/raw` bodies only. Tests: `zim-client.test.ts` describe
+  "fetchArticleHtml retries a stalled /raw read (#301 P7 T19)" (seven legs + two `kiwixGet` legs),
+  the `zim-ipc-session` leg "T19 an article whose first /raw read is never answered still opens…",
+  the `zim-arm` leg "… an article whose first read is never answered keeps its chunks"; reporting
+  it upstream rides the P8 issue #339 (the pinned bundle is P8's).
 - **Not run here — the owner's legs (pending):** the relocated drive with persisted citations
   (K: → another letter, in Electron), live lock / unlock / failed lock with a running pack
   server, the offline ask + viewer with Wi-Fi off (BUILD_STATE §5 item 21(d)) — each is recorded

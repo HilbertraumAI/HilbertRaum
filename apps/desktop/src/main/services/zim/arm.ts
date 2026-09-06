@@ -49,8 +49,10 @@ export const MAX_EXTERNAL_CANDIDATES = 24
 export const PACK_SEARCH_CONCURRENCY = 2
 /**
  * The whole archive arm's budget for ONE ask (plan §9.21 (c)5), shared by the request guard's
- * attempt and its single admitted retry. Above the client's 15 s per-request timeout, so one
- * hung request cannot swallow the entire budget, while a long sequence of timeouts still ends.
+ * attempt and its single admitted retry. Above the client's 15 s per-request timeout for
+ * `/search` and above an article read's full stall budget (`ARTICLE_READ_TIMEOUT_MS` ×
+ * `ARTICLE_READ_ATTEMPTS` = 12 s, #301 P7 T19), so one hung request cannot swallow the entire
+ * budget, while a long sequence of timeouts still ends.
  */
 export const EXTERNAL_RETRIEVAL_DEADLINE_MS = 20_000
 

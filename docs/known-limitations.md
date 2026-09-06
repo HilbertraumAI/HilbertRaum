@@ -2412,10 +2412,12 @@ reports and phase plans were working papers; their full text lives in git histor
   80 KB without any response — measured against the raw server with no app code, with two
   different HTTP clients and every thread setting; small entries never stall (P7 real acceptance,
   `rag-design.md` §17 "Real acceptance" finding 3; an upstream defect, tracked for the
-  provisioning wave on #339). The app detects a stalled read with a short timeout and retries it
-  on a fresh connection (P7 fix), so an article normally still opens and still reaches the
-  answer; only a read that stalls on every attempt shows "article unavailable" or costs the
-  answer that one article, and the per-answer note then reports what was searched.
+  provisioning wave on #339). The app detects a stalled read with a short timeout (4 s per attempt) and
+  retries it on a fresh connection, up to three attempts (P7 fix; `ARTICLE_READ_TIMEOUT_MS` /
+  `ARTICLE_READ_ATTEMPTS` in `client.ts`), so an article normally still opens and still reaches
+  the answer; only a read that stalls on all three attempts (about one in a thousand at the
+  measured rate) shows "article unavailable" or costs the answer that one article, and the
+  per-answer note then reports what was searched.
 - **Multipart `.zimaa` archives are unsupported (R-2).** A ZIM split across multiple
   `.zim<aa|ab|…>` parts is not read by this app; only a single-file `.zim` archive is. This
   is unsupported AND UNTESTED: no code path explicitly rejects a multipart archive, and no

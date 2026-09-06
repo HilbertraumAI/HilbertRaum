@@ -1528,7 +1528,10 @@ completion arrives via the `packs:changed` event, not the return value) · `pack
 `{ toolsInstalled }` shape) · `packs:getArticle` (`PackArticle | null` — plain sectioned
 TEXT, never HTML; the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM
 alias entry with `302 → /content/<book>/<target>` (P7 T19) — while a cross-book, chained or
-contract-refused target returns `null` and the locator does not change; `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
+contract-refused target returns `null` and the locator does not change; a `/raw` read that
+kiwix-serve never answers is retried on a fresh connection — `ARTICLE_READ_TIMEOUT_MS` 4 s per
+attempt, `ARTICLE_READ_ATTEMPTS` 3, only when nothing at all was received, never on the caller's
+own abort (P7 T19 finding 3, an upstream stall); `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
 stopped short of the whole article — input cap, work budget or unterminated markup —
 Phase 1, PR #294 review H1; the modal shows a hint line instead of presenting the partial
 text as complete; a refused entry key (empty, > 2048 chars, a control character, a `.`/`..`
