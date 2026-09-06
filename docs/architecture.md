@@ -954,7 +954,11 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   comfortably, the lightest model meeting its minimum; else none. Used by `listModels` (live
   `machineRamGb()` = `totalmem` rounded to whole GB) and by the benchmark (same rounding, so the two
   surfaces always agree). The legacy `recommended_profiles` lookup remains the fallback when RAM is
-  unknown.
+  unknown. **2026-09-06 amendment (PR #308 audit):** on a machine with a usable discrete graphics
+  card (and graphics acceleration not switched off), `recommendChatModelId` dispatches instead to
+  `recommendModelIdByVram` (`services/models.ts`), which judges fit against the budget device's
+  free graphics memory rather than RAM, RAM still a hard floor, otherwise reusing the same rank
+  tiebreak — see `docs/model-benchmarks.md` §6.6.
 - **RAM gate (post-MVP).** `buildModelList` flags `insufficientRam` on models whose
   `recommended_min_ram_gb` exceeds the machine RAM; the AI Model screen disables Select/Start and
   shows a "Needs ≥N GB RAM" badge, and `startModelRuntime` refuses to load installed weights that
@@ -3072,7 +3076,17 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 | `gpuMode: 'auto' \| 'off'` (user intent; Settings toggle) | `AppSettings` (encrypted DB) |
 | `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder; cleared by "Try GPU again" |
 | `gpuProbe` (devices + `probedAt`) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself. Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt }`) exactly like an empty successful probe, so a card from a previous machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device |
-| Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) |
+| Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` still names `devices[0]`, the first device the driver listed, display only; it is not the budget device the picker or the Performance tile use |
+
+**Runtime record (PR #308 audit, 2026-09-06), not a picker change.** The chat server runs on
+b9849's default **four unified slots** (`n_slots = 4`, `kv_unified = true`) whenever the app's
+argv passes no `-np`; for a single-user chat app this costs real sliding-window/recurrent cache
+overhead the picker's `estimated_context_cache_gib` term accounts for (`model-benchmarks.md`
+§6.6), and whether to add `-np 1` is a runtime decision outside this section (BUILD_STATE §5 item
+21 (i)). Separately, llama.cpp's `--fit` offload spreads layers across **every** device
+`--list-devices` lists, integrated GPUs included (`common/fit.cpp`), so on a hybrid laptop the
+sidecar may itself place layers on the iGPU even though the picker's budget device deliberately
+excludes it from the recommendation (BUILD_STATE §5 item 21 (j)).
 
 "Try GPU again" is the dedicated `gpu:try-again` IPC: clears the flags **and** invalidates the
 session probe cache **and** re-probes + persists (a plain settings write would keep a

@@ -124,17 +124,26 @@ Adjustments, in order:
 
 ## Recommendation
 
-**The primary picker is memory-best-fit, not profile lookup.** `runBenchmark` calls
-`recommendChatModelId(manifests, { memoryClass, ramGb: round(ramGb), vramMb }, speedSignal)`
-(model-benchmarks.md §6.6, 2026-09-05): on a computer with a usable **discrete card** the pick is the
-best model that FITS THE CARD (`recommendModelIdByVram`: weights × 1.15 + 0.5 GiB cache + the fit's
-1 GiB margin ≤ VRAM, RAM still a hard gate, then the RAM picker's tier/rank order); on **unified
-memory** (Apple Silicon) and on a machine **without a usable card** it is RAM-best-fit
-(`recommendModelIdByRam`: the largest model whose comfortable RAM fits, ties on
-`recommendation_rank`). The profile-based `recommendModelId(manifests, profile, 'chat')` is only the
-**fallback** when RAM can't be detected (`ramGb = 0`). With the committed manifests the live,
-real-hardware recommendations by card are 6 GB → `qwen3.5-4b-ud-q4kxl`, 8 GB → `qwen3.5-9b-ud-q4kxl`,
-12–16 GB → `gemma4-12b-it-qat-q4`, 24 GB and up → `qwen3.8-27b-ud-q5km` (§6.6 table); by RAM:
+**The primary picker is memory-best-fit, not profile lookup.** `runBenchmark` and `listModels`
+both call `recommendChatModelId(manifests, { memoryClass, ramGb: round(ramGb), budgetMb },
+speedSignal)` (model-benchmarks.md §6.6 rule C, **2026-09-06 amendment, PR #308 audit**): on a
+computer with a usable **discrete card** the pick is the best model that FITS THE CARD
+(`recommendModelIdByVram`: the RAM pick stands wherever it also fits the card; otherwise the
+fittest eligible model by rank, then RAM tier, then size) — "fits" means `weights × 1.15 + the
+model's own context-cache estimate (a per-model manifest field, default 0.5 GiB) + the fit's
+1 GiB margin ≤ the budget device's FREE memory` (the probe's free figure, else its total minus
+1,024 MiB), RAM always a hard gate. `budgetMb` comes from the **budget device**
+(`selectBudgetDevice` / `nextStartMemory` in `services/performance.ts`: the largest probed card at
+or above the runtime's own 6,144 MiB gate and not integrated by name — never the first device the
+driver listed); on **unified memory** (Apple Silicon) and on a machine **without a usable card**
+— including one with graphics acceleration switched off in Settings, or auto-disabled after a
+crash — it is RAM-best-fit (`recommendModelIdByRam`: the largest model whose comfortable RAM
+fits, ties on `recommendation_rank`). The profile-based `recommendModelId(manifests, profile,
+'chat')` is only the **fallback** when RAM can't be detected (`ramGb = 0`). With the committed
+manifests and RAM ample (32 GB), the live recommendations by card are 6 GB → `qwen3.5-4b-ud-q4kxl`,
+8 GB → `qwen3.5-4b-ud-q4kxl`, 12–20 GB → `qwen3.5-9b-ud-q4kxl`, 24 GB → `qwen3.8-27b-ud-q4km`, 32 GB
+and up → `qwen3.8-27b-ud-q5km` (§6.6's 30-point grid; the 8 GB point and the Gemma 12B / MoE
+bands between the measured legs are predicted, unverified on hardware — §6.6 "G3"); by RAM:
 
 | Measured RAM | Chat model |
 |---|---|
@@ -358,7 +367,11 @@ screen answers the user's question in plain words. Three cards:
    audit P4 it no longer reads `settings.gpuProbe.devices[0]`, which on a hybrid laptop is the
    iGPU's shared-RAM figure); with the GPU switched off or auto-disabled the result names no card
    and the tile reads "Graphics acceleration is off. Models run on the processor." instead of "No
-   usable graphics card"), Drive (`effectiveRead` with its source and date; "Pending" until a model start measured
+   usable graphics card". A result that was RECORDED while the GPU was on keeps showing its own
+   `gpuVramMb` as "Usable" after the toggle flips off, until the next check re-records it — the
+   result's own figure always wins over the live toggle state (known limitation, PR #308 audit P4;
+   a P7 candidate is preferring `currentGpu` over the result on the current machine)), Drive
+   (`effectiveRead` with its source and date; "Pending" until a model start measured
    it). The verdict sentence and the **Start \<model\> and measure** offer name the **live**
    recommendation (`PerformanceSnapshot.recommendation`, see "Recommendation" above — the same pick
    the AI Model screen stars), never the id saved with the result; where the saved

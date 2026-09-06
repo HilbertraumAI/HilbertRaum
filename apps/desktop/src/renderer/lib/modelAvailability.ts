@@ -60,10 +60,11 @@ export function isModelRunnableHere(m: ModelInfo): boolean {
  *     the usable ones sat below the fold. Runnability is not a tiebreak of last resort here —
  *     "can this computer run it" outranks alphabetical, always.
  *
- * Keys 2 and 3 can never fight: the RAM-best-fit recommender only ever picks a model that fits
- * this machine's RAM, so the ★ card is runnable by construction. Display order ONLY — the
- * recommender in the main process is untouched. `Array.prototype.sort` is stable, so models
- * that tie on all keys keep their catalog order.
+ * Keys 2 and 3 can never fight: whichever picker fires in the main process — RAM-best-fit, or
+ * (PR #308, on a usable discrete card) graphics-memory-best-fit — RAM is always a hard gate, so
+ * the ★ card is runnable by construction either way. Display order ONLY — the recommender in the
+ * main process is untouched. `Array.prototype.sort` is stable, so models that tie on all keys
+ * keep their catalog order.
  *
  * O8 — what this order does NOT promise once variants are grouped: the library renders task
  * sections of variant GROUPS, so the ordered list is read group-by-group (a group takes the

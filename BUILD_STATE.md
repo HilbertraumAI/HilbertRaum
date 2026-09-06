@@ -29,6 +29,16 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-06 — **PR #308 audit remediation (`feat/vram-aware-picker`, stacked on #303):** five
+phases closed the picker audit's R1–R6 findings: P1 merge/re-baseline (`7aae2716`), P2 budget
+device + next-start capability (`81661c69`), P2a empty-probe persistence on a failed GPU probe
+(`8cb4422d`), P3 rule C on the free-memory budget with a per-model context-cache term
+(`bf9a09b0`), P4 the Performance snapshot's live recommendation (`a468f6e1`). Decisions 1–11
+adopted per `tmp/PR-308-fix-plan-ledger.md`. Durable record: `model-benchmarks.md` §6.6
+(2026-09-06 amendment) + §6.5. Owner sign-off (§5 item 8 / §6.5–§6.6) requested in PR review; the
+hardware boundary legs (WP5, issue I1, number filled at close-out) are not a merge gate (decision
+G3) — §5 item 21 (h)–(k) are separate owner-call follow-ups, `#TBD-I1`–`#TBD-I4`._
+
 _2026-09-06 — **PR #303 audit remediation, P1 (same branch, master `ddd704ad` merged in first):** the
 M7 `_Host` and L7 empty-reading fixes of `ce741533` pinned (parser, verdict, renderer), stale `_Host`
 prose corrected, `skills.title` orphan removed, §5 item 20 archived to `docs/build-log.md` and
@@ -42,7 +52,8 @@ _2026-09-05: **Graphics-memory-aware picker (`feat/vram-aware-picker`, stacked o
 discrete card the chat ★ pick is the best model that fits the card (weights × 1.15 + 0.5 GiB + the
 fit's 1 GiB margin ≤ VRAM), RAM a hard gate, the §6.2 order among fitting models; unified / no-card
 keep the RAM pick. Record: model-benchmarks.md §6.6 (picks per card size pinned in
-`committed-catalog.test.ts`). Owner sign-off required in review (§5 item 8)._
+`committed-catalog.test.ts`). Owner sign-off required in review (§5 item 8) — **superseded by the
+2026-09-06 amendment** (PR #308 audit; rule C on free memory replaces this total-memory rule)._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -675,37 +686,8 @@ open round's item stays the last block of §5.)
     Records: `docs/benchmark.md` / `model-benchmarks.md` §6.5 (thresholds deliberately NOT retuned),
     architecture.md "Per-answer speed line" §1–§3. Narrative retired verbatim to `docs/build-log.md`
     ("BUILD_STATE §5 item 20", 2026-09-06). Nothing open.
-21. **Performance screen residuals (opened 2026-09-05, `feat/performance-screen`).** Shipped: the
-    rail destination, per-machine history + moved-drive restore, observed rows, step progress,
-    "Start \<model\> and measure". Still open, owner call each: (a) a Home readiness row ("This
-    computer: Balanced, about 12 tokens/s") plus a moved-drive notice with a "Check this computer"
-    action (the mock-up's Home artboard; today the re-check is silent in the background);
-    (b) the Diagnostics benchmark card could shrink to the raw table + Copy now that the answer
-    lives on Performance; (c) the hardware legs on the rig: a real moved-drive round trip between
-    two machines (restore, then new-machine background run) and the German rail label width at the
-    600 weight; (d) model-load duration per machine in the history rows (the `model_load` sample
-    carries it; only the current machine shows it today); (e) "Your model" Phase 2: the
-    context-cache estimate from the GGUF header still open; the VRAM-aware ★ picker SHIPPED on
-    `feat/vram-aware-picker` (stacked on #303; model-benchmarks.md §6.6; needs the §5 item 8
-    owner sign-off in review);
-    (f) the fit margin: on the rig the 27B Q5 lands 62/66 layers on a FREE 24 GB card (model
-    18.9 GiB + ~2.9 GiB working buffers + the fit's fixed 1 GiB margin comes within a layer of
-    the free memory); options are a smaller `--fit-target`, a smaller ubatch for the largest
-    models, or a full-offload rung when the app's own estimate says it fits (the "never -ngl"
-    rule would need a decision). Owner call; the row now states the reason. (g) start-order
-    contention between chat and translation on one card (the "Models on this computer" card now
-    names it): force translation to the processor while chat holds the card, or reclaim the card
-    when translation goes idle. Owner call.
-    **Audit remediation register (PR #303 review of 2026-09-05: M1–M8, L1–L8, H1, D1–D5, T1–T12;
-    fixed on the same branch before merge from 2026-09-06; durable disposition record lands in
-    `docs/benchmark.md` at P9, one commit per phase, CI green each):** P1 ✅ M7/L7 pins, stale
-    `_Host` prose, item 20 archived, `skills.title` orphan removed after the master merge;
-    P2 ✅ M2/M4/M6/L2 persistence (identity before ranking, upgrade backfill, mid-run samples);
-    P3 ☐ M1/M3/L3 `performance:changed` push + honest steps; P4 ☐ H1/L8/M5-residual schemas +
-    launch context; P5 ☐ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
-    P6 ☐ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ☐ L1/SD2 auto-start sequencing;
-    P8 ☐ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c);
-    P11 ☐ close-out issues. Residual (c) above is the audit's HW1–HW3 acceptance; (a)–(g) stand.
+21. **Performance screen residuals (opened 2026-09-05, `feat/performance-screen`).** Shipped: the rail destination, per-machine history + moved-drive restore, observed rows, step progress, "Start \<model\> and measure", plus (PR #308, 2026-09-06) the graphics-memory picker rule C on the free budget and the Performance snapshot's live recommendation. Still open, owner call each: (a) a Home readiness row ("This computer: Balanced, about 12 tokens/s") plus a moved-drive notice with a "Check this computer" action (the mock-up's Home artboard; today the re-check is silent in the background); (b) the Diagnostics benchmark card could shrink to the raw table + Copy now that the answer lives on Performance; (c) the hardware legs on the rig: a real moved-drive round trip between two machines (restore, then new-machine background run) and the German rail label width at the 600 weight; (d) model-load duration per machine in the history rows (the `model_load` sample carries it; only the current machine shows it today); (e) "Your model": the context-cache estimate from the GGUF header stays open; the card estimate itself is now rule C on the free budget (PR #308, `model-benchmarks.md` §6.6 2026-09-06 amendment) with owner sign-off pending in review, not the SHIPPED-but-unreviewed total-memory rule this line previously described; (f) the fit margin: on the rig the 27B Q5 lands 62/66 layers on a FREE 24 GB card (model 18.9 GiB + ~2.9 GiB working buffers + the fit's fixed 1 GiB margin comes within a layer of the free memory); options are a smaller `--fit-target`, a smaller ubatch for the largest models, or a full-offload rung when the app's own estimate says it fits (the "never -ngl" rule would need a decision); owner call, the row now states the reason; (g) start-order contention between chat and translation on one card (the "Models on this computer" card now names it): force translation to the processor while chat holds the card, or reclaim the card when translation goes idle, owner call; (h) device choice / iGPU naming: the picker's budget device excludes integrated GPUs by name (`looksIntegrated`) rather than a runtime device-type flag, and on a Mac with the GPU switched off the class still reads `unified` (P2 decision) — is the name heuristic complete enough, owner call, issue #TBD-I1; (i) the chat server's b9849 default of four unified slots (no `-np` passed) costs real cache overhead the picker's `estimated_context_cache_gib` now estimates around — should the app pass `-np 1` for a single-user session, owner call, issue #TBD-I2; (j) llama.cpp's `--fit` still spreads layers over every listed device, integrated ones included, so a hybrid laptop's iGPU can still take layers the picker's budget device excluded from the recommendation — should the app pass `--device` to exclude it at launch too, owner call, issue #TBD-I3; (k) every 6 GB laptop card measured for the #308 audit reports below the runtime's 6,144 MiB `discrete` gate (N8) — should the gate be lowered, owner call, issue #TBD-I4.
+    **Audit remediation register (PR #303 review of 2026-09-05: M1–M8, L1–L8, H1, D1–D5, T1–T12; fixed on the same branch before merge from 2026-09-06; durable disposition record lands in `docs/benchmark.md` at P9, one commit per phase, CI green each):** P1 ✅ / P2 ✅ — see the 2026-09-06 "PR #303 audit remediation" preamble entry above; P3 ☐ M1/M3/L3 `performance:changed` push + honest steps; P4 ☐ H1/L8/M5-residual schemas + launch context; P5 ☐ M8/N1/N3 one GPU source (consumes PR #308's `nextStartMemory` / `selectBudgetDevice` once #308 lands, 2026-09-06) + the resident rows' device/RAM total; P6 ☐ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ☐ L1/SD2 auto-start sequencing; P8 ☐ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c); P11 ☐ close-out issues. Residual (c) above is the audit's HW1–HW3 acceptance; (a)–(k) stand.
 
 ---
 

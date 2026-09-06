@@ -158,7 +158,9 @@ qwen2.5-vl vision, in `model-manifests/{chat,embeddings,reranker,transcriber,tra
 `model-policy.md` is the authoritative catalog and manifest count — this doc no longer restates a
 hard total (the number drifted twice, see DOC-3/F-20).
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
-`verifyChecksum`, `computeInstallState`, `recommendModelId`, `buildModelList`, `selectModel`.
+`verifyChecksum`, `computeInstallState`, `recommendChatModelId` (dispatching to
+`recommendModelIdByRam` / `recommendModelIdByVram`; `recommendModelId` is the legacy
+profile-based fallback — PR #308 §6.6), `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
 `shared/types.ts`. `local_path` resolved against the **drive root**.
 ✅ **`services/runtime/`** — `ModelRuntime` interface + `RuntimeManager` (single active runtime,
@@ -568,7 +570,7 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   secondary broken-media check with unchanged copy. Warnings warn, never block. Preflight feeds
   probe figures only and binds its note by exact canonical-English match.
 - **`runBenchmark(deps)`** → `BenchmarkResult` (the existing `shared/types.ts` shape):
-  detection + drive + optional tokens/sec + `classifyProfile` + `recommendModelId` + warnings +
+  detection + drive + optional tokens/sec + `classifyProfile` + `recommendChatModelId` + warnings +
   the injected `effectiveRead`.
 - **`ipc/registerBenchmarkIpc.ts`** — `runBenchmark()` (`benchmark:run`); runs it, persists to
   `settings.lastBenchmark` + `settings.benchmarkHistory`, returns the result, and streams
