@@ -128,6 +128,11 @@ from its first public `1.0.0` release onward.
   automatically; when several variants are equally good picks, the group shows one you can
   actually download.
 
+- **Complete source for the knowledge-pack tools, on a preloaded Kit.** A HilbertRaum Kit that
+  ships the knowledge-pack tools already installed now also carries their complete source code
+  in `runtime/kiwix-tools/source/`, with a `SOURCES.md` record. Nothing changes if you build your
+  own drive and install the knowledge-pack family yourself.
+
 ### Changed
 
 - **The Linux/macOS install step for knowledge-pack tools is documented.** The panel's

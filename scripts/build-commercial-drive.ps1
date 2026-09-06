@@ -45,6 +45,14 @@
   The platforms this kit is sold for (win-x64, mac-arm64, linux-x64; default all three).
   The gate requires an app artifact + launcher for each -- and none for any other.
 
+.PARAMETER KiwixSourceDir
+  The maintainer-local archive directory holding the five pinned kiwix-tools copyleft source
+  tarballs (#339 P8-4). When supplied, the script installs the corresponding-source bundle at
+  runtime/kiwix-tools/source/ (scripts/install-kiwix-source-bundle.mjs) BEFORE fetching the
+  kiwix_tools binaries for every Kit platform -- so an aborted install never leaves binaries
+  without their source. Omitted (default): this Kit ships no kiwix-tools at all; the buyer
+  installs the family in-app instead. See docs/packaging.md.
+
 .PARAMETER SkipPackage
   Skip the packaging/signing step entirely (assemble layout + assets + launchers + verify).
   The drive is NOT SELLABLE until the app artifacts are on it.
@@ -65,6 +73,7 @@ param(
   [switch] $AcceptLicense,
   [string[]] $AppArtifact,
   [string[]] $Platforms = @('win-x64', 'mac-arm64', 'linux-x64'),
+  [string] $KiwixSourceDir,
   [switch] $SkipPackage,
   [switch] $VerifyOnly,
   [switch] $DryRun
@@ -175,6 +184,44 @@ Run 'fetch-runtime.ps1' $whisper
 $ocrAssets = @{ Target = $Target; Family = 'ocr'; Commercial = $true }
 if ($DryRun) { $ocrAssets.DryRun = $true }
 Run 'fetch-runtime.ps1' $ocrAssets
+
+# --- Kiwix-tools corresponding-source bundle (#339 P8-4) ---------------------------
+# UN-NUMBERED: sits between the runtime sidecars above and packaging below, but is not
+# one of the seven planCommercialDrive step ids (commercial-drive.test.ts pins those).
+# SOURCE FIRST: the bundle is installed + re-verified BEFORE the kiwix_tools binaries are
+# fetched, so a failed/aborted install can never leave binaries on the drive without their
+# complete corresponding source. Omitted -KiwixSourceDir = this Kit ships no kiwix-tools at
+# all; the buyer installs the (unbundled) family in-app instead (its own download, its own
+# consent) -- checkSourceBundle then finds no kiwix_tools binary present and passes.
+if (-not $KiwixSourceDir) {
+  Write-Host "`n(no -KiwixSourceDir: this Kit ships no kiwix-tools; the buyer installs the family in-app)" -ForegroundColor Yellow
+} else {
+  Write-Host "`nInstalling the kiwix-tools corresponding-source bundle (#339 P8-4)" -ForegroundColor Cyan
+  $kiwixNodeCmd = Get-Command node -ErrorAction SilentlyContinue
+  if (-not $kiwixNodeCmd) {
+    Write-Host '  install-kiwix-source-bundle.mjs needs node on PATH' -ForegroundColor Red
+    exit 1
+  }
+  $kiwixInstallScript = Join-Path $RepoRoot 'scripts/install-kiwix-source-bundle.mjs'
+  $kiwixInstallArgs = @($kiwixInstallScript, '--target', $Target, '--source-dir', $KiwixSourceDir)
+  if ($DryRun) { $kiwixInstallArgs += '--dry-run' }
+  $global:LASTEXITCODE = 0
+  & $kiwixNodeCmd.Source @kiwixInstallArgs
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "  install-kiwix-source-bundle.mjs failed (exit $LASTEXITCODE) -- refusing to fetch kiwix-tools binaries without their source" -ForegroundColor Red
+    exit 1
+  }
+  Write-Host '  Fetching the kiwix-tools binaries for every Kit platform (explicit -Arch, never inherited from the yaml)'
+  foreach ($kiwixPlat in @(
+    @{ Os = 'win'; Arch = 'x64' },
+    @{ Os = 'mac'; Arch = 'arm64' },
+    @{ Os = 'linux'; Arch = 'x64' }
+  )) {
+    $kiwixRuntime = @{ Target = $Target; Os = $kiwixPlat.Os; Arch = $kiwixPlat.Arch; Family = 'kiwix_tools'; Commercial = $true }
+    if ($DryRun) { $kiwixRuntime.DryRun = $true }
+    Run 'fetch-runtime.ps1' $kiwixRuntime
+  }
+}
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
 Step 4 'Package + sign the portable app (MANUAL -- secrets never in the repo)'

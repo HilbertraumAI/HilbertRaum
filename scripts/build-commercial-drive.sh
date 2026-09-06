@@ -28,8 +28,11 @@
 # Usage:
 #   scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license \
 #       [--app-artifact ./release/HilbertRaum-0.1.0.AppImage]... [--platforms win-x64,mac-arm64,linux-x64] \
-#       [--skip-package] [--verify-only] [--dry-run]
-#   --platforms   the platforms this kit is sold for (default all three)
+#       [--kiwix-source-dir <archive dir>] [--skip-package] [--verify-only] [--dry-run]
+#   --platforms         the platforms this kit is sold for (default all three)
+#   --kiwix-source-dir  install the kiwix-tools corresponding-source bundle from this
+#                       maintainer-local archive dir before fetching kiwix_tools binaries
+#                       (#339 P8-4); omitted = this Kit ships no kiwix-tools at all
 #   --verify-only skip steps 1-6, run only the final gate against the drive as it is
 #   --dry-run     download and change nothing; the final gate still runs and prints its verdict
 set -euo pipefail
@@ -38,6 +41,7 @@ TARGET=""
 ACCEPT_LICENSE=0
 APP_ARTIFACTS=()
 PLATFORMS="win-x64,mac-arm64,linux-x64"
+KIWIX_SOURCE_DIR=""
 SKIP_PACKAGE=0
 VERIFY_ONLY=0
 DRY_RUN=0
@@ -51,6 +55,8 @@ while [[ $# -gt 0 ]]; do
     --app-artifact=*) APP_ARTIFACTS+=("${1#*=}"); shift ;;
     --platforms) PLATFORMS="${2:-}"; shift 2 ;;
     --platforms=*) PLATFORMS="${1#*=}"; shift ;;
+    --kiwix-source-dir) KIWIX_SOURCE_DIR="${2:-}"; shift 2 ;;
+    --kiwix-source-dir=*) KIWIX_SOURCE_DIR="${1#*=}"; shift ;;
     --skip-package) SKIP_PACKAGE=1; shift ;;
     --verify-only) VERIFY_ONLY=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -162,6 +168,40 @@ bash "$SCRIPT_DIR/fetch-runtime.sh" "${WHISPER[@]}"
 OCR_ASSETS=(--target "$TARGET" --family ocr --commercial)
 [[ $DRY_RUN -eq 1 ]] && OCR_ASSETS+=(--dry-run)
 bash "$SCRIPT_DIR/fetch-runtime.sh" "${OCR_ASSETS[@]}"
+
+# --- Kiwix-tools corresponding-source bundle (#339 P8-4) ---------------------------
+# UN-NUMBERED: sits between the runtime sidecars above and packaging below, but is not
+# one of the seven planCommercialDrive step ids (commercial-drive.test.ts pins those).
+# SOURCE FIRST: the bundle is installed + re-verified BEFORE the kiwix_tools binaries are
+# fetched, so a failed/aborted install can never leave binaries on the drive without their
+# complete corresponding source. Omitted --kiwix-source-dir = this Kit ships no kiwix-tools
+# at all; the buyer installs the (unbundled) family in-app instead (its own download, its
+# own consent) -- checkSourceBundle then finds no kiwix_tools binary present and passes.
+if [[ -z "$KIWIX_SOURCE_DIR" ]]; then
+  echo
+  echo "(no --kiwix-source-dir: this Kit ships no kiwix-tools; the buyer installs the family in-app)"
+else
+  echo
+  echo "Installing the kiwix-tools corresponding-source bundle (#339 P8-4)"
+  if ! command -v node >/dev/null 2>&1; then
+    echo "  install-kiwix-source-bundle.mjs needs node on PATH" >&2
+    exit 1
+  fi
+  KIWIX_INSTALL_ARGS=("$REPO_ROOT/scripts/install-kiwix-source-bundle.mjs" --target "$TARGET" --source-dir "$KIWIX_SOURCE_DIR")
+  [[ $DRY_RUN -eq 1 ]] && KIWIX_INSTALL_ARGS+=(--dry-run)
+  if ! node "${KIWIX_INSTALL_ARGS[@]}"; then
+    echo "  install-kiwix-source-bundle.mjs failed -- refusing to fetch kiwix-tools binaries without their source" >&2
+    exit 1
+  fi
+  echo "  Fetching the kiwix-tools binaries for every Kit platform (explicit --arch, never inherited from the yaml)"
+  for kiwix_entry in "win|x64" "mac|arm64" "linux|x64"; do
+    kiwix_os="${kiwix_entry%%|*}"
+    kiwix_arch="${kiwix_entry#*|}"
+    KIWIX_RUNTIME=(--target "$TARGET" --os "$kiwix_os" --arch "$kiwix_arch" --family kiwix_tools --commercial)
+    [[ $DRY_RUN -eq 1 ]] && KIWIX_RUNTIME+=(--dry-run)
+    bash "$SCRIPT_DIR/fetch-runtime.sh" "${KIWIX_RUNTIME[@]}"
+  done
+fi
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
 step 4 "Package + sign the app (MANUAL -- secrets never in the repo)"

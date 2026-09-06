@@ -108,6 +108,8 @@ describe('DRIVE-NOTICES.md ships and stays fresh (LIC-1)', () => {
     expect(text).toContain('### kiwix-tools 3.8.1 — GPL-3.0-or-later')
     expect(text).toContain('GPL-2.0-or-later, with GPL-3.0-or-later files')
     expect(text).toContain('runtime/kiwix-tools/source/')
+    expect(text).toContain('SOURCES.md')
+    expect(text).toContain('must not ship kiwix-tools')
     // The GPL-2.0 and LGPL-2.1 texts are inlined (kiwix-tools' first copyleft binaries).
     expect(text).toContain('GNU GENERAL PUBLIC LICENSE')
     expect(text).toContain('Version 2, June 1991')

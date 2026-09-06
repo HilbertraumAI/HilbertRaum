@@ -74,12 +74,21 @@ HILBERTRAUM/
 │   └── .hilbertraum-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
 ├── models/{chat,embeddings,reranker,transcriber,vision,translation}/ # weights (git-ignored; transcriber/ = whisper GGML .bin; vision/ = the GGUF + its mmproj projector, image understanding V1–V5; translation/ = TranslateGemma GGUF, TG wave)
 ├── runtime/kiwix-tools/{win,mac,linux}/        # THIRD sidecar family: kiwix-serve + kiwix-manage + kiwix-search
-│   └── .hilbertraum-runtime.json                       #   (knowledge packs; OPTIONAL — never a readiness prerequisite). Install
-│                                                #   marker: a hash per executable + per ICU DLL (win only). An in-app
-│                                                #   install writes it (#339 P8-1/P8-2, the Knowledge-packs-panel /
-│                                                #   AI-Model-screen consent dialog); `fetch-runtime --family kiwix_tools`
-│                                                #   is the scripted DIY path (P8-3); a hand-placed bundle still works as a
-│                                                #   last-resort fallback but carries no marker (rag-design §17 D-Z17)
+│   ├── .hilbertraum-runtime.json                       #   (knowledge packs; OPTIONAL — never a readiness prerequisite). Install
+│   │                                            #   marker: a hash per executable + per ICU DLL (win only). An in-app
+│   │                                            #   install writes it (#339 P8-1/P8-2, the Knowledge-packs-panel /
+│   │                                            #   AI-Model-screen consent dialog); `fetch-runtime --family kiwix_tools`
+│   │                                            #   is the scripted DIY path (P8-3); a hand-placed bundle still works as a
+│   │                                            #   last-resort fallback but carries no marker (rag-design §17 D-Z17)
+│   └── source/                                  # complete corresponding source for the five copyleft components
+│       └── SOURCES.md                           #   (kiwix-tools/libkiwix/libzim/xapian-core/libmicrohttpd tarballs + a
+│                                                #   generated record) — ONE dir per drive, OS-independent. A preloaded Kit
+│                                                #   carrying kiwix_tools binaries carries this too, installed + verified by
+│                                                #   `build-commercial-drive --kiwix-source-dir <archive dir>` via
+│                                                #   `scripts/install-kiwix-source-bundle.mjs` (#339 P8-4); the sell gate's
+│                                                #   `checkSourceBundle` fails a drive that ships the binaries without a
+│                                                #   complete, hash-matching bundle. A DIY drive built with `fetch-runtime`
+│                                                #   alone has no `source/` — that is fine until binaries actually ship.
 ├── ocr/                                        # OCR language files: {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
 ├── zim/                                        # Knowledge packs: ZIM archives (offline Wikipedia etc.) — PLAIN read-only
 │                                                #   files, never copied into the encrypted workspace (not the document
@@ -88,6 +97,12 @@ HILBERTRAUM/
 │                                                #   §17; git-ignored). Resolved first at `<drive>/zim/<leaf>`, then at
 │                                                #   the recorded path (an external file, or the same leaf after a
 │                                                #   drive-letter change) — both checked against the archive's header UUID.
+│   └── NOTICES/<uuid>.md                        #   generated per-archive licence notice (title, UUID, language, tags,
+│                                                #   a "Content licence" section stating plainly what is NOT knowable
+│                                                #   offline) written by `scripts/generate-zim-notices.mjs` when a
+│                                                #   commercial build provisions kiwix-tools + packs together (#339
+│                                                #   P8-4); invisible to the app (only `*.zim` is enumerated) and absent
+│                                                #   on a DIY drive built without that step.
 ├── model-manifests/{chat,embeddings,reranker,transcriber,vision,translation}/ # committed YAML (the only model metadata in git)
 │   └── runtime-sources.yaml                     # sidecar download manifest (llama_cpp + whisper_cpp + kiwix_tools + ocr blocks)
 ├── app-skills/                                 # app-shipped Skills (read-only PLAIN folders; provisioned + asserted, S3/S9)

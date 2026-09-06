@@ -72,11 +72,13 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
   // The canonical matrix = `runtime-sources.yaml` (the same file the app + assets.ts read).
   // Family-driven over `parsed.families` (#339 P8-1) rather than hand-enumerated per-family
   // reads, so a FIFTH family can never again go unnoticed by this net the way `kiwix_tools`
-  // did before this change. An OPTIONAL family (kiwix_tools) is excluded by default: the
-  // drive builders do not provision it yet (that is P8-3), so including it here would redden
-  // this PR for work it deliberately does not do — `includeOptional: true` is how the
-  // "the builders skip exactly the optional families" test below still keeps that carve-out
-  // honest.
+  // did before this change. An OPTIONAL family (kiwix_tools) is excluded by default: it is
+  // provisioned by its OWN un-numbered builder step (-KiwixSourceDir/--kiwix-source-dir,
+  // #339 P8-4), not by rows in this runtime-assert matrix — the canonical gate's
+  // `checkSourceBundle` verifies the source bundle, not this test — so including it here
+  // would assert a matrix shape the builders deliberately never produce.
+  // `includeOptional: true` is how the "the builders skip exactly the optional families"
+  // test below still keeps that carve-out honest.
   function canonicalBuilds(opts: { includeOptional?: boolean } = {}): Set<string> {
     const parsed = validateRuntimeSources(parseYaml(read('model-manifests/runtime-sources.yaml')))
     expect(parsed.errors, `runtime-sources.yaml must validate: ${parsed.errors.join('; ')}`).toEqual([])
@@ -162,11 +164,14 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
   })
 
   // #339 P8-1 R-c: the two comparisons above deliberately exclude optional families
-  // (kiwix_tools) because the drive builders don't provision them yet (P8-3). That carve-out
-  // must not become a permanent, silent blind spot: this test asserts the SET of families the
-  // builder matrices skip is EXACTLY the set the yaml marks optional — no more (a required
-  // family accidentally excluded would hide from both matrix comparisons above) and no less
-  // (an optional family a builder DOES provision would mean the carve-out is stale).
+  // (kiwix_tools) because it is provisioned by its own un-numbered builder step, never by a
+  // row in this runtime-assert matrix (#339 P8-4: -KiwixSourceDir/--kiwix-source-dir installs
+  // the source bundle then fetches the binaries; the canonical gate's `checkSourceBundle`
+  // verifies it, not this matrix). That carve-out must not become a permanent, silent blind
+  // spot: this test asserts the SET of families the builder matrices skip is EXACTLY the set
+  // the yaml marks optional — no more (a required family accidentally excluded would hide
+  // from both matrix comparisons above) and no less (an optional family a builder DOES
+  // provision through this matrix would mean the carve-out is stale).
   it('the runtime-sources families the drive builders skip are exactly the optional ones', () => {
     const allFamilies = canonicalBuilds({ includeOptional: true })
     const coveredFamilies = new Set([...ps1Matrix(), ...shMatrix()].map((r) => r.family))
@@ -209,6 +214,54 @@ describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)
     expect(m, 'fetch-runtime.sh --family case allow-list not found').not.toBeNull()
     const families = m![1].split('|').sort()
     expect(families).toEqual([...yamlBuildFamilies(), 'ocr'].sort())
+  })
+})
+
+// --- Kiwix-tools corresponding-source bundle (#339 P8-4) ----------------------------
+// The builder twins gained their own un-numbered step (-KiwixSourceDir/--kiwix-source-dir):
+// install the source bundle via the new node helper, then fetch the kiwix_tools binaries for
+// the three Kit platforms with EXPLICIT archs. Both re-spell the platform list as literals —
+// the same drift risk as every other matrix in this file.
+describe('TS ↔ shell-script drift (kiwix source bundle, #339 P8-4)', () => {
+  it.each(['scripts/build-commercial-drive.ps1', 'scripts/build-commercial-drive.sh'])(
+    '%s invokes install-kiwix-source-bundle.mjs',
+    (rel) => {
+      expect(read(rel)).toContain('install-kiwix-source-bundle.mjs')
+    }
+  )
+
+  it('build-commercial-drive.ps1 declares $KiwixSourceDir', () => {
+    expect(read('scripts/build-commercial-drive.ps1')).toMatch(/\[string\]\s*\$KiwixSourceDir/)
+  })
+
+  it('build-commercial-drive.sh handles --kiwix-source-dir', () => {
+    const src = read('scripts/build-commercial-drive.sh')
+    expect(src).toContain('--kiwix-source-dir)')
+    expect(src).toContain('KIWIX_SOURCE_DIR')
+  })
+
+  /** ps1: `@{ Os = 'win'; Arch = 'x64' }` rows inside the kiwix fetch loop. */
+  function ps1KiwixPlatforms(): Set<string> {
+    const src = read('scripts/build-commercial-drive.ps1')
+    const rows = [...src.matchAll(/Os\s*=\s*'([^']+)'\s*;\s*Arch\s*=\s*'([^']+)'/g)]
+    expect(rows.length, 'expected the kiwix fetch platform rows in build-commercial-drive.ps1').toBeGreaterThan(0)
+    return new Set(rows.map((m) => `${m[1]}|${m[2]}`))
+  }
+
+  /** sh: `for kiwix_entry in "win|x64" "mac|arm64" "linux|x64"; do` list. */
+  function shKiwixPlatforms(): Set<string> {
+    const src = read('scripts/build-commercial-drive.sh')
+    const start = src.indexOf('for kiwix_entry in')
+    expect(start, 'the kiwix fetch platform loop in build-commercial-drive.sh not found').toBeGreaterThanOrEqual(0)
+    const end = src.indexOf('; do', start)
+    expect(end, 'the kiwix fetch platform loop in build-commercial-drive.sh is not closed').toBeGreaterThan(start)
+    const rows = [...src.slice(start, end).matchAll(/"([^"|]+)\|([^"|]+)"/g)]
+    expect(rows.length, 'expected the kiwix fetch platform rows in build-commercial-drive.sh').toBeGreaterThan(0)
+    return new Set(rows.map((m) => `${m[1]}|${m[2]}`))
+  }
+
+  it('both twins fetch the same three kiwix_tools platform pairs', () => {
+    expect(shKiwixPlatforms()).toEqual(ps1KiwixPlatforms())
   })
 })
 
