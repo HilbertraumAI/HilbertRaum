@@ -16,7 +16,9 @@
 # (llama.cpp + whisper.cpp) and the OCR language files (deu/eng traineddata for scanned-PDF
 # and photo text recognition, Phase 38 — OS-independent, ~4 MB). The user downloads any
 # other models (larger chat models) from inside the app. Pass --all-models to fetch every
-# model instead (the sidecar runtimes + OCR files are fetched either way).
+# model instead (the sidecar runtimes + OCR files are fetched either way). The OPTIONAL
+# knowledge-pack tools (kiwix-tools, #339 P8-3) are never fetched here — run
+# `fetch-runtime.sh --family kiwix_tools` separately once you want ZIM knowledge packs.
 #
 # Usage:
 #   scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM [--dry-run] [--force] \
@@ -89,6 +91,11 @@ DIRS=(
   runtime/whisper.cpp/win
   runtime/whisper.cpp/mac
   runtime/whisper.cpp/linux
+  # Third sidecar family, OPTIONAL -- #339 P8-3: the kiwix-tools knowledge-pack tools. Never
+  # fetched by --with-assets -- run fetch-runtime.sh --family kiwix_tools separately.
+  runtime/kiwix-tools/win
+  runtime/kiwix-tools/mac
+  runtime/kiwix-tools/linux
   ocr
   zim
   logs

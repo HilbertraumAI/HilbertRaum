@@ -179,6 +179,39 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
   })
 })
 
+// --- fetch-runtime.{ps1,sh} family allow-list (#339 P8-3) ---------------------------
+// The scripts hard-allow-list the families they know how to fetch (`-Family`/`--family`),
+// separately from the yaml-driven `canonicalBuilds()` net above — a family can be added to
+// runtime-sources.yaml (and even to `canonicalBuilds()`'s families) while the fetch scripts
+// still reject it at the CLI. `ocr` is a different asset shape (`files:`, not `builds:`) and
+// is hand-added to the expected set since it never appears in `parsed.families`.
+describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)', () => {
+  function yamlBuildFamilies(): string[] {
+    const parsed = validateRuntimeSources(parseYaml(read('model-manifests/runtime-sources.yaml')))
+    expect(parsed.errors, `runtime-sources.yaml must validate: ${parsed.errors.join('; ')}`).toEqual([])
+    return Object.keys(parsed.families ?? {}).sort()
+  }
+
+  it('fetch-runtime.ps1 -Family ValidateSet matches the yaml build families + ocr', () => {
+    const src = read('scripts/fetch-runtime.ps1')
+    const m = src.match(/\[ValidateSet\(([^)]+)\)\]/)
+    expect(m, 'fetch-runtime.ps1 -Family ValidateSet not found').not.toBeNull()
+    const families = m![1]
+      .split(',')
+      .map((s) => s.trim().replace(/^'|'$/g, ''))
+      .sort()
+    expect(families).toEqual([...yamlBuildFamilies(), 'ocr'].sort())
+  })
+
+  it('fetch-runtime.sh --family case allow-list matches the yaml build families + ocr', () => {
+    const src = read('scripts/fetch-runtime.sh')
+    const m = src.match(/case "\$FAMILY" in\n\s*([A-Za-z0-9_|]+)\)/)
+    expect(m, 'fetch-runtime.sh --family case allow-list not found').not.toBeNull()
+    const families = m![1].split('|').sort()
+    expect(families).toEqual([...yamlBuildFamilies(), 'ocr'].sort())
+  })
+})
+
 // --- Root license/attribution artifacts (LIC-1, full-audit 2026-07-12b) -------------
 // prepare-drive.{ps1,sh} COPY the three drive-root notice files and
 // build-commercial-drive.{ps1,sh} GATE on them — four re-spelled literals of the one

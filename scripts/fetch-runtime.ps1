@@ -46,9 +46,11 @@
 .PARAMETER Family
   Which asset family to fetch from runtime-sources.yaml: llama_cpp (default; the
   llama-server binary), whisper_cpp (the whisper-cli transcriber, Phase 36 -- same
-  verify + marker logic), or ocr (Phase 38: the vendored OCR language files, plain
-  sha256-verified downloads into ocr/ -- no extraction, no marker; idempotency IS the
-  hash).
+  verify + marker logic), kiwix_tools (#339 P8-3: the OPTIONAL knowledge-pack tools --
+  kiwix-serve/kiwix-manage/kiwix-search plus the five ICU DLLs on Windows; never fetched
+  by prepare-drive -WithAssets, only by an explicit -Family kiwix_tools), or ocr (Phase 38:
+  the vendored OCR language files, plain sha256-verified downloads into ocr/ -- no
+  extraction, no marker; idempotency IS the hash).
 
 .PARAMETER Commercial
   Drive-builder mode: refuse a placeholder hash before any download, re-fetch a hashless
@@ -61,6 +63,7 @@
   .\scripts\fetch-runtime.ps1 -Target E:\
   .\scripts\fetch-runtime.ps1 -Target E:\ -Os linux -Arch x64 -DryRun
   .\scripts\fetch-runtime.ps1 -Target E:\ -Family whisper_cpp
+  .\scripts\fetch-runtime.ps1 -Target E:\ -Family kiwix_tools
   .\scripts\fetch-runtime.ps1 -Target E:\ -Family ocr -Commercial
 #>
 [CmdletBinding()]
@@ -69,7 +72,7 @@ param(
   [string] $Os,
   [string] $Arch,
   [string] $Backend,
-  [ValidateSet('llama_cpp', 'whisper_cpp', 'ocr')] [string] $Family = 'llama_cpp',
+  [ValidateSet('llama_cpp', 'whisper_cpp', 'kiwix_tools', 'ocr')] [string] $Family = 'llama_cpp',
   [switch] $Commercial,
   [switch] $DryRun
 )
@@ -113,6 +116,51 @@ function Invoke-CurlResilient {
     }
   }
   return $false
+}
+
+# #339 P8-3: parse a flow-sequence value ("[a, b, c]", or "[]"/empty) into a string array.
+# Mirrors the flow-sequence shape runtime-sources.yaml uses for `executables:`/`runtime_files:`.
+function Get-FlowListValue {
+  param([string] $Raw)
+  $inner = $Raw.Trim()
+  if ($inner.StartsWith('[') -and $inner.EndsWith(']')) { $inner = $inner.Substring(1, $inner.Length - 2) }
+  if ($inner.Trim() -eq '') { return @() }
+  return @($inner -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim("'") } | Where-Object { $_ -ne '' })
+}
+
+# #339 P8-3: the committed yaml spells `executables:`/`runtime_files:` as a one-line flow
+# sequence, but a hand-edited drive yaml might use a block sequence instead
+# (`executables:` alone, then `  - item` lines). Collapse any such block into the inline
+# flow form BEFORE the line-by-line parser below runs, so it only ever has to handle one
+# shape. Deliberately scoped to just these two keys -- `builds:`/`files:` are lists of
+# MAPPINGS ("- os: win"), not scalars, and are already handled by the per-item parsers below.
+function ConvertTo-FlowListLines {
+  param([string[]] $Lines)
+  $out = New-Object System.Collections.Generic.List[string]
+  $i = 0
+  while ($i -lt $Lines.Count) {
+    $line = $Lines[$i]
+    if ($line -match '^(\s*)(executables|runtime_files)\s*:\s*$') {
+      $indent = $Matches[1]
+      $key = $Matches[2]
+      $items = @()
+      $j = $i + 1
+      while ($j -lt $Lines.Count) {
+        if ($Lines[$j] -match '^(\s+)-\s*(.+?)\s*$' -and $Matches[1].Length -gt $indent.Length) {
+          $items += $Matches[2].Trim().Trim('"').Trim("'")
+          $j++
+        } else { break }
+      }
+      if ($items.Count -gt 0) {
+        $out.Add("$indent$key`: [$($items -join ', ')]")
+        $i = $j
+        continue
+      }
+    }
+    $out.Add($line)
+    $i++
+  }
+  return $out.ToArray()
 }
 
 # Normalize -Target to a full path: curl.exe resolves relative paths against the PROCESS
@@ -260,11 +308,13 @@ if ($Family -eq 'ocr') {
 # BLOCK-AWARE since Phase 36: the file holds TWO top-level families (llama_cpp +
 # whisper_cpp) with the same shape -- only the selected -Family's version/builds are
 # collected, so the whisper builds can never leak into a llama selection or vice versa.
-$lines = (Get-Content -Path $SourcesFile) -split "`n"
+$lines = ConvertTo-FlowListLines ((Get-Content -Path $SourcesFile) -split "`n")
 $version = $null
 $builds = @()
 $current = $null
 $topKey = $null
+$familyExecutables = @()
+$familyExecutablesSet = $false
 foreach ($raw in $lines) {
   $line = $raw.TrimEnd()
   if ($line -match '^\s*#') { continue }
@@ -279,6 +329,14 @@ foreach ($raw in $lines) {
   # committed `version: b9196   # PLACEHOLDER ...` used to leak the comment into the value.
   if (-not $version -and $line -match '^\s*version\s*:\s*(.+?)\s*$') {
     $version = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'"); continue
+  }
+  # #339 P8-3: the FAMILY-level `executables:` list (a family shipping more than one
+  # executable, e.g. kiwix_tools: [kiwix-serve, kiwix-manage, kiwix-search]). Only
+  # meaningful before the `builds:` list starts (-not $current).
+  if (-not $current -and -not $familyExecutablesSet -and $line -match '^\s*executables\s*:\s*(.+?)\s*$') {
+    $familyExecutables = Get-FlowListValue (($Matches[1] -replace '\s+#.*$', '').Trim())
+    $familyExecutablesSet = $true
+    continue
   }
   if ($line -match '^\s*-\s*os\s*:\s*(.+?)\s*$') {
     if ($current) { $builds += $current }
@@ -328,11 +386,26 @@ if ($build.extract_to -match '\.\.' -or $build.extract_to -match '^[/\\]' -or $b
 
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
 $extractTo = Join-Path $Target ($build.extract_to -replace '/', [IO.Path]::DirectorySeparatorChar)
-# Binary name follows the FAMILY + the SELECTED build's OS (we may be provisioning the
-# mac/linux dir from a Windows build machine), mirroring assets.ts sidecarBinaryName.
-$binaryBase = if ($Family -eq 'whisper_cpp') { 'whisper-cli' } else { 'llama-server' }
+# #339 P8-3: EXECUTABLE LIST per family (mirrors assets.ts SIDECAR_FAMILY_SPECS +
+# planRuntimeDownload) -- the primary base name per family, plus the yaml's family-level
+# `executables:` when present (its first entry is always the primary; llama_cpp/whisper_cpp
+# declare no `executables:`, so their required set stays the single binary it always was).
+$PrimaryBase = if ($Family -eq 'whisper_cpp') { 'whisper-cli' } elseif ($Family -eq 'kiwix_tools') { 'kiwix-serve' } else { 'llama-server' }
+$executableBases = @($PrimaryBase)
+foreach ($e in $familyExecutables) { if ($executableBases -notcontains $e) { $executableBases += $e } }
+# Binary name(s) follow the SELECTED build's OS (we may be provisioning the mac/linux dir
+# from a Windows build machine), mirroring assets.ts sidecarBinaryName. $binaryName/$binaryPath
+# keep referring to the PRIMARY only -- the flatten step below locates the archive's nested
+# folder by the primary executable, exactly as before.
+$binaryBase = $PrimaryBase
 $binaryName = if ($build.os -eq 'win') { "$binaryBase.exe" } else { $binaryBase }
 $binaryPath = Join-Path $extractTo $binaryName
+$requiredExecNames = @($executableBases | ForEach-Object { if ($build.os -eq 'win') { "$_.exe" } else { $_ } })
+$runtimeFileNames = @()
+if ($build.runtime_files) { $runtimeFileNames = Get-FlowListValue ([string]$build.runtime_files) }
+# Every file this install must produce: the executables, then the build's runtime_files
+# (verbatim -- they already carry their own extension). Mirrors assets.ts requiredInstallFiles.
+$requiredFileNames = @($requiredExecNames + $runtimeFileNames)
 $markerPath = Join-Path $extractTo '.hilbertraum-runtime.json'
 $sha = ([string]$build.sha256).ToLower()
 
@@ -340,26 +413,35 @@ Write-Host "Fetch runtime -> $Target" -ForegroundColor Cyan
 Write-Host ("  build: {0}/{1} {2} @ {3}" -f $build.os, $build.arch, $build.backend, $version)
 Write-Host ("  url:   {0}" -f $build.url)
 Write-Host ("  into:  {0}" -f $extractTo)
+Write-Host ("  files: {0}" -f ($requiredFileNames -join ', '))
 
 # Idempotent skip is MARKER-based (Phase 14, mirrors assets.ts runtimeInstallCurrent):
 # "binary exists" alone would silently keep a CPU-era build in place after the default
-# became vulkan. Skip only when .hilbertraum-runtime.json matches the selected version+backend
-# -- and, under -Commercial, records the binary's hash (a hashless legacy marker is
-# re-fetched, #234).
+# became vulkan. Skip only when EVERY required file is present (#339 P8-3 -- a half-installed
+# multi-file family is not "present", mirrors assets.ts runtimeBinaryPresent) and
+# .hilbertraum-runtime.json matches the selected version+backend -- and, under -Commercial,
+# records a hash for EVERY required file (a hashless legacy marker is re-fetched, #234).
 if (Test-Path $binaryPath) {
   $skip = $false
   $why = 'install marker is missing or differs'
-  if (Test-Path $markerPath) {
+  $allPresent = -not ($requiredFileNames | Where-Object { -not (Test-Path (Join-Path $extractTo $_)) })
+  if (-not $allPresent) {
+    $why = 'one or more required files are missing'
+  } elseif (Test-Path $markerPath) {
     try {
       $marker = Get-Content -Path $markerPath -Raw | ConvertFrom-Json
       if ($marker.version -eq $version -and $marker.backend -eq $build.backend) {
         $skip = $true
         if ($Commercial) {
-          $recorded = $null
-          if ($marker.binaries) { $recorded = $marker.binaries.PSObject.Properties[$binaryName].Value }
-          if (-not $recorded -or -not (& $IsRealSha ([string]$recorded).ToLower())) {
+          $allHashedMarker = $true
+          foreach ($f in $requiredFileNames) {
+            $recorded = $null
+            if ($marker.binaries) { $recorded = $marker.binaries.PSObject.Properties[$f].Value }
+            if (-not $recorded -or -not (& $IsRealSha ([string]$recorded).ToLower())) { $allHashedMarker = $false; break }
+          }
+          if (-not $allHashedMarker) {
             $skip = $false
-            $why = 'install marker records no binary hash (legacy) -- commercial mode'
+            $why = 'install marker records no binary hash for one or more required files (legacy) -- commercial mode'
           }
         }
       }
@@ -490,29 +572,61 @@ if (-not (Test-Path $binaryPath)) {
   }
 }
 
-if (Test-Path $binaryPath) {
-  # Record exactly which build is installed (UTF-8 without BOM -- PS 5.1 Set-Content
-  # would prepend one and break Node's JSON.parse). Mirrors assets.ts writeRuntimeMarker.
-  # `binaries` records the extracted binary's own SHA-256 so the app can re-hash it
-  # immediately before spawn (binary-verifier.ts, #234). The key is the binary's
-  # name relative to the extract dir (here it sits at the root after the flatten above).
-  # Only a VERIFIED archive earns that hash (#234): an unverified install must not mint
-  # a marker the sell gate and the spawn verifier would trust.
-  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-  $markerHead = '{"version":"' + $version + '","backend":"' + $build.backend + '","os":"' + $build.os + '","arch":"' + $build.arch + '"'
-  if ($archiveVerified) {
-    $binSha = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLower()
-    $markerJson = $markerHead + ',"binaries":{"' + $binaryName + '":"' + $binSha + '"}}'
+if (-not (Test-Path $binaryPath)) {
+  Write-Host "  FAIL: $binaryName not found under $extractTo after extraction -- the release archive layout may have changed." -ForegroundColor Red
+  exit 1
+}
+
+# #339 P8-3: post-extract completeness check -- EVERY required file (every declared
+# executable + runtime file), not just the primary. Mirrors assets.ts requiredInstallFiles /
+# the app's own post-extract check (runtime-download.ts installOne). A half-installed
+# multi-file family (e.g. the kiwix ICU DLLs left behind by a differently-shaped archive)
+# must fail loudly instead of writing a marker that claims a complete install.
+$missingRequired = @($requiredFileNames | Where-Object { -not (Test-Path (Join-Path $extractTo $_)) })
+if ($missingRequired.Count -gt 0) {
+  Write-Host ("  FAIL: required file(s) missing under {0} after extraction: {1}" -f $extractTo, ($missingRequired -join ', ')) -ForegroundColor Red
+  exit 1
+}
+
+if ($build.os -ne 'win') {
+  foreach ($f in $requiredExecNames) {
+    Write-Host "  NOTE: exec bit for $f cannot be set from Windows; exFAT mounts are typically all-executable, otherwise chmod +x it on the target OS." -ForegroundColor Yellow
+  }
+}
+
+# Record exactly which build is installed (UTF-8 without BOM -- PS 5.1 Set-Content
+# would prepend one and break Node's JSON.parse). Mirrors assets.ts writeRuntimeMarker.
+# `binaries` records every required file's own SHA-256 (keyed exactly like markerBinaryKey --
+# the path relative to the extract dir, posix separators; everything here is flat) so the
+# app can re-hash each executable immediately before spawn (binary-verifier.ts, #234) and the
+# sell gate can check the runtime files too. ALL-OR-NOTHING (#339 P8-3, mirrors
+# runtime-download.ts installOne): only a VERIFIED archive earns hashes at all, and a hashing
+# failure on ANY required file drops the whole map rather than writing a partial one -- the
+# verifier and the sell gate must never disagree about one install.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$markerHead = '{"version":"' + $version + '","backend":"' + $build.backend + '","os":"' + $build.os + '","arch":"' + $build.arch + '"'
+if ($archiveVerified) {
+  $allHashed = $true
+  $entries = @()
+  foreach ($f in $requiredFileNames) {
+    try {
+      $h = (Get-FileHash -Path (Join-Path $extractTo $f) -Algorithm SHA256).Hash.ToLower()
+      $entries += ('"' + $f + '":"' + $h + '"')
+    } catch {
+      $allHashed = $false
+      break
+    }
+  }
+  if ($allHashed) {
+    $markerJson = $markerHead + ',"binaries":{' + ($entries -join ',') + '}}'
   } else {
     $markerJson = $markerHead + '}'
-    Write-Host "  marker written WITHOUT a binary hash (archive unverified) -- the sell gate refuses this install" -ForegroundColor Yellow
+    Write-Host "  marker written WITHOUT binary hashes (could not hash every required file) -- the sell gate refuses this install" -ForegroundColor Yellow
   }
-  [System.IO.File]::WriteAllText($markerPath, $markerJson, $utf8NoBom)
-  Write-Host "  extracted $binaryName (+ .hilbertraum-runtime.json install marker)" -ForegroundColor Green
-  if ($build.os -ne 'win') {
-    Write-Host "  NOTE: exec bit for $binaryName cannot be set from Windows; exFAT mounts are typically all-executable, otherwise chmod +x it on the target OS." -ForegroundColor Yellow
-  }
-  exit 0
+} else {
+  $markerJson = $markerHead + '}'
+  Write-Host "  marker written WITHOUT a binary hash (archive unverified) -- the sell gate refuses this install" -ForegroundColor Yellow
 }
-Write-Host "  FAIL: $binaryName not found under $extractTo after extraction -- the release archive layout may have changed." -ForegroundColor Red
-exit 1
+[System.IO.File]::WriteAllText($markerPath, $markerJson, $utf8NoBom)
+Write-Host ("  extracted {0} (+ .hilbertraum-runtime.json install marker)" -f ($requiredFileNames -join ', ')) -ForegroundColor Green
+exit 0
