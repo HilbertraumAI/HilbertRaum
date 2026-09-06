@@ -130,6 +130,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Small knowledge-pack polish.** The packs panel shows each archive's language by name ("German")
+  instead of a three-letter code; while one pack is being enabled, disabled or removed, the other
+  rows' buttons stay usable; a pack whose file is missing can be disabled, not only removed; and
+  the "Answering from" chip in a chat says "(disabled)" or "(not available)" after a ticked pack
+  changed state, instead of naming it as if it would be searched.
 - **The knowledge-packs panel now says when two packs clash on a file name.** Two archives with
   the same file name in different folders cannot both be served — only the earlier one is — and
   the panel used to show both as simply "Enabled", with the reason visible only in the note under

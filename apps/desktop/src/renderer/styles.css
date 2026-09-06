@@ -855,6 +855,10 @@ code, pre, kbd { font-family: var(--font-mono); }
   font-size: var(--text-sm);
   cursor: pointer;
   padding: 3px 8px;
+  /* #340 nit: the trigger may shrink inside a narrow footer on its own, not only under
+     .scope-footer-wrap — a long label inside it then ellipsises instead of overflowing. */
+  min-width: 0;
+  max-width: 100%;
 }
 /* Inline file glyph in the chat-scope footer button / conversation meta line — muted,
    sized to the surrounding text (not accent: these are quiet labels, not actions). */

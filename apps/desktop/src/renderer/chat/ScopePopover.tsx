@@ -83,7 +83,22 @@ export function scopeSources(
   // Knowledge packs: name a single pack, count several (the projects pattern).
   if (packIds.length === 1) {
     const pack = packs.find((k) => k.id === packIds[0])
-    parts.push(pack ? t('chat.scope.packNamed', { name: pack.title }) : tCount('chat.scope.packCount', 1))
+    if (!pack) parts.push(tCount('chat.scope.packCount', 1))
+    else {
+      // #340 nit (T18-b observation): a ticked pack that was disabled or went missing afterwards
+      // is still named by the chip — with its state, so the readout never claims a source the
+      // ask will skip. The same state words the popover row uses.
+      const state = !pack.available
+        ? t('chat.scope.packUnavailable')
+        : !pack.enabled
+          ? t('chat.scope.packDisabled')
+          : null
+      parts.push(
+        state
+          ? t('chat.scope.packNamedState', { name: pack.title, state })
+          : t('chat.scope.packNamed', { name: pack.title })
+      )
+    }
   } else if (packIds.length > 1) {
     parts.push(tCount('chat.scope.packCount', packIds.length))
   }

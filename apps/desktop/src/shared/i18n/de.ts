@@ -2667,6 +2667,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.scope.packsTitle': 'Wissenspakete',
   'chat.scope.packUnavailable': 'nicht verfügbar',
   'chat.scope.packNamed': 'Paket: {name}',
+  // #340: der Chip nennt ein angehaktes, aber deaktiviertes / nicht verfügbares Paket MIT diesem Zustand.
+  'chat.scope.packNamedState': 'Paket: {name} ({state})',
   'chat.scope.packCount.one': '{count} Wissenspaket',
   'chat.scope.packCount.other': '{count} Wissenspakete',
   // Dokumente-Schalter (#301 P4, Befund M10): die ausdrückliche Wahl „aus den Paketen

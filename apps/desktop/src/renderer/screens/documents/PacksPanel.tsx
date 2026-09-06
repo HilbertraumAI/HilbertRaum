@@ -42,6 +42,20 @@ function addFailedKey(reason: KnowledgePackAddFailureReason | null): MessageKey 
   }
 }
 
+/**
+ * An archive's ISO 639-3 language code as a name in the UI language (#340 nit): `deu` → "German"
+ * / "Deutsch". The raw code stays when the platform cannot name it (`fallback: 'none'` answers
+ * undefined for an unknown code; an environment without `Intl.DisplayNames` throws).
+ */
+function languageName(uiLang: string, code: string): string {
+  try {
+    const name = new Intl.DisplayNames([uiLang], { type: 'language', fallback: 'none' }).of(code)
+    return name && name !== code ? name : code
+  } catch {
+    return code
+  }
+}
+
 function formatSize(tCount: ReturnType<typeof useT>['tCount'], bytes: number | null): string | null {
   if (bytes == null || bytes <= 0) return null
   const gb = bytes / (1024 * 1024 * 1024)
@@ -50,7 +64,7 @@ function formatSize(tCount: ReturnType<typeof useT>['tCount'], bytes: number | n
 }
 
 export function PacksPanel(): JSX.Element {
-  const { t, tCount } = useT()
+  const { t, tCount, lang } = useT()
   const showToast = useToast()
   const [packs, setPacks] = useState<KnowledgePack[] | null>(null)
   const [toolsInstalled, setToolsInstalled] = useState(true)
@@ -187,7 +201,7 @@ export function PacksPanel(): JSX.Element {
 
   const metaLine = (p: KnowledgePack): string => {
     const parts: string[] = []
-    if (p.language) parts.push(p.language)
+    if (p.language) parts.push(languageName(lang, p.language))
     if (p.articleCount != null) parts.push(tCount('packs.articleCount', p.articleCount))
     const size = formatSize(tCount, p.sizeBytes)
     if (size) parts.push(size)
@@ -302,9 +316,12 @@ export function PacksPanel(): JSX.Element {
                 {p.description && <p className="packs-card-desc hint">{p.description}</p>}
                 <p className="packs-card-meta hint">{metaLine(p)}</p>
                 <div className="packs-card-actions">
+                  {/* #340 nits: only THIS row's buttons disable while it is busy (another row's
+                      toggle or remove is an independent operation), and an unavailable pack can
+                      be disabled too — the flag is the user's, whatever the file is doing. */}
                   <Button
                     size="sm"
-                    disabled={busy !== null || !p.available}
+                    disabled={busy === p.id}
                     aria-label={t(p.enabled ? 'packs.disableNamed' : 'packs.enableNamed', { title: p.title })}
                     onClick={() => void onToggle(p)}
                   >
@@ -321,7 +338,7 @@ export function PacksPanel(): JSX.Element {
                   <Button
                     size="sm"
                     className="danger"
-                    disabled={busy !== null}
+                    disabled={busy === p.id}
                     aria-label={t('packs.removeNamed', { title: p.title })}
                     onClick={() => setConfirmRemove(p)}
                   >

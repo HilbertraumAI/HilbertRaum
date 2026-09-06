@@ -101,6 +101,64 @@ describe('PacksPanel', () => {
     expect(screen.getByText('Enabled')).toBeInTheDocument()
     expect(screen.getByText('File missing')).toBeInTheDocument()
     expect(screen.getAllByText(/4102 articles/).length).toBeGreaterThan(0)
+    // #340 nit: the ISO 639-3 code is shown as a language NAME in the UI language, never raw.
+    expect(screen.getAllByText(/German · 4102 articles/).length).toBe(2)
+    expect(screen.queryByText(/\bdeu\b/)).toBeNull()
+    // #340 nit: an unavailable pack can be disabled, not only removed.
+    expect(screen.getByRole('button', { name: 'Disable Chemie von Wikipedia' })).toBeEnabled()
+  })
+
+  // #340 nits: a row's buttons disable only while THAT row is busy — another row's toggle or
+  // remove is an independent operation — and the meta line's language name follows the UI
+  // language, with the raw code kept only when the platform cannot name it.
+  it('#340 nits: only the busy row disables, an unavailable pack can be disabled, the language is named in German too and an unknown code stays raw', async () => {
+    let release!: () => void
+    const parked = new Promise<void>((r) => (release = r))
+    const setKnowledgePackEnabled = vi.fn(async () => {
+      await parked
+    })
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack(),
+        pack({ id: 'uuid-gone', title: 'Chemie von Wikipedia', available: false, enabled: true, language: 'zzz' })
+      ],
+      setKnowledgePackEnabled
+    })
+    const user = userEvent.setup()
+    const first = render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('Klimawandel von Wikipedia')).toBeInTheDocument()
+    // The unknown code echoes back as itself — no invented name.
+    expect(screen.getByText(/^zzz · 4102 articles/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Disable Klimawandel von Wikipedia' }))
+    await waitFor(() => expect(setKnowledgePackEnabled).toHaveBeenCalledWith('uuid-climate', false))
+    // This row is working; the other row's buttons are untouched.
+    expect(screen.getByRole('button', { name: 'Disable Klimawandel von Wikipedia' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Remove Klimawandel von Wikipedia' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Disable Chemie von Wikipedia' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Remove Chemie von Wikipedia' })).toBeEnabled()
+    release()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Disable Klimawandel von Wikipedia' })).toBeEnabled()
+    )
+    // …and the unavailable pack's Disable really reaches the bridge.
+    await user.click(screen.getByRole('button', { name: 'Disable Chemie von Wikipedia' }))
+    await waitFor(() => expect(setKnowledgePackEnabled).toHaveBeenCalledWith('uuid-gone', false))
+    first.unmount()
+
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('Klimawandel von Wikipedia')).toBeInTheDocument()
+    expect(screen.getByText(/^Deutsch · 4102 Artikel/)).toBeInTheDocument()
   })
 
   // #340 (rag-design D-Z16): the served library's collision losers ride `packs:status.excluded`
@@ -740,6 +798,47 @@ describe('ScopePopover — knowledge packs', () => {
     // Toggling a PACK while documents are off preserves the flag (spread-preservation).
     await user.click(screen.getByRole('checkbox', { name: /Klimawandel von Wikipedia/ }))
     expect(emitted.at(-1)).toEqual({ collectionIds: [], documentIds: [], documentsOff: true })
+  })
+
+  // #340 nit (the T18-b observation): a ticked pack that was disabled or went missing afterwards
+  // is still named by the chip — WITH its state, in the popover row's own words — so the
+  // "Answering from:" readout never claims a source the ask will skip.
+  it('the chip names a ticked pack that is disabled or unavailable with its state', () => {
+    stubApi({})
+    const scope = { collectionIds: [], documentIds: [], packIds: ['uuid-climate'] }
+    const disabled = render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[pack({ enabled: false })]}
+          scope={scope}
+          onChangeScope={() => {}}
+        />
+      </I18nProvider>
+    )
+    expect(screen.getByRole('button')).toHaveTextContent('Pack: Klimawandel von Wikipedia (disabled)')
+    disabled.unmount()
+    const missing = render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[pack({ available: false, unavailableReason: 'missing' })]}
+          scope={scope}
+          onChangeScope={() => {}}
+        />
+      </I18nProvider>
+    )
+    expect(screen.getByRole('button')).toHaveTextContent('Pack: Klimawandel von Wikipedia (not available)')
+    missing.unmount()
+    render(
+      <I18nProvider>
+        <ScopePopover docs={[doc]} collections={collections} packs={[pack()]} scope={scope} onChangeScope={() => {}} />
+      </I18nProvider>
+    )
+    expect(screen.getByRole('button')).toHaveTextContent('Pack: Klimawandel von Wikipedia')
+    expect(screen.getByRole('button')).not.toHaveTextContent('(')
   })
 
   it('the chip says "documents off" beside the packs phrase, the hint names what stays on, and the reset clears the flag', async () => {

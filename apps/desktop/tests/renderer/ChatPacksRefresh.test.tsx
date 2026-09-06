@@ -126,6 +126,40 @@ afterEach(() => {
 })
 
 describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T13)', () => {
+  // #340 nit: `reconcile-start` says a pass BEGAN — the pack set cannot have moved yet — so the
+  // chat refetches at `reconcile-end` / `mutation` only, one DB read per pass instead of two.
+  it('a reconcile-start event does not refetch; the following reconcile-end does', async () => {
+    const user = userEvent.setup()
+    const docConv = conv()
+    const emitter = packsEventEmitter()
+    const listKnowledgePacks = vi.fn(async () => [pack()])
+    stubApi({
+      listConversations: vi.fn(async () => [docConv]),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [docInfo('d1', 'contract.pdf')]),
+      listCollections: vi.fn(async () => [collection({})]),
+      listAttachments: vi.fn(async () => []),
+      listKnowledgePacks,
+      onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByText('Doc Q&A'))
+    await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(1))
+
+    // A start notice under a NEWER epoch than anything seen: honoured as an epoch, not a refetch.
+    await act(async () => {
+      emitter.emit({ epoch: 2, revision: 2, refreshing: true, reason: 'reconcile-start' })
+    })
+    expect(listKnowledgePacks).toHaveBeenCalledTimes(1) // a flushed ceiling, not a proof of absence
+    act(() => emitter.emit({ epoch: 2, revision: 2, refreshing: false, reason: 'reconcile-end' }))
+    await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(2))
+    // …and the epoch the start notice carried was recorded: an OLDER end notice is ignored.
+    act(() => emitter.emit({ epoch: 1, revision: 1, refreshing: false, reason: 'reconcile-end' }))
+    await act(async () => {})
+    expect(listKnowledgePacks).toHaveBeenCalledTimes(2)
+  })
+
   it('a reconcile-end event refetches packs and the mounted ScopePopover shows the new pack', async () => {
     const user = userEvent.setup()
     const docConv = conv()

@@ -36,6 +36,9 @@ describe('knowledge-pack layout rules (#301 P6) — the stylesheet carries what 
     expect(label).toContain('text-overflow: ellipsis')
     expect(label).toContain('white-space: nowrap')
     expect(rule('.scope-footer-wrap .footer-menu-btn')).toContain('min-width: 0')
+    // #340 nit: the trigger carries its own shrink rule, not only under the scope wrapper.
+    expect(rule('.footer-menu-btn')).toContain('min-width: 0')
+    expect(rule('.footer-menu-btn')).toContain('max-width: 100%')
   })
 
   it('the pack card head wraps a long title with its badges; the list is a reset <ul>', () => {

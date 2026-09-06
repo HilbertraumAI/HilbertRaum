@@ -2637,6 +2637,8 @@ export const en = {
   'chat.scope.packsTitle': 'Knowledge packs',
   'chat.scope.packUnavailable': 'not available',
   'chat.scope.packNamed': 'Pack: {name}',
+  // #340 nit: the chip names a ticked pack that is disabled / unavailable WITH that state.
+  'chat.scope.packNamedState': 'Pack: {name} ({state})',
   'chat.scope.packCount.one': '{count} knowledge pack',
   'chat.scope.packCount.other': '{count} knowledge packs',
   // Documents toggle (#301 P4, finding M10): the explicit "answer from the packs, not from my
