@@ -237,6 +237,41 @@ samples, and `runBenchmark` receives the latest sample **injected**
 (`RunBenchmarkDeps.effectiveRead`, the GPU-probe injection pattern — this module measures
 nothing itself), carried forward from the previous result so a re-run never loses it.
 
+**Identity-gated carry-forward (PR #303 audit, M2).** A persisted sample describes the computer
+it was measured on, so it is carried forward — into a fresh run, its slow-read warning, and the
+#107 start estimate — only when it is **this machine's**: `sampleEligible` in
+`services/benchmark-persistence.ts` compares the result's `machineKey` with the current one.
+Known, unequal keys are foreign and never a candidate, so a NEW computer's first benchmark starts
+with no read figure rather than the previous computer's; a local `checksum` sample beats a
+foreign persisted `model_load` one because identity is decided **before** the source ranking
+(`preferCandidate`: same-machine `model_load` beats `checksum`, else the newer sample). **G3:**
+an unknown identity on **either** side (a `null` key — a legacy blob, a failed detection) stays
+eligible as "this machine". That is a compatibility policy, not proof of provenance: an old
+workspace keeps behaving as before, and an unkeyed result never acquires a fabricated key or a
+history entry. The eligible persisted sample is `lastBenchmark`'s when that result is eligible,
+plus this machine's own history entry's (the only same-machine record when `lastBenchmark` is
+foreign), ranked together (`eligiblePersistedSample`).
+
+**Every eligible destination (L2).** `persistEffectiveRead` writes a sample to `lastBenchmark`
+when it is eligible **and** to this machine's `benchmarkHistory` entry when one exists
+(`effectiveReadPatch`); with a foreign `lastBenchmark` only the history entry is written, and a
+local sample never rides another computer's result. Each destination is compared on its own —
+a headline that already carries the sample does not excuse a stale history copy — and each keeps
+a sample that outranks the new one. With no eligible destination nothing is written and the
+sample stays **un-handled** (a benchmark is never fabricated just to store it); the handled memo
+is set only after a successful write to every eligible destination, scoped to the workspace DB
+handle and the machine key, so a failed write, a locked workspace, a lock/unlock, or a drive on
+another computer re-evaluates on the next observer call or the post-start/list/verify retry.
+A sample-only update never touches `ranAt` — it is not a new run. Only the slow-read warning is
+re-keyed; every other warning is a benchmark-time fact.
+
+**Commit-time re-resolution (M6).** `runAndPersistBenchmark` resolves the eligible sample before
+the run (so the warning derivation sees it) and **again after both the drive and the speed legs**
+— a model start or a cold hash can land a newer sample meanwhile, which the observer has already
+persisted onto the outgoing result — and folds the newest eligible one into the result
+(`mergeSampleIntoResult`) before persisting. The returned result is the reconciled object that
+was written.
+
 ## History per machine (2026-09-05)
 
 A portable drive travels, and a benchmark result describes the computer it ran on, not the
@@ -263,6 +298,23 @@ unlock. If `lastBenchmark` exists and its key differs from this machine's:
 Either way the per-session GPU probe refresh still happens first. The `benchmarkHistory` write
 gate accepts only an array of plain objects (junk elements dropped, length capped; the 256 KB
 serialized cap applies to the list).
+
+**Upgrade backfill (PR #303 audit, M4).** A workspace from before the history existed holds the
+previous computer's result only in `lastBenchmark`, so whatever replaces that headline first
+files the **outgoing** result into the history (`backfillOutgoing`): the same-machine startup
+branch seeds a keyed `lastBenchmark` that the history lacks (no re-run; an unkeyed legacy result
+is left alone entirely), the restore branch backfills the foreign outgoing result before writing
+the restored one, the new-machine branch seeds it before the background run, and the run itself
+(manual or first-run) backfills once more — a no-op when already filed, so the entry is never
+duplicated. Rules: a history observation for that machine that is as new or newer (by `ranAt`,
+then by the sample's `at`) is never overwritten with an older outgoing copy; the entry lands at
+its `ranAt` position (newest first); and at the cap the **oldest OTHER machine** is evicted, never
+this machine's entry — the restore destination is captured before the backfill and survives it.
+
+**Write ordering.** The settings store upserts one row per key with no multi-key transaction, so
+every persist that touches both writes them in **one `updateSettings` call with `benchmarkHistory`
+first, then `lastBenchmark`** (the run, the restore, the observer): a crash between the two rows
+loses at most the headline copy, never a machine's only result.
 
 ## Performance screen (2026-09-05)
 
@@ -301,8 +353,9 @@ labelled "Unified memory" and the graphics tile is hidden); `cpu` = no usable ca
 chat ladder now reads it (`runtime/placement.ts`, one parser per attempt, fed by the sidecar's
 `onStderrData`; the chat server runs with `-lv 4` because the pinned build prints these lines
 only from log verbosity 4 up, verified 2026-09-05: 3 prints none, 5 adds the `--fit` dry-run
-pass): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices
-are the CPU side), every `<device> KV buffer size`, the Metal budget line. The reading is recorded
+pass): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices and the
+backends' `<Backend>_Host` buffers are the CPU side), every `<device> KV buffer size`, the Metal
+budget line. The reading is recorded
 once the rung is healthy (`recordModelPlacement`, stamped with the backend, the launched context
 and `machineKey`), latched for the session, and persisted per model id in
 `settings.modelPlacements` by the observer `registerBenchmarkIpc` registers; the snapshot uses it

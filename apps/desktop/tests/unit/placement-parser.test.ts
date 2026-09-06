@@ -9,7 +9,11 @@ import {
 import type { ModelPlacement } from '../../src/shared/types'
 
 // benchmark.md "Your model": the chat runtime reads llama.cpp's load log for where the model
-// landed. Lines arrive as arbitrary stderr chunks; devices named CPU* are the CPU side.
+// landed. Lines arrive as arbitrary stderr chunks; devices named CPU* — and the backends'
+// pinned `<Backend>_Host` buffers — are the CPU side.
+//
+// The fixtures below are handwritten from the log shapes the pinned build prints (a captured
+// real verbosity-4 log is tracked as a separate follow-up issue).
 
 const LOG = [
   '0.00.132.667 I device_info:',
@@ -81,6 +85,35 @@ describe('createPlacementParser', () => {
       ''
     ].join('\n'))
     expect(p.reading()).toMatchObject({ gpuLayers: 25, totalLayers: 25, gpuModelMb: 1267.23, cpuModelMb: 397.85, gpuKvMb: 24 })
+  })
+
+  it('files the GPU backend\'s _Host KV buffer under the CPU side (the partial-offload spill)', () => {
+    // ggml names a backend's pinned host buffer type "<Backend>_Host" (the pinned Windows
+    // build's ggml-vulkan.dll carries the literal "Vulkan_Host"). llama.cpp puts the context
+    // cache of the NON-offloaded layers there, so a partial offload spills into it: counting
+    // it as GPU memory would overstate what is on the card.
+    const p = createPlacementParser()
+    p.onStderrData([
+      'load_tensors: offloaded 30/41 layers to GPU',
+      'load_tensors:   Vulkan0 model buffer size =  4000.00 MiB',
+      'load_tensors:   CPU_Mapped model buffer size =  1900.00 MiB',
+      'llama_kv_cache: Vulkan0 KV buffer size = 400.00 MiB',
+      'llama_kv_cache: Vulkan_Host KV buffer size = 240.00 MiB',
+      'llama_kv_cache: CUDA_Host KV buffer size = 60.00 MiB',
+      ''
+    ].join('\n'))
+    const r = p.reading()
+    expect(r.gpuKvMb).toBe(400)
+    expect(r.cpuKvMb).toBe(300)
+    expect(r.gpuModelMb).toBe(4000)
+    expect(r.cpuModelMb).toBe(1900)
+  })
+
+  it('files a CUDA_Host model buffer (--no-mmap CPU-side weights) under the CPU side', () => {
+    const p = createPlacementParser()
+    p.onStderrData('load_tensors: CUDA_Host model buffer size = 1900.00 MiB\n')
+    expect(p.reading().cpuModelMb).toBe(1900)
+    expect(p.reading().gpuModelMb).toBeNull()
   })
 
   it('stays all-null on a log without those lines (a forced-CPU start)', () => {

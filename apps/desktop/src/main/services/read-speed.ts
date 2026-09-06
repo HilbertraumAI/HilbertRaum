@@ -25,11 +25,16 @@ import type { EffectiveReadSample } from '../../shared/types'
 // the page cache — both are the honest effective rate of that load.
 //
 // Module-level session latch (precedent: `checksumCacheStats` in models.ts). The IPC
-// layer persists the latest sample onto `settings.lastBenchmark.effectiveRead`
-// (registerModelIpc, notified via the observer below so a sample recorded by ANY
+// layer persists the latest sample onto the benchmark result for THIS machine — the
+// `effectiveRead` of `settings.lastBenchmark` when that is this machine's result, and of
+// this machine's `settings.benchmarkHistory` entry (`persistEffectiveRead` in
+// registerModelIpc, notified via the observer below so a sample recorded by ANY
 // producer — including a background download's cold-file hash — persists without each
 // producer remembering to call it) and injects it into `runBenchmark`
-// (registerBenchmarkIpc) — this module stays free of DB/settings imports.
+// (registerBenchmarkIpc) — this module stays free of DB/settings imports. The samples
+// this module latches are always LOCAL (measured on the running computer); a persisted
+// sample is only carried forward when its machine identity allows it
+// (services/benchmark-persistence.ts — identity before the ranking below).
 
 /** Below this byte count the timing is dominated by fixed costs, not throughput. */
 export const MIN_READ_SAMPLE_BYTES = 64 * 1024 * 1024
@@ -66,9 +71,11 @@ export function throughputMbps(bytes: number, ms: number): number | null {
 
 /**
  * The source-ranking rule, in one place (also applied by `persistEffectiveRead` against
- * the PERSISTED sample, so a fresh session's checksum sample can never overwrite last
- * session's model-load sample): a candidate loses only when it is a `checksum` sample
- * and the incumbent is a `model_load` one; otherwise the newer candidate wins.
+ * each PERSISTED destination, so a fresh session's checksum sample can never overwrite
+ * last session's model-load sample): a candidate loses only when it is a `checksum` sample
+ * and the incumbent is a `model_load` one; otherwise the newer candidate wins. Applied
+ * only among samples of the SAME machine — a foreign persisted sample is excluded before
+ * this rule runs (benchmark-persistence.ts `sampleEligible`).
  */
 export function preferCandidate(
   candidate: EffectiveReadSample,

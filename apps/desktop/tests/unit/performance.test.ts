@@ -166,7 +166,27 @@ describe('placementVerdict', () => {
     const v = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, observed: observed({ gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null, gpuKvMb: null }) })
     expect(v.kind).toBe('unknown')
     expect(v.needMb).toBeNull()
+    // Measured, not guessed: the record exists, it just never said where the layers went.
     expect(v.estimated).toBe(false)
+    expect(v.spillMb).toBeNull()
+    // Half a reading (only one of the two counts printed) is unknown too, never a split.
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, observed: observed({ totalLayers: null }) }).kind).toBe('unknown')
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, observed: observed({ gpuLayers: null }) }).kind).toBe('unknown')
+  })
+
+  it('an EMPTY reading is unknown on a gpu backend and cpu on a cpu backend, never a measured "On GPU"', () => {
+    // Every figure null (a build logging below verbosity 4, or stderr the parser never saw):
+    // the record proves a start happened, not that the model reached the card.
+    const empty = observed({
+      gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null,
+      gpuKvMb: null, cpuKvMb: null, metalMaxWorkingSetMb: null
+    })
+    const gpu = placementVerdict({ memoryClass: 'discrete', ramMb: 16_384, vramMb: 24_576, sizeOnDiskGb: 5.8, observed: empty })
+    expect(gpu.kind).not.toBe('gpu')
+    expect(gpu).toMatchObject({ kind: 'unknown', estimated: false, needMb: null, spillMb: null, gpuLayers: null, totalLayers: null })
+    // The same empty reading on a CPU backend IS the answer: the backend alone settles it.
+    const cpu = placementVerdict({ memoryClass: 'cpu', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 5.8, observed: { ...empty, backend: 'cpu' } })
+    expect(cpu).toMatchObject({ kind: 'cpu', estimated: false, needMb: null, spillMb: null })
   })
 
   it('estimates from the weights before the first start, with headroom, per memory class', () => {

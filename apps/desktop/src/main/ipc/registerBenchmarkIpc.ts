@@ -13,6 +13,7 @@ import type {
 import type { ModelManifest } from '../../shared/manifest'
 import { detectSystem, runBenchmark, type GpuBenchmarkInput } from '../services/benchmark'
 import { effectiveReadOrPersisted } from './registerModelIpc'
+import { backfillOutgoing, historyEquals, mergeSampleIntoResult } from '../services/benchmark-persistence'
 import {
   findMachine,
   latestAnswerSpeed,
@@ -113,12 +114,13 @@ async function runBenchmarkAndPersist(
   const gpu = await probeAndPersistGpu(ctx)
 
   // #108: the honest read figure is a byproduct of real loads/hashes (read-speed.ts),
-  // injected here via the shared latch-vs-persisted resolution (ranking-aware, so a
-  // session checksum sample never shadows a persisted model-load one) — a re-run never
-  // loses an observation.
+  // injected here via the shared latch-vs-persisted resolution (identity-gated — a
+  // foreign persisted sample is never a candidate, M2 — and ranking-aware, so a session
+  // checksum sample never shadows THIS machine's persisted model-load one) — a re-run
+  // never loses an observation.
   const effectiveRead = effectiveReadOrPersisted(ctx)
 
-  const result = await runBenchmark({
+  const measured = await runBenchmark({
     workspacePath: ctx.paths.workspacePath,
     manifests,
     runtime: ctx.runtime.active(),
@@ -131,13 +133,25 @@ async function runBenchmarkAndPersist(
     onProgress
   })
 
+  // M6: the drive and speed legs above take seconds, and a model start or a cold hash can
+  // land a NEWER sample meanwhile (the read-speed observer persists it onto the outgoing
+  // result mid-run). Re-resolve through the same gate now, after both legs, and fold the
+  // newest eligible same-machine sample in (the slow-read warning follows it; `ranAt` is
+  // the run's) — the sample captured before the run must never overwrite it at commit.
+  const result = mergeSampleIntoResult(measured, effectiveReadOrPersisted(ctx))
+
   // Persist the last result via the settings store (spec §8 defines no benchmarks table),
   // and file it under this machine in the per-computer history (benchmark.md "History per
-  // machine") so a drive that travels keeps one result per computer.
-  updateSettings(ctx.db, {
-    lastBenchmark: result,
-    benchmarkHistory: upsertHistory(getSettings(ctx.db).benchmarkHistory, result)
-  })
+  // machine") so a drive that travels keeps one result per computer. The OUTGOING
+  // `lastBenchmark` is backfilled into the history first (M4: an upgraded workspace holds
+  // the previous computer's result only there, and this run replaces it; a same-machine
+  // outgoing copy is simply superseded by the upsert). ONE settings write, history first,
+  // then lastBenchmark — the store has no multi-key transaction, so the order guarantees a
+  // crash between the two rows loses at most the headline copy, never a machine.
+  const settings = getSettings(ctx.db)
+  const here = machineKey(result)
+  const history = upsertHistory(backfillOutgoing(settings.benchmarkHistory, settings.lastBenchmark, here), result)
+  updateSettings(ctx.db, { benchmarkHistory: history, lastBenchmark: result })
   log.info('Benchmark complete', {
     profile: result.profile,
     recommendedModelId: result.recommendedModelId,
@@ -173,15 +187,38 @@ export function maybeRunFirstBenchmark(ctx: AppContext): void {
       // moved — "unknown" keeps what we have.
       const here = machineKey(detectSystem())
       const last = machineKey(settings.lastBenchmark)
-      if (here == null || last == null || here === last) return
+      if (here == null || last == null || here === last) {
+        // The same-machine upgrade seed (M4): a workspace from before the history existed
+        // carries its one result only in `lastBenchmark` — file a KEYED result under its
+        // machine now, so a later move keeps it; an unkeyed legacy result is left alone
+        // entirely (it could never be matched again). `backfillOutgoing` also repairs a
+        // history copy that is older than the headline one; nothing is re-run.
+        const seeded = backfillOutgoing(settings.benchmarkHistory, settings.lastBenchmark, here)
+        if (!historyEquals(seeded, settings.benchmarkHistory)) {
+          updateSettings(ctx.db, { benchmarkHistory: seeded })
+          log.info('Filed the last benchmark result under this computer in the history')
+        }
+        return
+      }
+      // Capture the restore destination BEFORE the backfill: the cap protects this
+      // machine's entry (`backfillOutgoing` evicts the oldest OTHER machine), and the copy
+      // restored is the one read here either way.
       const known = findMachine(settings.benchmarkHistory, here)
+      // M4: the outgoing foreign result is seeded into the history before anything replaces
+      // it (restore below, or the background run — whose own backfill then finds it already
+      // filed and does nothing, so the entry is never duplicated).
+      const history = backfillOutgoing(settings.benchmarkHistory, settings.lastBenchmark, here)
       if (known) {
-        updateSettings(ctx.db, { lastBenchmark: known })
+        // History first, then lastBenchmark (the same ordering as the run's persist).
+        updateSettings(ctx.db, { benchmarkHistory: history, lastBenchmark: known })
         log.info('Drive is back on a known computer: restored its benchmark result', {
           profile: known.profile,
           recommendedModelId: known.recommendedModelId
         })
         return
+      }
+      if (!historyEquals(history, settings.benchmarkHistory)) {
+        updateSettings(ctx.db, { benchmarkHistory: history })
       }
       log.info('Drive is on a new computer: benchmarking it in the background')
     } else {

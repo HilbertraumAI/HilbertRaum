@@ -1,5 +1,8 @@
 # Design & UI/UX Guidelines — HilbertRaum
 
+> **Model-library update (2026-09-05):** §15 supersedes the older full-card model picker
+> and installed/download subheadings described below.
+
 **Status:** ADOPTED 2026-06-10. Source: external design research (Claude web, 2026-06-10),
 reviewed and adapted to this repo's constraints — adaptations are marked **[adapted]**.
 This is the durable reference for all UI work. The UI polish wave (Phases 23–27) that rolled
@@ -1048,6 +1051,11 @@ change; nothing here touches the model recommender. Code comments cite this sect
    models sat below the fold. `orderPickerModels` (`ModelsScreen.tsx`) adds **runnable-first as
    an unconditional second key**, with installed-first still PRIMARY (the installed/needs-download
    boundary is a labelled subheading, so runnability may only reorder cards *within* a group).
+   [**Superseded 2026-09-05 by §15:** the full-card picker's labelled subheading is gone — "On
+   this drive" is a view FILTER, not a subheading, and grouping is by variant, not by
+   installed/needs-download. `orderPickerModels`'s installed-first/recommended-first/runnable-first
+   key order is unchanged and still governs group rank; see §15 "Ordering after grouping" for how
+   that key order maps onto the current grouped rendering.]
    Runnability reads `insufficientRam`, the SAME flag the card's warning badge and banner render
    from, so the order can never contradict the warning printed on a card it moved. **Display
    order only** — the RAM-best-fit recommender in the main process is untouched.
@@ -1358,3 +1366,83 @@ keeping the tiers and over uncapped full width:
   no-model/empty states now share the 1180px frame like every other screen.
 - Guards updated in `screen-width-tiers.test.ts`: the single width, a no-per-screen-max-width
   sweep, the `scrollbar-gutter` reserve, and the three 72ch prose pins.
+
+## 15. Model library — design record (2026-09-05)
+
+The growing catalog made full cards and repeated quantizations expensive to scan. The AI Model
+screen now keeps the active chat model pinned above a compact library of alternatives:
+
+- **On this drive / Browse models:** the view lists a model whose state is KNOWN to be on the
+  drive — `installed`/`ready`/`running`, plus `checksum_failed` ("Can't verify"), whose files are
+  present and whose entire recovery action (re-download) lives on that row (`isModelOnDrive`).
+  Nothing here infers file presence: `unsupported` and `not_recommended` describe the machine or
+  the policy, not the drive, and the renderer has no presence contract to read — widening the set
+  needs one first. The INITIAL view is still chosen once from whether anything is usable right now
+  (`isModelInstalled`), so a damaged-only drive opens in Browse; a completed download does not
+  change the user's view. Browse includes installed and missing entries. Existing
+  installed/recommended/memory-fit ordering and all main-process gates remain intact.
+- **Search + task + family filters:** search display name, exact id and family, case-insensitively,
+  matching every whitespace-separated term. Filter before grouping so a collapsed variant is
+  directly discoverable. Tasks are Chat, Document search (embeddings + reranker), Translation,
+  Images and Voice. Reset/empty states are explicit, and the active model remains visible.
+- **Variant identity:** renderer-only, strip a recognized terminal quantization label from the
+  display name, then key by role + family + runtime + remaining name. Preserve sizes, instruction
+  revisions, generations, and QAT identity; suffixes that do not look like a quantization label
+  are not stripped, but a `Q<digit>…` token is always treated as one — recorded, not endorsed
+  (e.g. `Q4KM-beta` merges with `Q4_K_M`), in `model-library.test.ts`. No manifest,
+  IPC, recommender, or runtime identifiers change. Exact names/actions remain on every row.
+- **Groups:** one variant stays visible (the FACE, below); a keyboard-accessible button with
+  `aria-expanded` reveals the rest, and expanding lists every other variant exactly once in its
+  ordered position. Counts describe matching alternatives, excluding the pinned active model.
+  Single variants need no group shell. Expansion state survives filtering. A group holding a
+  `checksum_failed` variant starts EXPANDED — a damaged sibling must not hide behind a click the
+  user has no reason to make — and an explicit toggle by the user always wins over that default,
+  in both directions, keyed by the stable group key so it survives refreshes and filter changes.
+  Heading outline: screen `<h2>` → task section `<h3>` → variant group `<h4>`.
+- **Group face (the collapsed card):** normally the group's first ordered member. When the leading
+  members TIE on all three ordering keys (installed, recommended, runnable here) the face is the
+  first member of that leading cohort that is obtainable — already on the drive, or still offering
+  a download that has not been withdrawn (#196); otherwise the original leader stays. The scan
+  stops at the first member that leaves the cohort, so obtainability never lifts a variant across
+  a priority boundary (an installed-but-withdrawn weight keeps the face; a manual entry with no
+  `download` block never wins it). This is a PRESENTATION exception to stable tie order:
+  `group.models`, group membership and the global sort are untouched, and every row keeps its own
+  exact id and actions. Without it the real 16 GB catalog fronted its six-way-tied Qwen3.8 27B
+  group with a withdrawn weight — the one card the user saw offered nothing to do.
+- **Ordering after grouping (correction):** the picker's installed-first key orders the flat list,
+  but the library renders task sections of variant GROUPS, so the list reads group by group (a
+  group takes its leader's rank) and variants keep their relative order inside it. There is no
+  global installed-first boundary across the rendered rows — a group whose leader is installed can
+  expand to needs-download siblings that sit above the next group's leader.
+- **Compact rows:** task, storage, minimum RAM, status badges and existing actions; descriptions,
+  automatic-role explanations and technical fields share the existing closed disclosure.
+  Rows stack at narrow widths and retain the shared screen frame and theme tokens.
+- **Downloads:** live progress/cancel appears once above results, so filtering or collapsing a
+  group cannot hide it. Confirmation, license acknowledgement, verification and start gates
+  retain their existing behavior. Context-size settings stay in their existing location.
+- **Terminal download results:** the SAME panel stays mounted through a `failed` job and a `done`
+  job that could not be verified — the outcome must not vanish at the moment the user has to act
+  on it, and the model's own row may be filtered away or collapsed. Presentation is derived from
+  the polled job (no second copy of it), independently of the row's state/withdrawal guards, so a
+  refresh that returns the model as `installed` or stops listing it cannot erase the result; the
+  last known display name, falling back to the model id, keeps it named. ONE alert element is
+  mounted for the panel's whole lifetime — empty during progress, filled on the terminal
+  transition — so the outcome is announced on an element that was already in the tree. While the
+  panel owns a job the row does not repeat its progress or result. **Retry** resolves the exact
+  variant id and reuses the existing confirmation with that variant's license link and a RESET
+  acknowledgement; it is disabled with the reason when downloads are blocked by policy or the
+  Settings toggle, when the source was withdrawn (#196), or when the entry no longer offers a
+  download. **Dismiss** is remembered by job id — the result does not return on a refresh, a
+  re-render or a re-entry of the screen — and the row's own Resume/verification affordances take
+  over again. The panel is replaced only by an ACCEPTED new job (a cancelled dialog, a rejected
+  start and an IPC rejection all keep the previous result) and disappears on a verified completion
+  or a cancellation, exactly as before. A retained result is not a live job: `JOB_LIVE` remains
+  the only gate on other models' Download/Use. Recovering a download whose id is unknown after a
+  renderer reload is out of scope here (follow-up I5); ordinary screen navigation is covered by
+  the existing remembered-job mechanism.
+
+Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face), `lib/modelAvailability.ts`
+(the pure `isModelInstalled` / `isModelOnDrive` / `isModelRunnableHere` / `orderPickerModels`, split
+out of the screen so `modelLibrary` can share them without importing it back), `styles.css`, EN/DE
+catalogs. Behavioral coverage: `ModelsScreen.test.tsx`, `model-library.test.ts`, the real-catalog
+grouping/face controls in `committed-catalog.test.ts`; visual fixtures: `models*` preview cases.

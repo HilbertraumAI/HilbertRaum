@@ -34,7 +34,10 @@ import {
   setEffectiveReadObserver,
   suppressNextModelLoadSample
 } from '../services/read-speed'
-import { upsertSlowReadWarning } from '../services/benchmark'
+import { detectSystem } from '../services/benchmark'
+import { machineKey } from '../services/performance'
+import { effectiveReadPatch, eligiblePersistedSample } from '../services/benchmark-persistence'
+import type { Db } from '../services/db'
 import { loadPolicy } from '../services/policy'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -209,9 +212,15 @@ function manifestReadBytes(rootPath: string, manifest: ModelManifest): number | 
   }
 }
 
-/** The `at` of the sample most recently written to settings — lets the persist helper
- *  no-op without a settings read on every poll/list call once a sample is stored. */
-let lastPersistedAt: string | null = null
+/**
+ * The sample most recently written to EVERY eligible destination — lets the persist helper
+ * no-op without a settings read on every poll/list call once a sample is stored. Scoped to
+ * the workspace DB handle and this machine's key: a lock/unlock (a new `Db`) or a drive on
+ * another computer re-evaluates rather than trusting a memo made against other settings.
+ * Set only after a successful write to all eligible destinations, so a failed or deferred
+ * write (a locked workspace, a closed DB) leaves it unset and the next call retries.
+ */
+let persistedSampleMemo: { at: string; db: Db; key: string | null } | null = null
 
 /** #107: the effective-read sample resolved once per "Starting…" window (keyed on the
  *  starting model), so the 2.5 s status poll never re-reads settings mid-window. A
@@ -220,41 +229,41 @@ let startingSampleMemo: { forModelId: string; sample: EffectiveReadSample | null
 
 /**
  * Fold the session's latest honest effective-read sample (services/read-speed.ts) into
- * the persisted `settings.lastBenchmark` (#108) — AND re-key the one warning that
- * tracks it (#110, `upsertSlowReadWarning`): the only automatic benchmark runs before
- * any model exists, so without this the primary slow-read warning would never appear on
- * the default journey, and a stale one could contradict the freshly updated Diagnostics
- * row beside it. Registered as the read-speed OBSERVER (fires on every recorded sample,
- * including a background download path with no model IPC afterwards) and also invoked
- * after start/list/verify as cheap retries for samples whose observer-time persist hit
- * a locked workspace. The cross-session source ranking is enforced here too
- * (`preferCandidate`): a fresh session's checksum sample never overwrites last
- * session's persisted model-load sample. Never throws (persistGpuFailure precedent).
+ * the persisted benchmark result for THIS machine (#108) — `settings.lastBenchmark` when
+ * that result is this machine's (or unkeyed on either side, G3) AND this machine's
+ * `benchmarkHistory` entry when one exists (L2: a restore after a round trip used to bring
+ * back the stale copy) — re-keying the one warning that tracks the sample (#110,
+ * `upsertSlowReadWarning`): the only automatic benchmark runs before any model exists, so
+ * without this the primary slow-read warning would never appear on the default journey,
+ * and a stale one could contradict the freshly updated Diagnostics row beside it. A
+ * foreign `lastBenchmark` is never touched (a local sample never rides another computer's
+ * result); with no eligible destination at all the sample stays un-handled — a benchmark
+ * is never fabricated just to store it. Registered as the read-speed OBSERVER (fires on
+ * every recorded sample, including a background download path with no model IPC
+ * afterwards) and also invoked after start/list/verify as cheap retries for samples whose
+ * observer-time persist hit a locked workspace. The cross-session source ranking is
+ * enforced per destination (`effectiveReadPatch` → `preferCandidate`): a fresh session's
+ * checksum sample never overwrites last session's persisted model-load sample. Never
+ * throws (persistGpuFailure precedent). P3 hooks its `performance:changed` push here.
+ * Exported as the explicit retry seam (and for the persistence tests); production callers
+ * are this module's handlers and the observer registered in `registerModelIpc`.
  */
-function persistEffectiveRead(ctx: AppContext): void {
+export function persistEffectiveRead(ctx: AppContext): void {
   try {
     const sample = latestEffectiveRead()
-    if (!sample || sample.at === lastPersistedAt) return
-    const lastBenchmark = getSettings(ctx.db).lastBenchmark
-    if (!lastBenchmark) return
-    if (lastBenchmark.effectiveRead?.at === sample.at) {
-      lastPersistedAt = sample.at
-      return
+    if (!sample) return
+    const here = machineKey(detectSystem())
+    const db = ctx.db // throws while locked → the catch below, memo untouched, retried later
+    const memo = persistedSampleMemo
+    if (memo && memo.at === sample.at && memo.db === db && memo.key === here) return
+    const patch = effectiveReadPatch(getSettings(db), sample, here)
+    if (patch === null) return // no eligible destination yet — not handled, retry next call
+    // Ordering (no multi-key transaction in the settings store): history first, then
+    // lastBenchmark — a crash between the two loses at most the headline copy, never a machine.
+    if (patch.benchmarkHistory || patch.lastBenchmark) {
+      updateSettings(db, { benchmarkHistory: patch.benchmarkHistory, lastBenchmark: patch.lastBenchmark })
     }
-    if (!preferCandidate(sample, lastBenchmark.effectiveRead)) {
-      // The persisted sample outranks this one — mark it handled so the next call
-      // doesn't re-read settings just to lose the same comparison.
-      lastPersistedAt = sample.at
-      return
-    }
-    updateSettings(ctx.db, {
-      lastBenchmark: {
-        ...lastBenchmark,
-        effectiveRead: sample,
-        warnings: upsertSlowReadWarning(lastBenchmark.warnings ?? [], sample.mbps)
-      }
-    })
-    lastPersistedAt = sample.at
+    persistedSampleMemo = { at: sample.at, db, key: here }
   } catch (err) {
     log.warn('Could not persist the effective-read sample', { error: String(err) })
   }
@@ -262,18 +271,23 @@ function persistEffectiveRead(ctx: AppContext): void {
 
 /**
  * The current effective-read sample for consumers OUTSIDE the recording path (#108):
- * this session's latch vs the persisted one under the SAME source ranking the latch
- * itself uses (`preferCandidate`) — so a session checksum sample never shadows last
- * session's persisted model-load sample here either (it would bake the worse figure
- * into a fresh benchmark's warnings, or a wrong #107 estimate). The single definition
- * of this fallback, shared by the benchmark injection and the progress estimate; a
- * settings error (locked workspace) reads as latch-only.
+ * this session's latch (always this machine's) vs the persisted sample THIS machine may
+ * carry (`eligiblePersistedSample`: identity before ranking — a foreign `lastBenchmark`'s
+ * sample is never a candidate, this machine's own history entry is), under the SAME
+ * source ranking the latch itself uses (`preferCandidate`) — so a session checksum sample
+ * never shadows last session's persisted model-load sample here either (it would bake the
+ * worse figure into a fresh benchmark's warnings, or a wrong #107 estimate), while a local
+ * checksum sample does beat a foreign persisted model-load one. The single definition of
+ * this fallback, shared by the benchmark injection (before AND after the run, M6) and the
+ * progress estimate; a settings error (locked workspace) reads as latch-only. Detection
+ * (`detectSystem`) is a handful of `node:os` calls — computed per call, never memoized for
+ * the process (the #107 poll memoizes the whole result per "Starting…" window itself).
  */
 export function effectiveReadOrPersisted(ctx: AppContext): EffectiveReadSample | null {
   const latched = latestEffectiveRead()
   let persisted: EffectiveReadSample | null = null
   try {
-    persisted = getSettings(ctx.db).lastBenchmark?.effectiveRead ?? null
+    persisted = eligiblePersistedSample(getSettings(ctx.db), machineKey(detectSystem()))
   } catch {
     persisted = null
   }
@@ -318,7 +332,8 @@ export function registerModelIpc(ctx: AppContext): void {
   // (including one from a background download's cold-file hash, which has no model IPC
   // afterwards to piggyback on). The explicit persistEffectiveRead calls after
   // start/list/verify remain as cheap retries for observer-time persists that hit a
-  // locked workspace.
+  // locked workspace. The SINGLE observer wiring for the process — P3's push notifier
+  // hooks `persistEffectiveRead`, not a second observer.
   setEffectiveReadObserver(() => persistEffectiveRead(ctx))
   // F16 (audit-postmerge-2026-06-29): the DB-touching model handlers (list/select/verify/start all
   // read ctx.db via getSettings/selectModel/computeInstallState) fail-close when locked but throw

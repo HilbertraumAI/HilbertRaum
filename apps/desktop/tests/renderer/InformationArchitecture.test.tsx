@@ -102,6 +102,7 @@ function stubAppShell(): void {
       message: 'Stopped'
     })),
     listDocuments: vi.fn(async () => []),
+    listModels: vi.fn(async () => []),
     runPreflight: vi.fn(async () => ({
       ok: true,
       rootPath: '/drive',

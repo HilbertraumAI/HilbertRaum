@@ -2019,11 +2019,17 @@ export interface ModelPlacement {
   backend: 'gpu' | 'cpu'
   gpuLayers: number | null
   totalLayers: number | null
-  /** Weights resident on GPU devices (every non-CPU "model buffer size" line summed). */
+  /** Weights resident on GPU devices (every "model buffer size" line of a GPU device summed). */
   gpuModelMb: number | null
-  /** Weights on the CPU side (the CPU and CPU_Mapped buffers summed). */
+  /**
+   * Weights on the CPU side: the CPU and CPU_Mapped buffers PLUS the GPU backends' pinned
+   * host buffers (`Vulkan_Host`, `CUDA_Host`), which are host memory, not card memory
+   * (`isCpuDevice` in `runtime/placement.ts`).
+   */
   cpuModelMb: number | null
+  /** Context cache on GPU devices, MiB summed. */
   gpuKvMb: number | null
+  /** Context cache on the CPU side, `*_Host` buffers included (the partial-offload spill). */
   cpuKvMb: number | null
   /** Metal's `recommendedMaxWorkingSetSize` in MB when printed: the unified-memory budget. */
   metalMaxWorkingSetMb: number | null

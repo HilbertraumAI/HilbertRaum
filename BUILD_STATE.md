@@ -29,6 +29,15 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-06 — **PR #303 audit remediation, P1 (same branch, master `ddd704ad` merged in first):** the
+M7 `_Host` and L7 empty-reading fixes of `ce741533` pinned (parser, verdict, renderer), stale `_Host`
+prose corrected, `skills.title` orphan removed, §5 item 20 archived to `docs/build-log.md` and
+collapsed, the remediation register added to item 21. Plan: `tmp/pr-303-fix-plan.md` (untracked).
+**P2:** M2/M4/M6/L2 repaired together in the new pure `services/benchmark-persistence.ts` (identity before
+source ranking under G3, outgoing-result backfill on the run / restore / startup-seed paths, commit-time
+re-resolution of a mid-run sample, samples written to `lastBenchmark` AND this machine's history entry,
+history-first write order); records in `benchmark.md` "Persistence" / "History per machine"._
+
 _2026-09-05: **Graphics-memory-aware picker (`feat/vram-aware-picker`, stacked on #303):** on a
 discrete card the chat ★ pick is the best model that fits the card (weights × 1.15 + 0.5 GiB + the
 fit's 1 GiB margin ≤ VRAM), RAM a hard gate, the §6.2 order among fitting models; unified / no-card
@@ -49,6 +58,17 @@ check in `maybeRunFirstBenchmark` restores a known machine's result or benchmark
 `benchmark:progress` streams the run's steps. Diagnostics keeps the raw table. Records:
 `docs/benchmark.md` "History per machine" / "Performance screen", data-contracts (settings
 storage + IPC). §5 item 21 tracks the residuals._
+
+_2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), ready for merge
+(owner squash-merge; keep the branch):** searchable On this drive / Browse views, task/family
+filters and expandable quantization groups (`docs/design-guidelines.md` §15, user-guide §5/§6);
+F2 keeps a failed/unverified download's named result with Retry/Dismiss; F3 keeps repair-state
+models visible and auto-expands their groups; F5 fronts a tied group with an obtainable variant;
+a catalog guard plus F7 cleanup retire dead keys/CSS and add an unused-i18n-key guard. Rebuilt
+on master as UX-only: Flash-Next (`feat/qwen38-flash-next-manifest`) split out, contained here
+only, tracked as follow-ups #310/#311/#312 (shards, Flash-Next landing, GPU ladder) plus
+#313/#314 (family filter, renderer-reload recovery) and #315 (review residuals). Final head =
+the PR #302 tip (CI green on every phase); 379 / 5,784 passed, 74 skipped locally._
 
 _2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
 `readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one
@@ -647,23 +667,14 @@ open round's item stays the last block of §5.)
       compare, `as unknown as` private-field injection — convert to behavioural assertions when
       touched; `FullSuiteGuard` cannot see dropped individual tests.
 
-20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line (opened
-    2026-09-04; three stacked PRs on one lineage).** PR 1 (`fix/290-291-pr1-sse-timings-seam`):
-    the `readChatSSE` seam — `onFinish(reason, timings?)`, `RuntimeTimings` in `runtime/index.ts`.
-    PR 2 (#291): `measureTokensPerSecond` reports `predicted_per_second` (decode tokens, prefill
-    excluded) with the chunk count as the flagged fallback; `BenchmarkResult.speedBasis`; the card
-    says "Decode speed" + the token count; MTP record §7 watch item → observed. PR 3 (#290): chat
-    only — one ephemeral `chat:speed:<id>` payload per finished answer, `tok/s · s to first
-    token · tokens`, EN/DE, nothing persisted. The PRs used "Refs", not "Closes": the "matches
-    llama-server's `print_timing` within rounding" legs need a real runtime and the execution
-    machine cannot launch one (Smart App Control, exit `0xC0E90002`) — verification issue
-    **#298** (the #291 reporter) carried both acceptance lists and the reconstructed rung-1a argv.
-    **#298 VERIFIED 2026-09-04, every box ticked** (figures in the dated entry); the captured b9849
-    transcript is committed by PR 4 (`fix/290-291-pr4-timings-fixture`, which closes
-    #290/#291/#298). PRs: #295 → #296 → #297 → PR 4 (stacked; merge in order, re-basing each onto
-    master as the one below lands). Remaining after merge: nothing — collapse this item. Thresholds (`VERY_LOW_TOKENS_PER_SECOND`,
-    `SLOW_PICK_TOKENS_PER_SECOND`) deliberately NOT retuned — they now compare a decode figure
-    against probe-basis calibration (recorded in `docs/benchmark.md` / `model-benchmarks.md` §6.5).
+20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line — CLOSED
+    2026-09-04.** Four stacked PRs merged in order the same day: #295 (PR 1, the `readChatSSE`
+    timings seam), #300 (PR 2, decode speed + `speedBasis`; re-opened from #296 after a rebase),
+    #297 (PR 3, the per-answer speed line), #299 (PR 4, the captured b9849 transcript as
+    `tests/fixtures/chat-sse-timings-b9849.txt`; closes #290/#291/#298 — #298 verified on the rig).
+    Records: `docs/benchmark.md` / `model-benchmarks.md` §6.5 (thresholds deliberately NOT retuned),
+    architecture.md "Per-answer speed line" §1–§3. Narrative retired verbatim to `docs/build-log.md`
+    ("BUILD_STATE §5 item 20", 2026-09-06). Nothing open.
 21. **Performance screen residuals (opened 2026-09-05, `feat/performance-screen`).** Shipped: the
     rail destination, per-machine history + moved-drive restore, observed rows, step progress,
     "Start \<model\> and measure". Still open, owner call each: (a) a Home readiness row ("This
@@ -685,6 +696,16 @@ open round's item stays the last block of §5.)
     contention between chat and translation on one card (the "Models on this computer" card now
     names it): force translation to the processor while chat holds the card, or reclaim the card
     when translation goes idle. Owner call.
+    **Audit remediation register (PR #303 review of 2026-09-05: M1–M8, L1–L8, H1, D1–D5, T1–T12;
+    fixed on the same branch before merge from 2026-09-06; durable disposition record lands in
+    `docs/benchmark.md` at P9, one commit per phase, CI green each):** P1 ✅ M7/L7 pins, stale
+    `_Host` prose, item 20 archived, `skills.title` orphan removed after the master merge;
+    P2 ✅ M2/M4/M6/L2 persistence (identity before ranking, upgrade backfill, mid-run samples);
+    P3 ☐ M1/M3/L3 `performance:changed` push + honest steps; P4 ☐ H1/L8/M5-residual schemas +
+    launch context; P5 ☐ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
+    P6 ☐ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ☐ L1/SD2 auto-start sequencing;
+    P8 ☐ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c);
+    P11 ☐ close-out issues. Residual (c) above is the audit's HW1–HW3 acceptance; (a)–(g) stand.
 
 ---
 
