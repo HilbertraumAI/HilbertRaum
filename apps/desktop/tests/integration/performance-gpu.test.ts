@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -46,7 +46,15 @@ import type {
   RuntimeStatus,
   TranslationDeviceStatus
 } from '../../src/shared/types'
-import { ctxWith, freshRoot, hereResult, performanceChangedSpy, result, seededDb } from '../helpers/performance-fixture'
+import {
+  closePerformanceFixture,
+  ctxWith,
+  freshRoot,
+  hereResult,
+  performanceChangedSpy,
+  result,
+  seededDb
+} from '../helpers/performance-fixture'
 
 beforeEach(() => {
   resetPerformanceForTests()
@@ -54,6 +62,10 @@ beforeEach(() => {
   resetModelPlacementForTests()
   setPerformanceChangedSink(null)
 })
+
+// TH2: every root/DB in this file (including via the `cardMachine`/`withLog` helpers below)
+// comes from the fixture's `freshRoot`/`seededDb` — safe to add the shared teardown.
+afterEach(closePerformanceFixture)
 
 const IRIS: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, freeMb: 15_000 }
 const RTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_576, freeMb: 22_000 }

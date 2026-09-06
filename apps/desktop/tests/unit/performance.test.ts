@@ -64,15 +64,19 @@ describe('machineKey', () => {
 
 describe('upsertHistory', () => {
   it('replaces the entry for the same machine, newest first, keeps other machines', () => {
-    const office = result({ cpuModel: 'i9-13900K', cpuCores: 32, ramGb: 64, ranAt: '2026-09-02T00:00:00Z' })
+    const office = result({ cpuModel: 'i9-13900K', cpuCores: 32, ramGb: 64, ranAt: '2026-09-02T00:00:00Z', tokensPerSecond: 41 })
     const laptopOld = result({ ranAt: '2026-08-01T00:00:00Z', tokensPerSecond: 4 })
     const laptopNew = result({ ranAt: '2026-09-04T00:00:00Z', tokensPerSecond: 12 })
     const history = upsertHistory(upsertHistory([], laptopOld), office)
     expect(history.map((e) => e.ranAt)).toEqual([office.ranAt, laptopOld.ranAt])
     const next = upsertHistory(history, laptopNew)
-    expect(next.map((e) => e.tokensPerSecond)).toEqual([12, null].map((v) => v ?? office.tokensPerSecond))
     expect(next).toHaveLength(2)
+    // Identities AND order: laptopNew replaces laptopOld and leads; office (a distinct
+    // tokensPerSecond, so this can't pass by coincidence) is untouched, second.
     expect(next[0]).toBe(laptopNew)
+    expect(next[1]).toBe(office)
+    expect(next.map((e) => e.cpuModel)).toEqual([laptopNew.cpuModel, office.cpuModel])
+    expect(next.map((e) => e.tokensPerSecond)).toEqual([12, 41])
   })
 
   it('caps at MAX_BENCHMARK_HISTORY, dropping the oldest OTHER machines, never the new one', () => {

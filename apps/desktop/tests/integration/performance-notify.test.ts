@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -62,7 +62,15 @@ import { VisionService, type VisionAnalyzer, type VisionStreamEmitter } from '..
 import { EVENTS, IPC } from '../../src/shared/ipc'
 import type { BenchmarkProgressStep, ImageAnalyzeRequest, VisionStatus } from '../../src/shared/types'
 import { invoke, makeEvent } from '../helpers/ipc'
-import { ctxWith, freshRoot, hereResult, performanceChangedSpy, result, seededDb } from '../helpers/performance-fixture'
+import {
+  closePerformanceFixture,
+  ctxWith,
+  freshRoot,
+  hereResult,
+  performanceChangedSpy,
+  result,
+  seededDb
+} from '../helpers/performance-fixture'
 
 const here = () => {
   const root = freshRoot()
@@ -82,6 +90,11 @@ beforeEach(() => {
   resetEffectiveReadForTests()
   resetModelPlacementForTests()
 })
+
+// TH2: every root/DB here is minted through the fixture's `freshRoot`/`seededDb` (via this
+// file's own `here()` helper) — the shared teardown's extra resets (first-benchmark's memo,
+// the two observer setters) are additions this file never depended on being left dirty.
+afterEach(closePerformanceFixture)
 
 describe('IPC controls', () => {
   it('performance:get refuses a locked workspace and an untrusted sender', () => {

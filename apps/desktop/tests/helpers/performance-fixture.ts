@@ -1,10 +1,15 @@
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { vi } from 'vitest'
 import { detectSystem } from '../../src/main/services/benchmark'
+import { setAnswerSpeedObserver } from '../../src/main/ipc/chat-stream'
+import { resetFirstBenchmarkForTests } from '../../src/main/ipc/registerBenchmarkIpc'
 import { openDatabase, type Db } from '../../src/main/services/db'
+import { resetPerformanceForTests } from '../../src/main/services/performance'
+import { resetEffectiveReadForTests, setEffectiveReadObserver } from '../../src/main/services/read-speed'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
+import { resetModelPlacementForTests, setModelPlacementObserver } from '../../src/main/services/runtime/placement'
 import { seedSettings } from '../../src/main/services/settings'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import type { AppContext } from '../../src/main/services/context'
@@ -12,21 +17,78 @@ import type { BenchmarkResult, RuntimeStatus } from '../../src/shared/types'
 import { ANY_SENDER } from './ipc'
 
 // Shared fixture for the Performance-screen main-side tests (performance-ipc,
-// performance-persistence, performance-notify): a throwaway root + workspace dir, a seeded
-// settings DB, a minimal AppContext, a `performance:changed` sink spy, and two typed
-// BenchmarkResult builders — one for an arbitrary OTHER computer, one carrying THIS test
-// host's machine fingerprint.
+// performance-persistence, performance-notify, performance-gpu, performance-schema,
+// first-benchmark-scheduler): a throwaway root + workspace dir, a seeded settings DB, a
+// minimal AppContext, a `performance:changed` sink spy, and two typed BenchmarkResult
+// builders — one for an arbitrary OTHER computer, one carrying THIS test host's machine
+// fingerprint.
+//
+// TH2 (PR #303 audit remediation, P8): every root `freshRoot()` mints and every DB
+// `seededDb()` opens is registered below so `closePerformanceFixture()` can close the DBs
+// and remove the temp directories — before this, NEITHER ever happened, so every test using
+// this fixture leaked its `hilbertraum-perf-ipc-*` root (and its open sqlite handle) for the
+// life of the process. Call `closePerformanceFixture` from `afterEach` in every file that
+// shares this fixture.
+
+const createdRoots: string[] = []
+const createdDbs: Db[] = []
 
 export function freshRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-perf-ipc-'))
   mkdirSync(join(root, 'workspace'), { recursive: true })
+  createdRoots.push(root)
   return root
 }
 
 export function seededDb(root: string): Db {
   const db = openDatabase(join(root, 'test.sqlite'))
   seedSettings(db)
+  createdDbs.push(db)
   return db
+}
+
+/**
+ * TH2 teardown: reset every module-level latch/memo/observer the sharing files touch, close
+ * every DB `seededDb()` opened (a double close — e.g. a test whose own `WorkspaceController`
+ * already closed it via `ctrl.lock()` — is swallowed), then remove every root `freshRoot()`
+ * minted. `resetEffectiveReadForTests` / `resetModelPlacementForTests` already null their own
+ * observers; `setEffectiveReadObserver` / `setModelPlacementObserver` are still called
+ * explicitly here (belt and suspenders — this teardown must not silently stop covering them if
+ * that internal detail ever changes), and `setAnswerSpeedObserver` has no reset of its own.
+ *
+ * Root removal closes DBs FIRST: on Windows a still-open sqlite file makes `rmSync` fail. If it
+ * still fails (a close that is asynchronously settling), retry ONCE after a real macrotask
+ * (never a bare microtask/turn count — CLAUDE.md's testing convention) and let a second failure
+ * throw — that would be a genuine leak, not a timing artifact.
+ */
+export async function closePerformanceFixture(): Promise<void> {
+  resetPerformanceForTests()
+  resetEffectiveReadForTests()
+  resetModelPlacementForTests()
+  resetFirstBenchmarkForTests()
+  setPerformanceChangedSink(null)
+  setEffectiveReadObserver(null)
+  setModelPlacementObserver(null)
+  setAnswerSpeedObserver(null)
+
+  const dbs = createdDbs.splice(0, createdDbs.length)
+  for (const db of dbs) {
+    try {
+      db.close()
+    } catch {
+      /* already closed by the test itself (e.g. a WorkspaceController's ctrl.lock()) */
+    }
+  }
+
+  const roots = createdRoots.splice(0, createdRoots.length)
+  for (const root of roots) {
+    try {
+      rmSync(root, { recursive: true, force: true })
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 1))
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
 }
 
 /** A stopped chat runtime's status (the fixture's default `runtime.status()`). */

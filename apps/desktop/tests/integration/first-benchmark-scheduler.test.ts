@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -70,7 +70,16 @@ import { WorkspaceController, createEncryptedVaultOnDisk, vaultPathsFrom } from 
 import { IPC } from '../../src/shared/ipc'
 import type { AppSettings, BenchmarkResult, PrivacyPolicy, RuntimeStatus } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
-import { ctxWith, freshRoot, hereResult, performanceChangedSpy, result, seededDb, stoppedStatus } from '../helpers/performance-fixture'
+import {
+  closePerformanceFixture,
+  ctxWith,
+  freshRoot,
+  hereResult,
+  performanceChangedSpy,
+  result,
+  seededDb,
+  stoppedStatus
+} from '../helpers/performance-fixture'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const REPO_MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
@@ -298,6 +307,12 @@ beforeEach(() => {
   setPerformanceChangedSink(null)
   inFlightStreams.clear()
 })
+
+// TH2: every root here comes from the fixture's `freshRoot` (directly, or via `lockedVault`);
+// the DBs `lockedVault`/`seamCtx` open through a real `WorkspaceController` are outside the
+// `seededDb` registry, but every test using them calls `ctrl.lock()` (which closes its DB)
+// before returning, so by the time this runs there is nothing left open on those roots either.
+afterEach(closePerformanceFixture)
 
 describe('prepareFirstBenchmark: the cheap half', () => {
   it('a fresh workspace owes a first run; a known computer is restored synchronously and owes nothing; a legacy blob owes nothing', () => {
@@ -799,6 +814,10 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     const { result: created } = await invoke(handlers, IPC.createWorkspace, PASSWORD, 'encrypted')
     expect(created).toMatchObject({ ok: true })
 
+    // TH2: this goes through the real registerWorkspaceIpc seam, which `void`s
+    // scheduleFirstBenchmark — there is no returned outcome for the test to await, so this
+    // stays a poll on the persisted state (unlike the direct scheduler calls elsewhere in this
+    // file, which now await the outcome instead of vi.waitFor).
     await vi.waitFor(() => {
       expect(machineKey(getSettings(ctx.db).lastBenchmark)).toBe(here())
     })
@@ -851,6 +870,8 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     expect(getSettings(ctx.db).lastBenchmark).toEqual(foreign)
 
     rt.finishStart()
+    // TH2: same as the 'create' test above — a real IPC seam voids scheduleFirstBenchmark, so
+    // there is no handle to await and this stays a poll on the persisted state.
     await vi.waitFor(() => {
       expect(machineKey(getSettings(ctx.db).lastBenchmark)).toBe(here())
     })

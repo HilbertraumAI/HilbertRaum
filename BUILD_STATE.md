@@ -51,7 +51,12 @@ measurement behind the auto-start (L1/SD2, G5): `prepareFirstBenchmark` does the
 backfill / restore before `maybeAutoStartActiveModel` (now awaitable), `scheduleFirstBenchmark` waits
 for the start to settle under a 120 s bound and otherwise keeps one continuation, re-checks admission
 / epoch / shutdown / busy / "already current" before running, allows one automatic attempt per unlock
-epoch, and the run refuses to persist into a session that locked or re-opened meanwhile._
+epoch, and the run refuses to persist into a session that locked or re-opened meanwhile. P8 closed the test gaps (T7/T8/T11/TH1/TH2): the history-order assertion names both
+identities, a source-text + behavioural pin covers the answer-speed observer wiring, the 300 ms sleep
+became an await on P7's outcome, one shared teardown closes the fixture's DBs and removes its temp
+roots (2,683 leaked roots from earlier runs cleared), and a ladder-to-placement wiring test drives
+the real rung factory with a fake sidecar's stderr (one parser per attempt; the persister writes,
+skips while locked, and survives a throwing observer)._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -712,7 +717,7 @@ open round's item stays the last block of §5.)
     P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ✅ H1/L8/M5-residual schemas +
     launch context; P5 ✅ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
     P6 ✅ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ✅ L1/SD2 auto-start sequencing;
-    P8 ☐ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c);
+    P8 ✅ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c);
     P11 ☐ close-out issues. Residual (c) above is the audit's HW1–HW3 acceptance; (a)–(g) stand.
 
 ---

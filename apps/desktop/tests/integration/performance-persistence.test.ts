@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { t } from '../../src/shared/i18n'
 
 // Benchmark persistence on a drive that TRAVELS (benchmark.md "Persistence" / "History per
@@ -38,7 +38,7 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/ma
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { MAX_BENCHMARK_HISTORY, type BenchmarkProgressStep, type BenchmarkResult, type EffectiveReadSample } from '../../src/shared/types'
-import { ctxWith, freshRoot, hereResult, result, seededDb } from '../helpers/performance-fixture'
+import { closePerformanceFixture, ctxWith, freshRoot, hereResult, result, seededDb } from '../helpers/performance-fixture'
 
 /** A model-load sample measured on some other computer (slow enough to carry the #110 warning). */
 const foreignSample: EffectiveReadSample = {
@@ -105,6 +105,12 @@ beforeEach(() => {
   let tick = Date.parse('2026-09-06T10:00:00.000Z')
   setReadSpeedClockForTests(() => new Date((tick += 1000)))
 })
+
+// TH2: this file's own beforeEach doesn't reset model-placement/first-benchmark state or the
+// notify sink because it never touches them directly — the shared teardown adding those resets
+// (on top of closing the DBs/removing the roots every test's `freshRoot`/`seededDb` created) is
+// a pure addition, nothing here relies on their being left dirty between tests.
+afterEach(closePerformanceFixture)
 
 describe('identity before ranking (M2)', () => {
   it('a NEW computer does not inherit a foreign persisted model-load sample, nor its warning', async () => {
@@ -198,11 +204,11 @@ describe('upgrade backfill (M4)', () => {
     if (dropRow) db.prepare("DELETE FROM settings WHERE key = 'benchmarkHistory'").run()
     expect(getSettings(db).benchmarkHistory).toEqual([])
 
-    maybeRunFirstBenchmark(ctxWith(root, db))
+    // TH2: a direct call with an obtainable handle — await the scheduler's own outcome (P7)
+    // instead of polling for the state it guarantees on 'ran'.
+    await expect(maybeRunFirstBenchmark(ctxWith(root, db))).resolves.toBe('ran')
 
-    await vi.waitFor(() => {
-      expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
-    })
+    expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
     const history = getSettings(db).benchmarkHistory
     expect(history).toHaveLength(2)
     expect(history.filter((e) => machineKey(e) === machineKey(foreign))).toHaveLength(1)
@@ -327,13 +333,17 @@ describe('upgrade backfill (M4)', () => {
     const foreign = result()
     updateSettings(db, { lastBenchmark: foreign })
 
-    maybeRunFirstBenchmark(ctxWith(root, db))
+    // TH2: `prepareFirstBenchmark`'s synchronous seeding runs as part of evaluating this call's
+    // argument, before `maybeRunFirstBenchmark` returns its (still-pending) outcome promise — so
+    // capturing that promise here and asserting the synchronous seed on the very next line is
+    // exactly as ordered as the original unawaited call was, and the trailing wait can now await
+    // the concrete outcome instead of polling for it.
+    const outcome = maybeRunFirstBenchmark(ctxWith(root, db))
 
     // Seeded synchronously, before the background run can replace the headline.
     expect(getSettings(db).benchmarkHistory).toEqual([foreign])
-    await vi.waitFor(() => {
-      expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
-    })
+    await expect(outcome).resolves.toBe('ran')
+    expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
     const history = getSettings(db).benchmarkHistory
     expect(history).toHaveLength(2)
     expect(history.filter((e) => machineKey(e) === machineKey(foreign))).toHaveLength(1)
