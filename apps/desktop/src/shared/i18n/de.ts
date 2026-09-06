@@ -1367,8 +1367,7 @@ export const de: Record<keyof typeof en, string> = {
   'settings.changePassword.submitBusy': 'Wird geändert…',
   'settings.changePassword.toast': 'Passwort geändert',
 
-  // ---- Skills (Rail-Ziel — SkillsScreen.tsx + settings/SkillsTab.tsx, Skills-Plan §15) ----
-  'skills.title': 'Skills',
+  // ---- Skills (settings/SkillsTab.tsx, Skills-Plan §15) ----
   'skills.intro': 'Skills bringen der KI bei, eine bestimmte Aufgabe zu erledigen. Sie ergänzen ihre Antworten um Hinweise – sie greifen nie auf das Internet oder andere Ordner auf deinem Computer zu.',
   // #46 – die Was/Braucht/Grenzen-Zeilen der Info-Karte bei der ersten Skill-Auswahl
   // (`shared/skill-info.ts`). Je EIN ruhiger Satz, destilliert aus user-guide §9 und

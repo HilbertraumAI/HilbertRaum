@@ -295,8 +295,9 @@ labelled "Unified memory" and the graphics tile is hidden); `cpu` = no usable ca
 chat ladder now reads it (`runtime/placement.ts`, one parser per attempt, fed by the sidecar's
 `onStderrData`; the chat server runs with `-lv 4` because the pinned build prints these lines
 only from log verbosity 4 up, verified 2026-09-05: 3 prints none, 5 adds the `--fit` dry-run
-pass): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices
-are the CPU side), every `<device> KV buffer size`, the Metal budget line. The reading is recorded
+pass): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices and the
+backends' `<Backend>_Host` buffers are the CPU side), every `<device> KV buffer size`, the Metal
+budget line. The reading is recorded
 once the rung is healthy (`recordModelPlacement`, stamped with the backend, the launched context
 and `machineKey`), latched for the session, and persisted per model id in
 `settings.modelPlacements` by the observer `registerBenchmarkIpc` registers; the snapshot uses it

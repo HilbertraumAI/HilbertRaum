@@ -266,6 +266,24 @@ describe('PerformanceScreen: the Your-model row', () => {
     expect(screen.getByText('On GPU')).toBeInTheDocument()
   })
 
+  it('an observed start whose log said nothing reads as Not measured, never "all  layers on the GPU"', async () => {
+    // A start was recorded but every figure is null (a build below verbosity 4). The row must
+    // not dress that up as a measured full offload with an empty layer count.
+    install(snapshot({ placement: placement({
+      observed: { ...observedFull, gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null, gpuKvMb: null },
+      verdict: { kind: 'unknown', needMb: null, estimated: false, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText('Where the model lands is measured on its first start.')).toBeInTheDocument()
+    expect(screen.getByText('Not measured')).toBeInTheDocument()
+    expect(screen.queryByText('On GPU')).not.toBeInTheDocument()
+    // The gap the L7 bug left behind ("all {layers} layers" with no count). The default
+    // matcher collapses whitespace, so ask for the raw text.
+    expect(screen.queryByText(/all\s{2,}layers/, { normalizer: (s) => s })).not.toBeInTheDocument()
+    expect(screen.queryByText(/layers on the GPU/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Fits in graphics memory/)).not.toBeInTheDocument()
+  })
+
   it('names a partial offload with the layer split and the RAM spill, in words', async () => {
     install(snapshot({ placement: placement({
       vramMb: 16_384,

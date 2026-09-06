@@ -1316,8 +1316,7 @@ export const en = {
   'settings.changePassword.submitBusy': 'Changing…',
   'settings.changePassword.toast': 'Password changed',
 
-  // ---- Skills (rail destination — SkillsScreen.tsx + settings/SkillsTab.tsx, skills plan §15) ----
-  'skills.title': 'Skills',
+  // ---- Skills (settings/SkillsTab.tsx, skills plan §15) ----
   'skills.intro': 'Skills teach the assistant how to do a specific task. They add guidance to its answers — they never reach the internet or other folders on your computer.',
   // #46 — the per-skill what/needs/limits lines behind the composer's first-selection info card
   // (`shared/skill-info.ts`). Each is ONE calm sentence, distilled from user-guide §9 and
