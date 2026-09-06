@@ -70,11 +70,14 @@ function corpusSignature(db: Db, includeArchived: boolean): string {
   return `${includeArchived ? 1 : 0}|${docs.n}|${docs.m ?? 0}|${mem.n}|${mem.m ?? 0}`
 }
 
-/** Deterministic fingerprint of a resolved scope's id-union (order-independent). */
+/** Deterministic fingerprint of a resolved scope's id-union (order-independent). Carries the
+ *  #301 P4 deny-all bit too: a documents-off scope resolves to the same null ids as the explicit
+ *  whole-corpus scope, and without the bit the per-Db memo would hand a documents-off chat the
+ *  whole-corpus title/MIME signals (retrieval itself is fail-closed through `buildScopeFilter`). */
 function scopeFingerprint(scope: RetrievalScope): string {
   const c = [...(scope.collectionIds ?? [])].sort().join(',')
   const d = [...(scope.documentIds ?? [])].sort().join(',')
-  return `c:${c}|d:${d}`
+  return `c:${c}|d:${d}|n:${scope.noDocuments ? 1 : 0}`
 }
 
 /** Project the in-scope indexed documents to their filename + MIME signals (empty-tolerant). */
