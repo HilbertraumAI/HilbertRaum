@@ -7,7 +7,12 @@ import { fmt1 } from '../lib/format'
 import type { UiLanguage } from '@shared/i18n'
 import { isHardwareProfile } from '@shared/benchmark-schema'
 import { isUsefulDevice, looksIntegrated, USABLE_VRAM_MB } from '@shared/gpu-rules'
-import { SLOW_READ_MBPS, SLOW_TOKENS_PER_SECOND } from '@shared/performance-rules'
+import {
+  CARD_FREE_SLACK_MB,
+  FIT_TARGET_MARGIN_MB,
+  SLOW_READ_MBPS,
+  SLOW_TOKENS_PER_SECOND
+} from '@shared/performance-rules'
 import type {
   BenchmarkProgressStep,
   BenchmarkResult,
@@ -25,8 +30,10 @@ import type {
 //      memory, graphics memory, drive) and the one action, "Check again". While a check runs, the steps show
 //      as they land (EVENTS.benchmarkProgress) instead of an opaque "Running…" button.
 //   2. "Observed while you worked": real figures from normal use (the last finished answer,
-//      the last model start, the last full file check): session-only, never persisted. Above
-//      the models card on purpose: what the machine actually did outranks what it could hold.
+//      the last model start, the last full file check). The ROWS are session latches; of the
+//      figures behind them only the answer speed is never persisted — the read samples do
+//      persist into the benchmark records, where the Drive tile shows them (PR #303 audit L8).
+//      Above the models card on purpose: what the machine actually did outranks what it could hold.
 //   3. "Models on this computer": every model the app can hold, where it runs, loaded or not,
 //      and the two shared budgets (card, RAM).
 //   4. "Other computers": one row per machine the drive has been checked on.
@@ -39,16 +46,21 @@ import type {
 // running state stay current while the screen is open, including for a benchmark another window
 // (or the first-run path) started.
 //
-// The rating thresholds (`SLOW_TOKENS_PER_SECOND`, `SLOW_READ_MBPS`) and the "usable card" rule
-// (`isUsefulDevice`, `USABLE_VRAM_MB`) are IMPORTED from the shared modules the main services
-// rate by — never re-declared here (PR #303 audit N3 / M8).
-
-/** A card counts as "free at start" when at most this much was in use (desktop, other apps). */
-const CARD_FREE_SLACK_MB = 1536
+// The rating thresholds (`SLOW_TOKENS_PER_SECOND`, `SLOW_READ_MBPS`), the "usable card" rule
+// (`isUsefulDevice`, `USABLE_VRAM_MB`) and the two placement figures the copy names
+// (`CARD_FREE_SLACK_MB`, `FIT_TARGET_MARGIN_MB`) are IMPORTED from the shared modules the main
+// services rate by — never re-declared here (PR #303 audit N3 / M8 / DR4).
 
 /** MiB → GB (1 GiB units, one decimal), the figure the probe reports. */
 function vramGb(mb: number, lang: UiLanguage): string {
   return fmt1(mb / 1024, lang)
+}
+
+/** The `--fit-target` margin as the copy states it: a whole number of GB when it divides
+ *  evenly (today's 1 GiB), else one decimal — locale-formatted either way. */
+function marginGb(lang: UiLanguage): string {
+  const gb = FIT_TARGET_MARGIN_MB / 1024
+  return Number.isInteger(gb) ? gb.toLocaleString(lang) : fmt1(gb, lang)
 }
 
 const PLACE_PILL: Record<PlacementKind, { key: 'perf.place.gpu' | 'perf.place.partial' | 'perf.place.cpu' | 'perf.place.tooLarge' | 'perf.place.unknown'; tone: 'success' | 'warning' | 'neutral' | 'error' }> = {
@@ -155,13 +167,41 @@ function graphicsFigure(bench: BenchmarkResult | null, snap: PerformanceSnapshot
   return { kind: 'device', mb, name, useful, integrated: !useful && name != null && looksIntegrated(name) }
 }
 
+/**
+ * A decode figure that did NOT come from the runtime's own timings: the chunk-count fallback,
+ * or a result persisted before `speedBasis` existed (all of which were chunk-based). Rated with
+ * the neutral "Approximate" pill instead of Good/Slow — an approximate figure is not evidence
+ * of a fast or a slow machine (PR #303 audit L6).
+ */
+function speedIsApprox(bench: Pick<BenchmarkResult, 'speedBasis'>): boolean {
+  return bench.speedBasis?.basis !== 'timings'
+}
+
+/**
+ * How a decode figure was measured, in words — the SAME qualifier the Speed tile carries, so
+ * the Copy report and the other-computer rows can never present a chunk-counted or a legacy
+ * reading as an ordinary tokens/s figure (PR #303 audit L6). `basis: 'timings'` names the
+ * window it covers (`diag.bench.tokensOver`, the wording Diagnostics uses for the same fact);
+ * the chunk fallback is marked approximate and names its chunk count; an ABSENT basis is
+ * approximate with NO window — the app never invents one.
+ */
+function speedBasisNote(bench: Pick<BenchmarkResult, 'speedBasis'>, t: I18n['t'], lang: UiLanguage): string {
+  const basis = bench.speedBasis
+  if (basis?.basis === 'timings') return t('diag.bench.tokensOver', { tokens: fmtNumSafe(basis.tokens, lang) })
+  const approx = t('perf.tile.speed.approx')
+  return basis ? `${approx}; ${t('perf.tile.speed.chunks', { chunks: fmtNumSafe(basis.tokens, lang) })}` : approx
+}
+
 /** Plain-text rendering of the "This computer" card for the Copy button (mirrors the
- *  Diagnostics report shape so support sees the same figures either way). */
+ *  Diagnostics report shape so support sees the same figures either way). `currentMachine`
+ *  decides the heading: the report is pasted into a support message, where "This computer"
+ *  over another machine's figures misattributes every line under it (L6). */
 function buildReport(
   bench: BenchmarkResult,
   graphics: GraphicsFigure,
   models: ModelInfo[],
   contextTokens: number | null,
+  currentMachine: boolean,
   t: I18n['t'],
   lang: UiLanguage
 ): string {
@@ -171,14 +211,25 @@ function buildReport(
       : graphics.kind === 'notRecorded'
         ? t('perf.rating.notRecorded')
         : t('perf.rating.none')
+  // Timings: "Measured with X on DATE, over N tokens". Chunks / no basis: the tile's own
+  // qualifier after a full stop, with the chunk window only when the record carries one.
+  const speedSub = t('perf.tile.speed.sub', {
+    model: modelName(bench.measuredModelId, models, t),
+    when: fmtDate(bench.ranAt, lang)
+  })
+  const speedProvenance = speedIsApprox(bench)
+    ? `${speedSub}. ${speedBasisNote(bench, t, lang)}`
+    : `${speedSub}, ${speedBasisNote(bench, t, lang)}`
   const lines = [
-    t('perf.card.title'),
+    currentMachine
+      ? t('perf.card.title')
+      : t('perf.report.otherComputer', {
+          cpu: bench.cpuModel || t('perf.unknownCpu'),
+          ram: fmt1Safe(bench.ramGb, lang)
+        }),
     `${t('perf.tile.speed')}: ${
       bench.tokensPerSecond != null
-        ? `${fmtNumSafe(bench.tokensPerSecond, lang)} ${t('perf.tile.speed.unit')} (${t('perf.tile.speed.sub', {
-            model: modelName(bench.measuredModelId, models, t),
-            when: fmtDate(bench.ranAt, lang)
-          })})`
+        ? `${fmtNumSafe(bench.tokensPerSecond, lang)} ${t('perf.tile.speed.unit')} (${speedProvenance})`
         : t('perf.tile.speed.none')
     }`,
     `${t('perf.tile.memory')}: ${bench.ramGb > 0 ? `${fmt1Safe(bench.ramGb, lang)} ${t('perf.tile.memory.unit')}` : t('diag.app.unknown')}`,
@@ -446,7 +497,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   // window, while the runtime starts such a model on the settings default.
   const contextTokens = snap?.placement.recommendedContextTokens ?? null
   const speedModelName = bench ? modelName(bench.measuredModelId, models, t) : ''
-  const speedApprox = bench != null && bench.tokensPerSecond != null && bench.speedBasis?.basis !== 'timings'
+  const speedApprox = bench != null && bench.tokensPerSecond != null && speedIsApprox(bench)
   const canStartRecommended =
     recommended != null &&
     runtimeModelId == null &&
@@ -605,12 +656,15 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           text =
             p.memoryClass === 'unified'
               ? t(v.estimated ? 'perf.model.unifiedEstimate' : 'perf.model.unified', { ram: gb(p.ramMb), budget })
-              : v.estimated
+              : // No layer count to state (an estimate, or — defence in depth against a
+                // malformed record — an observed 'gpu' with no total): the wording that needs
+                // none, never "all  layers on the GPU" with an empty interpolation (L7 / gate (c)).
+                v.estimated || v.totalLayers == null
                 ? t('perf.model.gpuEstimate', { budget })
-                : t('perf.model.gpu', { budget, layers: String(v.totalLayers ?? '') })
+                : t('perf.model.gpu', { budget, layers: String(v.totalLayers) })
           break
         case 'partial': {
-          const split = { budget, gpuLayers: String(v.gpuLayers ?? ''), layers: String(v.totalLayers ?? ''), spill: gb(v.spillMb) }
+          const split = { budget, gpuLayers: String(v.gpuLayers ?? ''), layers: String(v.totalLayers ?? ''), spill: gb(v.spillMb), margin: marginGb(lang) }
           if (v.estimated) {
             text = t('perf.model.partialEstimate', { budget, spill: gb(v.spillMb) })
           } else if (v.freeAtStartMb == null) {
@@ -634,9 +688,16 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           text = t('perf.model.tooLarge', { budget })
           break
         default:
-          text = t('perf.model.unknown')
+          // Owner gate (c): an OBSERVED unknown is the runtime's silence, not a missing first
+          // start — "measured on its first start" would invite a restart that changes nothing.
+          text = t(v.estimated ? 'perf.model.unknown' : 'perf.model.unknownObserved')
       }
     }
+    // Nothing measured for the current configuration: the placement record lives on the DRIVE,
+    // one per model, and is read back only on the machine that wrote it — so a start elsewhere
+    // sends this row back to the estimate (PR #303 audit L8). The mismatch note below says
+    // something more specific about the same fact, so the two never both appear.
+    const showPerDrive = p.model != null && v.estimated && !p.observedMismatch
     return (
       <div className="perf-model">
         <div className="perf-model-title">{t('perf.model.title')}</div>
@@ -662,6 +723,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             })}
           </div>
         )}
+        {showPerDrive && <div className="perf-model-note hint">{t('perf.model.perDrive')}</div>}
         <div className="perf-model-side">
           <Badge tone={pill.tone}>{t(pill.key)}</Badge>
           {p.model && v.kind === 'too_large' && (
@@ -839,7 +901,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 <Button
                   variant="ghost"
                   title={t('diag.copyTitle')}
-                  onClick={() => copyReport(buildReport(bench, graphics, models, contextTokens, t, lang))}
+                  onClick={() => copyReport(buildReport(bench, graphics, models, contextTokens, snap?.currentMachine ?? true, t, lang))}
                 >
                   {t('perf.copy')}
                 </Button>
@@ -944,6 +1006,13 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
               const model = entry.tokensPerSecond != null ? entry.measuredModelId : entry.recommendedModelId
               const name = modelName(model, models, t)
               const slowDrive = entry.effectiveRead != null && entry.effectiveRead.mbps < SLOW_READ_MBPS
+              // Provenance travels with the figure (L6): a chunk-counted or a legacy
+              // (absent-basis) reading is rated with the neutral "Approximate" pill and carries
+              // the tile's own qualifier in the sub line, so it is never read as an ordinary
+              // tokens/s figure this machine could be compared against. A timings reading names
+              // the window it covers instead.
+              const approx = speedIsApprox(entry)
+              const basisNote = entry.tokensPerSecond != null ? speedBasisNote(entry, t, lang) : null
               return (
                 <div className="perf-row" key={`${entry.cpuModel}|${entry.ramGb}|${entry.ranAt}`}>
                   <div className="perf-row-main">
@@ -954,25 +1023,34 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                   <div className="perf-row-sub">
                     {/* A recorded card is listed as VRAM only when the shared rule rates it usable:
                         an integrated device's shared figure is not graphics memory (M8.1). */}
-                    {entry.gpuVramMb != null &&
-                    entry.gpuVramMb > 0 &&
-                    isUsefulDevice({ name: entry.gpu ?? '', totalMb: entry.gpuVramMb })
-                      ? t('perf.others.subGpu', {
-                          cpu: entry.cpuModel || t('perf.unknownCpu'),
-                          ram: fmt1Safe(entry.ramGb, lang),
-                          vram: vramGb(entry.gpuVramMb, lang),
-                          when: fmtDate(entry.ranAt, lang)
-                        })
-                      : t('perf.others.sub', {
-                          cpu: entry.cpuModel || t('perf.unknownCpu'),
-                          ram: fmt1Safe(entry.ramGb, lang),
-                          when: fmtDate(entry.ranAt, lang)
-                        })}
+                    {[
+                      entry.gpuVramMb != null &&
+                      entry.gpuVramMb > 0 &&
+                      isUsefulDevice({ name: entry.gpu ?? '', totalMb: entry.gpuVramMb })
+                        ? t('perf.others.subGpu', {
+                            cpu: entry.cpuModel || t('perf.unknownCpu'),
+                            ram: fmt1Safe(entry.ramGb, lang),
+                            vram: vramGb(entry.gpuVramMb, lang),
+                            when: fmtDate(entry.ranAt, lang)
+                          })
+                        : t('perf.others.sub', {
+                            cpu: entry.cpuModel || t('perf.unknownCpu'),
+                            ram: fmt1Safe(entry.ramGb, lang),
+                            when: fmtDate(entry.ranAt, lang)
+                          }),
+                      basisNote
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </div>
                   <div className="perf-row-side">
                     {entry.tokensPerSecond != null && (
-                      <Badge tone={speedTone(entry.tokensPerSecond)}>
-                        {entry.tokensPerSecond < SLOW_TOKENS_PER_SECOND ? t('perf.rating.slow') : t('perf.rating.good')}
+                      <Badge tone={approx ? 'neutral' : speedTone(entry.tokensPerSecond)}>
+                        {approx
+                          ? t('perf.rating.approx')
+                          : entry.tokensPerSecond < SLOW_TOKENS_PER_SECOND
+                            ? t('perf.rating.slow')
+                            : t('perf.rating.good')}
                       </Badge>
                     )}
                     {slowDrive && <Badge tone="warning">{t('perf.rating.slowDrive')}</Badge>}

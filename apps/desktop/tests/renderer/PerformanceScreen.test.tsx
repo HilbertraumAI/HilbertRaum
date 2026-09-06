@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { StrictMode } from 'react'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PerformanceScreen } from '../../src/renderer/screens/PerformanceScreen'
 import { ToastProvider } from '../../src/renderer/components'
@@ -16,6 +16,7 @@ import {
 } from '../../src/shared/types'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
+import { FIT_TARGET_MARGIN_MB } from '../../src/shared/performance-rules'
 import { stubApi } from '../helpers/renderer'
 
 // The Performance screen (design-guidelines §2, benchmark.md "Performance screen"): the
@@ -433,12 +434,17 @@ describe('PerformanceScreen: the Your-model row', () => {
   it('an observed start whose log said nothing reads as Not measured, never "all  layers on the GPU"', async () => {
     // A start was recorded but every figure is null (a build below verbosity 4). The row must
     // not dress that up as a measured full offload with an empty layer count.
+    // Owner gate (c): the sentence names the runtime's SILENCE, never "measured on its first
+    // start" — that start already happened, so a restart would change nothing.
     install(snapshot({ placement: placement({
       observed: { ...observedFull, gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null, gpuKvMb: null },
       verdict: { kind: 'unknown', needMb: null, estimated: false, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
     }) }))
     renderScreen()
-    expect(await screen.findByText('Where the model lands is measured on its first start.')).toBeInTheDocument()
+    expect(await screen.findByText('The runtime did not report where the model landed.')).toBeInTheDocument()
+    expect(screen.queryByText(/measured the first time it starts/)).not.toBeInTheDocument()
+    // Nothing here is an estimate, so the per-drive hint stays off.
+    expect(screen.queryByText(/one record per model/)).not.toBeInTheDocument()
     expect(screen.getByText('Not measured')).toBeInTheDocument()
     expect(screen.queryByText('On GPU')).not.toBeInTheDocument()
     // The gap the L7 bug left behind ("all {layers} layers" with no count). The default
@@ -446,6 +452,48 @@ describe('PerformanceScreen: the Your-model row', () => {
     expect(screen.queryByText(/all\s{2,}layers/, { normalizer: (s) => s })).not.toBeInTheDocument()
     expect(screen.queryByText(/layers on the GPU/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Fits in graphics memory/)).not.toBeInTheDocument()
+  })
+
+  it('L8: the estimate says the measurement is taken on THIS computer, and that the drive keeps one record per model', async () => {
+    // Nothing observed yet for this configuration. The placement lives in the DRIVE's settings,
+    // one entry per model id, and is read back only on the machine that wrote it — so a start
+    // on another computer sends this row back to the estimate.
+    install(snapshot({ placement: placement({
+      observed: null,
+      verdict: { kind: 'unknown', needMb: null, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
+    }) }))
+    renderScreen()
+    expect(
+      await screen.findByText('Where the model lands is measured the first time it starts on this computer.')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('The drive keeps one record per model, so a start on another computer replaces the one measured here.')
+    ).toBeInTheDocument()
+  })
+
+  it('L8: the per-drive hint gives way to the more specific "measured earlier" note, never both', async () => {
+    install(snapshot({ placement: placement({
+      observed: null,
+      observedMismatch: { contextTokens: 32_768, backend: 'gpu', at: '2026-09-01T00:00:00Z' }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText(/Measured earlier with a 32,768-token context on/)).toBeInTheDocument()
+    expect(screen.queryByText(/one record per model/)).not.toBeInTheDocument()
+  })
+
+  it('a "gpu" verdict with no layer count uses the wording that needs none, never "all  layers"', async () => {
+    // Defence in depth: `placementVerdict` only reports 'gpu' when it read both counts, so a
+    // non-estimated 'gpu' with a null total can only come from a malformed record — it must
+    // still never render the empty `{layers}` interpolation (L7 / gate (c)).
+    install(snapshot({ placement: placement({
+      observed: observedFull,
+      verdict: { kind: 'gpu', needMb: 6540, estimated: false, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText(/Should fit in graphics memory \(24\.2 GB\)\./)).toBeInTheDocument()
+    expect(screen.queryByText(/all\s{2,}layers/, { normalizer: (s) => s })).not.toBeInTheDocument()
+    expect(screen.queryByText(/layers on the GPU/)).not.toBeInTheDocument()
+    expect(screen.getByText('On GPU')).toBeInTheDocument()
   })
 
   it('names a partial offload with the layer split and the RAM spill, in words', async () => {
@@ -478,6 +526,40 @@ describe('PerformanceScreen: the Your-model row', () => {
     renderScreen()
     expect(await screen.findByText(/The card was free \(23\.1 of 24\.2 GB\), but the runtime also sets aside 2\.8 GB of working buffers and a 1 GB safety margin, and moves whole layers off the card when the sum gets close\. Answers slower\./)).toBeInTheDocument()
     expect(screen.queryByText(/only 23\.1 GB/)).not.toBeInTheDocument()
+  })
+
+  it('DR4: all three partial copies state the runtime margin from the shared constant, never a literal', async () => {
+    // `FIT_TARGET_MARGIN_MB` is llama.cpp's `--fit-target` default, which the app does not
+    // override. The expected figure is DERIVED from it, so raising the constant fails this
+    // test instead of silently leaving three sentences claiming the old number.
+    const margin = String(FIT_TARGET_MARGIN_MB / 1024)
+    const spilled = {
+      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, contextTokens: 8192 },
+      observed: { ...observedFull, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66 }
+    }
+    // (1) the card was NOT free at start.
+    install(snapshot({ placement: placement({
+      ...spilled,
+      verdict: { kind: 'partial', needMb: 19_862, estimated: false, budgetMb: 24_822, freeAtStartMb: 20_300, workingMb: 2860, spillMb: 1750, gpuLayers: 62, totalLayers: 66 }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText(new RegExp(`the runtime keeps a ${margin} GB safety margin`))).toBeInTheDocument()
+    cleanup()
+    // (2) the card WAS free and the working buffers are known.
+    install(snapshot({ placement: placement({
+      ...spilled,
+      verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb: 23_615, workingMb: 2860, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText(new RegExp(`2\\.8 GB of working buffers and a ${margin} GB safety margin`))).toBeInTheDocument()
+    cleanup()
+    // (3) the card WAS free and the working buffers were never printed.
+    install(snapshot({ placement: placement({
+      ...spilled,
+      verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb: 23_615, workingMb: null, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
+    }) }))
+    renderScreen()
+    expect(await screen.findByText(new RegExp(`sets aside working buffers and a ${margin} GB safety margin`))).toBeInTheDocument()
   })
 
   it('on Apple Silicon shows one Unified memory tile, no graphics tile, and the unified budget', async () => {
@@ -753,7 +835,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
     act(() => progress.forEach((cb) => cb('system')))
     act(() => progress.forEach((cb) => cb('drive')))
-    expect(screen.getByText('Drive write speed').closest('li')?.className).toContain('perf-step-done')
+    expect(screen.getByText('Drive speed').closest('li')?.className).toContain('perf-step-done')
     await act(async () => {
       resolveRun(result())
     })
@@ -761,7 +843,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Check again' }))
     // The second run starts from nothing — never from what the first one reported.
     expect(screen.getByText('Hardware detected').closest('li')?.className).not.toContain('perf-step-done')
-    expect(screen.getByText('Drive write speed').closest('li')?.className).not.toContain('perf-step-done')
+    expect(screen.getByText('Drive speed').closest('li')?.className).not.toContain('perf-step-done')
     await act(async () => {
       resolveRun(result())
     })
@@ -1096,5 +1178,116 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
       when: new Date('2026-09-01T00:00:00Z').toLocaleDateString('de')
     })
     expect(await screen.findByText(expected)).toBeInTheDocument()
+  })
+})
+
+// PR #303 audit P6 (L6): a decode figure never travels without HOW it was measured. The Speed
+// tile already said "Approximate" for a chunk-counted reading; the Copy report and the
+// other-computer rows presented the same number as an ordinary tokens/s figure with a Good/Slow
+// rating, and the report headed every machine's figures "This computer".
+describe('PerformanceScreen: where a speed figure came from', () => {
+  it('L6: the report carries the window a runtime-timings figure covers, and calls it nothing else', async () => {
+    const { api } = install(snapshot())
+    renderScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    const text = api.copyToClipboard.mock.calls[0][0] as string
+    expect(text).toContain('12 tokens / s (Measured with Qwen3.5 9B (UD-Q4_K_XL) on')
+    expect(text).toContain('over 64 tokens')
+    expect(text).not.toMatch(/approximate/i)
+    expect(text).not.toMatch(/chunks/i)
+  })
+
+  it('L6: the report preserves the approximation qualifier and the chunk window', async () => {
+    const { api } = install(snapshot({ current: result({ speedBasis: { basis: 'chunks', tokens: 10 } }) }))
+    renderScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    const text = api.copyToClipboard.mock.calls[0][0] as string
+    expect(text).toMatch(/approximate|chunks/i)
+    expect(text).toContain('Approximate: counted chunks, not runtime timings; 10 chunks')
+    expect(text).not.toContain('over 10 tokens')
+  })
+
+  it('L6: a legacy result with NO basis is approximate with no invented window, on the tile and in the report', async () => {
+    // Every result persisted before #291 was chunk-based and recorded no window. The app says
+    // so and stops there — it never dresses the missing figure up as a token or chunk count.
+    const legacy = result()
+    delete (legacy as Partial<BenchmarkResult>).speedBasis
+    const { api } = install(snapshot({ current: legacy }))
+    renderScreen()
+    expect(await screen.findByText('Approximate')).toBeInTheDocument()
+    expect(screen.getByText(/Approximate: counted chunks, not runtime timings/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    const text = api.copyToClipboard.mock.calls[0][0] as string
+    expect(text).toContain('Approximate: counted chunks, not runtime timings')
+    expect(text).not.toMatch(/\d+ chunks/)
+    expect(text).not.toMatch(/over \d+ tokens/)
+  })
+
+  it('L6: a result from another computer is not headed "This computer" — the report names the machine it belongs to', async () => {
+    const { api } = install(snapshot({ currentMachine: false }))
+    renderScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    const text = api.copyToClipboard.mock.calls[0][0] as string
+    expect(text.split('\n')[0]).toBe('Another computer: Intel Core i7-1260P, 15.7 GB RAM')
+    expect(text).not.toContain('This computer')
+  })
+
+  it('L6: an other-computer row measured from chunks reads "Approximate", never Good or Slow', async () => {
+    install(snapshot({
+      otherMachines: [result({ cpuModel: 'Old CPU', ramGb: 8, tokensPerSecond: 24, speedBasis: { basis: 'chunks', tokens: 10 } })]
+    }))
+    renderScreen()
+    const row = (await screen.findByText(/Old CPU/)).closest('.perf-row') as HTMLElement
+    expect(within(row).getByText('Approximate')).toBeInTheDocument()
+    // The qualifier travels with the row, in the same words the tile uses.
+    expect(
+      within(row).getByText(/Old CPU, 8\.0 GB RAM · .* · Approximate: counted chunks, not runtime timings; 10 chunks/)
+    ).toBeInTheDocument()
+    // 24 tokens/s is above the slow threshold — the row must not claim the machine is Good on
+    // the strength of a figure the app cannot stand behind. Scoped to the row: the CURRENT
+    // result is a timings figure and keeps its own Good rating on the Speed tile.
+    expect(within(row).queryByText('Good')).not.toBeInTheDocument()
+    expect(within(row).queryByText('Slow')).not.toBeInTheDocument()
+  })
+
+  it('L6: an other-computer row with NO basis is approximate with no window', async () => {
+    const legacy = result({ cpuModel: 'Older CPU', ramGb: 8, tokensPerSecond: 24 })
+    delete (legacy as Partial<BenchmarkResult>).speedBasis
+    install(snapshot({ otherMachines: [legacy] }))
+    renderScreen()
+    expect(await screen.findByText('Approximate')).toBeInTheDocument()
+    expect(screen.getByText(/Older CPU, 8\.0 GB RAM · .* · Approximate: counted chunks, not runtime timings$/)).toBeInTheDocument()
+    expect(screen.queryByText(/chunks;/)).not.toBeInTheDocument()
+  })
+
+  it('L6: an other-computer row measured from runtime timings keeps its Good/Slow rating and names its window', async () => {
+    install(snapshot({ otherMachines: [office, oldLaptop] }))
+    renderScreen()
+    await screen.findByText(/41 tokens \/ s with Qwen3\.8 27B UD-Q4_K_M/)
+    expect(screen.queryByText('Approximate')).not.toBeInTheDocument()
+    // office (41 t/s) is Good, oldLaptop (2 t/s) is Slow — plus the current result's own Good.
+    expect(screen.getAllByText('Good').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText('Slow').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText(/Intel Core i9-13900K, 64\.0 GB RAM, 24\.0 GB VRAM · .* · over 64 tokens/)).toBeInTheDocument()
+  })
+})
+
+// PR #303 audit P6 (N4 / N5): two labels that contradicted the figure beside them.
+describe('PerformanceScreen: labels that match what is measured', () => {
+  it('N4: the empty Drive tile credits a file check as well as a model start', async () => {
+    install(snapshot({ current: result({ effectiveRead: null }) }))
+    renderScreen()
+    expect(await screen.findByText('Measured by the first model start or file check')).toBeInTheDocument()
+  })
+
+  it('N5: the drive step is "Drive speed", not "Drive write speed" beside a tile reading MB/s read', async () => {
+    install(snapshot({ running: true }))
+    renderScreen()
+    expect(await screen.findByText('Drive speed')).toBeInTheDocument()
+    expect(screen.queryByText(/write speed/i)).not.toBeInTheDocument()
   })
 })

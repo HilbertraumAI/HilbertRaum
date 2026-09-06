@@ -31,6 +31,8 @@ import type { GpuDevice } from '../../src/shared/types'
 const opts: RuntimeStartOptions = { modelId: 'm', modelPath: '/w.gguf', contextTokens: 2048 }
 
 const RTX: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
+/** A hybrid laptop's FIRST enumerated device: integrated, reporting shared system memory. */
+const IRIS: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16384, freeMb: 12000 }
 
 interface LadderCall {
   binPath: string
@@ -218,6 +220,30 @@ describe('the GPU start ladder', () => {
     await runtime.start()
     expect(runtime.backend).toBe('cpu')
     expect(runtime.gpuName).toBeNull()
+  })
+
+  it('a hybrid [iGPU, dGPU] box is LABELLED with the discrete card, not the first enumerated device', async () => {
+    // PR #303 audit M8.2 (P5 residual): `devices[0]` named the iGPU while the model actually ran
+    // on the dGPU, so the Chat hint and the Diagnostics line credited the wrong device. The
+    // label now comes from the shared `displayDevice` rule. SELECTION is untouched — same rung,
+    // same (empty) args, still no -ngl: `--fit` decides.
+    const h = ladderHarness({ probe: [IRIS, RTX] })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(runtime.gpuName).toBe(RTX.name)
+    expect(runtime.backend).toBe('gpu')
+    expect(h.calls).toHaveLength(1)
+    expect(h.calls[0].extraArgs).toEqual([])
+  })
+
+  it('an integrated-only box is still named: the label falls back to the first listed device', async () => {
+    // `displayDevice` returns the first device with `useful: false` when none is useful, so the
+    // line never goes blank on a machine whose only GPU is integrated.
+    const h = ladderHarness({ probe: [IRIS] })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(runtime.gpuName).toBe(IRIS.name)
+    expect(runtime.backend).toBe('gpu')
   })
 
   it('rung 1 failure → rung 2 respawns the SAME binary with exactly --device none and persists the failure', async () => {

@@ -67,7 +67,17 @@ memory for the tile, the benchmark record, the budget, `currentGpu` and the fold
 fallback in the screen; the resident rows' device follows the configuration (GPU off / auto-disabled /
 observed CPU / translation `--device none`), the RAM total is class-aware (owner ruling), the free and
 working figures are attributed to the selected device by name (`ModelPlacement.devices`), and the tile
-says "Integrated, shared memory" / "Not recorded" where it used to say "Usable" / "No usable card"._
+says "Integrated, shared memory" / "Not recorded" where it used to say "Usable" / "No usable card".
+**P6:** L6/L8/N4/N5/T6 + DR4 — the Copy report and the other-computer rows carry the speed basis
+(measured "over N tokens", or "Approximate: counted chunks" with the chunk count; a legacy result
+without a basis is approximate with no invented window) and a neutral "Approximate" pill instead of
+Good/Slow; the report says "This computer" only for this machine, else "Another computer: cpu, RAM";
+the "Your model" copy says the first start is measured on this computer and that the drive keeps one
+record per model (a start elsewhere replaces it); an observed start whose log said nothing reads "The
+runtime did not report where the model landed."; the partial-offload copy interpolates the fit margin
+from `shared/performance-rules.ts` (`FIT_TARGET_MARGIN_MB`, `CARD_FREE_SLACK_MB`); "Drive speed" step
+and "…or file check" hint; German component smoke for the screen; the runtime-status and Diagnostics
+GPU labels name the display device (P5 residual)._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -727,7 +737,7 @@ open round's item stays the last block of §5.)
     P2 ✅ M2/M4/M6/L2 persistence (identity before ranking, upgrade backfill, mid-run samples);
     P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ✅ H1/L8/M5-residual schemas +
     launch context; P5 ✅ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
-    P6 ☐ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ☐ L1/SD2 auto-start sequencing;
+    P6 ✅ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ☐ L1/SD2 auto-start sequencing;
     P8 ☐ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c);
     P11 ☐ close-out issues. Residual (c) above is the audit's HW1–HW3 acceptance; (a)–(g) stand.
 
