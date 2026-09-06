@@ -1428,3 +1428,117 @@ describe('PerformanceScreen: labels that match what is measured', () => {
     expect(screen.queryByText(/write speed/i)).not.toBeInTheDocument()
   })
 })
+
+// Issue #325 — three residuals the PR #308 review left on this screen: (1) with the GPU switched
+// off (or auto-disabled) the tile must not fall back to a card the result RECORDED while the GPU
+// was on; (2) the Copy report carries the live pick beside the saved one; (3) a model running on
+// the graphics card right now says so on the "Your model" row (the runtime status plus the
+// placement evidence — the `observedMismatch` rule itself, #303 P4, is untouched).
+describe('PerformanceScreen: #325 residuals', () => {
+  const recordedCard = result({ gpu: 'NVIDIA GeForce RTX 3070', gpuVramMb: 8192 })
+
+  it('#325 (1): with the GPU switched off, a saved result that recorded a card no longer fills the tile — the off state wins', async () => {
+    for (const flags of [{ gpuMode: 'off' as const }, { gpuAutoDisabled: true }]) {
+      const { api } = install(snapshot({ current: recordedCard, currentGpu: null, placement: placement({ memoryClass: 'cpu', vramMb: null }) }), {
+        getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, ...flags }))
+      })
+      renderScreen()
+      expect(await screen.findByText('Graphics acceleration is off. Models run on the processor.')).toBeInTheDocument()
+      expect(screen.queryByText('Usable')).not.toBeInTheDocument()
+      expect(screen.queryByText('NVIDIA GeForce RTX 3070')).not.toBeInTheDocument()
+      expect(screen.getByText('None')).toBeInTheDocument()
+      // The report follows the tile: the off copy, never the recorded card.
+      await userEvent.click(screen.getByRole('button', { name: 'Copy report' }))
+      await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+      const text = api.copyToClipboard.mock.calls[0][0] as string
+      expect(text).toContain('Graphics memory: Graphics acceleration is off. Models run on the processor.')
+      expect(text).not.toContain('RTX 3070')
+      cleanup()
+    }
+  })
+
+  it('#325 (1): with the GPU on, the same recorded card still fills the tile (the fallback is kept)', async () => {
+    install(snapshot({ current: recordedCard, currentGpu: null }))
+    renderScreen()
+    expect(await screen.findByText('Usable')).toBeInTheDocument()
+    expect(screen.getByText('NVIDIA GeForce RTX 3070')).toBeInTheDocument()
+  })
+
+  it('#325 (2): the Copy report carries the live recommendation beside the one saved with the check', async () => {
+    const { api } = install(snapshot({ recommendation: { modelId: 'qwen3.5-4b-ud-q4kxl', basis: 'cpu' } }))
+    renderScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    const text = api.copyToClipboard.mock.calls[0][0] as string
+    expect(text).toContain('Recommended for the next start: Qwen3.5 4B (UD-Q4_K_XL) (RAM)')
+    expect(text).toContain('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')
+    expect(text.indexOf('Recommended for the next start')).toBeLessThan(text.indexOf('Recommended at the time of the check'))
+  })
+
+  it('#325 (2): with no catalog there is no live line, and the saved line stands alone', async () => {
+    const { api } = install(snapshot({ recommendation: null }))
+    renderScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    const text = api.copyToClipboard.mock.calls[0][0] as string
+    expect(text).not.toContain('Recommended for the next start')
+    expect(text).toContain('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')
+  })
+
+  const onCard: RuntimeStatus = { ...RUNNING_STATUS, backend: 'gpu' }
+  const mismatchOnCard = placement({
+    memoryClass: 'cpu',
+    vramMb: null,
+    observed: null,
+    observedMismatch: { contextTokens: 8192, backend: 'gpu', at: '2026-09-01T00:00:00Z' }
+  })
+
+  it('#325 (3): a model genuinely running on the graphics card right now says so, beside the dated earlier measurement', async () => {
+    install(snapshot({ currentGpu: null, placement: mismatchOnCard }), { getRuntimeStatus: vi.fn(async () => onCard) })
+    renderScreen()
+    expect(await screen.findByText('Running on the graphics card right now.')).toBeInTheDocument()
+    // The #303 P4 rule is untouched: the mismatch note still dates the measurement.
+    expect(screen.getByText(/Measured earlier with a 8,192-token context on/)).toBeInTheDocument()
+  })
+
+  it('#325 (3): the line also stands over a matching observation', async () => {
+    install(snapshot({ placement: placement({ observed: observedFull, verdict: { kind: 'gpu', needMb: 6140, estimated: false, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: 41, totalLayers: 41 } }) }), {
+      getRuntimeStatus: vi.fn(async () => onCard)
+    })
+    renderScreen()
+    expect(await screen.findByText('Running on the graphics card right now.')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['the runtime is on the processor', { ...RUNNING_STATUS, backend: 'cpu' } as RuntimeStatus, mismatchOnCard],
+    ['nothing runs', STOPPED_STATUS as RuntimeStatus, mismatchOnCard],
+    ['another model runs on the card', { ...onCard, modelId: 'qwen3.5-4b-ud-q4kxl' } as RuntimeStatus, mismatchOnCard],
+    ['the runtime reports no backend', RUNNING_STATUS as RuntimeStatus, mismatchOnCard],
+    [
+      'the placement evidence says the processor',
+      onCard,
+      placement({ memoryClass: 'cpu', vramMb: null, observed: null, observedMismatch: { contextTokens: 32_768, backend: 'cpu', at: '2026-09-01T00:00:00Z' } })
+    ],
+    ['there is no placement evidence at all', onCard, placement({ observed: null, observedMismatch: null })]
+  ])('#325 (3): no line when %s', async (_why, status, p) => {
+    install(snapshot({ currentGpu: null, placement: p }), { getRuntimeStatus: vi.fn(async () => status) })
+    renderScreen()
+    expect(await screen.findByText('Your model')).toBeInTheDocument()
+    await waitFor(() => expect(window.api.getRuntimeStatus).toHaveBeenCalled())
+    expect(screen.queryByText('Running on the graphics card right now.')).not.toBeInTheDocument()
+  })
+
+  it('#325 (3): the same line in German (asserted from the catalog)', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    install(snapshot({ currentGpu: null, placement: mismatchOnCard }), { getRuntimeStatus: vi.fn(async () => onCard) })
+    render(
+      <I18nProvider>
+        <ToastProvider>
+          <PerformanceScreen onNavigate={vi.fn()} />
+        </ToastProvider>
+      </I18nProvider>
+    )
+    expect(await screen.findByText(t('de', 'perf.model.runningOnCard'))).toBeInTheDocument()
+    expect(t('de', 'perf.model.runningOnCard')).not.toBe(t('en', 'perf.model.runningOnCard'))
+  })
+})

@@ -18,6 +18,7 @@ import type {
   BenchmarkResult,
   EffectiveReadSample,
   HardwareProfile,
+  LiveRecommendation,
   ModelInfo,
   PerformanceSnapshot,
   PlacementKind,
@@ -155,11 +156,17 @@ type GraphicsFigure =
   | { kind: 'pending' }
   | { kind: 'notRecorded' }
   | { kind: 'none' }
+  /** The GPU is switched off in Settings or auto-disabled: the next start runs from RAM. */
+  | { kind: 'off' }
   | { kind: 'device'; mb: number; name: string | null; useful: boolean; integrated: boolean }
 
-function graphicsFigure(bench: BenchmarkResult | null, snap: PerformanceSnapshot | null): GraphicsFigure {
+function graphicsFigure(bench: BenchmarkResult | null, snap: PerformanceSnapshot | null, gpuOff: boolean): GraphicsFigure {
   if (!bench) return { kind: 'pending' }
   const live = snap?.currentMachine ? snap.currentGpu : null
+  // With the GPU switched off or auto-disabled the snapshot names no device for the next start,
+  // and a card the RESULT recorded while the GPU was on must not fill the tile in its place: the
+  // verdict, the ★ and the "Your model" row already say RAM for that start (issue #325 (1)).
+  if (gpuOff && !live) return { kind: 'off' }
   const mb = live?.totalMb ?? bench.gpuVramMb ?? null
   const name = live?.name ?? bench.gpu ?? null
   if (mb == null || mb <= 0) {
@@ -206,6 +213,7 @@ function buildReport(
   models: ModelInfo[],
   contextTokens: number | null,
   currentMachine: boolean,
+  live: LiveRecommendation | null,
   t: I18n['t'],
   lang: UiLanguage
 ): string {
@@ -214,7 +222,9 @@ function buildReport(
       ? `${vramGb(graphics.mb, lang)} ${t(graphics.integrated ? 'perf.tile.graphics.unitShared' : 'perf.tile.graphics.unit')} (${graphics.name ?? ''})`
       : graphics.kind === 'notRecorded'
         ? t('perf.rating.notRecorded')
-        : t('perf.rating.none')
+        : graphics.kind === 'off'
+          ? t('perf.tile.graphics.off')
+          : t('perf.rating.none')
   // Timings: "Measured with X on DATE, over N tokens". Chunks / no basis: the tile's own
   // qualifier after a full stop, with the chunk window only when the record carries one.
   const speedSub = t('perf.tile.speed.sub', {
@@ -242,10 +252,18 @@ function buildReport(
     `${t('perf.tile.drive')}: ${
       bench.effectiveRead ? `${fmtNumSafe(bench.effectiveRead.mbps, lang)} ${t('perf.tile.drive.unit')}` : t('perf.tile.drive.none')
     }`,
-    `${t('diag.bench.profile')}: ${bench.profile}`,
-    // The result's own pick is what the check said then; the live one is on the screen.
-    `${t('perf.recommendation.atCheckTime')}: ${bench.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : t('diag.bench.noMatch')}`
+    `${t('diag.bench.profile')}: ${bench.profile}`
   ]
+  // The LIVE pick for the next start (the same one the AI Model screen stars) with the memory it
+  // was judged against, so a report compared with someone else's shows what the app would
+  // actually pick (issue #325 (2)); null only without a catalog. Then the result's own pick,
+  // which is what the check said at the time.
+  if (live) {
+    lines.push(
+      `${t('perf.recommendation.next')}: ${live.modelId ? `${modelName(live.modelId, models, t)} (${t(`perf.basis.${live.basis}`)})` : t('diag.bench.noMatch')}`
+    )
+  }
+  lines.push(`${t('perf.recommendation.atCheckTime')}: ${bench.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : t('diag.bench.noMatch')}`)
   if (contextTokens != null) lines.push(`${t('models.context.title')}: ${t('models.tech.contextValue', { count: contextTokens.toLocaleString(lang) })}`)
   lines.push(`${t('diag.bench.lastRun')}: ${fmtDateTime(bench.ranAt, lang)}`)
   for (const w of bench.warnings) lines.push(`- ${localizeServerCopy(t, w)}`)
@@ -302,6 +320,9 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   // RAM whatever card the probe lists, and the graphics tile says so instead of "no card".
   const [gpuOff, setGpuOff] = useState(false)
   const [runtimeModelId, setRuntimeModelId] = useState<string | null>(null)
+  /** The running model landed on the GPU rung (`RuntimeStatus.backend === 'gpu'`): with the
+   *  placement evidence, the "running on the graphics card right now" line (issue #325 (3)). */
+  const [runtimeOnGpu, setRuntimeOnGpu] = useState(false)
   /** A check THIS window started ("Check again" / "Start … and measure"). Kept apart from the
    *  snapshot's `running`, which is the backend's benchmark occupancy span and is true for runs
    *  this window never started (PR #303 audit M1: merging the two locked the screen into
@@ -362,7 +383,9 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     void window.api
       .getRuntimeStatus()
       .then((r) => {
-        if (fresh()) setRuntimeModelId(r.running ? r.modelId : null)
+        if (!fresh()) return
+        setRuntimeModelId(r.running ? r.modelId : null)
+        setRuntimeOnGpu(r.running && r.backend === 'gpu')
       })
       .catch(() => {})
     void window.api
@@ -475,7 +498,10 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
       setDoneSteps([])
       try {
         const status = await window.api.useModel(modelId)
-        if (mountedRef.current) setRuntimeModelId(status.running ? status.modelId : null)
+        if (mountedRef.current) {
+          setRuntimeModelId(status.running ? status.modelId : null)
+          setRuntimeOnGpu(status.running && status.backend === 'gpu')
+        }
         await window.api.runBenchmark()
       } catch (err) {
         if (mountedRef.current) setActionError(friendlyIpcError(err))
@@ -613,7 +639,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     )
   }
 
-  const graphics = graphicsFigure(bench, snap)
+  const graphics = graphicsFigure(bench, snap, gpuOff)
 
   /** Graphics memory decides what runs accelerated, so it stands beside RAM as its own
    *  tile. One figure (`graphicsFigure`): `snapshot.currentGpu` — the BUDGET device for the
@@ -632,7 +658,9 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           ? [t('perf.notChecked'), t('perf.rating.pending')]
           : graphics.kind === 'notRecorded'
             ? [t('perf.tile.graphics.notRecorded'), t('perf.rating.notRecorded')]
-            : [gpuOff ? t('perf.tile.graphics.off') : t('perf.tile.graphics.none'), t('perf.rating.none')]
+            : graphics.kind === 'off'
+              ? [t('perf.tile.graphics.off'), t('perf.rating.none')]
+              : [t('perf.tile.graphics.none'), t('perf.rating.none')]
       return <Tile label={t('perf.tile.graphics')} value={null} sub={sub} pill={pill} tone="neutral" />
     }
     const { mb, name, useful, integrated } = graphics
@@ -748,6 +776,8 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     // sends this row back to the estimate (PR #303 audit L8). The mismatch note below says
     // something more specific about the same fact, so the two never both appear.
     const showPerDrive = p.model != null && v.estimated && !p.observedMismatch
+    const runningOnCard =
+      p.model != null && runtimeOnGpu && runtimeModelId === p.model.id && (p.observed ?? p.observedMismatch)?.backend === 'gpu'
     return (
       <div className="perf-model">
         <div className="perf-model-title">{t('perf.model.title')}</div>
@@ -774,6 +804,12 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           </div>
         )}
         {showPerDrive && <div className="perf-model-note hint">{t('perf.model.perDrive')}</div>}
+        {/* The model is on the card RIGHT NOW: the runtime reports it running on the GPU rung and
+            the placement evidence for it (the session latch, or the stored record the mismatch
+            note dates) says the card. Distinguishes "measured earlier, on the card" from "still
+            running there" after the GPU toggle flips off (issue #325 (3)); the mismatch rule
+            itself is untouched. */}
+        {runningOnCard && <div className="perf-model-note hint">{t('perf.model.runningOnCard')}</div>}
         <div className="perf-model-side">
           <Badge tone={pill.tone}>{t(pill.key)}</Badge>
           {p.model && v.kind === 'too_large' && (
@@ -958,7 +994,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 <Button
                   variant="ghost"
                   title={t('diag.copyTitle')}
-                  onClick={() => copyReport(buildReport(bench, graphics, models, contextTokens, snap?.currentMachine ?? true, t, lang))}
+                  onClick={() => copyReport(buildReport(bench, graphics, models, contextTokens, snap?.currentMachine ?? true, live, t, lang))}
                 >
                   {t('perf.copy')}
                 </Button>

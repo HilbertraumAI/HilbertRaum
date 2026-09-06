@@ -1816,6 +1816,7 @@ export const de: Record<keyof typeof en, string> = {
   'perf.basis.unified': 'gemeinsamen Speicher',
   'perf.basis.cpu': 'Arbeitsspeicher',
   'perf.recommendation.atCheckTime': 'Empfohlen zum Zeitpunkt der Prüfung',
+  'perf.recommendation.next': 'Empfohlen für den nächsten Start',
   'perf.verdict.noRecommendation': 'Noch kein Modell im Katalog passt zu diesem Computer.',
   'perf.verdict.notChecked':
     'Eine kurze Prüfung misst Arbeitsspeicher, Laufwerksgeschwindigkeit und, sobald ein Modell läuft, die Generierungsgeschwindigkeit.',
@@ -1868,6 +1869,7 @@ export const de: Record<keyof typeof en, string> = {
     'Das Laufwerk behält einen Datensatz pro Modell, ein Start auf einem anderen Computer ersetzt also den hier gemessenen.',
   'perf.model.measuredOther':
     'Früher mit einem Kontext von {context} Token am {when} gemessen; die Schätzung oben gilt für die aktuellen Einstellungen.',
+  'perf.model.runningOnCard': 'Läuft gerade auf der Grafikkarte.',
   'perf.model.choose': 'Kleineres Modell wählen',
   'perf.models.title': 'Modelle auf diesem Computer',
   'perf.models.hint':

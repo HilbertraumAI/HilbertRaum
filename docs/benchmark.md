@@ -212,7 +212,10 @@ surfaces cannot diverge; `basis` is the memory class the pick was judged against
 card's budget, `unified`, `cpu` = RAM). The screen's verdict sentence names that basis ("… is the
 best fit for this computer's graphics memory / unified memory / RAM"); the saved
 `recommendedModelId` stays visible only where it differs from the live pick, labelled "Recommended
-at the time of the check" (also the Copy report's label). `null` only without a catalog. A
+at the time of the check" (also the Copy report's label). The Copy report additionally carries the
+live pick on its own line, "Recommended for the next start: \<model\> (\<basis\>)", ahead of the
+saved one, so a report compared with someone else's shows what the app would actually pick
+(issue #325, 2026-09-06; omitted when `recommendation` is null). `null` only without a catalog. A
 "recommendation changed since this check" note was deliberately omitted (audit gate G4).
 
 **Speed-signal step-down (issue #95, since 2026-08-09).** The picker optionally consumes the
@@ -513,11 +516,12 @@ screen answers the user's question in plain words. Four cards:
    (it could be another machine's, M8.3; and on a hybrid laptop its first device is the iGPU's
    shared-RAM figure) — it reads `getSettings` for the two GPU flags only: with the GPU switched
    off or auto-disabled the snapshot names no card and the tile reads "Graphics acceleration is
-   off. Models run on the processor." instead of "No usable graphics card". A result that was
-   RECORDED while the GPU was on keeps showing its own `gpuVramMb` as "Usable" after the toggle
-   flips off, until the next check re-records it — the result's own figure wins over the live
-   toggle state (known limitation, PR #308 audit P4; a P7 candidate is preferring the off state
-   on the current machine). A result from ANOTHER computer that predates the field says "Not
+   off. Models run on the processor." instead of "No usable graphics card". That off state wins
+   over a card the result RECORDED while the GPU was on (issue #325, 2026-09-06): with the flags
+   set and no live device, `graphicsFigure` never falls back to the result's own `gpuVramMb` /
+   `gpu`, so the tile, the verdict, the ★ and the "Your model" row all say RAM for the next
+   start (it used to read "Usable / \<card\>" until the next check re-recorded it); the Copy
+   report's Graphics line carries the same off copy. A result from ANOTHER computer that predates the field says "Not
    recorded" — the app never probed that machine for it (N1) — while an explicit `null` is a
    recorded "None"; its other-computers row lists VRAM only for a usable card), Drive
    (`effectiveRead` with its source and date; "Pending" until a model start **or a full file
@@ -640,7 +644,14 @@ settings (the next matching start restores it, and it is still the truth about t
 row falls back to the weights-only ESTIMATE — which is what the current settings would actually do
 — and the snapshot carries `placement.observedMismatch` so the copy can date the earlier
 measurement ("Measured earlier with a {context}-token context on {when}; the estimate above is for
-the current settings.") instead of presenting a fit the settings never asked for. **Verdict**
+the current settings.") instead of presenting a fit the settings never asked for. **Running there
+right now** (issue #325, 2026-09-06): the row adds one line, "Running on the graphics card right
+now." (`perf.model.runningOnCard`), when the runtime status reports the ACTIVE model running on the
+`gpu` backend AND the placement evidence for it — `observed`, else the record `observedMismatch`
+dates — says `backend: 'gpu'`; so after the GPU toggle flips off while the model keeps running,
+"measured earlier, on the card" and "still running there" no longer read the same. The mismatch
+rule itself is unchanged; a CPU rung, a stopped runtime, another model running, or a record that
+says the processor never shows the line. **Verdict**
 (`placementVerdict`, pure): observed → 'gpu' when every layer is on the GPU (unified reads the
 same), 'partial' otherwise with the CPU-side bytes as the spill (CPU, CPU_Mapped and the
 backends' `*_Host` buffers), 'cpu' for a CPU backend, 'unknown' for a GPU start whose log carried

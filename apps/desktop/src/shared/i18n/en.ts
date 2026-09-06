@@ -1777,6 +1777,9 @@ export const en = {
   'perf.basis.cpu': 'RAM',
   // The saved result's own pick, shown only where it differs from the live one (historical).
   'perf.recommendation.atCheckTime': 'Recommended at the time of the check',
+  // The Copy report's line for the LIVE pick (the same one the AI Model screen stars), so a
+  // report compared with someone else's shows what the app would actually pick (issue #325).
+  'perf.recommendation.next': 'Recommended for the next start',
   'perf.verdict.noRecommendation': 'No model in the catalog matches this computer yet.',
   'perf.verdict.notChecked':
     'A quick check measures memory, drive speed and, once a model runs, generation speed.',
@@ -1842,6 +1845,10 @@ export const en = {
   // current settings, and this dates the measurement rather than letting the two contradict.
   'perf.model.measuredOther':
     'Measured earlier with a {context}-token context on {when}; the estimate above is for the current settings.',
+  // The active model is on the card RIGHT NOW (the runtime reports the GPU rung and the placement
+  // evidence says the card): tells "still running there" from "measured earlier" once the GPU
+  // toggle flips off while the model keeps running (issue #325).
+  'perf.model.runningOnCard': 'Running on the graphics card right now.',
   'perf.model.choose': 'Choose a smaller model',
   'perf.models.title': 'Models on this computer',
   'perf.models.hint':
