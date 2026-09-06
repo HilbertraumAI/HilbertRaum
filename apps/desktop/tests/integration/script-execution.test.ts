@@ -44,6 +44,36 @@ function runtimeSourcesYaml(sha: string): string {
     '      url: https://example.invalid/llama-b9585-bin-ubuntu-vulkan-x64.tar.gz',
     `      sha256: ${sha}`,
     '      extract_to: runtime/llama.cpp/linux',
+    'kiwix_tools:',
+    "  version: '3.8.1'",
+    '  optional: true',
+    '  executables: [kiwix-serve, kiwix-manage, kiwix-search]',
+    '  builds:',
+    '    - os: win',
+    '      arch: x64',
+    '      backend: cpu',
+    '      url: https://example.invalid/kiwix-tools_win-x86_64-3.8.1.zip',
+    `      sha256: ${sha}`,
+    '      extract_to: runtime/kiwix-tools/win',
+    '      runtime_files: [icudt74.dll, icuin74.dll, icuio74.dll, icutu74.dll, icuuc74.dll]',
+    '    - os: mac',
+    '      arch: arm64',
+    '      backend: cpu',
+    '      url: https://example.invalid/kiwix-tools_macos-arm64-3.8.1.tar.gz',
+    `      sha256: ${sha}`,
+    '      extract_to: runtime/kiwix-tools/mac',
+    '    - os: mac',
+    '      arch: x64',
+    '      backend: cpu',
+    '      url: https://example.invalid/kiwix-tools_macos-x86_64-3.8.1.tar.gz',
+    `      sha256: ${sha}`,
+    '      extract_to: runtime/kiwix-tools/mac',
+    '    - os: linux',
+    '      arch: x64',
+    '      backend: cpu',
+    '      url: https://example.invalid/kiwix-tools_linux-x86_64-3.8.1.tar.gz',
+    `      sha256: ${sha}`,
+    '      extract_to: runtime/kiwix-tools/linux',
     'ocr:',
     '  version: 4.0.0_best_int',
     '  files:',
@@ -218,6 +248,39 @@ for (const leg of LEGS) {
         expect(r.status, out).toBe(1)
         expect(out).toMatch(/placeholder/i)
         expect(existsSync(join(root, 'ocr')) ? readdirSync(join(root, 'ocr')) : []).toEqual([])
+      })
+    })
+
+    // #339 P8-3: kiwix_tools is the first multi-file, multi-build OPTIONAL family the
+    // scripts fetch. A dry run for each of the four pinned builds (win + the two mac archs
+    // + linux) must print that build's full required-file plan (the executables the yaml's
+    // `executables:` declares, plus win's ICU `runtime_files:`) without touching the
+    // network, and must never require --Family/--family to guess right without --os/--arch.
+    describe('fetch-runtime kiwix_tools family — dry run enumerates every build (#339 P8-3)', () => {
+      it.each([
+        ['win', 'x64', ['kiwix-serve.exe', 'kiwix-manage.exe', 'kiwix-search.exe', 'icudt74.dll', 'icuin74.dll', 'icuio74.dll', 'icutu74.dll', 'icuuc74.dll']],
+        ['mac', 'arm64', ['kiwix-serve', 'kiwix-manage', 'kiwix-search']],
+        ['mac', 'x64', ['kiwix-serve', 'kiwix-manage', 'kiwix-search']],
+        ['linux', 'x64', ['kiwix-serve', 'kiwix-manage', 'kiwix-search']]
+      ] as const)('%s/%s: prints the required-file plan, offline, exit 0', (os, arch, files) => {
+        const root = scratchTarget(REAL_SHA)
+        const r = leg.run(fetcher, [
+          f('Target'),
+          root,
+          f('Family'),
+          'kiwix_tools',
+          f('Os'),
+          os,
+          f('Arch'),
+          arch,
+          f('DryRun')
+        ])
+        const out = text(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toMatch(/dry run/i)
+        for (const file of files) expect(out, `${os}/${arch}: expected ${file} in the plan`).toContain(file)
+        // Nothing extracted — dry run touches no network and creates no runtime/ tree.
+        expect(existsSync(join(root, 'runtime', 'kiwix-tools'))).toBe(false)
       })
     })
 

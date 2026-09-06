@@ -707,7 +707,8 @@ open round's item stays the last block of §5.)
 21. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable
     record: [`docs/rag-design.md`](docs/rag-design.md) §17 "Deliberately not built").**
     (a) **kiwix_tools provisioning** — P8 successor issue #339. P8-1 (the family contract) landed
-    on `feat/339-p8-1-kiwix-family`; open: P8-2 consent (owner ruling pending), P8-3 scripts,
+    on `feat/339-p8-1-kiwix-family`; P8-3 (`fetch-runtime --family kiwix_tools`, the drive layout, the drift legs; a real fetch
+    verified all eight hashes) landed on `feat/339-p8-3-kiwix-scripts`; open: P8-2 consent (owner ruling pending),
     P8-4 source bundle (owner ruling pending), P8-5 network-inventory prose, P8-6 the upstream
     report, P8-7 T20-a real-run / R-4 re-verification.
     (b) **Tier 2** (persistent import of selected articles into the corpus) — P9 successor issue #340.

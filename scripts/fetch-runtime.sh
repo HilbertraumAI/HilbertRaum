@@ -28,12 +28,15 @@
 #
 # --family selects the asset family: llama_cpp (default, llama-server), whisper_cpp
 # (the whisper-cli transcriber, runtime/whisper.cpp/<os>/ — same verify + marker
-# logic), or ocr (Phase 38: the vendored OCR language files, plain sha256-verified
-# downloads into ocr/ — no extraction, no marker; idempotency IS the hash).
+# logic), kiwix_tools (#339 P8-3: the OPTIONAL knowledge-pack tools —
+# kiwix-serve/kiwix-manage/kiwix-search plus the five ICU DLLs on Windows; never fetched
+# by prepare-drive --with-assets, only by an explicit --family kiwix_tools), or ocr
+# (Phase 38: the vendored OCR language files, plain sha256-verified downloads into ocr/ —
+# no extraction, no marker; idempotency IS the hash).
 #
 # Usage:
 #   scripts/fetch-runtime.sh --target /Volumes/HILBERTRAUM \
-#       [--os linux] [--arch x64] [--backend cpu] [--family whisper_cpp|ocr] [--commercial] [--dry-run]
+#       [--os linux] [--arch x64] [--backend cpu] [--family whisper_cpp|kiwix_tools|ocr] [--commercial] [--dry-run]
 set -euo pipefail
 
 TARGET=""; OS=""; ARCH=""; BACKEND=""; FAMILY="llama_cpp"; COMMERCIAL=0; DRY_RUN=0
@@ -57,8 +60,8 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$TARGET" ]] && { echo "Error: --target <drive-root> is required" >&2; exit 2; }
 case "$FAMILY" in
-  llama_cpp|whisper_cpp|ocr) ;;
-  *) echo "Error: --family must be llama_cpp, whisper_cpp, or ocr" >&2; exit 2 ;;
+  llama_cpp|whisper_cpp|kiwix_tools|ocr) ;;
+  *) echo "Error: --family must be llama_cpp, whisper_cpp, kiwix_tools, or ocr" >&2; exit 2 ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -120,6 +123,61 @@ sha256_of() {
   # \ed6156…"). Stdin has no filename, so nothing is ever escaped.
   if command -v sha256sum >/dev/null 2>&1; then sha256sum < "$1" | awk '{print $1}'
   else shasum -a 256 < "$1" | awk '{print $1}'; fi
+}
+
+# #339 P8-3: parse a flow-sequence string ("[a, b, c]", or "[]"/empty) into words on
+# stdout, one per line. Mirrors the .ps1 Get-FlowListValue twin.
+flow_list_items() {
+  local raw="$1"
+  raw="${raw#\[}"; raw="${raw%\]}"
+  [[ -z "${raw//[[:space:]]/}" ]] && return 0
+  local IFS=','
+  local -a parts
+  read -ra parts <<< "$raw"
+  local p
+  for p in "${parts[@]}"; do
+    p="$(echo "$p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr -d '"'"'"'')"
+    [[ -n "$p" ]] && echo "$p"
+  done
+}
+
+# #339 P8-3: the committed yaml spells `executables:`/`runtime_files:` as a one-line flow
+# sequence, but a hand-edited drive yaml might use a block sequence instead (`key:` alone,
+# then indented `- item` lines). Collapse any such block into the inline flow form BEFORE
+# the line-by-line parsers below run, so they only ever see one shape. Scoped to just these
+# two keys — `builds:`/`files:` are lists of MAPPINGS ("- os: win"), not scalars, and are
+# already handled by the per-item parsers below. Reads the global RAW_LINES array, writes
+# the global PP_LINES array.
+collapse_block_lists() {
+  local n=${#RAW_LINES[@]} i=0
+  PP_LINES=()
+  while (( i < n )); do
+    local line="${RAW_LINES[$i]%$'\r'}"
+    if [[ "$line" =~ ^([[:space:]]*)(executables|runtime_files)[[:space:]]*:[[:space:]]*$ ]]; then
+      local indent="${BASH_REMATCH[1]}" key="${BASH_REMATCH[2]}"
+      local items="" found=0
+      local j=$((i + 1))
+      while (( j < n )); do
+        local cand="${RAW_LINES[$j]%$'\r'}"
+        if [[ "$cand" =~ ^([[:space:]]+)-[[:space:]]*(.+)$ ]] && (( ${#BASH_REMATCH[1]} > ${#indent} )); then
+          local item
+          item="$(echo "${BASH_REMATCH[2]}" | sed 's/[[:space:]]*$//' | tr -d '"'"'"'')"
+          items="${items:+$items, }$item"
+          found=1
+          j=$((j + 1))
+        else
+          break
+        fi
+      done
+      if [[ $found -eq 1 ]]; then
+        PP_LINES+=("${indent}${key}: [${items}]")
+        i=$j
+        continue
+      fi
+    fi
+    PP_LINES+=("$line")
+    i=$((i + 1))
+  done
 }
 
 # --- The ocr family (Phase 38, D32): plain verified FILES, not build archives -------
@@ -238,14 +296,17 @@ fi
 # whisper_cpp) with the same shape — only the selected --family's version/builds are
 # collected, so the whisper builds can never leak into a llama selection or vice versa.
 VERSION=""
-declare -a B_OS B_ARCH B_BACKEND B_URL B_SHA B_EXTRACT
+declare -a B_OS B_ARCH B_BACKEND B_URL B_SHA B_EXTRACT B_RUNTIME
 idx=-1
 TOP_KEY=""
+FAMILY_EXECUTABLES=""
 # Strip an inline YAML comment (whitespace + '#' + rest) before unquoting (M17) — the
 # committed `version: b9196   # PLACEHOLDER …` used to leak the comment into the value.
 strip_value() { echo "$1" | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
-while IFS= read -r raw; do
+mapfile -t RAW_LINES < "$SOURCES_FILE"
+collapse_block_lists
+for raw in "${PP_LINES[@]}"; do
   line="${raw%$'\r'}"
   [[ "$line" =~ ^[[:space:]]*# ]] && continue
   # A non-indented `key:` line starts a new top-level family block.
@@ -256,6 +317,12 @@ while IFS= read -r raw; do
   [[ "$TOP_KEY" == "$FAMILY" ]] || continue
   if [[ -z "$VERSION" && "$line" =~ ^[[:space:]]*version[[:space:]]*:[[:space:]]*(.+)$ ]]; then
     VERSION="$(strip_value "${BASH_REMATCH[1]}")"; continue
+  fi
+  # #339 P8-3: the FAMILY-level `executables:` list (a family shipping more than one
+  # executable, e.g. kiwix_tools: [kiwix-serve, kiwix-manage, kiwix-search]). Only
+  # meaningful before the `builds:` list starts ($idx -lt 0).
+  if [[ $idx -lt 0 && -z "$FAMILY_EXECUTABLES" && "$line" =~ ^[[:space:]]*executables[[:space:]]*:[[:space:]]*(.+)$ ]]; then
+    FAMILY_EXECUTABLES="$(strip_value "${BASH_REMATCH[1]}")"; continue
   fi
   if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*os[[:space:]]*:[[:space:]]*(.+)$ ]]; then
     idx=$((idx + 1))
@@ -271,9 +338,10 @@ while IFS= read -r raw; do
       url) B_URL[$idx]="$val" ;;
       sha256) B_SHA[$idx]="$(echo "$val" | tr '[:upper:]' '[:lower:]')" ;;
       extract_to) B_EXTRACT[$idx]="$val" ;;
+      runtime_files) B_RUNTIME[$idx]="$val" ;;
     esac
   fi
-done < "$SOURCES_FILE"
+done
 
 [[ -z "$VERSION" ]] && { echo "runtime-sources.yaml: missing $FAMILY.version (is the $FAMILY block present?)" >&2; exit 2; }
 
@@ -318,11 +386,40 @@ case "${B_EXTRACT[$SEL]}" in
 esac
 
 EXTRACT_TO="$TARGET/${B_EXTRACT[$SEL]}"
-# Binary name follows the FAMILY + the selected build's OS (mirrors assets.ts
-# sidecarBinaryName): llama-server for llama_cpp, whisper-cli for whisper_cpp.
-BIN_BASE="llama-server"; [[ "$FAMILY" == "whisper_cpp" ]] && BIN_BASE="whisper-cli"
+# #339 P8-3: EXECUTABLE LIST per family (mirrors assets.ts SIDECAR_FAMILY_SPECS +
+# planRuntimeDownload) — the primary base name per family, plus the yaml's family-level
+# `executables:` when present (its first entry is always the primary; llama_cpp/whisper_cpp
+# declare no `executables:`, so their required set stays the single binary it always was).
+PRIMARY_BASE="llama-server"
+[[ "$FAMILY" == "whisper_cpp" ]] && PRIMARY_BASE="whisper-cli"
+[[ "$FAMILY" == "kiwix_tools" ]] && PRIMARY_BASE="kiwix-serve"
+declare -a EXEC_BASES=("$PRIMARY_BASE")
+if [[ -n "$FAMILY_EXECUTABLES" ]]; then
+  while IFS= read -r e; do
+    already=0
+    for existing in "${EXEC_BASES[@]}"; do [[ "$existing" == "$e" ]] && already=1 && break; done
+    [[ $already -eq 0 ]] && EXEC_BASES+=("$e")
+  done < <(flow_list_items "$FAMILY_EXECUTABLES")
+fi
+# Binary name(s) follow the SELECTED build's OS (mirrors assets.ts sidecarBinaryName).
+# BIN_BASE/BIN_NAME/BIN_PATH keep referring to the PRIMARY only — the flatten step below
+# locates the archive's nested folder by the primary executable, exactly as before.
+BIN_BASE="$PRIMARY_BASE"
 BIN_NAME="$BIN_BASE"; [[ "${B_OS[$SEL]}" == "win" ]] && BIN_NAME="$BIN_BASE.exe"
 BIN_PATH="$EXTRACT_TO/$BIN_NAME"
+declare -a EXEC_NAMES=()
+for b in "${EXEC_BASES[@]}"; do
+  if [[ "${B_OS[$SEL]}" == "win" ]]; then EXEC_NAMES+=("$b.exe"); else EXEC_NAMES+=("$b"); fi
+done
+declare -a RUNTIME_FILE_NAMES=()
+RUNTIME_FILES_RAW="${B_RUNTIME[$SEL]:-}"
+if [[ -n "$RUNTIME_FILES_RAW" ]]; then
+  while IFS= read -r f; do RUNTIME_FILE_NAMES+=("$f"); done < <(flow_list_items "$RUNTIME_FILES_RAW")
+fi
+# Every file this install must produce: the executables, then the build's runtime_files
+# (verbatim — they already carry their own extension). Mirrors assets.ts requiredInstallFiles.
+declare -a REQUIRED_FILE_NAMES=("${EXEC_NAMES[@]}")
+if [[ ${#RUNTIME_FILE_NAMES[@]} -gt 0 ]]; then REQUIRED_FILE_NAMES+=("${RUNTIME_FILE_NAMES[@]}"); fi
 MARKER_PATH="$EXTRACT_TO/.hilbertraum-runtime.json"
 URL="${B_URL[$SEL]}"
 SHA="${B_SHA[$SEL]}"
@@ -331,27 +428,43 @@ echo "Fetch runtime -> $TARGET"
 echo "  build: ${B_OS[$SEL]}/${B_ARCH[$SEL]} ${B_BACKEND[$SEL]} @ $VERSION"
 echo "  url:   $URL"
 echo "  into:  $EXTRACT_TO"
+echo "  files: ${REQUIRED_FILE_NAMES[*]}"
+
+# marker_hash_for KEY MARKER_PATH — the recorded hash for one marker key (parsed with sed,
+# no jq dep; the marker is written by us as flat single-line JSON).
+marker_hash_for() {
+  sed -n 's/.*"binaries":{[^}]*"'"$1"'":"\([a-fA-F0-9]\{64\}\)".*/\1/p' "$2" | tr '[:upper:]' '[:lower:]'
+}
 
 # Idempotent skip is MARKER-based (Phase 14, mirrors assets.ts runtimeInstallCurrent):
 # "binary exists" alone would silently keep a CPU-era build in place after the default
-# became vulkan. Skip only when .hilbertraum-runtime.json matches the selected version+backend
-# — and, under --commercial, records the binary's hash (a hashless legacy marker is
-# re-fetched, #234).
+# became vulkan. Skip only when EVERY required file is present (#339 P8-3 — a half-installed
+# multi-file family is not "present", mirrors assets.ts runtimeBinaryPresent) and
+# .hilbertraum-runtime.json matches the selected version+backend — and, under --commercial,
+# records a hash for EVERY required file (a hashless legacy marker is re-fetched, #234).
 if [[ -f "$BIN_PATH" ]]; then
   SKIP=0
   WHY="install marker is missing or differs"
-  if [[ -f "$MARKER_PATH" ]]; then
-    # The marker is written by us as flat single-line JSON — parse with sed (no jq dep).
+  ALL_PRESENT=1
+  for f in "${REQUIRED_FILE_NAMES[@]}"; do
+    [[ -f "$EXTRACT_TO/$f" ]] || { ALL_PRESENT=0; break; }
+  done
+  if [[ $ALL_PRESENT -eq 0 ]]; then
+    WHY="one or more required files are missing"
+  elif [[ -f "$MARKER_PATH" ]]; then
     m_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
     m_backend="$(sed -n 's/.*"backend":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
     if [[ "$m_version" == "$VERSION" && "$m_backend" == "${B_BACKEND[$SEL]}" ]]; then
       SKIP=1
       if [[ $COMMERCIAL -eq 1 ]]; then
-        m_hash="$(sed -n 's/.*"binaries":{[^}]*"'"$BIN_NAME"'":"\([a-fA-F0-9]\{64\}\)".*/\1/p' "$MARKER_PATH" | tr '[:upper:]' '[:lower:]')"
-        if ! is_real_sha "$m_hash"; then
-          SKIP=0
-          WHY="install marker records no binary hash (legacy) — commercial mode"
-        fi
+        for f in "${REQUIRED_FILE_NAMES[@]}"; do
+          m_hash="$(marker_hash_for "$f" "$MARKER_PATH")"
+          if ! is_real_sha "$m_hash"; then
+            SKIP=0
+            WHY="install marker records no binary hash for one or more required files (legacy) — commercial mode"
+            break
+          fi
+        done
       fi
     fi
   fi
@@ -479,25 +592,61 @@ if [[ ! -f "$BIN_PATH" ]]; then
   fi
 fi
 
-if [[ -f "$BIN_PATH" ]]; then
-  chmod +x "$BIN_PATH" 2>/dev/null || true
-  # Record exactly which build is installed (mirrors assets.ts writeRuntimeMarker). The
-  # `binaries` map records the extracted binary's own SHA-256 (keyed by its name relative
-  # to the extract dir — it sits at the root after the flatten above) so the app can
-  # re-hash it immediately before spawn (binary-verifier.ts, #234). Only a
-  # VERIFIED archive earns that hash (#234): an unverified install must not mint a
-  # marker the sell gate and the spawn verifier would trust.
-  if [[ $ARCHIVE_VERIFIED -eq 1 ]]; then
-    BIN_SHA="$(sha256_of "$BIN_PATH")"
-    printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s","binaries":{"%s":"%s"}}' \
-      "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" "$BIN_NAME" "$BIN_SHA" > "$MARKER_PATH"
+if [[ ! -f "$BIN_PATH" ]]; then
+  echo "  FAIL: $BIN_NAME not found under $EXTRACT_TO after extraction — the release archive layout may have changed." >&2
+  exit 1
+fi
+
+# #339 P8-3: post-extract completeness check — EVERY required file (every declared
+# executable + runtime file), not just the primary. Mirrors assets.ts requiredInstallFiles /
+# the app's own post-extract check (runtime-download.ts installOne). A half-installed
+# multi-file family (e.g. the kiwix ICU DLLs left behind by a differently-shaped archive)
+# must fail loudly instead of writing a marker that claims a complete install.
+declare -a MISSING_REQUIRED=()
+for f in "${REQUIRED_FILE_NAMES[@]}"; do
+  [[ -f "$EXTRACT_TO/$f" ]] || MISSING_REQUIRED+=("$f")
+done
+if [[ ${#MISSING_REQUIRED[@]} -gt 0 ]]; then
+  echo "  FAIL: required file(s) missing under $EXTRACT_TO after extraction: ${MISSING_REQUIRED[*]}" >&2
+  exit 1
+fi
+
+for exe in "${EXEC_NAMES[@]}"; do
+  chmod +x "$EXTRACT_TO/$exe" 2>/dev/null || true
+done
+
+# Record exactly which build is installed (mirrors assets.ts writeRuntimeMarker). The
+# `binaries` map records every required file's own SHA-256 (keyed exactly like
+# markerBinaryKey — the path relative to the extract dir; everything here is flat) so the
+# app can re-hash each executable immediately before spawn (binary-verifier.ts, #234) and
+# the sell gate can check the runtime files too. ALL-OR-NOTHING (#339 P8-3, mirrors
+# runtime-download.ts installOne): only a VERIFIED archive earns hashes at all, and a
+# hashing failure on ANY required file drops the whole map rather than writing a partial
+# one — the verifier and the sell gate must never disagree about one install.
+if [[ $ARCHIVE_VERIFIED -eq 1 ]]; then
+  ALL_HASHED=1
+  declare -a ENTRIES=()
+  for f in "${REQUIRED_FILE_NAMES[@]}"; do
+    if h="$(sha256_of "$EXTRACT_TO/$f" 2>/dev/null)"; then
+      ENTRIES+=("\"$f\":\"$h\"")
+    else
+      ALL_HASHED=0
+      break
+    fi
+  done
+  if [[ $ALL_HASHED -eq 1 ]]; then
+    BIN_MAP="$(IFS=,; echo "${ENTRIES[*]}")"
+    printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s","binaries":{%s}}' \
+      "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" "$BIN_MAP" > "$MARKER_PATH"
   else
     printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s"}' \
       "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" > "$MARKER_PATH"
-    echo "  marker written WITHOUT a binary hash (archive unverified) — the sell gate refuses this install"
+    echo "  marker written WITHOUT binary hashes (could not hash every required file) — the sell gate refuses this install"
   fi
-  echo "  extracted + chmod +x $BIN_NAME (+ .hilbertraum-runtime.json install marker)"
-  exit 0
+else
+  printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s"}' \
+    "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" > "$MARKER_PATH"
+  echo "  marker written WITHOUT a binary hash (archive unverified) — the sell gate refuses this install"
 fi
-echo "  FAIL: $BIN_NAME not found under $EXTRACT_TO after extraction — the release archive layout may have changed." >&2
-exit 1
+echo "  extracted + chmod +x ${EXEC_NAMES[*]} (+ .hilbertraum-runtime.json install marker)"
+exit 0

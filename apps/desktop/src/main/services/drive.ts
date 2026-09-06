@@ -65,6 +65,10 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   // a prebuilt Windows build only; the mac/linux dirs exist for the documented
   // source-build provisioning step (drive-layout.md).
   ...DRIVE_OS_DIRS.map((os) => `runtime/whisper.cpp/${os}`),
+  // Third sidecar family, OPTIONAL (#339 P8-3): the kiwix-tools knowledge-pack tools.
+  // Never fetched by `prepare-drive --with-assets` — a DIY user runs
+  // `fetch-runtime --family kiwix_tools` explicitly once they want ZIM knowledge packs.
+  ...DRIVE_OS_DIRS.map((os) => `runtime/kiwix-tools/${os}`),
   // OCR language files: `<lang>.traineddata.gz`, vendored at drive-build
   // time (runtime-sources.yaml `ocr:` block) — the engine never fetches at runtime.
   'ocr',

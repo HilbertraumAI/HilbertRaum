@@ -300,7 +300,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 |---|---|
 | `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs + **the root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `DRIVE-NOTICES.md` — LIC-1), generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (~10.4 GB: chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber + Qwen2.5-VL vision) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
 | `fetch-models.{ps1,sh}` | Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
-| `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
+| `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), `kiwix_tools` (optional; the knowledge-pack tools — `kiwix-serve`/`kiwix-manage`/`kiwix-search` plus, on Windows, the five ICU DLLs; never part of `--with-assets`, only fetched by an explicit `--family kiwix_tools`, #339 P8-3), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm ci` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise; `npm ci` = lockfile-exact, never rewrites `package-lock.json` — issue #49, the dev half of hardening L-8) + build + test smoke. |
 | `release-issues-section.sh` | Not drive prep: `.github/workflows/release.yml` runs it while building a tag and appends its output to the release notes. It emits an "Issues resolved" section — the ISSUES closed by the PRs merged since the last **published** release (the same baseline GitHub's own generated "What's Changed" uses, so the two agree), resolved via each commit's associated PRs + `closingIssuesReferences` rather than by parsing "(#N)" out of subjects (which would miss true merge commits). Read-only `gh` API calls, so it is locally testable: `scripts/release-issues-section.sh HilbertraumAI/HilbertRaum master`. Best-effort by design — a failure is downgraded to a workflow warning, so release notes can never block a release build. |
@@ -752,16 +752,19 @@ these harnesses prove the *current* pin (the drive's previous binary was b9585).
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
 | `zim-real` | `HILBERTRAUM_ZIM_SMOKE` | real `kiwix-manage` registration, the real `kiwix-serve` sidecar, Xapian search, the offline article viewer read — fully offline. **FAIL-CLOSED (#301 P5, finding L8):** requested with a missing/invalid tools dir, either binary absent, a non-ZIM file or an unset query **FAILS** the run instead of silently skipping it |
 
-**Manual install of the pinned kiwix-tools bundle (until P8-3).** `zim-real`'s tools directory
-is not fetched by any script yet: download the pinned **kiwix-tools 3.8.1, win-x86_64** zip
-(see `model-policy.md` "Sidecar binaries — kiwix-tools" for the exact bundle/hashes) and
-unzip the WHOLE archive under `runtime/kiwix-tools/<os>/` (Windows needs its five ICU DLLs
-beside the two exes). A hand-placed bundle like this has no install marker and resolves
-through the hashless `skip-legacy` verifier path (residual R-1) rather than integrity
-verification; an in-app install (the family contract landed at #339 P8-1) writes that marker
-instead, and both `kiwix-serve` and `kiwix-manage` then verify normally — but no user-reachable
-install exists yet (the consent step is P8-2). The drive scripts' own `--family kiwix_tools`
-support is P8-3 — none of that lands here.
+**Installing the pinned kiwix-tools bundle.** `fetch-runtime --family kiwix_tools` (#339 P8-3)
+downloads, SHA-256-verifies and extracts the pinned **kiwix-tools 3.8.1** archive for the host
+(or `--os`/`--arch` to provision another OS's dir), writes a `.hilbertraum-runtime.json` install
+marker hashing every required file (`kiwix-serve`, `kiwix-manage`, `kiwix-search`, and on
+Windows the five ICU DLLs), and `chmod +x`s the executables on mac/linux — exactly like the
+`llama_cpp`/`whisper_cpp` families, except it is never fetched by `prepare-drive --with-assets`
+(the family is optional: a DIY user runs the command explicitly once they want ZIM knowledge
+packs). A manual unzip of the pinned zip (see `model-policy.md` "Sidecar binaries —
+kiwix-tools" for the exact bundle/hashes) under `runtime/kiwix-tools/<os>/` remains a fallback
+that still works, but leaves no install marker and so resolves through the hashless
+`skip-legacy` verifier path (residual R-1) instead of integrity verification — prefer the
+script. An in-app install (the consent step, P8-2) is still to come; `kiwix-serve` and
+`kiwix-manage` verify normally against either the script's marker or an in-app one.
 
 **Optional harness *inputs* (point a harness at a specific artifact).** Distinct from the on-switch
 env vars in the table above, several harnesses additionally read an **artifact-pointer input**,
