@@ -109,7 +109,11 @@ _2026-09-06 — **ZIM follow-up wave, step 1 — #344 (`fix/344-failed-lock-rear
 engine stopped (and an opted-in local API down) — the teardown stops every sidecar before the re-encrypt and only the post-unlock seam restarted the two eager ones. The lock
 handler's single AUD-02 disarm point now re-runs exactly those two restarts (`maybeAutoStartActiveModel`, `maybeStartLocalApi`) after `cancelLock()`; the successful-lock, quit and
 unlock paths are untouched, no epoch moves. Test: `lock-admission-race.test.ts` "a FAILED lock re-arms the chat engine …" (real vault + handler + `RuntimeManager`, a chat-path ask after
-the failure; red with the fix reverted). Docs: troubleshooting "Could not lock the workspace", CHANGELOG, rag-design §17 owner-leg annotation. Next: #340 residuals, then #339, then #340 capabilities._
+the failure; red with the fix reverted). Docs: troubleshooting "Could not lock the workspace", CHANGELOG, rag-design §17 owner-leg annotation. **Step 2 — #340 residual (a), the
+post-registration searchability probe (`fix/340-post-registration-probe`, stacked on step 1; paper `tmp/340-residuals.md`):** `ZimService.scheduleSearchabilityProbe` — once per completed
+`packs:add` batch and on enable, the reconcile's key pass first, the same guarded probe and conditional write, a `'mutation'` notice after a verdict; record rag-design **D-Z15**; test
+`zim-ipc-session` "#340 …" (four legs, red without the trigger). Owner questions (b) non-ASCII message vs metadata and (c) LaTeX strip / normalise / render posted on #340 — their
+code waits. Next: 21(l) `packs:status.excluded`, the UI nits, then #339, then #340 capabilities._
 
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — WAVE CLOSED: Phases 0–7 complete, #294 MERGED to master (`92e86a07`, 16:12 UTC), #301 closed by the merge.**_
 The PR's review remediation — 28 findings (H1–H4, M1–M11, L1–L9 with L10 withdrawn, DOC-1–DOC-4; three assessed High, H3 and DOC-1/DOC-2 Medium) — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;
@@ -717,7 +721,7 @@ open round's item stays the last block of §5.)
     `reconcile-start` and `-end` of one epoch (cosmetic, P9); the pack meta line shows the raw ISO 639-3 code unlabelled (copy nit, P9); `.footer-menu-btn` has no overflow rule of its own (low, P9);
     accepted deviation: the ScopePopover is non-modal (design-guidelines §11.15 decision 1, P6); T18-b — RECORDED 2026-09-06 (run by the orchestrator at the owner's request in real Electron against the real packs; rag-design §17 "Real acceptance" → "T18-b"; it surfaced T19 finding 3: kiwix-serve 3.8.1 win-x86_64 cuts ~5–20 % of large /raw reads short (the body's last part never arrives) — upstream, mitigated by the P7 fix PR 2, upstream report on #339); T19 the owner's Electron/drive legs — (vi) the relocated drive with
     persisted citations and (vii) live lock/unlock/failed lock PASSED 2026-09-06 on the real K: drive (rag-design §17 "Real acceptance" → "The owner's legs"; observations: a failed lock leaves the chat
-    engine stopped until a model is re-selected — #344, FIXED in the follow-up wave (2026-09-06 dated entry); a pack added via Add packs… stays searchability-unknown until Refresh; LaTeX echoed in answers — #340), (viii) the offline ask + viewer PASSED
+    engine stopped until a model is re-selected — #344, FIXED in the follow-up wave (2026-09-06 dated entry); a pack added via Add packs… stays searchability-unknown until Refresh — FIXED, D-Z15 (follow-up wave step 2); LaTeX echoed in answers — #340, owner ruling pending), (viii) the offline ask + viewer PASSED
     (item (d) closed) — T19 complete; the orchestrator's machine legs are recorded in rag-design §17 "Real acceptance"; R-1 open
     until P8 (the acceptance bundle has no install marker ⇒ `skip-legacy`); R-2 multipart unsupported; R-4 Authenticode — result recorded at P7 in model-policy.md; R-6 → P9; R-9 accepted
     (2026-09-05). From P7's T19: kiwix-manage 3.8.1 refuses non-ASCII archive paths on Windows (registration-only — kiwix-serve serves such a file from UTF-8 XML; documented in

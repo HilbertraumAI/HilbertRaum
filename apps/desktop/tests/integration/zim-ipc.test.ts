@@ -79,6 +79,9 @@ function fakeZimService(db: () => Db, zimDir: string): unknown {
     registerPack: (d: Db, p: string) => packs.registerPack(d, deps, p),
     removePack: (d: Db, id: string) => packs.removePack(d, id),
     setPackEnabled: (d: Db, id: string, enabled: boolean) => packs.setPackEnabled(d, id, enabled),
+    // #340 (D-Z15): the post-add / post-enable probe is a background service pass; this stand-in
+    // has no sidecar, and the behaviour is driven against the REAL service in zim-ipc-session.
+    scheduleSearchabilityProbe: () => undefined,
     getArticle: async () => null,
     makeArm: () => null,
     // #301 P3b: `packs:add` opens the native picker under a service-owned operation. This

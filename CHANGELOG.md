@@ -130,6 +130,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A knowledge pack you just added is checked for full-text search right away.** Until now the
+  check ran only when you unlocked or pressed Refresh, so a pack added through *Add packs…* (or
+  enabled after being added) showed no "No full-text index" badge until then, and a question asked
+  in between reported such a pack as "search failed". The check now runs by itself a moment after
+  adding or enabling, and the badge and the sources picker update without a Refresh.
 - **A lock that could not finish no longer leaves the chat without a model.** When "Lock now"
   fails (for example on a nearly-full drive) the workspace stays open, as before — but the app
   used to stop the AI model on the way and never start it again, so the next question was met

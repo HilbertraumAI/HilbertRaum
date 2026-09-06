@@ -2561,6 +2561,8 @@ offline article viewer. Files are registered in place, never copied.
   unknown. The key (`<file size>:<file mtime>:<kiwix-serve binary size>:<mtime>`) resets a
   row to unknown whenever it changes — a replaced file, a healed path with a different
   size, or a tools-bundle swap all re-probe automatically; Refresh re-runs the same pass.
+  The reconcile is no longer the only trigger: a completed `packs:add` batch and an enable
+  schedule the same probe in the background — **D-Z15** below (#340).
   Cost, accepted: a session whose registered packs are all confirmed wakes no sidecar at
   all; a session with one unknown pack costs one background sidecar start (~0.8 s) at that
   session's reconcile. A confirmed-`'no'` pack is skipped by the ask (outcome
@@ -2624,6 +2626,31 @@ offline article viewer. Files are registered in place, never copied.
   line is scrubbed from the persisted answer; archive candidates are charged against the SAME
   context budget as document chunks, in both directions. Tests: `zim-prompt-framing.test.ts`,
   T01-a/b/c.
+- **D-Z15 — the searchability probe runs after Add packs… and Enable too (follow-up wave,
+  2026-09-06; #340, the owner's T19 observation).** D-Z11's probe ran only at the end of a
+  reconciliation, so a pack registered through `packs:add` — or enabled after being registered
+  disabled, which the reconcile's enabled ∧ available filter skipped — stayed `unknown` (tickable,
+  no badge) until the next Refresh or unlock, and an ask in between reported an index-less pack as
+  `search-failed` (the `/search` 404) instead of `not-searchable`. `ZimService.scheduleSearchabilityProbe(getDb)`
+  is the second trigger: the IPC layer calls it ONCE per completed `packs:add` batch (after the
+  loop — a probe started between two files of one batch would be discarded as stale by the second
+  file's revision bump, a wasted sidecar start) and on `packs:setEnabled(…, true)` when the flag
+  actually changed; the direct service API does not schedule (its many unit callers count
+  starts and generations). Never on the caller's critical path (a zero timer, D3; `getDb` is read
+  when the pass runs, so a workspace that locked meanwhile is refused by admission before any
+  handle is touched); single-flight with one coalesced rerun like `reconcile()`; a no-op while a
+  reconciliation is in flight (that pass's end-probe sees the new row). The pass is a registered
+  `zim-reconcile` operation (the lock's `abortAll` + bounded settle reach it) that runs the
+  reconcile's `resetStaleSearchability` key pass FIRST — a freshly registered row has no
+  `searchable_key`, and a verdict stored under a NULL key would be reset and re-probed by the next
+  reconcile — then the same `withServer`-guarded `probeUnknownSearchability` and the same
+  conditional write, and emits `packs:changed` `'mutation'` after a verdict landed so the panel and
+  the picker refetch without a Refresh. An `AbortError` writes nothing and is not logged; a
+  `StaleServerError` leaves unknown as before. Test: `zim-ipc-session.test.ts` "#340 a pack added
+  through packs:add (or enabled …) is probed in the background …" (one batch of two files →
+  yes/no with ONE sidecar start and no Refresh; the next Refresh issues no `/suggest`; enable
+  after a never-probed registration; a lock landing mid-probe writes nothing and the next
+  session's reconcile confirms). Red with the IPC trigger removed.
 
 ### Module map
 

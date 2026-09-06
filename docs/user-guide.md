@@ -818,6 +818,8 @@ Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
    server restarted mid-question. In the sources picker, a greyed-out pack always says why
    it can't be ticked — file missing, a different archive at that location, disabled, or no
    full-text search index; the panel itself shows a "No full-text index" badge on such a pack.
+   The app checks that a moment after you add or enable a pack (and when you unlock or press
+   Refresh), so the badge appears on its own.
 
 Removing a pack's registration (the **Remove** button) only forgets it — the file itself is
 never deleted. An article from a pack that has no full-text search index is still readable:
