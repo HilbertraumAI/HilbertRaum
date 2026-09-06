@@ -168,8 +168,13 @@ interface SessionHooks {
   probe: (port: number) => Promise<boolean>
   /** Runs before the loopback server answers; park it to hold an HTTP read open. */
   beforeRespond: (url: string) => Promise<void>
-  /** Decide the whole response for this URL (T12), or null for the default fixtures. */
-  respond: (url: string) => { status: number; body: string } | null
+  /** Decide the whole response for this URL (T12), or null for the default fixtures.
+   *  `headers` carries a redirect's `Location` (#301 P7 T19); it defaults to none. */
+  respond: (url: string) => {
+    status: number
+    headers?: Record<string, string>
+    body: string
+  } | null
 }
 
 interface SessionHarness {
@@ -284,7 +289,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       // "the viewer fetched the OTHER archive" cannot pass as a success.
       const custom = hooks.respond(url)
       if (custom) {
-        res.writeHead(custom.status, { 'content-type': 'text/html' })
+        res.writeHead(custom.status, { 'content-type': 'text/html', ...custom.headers })
         res.end(custom.body)
         return
       }
@@ -1197,6 +1202,61 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
           .map((p) => p.trim())
           .filter(Boolean)
       ).toEqual(['packId: string', 'articlePath: string'])
+    } finally {
+      await h.close()
+    }
+  })
+
+  // ---------------------------------------------------------------------------------------
+  // T19 (the real-tool acceptance run) — kiwix-serve 3.8.1 answers a ZIM REDIRECT ENTRY under
+  // /raw with a 302 to the VIEWER route /content/<book>/<target>. The viewer must open the
+  // target; a redirect naming ANOTHER book must stay the honest null (finding L4).
+  // (#301 P7; docs/rag-design.md §17 D-Z11)
+  // ---------------------------------------------------------------------------------------
+  it('T19 a redirect entry read over packs:getArticle opens the TARGET article, while a cross-book redirect stays null and fetches nothing from the other book', async () => {
+    const h = await sessionHarness()
+    try {
+      const packId = await h.registerPack('klima.zim', '55555555-0000-4000-8000-000000000000')
+      const library = (await h.svc.ensureServer(h.db())) as ServedLibrary
+      const name = library.names.get(packId)!
+      const alias = 'A/CO2-Äquivalent' // the redirect entry the user's citation names
+      const target = 'A/Treibhauspotential' // the article it aliases
+      const aliasUrl = `/raw/${encodeURIComponent(name)}/content/${encodeArticlePath(alias)}`
+      const targetUrl = `/raw/${encodeURIComponent(name)}/content/${encodeArticlePath(target)}`
+      const targetHtml =
+        '<html><body><h1>Treibhauspotential</h1><p>' +
+        'Das Treibhauspotential ist der Zielartikel dieser Weiterleitung. '.repeat(40) +
+        '</p></body></html>'
+      /** Where the alias redirects; flipped to another book for the second half. */
+      let location = `/content/${name}/${encodeArticlePath(target)}`
+      h.hooks.respond = (url) => {
+        if (url === aliasUrl) return { status: 302, headers: { location }, body: '' }
+        if (url === targetUrl) return { status: 200, body: targetHtml }
+        return null
+      }
+      const rawsSinceMark = (mark: number): string[] =>
+        h.requests.slice(mark).filter((u) => u.startsWith('/raw/'))
+
+      // ---- (1) THE SAME BOOK: the viewer gets the TARGET article, title and all ------------
+      let mark = h.requests.length
+      const opened = (await invoke(handlers, IPC.getPackArticle, packId, alias)).result as {
+        title: string
+        sections: Array<{ label: string | null; text: string }>
+      } | null
+      expect(opened).not.toBeNull()
+      // The title comes from the fetched HTML, so it is the TARGET's — the locator that was
+      // stored stays `packId + articlePath` (the alias), unchanged by the hop.
+      expect(opened!.title).toBe('Treibhauspotential')
+      expect(opened!.sections.map((s) => s.text).join('\n')).toContain('Zielartikel dieser Weiterleitung')
+      // Exactly one hop: the alias, then the target, and nothing else.
+      expect(rawsSinceMark(mark)).toEqual([aliasUrl, targetUrl])
+
+      // ---- (2) ANOTHER BOOK: null, and not one byte read from that book --------------------
+      location = '/content/some_other_book/A/Treibhauspotential'
+      mark = h.requests.length
+      const crossBook = await invoke(handlers, IPC.getPackArticle, packId, alias)
+      expect(crossBook.result).toBeNull()
+      expect(rawsSinceMark(mark)).toEqual([aliasUrl])
     } finally {
       await h.close()
     }
