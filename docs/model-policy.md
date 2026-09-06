@@ -722,6 +722,13 @@ Per-file SHA-256: `kiwix-serve.exe` `619ECCC76C112A57538E3CEB001D75E71CAF5A04017
 carry no equivalent per-file inspection yet (their code-signing is R-4's remaining manual leg,
 owner's).
 
+The linux-x86_64 build's per-binary inventory is humaniser's measurement of 2026-09-06 on
+Ubuntu 22.04 (#352), not re-measured by the maintainer; `--version` reported kiwix-tools
+3.8.1, libkiwix 14.1.1, libzim 9.4.0, libxapian 1.4.23. Per-binary SHA-256:
+`kiwix-serve` `a4efa19354e52a2b4a3c6567d363897140d35fbec6b10b9843ee1f511434042c`,
+`kiwix-manage` `d5ea144a87418d15245d73280ec92084f7878860a7d3d8e80252e83c3f709ccb`,
+`kiwix-search` pending (asked on #352).
+
 Transitive components, with grants **read from the pinned source trees** (`COPYING` files + the
 per-file headers under `src/`, not assumed from upstream README prose):
 

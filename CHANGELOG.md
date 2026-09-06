@@ -128,6 +128,14 @@ from its first public `1.0.0` release onward.
   automatically; when several variants are equally good picks, the group shows one you can
   actually download.
 
+### Changed
+
+- **The Linux/macOS install step for knowledge-pack tools is documented.** The panel's
+  "kiwix-tools are missing" notice, and the user guide, now point at a Troubleshooting
+  section that names the recommended `fetch-runtime` script command first, with the manual
+  download-and-extract steps (including the tarball's single top-level folder) kept as a
+  fallback.
+
 ### Fixed
 
 - **Small knowledge-pack polish.** The packs panel shows each archive's language by name ("German")
