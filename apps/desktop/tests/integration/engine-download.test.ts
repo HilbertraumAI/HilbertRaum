@@ -9,7 +9,9 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { stringify } from 'yaml'
+import { parse as parseYaml, stringify } from 'yaml'
+import { isRealSha256 } from '../../src/shared/manifest'
+import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 import {
   EngineDownloadManager,
   engineStatus,
@@ -30,7 +32,8 @@ import {
   runtimeMarkerPath,
   verifyDownloadedFile,
   writeRuntimeMarker,
-  ENGINE_DOWNLOAD_MAX_BYTES
+  ENGINE_DOWNLOAD_MAX_BYTES,
+  SIDECAR_FAMILY_SPECS
 } from '../../src/main/services/assets'
 import type { FetchFn } from '../../src/main/services/assets'
 import {
@@ -692,6 +695,28 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
     expect(after.installed).toBe(true)
     expect(after.missingFamilies).toEqual([])
     expect(after.missingOptionalFamilies).toEqual([])
+
+    // The COMMITTED pin: four per-platform artifacts with real digests, the family optional in
+    // the yaml exactly as the code spec says, and the notices carrying the family + its
+    // corresponding-source record (the drift and notices suites pin the matrices and the text).
+    const repoRoot = join(__dirname, '..', '..', '..', '..')
+    const shipped = validateRuntimeSources(parseYaml(readFileSync(join(repoRoot, 'model-manifests', 'runtime-sources.yaml'), 'utf8')))
+    expect(shipped.errors).toEqual([])
+    const kiwix = shipped.families?.kiwix_tools
+    expect(kiwix?.version).toBe('3.8.1')
+    expect(kiwix?.optional).toBe(true)
+    expect(kiwix?.executables).toEqual(['kiwix-serve', 'kiwix-manage', 'kiwix-search'])
+    expect(kiwix?.builds.map((b) => `${b.os}/${b.arch}`)).toEqual(['win/x64', 'mac/arm64', 'mac/x64', 'linux/x64'])
+    for (const b of kiwix?.builds ?? []) {
+      expect(isRealSha256(b.sha256), b.url).toBe(true)
+      expect(b.url.startsWith('https://download.kiwix.org/release/kiwix-tools/')).toBe(true)
+    }
+    expect(kiwix?.builds[0]?.runtimeFiles).toEqual(['icudt74.dll', 'icuin74.dll', 'icuio74.dll', 'icutu74.dll', 'icuuc74.dll'])
+    expect(SIDECAR_FAMILY_SPECS.find((s) => s.family === 'kiwix_tools')?.optional).toBe(true)
+    const notices = readFileSync(join(repoRoot, 'DRIVE-NOTICES.md'), 'utf8')
+    expect(notices).toContain('runtime-family: kiwix_tools 3.8.1')
+    expect(notices).toContain('### kiwix-tools 3.8.1 — GPL-3.0-or-later')
+    expect(notices).toContain('#### Complete corresponding source')
   })
 
   it('whisper_cpp keeps its non-optional semantics (a missing whisper-cli still makes installed false)', () => {

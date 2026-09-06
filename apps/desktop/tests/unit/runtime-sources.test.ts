@@ -313,5 +313,8 @@ describe('validateRuntimeSources', () => {
     const res = validateRuntimeSources(parse(readFileSync(file, 'utf8')))
     expect(res.errors).toEqual([])
     expect(res.ok).toBe(true)
+    // #339 P8-1: the shipped kiwix_tools block is optional with all four pinned builds.
+    expect(res.families?.kiwix_tools?.optional).toBe(true)
+    expect(res.families?.kiwix_tools?.builds).toHaveLength(4)
   })
 })

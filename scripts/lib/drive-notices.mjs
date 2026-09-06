@@ -1,9 +1,9 @@
 // Shared builder for DRIVE-NOTICES.md (LIC-1, full-audit 2026-07-12b) — the drive-root
 // license/attribution notices for everything a prepared drive carries OUTSIDE the
-// packaged app: the sidecar runtime binaries (llama.cpp, whisper.cpp), the SDL2.dll the
-// whisper Windows archive bundles, the OCR language data, and the model weights described
-// by the manifests under model-manifests/. Kept as a lib (the shipped-packages.mjs
-// precedent) so the vitest freshness gate
+// packaged app: the sidecar runtime binaries (llama.cpp, whisper.cpp, kiwix-tools), the
+// SDL2.dll the whisper Windows archive bundles, the OCR language data, and the model
+// weights described by the manifests under model-manifests/. Kept as a lib (the
+// shipped-packages.mjs precedent) so the vitest freshness gate
 // (apps/desktop/tests/integration/drive-notices.test.ts) recomputes the EXACT output the
 // generator writes and fails while the committed file is stale.
 //
@@ -61,6 +61,21 @@ function fence(text) {
   return `${f}\n${text}\n${f}`
 }
 
+// #339 P8-1: the five copyleft components of the kiwix-tools 3.8.1 build whose complete
+// corresponding source a preloaded Kit must carry, with the SHA-256 of each pinned source
+// archive (from tmp/339-kiwix-provisioning-plan.md §2, read from the kiwix-build recipe
+// pins and the upstream release directories). P8-4 (#339) moves this to
+// runtime-sources.yaml `source_bundle:` and reads it from there; the DIRECTORY is pending
+// the owner's layout ruling on #339.
+const KIWIX_SOURCE_DIR = 'runtime/kiwix-tools/source/'
+const KIWIX_SOURCE_ARCHIVES = [
+  ['kiwix-tools-3.8.1.tar.xz', 'dd769c9bd3d75b59ad9e451b128187b128da6a10b1241bb2d0325fe4aafe51a3'],
+  ['libkiwix-14.1.1.tar.xz', 'e232f42bba33561493e2d7318c3be60d8508e83a8891a8358135519dedc5ff5a'],
+  ['libzim-9.4.0.tar.xz', '7fa374f4714b23c43afa3fb406d7e21c483d77e8218895e1408e2f037969b6ea'],
+  ['xapian-core-1.4.23.tar.xz', '30d3518172084f310dab86d262b512718a7f9a13635aaa1a188e61dc26b2288c'],
+  ['libmicrohttpd-0.9.76.tar.gz', 'f0b1547b5a42a6c0f724e8e1c1cb5ce9c4c35fb495e7d780b9930d35011ceb4c']
+]
+
 /** Recursively list *.yaml/*.yml under dir in deterministic order. */
 function walkYaml(dir) {
   const out = []
@@ -86,13 +101,23 @@ export function buildDriveNotices(repoRoot) {
   const whisperMit = pinned('whisper.cpp-MIT.txt')
   const sdlZlib = pinned('SDL2-zlib.txt')
   const apache = pinned('Apache-2.0.txt')
+  // #339 P8-1: kiwix-tools' copyleft + attribution-only components.
+  const gpl2 = pinned('GPL-2.0.txt')
+  const lgpl21 = pinned('LGPL-2.1.txt')
+  const curlLicense = pinned('curl.txt')
+  const icuLicense = pinned('ICU-Unicode.txt')
+  const docoptMit = pinned('docopt-MIT.txt')
+  const pugixmlMit = pinned('pugixml-MIT.txt')
+  const zlibLicense = pinned('zlib.txt')
+  const zstdBsd = pinned('zstd-BSD-3-Clause.txt')
+  const xzCopying = pinned('xz-COPYING.txt')
 
   // --- Runtime families (names + pinned versions come from the yaml, never hardcoded) ---
   const runtimeSources = parse(
     readFileSync(join(repoRoot, 'model-manifests', 'runtime-sources.yaml'), 'utf8')
   )
   const families = Object.keys(runtimeSources).sort(foldedCodepointCompare)
-  const knownFamilies = ['llama_cpp', 'ocr', 'whisper_cpp']
+  const knownFamilies = ['kiwix_tools', 'llama_cpp', 'ocr', 'whisper_cpp']
   if (JSON.stringify(families) !== JSON.stringify(knownFamilies)) {
     throw new Error(
       `runtime-sources.yaml families changed (${families.join(', ')} vs known ` +
@@ -142,15 +167,18 @@ export function buildDriveNotices(repoRoot) {
   lines.push('# Drive notices — licenses & attribution')
   lines.push('')
   lines.push('This file covers everything a prepared HilbertRaum drive carries OUTSIDE the')
-  lines.push('packaged application: the sidecar runtime binaries (llama.cpp, whisper.cpp), the')
-  lines.push('OCR language data, and the model weights described by the manifests under')
-  lines.push('`model-manifests/`.')
+  lines.push('packaged application: the sidecar runtime binaries (llama.cpp, whisper.cpp,')
+  lines.push('kiwix-tools), the OCR language data, and the model weights described by the')
+  lines.push('manifests under `model-manifests/`.')
   lines.push('')
   lines.push('- **HilbertRaum itself** is free software under **GPL-3.0-or-later** — the full')
   lines.push('  license text ships as `LICENSE` at this drive\'s root. The complete corresponding')
   lines.push('  source code is available at https://github.com/HilbertraumAI/HilbertRaum.')
   lines.push('- **Third-party npm packages bundled inside the application** are covered by')
   lines.push('  `THIRD-PARTY-NOTICES.md`, also at this drive\'s root.')
+  lines.push('- **kiwix-tools** (the knowledge-pack tools) is **copyleft** — its licence terms and')
+  lines.push('  the complete corresponding source for its GPL/LGPL components are recorded in the')
+  lines.push('  "Runtime binaries and data" section below.')
   lines.push('')
   lines.push('This file is GENERATED — do not edit by hand. It is derived from the committed')
   lines.push('model manifests (`model-manifests/**/*.yaml`), the runtime pin file')
@@ -199,6 +227,122 @@ export function buildDriveNotices(repoRoot) {
   lines.push('`docs/model-policy.md`). SDL2 is under the zlib license (`licenses/SDL2-zlib.txt`):')
   lines.push('')
   lines.push(fence(sdlZlib))
+  lines.push('')
+  lines.push(`### kiwix-tools ${versionOf('kiwix_tools')} — GPL-3.0-or-later`)
+  lines.push('')
+  lines.push('The `kiwix-serve`, `kiwix-manage` and `kiwix-search` programs under')
+  lines.push('`runtime/kiwix-tools/<os>/` are prebuilt release artifacts of the kiwix-tools project')
+  lines.push('(https://github.com/kiwix/kiwix-tools), pinned at release')
+  lines.push(`${versionOf('kiwix_tools')} and published at`)
+  lines.push('https://download.kiwix.org/release/kiwix-tools/ (license review:')
+  lines.push('`docs/model-policy.md`). They power the optional knowledge-pack feature; a drive may')
+  lines.push('ship without them.')
+  lines.push('')
+  lines.push('kiwix-tools is licensed **GPL-3.0-or-later**. The full GNU General Public License v3')
+  lines.push('text ships as `LICENSE` at this drive\'s root — the same text that licenses HilbertRaum')
+  lines.push('itself.')
+  lines.push('')
+  lines.push('These are STATICALLY LINKED builds: the libraries below are compiled into the')
+  lines.push('executables, so their terms apply to the binaries you received here. Versions are as')
+  lines.push('reported by `kiwix-serve --version` at the pinned release and by the kiwix-build')
+  lines.push('recipe for that build.')
+  lines.push('')
+  lines.push('#### libkiwix 14.1.1 — GPL-3.0-or-later')
+  lines.push('')
+  lines.push('Read from the pinned source tree (`COPYING` = GPL-3; 43 source files "version 3 … or')
+  lines.push('(at your option) any later version", one file GPL-2.0-or-later). Text: `LICENSE` at')
+  lines.push('this drive\'s root.')
+  lines.push('')
+  lines.push('#### libzim 9.4.0 — GPL-2.0-or-later, with GPL-3.0-or-later files')
+  lines.push('')
+  lines.push('Read from the pinned source tree: `COPYING` = GPL-2, and the per-file headers are')
+  lines.push('mixed — 74 files GPL-2.0-or-later, 16 files GPL-3.0-or-later. The combined work is')
+  lines.push('therefore effectively GPL-3.0-or-later, but libzim itself is NOT wholly GPL-3.')
+  lines.push('GPL-2.0 text:')
+  lines.push('')
+  lines.push(fence(gpl2))
+  lines.push('')
+  lines.push('#### Xapian 1.4.23 — GPL-2.0-or-later')
+  lines.push('')
+  lines.push('The search-index library `kiwix-serve` uses for full-text queries. GPL-2.0 text as')
+  lines.push('above (`licenses/GPL-2.0.txt`).')
+  lines.push('')
+  lines.push('#### libmicrohttpd 0.9.76 — LGPL-2.1-or-later')
+  lines.push('')
+  lines.push('The HTTP server `kiwix-serve` embeds. Statically linked, so the LGPL\'s relinking')
+  lines.push('condition applies: the corresponding source below lets you rebuild it.')
+  lines.push('')
+  lines.push(fence(lgpl21))
+  lines.push('')
+  lines.push('#### libcurl 8.4.0 — curl license')
+  lines.push('')
+  lines.push('The HTTP client library `kiwix-serve` links for outbound requests. Attribution-only')
+  lines.push('(no copyleft):')
+  lines.push('')
+  lines.push(fence(curlLicense))
+  lines.push('')
+  lines.push('#### ICU 74 — Unicode/ICU license')
+  lines.push('')
+  lines.push('Unicode text handling; the five `icu*74.dll` files sit beside the executables in the')
+  lines.push('Windows bundle (the other builds link it statically). Attribution-only:')
+  lines.push('')
+  lines.push(fence(icuLicense))
+  lines.push('')
+  lines.push('#### docopt.cpp 0.6.3 — MIT')
+  lines.push('')
+  lines.push('Command-line argument parsing for the kiwix-tools executables. MIT/Boost dual;')
+  lines.push('taken under MIT:')
+  lines.push('')
+  lines.push(fence(docoptMit))
+  lines.push('')
+  lines.push('#### pugixml 1.15 — MIT')
+  lines.push('')
+  lines.push('XML parsing used by libkiwix. Attribution-only:')
+  lines.push('')
+  lines.push(fence(pugixmlMit))
+  lines.push('')
+  lines.push('#### zlib 1.3.1 — zlib license')
+  lines.push('')
+  lines.push('Compression used by libkiwix. A *different* copyright line from the SDL2 zlib text')
+  lines.push('above, so it is pinned separately:')
+  lines.push('')
+  lines.push(fence(zlibLicense))
+  lines.push('')
+  lines.push('#### Zstandard 1.5.7 — BSD-3-Clause')
+  lines.push('')
+  lines.push('Compression used by libzim. BSD-3-Clause/GPL-2.0 dual; taken under BSD-3-Clause:')
+  lines.push('')
+  lines.push(fence(zstdBsd))
+  lines.push('')
+  lines.push('#### xz / liblzma 5.2.6 — public domain')
+  lines.push('')
+  lines.push('Compression used by libzim. Per the pinned `COPYING`, liblzma itself is in the public')
+  lines.push('domain (the 0BSD relicensing of xz came in a later release than 5.2.6):')
+  lines.push('')
+  lines.push(fence(xzCopying))
+  lines.push('')
+  lines.push('#### Complete corresponding source')
+  lines.push('')
+  lines.push('Five of the components above are copyleft — kiwix-tools, libkiwix, libzim, Xapian and')
+  lines.push('libmicrohttpd — so the complete corresponding source for the binaries on this drive is')
+  lines.push('provided with them. On a preloaded HilbertRaum Kit the upstream source archives sit in')
+  lines.push(`the \`${KIWIX_SOURCE_DIR}\` directory of this drive (layout per the owner's ruling on`)
+  lines.push('issue #339), each verifiable against the SHA-256 recorded here:')
+  lines.push('')
+  lines.push('```')
+  const kiwixNameWidth = Math.max(...KIWIX_SOURCE_ARCHIVES.map(([name]) => name.length)) + 3
+  for (const [name, sha] of KIWIX_SOURCE_ARCHIVES) {
+    lines.push(`${name.padEnd(kiwixNameWidth)}${sha}`)
+  }
+  lines.push('```')
+  lines.push('')
+  lines.push('If you obtained these programs by installing them from inside HilbertRaum instead,')
+  lines.push('they were downloaded from the Kiwix project\'s own server at the URLs pinned in')
+  lines.push('`model-manifests/runtime-sources.yaml`, and the same source archives are published by')
+  lines.push('their upstream projects at the addresses recorded in `docs/model-policy.md` ("Sidecar')
+  lines.push('binaries — kiwix-tools"), which also records the kiwix-build recipe the')
+  lines.push(`${versionOf('kiwix_tools')} binaries were produced from. This record applies to the`)
+  lines.push('binaries as pinned above; nothing here requires network access to read.')
   lines.push('')
   lines.push(`### OCR language data ${versionOf('ocr')} — Apache-2.0`)
   lines.push('')

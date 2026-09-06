@@ -578,6 +578,36 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
     expect(win.extractTo).toBe('runtime/whisper.cpp/win')
     expect(isRealSha256(win.sha256)).toBe(true)
   })
+
+  // #339 P8-1: the third family — OPTIONAL, multi-executable, four builds (two mac archs
+  // sharing one extract dir), real hashes throughout.
+  it('pins the kiwix_tools family at 3.8.1 with real hashes for all four builds', () => {
+    const raw = parse(
+      readFileSync(join(process.cwd(), '..', '..', 'model-manifests', 'runtime-sources.yaml'), 'utf8')
+    )
+    const res = validateRuntimeSources(raw)
+    expect(res.ok).toBe(true)
+    const kiwix = res.families?.kiwix_tools
+    expect(kiwix?.version).toBe('3.8.1')
+    expect(kiwix?.optional).toBe(true)
+    expect(kiwix?.executables).toEqual(['kiwix-serve', 'kiwix-manage', 'kiwix-search'])
+    expect(kiwix?.builds).toHaveLength(4)
+    for (const b of kiwix!.builds) expect(isRealSha256(b.sha256), `${b.os}/${b.arch}`).toBe(true)
+
+    const win = kiwix!.builds.find((b) => b.os === 'win')
+    expect(win?.arch).toBe('x64')
+    expect(win?.extractTo).toBe('runtime/kiwix-tools/win')
+    expect(win?.runtimeFiles).toEqual(['icudt74.dll', 'icuin74.dll', 'icuio74.dll', 'icutu74.dll', 'icuuc74.dll'])
+
+    const macArm = kiwix!.builds.find((b) => b.os === 'mac' && b.arch === 'arm64')
+    const macX64 = kiwix!.builds.find((b) => b.os === 'mac' && b.arch === 'x64')
+    expect(macArm?.extractTo).toBe('runtime/kiwix-tools/mac')
+    expect(macX64?.extractTo).toBe('runtime/kiwix-tools/mac')
+
+    const linux = kiwix!.builds.find((b) => b.os === 'linux')
+    expect(linux?.arch).toBe('x64')
+    expect(linux?.extractTo).toBe('runtime/kiwix-tools/linux')
+  })
 })
 
 describe('planRuntimeDownload', () => {
@@ -1135,7 +1165,10 @@ describe('archiveNameFromUrl (#245)', () => {
     const file = join(__dirname, '..', '..', '..', '..', 'model-manifests', 'runtime-sources.yaml')
     const res = validateRuntimeSources(parse(readFileSync(file, 'utf8')))
     expect(res.ok).toBe(true)
-    const builds = [...(res.sources?.builds ?? []), ...(res.whisper?.builds ?? [])]
+    // Iterate `res.families` (#339 P8-1) rather than hand-enumerating `sources`/`whisper` —
+    // a new family that this test never learned about would otherwise stay invisible to it,
+    // exactly the blind spot that let kiwix_tools ship unchecked before this change.
+    const builds = Object.values(res.families ?? {}).flatMap((f) => f!.builds)
     expect(builds.length).toBeGreaterThan(0)
     for (const b of builds) {
       const name = archiveNameFromUrl(b.url, 'FALLBACK')
