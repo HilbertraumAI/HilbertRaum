@@ -482,8 +482,9 @@ describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlist
     // The lock latch's own disarm-on-failure path: it must disarm ONLY while the workspace is
     // genuinely still open. A lock that already closed the DB must KEEP the latch, so the bare
     // check is precisely the intended question here — `workspaceAdmitsWork` would be false
-    // mid-teardown and would skip the disarm, stranding the session.
-    'src/main/ipc/registerWorkspaceIpc.ts :: if (ctx.workspace.isUnlocked()) ctx.workspace.cancelLock()',
+    // mid-teardown and would skip the disarm, stranding the session. The block also re-runs the
+    // two eager post-unlock restarts after the disarm (#344), which DO check `workspaceAdmitsWork`.
+    'src/main/ipc/registerWorkspaceIpc.ts :: if (ctx.workspace.isUnlocked()) {',
     // Vision status: a display-only availability probe. Locked ⇒ fall back to the build's isDev
     // and a cache miss; it computes install state, it does not load a model.
     'src/main/services/vision/status.ts :: const unlocked = ctx.workspace.isUnlocked()',

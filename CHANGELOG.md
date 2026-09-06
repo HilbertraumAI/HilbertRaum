@@ -130,6 +130,13 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A lock that could not finish no longer leaves the chat without a model.** When "Lock now"
+  fails (for example on a nearly-full drive) the workspace stays open, as before — but the app
+  used to stop the AI model on the way and never start it again, so the next question was met
+  with "No model is running" until you started the model by hand on the AI Model screen. The
+  model now restarts by itself after a failed lock (when "Start the selected model automatically"
+  is on, exactly as after an unlock), and the local API, if you have it switched on, comes back
+  too.
 - **The speed figure on Settings → Diagnostics is now the model's real decode speed.** The
   benchmark used to count streamed chunks over the whole request, including the time the model
   spent reading the prompt, so on the recommended Qwen3.8 models — which can produce several

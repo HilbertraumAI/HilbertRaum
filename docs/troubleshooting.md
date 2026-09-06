@@ -203,6 +203,13 @@ model off the drive via the AI Model screen), then press **Lock now** again. Qui
 retries the lock too. Even if the app closes before a lock ever succeeds, your newest data is
 kept safely on the drive and secured at the next unlock — you don't lose the session's work.
 
+The lock stops the AI model (and every other engine) before it re-encrypts, so after a failed
+lock the model comes back the same way it does after an unlock: automatically in the
+background when **Start the selected model automatically** is on (Chat shows "Starting…" for a
+moment and then the composer again), or by hand on the AI Model screen when that setting is off.
+The local API, if you have it switched on, comes back as well. Everything else — document
+search, the reranker, translation, voice input, OCR, knowledge packs — restarts on its next use.
+
 ---
 
 ## "Could not open the workspace yet: another program is holding a recovery file"
