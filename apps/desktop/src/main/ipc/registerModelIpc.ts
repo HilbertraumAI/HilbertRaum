@@ -27,6 +27,7 @@ import {
   weightPath
 } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
+import { notifyPerformanceChanged } from './performance-notify'
 import {
   latestEffectiveRead,
   preferCandidate,
@@ -243,28 +244,42 @@ let startingSampleMemo: { forModelId: string; sample: EffectiveReadSample | null
  * observer-time persist hit a locked workspace. The cross-session source ranking is
  * enforced per destination (`effectiveReadPatch` → `preferCandidate`): a fresh session's
  * checksum sample never overwrites last session's persisted model-load sample. Never
- * throws (persistGpuFailure precedent). P3 hooks its `performance:changed` push here.
- * Exported as the explicit retry seam (and for the persistence tests); production callers
- * are this module's handlers and the observer registered in `registerModelIpc`.
+ * throws (persistGpuFailure precedent). Exported as the explicit retry seam (and for the
+ * persistence tests); production callers are this module's handlers and the observer
+ * registered in `registerModelIpc`.
+ *
+ * The `performance:changed` push (P3): a retry call pushes only when it actually WROTE (the
+ * Drive tile's persisted figure moved); the observer wiring pushes on every accepted sample
+ * regardless (the observed rows read the per-source latches, which moved even when the
+ * persist was a ranked no-op) — see `persistPendingEffectiveRead`.
  */
 export function persistEffectiveRead(ctx: AppContext): void {
+  if (persistPendingEffectiveRead(ctx)) notifyPerformanceChanged()
+}
+
+/** The persist itself; true when a settings write happened, false on a no-op or a deferral. */
+function persistPendingEffectiveRead(ctx: AppContext): boolean {
   try {
     const sample = latestEffectiveRead()
-    if (!sample) return
+    if (!sample) return false
     const here = machineKey(detectSystem())
     const db = ctx.db // throws while locked → the catch below, memo untouched, retried later
     const memo = persistedSampleMemo
-    if (memo && memo.at === sample.at && memo.db === db && memo.key === here) return
+    if (memo && memo.at === sample.at && memo.db === db && memo.key === here) return false
     const patch = effectiveReadPatch(getSettings(db), sample, here)
-    if (patch === null) return // no eligible destination yet — not handled, retry next call
+    if (patch === null) return false // no eligible destination yet — not handled, retry next call
     // Ordering (no multi-key transaction in the settings store): history first, then
     // lastBenchmark — a crash between the two loses at most the headline copy, never a machine.
+    let wrote = false
     if (patch.benchmarkHistory || patch.lastBenchmark) {
       updateSettings(db, { benchmarkHistory: patch.benchmarkHistory, lastBenchmark: patch.lastBenchmark })
+      wrote = true
     }
     persistedSampleMemo = { at: sample.at, db, key: here }
+    return wrote
   } catch (err) {
     log.warn('Could not persist the effective-read sample', { error: String(err) })
+    return false
   }
 }
 
@@ -331,9 +346,13 @@ export function registerModelIpc(ctx: AppContext): void {
   // (including one from a background download's cold-file hash, which has no model IPC
   // afterwards to piggyback on). The explicit persistEffectiveRead calls after
   // start/list/verify remain as cheap retries for observer-time persists that hit a
-  // locked workspace. The SINGLE observer wiring for the process — P3's push notifier
-  // hooks `persistEffectiveRead`, not a second observer.
-  setEffectiveReadObserver(() => persistEffectiveRead(ctx))
+  // locked workspace. The SINGLE observer wiring for the process: persist first, then the
+  // Performance push — on EVERY accepted sample (P3), including a checksum that lost the
+  // ranked slot to an earlier model load, whose per-source latch the observed rows show.
+  setEffectiveReadObserver(() => {
+    persistPendingEffectiveRead(ctx)
+    notifyPerformanceChanged()
+  })
   // F16 (audit-postmerge-2026-06-29): the DB-touching model handlers (list/select/verify/start all
   // read ctx.db via getSettings/selectModel/computeInstallState) fail-close when locked but throw
   // the raw English vault string; gate them with the localized copy (parity). stopRuntime + the two
@@ -396,6 +415,8 @@ export function registerModelIpc(ctx: AppContext): void {
     log.info('Select model', { modelId })
     const result = selectModel(ctx.db, ctx.manifestsDir, modelId)
     ctx.audit?.('model_selected', `Model selected: ${modelId}`, { modelId })
+    // The Performance snapshot keys its "Your model" block on the active slots.
+    notifyPerformanceChanged()
     return result
   })
 
@@ -462,6 +483,8 @@ export function registerModelIpc(ctx: AppContext): void {
     log.info('Use model (select + start)', { modelId })
     selectModel(ctx.db, ctx.manifestsDir, modelId)
     ctx.audit?.('model_selected', `Model selected: ${modelId}`, { modelId })
+    notifyPerformanceChanged()
+
     // Mirror startRuntime: free the runtime slot from any yielding deep-index build before the
     // start tears down / replaces llama-server.
     ctx.docTasks?.abortActiveBuild()

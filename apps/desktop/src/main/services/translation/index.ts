@@ -62,4 +62,12 @@ export interface Translator {
    * read as "unknown"; `getAppStatus` forwards it to the Translate screen's device hint.
    */
   deviceStatus?(): TranslationDeviceStatus | null
+  /**
+   * Subscribe to residency transitions — whatever flips `deviceStatus().live` (a cold start,
+   * the idle teardown, a suspend/stop). Optional — fakes without it are simply never
+   * observed; the main layer wires the Performance screen's push to it (PR #303 P3).
+   * Returns the unsubscribe.
+   */
+  onResidencyChange?(cb: () => void): () => void
 }
+

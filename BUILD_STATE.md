@@ -36,7 +36,21 @@ collapsed, the remediation register added to item 21. Plan: `tmp/pr-303-fix-plan
 **P2:** M2/M4/M6/L2 repaired together in the new pure `services/benchmark-persistence.ts` (identity before
 source ranking under G3, outgoing-result backfill on the run / restore / startup-seed paths, commit-time
 re-resolution of a mid-run sample, samples written to `lastBenchmark` AND this machine's history entry,
-history-first write order); records in `benchmark.md` "Persistence" / "History per machine"._
+history-first write order); records in `benchmark.md` "Persistence" / "History per machine".
+**P3:** M1/M3/L3 — the screen is pushed, never polled: `EVENTS.performanceChanged` (payload-free,
+every live window, after each mutation: run start/end after persist + release, every accepted
+read-speed sample incl. a ranked loser, the answer latch, placements, restore/backfill/GPU-probe
+writes, chat-runtime starting/ready/stopped via a new `RuntimeManager.onChange`, resident-sidecar
+load/unload via `onResidencyChange` on the e5/reranker/translation/vision runtimes, the snapshot's
+settings keys); `running` = the held benchmark span; the observed rows are session latches only
+(G2: main-process lifetime, never a persisted fallback); `drive`/`speed` steps tick only on success;
+the renderer splits backend `running` from its own action, subscribes before the first read,
+serialises and stamps reads, and keeps read and action failures apart (retry button). Records:
+`benchmark.md` "Push, not poll" / "Progress", data-contracts (`EVENTS`, `api.onPerformanceChanged`).
+Dev launch smoke on a scratch root (CDP-driven): the push refresh verified live for an own run and an
+external run; it caught a React.StrictMode double-mount defect in the renderer's read drain (a stale
+reply left the remount's read un-issued; fixed + pinned). Measured: one `performance:get` read ≈ 100 ms
+in the dev build (the sync manifest scan, N6 / follow-up I5)._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -694,7 +708,7 @@ open round's item stays the last block of §5.)
     `docs/benchmark.md` at P9, one commit per phase, CI green each):** P1 ✅ M7/L7 pins, stale
     `_Host` prose, item 20 archived, `skills.title` orphan removed after the master merge;
     P2 ✅ M2/M4/M6/L2 persistence (identity before ranking, upgrade backfill, mid-run samples);
-    P3 ☐ M1/M3/L3 `performance:changed` push + honest steps; P4 ☐ H1/L8/M5-residual schemas +
+    P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ☐ H1/L8/M5-residual schemas +
     launch context; P5 ☐ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
     P6 ☐ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ☐ L1/SD2 auto-start sequencing;
     P8 ☐ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c);

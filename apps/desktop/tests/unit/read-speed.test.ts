@@ -119,19 +119,28 @@ describe('effective-read latch (#108)', () => {
     expect(latestEffectiveRead()).toBeNull()
   })
 
-  it('the observer fires once per ACCEPTED sample and its throw never escapes', () => {
-    const seen: Array<string | null> = []
+  it('the observer fires once per ACCEPTED sample (ranked winner or not) and its throw never escapes', () => {
+    const seen: Array<{ ranked: string | null; checksum: string | null }> = []
     setEffectiveReadObserver(() => {
-      seen.push(latestEffectiveRead()?.modelId ?? null)
+      seen.push({
+        ranked: latestEffectiveRead()?.modelId ?? null,
+        checksum: latestEffectiveReadBySource('checksum')?.modelId ?? null
+      })
       throw new Error('persist failed — must not reach the producer')
     })
     expect(() => recordChecksumRead(6_000_000_000, 60_000, 'observed')).not.toThrow()
     recordChecksumRead(MIN_READ_SAMPLE_BYTES - 1, 60_000, 'rejected-by-floor')
-    // A ranking-rejected candidate notifies nobody either.
     recordModelLoadRead('/ignored.gguf', 10_000, 'load', 6_000_000_000)
+    // A checksum that LOSES the ranked slot to the model load still notifies (P3): its per-source
+    // latch moved — the observer sees the ranked latch unchanged and the checksum latch updated.
     recordChecksumRead(6_000_000_000, 60_000, 'outranked')
-    expect(seen).toEqual(['observed', 'load'])
+    expect(seen).toEqual([
+      { ranked: 'observed', checksum: 'observed' },
+      { ranked: 'load', checksum: 'observed' },
+      { ranked: 'load', checksum: 'outranked' }
+    ])
   })
+
 
   it('the observer sees the sample already latched (persistence reads the latch)', () => {
     const cb = vi.fn(() => expect(latestEffectiveRead()?.modelId).toBe('latched-first'))

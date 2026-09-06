@@ -356,6 +356,8 @@ export class TranslationRuntime {
   private startAbort: AbortController | null = null
   private readonly idleTimeoutMs: number
   private readonly idleClock: IdleClock
+  /** Residency listeners (`onResidencyChange`): fired after `deviceStatus().live` flips. */
+  private readonly residencyListeners = new Set<() => void>()
 
   constructor(private readonly opts: TranslationRuntimeOptions) {
     this.modelId = opts.modelId
@@ -446,6 +448,30 @@ export class TranslationRuntime {
     return this.lastStart ? { ...this.lastStart, live: this.server !== null } : null
   }
 
+  /**
+   * Subscribe to residency transitions (PR #303 P3): a successful cold start, the idle
+   * teardown, a suspend/stop, and an unexpected exit — everything that flips
+   * `deviceStatus().live`. Fired synchronously after the flip, before any kill is awaited,
+   * so a reader in the callback sees the new state. Observability only; a throwing listener
+   * never breaks the sidecar's lifecycle. Returns the unsubscribe.
+   */
+  onResidencyChange(cb: () => void): () => void {
+    this.residencyListeners.add(cb)
+    return () => {
+      this.residencyListeners.delete(cb)
+    }
+  }
+
+  private emitResidencyChange(): void {
+    for (const cb of this.residencyListeners) {
+      try {
+        cb()
+      } catch {
+        /* observability only */
+      }
+    }
+  }
+
   /** One launch attempt at one device posture; installs `this.server` on success. */
   private async startAttempt(device: TranslationDevice, startSignal?: AbortSignal): Promise<void> {
     // Parse the server's own load log for the offload outcome (issue #42 reopen): under the
@@ -499,7 +525,10 @@ export class TranslationRuntime {
       // latch — the next cold start pins `--device none` instead of crash-looping the GPU across
       // a doc-task's per-window retries (the chat §5.3 auto-fallback, session-scoped).
       onUnexpectedExit: () => {
-        if (this.server === server) this.server = null
+        if (this.server === server) {
+          this.server = null
+          this.emitResidencyChange()
+        }
         if (device === 'auto') {
           this.noteDeviceFallback('GPU-composed translation sidecar exited unexpectedly mid-session')
         }
@@ -512,6 +541,7 @@ export class TranslationRuntime {
     // A parse miss stays honest as null (e.g. a forced-CPU start on a GPU-less machine prints
     // no offload line); the hook is observability-only and must never break the start path.
     this.lastStart = { device, gpuLayers, totalLayers }
+    this.emitResidencyChange()
     try {
       this.opts.onStarted?.({ device, gpuLayers, totalLayers })
     } catch {
@@ -703,7 +733,10 @@ export class TranslationRuntime {
     if (this.idleTeardownPromise) await this.idleTeardownPromise.catch(() => undefined)
     const server = this.server
     this.server = null
-    if (server) await server.stop()
+    if (server) {
+      this.emitResidencyChange()
+      await server.stop()
+    }
   }
 
   // ---- Idle-teardown interlock (the vision RUNTIME-4 pattern) --------------------------
@@ -738,7 +771,9 @@ export class TranslationRuntime {
     // Null the reference SYNCHRONOUSLY before awaiting the kill: a translate() arriving
     // mid-teardown then sees `server === null` and cold-starts a fresh, independent child.
     this.server = null
+    this.emitResidencyChange()
     this.idleTeardownPromise = server.stop().finally(() => {
+
       this.idleTeardownPromise = null
     })
     await this.idleTeardownPromise

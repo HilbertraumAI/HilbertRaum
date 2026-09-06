@@ -13,6 +13,7 @@ import type {
 import type { ModelManifest } from '../../shared/manifest'
 import { detectSystem, runBenchmark, type GpuBenchmarkInput } from '../services/benchmark'
 import { effectiveReadOrPersisted } from './registerModelIpc'
+import { notifyPerformanceChanged } from './performance-notify'
 import { backfillOutgoing, historyEquals, mergeSampleIntoResult } from '../services/benchmark-persistence'
 import {
   findMachine,
@@ -21,11 +22,12 @@ import {
   memoryClassOf,
   otherMachines,
   placementVerdict,
+  recordAnswerSpeed,
   upsertHistory
 } from '../services/performance'
 import { latestModelPlacement, setModelPlacementObserver } from '../services/runtime/placement'
 import { latestEffectiveReadBySource } from '../services/read-speed'
-import { EVENTS } from '../../shared/ipc'
+import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
 import { gpuUsefulForProfile } from '../services/runtime/gpu'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { discoverManifests } from '../services/models'
@@ -59,6 +61,9 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
     if (binPath && ctx.probeGpu) {
       devices = await ctx.probeGpu(binPath)
       updateSettings(ctx.db, { gpuProbe: { devices, probedAt: new Date().toISOString() } })
+      // The graphics tile and the memory class read this probe: an empty device list is a
+      // result too (the tile flips to "None"), so the write notifies either way.
+      notifyPerformanceChanged()
     }
   } catch (err) {
     log.warn('GPU probe failed (benchmark continues without it)', String(err))
@@ -86,7 +91,15 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
  *
  * Throws the friendly, localized refusal. The Diagnostics button surfaces it; the first-run
  * caller (`maybeRunFirstBenchmark`) already logs and drops it, and re-runs next launch because
- * `lastBenchmark` stays null.
+ * `lastBenchmark` stays null. A refused call emits NO `performance:changed`: the span it saw
+ * belongs to the running benchmark, whose own release will announce the idle state — a
+ * refusal announcing it would tell the screen the first run had finished.
+ *
+ * The push (P3, G6): `performance:changed` once the span is taken (`running` flips true —
+ * the screen learns about a run it did not start: first-run, moved-drive, another window)
+ * and once more in the `finally`, after BOTH the persist and the release, on success and on
+ * failure alike. That second push is the idle signal; the progress 'done' step precedes the
+ * persist and must not be read as one.
  */
 export async function runAndPersistBenchmark(
   ctx: AppContext,
@@ -95,10 +108,12 @@ export async function runAndPersistBenchmark(
   const busy = modelBusyLane(ctx)
   if (busy) throw new Error(tMain(modelBusyMessageKey(busy)))
   const releaseOccupancy = ctx.runtime.occupancy.begin('benchmark')
+  notifyPerformanceChanged()
   try {
     return await runBenchmarkAndPersist(ctx, onProgress)
   } finally {
     releaseOccupancy()
+    notifyPerformanceChanged()
   }
 }
 
@@ -196,6 +211,7 @@ export function maybeRunFirstBenchmark(ctx: AppContext): void {
         if (!historyEquals(seeded, settings.benchmarkHistory)) {
           updateSettings(ctx.db, { benchmarkHistory: seeded })
           log.info('Filed the last benchmark result under this computer in the history')
+          notifyPerformanceChanged()
         }
         return
       }
@@ -214,10 +230,13 @@ export function maybeRunFirstBenchmark(ctx: AppContext): void {
           profile: known.profile,
           recommendedModelId: known.recommendedModelId
         })
+        // The screen may already be open on the outgoing computer's result: tell it.
+        notifyPerformanceChanged()
         return
       }
       if (!historyEquals(history, settings.benchmarkHistory)) {
         updateSettings(ctx.db, { benchmarkHistory: history })
+        notifyPerformanceChanged()
       }
       log.info('Drive is on a new computer: benchmarking it in the background')
     } else {
@@ -254,11 +273,21 @@ export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
 }
 
 /**
- * The Performance screen's one read: the last result and whether it is this computer's,
- * the other computers the drive has been checked on, whether a run is in progress, and the
- * session's observed figures (a finished answer, a model start, a file check) — the latter
- * two straight from the read-speed latches, never persisted.
+ * Is the ACTIVE chat model resident and ready? Read from the runtime's state, never from
+ * `active() != null` alone and never from the placement latch (DR6): the placement is
+ * recorded when the rung is healthy but BEFORE the #109 warm-up generation finishes, and
+ * `status().running` stays false for that whole window — so a loading model reads "not
+ * loaded" until it is actually ready. A start in flight (a first start or a switch) reads
+ * the same way, and a runtime running some OTHER model than the active one does not count
+ * for this row. Optional-chained like the sibling service probes: partial test contexts
+ * build a `runtime` with only the members they need.
  */
+function chatModelResident(ctx: AppContext, activeId: string | null): boolean {
+  const status = ctx.runtime?.status?.()
+  if (!status || !status.running || !status.healthy || status.startingModelId) return false
+  return activeId == null || status.modelId === activeId
+}
+
 /** The "Your model" block: the active model against this computer's memory. */
 function buildPlacement(
   ctx: AppContext,
@@ -304,7 +333,7 @@ function buildPlacement(
       modelId: activeId,
       sizeOnDiskGb: model?.sizeOnDiskGb ?? null,
       device: gpuDevice,
-      loaded: ctx.runtime.active() != null,
+      loaded: chatModelResident(ctx, activeId),
       lifetime: 'session',
       gpuLayers: null,
       totalLayers: null
@@ -388,17 +417,25 @@ function buildPlacement(
   }
 }
 
+/**
+ * The Performance screen's one read: the last result and whether it is this computer's,
+ * the other computers the drive has been checked on, whether a run is in progress, the
+ * placement block, and the session's observed figures. A GETTER: it must never call
+ * `notifyPerformanceChanged` (the push would fan a read out into more reads).
+ *
+ * `observed` (M3 / G2) is SESSION latches only — the last finished answer, the newest
+ * `model_load` sample, the newest `checksum` sample, each latched in the main process and
+ * cleared with it (they survive a workspace lock/unlock, never a restart). The persisted
+ * `current.effectiveRead` is deliberately NOT a fallback here, for a same-machine result as
+ * much as a foreign one: the copy promises "while you worked", and a weeks-old sample is not
+ * that. The Drive tile reads the persisted figure with its own source and date instead.
+ */
 export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
   const settings = getSettings(ctx.db)
   const sys = detectSystem()
   const here = machineKey(sys)
   const current = settings.lastBenchmark
   const currentKey = machineKey(current)
-  // The persisted model-load sample outlives the session; the session latch wins when it
-  // exists (a start we just watched), otherwise the last persisted one still says how the
-  // last start on this drive went.
-  const persistedLoad =
-    current?.effectiveRead?.source === 'model_load' ? current.effectiveRead : null
   const probed = settings.gpuProbe?.devices[0]
   // An unknown identity on either side reads as "this machine": the moved-drive check in
   // maybeRunFirstBenchmark makes the same call, so the two never contradict each other.
@@ -415,29 +452,49 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
     currentGpu: probed ? { name: probed.name, totalMb: probed.totalMb } : null,
     currentMachine,
     otherMachines: otherMachines(settings.benchmarkHistory, currentKey ?? here),
-    running: modelBusyLane(ctx) === 'benchmark',
+    // The benchmark's OWN span, read directly (M1): `modelBusyLane` answers "chat" first, so a
+    // permitted foreground answer used to hide a held benchmark span and the screen re-enabled
+    // its button mid-run.
+    running: ctx.runtime.occupancy.held('benchmark'),
     placement: buildPlacement(ctx, settings, here, sys.ramGb),
     observed: {
       lastAnswer: latestAnswerSpeed(),
-      lastModelLoad: latestEffectiveReadBySource('model_load') ?? persistedLoad,
+      lastModelLoad: latestEffectiveReadBySource('model_load'),
       lastChecksum: latestEffectiveReadBySource('checksum')
     }
   }
+}
+
+/**
+ * The chat-stream answer-speed observer's body (wired in `initBackend` through
+ * `setAnswerSpeedObserver`): latch the finished answer's #290 payload with the model that
+ * produced it, then push. The latch itself (`recordAnswerSpeed`) stays pure; the push lives
+ * here in the IPC layer. Local-API answers never pass through the chat observer, so they
+ * never latch (documented, not changed).
+ */
+export function observeAnswerSpeed(ctx: AppContext, speed: AnswerSpeed): void {
+  recordAnswerSpeed(speed, ctx.runtime.active()?.modelId ?? null)
+  notifyPerformanceChanged()
 }
 
 export function registerBenchmarkIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
   // Persist every observed placement under its model id (benchmark.md "Your model"), so the
   // row survives a restart. Skipped while locked; a failure is logged, never thrown into a start.
+  // The session latch already moved before this observer ran, and the snapshot reads the
+  // latch first — so the push follows the observation even when the persist is skipped.
   setModelPlacementObserver((placement) => {
     try {
-      if (!workspaceAdmitsWork(ctx.workspace)) return
-      const placements = { ...getSettings(ctx.db).modelPlacements, [placement.modelId]: placement }
-      updateSettings(ctx.db, { modelPlacements: placements })
+      if (workspaceAdmitsWork(ctx.workspace)) {
+        const placements = { ...getSettings(ctx.db).modelPlacements, [placement.modelId]: placement }
+        updateSettings(ctx.db, { modelPlacements: placements })
+      }
     } catch (err) {
       log.warn('Could not persist the model placement', { error: String(err) })
     }
+    notifyPerformanceChanged()
   })
+
   // SEC-N2: both handlers touch ctx.db (via updateSettings/getSettings). The ctx.db getter already
   // fail-closes when the workspace is locked, but it throws a raw English string; mirror every other
   // DB-touching handler with an explicit requireUnlocked() so a locked call surfaces the localized

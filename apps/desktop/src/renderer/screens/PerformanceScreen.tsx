@@ -27,6 +27,12 @@ import type {
 //   4. "Other computers": one row per machine the drive has been checked on.
 // The raw table + Copy stays on Settings › Diagnostics (the support surface); this screen
 // answers the user's question ("what can this computer run, how fast") in plain words.
+//
+// The whole screen is PUSHED, never polled (benchmark.md "Push, not poll"): main broadcasts the
+// payload-free `performance:changed` after anything the snapshot reads has changed, and the
+// screen re-reads `performance:get`. So the observed rows, the loaded/not-loaded pills and the
+// running state stay current while the screen is open, including for a benchmark another window
+// (or the first-run path) started.
 
 /** Below this a measured decode speed reads "Slow" (the picker's own #95 step-down gate). */
 const SLOW_TOKENS_PER_SECOND = 5
@@ -179,74 +185,156 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   // it into `current` main-side; this covers a main process older than that seam).
   const [probedGpu, setProbedGpu] = useState<{ name: string; totalMb: number } | null>(null)
   const [runtimeModelId, setRuntimeModelId] = useState<string | null>(null)
-  const [running, setRunning] = useState(false)
+  /** A check THIS window started ("Check again" / "Start … and measure"). Kept apart from the
+   *  snapshot's `running`, which is the backend's benchmark occupancy span and is true for runs
+   *  this window never started (PR #303 audit M1: merging the two locked the screen into
+   *  "Running…" for a foreign run and never let it out). */
+  const [ownActionInFlight, setOwnActionInFlight] = useState(false)
   const [doneSteps, setDoneSteps] = useState<BenchmarkProgressStep[]>([])
-  const [error, setError] = useState<string | null>(null)
+  /** The last failed `performance:get`; cleared by the next successful read. */
+  const [fetchError, setFetchError] = useState<string | null>(null)
+  /** The last failed action; cleared when the user starts another one — never by a read, so a
+   *  background refresh cannot swallow the failure the user is still looking at. */
+  const [actionError, setActionError] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
-  useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-    }
+  // ---- The snapshot read: pushed, serialised (benchmark.md "Push, not poll") ----------------
+  // `performance:changed` carries nothing; every push means "re-read `performance:get`". One
+  // read at a time: a push that lands while a read is in flight raises `wantedRef` and buys
+  // ANOTHER pass once that read settles, so no push is ever dropped and two reads never race.
+  // `genRef` stamps each issued read — only the newest stamp may apply a reply, and unmount
+  // bumps it, so a late reply is discarded instead of touching a dead screen. A discarded reply
+  // CONTINUES the drain rather than leaving it: a read wanted meanwhile (React.StrictMode's
+  // dev double mount asks for one on the same instance) must still be issued. No timers.
+  const genRef = useRef(0)
+  const readingRef = useRef(false)
+  const wantedRef = useRef(false)
+  const pendingRef = useRef<Promise<void> | null>(null)
+  /** Mirrors `ownActionInFlight` for the apply path (state is a render behind). */
+  const ownActionRef = useRef(false)
+  /** `running` of the last applied snapshot: its false → true edge is a run starting. */
+  const backendRunningRef = useRef(false)
+
+  const applySnapshot = useCallback((next: PerformanceSnapshot): void => {
+    // Verbatim, never merged with the previous value: the screen follows the backend out of a
+    // run as readily as into one.
+    setSnap(next)
+    // A run this window did not start has no steps here (main sends `benchmark:progress` to the
+    // requesting window only), so it shows the running state with none ticked rather than
+    // inventing them. Our own run cleared them at the click and its first step can land before
+    // this snapshot does — re-clearing under our own run would un-tick it.
+    if (next.running && !backendRunningRef.current && !ownActionRef.current) setDoneSteps([])
+    backendRunningRef.current = next.running
   }, [])
 
-  const refresh = useCallback(async (): Promise<void> => {
-    try {
-      const next = await window.api.getPerformance()
-      if (mountedRef.current) {
-        setSnap(next)
-        setRunning((r) => r || next.running)
-      }
-    } catch (err) {
-      if (mountedRef.current) setError(friendlyIpcError(err))
-    }
-  }, [])
-
-  useEffect(() => {
-    void refresh()
-    // Display names for the model ids the results carry, the active context pick, and which
-    // model is up (the "Start … and measure" offer). lazyVerify: no weight hashing for a
-    // name lookup.
-    window.api
-      .listModels(true)
-      .then((list) => mountedRef.current && setModels(list))
+  /** The cheap metadata the actions read, re-read with every snapshot: which model is up (the
+   *  "Start … and measure" offer, the speed step's label) and the active context pick. NOT
+   *  `listModels` — that is a name lookup, mount-only. Fire-and-forget under the read's stamp,
+   *  so a slow reply neither stalls the snapshot nor overwrites a newer one. */
+  const refreshMeta = useCallback((gen: number): void => {
+    const fresh = (): boolean => mountedRef.current && gen === genRef.current
+    void window.api
+      .getRuntimeStatus()
+      .then((r) => {
+        if (fresh()) setRuntimeModelId(r.running ? r.modelId : null)
+      })
       .catch(() => {})
-    window.api
+    void window.api
       .getSettings()
       .then((s) => {
-        if (!mountedRef.current) return
+        if (!fresh()) return
         setContextOverride(s.contextTokensOverride ?? null)
         const d = s.gpuProbe?.devices?.[0]
         setProbedGpu(d ? { name: d.name, totalMb: d.totalMb } : null)
       })
       .catch(() => {})
-    window.api
-      .getRuntimeStatus()
-      .then((r) => mountedRef.current && setRuntimeModelId(r.running ? r.modelId : null))
-      .catch(() => {})
-  }, [refresh])
-
-  // The steps of a check THIS window started (main sends them to the requesting window only).
-  useEffect(() => {
-    const off = window.api.onBenchmarkProgress?.((step) => {
-      if (!mountedRef.current) return
-      if (step === 'done') return
-      setDoneSteps((prev) => (prev.includes(step) ? prev : [...prev, step]))
-    })
-    return () => off?.()
   }, [])
 
+  const refresh = useCallback((): Promise<void> => {
+    wantedRef.current = true
+    // Already reading: the flag above guarantees one more pass when it settles.
+    if (readingRef.current) return pendingRef.current ?? Promise.resolve()
+    readingRef.current = true
+    const drain = async (): Promise<void> => {
+      try {
+        while (wantedRef.current && mountedRef.current) {
+          wantedRef.current = false
+          const gen = (genRef.current += 1)
+          try {
+            const next = await window.api.getPerformance()
+            if (!mountedRef.current || gen !== genRef.current) continue
+            applySnapshot(next)
+            setFetchError(null)
+          } catch (err) {
+            if (!mountedRef.current || gen !== genRef.current) continue
+            // The last snapshot stays on screen and the actions stay live; the banner explains
+            // the stale figures and offers the retry.
+            setFetchError(friendlyIpcError(err))
+          }
+          refreshMeta(gen)
+        }
+      } finally {
+        readingRef.current = false
+        pendingRef.current = null
+      }
+    }
+    const p = drain()
+    // Park it only if the drain actually suspended — a synchronous throw finishes it before
+    // this line, and its `finally` has already cleared the flags.
+    if (readingRef.current) pendingRef.current = p
+    return p
+  }, [applySnapshot, refreshMeta])
+
+  // Subscribe BEFORE the first read (a push that lands during it must not be missed) and tear
+  // both subscriptions down on unmount: one registration per mount, no accumulation.
+  useEffect(() => {
+    mountedRef.current = true
+    const offChanged = window.api.onPerformanceChanged(() => {
+      void refresh()
+    })
+    // The steps of a check THIS window started (main sends them to the requesting window only).
+    const offProgress = window.api.onBenchmarkProgress((step) => {
+      if (!mountedRef.current) return
+      // 'done' means the PROBES are complete — the persist and the occupancy release still
+      // follow (benchmark.md "Progress"), so it is not the idle signal: re-read rather than
+      // guess, and let the terminal push be the one that turns `running` off.
+      if (step === 'done') {
+        void refresh()
+        return
+      }
+      setDoneSteps((prev) => (prev.includes(step) ? prev : [...prev, step]))
+    })
+    void refresh()
+    // Display names for the model ids the results carry. Mount-only: it is a name lookup, no
+    // push changes it, and a model installed elsewhere arrives with this screen's next mount.
+    // lazyVerify: no weight hashing for a name lookup.
+    window.api
+      .listModels(true)
+      .then((list) => mountedRef.current && setModels(list))
+      .catch(() => {})
+    return () => {
+      mountedRef.current = false
+      // Invalidate everything in flight: a reply that lands after this applies nothing.
+      genRef.current += 1
+      offChanged?.()
+      offProgress?.()
+    }
+  }, [refresh])
+
   const runCheck = useCallback(async (): Promise<void> => {
-    setRunning(true)
-    setError(null)
+    ownActionRef.current = true
+    setOwnActionInFlight(true)
+    setActionError(null)
     setDoneSteps([])
     try {
       await window.api.runBenchmark()
     } catch (err) {
-      if (mountedRef.current) setError(friendlyIpcError(err))
+      if (mountedRef.current) setActionError(friendlyIpcError(err))
     } finally {
-      if (mountedRef.current) setRunning(false)
+      // ONLY the local flag: whether a run still holds the lane is the snapshot's answer (the
+      // persist and the release follow the last step), and the push after them delivers it.
+      ownActionRef.current = false
+      if (mountedRef.current) setOwnActionInFlight(false)
       await refresh()
     }
   }, [refresh])
@@ -255,17 +343,19 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
    *  "Use this model" action), then check, so the check's speed leg has a runtime. */
   const startAndMeasure = useCallback(
     async (modelId: string): Promise<void> => {
-      setRunning(true)
-      setError(null)
+      ownActionRef.current = true
+      setOwnActionInFlight(true)
+      setActionError(null)
       setDoneSteps([])
       try {
         const status = await window.api.useModel(modelId)
         if (mountedRef.current) setRuntimeModelId(status.running ? status.modelId : null)
         await window.api.runBenchmark()
       } catch (err) {
-        if (mountedRef.current) setError(friendlyIpcError(err))
+        if (mountedRef.current) setActionError(friendlyIpcError(err))
       } finally {
-        if (mountedRef.current) setRunning(false)
+        ownActionRef.current = false
+        if (mountedRef.current) setOwnActionInFlight(false)
         await refresh()
       }
     },
@@ -283,6 +373,18 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   )
 
   const bench = snap?.current ?? null
+  /** The backend's own answer, taken from each snapshot as it comes. */
+  const backendRunning = snap?.running ?? false
+  /** What the card shows as busy: a run anywhere on this machine, or this window's own action. */
+  const busy = backendRunning || ownActionInFlight
+  // Both failures can stand at once; the read failure is the one with a retry.
+  const bannerMessage =
+    [
+      actionError ? t('perf.failed', { error: actionError }) : null,
+      fetchError ? t('perf.loadFailed', { error: fetchError }) : null
+    ]
+      .filter(Boolean)
+      .join(' ') || null
   const recommended = bench?.recommendedModelId
     ? models.find((m) => m.id === bench.recommendedModelId) ?? null
     : null
@@ -605,7 +707,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
         <div className="perf-card-head">
           <h2>{t('perf.card.title')}</h2>
           <span className="hint">
-            {running
+            {busy
               ? t('perf.running')
               : bench
                 ? t('perf.checkedAt', { when: fmtDateTime(bench.ranAt, lang) })
@@ -613,7 +715,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           </span>
         </div>
         {snap && bench && !snap.currentMachine && <p className="hint hint-lede">{t('perf.otherMachine')}</p>}
-        {running ? (
+        {busy ? (
           <>
             {steps()}
             <div className="actions perf-actions">
@@ -654,8 +756,18 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             </div>
           </>
         )}
-        {/* Always mounted so the FIRST failure is announced (SH-2, #145). */}
-        <ErrorBanner message={error ? t('perf.failed', { error }) : null} t={t} />
+        {/* Always mounted so the FIRST failure is announced (SH-2, #145). A failed check and a
+            failed read are separate: a later successful read clears the read failure without
+            hiding the check the user is still waiting on. */}
+        <ErrorBanner message={bannerMessage} t={t}>
+          {fetchError ? (
+            <div className="actions">
+              <Button size="sm" onClick={() => void refresh()}>
+                {t('perf.retry')}
+              </Button>
+            </div>
+          ) : null}
+        </ErrorBanner>
       </div>
 
       <div className="card">

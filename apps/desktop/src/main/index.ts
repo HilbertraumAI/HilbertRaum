@@ -47,9 +47,10 @@ import { createLocalApiServer, maybeStartLocalApi } from './services/local-api/l
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerEngineIpc } from './ipc/registerEngineIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
-import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
+import { registerBenchmarkIpc, maybeRunFirstBenchmark, observeAnswerSpeed } from './ipc/registerBenchmarkIpc'
+import { notifyPerformanceChanged } from './ipc/performance-notify'
 import { setAnswerSpeedObserver } from './ipc/chat-stream'
-import { machineKey, recordAnswerSpeed } from './services/performance'
+import { machineKey } from './services/performance'
 import { detectSystem } from './services/benchmark'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
@@ -563,7 +564,18 @@ function initBackend(): void {
       isDev,
       gpu: gpuSignals
     })
+    // The replacement is a fresh instance: re-attach the Performance push to it.
+    ctx.translator?.onResidencyChange?.(notifyPerformanceChanged)
   }
+  // The Performance screen's push (PR #303 P3, G6): every transition of the chat runtime
+  // (starting / ready / stopped) and every resident sidecar loading or unloading (the
+  // "Models on this computer" rows) tells every window to re-read `performance:get`. The
+  // services stay Electron-free — the subscriptions live here, at the composition seam.
+  runtime.onChange(notifyPerformanceChanged)
+  embedder.onResidencyChange?.(notifyPerformanceChanged)
+  reranker?.onResidencyChange?.(notifyPerformanceChanged)
+  translator?.onResidencyChange?.(notifyPerformanceChanged)
+  ctx.vision.onResidencyChange(notifyPerformanceChanged)
   // Best-effort first reconcile (skills plan §8). In plaintext_dev the DB is already open; in
   // encrypted mode `requireDb()` throws while locked, so swallow it — a later phase reconciles on
   // unlock, and S3 ships no surface that reads skills yet.
@@ -609,11 +621,12 @@ function initBackend(): void {
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
   // The Performance screen's "last answer" figure: every finished chat answer's #290 speed
-  // payload lands in the session latch, tagged with the model that produced it.
+  // payload lands in the session latch, tagged with the model that produced it, and the
+  // screen is told (`observeAnswerSpeed`). Local-API answers do not pass through this
+  // observer and therefore never latch.
   const appCtx = ctx as AppContext
-  setAnswerSpeedObserver((speed) =>
-    recordAnswerSpeed(speed, appCtx.runtime.active()?.modelId ?? null)
-  )
+  setAnswerSpeedObserver((speed) => observeAnswerSpeed(appCtx, speed))
+
   registerAuditIpc(ctx)
   registerLocalApiIpc(ctx)
 

@@ -1914,6 +1914,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.autoNote':
     'Läuft von selbst beim ersten Mal und immer, wenn dieses Laufwerk an einen anderen Computer angeschlossen wird.',
   'perf.failed': 'Prüfung fehlgeschlagen: {error}',
+  'perf.loadFailed': 'Die aktuellen Werte konnten nicht gelesen werden: {error}',
+  'perf.retry': 'Erneut versuchen',
   'perf.step.system': 'Hardware erkannt',
   'perf.step.drive': 'Schreibgeschwindigkeit des Laufwerks',
   'perf.step.speed': 'Generierungsgeschwindigkeit mit {model}',

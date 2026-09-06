@@ -2119,7 +2119,12 @@ export interface PerformanceSnapshot {
    * `gpuVramMb`. Null with no probe or no device.
    */
   currentGpu: { name: string; totalMb: number } | null
-  /** True while a benchmark is running (the button disables; steps stream via the event). */
+  /**
+   * True while the benchmark occupancy span is held on this machine — a run THIS window
+   * started or any other (first-run, moved-drive, another window). Assigned verbatim by the
+   * screen on every read; the terminal performance:changed push after persistence + release
+   * is what turns it off (the progress done step precedes both).
+   */
   running: boolean
   /** The active model against this computer's memory (benchmark.md "Your model"). */
   placement: {

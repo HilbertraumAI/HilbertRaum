@@ -385,7 +385,10 @@ by design (`--device none`, see vision/runtime.ts, embeddings/e5.ts, reranker/ll
 a CLI) and say so. Lifetime: chat / reranker / embedder stay for the session, translation and
 vision unload after their idle window, whisper runs only while transcribing. Liveness comes from
 each service's own handle (`isLoaded()` on `E5Embedder`, `LlamaReranker`, `VisionRuntime` /
-`VisionService`; `Translator.deviceStatus().live`; `runtime.active()` for chat); the translation
+`VisionService`; `Translator.deviceStatus().live`; for chat the runtime STATE —
+`RuntimeManager.status()` running + healthy + no start in flight + the active model, never
+`active() != null` or the placement latch, which is recorded before the #109 warm-up finishes
+(PR #303 audit DR6: a loading model reads "not loaded" until it is ready)); the translation
 row carries its observed layer split when live. Two summary lines: the card (chat + translation
 sizes against VRAM, with the START-ORDER warning when both are resident: whichever started second
 got the leftovers and runs slower; stop and start it once the other has unloaded) and the
@@ -394,22 +397,88 @@ the app should DO about the start-order contention (force translation to the pro
 holds the card, or reclaim the card when translation goes idle) is an owner decision (§5 item 21
 (g)).
 
-2. **Observed while you worked**: figures from real use, session-only, never persisted: the last
-   finished answer (the #290 `chat:speed` payload, latched by `setAnswerSpeedObserver` in
-   `chat-stream.ts` with the model that produced it), the last model start (the `model_load`
-   read sample: bytes, elapsed, MB/s; falls back to the persisted sample), the last full file
-   check (the `checksum` sample). `read-speed.ts` keeps an unranked newest-per-source latch for
-   this (`latestEffectiveReadBySource`); the ranked `latestEffectiveRead` is unchanged.
+2. **Observed while you worked**: figures from real use — SESSION latches only (PR #303 audit
+   M3, owner decision G2), where "session" is the **main-process lifetime**: the latches survive
+   a workspace lock/unlock and are cleared by an app restart, nothing else. The rows: the last
+   finished answer (the #290 `chat:speed` payload, latched by the `setAnswerSpeedObserver`
+   wiring — `observeAnswerSpeed` in `registerBenchmarkIpc.ts` — with the model that produced
+   it; a local-API answer does not pass through the chat observer and never latches), the last
+   model start (the newest `model_load` read sample: bytes, elapsed, MB/s), the last full file
+   check (the newest `checksum` sample). `read-speed.ts` keeps an unranked newest-per-source
+   latch for this (`latestEffectiveReadBySource`); the ranked `latestEffectiveRead` is
+   unchanged. The rows never fall back to a persisted sample — not a foreign one and not this
+   machine's own weeks-old one: the answer figures are never persisted at all, and the read
+   samples persist SEPARATELY into the benchmark records (`effectiveRead` on `lastBenchmark`
+   and this machine's history entry, `persistEffectiveRead`; that persistence is unchanged by
+   the push model) where the Drive tile shows them with their own source and date. The
+   observed rows are presentation-only latches on top of that.
 3. **Other computers this drive has been used on**: the history minus this machine, newest
    first, each with its speed/model, CPU/RAM/date and rating pills ("Slow drive" under 100 MB/s).
 
 **Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
 in `registerBenchmarkIpc.ts`): `current`, `currentMachine`, `currentGpu`, `otherMachines`,
-`running` (the `benchmark` occupancy lane), `placement` (memory class, RAM/VRAM, the active
-model, the observed placement, the verdict, the per-role `models` rows, `totals`), `observed`. **Progress**: `RunBenchmarkDeps.onProgress` reports
-`'system' | 'drive' | 'speed' | 'done'` as each step lands ('speed' only when a runtime was up);
-the IPC handler forwards them to the requesting window as `benchmark:progress`, and the screen
-shows a step list instead of an opaque "Running…" button. The first-run path passes no callback.
+`running` (the `benchmark` occupancy span read directly, `occupancy.held('benchmark')` — not
+through `modelBusyLane`, which answers "chat" first and hid a held span behind a permitted
+foreground answer, PR #303 audit M1), `placement` (memory class, RAM/VRAM, the active model, the
+observed placement, the verdict, the per-role `models` rows, `totals`), `observed`. The read is
+a getter: it never emits anything.
+
+**Push, not poll** (PR #303 audit, owner decision G6): the screen re-reads the snapshot when the
+main process sends the payload-free **`performance:changed`** (`EVENTS.performanceChanged`,
+preload `api.onPerformanceChanged`) to every live window — `notifyPerformanceChanged()` in
+`ipc/performance-notify.ts`, each send isolated so a destroyed window or a throwing recipient
+never blocks the next one, the persist that triggered it, or startup. No interval polling. It is
+emitted only AFTER a mutation, by these sites: a benchmark run taking its occupancy span
+(`running` → true: the screen learns about a run it did not start — the first-run benchmark,
+the moved-drive re-benchmark, a run pressed in another window) and again in the run's `finally`
+after BOTH the persist and the release, on success and on failure (a run REFUSED as busy emits
+nothing — the span it saw belongs to the running benchmark, whose own release announces the
+idle state); every accepted read-speed sample, including a lower-ranked per-source one (a
+checksum after a model load updates the checksum row while the ranked latch and the persisted
+sample stay the model load — `read-speed.ts` fires its observer for every accepted sample, and
+the persister applies the ranking per destination); a retry persist that actually wrote; the
+answer latch; a placement observation (after its persist, or after the skipped persist while
+locked); the moved-drive restore, the upgrade seed and the new-machine backfill in
+`maybeRunFirstBenchmark`; a completed GPU probe write (`probeAndPersistGpu`, incl. an empty
+device list, so "Try GPU again" pushes through it); the chat runtime's transitions
+(`RuntimeManager.onChange` — starting, ready, stopped, subscribed in `initBackend`);
+resident-sidecar transitions for the "Models on this computer" rows (`onResidencyChange` on
+`E5Embedder`, `LlamaReranker`, `TranslationRuntime`, `VisionRuntime` forwarded by
+`VisionService`: lazy start landed, idle teardown, suspend/stop, unexpected exit — the services
+stay Electron-free, the subscriptions live in `initBackend`); and the settings keys the snapshot
+reads when they change through `models:select` / `models:use` or `settings:update`
+(`PERFORMANCE_SETTINGS_KEYS`: the active slots, `contextTokens`, `contextTokensOverride`,
+`gpuMode` — not every settings write). No coalescing main-side; the renderer serialises its
+refetches.
+
+**The screen's half of that contract** (`PerformanceScreen.tsx`): it subscribes to
+`onPerformanceChanged` BEFORE issuing the first `performance:get`, and unsubscribes on unmount
+(one registration per mount). Reads are serialised behind one flag — a push that lands while a
+read is out raises a "wanted" flag and buys exactly ONE more pass when that read settles, so a
+burst of pushes costs a single extra read and no push is dropped — and every issued read carries
+a generation stamp: only the newest may apply its reply (the snapshot, and the `getRuntimeStatus`
+/ `getSettings` metadata each pass re-reads alongside it), and unmount bumps the stamp so a late
+reply touches nothing. `listModels` stays MOUNT-ONLY (a display-name lookup; the screen remounts
+on navigation). Two states, never merged: the snapshot's `running` is assigned verbatim from each
+read, and a separate local flag covers the action THIS window started — the card reads busy when
+either is set, and the action's `finally` clears only its own flag, so a run that still holds the
+lane keeps the screen busy while a foreign run's terminal push releases it. `'done'` triggers a
+re-read but never sets idle. A failed read keeps the last snapshot on screen, adds
+`perf.loadFailed` to the banner with a `perf.retry` button, and is cleared by the next successful
+read; a failed action's `perf.failed` line stands until the user starts another one, so neither
+failure can hide the other.
+
+**Progress** (honest step semantics, PR #303 audit L3): `RunBenchmarkDeps.onProgress` reports a
+step only when it SUCCEEDED — `'system'` always; `'drive'` only when the write/fsync probe
+produced figures (a failed probe reports nothing, the result carries `warnDriveProbe`);
+`'speed'` only when a tokens/sec reading was actually obtained (not when no runtime was up, not
+when the leg was skipped as busy — `warnSpeedSkipped` — and not when the probe failed);
+`'done'` always. A later step never implies an omitted earlier one succeeded. `'done'` means
+the PROBES are complete: it precedes the persist and the occupancy release, so it is not the
+idle signal — the terminal `performance:changed` after both is. The IPC handler forwards the
+steps to the requesting window only, as `benchmark:progress`, and the screen shows a step
+list instead of an opaque "Running…" button. The first-run path passes no callback.
+
 
 ## Perf marks (opt-in, `HILBERTRAUM_PERF_LOG=1`)
 

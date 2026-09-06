@@ -104,14 +104,19 @@ function record(
     at: new Date().toISOString()
   }
   latestBySource[source] = candidate
-  if (!preferCandidate(candidate, latest)) return
-  latest = candidate
+  if (preferCandidate(candidate, latest)) latest = candidate
+  // The observer fires for EVERY accepted sample, including one that lost the ranked `latest`
+  // selection (a checksum after a model load): the per-source latch above still moved, and the
+  // Performance screen's observed rows read that one. The persister behind the observer reads
+  // the ranked `latest` and applies `preferCandidate` per destination, so a lower-ranked sample
+  // notifies without ever overwriting a better persisted one.
   try {
     observer?.()
   } catch {
     /* persistence is an observer concern — it must never throw into a hash/start */
   }
 }
+
 
 /**
  * Record a model-load window read: the window's byte total over the elapsed
@@ -181,11 +186,14 @@ export function latestEffectiveReadBySource(
 }
 
 /**
- * Register the single sample observer (the IPC layer's persister). Persistence is a
- * property of RECORDING, not of each producing call site — a sample recorded by a
- * background download's cold-file hash persists even if no model IPC runs afterwards.
- * Last registration wins (one persister per process); never throws into producers.
+ * Register the single sample observer (the IPC layer's persister + Performance-screen
+ * notifier). Persistence is a property of RECORDING, not of each producing call site — a
+ * sample recorded by a background download's cold-file hash persists even if no model IPC
+ * runs afterwards. Fires once per ACCEPTED sample of either source, whether or not it won the
+ * ranked `latest` slot (see `record`). Last registration wins (one persister per process);
+ * never throws into producers.
  */
+
 export function setEffectiveReadObserver(cb: (() => void) | null): void {
   observer = cb
 }

@@ -538,12 +538,33 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   the injected `effectiveRead`.
 - **`ipc/registerBenchmarkIpc.ts`** — `runBenchmark()` (`benchmark:run`); runs it, persists to
   `settings.lastBenchmark` + `settings.benchmarkHistory`, returns the result, and streams
-  `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window. `performance:get`
+  `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window — a step only when it
+  succeeded (`'drive'` only on a successful probe, `'speed'` only on an obtained reading,
+  `'done'` always, and `'done'` PRECEDES the persist and the occupancy release). `performance:get`
   returns the `PerformanceSnapshot` the Performance screen renders (`current`, `currentMachine`,
-  `currentGpu`, `otherMachines`, `running`, `placement: { memoryClass, ramMb, vramMb, model,
-  observed, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }`, `observed: { lastAnswer, lastModelLoad, lastChecksum }`; the
-  observed figures are session-only latches, never persisted). Registered in `initBackend()`;
-  exposed on preload `api.runBenchmark` / `api.getPerformance` / `api.onBenchmarkProgress`.
+  `currentGpu`, `otherMachines`, `running` (the `benchmark` occupancy span, read directly),
+  `placement: { memoryClass, ramMb, vramMb, model, observed, verdict, models: ResidentModelRow[],
+  totals: { ramAllMb, bothOnCard } }`, `observed: { lastAnswer, lastModelLoad, lastChecksum }`).
+  The observed figures are SESSION latches only — session = the main-process lifetime (they
+  survive a workspace lock/unlock, an app restart clears them) — and never fall back to a
+  persisted sample, foreign or same-machine (PR #303 audit M3/G2): the answer figures are never
+  persisted; the read samples persist SEPARATELY into the benchmark records (`effectiveRead` on
+  `lastBenchmark` and this machine's history entry) where the Drive tile reads them with their
+  own source and date. Local-API answers never pass through the chat observer and never latch.
+  Registered in `initBackend()`; exposed on preload `api.runBenchmark` / `api.getPerformance` /
+  `api.onBenchmarkProgress` / `api.onPerformanceChanged`.
+- **`EVENTS.performanceChanged`** (`performance:changed`, PR #303 audit G6) — a PAYLOAD-FREE
+  main → renderer push to every live window: "something `performance:get` reads changed, re-read
+  it". Emitted by `notifyPerformanceChanged()` (`ipc/performance-notify.ts`) only AFTER a
+  mutation — a benchmark run taking / releasing its span (the release push, after the persist,
+  is the idle signal; a busy-refused run emits nothing), every accepted read-speed sample
+  (including a ranked loser), the answer latch, a placement observation, the restore / seed /
+  backfill / GPU-probe writes, chat-runtime transitions (`RuntimeManager.onChange`),
+  resident-sidecar transitions (`onResidencyChange` on the embedder, reranker, translation and
+  vision runtimes), and the snapshot's settings keys (`PERFORMANCE_SETTINGS_KEYS`) — and never
+  from a getter. The read stays gated; the event carries nothing to gate. Preload:
+  `onPerformanceChanged(cb: () => void): () => void` (returns the unsubscribe). No polling.
+
 - **Renderer:** `DiagnosticsScreen` Run-benchmark button → RAM / CPU / OS-arch / measured read
   speed (`effectiveRead` or "not measured yet") / drive write / tokens-sec / profile /
   recommended model + warnings; re-loads `lastBenchmark` on mount. `HomeScreen` profile reflects

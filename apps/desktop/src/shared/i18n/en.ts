@@ -1875,6 +1875,10 @@ export const en = {
   'perf.autoNote':
     'Runs on its own the first time and whenever this drive is plugged into a different computer.',
   'perf.failed': 'Check failed: {error}',
+  // The screen re-reads its figures whenever the app says something changed; when that read
+  // fails the figures already on screen stay, this says so, and the retry sits beside it.
+  'perf.loadFailed': 'Could not read the latest figures: {error}',
+  'perf.retry': 'Try again',
   'perf.step.system': 'Hardware detected',
   'perf.step.drive': 'Drive write speed',
   'perf.step.speed': 'Generation speed with {model}',
