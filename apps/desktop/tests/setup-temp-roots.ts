@@ -54,6 +54,13 @@ if (!marker[PATCHED]) {
 // One teardown per file: remove what this file minted; what cannot be removed (an open sqlite
 // handle on Windows) is deferred to the post-run sweep in `tests/global-temp-roots.ts`. Never
 // throws, never fails a green suite.
+//
+// ONE attempt per root here, no in-hook retry: a handle the suite never closed does not clear
+// in 25 ms, and a second recursive delete of a locked root only doubles the cost — on a starved
+// windows CI runner that tripped vitest's 10 s hook budget (run 34033122353, a suite holding a
+// sqlite handle per test). The sweep after the forks exit is the retry. The hook also carries
+// its own generous timeout: cleanup may be slow, it must never fail a green suite.
+const TEARDOWN_TIMEOUT_MS = 120_000
 afterAll(async () => {
-  await cleanupRecordedRoots()
-})
+  await cleanupRecordedRoots({ attempts: 1 })
+}, TEARDOWN_TIMEOUT_MS)

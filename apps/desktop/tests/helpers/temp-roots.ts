@@ -11,10 +11,11 @@ import { basename, dirname, resolve } from 'node:path'
 //
 //   tests/setup-temp-roots.ts   (vitest `setupFiles`, runs inside every test file's fork) wraps
 //                               the `mkdtemp` family, records every root minted directly under
-//                               `os.tmpdir()` with a test prefix, and removes them in `afterAll`;
-//                               a root that cannot be removed — on Windows a sqlite handle the
-//                               suite never closed keeps the file locked until the fork exits —
-//                               goes onto the run's deferred list instead of failing the suite.
+//                               `os.tmpdir()` with a test prefix, and removes them in `afterAll`
+//                               (ONE attempt each, under the hook's own long timeout); a root
+//                               that cannot be removed — on Windows a sqlite handle the suite
+//                               never closed keeps the file locked until the fork exits — goes
+//                               onto the run's deferred list instead of failing the suite.
 //   tests/global-temp-roots.ts  (vitest `globalSetup`, main process) mints the deferred list and
 //                               sweeps it in its teardown, which runs after every fork has exited
 //                               and released its handles.
