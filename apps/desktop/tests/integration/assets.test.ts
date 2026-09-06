@@ -607,6 +607,11 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
     const linux = kiwix!.builds.find((b) => b.os === 'linux')
     expect(linux?.arch).toBe('x64')
     expect(linux?.extractTo).toBe('runtime/kiwix-tools/linux')
+
+    // #339 P8-2: the sizes the consent dialog shows, pinned with the SHA-256s — nothing at
+    // runtime can catch a mistyped figure (the download verifies the hash only), so this can.
+    const sizes = Object.fromEntries(kiwix!.builds.map((b) => [`${b.os}/${b.arch}`, b.sizeBytes]))
+    expect(sizes).toEqual({ 'win/x64': 18_301_924, 'mac/arm64': 10_254_751, 'mac/x64': 10_768_392, 'linux/x64': 21_503_420 })
   })
 })
 

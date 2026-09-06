@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
@@ -33,7 +33,7 @@ vi.mock('electron', () => ({
 import { IPC } from '../../src/shared/ipc'
 import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
 import { EngineDownloadManager, hostRuntimeArch, hostRuntimeOs, type ExtractFn } from '../../src/main/services/runtime-download'
-import type { FetchFn } from '../../src/main/services/assets'
+import { SIDECAR_FAMILY_SPECS, type FetchFn } from '../../src/main/services/assets'
 import { llamaServerBinaryName, registerSidecarChild, unregisterSidecarChild } from '../../src/main/services/runtime/sidecar'
 import { updateSettings } from '../../src/main/services/settings'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
@@ -163,7 +163,11 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
       { families: ['kiwix-tools'] },
       { families: [] },
       { families: ['kiwix_tools', 'kiwix_tools'] },
+      // An optional family never rides with a required one: the dialog sends kiwix alone,
+      // the engine button sends nothing — a mixed payload blurs which request was consented.
+      { families: ['llama_cpp', 'kiwix_tools'] },
       { families: 'kiwix_tools' },
+      { families: { length: 1, 0: 'kiwix_tools' } },
       'kiwix_tools',
       ['kiwix_tools'],
       42
@@ -213,5 +217,18 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     // Readiness is still the chat family's fact alone (P8-1 ruling 3): kiwix changed nothing.
     expect(after.installed).toBe(false)
     expect(after.missingFamilies).toEqual(['llama_cpp'])
+    // `installed` means EVERY declared file — the panel's own `toolsInstalled` needs serve AND
+    // manage, and the consent row must never say "installed" while the panel says "missing".
+    rmSync(join(kiwixDir(d.root), exe('kiwix-manage')))
+    const half = (await invoke(d.handlers, IPC.getEngineStatus)).result as EngineStatus
+    expect(half.optionalFamilies?.[0]?.installed).toBe(false)
+  })
+
+  it('every optional family the code declares carries the licence its consent dialog names, and it is the one the drive notices state', () => {
+    const optional = SIDECAR_FAMILY_SPECS.filter((s) => s.optional === true)
+    expect(optional.map((s) => s.family)).toEqual(['kiwix_tools'])
+    for (const spec of optional) expect(spec.license, spec.family).toMatch(/^[A-Za-z0-9.+-]+$/)
+    const notices = readFileSync(join(__dirname, '..', '..', '..', '..', 'DRIVE-NOTICES.md'), 'utf8')
+    expect(notices).toContain(`### kiwix-tools 3.8.1 — ${SIDECAR_FAMILY_SPECS.find((s) => s.family === 'kiwix_tools')?.license}`)
   })
 })

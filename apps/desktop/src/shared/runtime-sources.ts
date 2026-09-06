@@ -62,7 +62,7 @@ export interface RuntimeBuild {
   /**
    * The archive's size in bytes as pinned with its SHA-256 (#339 P8-2) — what the consent
    * dialog shows BEFORE any request is made (the engine job's `totalBytes` only exists once
-   * the download started). Declarative; a positive integer when present. Absent = unknown.
+   * the download started). A label, never an integrity input: absent OR malformed = unknown.
    */
   sizeBytes?: number
 }
@@ -266,17 +266,13 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
           })
         }
       }
-      // #339 P8-2: the pinned archive size the consent dialog shows. Optional; when present it
-      // must be a positive integer (a wrong size is a pin error, not a runtime concern).
+      // #339 P8-2: the pinned archive size the consent dialog shows — a LABEL, never an
+      // integrity input (the download is verified by SHA-256 alone). So a malformed value is
+      // treated as "unknown" rather than failing the file: a typo in a dialog figure must not
+      // disable every engine install on the drive (review finding, 2026-09-06).
       const sizeRaw = b['size_bytes']
-      let sizeBytes: number | undefined
-      let sizeOk = true
-      if (sizeRaw !== undefined) {
-        if (typeof sizeRaw !== 'number' || !Number.isInteger(sizeRaw) || sizeRaw <= 0) {
-          errors.push(`${where}.size_bytes must be a positive integer when present`)
-          sizeOk = false
-        } else sizeBytes = sizeRaw
-      }
+      const sizeBytes =
+        typeof sizeRaw === 'number' && Number.isInteger(sizeRaw) && sizeRaw > 0 ? sizeRaw : undefined
       if (
         typeof osRaw === 'string' &&
         OS_KEYS.includes(osRaw as RuntimeOs) &&
@@ -286,8 +282,7 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
         typeof shaRaw === 'string' &&
         typeof extractTo === 'string' &&
         !isUnsafeDrivePath(extractTo.trim()) &&
-        runtimeFilesOk &&
-        sizeOk
+        runtimeFilesOk
       ) {
         builds.push({
           os: osRaw as RuntimeOs,

@@ -68,6 +68,8 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
     // the workspace still admits work: a lock that landed mid-download owns the teardown.
     if (families.includes('kiwix_tools') && ctx.zim && workspaceAdmitsWork(ctx.workspace)) {
       ctx.zim.reconcile(ctx.db).catch((err) => {
+        // A lock that lands mid-pass aborts it by design — not a failure worth a warning.
+        if (err instanceof Error && err.name === 'AbortError') return
         log.warn('Knowledge-pack reconcile after the tools install failed', String(err))
       })
     }

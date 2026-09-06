@@ -24,6 +24,7 @@ vi.mock('electron', () => ({
 
 import { IPC } from '../../src/shared/ipc'
 import type { PreloadApi } from '../../src/preload/index'
+import type { EngineDownloadRequest } from '../../src/shared/types'
 
 async function loadApi(): Promise<PreloadApi> {
   await import('../../src/preload/index')
@@ -45,7 +46,7 @@ describe('preload — engine downloader surface (#339 P8-2)', () => {
 
   it('downloadEngine({ families }) forwards the request object verbatim on the same channel', async () => {
     const api = await loadApi()
-    const request = { families: ['kiwix_tools'] }
+    const request: EngineDownloadRequest = { families: ['kiwix_tools'] }
     await api.downloadEngine(request)
     expect(ipc.invoke).toHaveBeenCalledWith(IPC.downloadEngine, request)
     expect(IPC.downloadEngine).toBe('engine:download')

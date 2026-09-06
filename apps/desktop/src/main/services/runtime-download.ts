@@ -19,6 +19,7 @@ import {
   markerBinaryKey,
   planRuntimeDownload,
   requiredInstallFiles,
+  runtimeBinaryPresent,
   runtimeInstallCurrent,
   selectRuntimeBuild,
   verifyDownloadedFile,
@@ -171,13 +172,18 @@ export function parseEngineDownloadRequest(raw: unknown): { families?: EngineFam
   if (!Array.isArray(families) || families.length === 0) {
     throw new Error(tMain('main.engine.badRequest'))
   }
-  const known = SIDECAR_FAMILY_SPECS.map((s) => s.family)
   const out: EngineFamily[] = []
   for (const f of families) {
-    const match = known.find((k) => k === f)
-    if (!match || out.includes(match)) throw new Error(tMain('main.engine.badRequest'))
-    out.push(match)
+    const spec = SIDECAR_FAMILY_SPECS.find((s) => s.family === f)
+    if (!spec || out.includes(spec.family)) throw new Error(tMain('main.engine.badRequest'))
+    out.push(spec.family)
   }
+  // A request never mixes an optional (separately consented) family with a required one: the
+  // consent dialog sends the optional family alone, the engine button sends nothing. A mixed
+  // payload is not an escalation (a current family is never re-installed) but it would blur
+  // which request carried the acknowledgement, so it is refused outright.
+  const optional = out.filter((f) => SIDECAR_FAMILY_SPECS.find((s) => s.family === f)?.optional === true)
+  if (optional.length > 0 && optional.length !== out.length) throw new Error(tMain('main.engine.badRequest'))
   return { families: out }
 }
 
@@ -215,8 +221,11 @@ export function engineStatus(
         version: e.version,
         sizeBytes: e.build.sizeBytes ?? null,
         url: e.build.url,
-        license: e.license ?? 'unknown',
-        installed: !missingOptional.includes(e)
+        license: e.license ?? '',
+        // EVERY declared file, not just the primary binary: the packs panel's own
+        // `toolsInstalled` needs serve AND manage, and the consent surface must never say
+        // "installed" while the panel says "missing" (review finding, 2026-09-06).
+        installed: runtimeBinaryPresent(e.plan)
       }))
   }
 }

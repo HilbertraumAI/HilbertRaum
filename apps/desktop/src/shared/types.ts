@@ -4,6 +4,7 @@
 
 import { t, type UiLanguageSetting } from './i18n'
 import type { SkillKind, SkillNoteRef, SkillPermissions, SkillTrustedLevel } from './skill-manifest'
+import type { RuntimeFamily } from './runtime-sources'
 export type { SkillNoteRef } from './skill-manifest'
 
 export type HardwareProfile = 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'
@@ -716,7 +717,7 @@ export interface EngineOptionalFamily {
  * sends it from the consent dialog after the user acknowledged the licence.
  */
 export interface EngineDownloadRequest {
-  families?: string[]
+  families?: RuntimeFamily[]
 }
 
 // ---- Image understanding (vision) — image-understanding plan §9.3 ----
