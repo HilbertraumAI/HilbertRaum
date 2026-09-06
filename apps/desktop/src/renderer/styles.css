@@ -1530,7 +1530,12 @@ code, pre, kbd { font-family: var(--font-mono); }
   background: var(--surface); color: var(--text); font-size: 14px;
 }
 /* Scope picker — multi-select source rows (plan §13.2) */
-.scope-footer-wrap { display: inline-flex; align-items: center; gap: 8px; }
+.scope-footer-wrap { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+/* #301 P6 (plan §9.23 (d)): the "Answering from: …" chip ellipsises a long pack title at a
+   narrow width instead of overflowing the composer footer (the label stays the button's full
+   accessible name). The trigger itself may shrink; the icon and the caret never do. */
+.scope-footer-wrap .footer-menu-btn { min-width: 0; max-width: 100%; }
+.scope-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scope-dangling { font-size: 12px; }
 .scope-sources { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
 .scope-source-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; cursor: pointer; }
@@ -1538,6 +1543,9 @@ code, pre, kbd { font-family: var(--font-mono); }
    instead of forcing it wider. */
 .scope-source-name { color: var(--text); overflow-wrap: anywhere; min-width: 0; }
 .scope-source-hint { color: var(--text-muted); font-size: var(--text-xs); }
+/* #301 P6: the Documents toggle's hint left the <label> (it must not be part of the checkbox's
+   accessible name), so it is a block sibling — indent it under the label text. */
+.scope-documents-toggle .scope-source-hint { margin-left: 22px; }
 .scope-specific-toggle { background: none; border: none; cursor: pointer; text-align: left; }
 /* Conversation list — creation-anchor project sections (plan §13.4) */
 .chat-proj-group-label { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 8px 10px 2px; font-weight: 600; }

@@ -283,8 +283,15 @@ export function ScopePopover({
     <Popover.Root>
       <Popover.Trigger asChild>
         <button type="button" className="footer-menu-btn" disabled={disabled}>
-          <Icon name="file" className="footer-menu-icon" /> {label}
-          {filesSuffix} <span aria-hidden="true">▾</span>
+          <Icon name="file" className="footer-menu-icon" />{' '}
+          {/* #301 P6 (plan §9.23 (d)): a 200-char pack title ellipsises inside the composer
+              footer instead of pushing the send button off a ~900 px window; the full text
+              stays the button's accessible name (text-overflow hides nothing from AT). */}
+          <span className="scope-chip-label">
+            {label}
+            {filesSuffix}
+          </span>{' '}
+          <span aria-hidden="true">▾</span>
         </button>
       </Popover.Trigger>
       <Popover.Portal>
