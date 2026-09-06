@@ -642,6 +642,15 @@ its generated index as part of locking. If that cleanup itself hits trouble, the
 it honestly rather than claiming success — nothing of yours is lost, and the next session
 starts clean and works normally.
 
+### "Open article" says the article is not available, but the pack is enabled
+
+Try again — it usually opens on the second attempt. The bundled Windows pack server occasionally
+never answers a read of a large article (a known defect of kiwix-tools 3.8.1, see
+[`known-limitations.md`](known-limitations.md) "Knowledge packs"); the app already retries such a
+read a few times on its own, so this should be rare. If it keeps happening for one article, the
+pack's file may be damaged: run *Refresh* under *Documents → Knowledge packs* and, if the pack
+shows "Different archive" or "File missing", copy the archive again.
+
 ### Can another program on my computer read my packs?
 
 While the workspace is unlocked and a knowledge pack has been used in a chat, other programs
