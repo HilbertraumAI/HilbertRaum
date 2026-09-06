@@ -612,8 +612,8 @@ open round's item stays the last block of §5.)
 ---
 21. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable
     record: [`docs/rag-design.md`](docs/rag-design.md) §17 "Deliberately not built").**
-    (a) **kiwix_tools provisioning** — P8 successor issue (opened at the #294 merge).
-    (b) **Tier 2** (persistent import of selected articles into the corpus) — P9 successor issue.
+    (a) **kiwix_tools provisioning** — P8 successor issue #339.
+    (b) **Tier 2** (persistent import of selected articles into the corpus) — P9 successor issue #340.
     (c) **Evidence identity for archive citations — CLOSED.** Identity resolution: P2, record rag-design D-Z5; the "Open article from a review" residual: closed P6, record design-guidelines §11.15.
     (d) **Manual acceptance leg** (airplane-mode demo, `wikipedia_de_*` packs + kiwix-tools 3.8.1) — pending, owner (T19 (viii)).
     (e) Observation for item 1b's matrix, measured 2026-09-04 on the i7-8550U + UHD 620: GPU auto-offload gains nothing on pp (56 vs 57 t/s) and LOSES 45 percent on tg (11 vs 19.6) — on this iGPU

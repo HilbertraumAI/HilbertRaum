@@ -2737,8 +2737,7 @@ the real-tool check of that mapping is P7's (T19), not assumed. The name-collisi
 `PacksPanel` row (P6): it is a property of the served library, computed at build time, not
 a `KnowledgePack` field — the per-answer outcome's `not-served` row already tells the user
 "not searched: name collision with another pack"; a `packs:status` addition to surface it
-in the panel is registered on the P9 successor issue (opened at the #294 merge; BUILD_STATE
-§5 item 21).
+in the panel is registered on the P9 successor issue #340 (BUILD_STATE §5 item 21).
 
 ### Real acceptance (T19, P7 — the machine-drivable legs, 2026-09-06)
 
@@ -2807,7 +2806,7 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   `library.xml` (hand-written: healthy, `/raw/klimawandel_arger_unicode/content/index` → 200), so
   the limit is registration-only. In the app `registerPack` throws `KiwixManageError` → the add
   result reports `failureReason: 'manager'` — honest but unhelpful copy for this cause; recorded in
-  `known-limitations.md`, `troubleshooting.md` and the P9 successor issue.
+  `known-limitations.md`, `troubleshooting.md` and the P9 successor issue #340.
 - **R-9 window (iii) — same-port bind on Windows:** with kiwix-serve listening on 127.0.0.1:58614
   (one Listen row owned by `kiwix-serve` in `Get-NetTCPConnection`), a Node `listen()` on the port
   → `EADDRINUSE`; a .NET socket bind without `ReuseAddress` → `AddressAlreadyInUse`; WITH

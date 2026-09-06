@@ -2400,7 +2400,7 @@ reports and phase plans were working papers; their full text lives in git histor
   other path without such characters (a Windows user folder such as `C:\Users\Jörg\Downloads`
   hits this). Serving is not affected — a pack registered from an ASCII path stays readable and
   searchable. A reason-specific message, or reading the archive's metadata without
-  `kiwix-manage`, is on the P9 successor issue.
+  `kiwix-manage`, is on the P9 successor issue #340.
 - **A redirect entry (an alias title) opens the article it points to — one hop, same pack.**
   About half of a Wikipedia ZIM's entries are redirects; `kiwix-serve` answers them with a 302
   rather than the target's bytes, and the viewer follows exactly one such hop inside the same
@@ -2432,7 +2432,7 @@ reports and phase plans were working papers; their full text lives in git histor
   exactly (`identity.ts`); when two packs would compute the SAME name, the smaller UUID
   wins by libkiwix's own ascending-map-order rule and the later pack is excluded from the
   served library until it is renamed, rather than answering under the winner's name (the
-  panel does not say so — deferred to the P9 successor issue (opened at the #294 merge;
+  panel does not say so — deferred to the P9 successor issue #340 (opened at the #294 merge;
   BUILD_STATE §5 item 21), since it is a served-library fact rather than a pack-row fact; the
   per-answer note says "not searched: name collision with another pack"). The real-tool check that our computed map still matches a
   pinned kiwix-serve build is P7's (T19), not assumed here.
