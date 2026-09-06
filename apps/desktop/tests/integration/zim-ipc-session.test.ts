@@ -375,11 +375,20 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
         return
       }
       const stem = basename(zimPath).replace(/\.zim$/i, '')
-      appendFileSync(
-        libraryXmlPath,
-        `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${stem}" ` +
-          `description="Test archive" language="deu" date="2026-07-01" articleCount="41" mediaCount="7" />\n`
-      )
+      // The real kiwix-manage exits non-zero when the archive (or the library file) is gone —
+      // e.g. a background probe's library build (D-Z15) landing after a test's temp root was
+      // removed. The fake must fail the same way, never reject out of this detached IIFE.
+      try {
+        appendFileSync(
+          libraryXmlPath,
+          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${stem}" ` +
+            `description="Test archive" language="deu" date="2026-07-01" articleCount="41" mediaCount="7" />\n`
+        )
+      } catch (err) {
+        child.stderr.emit('data', `Cannot add ZIM to the library: ${err instanceof Error ? err.name : 'error'}`)
+        child.emit('exit', 1, null)
+        return
+      }
       child.emit('exit', 0, null)
     })()
     return child
