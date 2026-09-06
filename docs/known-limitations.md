@@ -2533,8 +2533,10 @@ reports and phase plans were working papers; their full text lives in git histor
   archive's own metadata tag is a hint only. The app confirms full-text search capability
   with one request to the pack server (cached against the archive file and the
   kiwix-tools build, so a replaced file or a new tools install re-checks automatically,
-  and Refresh re-runs it too); until that check completes, the pack is treated as
-  searchable. A 404, a timeout, a malformed reply, or a reply observed across a
+  and Refresh re-runs it too). The check runs when you unlock, when you press Refresh, and — a
+  moment after — when you add a pack through *Add packs…* or enable one; until it completes,
+  the pack is treated as searchable, so a question asked in that moment against an index-less
+  pack reports "search failed" rather than "no full-text index". A 404, a timeout, a malformed reply, or a reply observed across a
   pack-server restart never confirms "no" — only a clean, positive or negative reply
   does. A pack confirmed to have no full-text index is skipped for asking ("not searched:
   no full-text index") but stays fully readable in the article viewer, which never

@@ -1833,7 +1833,9 @@ into `RetrievalScope.noDocuments` only when no file is attached to the chat (att
 stay in scope); `buildScopeFilter`, the resident-vector fast path and `retrieve`'s pre-embed
 skip all honour it. A pack's searchability is CONFIRMED only by a validated `/suggest`
 probe (`GET /suggest?content=<name>&term=the&count=1`, `'yes'` iff the body is a JSON array
-with a `kind:"pattern"` entry) run once at the end of a reconciliation, under the SAME
+with a `kind:"pattern"` entry) run at the end of a reconciliation and, in the background, once
+per completed `packs:add` batch and on `packs:setEnabled(…, true)` (`ZimService.scheduleSearchabilityProbe`,
+rag-design D-Z15, #340 — a `packs:changed` `'mutation'` follows a landed verdict), under the SAME
 request guard as an ask, and cached against `<file size>:<file mtime>:<kiwix-serve binary
 size>:<mtime>` — a 404, a timeout, a malformed body or a response observed across a server
 change never confirms "no"; a confirmed-no pack is skipped by an ask but stays readable.

@@ -155,6 +155,9 @@ export function registerZimIpc(ctx: AppContext): void {
       }
       const outcome: KnowledgePackAddResult['outcome'] =
         added.length === 0 ? 'failure' : failed === 0 ? 'success' : 'partial'
+      // #340 (D-Z15): confirm the new packs' full-text capability in the background — ONCE per
+      // batch, after the loop, never per file. Scheduled, so the result below returns first.
+      if (added.length > 0) svc.scheduleSearchabilityProbe(() => ctx.db)
       return { outcome, added, failed, failureReason }
     } finally {
       op.release()
@@ -170,7 +173,10 @@ export function registerZimIpc(ctx: AppContext): void {
 
   ipcHandle(IPC.setKnowledgePackEnabled, (_e, id: string, enabled: boolean): void => {
     requireUnlocked()
-    zim().setPackEnabled(ctx.db, id, enabled)
+    const changed = zim().setPackEnabled(ctx.db, id, enabled)
+    // #340 (D-Z15): a pack enabled after the session's reconcile was skipped by that probe
+    // (it covers enabled ∧ available rows only), so it would stay unknown until a Refresh.
+    if (changed && enabled) zim().scheduleSearchabilityProbe(() => ctx.db)
   })
 
   ipcHandle(

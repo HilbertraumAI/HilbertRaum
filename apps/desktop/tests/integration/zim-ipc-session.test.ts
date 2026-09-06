@@ -375,11 +375,20 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
         return
       }
       const stem = basename(zimPath).replace(/\.zim$/i, '')
-      appendFileSync(
-        libraryXmlPath,
-        `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${stem}" ` +
-          `description="Test archive" language="deu" date="2026-07-01" articleCount="41" mediaCount="7" />\n`
-      )
+      // The real kiwix-manage exits non-zero when the archive (or the library file) is gone —
+      // e.g. a background probe's library build (D-Z15) landing after a test's temp root was
+      // removed. The fake must fail the same way, never reject out of this detached IIFE.
+      try {
+        appendFileSync(
+          libraryXmlPath,
+          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${stem}" ` +
+            `description="Test archive" language="deu" date="2026-07-01" articleCount="41" mediaCount="7" />\n`
+        )
+      } catch (err) {
+        child.stderr.emit('data', `Cannot add ZIM to the library: ${err instanceof Error ? err.name : 'error'}`)
+        child.emit('exit', 1, null)
+        return
+      }
       child.emit('exit', 0, null)
     })()
     return child
@@ -2241,4 +2250,122 @@ describe('T16 — per-ask knowledge-pack outcomes end to end (#301 P4, M6/M7)', 
     // it bounds a hang, it is never the proof of anything (§10.1: every ordering fact below is a
     // controlled promise with an entered/release pair, and no leg waits on a fixed sleep).
   }, 120_000)
+})
+
+// ---- #340 — the searchability probe after Add packs… / Enable (rag-design §17 D-Z15) ----------
+//
+// The owner's real-drive observation (T19): a pack added through Add packs… stayed
+// `searchable: unknown` — tickable, no badge — until the next Refresh or unlock, because the
+// `/suggest` probe ran only at the END of a reconciliation, and an ask in between reported an
+// index-less pack as "search failed" (the `/search` 404) instead of "no full-text index". The
+// probe now also runs, in the background, once per completed `packs:add` batch and on
+// `packs:setEnabled(…, true)` — through the SAME request guard and under the SAME cache key as
+// the reconcile's probe, so a Refresh afterwards asks nothing again.
+//
+// Real vault, the real handlers, the real service + registry, fake kiwix children and the
+// loopback stand-in; the harness's default responder 404s `/suggest` (unknown), so this suite
+// answers it the way the pinned binary does (T19: a `path` title entry for every book, the
+// synthetic `pattern` entry only for an indexed one). Every wait is bounded, never a fixed sleep.
+describe('#340 — searchability is confirmed right after Add packs… / Enable (D-Z15)', () => {
+  /** The pinned binary's /suggest shape: a title match for every book, `pattern` iff indexed. */
+  const suggestFor =
+    (indexed: ReadonlySet<string>) =>
+    (url: string): { status: number; headers?: Record<string, string>; body: string } | null => {
+      if (!url.startsWith('/suggest')) return null
+      const name = new URL(url, 'http://127.0.0.1').searchParams.get('content') ?? ''
+      const entries: Array<Record<string, string>> = [{ value: 'the', label: 'the', kind: 'path', path: 'A/The' }]
+      if (indexed.has(name)) entries.push({ value: 'the ', label: "containing 'the'...", kind: 'pattern' })
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify(entries) }
+    }
+  const searchableOf = (h: SessionHarness, id: string): { searchable: string | null; searchable_key: string | null } =>
+    h.db().prepare('SELECT searchable, searchable_key FROM knowledge_packs WHERE id = ?').get(id) as unknown as {
+      searchable: string | null
+      searchable_key: string | null
+    }
+  const suggestsSince = (h: SessionHarness, mark: number): string[] =>
+    h.requests.slice(mark).filter((u) => u.startsWith('/suggest'))
+
+  it('#340 a pack added through packs:add (or enabled through packs:setEnabled) is probed in the background: the verdict lands without a Refresh, under the reconcile’s own cache key, the picker is told, an ask in between says "no full-text index", and a lock mid-probe writes nothing', async () => {
+    const h = await sessionHarness()
+    try {
+      const db = h.db()
+      // Serving names are the leaf without `.zim` (D-Z11), so the responder keys on the leaf.
+      h.hooks.respond = suggestFor(new Set(['alpha-indexed']))
+
+      // ---- (1) ONE add batch, two files: both confirmed, one sidecar start, no Refresh ------
+      dialogState.paths = [h.addPackFile('alpha-indexed.zim'), h.addPackFile('bravo-noindex.zim')]
+      const noticesBefore = h.notices.length
+      const spawnsBefore = h.serveSpawns.length
+      const { result } = await invoke(handlers, IPC.addKnowledgePacks)
+      const added = (result as KnowledgePackAddResult).added
+      expect(added).toHaveLength(2)
+      const alpha = added.find((p) => p.leaf === 'alpha-indexed.zim')!.id
+      const bravo = added.find((p) => p.leaf === 'bravo-noindex.zim')!.id
+      // The add RESOLVED before the probe ran (D3: never on the caller's critical path).
+      expect(searchableOf(h, alpha)).toEqual({ searchable: null, searchable_key: null })
+      expect(searchableOf(h, bravo)).toEqual({ searchable: null, searchable_key: null })
+      expect(
+        await waitUntil(() => searchableOf(h, alpha).searchable === 'yes' && searchableOf(h, bravo).searchable === 'no')
+      ).toBe(true)
+      // Once per batch, after the loop: ONE sidecar start, one /suggest per pack.
+      expect(h.serveSpawns.length - spawnsBefore).toBe(1)
+      expect(suggestsSince(h, 0).filter((u) => u.includes('alpha-indexed'))).toHaveLength(1)
+      expect(suggestsSince(h, 0).filter((u) => u.includes('bravo-noindex'))).toHaveLength(1)
+      // The verdict is keyed exactly as the reconcile keys it: `<size>:<mtime>:<tools fingerprint>`.
+      const keyAlpha = searchableOf(h, alpha).searchable_key
+      expect(keyAlpha).toMatch(/^\d+:[\d.]+:.+$/)
+      // …and the picker / panel were told, under THIS session's epoch, after the verdict landed.
+      const mutation = h.notices.slice(noticesBefore).filter((n) => n.reason === 'mutation')
+      expect(mutation.length).toBeGreaterThan(0)
+      expect(mutation[mutation.length - 1]!.epoch).toBe(h.ctrl.unlockEpoch())
+      // An ask in between now reports the index-less pack honestly: skipped, not failed.
+      const arm = h.svc.makeArm(db, [bravo])
+      const { outcomes } = await arm!('alpha climate', new AbortController().signal)
+      expect(outcomes).toEqual([expect.objectContaining({ packId: bravo, status: 'skipped', reason: 'not-searchable' })])
+
+      // ---- (2) the next Refresh asks NOTHING again — same key, verdict kept ---------------
+      const mark = h.requests.length
+      await h.svc.reconcile(db) // the whole pass, its end-probe included
+      expect(suggestsSince(h, mark)).toEqual([])
+      expect(searchableOf(h, alpha)).toEqual({ searchable: 'yes', searchable_key: keyAlpha })
+      expect(searchableOf(h, bravo).searchable).toBe('no')
+
+      // ---- (3) ENABLE after a registration that never probed ----------------------------
+      // The direct service API does not schedule (the IPC layer owns the trigger); the pack
+      // stays unknown through a disable, and the enable through packs:setEnabled probes it.
+      const charlie = await h.registerPack('charlie-indexed.zim')
+      h.hooks.respond = suggestFor(new Set(['alpha-indexed', 'charlie-indexed']))
+      await invoke(handlers, IPC.setKnowledgePackEnabled, charlie, false)
+      for (let i = 0; i < 10; i++) await tick() // a ceiling, not a proof: nothing probed a disable
+      expect(searchableOf(h, charlie).searchable).toBeNull()
+      await invoke(handlers, IPC.setKnowledgePackEnabled, charlie, true)
+      expect(await waitUntil(() => searchableOf(h, charlie).searchable === 'yes')).toBe(true)
+
+      // ---- (4) a LOCK landing while the probe's /suggest is parked writes nothing --------
+      h.hooks.respond = suggestFor(new Set(['alpha-indexed', 'charlie-indexed', 'delta-indexed']))
+      const probeGate = serveGate<void>()
+      h.hooks.beforeRespond = async (url) => {
+        if (url.startsWith('/suggest')) await probeGate.wait()
+      }
+      dialogState.paths = [h.addPackFile('delta-indexed.zim')]
+      const { result: r4 } = await invoke(handlers, IPC.addKnowledgePacks)
+      const delta = (r4 as KnowledgePackAddResult).added[0]!.id
+      await probeGate.entered // the probe is inside its request when the lock arms
+      const { lockP } = await parkedLock(h)
+      h.hooks.beforeRespond = async () => undefined
+      probeGate.release() // the response arrives — into an aborted operation
+      h.releaseSuspend()
+      await lockP
+      expect(h.ctrl.isUnlocked()).toBe(false)
+      expect(h.transientEntries()).toEqual([])
+      // A fresh session through the real unlock handler: the row is still unknown (no post-lock
+      // write) — and that session's reconcile-end probe then confirms it, unprompted.
+      const { result: unlocked } = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
+      expect(unlocked).toMatchObject({ ok: true })
+      expect(searchableOf(h, delta).searchable).toBeNull()
+      expect(await waitUntil(() => searchableOf(h, delta).searchable === 'yes', 2_000)).toBe(true)
+    } finally {
+      await h.close()
+    }
+  }, 60_000)
 })

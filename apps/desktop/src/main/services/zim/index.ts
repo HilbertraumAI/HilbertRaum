@@ -22,6 +22,7 @@ import {
   reconcile,
   registerPack,
   removePack,
+  resetStaleSearchability,
   retrievablePacks,
   servedCandidates,
   setPackEnabled,
@@ -373,6 +374,11 @@ export class ZimService {
   private reconcileInFlight: Promise<void> | null = null
   /** A Refresh arrived while a pass was running: run exactly ONE more, however many arrived. */
   private runAgain = false
+  /** The post-registration searchability probe currently running, or null (#340, D-Z15) —
+   *  the same single-flight shape as the reconcile. */
+  private probeInFlight: Promise<void> | null = null
+  /** A probe was requested while one ran: run exactly ONE more afterwards. */
+  private probeAgain = false
 
   constructor(opts: ZimServiceOptions) {
     this.opts = opts
@@ -615,9 +621,9 @@ export class ZimService {
    * quit, a new epoch) propagates without a write. `null` (unknown) verdicts are skipped, so a
    * 404, a timeout or a malformed body simply means "ask again next time".
    */
-  private async probeUnknownSearchability(db: Db, op: ZimOp): Promise<void> {
+  private async probeUnknownSearchability(db: Db, op: ZimOp): Promise<number> {
     const pending = unknownSearchablePacks(db)
-    if (pending.length === 0) return
+    if (pending.length === 0) return 0
     let verdicts: Array<{ id: string; verdict: 'yes' | 'no'; searchableKey: string | null }> | null
     try {
       verdicts = await this.withServer(db, op, async (library) => {
@@ -643,14 +649,78 @@ export class ZimService {
         log.warn('Knowledge-pack searchability probe discarded — the pack server changed', {
           reason: err.reason
         })
-        return
+        return 0
       }
       throw err // an AbortError (lock / quit / cancelled reconcile) propagates, unwritten
     }
-    if (verdicts === null || verdicts.length === 0) return
+    if (verdicts === null || verdicts.length === 0) return 0
     // The LAST recheck before the only capability write there is.
     op.assert()
-    writeSearchableVerdicts(db, verdicts)
+    return writeSearchableVerdicts(db, verdicts)
+  }
+
+  /**
+   * Probe the searchability of whatever is still unknown, in the background — the second
+   * trigger of the capability probe (#340, rag-design D-Z15). The reconcile-end probe above
+   * covers session start and Refresh; without this, a pack the user just ADDED (or ENABLED
+   * after registering it disabled) stayed unknown — tickable, no badge — until the next Refresh,
+   * and an ask in between reported an index-less pack as "search failed" instead of "no full-text
+   * index". The IPC layer calls this once per completed `packs:add` batch (never per file: a
+   * probe started between two files of one batch would be discarded as stale by the second
+   * file's revision bump) and on `packs:setEnabled(…, true)`.
+   *
+   * Never on the caller's critical path (D3: the timer runs after the add/enable has resolved);
+   * `getDb` is read when the pass runs, not when it is scheduled, so a workspace that locked
+   * meanwhile is refused by the operation's admission check before any handle is touched.
+   * Single-flight with one coalesced rerun, like `reconcile()`; while a reconciliation is in
+   * flight nothing runs here — that pass's own end-probe sees the new row. The pass runs the
+   * reconcile's key pass FIRST so the verdict is stored under the SAME cache key the reconcile
+   * would compute, then the same guarded probe and the same conditional write, and announces
+   * `'mutation'` when a verdict landed so the panel and the picker refetch without a Refresh.
+   * Fully best-effort: an `AbortError` (lock / quit / a new session) writes nothing and is not
+   * even logged; anything else is a warn line with the error class only.
+   */
+  scheduleSearchabilityProbe(getDb: () => Db): void {
+    const timer = setTimeout(() => {
+      void this.runScheduledProbe(getDb)
+    }, 0)
+    timer.unref?.()
+  }
+
+  private async runScheduledProbe(getDb: () => Db): Promise<void> {
+    if (this.probeInFlight) {
+      this.probeAgain = true
+      return this.probeInFlight
+    }
+    const run = this.probeOnce(getDb).finally(() => {
+      this.probeInFlight = null
+    })
+    this.probeInFlight = run
+    await run
+    if (this.probeAgain) {
+      this.probeAgain = false
+      await this.runScheduledProbe(getDb)
+    }
+  }
+
+  private async probeOnce(getDb: () => Db): Promise<void> {
+    if (this.reconcileInFlight) return // its end-probe covers whatever is unknown
+    const op = this.beginOp('zim-reconcile')
+    try {
+      op.assert()
+      if (!this.toolsInstalled()) return
+      const db = getDb()
+      resetStaleSearchability(db, this.packDeps(op.signal, op), () => op.assert())
+      const written = await this.probeUnknownSearchability(db, op)
+      if (written > 0) this.emitPacksChanged(op, 'mutation', this.refreshing())
+    } catch (err) {
+      if (isAbortError(err)) return
+      log.warn('Knowledge-pack searchability probe failed (non-fatal)', {
+        error: err instanceof Error ? err.constructor.name : 'UnknownError'
+      })
+    } finally {
+      op.release()
+    }
   }
 
   /**

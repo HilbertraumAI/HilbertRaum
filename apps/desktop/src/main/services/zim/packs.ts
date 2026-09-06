@@ -607,8 +607,13 @@ function searchableKeyFor(filePath: string, toolsFingerprint: string | null): st
  * Recompute the key for every enabled ∧ available row and RESET the verdict whose key moved
  * (the reconcile is the ONE write path for capability state — plan §9.17 (d)/§9.21 (d)3).
  * A row whose key is unchanged is not touched at all, so a no-op Refresh writes nothing.
+ *
+ * Exported for the post-registration probe (#340, rag-design D-Z15): a row a registration just
+ * inserted has NO key yet, and a verdict written under a NULL key would be reset — and the pack
+ * re-probed — by the next reconcile's key pass. Running this same pass first keys the new row
+ * exactly as the reconcile would, so the two probes share one cache key.
  */
-function resetStaleSearchability(db: Db, deps: PackDeps, assert: () => void): void {
+export function resetStaleSearchability(db: Db, deps: PackDeps, assert: () => void): void {
   const fingerprint = deps.toolsFingerprint?.() ?? null
   const rows = prepareCached(
     db,
