@@ -283,29 +283,44 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(screen.getByText(/None yet\. Plug the drive into another computer/)).toBeInTheDocument()
   })
 
-  it('shows the graphics memory from the result, or from the live probe when the result predates the field', async () => {
+  it('shows the graphics memory from the result, or from this machine’s eligible probe when the result predates the field', async () => {
     install(snapshot({ current: result({ gpu: 'NVIDIA GeForce RTX 3090', gpuVramMb: 24576 }) }))
     renderScreen()
     expect(await screen.findByText('24.0')).toBeInTheDocument()
     expect(screen.getByText('Usable')).toBeInTheDocument()
     cleanup()
-    // An old result (no gpuVramMb) on the current machine: the live probe fills the tile.
+    // An old result (no gpuVramMb) on the current machine: the eligible probe's device fills
+    // the tile — a small DISCRETE card is "Small", with its size as the reason.
     const legacy = result()
     delete (legacy as Partial<BenchmarkResult>).gpuVramMb
-    install(snapshot({ current: legacy, currentGpu: { name: 'Intel Iris Xe', totalMb: 4096 } }))
+    install(snapshot({ current: legacy, currentGpu: { name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, useful: false } }))
     renderScreen()
     expect(await screen.findByText('4.0')).toBeInTheDocument()
     expect(screen.getByText('Small')).toBeInTheDocument()
-    expect(screen.getByText(/Under 6 GB: models run on the processor/)).toBeInTheDocument()
+    expect(screen.getByText(/NVIDIA GeForce GTX 1650 · Under 6 GB: models run on the processor/)).toBeInTheDocument()
     cleanup()
-    // …but never for a result from ANOTHER computer.
-    install(snapshot({ current: legacy, currentMachine: false, currentGpu: { name: 'Intel Iris Xe', totalMb: 4096 } }))
+    // …but never for a result from ANOTHER computer: that check never recorded the field, so
+    // the tile claims nothing either way (N1) — not "no usable graphics card".
+    install(snapshot({ current: legacy, currentMachine: false, currentGpu: { name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, useful: false } }))
+    renderScreen()
+    expect(await screen.findByText('That check did not record the graphics card.')).toBeInTheDocument()
+    expect(screen.getByText('Not recorded')).toBeInTheDocument()
+    expect(screen.queryByText(/No usable graphics card/)).not.toBeInTheDocument()
+    expect(screen.queryByText('4.0')).not.toBeInTheDocument()
+    cleanup()
+    // A foreign result that RECORDED nothing (an explicit null) is a real "none".
+    install(snapshot({ current: result({ gpuVramMb: null }), currentMachine: false }))
     renderScreen()
     expect(await screen.findByText(/No usable graphics card/)).toBeInTheDocument()
-    cleanup()
+    expect(screen.getByText('None')).toBeInTheDocument()
+  })
+
+  it('never reads the raw settings probe: without a device in the snapshot the tile stays empty, whatever settings hold (M8.3)', async () => {
     // `snapshot.currentGpu` is the BUDGET device for the next start (PR #308 audit decision 9);
     // when main reports none, the tile says so — it never falls back to the stored probe's first
     // device, which on a hybrid laptop is the iGPU's shared-RAM figure (the P2 carry-over).
+    const legacy = result()
+    delete (legacy as Partial<BenchmarkResult>).gpuVramMb
     install(snapshot({ current: legacy, currentGpu: null }), {
       getSettings: vi.fn(async () => ({
         ...DEFAULT_SETTINGS,
@@ -317,6 +332,11 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(screen.queryByText('11.3')).not.toBeInTheDocument()
     expect(screen.queryByText(/Intel\(R\) Graphics/)).not.toBeInTheDocument()
     expect(screen.getByText('None')).toBeInTheDocument()
+    expect(screen.queryByText('24.2')).not.toBeInTheDocument()
+    expect(screen.queryByText('Usable')).not.toBeInTheDocument()
+    expect(screen.queryByText('NVIDIA GeForce RTX 3090')).not.toBeInTheDocument()
+    // The screen does read `getSettings` — for the two GPU flags behind the "acceleration is
+    // off" sub-line (next test), never for the probe: the ARL device above stays unseen.
   })
 
   it('with the GPU switched off (or auto-disabled) and no card for the next start, the tile says so instead of "no card"', async () => {
@@ -336,6 +356,89 @@ describe('PerformanceScreen: the check as an answer', () => {
       expect(screen.getByText('None')).toBeInTheDocument()
       cleanup()
     }
+  })
+
+  it('T12: an integrated device reporting 16 GB of shared memory is "Integrated", never "Usable", beside "On processor" (M8.1)', async () => {
+    // The old tile rated `mb >= 6144` alone and printed "16.0 GB VRAM · Usable" while the row
+    // below said the model runs on the processor.
+    const iris = result({ gpu: 'Intel(R) Iris(R) Xe Graphics', gpuVramMb: 16_384 })
+    install(
+      snapshot({
+        current: iris,
+        currentGpu: { name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, useful: false },
+        placement: placement({
+          memoryClass: 'cpu',
+          vramMb: null,
+          ramMb: 16_077,
+          verdict: { kind: 'cpu', needMb: 5939, estimated: true, budgetMb: 16_077, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
+        })
+      })
+    )
+    renderScreen()
+    expect(await screen.findByText('On processor')).toBeInTheDocument()
+    expect(screen.getByText('16.0')).toBeInTheDocument()
+    expect(screen.getByText('GB shared')).toBeInTheDocument()
+    expect(screen.getByText('Integrated')).toBeInTheDocument()
+    expect(screen.getByText('Intel(R) Iris(R) Xe Graphics · Integrated, shared memory: models run on the processor.')).toBeInTheDocument()
+    expect(screen.queryByText('Usable')).not.toBeInTheDocument()
+    expect(screen.queryByText('GB VRAM')).not.toBeInTheDocument()
+    // Not blamed on size: the memory is not the card's own.
+    expect(screen.queryByText(/Under 6 GB/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Small')).not.toBeInTheDocument()
+  })
+
+  it('rates a recorded device by the shared rule when the snapshot carries no flag for it', async () => {
+    // A foreign result (no live device applies) naming an integrated device: the same rule,
+    // from the recorded name + memory.
+    install(snapshot({ current: result({ gpu: 'AMD Radeon(TM) Graphics', gpuVramMb: 16_000 }), currentMachine: false, currentGpu: null }))
+    renderScreen()
+    expect(await screen.findByText('Integrated')).toBeInTheDocument()
+    expect(screen.queryByText('Usable')).not.toBeInTheDocument()
+    cleanup()
+    // An older main process without the flag on `currentGpu`: still never "Usable" for an iGPU.
+    const oldShape = { name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384 } as PerformanceSnapshot['currentGpu']
+    install(snapshot({ current: result({ gpu: 'Intel(R) Iris(R) Xe Graphics', gpuVramMb: 16_384 }), currentGpu: oldShape }))
+    renderScreen()
+    expect(await screen.findByText('Integrated')).toBeInTheDocument()
+    expect(screen.queryByText('Usable')).not.toBeInTheDocument()
+  })
+
+  it('an other-computer row lists VRAM only for a usable card, never an integrated device’s shared figure', async () => {
+    const igpuLaptop = result({
+      cpuModel: 'Intel Core i5-1235U',
+      cpuCores: 12,
+      ramGb: 16,
+      gpu: 'Intel(R) Iris(R) Xe Graphics',
+      gpuVramMb: 16_384,
+      tokensPerSecond: 6,
+      ranAt: '2026-08-30T10:00:00Z'
+    })
+    install(snapshot({ otherMachines: [office, igpuLaptop] }))
+    renderScreen()
+    expect(await screen.findByText(/Intel Core i9-13900K, 64\.0 GB RAM, 24\.0 GB VRAM/)).toBeInTheDocument()
+    expect(screen.getByText(/Intel Core i5-1235U, 16\.0 GB RAM · /)).toBeInTheDocument()
+    expect(screen.queryByText(/16\.0 GB VRAM/)).not.toBeInTheDocument()
+  })
+
+  it('the integrated tile in German (asserted from the catalog, D-L8)', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    install(
+      snapshot({
+        current: result({ gpu: 'Intel(R) Iris(R) Xe Graphics', gpuVramMb: 16_384 }),
+        currentGpu: { name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, useful: false }
+      })
+    )
+    render(
+      <I18nProvider>
+        <ToastProvider>
+          <PerformanceScreen onNavigate={vi.fn()} />
+        </ToastProvider>
+      </I18nProvider>
+    )
+    expect(await screen.findByText(t('de', 'perf.rating.integrated'))).toBeInTheDocument()
+    expect(screen.getByText(`Intel(R) Iris(R) Xe Graphics · ${t('de', 'perf.tile.graphics.integrated')}`)).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'perf.tile.graphics.unitShared'))).toBeInTheDocument()
+    expect(screen.queryByText(t('de', 'perf.rating.usable'))).not.toBeInTheDocument()
   })
 
   it('says so when the last result belongs to a different computer', async () => {
@@ -480,6 +583,44 @@ describe('PerformanceScreen: models on this computer', () => {
     await screen.findByText('Models on this computer')
     expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
     expect(screen.getByText(/Everything loaded at once needs about/)).toBeInTheDocument()
+  })
+
+  it('chat and translation on the processor by configuration say "processor", not "by design", and the card line is gone (DR1)', async () => {
+    // The GPU switched off on a card machine: main puts both rows on the processor.
+    const rows = placement().models.map((r) => (r.role === 'chat' || r.role === 'translation' ? { ...r, device: 'cpu' as const } : r))
+    install(
+      snapshot({
+        placement: placement({
+          models: rows,
+          verdict: { kind: 'cpu', needMb: 5939, estimated: true, budgetMb: 16_077, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
+        })
+      })
+    )
+    renderScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.getAllByText(/^processor · /)).toHaveLength(2)
+    expect(screen.getAllByText(/processor, by design/)).toHaveLength(4)
+    expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Will run on the processor from RAM \(15\.7 GB\)/)).toBeInTheDocument()
+  })
+
+  it('on Apple Silicon the processor line speaks of unified memory and the pill compares against the budget (DR5)', async () => {
+    // 40 GB of models: under the 48 GB of RAM, over the 36 GB Metal lets models take.
+    install(
+      snapshot({
+        placement: placement({
+          memoryClass: 'unified',
+          vramMb: null,
+          ramMb: 49_152,
+          verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 36_864, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null },
+          totals: { ramAllMb: Math.round(40.0 * 1024), bothOnCard: false }
+        })
+      })
+    )
+    renderScreen()
+    expect(await screen.findByText(/Everything loaded at once needs about 40\.0 GB of the 36\.0 GB of unified memory available to models\./)).toBeInTheDocument()
+    expect(screen.getByText('Too much at once')).toBeInTheDocument()
+    expect(screen.queryByText(/GB RAM\./)).not.toBeInTheDocument()
   })
 })
 

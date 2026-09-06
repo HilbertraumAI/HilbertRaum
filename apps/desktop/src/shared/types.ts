@@ -475,8 +475,19 @@ export interface GpuDevice {
 }
 
 export interface GpuProbeResult {
+  /** Every device the probe enumerated, in order (Diagnostics lists them all). */
   devices: GpuDevice[]
   probedAt: string
+  /**
+   * The computer the probe ran on (`machineKey`), stamped since the PR #303 audit (M8.3,
+   * owner decision G3): a drive moved to a machine whose probe cannot refresh (no binary for
+   * that OS) must not present the previous machine's devices as local. ABSENT on a probe
+   * persisted before the stamp existed — such a probe stays eligible ("unverifiable until a
+   * successful local refresh", never re-stamped); a probe stamped with ANOTHER machine's key
+   * supplies nothing (`eligibleGpuProbe` in `shared/gpu-rules.ts`). `null` = the probe ran
+   * here but this machine's identity could not be detected.
+   */
+  machineKey?: string | null
 }
 
 /**
@@ -1929,11 +1940,17 @@ export interface BenchmarkResult {
   ramGb: number
   gpu: string | null
   /**
-   * Total memory of the primary probed GPU in MiB (the `--list-devices` probe injected at
-   * benchmark time), or null with no usable GPU. Optional: absent on results persisted
-   * before the field existed; the Performance screen then falls back to the live probe for
-   * the current machine and shows nothing for other machines. Graphics memory decides what
-   * runs accelerated, so it gets its own tile beside RAM.
+   * Total memory in MiB of the SAME device `gpu` names — the BUDGET device `nextStartMemory`
+   * (services/performance.ts) selected from the `--list-devices` probe at benchmark time: the
+   * largest usable card by the `shared/gpu-rules.ts` rule (PR #308 audit decision 9, unified
+   * with the PR #303 audit M8.2 pairing at the merge of the two). null with no usable device,
+   * or with the GPU switched off / auto-disabled (the next start runs from RAM). A result
+   * persisted by the old `devices[0]` rule may name an integrated device's SHARED figure —
+   * readers rate every recorded figure with `isUsefulDevice` and never call that "VRAM".
+   * Optional: absent on results persisted before the field existed; the snapshot folds this
+   * machine's eligible probe in for the current machine, and the screen says "Not recorded"
+   * for another machine's. Graphics memory decides what runs accelerated, so it gets its own
+   * tile beside RAM.
    */
   gpuVramMb?: number | null
   /**
@@ -2034,22 +2051,47 @@ export interface ModelPlacement {
   /** Metal's `recommendedMaxWorkingSetSize` in MB when printed: the unified-memory budget. */
   metalMaxWorkingSetMb: number | null
   /**
-   * Free memory on the primary GPU when the server started (the `device_info` line's
-   * "N MiB free"), or null when not printed. Explains a partial offload on a card that would
+   * Free memory on the FIRST GPU device of the `device_info` block when the server started
+   * ("N MiB free"), or null when not printed. Explains a partial offload on a card that would
    * hold the model when empty: `--fit` places layers into what was FREE at that moment, minus
    * its 1 GiB safety margin. Optional: absent on records persisted before the field existed.
+   * On a multi-device box the figure is attributed to the SELECTED device through `devices`
+   * instead (`attributedGpuFigures`, PR #303 audit DR2).
    */
   gpuFreeAtStartMb?: number | null
   /**
-   * The working (compute) buffers the runtime reserved on the GPU beside the weights and the
-   * cache (`sched_reserve: <device> compute buffer size`), MiB; null when not printed. Part of
-   * why a fit can leave layers off a card that would hold the weights. Optional: absent on
-   * records persisted before the field existed.
+   * The working (compute) buffers the runtime reserved on GPU devices beside the weights and
+   * the cache (`sched_reserve: <device> compute buffer size`), MiB summed over every GPU
+   * device; null when not printed. Part of why a fit can leave layers off a card that would
+   * hold the weights. Optional: absent on records persisted before the field existed. See
+   * `devices` for the per-device figure.
    */
   gpuComputeMb?: number | null
+  /**
+   * Every GPU row of the log's `device_info` block with the compute buffer reserved on it
+   * (`runtime/placement.ts`; PR #303 audit DR2). The join between the log and the probe: the
+   * verdict takes `freeAtStartMb`/`workingMb` from the row whose `name` is the selected
+   * device's, so a dGPU's spill is never explained with the iGPU's free memory. Optional:
+   * absent on records persisted before the rows existed (a lone device then attributes as it
+   * always did, from the two summary fields above).
+   */
+  devices?: PlacementDevice[]
   /** The machine the start ran on (`machineKey`), so a travelling drive never shows another computer's placement. */
   machineKey: string | null
   at: string
+}
+
+/** One GPU device as the load log's `device_info` block listed it (`ModelPlacement.devices`). */
+export interface PlacementDevice {
+  /** ggml's device label (`Vulkan0`, `CUDA1`) — the name the buffer lines use. */
+  label: string
+  /** The driver's device name, as `--list-devices` prints it too (the join key to the probe). */
+  name: string
+  totalMb: number | null
+  /** Free MiB on this device when the server started. */
+  freeMb: number | null
+  /** Working (compute) buffers reserved on THIS device, MiB; null when none was printed for its label. */
+  computeMb: number | null
 }
 
 /**
@@ -2083,7 +2125,7 @@ export interface PlacementVerdict {
 
 /**
  * One model the app can hold in memory (benchmark.md "Models on this computer"): what it is,
- * where it runs by design, and whether it is resident right now.
+ * where it runs under the CURRENT configuration, and whether it is resident right now.
  */
 export interface ResidentModelRow {
   role: 'chat' | 'translation' | 'vision' | 'embeddings' | 'reranker' | 'transcriber'
@@ -2091,7 +2133,14 @@ export interface ResidentModelRow {
   modelId: string | null
   /** GiB (the manifest's decimal figure converted), or null when unknown. */
   sizeOnDiskGb: number | null
-  /** 'gpu' = auto-fit onto the graphics card (chat, translation); 'cpu' = pinned to the processor by design. */
+  /**
+   * 'gpu' = would auto-fit onto the graphics card as things stand: chat and translation on a
+   * machine with a usable card, GPU acceleration not switched off or auto-disabled, and no
+   * observation saying otherwise (PR #303 audit DR1 — the memory class alone used to decide).
+   * 'cpu' = runs on the processor: pinned by design (images, document search, voice), or
+   * because the configuration forces it (`gpuMode: 'off'`, `gpuAutoDisabled`, the translation
+   * sidecar's `--device none` posture), or because the matching observed start landed there.
+   */
   device: 'gpu' | 'cpu'
   /** Resident right now. */
   loaded: boolean
@@ -2133,11 +2182,19 @@ export interface PerformanceSnapshot {
   currentMachine: boolean
   otherMachines: BenchmarkResult[]
   /**
-   * The live GPU probe for the computer the app runs on (`settings.gpuProbe`, refreshed once
-   * per session), so the graphics-memory tile has a figure even when `current` predates
-   * `gpuVramMb`. Null with no probe or no device.
+   * The BUDGET device for the next start, from this machine's ELIGIBLE probe (`settings.gpuProbe`
+   * when it is stamped with this machine's key or unstamped — never a probe stamped with another
+   * machine's; `eligibleGpuProbe` in `shared/gpu-rules.ts`, then `nextStartMemoryFor` in
+   * services/performance.ts): the largest usable card, the same device `BenchmarkResult.gpu`,
+   * the placement budget and the Models ★ go by (PR #308 audit decision 9 merged with PR #303
+   * audit M8). `useful` is the shared `isUsefulDevice` verdict on it (true for a discrete card
+   * by construction; the Metal pool device on unified memory is rated by the same predicate).
+   * `name` and `totalMb` always describe the SAME device. Null with no eligible probe, no
+   * usable device (an integrated-only machine: the tile reads "No usable graphics card"), or
+   * the GPU switched off / auto-disabled (the tile names the cause). The screen never falls
+   * back to the raw settings probe.
    */
-  currentGpu: { name: string; totalMb: number } | null
+  currentGpu: { name: string; totalMb: number; useful: boolean } | null
   /**
    * True while the benchmark occupancy span is held on this machine — a run THIS window
    * started or any other (first-run, moved-drive, another window). Assigned verbatim by the
@@ -2180,9 +2237,24 @@ export interface PerformanceSnapshot {
     /** Every model the app can hold, chat first (benchmark.md "Models on this computer"). */
     models: ResidentModelRow[]
     totals: {
-      /** Everything loadable at once, MiB (the sizes summed); null when nothing is installed. */
+      /**
+       * What everything loadable at once would take from the PROCESSOR's memory, MiB
+       * (`loadedAtOnceMb` in `services/performance.ts`; PR #303 audit DR5, owner ruling):
+       * on the `cpu` class every row's size; on `discrete` the rows that run on the processor
+       * plus the active model's OBSERVED partial-offload spill and the live translation
+       * sidecar's spill (size × the share of layers off the card — a not-live or all-on-card
+       * translation contributes 0); on `unified` the full sum (one pool — the copy says
+       * "memory", not "RAM", and the pill compares against the unified budget). null when
+       * nothing is installed.
+       */
       ramAllMb: number | null
-      /** Chat and translation are both resident on the card right now: the second one got the leftovers. */
+      /**
+       * Chat and translation are both resident on the card right now, so the second one got
+       * the leftovers: both rows say 'gpu', the active chat model is resident with its
+       * observed start on the GPU and at least one layer offloaded (or no observation under a
+       * GPU-eligible configuration), and the translation sidecar is live with layers on the
+       * card. Never true for a row that says 'cpu'.
+       */
       bothOnCard: boolean
     }
   }

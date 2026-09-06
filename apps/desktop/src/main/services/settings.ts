@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
 import {
   normalizeBenchmarkHistory,
   normalizeBenchmarkResult,
+  normalizeGpuProbe,
   normalizeModelPlacements
 } from '../../shared/benchmark-schema'
 import { MAX_LOCAL_API_PORT, MIN_LOCAL_API_PORT } from '../../shared/local-api'
@@ -83,6 +84,8 @@ export function getSettings(db: Db): AppSettings {
   if ('lastBenchmark' in stored) stored.lastBenchmark = normalizeBenchmarkResult(stored.lastBenchmark)
   if ('benchmarkHistory' in stored) stored.benchmarkHistory = normalizeBenchmarkHistory(stored.benchmarkHistory)
   if ('modelPlacements' in stored) stored.modelPlacements = normalizeModelPlacements(stored.modelPlacements)
+  // The probe too (P5): the memory class, the VRAM budget and the graphics tile read it.
+  if ('gpuProbe' in stored) stored.gpuProbe = normalizeGpuProbe(stored.gpuProbe)
   // Merge stored values over defaults so new fields always have a value.
   return { ...DEFAULT_SETTINGS, ...(stored as Partial<AppSettings>) }
 }
@@ -161,6 +164,13 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
       toStore = normalizeModelPlacements(value)
     } else if (key === 'lastBenchmark' && value !== null) {
       const normalized = normalizeBenchmarkResult(value)
+      if (normalized == null) continue
+      toStore = normalized
+    } else if (key === 'gpuProbe' && value !== null) {
+      // P5: validated devices (junk items dropped), a parseable `probedAt`, and the machine
+      // stamp kept exactly as given — absent stays absent (an unstamped legacy probe is never
+      // re-stamped, G3). A value with no `devices` array is not a probe and is ignored.
+      const normalized = normalizeGpuProbe(value)
       if (normalized == null) continue
       toStore = normalized
     } else if (Array.isArray(def)) {

@@ -1,4 +1,4 @@
-import type { ModelPlacement } from '../../../shared/types'
+import type { ModelPlacement, PlacementDevice } from '../../../shared/types'
 
 // Where a model's start actually put it (benchmark.md "Your model"). llama.cpp's load log
 // is the only place the real outcome of `--fit` is reported: the layer split, the bytes each
@@ -18,6 +18,16 @@ import type { ModelPlacement } from '../../../shared/types'
 // A device whose name starts with "CPU" (CPU, CPU_Mapped) or ends in "_Host" (Vulkan_Host,
 // CUDA_Host: pinned host memory the backend keeps CPU-side) is the CPU side; everything else
 // is a GPU. The lines are printed from log verbosity 4 up (`-lv 4`, CHAT_SERVER_ARGS).
+//
+// The `device_info` block names each device TWICE over — by ggml's label (`Vulkan0`, the name
+// the buffer lines use) and by the driver's name (the one `--list-devices` prints too):
+//   device_info:
+//     - Vulkan0 : Intel(R) Iris(R) Xe Graphics (16384 MiB, 15000 MiB free)
+//     - Vulkan1 : NVIDIA GeForce RTX 3090 (24822 MiB, 22900 MiB free)
+// The parser keeps every GPU row (`devices`) with the compute buffer reserved on it, so the
+// snapshot can attribute the free-at-start and working figures to the device it actually
+// selected (PR #303 audit DR2) instead of the first row / the sum over all devices — which
+// on a hybrid box described the iGPU while the budget described the dGPU.
 
 const OFFLOAD_RE = /offloaded\s+(\d+)\s*\/\s*(\d+)\s+layers to GPU/
 const MODEL_BUFFER_RE = /(\S+) model buffer size\s*=\s*([\d.]+)\s*MiB/
@@ -25,8 +35,12 @@ const KV_BUFFER_RE = /(\S+) KV buffer size\s*=\s*([\d.]+)\s*MiB/
 /** `sched_reserve:    Vulkan0 compute buffer size =  2860.00 MiB` (the working buffers). */
 const COMPUTE_BUFFER_RE = /(\S+) compute buffer size\s*=\s*([\d.]+)\s*MiB/
 const METAL_BUDGET_RE = /recommendedMaxWorkingSetSize\s*=\s*([\d.]+)\s*MB/
-/** `device_info` rows: `  - Vulkan0 : NVIDIA GeForce RTX 3090 (24822 MiB, 2703 MiB free)`. */
-const DEVICE_INFO_RE = /-\s+(\S+)\s+:\s+.*\((\d+)\s*MiB,\s*(\d+)\s*MiB free\)/
+/**
+ * `device_info` rows: `  - Vulkan0 : NVIDIA GeForce RTX 3090 (24822 MiB, 2703 MiB free)` —
+ * label, name, total, free. The name is matched lazily up to the LAST `(<total> MiB, <free>
+ * MiB free)` group so a name with its own parentheses ("… Graphics 630 (CFL GT2)") survives.
+ */
+const DEVICE_INFO_RE = /-\s+(\S+)\s+:\s+(.*?)\s*\((\d+)\s*MiB,\s*(\d+)\s*MiB free\)\s*$/
 
 /** What one start's log said; every figure null until its line is seen. */
 export interface PlacementReading {
@@ -41,6 +55,8 @@ export interface PlacementReading {
   gpuFreeAtStartMb: number | null
   /** Working (compute) buffers reserved on GPU devices, MiB summed. */
   gpuComputeMb: number | null
+  /** Every GPU row of the `device_info` block, in order, with the compute buffer filed under its label. */
+  devices: PlacementDevice[]
 }
 
 export interface PlacementParser {
@@ -55,9 +71,11 @@ function isCpuDevice(name: string): boolean {
   return upper.startsWith('CPU') || upper.endsWith('_HOST')
 }
 
+const round2 = (mb: number): number => Math.round(mb * 100) / 100
+
 /** One parser per start attempt: a retried rung gets a fresh reading. */
 export function createPlacementParser(): PlacementParser {
-  const r: PlacementReading = {
+  const r: Omit<PlacementReading, 'devices'> = {
     gpuLayers: null,
     totalLayers: null,
     gpuModelMb: null,
@@ -68,9 +86,13 @@ export function createPlacementParser(): PlacementParser {
     gpuFreeAtStartMb: null,
     gpuComputeMb: null
   }
+  /** The GPU rows of the `device_info` block, in log order. */
+  const rows: Array<Omit<PlacementDevice, 'computeMb'>> = []
+  /** Compute buffers by device LABEL — joined onto the rows in `reading()`, whichever line came first. */
+  const computeByLabel = new Map<string, number>()
   let pending = ''
   const add = (key: 'gpuModelMb' | 'cpuModelMb' | 'gpuKvMb' | 'cpuKvMb' | 'gpuComputeMb', mb: number): void => {
-    r[key] = Math.round(((r[key] ?? 0) + mb) * 100) / 100
+    r[key] = round2((r[key] ?? 0) + mb)
   }
   const line = (text: string): void => {
     const off = OFFLOAD_RE.exec(text)
@@ -91,7 +113,11 @@ export function createPlacementParser(): PlacementParser {
     }
     const compute = COMPUTE_BUFFER_RE.exec(text)
     if (compute) {
-      if (!isCpuDevice(compute[1])) add('gpuComputeMb', Number(compute[2]))
+      if (!isCpuDevice(compute[1])) {
+        const mb = Number(compute[2])
+        add('gpuComputeMb', mb)
+        computeByLabel.set(compute[1], round2((computeByLabel.get(compute[1]) ?? 0) + mb))
+      }
       return
     }
     const metal = METAL_BUDGET_RE.exec(text)
@@ -99,9 +125,14 @@ export function createPlacementParser(): PlacementParser {
       r.metalMaxWorkingSetMb = Math.round(Number(metal[1]))
       return
     }
-    // The FIRST GPU device's free figure: the fit works against what was free right then.
+    // Every GPU row is kept (label ↔ name is what lets the snapshot pick the selected device);
+    // the FIRST one's free figure is the legacy summary field, the fit works against what was
+    // free right then.
     const dev = DEVICE_INFO_RE.exec(text)
-    if (dev && !isCpuDevice(dev[1]) && r.gpuFreeAtStartMb == null) r.gpuFreeAtStartMb = Number(dev[3])
+    if (dev && !isCpuDevice(dev[1])) {
+      rows.push({ label: dev[1], name: dev[2], totalMb: Number(dev[3]), freeMb: Number(dev[4]) })
+      if (r.gpuFreeAtStartMb == null) r.gpuFreeAtStartMb = Number(dev[4])
+    }
   }
   return {
     onStderrData: (text) => {
@@ -113,7 +144,10 @@ export function createPlacementParser(): PlacementParser {
         nl = pending.indexOf('\n')
       }
     },
-    reading: () => ({ ...r })
+    reading: () => ({
+      ...r,
+      devices: rows.map((row) => ({ ...row, computeMb: computeByLabel.get(row.label) ?? null }))
+    })
   }
 }
 

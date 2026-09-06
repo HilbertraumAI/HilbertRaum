@@ -122,10 +122,12 @@ foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `c
 wins; a commercial `policy.json` can force it back off), `workspaceMode:'plaintext_dev'`,
 `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
 (JSON `BenchmarkResult | null`, default `null`) — the persisted hardware profile lives here.
-**The performance wave (2026-09-05) added `BenchmarkResult.gpuVramMb`** (the budget device's
-total MiB, optional; absent on older results; since the PR #308 audit `gpu` / `gpuVramMb` name
-the budget device `nextStartMemory` selects for the NEXT start — null with the GPU off or
-auto-disabled even when a card is probed — never the first device listed) **and `benchmarkHistory`** (`BenchmarkResult[]`, default `[]`,
+**The performance wave (2026-09-05) added `BenchmarkResult.gpuVramMb`** (the total MiB of the
+SAME device `gpu` names — the BUDGET device `nextStartMemory` selects for the NEXT start (the
+largest usable card by the `shared/gpu-rules.ts` rule; PR #308 audit decision 9 unified with the
+PR #303 audit P5 pairing rule at the merge of the two) — null with the GPU off or auto-disabled or
+on an integrated-only machine even when a device is probed, never the first device listed; optional;
+absent on older results) **and `benchmarkHistory`** (`BenchmarkResult[]`, default `[]`,
 one entry per computer keyed by `machineKey`, capped at `MAX_BENCHMARK_HISTORY = 8`; the write
 gate keeps plain-object elements only; since the PR #303 audit an outgoing `lastBenchmark` from
 another computer is backfilled into it before being replaced, the cap evicts the oldest OTHER
@@ -154,7 +156,23 @@ shape-checked — on WRITE and on READ**, by the pure normalizers in
 - `modelPlacements` — each record must validate (non-empty `modelId`, `'gpu' | 'cpu'` backend,
   positive whole `contextTokens`, parseable `at`; layer/buffer figures finite `>= 0` or `null`; an
   ALL-NULL reading is valid — L7 renders it as `unknown`; a self-contradicting `gpuLayers >
-  totalLayers` is rejected) AND be filed under its own `modelId`.
+  totalLayers` is rejected) AND be filed under its own `modelId`. Since P5 a record may carry
+  **`devices?: PlacementDevice[]`** (DR2) — the log's `device_info` rows `{ label, name, totalMb,
+  freeMb, computeMb }`, validated per row (both join keys non-empty strings, figures finite or
+  null; junk rows dropped, a non-array reads as `[]`, absence stays absent).
+- `gpuProbe` (P5) — `{ devices: GpuDevice[], probedAt, machineKey? }` via `normalizeGpuProbe`,
+  behind the unchanged top-level object gate: a `devices` ARRAY is required (junk items dropped —
+  a device needs a non-empty `name` and a finite `totalMb`; `id` reads as `''` and `freeMb` as
+  `0` when unusable; an all-junk list is an EMPTY probe, which is a result), `probedAt` a
+  parseable date or the unknown sentinel, and **`machineKey`** (M8.3, owner decision G3) — the
+  computer the probe ran on, written by `probeAndPersistGpu` — a string or `null`, kept ABSENT
+  when the stored probe has none: an unstamped legacy probe is never re-stamped, readers
+  (`eligibleGpuProbe` in `shared/gpu-rules.ts`) treat it as eligible until a local refresh
+  replaces it, and a probe stamped with another machine's key supplies nothing. Every path of
+  `probeAndPersistGpu` that reaches the write persists this session's stamped answer — a probe
+  that cannot run (no binary) or that threw writes `{ devices: [], probedAt, machineKey }` like an
+  empty successful probe (PR #308 audit decision 6; an empty stamped result re-stamps no old
+  device), each only after the admission + unlock-epoch re-check.
 
 On WRITE, garbage is IGNORED (a `lastBenchmark` that normalizes to nothing leaves the previous
 result standing — the convention every mistyped value here follows; `null` is still the explicit
@@ -616,7 +634,7 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   calls the same function), `basis` = the memory class the pick was judged against; null only
   without a catalog; `current.recommendedModelId` is the historical figure and is never rewritten —,
   `currentMachine`,
-  `currentGpu` — the budget device for the next start, `{ name, totalMb }` or null, the same
+  `currentGpu` — the budget device for the next start, `{ name, totalMb, useful }` or null, the same
   device `BenchmarkResult.gpu` and the `listModels` ★ go by, never `settings.gpuProbe.devices[0]` —,
   `otherMachines`, `running` (the `benchmark` occupancy span, read directly),
   `placement: { memoryClass, ramMb, vramMb, model, recommendedContextTokens, observed,
@@ -624,8 +642,26 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   pre-start `verdict` on a discrete card is `estimateGraphicsNeedMib(manifest) ≤
   graphicsBudgetMib(device)` — the picker's fit — with `needMb` = the unrounded weights and
   `budgetMb` = the card's total; `PlacementVerdictInput` in services/performance.ts carries
-  `graphicsBudgetMb` and `manifest` for it),
-  `observed: { lastAnswer, lastModelLoad, lastChecksum }`). Two `placement` fields were added by
+  `graphicsBudgetMb`, `manifest` and the base's `gpuName` for it),
+  `observed: { lastAnswer, lastModelLoad, lastChecksum }`). **P5 (M8 / DR1 / DR5), merged with
+  PR #308 decisions 6/9**: `currentGpu` is `{ name, totalMb, useful } | null` — the ELIGIBLE
+  probe's BUDGET device for the next start (`eligibleGpuProbe`, `shared/gpu-rules.ts`, then
+  `nextStartMemoryFor` in services/performance.ts: the largest usable card, `useful` = the shared
+  `isUsefulDevice` verdict on it; `name` and `totalMb` always describe one device; null with no
+  eligible probe, no usable device, or the GPU switched off / auto-disabled — the screen never
+  falls back to the raw settings probe, and reads `getSettings` for the two GPU flags only);
+  `current` gets that device folded in (name and memory together) only for the current machine
+  and only when it predates `gpuVramMb`; `placement.memoryClass` and `placement.vramMb` are the
+  NEXT start's (`cpu` / null when the flags force the processor, whatever the probe lists — the
+  same answer `pickerMemoryFor` gives the Models ★); `ResidentModelRow.device` is where a row
+  runs under the CURRENT configuration (`'cpu'` for chat/translation under a `cpu` class — no
+  usable card, GPU off / auto-disabled — or when the matching observed start was on the CPU
+  backend, or the translation sidecar's posture is `--device none`); `totals.ramAllMb` is
+  class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the observed chat spill +
+  the live translation spill on `discrete`; the full sum on `unified`, compared against the
+  unified budget) and `totals.bothOnCard` requires both rows on the card with observed layers.
+  The verdict is asked for the EFFECTIVE class (the next start's, and `cpu` when the observed
+  start was CPU). Two `placement` fields were added by
   the PR #303 audit P4: **`recommendedContextTokens`** (`number | null`) is the context the
   RECOMMENDED model would launch with — the live `recommendation.modelId`, the model the screen's
   CTA starts, never the id saved with the check (PR #308 decision 8 on top of #303 M5) — resolved

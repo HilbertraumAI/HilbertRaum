@@ -2760,9 +2760,13 @@ adds is the safety machinery:
   marker), and the compatibility-mode notice with **"Try GPU again"** — a dedicated IPC
   (`gpu:try-again`) that clears `gpuAutoDisabled`/`gpuLastError`, invalidates the session probe
   cache, and re-probes + persists (hidden while the toggle is OFF, where it would do nothing).
-  The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful }`
+  The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful, totalMb, budgetMb, memoryClass }`
   (`gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated → the conservative `classifyProfile`
-  bump); `benchmark.ts` itself keeps **zero `child_process`**. `maybeRunFirstBenchmark`
+  bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, re-exported by
+  `runtime/gpu.ts`, so the Performance screen rates a device by the same definition — `name`,
+  `totalMb` and `budgetMb` are one device's, the BUDGET device `nextStartMemory` selects, PR #308
+  audit decision 9); `benchmark.ts` itself keeps **zero
+  `child_process`**. `maybeRunFirstBenchmark`
   additionally refreshes `settings.gpuProbe` once per session even when a benchmark already
   exists, so a drive moved between machines re-labels itself.
 - **`services/embeddings/e5.ts`** — `E5Embedder implements Embedder`, the real backend behind the same
@@ -3075,7 +3079,7 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 |---|---|
 | `gpuMode: 'auto' \| 'off'` (user intent; Settings toggle) | `AppSettings` (encrypted DB) |
 | `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder; cleared by "Try GPU again" |
-| `gpuProbe` (devices + `probedAt`) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself. Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt }`) exactly like an empty successful probe, so a card from a previous machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device |
+| `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way) |
 | Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` still names `devices[0]`, the first device the driver listed, display only; it is not the budget device the picker or the Performance tile use |
 
 **Runtime record (PR #308 audit, 2026-09-06), not a picker change.** The chat server runs on

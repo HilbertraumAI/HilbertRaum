@@ -45,51 +45,13 @@ export function parseListDevices(stdout: string): GpuDevice[] {
   return devices
 }
 
-/**
- * Name-based heuristic for "this is an integrated GPU sharing system RAM" — used to
- * keep classifyProfile's GPU bump conservative (GPU record §8). Deliberately biased toward
- * matching (NOT bumping): an Iris Xe reporting 16 GB of *shared* memory must never
- * push a laptop a profile step up and get recommended a model it cannot run. A false
- * positive only costs a too-small recommendation, never a too-big one.
- */
-export function looksIntegrated(name: string): boolean {
-  // Patterns cover the names real Vulkan drivers report (including Linux/RADV APUs
-  // and Meteor-Lake Intel, which a name-only "Iris/UHD" check would miss):
-  //   - "Intel(R) Iris(R) Xe Graphics", "Intel(R) UHD Graphics 770", "Intel(R) HD ..."
-  //   - "Intel(R) Arc(TM) Graphics"          (Meteor/Lunar-Lake iGPU — NO model number;
-  //     discrete is "Arc(TM) A770 Graphics" and must NOT match)
-  //   - "AMD Radeon(TM) Graphics" / "AMD Radeon Graphics (RADV REMBRANDT)"  (APUs)
-  //   - "AMD Radeon(TM) 780M Graphics" and other "...Graphics"-suffixed APU names
-  //   - "AMD Radeon Vega 8 Graphics", "Vega 11" APUs (also catches old discrete
-  //     RX Vega 56/64 — an accepted false positive; see the bias note above)
-  // PR #308 audit (decision 9, finding R6) — the current-generation integrated names the
-  // pinned b9849 Vulkan build reports, none of which the patterns above matched (so a hybrid
-  // laptop's 11–36 GiB of SHARED memory read as a discrete card on every consumer):
-  //   - "Intel(R) Graphics (ARL)" / "(LNL)"   (Arrow/Lunar-Lake iGPU: the bare "Graphics"
-  //     form with the platform code in parentheses)
-  //   - "Intel(R) Arc(TM) 140V GPU (16GB)"    (Lunar-Lake "Arc 1xxV" iGPU; a discrete Arc is
-  //     "Arc(TM) A770" / "A750" and must NOT match)
-  //   - "AMD Radeon 780M Graphics (RADV PHOENIX)", "890M … (RADV GFX1150)" (RADV APU names
-  //     WITHOUT "(TM)" and WITH a trailing driver tag, which `radeon.*graphics$` misses) and
-  //     the Strix Halo "AMD Radeon 8060S Graphics (RADV GFX1151)"; the discrete laptop
-  //     "AMD Radeon RX 7700S" carries "RX" and no "Graphics" and must NOT match
-  return /iris|uhd|intel\(r\) (hd|arc.*integrated)|intel\(r\) graphics \(|arc\(tm\) graphics|arc\(tm\) 1\d{2}v|radeon(\(tm\))? graphics|radeon(\(tm\))? \d{3,4}[ms] graphics|radeon.*graphics$|vega \d+/i.test(
-    name
-  )
-}
-
-/** Minimum dedicated VRAM (MiB) before a GPU may bump the hardware profile. */
-export const GPU_BUMP_MIN_VRAM_MB = 6144
-
-/**
- * The conservative profile-bump gate (GPU record §8): bump only when some probed device
- * has ≥ 6 GiB AND does not look integrated. An iGPU reporting 16 GB of *shared* RAM
- * must never push a laptop a profile step up; a false negative only costs a too-small
- * model recommendation, never a too-big one.
- */
-export function gpuUsefulForProfile(devices: GpuDevice[]): boolean {
-  return devices.some((d) => d.totalMb >= GPU_BUMP_MIN_VRAM_MB && !looksIntegrated(d.name))
-}
+// The usefulness rules — `looksIntegrated`, the 6 GiB `GPU_BUMP_MIN_VRAM_MB` gate and
+// `gpuUsefulForProfile` (GPU record §8) — moved VERBATIM to `shared/gpu-rules.ts` with the
+// PR #303 audit (M8 / N3): the Performance screen must rate a device by the same definition
+// the profile bump and the memory class use, and the renderer cannot import this module (it
+// spawns). Re-exported here so every existing import site is unchanged; the bump's semantics
+// are untouched (owner decision G4).
+export { GPU_BUMP_MIN_VRAM_MB, gpuUsefulForProfile, looksIntegrated } from '../../../shared/gpu-rules'
 
 export interface GpuProbeDeps {
   /** Injected spawn (the same `SpawnFn` seam the sidecar uses) — tests fake it. */

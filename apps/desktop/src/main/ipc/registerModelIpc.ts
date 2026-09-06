@@ -32,7 +32,7 @@ import {
   type PickerSpeedSignal
 } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
-import { nextStartMemory } from '../services/performance'
+import { nextStartMemoryFor } from '../services/performance'
 import { notifyPerformanceChanged } from './performance-notify'
 import {
   latestEffectiveRead,
@@ -62,19 +62,19 @@ import { perfMark, perfMs } from '../services/perf'
  */
 /**
  * The memory inputs the chat ★ pick goes by (§6.6; PR #308 audit decisions 6 and 9): the class
- * and the BUDGET device for the NEXT start, read through `nextStartMemory` from the persisted
- * probe and the two GPU flags — the same call `probeAndPersistGpu` and the Performance screen
- * make, so the Models ★ and the benchmark can never name different cards. Exported so the seam
- * test can pin what the `listModels` handler feeds `buildModelList`.
+ * and the BUDGET device for the NEXT start, read through `nextStartMemoryFor` from the
+ * ELIGIBLE persisted probe (`eligibleGpuProbe`, PR #303 audit M8.3: a probe stamped with
+ * another machine's key supplies nothing, an unstamped legacy one stays eligible) and the two
+ * GPU flags — the same call `probeAndPersistGpu` and the Performance screen make, so the
+ * Models ★ and the benchmark can never name different cards. `hereKey` defaults to this
+ * machine's identity; the seam tests pass it to pin the foreign-probe case. Exported so the
+ * seam test can pin what the `listModels` handler feeds `buildModelList`.
  */
-export function pickerMemoryFor(s: AppSettings): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb'> {
-  const next = nextStartMemory({
-    platform: process.platform,
-    arch: process.arch,
-    devices: s.gpuProbe?.devices ?? [],
-    gpuMode: s.gpuMode,
-    gpuAutoDisabled: s.gpuAutoDisabled
-  })
+export function pickerMemoryFor(
+  s: AppSettings,
+  hereKey: string | null = machineKey(detectSystem())
+): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb'> {
+  const next = nextStartMemoryFor(s, hereKey)
   // The budget is the device's FREE figure (else total − 1024), raw MiB — decision 10; the same
   // `graphicsBudgetMib` call `probeAndPersistGpu` makes for the benchmark.
   return { memoryClass: next.memoryClass, graphicsBudgetMb: graphicsBudgetMib(next.device) }

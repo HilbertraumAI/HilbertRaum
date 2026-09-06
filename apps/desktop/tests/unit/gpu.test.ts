@@ -3,10 +3,10 @@ import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  parseListDevices,
+  createCachedGpuProbe,
   looksIntegrated,
-  probeGpuDevices,
-  createCachedGpuProbe
+  parseListDevices,
+  probeGpuDevices
 } from '../../src/main/services/runtime/gpu'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 

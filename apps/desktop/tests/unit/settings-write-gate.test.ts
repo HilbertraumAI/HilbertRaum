@@ -161,7 +161,7 @@ describe('settings write gate (BE-1)', () => {
 
   // PR #303 audit P4: the blob was `{ profile: 'FAST_LOCAL' }` — a profile name the app has
   // never had. The record is VALIDATED now (H1), so the fixture states a real `HardwareProfile`;
-  // `gpuProbe` still passes the plain-object gate only (P5 validates it next).
+  // `gpuProbe` is validated too since P5 (`normalizeGpuProbe`, behind the same plain-object gate).
   it('lastBenchmark / gpuProbe accept plain objects only', () => {
     const db = freshDb()
     updateSettings(db, { lastBenchmark: 'junk' as never })
@@ -217,9 +217,18 @@ describe('settings write gate — object-valued size cap + array rejection (CODE
 
   it('gpuProbe honours the same serialized-size cap', () => {
     const db = freshDb()
-    const huge = { devices: [], probedAt: '2026-07-10T00:00:00.000Z', junk: 'y'.repeat(MAX_SETTINGS_OBJECT_BYTES) }
-    updateSettings(db, { gpuProbe: huge as never })
-    expect(getSettings(db).gpuProbe).toBeNull()
+    // A healthy small probe persists…
+    updateSettings(db, { gpuProbe: { devices: [], probedAt: '2026-07-10T00:00:00.000Z' } })
+    expect(getSettings(db).gpuProbe?.probedAt).toBe('2026-07-10T00:00:00.000Z')
+    // …an over-cap payload is dropped, leaving the prior value untouched. PR #303 audit P5: the
+    // bloat has to ride a REAL field now (a device `name`) — an unknown key is stripped by
+    // `normalizeGpuProbe` before the cap ever sees it, which would leave this pinning nothing.
+    const huge = {
+      devices: [{ id: 'Vulkan0', name: 'y'.repeat(MAX_SETTINGS_OBJECT_BYTES + 1), totalMb: 1, freeMb: 1 }],
+      probedAt: '2026-07-11T00:00:00.000Z'
+    }
+    updateSettings(db, { gpuProbe: huge })
+    expect(getSettings(db).gpuProbe).toEqual({ devices: [], probedAt: '2026-07-10T00:00:00.000Z' })
   })
 })
 

@@ -197,7 +197,7 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
       expect(bench.gpuVramMb).toBe(8151)
       expect(await liveStar(ctx)).toBe(CARD8_PICK)
       const snap = buildPerformanceSnapshot(ctx)
-      expect(snap.currentGpu).toEqual({ name: RTX5060.name, totalMb: 8151 })
+      expect(snap.currentGpu).toEqual({ name: RTX5060.name, totalMb: 8151, useful: true })
       expect(snap.placement.memoryClass).toBe('discrete')
       expect(snap.placement.vramMb).toBe(8151)
     }

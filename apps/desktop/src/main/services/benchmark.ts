@@ -23,6 +23,7 @@ import type {
 } from '../../shared/types'
 import type { ModelRuntime, RuntimeTimings } from './runtime'
 import { recommendChatModelId, recommendModelId } from './models'
+import { SLOW_READ_MBPS, VERY_LOW_TOKENS_PER_SECOND } from '../../shared/performance-rules'
 
 // Hardware benchmarker (spec §7.3, §11). Detects RAM/CPU/OS, measures drive
 // read/write speed with a small temp file in the workspace, optionally estimates
@@ -31,8 +32,12 @@ import { recommendChatModelId, recommendModelId } from './models'
 // no network, no telemetry, no child_process. Every measurement is independently
 // resilient: a failed step yields a null value + a friendly warning, never a throw.
 
-/** Tokens/sec at or below this count as "very low" and downgrade the profile one step (spec §11.3). */
-export const VERY_LOW_TOKENS_PER_SECOND = 3
+/**
+ * Tokens/sec strictly below this count as "very low" and downgrade the profile one step (spec
+ * §11.3). Defined in `shared/performance-rules.ts` since the PR #303 audit (N3) so the
+ * Performance screen rates by the same figures; re-exported here unchanged.
+ */
+export { VERY_LOW_TOKENS_PER_SECOND }
 /** Drive WRITE throughput below this (MB/s) earns a non-blocking "slow drive" warning
  *  (spec §11.3). Calibrated against the fsync-bound write leg of the 8 MB probe; kept as
  *  the secondary check for genuinely broken media after #110 re-keyed the primary
@@ -45,9 +50,11 @@ export const SLOW_DRIVE_MBPS = 30
  * 88–99 s per 9B start at ~70 MB/s effective read vs 12–14 s from an SSD. 100 MB/s
  * separates the USB-stick class (~70) from SSDs (430+ measured) with margin on both
  * sides; checksum-pass samples are hash-CPU-bound at a few hundred MB/s and stay above
- * it on any healthy SSD (#108 measured 136 MB/s worst-case).
+ * it on any healthy SSD (#108 measured 136 MB/s worst-case). The value lives in
+ * `shared/performance-rules.ts` (`SLOW_READ_MBPS`, PR #303 audit N3) — the screen's "Slow"
+ * drive rating is the same threshold by construction.
  */
-export const SLOW_EFFECTIVE_READ_MBPS = 100
+export const SLOW_EFFECTIVE_READ_MBPS = SLOW_READ_MBPS
 /** Size of the temp file written to probe drive speed. Small + bounded so the UI never hangs. */
 export const DRIVE_PROBE_BYTES = 8 * 1024 * 1024 // 8 MB
 /** Bytes per gigabyte (GiB) used to convert total memory for classification + display. */
@@ -443,7 +450,13 @@ export function upsertSlowReadWarning(warnings: string[], effectiveReadMbps: num
   return kept
 }
 
-/** The GPU probe summary INJECTED into the benchmark (architecture.md GPU record §5.1/§8). */
+/**
+ * The GPU probe summary INJECTED into the benchmark (architecture.md GPU record §5.1/§8).
+ * `name`, `totalMb` and `budgetMb` describe ONE device — the BUDGET device `nextStartMemory`
+ * in services/performance.ts selects (the largest usable card by the shared
+ * `shared/gpu-rules.ts` rule; PR #308 audit decision 9 unified with PR #303 audit M8.2) — so a
+ * recorded result never pairs one device's name with another's memory.
+ */
 export interface GpuBenchmarkInput {
   /**
    * Display name of the BUDGET device (→ `BenchmarkResult.gpu`): the card the next start will
