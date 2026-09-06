@@ -120,7 +120,8 @@ on step 3; record design-guidelines §11.15 "Follow-up wave"):** per-row busy, a
 "(not available)" state, `.footer-menu-btn`'s own shrink rule, no `reconcile-start` refetch. **Step 5 — #339 P8-1** (`feat/339-p8-1-kiwix-family`, design paper
 `tmp/339-p8-1-design.md`): the `kiwix_tools` family contract landed (record rag-design **D-Z17**); the consent step and the source-bundle code still wait on the owner's rulings.
 **Step 6 — #340 L3** (`feat/340-l3-search-rewrite`, paper `tmp/340-capabilities-plan.md` C1): the question → `/search` pattern rewrite (record rag-design **D-Z18**; measured on the real
-K: pack raw-server 6/9 → 9/9 hit@5; fixture `quality-questions-de.json`, replayed by the manual smoke). Next: L1 / L2 (owner questions first), then C2–C4; (b)/(c) wait for the owner._
+K: pack raw-server 6/9 → 9/9 hit@5; fixture `quality-questions-de.json`, replayed by the manual smoke). Next: L1 / L2 (owner questions first), then C2–C4; (b)/(c) wait for the owner. **MERGED 2026-09-06 on the owner's instruction:** #348, #349, #350, #351, #354, #355, #356 → master bottom-up
+with merge commits (each child retargeted to master, every one CLEAN), tip `ab0f060d`; branches kept; #344 closed by the merge._
 
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — WAVE CLOSED: Phases 0–7 complete, #294 MERGED to master (`92e86a07`, 16:12 UTC), #301 closed by the merge.**_
 The PR's review remediation — 28 findings (H1–H4, M1–M11, L1–L9 with L10 withdrawn, DOC-1–DOC-4; three assessed High, H3 and DOC-1/DOC-2 Medium) — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;
@@ -707,9 +708,9 @@ open round's item stays the last block of §5.)
 ---
 21. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable
     record: [`docs/rag-design.md`](docs/rag-design.md) §17 "Deliberately not built").**
-    (a) **kiwix_tools provisioning** — P8 successor issue #339. P8-1 (the family contract) landed
-    on `feat/339-p8-1-kiwix-family`; P8-3 (`fetch-runtime --family kiwix_tools`, the drive layout, the drift legs; a real fetch
-    verified all eight hashes) landed on `feat/339-p8-3-kiwix-scripts`; open: P8-2 consent (owner ruling pending),
+    (a) **kiwix_tools provisioning** — P8 successor issue #339. P8-1 (the family contract) MERGED
+    (PR #354, 2026-09-06); P8-3 (`fetch-runtime --family kiwix_tools`, the drive layout, the drift legs; a real fetch
+    verified all eight hashes) MERGED (PR #355, 2026-09-06); open: P8-2 consent (owner ruling pending),
     P8-4 source bundle (owner ruling pending), P8-5 network-inventory prose, P8-6 the upstream
     report, P8-7 T20-a real-run / R-4 re-verification.
     (b) **Tier 2** (persistent import of selected articles into the corpus) — P9 successor issue #340.
