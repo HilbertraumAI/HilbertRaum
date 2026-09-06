@@ -2421,6 +2421,16 @@ offline article viewer. Files are registered in place, never copied.
   failed lock admits new work at once — nothing latched — and never revives cancelled
   work: an old operation's aborted signal, not the epoch, is what keeps refusing it even
   after admission is restored.
+  **The request guard (P5, 2026-09-06; review M1, owner ruling D1(a)):** every request the
+  ask arm and the article viewer send to kiwix-serve runs inside `ZimService.withServer`:
+  the service captures the published tuple — revision, generation, port, alive — before the
+  request and reads it again after the response; a response observed across a change of
+  that tuple is discarded whatever it contained, and the request is retried exactly once,
+  only while the same unlocked session still admits the operation and it was not cancelled,
+  and only after the served set has been recomputed under the current revision. The guard
+  detects an observed lifecycle change of the app's own child; it does not authenticate the
+  server, because kiwix-serve has none — that boundary and its residual windows are recorded
+  in `security-model.md` as R-9.
 
 - **D-Z11 — identity, reconciliation, locator (P3b, 2026-09-06; review M5 / L4 / L7).**
   A pack's identity is the UUID at bytes 8–23 of its 80-byte ZIM header (`identity.ts`),
@@ -2453,10 +2463,12 @@ offline article viewer. Files are registered in place, never copied.
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
 budget and `truncated` signal — PR #294 review H1; cooperatively sliced, async on the ask
 path — P1b), `client.ts` (node:http + search/
-library XML parsing), `tools.ts` (binary discovery `runtime/kiwix-tools/<os>/`, dev-only
+library XML parsing; the ONE entry-key encoder with the L5 contract — controls, dot
+segments, 2048-char bound; URL-shaped and empty-segment keys accepted, P5), `tools.ts`
+(binary discovery `runtime/kiwix-tools/<os>/`, dev-only
 `HILBERTRAUM_KIWIX_BIN`, the verified `kiwix-manage` runner — pre-spawn verifier, PID
 registration for as long as the child may be running, settles only after a terminal
-state or the bounded wait — D-Z10), `serve.ts` (`KiwixServer` — per-child records, no
+state or the bounded wait — D-Z10; `platform` injected, L9), `serve.ts` (`KiwixServer` — per-child records, no
 mutable state on `this`, the bounded SIGTERM→SIGKILL teardown policy — D-Z10),
 `packs.ts` (registry over `knowledge_packs`; `writeLibraryXml` stops and rethrows on an
 unconfirmed manager child, D-Z10; `reconcile()` is the one filesystem pass, D-Z11),
@@ -2466,8 +2478,10 @@ unconfirmed manager child, D-Z10; `reconcile()` is the one filesystem pass, D-Z1
 D-Z11), `arm.ts` (candidate production), `index.ts` (`ZimService` facade on
 `AppContext.zim` — the revision/generation allocator, the FIFO build/teardown/start chain
 and the published tuple, D-Z10; the operation registry and admission-epoch checks, the
-`packs:changed` notify hook, D-Z11; quit teardown in shutdown.ts). IPC:
-`ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt).
+`packs:changed` notify hook, D-Z11; `withServer` — the alive/generation request guard with
+one admitted retry (D-Z10, P5); quit teardown in shutdown.ts). IPC:
+`ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt; `packs:add` answers the
+typed `KnowledgePackAddResult`, L1).
 Renderer: `documents/PacksPanel.tsx`, ScopePopover pack sources, SourcesDisclosure "Open
 article", `chat/ArticleModal.tsx`. Shapes: [`data-contracts.md`](data-contracts.md)
 "Knowledge packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit) —
@@ -2483,7 +2497,7 @@ unconfirmed with its PID and file kept; test T06 walks `kiwix-manage`'s verifier
 outcomes (match/mismatch/hashless), PID registration bounded to the child's lifetime,
 and timeout/abort settling only after a terminal state — `zim-arm/zim-ipc`
 (integration), `KnowledgePacks.test.tsx` (renderer, incl. the `partial`-hint case);
-real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
+real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES_DIR`).
 `zim-ipc-session.test.ts` (integration, NEW, P3b) drives the REAL service + registry over
 the real vault harness: test T07 walks lock-during-picker/discovery/registration/rebuild/
 start/probe/HTTP-read, each proving no post-lock write or content response and a clean
@@ -2493,12 +2507,20 @@ seam, and a terminal quit; test T12 proves the collision/Unicode/locator contrac
 end (a rename/restart/drive-letter change all resolve the same citation); test T13 proves
 `packs:list` performs no discovery, a parked reconcile plus two Refreshes coalesce into
 exactly one rerun, the `packs:changed` notices carry the correct epoch and stop at a lock,
-and a user remove/disable during a parked pass wins. `zim-transients.test.ts` (unit, NEW,
-P3b) exercises the standalone cleanup in both workspace modes: containment/link refusal,
+and a user remove/disable during a parked pass wins; test T17 (P5, the `withServer` request
+guard) lives in the same file — child death/reused port/stale response rejected with exactly
+one admitted retry, no retry into a new session or after cancellation, the L5 entry-key
+contract enforced with zero `/raw` requests on a refused key, and the cancelled/partial
+(mixed)/failed `packs:add` DTO outcomes with no path or stderr leak. `zim-transients.test.ts`
+(unit, NEW, P3b) exercises the standalone cleanup in both workspace modes: containment/link
+refusal,
 the keep set, unknown entries left in place. `zim-identity.test.ts` (unit, NEW, P3b) pins
 the header parse, the UUID byte order and the `servingNameFor` slugification against the
 pinned libkiwix 14.1 rule; `zim-packs.test.ts` test T11-a proves identity-based resolution
 and that a tombstoned/disabled UUID stays that way across rename/copy/replacement.
+`zim-smoke-env.test.ts` (unit, NEW, P5) pins the fail-closed `HILBERTRAUM_ZIM_SMOKE` gate
+(`zimSmokeEnv`) against every requested-but-invalid input; `zim-real.test.ts` (manual, P5) is
+the gated real-tool smoke itself — fail-closed once requested, a genuine skip otherwise.
 `scripts/zim-html-perf.mjs` prints the D2 measurement table outside Vitest/Electron
 (`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`), including
 Section D's per-slice cooperative-slicing gate (P1b) — each `--gate` profile now also

@@ -16,8 +16,7 @@ import { join } from 'node:path'
 import {
   ZIM_TRANSIENT_DIR_NAME,
   cleanupZimTransients,
-  zimTransientDir
-} from '../../src/main/services/zim/transients'
+  zimTransientDir, samePath } from '../../src/main/services/zim/transients'
 
 // The knowledge-pack transient cleanup on its own (#301 P3b, findings L3/M4, residual R-7).
 //
@@ -235,5 +234,16 @@ describe('cleanupZimTransients — the contained ZIM transient sweep (#301 P3b, 
     expect(statSync(doc).size).toBe(docBefore)
     expect(readFileSync(doc, 'utf8')).toBe('DOCUMENT-CIPHERTEXT')
     expect(readdirSync(target)).toEqual(['a1b2.enc'])
+  })
+})
+
+describe('samePath — the containment compare folds case on win32 only (#301 P5, finding L9)', () => {
+  it('win32: differing case is the same path', () => {
+    expect(samePath('C:\\Work\\zim-transient', 'c:\\work\\ZIM-TRANSIENT', 'win32')).toBe(true)
+    expect(samePath('C:\\Work\\zim-transient', 'C:\\Work\\zim-transient2', 'win32')).toBe(false)
+  })
+  it('linux / darwin: the compare is exact', () => {
+    expect(samePath('/work/zim-transient', '/work/ZIM-TRANSIENT', 'linux')).toBe(false)
+    expect(samePath('/work/zim-transient', '/work/zim-transient', 'darwin')).toBe(true)
   })
 })

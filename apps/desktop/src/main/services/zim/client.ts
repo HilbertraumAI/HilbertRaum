@@ -155,6 +155,62 @@ export function parseSearchXml(xml: string): KiwixSearchHit[] {
 
 // ---- /raw article fetch --------------------------------------------------------
 
+/** The documented length bound for an archive entry key (#301 P5, finding L5, plan §9.19 (b)):
+ *  Wikipedia titles are ≤ 255 bytes and zimit/warc2zim URL-shaped keys reach a few hundred; 2048
+ *  is the conventional URL bound with headroom, in UTF-16 code units (`string.length`). */
+export const MAX_ARTICLE_PATH_CHARS = 2048
+
+/** Why `assertArticlePath` refused a key. The message carries only this code, NEVER the path
+ *  (#301 P5, finding L5). */
+export type ArticlePathErrorReason = 'empty' | 'too-long' | 'control' | 'dot-segment' | 'unencodable'
+
+/** Thrown by `assertArticlePath` (and therefore by `encodeArticlePath`) for a hazardous or
+ *  unencodable entry key. `message` is the reason CODE, never the path. */
+export class ArticlePathError extends Error {
+  readonly reason: ArticlePathErrorReason
+  constructor(reason: ArticlePathErrorReason) {
+    super(reason)
+    this.name = 'ArticlePathError'
+    this.reason = reason
+  }
+}
+
+/** Matches any C0 control character or DEL. Built from character codes rather than a regex
+ *  escape literal — this toolchain has been observed mangling literal `\u00NN`-style escapes
+ *  typed directly into a source edit, so the char-code form is the safe way to express it. */
+const CONTROL_OR_DEL_RE = new RegExp(
+  '[' + String.fromCharCode(0) + '-' + String.fromCharCode(31) + String.fromCharCode(127) + ']'
+)
+
+/**
+ * The archive-entry-key contract (#301 P5, finding L5, plan §9.19 (b)) — runs FIRST inside
+ * `encodeArticlePath`, so there is one place that enforces it. Rejects: an empty key; a key
+ * longer than `MAX_ARTICLE_PATH_CHARS`; any C0 control character or DEL; a `.` or `..` SEGMENT
+ * anywhere (the `/raw/<book>/content/A/../../x` enumeration vector — a segment that merely
+ * STARTS with dots, `..foo` / `.hidden`, is a legal entry name and stays allowed); a lone
+ * surrogate (an unencodable key — `encodeURIComponent` itself would throw `URIError`).
+ *
+ * Compatibility, deliberately kept ALLOWED (tested in `zim-client.test.ts`): empty segments
+ * (`A/https://example.com/a//b` — zimit-era URL-shaped keys carry `//`), URL-shaped keys with
+ * `: ? # % + & = space` and Unicode, an already-encoded slash inside one segment, namespace-less
+ * keys (`Treibhausgas`), namespaced keys (`-/style.css`, `I/img.png`), a trailing dot
+ * (`A/Foo.`), and segments that merely start with dots.
+ */
+export function assertArticlePath(path: string): void {
+  if (path.length === 0) throw new ArticlePathError('empty')
+  if (path.length > MAX_ARTICLE_PATH_CHARS) throw new ArticlePathError('too-long')
+  if (CONTROL_OR_DEL_RE.test(path)) throw new ArticlePathError('control')
+  for (const segment of path.split('/')) {
+    if (segment === '.' || segment === '..') throw new ArticlePathError('dot-segment')
+  }
+  try {
+    path.split('/').forEach(encodeURIComponent)
+  } catch (err) {
+    if (err instanceof URIError) throw new ArticlePathError('unencodable')
+    throw err
+  }
+}
+
 /**
  * THE encoder for an archive entry key (#301 P3b, finding L4; plan §9.17 (d)8). Per SEGMENT
  * `encodeURIComponent`, joined by literal `/`: the entry key's own slashes are structure and
@@ -163,10 +219,11 @@ export function parseSearchXml(xml: string): KiwixSearchHit[] {
  * `parseSearchXml` applies to a hit's link, so a path round-trips search → citation → viewer
  * unchanged (`my%20wiki` never becomes `my%2520wiki`).
  *
- * ONE owner: nothing else in `src/` may encode an article path. P5's entry-key validation
- * (L5) lands inside this function, so there is a single place to enforce the contract.
+ * ONE owner: nothing else in `src/` may encode an article path. `assertArticlePath` (#301 P5,
+ * finding L5, plan §9.19 (b)) runs FIRST, so there is a single place that enforces the contract.
  */
 export function encodeArticlePath(articlePath: string): string {
+  assertArticlePath(articlePath)
   return articlePath.split('/').map(encodeURIComponent).join('/')
 }
 

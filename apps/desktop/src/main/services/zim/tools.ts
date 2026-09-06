@@ -120,6 +120,10 @@ export interface KiwixManageOptions {
   /** How long to wait for a terminal state after `SIGKILL` before giving up and settling
    *  `'uncertain'` (default 2s). */
   forceKillWaitMs?: number
+  /** Which native path-separator convention to normalize argv paths to (#301 P5, finding L9).
+   *  Defaults to `process.platform` so production is unchanged; tests pin both branches
+   *  independently of the host by passing this explicitly. */
+  platform?: NodeJS.Platform
 }
 
 /** One `log.warn` per process for a hashless install marker (R-1) — never per call, and
@@ -181,8 +185,10 @@ export async function kiwixManageAdd(
 
   // kiwix-manage on Windows REJECTS forward-slash absolute paths ("Cannot add ZIM …" —
   // spike 2026-08-22). `join()`-built paths are already native, but an env/config-sourced
-  // path may not be; normalizing here removes the whole failure class.
-  const native = (p: string): string => (process.platform === 'win32' ? p.replace(/\//g, '\\') : p)
+  // path may not be; normalizing here removes the whole failure class. `platform` is injected
+  // (#301 P5, finding L9) so the branch is pinned in tests independently of the host.
+  const platform = opts.platform ?? process.platform
+  const native = (p: string): string => (platform === 'win32' ? p.replace(/\//g, '\\') : p)
 
   let child: ChildProcessLike
   try {

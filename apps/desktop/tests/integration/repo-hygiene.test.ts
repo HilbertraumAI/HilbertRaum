@@ -811,4 +811,59 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
       expect(other, `${lang}: .other directly follows .one`).toBe(one + 1)
     }
   })
+
+  it('T17 security-model.md carries the kiwix-serve exception to the per-spawn-key claim and the R-9 wording is present in security-model.md, PRIVACY.md and known-limitations.md', () => {
+    // #301 P5, findings DOC-1 / M1: the pre-P5 text claimed EVERY sidecar's own HTTP port is
+    // closed by the per-spawn API key. kiwix-serve has no such key (it implements no request
+    // authentication upstream), so that claim must be carved out by name, not just qualified by
+    // a new subsection sitting beside unqualified prose (plan §9.19 (f)1-2).
+    const paragraphContains = (text: string, startMarker: string, needle: string): boolean => {
+      const start = text.indexOf(startMarker)
+      if (start === -1) return false
+      const end = text.indexOf('\n\n', start)
+      const para = end === -1 ? text.slice(start) : text.slice(start, end)
+      return para.includes(needle)
+    }
+    const securityModel = readFileSync(join(repoRoot, 'docs', 'security-model.md'), 'utf8')
+    const privacy = readFileSync(join(repoRoot, 'PRIVACY.md'), 'utf8')
+    const knownLimitations = readFileSync(join(repoRoot, 'docs', 'known-limitations.md'), 'utf8')
+    const userGuide = readFileSync(join(repoRoot, 'docs', 'user-guide.md'), 'utf8')
+    // Markdown source soft-wraps a long sentence across lines; collapse whitespace runs to a
+    // single space on both sides so a wrapped quote still counts as verbatim.
+    const oneLine = (s: string): string => s.replace(/\s+/g, ' ')
+
+    expect(
+      paragraphContains(securityModel, '**Sidecar requests are authenticated', 'kiwix-serve'),
+      'the "Sidecar requests are authenticated" paragraph must name kiwix-serve as the exception'
+    ).toBe(true)
+    expect(
+      paragraphContains(securityModel, "**The sidecars' own HTTP ports**", 'kiwix-serve'),
+      'the "sidecars\' own HTTP ports … closed by the per-spawn key" item must carve out kiwix-serve'
+    ).toBe(true)
+    expect(
+      /^#### kiwix-serve — the one unauthenticated sidecar/m.test(securityModel),
+      'security-model.md must carry the dedicated kiwix-serve subsection heading'
+    ).toBe(true)
+    expect(securityModel.includes('R-9'), 'security-model.md must record residual R-9').toBe(true)
+    expect(knownLimitations.includes('R-9'), 'known-limitations.md must record residual R-9').toBe(true)
+
+    // The one user-facing R-9 sentence (plan §9.19 (f)3), VERBATIM across every mirror.
+    const sentence =
+      'While the workspace is unlocked and a knowledge pack has been used in a chat, other ' +
+      'programs running under your own user account on this computer can read the enabled ' +
+      'packs through the pack server, which has no password of its own; locking or quitting ' +
+      'stops it.'
+    expect(oneLine(privacy).includes(sentence), 'PRIVACY.md must quote the R-9 sentence verbatim').toBe(true)
+    expect(
+      oneLine(knownLimitations).includes(sentence),
+      'known-limitations.md must quote the R-9 sentence verbatim'
+    ).toBe(true)
+    expect(oneLine(userGuide).includes(sentence), 'user-guide.md must quote the R-9 sentence verbatim').toBe(
+      true
+    )
+    expect(
+      oneLine(securityModel).includes(sentence),
+      'security-model.md must quote the R-9 sentence verbatim (the counterpart it introduces)'
+    ).toBe(true)
+  })
 })

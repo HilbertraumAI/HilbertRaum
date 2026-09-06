@@ -2,8 +2,16 @@ import { BrowserWindow, dialog } from 'electron'
 import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { KnowledgePack, KnowledgePackStatus } from '../../shared/types'
+import type {
+  KnowledgePack,
+  KnowledgePackAddFailureReason,
+  KnowledgePackAddResult,
+  KnowledgePackStatus
+} from '../../shared/types'
 import type { PackArticle } from '../services/zim'
+import { ArticlePathError } from '../services/zim/client'
+import { KiwixManageError } from '../services/zim/tools'
+import { ZimHeaderError } from '../services/zim/identity'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -19,6 +27,21 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
 // Audit privacy: pack ids (archive UUIDs) + sizes/counts only. The pack TITLE and FILENAME
 // name what the user reads — content by the export rule, like project names (sentinel-grep
 // enforced in tests/integration/audit-ipc.test.ts).
+
+/**
+ * Map a per-file registration failure to a reason CODE — never the raw message or a path (#301
+ * P5, finding L1, plan §9.19 (c)1). `ZimHeaderError` ⇒ the file is not a readable ZIM archive;
+ * the "kiwix-tools is not installed" refusal (`ZimService.packDeps`) ⇒ tools missing;
+ * `KiwixManageError` or the header/manager identity disagreement (`packs.ts registerPack`) ⇒
+ * a manager problem; anything else ⇒ 'other'.
+ */
+function classifyAddFailure(err: unknown): KnowledgePackAddFailureReason {
+  if (err instanceof ZimHeaderError) return 'not-a-zim'
+  if (err instanceof KiwixManageError) return 'manager'
+  if (err instanceof Error && /kiwix-tools is not installed/.test(err.message)) return 'tools-missing'
+  if (err instanceof Error && /reported a different archive identity/.test(err.message)) return 'manager'
+  return 'other'
+}
 
 export function registerZimIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
@@ -63,7 +86,7 @@ export function registerZimIpc(ctx: AppContext): void {
     return zim().listPacks(ctx.db)
   })
 
-  ipcHandle(IPC.addKnowledgePacks, async (): Promise<KnowledgePack[] | null> => {
+  ipcHandle(IPC.addKnowledgePacks, async (): Promise<KnowledgePackAddResult> => {
     requireUnlocked()
     const svc = zim()
     // H4 — the PICKER WAIT is itself a registered operation, opened BEFORE the dialog is
@@ -88,18 +111,23 @@ export function registerZimIpc(ctx: AppContext): void {
         op.assert()
       } catch {
         // The same friendly locked copy every other refused surface uses: the user chose files
-        // for a workspace that no longer admits them.
+        // for a workspace that no longer admits them. A late/lock-mid-batch outcome REJECTS —
+        // it is not one of the admitted outcomes the DTO below represents (#301 P5, finding L1).
         throw new Error(tMain('main.docs.locked'))
       }
-      if (result.canceled || result.filePaths.length === 0) return null
+      if (result.canceled || result.filePaths.length === 0) {
+        return { outcome: 'cancelled', added: [], failed: 0, failureReason: null }
+      }
       const added: KnowledgePack[] = []
-      const failures: string[] = []
+      let failed = 0
+      let failureReason: KnowledgePackAddFailureReason | null = null
       for (const path of result.filePaths) {
         try {
           // Every file of one "Add packs" runs under the SAME operation, so one abort stops
           // the whole batch rather than only the file in flight.
           const pack = await svc.registerPack(ctx.db, path, op)
           added.push(pack)
+          // Audit records only ACTUALLY ADDED packs (ids/counts only) — never a failed file.
           ctx.audit?.('knowledge_pack_added', 'Knowledge pack registered', {
             packId: pack.id,
             sizeBytes: pack.sizeBytes,
@@ -108,19 +136,26 @@ export function registerZimIpc(ctx: AppContext): void {
         } catch (err) {
           // A cancellation is NOT a per-archive failure: the workspace stopped admitting this
           // add while the manager was running, so it wears the locked copy like the late
-          // picker above rather than "the archive could not be added".
+          // picker above rather than becoming one more entry in the DTO's `failed` count.
           try {
             op.assert()
           } catch {
             throw new Error(tMain('main.docs.locked'))
           }
-          failures.push(err instanceof Error ? err.message : String(err))
+          failed++
+          const reason = classifyAddFailure(err)
+          if (failureReason === null) failureReason = reason
+          // Protected diagnostic ONLY: the error class + reason code, never the message or the
+          // path (#301 P5, finding L1) — the manager's own stderr can carry an absolute path.
+          log.warn('Knowledge pack registration failed', {
+            reason,
+            error: err instanceof Error ? err.constructor.name : 'UnknownError'
+          })
         }
       }
-      if (added.length === 0 && failures.length > 0) {
-        throw new Error(tMain('main.zim.addFailed', { reason: failures[0] }))
-      }
-      return added
+      const outcome: KnowledgePackAddResult['outcome'] =
+        added.length === 0 ? 'failure' : failed === 0 ? 'success' : 'partial'
+      return { outcome, added, failed, failureReason }
     } finally {
       op.release()
     }
@@ -146,8 +181,13 @@ export function registerZimIpc(ctx: AppContext): void {
       try {
         return await zim().getArticle(ctx.db, packId, articlePath)
       } catch (err) {
-        // The viewer shows an honest "unavailable" state; the reason goes to the log only.
-        log.warn('Pack article read failed', String(err))
+        // The viewer shows an honest "unavailable" state. Only the error CLASS NAME (plus an
+        // ArticlePathError's reason code) goes to the log — never `String(err)`, whose message
+        // could carry a path for some other error class (#301 P5, finding L5).
+        log.warn('Pack article read failed', {
+          error: err instanceof Error ? err.constructor.name : 'UnknownError',
+          reason: err instanceof ArticlePathError ? err.reason : undefined
+        })
         return null
       }
     }

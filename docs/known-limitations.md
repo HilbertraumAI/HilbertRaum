@@ -2443,3 +2443,19 @@ reports and phase plans were working papers; their full text lives in git histor
   Explicit limits: a file belonging to a child whose death could not be confirmed waits
   for the NEXT session start, not the current cleanup pass; a file a stray process still
   holds open on Windows is left in place and reported, never silently called clean.
+- **The pack server has no password of its own (residual R-9).** While the workspace is
+  unlocked and a knowledge pack has been used in a chat, other programs running under
+  your own user account on this computer can read the enabled packs through the pack
+  server, which has no password of its own; locking or quitting stops it. `kiwix-serve`
+  has no request-authentication feature upstream at all, so the app bounds the window a
+  same-user "port squatter" could exploit with the request guard (`ZimService.withServer`):
+  every request is checked against the app's own server lifecycle before and after, a
+  response observed across a lifecycle change is discarded, and the request is retried
+  at most once — this detects a lifecycle change of the app's own child, never the
+  server's identity. Residual windows: the brief race between picking a port and the
+  child binding it, a delayed notification of the child's exit, and whether a second
+  same-user process can bind the port while `kiwix-serve` still holds it (left to the
+  real-tool acceptance run). `--urlRootLocation` exists in kiwix-tools 3.8.1 and is
+  deliberately NOT used — a path prefix in argv is readable by any local process, so it
+  would be obscurity, not authentication (residual R-8, a documented unused option).
+  Revisited only if upstream kiwix-serve adds authentication.

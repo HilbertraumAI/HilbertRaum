@@ -750,6 +750,7 @@ these harnesses prove the *current* pin (the drive's previous binary was b9585).
 | `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
 | `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
+| `zim-real` | `HILBERTRAUM_ZIM_SMOKE` | real `kiwix-manage` registration, the real `kiwix-serve` sidecar, Xapian search, the offline article viewer read — fully offline. **FAIL-CLOSED (#301 P5, finding L8):** requested with a missing/invalid tools dir, either binary absent, a non-ZIM file or an unset query **FAILS** the run instead of silently skipping it |
 
 **Optional harness *inputs* (point a harness at a specific artifact).** Distinct from the on-switch
 env vars in the table above, several harnesses additionally read an **artifact-pointer input**,
@@ -764,6 +765,12 @@ optional — each has a default or is only needed by its harness:
 | `HILBERTRAUM_REAL_MODEL_PATH` | `real-model/wave3` | the chat GGUF path (default `D:/models/chat/qwen3.5-4b-ud-q4kxl.gguf`; sibling `HILBERTRAUM_LLAMA_BIN` points at the binary) |
 | `HILBERTRAUM_RESIDENT_REAL_N` | `resident-cache-real` | real chunk count to embed (default 2000) |
 | `HILBERTRAUM_EVAL_DIR` | `model-eval` | override the `eval/` data dir |
+| `HILBERTRAUM_ZIM_TOOLS_DIR` | `zim-real` | a directory holding the WHOLE unzipped kiwix-tools bundle (both `kiwix-serve`/`kiwix-manage` binaries plus their ICU DLLs) — **required once `zim-real` is requested** |
+| `HILBERTRAUM_ZIM_FILE` | `zim-real` | an existing `.zim` archive whose 80-byte header `readZimHeader` accepts — **required once requested** |
+| `HILBERTRAUM_ZIM_QUERY` | `zim-real` | a non-empty search term the archive's index will hit — **required once requested; deliberately has NO default** (the old hardcoded `'Treibhausgas'` fallback let an unset query pass silently) |
+| `HILBERTRAUM_ZIM_EXPECT_ARTICLE` | `zim-real` | optional — a known entry key; when set, the harness also asserts the viewer reads it with a non-empty title |
+| `HILBERTRAUM_ZIM_FIXTURES_DIR` | `zim-html.test.ts` (unit, CI-run) | optional realism leg — a dir of real mwoffliner `*.html` articles; the committed fixture pins the contract regardless |
+| `HILBERTRAUM_KIWIX_BIN` | `zim-real` / dev runs | dev-only resolver override for `kiwix-serve` (kiwix-manage resolves as its sibling); **ignored in packaged builds** |
 
 **Canned-real-output regression-fixture policy:** because these never run in CI, an
 upstream format change (SSE shape, `--list-devices` lines, whisper JSON) would otherwise

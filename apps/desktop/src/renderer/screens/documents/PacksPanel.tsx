@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { KnowledgePack, KnowledgePacksChangedEvent } from '@shared/types'
+import type {
+  KnowledgePack,
+  KnowledgePackAddFailureReason,
+  KnowledgePacksChangedEvent
+} from '@shared/types'
+import type { MessageKey } from '@shared/i18n'
 import { Badge, Button, ConfirmDialog, EmptyState, ErrorBanner, Spinner, useToast } from '../../components'
 import { friendlyIpcError } from '../../lib/errors'
 import { useT } from '../../i18n'
@@ -19,6 +24,22 @@ import { useT } from '../../i18n'
 // `reconcile-end`/`mutation` refetch the list and clear it. An event whose `epoch` is below
 // the last one seen (an old session's late announcement) is ignored — states just reset on
 // the next mount because the App unmounts this screen on lock.
+
+/** Reason code → the mapped banner key (#301 P5, finding L1, plan §9.19 (c)3) — never the raw
+ *  reason text or manager detail; `null` (the DTO's cancelled shape carries no reason) falls
+ *  back to the generic copy defensively. */
+function addFailedKey(reason: KnowledgePackAddFailureReason | null): MessageKey {
+  switch (reason) {
+    case 'not-a-zim':
+      return 'packs.addFailed.notAZim'
+    case 'tools-missing':
+      return 'packs.addFailed.toolsMissing'
+    case 'manager':
+      return 'packs.addFailed.manager'
+    default:
+      return 'packs.addFailed.other'
+  }
+}
 
 function formatSize(tCount: ReturnType<typeof useT>['tCount'], bytes: number | null): string | null {
   if (bytes == null || bytes <= 0) return null
@@ -97,15 +118,32 @@ export function PacksPanel(): JSX.Element {
     }
   }
 
+  // The typed add-result DTO (#301 P5, finding L1, plan §9.19 (c)3): 'cancelled' does nothing;
+  // 'success' toasts + refreshes; 'partial' refreshes AND banners the generic mixed-add copy
+  // (the added packs are real — they just aren't the whole story); 'failure' banners the
+  // reason-specific copy. No visual redesign here — ErrorBanner/showToast, same as every other
+  // outcome this panel already handles.
   async function onAdd(): Promise<void> {
     setBusy('add')
     setError(null)
     try {
-      const added = await window.api.addKnowledgePacks()
+      const result = await window.api.addKnowledgePacks()
       if (!mountedRef.current) return
-      if (added && added.length > 0) {
-        showToast(tCount('packs.addedToast', added.length))
-        await refresh()
+      switch (result.outcome) {
+        case 'cancelled':
+          break
+        case 'success':
+          showToast(tCount('packs.addedToast', result.added.length))
+          await refresh()
+          break
+        case 'partial':
+          showToast(tCount('packs.addedToast', result.added.length))
+          setError(t('packs.addPartial', { failed: result.failed, total: result.added.length + result.failed }))
+          await refresh()
+          break
+        case 'failure':
+          setError(t(addFailedKey(result.failureReason)))
+          break
       }
     } catch (e) {
       if (mountedRef.current) setError(friendlyIpcError(e))

@@ -47,6 +47,14 @@ from its first public `1.0.0` release onward.
   matching it to a similarly named document — the review, its HTML/PDF evidence pack and
   the Markdown transcript export all name the pack. Reviews created on a pre-release
   knowledge-pack build that cite an archive must be re-run.
+- **Adding several knowledge packs at once now reports exactly what happened.** If some of
+  the chosen archives could not be added, you are told how many were added and how many
+  were not — never the technical reason a file failed. Answers and the article viewer now
+  double-check with the pack server that it is still the same one that was running a moment
+  ago, and retry once if it was restarted mid-question, instead of silently trusting
+  whatever answers on that port. One privacy limit to know: other programs running under
+  your own user account can read the enabled packs while the workspace is unlocked, through
+  the pack server, which has no password of its own; locking or quitting the app stops it.
 - **Each finished chat answer now shows how fast it was generated.** A small line under the
   answer reads, for example, "42 tok/s · 1.8 s to first token · 615 tokens": the model's decode
   speed as reported by the AI engine, how long you waited for the first word, and how many

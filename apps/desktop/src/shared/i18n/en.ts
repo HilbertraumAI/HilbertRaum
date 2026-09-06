@@ -2261,7 +2261,6 @@ export const en = {
   'main.zim.unavailable': 'Knowledge packs are not available in this session.',
   'main.zim.dialogTitle': 'Add knowledge packs',
   'main.zim.filterZim': 'ZIM archives',
-  'main.zim.addFailed': 'The archive could not be added: {reason}',
   'main.dialog.chooseImage': 'Choose an image',
   'main.dialog.filterImages': 'Images',
   // #120 item 4: the images IPC refusal backstops (near-dead text — the renderer shows its own
@@ -2411,6 +2410,14 @@ export const en = {
   'packs.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See the user guide for the manual install step.',
   'packs.addedToast.one': 'Knowledge pack added',
   'packs.addedToast.other': '{count} knowledge packs added',
+  // #301 P5, finding L1 (plan §9.19 (c)3): the typed add-result DTO's outcomes. `addPartial` is
+  // the generic banner for a mixed add; each `addFailed.*` is the reason-specific banner for an
+  // all-fail add — no free text (manager stderr/path) ever reaches these strings.
+  'packs.addPartial': '{failed} of {total} archives could not be added.',
+  'packs.addFailed.notAZim': 'The chosen file is not a readable ZIM archive.',
+  'packs.addFailed.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See the user guide for the manual install step.',
+  'packs.addFailed.manager': 'The archive could not be read by kiwix-manage. Check that the file is complete and try again.',
+  'packs.addFailed.other': 'The archive could not be added.',
   'packs.removedToast': 'Knowledge pack removed',
   'packs.articleCount.one': '{count} article',
   'packs.articleCount.other': '{count} articles',

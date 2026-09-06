@@ -6,6 +6,7 @@ import { PacksPanel } from '../../src/renderer/screens/documents/PacksPanel'
 import { ArticleModal } from '../../src/renderer/chat/ArticleModal'
 import { ScopePopover } from '../../src/renderer/chat/ScopePopover'
 import { I18nProvider } from '../../src/renderer/i18n'
+import { ToastProvider } from '../../src/renderer/components'
 import type {
   Collection,
   DocumentInfo,
@@ -100,11 +101,101 @@ describe('PacksPanel', () => {
     let added = false
     const addKnowledgePacks = vi.fn(async () => {
       added = true
-      return [pack()]
+      return { outcome: 'success' as const, added: [pack()], failed: 0, failureReason: null }
     })
     stubApi({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => (added ? [pack()] : []),
+      addKnowledgePacks
+    })
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ToastProvider>
+          <PacksPanel />
+        </ToastProvider>
+      </I18nProvider>
+    )
+    expect(await screen.findByText('No knowledge packs yet')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add packs…' }))
+    expect(await screen.findByText('Klimawandel von Wikipedia')).toBeInTheDocument()
+    expect(addKnowledgePacks).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('Knowledge pack added')).toBeInTheDocument()
+  })
+
+  // #301 P5, finding L1 (plan §9.19 (c)3): the typed add-result DTO's four outcomes, asserted
+  // through the RENDERED copy — the generic mixed-add string for 'partial', the mapped
+  // reason-specific string for 'failure', nothing for 'cancelled'.
+  it('add flow: cancelled shows nothing and never refreshes', async () => {
+    const addKnowledgePacks = vi.fn(async () => ({
+      outcome: 'cancelled' as const,
+      added: [],
+      failed: 0,
+      failureReason: null
+    }))
+    const listKnowledgePacks = vi.fn(async () => [])
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks,
+      addKnowledgePacks
+    })
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText('No knowledge packs yet')).toBeInTheDocument()
+    const callsBefore = listKnowledgePacks.mock.calls.length
+    await user.click(screen.getByRole('button', { name: 'Add packs…' }))
+    await waitFor(() => expect(addKnowledgePacks).toHaveBeenCalledTimes(1))
+    // No refresh, no toast, no banner — 'cancelled' does nothing (§9.19 (c)3).
+    expect(listKnowledgePacks.mock.calls.length).toBe(callsBefore)
+    expect(screen.queryByText('Knowledge pack added')).not.toBeInTheDocument()
+  })
+
+  it('add flow: partial shows the toast for the added count AND the generic mixed-add banner', async () => {
+    let added = false
+    const addKnowledgePacks = vi.fn(async () => {
+      added = true
+      return { outcome: 'partial' as const, added: [pack()], failed: 1, failureReason: 'manager' as const }
+    })
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => (added ? [pack()] : []),
+      addKnowledgePacks
+    })
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ToastProvider>
+          <PacksPanel />
+        </ToastProvider>
+      </I18nProvider>
+    )
+    expect(await screen.findByText('No knowledge packs yet')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add packs…' }))
+    expect(await screen.findByText('Knowledge pack added')).toBeInTheDocument()
+    // The generic banner — a `failureReason` never renders anything but this mapped copy.
+    expect(await screen.findByText('1 of 2 archives could not be added.')).toBeInTheDocument()
+    expect(await screen.findByText('Klimawandel von Wikipedia')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['not-a-zim', 'The chosen file is not a readable ZIM archive.'],
+    ['tools-missing', /kiwix-tools binaries are not installed/],
+    ['manager', 'The archive could not be read by kiwix-manage. Check that the file is complete and try again.'],
+    ['other', 'The archive could not be added.']
+  ] as const)('add flow: failure (%s) shows the reason’s banner text, never a different one', async (reason, expected) => {
+    const addKnowledgePacks = vi.fn(async () => ({
+      outcome: 'failure' as const,
+      added: [],
+      failed: 1,
+      failureReason: reason
+    }))
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [],
       addKnowledgePacks
     })
     const user = userEvent.setup()
@@ -115,8 +206,8 @@ describe('PacksPanel', () => {
     )
     expect(await screen.findByText('No knowledge packs yet')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Add packs…' }))
-    expect(await screen.findByText('Klimawandel von Wikipedia')).toBeInTheDocument()
-    expect(addKnowledgePacks).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText(expected)).toBeInTheDocument()
+    expect(screen.queryByText('Knowledge pack added')).not.toBeInTheDocument()
   })
 
   it('remove asks for confirmation and says the file is untouched', async () => {

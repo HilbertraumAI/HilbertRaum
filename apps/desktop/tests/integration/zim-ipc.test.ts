@@ -35,7 +35,7 @@ import { readZimHeader } from '../../src/main/services/zim/identity'
 import { packUuid, writeZimFixture } from '../helpers/zim-header'
 import * as packs from '../../src/main/services/zim/packs'
 import type { AppContext } from '../../src/main/services/context'
-import type { KnowledgePack } from '../../src/shared/types'
+import type { KnowledgePack, KnowledgePackAddResult } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -148,9 +148,12 @@ describe('packs IPC', () => {
   it('adds packs via the main-side dialog and audits ids/counts ONLY', async () => {
     const h = makeHarness()
     ipcState.dialogPaths = [addZimFile(h.zimDir, `${FILE_SENTINEL}.zim`)]
-    const added = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePack[]
-    expect(added).toHaveLength(1)
-    expect(added[0]?.title).toContain(TITLE_SENTINEL)
+    const result = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+    expect(result.outcome).toBe('success')
+    expect(result.failed).toBe(0)
+    expect(result.failureReason).toBeNull()
+    expect(result.added).toHaveLength(1)
+    expect(result.added[0]?.title).toContain(TITLE_SENTINEL)
     expect(h.auditCalls).toHaveLength(1)
     expect(h.auditCalls[0]?.type).toBe('knowledge_pack_added')
     // The ids-only privacy rule: neither the pack title nor its filename may ride the audit.
@@ -160,18 +163,50 @@ describe('packs IPC', () => {
     expect(h.auditCalls[0]?.metadata).toMatchObject({ articleCount: 42 })
   })
 
-  it('returns null on a cancelled dialog and registers nothing', async () => {
+  it('returns the cancelled DTO on a cancelled dialog and registers nothing (#301 P5, finding L1)', async () => {
     const h = makeHarness()
     ipcState.dialogCancel = true
-    expect((await invoke(handlers, IPC.addKnowledgePacks)).result).toBeNull()
+    const result = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+    expect(result).toEqual({ outcome: 'cancelled', added: [], failed: 0, failureReason: null })
     expect(h.auditCalls).toHaveLength(0)
   })
 
-  it('throws friendly copy when every chosen archive fails to register', async () => {
+  it('resolves the failure DTO — no throw, no sentinel — when every chosen archive fails to register', async () => {
     const h = makeHarness()
-    ipcState.dialogPaths = [addZimFile(h.zimDir, 'corrupt.zim')]
-    await expect(invoke(handlers, IPC.addKnowledgePacks)).rejects.toThrow(/could not be added/)
+    const badPath = addZimFile(h.zimDir, `${FILE_SENTINEL}_corrupt.zim`)
+    ipcState.dialogPaths = [badPath]
+    const { result } = await invoke(handlers, IPC.addKnowledgePacks)
+    const dto = result as KnowledgePackAddResult
+    expect(dto.outcome).toBe('failure')
+    expect(dto.added).toHaveLength(0)
+    expect(dto.failed).toBe(1)
+    // The fake manager throws a plain Error (not `KiwixManageError`), so the classifier's
+    // fallback bucket applies — see `classifyAddFailure` in registerZimIpc.ts.
+    expect(dto.failureReason).toBe('other')
+    const json = JSON.stringify(dto)
+    expect(json).not.toContain(FILE_SENTINEL)
+    expect(json).not.toContain(badPath)
     expect(h.auditCalls).toHaveLength(0)
+  })
+
+  it('resolves the partial DTO for a MIXED add — the good pack survives, the sentinel/path never ride the result (#301 P5, finding L1)', async () => {
+    const h = makeHarness()
+    const goodPath = addZimFile(h.zimDir, 'good-mixed.zim')
+    const badPath = addZimFile(h.zimDir, `${FILE_SENTINEL}_corrupt.zim`)
+    ipcState.dialogPaths = [goodPath, badPath]
+    const { result } = await invoke(handlers, IPC.addKnowledgePacks)
+    const dto = result as KnowledgePackAddResult
+    expect(dto.outcome).toBe('partial')
+    expect(dto.added).toHaveLength(1)
+    expect(dto.added[0]?.leaf).toBe('good-mixed.zim')
+    expect(dto.failed).toBe(1)
+    expect(dto.failureReason).toBe('other')
+    const json = JSON.stringify(dto)
+    expect(json).not.toContain(FILE_SENTINEL)
+    expect(json).not.toContain(badPath)
+    expect(json).not.toContain('\\')
+    // Exactly one `knowledge_pack_added` — the failed file never rides the audit.
+    expect(h.auditCalls.filter((c) => c.type === 'knowledge_pack_added')).toHaveLength(1)
   })
 
   it('list is DATABASE-ONLY: a file dropped into zim/ appears only after a reconciliation (L7)', async () => {
@@ -190,7 +225,8 @@ describe('packs IPC', () => {
   it('remove audits the id; enable/disable round-trips', async () => {
     const h = makeHarness()
     ipcState.dialogPaths = [addZimFile(h.zimDir, 'a.zim')]
-    const [pack] = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePack[]
+    const { result } = await invoke(handlers, IPC.addKnowledgePacks)
+    const [pack] = (result as KnowledgePackAddResult).added
     await invoke(handlers, IPC.setKnowledgePackEnabled, pack!.id, false)
     expect(retrievablePacks(h.db, h.zimDir, [pack!.id])).toHaveLength(0)
     await invoke(handlers, IPC.removeKnowledgePack, pack!.id)

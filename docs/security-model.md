@@ -19,8 +19,8 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
   plaintext dev mode is gated by policy and clearly labelled).
 - **Other processes on the same machine** (added by the local-api wave). Until this wave the model
   was reachable only from inside the app; the opt-in local API deliberately opens a loopback door,
-  and the sidecars had always had an unauthenticated one. This threat is now modeled explicitly —
-  see "The fifth threat: same-machine processes" below.
+  and the sidecars had always had an unauthenticated one. This threat is now modeled explicitly
+  (kiwix-serve excepted — R-9) — see "The fifth threat: same-machine processes" below.
 
 ## Security baseline (spec §3.5)
 
@@ -271,7 +271,9 @@ vision, translation) now carries a fresh per-spawn API key, delivered via the **
 (`LLAMA_API_KEY` — verified enforced on the pinned b9849 build) and injected as a Bearer header at
 the single `LlamaServer.fetch()` chokepoint. The key is never placed in argv (readable in any
 process list, and llama-server echoes resolved params to stderr) and never set on the app's own
-`process.env` (other children would inherit it); key material is redacted AT THE STDERR DRAIN over
+`process.env` (other children would inherit it). **The one exception is the knowledge-pack sidecar
+`kiwix-serve`, which has no request-authentication feature upstream — see "kiwix-serve — the one
+unauthenticated sidecar" below (residual R-9).** Key material is redacted AT THE STDERR DRAIN over
 a partial-line hold-back window — so neither the captured tail (→ error strings, `gpuLastError`,
 the audit trail, the app log, the support-log export) nor the streaming `onStderrData` observer
 can ever see the key, whole or chunk-split. Upstream exempts `/health` and `/v1/models` from auth on this pin — a local
@@ -288,7 +290,9 @@ Loopback binding answers "can the network reach it?" — it says nothing about t
 running as you**. Two doors exist:
 
 1. **The sidecars' own HTTP ports**, which existed before this wave and were unauthenticated. Closed
-   by the per-spawn env-delivered API key described above.
+   by the per-spawn env-delivered API key described above **for every `llama-server` sidecar. Not
+   for `kiwix-serve`: the knowledge-pack sidecar's port stays open to same-user processes while a
+   pack is being served — the subsection below states that boundary and its residual R-9.**
 2. **The local API endpoint**, which this wave adds on purpose. Its bounding controls, in the order
    a request meets them:
 
@@ -319,6 +323,76 @@ running as you**. Two doors exist:
 - What a connected app does with the answers it receives is outside HilbertRaum's control; this is
   stated to the user in the consent dialog, `PRIVACY.md`, and the user guide rather than pretended
   away.
+
+#### kiwix-serve — the one unauthenticated sidecar (knowledge packs, #301; residual R-9)
+
+**What it is.** Knowledge packs (offline ZIM archives) are served to the app by `kiwix-serve`, the
+upstream kiwix-tools binary, spawned as
+`--address 127.0.0.1 --port <n> --nosearchbar --blockexternal --library <generated library.xml>`.
+It is loopback-only and **lazy**: it starts on the first ask (or article read) that has a pack in
+scope, serves only the packs that are enabled and whose archive identity checked out, and is
+stopped again by the workspace lock and by quit through the same bounded teardown every other
+sidecar goes through. Between sessions there is no process and no port.
+
+**Why it has no key.** Every `llama-server` sidecar carries a per-spawn Bearer key because
+llama.cpp implements one. **kiwix-serve implements no request authentication at all** — verified
+against the pinned kiwix-tools 3.8.1 server source; there is no key, token, or credential option to
+pass it. Two alternatives were examined and rejected by the owner (finding M1, ruling D1,
+2026-09-05). `--urlRootLocation` **does** exist (residual R-8, closed as a factual question), but it
+is a path prefix supplied in argv: argv is readable in any process list on the same machine, so a
+"secret" prefix is obscurity, not authentication, and it would cost client, probe and link-parsing
+work for no real boundary — **rejected, D1(b)**; the flag stays a documented, unused option. Starting
+a **fresh child per request** was also rejected — **D1(c)** — at roughly 0.8 s of cold start per ask
+and squarely against the reusable-server design the sidecar lifecycle is built on.
+
+**The boundary, as ruled.** While a pack server is running, any process running **as the same user**
+on this computer can reach that loopback port and read, without any credential: the whole enabled
+served library and its catalog — **including archives the user considers private**, because the
+"Add packs" picker accepts any readable ZIM file and does not (and cannot) enforce "public archives
+only" — and the **text of the question** the app puts in the search URL. That exposure exists only
+**while the workspace is unlocked** and only **after a pack has actually been asked about in this
+session**; locking or quitting stops the child, and a session that never touches a pack never opens
+the port. This is not defended by claiming the content is public: some of it is not, and the
+boundary is stated as it is rather than argued away. It is recorded as accepted residual **R-9**
+(owner, 2026-09-05) and is not closable by this wave — it reopens only if upstream adds
+authentication.
+
+**What the app does instead: the request guard.** Every request the ask arm and the article viewer
+send to kiwix-serve runs inside `ZimService.withServer` (#301 P5). The service captures its published
+tuple — pack revision, service generation, port, and whether that generation is still its live child
+— from `serverState()` **before** the request, and reads it again **after** the response; a response
+observed across any change of that tuple is **discarded whatever it contained**, a successful body
+included, because on a reused loopback port a body that arrived after the app's own child died
+cannot be told apart from another process's. The whole attempt is discarded as a unit (an ask's
+search-and-fetch batch is one guard window) and retried **exactly once**, only while the same
+unlocked session still admits the operation and it was not cancelled, and only after the served set
+has been recomputed under the current revision; a second discard fails the request honestly. **The
+guard detects an observed lifecycle change of the app's own child. It does not authenticate the
+server** — it cannot distinguish kiwix-serve from any other process answering on that port, because
+there is nothing to distinguish it by.
+
+**The windows it leaves (R-9).** Three, stated rather than closed. (i) **The initial bind race** —
+port selection and spawn are two steps, so a same-user listener that takes the port in between will
+answer the health probe, be published, and be detected only when the child's own bind failure is
+observed, one probe interval later. (ii) **Delayed exit notification** — a response validated before
+the operating system's `exit` event for the child has been delivered passes the check; the guard
+yields one macrotask before its second read to let an already-queued event arrive, which narrows
+this window and does not close it. (iii) **Binding a port a live child already holds** — Windows
+permits a second `SO_REUSEADDR` bind unless the first listener set `SO_EXCLUSIVEADDRUSE`, and
+whether kiwix-serve / libmicrohttpd sets it is **not verified here**; it is a check item for the
+real-tool acceptance run (T19) on the pinned binary.
+
+**The consequence, plainly.** A process that answers on that port during an ask can put text of its
+choosing into the grounded prompt as archive evidence. The prompt's excerpt framing (#293) bounds
+what an excerpt is allowed to do once it is in the prompt; it does **not** authenticate where the
+excerpt came from. The guard bounds the window in which that substitution can go unnoticed; it does
+not remove it.
+
+**What the user is told.** The counterpart of this section in `PRIVACY.md`,
+[`known-limitations.md`](known-limitations.md) and the user guide is one sentence:
+**"While the workspace is unlocked and a knowledge pack has been used in a chat, other programs
+running under your own user account on this computer can read the enabled packs through the pack
+server, which has no password of its own; locking or quitting stops it."**
 
 #### Detection-only, not enforcement — a recorded decision (audit M-S1, 2026-06-13)
 

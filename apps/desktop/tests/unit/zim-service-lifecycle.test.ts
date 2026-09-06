@@ -15,7 +15,12 @@ import {
   _resetKiwixManageSkipLegacyWarnForTests
 } from '../../src/main/services/zim/tools'
 import type { BinaryVerifyResult } from '../../src/main/services/binary-verifier'
-import { ZimService, type ServedLibrary, type ZimAdmission } from '../../src/main/services/zim'
+import {
+  StaleServerError,
+  ZimService,
+  type ServedLibrary,
+  type ZimAdmission
+} from '../../src/main/services/zim'
 import { KiwixServer } from '../../src/main/services/zim/serve'
 import { ServeFakeChild, serveGate, type ServeChildMode } from '../helpers/zim-fakes'
 
@@ -1178,5 +1183,160 @@ describe('KiwixServer — per-child records (H3, P3a)', () => {
     expect(third.generation).toBeGreaterThan(second.generation)
     expect(h.spawns).toHaveLength(4)
     await h.server.stop()
+  })
+})
+
+// ---------------------------------------------------------------------------------------
+// P5 — the alive/generation REQUEST GUARD (#301, finding M1; plan §9.19 (a)). Focused
+// ordinary cases per race; the walked reproduction on the real vault + the real handlers is
+// T17-a in `tests/integration/zim-ipc-session.test.ts`. Every ordering fact below is the
+// callback's own position in the lifecycle — the child dies INSIDE the request, which is the
+// only moment at which "the response may not have come from our child" is true — never a sleep.
+// ---------------------------------------------------------------------------------------
+describe('ZimService.withServer — the alive/generation request guard (M1, P5)', () => {
+  it('returns the callback value on a clean request and reads the same live generation before and after it', async () => {
+    const h = svcHarness()
+    await h.addPack('alpha.zim')
+    const op = h.svc.beginRegistration()
+    try {
+      const handed: number[] = []
+      const observedInside: Array<number | null> = []
+      const value = await h.svc.withServer(h.db, op, async (library) => {
+        handed.push(library.generation)
+        observedInside.push(h.svc.serverState()?.generation ?? null)
+        return 'the callback value'
+      })
+      expect(value).toBe('the callback value')
+      expect(h.serveSpawns).toHaveLength(1)
+      // The tuple the callback was handed IS the published one, and it is still that one
+      // afterwards — the accept condition, spelled out.
+      expect(handed).toEqual(observedInside)
+      expect(h.svc.serverState()).toMatchObject({ generation: handed[0], alive: true })
+    } finally {
+      op.release()
+    }
+  })
+
+  it('resolves null without running the callback when there is nothing to serve', async () => {
+    const h = svcHarness() // no packs registered at all
+    const op = h.svc.beginRegistration()
+    try {
+      let ran = 0
+      const value = await h.svc.withServer(h.db, op, async () => {
+        ran++
+        return 'unreachable'
+      })
+      expect(value).toBeNull()
+      expect(ran).toBe(0)
+      expect(h.serveSpawns).toHaveLength(0)
+    } finally {
+      op.release()
+    }
+  })
+
+  it('discards a result observed across a child death and retries EXACTLY once, with the callback re-entered under the NEW generation', async () => {
+    const h = svcHarness()
+    await h.addPack('alpha.zim')
+    const op = h.svc.beginRegistration()
+    try {
+      const handed: number[] = []
+      const value = await h.svc.withServer(h.db, op, async (library) => {
+        handed.push(library.generation)
+        if (handed.length === 1) {
+          // The child dies while OUR response is in flight: everything this attempt
+          // produced — a successful body included — may have come from another process
+          // that answered on the same loopback port.
+          h.lastServeChild().emit('exit', 0, null)
+          return 'FIRST-ATTEMPT-RESULT'
+        }
+        return 'SECOND-ATTEMPT-RESULT'
+      })
+      expect(value).toBe('SECOND-ATTEMPT-RESULT') // the first attempt's body is gone
+      expect(handed).toHaveLength(2)
+      expect(handed[1]!).toBeGreaterThan(handed[0]!) // a genuinely new child
+      expect(h.serveSpawns).toHaveLength(2)
+      // The pack set did not change, so the retry restarted over the SAME library build:
+      // one manager pass, one build file, a new generation.
+      expect(h.buildAdds).toHaveLength(1)
+      expect(h.builds()).toHaveLength(1)
+      expect(h.svc.serverState()).toMatchObject({ generation: handed[1], alive: true })
+    } finally {
+      op.release()
+    }
+  })
+
+  it('rejects with StaleServerError (child-died) after a SECOND discarded attempt, and never makes a third', async () => {
+    const h = svcHarness()
+    await h.addPack('alpha.zim')
+    const op = h.svc.beginRegistration()
+    try {
+      let attempts = 0
+      const failing = h.svc.withServer(h.db, op, async () => {
+        attempts++
+        h.lastServeChild().emit('exit', 0, null)
+        return 'never accepted'
+      })
+      const err = await failing.then(
+        () => {
+          throw new Error('expected a StaleServerError rejection, but the call resolved')
+        },
+        (e: unknown) => e
+      )
+      expect(err).toBeInstanceOf(StaleServerError)
+      expect(err).toMatchObject({ name: 'StaleServerError', reason: 'child-died' })
+      // An ORDINARY error, never the #159 abort convention: the session still admits the
+      // work, so the caller reports an outcome rather than a cancellation.
+      expect(err).not.toBeInstanceOf(DOMException)
+      expect(attempts).toBe(2)
+      expect(h.serveSpawns).toHaveLength(2)
+    } finally {
+      op.release()
+    }
+  })
+
+  it('a stopped service rejects with an AbortError before the request and never retries', async () => {
+    const h = svcHarness()
+    await h.addPack('alpha.zim')
+    const op = h.svc.beginRegistration()
+    try {
+      expect(await h.svc.withServer(h.db, op, async () => 'warm')).toBe('warm')
+      const spawnsBeforeStop = h.serveSpawns.length
+      await h.svc.stop()
+
+      let ran = 0
+      await serveExpectAbortError(
+        h.svc.withServer(h.db, op, async () => {
+          ran++
+          return 'unreachable'
+        })
+      )
+      expect(ran).toBe(0)
+      expect(h.serveSpawns).toHaveLength(spawnsBeforeStop) // no retry, no resurrection
+    } finally {
+      op.release()
+    }
+  })
+
+  it('rethrows an ordinary request failure UNCHANGED under a live, unchanged generation, with no retry', async () => {
+    const h = svcHarness()
+    await h.addPack('alpha.zim')
+    const op = h.svc.beginRegistration()
+    try {
+      // An HTTP 500 or a parse failure from a live, unchanged child is an ordinary failure,
+      // not a lifecycle change: the arm's per-pack catch and the viewer's null must keep
+      // their meaning, so the guard must not convert it into a retry or a StaleServerError.
+      const boom = new Error('kiwix-serve article fetch failed (HTTP 500)')
+      let attempts = 0
+      const failing = h.svc.withServer(h.db, op, async () => {
+        attempts++
+        throw boom
+      })
+      await expect(failing).rejects.toBe(boom)
+      expect(attempts).toBe(1)
+      expect(h.serveSpawns).toHaveLength(1)
+      expect(h.svc.serverState()).toMatchObject({ alive: true })
+    } finally {
+      op.release()
+    }
   })
 })
