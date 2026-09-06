@@ -29,6 +29,12 @@ const SIZES = {
   // The AI Model screen is tall (active card + context card + grouped picker) — capture it all.
   models: [840, 1500],
   'models-de': [840, 1500],
+  'models-download-failed': [1280, 1500],
+  'models-browse': [1280, 1400],
+  'models-browse-de': [1024, 1500],
+  'models-browse-light': [1280, 1400],
+  'models-browse-de-light': [1024, 1500],
+  'models-browse-expanded': [1280, 1700],
   'chat-runtime': [1180, 740],
   'chat-runtime-compat': [1180, 740],
   // #44/#46: short composer-strip components — no full-screen canvas needed.
@@ -45,10 +51,21 @@ const SIZES = {
 // capture as soon as the UI is real instead of sleeping a fixed worst-case interval.
 // Unlisted cases fall back to the generic "harness root has rendered children" check.
 const READY = {
+  // `.model-library` (the screen's outer section) is present in EVERY models* case, including
+  // the zero-card empty state (`.model-library-empty`), and it mounts before any individual
+  // `.model-card` renders — so it is both the earliest-rendering and the only selector reliable
+  // across every named models capture. A duplicate `models`/`models-de` key here (F7) used to
+  // shadow this with `.model-card`, which is absent whenever the view has no matching cards.
+  models: '.model-library',
+  'models-de': '.model-library',
+  'models-download-failed': '.model-library-download',
+  'models-browse': '.model-library',
+  'models-browse-de': '.model-library',
+  'models-browse-light': '.model-library',
+  'models-browse-de-light': '.model-library',
+  'models-browse-expanded': '.model-library',
   documents: '.doc-row',
   'chat-byproject': '.chat-conv-group',
-  models: '.model-card',
-  'models-de': '.model-card',
   'chat-runtime': '.chat-runtime-hint',
   'chat-runtime-compat': '.chat-runtime-hint',
   'chat-warmup': '.chat-warmup-hint',
@@ -167,6 +184,36 @@ function capture(c) {
     win.webContents.once('did-finish-load', async () => {
       await waitReady(win, c)
       try {
+        if (c.startsWith('models-browse')) {
+          await win.webContents.executeJavaScript(`
+            document.documentElement.dataset.theme = ${JSON.stringify(c.includes('light') ? 'light' : 'dark')};
+            document.querySelector('.model-library [role="radio"]:last-child')?.click();
+            new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+          `)
+          if (c.includes('expanded')) {
+            await win.webContents.executeJavaScript(`
+              (async () => {
+                const deadline = Date.now() + 1800;
+                while (Date.now() < deadline) {
+                  const button = document.querySelector('.model-variant-heading button');
+                  if (button?.getAttribute('aria-expanded') === 'true') return true;
+                  button?.click();
+                  await new Promise(r => setTimeout(r, 50));
+                }
+                throw new Error('Model variants did not expand');
+              })();
+            `)
+          }
+          // The hidden window's compositor can lag the DOM after a disclosure changes.
+          // Wait for that interaction to paint (waitReady's frames preceded the click).
+          await win.webContents.executeJavaScript(
+            'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))'
+          )
+          await new Promise((r) => setTimeout(r, 100))
+          console.log('model library state', await win.webContents.executeJavaScript(
+            'JSON.stringify({ view: document.querySelector(".model-library [aria-checked=true]")?.textContent, expanded: document.querySelector(".model-variant-heading button")?.getAttribute("aria-expanded"), rows: document.querySelectorAll(".model-title").length })'
+          ))
+        }
         if (c.startsWith('marketing-')) {
           // Park the pointer in the harness padding (bottom-left corner): the hidden window maps
           // the REAL OS cursor position, so a stray :hover fill (a rail item, a document row)

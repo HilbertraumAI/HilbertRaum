@@ -1,5 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, Spinner, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
+import {
+  groupModelVariants,
+  matchesModelSearch,
+  modelTask,
+  variantGroupOrder,
+  type ModelTask
+} from '../lib/modelLibrary'
+import {
+  isModelInstalled,
+  isModelOnDrive,
+  orderPickerModels
+} from '../lib/modelAvailability'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
@@ -23,6 +35,13 @@ import { RUNTIME_POLL_MS } from '../lib/polling'
 // RAM-gate / mock-start flows live in the main process; this screen only presents them.
 
 const UNKNOWN_RAM = null
+const TASKS: { value: ModelTask; label: MessageKey }[] = [
+  { value: 'chat', label: 'models.library.chat' },
+  { value: 'documents', label: 'models.section.docSearch' },
+  { value: 'translation', label: 'models.library.translation' },
+  { value: 'vision', label: 'models.library.images' },
+  { value: 'transcriber', label: 'models.library.voice' }
+]
 
 // Status pills: icon + word, never color-only (guidelines §6). Label values are
 // MessageKeys resolved at render (i18n record §5).
@@ -98,59 +117,43 @@ const CONTEXT_SIZE_PRESETS = [4096, 8192, 16384, 32768, 65536, 131072] as const
 /** Picks at or above this show the "large windows cost memory" hint (issue #43). */
 const CONTEXT_SIZE_WARNING_MIN = 65_536
 
-/** Usable right now — no download needed. The boundary `groupedCards` makes visible (#35). */
-export function isModelInstalled(m: ModelInfo): boolean {
-  return m.state === 'installed' || m.state === 'running' || m.state === 'ready'
-}
-
 /**
- * Runnable on THIS machine, by exactly the flag the card's RAM warning renders from
- * (`insufficientRam`, computed in the main process against the machine's whole-GB RAM).
- * Sharing the flag is the point: the order can never disagree with the "Needs at least N GB"
- * badge and banner printed on the card it moved.
+ * The pure availability predicates + picker order now live in `lib/modelAvailability.ts` so
+ * `lib/modelLibrary` can share them without importing this screen back (that would be a cycle).
+ * Re-exported here unchanged: every existing importer of these three keeps working.
  */
-export function isModelRunnableHere(m: ModelInfo): boolean {
-  return m.insufficientRam !== true
-}
-
-/**
- * DV-2 — display order for the chat picker (the cards below the active model).
- *
- * Three keys, in order:
- *  1. **Installed first** — a model already on the drive is usable now, while the rest cost a
- *     multi-GB download. Unchanged, and it stays PRIMARY: `groupedCards` renders that boundary
- *     as a labelled subheading, so the lower keys may only reorder cards WITHIN a group.
- *  2. **Recommended first** (issue #93 item 3) — the ★ card leads its group. On a fresh
- *     install with nothing on the drive, the recommendation is the ONE actionable answer the
- *     screen has for "which of these should I download?" — it must be the first card scanned,
- *     not sit wherever catalog order put it inside the runnable block. This supersedes the
- *     DV-2 "plays no part" stance for the UPWARD direction only (design-guidelines §11's DV-2
- *     note): the ★ still never crosses the installed/needs-download boundary.
- *  3. **Runnable on this machine first** — unconditionally. Catalog order is alphabetical, so
- *     without this key the picker opened on models the machine cannot run at all (on a 16 GB
- *     box: three of the first four cards carried a "Needs at least 20/24 GB RAM" warning) while
- *     the usable ones sat below the fold. Runnability is not a tiebreak of last resort here —
- *     "can this computer run it" outranks alphabetical, always.
- *
- * Keys 2 and 3 can never fight: the RAM-best-fit recommender only ever picks a model that fits
- * this machine's RAM, so the ★ card is runnable by construction. Display order ONLY — the
- * recommender in the main process is untouched. `Array.prototype.sort` is stable, so models
- * that tie on all keys keep their catalog order.
- */
-export function orderPickerModels(list: ModelInfo[]): ModelInfo[] {
-  return [...list].sort(
-    (a, b) =>
-      Number(isModelInstalled(b)) - Number(isModelInstalled(a)) ||
-      Number(b.recommended === true) - Number(a.recommended === true) ||
-      Number(isModelRunnableHere(b)) - Number(isModelRunnableHere(a))
-  )
-}
+export { isModelInstalled, isModelRunnableHere, orderPickerModels } from '../lib/modelAvailability'
 
 // The in-flight download survives leaving + re-entering the screen (the job itself
 // lives in the main process; this only remembers which one to keep polling).
 let rememberedJob: DownloadJob | null = null
 
+/**
+ * The display name of the remembered job's model (F2/B1). A refresh at the terminal transition
+ * can stop listing the model, or list it as `installed` — the RESULT must still be named, so the
+ * last known name is remembered alongside the job id it belongs to. Falls back to the model id.
+ */
+let rememberedJobName: { jobId: string; name: string } | null = null
+
+/**
+ * A terminal result the user dismissed, by job id (F2/B1): it must not come back on a refresh,
+ * a re-render, or a remount within this renderer session. Module-scoped for the same reason
+ * `rememberedJob` is — leaving and re-entering the screen remounts the component. Recovery after
+ * a renderer RELOAD (which recreates this module) is a separate lifecycle, issue I5.
+ */
+let dismissedJobId: string | null = null
+
 const JOB_LIVE: ReadonlySet<DownloadJob['status']> = new Set(['queued', 'downloading', 'verifying'])
+
+/**
+ * A finished download the user still has to act on: it failed, or it completed but could not be
+ * verified. These keep the independent download panel (named, with Retry / Dismiss) so a search,
+ * a task/family/view filter or a collapsed group cannot swallow the outcome. A VERIFIED `done`
+ * and a `cancelled` job need no panel — the row itself carries their state (existing behaviour).
+ */
+function isUnresolvedResult(j: DownloadJob | null): boolean {
+  return j != null && (j.status === 'failed' || (j.status === 'done' && j.unverified === true))
+}
 
 // The engine download (like the model download) outlives leaving the screen.
 let rememberedEngineJob: EngineDownloadJob | null = null
@@ -162,9 +165,35 @@ const ENGINE_JOB_LIVE: ReadonlySet<EngineDownloadJob['status']> = new Set([
   'extracting'
 ])
 
+/**
+ * Test/preview-only reset (optionally: seed) of this module's download memory. Module state is
+ * deliberately outside React so it survives a remount, which also means a jsdom test or a preview
+ * case has no other way to start from a known state. Production code never calls this.
+ */
+export function __resetModelsScreenMemoryForTests(seed?: {
+  job?: DownloadJob | null
+  jobName?: string | null
+}): void {
+  rememberedJob = seed?.job ?? null
+  rememberedJobName =
+    seed?.job && seed.jobName ? { jobId: seed.job.jobId, name: seed.jobName } : null
+  dismissedJobId = null
+  rememberedEngineJob = null
+}
+
 export function ModelsScreen(): JSX.Element {
-  const { t, lang } = useT()
+  const { t, tCount, lang } = useT()
   const [models, setModels] = useState<ModelInfo[] | null>(null)
+  const [libraryView, setLibraryView] = useState<'installed' | 'browse' | null>(null)
+  const [query, setQuery] = useState('')
+  const [task, setTask] = useState<ModelTask | 'all'>('all')
+  const [family, setFamily] = useState('all')
+  // F3/C1: group expansion is DERIVED by default — a group holding a damaged (`checksum_failed`)
+  // variant starts expanded, so the repair row is reachable without first guessing that it hides
+  // behind "Show all variants". This map records only the user's EXPLICIT toggles, by stable
+  // group key, and those always win — across a refresh that introduces or clears damage, and
+  // across filter/view changes (the key outlives both).
+  const [userToggledGroups, setUserToggledGroups] = useState<ReadonlyMap<string, boolean>>(new Map())
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [policy, setPolicy] = useState<PolicyStatus | null>(null)
   const [machineRam, setMachineRam] = useState<number | null>(UNKNOWN_RAM)
@@ -183,6 +212,10 @@ export function ModelsScreen(): JSX.Element {
   const [licenseAck, setLicenseAck] = useState(false)
   const [job, setJob] = useState<DownloadJob | null>(rememberedJob)
   const jobRef = useRef<DownloadJob | null>(rememberedJob)
+  // F2/B1: the last known display name of the job's model, and the terminal result the user
+  // dismissed. Both mirror module state so they survive leaving + re-entering the screen.
+  const [jobName, setJobName] = useState<{ jobId: string; name: string } | null>(rememberedJobName)
+  const [dismissedJob, setDismissedJob] = useState<string | null>(dismissedJobId)
   // The real AI engine (llama.cpp): without it, started models run in demo mode.
   const [engine, setEngine] = useState<EngineStatus | null>(null)
   const [engineJob, setEngineJob] = useState<EngineDownloadJob | null>(rememberedEngineJob)
@@ -210,6 +243,8 @@ export function ModelsScreen(): JSX.Element {
     ])
     if (!mountedRef.current) return // unmounted while the batch was loading (FE-4)
     setModels(m)
+    // Initialize once: finishing a download must not unexpectedly change views.
+    setLibraryView((current) => current ?? (m.some(isModelInstalled) ? 'installed' : 'browse'))
     setSettings(s)
     setPolicy(p)
     setEngine(e)
@@ -266,6 +301,17 @@ export function ModelsScreen(): JSX.Element {
     return () => clearInterval(timer)
   }, [runtime?.startingModelId])
 
+  // F2/B1: remember the downloading model's NAME while the catalog still lists it, so a terminal
+  // result stays named after a refresh that drops the entry or flips it to `installed`.
+  useEffect(() => {
+    if (!job || !models) return
+    const found = models.find((m) => m.id === job.modelId)
+    if (!found) return
+    if (rememberedJobName?.jobId === job.jobId && rememberedJobName.name === found.displayName) return
+    rememberedJobName = { jobId: job.jobId, name: found.displayName }
+    setJobName(rememberedJobName)
+  }, [job, models])
+
   // Poll the live download job (async-with-polling, like import progress).
   useEffect(() => {
     jobRef.current = job
@@ -276,6 +322,9 @@ export function ModelsScreen(): JSX.Element {
         .getDownloadJob(job.jobId)
         .then((next) => {
           if (!mountedRef.current) return // late tick after unmount (FE-4)
+          // F2/B1: a response for a job that is no longer the current one (a new download was
+          // accepted meanwhile) must never overwrite the newer job or resurrect an old result.
+          if (jobRef.current?.jobId !== job.jobId || next.jobId !== job.jobId) return
           setJob(next)
           // A finished download changes install state — refresh the cards once. CODE-28
           // (full-audit 2026-07-11): surfaced, not fire-and-forget — a failing refresh at
@@ -355,11 +404,17 @@ export function ModelsScreen(): JSX.Element {
     setError(null)
     try {
       const started = await window.api.downloadModel(m.id, { licenseAccepted: licenseAck })
+      // F2/B1: only an ACCEPTED job replaces a retained terminal result — a rejected start (and a
+      // cancelled dialog) leaves the previous result on screen. The dismissal is cleared with it so
+      // a backend that resumes under the same job id cannot start out hidden. FE-4 mounted guard.
+      if (!mountedRef.current) return
+      dismissedJobId = null
+      setDismissedJob(null)
       setJob(started)
     } catch (e) {
-      setError(friendlyIpcError(e))
+      if (mountedRef.current) setError(friendlyIpcError(e))
     } finally {
-      setLicenseAck(false)
+      if (mountedRef.current) setLicenseAck(false)
     }
   }
 
@@ -407,14 +462,35 @@ export function ModelsScreen(): JSX.Element {
       : settings.activeModelId === m.id
 
   const chat = models.filter((m) => m.role === 'chat')
-  const embeddings = models.filter((m) => m.role === 'embeddings')
-  const others = models.filter((m) => m.role !== 'chat' && m.role !== 'embeddings')
 
-  // The active chat model leads the screen (guidelines §2); the rest are the picker, whose
-  // display order is `orderPickerModels` above (installed first, then runnable-on-this-machine
-  // first). `groupedCards` below makes the installed/needs-download boundary VISIBLE (#35).
+  // The active chat model remains pinned outside the filters. The library contains
+  // alternatives, ordered by availability/recommendation before grouping variants.
   const activeChat = chat.find(isActive) ?? null
-  const otherChat = orderPickerModels(chat.filter((m) => m !== activeChat))
+  const visibleModels = orderPickerModels(models.filter((m) =>
+    m !== activeChat &&
+    // F3/C1: the drive view lists known damaged entries too — the repair action is on the row.
+    (libraryView !== 'installed' || isModelOnDrive(m)) &&
+    (task === 'all' || modelTask(m) === task) &&
+    (family === 'all' || m.family === family) &&
+    matchesModelSearch(m, query)
+  ))
+  const families = [...new Set(models.map((m) => m.family))].sort()
+  const hasFilters = query !== '' || task !== 'all' || family !== 'all'
+  // F2/B1 — what the independent "Current model download" panel owns: the live job (as before)
+  // AND an unresolved terminal result, until the user dismisses it, a new job is accepted, or the
+  // download ends verified/cancelled. Derived from `job` alone; no separate copy of the job.
+  const panelJob =
+    job && job.jobId !== dismissedJob && (JOB_LIVE.has(job.status) || isUnresolvedResult(job))
+      ? job
+      : null
+  const panelLive = panelJob != null && JOB_LIVE.has(panelJob.status)
+  const panelModel = panelJob ? models.find((m) => m.id === panelJob.modelId) ?? null : null
+  // Name the result even when the refresh at the transition no longer lists the model.
+  const panelName = panelJob
+    ? panelModel?.displayName ??
+      (jobName?.jobId === panelJob.jobId ? jobName.name : null) ??
+      panelJob.modelId
+    : ''
 
   // Download gates: the drive policy is the ceiling, the Settings toggle the
   // switch. The copy distinguishes the two — "disabled by policy" vs. "turn it on in
@@ -431,6 +507,21 @@ export function ModelsScreen(): JSX.Element {
   const anyDownloadable = models.some(
     (m) => m.download && !m.download.withdrawn && (m.state === 'missing' || m.state === 'checksum_failed')
   )
+
+  // Retry (panel, terminal result only): resolve the EXACT model id from the current list and run
+  // it through the same confirmation as every other download — the same gates, the same license
+  // link, a fresh acknowledgement. A model that left the catalog, lost its download block or was
+  // withdrawn (#196) keeps a visible, explained result instead of a button that can only fail.
+  const retryTarget =
+    panelJob && !panelLive ? models.find((m) => m.id === panelJob.modelId) ?? null : null
+  const retryWithdrawn = retryTarget?.download?.withdrawn ?? null
+  const retryUnavailable = retryTarget == null || retryTarget.download == null
+  const retryBlockedReason =
+    downloadsBlockedReason ??
+    (retryWithdrawn != null ? t('models.download.withdrawn', { reason: retryWithdrawn }) : null) ??
+    (retryUnavailable ? t('models.download.retryUnavailable') : null) ??
+    // The same one-at-a-time gate the rows use; a retained result never widens it (see below).
+    (job != null && JOB_LIVE.has(job.status) ? t('models.download.otherRunning') : null)
 
   function downloadSection(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
@@ -571,7 +662,9 @@ export function ModelsScreen(): JSX.Element {
           <div>
             <div className="model-title">{m.displayName}</div>
             <div className="model-sub">
-              {t(plainHintKey(m))} {t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
+              {t(TASKS.find((entry) => entry.value === modelTask(m))!.label)}
+              {' · '}{t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
+              {' · '}{t('models.library.memory', { size: fmtGbNum(m.recommendedMinRamGb, lang) })}
             </div>
           </div>
           <div className="badges">
@@ -596,23 +689,8 @@ export function ModelsScreen(): JSX.Element {
           </div>
         </div>
 
-        {ramTooLow && <Banner tone="warning">{ramHint}</Banner>}
-
-        {automatic ? (
-          <p className="hint hint-tight">
-            {m.role === 'vision'
-              ? installed
-                ? t('models.vision.installed')
-                : t('models.vision.notInstalled')
-              : m.role === 'translation'
-                ? installed
-                  ? t('models.translation.installed')
-                  : t('models.translation.notInstalled')
-                : installed
-                  ? t('models.automatic.installed')
-                  : t('models.automatic.notInstalled')}
-          </p>
-        ) : (
+        <div className="model-row-actions">
+        {!automatic && (
           // A "Not downloaded" card shows ONE clear action — Download (rendered below) —
           // plus, in demo-capable developer mode, "Try in demo mode". The disabled
           // "Select" / "Start runtime" buttons are noise before the weights exist, so they
@@ -663,13 +741,28 @@ export function ModelsScreen(): JSX.Element {
           )
         )}
 
-        {downloadSection(m)}
+        {/* While the panel above owns this model's job — live progress OR a retained terminal
+            result — the row must not repeat it. After Dismiss the row's own status/recovery UI
+            (Resume, the unverified note) comes back exactly as before. */}
+        {panelJob?.modelId !== m.id && downloadSection(m)}
+        </div>
 
         {/* Checksums / quantization ids / paths / runtime internals live here, closed
             by default (guidelines §2/§3 principle 3 — never in the everyday path). */}
         <details className="tech-details">
           <summary>{t('models.tech.summary')}</summary>
           <div className="tech-details-body">
+            <p className="hint">{t(plainHintKey(m))}</p>
+            {ramTooLow && <Banner tone="warning">{ramHint}</Banner>}
+            {automatic && (
+              <p className="hint hint-tight">
+                {m.role === 'vision'
+                  ? installed ? t('models.vision.installed') : t('models.vision.notInstalled')
+                  : m.role === 'translation'
+                    ? installed ? t('models.translation.installed') : t('models.translation.notInstalled')
+                    : installed ? t('models.automatic.installed') : t('models.automatic.notInstalled')}
+              </p>
+            )}
             <dl className="kv">
               <dt>{t('models.tech.id')}</dt>
               <dd>
@@ -718,27 +811,32 @@ export function ModelsScreen(): JSX.Element {
     )
   }
 
-  /**
-   * A picker section's cards with the installed/needs-download boundary explicit (#35).
-   * The old implicit sort relied on the per-card state badge — scanning the list couldn't
-   * tell "usable right now" from "costs a multi-GB download first". When a section holds
-   * both groups, each gets a small labeled subheading ("On this drive" / "Available to
-   * download"); a homogeneous section renders flat — there is no boundary to mark, and
-   * the badges already say which world it is. Grouping preserves order within each group,
-   * so the sorted chat picker renders the same cards in the same order.
-   */
-  function groupedCards(list: ModelInfo[]): JSX.Element {
-    const onDrive = list.filter(isModelInstalled)
-    const toDownload = list.filter((m) => !isModelInstalled(m))
-    if (onDrive.length === 0 || toDownload.length === 0) return <>{list.map(card)}</>
-    return (
-      <>
-        <div className="model-group-title">{t('models.group.onDrive')}</div>
-        {onDrive.map(card)}
-        <div className="model-group-title">{t('models.group.toDownload')}</div>
-        {toDownload.map(card)}
-      </>
-    )
+  function libraryRows(list: ModelInfo[]): JSX.Element[] {
+    return groupModelVariants(list).map((group) => {
+      if (group.models.length === 1) return card(group.models[0])
+      // C1: a damaged variant must not hide inside a collapsed group — the whole recovery action
+      // sits on its row. An explicit user toggle still wins (both directions).
+      const hasRepair = group.models.some((m) => m.state === 'checksum_failed')
+      const expanded = userToggledGroups.get(group.key) ?? hasRepair
+      // F5: the collapsed card is the group FACE (an obtainable member of the leader's priority
+      // cohort), then every other variant once, in the order the sort produced.
+      const ordered = variantGroupOrder(group)
+      return (
+        // Heading outline (O5): screen <h2> → task section <h3> → this group <h4>.
+        <section className="model-variant-group" key={group.key} aria-label={group.name}>
+          <div className="model-variant-heading">
+            <h4>{group.name}</h4>
+            <Button size="sm" variant="ghost" aria-expanded={expanded} onClick={() => {
+              setUserToggledGroups((previous) => new Map(previous).set(group.key, !expanded))
+            }}>
+              {t(expanded ? 'models.library.hideVariants' : 'models.library.showVariants', { count: group.models.length })}
+            </Button>
+          </div>
+          {card(ordered[0])}
+          {expanded && ordered.slice(1).map(card)}
+        </section>
+      )
+    })
   }
 
   function confirmDialog(m: ModelInfo): JSX.Element | null {
@@ -984,18 +1082,127 @@ export function ModelsScreen(): JSX.Element {
         </div>
       )}
 
-      {otherChat.length > 0 && (
-        <div className="section-title">
-          {activeChat ? t('models.section.otherModels') : t('models.section.choose')}
+      <section className="model-library" aria-label={t('models.library.title')}>
+        <h2>{t('models.library.title')}</h2>
+        <SegmentedControl
+          ariaLabel={t('models.library.view')}
+          value={libraryView ?? 'browse'}
+          options={[
+            { value: 'installed', label: t('models.library.onDrive') },
+            { value: 'browse', label: t('models.library.browse') }
+          ]}
+          onChange={setLibraryView}
+        />
+        <div className="model-library-filters">
+          <label className="model-library-search">
+            {t('models.library.search')}
+            <input className="input" type="search" value={query} onChange={(e) => setQuery(e.target.value)}
+              placeholder={t('models.library.searchPlaceholder')} />
+          </label>
+          <label>
+            {t('models.library.task')}
+            <select className="select" value={task} onChange={(e) => setTask(e.target.value as ModelTask | 'all')}>
+              <option value="all">{t('models.library.allTasks')}</option>
+              {TASKS.map((entry) => <option key={entry.value} value={entry.value}>{t(entry.label)}</option>)}
+            </select>
+          </label>
+          <label>
+            {t('models.library.family')}
+            <select className="select" value={family} onChange={(e) => setFamily(e.target.value)}>
+              <option value="all">{t('models.library.allFamilies')}</option>
+              {families.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+          {hasFilters && <Button size="sm" onClick={() => { setQuery(''); setTask('all'); setFamily('all') }}>
+            {t('models.library.clear')}
+          </Button>}
         </div>
-      )}
-      {groupedCards(otherChat)}
-
-      {embeddings.length > 0 && <div className="section-title">{t('models.section.docSearch')}</div>}
-      {groupedCards(embeddings)}
-
-      {others.length > 0 && <div className="section-title">{t('models.section.other')}</div>}
-      {groupedCards(others)}
+        {/* Progress/cancel remains reachable even when filters or a collapsed group hide its row —
+            and a FAILED or unverified result stays here, named, with Retry / Dismiss, until the
+            user acts, a new download is accepted, or the download ends verified/cancelled
+            (design-guidelines §15 "Terminal download results"). */}
+        {panelJob && <div className="model-library-download" role="region" aria-label={t('models.library.download')}>
+          <strong>{panelName}</strong>
+          {/* ONE always-mounted alert node for the whole panel lifetime: empty while the download
+              runs, filled on the terminal transition. Same wrapper shape as ErrorBanner (audit
+              M-U1) — a live region that only appears at failure is not reliably announced. */}
+          <div className="error-banner-region" role="alert" aria-live="assertive">
+            {panelJob.status === 'failed' && (
+              <Banner tone="error" role="status">
+                <p>{t('models.download.failed', { name: panelName })}</p>
+                {panelJob.error && <p>{panelJob.error}</p>}
+              </Banner>
+            )}
+            {panelJob.status === 'done' && panelJob.unverified && (
+              <Banner tone="warning" role="status">
+                {t('models.download.unverifiedBefore')}
+                <code>verify-models --generate</code>
+                {t('models.download.unverifiedAfter')}
+              </Banner>
+            )}
+          </div>
+          {panelLive ? (
+            panelModel && downloadSection(panelModel)
+          ) : (
+            <>
+              <div className="model-library-download-actions">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={retryBlockedReason != null}
+                  title={
+                    retryBlockedReason ??
+                    t('models.download.titled', {
+                      name: panelName,
+                      size: fmtGb(
+                        retryTarget?.download?.sizeBytes ?? null,
+                        retryTarget?.sizeOnDiskGb ?? 0,
+                        lang
+                      )
+                    })
+                  }
+                  // The EXISTING confirmation, with this variant's license link and a reset
+                  // acknowledgement — a retry never silently accepts a pending license.
+                  onClick={() => {
+                    if (!retryTarget) return
+                    setLicenseAck(false)
+                    setConfirming(retryTarget)
+                  }}
+                >
+                  {t('models.download.retry')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    dismissedJobId = panelJob.jobId
+                    setDismissedJob(panelJob.jobId)
+                  }}
+                >
+                  {t('models.download.dismiss')}
+                </Button>
+              </div>
+              {retryBlockedReason && <p className="hint mb-0">{retryBlockedReason}</p>}
+            </>
+          )}
+        </div>}
+        <p className="hint" role="status">{tCount('models.library.results', visibleModels.length)}</p>
+        {visibleModels.length === 0 ? (
+          <div className="model-library-empty">
+            <p>{t(hasFilters ? 'models.library.noMatches' : libraryView === 'installed'
+              ? activeChat && isModelInstalled(activeChat) ? 'models.library.onlyActive' : 'models.library.noneInstalled'
+              : 'models.library.noAlternatives')}</p>
+            {libraryView === 'installed' && <Button onClick={() => setLibraryView('browse')}>
+              {t('models.library.browse')}
+            </Button>}
+          </div>
+        ) : TASKS.map((entry) => {
+          const list = visibleModels.filter((m) => modelTask(m) === entry.value)
+          return list.length > 0 && <section key={entry.value} aria-label={t(entry.label)}>
+            <h3 className="model-task-heading">{t(entry.label)}</h3>
+            {libraryRows(list)}
+          </section>
+        })}
+      </section>
 
       {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}
       <ErrorBanner message={error} t={t} />
