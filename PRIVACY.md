@@ -53,6 +53,11 @@ folder):
 - Generated outputs
 - Local debug/audit logs
 - App settings
+- Knowledge packs (offline ZIM archives, e.g. an offline Wikipedia) are used in place —
+  never copied. While unlocked, the app keeps a small generated index file naming your
+  enabled packs' titles and file locations under `workspace/zim-transient/`, removed
+  when you lock, quit, or start the app. The pack server that reads it listens on
+  127.0.0.1 only.
 
 Two small things live outside the workspace: the app remembers display preferences (such as your
 chosen language) in the app-data folder that the built-in browser engine keeps on this computer,

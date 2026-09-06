@@ -246,7 +246,9 @@ export const IPC = {
   exportAuditLog: 'audit:export',
   // Knowledge packs (ZIM wave). Handlers in registerZimIpc.ts; all DB-backed and
   // requireUnlocked. Audit metadata is ids/counts only (pack titles/filenames are content).
-  /** All registered packs, availability recomputed; runs drive zim/ auto-discovery first — `KnowledgePack[]`. */
+  /** All registered packs — DATABASE-ONLY (#301 P3b, finding L7): no filesystem probe, no
+   *  availability write. `reconcile()` (session start, and `packs:refresh`) is what discovers
+   *  new drive files and heals availability — `KnowledgePack[]`. */
   listKnowledgePacks: 'packs:list',
   /** Open the native .zim picker AND register the chosen archives (dialog + registration in ONE
    *  main-side handler — no renderer-supplied path ever reaches registration). Returns the packs
@@ -256,8 +258,14 @@ export const IPC = {
   removeKnowledgePack: 'packs:remove',
   /** Enable/disable a pack (a disabled pack stays registered but is never queried). */
   setKnowledgePackEnabled: 'packs:setEnabled',
-  /** Whether the kiwix-tools binaries are installed (feature availability for the UI). */
+  /** Whether kiwix-tools is installed, and whether a reconciliation is currently running
+   *  (feature + refreshing-state for the UI) — `KnowledgePackStatus`. */
   getKnowledgePackStatus: 'packs:status',
+  /** Kick off a background reconciliation pass (drive discovery + availability heal) at the
+   *  user's request; schedules and returns `{ started: true }` at once — completion arrives via
+   *  `EVENTS.knowledgePacksChanged` (#301 P3b, finding L7). The friendly locked copy when the
+   *  workspace does not admit work. */
+  refreshKnowledgePacks: 'packs:refresh',
   /** Read one article from a pack for the citation viewer — plain sectioned TEXT
    *  (`PackArticle`), resolved MAIN-side over the loopback sidecar; null when unavailable. */
   getPackArticle: 'packs:getArticle',
@@ -525,5 +533,13 @@ export const EVENTS = {
    * first-run gate + first cold Models visit can show a determinate bar instead of an
    * opaque spinner. First-run-only in practice (the hash cache makes later passes a no-op).
    */
-  modelVerifyProgress: 'models:verifyProgress'
+  modelVerifyProgress: 'models:verifyProgress',
+  /**
+   * The registered knowledge-pack set changed (#301 P3b, finding L7) — `KnowledgePacksChangedEvent`.
+   * Broadcast to EVERY window (not just the calling one, unlike `modelVerifyProgress`) on
+   * reconciliation start/end and on register/remove/enable, so a mounted Chat/panel can refetch
+   * without navigating away and back. A consumer ignores an event whose `epoch` is below the last
+   * one it saw (an old session's late announcement).
+   */
+  knowledgePacksChanged: 'packs:changed'
 } as const

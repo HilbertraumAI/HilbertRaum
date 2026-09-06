@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { KnowledgePack } from '@shared/types'
+import type { KnowledgePack, KnowledgePacksChangedEvent } from '@shared/types'
 import { Badge, Button, ConfirmDialog, EmptyState, ErrorBanner, Spinner, useToast } from '../../components'
 import { friendlyIpcError } from '../../lib/errors'
 import { useT } from '../../i18n'
@@ -10,6 +10,15 @@ import { useT } from '../../i18n'
 // crosses the bridge), toggles per-pack enablement, removes registrations (the archive
 // file is never touched — the confirm says so). Modeled on SkillsTab: mountedRef'd
 // loader, ErrorBanner for failures, toast for successes, badges icon+word (§9).
+//
+// Live refresh (#301 P3b, finding L7, plan §9.17 (e)3): `packs:list` is DB-only — a file
+// dropped into the drive's `zim/` folder or an external reconciliation is discovered by the
+// session-start pass or by the "Refresh" button here, never by this panel polling. The panel
+// reads its initial `refreshing` state from `packs:status` and then follows
+// `onKnowledgePacksChanged`: `reconcile-start` shows the "Checking the drive…" line,
+// `reconcile-end`/`mutation` refetch the list and clear it. An event whose `epoch` is below
+// the last one seen (an old session's late announcement) is ignored — states just reset on
+// the next mount because the App unmounts this screen on lock.
 
 function formatSize(tCount: ReturnType<typeof useT>['tCount'], bytes: number | null): string | null {
   if (bytes == null || bytes <= 0) return null
@@ -23,10 +32,14 @@ export function PacksPanel(): JSX.Element {
   const showToast = useToast()
   const [packs, setPacks] = useState<KnowledgePack[] | null>(null)
   const [toolsInstalled, setToolsInstalled] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<'add' | string | null>(null)
+  const [busy, setBusy] = useState<'add' | 'refresh' | string | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<KnowledgePack | null>(null)
   const mountedRef = useRef(true)
+  // Ignore an event whose epoch is below the last one seen — an old session's late
+  // announcement (0 before anything has been observed; a real epoch starts at 1).
+  const lastEpochRef = useRef(0)
 
   useEffect(() => {
     mountedRef.current = true
@@ -43,6 +56,7 @@ export function PacksPanel(): JSX.Element {
       ])
       if (!mountedRef.current) return
       setToolsInstalled(status.toolsInstalled)
+      setRefreshing(status.refreshing)
       setPacks(list)
     } catch (e) {
       if (!mountedRef.current) return
@@ -54,6 +68,34 @@ export function PacksPanel(): JSX.Element {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  useEffect(() => {
+    return window.api.onKnowledgePacksChanged?.((event: KnowledgePacksChangedEvent) => {
+      if (event.epoch < lastEpochRef.current) return
+      lastEpochRef.current = event.epoch
+      if (event.reason === 'reconcile-start') {
+        setRefreshing(true)
+        return
+      }
+      // 'reconcile-end' / 'mutation': the pack set may have moved — refetch, and clear the
+      // refreshing line even before the refetch settles (a coalesced rerun re-sets it via its
+      // own reconcile-start event).
+      setRefreshing(false)
+      void refresh()
+    })
+  }, [refresh])
+
+  async function onRefresh(): Promise<void> {
+    setBusy('refresh')
+    setError(null)
+    try {
+      await window.api.refreshKnowledgePacks()
+    } catch (e) {
+      if (mountedRef.current) setError(friendlyIpcError(e))
+    } finally {
+      if (mountedRef.current) setBusy(null)
+    }
+  }
 
   async function onAdd(): Promise<void> {
     setBusy('add')
@@ -125,8 +167,21 @@ export function PacksPanel(): JSX.Element {
         <Button variant="primary" disabled={busy !== null || !toolsInstalled} onClick={() => void onAdd()}>
           {busy === 'add' ? t('packs.addBusy') : t('packs.add')}
         </Button>
+        <Button
+          size="sm"
+          disabled={refreshing || busy !== null || !toolsInstalled}
+          onClick={() => void onRefresh()}
+        >
+          {t('packs.refresh')}
+        </Button>
       </div>
       <p className="hint">{t('packs.lead')}</p>
+
+      {refreshing && (
+        <p className="hint" role="status">
+          <Spinner /> {t('packs.refreshing')}
+        </p>
+      )}
 
       {packs == null && (
         <p className="hint" role="status">
@@ -154,6 +209,10 @@ export function PacksPanel(): JSX.Element {
                       {t('packs.state.disabled')}
                     </Badge>
                   )
+                ) : p.unavailableReason === 'identity-mismatch' ? (
+                  <Badge tone="warning" icon="⚠" title={t('packs.state.identityMismatchTitle')}>
+                    {t('packs.state.identityMismatch')}
+                  </Badge>
                 ) : (
                   <Badge tone="warning" icon="⚠" title={t('packs.state.missingTitle')}>
                     {t('packs.state.missing')}

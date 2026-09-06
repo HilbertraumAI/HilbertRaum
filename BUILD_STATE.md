@@ -29,6 +29,19 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 3b — session boundary, lock, identity, discovery: review
+H4 / M4 / M5 / L3 / L4 / L7 closed.**_ Every pack operation captures the unlock epoch and re-asserts admission/epoch/
+cancellation after every await; lock/quit abort the operation registry, suspend/stop the sidecar and clean the
+relocated `<workspacePath>/zim-transient/` (`library.<build>.xml` + `meta-<n>/library.xml`, containment- and
+link-checked; the OS-temp location is gone). A pack's identity is its 80-byte header UUID; `packs:list` is DB-only
+and one serialized reconciliation (session start, new `packs:refresh`) heals paths/availability without ever
+touching `enabled`/`removed_at`, so a user's remove/disable wins over a late pass. Serving names follow the pinned
+libkiwix rule; a collision excludes the later UUID. New `packs:changed` event refreshes `PacksPanel`/`ChatScreen`
+without navigation. Record: `docs/rag-design.md` §17 D-Z8 (relocated dir)/D-Z10 (admission-epoch half)/D-Z11
+(identity, reconciliation, locator — NEW). T07/T08/T11/T12/T13-a implemented. Suite on this machine:
+416 / 5,958 (5,879 / 78) = +4 files / +40 tests over the head 45df38b1 (412 / 5,918, recounted here);
+typecheck + build green; real kiwix-tools not installed here.
+
 _2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 3a — server and manager generations: review
 H3 / M2 / M9 closed.**_ `KiwixServer` keeps per-child records whose late callbacks can never touch a newer
 child; `ZimService` owns a monotonic pack revision, ONE generation allocator for library builds and children,
@@ -694,6 +707,11 @@ open round's item stays the last block of §5.)
     (g) **R-1 registered (P3a, 2026-09-05):** `kiwix-manage` on a hashless install marker runs as
     `skip-legacy` (one logged warning) — no integrity claim for the manager until (a) proves install
     hashes for serve AND manage; kiwix-serve already had the same tolerance. Record: rag-design D-Z10.
+    (h) **R-7 (P3b, 2026-09-06) — closed with recorded limits:** the dedicated `zim-transient/` cleanup is
+    tested with the actual filenames in both workspace modes (startup / session start), and at lock, quit,
+    failed registration, superseded rebuild and an unconfirmed manager child on the real encrypted vault
+    (`zim-ipc-session.test.ts`, `zim-transients.test.ts`); limits in `known-limitations.md`: an unconfirmed
+    child's file waits for the next session start, a file a stray process holds open is left and reported.
 
 ## 6. Open issues / risks
 

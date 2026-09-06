@@ -2404,10 +2404,13 @@ reports and phase plans were working papers; their full text lives in git histor
   locator/serving-map contract. Evidence reviews created on a pre-release knowledge-pack
   build that cite an archive may carry a wrongly resolved document identity and must be
   re-run; the app never rewrites a frozen review.
-- **The article viewer derives the serving URL id from the pack’s filename stem** (the
-  kiwix-serve `--library` rule, verified on kiwix-tools 3.8.1). Retrieval itself parses
-  ids from search results and does not depend on the rule; a kiwix naming change would
-  surface as a viewer 404 (“not available right now”), not a wrong article.
+- **Serving names are computed, not read back from the running server.** Every enabled
+  pack's serving name follows the pinned libkiwix 14.1 `getHumanReadableIdFromPath` rule
+  exactly (`identity.ts`); when two packs would compute the SAME name, the smaller UUID
+  wins by libkiwix's own ascending-map-order rule and the later pack is excluded from the
+  served library until it is renamed, rather than answering under the winner's name (the
+  panel does not yet say so — the collision surface is P6's; the pack simply contributes nothing). The real-tool check that our computed map still matches a
+  pinned kiwix-serve build is P7's (T19), not assumed here.
 - **Every enabled in-scope pack is searched for every ask**, regardless of language —
   a German question against an English pack simply scores poorly. The reranker sorts it
   out when present; without one, expect occasional off-language chunks.
@@ -2427,8 +2430,16 @@ reports and phase plans were working papers; their full text lives in git histor
   teardown bound** (SIGTERM → SIGKILL → a bounded wait — ≈5 s total for kiwix-serve,
   ≈3 s for kiwix-manage) is reported as cleanup NOT CONFIRMED, never "complete": its
   PID stays on the crash-reap list and its `library.<n>.xml` build (or, for
-  registration, its throwaway metadata temp directory) is left in the OS temp dir
-  until the crash reaper or a later startup sweep (P3b) removes it. Separately,
+  registration, its throwaway metadata temp directory) is left under
+  `workspace/zim-transient/` until the next session start removes it. Separately,
   **kiwix-manage on a legacy hashless install marker runs with a logged warning
   instead of integrity verification** (residual R-1) — retained until the
   provisioning wave above proves both binaries' verification and repair.
+- **`workspace/zim-transient/` (P3b) holds only the generated library XML the pack
+  server reads** — `library.<build>.xml` and, during registration, a throwaway
+  `meta-<n>/library.xml` — plaintext while present in both workspace modes, and
+  removed at lock, at quit and at every session start after a containment check
+  (a symlinked or junctioned `zim-transient/` dir is refused outright, never followed).
+  Explicit limits: a file belonging to a child whose death could not be confirmed waits
+  for the NEXT session start, not the current cleanup pass; a file a stray process still
+  holds open on Windows is left in place and reported, never silently called clean.

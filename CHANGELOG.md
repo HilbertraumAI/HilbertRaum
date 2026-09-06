@@ -34,6 +34,13 @@ from its first public `1.0.0` release onward.
   open the article offline. Fully local: the pack server binds to 127.0.0.1 only,
   archives are used in place and never copied. Needs the kiwix-tools binaries on the
   drive — still a manual step in this release (see the user guide §7b).
+- **Knowledge packs are found once, not on every open.** The list is discovered when you
+  unlock and by an explicit **Refresh** in *Documents → Knowledge packs*, instead of a
+  fresh drive scan every time the panel opens or a message is sent — packs load
+  instantly, and copying a new archive onto the drive shows up after Refresh. A pack
+  whose file was replaced by a different archive is now shown as such ("Different
+  archive") instead of quietly answering from the wrong one. Locking or quitting the app
+  stops the pack server and removes its small generated index file.
 - **Evidence reviews now name the knowledge pack, not a same-named document.** Reviewing an
   answer that cites a knowledge-pack article records the archive, the article and its pack
   id honestly, and shows identity as not verifiable against the workspace instead of

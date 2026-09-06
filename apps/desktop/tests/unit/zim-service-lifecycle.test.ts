@@ -6,15 +6,18 @@ import { basename, dirname, join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { log } from '../../src/main/services/logging'
 import { registeredSidecarPids, type ChildProcessLike, type SpawnFn } from '../../src/main/services/runtime/sidecar'
-import { registerPack, writeLibraryXml, type PackDeps } from '../../src/main/services/zim/packs'
+import { registerPack, servedCandidates, writeLibraryXml, type PackDeps } from '../../src/main/services/zim/packs'
+import { readZimHeader } from '../../src/main/services/zim/identity'
+import { packUuid, writeZimFixture } from '../helpers/zim-header'
 import {
   KiwixManageError,
   kiwixManageAdd,
   _resetKiwixManageSkipLegacyWarnForTests
 } from '../../src/main/services/zim/tools'
 import type { BinaryVerifyResult } from '../../src/main/services/binary-verifier'
-import { ZimService, type ZimAdmission } from '../../src/main/services/zim'
+import { ZimService, type ServedLibrary, type ZimAdmission } from '../../src/main/services/zim'
 import { KiwixServer } from '../../src/main/services/zim/serve'
+import { ServeFakeChild, serveGate, type ServeChildMode } from '../helpers/zim-fakes'
 
 // P3a — service generations, publication and cancellation. This file is shared with a
 // parallel agent's T05 (`KiwixServer`/`ZimService`) block; this describe covers ONLY
@@ -64,6 +67,12 @@ function manageFakeSpawn(pid = 9001): {
  *  after it reads a fake's RECORDED state (call counts, registry membership), never
  *  elapsed wall-clock time, so it is not a race-condition "proof". */
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+/** #301 P3b: `ensureServer` publishes the whole `ServedLibrary` (port + revision +
+ *  generation + the identity-checked serving map). These P3a cases assert the PORT it
+ *  carries — the same claim, one field deeper. */
+async function svcPort(p: Promise<ServedLibrary | null>): Promise<number | null> {
+  return (await p)?.port ?? null
+}
 /** Let a real (tiny) timer configured on the call under test actually fire. Used only
  *  to let `timeoutMs`/`killGraceMs`/`forceKillWaitMs` elapse before checking a fake's
  *  recorded state — never as the proof of an outcome by itself. */
@@ -77,10 +86,12 @@ function managePackHarness(): { db: Db; zimDir: string; root: string } {
   return { db, zimDir, root }
 }
 
+/** A REAL 80-byte ZIM header (#301 P3b): a pack IS its header UUID, so every fixture the
+ *  registry reads must carry one — and the fake manager below echoes exactly that uuid. */
 function addManageZimFile(dir: string, leaf: string): string {
-  const p = join(dir, leaf)
-  writeFileSync(p, 'ZIM')
-  return p
+  return writeZimFixture(join(dir, leaf), packUuid('0000aa01', leaf.slice(0, 6)), {
+    trailing: `body of ${leaf}`
+  })
 }
 
 describe('kiwixManageAdd — verifier, PID registry, abort, settle-before-cleanup (M9, P3a)', () => {
@@ -280,7 +291,7 @@ describe('writeLibraryXml — stops on an unconfirmed manager child (M9 → pack
       if (mode === 'register') {
         appendFileSync(
           libraryXmlPath,
-          `<book id="uuid-${leaf}" path="${zimPath.replace(/\\/g, '/')}" title="T ${leaf}" ` +
+          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="T ${leaf}" ` +
             `language="deu" date="2026-07-01" articleCount="1" mediaCount="0" />\n`
         )
         return
@@ -302,12 +313,22 @@ describe('writeLibraryXml — stops on an unconfirmed manager child (M9 → pack
     mode = 'build'
     const libraryPath = join(root, 'library.xml')
     const warn = vi.spyOn(log, 'warn')
-    const err: unknown = await writeLibraryXml(db, deps, libraryPath).catch((e: unknown) => e)
+    const err: unknown = await writeLibraryXml(deps, libraryPath, servedCandidates(db, zimDir)).catch(
+      (e: unknown) => e
+    )
     expect(err).toBeInstanceOf(KiwixManageError)
     expect(err).toMatchObject({ childState: 'uncertain' })
     // The ordinary failure (b) was skipped with a warn, not rethrown — c stopped the build.
     expect(buildCalls).toEqual(['a-good.zim', 'b-badordinary.zim', 'c-uncertain.zim'])
-    expect(warn.mock.calls.some((c) => typeof c[0] === 'string' && c[0].includes('b-badordinary.zim'))).toBe(true)
+    // The warn names the pack by its archive UUID, never by its filename (#301 P3b: the
+    // library build now works from identity-resolved candidates, and the sentinel rule keeps
+    // the leaf out of the log).
+    const skippedId = readZimHeader(join(zimDir, 'b-badordinary.zim')).uuid
+    // Message AND metadata are inspected: the id rides the structured fields, the message is
+    // a fixed sentence, and neither may carry the leaf or the manager's path-bearing stderr.
+    const warnText = warn.mock.calls.map((c) => JSON.stringify(c)).join(' ')
+    expect(warnText).toContain(skippedId)
+    expect(warnText).not.toContain('b-badordinary.zim')
   })
 
   it('stops immediately when the signal is already aborted; no pack is attempted', async () => {
@@ -319,7 +340,7 @@ describe('writeLibraryXml — stops on an unconfirmed manager child (M9 → pack
       if (mode === 'register') {
         appendFileSync(
           libraryXmlPath,
-          `<book id="uuid-${leaf}" path="${zimPath.replace(/\\/g, '/')}" title="T ${leaf}" language="deu" />\n`
+          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="T ${leaf}" language="deu" />\n`
         )
         return
       }
@@ -331,7 +352,9 @@ describe('writeLibraryXml — stops on an unconfirmed manager child (M9 → pack
     const controller = new AbortController()
     controller.abort()
     const libraryPath = join(root, 'library.xml')
-    await expect(writeLibraryXml(db, deps, libraryPath, controller.signal)).rejects.toMatchObject({
+    await expect(
+      writeLibraryXml(deps, libraryPath, servedCandidates(db, zimDir), controller.signal)
+    ).rejects.toMatchObject({
       name: 'AbortError'
     })
     expect(buildCalls).toEqual([])
@@ -346,7 +369,7 @@ describe('writeLibraryXml — stops on an unconfirmed manager child (M9 → pack
       if (mode === 'register') {
         appendFileSync(
           libraryXmlPath,
-          `<book id="uuid-${leaf}" path="${zimPath.replace(/\\/g, '/')}" title="T ${leaf}" language="deu" />\n`
+          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="T ${leaf}" language="deu" />\n`
         )
         return
       }
@@ -358,7 +381,7 @@ describe('writeLibraryXml — stops on an unconfirmed manager child (M9 → pack
     mode = 'build'
     const controller = new AbortController()
     const libraryPath = join(root, 'library.xml')
-    await writeLibraryXml(db, deps, libraryPath, controller.signal)
+    await writeLibraryXml(deps, libraryPath, servedCandidates(db, zimDir), controller.signal)
     expect(receivedSignal).toBe(controller.signal)
   })
 })
@@ -409,69 +432,9 @@ describe('readZimMetadata (via registerPack) — the throwaway meta dir on an un
 // kill-grace timers elapse, and what is asserted afterwards is a fake's RECORDED state.
 // =====================================================================================
 
-/** A controlled promise: `entered` resolves when the code under test reaches the gate,
- *  `release(value)` lets it continue. */
-interface ServeGate<T> {
-  readonly entered: Promise<void>
-  wait(): Promise<T>
-  release(value: T): void
-}
-
-function serveGate<T>(): ServeGate<T> {
-  let markEntered: () => void = () => {}
-  const entered = new Promise<void>((resolve) => {
-    markEntered = () => resolve()
-  })
-  let release: (value: T) => void = () => {}
-  const released = new Promise<T>((resolve) => {
-    release = resolve
-  })
-  return {
-    entered,
-    wait: (): Promise<T> => {
-      markEntered()
-      return released
-    },
-    release: (value: T): void => release(value)
-  }
-}
-
-/**
- * How a fake child reacts to `kill()`:
- * - `exit-on-sigterm` — the polite signal is enough (the ordinary case),
- * - `ignore-sigterm`  — only `SIGKILL` kills it (proves the escalation),
- * - `ignore-all`      — nothing kills it (proves the bounded wait and the `uncertain`
- *   failure policy: the PID stays registered and the build file is kept).
- * `kill()` NEVER implies a terminal state on its own — the test decides when `exit` arrives.
- */
-type ServeChildMode = 'exit-on-sigterm' | 'ignore-sigterm' | 'ignore-all'
-
-class ServeFakeChild extends EventEmitter implements ChildProcessLike {
-  pid: number
-  killed = false
-  /** Set by its own listener when it emits  — the ordering oracle for "the next
-   *  child spawns only after the previous one is terminal". */
-  exited = false
-  stderr = new EventEmitter()
-  readonly killCalls: Array<NodeJS.Signals | number | undefined> = []
-  mode: ServeChildMode
-  constructor(pid: number, mode: ServeChildMode) {
-    super()
-    this.pid = pid
-    this.mode = mode
-    this.on('exit', () => {
-      this.exited = true
-    })
-  }
-  kill(signal?: NodeJS.Signals | number): boolean {
-    this.killCalls.push(signal)
-    this.killed = true
-    if (this.mode === 'exit-on-sigterm') queueMicrotask(() => this.emit('exit', 0, null))
-    else if (this.mode === 'ignore-sigterm' && signal === 'SIGKILL')
-      queueMicrotask(() => this.emit('exit', null, 'SIGKILL'))
-    return true
-  }
-}
+// The controlled gate and the fake serve child now live in tests/helpers/zim-fakes.ts —
+// shared verbatim with the P3b session suite so the two cannot drift on what "the child
+// ignored SIGTERM" means (#301).
 
 interface ServeSpawnRecord {
   args: string[]
@@ -546,8 +509,9 @@ function svcHarness(
     nextChildMode: 'exit-on-sigterm',
     svc: null as unknown as ZimService,
     addPack: async (leaf) => {
-      const file = join(zimDir, leaf)
-      writeFileSync(file, 'ZIM')
+      const file = writeZimFixture(join(zimDir, leaf), packUuid('0000bb02', leaf.slice(0, 6)), {
+        trailing: `body of ${leaf}`
+      })
       const pack = await harness.svc.registerPack(db, file)
       return pack.id
     },
@@ -599,7 +563,7 @@ function svcHarness(
       const stem = basename(zimPath).replace(/\.zim$/i, '')
       appendFileSync(
         libraryXmlPath,
-        `<book id="uuid-${stem}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${stem}" ` +
+        `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${stem}" ` +
           `description="Test archive" language="deu" date="2026-07-01" articleCount="41" mediaCount="7" />\n`
       )
       child.emit('exit', 0, null)
@@ -672,7 +636,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     const beta = await h.addPack('beta.zim') // revision 2 — aborts the parked start
     h.hooks.verify = async () => 'ok'
     verifyGate.release('ok')
-    const portAfterOne = await firstAsk // the ask re-loops onto revision 2 rather than failing
+    const portAfterOne = await svcPort(firstAsk) // the ask re-loops onto revision 2 rather than failing
 
     // No obsolete spawn: nothing was ever launched with build A, and A deleted its OWN file.
     expect(h.serveSpawns).toHaveLength(1)
@@ -706,7 +670,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     h.svc.setPackEnabled(h.db, beta, true) // revision 4 — aborts the parked start
     h.hooks.findPort = async () => 8400 + h.serveSpawns.length
     portGate.release(8399)
-    const portAfterTwo = await secondAsk
+    const portAfterTwo = await svcPort(secondAsk)
 
     expect(h.serveSpawns.map((s) => s.libraryXmlPath)).not.toContain(buildC)
     expect(h.builds()).not.toContain(basename(buildC)) // the stale build cleaned its own file
@@ -727,7 +691,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     h.svc.setPackEnabled(h.db, alpha, true) // revision 6 — aborts the parked manager
     h.hooks.manage = async () => undefined
     manageGate.release()
-    const portAfterThree = await thirdAsk
+    const portAfterThree = await svcPort(thirdAsk)
 
     expect(h.serveSpawns.map((s) => s.libraryXmlPath)).not.toContain(buildD)
     expect(h.builds()).not.toContain(basename(buildD))
@@ -748,7 +712,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     h.svc.setPackEnabled(h.db, beta, true) // revision 8 — supersedes the parked start
     h.hooks.probe = async () => true
     probeGate.release(true)
-    const portAfterFour = await fourthAsk
+    const portAfterFour = await svcPort(fourthAsk)
 
     const freshChild = h.lastServeChild()
     expect(freshChild).not.toBe(staleChild)
@@ -759,7 +723,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(h.svc.serverState()).toMatchObject({ revision: 8, port: portAfterFour, alive: true })
     // No stale start failure latched: the next ask is served from the publication, no spawn.
     const spawnsAfterFour = h.serveSpawns.length
-    await expect(h.svc.ensureServer(h.db)).resolves.toBe(portAfterFour)
+    await expect(h.svc.ensureServer(h.db)).resolves.toMatchObject({ port: portAfterFour })
     expect(h.serveSpawns).toHaveLength(spawnsAfterFour)
 
     // --- (5) NATURAL CRASH: the restart is a NEW generation over the SAME build -----------
@@ -774,7 +738,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
       generation: beforeCrash.generation,
       alive: false
     })
-    const portAfterCrash = await h.svc.ensureServer(h.db)
+    const portAfterCrash = await svcPort(h.svc.ensureServer(h.db))
     const afterCrash = h.svc.serverState()!
     expect(afterCrash.revision).toBe(beforeCrash.revision)
     expect(afterCrash.build).toBe(beforeCrash.build) // the pack set did not change
@@ -797,7 +761,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(registeredSidecarPids('kiwix_tools')).toContain(stubborn.pid) // stays reapable
     expect(h.builds()).toContain(basename(stubbornBuild)) // its file is NOT deleted
 
-    const portAfterStubborn = await h.svc.ensureServer(h.db)
+    const portAfterStubborn = await svcPort(h.svc.ensureServer(h.db))
     const currentChild = h.lastServeChild()
     const stateBeforeLateExit = h.svc.serverState()!
     expect(stateBeforeLateExit).toMatchObject({ revision: 10, port: portAfterStubborn, alive: true })
@@ -845,7 +809,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(h.serveSpawns).toHaveLength(1) // the cancelled waiter did NOT abort the start
 
     probeGate.release(true)
-    const port = await live
+    const port = await svcPort(live)
     expect(h.svc.serverState()).toMatchObject({ port, alive: true })
     expect(h.serveSpawns).toHaveLength(1)
     await h.svc.stop()
@@ -872,7 +836,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(lockedChild.killCalls.length).toBeGreaterThan(0)
 
     // suspend() is NOT a latch: the next ask lazily restarts (vision's lock shape).
-    const port = await h.svc.ensureServer(h.db)
+    const port = await svcPort(h.svc.ensureServer(h.db))
     expect(h.serveSpawns).toHaveLength(2)
     expect(h.svc.serverState()).toMatchObject({ port, alive: true })
     await h.svc.stop()
@@ -904,7 +868,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     await expect(h2.svc.ensureServer(h2.db)).rejects.toThrow(/did not become healthy/)
     h2.hooks.probe = async () => true
     await h2.addPack('beta.zim') // the pack set changed — the change may be the fix
-    const port = await h2.svc.ensureServer(h2.db)
+    const port = await svcPort(h2.svc.ensureServer(h2.db))
     expect(h2.serveSpawns).toHaveLength(2)
     expect(h2.svc.serverState()).toMatchObject({ port, alive: true })
     await h2.svc.stop()
@@ -927,7 +891,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     const h = svcHarness()
     await h.addPack('alpha.zim')
     h.nextChildMode = 'ignore-all'
-    const port = await h.svc.ensureServer(h.db)
+    const port = await svcPort(h.svc.ensureServer(h.db))
     const child = h.lastServeChild()
     const build = h.serveSpawns[0]!.libraryXmlPath
     const generation = h.svc.serverState()!.generation
@@ -971,11 +935,14 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(await h.svc.ensureServer(h.db)).toBeNull()
     expect(h.serveSpawns).toHaveLength(0)
 
-    // The generation allocator is the witness that the second ask did NOT rebuild: the
-    // empty build took g1, so the next real build is g2 and its child g3 — not g3/g4.
+    // The generation allocator is the witness that the second ask did NOT rebuild. P3b (#301)
+    // draws the registration throwaway `meta-<n>/` from the SAME allocator, so `addPack` above
+    // took g1: the empty build is g2, the next real build g3 and its child g4 — not g4/g5,
+    // which is what a rebuild on the second (null) ask would have produced. Unchanged claim,
+    // shifted by exactly the one registration.
     h.svc.setPackEnabled(h.db, alpha, true) // revision 3
-    const port = await h.svc.ensureServer(h.db)
-    expect(h.svc.serverState()).toMatchObject({ revision: 3, build: 2, generation: 3, port, alive: true })
+    const port = await svcPort(h.svc.ensureServer(h.db))
+    expect(h.svc.serverState()).toMatchObject({ revision: 3, build: 3, generation: 4, port, alive: true })
     await h.svc.stop()
   })
 
@@ -1047,7 +1014,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     // Admitted again under the new epoch: an ordinary start publishes.
     admits = true
     h.hooks.probe = async () => true
-    const port = await h.svc.ensureServer(h.db)
+    const port = await svcPort(h.svc.ensureServer(h.db))
     expect(h.svc.serverState()).toMatchObject({ port, alive: true })
     await h.svc.stop()
   })

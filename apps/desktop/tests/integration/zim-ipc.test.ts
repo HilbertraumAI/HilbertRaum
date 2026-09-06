@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
 // Knowledge packs (ZIM wave): the packs:* IPC surface — dialog-in-handler registration
-// (no renderer-supplied paths), list-with-discovery, remove/enable, the ids-only audit
+// (no renderer-supplied paths), the DB-only list, remove/enable, the ids-only audit
 // rule, and the scope round-trip (packIds persist through setScope → resolveScope).
 
 const ipcState = vi.hoisted(() => ({
@@ -31,6 +31,8 @@ import { seedSettings } from '../../src/main/services/settings'
 import { createConversation, setScope } from '../../src/main/services/chat'
 import { resolveScope } from '../../src/main/services/collections'
 import { retrievablePacks, type PackDeps } from '../../src/main/services/zim/packs'
+import { readZimHeader } from '../../src/main/services/zim/identity'
+import { packUuid, writeZimFixture } from '../helpers/zim-header'
 import * as packs from '../../src/main/services/zim/packs'
 import type { AppContext } from '../../src/main/services/context'
 import type { KnowledgePack } from '../../src/shared/types'
@@ -53,25 +55,54 @@ interface Harness {
 function fakeZimService(db: () => Db, zimDir: string): unknown {
   const deps: PackDeps = {
     zimDir,
+    // #301 P3b: the fake manager READS the fixture's 80-byte header and echoes that uuid, so
+    // manager and header agree by construction — exactly what the real kiwix-manage does.
     manageAdd: async (libraryXmlPath, zimPath) => {
       const leaf = basename(zimPath)
       if (leaf.includes('corrupt')) throw new Error(`Cannot add ZIM ${zimPath} to the library.`)
+      const { uuid } = readZimHeader(zimPath)
       appendFileSync(
         libraryXmlPath,
-        `<book id="uuid-${Buffer.from(leaf).toString('hex').slice(0, 16)}" path="${zimPath.replace(/\\/g, '/')}" ` +
+        `<book id="${uuid}" path="${zimPath.replace(/\\/g, '/')}" ` +
           `title="${TITLE_SENTINEL} ${leaf}" language="deu" date="2026-07-01" articleCount="42" />\n`
       )
     }
   }
   return {
     toolsInstalled: () => true,
-    listPacks: (d: Db) => packs.listPacks(d, zimDir),
-    discoverDrivePacks: (d: Db) => packs.discoverDrivePacks(d, deps),
+    listPacks: (d: Db) => packs.listPacks(d),
+    reconcile: async (d: Db) => {
+      await packs.reconcile(d, deps)
+    },
+    refreshing: () => false,
+    revision: () => 0,
     registerPack: (d: Db, p: string) => packs.registerPack(d, deps, p),
     removePack: (d: Db, id: string) => packs.removePack(d, id),
     setPackEnabled: (d: Db, id: string, enabled: boolean) => packs.setPackEnabled(d, id, enabled),
     getArticle: async () => null,
     makeArm: () => null,
+    // #301 P3b: `packs:add` opens the native picker under a service-owned operation. This
+    // stand-in has no operation registry, so it returns the always-admitted no-op shape the
+    // real service also uses when `ctx.zimOps` is absent. The SESSION behaviour (a lock
+    // aborting a parked picker, the late result refused) is driven against the REAL service in
+    // zim-ipc-session.test.ts, not here.
+    beginRegistration: () => ({
+      signal: new AbortController().signal,
+      epoch: null,
+      assert: () => undefined,
+      track: () => undefined,
+      release: () => undefined
+    }),
+    suspend: async () => {},
+    cleanupTransients: () => ({
+      removed: 0,
+      kept: 0,
+      unknownEntries: 0,
+      unsettledOps: 0,
+      unconfirmedChildren: 0,
+      confirmed: true
+    }),
+    whenSettled: async () => {},
     stop: async () => {}
   }
 }
@@ -101,10 +132,12 @@ function makeHarness(): Harness {
   return { ctx, db, zimDir, auditCalls }
 }
 
+/** A real 80-byte ZIM header whose UUID is derived from the leaf, so the fixtures of one test
+ *  file never collide while the manager still reads its id out of the FILE (#301 P3b). */
 function addZimFile(dir: string, leaf: string): string {
-  const p = join(dir, leaf)
-  writeFileSync(p, 'ZIM')
-  return p
+  return writeZimFixture(join(dir, leaf), packUuid('0000abcd', leaf.slice(0, 6)), {
+    trailing: `body of ${leaf}`
+  })
 }
 
 beforeEach(() => {
@@ -141,9 +174,15 @@ describe('packs IPC', () => {
     expect(h.auditCalls).toHaveLength(0)
   })
 
-  it('list runs drive discovery first (drop a file in zim/, open the panel)', async () => {
+  it('list is DATABASE-ONLY: a file dropped into zim/ appears only after a reconciliation (L7)', async () => {
     const h = makeHarness()
     addZimFile(h.zimDir, 'dropped.zim')
+    // The old handler ran a full drive discovery here — a kiwix-manage spawn with a 30 s
+    // timeout per unknown file, on every Chat mount and after every toggle.
+    const before = (await invoke(handlers, IPC.listKnowledgePacks)).result as KnowledgePack[]
+    expect(before.map((p) => p.leaf)).not.toContain('dropped.zim')
+    // The session-start / Refresh pass is what discovers it.
+    await (h.ctx.zim as unknown as { reconcile: (db: Db) => Promise<void> }).reconcile(h.db)
     const listed = (await invoke(handlers, IPC.listKnowledgePacks)).result as KnowledgePack[]
     expect(listed.map((p) => p.leaf)).toContain('dropped.zim')
   })
@@ -169,8 +208,44 @@ describe('packs IPC', () => {
       workspace: { isUnlocked: () => true }
     } as unknown as AppContext)
     expect((await invoke(handlers, IPC.getKnowledgePackStatus)).result).toEqual({
-      toolsInstalled: false
+      toolsInstalled: false,
+      refreshing: false,
+      revision: 0
     })
+  })
+
+  // #301 P3b, finding L7 (plan §9.17 (e)2-3): packs:refresh schedules a reconciliation and
+  // returns at once; packs:status carries the refreshing flag; packs:list never triggers
+  // discovery — it is asserted here as a spy on the same fake service the harness already
+  // drives (the real single-flight/serialization behaviour is zim-ipc-session.test.ts's T13-a).
+  it('refresh returns { started: true } and calls reconcile exactly once', async () => {
+    const h = makeHarness()
+    const svc = h.ctx.zim as unknown as { reconcile: (db: Db) => Promise<void> }
+    const reconcileSpy = vi.spyOn(svc, 'reconcile')
+    const { result } = await invoke(handlers, IPC.refreshKnowledgePacks)
+    expect(result).toEqual({ started: true })
+    // Fire-and-forget: the handler must not await the reconciliation before resolving.
+    expect(reconcileSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('status reports the refreshing flag from the service', async () => {
+    const h = makeHarness()
+    const svc = h.ctx.zim as unknown as { refreshing: () => boolean }
+    const spy = vi.spyOn(svc, 'refreshing').mockReturnValue(true)
+    expect((await invoke(handlers, IPC.getKnowledgePackStatus)).result).toMatchObject({
+      refreshing: true
+    })
+    spy.mockRestore()
+  })
+
+  it('list never calls reconcile or discovery, even with unregistered files on the drive', async () => {
+    const h = makeHarness()
+    addZimFile(h.zimDir, 'never-discovered.zim')
+    const svc = h.ctx.zim as unknown as { reconcile: (db: Db) => Promise<void> }
+    const reconcileSpy = vi.spyOn(svc, 'reconcile')
+    const before = (await invoke(handlers, IPC.listKnowledgePacks)).result as KnowledgePack[]
+    expect(before.map((p) => p.leaf)).not.toContain('never-discovered.zim')
+    expect(reconcileSpy).not.toHaveBeenCalled()
   })
 
   it('getPackArticle rejects malformed args with null, never a throw', async () => {

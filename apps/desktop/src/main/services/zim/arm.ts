@@ -36,7 +36,8 @@ export async function collectPackCandidates(
   port: number,
   packs: readonly ArmPack[],
   question: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  names?: ReadonlyMap<string, string>
 ): Promise<ExternalCandidate[]> {
   const terms = queryTerms(question)
   const out: ExternalCandidate[] = []
@@ -50,9 +51,16 @@ export async function collectPackCandidates(
     }
     for (const hit of hits) {
       if (out.length >= MAX_EXTERNAL_CANDIDATES) break
+      // The published serving map (`Published.names`, #301 P3b/L4) is the route authority. A
+      // hit whose parsed `urlId` is not the name this pack is served under is SKIPPED —
+      // defensive within one generation: the search was filtered by `books.id`, so a
+      // disagreeing link would mean the response describes a book we did not ask about, and
+      // fetching it would label another archive's text with this pack's title.
+      const expected = names?.get(pack.id)
+      if (expected !== undefined && hit.urlId !== expected) continue
       let html: string | null
       try {
-        html = await fetchArticleHtml(port, hit.urlId, hit.articlePath, signal)
+        html = await fetchArticleHtml(port, expected ?? hit.urlId, hit.articlePath, signal)
       } catch {
         continue
       }

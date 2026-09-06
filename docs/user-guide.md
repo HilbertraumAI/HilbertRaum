@@ -703,7 +703,9 @@ Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
    installer step is still manual.
 2. **Add packs:** copy `.zim` files into the drive’s `zim/` folder (they are found
    automatically), or use *Documents → Knowledge packs → Add packs…* for files
-   stored elsewhere. Files are used in place — nothing is copied.
+   stored elsewhere. Files are used in place — nothing is copied. The list updates
+   itself when you unlock; use **Refresh** under Knowledge packs after copying files
+   while the app is open.
 3. **Use them in a chat:** in a documents chat, open the sources picker
    (“Answering from…”) and tick the packs under *Knowledge packs*. Packs are
    per-chat and off by default.

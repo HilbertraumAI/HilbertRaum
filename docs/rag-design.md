@@ -2370,10 +2370,13 @@ offline article viewer. Files are registered in place, never copied.
   (`packs:getArticle` → ArticleModal) ships main-extracted plain sectioned text — the
   same converter retrieval uses — so the renderer keeps its no-innerHTML posture and no
   sanitizer dependency exists. The generated library is one immutable
-  `library.<build>.xml` per pack revision in an OS temp dir (P3a; P3b relocates it under
-  the workspace) — a new file per rebuild, never rewritten in place, deleted only after
-  the child that read it reached a confirmed terminal state — and every build is removed
-  on quit unless a child could not be confirmed dead.
+  `library.<build>.xml` per pack revision, now under `<workspacePath>/zim-transient/`
+  (P3b, L3/M4 — relocated off the host's OS temp dir) alongside registration's throwaway
+  `meta-<n>/library.xml` files — a new file per rebuild, never rewritten in place,
+  plaintext while present in BOTH workspace modes. Removed at lock, at quit and at every
+  session start (containment + link checks; `transients.ts`), never while the child that
+  read it could still be writing it: the file of a child whose death could not be
+  confirmed is kept and reported, and removed by the next session-start cleanup.
 - **D-Z9 — dialog-in-handler registration.** `packs:add` opens the native picker AND
   registers inside one main-side handler; no archive path ever crosses the IPC bridge.
   Audit is ids/counts only — pack titles and filenames are content (sentinel-tested).
@@ -2406,8 +2409,44 @@ offline article viewer. Files are registered in place, never copied.
   caller's abort, and settles only after its child reaches a terminal state or the
   bound expires, so no directory is ever removed while the child may still be writing
   it. `ZimService.serverState()` exposes `{ revision, build, generation, port, alive }`
-  for the P5 alive/generation request guard. P3b adds the admission-epoch half of this
-  record.
+  for the P5 alive/generation request guard. The admission-epoch half (P3b, 2026-09-06;
+  review H4): every knowledge-pack operation — an ask's arm, an article read, a
+  registration (the native picker wait included) and the reconcile — is a registered,
+  cancellable operation that captures the workspace's unlock epoch and re-asserts
+  admission, epoch and its own cancellation after every await and before every database
+  write or content return, releasing in a `finally`. Lock and quit abort the registry
+  that owns these operations, suspend the sidecar (bounded, non-latching — the child is
+  killed, not permanently stopped), await the operations within the shared 5 s bound,
+  shred what they still track and run the dedicated transient cleanup (D-Z11 below). A
+  failed lock admits new work at once — nothing latched — and never revives cancelled
+  work: an old operation's aborted signal, not the epoch, is what keeps refusing it even
+  after admission is restored.
+
+- **D-Z11 — identity, reconciliation, locator (P3b, 2026-09-06; review M5 / L4 / L7).**
+  A pack's identity is the UUID at bytes 8–23 of its 80-byte ZIM header (`identity.ts`),
+  checked on every file resolution and at every library build — never the filename, so a
+  wrong-UUID leaf at the drive's conventional location no longer hides a correct external
+  file, and a file whose header now names a DIFFERENT archive surfaces as
+  `identity-mismatch` rather than silently serving the wrong content under an old title.
+  `packs:list` reads the registry ONLY — no disk probe, no availability write; ONE
+  serialized reconciliation (single-flight, a Refresh arriving mid-pass coalesces into
+  exactly one more) runs at session start (after the unlock/create/startup promise has
+  already resolved — D3, never on that critical path) and on an explicit Refresh. The
+  reconcile owns only path/size/availability columns and the INSERT of a genuinely
+  unknown UUID; it never writes `enabled`/`removed_at`, so a user's remove or disable
+  always wins over a late-arriving reconciliation pass, even one that started earlier and
+  finishes after the user's action (A07). Serving names follow the pinned libkiwix 14.1
+  rule exactly; a name collision keeps the ascending-UUID winner and excludes every later
+  same-name book from the served library, so the server itself never sees the collision.
+  The citation locator stays `packId + articlePath`: the route is resolved against the
+  CURRENT serving map on every read, never carried as a stored hint, so old citations,
+  renamed files, restarts and drive-letter changes all resolve correctly and a renderer
+  can never select another pack. An `EVENTS.knowledgePacksChanged` (`packs:changed`)
+  broadcast — `{ epoch, revision, refreshing, reason }` — reaches every window on
+  reconcile start/end and on register/remove/enable, emitted only after the producing
+  operation's `assert()` so a pass that finished under an old epoch announces nothing;
+  `PacksPanel` and `ChatScreen` subscribe and refetch, ignoring an event whose epoch is
+  below the last one seen. P4 adds the searchability half of this record.
 
 ### Module map
 
@@ -2420,10 +2459,15 @@ registration for as long as the child may be running, settles only after a termi
 state or the bounded wait — D-Z10), `serve.ts` (`KiwixServer` — per-child records, no
 mutable state on `this`, the bounded SIGTERM→SIGKILL teardown policy — D-Z10),
 `packs.ts` (registry over `knowledge_packs`; `writeLibraryXml` stops and rethrows on an
-unconfirmed manager child, D-Z10), `arm.ts` (candidate production), `index.ts`
-(`ZimService` facade on `AppContext.zim` — the revision/generation allocator, the FIFO
-build/teardown/start chain and the published tuple, D-Z10; quit teardown in
-shutdown.ts). IPC: `ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt).
+unconfirmed manager child, D-Z10; `reconcile()` is the one filesystem pass, D-Z11),
+`identity.ts` (header read + UUID identity + the serving-name map, D-Z11), `transients.ts`
+(the owned `zim-transient/` dir; containment-checked, link-refusing cleanup, D-Z11),
+`session.ts` (the post-unlock reconciliation kickoff, the `maybeStartLocalApi` shape,
+D-Z11), `arm.ts` (candidate production), `index.ts` (`ZimService` facade on
+`AppContext.zim` — the revision/generation allocator, the FIFO build/teardown/start chain
+and the published tuple, D-Z10; the operation registry and admission-epoch checks, the
+`packs:changed` notify hook, D-Z11; quit teardown in shutdown.ts). IPC:
+`ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt).
 Renderer: `documents/PacksPanel.tsx`, ScopePopover pack sources, SourcesDisclosure "Open
 article", `chat/ArticleModal.tsx`. Shapes: [`data-contracts.md`](data-contracts.md)
 "Knowledge packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit) —
@@ -2440,6 +2484,21 @@ outcomes (match/mismatch/hashless), PID registration bounded to the child's life
 and timeout/abort settling only after a terminal state — `zim-arm/zim-ipc`
 (integration), `KnowledgePacks.test.tsx` (renderer, incl. the `partial`-hint case);
 real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES`).
+`zim-ipc-session.test.ts` (integration, NEW, P3b) drives the REAL service + registry over
+the real vault harness: test T07 walks lock-during-picker/discovery/registration/rebuild/
+start/probe/HTTP-read, each proving no post-lock write or content response and a clean
+transient dir; test T08 covers a failed-lock recovery that admits new work without
+reviving cancelled work, one reconciliation pass per create/unlock/plaintext-dev startup
+seam, and a terminal quit; test T12 proves the collision/Unicode/locator contract end to
+end (a rename/restart/drive-letter change all resolve the same citation); test T13 proves
+`packs:list` performs no discovery, a parked reconcile plus two Refreshes coalesce into
+exactly one rerun, the `packs:changed` notices carry the correct epoch and stop at a lock,
+and a user remove/disable during a parked pass wins. `zim-transients.test.ts` (unit, NEW,
+P3b) exercises the standalone cleanup in both workspace modes: containment/link refusal,
+the keep set, unknown entries left in place. `zim-identity.test.ts` (unit, NEW, P3b) pins
+the header parse, the UUID byte order and the `servingNameFor` slugification against the
+pinned libkiwix 14.1 rule; `zim-packs.test.ts` test T11-a proves identity-based resolution
+and that a tombstoned/disabled UUID stays that way across rename/copy/replacement.
 `scripts/zim-html-perf.mjs` prints the D2 measurement table outside Vitest/Electron
 (`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`), including
 Section D's per-slice cooperative-slicing gate (P1b) — each `--gate` profile now also
@@ -2451,7 +2510,6 @@ Provisioning of the `kiwix_tools` family (runtime-sources.yaml, engine downloade
 DRIVE-NOTICES, commercial-drive checks, fetch scripts — binaries are placed manually);
 persistent article import (Tier 2); an in-app ZIM catalog/downloader; evidence review
 over archive citations (they resolve as honest 'unresolved'); packs on the whole-document
-/ compare paths; quality guarantees for non-Wikimedia ZIMs. The viewer derives the
-serving URL id from the filename stem (the kiwix-serve `--library` naming rule, verified
-against kiwix-tools 3.8.1) — retrieval itself parses ids from search links and does not
-depend on that rule.
+/ compare paths; quality guarantees for non-Wikimedia ZIMs. Serving names are computed
+by the pinned libkiwix 14.1 rule (D-Z11) rather than read back from the running server —
+the real-tool check of that mapping is P7's (T19), not assumed.

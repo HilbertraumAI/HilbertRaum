@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import {
+  encodeArticlePath,
   fetchArticleHtml,
   kiwixGet,
   parseLibraryXml,
@@ -180,5 +183,48 @@ describe('parseLibraryXml', () => {
     })
     expect(books[1]?.title).toBe('Käfer & Co')
     expect(books[1]?.articleCount).toBeNull()
+  })
+})
+
+describe('encodeArticlePath — the ONE encoding owner (#301 P3b, finding L4)', () => {
+  it('escapes every segment exactly once and keeps the entry key’s own slashes as structure', () => {
+    expect(encodeArticlePath('A/Alpha')).toBe('A/Alpha')
+    expect(encodeArticlePath('A/with space')).toBe('A/with%20space')
+    expect(encodeArticlePath('A/Über_ß')).toBe('A/%C3%9Cber_%C3%9F')
+    expect(encodeArticlePath('A/one#two')).toBe('A/one%23two')
+    expect(encodeArticlePath('A/50%_rule')).toBe('A/50%25_rule')
+    expect(encodeArticlePath('A/plus+sign')).toBe('A/plus%2Bsign')
+    // A percent-escape that is part of the KEY is escaped once more, so one decode gives the
+    // key back — the `my%20wiki` → `my%2520wiki` regression is the case where it is not.
+    expect(encodeArticlePath('A/a%2Fb')).toBe('A/a%252Fb')
+    for (const key of ['A/Alpha', 'A/with space', 'A/a%2Fb', 'A/50%_rule', 'A/Über_ß']) {
+      expect(
+        encodeArticlePath(key)
+          .split('/')
+          .map(decodeURIComponent)
+          .join('/')
+      ).toBe(key)
+    }
+  })
+
+  it('is the only place in src/ that encodes an article path', () => {
+    // The route contract has ONE owner (plan §9.17 (d)8): P5's entry-key validation lands
+    // inside it, so a second encoder anywhere would be a second, unvalidated route.
+    const root = join(process.cwd(), 'src')
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name)] : []
+      )
+    const offenders: string[] = []
+    for (const file of walk(root)) {
+      if (file.endsWith(join('services', 'zim', 'client.ts'))) continue
+      const text = readFileSync(file, 'utf8')
+      // The per-segment `split('/').map(encodeURIComponent)` shape, in any spelling.
+      if (/split\(\s*['"]\/['"]\s*\)[\s\S]{0,40}encodeURIComponent/.test(text)) {
+        offenders.push(file.slice(root.length + 1))
+      }
+      if (/encodeURIComponent\([^)]*articlePath/.test(text)) offenders.push(file.slice(root.length + 1))
+    }
+    expect(offenders).toEqual([])
   })
 })
