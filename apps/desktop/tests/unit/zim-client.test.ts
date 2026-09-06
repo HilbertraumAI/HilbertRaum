@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -63,10 +63,22 @@ const CEILING_BYTES = 8 * 1024 * 1024
 /** Every request the fixture server received — used to prove the L5 contract rejects a
  *  hazardous key BEFORE any HTTP request (#301 P5, finding L5). */
 let requestCount = 0
+/** Every request URL the fixture server received, in order — the redirect legs assert not just
+ *  the answer but exactly WHICH routes were asked for, and in what order (#301 P7 T19). */
+const requestLog: string[] = []
+/**
+ * What the fixture answers on a `/raw/` request (#301 P7 T19): a status, optional response
+ * headers (a redirect's `Location`) and a body; null falls through to the default article
+ * fixtures below, so every pre-existing `/raw` test is untouched.
+ */
+let rawHook:
+  | ((url: string) => { status: number; headers?: Record<string, string>; body: string } | null)
+  | null = null
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
     requestCount++
+    requestLog.push(req.url ?? '')
     if (req.url?.startsWith('/slow')) return // never responds — timeout leg
     if (req.url?.startsWith('/suggest')) {
       const answer = suggestHook?.(req.url) ?? null
@@ -113,6 +125,12 @@ beforeAll(async () => {
       return
     }
     if (req.url?.startsWith('/raw/')) {
+      const answer = rawHook?.(req.url) ?? null
+      if (answer) {
+        res.writeHead(answer.status, { 'content-type': 'text/html', ...answer.headers })
+        res.end(answer.body)
+        return
+      }
       if (req.url.includes('/raw/missing/')) {
         res.writeHead(404)
         res.end('not found')
@@ -226,6 +244,163 @@ describe('fetchArticleHtml', () => {
     const before = requestCount
     await expect(fetchArticleHtml(port, 'book', 'A/../x')).rejects.toThrow(ArticlePathError)
     expect(requestCount).toBe(before)
+  })
+})
+
+// ------------------------------------------------------------------------------------------
+// #301 P7 T19: kiwix-serve 3.8.1 answers a ZIM REDIRECT ENTRY (an alias title — roughly half a
+// Wikipedia ZIM's entries) under `/raw/<book>/content/<key>` with a 302 whose `Location` is the
+// VIEWER route `/content/<book>/<target>`. It redirects; it does not follow. One hop, same book
+// only; everything else is the honest "unavailable" null (`docs/rag-design.md` §17 D-Z11).
+// ------------------------------------------------------------------------------------------
+describe('fetchArticleHtml follows one same-book redirect (#301 P7 T19)', () => {
+  /** The real archive of the T19 acceptance run, served under its own name. */
+  const NAME = 'wikipedia_de_climate-change_nopic_2026-07'
+  const ALIAS = 'CO2-Äquivalent' // a redirect entry
+  const TARGET_HTML = '<html><body><h1>Treibhauspotential</h1><p>Zielartikel</p></body></html>'
+  type RawAnswer = { status: number; headers?: Record<string, string>; body: string }
+  const raw = (encodedKey: string): string => `/raw/${NAME}/content/${encodedKey}`
+  const ALIAS_URL = raw('CO2-%C3%84quivalent')
+  const TARGET_URL = raw('Treibhauspotential')
+  const NOT_FOUND: RawAnswer = { status: 404, body: 'not found' }
+  const redirectTo = (location: string, status = 302): RawAnswer => ({
+    status,
+    headers: { location },
+    body: ''
+  })
+  /** The fixture answers exactly the routes the leg spells out; anything else is a 404. */
+  const install = (answers: Record<string, RawAnswer>): void => {
+    rawHook = (url) => answers[url] ?? NOT_FOUND
+  }
+  /** Every `/raw` request of THIS leg, in order. */
+  const rawLog = (): string[] => requestLog.filter((u) => u.startsWith('/raw/'))
+
+  beforeEach(() => {
+    requestLog.length = 0
+  })
+  afterEach(() => {
+    rawHook = null
+  })
+
+  it('(a) 302 to /content/<same book>/<target> returns the target body after exactly two requests', async () => {
+    install({
+      [ALIAS_URL]: redirectTo(`/content/${NAME}/Treibhauspotential`),
+      [TARGET_URL]: { status: 200, body: TARGET_HTML }
+    })
+    await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBe(TARGET_HTML)
+    // The order matters as much as the count: the alias first, then the target — and nothing else.
+    expect(rawLog()).toEqual([ALIAS_URL, TARGET_URL])
+  })
+
+  it('(a2) the same one hop for 301, 307 and 308, and a /raw-shaped Location is accepted too', async () => {
+    for (const status of [301, 302, 307, 308]) {
+      requestLog.length = 0
+      install({
+        [ALIAS_URL]: redirectTo(`/content/${NAME}/Treibhauspotential`, status),
+        [TARGET_URL]: { status: 200, body: TARGET_HTML }
+      })
+      await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBe(TARGET_HTML)
+      expect(rawLog(), `status ${status}`).toEqual([ALIAS_URL, TARGET_URL])
+    }
+    // Some builds could answer with the /raw route instead; the same book is the whole test.
+    requestLog.length = 0
+    install({
+      [ALIAS_URL]: redirectTo(`/raw/${NAME}/content/Treibhauspotential`),
+      [TARGET_URL]: { status: 200, body: TARGET_HTML }
+    })
+    await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBe(TARGET_HTML)
+    expect(rawLog()).toEqual([ALIAS_URL, TARGET_URL])
+  })
+
+  it('(b) a 302 to ANOTHER book returns null and fetches nothing from it (finding L4)', async () => {
+    install({ [ALIAS_URL]: redirectTo('/content/other_book/Treibhauspotential') })
+    await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBeNull()
+    expect(rawLog()).toEqual([ALIAS_URL])
+  })
+
+  it('(c) a redirect CHAIN is not followed: null after exactly two requests', async () => {
+    install({
+      [ALIAS_URL]: redirectTo(`/content/${NAME}/Treibhauspotential`),
+      [TARGET_URL]: redirectTo(`/content/${NAME}/Klimawandel`)
+    })
+    await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBeNull()
+    expect(rawLog()).toEqual([ALIAS_URL, TARGET_URL])
+  })
+
+  it('(d) a target the L5 entry-key contract refuses returns null WITHOUT throwing, after one request', async () => {
+    // A server-supplied target is never a caller's key: it is refused as unavailable, quietly.
+    // `..%2Fx` decodes per segment to `../x`, whose `..` segment is the enumeration vector L5
+    // exists to stop; `x%00y` decodes to a C0 control character.
+    for (const hostile of ['..%2Fx', 'x%00y', '%2E%2E/x']) {
+      requestLog.length = 0
+      install({ [ALIAS_URL]: redirectTo(`/content/${NAME}/${hostile}`) })
+      await expect(fetchArticleHtml(port, NAME, ALIAS), hostile).resolves.toBeNull()
+      expect(rawLog(), hostile).toEqual([ALIAS_URL])
+    }
+  })
+
+  it('(e) an absolute-URL, protocol-relative, relative or missing Location returns null after one request', async () => {
+    const locations = [
+      `http://127.0.0.1:1/content/${NAME}/Treibhauspotential`, // an absolute URL — never followed
+      `//evil.example/content/${NAME}/Treibhauspotential`, // protocol-relative
+      'Treibhauspotential', // a relative reference
+      `/content/${NAME}`, // no target segment at all
+      '/something/else'
+    ]
+    for (const location of locations) {
+      requestLog.length = 0
+      install({ [ALIAS_URL]: redirectTo(location), [TARGET_URL]: { status: 200, body: TARGET_HTML } })
+      await expect(fetchArticleHtml(port, NAME, ALIAS), location).resolves.toBeNull()
+      expect(rawLog(), location).toEqual([ALIAS_URL])
+    }
+    // A redirect status with no `Location` header at all is the same honest null.
+    requestLog.length = 0
+    install({ [ALIAS_URL]: { status: 302, body: '' } })
+    await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBeNull()
+    expect(rawLog()).toEqual([ALIAS_URL])
+  })
+
+  it('(f) a percent-encoded non-ASCII target is decoded then re-encoded exactly once', async () => {
+    const targetUrl = raw('CO2-%C3%84quivalente')
+    install({
+      [ALIAS_URL]: redirectTo(`/content/${NAME}/CO2-%C3%84quivalente`),
+      [targetUrl]: { status: 200, body: TARGET_HTML }
+    })
+    await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBe(TARGET_HTML)
+    // Exactly once: `%C3%84` must not come back as `%25C3%2584` (the L4 double-encode).
+    expect(rawLog()).toEqual([ALIAS_URL, targetUrl])
+    expect(rawLog()[1]).not.toContain('%25')
+    // …and an already-encoded slash inside one segment stays inside it, both ways.
+    requestLog.length = 0
+    const encodedSlash = raw('A/a%252Fb')
+    install({
+      [ALIAS_URL]: redirectTo(`/content/${NAME}/A/a%252Fb`),
+      [encodedSlash]: { status: 200, body: TARGET_HTML }
+    })
+    await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBe(TARGET_HTML)
+    expect(rawLog()).toEqual([ALIAS_URL, encodedSlash])
+  })
+
+  it('(g) the book-name comparison is EXACT — a case-shifted name is another book', async () => {
+    install({ [ALIAS_URL]: redirectTo(`/content/${NAME.toUpperCase()}/Treibhauspotential`) })
+    await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBeNull()
+    expect(rawLog()).toEqual([ALIAS_URL])
+  })
+
+  it('the second hop maps 404 to null and any other error status to the existing throw', async () => {
+    install({ [ALIAS_URL]: redirectTo(`/content/${NAME}/Treibhauspotential`) }) // target 404s
+    await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBeNull()
+    expect(rawLog()).toEqual([ALIAS_URL, TARGET_URL])
+
+    requestLog.length = 0
+    install({
+      [ALIAS_URL]: redirectTo(`/content/${NAME}/Treibhauspotential`),
+      [TARGET_URL]: { status: 500, body: 'boom' }
+    })
+    await expect(fetchArticleHtml(port, NAME, ALIAS)).rejects.toThrow(
+      /article fetch failed \(HTTP 500\)/
+    )
+    expect(rawLog()).toEqual([ALIAS_URL, TARGET_URL])
   })
 })
 

@@ -20,6 +20,11 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024
 export interface KiwixResponse {
   status: number
   body: string
+  /**
+   * The `Location` response header, verbatim, when the server sent one — additive (#301 P7 T19):
+   * only `fetchArticleHtml`'s redirect leg reads it, every other caller is unchanged.
+   */
+  location?: string
 }
 
 /**
@@ -48,9 +53,14 @@ export function kiwixGet(
           }
           chunks.push(chunk)
         })
-        res.on('end', () =>
-          resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') })
-        )
+        res.on('end', () => {
+          const location = res.headers.location
+          resolve({
+            status: res.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf8'),
+            ...(typeof location === 'string' ? { location } : {})
+          })
+        })
         res.on('error', reject)
       }
     )
@@ -312,6 +322,45 @@ export function encodeArticlePath(articlePath: string): string {
   return articlePath.split('/').map(encodeURIComponent).join('/')
 }
 
+/** The redirect statuses a `/raw/…/content/` read can answer with (kiwix-serve 3.8.1 sends 302). */
+const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 307, 308])
+
+/** The one `/raw` route builder — `encodeArticlePath` (and therefore `assertArticlePath`) owns
+ *  the entry key, `encodeURIComponent` the serving name. */
+function rawContentPath(name: string, articlePath: string): string {
+  return `/raw/${encodeURIComponent(name)}/content/${encodeArticlePath(articlePath)}`
+}
+
+/**
+ * The entry key a redirect `Location` points at within the SAME book, or null when the
+ * location is anything we refuse to follow (#301 P7 T19).
+ *
+ * Accepted: a PATH-ABSOLUTE `/content/<name>/<target>` (what kiwix-serve answers — the viewer
+ * route, not `/raw`) or `/raw/<name>/content/<target>`, where `<name>` URL-decodes to EXACTLY
+ * the `name` we asked under. Refused, as null: another book's name (the viewer must never show
+ * another book's text — finding L4), an absolute-URL or protocol-relative location, a relative
+ * reference, an unparseable one, and a target the entry-key contract refuses (finding L5;
+ * `assertArticlePath` never THROWS for a server-supplied target — that throw is for
+ * caller-supplied keys, at the first request only).
+ */
+function redirectTargetFor(name: string, location: string | undefined): string | null {
+  if (location === undefined) return null
+  if (!location.startsWith('/') || location.startsWith('//')) return null
+  const m =
+    /^\/content\/([^/]+)\/(.+)$/.exec(location) ?? /^\/raw\/([^/]+)\/content\/(.+)$/.exec(location)
+  if (!m) return null
+  if (safeDecodeURIComponent(m[1]) !== name) return null
+  // Per SEGMENT — the exact inverse of `encodeArticlePath`, so an already-encoded slash inside
+  // one segment stays inside it and the re-encode round-trips (`a%252Fb` → `a%2Fb` → `a%252Fb`).
+  const target = m[2].split('/').map(safeDecodeURIComponent).join('/')
+  try {
+    assertArticlePath(target)
+  } catch {
+    return null
+  }
+  return target
+}
+
 /**
  * Fetch one article's raw HTML. 404 → null (entry vanished between search and fetch,
  * or the pack file changed underneath us — a skip, not a failure); other non-200 → throws.
@@ -319,6 +368,13 @@ export function encodeArticlePath(articlePath: string): string {
  * `name` is the SERVING name (`identity.ts` `servingNameFor`), never the file stem: libkiwix
  * ≥ 14 slugifies case, accents, spaces and `+`, so the stem 404s or — worse — names another
  * book (finding L4).
+ *
+ * #301 P7 T19: kiwix-serve 3.8.1 answers a ZIM redirect entry under /raw with 302 →
+ * /content/<book>/<target>; followed one hop, same book only. Roughly half a Wikipedia ZIM's
+ * entries are such alias titles, so without the hop the viewer could not open them at all.
+ * A second redirect, another book, or a target the entry-key contract refuses ⇒ the honest
+ * "unavailable" null. The locator is unchanged by the hop — a citation stays
+ * `packId + articlePath` (`docs/rag-design.md` §17 D-Z11).
  */
 export async function fetchArticleHtml(
   port: number,
@@ -326,11 +382,17 @@ export async function fetchArticleHtml(
   articlePath: string,
   signal?: AbortSignal
 ): Promise<string | null> {
-  const encodedPath = encodeArticlePath(articlePath)
-  const res = await kiwixGet(port, `/raw/${encodeURIComponent(name)}/content/${encodedPath}`, {
-    signal
-  })
+  const res = await kiwixGet(port, rawContentPath(name, articlePath), { signal })
   if (res.status === 404) return null
+  if (REDIRECT_STATUSES.has(res.status)) {
+    const target = redirectTargetFor(name, res.location)
+    if (target === null) return null
+    // Exactly ONE more request, under the same signal: a chain is bounded, not followed.
+    const hop = await kiwixGet(port, rawContentPath(name, target), { signal })
+    if (hop.status === 200) return hop.body
+    if (hop.status === 404 || REDIRECT_STATUSES.has(hop.status)) return null
+    throw new Error(`kiwix-serve article fetch failed (HTTP ${hop.status})`)
+  }
   if (res.status !== 200) throw new Error(`kiwix-serve article fetch failed (HTTP ${res.status})`)
   return res.body
 }
