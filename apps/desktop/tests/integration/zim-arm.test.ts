@@ -288,21 +288,40 @@ describe('retrieve() with an external arm', () => {
     expect(r.chunks[0]?.label).toBe('S1')
   })
 
+  // Re-based by P4 (#301, plan §9.21 (a)3, ruling D4) onto the EXPLICIT flag. The live-demo fix
+  // (88be37ec) derived "packs only" from an empty document selection, which redefined the legacy
+  // empty scope and made "all documents AND a pack" inexpressible; the ruled design is the
+  // additive `documentsOff` → `RetrievalScope.noDocuments` flag that `resolveScope` sets. The
+  // counter-assertion below is the rejection, pinned.
   it('a packs-only scope skips the document arms entirely (live-demo finding 2026-09-05)', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
-    // A document that WOULD match the question — it must not surface when the user
-    // selected packs and no document sources (the empty composed doc-scope used to fall
-    // through to whole-corpus, and an invoice claimed the packs-only answer's slots).
+    // A document that WOULD match the question — it must not surface when the user turned
+    // documents off (an unrelated invoice used to claim the packs-only answer's slots).
     await seedDocument(db, embedder, 'invoice.pdf', ['Treibhausgase entstehen in der Landwirtschaft.'])
-    const scope = { packIds: ['pack-1'], collectionIds: null, documentIds: null }
+    const scope = { packIds: ['pack-1'], collectionIds: null, documentIds: null, noDocuments: true as const }
     const r = await retrieve(db, embedder, 'Treibhausgas', SETTINGS, scope, null, undefined, async () => [
       archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')
     ])
     expect(r.chunks.length).toBeGreaterThan(0)
     expect(r.chunks.every((c) => c.sourceKind === 'archive')).toBe(true)
-    // Counter-check: the same scope WITH a collection selected keeps the document arms.
-    const both = await retrieve(
+    // Counter-assertion (D4): the SAME pack selection WITHOUT the flag keeps the document arms —
+    // an empty composed document scope still means the whole corpus, packs are additive.
+    const additive = await retrieve(
+      db,
+      embedder,
+      'Treibhausgas',
+      SETTINGS,
+      { packIds: ['pack-1'], collectionIds: null, documentIds: null },
+      null,
+      undefined,
+      async () => [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+    )
+    expect(additive.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
+    expect(additive.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
+    // And a ticked collection alongside the flag cannot resurrect the documents either: the
+    // resolved deny-all is fail-closed everywhere (a contradictory spread stays denied).
+    const contradictory = await retrieve(
       db,
       embedder,
       'Treibhausgas',
@@ -312,7 +331,7 @@ describe('retrieve() with an external arm', () => {
       undefined,
       async () => [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
     )
-    expect(both.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
+    expect(contradictory.chunks.every((c) => c.sourceKind === 'archive')).toBe(true)
   })
 
   it('a throwing arm never breaks the document ask', async () => {

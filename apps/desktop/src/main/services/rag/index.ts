@@ -11,7 +11,13 @@ export { detectFilenameScope, type DetectedScope, type ScopeableDoc } from './sc
 // (plan §10.2). The canonical definition lives in shared/types.ts (no cycle with embeddings).
 export type { RetrievalScope } from '../../../shared/types'
 
-/** Normalize retrieve's arg-5 union: a bare `string[]`/`null` is the legacy doc-id scope. */
+/**
+ * Normalize retrieve's arg-5 union: a bare `string[]`/`null` is the legacy doc-id scope.
+ *
+ * A `RetrievalScope` object is passed through BY IDENTITY, so every field `resolveScope`
+ * produced — including the knowledge-pack `packIds` and the deny-all `noDocuments` flag
+ * (#301 P4, M10) — reaches `retrieve` intact. The legacy array form can never carry either.
+ */
 function normalizeScope(scope: string[] | RetrievalScope | null | undefined): RetrievalScope {
   return Array.isArray(scope) || scope == null ? { documentIds: scope ?? null } : scope
 }
@@ -269,8 +275,9 @@ interface ChunkRow {
  *  3. FTS5 keyword-search the corpus (`topKInitial`, embedder-visibility-scoped),
  *  4. fuse the two ranked lists by reciprocal rank (RRF, hybrid.ts),
  *  5. join candidates back to `chunks` for text + source label + page/section,
- *  6. rerank the candidates when a reranker is available (reorder by relevance;
- *     a rerank failure falls back to the fused order — never breaks asking),
+ *  6. rerank the candidates when a reranker is available (reorder by relevance; a rerank
+ *     failure falls back to the fused order — never breaks asking — and, with an archive
+ *     arm, to the same round-robin interleave the reranker-absent path uses, M3),
  *  7. dedup by document/page (keep the best-ranked chunk per page),
  *  8. trim to `topKFinal` while respecting `maxContextTokens` (approx token counter),
  *  9. assign `[S1] [S2] …` labels and resolve `Citation[]`.
@@ -299,15 +306,17 @@ export async function retrieve(
   externalArm?: ExternalRetrievalArm | null
 ): Promise<RetrievalResult> {
   const s = normalizeScope(scope)
-  // Knowledge packs (ZIM wave, live-demo finding 2026-09-05): a scope that selects packs
-  // but NO document sources means "answer from the packs" — the document arms are skipped.
-  // Without this, the empty composed doc-scope fell through to its historical whole-corpus
-  // meaning and unrelated documents (an invoice) claimed the topKFinal slots of a
-  // packs-only ask. Any document source keeps the arms: a ticked collection or hand-picked
-  // doc makes collectionIds/documentIds non-null in resolveScope, and chat attachments are
-  // always unioned into documentIds before this runs.
-  const packsOnly =
-    externalArm != null && (s.packIds?.length ?? 0) > 0 && s.collectionIds == null && s.documentIds == null
+  // Knowledge packs (#301 P4, finding M10, ruling D4): the EXPLICIT deny-all document scope —
+  // the user turned "Search my documents" off and no file is attached to this chat, so
+  // `resolveScope` set `noDocuments`. Both document arms are then skipped BEFORE the question
+  // is embedded: no query-embed round trip, no resident-vector cache load, no FTS query. This
+  // is correctness, not an optimisation — an empty document scope must not fall through to its
+  // historical whole-corpus meaning and let unrelated documents (the live demo's invoice) claim
+  // the topKFinal slots of a packs-only ask. The flag is the ONLY trigger: `{ packIds }` with
+  // null/empty ids and no flag still means "all documents AND those packs" (D4 rejected
+  // redefining the legacy empty scope — the 88be37ec `packsOnly` derivation is superseded).
+  // With an attachment the scope resolves to exactly that file instead, so the arms run.
+  const noDocuments = s.noDocuments === true
 
   // Mismatch guard: only search vectors tagged with the active embedder's id.
   // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
@@ -317,9 +326,11 @@ export async function retrieve(
     embeddingModelId: embedder.id,
     documentIds: s.documentIds ?? null,
     collectionIds: s.collectionIds ?? null,
-    includeArchived: s.includeArchived
+    includeArchived: s.includeArchived,
+    // Deny-all also inside the index (the resident fast path bypasses the SQL builder).
+    ...(noDocuments ? { noDocuments: true as const } : {})
   })
-  const vectorHits = packsOnly
+  const vectorHits = noDocuments
     ? []
     : (await index.searchText(question, settings.topKInitial, signal)).filter(
         (hit) => hit.score >= settings.minSimilarity
@@ -328,7 +339,7 @@ export async function retrieve(
   // Scoped to chunks VISIBLE to the active embedder so the keyword path can
   // never surface a document vector search couldn't — the re-index honesty story
   // (staleEmbeddings / corpusNeedsReindex / REINDEX_NEEDED_ANSWER) is unchanged.
-  const keywordHits = packsOnly
+  const keywordHits = noDocuments
     ? []
     : keywordSearchChunks(db, question, settings.topKInitial, {
         embeddingModelId: embedder.id,
@@ -384,6 +395,13 @@ export async function retrieve(
       externalCount = external.length
       candidates.push(...external)
     } catch (err) {
+      // #301 P4 (T09): a cancellation is NEVER a fallback. An `AbortError` — from the ask's
+      // own signal or thrown by the arm — propagates out of `retrieve()` unchanged, so the
+      // caller ends the turn instead of resolving with a quietly documents-only answer that
+      // claims to have consulted the packs. Every OTHER arm failure stays swallowed here (an
+      // unplugged pack drive must not break asking); P4's outcome step turns those into
+      // per-pack outcomes, which is why the log line and the empty-candidate behaviour stay.
+      if (isAbortError(err, signal)) throw err
       log.warn('Knowledge-pack retrieval unavailable for this question', {
         error: err instanceof Error ? err.message : String(err)
       })
@@ -393,6 +411,13 @@ export async function retrieve(
   // Rerank between fusion and dedup: the cross-encoder rescoring decides which chunk
   // represents a page BEFORE the dedup collapse. A failing reranker logs and keeps
   // the fused order — a quality pass must never turn into an error for the user.
+  //
+  // #301 P4 (finding M3): `reranked` records whether a reranker actually RANKED these
+  // candidates. The interleave below used to hang off an `else if`, so a provisioned but
+  // FAILING reranker took the catch path and kept the fused order — with the archive
+  // candidates appended last, `topKFinal` then trimmed every one of them away. It now runs
+  // whenever no ranking happened, absent and threw alike.
+  let reranked = false
   if (reranker && candidates.length > 0) {
     try {
       const scores = new Map(
@@ -405,17 +430,22 @@ export async function retrieve(
         .map((c, i) => ({ ...c, score: scores.get(i) ?? c.score, fusedRank: i }))
         .sort((a, b) => b.score - a.score || a.fusedRank - b.fusedRank)
         .map(({ fusedRank: _unused, ...c }) => c)
+      reranked = true
     } catch (err) {
+      // T09 again: an aborted ask must not be dressed up as "the reranker was unavailable".
+      if (isAbortError(err, signal)) throw err
       log.warn('Reranker unavailable for this question — using fused order', {
         error: err instanceof Error ? err.message : String(err)
       })
     }
-  } else if (externalCount > 0 && candidates.length > externalCount) {
-    // No reranker to merge the two scales, and external candidates were appended AFTER
-    // every fused document candidate — a straight trim to topKFinal would then always
-    // drop the archive chunks. Round-robin interleave document/archive candidates so both
-    // sources reach the budget trim in their own rank order. (With a reranker this branch
-    // is dead: relevance decides.)
+  }
+  if (!reranked && externalCount > 0 && candidates.length > externalCount) {
+    // No reranker RANKED the two scales (absent, or provisioned and threw), and external
+    // candidates were appended AFTER every fused document candidate — a straight trim to
+    // topKFinal would then always drop the archive chunks. Round-robin interleave
+    // document/archive candidates so both sources reach the budget trim in their own rank
+    // order. (After a successful rerank this is dead: relevance decides. With no arm
+    // `externalCount === 0`, so the no-arm pipeline is byte-identical — L6's fixture.)
     const docs = candidates.slice(0, candidates.length - externalCount)
     const ext = candidates.slice(candidates.length - externalCount)
     const merged: typeof candidates = []

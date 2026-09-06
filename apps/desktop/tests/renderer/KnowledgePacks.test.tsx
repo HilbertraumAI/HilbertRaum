@@ -387,6 +387,130 @@ describe('ScopePopover — knowledge packs', () => {
     expect(emitted.at(-1)?.packIds).toEqual(['uuid-climate'])
   })
 
+  // ---- Documents toggle (#301 P4, finding M10, ruling D4) --------------------------------
+  // The explicit "answer from the ticked packs, not from my documents" control. It exists only
+  // where the packs section exists, the flag is never derived from an empty selection, and the
+  // chip says what the ask will really do (the resolved-scope half is T10-a in
+  // tests/integration/zim-regressions.test.ts).
+
+  it('unticking Documents emits the flag with cleared document sources, keeping the ticked packs', async () => {
+    stubApi({})
+    const emitted: DocumentScope[] = []
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[pack()]}
+          scope={{ collectionIds: ['lib'], documentIds: ['d1'], packIds: ['uuid-climate'] }}
+          onChangeScope={(next) => emitted.push(next)}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    const documentsBox = await screen.findByRole('checkbox', { name: /Search my documents/ })
+    expect(documentsBox).toBeChecked()
+    await user.click(documentsBox)
+    expect(emitted.at(-1)).toEqual({
+      collectionIds: [],
+      documentIds: [],
+      packIds: ['uuid-climate'],
+      documentsOff: true
+    })
+  })
+
+  it('ticking a collection while documents are off clears the flag (an emit never carries it with a document source)', async () => {
+    stubApi({})
+    const emitted: DocumentScope[] = []
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[pack()]}
+          scope={{ collectionIds: [], documentIds: [], packIds: ['uuid-climate'], documentsOff: true }}
+          onChangeScope={(next) => emitted.push(next)}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    expect(await screen.findByRole('checkbox', { name: /Search my documents/ })).not.toBeChecked()
+    await user.click(screen.getByRole('checkbox', { name: /Library/ }))
+    expect(emitted.at(-1)).toEqual({
+      collectionIds: ['lib'],
+      documentIds: [],
+      packIds: ['uuid-climate']
+    })
+    // Ticking the Documents row itself is the other way back: the legacy empty scope.
+    await user.click(screen.getByRole('checkbox', { name: /Search my documents/ }))
+    expect(emitted.at(-1)).toEqual({ collectionIds: [], documentIds: [], packIds: ['uuid-climate'] })
+    // Toggling a PACK while documents are off preserves the flag (spread-preservation).
+    await user.click(screen.getByRole('checkbox', { name: /Klimawandel von Wikipedia/ }))
+    expect(emitted.at(-1)).toEqual({ collectionIds: [], documentIds: [], documentsOff: true })
+  })
+
+  it('the chip says "documents off" beside the packs phrase, the hint names what stays on, and the reset clears the flag', async () => {
+    stubApi({})
+    const emitted: DocumentScope[] = []
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[pack()]}
+          scope={{ collectionIds: [], documentIds: [], packIds: ['uuid-climate'], documentsOff: true }}
+          onChangeScope={(next) => emitted.push(next)}
+        />
+      </I18nProvider>
+    )
+    const trigger = screen.getByRole('button')
+    expect(trigger).toHaveTextContent('Pack: Klimawandel von Wikipedia · documents off')
+    await user.click(trigger)
+    expect(await screen.findByText(/Files attached to this chat are still used/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /All documents/ }))
+    expect(emitted.at(-1)).toEqual({ collectionIds: [], documentIds: [] })
+  })
+
+  it('with documents off and no pack ticked the chip names the state, not a corpus', () => {
+    stubApi({})
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[pack()]}
+          scope={{ collectionIds: [], documentIds: [], documentsOff: true }}
+          onChangeScope={() => {}}
+        />
+      </I18nProvider>
+    )
+    expect(screen.getByRole('button')).toHaveTextContent(
+      'no sources — turn documents on or tick a knowledge pack'
+    )
+  })
+
+  it('renders no Documents toggle when no pack is registered (the popover stays byte-identical)', async () => {
+    stubApi({})
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[]}
+          scope={{ collectionIds: [], documentIds: [] }}
+          onChangeScope={() => {}}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    expect(await screen.findByRole('checkbox', { name: /Library/ })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /Search my documents/ })).toBeNull()
+  })
+
   it('preserves packIds when an unrelated source is toggled (spread-preservation)', async () => {
     stubApi({})
     const emitted: DocumentScope[] = []

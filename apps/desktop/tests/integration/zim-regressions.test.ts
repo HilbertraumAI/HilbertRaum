@@ -6,17 +6,37 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { MockEmbedder, VectorIndex, encodeVector, type Embedder } from '../../src/main/services/embeddings'
 import {
+  corpusNeedsReindex,
+  detectFilenameScope,
   ragSettingsFrom,
   retrieve,
   type RagRetrievalSettings,
   type RetrievalResult
 } from '../../src/main/services/rag'
+import { keywordSearchChunks } from '../../src/main/services/rag/hybrid'
+import { buildScopeFilter } from '../../src/main/services/retrieval-scope'
+import { documentsInScope } from '../../src/main/services/skills/scope-documents'
+import { aggregateExtractions } from '../../src/main/services/analysis/extract'
+import {
+  addToCollection,
+  createCollection,
+  getBuiltinCollection,
+  linkConversationDocument,
+  parseDocumentScope,
+  resolveScope
+} from '../../src/main/services/collections'
 import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import type { Citation, EvidencePackOptions, EvidenceSourceSnapshot } from '../../src/shared/types'
-import { appendMessage, createConversation, exportTranscript } from '../../src/main/services/chat'
+import {
+  appendMessage,
+  createConversation,
+  exportTranscript,
+  getConversation,
+  setScope
+} from '../../src/main/services/chat'
 import {
   buildEvidenceSourceSnapshots,
   createEvidenceReviewFromMessage
@@ -28,6 +48,9 @@ import { escapeHtml, renderEvidencePackHtml } from '../../src/main/services/evid
 import { EVIDENCE_PACK_OPTION_DEFAULTS } from '../../src/shared/evidence-review'
 import { t } from '../../src/shared/i18n'
 import { collectPackCandidates, type ExternalCandidate } from '../../src/main/services/zim/arm'
+// The chip/footer phrase is a PURE function of the stored scope (no React state), so the node
+// test can pin "the chip agrees with the resolved scope" (T10) directly against it.
+import { scopeSources } from '../../src/renderer/chat/ScopePopover'
 
 // ZIM knowledge packs (PR #294 → #301) — desired-behaviour regressions for reviewed defects that
 // a LATER phase repairs. Each is an `it.fails` BASELINE (Vitest: the test is reported green while
@@ -685,12 +708,13 @@ describe('T04 — mixed review: archive locator through storage, reopen, model, 
 
 // ---- M3 — a failing reranker must not silently drop archive candidates (P4, T09) --------
 
+/** Seed one indexed document with chunks + real vectors; returns its id (P4 needs the id). */
 async function seedDocument(
   db: Db,
   embedder: MockEmbedder,
   title: string,
   texts: string[]
-): Promise<void> {
+): Promise<string> {
   const now = new Date().toISOString()
   const docId = randomUUID()
   db.prepare(
@@ -708,6 +732,7 @@ async function seedDocument(
        VALUES (?, ?, ?, ?, ?)`
     ).run(chunkId, embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
   }
+  return docId
 }
 
 function archiveCandidate(n: number, text: string): ExternalCandidate {
@@ -773,8 +798,599 @@ describe('M3 — reranker failure fallback', () => {
     expect(result!.chunks.length).toBeLessThanOrEqual(SETTINGS.topKFinal)
   })
 
-  it.fails('M3 failing reranker keeps archive candidates through final selection', () => {
+  // FLIPPED by P4 (#301, plan §9.21 (b), §0.3 item 2). Demonstration on the repaired code, this
+  // worktree, before the flip: `× M3 — reranker failure fallback > M3 failing reranker keeps
+  // archive candidates through final selection → Expect test to fail` (vitest 3.2.6). The fix is
+  // the `reranked` flag in `retrieve()`: the round-robin interleave now runs whenever no reranker
+  // RANKED the candidates — absent or threw alike — instead of hanging off an `else if` that the
+  // catch path skipped.
+  it('M3 failing reranker keeps archive candidates through final selection', () => {
     expect(result!.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
+  })
+})
+
+// ---- T09-c — the reranker matrix and the abort discipline (P4, M3, plan §9.21 (b)) ------
+
+const T09_QUESTION = 'Treibhausgas Landwirtschaft'
+
+/** Eight document chunks that all answer the question — with `topKFinal` = 6 they fill every
+ *  final slot, which is the exact state in which appended-last archive candidates disappear. */
+async function seedT09Corpus(): Promise<{ db: Db; embedder: MockEmbedder }> {
+  const db = freshDb()
+  const embedder = new MockEmbedder()
+  await seedDocument(
+    db,
+    embedder,
+    'notes.txt',
+    Array.from(
+      { length: 8 },
+      (_, i) => `Treibhausgas Landwirtschaft Abschnitt ${i} über Methan und Emissionen.`
+    )
+  )
+  return { db, embedder }
+}
+
+/** Two archive candidates carrying a marker term the document chunks never use, so a reranker
+ *  can prefer them without the assertion depending on the seeded wording. */
+function t09Archives(): ExternalCandidate[] {
+  return [
+    archiveCandidate(0, 'Wikipedia-Auszug: Methan aus der Landwirtschaft ist ein Treibhausgas.'),
+    archiveCandidate(1, 'Wikipedia-Auszug: Weitere Treibhausgase sind Lachgas und CO2.')
+  ]
+}
+
+/** A reranker that prefers the archive marker; `calls` proves it actually ran. */
+function markerReranker(calls: { n: number }): Reranker {
+  return {
+    async rerank(_q: string, docs: string[]) {
+      calls.n++
+      return docs.map((text, index) => ({ index, score: text.includes('Wikipedia-Auszug') ? 10 : 1 }))
+    }
+  } as unknown as Reranker
+}
+
+describe('T09 — reranker present / absent / throwing, and abort as a refusal (P4, M3)', () => {
+  it('prerequisite: the seeded documents alone fill every final slot (the state the defect hid in)', async () => {
+    const { db, embedder } = await seedT09Corpus()
+    const documentsOnly = await retrieve(db, embedder, T09_QUESTION, SETTINGS, null, null)
+    expect(documentsOnly.chunks.length).toBe(SETTINGS.topKFinal)
+    expect(documentsOnly.chunks.every((c) => c.sourceKind !== 'archive')).toBe(true)
+  })
+
+  it('T09 reranker present / absent / throwing with ≥ 8 document candidates plus archives: archive candidates survive final selection on failure and an abort is never converted into an ordinary fallback', async () => {
+    // ---- (1) reranker PRESENT: relevance decides, and it may put archives first.
+    const present = await seedT09Corpus()
+    const calls = { n: 0 }
+    const ranked = await retrieve(
+      present.db,
+      present.embedder,
+      T09_QUESTION,
+      SETTINGS,
+      null,
+      markerReranker(calls),
+      undefined,
+      async () => t09Archives()
+    )
+    expect(calls.n).toBe(1)
+    expect(ranked.chunks[0]?.sourceKind).toBe('archive')
+    expect(ranked.citations[0]).toMatchObject({
+      label: 'S1',
+      sourceKind: 'archive',
+      packId: 'pack-1',
+      archiveTitle: 'Wikipedia (Test)',
+      articlePath: 'Artikel'
+    })
+
+    // ---- (2) reranker ABSENT: the round-robin interleave keeps both sources in the FINAL set.
+    const absent = await seedT09Corpus()
+    const interleaved = await retrieve(
+      absent.db,
+      absent.embedder,
+      T09_QUESTION,
+      SETTINGS,
+      null,
+      null,
+      undefined,
+      async () => t09Archives()
+    )
+    expect(interleaved.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
+    expect(interleaved.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
+    expect(interleaved.chunks[1]?.sourceKind).toBe('archive')
+    expect(interleaved.citations.filter((c) => c.sourceKind === 'archive').length).toBeGreaterThan(0)
+
+    // ---- (3) reranker THROWING (M3): the same interleave, reached through the catch path.
+    // Inspected on the FINAL chunks AND citations, not on a helper's intermediate order.
+    const failing = await seedT09Corpus()
+    const threw = await retrieve(
+      failing.db,
+      failing.embedder,
+      T09_QUESTION,
+      SETTINGS,
+      null,
+      { async rerank() { throw new Error('reranker model failed to load') } } as unknown as Reranker,
+      undefined,
+      async () => t09Archives()
+    )
+    expect(threw.chunks.length).toBeLessThanOrEqual(SETTINGS.topKFinal)
+    expect(threw.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
+    expect(threw.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
+    const archiveCitation = threw.citations.find((c) => c.sourceKind === 'archive')
+    expect(archiveCitation).toMatchObject({
+      packId: 'pack-1',
+      archiveTitle: 'Wikipedia (Test)',
+      articlePath: 'Artikel'
+    })
+    expect(archiveCitation?.documentId).toBeUndefined()
+    // Labels stay dense over the merged set: S1…Sn with no gap.
+    expect(threw.chunks.map((c) => c.label)).toEqual(threw.chunks.map((_, i) => `S${i + 1}`))
+
+    // ---- (4) ABORT is never a fallback (T09): a reranker-side AbortError REJECTS the ask
+    // instead of resolving with a quietly documents-only answer.
+    const abortA = await seedT09Corpus()
+    await expect(
+      retrieve(
+        abortA.db,
+        abortA.embedder,
+        T09_QUESTION,
+        SETTINGS,
+        null,
+        {
+          async rerank() {
+            throw new DOMException('The operation was aborted', 'AbortError')
+          }
+        } as unknown as Reranker,
+        undefined,
+        async () => t09Archives()
+      )
+    ).rejects.toMatchObject({ name: 'AbortError' })
+
+    // ---- (5) arm-side AbortError (a plain Error with the name, the spelling §9.20 pins).
+    const abortB = await seedT09Corpus()
+    await expect(
+      retrieve(abortB.db, abortB.embedder, T09_QUESTION, SETTINGS, null, null, undefined, async () => {
+        const err = new Error('aborted')
+        err.name = 'AbortError'
+        throw err
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' })
+
+    // ---- (6) an ALREADY-aborted signal: the ask is cancelled, so even an ordinary arm failure
+    // must not be swallowed into a documents-only answer.
+    const abortC = await seedT09Corpus()
+    const already = new AbortController()
+    already.abort()
+    await expect(
+      retrieve(
+        abortC.db,
+        abortC.embedder,
+        T09_QUESTION,
+        SETTINGS,
+        null,
+        null,
+        already.signal,
+        async () => {
+          throw new Error('drive unplugged')
+        }
+      )
+    ).rejects.toThrow('drive unplugged')
+
+    // ---- (7) MID-FLIGHT abort: the user stops the ask while the arm is running.
+    const abortD = await seedT09Corpus()
+    const midFlight = new AbortController()
+    await expect(
+      retrieve(
+        abortD.db,
+        abortD.embedder,
+        T09_QUESTION,
+        SETTINGS,
+        null,
+        null,
+        midFlight.signal,
+        async () => {
+          midFlight.abort()
+          throw new DOMException('The operation was aborted', 'AbortError')
+        }
+      )
+    ).rejects.toMatchObject({ name: 'AbortError' })
+
+    // ---- (8) counter-check: with a LIVE signal an ordinary arm failure is still swallowed —
+    // an unplugged pack drive must never break asking (P4's outcome step reports it instead).
+    const tolerated = await seedT09Corpus()
+    const live = new AbortController()
+    const degraded = await retrieve(
+      tolerated.db,
+      tolerated.embedder,
+      T09_QUESTION,
+      SETTINGS,
+      null,
+      null,
+      live.signal,
+      async () => {
+        throw new Error('drive unplugged')
+      }
+    )
+    expect(degraded.chunks.length).toBeGreaterThan(0)
+    expect(degraded.chunks.every((c) => c.sourceKind !== 'archive')).toBe(true)
+  })
+})
+
+// ---- T10-a — the effective document scope under `documentsOff` (P4, M10, §9.21 (a)) ----
+
+const T10_QUESTION = 'Treibhausgas Landwirtschaft'
+
+interface ScopeHarness {
+  db: Db
+  embedder: MockEmbedder
+  notesId: string
+  attachmentId: string
+  projectId: string
+  libraryId: string
+}
+
+/**
+ * A real migrated temp-file DB with: one indexed, chunked, embedded document filed in a project
+ * (`notes.txt`, `tree_status='ready'`, extraction records), one attachment document, and NO
+ * archived document — the exact state in which `canIterateResident()` is true, so the resident
+ * fast path (which bypasses the SQL builder) is really exercised.
+ */
+async function seedScopeHarness(): Promise<ScopeHarness> {
+  const db = freshDb()
+  const embedder = new MockEmbedder()
+  const notesId = await seedDocument(db, embedder, 'notes.txt', [
+    'Treibhausgas Landwirtschaft: Methan und Emissionen im Betrieb.',
+    'Treibhausgas Landwirtschaft: Lachgas aus Düngemitteln.'
+  ])
+  const attachmentId = await seedDocument(db, embedder, 'attachment.txt', [
+    'Treibhausgas Landwirtschaft: die angehängte Datei über Emissionen.'
+  ])
+  const libraryId = getBuiltinCollection(db, 'library')!.id
+  const projectId = createCollection(db, 'Klima').id
+  addToCollection(db, [notesId], libraryId)
+  addToCollection(db, [notesId], projectId)
+  db.prepare("UPDATE documents SET tree_status = 'ready' WHERE id = ?").run(notesId)
+  const now = new Date().toISOString()
+  const chunkId = (
+    db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(notesId) as unknown as {
+      id: string
+    }
+  ).id
+  for (const [type, value, normalized] of [
+    ['generic', 'Methan', 'methan'],
+    ['__scan__', '', 'ok']
+  ] as const) {
+    db.prepare(
+      `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text,
+         normalized_value, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(randomUUID(), notesId, chunkId, type, value, normalized, randomUUID(), now)
+  }
+  return { db, embedder, notesId, attachmentId, projectId, libraryId }
+}
+
+/** An embedder that must never be called: reaching it means the document arm was not skipped. */
+function throwingEmbedder(calls: { n: number }): Embedder {
+  return {
+    id: new MockEmbedder().id,
+    dimensions: 384,
+    async embed(): Promise<Float32Array[]> {
+      calls.n++
+      throw new Error('the embedder must not be reached in a documents-off ask')
+    }
+  }
+}
+
+/** Record every SQL string a `retrieve` call compiles (the resident-cache load and the FTS
+ *  query are both visible there — no ESM module spy needed, which does not work here). */
+function sqlSpy(db: Db): { seen: string[]; restore: () => void } {
+  const original = db.prepare.bind(db)
+  const seen: string[] = []
+  ;(db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+    seen.push(sql)
+    return original(sql)
+  }
+  return { seen, restore: () => Reflect.deleteProperty(db as unknown as object, 'prepare') }
+}
+
+describe('T10 — effective document scope under the documents-off flag (P4, M10)', () => {
+  it('prerequisite: without the flag every route reads the seeded corpus (documents, keyword, skills, filename, reindex, extracts, resident vectors)', async () => {
+    const h = await seedScopeHarness()
+    const conv = createConversation(h.db, { mode: 'documents' })
+    setScope(h.db, conv.id, { collectionIds: [h.projectId], documentIds: [], packIds: ['p1'] })
+    const scope = resolveScope(h.db, conv.id)
+    expect(scope.noDocuments).toBeUndefined()
+    expect(buildScopeFilter(scope, 'd.id')?.sql).not.toBe('0')
+    expect(documentsInScope(h.db, scope, { requireChunks: true }).map((d) => d.title)).toEqual([
+      'notes.txt'
+    ])
+    expect(
+      keywordSearchChunks(h.db, T10_QUESTION, 10, {
+        embeddingModelId: h.embedder.id,
+        collectionIds: scope.collectionIds
+      }).length
+    ).toBeGreaterThan(0)
+    // A corpus invisible to another embedder is exactly the REINDEX_NEEDED state.
+    expect(corpusNeedsReindex(h.db, 'some-other-model', scope)).toBe(true)
+    expect(aggregateExtractions(h.db, scope, 'generic').items.length).toBeGreaterThan(0)
+    // The resident fast path is genuinely live here: no scope ids, no archived documents.
+    expect(
+      (
+        h.db
+          .prepare("SELECT COUNT(*) AS n FROM documents WHERE lifecycle = 'archived'")
+          .get() as unknown as { n: number }
+      ).n
+    ).toBe(0)
+    const [queryVector] = await h.embedder.embed([T10_QUESTION])
+    const wholeCorpus = new VectorIndex(h.db, h.embedder, { embeddingModelId: h.embedder.id })
+    expect(wholeCorpus.search(queryVector!, 10).length).toBeGreaterThan(0)
+  })
+
+  it('T10 every scope truth-table row through persist / parse / resolve, resident-vector and scoped-SQL paths and the keyword / skills / filename / whole-doc / reindex routes: exact allowed document ids, no implicit all-documents expansion, attachments per policy, chip agrees; true packs-only mode calls no embedder and loads no document cache', async () => {
+    const h = await seedScopeHarness()
+    const rawScope = (id: string): string | null =>
+      (
+        h.db.prepare('SELECT scope_v2_json AS j FROM conversations WHERE id = ?').get(id) as unknown as {
+          j: string | null
+        }
+      ).j
+
+    // ---- (A) PERSISTENCE through BOTH owners, and byte-identity for a documents-ON scope.
+    const conv = createConversation(h.db, { mode: 'documents' })
+    setScope(h.db, conv.id, { collectionIds: [], documentIds: [], packIds: ['p1'] })
+    expect(rawScope(conv.id)).toBe('{"collectionIds":[],"documentIds":[],"packIds":["p1"]}')
+    setScope(h.db, conv.id, { collectionIds: [], documentIds: [], packIds: ['p1'], documentsOff: true })
+    expect(rawScope(conv.id)).toBe(
+      '{"collectionIds":[],"documentIds":[],"packIds":["p1"],"documentsOff":true}'
+    )
+    expect(getConversation(h.db, conv.id)!.scope).toEqual({
+      collectionIds: [],
+      documentIds: [],
+      includeArchived: false,
+      packIds: ['p1'],
+      documentsOff: true
+    })
+    // Only the literal `true` survives the whitelist — a hand-edited row cannot fake the flag.
+    expect(parseDocumentScope('{"collectionIds":[],"documentIds":[],"documentsOff":"yes"}')?.documentsOff)
+      .toBeUndefined()
+    expect(parseDocumentScope('{"collectionIds":[],"documentIds":[],"documentsOff":1}')?.documentsOff)
+      .toBeUndefined()
+
+    // ---- (B) THE TRUTH TABLE (§5.4), each row through createConversation / setScope /
+    // conversation_documents → resolveScope, asserting the EXACT resolved shape.
+    const row = (
+      scope: Parameters<typeof setScope>[2],
+      opts: { attach?: boolean; legacyIds?: string[]; legacyCollection?: string } = {}
+    ): ReturnType<typeof resolveScope> => {
+      const c = createConversation(h.db, { mode: 'documents' })
+      if (opts.legacyIds) {
+        h.db
+          .prepare('UPDATE conversations SET scope_json = ? WHERE id = ?')
+          .run(JSON.stringify(opts.legacyIds), c.id)
+      } else if (opts.legacyCollection) {
+        h.db
+          .prepare('UPDATE conversations SET collection_id = ? WHERE id = ?')
+          .run(opts.legacyCollection, c.id)
+      } else {
+        setScope(h.db, c.id, scope)
+      }
+      if (opts.attach) linkConversationDocument(h.db, c.id, h.attachmentId)
+      return resolveScope(h.db, c.id)
+    }
+
+    // Row 1 — legacy empty, no attachments: the whole corpus, exactly as before.
+    const r1 = row({ collectionIds: [], documentIds: [] })
+    expect(r1).toMatchObject({ collectionIds: null, documentIds: null, hasExplicitDocSelection: false })
+    expect(r1.noDocuments).toBeUndefined()
+
+    // Row 2 — legacy empty with an attachment: the attachment only (unchanged behaviour).
+    const r2 = row({ collectionIds: [], documentIds: [] }, { attach: true })
+    expect(r2.documentIds).toEqual([h.attachmentId])
+    expect(r2.noDocuments).toBeUndefined()
+
+    // Row 3 — a pack added FROM "All documents": documents stay on (the combination the
+    // superseded `packsOnly` derivation made inexpressible is expressible again).
+    const r3 = row({ collectionIds: [], documentIds: [], packIds: ['p1'] })
+    expect(r3).toMatchObject({ collectionIds: null, documentIds: null, packIds: ['p1'] })
+    expect(r3.noDocuments).toBeUndefined()
+
+    // Row 4 — documents off, no attachments: the explicit deny-all state.
+    const r4 = row({ collectionIds: [], documentIds: [], packIds: ['p1'], documentsOff: true })
+    expect(r4).toMatchObject({
+      collectionIds: null,
+      documentIds: null,
+      packIds: ['p1'],
+      hasExplicitDocSelection: false,
+      noDocuments: true
+    })
+
+    // Row 5 — documents off WITH attachments: exactly the attachments; the retained project
+    // and hand-picked documents are dropped, and they never re-enter as a hand-pick.
+    const r5 = row(
+      {
+        collectionIds: [h.projectId],
+        documentIds: [h.notesId],
+        packIds: ['p1'],
+        documentsOff: true
+      },
+      { attach: true }
+    )
+    expect(r5.documentIds).toEqual([h.attachmentId])
+    expect(r5.collectionIds).toBeNull()
+    expect(r5.hasExplicitDocSelection).toBe(false)
+    expect(r5.noDocuments).toBeUndefined()
+
+    // Row 6 — explicit documents/projects + packs, no flag: the union and the attachment rules
+    // are untouched.
+    const r6 = row({ collectionIds: [h.projectId], documentIds: [h.notesId], packIds: ['p1'] }, { attach: true })
+    expect(r6.collectionIds).toEqual([h.projectId])
+    expect(r6.documentIds).toEqual([h.notesId, h.attachmentId])
+    expect(r6.hasExplicitDocSelection).toBe(true)
+    expect(r6.noDocuments).toBeUndefined()
+
+    // Row 7 — documents off, then the LAST pack and attachment removed: still no documents.
+    // No implicit all-documents expansion; an explicit reset is the only way back.
+    const last = createConversation(h.db, { mode: 'documents' })
+    setScope(h.db, last.id, { collectionIds: [], documentIds: [], packIds: ['p1'], documentsOff: true })
+    linkConversationDocument(h.db, last.id, h.attachmentId)
+    expect(resolveScope(h.db, last.id).documentIds).toEqual([h.attachmentId])
+    h.db.prepare('DELETE FROM conversation_documents WHERE conversation_id = ?').run(last.id)
+    setScope(h.db, last.id, { collectionIds: [], documentIds: [], documentsOff: true })
+    const r7 = resolveScope(h.db, last.id)
+    expect(r7).toMatchObject({ collectionIds: null, documentIds: null, packIds: null, noDocuments: true })
+    // The explicit reset (the popover's button) restores all documents.
+    setScope(h.db, last.id, { collectionIds: [], documentIds: [] })
+    expect(resolveScope(h.db, last.id).noDocuments).toBeUndefined()
+
+    // Legacy rows (1–2 of the table) can never carry the flag: neither fallback ever
+    // resolves to deny-all, whatever the legacy column holds.
+    expect(row({ collectionIds: [], documentIds: [] }, { legacyIds: [h.notesId] })).toMatchObject({
+      documentIds: [h.notesId],
+      hasExplicitDocSelection: true
+    })
+    expect(row({ collectionIds: [], documentIds: [] }, { legacyIds: [h.notesId] }).noDocuments).toBeUndefined()
+    expect(
+      row({ collectionIds: [], documentIds: [] }, { legacyCollection: h.projectId }).noDocuments
+    ).toBeUndefined()
+
+    // ---- (C) EVERY CONSUMER honours the resolved deny-all state.
+    const denyAll = r4
+    // The one SQL builder is fail-closed — and stays fail-closed under a contradictory spread.
+    expect(buildScopeFilter(denyAll, 'd.id')).toEqual({ sql: '0', params: [] })
+    expect(buildScopeFilter(denyAll, 'c.document_id')).toEqual({ sql: '0', params: [] })
+    expect(buildScopeFilter({ ...denyAll, documentIds: [h.notesId] }, 'd.id')).toEqual({
+      sql: '0',
+      params: []
+    })
+    // Skills / whole-document / compare routing all read `documentsInScope`.
+    expect(documentsInScope(h.db, denyAll, { requireChunks: true })).toEqual([])
+    expect(documentsInScope(h.db, denyAll, { requireChunks: false })).toEqual([])
+    // Filename auto-scope runs over that same (now empty) list — no match can be invented.
+    expect(
+      detectFilenameScope(
+        'was steht in notes.txt?',
+        documentsInScope(h.db, denyAll, { requireChunks: true })
+      )
+    ).toBeNull()
+    // Keyword arm: the pass-through reaches the same fail-closed builder.
+    expect(
+      keywordSearchChunks(h.db, T10_QUESTION, 10, {
+        embeddingModelId: h.embedder.id,
+        noDocuments: true
+      })
+    ).toEqual([])
+    // Re-index honesty: no indexed document in scope ⇒ false ⇒ the no-context answer, never
+    // the REINDEX answer (the prerequisite test proves the same call is `true` without the flag).
+    expect(corpusNeedsReindex(h.db, 'some-other-model', denyAll)).toBe(false)
+    // Aggregation/extracts.
+    const aggregated = aggregateExtractions(h.db, denyAll, 'generic')
+    expect(aggregated.items).toEqual([])
+    expect(aggregated.scannedChunks).toBe(0)
+    expect(aggregated.totalChunks).toBe(0)
+    // The three `registerRagIpc.ts` routing helpers are module-private; each splices this same
+    // builder into ` AND ${filter.sql}`. Replicating that one-line composition shows the `0`
+    // reaches them: the scan marker is not found and both counters read 0.
+    const recFilter = buildScopeFilter(denyAll, 'document_id')!
+    expect(
+      h.db
+        .prepare(
+          `SELECT 1 FROM extraction_records WHERE record_type = ? AND ${recFilter.sql} LIMIT 1`
+        )
+        .get('__scan__', ...recFilter.params)
+    ).toBeUndefined()
+    const docFilter = buildScopeFilter(denyAll, 'd.id')!
+    expect(
+      (
+        h.db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM documents d WHERE d.tree_status = 'ready' AND ${docFilter.sql}`
+          )
+          .get(...docFilter.params) as unknown as { n: number }
+      ).n
+    ).toBe(0)
+    expect(
+      (
+        h.db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM documents d WHERE d.status = 'indexed'
+               AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)
+               AND d.fully_chunked IS NULL AND ${docFilter.sql}`
+          )
+          .get(...docFilter.params) as unknown as { n: number }
+      ).n
+    ).toBe(0)
+
+    // ---- (D) THE RESIDENT-VECTOR BYPASS, with REAL embeddings and no archived documents —
+    // the state in which `canIterateResident()` is true and the SQL builder is never consulted.
+    const [queryVector] = await h.embedder.embed([T10_QUESTION])
+    const ordinary = new VectorIndex(h.db, h.embedder, { embeddingModelId: h.embedder.id })
+    expect(ordinary.search(queryVector!, 10).length).toBeGreaterThan(0)
+    const denied = new VectorIndex(h.db, h.embedder, {
+      embeddingModelId: h.embedder.id,
+      noDocuments: true
+    })
+    expect(denied.search(queryVector!, 10)).toEqual([])
+
+    // ---- (E) TRUE PACKS-ONLY: no query embedding, no resident-cache load, no FTS — the arm
+    // still runs and its candidates are the whole answer.
+    const packsOnly = await seedScopeHarness()
+    const embedCalls = { n: 0 }
+    const spy = sqlSpy(packsOnly.db)
+    let armCalls = 0
+    const result = await retrieve(
+      packsOnly.db,
+      throwingEmbedder(embedCalls),
+      T10_QUESTION,
+      SETTINGS,
+      denyAll,
+      null,
+      undefined,
+      async () => {
+        armCalls++
+        return [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+      }
+    )
+    spy.restore()
+    expect(embedCalls.n).toBe(0)
+    expect(armCalls).toBe(1)
+    expect(result.chunks.length).toBe(1)
+    expect(result.chunks.every((c) => c.sourceKind === 'archive')).toBe(true)
+    expect(spy.seen.filter((sql) => /FROM embeddings/i.test(sql))).toEqual([])
+    expect(spy.seen.filter((sql) => /chunks_fts/i.test(sql))).toEqual([])
+    // The counter-check (D4's rejection, pinned): the SAME scope WITHOUT the flag keeps the
+    // document arms — it is the flag, never the emptiness, that turns them off.
+    const withDocuments = await retrieve(
+      packsOnly.db,
+      packsOnly.embedder,
+      T10_QUESTION,
+      SETTINGS,
+      { ...denyAll, noDocuments: undefined },
+      null,
+      undefined,
+      async () => [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+    )
+    expect(withDocuments.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
+
+    // ---- (F) THE CHIP AGREES with the resolved scope: the stored scope that resolves to
+    // deny-all renders as the packs phrase plus the honest "documents off" tail, and with no
+    // pack ticked it names the state instead of a corpus. (The popover's own emit/tick cases
+    // are pinned in tests/renderer/KnowledgePacks.test.tsx.)
+    const tt = ((key: string, params?: Record<string, string | number>) =>
+      t('en', key as never, params as never)) as unknown as Parameters<typeof scopeSources>[2]
+    const tCount = ((key: string, count: number) =>
+      t('en', `${key}.${count === 1 ? 'one' : 'other'}` as never, { count } as never)) as unknown as Parameters<
+      typeof scopeSources
+    >[3]
+    const chip = scopeSources(
+      { collectionIds: [], documentIds: [], packIds: ['p1'], documentsOff: true },
+      [],
+      tt,
+      tCount,
+      [{ id: 'p1', title: 'Wikipedia (DE)' } as never]
+    )
+    expect(chip).toBe(`Pack: Wikipedia (DE) · ${t('en', 'chat.scope.documentsOffSuffix')}`)
+    expect(
+      scopeSources({ collectionIds: [], documentIds: [], documentsOff: true }, [], tt, tCount, [])
+    ).toBe(t('en', 'chat.scope.documentsOffNoPacks'))
+    // Without the flag the same empty scope still means the whole corpus (null = no phrase).
+    expect(scopeSources({ collectionIds: [], documentIds: [] }, [], tt, tCount, [])).toBeNull()
   })
 })
 

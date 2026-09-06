@@ -188,7 +188,14 @@ function serializeDocumentScope(scope: DocumentScope | null | undefined): string
     ...(scope.includeArchived ? { includeArchived: true } : {}),
     // Knowledge packs (ZIM wave): persisted only when selected, so pre-wave rows and
     // pack-less scopes serialize byte-identically to before.
-    ...(packIds.length > 0 ? { packIds } : {})
+    ...(packIds.length > 0 ? { packIds } : {}),
+    // #301 P4 (finding M10, ruling D4): the user's EXPLICIT "answer without my documents"
+    // choice. ONLY the literal `true` is ever written, so every documents-on scope — and every
+    // pre-P4 row — serializes to exactly the same JSON string as before. It is NEVER derived
+    // from an empty selection: `{collectionIds: [], documentIds: [], packIds: ['p']}` without
+    // the flag still means "all documents AND pack p". `parseDocumentScope` (collections.ts,
+    // the reading owner's explicit whitelist) reads it back.
+    ...(scope.documentsOff === true ? { documentsOff: true } : {})
   })
 }
 

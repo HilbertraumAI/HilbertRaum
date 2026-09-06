@@ -2459,6 +2459,14 @@ export const de: Record<keyof typeof en, string> = {
   'chat.scope.packNamed': 'Paket: {name}',
   'chat.scope.packCount.one': '{count} Wissenspaket',
   'chat.scope.packCount.other': '{count} Wissenspakete',
+  // Dokumente-Schalter (#301 P4, Befund M10): die ausdrückliche Wahl „aus den Paketen
+  // antworten, nicht aus meinen Dokumenten“. Der Hinweis nennt, was AN bleibt — Dateien im
+  // Chat werden nie verworfen.
+  'chat.scope.documentsToggle': 'Meine Dokumente durchsuchen',
+  'chat.scope.documentsToggleHint':
+    'Aus: Antworten kommen nur aus den angehakten Wissenspaketen. Dateien in diesem Chat werden weiterhin genutzt.',
+  'chat.scope.documentsOffSuffix': 'Dokumente aus',
+  'chat.scope.documentsOffNoPacks': 'keine Quellen — Dokumente einschalten oder ein Wissenspaket anhaken',
   'chat.sources.openArticle': 'Artikel öffnen',
   'chat.article.title': 'Artikel',
   'chat.article.from': 'Aus {archive} - Offline-Kopie',

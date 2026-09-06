@@ -59,10 +59,15 @@ export function scopeSources(
   tCount: I18n['tCount'],
   packs: KnowledgePack[] = []
 ): string | null {
-  const collIds = scope?.collectionIds ?? []
-  const docIds = scope?.documentIds ?? []
+  // Documents off (#301 P4, finding M10): main-side `resolveScope` DROPS the ticked
+  // collections and hand-picked documents under the flag, so the phrase must too — otherwise
+  // the chip would name sources the ask never reads. Attachments are handled by the caller
+  // (they survive the flag and are counted separately in the "N files in this chat" suffix).
+  const documentsOff = scope?.documentsOff === true
+  const collIds = documentsOff ? [] : (scope?.collectionIds ?? [])
+  const docIds = documentsOff ? [] : (scope?.documentIds ?? [])
   const packIds = scope?.packIds ?? []
-  if (collIds.length === 0 && docIds.length === 0 && packIds.length === 0) return null
+  if (!documentsOff && collIds.length === 0 && docIds.length === 0 && packIds.length === 0) return null
 
   const parts: string[] = []
   const picked = collIds
@@ -82,6 +87,13 @@ export function scopeSources(
     parts.push(tCount('chat.scope.packCount', packIds.length))
   }
 
+  if (documentsOff) {
+    // The packs phrase plus the honest "documents off" tail — and, with nothing ticked, the
+    // state that says so and how to leave it (an explicit reset is the only way back).
+    return parts.length === 0
+      ? t('chat.scope.documentsOffNoPacks')
+      : `${parts.join(' + ')} · ${t('chat.scope.documentsOffSuffix')}`
+  }
   return parts.length === 0 ? null : parts.join(' + ')
 }
 
@@ -119,6 +131,9 @@ export function ScopePopover({
   const collIds = scope?.collectionIds ?? EMPTY_IDS
   const docIds = scope?.documentIds ?? EMPTY_IDS
   const packIds = scope?.packIds ?? EMPTY_IDS
+  // Documents off (#301 P4, finding M10, ruling D4): the explicit "answer from the ticked
+  // packs, not from my documents" choice — additive, never derived from an empty selection.
+  const documentsOff = scope?.documentsOff === true
   // Pickable sources: Library + non-archived projects (archived projects drop out — C1).
   const library = useMemo(() => collections.find((c) => c.type === 'library'), [collections])
   const projects = useMemo(
@@ -142,13 +157,23 @@ export function ScopePopover({
     )
   }
 
-  function emit(nextColl: string[], nextDocs: string[], nextPacks: string[] = packIds): void {
+  function emit(
+    nextColl: string[],
+    nextDocs: string[],
+    nextPacks: string[] = packIds,
+    nextDocumentsOff: boolean = documentsOff
+  ): void {
     // packIds ride every emit (spread-preservation): a doc/project toggle must never
-    // silently drop the chat's selected knowledge packs.
+    // silently drop the chat's selected knowledge packs. documentsOff rides the same way,
+    // with ONE rule (#301 P4, M10): an emit never carries the flag together with a document
+    // source, so ticking a collection or adding a specific document turns documents back on
+    // by construction — no separate handler can forget it.
+    const off = nextDocumentsOff && nextColl.length === 0 && nextDocs.length === 0
     onChangeScope({
       collectionIds: nextColl,
       documentIds: nextDocs,
-      ...(nextPacks.length > 0 ? { packIds: nextPacks } : {})
+      ...(nextPacks.length > 0 ? { packIds: nextPacks } : {}),
+      ...(off ? { documentsOff: true as const } : {})
     })
   }
 
@@ -160,6 +185,12 @@ export function ScopePopover({
     emit(collIds, docIds, packIds.includes(id) ? packIds.filter((x) => x !== id) : [...packIds, id])
   }
 
+  /** The Documents toggle: unticking clears the document sources and sets the flag; ticking
+   *  emits the legacy empty scope (= all documents), keeping the ticked packs either way. */
+  function toggleDocuments(): void {
+    emit([], [], packIds, !documentsOff)
+  }
+
   function title(id: string): string {
     return docs.find((d) => d.id === id)?.title ?? t('chat.scope.removedDoc')
   }
@@ -168,6 +199,21 @@ export function ScopePopover({
   // The chip IS the popover trigger, so it stays visible before asking and one click opens the picker.
   const composedEmpty = collIds.length === 0 && docIds.length === 0 && packIds.length === 0
   const source = ((): string => {
+    // Documents off (#301 P4, M10) decides the phrase first: whatever else the stored scope
+    // still carries, main-side `resolveScope` answers from the ticked packs plus the chat's
+    // attachments and nothing else. With no pack ticked the attachments ARE the scope, so name
+    // them (the #26 single-file phrasing) and append the honest tail; with neither, the chip
+    // says there is no source and how to get one back.
+    if (documentsOff) {
+      if (packIds.length === 0 && fileCount > 0) {
+        const names = [...attachments.map((d) => d.title), ...pendingAttachmentNames]
+        const named = names.length === 1 ? names[0] : tCount('chat.scope.filesInChat', fileCount)
+        return `${named} · ${t('chat.scope.documentsOffSuffix')}`
+      }
+      return (
+        scopeSources(scope, collections, t, tCount, packs) ?? t('chat.scope.documentsOffNoPacks')
+      )
+    }
     // Empty composed scope + attachments: main-side `resolveScope` unions the chat attachments in, so
     // retrieval is scoped to THOSE files — never the whole corpus. Name the single file, else count them
     // (this is the single-document workflow #26 targets, so the file name is the honest answer).
@@ -214,6 +260,26 @@ export function ScopePopover({
           aria-label={t('chat.scope.sourcesTitle')}
         >
           <p className="popover-line">{t('chat.scope.sourcesTitle')}</p>
+          {/* Documents toggle (#301 P4, finding M10, ruling D4): the explicit way to answer from
+              knowledge packs WITHOUT the document corpus. Rendered only where the packs section
+              renders — a chat with no registered pack has nothing to turn documents off FOR, and
+              the popover stays byte-identical there. Unticking clears the document sources and
+              sets the flag; ticking it (or any collection / specific document) turns documents
+              back on. Chat attachments stay in retrieval either way — the hint says so. */}
+          {packs.length > 0 && (
+            <div className="scope-sources scope-documents-toggle">
+              <label className="scope-source-row">
+                <input
+                  type="checkbox"
+                  checked={!documentsOff}
+                  disabled={disabled}
+                  onChange={() => toggleDocuments()}
+                />
+                <span className="scope-source-name">{t('chat.scope.documentsToggle')}</span>
+                <span className="scope-source-hint">{t('chat.scope.documentsToggleHint')}</span>
+              </label>
+            </div>
+          )}
           <div className="scope-sources">
             {library && (
               <label className="scope-source-row">
@@ -333,12 +399,14 @@ export function ScopePopover({
             </div>
           )}
 
-          {(collIds.length > 0 || docIds.length > 0 || packIds.length > 0) && (
+          {(collIds.length > 0 || docIds.length > 0 || packIds.length > 0 || documentsOff) && (
             <Button
               size="sm"
               className="popover-reset"
               disabled={disabled}
-              onClick={() => emit([], [], [])}
+              // The reset clears documentsOff too (#301 P4, M10): an explicit reset is the ONE
+              // way back to all-documents once the last pack and attachment are gone.
+              onClick={() => emit([], [], [], false)}
             >
               {/* full-audit 2026-07-11 CODE-31 (owner decision: relabel truthfully — the emitted
                   scope stays the empty explicit one). In a chat WITH attachments, main-side

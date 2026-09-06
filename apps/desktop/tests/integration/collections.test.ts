@@ -374,6 +374,92 @@ describe('resolveScope', () => {
     expect(scope.documentIds).toEqual(['sel-1', 'sel-2'])
     expect(scope.hasExplicitDocSelection).toBe(true)
   })
+
+  // ---- Knowledge packs (#301 P4, finding M10, ruling D4): the documents-off flag ----------
+  // The full truth table + every consumer is T10-a (tests/integration/zim-regressions.test.ts);
+  // these pin the two scope owners' own contract right where resolveScope is tested.
+  it('documentsOff round-trips through createConversation → setScope → getConversation, and only the literal true survives', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {
+      mode: 'documents',
+      scope: { collectionIds: [], documentIds: [], packIds: ['p1'], documentsOff: true }
+    })
+    expect(getConversation(db, conv.id)!.scope).toEqual({
+      collectionIds: [],
+      documentIds: [],
+      includeArchived: false,
+      packIds: ['p1'],
+      documentsOff: true
+    })
+    // A documents-ON scope serializes byte-identically to the pre-P4 row (no stray key).
+    setScope(db, conv.id, { collectionIds: [], documentIds: [], packIds: ['p1'] })
+    expect(
+      (
+        db.prepare('SELECT scope_v2_json AS j FROM conversations WHERE id = ?').get(conv.id) as unknown as {
+          j: string
+        }
+      ).j
+    ).toBe('{"collectionIds":[],"documentIds":[],"packIds":["p1"]}')
+    expect(getConversation(db, conv.id)!.scope!.documentsOff).toBeUndefined()
+    // The parse side is an explicit whitelist: truthy junk never becomes the flag.
+    db.prepare('UPDATE conversations SET scope_v2_json = ? WHERE id = ?').run(
+      '{"collectionIds":[],"documentIds":[],"documentsOff":"yes"}',
+      conv.id
+    )
+    expect(getConversation(db, conv.id)!.scope!.documentsOff).toBeUndefined()
+    expect(resolveScope(db, conv.id).noDocuments).toBeUndefined()
+  })
+
+  it('resolveScope: documentsOff drops projects and hand-picks, keeps attachments, and only then denies all documents', () => {
+    const db = freshDb()
+    const project = createCollection(db, 'Tax')
+    seedDoc(db, 'picked')
+    seedDoc(db, 'attach-1')
+    // With an attachment: exactly the attachment — never the retained project/hand-pick union.
+    const withFile = createConversation(db, {
+      mode: 'documents',
+      scope: {
+        collectionIds: [project.id],
+        documentIds: ['picked'],
+        packIds: ['p1'],
+        documentsOff: true
+      }
+    })
+    db.prepare(
+      `INSERT INTO conversation_documents (conversation_id, document_id, added_at) VALUES (?, ?, ?)`
+    ).run(withFile.id, 'attach-1', new Date().toISOString())
+    const attached = resolveScope(db, withFile.id)
+    expect(attached.collectionIds).toBeNull()
+    expect(attached.documentIds).toEqual(['attach-1'])
+    expect(attached.hasExplicitDocSelection).toBe(false)
+    expect(attached.noDocuments).toBeUndefined()
+    expect(attached.packIds).toEqual(['p1'])
+
+    // Without one: the explicit deny-all state, with the packs still passed through.
+    const bare = createConversation(db, {
+      mode: 'documents',
+      scope: { collectionIds: [project.id], documentIds: ['picked'], packIds: ['p1'], documentsOff: true }
+    })
+    expect(resolveScope(db, bare.id)).toMatchObject({
+      collectionIds: null,
+      documentIds: null,
+      packIds: ['p1'],
+      hasExplicitDocSelection: false,
+      noDocuments: true
+    })
+
+    // The same selection WITHOUT the flag is unchanged: the union, not deny-all.
+    const on = createConversation(db, {
+      mode: 'documents',
+      scope: { collectionIds: [project.id], documentIds: ['picked'], packIds: ['p1'] }
+    })
+    expect(resolveScope(db, on.id)).toMatchObject({
+      collectionIds: [project.id],
+      documentIds: ['picked'],
+      hasExplicitDocSelection: true
+    })
+    expect(resolveScope(db, on.id).noDocuments).toBeUndefined()
+  })
 })
 
 // ---- Conversation scope/collection data contract (plan §8.3, Phase B) --------------

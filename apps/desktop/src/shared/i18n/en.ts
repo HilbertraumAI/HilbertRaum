@@ -2391,6 +2391,14 @@ export const en = {
   'chat.scope.packNamed': 'Pack: {name}',
   'chat.scope.packCount.one': '{count} knowledge pack',
   'chat.scope.packCount.other': '{count} knowledge packs',
+  // Documents toggle (#301 P4, finding M10): the explicit "answer from the packs, not from my
+  // documents" choice. The hint names what stays ON — chat attachments are never dropped, so
+  // "only these packs" alone would be a false promise in a chat with files.
+  'chat.scope.documentsToggle': 'Search my documents',
+  'chat.scope.documentsToggleHint':
+    'Off: answers come from the ticked knowledge packs only. Files attached to this chat are still used.',
+  'chat.scope.documentsOffSuffix': 'documents off',
+  'chat.scope.documentsOffNoPacks': 'no sources — turn documents on or tick a knowledge pack',
   'chat.sources.openArticle': 'Open article',
   'chat.article.title': 'Article',
   'chat.article.from': 'From {archive} - offline copy',
