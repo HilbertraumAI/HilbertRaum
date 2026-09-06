@@ -53,6 +53,10 @@ folder):
 - Generated outputs
 - Local debug/audit logs
 - App settings
+- Hardware check history (up to eight records of the computers this drive has been checked on —
+  processor, memory, graphics card, the model that was recommended, and when — plus the
+  graphics-card probe and where each model last landed; no computer names, user names or serial
+  numbers; nothing is sent anywhere)
 
 Two small things live outside the workspace: the app remembers display preferences (such as your
 chosen language) in the app-data folder that the built-in browser engine keeps on this computer,

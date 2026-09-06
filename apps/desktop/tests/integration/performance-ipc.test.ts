@@ -366,8 +366,12 @@ describe('buildPerformanceSnapshot', () => {
     // Sizes are GiB from the manifests' decimal GB; the total sums every row.
     const sum = rows.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0), 0)
     expect(snap.placement.totals.ramAllMb).toBe(Math.round(sum * 1024))
-    // Both on the card only counts on a machine WITH a card (this test host has no probe → cpu class).
-    expect(snap.placement.totals.bothOnCard).toBe(snap.placement.memoryClass !== 'cpu')
+    // DR11 (PR #303 audit remediation, P9): a FIXED expectation, never one derived from the host.
+    // The fixture's runtime stub has no ready `status()`, so the chat model is not resident and
+    // "both on the card" is false on every host — including an Apple Silicon one, where the
+    // probe-less class is `unified` and the old `memoryClass !== 'cpu'` form would have demanded
+    // `true` for a model that is not even loaded.
+    expect(snap.placement.totals.bothOnCard).toBe(false)
   })
 
   it('the chat row is "loaded" only once the ACTIVE model is running and ready (DR6)', () => {

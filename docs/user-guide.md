@@ -94,7 +94,7 @@ enter your password on a single unlock screen.
 ## 4. Finding your way around
 
 The sidebar has three groups: **Chat**, **Documents**, **Translate** and **Images** for everyday
-work; **AI Model** and **Performance** for the machine; and **Settings** at the bottom. The
+work; **AI Model** and **Performance** (§5a) for the machine; and **Settings** at the bottom. The
 HilbertRaum mark at the top is the **Home** button. Settings has four tabs: **General**,
 **Privacy & data**, **Skills**, and **Diagnostics (advanced)** (see §10).
 
@@ -230,6 +230,84 @@ pick applies the next time the model starts. Large windows cost memory — choic
 above show a note saying so, because the model's working memory grows with the window. If you
 work with long documents and hit "context limit" messages, a larger context size here is the
 remedy.
+
+---
+
+## 5a. Performance
+
+**Performance**, next to **AI Model** in the sidebar's machine group (§4), answers one question:
+*can this computer run your model, how fast, and is the drive fast enough?* It reuses the same
+hardware check the app already runs when you first set up, and turns the numbers into a verdict
+you can read at a glance instead of a raw table.
+
+**The verdict and four tiles.** One sentence at the top sums up how your model does here — for
+example *"Runs Qwen3.5 9B at about 24 tokens per second. Model starts from this drive are
+fast."* — and four tiles below it each carry a rating word, never just a colour:
+
+- **Speed** — tokens per second, with the model and date it was measured. A reading counted from
+  streamed chunks rather than the model's own timing is marked **Approximate**, so you can tell a
+  precise figure from a rough one.
+- **Memory** — your RAM, the profile it puts you in (Tiny, Lite, Balanced, or Pro), and the model
+  that fits together with the context size it launches with.
+- **Graphics memory** — your graphics card's memory and whether it is **Usable** or **Small**, or
+  whether you have **None**. A built-in chip that shares memory with the rest of the computer (an
+  Intel Iris Xe, for example) is marked **Integrated, shared memory** — models still run on the
+  processor, and that is not a fault of the chip's size. A computer this drive visited before the
+  app could record this figure shows **Not recorded** rather than a guess.
+- **Drive** — the honest read speed measured from a real model start or a full file check, with
+  its source and date. It says **Pending** until either has happened once.
+
+Two actions sit under the tiles: **Check again** re-runs the check right now; if nothing has
+measured your speed yet and your recommended model is already installed, the button instead
+reads **Start … and measure**, so getting your first reading and starting your model is one
+click. **Copy report** puts everything above into your clipboard for a support message, and
+always says which computer it describes, so a report copied on a different laptop is never
+mistaken for this one's.
+
+**Your model.** A row under the tiles about the model you actually have selected. Before its
+first start on this computer it is an estimate from the file size alone, and the note says the
+context cache is measured once the model starts. After a start, with the context size and
+graphics setting you currently have, the row switches to what actually happened: on the graphics
+card, partly on it (with why, when the card was busy), or on the processor from RAM. If you
+change the context size or turn graphics acceleration off afterwards, the row does not pretend
+the old measurement still applies — it reads *"Measured earlier with a 4,096-token context on
+3 Sept; the estimate above is for the current settings"* and shows the estimate again until you
+start the model once more under the new settings. This record travels with the drive, not with
+any one computer, and keeps only one entry per model: starting that model on another computer
+replaces what was measured here, and coming back to this computer shows the estimate again until
+you start it here once more.
+
+**Models on this computer.** A card listing every model the app can hold — chat, translation,
+images, document search (its ranking and index models), and voice — one row each, so you can see
+what is actually using the graphics card right now versus what always runs on the processor by
+design (document search and voice, always; images, usually). A row reads **loaded** only once
+that service is actually running and ready, not while it is still starting. Two totals sit below
+the rows: the card total (what is resident on the graphics card, against its memory) and the
+processor total (what loading everything at once would take from RAM).
+
+**Observed while you worked.** Three rows fill in from ordinary use, with no separate check: your
+last finished chat answer, your last model start, and your last full file check. These are
+honest about their scope — the card says the rows last for this session and refresh on their own
+as you use the app — an app restart clears them, but the read speeds behind the model-start and
+file-check rows are also kept with the Drive tile above, so that part of what you just did is not
+lost when the session ends.
+
+**Other computers this drive has been used on.** Every other computer this drive has visited,
+newest first, each with its own speed, model, hardware and date, and the same rating pills you
+see above (**Slow drive** below 100 MB/s; **Approximate** wherever the speed reading was not the
+model's own timing).
+
+**A drive that moves between computers.** Plug this drive into a computer it already has a
+record for, and Performance restores that computer's result right away — nothing is
+re-measured, so the ★ pick and the profile follow the machine you're on, not whichever computer
+last ran the check. Plug it into a genuinely new computer, and the app checks quietly in the
+background — behind starting your model, never competing with it for the drive — the first time
+you unlock there. If that check cannot finish (no compatible runtime for this computer, for
+example), it tries again once per unlock until it succeeds; a manual **Check again** always works
+in the meantime. See §13 for what this means when you carry the drive between laptops.
+
+Performance never sends anything anywhere — see §10 for exactly what it keeps on the drive and
+in what form.
 
 ---
 
@@ -890,6 +968,11 @@ confirmed, and the core app — chat, documents, search — never goes online. (
 in the dialog described in §6 is opened by your *browser*, not by the app.) Logs are stored
 **locally** on the drive (encrypted on an encrypted workspace) and never uploaded.
 
+The drive also keeps up to eight records of the computers it has been checked on — processor,
+memory, graphics card, the model that was recommended, and when — plus the graphics-card probe
+and where each model last landed (§5a). No computer names, user names or serial numbers are
+kept, and nothing here is sent anywhere either.
+
 Two related switches in Settings: **Developer mode** (Settings → General → Developer card, off by default)
 allows developer conveniences — a plaintext workspace and unverified models — though the drive
 policy stays authoritative: on a commercial drive, unverified models are rejected regardless of
@@ -1057,6 +1140,11 @@ locked point — but everything after it is gone, so quit the app first.
 the workspace on its own as the session ends. That is a best-effort safety net — a very large
 workspace may not finish locking in the time Windows allows — so quitting the app first is
 still the sure way. On a Mac this is not yet verified: quit the app before you shut down.
+
+**Performance remembers each computer separately** (§5a): plug the drive into a computer it has
+seen before and its hardware result comes back immediately, with nothing re-measured. On a
+genuinely new computer, the app checks quietly in the background and tries again at every unlock
+until it succeeds, so you don't need to visit Performance yourself to keep it current.
 
 ---
 

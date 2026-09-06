@@ -2097,6 +2097,51 @@ localized `main.benchmark.locked`. A structural lock test (`chat-ipc.test.ts`, T
 registered DB-touching handler — chat + these benchmark handlers — and asserts each refuses with the
 friendly copy (never the raw string) when locked.
 
+**SEC-N2, current coverage (PR #303 audit, 2026-09-06).** The performance wave added a third
+DB-backed benchmark channel, `performance:get` — a read-only snapshot builder
+(`buildPerformanceSnapshot`) — gated the same way as the two above: an explicit
+`requireUnlocked()` preamble plus the standard `guardedHandle` sender check (#252) every
+`ipcMain.handle` channel gets. `performance:changed` (`EVENTS.performanceChanged`) is a separate,
+**payload-free** main → renderer push (`notifyPerformanceChanged()`,
+`ipc/performance-notify.ts`): it only tells a live window "something `performance:get` reads
+changed, re-read it" and carries no data of its own to gate — the read it provokes still goes
+through `performance:get`'s own `requireUnlocked()`. Current coverage: `benchmark:run`,
+`performance:get`, `gpu:try-again` — all `requireUnlocked` + trusted-sender, read/write; the
+`performance:changed` event — trusted-sender delivery only, nothing to unlock-gate because it
+carries nothing.
+
+The same wave grew what the settings store retains. All of it is hardware/configuration data —
+never a stored hostname, username, or hardware serial, and none of it is sent anywhere
+(`docs/benchmark.md` "Persistence" / "History per machine" / "Your model"; `docs/data-contracts.md`):
+
+- Up to `MAX_BENCHMARK_HISTORY` (8) benchmark records, one per computer this drive has been
+  checked on (`AppSettings.benchmarkHistory`, plus the current computer's in
+  `AppSettings.lastBenchmark`): CPU model string, core count, RAM, OS/arch, GPU name and memory,
+  the model ids measured and recommended, the run date, and the honest drive-read sample.
+- The stamped GPU probe (`AppSettings.gpuProbe`): the enumerated devices, the probe date, and the
+  machine key it was taken on (M8.3) — a probe stamped with another machine's key is never
+  treated as this machine's.
+- Per-model placement records (`AppSettings.modelPlacements`): model id, the launched context
+  size, the backend it ran on, the layer/buffer figures llama.cpp's own load log reported, the
+  machine key, and the date — one record per model per DRIVE, replaced by the next start on any
+  computer (`docs/benchmark.md` "Where the measurement lives, in the copy").
+
+All three are validated field by field on read and write since P4
+(`shared/benchmark-schema.ts`, H1/L8, owner decision G7) rather than merely shape-checked, and —
+like the rest of the settings store, with no separate storage tier or encryption decision for
+this wave — encrypted at rest on an encrypted workspace, plaintext on `plaintext_dev`.
+
+**The chat sidecar's `-lv 4` verbosity (PR #303, P0 gate decision (d)).** The chat server now
+launches at llama-server log verbosity 4 ("trace") so the placement parser can read the load-log
+lines it needs (`docs/benchmark.md` "Observed first"). This changes nothing about the existing
+sidecar-logging posture above ("Sidecar requests are authenticated"): stderr is piped to memory
+only, capped at `STDERR_TAIL_MAX = 4000` characters
+(`main/services/runtime/sidecar.ts`), redacted at the drain before it is ever read
+(`redactSidecarSecrets`), and never written to disk — it surfaces only inside a crash notice. No
+code changed to add this line; the wave's own open acceptance item (issue #TBD-I1) is that a
+captured log from the pinned build must show verbosity 4 printing the load lines and no
+request/prompt content.
+
 **Sidecar `serverMessage` is structural-only — accepted Info residual (SEC-N3).** `ChatRequestError`
 (runtime/`llama.ts`) keeps up to 500 chars of a non-JSON error body as `serverMessage`, surfaced via
 `chat-stream.ts` and `doctasks/manager.ts`. The sidecar is **our own loopback llama.cpp server** and its

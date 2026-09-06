@@ -525,7 +525,9 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 - **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
   throws (failed probe → `''`/`0`); `detectSystem` itself always reports `gpu: null` — the
   REAL probe lives in `runtime/gpu.ts` and is **injected** by the IPC layer (Phase 16:
-  `RunBenchmarkDeps.gpu: { name, useful }`), keeping this module `child_process`-free.
+  `RunBenchmarkDeps.gpu: GpuBenchmarkInput = { name, useful, totalMb? }` — `totalMb` added by
+  the performance wave, feeds `BenchmarkResult.gpuVramMb`), keeping this module
+  `child_process`-free.
 - **`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })`** — pure; spec §11.3
   thresholds + the conservative Phase-16 GPU bump (`gpuUseful` is precomputed by
   `gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated) + low-tok/sec downgrade; invalid

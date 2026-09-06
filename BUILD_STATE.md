@@ -56,7 +56,11 @@ identities, a source-text + behavioural pin covers the answer-speed observer wir
 became an await on P7's outcome, one shared teardown closes the fixture's DBs and removes its temp
 roots (2,683 leaked roots from earlier runs cleared), and a ladder-to-placement wiring test drives
 the real rung factory with a fake sidecar's stderr (one parser per attempt; the persister writes,
-skips while locked, and survives a throwing observer)._
+skips while locked, and survives a throwing observer). P9 wrote the durable record — `docs/benchmark.md` "Audit remediation record — PR #303"
+§1–§5 (decisions, a 63-row disposition matrix, the design as built, what is not verified, a §-anchor
+legend) — plus user-guide §5a "Performance", the privacy inventories in `PRIVACY.md` /
+`security-model.md`, the known-limitations block, the `architecture.md` supersession notes, and the
+DR11 host-conditional assertion turned into a fixed expectation._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -717,7 +721,7 @@ open round's item stays the last block of §5.)
     P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ✅ H1/L8/M5-residual schemas +
     launch context; P5 ✅ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
     P6 ✅ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ✅ L1/SD2 auto-start sequencing;
-    P8 ✅ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c);
+    P8 ✅ T7/T8/T11/TH1/TH2; P9 ✅ D1–D5/L4/L5 docs — durable record `docs/benchmark.md` "Audit remediation record — PR #303" §1–§5; P10 ☐ cross-review + the local half of (c);
     P11 ☐ close-out issues. Residual (c) above is the audit's HW1–HW3 acceptance; (a)–(g) stand.
 
 ---

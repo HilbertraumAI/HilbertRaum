@@ -2235,7 +2235,9 @@ Per-finding disposition (F-1…F-8):
 - **TG-4 — the Translate view (text path, plan §2 D6).** A new **7th primary** rail destination
   (`ScreenId 'translate'`, between Documents and Images — design-guidelines §2 now "7 primary +
   1 utility") for live TEXT translation on the SAME `ctx.translator` sidecar the doc-task uses (no
-  second model). A per-job streaming service `TranslateJobService` (`services/translation/jobs.ts`,
+  second model). (Rail superseded 2026-09-05: the rail is now three groups plus the brand mark,
+  with Skills folded into Settings as a tab — design-guidelines.md §2 is current, not this count.)
+  A per-job streaming service `TranslateJobService` (`services/translation/jobs.ts`,
   the vision image-job template) behind new IPC — `translate:start` → `{jobId}` (validates
   `isTranslationLangCode` + source ≠ target + non-empty + a model present; busy-REJECTs a second
   job; refuses while a doc task holds the lane), `translate:cancel`, `translate:getActive` for
@@ -9799,6 +9801,8 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   **6th primary nav destination** — `design-guidelines.md §2` updated to "6 primary + 1 utility"
   *at that wave's date*. (#151 AR-1: superseded by TG-4 — Translate joined and Images now sits
   5th of **7 primary + 1 utility**; §2 and the TG-4 note earlier in this file are current.)
+  (Further superseded 2026-09-05: the rail is now three groups plus the brand mark, with Skills
+  folded into Settings as a tab — design-guidelines.md §2, not the TG-4 note, is current.)
 - **Lifecycle wiring** — `ctx.vision` built once in `main/index.ts`; torn down on `will-quit` and on
   workspace **LOCK** (in `registerWorkspaceIpc`, beside `ctx.embedder.suspend()` — its KV cache holds
   the decoded image, so it must die before the vault re-encrypts).
