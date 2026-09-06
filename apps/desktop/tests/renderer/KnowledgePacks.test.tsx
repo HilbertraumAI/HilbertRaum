@@ -790,7 +790,10 @@ describe('ScopePopover — knowledge packs', () => {
     expect(gone).toBeEnabled()
     expect(off).toBeChecked()
     expect(off).toBeEnabled()
-    expect(screen.getByText('not available')).toBeInTheDocument()
+    // #301 P6 (plan §9.23 (c)5): the hint names the RECORDED reason, not a generic
+    // "not available" — the row now says what the per-answer outcome will say.
+    expect(screen.getByText('file missing')).toBeInTheDocument()
+    expect(screen.queryByText('not available')).not.toBeInTheDocument()
     expect(screen.getByText('disabled')).toBeInTheDocument()
     await user.click(gone)
     expect(emitted.at(-1)?.packIds).toEqual(['uuid-off'])

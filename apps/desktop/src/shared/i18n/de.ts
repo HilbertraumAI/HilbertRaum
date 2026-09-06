@@ -2506,6 +2506,12 @@ export const de: Record<keyof typeof en, string> = {
   'chat.article.loading': 'Artikel wird geladen…',
   'chat.article.unavailable': 'Dieser Artikel ist gerade nicht verfügbar. Das Paket ist möglicherweise deaktiviert, entfernt oder das Laufwerk nicht angeschlossen.',
   'chat.article.partial': 'Nur der erste Teil dieses Artikels konnte angezeigt werden.',
+  // ---- #301 P6 (a11y pass; plan §9.23 (b)4/(b)6 and decision (c)5) — BEGIN -----------------
+  'chat.scope.packMissing': 'Datei fehlt',
+  'chat.scope.packMismatch': 'anderes Archiv an diesem Ort',
+  'chat.scope.packNotSearchable': 'kein Volltextindex',
+  'chat.sources.openArticleNamed': 'Artikel öffnen: {title}',
+  // ---- #301 P6 — END ------------------------------------------------------------------------
   'docs.section.sources': 'Nachschlagewerke',
   'docs.section.packs': 'Wissenspakete',
   'packs.add': 'Pakete hinzufügen…',

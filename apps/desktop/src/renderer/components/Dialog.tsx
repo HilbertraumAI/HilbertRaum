@@ -35,6 +35,14 @@ export interface ModalProps {
   title: ReactNode
   /** Accessible name when the visible title alone isn't descriptive enough. */
   ariaLabel?: string
+  /**
+   * Id of an element inside `children` that describes the dialog (#301 P6, plan §9.23 (b)1) —
+   * e.g. the article viewer's "From <archive> – offline copy" attribution. Omitted (the
+   * default) keeps `aria-describedby={undefined}`, which is what every other consumer wants
+   * and what silences Radix's missing-description warning. ConfirmDialog does the same for
+   * its body (audit L12); this is the general-content twin.
+   */
+  describedBy?: string
   width?: 'content' | 'wide'
   children: ReactNode
   /** Bound translate fn for the built-in Close label (i18n record §5 ⑤); English default. */
@@ -47,6 +55,7 @@ export function Modal({
   onClose,
   title,
   ariaLabel,
+  describedBy,
   width = 'content',
   children,
   t = englishTranslator
@@ -59,7 +68,7 @@ export function Modal({
         <RadixDialog.Content
           className={`dialog ${width === 'wide' ? 'dialog-wide' : ''}`}
           aria-label={ariaLabel}
-          aria-describedby={undefined}
+          aria-describedby={describedBy}
           onCloseAutoFocus={onCloseAutoFocus}
         >
           <div className="modal-head">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { Modal, Spinner } from '../components'
 import { useT } from '../i18n'
 
@@ -34,6 +34,7 @@ export function ArticleModal({
   onClose: () => void
 }): JSX.Element {
   const { t } = useT()
+  const sourceLineId = useId()
   const [article, setArticle] = useState<PackArticleView | null>(null)
   const [phase, setPhase] = useState<'loading' | 'ready' | 'failed'>('loading')
 
@@ -62,12 +63,17 @@ export function ArticleModal({
       open={target != null}
       onClose={onClose}
       title={article?.title ?? t('chat.article.title')}
+      // #301 P6 (plan §9.23 (b)1): the dialog's accessible NAME stays the article title; the
+      // attribution line ("From <archive> – offline copy") becomes its DESCRIPTION, so a screen
+      // reader announcing the dialog says which offline archive the text comes from instead of
+      // only naming the article. Absent attribution ⇒ undefined, the prior behaviour.
+      describedBy={target?.archiveTitle ? sourceLineId : undefined}
       width="wide"
       t={t}
     >
       <div className="pack-article">
         {target?.archiveTitle && (
-          <p className="hint pack-article-source">
+          <p className="hint pack-article-source" id={sourceLineId}>
             {t('chat.article.from', { archive: target.archiveTitle })}
           </p>
         )}

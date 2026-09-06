@@ -113,6 +113,11 @@ export function SourcesDisclosure({
                   <button
                     type="button"
                     className="source-card-open"
+                    // #301 P6 (plan §9.23 (b)6): the visible text stays the bare "Open article"
+                    // (it sits inside a card that already names its article), but an answer can
+                    // carry several archive cards — so the ACCESSIBLE name carries the article
+                    // title, and a screen reader's button list distinguishes them.
+                    aria-label={t('chat.sources.openArticleNamed', { title: c.sourceTitle })}
                     onClick={() => onOpenArticle(c)}
                   >
                     {t('chat.sources.openArticle')}

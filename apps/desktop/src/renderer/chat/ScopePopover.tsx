@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import * as Popover from '@radix-ui/react-popover'
 import type { Collection, DocumentInfo, DocumentScope, KnowledgePack } from '@shared/types'
 import { MAX_SELECTED_PACKS } from '@shared/types'
@@ -123,6 +123,13 @@ export function ScopePopover({
 }: ScopePopoverProps): JSX.Element {
   const { t, tCount } = useT()
   const [showDocs, setShowDocs] = useState(false)
+  // #301 P6 (plan §9.23 (b)3/(b)4/(b)5): ids for the group labels, the Documents toggle's
+  // DESCRIPTION, and the cap line every cap-disabled checkbox points at. Hoisted above the
+  // empty-corpus early return below — hooks must run unconditionally.
+  const sourcesTitleId = useId()
+  const packsTitleId = useId()
+  const documentsHintId = useId()
+  const packLimitId = useId()
   // PF-7d (full-audit 2026-07-10): memo the list derivations — this popover sits in the composer
   // footer, so it re-renders on every keystroke and stream flush (usually CLOSED), and re-filtering
   // the full docs list each time was pure churn. Keyed on the inputs that actually change them.
@@ -263,6 +270,16 @@ export function ScopePopover({
   const filesSuffix = fileCount > 0 && !composedEmpty ? ` · ${tCount('chat.scope.filesInChat', fileCount)}` : ''
 
   return (
+    // #301 P6 (plan §9.23 (b)2 — decided, with its reason): the picker stays a NON-MODAL
+    // popover (the WAI-ARIA non-modal pattern: Escape closes, focus returns to the trigger,
+    // moving focus out dismisses it). `modal` was tried and rejected: Radix's modal Popover
+    // `aria-hidden`s the rest of the app, which HIDES the trigger chip itself — and that chip
+    // is the "Answering from: …" state readout the user is checking their choice against —
+    // and locks body scroll, so the transcript the scope is being picked FOR cannot be read
+    // while picking. Two existing ChatScreen tests fail on exactly that (the trigger is no
+    // longer in the accessibility tree while the popover is open), which is the symptom, not
+    // the reason. The §5.6 "focus trap" bullet is therefore an accepted deviation for this
+    // surface; the modal ArticleModal keeps its trap.
     <Popover.Root>
       <Popover.Trigger asChild>
         <button type="button" className="footer-menu-btn" disabled={disabled}>
@@ -277,13 +294,19 @@ export function ScopePopover({
           sideOffset={6}
           aria-label={t('chat.scope.sourcesTitle')}
         >
-          <p className="popover-line">{t('chat.scope.sourcesTitle')}</p>
+          <p className="popover-line" id={sourcesTitleId}>
+            {t('chat.scope.sourcesTitle')}
+          </p>
           {/* Documents toggle (#301 P4, finding M10, ruling D4): the explicit way to answer from
               knowledge packs WITHOUT the document corpus. Rendered only where the packs section
               renders — a chat with no registered pack has nothing to turn documents off FOR, and
               the popover stays byte-identical there. Unticking clears the document sources and
               sets the flag; ticking it (or any collection / specific document) turns documents
-              back on. Chat attachments stay in retrieval either way — the hint says so. */}
+              back on. Chat attachments stay in retrieval either way — the hint says so.
+              #301 P6 (plan §9.23 (b)4): the hint sits OUTSIDE the <label> and is wired with
+              `aria-describedby`, so the checkbox's accessible NAME is the bare "Search my
+              documents" and the two-sentence caveat is announced as its description. A hint
+              inside the label would be read as part of the name on every focus. */}
           {packs.length > 0 && (
             <div className="scope-sources scope-documents-toggle">
               <label className="scope-source-row">
@@ -291,14 +314,19 @@ export function ScopePopover({
                   type="checkbox"
                   checked={!documentsOff}
                   disabled={disabled}
+                  aria-describedby={documentsHintId}
                   onChange={() => toggleDocuments()}
                 />
                 <span className="scope-source-name">{t('chat.scope.documentsToggle')}</span>
-                <span className="scope-source-hint">{t('chat.scope.documentsToggleHint')}</span>
               </label>
+              <span className="scope-source-hint" id={documentsHintId}>
+                {t('chat.scope.documentsToggleHint')}
+              </span>
             </div>
           )}
-          <div className="scope-sources">
+          {/* The document sources are a labelled GROUP (§9.23 (b)3): a screen reader announces
+              "Choose your sources, group" on entry instead of a bare run of checkboxes. */}
+          <div className="scope-sources" role="group" aria-labelledby={sourcesTitleId}>
             {library && (
               <label className="scope-source-row">
                 <input
@@ -340,22 +368,38 @@ export function ScopePopover({
                   pack" row the user can untick — instead of vanishing from the picker while
                   staying in the stored scope. */}
           {(packs.length > 0 || removedPackIds.length > 0) && (
-            <div className="scope-sources scope-packs">
-              <p className="popover-line">{t('chat.scope.packsTitle')}</p>
+            <div className="scope-sources scope-packs" role="group" aria-labelledby={packsTitleId}>
+              <p className="popover-line" id={packsTitleId}>
+                {t('chat.scope.packsTitle')}
+              </p>
               {atPackLimit && (
-                <p className="popover-line hint scope-pack-limit">
+                <p className="popover-line hint scope-pack-limit" id={packLimitId}>
                   {tCount('chat.scope.packLimit', MAX_SELECTED_PACKS)}
                 </p>
               )}
               {packs.map((k) => {
                 const selected = packIds.includes(k.id)
                 // Why this pack cannot take part in an ask, or null when it can. Order mirrors
-                // the arm's classification: removal/disabled before availability.
+                // the arm's `classifyPackSelection` exactly (#301 P6, plan §9.23 (c)5): disabled,
+                // then availability WITH its recorded reason, then searchability. A row that says
+                // "not available" where the outcome will say "different archive at this location"
+                // is a second, quieter lie — the picker names the same cause the answer will.
+                // `packUnavailable` survives only as the fallback for a pre-P3b null reason.
                 const ineligible = !k.enabled
                   ? t('chat.scope.packDisabled')
                   : !k.available
-                    ? t('chat.scope.packUnavailable')
-                    : null
+                    ? k.unavailableReason === 'missing'
+                      ? t('chat.scope.packMissing')
+                      : k.unavailableReason === 'identity-mismatch'
+                        ? t('chat.scope.packMismatch')
+                        : t('chat.scope.packUnavailable')
+                    : k.searchable === 'no'
+                      ? t('chat.scope.packNotSearchable')
+                      : null
+                // Disabled because the CHAT IS FULL, not because of this pack: the refusal has a
+                // reason the user cannot see on the row itself, so the box is described by the
+                // cap line (§9.23 (b)5) — otherwise a screen reader announces only "dimmed".
+                const capBlocked = !selected && ineligible == null && atPackLimit
                 return (
                   <label className="scope-source-row" key={k.id}>
                     <input
@@ -364,9 +408,12 @@ export function ScopePopover({
                       // A selected pack is ALWAYS deselectable (D6). An unselected one is
                       // tickable only when it is eligible and the cap has room.
                       disabled={disabled || (!selected && (ineligible != null || atPackLimit))}
+                      aria-describedby={capBlocked ? packLimitId : undefined}
                       onChange={() => togglePack(k.id)}
                     />
                     <span className="scope-source-name">{k.title}</span>
+                    {/* The pack's OWN reason stays inside the label (§9.23 (b)4): it is two or
+                        three words, and "<title> file missing" is the honest accessible name. */}
                     {ineligible && <span className="scope-source-hint">{ineligible}</span>}
                   </label>
                 )

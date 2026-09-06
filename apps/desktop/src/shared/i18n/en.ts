@@ -2438,6 +2438,19 @@ export const en = {
   'chat.article.loading': 'Loading the article…',
   'chat.article.unavailable': 'This article is not available right now. The pack may be disabled, removed, or its drive unplugged.',
   'chat.article.partial': 'Only the first part of this article could be shown.',
+  // ---- #301 P6 (a11y pass; plan §9.23 (b)4/(b)6 and decision (c)5) — BEGIN -----------------
+  // Reason-specific popover hints. The picker greys an ineligible pack with the SAME reason the
+  // arm's `classifyPackSelection` records, so the row and the per-answer outcome can never tell
+  // different stories. `chat.scope.packUnavailable` above stays the fallback for the pre-P3b
+  // null-reason state; `packNotSearchable` mirrors the arm skipping a confirmed `searchable:'no'`.
+  'chat.scope.packMissing': 'file missing',
+  'chat.scope.packMismatch': 'different archive at this location',
+  'chat.scope.packNotSearchable': 'no full-text index',
+  // The article action's ACCESSIBLE name (the visible text stays the bare "Open article"): an
+  // answer or a review can carry several archive cards, and "Open article" ×5 in a screen
+  // reader's button list names none of them.
+  'chat.sources.openArticleNamed': 'Open article: {title}',
+  // ---- #301 P6 — END ------------------------------------------------------------------------
   'docs.section.sources': 'Reference',
   'docs.section.packs': 'Knowledge packs',
   'packs.add': 'Add packs…',
