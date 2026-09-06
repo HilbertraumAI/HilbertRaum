@@ -1,6 +1,6 @@
 import type { Db } from '../db'
 import { t } from '../../../shared/i18n'
-import type { AppSettings, Citation, ContextUsage, CoverageInfo, Message, RetrievalScope } from '../../../shared/types'
+import type { AppSettings, Citation, ContextUsage, CoverageInfo, KnowledgePackOutcome, Message, RetrievalScope } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
 import type { Reranker } from '../reranker'
@@ -153,6 +153,13 @@ export interface RetrievedChunk {
 export interface RetrievalResult {
   chunks: RetrievedChunk[]
   citations: Citation[]
+  /**
+   * Knowledge packs (#301 P4, findings M6/M7): one outcome per pack id the ask's scope selected,
+   * classified before any eligibility filter (plan §9.21 (e)). ABSENT when no arm ran (the
+   * byte-unchanged no-arm path: the pre-change fixture still compares equal), present — possibly
+   * with every status `skipped`/`failed` — whenever the scope selected packs.
+   */
+  packOutcomes?: KnowledgePackOutcome[]
 }
 
 /**
@@ -167,6 +174,17 @@ export type ExternalRetrievalArm = (
   question: string,
   signal?: AbortSignal
 ) => Promise<Array<Omit<RetrievedChunk, 'label'>>>
+
+/**
+ * The arm's result once P4's outcome contract is wired through (plan §9.21 (e)3): the candidates
+ * exactly as before, plus one outcome per selected pack. Declared here first so the arm side
+ * (`services/zim`) and the retrieval side can be built against one shape; `ExternalRetrievalArm`
+ * itself moves to this return type in the outcomes step.
+ */
+export interface ExternalRetrievalOutput {
+  candidates: Array<Omit<RetrievedChunk, 'label'>>
+  outcomes: KnowledgePackOutcome[]
+}
 
 /** Chunk text stored on a citation snippet is capped to keep citations_json small. */
 export const SNIPPET_MAX_CHARS = 600
