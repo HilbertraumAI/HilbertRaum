@@ -62,7 +62,7 @@ import { IPC } from '../../src/shared/ipc'
 import type { AppContext } from '../../src/main/services/context'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import type { ModelRuntime } from '../../src/main/services/runtime'
-import type { AppSettings, EngineDownloadJob, GpuDevice, ModelInfo, RuntimeStatus } from '../../src/shared/types'
+import type { AppSettings, EngineDownloadJob, GpuDevice, ModelInfo, RuntimeStatus, SpeedSampleIdentity } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -671,11 +671,13 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
 
 // Issue #322 — the persisted speed sample carries the identity it was measured under
 // (`BenchmarkResult.speedIdentity`: the next-start memory class, the budget device, the launched
-// context, the backend), and `speedSignalFor` hands the picker the sample only when that identity
-// matches the NEXT start: the same class and the same budget device (the context is recorded, not
-// matched — the crawl gate is an order-of-magnitude decode figure). A legacy sample without the
-// field keeps steering as before. Policy amendment to §6.5: NEEDS OWNER CONFIRMATION in review.
-describe('picker seams: the speed sample carries the identity it was measured under (#322 — needs owner confirmation)', () => {
+// context, the backend), and `speedSignalFor` hands the picker the sample only when the NEXT start
+// runs on a path no faster than the one it was measured on: the same card, or the processor after
+// a card measurement (the crawl is an upper bound on the slower path); never a card start after a
+// processor measurement, a different card, or the mock runtime. The context is recorded, not
+// matched. A legacy sample without the field keeps steering as before. §6.5 amendment, owner-
+// confirmed 2026-09-06.
+describe('picker seams: the speed sample carries the identity it was measured under (#322)', () => {
   const STALE_AT = '2026-08-20T00:00:00Z'
   const ON_CARD8 = { memoryClass: 'discrete' as const, deviceName: CARD8.name, contextTokens: 8192, backend: 'gpu' as const }
   const Q4 = 'qwen3.8-27b-ud-q4km'
@@ -698,8 +700,8 @@ describe('picker seams: the speed sample carries the identity it was measured un
   }
 
   /** A saved 3 tok/s crawl on the 4B (the card pick), measured on the 8 GiB card — or a LEGACY one without identity. */
-  function savedCrawl(f: Fixture, opts: { legacy?: boolean } = {}): Fixture {
-    const identity = opts.legacy ? {} : { speedIdentity: ON_CARD8 }
+  function savedCrawl(f: Fixture, opts: { legacy?: boolean; identity?: SpeedSampleIdentity } = {}): Fixture {
+    const identity = opts.legacy ? {} : { speedIdentity: opts.identity ?? ON_CARD8 }
     updateSettings(f.ctx.db, {
       lastBenchmark: {
         ...detectSystem(),
@@ -752,9 +754,34 @@ describe('picker seams: the speed sample carries the identity it was measured un
     expect(stepped).not.toBe(CARD8_PICK)
   })
 
-  it('the GPU switched off since: a sample measured on the card is no evidence for the processor start — the RAM pick stands, no step-down', async () => {
+  it('the GPU switched off since: a crawl measured on the card is an upper bound for the processor start — the RAM pick still steps down', async () => {
+    // Dropping the sample here would move the pick UP (to the 27B Q5) on the slowest path the
+    // machine has, for a model that crawled at 3 tok/s even on the card.
     const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings: { gpuMode: 'off' } }))
-    expect(await both(f)).toBe(RAM_PICK)
+    expect(await both(f)).toBe(Q4)
+  })
+
+  it('auto-disabled after a crash: the same direction, the same answer', async () => {
+    const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings: { gpuAutoDisabled: true } }))
+    expect(await both(f)).toBe(Q4)
+  })
+
+  it('a crawl measured on the processor rung (the ladder fell to CPU under a card class) says nothing about the card: the card pick, not the step', async () => {
+    const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8] }), { identity: { ...ON_CARD8, backend: 'cpu' } })
+    expect(await both(f)).toBe(CARD8_PICK)
+  })
+
+  it('a crawl measured on the processor with no card counts for a processor start, and for nothing faster', async () => {
+    const onCpu = { memoryClass: 'cpu' as const, deviceName: null, contextTokens: 8192, backend: 'cpu' as const }
+    // No card now either: the processor is not faster than the processor → the RAM pick steps.
+    expect(await both(savedCrawl(fixture({ probeReturns: [], persisted: [] }), { identity: onCpu }))).toBe(Q4)
+    // A card was added since: the processor crawl is no evidence about it → the card pick.
+    expect(await both(savedCrawl(fixture({ probeReturns: [], persisted: [CARD8] }), { identity: onCpu }))).toBe(CARD8_PICK)
+  })
+
+  it('a sample from the mock runtime never counts', async () => {
+    const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8] }), { identity: { ...ON_CARD8, backend: 'mock' } })
+    expect(await both(f)).toBe(CARD8_PICK)
   })
 
   it('a legacy sample without identity keeps steering as before (GPU off: the RAM pick still steps down)', async () => {

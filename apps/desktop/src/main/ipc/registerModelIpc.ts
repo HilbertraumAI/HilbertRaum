@@ -9,7 +9,8 @@ import type {
   ModelInfo,
   ModelState,
   RuntimeInstallInfo,
-  RuntimeStatus
+  RuntimeStatus,
+  SpeedSampleIdentity
 } from '../../shared/types'
 import type { ModelManifest } from '../../shared/manifest'
 import { readRuntimeMarker } from '../services/assets'
@@ -32,7 +33,7 @@ import {
   type PickerSpeedSignal
 } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
-import { nextStartMemoryFor } from '../services/performance'
+import { nextStartMemoryFor, type NextStartMemory } from '../services/performance'
 import { notifyPerformanceChanged } from './performance-notify'
 import {
   latestEffectiveRead,
@@ -86,13 +87,21 @@ export function pickerMemoryFor(
  * call — stateless, never compounds. Shared by the `listModels` handler and the Performance
  * snapshot's live recommendation so both surfaces read one signal.
  *
- * Sample identity (issue #322, §6.5 2026-09-06 amendment — pending owner confirmation): a
- * sample that carries `speedIdentity` is handed over ONLY while its memory class and its budget
- * device name are the NEXT start's (`nextStartMemoryFor`): a crawl measured on the card says
- * nothing about a start the settings now force onto the processor, and a crawl on one card
- * says nothing about another. The context is recorded but not matched — the step-down is an
- * order-of-magnitude crawl gate on a decode figure, and the context is a setting users change
- * often. A legacy sample without the field keeps steering exactly as before.
+ * Sample identity (issue #322, §6.5 2026-09-06 amendment, owner-confirmed): a sample that
+ * carries `speedIdentity` counts only when the NEXT start (`nextStartMemoryFor`) runs on a path
+ * NO FASTER than the one the sample was measured on — the crawl is an upper bound on what a
+ * slower path can do, never evidence about a faster one:
+ *   - measured on the card, next start on the SAME card → counts;
+ *   - measured on the card, next start on the processor (GPU switched off, auto-disabled) →
+ *     counts (the processor will be slower still; dropping it would move the pick UP on the
+ *     slowest configuration the machine has);
+ *   - measured on the processor (the ladder's CPU rung, whatever the class was), next start on
+ *     the card → dropped (a processor crawl says nothing about the card);
+ *   - measured on a DIFFERENT card → dropped (ambiguous without the sizes; rare);
+ *   - measured on the mock runtime → never counts (its figures are not the machine's).
+ * The context is recorded but not matched — the step-down is an order-of-magnitude crawl gate
+ * on a decode figure, and the context is a setting users change often. A legacy sample without
+ * the field keeps steering exactly as before.
  */
 export function speedSignalFor(
   s: AppSettings,
@@ -101,16 +110,23 @@ export function speedSignalFor(
   const last = s.lastBenchmark
   if (!last) return null
   const identity = last.speedIdentity
-  if (identity) {
-    const next = nextStartMemoryFor(s, hereKey)
-    if (identity.memoryClass !== next.memoryClass || (identity.deviceName ?? null) !== (next.device?.name ?? null)) {
-      return null
-    }
-  }
+  if (identity && !sampleCountsForNextStart(identity, nextStartMemoryFor(s, hereKey))) return null
   return {
     tokensPerSecond: last.tokensPerSecond,
     measuredModelId: last.measuredModelId ?? null
   }
+}
+
+/** The one-directional rule above, pure: does a sample measured under `identity` describe `next`? */
+export function sampleCountsForNextStart(identity: SpeedSampleIdentity, next: NextStartMemory): boolean {
+  if (identity.backend === 'mock') return false
+  // The path the sample was measured on: the card only when the ladder actually landed there
+  // under a card class; a CPU rung (or an unknown backend) under any class is the processor.
+  const measuredOnCard = identity.backend === 'gpu' && identity.memoryClass !== 'cpu'
+  const nextOnCard = next.memoryClass !== 'cpu'
+  if (!nextOnCard) return true // the processor is never faster than what was measured
+  if (!measuredOnCard) return false // a processor crawl says nothing about the card
+  return (identity.deviceName ?? null) === (next.device?.name ?? null)
 }
 
 /**

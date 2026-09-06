@@ -227,11 +227,13 @@ is expected and never moves the pick. `runBenchmark` applies it with the just-me
 `listModels` with the persisted ones, so Diagnostics and the Models screen ★ always agree; when
 the step fires, the persisted warnings gain `main.benchmark.warnRecommendationLowered` (canonical
 English) naming the measured model and figure. Since issue #322 (2026-09-06, §6.5 "Sample
-identity" amendment — needs owner confirmation in review) the persisted sample also carries
+identity" amendment, owner-confirmed) the persisted sample also carries
 `BenchmarkResult.speedIdentity` (the next-start class, the budget device, the launched context,
-the backend at measurement time) and `speedSignalFor` consumes it only while the class and the
-device still match the next start; the context is recorded, not matched; a legacy sample without
-the field steers as before. Full design record: `model-benchmarks.md` §6.5.
+the backend at measurement time) and `speedSignalFor` consumes it only when the next start runs
+on a path no faster than the measured one — the same card, or the processor after a card
+measurement; never a card start after a processor measurement, a different card, or the mock;
+the context is recorded, not matched; a legacy sample without the field steers as before. Full
+design record: `model-benchmarks.md` §6.5.
 
 ## Warnings (spec §11.3 + §11.4)
 

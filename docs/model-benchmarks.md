@@ -499,41 +499,50 @@ as an oversized-RAM crawl never moves the RAM pick (audit finding R2). Both are 
 applicability predicate as rule 2 above, extended once to the card's eligible set — never applied
 twice.
 
-**Sample identity (2026-09-06 amendment, issue #322 — NEEDS OWNER CONFIRMATION in review; the
-rule ships on `feat/performance-screen` pending that confirmation).** The persisted pairing used
-to carry no record of what produced it, so after a card swap, a driver change of backend, or the
-GPU switched off, a stale crawl kept steering the pick as if nothing had changed (audit R2's
-residual, finding O5). Every sample now carries **`BenchmarkResult.speedIdentity`** — the
-NEXT-start memory class and budget device name at benchmark time (the same `GpuBenchmarkInput`
-the pick is judged against), the context window the running model was launched with
-(`ModelRuntime.contextWindow`), and the backend the ladder landed on — normalised by
-`shared/benchmark-schema.ts` like `speedBasis` (absent on older results, null when nothing was
-measured). The rule, in `speedSignalFor` (registerModelIpc.ts, the one implementation both the
-Models ★ and the Performance snapshot read):
+**Sample identity (2026-09-06 amendment, issue #322; owner-confirmed 2026-09-06).** The
+persisted pairing used to carry no record of what produced it, so after a card swap, a driver
+change of backend, or the GPU switched off, a stale crawl kept steering the pick as if nothing
+had changed (audit R2's residual, finding O5). Every sample now carries
+**`BenchmarkResult.speedIdentity`** — the NEXT-start memory class and budget device name at
+benchmark time (the same `GpuBenchmarkInput` the pick is judged against), the context window
+the running model was launched with (`ModelRuntime.contextWindow`), and the backend the ladder
+landed on — normalised by `shared/benchmark-schema.ts` like `speedBasis` (absent on older
+results, null when nothing was measured). The rule, in `speedSignalFor` /
+`sampleCountsForNextStart` (registerModelIpc.ts, the one implementation both the Models ★ and
+the Performance snapshot read), is **one-directional**: a sample counts when the next start
+(`nextStartMemoryFor`) runs on a path NO FASTER than the one it was measured on — the crawl is
+an upper bound on what a slower path can do, never evidence about a faster one.
 
-1. A sample WITH an identity feeds the step-down only while its `memoryClass` AND its
-   `deviceName` equal the next start's (`nextStartMemoryFor`: the class after the GPU flags, the
-   largest usable card). A crawl measured on the card is no evidence about a start the settings
-   now force onto the processor (class `discrete` → `cpu`), nor about another card; the pick is
-   then the plain memory-best-fit answer. Toggle the GPU back on, or put the same card back, and
-   the sample counts again — nothing is deleted.
-2. **The context is recorded, not matched.** The step-down is an order-of-magnitude crawl gate
+1. **Measured on the card** (backend `gpu` under a `discrete` / `unified` class): counts for
+   the next start on the SAME card (by name), and counts for a next start on the PROCESSOR
+   (GPU switched off, auto-disabled) — the processor will be slower still, so dropping the
+   sample there would move the pick UP on the slowest configuration the machine has (the first
+   draft of this rule did exactly that; corrected on the owner's review). A DIFFERENT card:
+   dropped (ambiguous without the sizes; rare).
+2. **Measured on the processor** (the ladder's CPU rung, whatever the class was; or an unknown
+   backend): counts for a processor start, never for a card start — a processor crawl says
+   nothing about the card. A sample from the **mock** runtime never counts.
+3. **The context is recorded, not matched.** The step-down is an order-of-magnitude crawl gate
    (< 5 tok/s) on a DECODE figure (#291: prefill excluded), and decode speed does not move by an
    order of magnitude with the context size — while the context is a Settings value users change
-   often; invalidating on it would drop a valid signal for no reason. The backend is recorded for
-   the same reason (the next start's rung is the ladder's decision, not known ahead of time; the
-   class stands in for it).
-3. **Legacy samples (no identity) keep steering as before** — an existing workspace's
+   often; invalidating on it would drop a valid signal for no reason. No ratio threshold: it
+   would be a number with no measurement behind it.
+4. **Legacy samples (no identity) keep steering as before** — an existing workspace's
    recommendation does not change at upgrade; the next check records the identity.
-4. Thresholds, the step itself and the card-path filtering above are unchanged; `runBenchmark`
+5. Thresholds, the step itself and the card-path filtering above are unchanged; `runBenchmark`
    still applies the just-measured sample (its identity trivially matches at that moment).
 
+Known residual: the `warnRecommendationLowered` warning a check persisted is historical (it
+describes that run) and stays on the Diagnostics card and in the Copy report after the identity
+stops matching, while the ★ no longer steps — the "Recommended at the time of the check" label
+already covers the saved id; the warning carries no such qualifier.
+
 Pinned in `picker-seams.test.ts` ("the speed sample carries the identity it was measured under
-(#322)": recorded at `runAndPersistBenchmark`; GPU off → the RAM pick stands; a different card of
-the same size → the card pick; the same card → still steps, exactly as a legacy sample; a
-different context → still steps) and `benchmark-schema.test.ts`. Open for the owner: whether the
-backend should ALSO be matched (a CPU-rung crawl under a `discrete` class), and whether a
-context change beyond some ratio should invalidate after all.
+(#322)": recorded at `runAndPersistBenchmark`; GPU off / auto-disabled → the RAM pick still
+steps (Q5 → Q4); a CPU-rung crawl under a card class → the card pick, not the step; a
+processor-only crawl → steps a processor start, not a later card start; the mock → never; a
+different card → the card pick; the same card → still steps, exactly as a legacy sample; a
+different context → still steps) and `benchmark-schema.test.ts`.
 
 ---
 
