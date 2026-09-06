@@ -671,9 +671,12 @@ inventory) is what would confirm any conveyance.
 `runtime-sources.yaml` pins the **`kiwix_tools:`** block — the THIRD sidecar family and the
 first **`optional: true`** one: it is never part of the default engine-install selection and
 never counted toward `engineStatus().installed`/`missingFamilies` — only an explicit
-`families: ['kiwix_tools']` request installs it (the consent surface that sends that request is
-P8-2; until then `EngineStatus.missingOptionalFamilies` reports the family separately, additive
-and optional so a pre-#339 renderer simply ignores it). The family also ships **more than one
+`families: ['kiwix_tools']` request installs it. The consent surface that sends that request
+landed at P8-2: the Knowledge-packs panel's tools-missing notice and a mirror row on the AI
+Model screen, each requiring the user to accept the GPL-3.0-or-later license before the request
+goes out, gated by the same `policy.network.allowModelDownloads ∧ allowNetwork` check as models
+and the engine. `EngineStatus.missingOptionalFamilies` reports the family separately, additive
+and optional so a pre-#339 renderer simply ignores it. The family also ships **more than one
 executable**: `executables: [kiwix-serve, kiwix-manage, kiwix-search]`, base names only
 (`sidecarBinaryName` adds `.exe` on win; the first entry is the primary binary,
 `plan.binaryPath`). Per build, `runtime_files` lists non-executable files the executables cannot
@@ -787,12 +790,15 @@ source-bundle (P8-4) rulings that gate any conveyance (plan §3).
 > per-file headers of all five copyleft source trees (re-fetching the source tarballs too) before
 > promoting any of it. A version bump here is a licence re-review, not a mechanical edit.
 
-Placement on the drive today is **manual**: unzip the whole bundle under
-`runtime/kiwix-tools/<os>/`. A hand-placed bundle carries no install marker and resolves through
-the hashless `skip-legacy` verifier path (residual R-1) rather than integrity verification; an
-in-app install (family contract landed, #339 P8-1) writes the marker described above and both
-`kiwix-serve` and `kiwix-manage` verify normally — but no user-reachable install exists yet
-(`downloadEngine` still takes no arguments; the consent step is P8-2).
+The user path is the in-app **consent dialog** (#339 P8-2, `downloadEngine({ families:
+['kiwix_tools'] })`): the Knowledge-packs panel's tools-missing notice, or the mirror row on the
+AI Model screen, states the size, the GPL-3.0-or-later license and the source, and installs the
+family once accepted — writing the marker described above, so both `kiwix-serve` and
+`kiwix-manage` verify normally. The builder/DIY path is `fetch-runtime --family kiwix_tools`
+(#339 P8-3, same marker). Hand-placing the bundle under `runtime/kiwix-tools/<os>/` remains a
+**last-resort fallback**: it carries no install marker and resolves through the hashless
+`skip-legacy` verifier path (residual R-1) rather than integrity verification, and is replaced
+wholesale by the first in-app or scripted install.
 
 ## The vision role + mmproj projector (image understanding, Phases V1–V5)
 

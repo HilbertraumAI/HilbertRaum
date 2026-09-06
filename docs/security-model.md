@@ -176,14 +176,18 @@ content). The OS microphone indicator is the recording signal; the app adds no o
 ## Offline posture (spec §3.6)
 
 The app makes **no outbound network calls in its core path** — this is a property of the code, not a
-firewall. Two layers make it visible and defensible:
+firewall. The only things the app ever downloads are AI models, the AI engine and the optional
+knowledge-pack tools — each one only after you confirm it, each one verified before use. Two
+layers make it visible and defensible:
 
 ### 1. Policy precedence (`services/policy.ts`)
 `config/policy.json` and `config/drive.json` are **optional** (developer runs fall back to defaults)
 and are merged over `DEFAULT_POLICY`, where **update checks and telemetry are off** (no toggle
 exists for either) and — since Phase 18 (wave-1 decision D3 — architecture.md "In-app model downloader") — `allow_model_downloads` is
 **permitted**, so that with no policy file the spec §3.6 user toggle is the effective downloads
-gate. The policy models the spec §6 shape (`network` / `workspace` / `models` blocks).
+gate. The same key also gates the AI engine and the optional knowledge-pack-tools downloads
+(#339 P8-2, owner-ruled: no new policy key, the one gate covers all three). The policy models
+the spec §6 shape (`network` / `workspace` / `models` blocks).
 
 **Fail-closed on a packaged build (audit M-4, 2026-06-13).** The base the file is merged over —
 and the fallback for a **missing / malformed / partial** `policy.json` — depends on the build type
@@ -206,7 +210,8 @@ and the fallback for a **missing / malformed / partial** `policy.json` — depen
   release notes point users to (the policy is the ceiling, so the Settings toggle could not
   re-enable it). The standalone posture relaxes **two** network ceilings:
   `allow_model_downloads` (still gated by the `allowNetwork` setting + a per-download
-  confirmation, downloads SHA-256-verified against their manifests) and — since the local-api
+  confirmation; this covers model, engine and optional knowledge-pack-tool downloads alike,
+  each SHA-256-verified before use) and — since the local-api
   wave, owner decision O3 — `allow_local_api` (a loopback-only INBOUND ceiling; the feature
   stays default-off behind its own consent dialog, and without this it would be policy-dead on
   every standalone install); update checks + telemetry stay denied, and the
@@ -230,6 +235,11 @@ networkAllowedByPolicy = policy.network.allowModelDownloads || policy.network.al
 networkAllowed         = networkAllowedByPolicy && userSetting.allowNetwork
 offlineMode            = !networkAllowed
 ```
+
+The optional knowledge-pack tools (`kiwix_tools`) reuse `allowModelDownloads` rather than adding
+a policy key of their own (owner-ruled 2026-09-06, #339 P8-2) — a drive that restricts model
+downloads restricts the knowledge-pack-tools install the same way, with no separate switch to
+keep in sync.
 
 Consequences:
 - **The shipped default permits downloads, but only when a policy also allows them.** `allowNetwork`
@@ -1520,7 +1530,11 @@ exactly as they could alter the engine binary or any on-drive asset. A hash mani
 same writable drive would be **unanchored** (the attacker rewrites it too), so it buys nothing; real
 integrity needs **off-drive signing**, a Tier-3 prerequisite not in scope. This is the **same residual
 already accepted for the engine binary and the on-drive sidecars** — documented here and in
-`known-limitations.md`, not papered over. The blast radius is bounded: a tampered instruction skill is
+`known-limitations.md`, not papered over. (A downloaded `kiwix-tools` install improves on this: it is
+hashed per executable into the same `.hilbertraum-runtime.json` marker as the other sidecars and
+re-verified before every spawn, exactly like `llama-server`; only a hand-placed, marker-less bundle
+still resolves through the hashless `skip-legacy` path this residual describes.) The blast radius is
+bounded: a tampered instruction skill is
 still only injected reference text behind the prompt-injection guard — it cannot run code, reach the
 network, read other files, or widen document scope (the structural ceilings, §14).
 
@@ -1994,7 +2008,8 @@ re-checked by `assertSafeDownloadUrl`: **https-only** *and* a **loopback/private
 (127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, `localhost`, IPv6 `::1`/`fe80:`/`fc`/`fd`), with a
 **max-redirect** cap. The body is rejected once it exceeds the smallest of {`Content-Length`,
 caller `maxBytes`} + margin, with a global backstop when neither is known. All callers (model
-weights, runtime sidecar, OCR files) get this for free because they share the seam.
+weights, the runtime sidecars — llama.cpp, whisper.cpp, and the optional kiwix-tools — and OCR
+files) get this for free because they share the seam.
 
 **F15 (audit-postmerge-2026-06-29) — IPv4-mapped IPv6 closed.** The deny-list classifier
 (`isPrivateOrLoopbackHost`) matched the mapped form only in its **dotted-decimal** spelling
@@ -2014,7 +2029,9 @@ one only when the manifest carried `size_bytes`, so a redirected / `Content-Leng
 collapsed the cap to the 64 GiB backstop (a disk-fill nuisance on small USB drives; the bytes fail
 SHA verify afterwards). Now **both downloaders always pass a bounded cap**: the engine path passes a
 per-family ceiling (`ENGINE_DOWNLOAD_MAX_BYTES` = 2 GiB — engine archives are tens-to-low-hundreds of
-MB), and the model path passes the manifest's exact `size_bytes` when known, else a bounded **per-role
+MB; the same ceiling covers the optional `kiwix_tools` family, whose per-platform archives are
+10-20 MB, since it installs through the same `installOne` path), and the model path passes the
+manifest's exact `size_bytes` when known, else a bounded **per-role
 default** (`modelWeightMaxBytes`: chat/vision 40 GiB, transcriber 8 GiB, embeddings/reranker 4 GiB).
 The backstop itself was lowered 64 → 48 GiB and is now unreachable from production (defence-in-depth
 for a future caller). Residual: the cap is a disk-fill bound, not an integrity control — wrong bytes

@@ -34,7 +34,8 @@ described under "Letting other apps on this computer use your model" below.
   the translation is produced **on this device** by a local translation model — your text and
   documents are never sent off-device, and no cloud translation service is ever involved.
 - **No embedding upload.** Vector indexes stay local.
-- **No automatic model downloads** unless you explicitly opt in.
+- **No automatic downloads.** Models, the AI engine, and the optional knowledge-pack tools are
+  only ever fetched after you explicitly opt in.
 
 ## What data is stored, and where
 
@@ -61,7 +62,12 @@ folder):
   after you lock the workspace and after you remove a pack's registration from the app
   (removing a pack only forgets it — the file itself is untouched). Each pack's title,
   language and file location are stored as workspace metadata, inside the encrypted
-  database in encrypted mode, like the rest of your settings. While unlocked, the app also
+  database in encrypted mode, like the rest of your settings. The kiwix-tools programs that
+  read and serve packs (`kiwix-serve`, `kiwix-manage`) are a separate, optional download
+  (GPL-3.0-or-later, from `download.kiwix.org`) — offered from the **Knowledge packs** panel's
+  tools-missing notice or a mirror on the **AI Model** screen the first time you need them, and
+  SHA-256-verified like every other download; or you can place the binaries on the drive
+  yourself. While unlocked, the app also
   keeps a small generated index file naming your enabled packs' titles and file locations,
   in plain text, under `workspace/zim-transient/`; it is removed when you lock, quit, or
   start the app, though a crash can leave it behind until the next successful
@@ -80,10 +86,11 @@ copying text anywhere else.
 The app's **core path — chat, documents, indexing, search — always stays local** and makes no
 network calls. A visible indicator (in the chat header; clicking it opens
 Settings → **Privacy & data**) tells you the current state honestly: **Local · Offline** when
-no network is permitted, or "Downloads allowed — chats and documents stay local" when it is. The
-only thing the app uses the internet for is downloading/updating models + the AI engine. That setting is now
-**on by default** so a fresh install can fetch models out of the box — but it stays bounded:
-every download is explicit and confirmed, and you can turn it off in Settings:
+no network is permitted, or "Downloads allowed — chats and documents stay local" when it is.
+The only things the app ever downloads are AI models, the AI engine and the optional
+knowledge-pack tools — each one only after you confirm it, each one verified before use. That
+setting is now **on by default** so a fresh install can fetch models out of the box — but it
+stays bounded: every download is explicit and confirmed, and you can turn it off in Settings:
 
 ```
 [x] Allow internet access for model downloads and updates
@@ -98,23 +105,28 @@ The built-in browser engine's own background fetches are switched off as well: s
 disabled, because the engine would otherwise download a spelling dictionary from a Google-operated
 server on Windows and Linux the first time you type.
 
-## Model downloads — the app's only use of the internet
+## Model, engine and knowledge-pack-tool downloads — the app's only use of the internet
 
-The **only** thing the app can use the internet for is fetching a model file you ask for, from the
-**Models** screen. Three things must all be true before a single byte moves:
+The **only** thing the app can use the internet for is fetching a model file, the AI engine, or
+the optional knowledge-pack tools — from the **AI Model** screen, or, for the knowledge-pack
+tools, also from the **Knowledge packs** panel's tools-missing notice. Three things must all be
+true before a single byte moves:
 
-1. The drive's policy permits model downloads (drives — including prepared commercial drives —
-   ship with this **permitted** so you can add models; a drive `policy` can turn it off entirely).
+1. The drive's policy permits these downloads (drives — including prepared commercial drives —
+   ship with this **permitted** so you can add models, the engine or the knowledge-pack tools; a
+   drive `policy` can turn it off entirely).
 2. You left the Settings checkbox above on (it is **on** by default for a fresh install, unless the
    drive's policy disables it) — or turned it back on if you had switched it off.
 3. You confirmed that specific download in a dialog showing its size, license, and source address —
-   including explicitly accepting the model's license when it hasn't been pre-reviewed.
+   including explicitly accepting the license when it hasn't been pre-reviewed. The knowledge-pack
+   tools are GPL-3.0-or-later and always show that license for you to accept.
 
-The request goes only to the address printed in the model's local manifest; nothing about you, your
-prompts, or your documents is sent. There are **no update checks, no model catalog, and no
-background downloads** — with the checkbox off (or no internet at all) the app is fully usable and
-makes no internet calls. Every downloaded file is checked against its expected checksum before the
-app will use it.
+The request goes only to the address printed in the model's local manifest — the knowledge-pack
+tools instead ride the pinned `runtime-sources.yaml`, not a model manifest, but the same
+address-only, no-telemetry rule applies. Nothing about you, your prompts, or your documents is
+ever sent. There are **no update checks, no model catalog, and no background downloads** — with
+the checkbox off (or no internet at all) the app is fully usable and makes no internet calls.
+Every downloaded file is checked against its expected checksum before the app will use it.
 
 ## Letting other apps on this computer use your model (local API)
 

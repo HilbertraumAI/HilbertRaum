@@ -75,10 +75,11 @@ HILBERTRAUM/
 ├── models/{chat,embeddings,reranker,transcriber,vision,translation}/ # weights (git-ignored; transcriber/ = whisper GGML .bin; vision/ = the GGUF + its mmproj projector, image understanding V1–V5; translation/ = TranslateGemma GGUF, TG wave)
 ├── runtime/kiwix-tools/{win,mac,linux}/        # THIRD sidecar family: kiwix-serve + kiwix-manage + kiwix-search
 │   └── .hilbertraum-runtime.json                       #   (knowledge packs; OPTIONAL — never a readiness prerequisite). Install
-│                                                #   marker: a hash per executable + per ICU DLL (win only). An in-app install
-│                                                #   writes it (#339 P8-1); no user-reachable install exists yet (P8-2); the
-│                                                #   drive scripts follow in P8-3 — until then the bundle is placed manually
-│                                                #   (rag-design §17 D-Z17)
+│                                                #   marker: a hash per executable + per ICU DLL (win only). An in-app
+│                                                #   install writes it (#339 P8-1/P8-2, the Knowledge-packs-panel /
+│                                                #   AI-Model-screen consent dialog); `fetch-runtime --family kiwix_tools`
+│                                                #   is the scripted DIY path (P8-3); a hand-placed bundle still works as a
+│                                                #   last-resort fallback but carries no marker (rag-design §17 D-Z17)
 ├── ocr/                                        # OCR language files: {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
 ├── zim/                                        # Knowledge packs: ZIM archives (offline Wikipedia etc.) — PLAIN read-only
 │                                                #   files, never copied into the encrypted workspace (not the document

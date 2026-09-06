@@ -752,19 +752,21 @@ these harnesses prove the *current* pin (the drive's previous binary was b9585).
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
 | `zim-real` | `HILBERTRAUM_ZIM_SMOKE` | real `kiwix-manage` registration, the real `kiwix-serve` sidecar, Xapian search, the offline article viewer read — fully offline. **FAIL-CLOSED (#301 P5, finding L8):** requested with a missing/invalid tools dir, either binary absent, a non-ZIM file or an unset query **FAILS** the run instead of silently skipping it |
 
-**Installing the pinned kiwix-tools bundle.** `fetch-runtime --family kiwix_tools` (#339 P8-3)
+**Installing the pinned kiwix-tools bundle.** The user path is the in-app **consent dialog**
+(#339 P8-2): the Knowledge-packs panel's tools-missing notice, or the mirror row on the AI Model
+screen, states the size, the GPL-3.0-or-later license and the source, and installs the family
+once you accept. The builder/DIY path is `fetch-runtime --family kiwix_tools` (#339 P8-3), which
 downloads, SHA-256-verifies and extracts the pinned **kiwix-tools 3.8.1** archive for the host
 (or `--os`/`--arch` to provision another OS's dir), writes a `.hilbertraum-runtime.json` install
 marker hashing every required file (`kiwix-serve`, `kiwix-manage`, `kiwix-search`, and on
 Windows the five ICU DLLs), and `chmod +x`s the executables on mac/linux — exactly like the
 `llama_cpp`/`whisper_cpp` families, except it is never fetched by `prepare-drive --with-assets`
-(the family is optional: a DIY user runs the command explicitly once they want ZIM knowledge
-packs). A manual unzip of the pinned zip (see `model-policy.md` "Sidecar binaries —
-kiwix-tools" for the exact bundle/hashes) under `runtime/kiwix-tools/<os>/` remains a fallback
-that still works, but leaves no install marker and so resolves through the hashless
-`skip-legacy` verifier path (residual R-1) instead of integrity verification — prefer the
-script. An in-app install (the consent step, P8-2) is still to come; `kiwix-serve` and
-`kiwix-manage` verify normally against either the script's marker or an in-app one.
+(the family is optional). A manual unzip of the pinned zip (see `model-policy.md` "Sidecar
+binaries — kiwix-tools" for the exact bundle/hashes) under `runtime/kiwix-tools/<os>/` is the
+**last-resort fallback**: it still works, but leaves no install marker and so resolves through
+the hashless `skip-legacy` verifier path (residual R-1) instead of integrity verification —
+prefer the in-app install or the script. `kiwix-serve` and `kiwix-manage` verify normally
+against a marker from either the script or an in-app install.
 
 **Optional harness *inputs* (point a harness at a specific artifact).** Distinct from the on-switch
 env vars in the table above, several harnesses additionally read an **artifact-pointer input**,

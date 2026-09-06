@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { en } from '../../src/shared/i18n'
 
 // Issue #49: different npm versions compute the lockfile `peer` flags differently (a
 // long-standing npm/Arborist behaviour), so with an unpinned npm every contributor's
@@ -865,6 +866,36 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
     expect(
       oneLine(securityModel).includes(sentence),
       'security-model.md must quote the R-9 sentence verbatim (the counterpart it introduces)'
+    ).toBe(true)
+  })
+
+  it('the network-inventory sentence is stated identically wherever it lives (#339 P8-5)', () => {
+    // The app's network footprint grew a third leg (the optional kiwix-tools family, #339
+    // P8-1/P8-2): models + the AI engine + the optional knowledge-pack tools, all behind the
+    // same gate. This ONE sentence is the shared statement of that inventory — pinned
+    // VERBATIM across every doc that states it, and echoed in the Settings/Privacy tab hint
+    // (en.ts `privacy.network.hint`) so the UI copy cannot drift from the docs silently.
+    const oneLine = (s: string): string => s.replace(/\s+/g, ' ')
+    const sentence =
+      'The only things the app ever downloads are AI models, the AI engine and the optional ' +
+      'knowledge-pack tools — each one only after you confirm it, each one verified before use.'
+    const privacy = readFileSync(join(repoRoot, 'PRIVACY.md'), 'utf8')
+    const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8')
+    const userGuide = readFileSync(join(repoRoot, 'docs', 'user-guide.md'), 'utf8')
+    const securityModelDoc = readFileSync(join(repoRoot, 'docs', 'security-model.md'), 'utf8')
+
+    expect(oneLine(privacy).includes(sentence), 'PRIVACY.md must state the sentence verbatim').toBe(true)
+    expect(oneLine(readme).includes(sentence), 'README.md must state the sentence verbatim').toBe(true)
+    expect(oneLine(userGuide).includes(sentence), 'user-guide.md must state the sentence verbatim').toBe(
+      true
+    )
+    expect(
+      oneLine(securityModelDoc).includes(sentence),
+      'security-model.md must state the sentence verbatim'
+    ).toBe(true)
+    expect(
+      oneLine(en['privacy.network.hint']).includes(sentence),
+      'en.ts privacy.network.hint must state the sentence verbatim so the UI cannot drift from the docs'
     ).toBe(true)
   })
 })

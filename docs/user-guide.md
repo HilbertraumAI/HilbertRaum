@@ -100,7 +100,7 @@ HilbertRaum mark at the top is the **Home** button. Settings has four tabs: **Ge
 
 A quiet **🔒 Local · Offline** status sits in the chat header. Hover it for the short version — *"Everything stays on this drive. No internet
 connection is used."* — or click it to open the full privacy details. If you have enabled
-internet access for model downloads, it says so honestly: **Local · Downloads allowed**
+internet access for downloads, it says so honestly: **Local · Downloads allowed**
 (your chats and documents stay local either way).
 
 ### The Home screen
@@ -168,13 +168,14 @@ can turn this off under **Settings → Load the selected model automatically**.
 ### Downloading a model (optional)
 
 A model marked **Not downloaded** can be fetched from inside the app — for example the larger
-8B model after you upgrade to a 16 GB laptop. This is the **only** thing the app ever uses the
-internet for, and it never happens by itself:
+8B model after you upgrade to a 16 GB laptop. The only things the app ever downloads are AI
+models, the AI engine and the optional knowledge-pack tools — each one only after you confirm
+it, each one verified before use. None of it ever happens by itself:
 
 1. Open **Settings** and make sure **Allow internet access for model downloads and updates**
    is on (it is **on by default**, including on prepared commercial drives, unless this drive's
    builder deliberately disabled downloads in the drive's policy — rare; the app is fully usable
-   without it either way).
+   without it either way). The same setting also gates engine and knowledge-pack-tool downloads.
 2. On **AI Model**, click **Download** on the model you want. A confirmation shows the size,
    the license (with a link that names the site it points to), and the address the file comes
    from. If the model's license hasn't been pre-reviewed, you'll also tick a box accepting it.
@@ -795,10 +796,11 @@ A *knowledge pack* is a ZIM archive — a compressed offline copy of a reference
 The Kiwix project publishes thousands (Wikipedia in ~100 languages, Wiktionary,
 Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
 
-1. **One-time setup:** the kiwix-tools programs must sit under
-   `runtime/kiwix-tools/win` (or `mac`/`linux`) on your drive — see
-   [`troubleshooting.md`](troubleshooting.md) “The panel says kiwix-tools are
-   missing” while the installer step is still manual.
+1. **One-time setup:** the kiwix-tools programs (kiwix-serve, kiwix-manage) must be on your
+   drive. The first time, the panel offers to install them — a dialog states the size, the
+   GPL-3.0-or-later license and the source, and asks you to accept the license; or place them
+   yourself, see Troubleshooting → [“The panel says kiwix-tools are
+   missing”](troubleshooting.md#the-panel-says-kiwix-tools-are-missing).
 2. **Add packs:** copy `.zim` files into the drive’s `zim/` folder (found when you
    unlock, and on Refresh), or use *Documents → Knowledge packs → Add packs…* for files
    stored elsewhere. Files are used in place — nothing is copied. The list updates
@@ -1009,10 +1011,11 @@ skill's figures.
 ## 10. Privacy & offline
 
 Open **Settings → Privacy & data** (or click the **🔒 Local · Offline** status in the chat header)
-to see where your data lives and confirm the app's network state. Internet access is used **only**
-for optional model/engine downloads — it is on by default so you can fetch a model out of the
-box, including on a prepared commercial drive; every download is explicit and
-confirmed, and the core app — chat, documents, search — never goes online. (A link you confirm
+to see where your data lives and confirm the app's network state. The only things the app ever
+downloads are AI models, the AI engine and the optional knowledge-pack tools — each one only
+after you confirm it, each one verified before use. That setting is on by default so you can
+fetch a model out of the box, including on a prepared commercial drive; every download is
+explicit and confirmed, and the core app — chat, documents, search — never goes online. (A link you confirm
 in the dialog described in §6 is opened by your *browser*, not by the app.) Logs are stored
 **locally** on the drive (encrypted on an encrypted workspace) and never uploaded.
 

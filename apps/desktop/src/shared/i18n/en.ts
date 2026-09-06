@@ -1255,10 +1255,11 @@ export const en = {
   'settings.network.title': 'Privacy & Offline Mode',
   'settings.network.allow': 'Allow internet access for model downloads and updates',
   'settings.network.hint':
-    'Off by default. When off, the app makes no internet calls. Turning it on only enables ' +
-    'model downloads from the AI Model screen — each one asks for confirmation first, and a ' +
-    'drive policy can keep downloads disabled entirely. Your prompts and documents never ' +
-    'leave this device regardless of this setting.',
+    'On by default, so a fresh install can fetch a model out of the box. When off, the app ' +
+    'makes no internet calls. Turning it on enables downloads for models, the AI engine, and ' +
+    'the optional knowledge-pack tools — each one asks for confirmation first, and a drive ' +
+    'policy can keep downloads disabled entirely. Your prompts and documents never leave this ' +
+    'device regardless of this setting.',
   'settings.appearance.title': 'Appearance',
   'settings.appearance.aria': 'Theme',
   'settings.appearance.system': 'System',
@@ -1534,7 +1535,7 @@ export const en = {
   'privacy.statement.online':
     'HilbertRaum runs the AI model on your laptop. Your prompts, documents, ' +
     'embeddings, and chat history stay local — even with internet access enabled, only ' +
-    'model downloads use the network.',
+    'downloads (models, the AI engine, and the optional knowledge-pack tools) use the network.',
   'privacy.statement.noUploads':
     'This app does not send your data to cloud AI providers. There are no prompt, ' +
     'document, or embedding uploads, no telemetry, no analytics, and no remote crash ' +
@@ -1543,7 +1544,9 @@ export const en = {
   'privacy.networkState.noPolicy': 'Offline Mode is on.',
   'privacy.networkState.disabledByPolicy': 'Network access disabled by policy.',
   'privacy.networkState.offDefault': 'Offline Mode is on (network off by default).',
-  'privacy.networkState.enabled': 'Internet access is enabled for model downloads and updates.',
+  'privacy.networkState.enabled':
+    'Internet access is enabled for downloads: models, the AI engine, and the optional ' +
+    'knowledge-pack tools.',
   'privacy.network.noFiles': 'No prompts or files leave this device.',
   'privacy.network.effective': 'Effective state',
   'privacy.network.effectiveOffline': 'Offline (no internet calls)',
@@ -1557,10 +1560,11 @@ export const en = {
   'privacy.network.telemetry': 'Telemetry',
   'privacy.network.telemetryValue': 'Nothing leaves this device — there’s no tracking to turn off',
   'privacy.network.hint':
-    'The app warns before any internet action. The only thing it uses the internet for is ' +
-    'downloading or updating models, which is off by default and must be enabled on the ' +
-    'General tab. A drive policy can disable it entirely. The Local API below is a separate, ' +
-    'opt-in feature that never touches the internet.',
+    'The app warns before any internet action. The only things the app ever downloads are AI ' +
+    'models, the AI engine and the optional knowledge-pack tools — each one only after you ' +
+    'confirm it, each one verified before use. This is on by default and can be turned off on ' +
+    'the General tab. A drive policy can disable it entirely. The Local API below is a ' +
+    'separate, opt-in feature that never touches the internet.',
   'privacy.data.title': 'Where your data lives',
   'privacy.data.driveRoot': 'Drive root',
   'privacy.data.workspace': 'Workspace',

@@ -2948,12 +2948,12 @@ outcomes notice over every reason code); `ReviewEvidencePane.test.tsx` / `Review
 
 ### Deliberately not built (MVP cut; §5 item 21 tracks the follow-ups)
 
-Provisioning of the `kiwix_tools` family: the family contract itself landed (#339 P8-1,
-D-Z17) — `runtime-sources.yaml`, the in-app installer, the sell gate. Still open: the consent
-step that lets a user reach the installer (P8-2), the drive scripts' `fetch-runtime`/
-`prepare-drive` support (P8-3), the on-drive corresponding-source bundle (P8-4), and the
-network-inventory prose in PRIVACY/README/user-guide/security-model (P8-5) — until P8-2 lands,
-binaries are still placed manually. Also not built: persistent article import (Tier 2); an
+Provisioning of the `kiwix_tools` family: the family contract landed (#339 P8-1, D-Z17) —
+`runtime-sources.yaml`, the in-app installer, the sell gate. The consent step that lets a user
+reach the installer (P8-2), the drive scripts' `fetch-runtime`/`prepare-drive` support (P8-3),
+and the network-inventory prose in PRIVACY/README/user-guide/security-model (P8-5) have since
+landed too. Still open: the on-drive corresponding-source bundle (P8-4), in flight as a sibling
+PR. Also not built: persistent article import (Tier 2); an
 in-app ZIM catalog/downloader; evidence review
 over archive citations (they resolve as honest 'unresolved'); packs on the whole-document
 / compare paths (disclosed per answer as `mode`, not queried — P4); quality guarantees
