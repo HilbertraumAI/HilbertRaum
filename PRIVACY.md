@@ -53,6 +53,20 @@ folder):
 - Generated outputs
 - Local debug/audit logs
 - App settings
+- Knowledge packs (offline ZIM archives, e.g. an offline Wikipedia) are used in place —
+  never copied, and never encrypted by the workspace vault. The original file stays on disk
+  after you lock the workspace and after you remove a pack's registration from the app
+  (removing a pack only forgets it — the file itself is untouched). Each pack's title,
+  language and file location are stored as workspace metadata, inside the encrypted
+  database in encrypted mode, like the rest of your settings. While unlocked, the app also
+  keeps a small generated index file naming your enabled packs' titles and file locations,
+  in plain text, under `workspace/zim-transient/`; it is removed when you lock, quit, or
+  start the app, though a crash can leave it behind until the next successful
+  start/lock/quit cleanup. The pack server that reads it is local — it listens on 127.0.0.1
+  only, and no question you ask is ever uploaded anywhere. While the workspace is unlocked
+  and a knowledge pack has been used in a chat, other programs running under your own user
+  account on this computer can read the enabled packs through the pack server, which has
+  no password of its own; locking or quitting stops it.
 
 Two small things live outside the workspace: the app remembers display preferences (such as your
 chosen language) in the app-data folder that the built-in browser engine keeps on this computer,

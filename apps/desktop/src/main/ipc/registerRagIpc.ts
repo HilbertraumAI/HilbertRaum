@@ -23,6 +23,7 @@ import {
   documentApproxTokenTotal,
   generateGroundedAnswer,
   generateGroundedDataAnswer,
+  modePackOutcomes,
   ragSettingsFrom,
   wholeDocumentFitBudgetTokens
 } from '../services/rag'
@@ -548,7 +549,12 @@ export function registerRagIpc(ctx: AppContext): void {
                       onToken: sendToken,
                       skill: turnSkill,
                       // W2 (§2.1): carry the auto-narrow scope notice into the grounded-data path too.
-                      answerPrefix: notice ? `${notice}\n\n` : undefined
+                      answerPrefix: notice ? `${notice}\n\n` : undefined,
+                      // Knowledge packs (#301 P4, plan §9.21 (e)5): this path narrates a
+                      // deterministic extract from DOCUMENTS and never queries a pack, so every
+                      // ticked pack gets an honest `skipped / mode` outcome. Built HERE because
+                      // `GroundedDataAnswerOptions` carries no scope — the resolved one lives here.
+                      packOutcomes: modePackOutcomes(ctx.db, scope.packIds)
                     }
                   )
                 }
@@ -760,6 +766,10 @@ export function registerRagIpc(ctx: AppContext): void {
             // Retrieval reranker: null when no reranker is provisioned — retrieval then
             // keeps the unreranked ordering byte-identical.
             reranker: ctx.reranker,
+            // Knowledge packs (ZIM wave): the query-time archive arm, only when this chat's
+            // scope selected packs (opt-in per chat). makeArm returns null when the tools
+            // are missing or nothing is retrievable; retrieve() isolates arm failures.
+            externalArm: ctx.zim?.makeArm(ctx.db, scope.packIds) ?? null,
             // The turn's skill: its fence rides in the grounded user turn; the assistant row is
             // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
             skill,

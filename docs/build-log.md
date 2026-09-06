@@ -27,6 +27,176 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-06 — ZIM knowledge-packs wave (PR #294 → #301): the Phase 0–6 dated entries retired verbatim (P7)
+
+Moved to make room under the BUILD_STATE.md preamble budget at the P7 close-out (master's #302 merge-in had pushed it over 200 lines); the ten entries below are unchanged from how they stood in BUILD_STATE.md. The wave summary entry that replaces them there stays in BUILD_STATE.md until the wave itself closes.
+
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 6 — design and frontend review: T18-a implemented, review "Open article" added.**_
+PacksPanel/ScopePopover/SourcesDisclosure/ArticleModal/EvidencePane/ReviewScreen reviewed for copy, structure, a11y and visuals over the states P1–P5
+produced; no scope/outcome/lifecycle semantics changed. Closed: T18-a (the seven-leg UI acceptance row, `KnowledgePacks.test.tsx`); the §5 item 21(c)
+residual — a review row's archive citation now opens through the shared "Open article" viewer (frozen-snapshot locator; renamed/removed/unavailable
+all handled); the P2 copy items (register header "Document"→"Source", archive SHA cell, Markdown locator labels stay English — accepted); house
+dashes (EN —, DE –) across four keys. New: the "No full-text index" badge, reason-specific greyed-row hints in the picker, named pack/article action
+buttons, `role="group"` checkbox blocks, `Modal.describedBy`. Decisions: the collision surface (`ServedLibrary.excluded`) stays OUT of the panel — a
+served-library, not a pack-row, fact; deferred to P7 (a `packs:status` addition) — the per-answer "name collision" row already covers it; the source
+popover stays non-modal (Radix's modal variant aria-hides its own trigger chip and locks transcript scroll). Residuals: T18-b (owner's real-visual
+leg) pending — owner; the collision-surface follow-up; small PacksPanel residuals — all registered at P7 (§5 item 21(k)). Record:
+`design-guidelines.md` §11.15; `rag-design.md` §17 module map. Suite on this machine: 419 / 6,060 (5,980 / 79), exit 0 = +1 file / +25 tests over the head c3ea5581 (418 / 6,035, recounted here; its one failure was the known zim-client 8 MiB load flake); typecheck + build green; T18-b orchestrator pre-check in real Electron (both themes/languages, panel + picker) recorded in the inventory row — the owner's sign-off stays pending.
+
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 4 — retrieval honesty: review M3 / M6 / M7 / M8 / M10 closed.**_
+An explicit, additive `documentsOff` flag (never derived from emptiness) makes packs-only scope expressible again, superseding the
+2026-09-05 interim fix; `resolveScope`'s deny-all keeps chat attachments in scope, is fail-closed through `buildScopeFilter` and the
+resident-vector fast path, and `retrieve` skips the document arms before embedding. Document/archive candidates interleave whenever
+no reranker RANKED them — absent or threw — and a cancellation is never turned into a fallback. At most 12 packs run per ask; the 24
+admitted candidates are allocated round-robin in title order after every pack settles, ≤ 2 packs at once, under a 20 s per-ask
+deadline shared with the request guard's one retry. Searchability is confirmed only by a validated `/suggest` probe run at a
+reconcile's end, cached against the file/tool fingerprint; a confirmed-no pack stays readable. Every selected pack gets one
+persisted outcome per ask, shown under the answer even with zero citations, "unknown" on legacy rows; whole-doc/compare answers now
+say packs were not queried. Record: `docs/rag-design.md` §17 D-Z4 (M3/M8/M6 facts), D-Z11 (searchability half), NEW D-Z12 (scope).
+Suite on this machine: 418 / 6,035 (5,955 / 79) = +1 file / +34 tests over the head 31869fc5 (417 / 6,001, recounted here); one full run needed the known 8 MiB-leg retries under a foreign test load; typecheck + build green; real kiwix-tools not installed here.
+
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 5 — access boundary and hygiene: review
+M1 / L1 / L5 / L8 / L9 / DOC-1 closed.**_ Every kiwix-serve request from the ask arm and article
+viewer runs inside `ZimService.withServer`: captures the revision/generation/port/alive tuple before
+and after, discards a response observed across a lifecycle change, retries exactly once — only while
+the session still admits the op and eligibility is recomputed under the current revision — else
+`StaleServerError`. `packs:add` answers one typed `KnowledgePackAddResult` (outcome, added packs,
+failure count, a reason code — never a path or a tool's stderr); the one encoder `encodeArticlePath`
+validates entry keys (2048-char bound); the real-tool smoke is fail-closed on `HILBERTRAUM_ZIM_SMOKE`; `platform` is injected throughout `services/zim/`. `security-model.md`
+carves out both `kiwix-serve` exceptions by name and records accepted residual R-9 (mirrored in
+PRIVACY/known-limitations/user-guide). Record: rag-design D-Z10 (request-guard paragraph),
+security-model "kiwix-serve — the one unauthenticated sidecar". T17-a / T17-b implemented. Suite on
+this machine: 417 / 6,001 (5,921 / 79) = +1 file / +43 tests over the head 194b28ec (416 / 5,958, recounted here); typecheck + build green; real kiwix-tools not installed here.
+
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 3b — session boundary, lock, identity, discovery: review
+H4 / M4 / M5 / L3 / L4 / L7 closed.**_ Every pack operation captures the unlock epoch and re-asserts admission/epoch/
+cancellation after every await; lock/quit abort the operation registry, suspend/stop the sidecar and clean the
+relocated `<workspacePath>/zim-transient/` (`library.<build>.xml` + `meta-<n>/library.xml`, containment- and
+link-checked; the OS-temp location is gone). A pack's identity is its 80-byte header UUID; `packs:list` is DB-only
+and one serialized reconciliation (session start, new `packs:refresh`) heals paths/availability without ever
+touching `enabled`/`removed_at`, so a user's remove/disable wins over a late pass. Serving names follow the pinned
+libkiwix rule; a collision excludes the later UUID. New `packs:changed` event refreshes `PacksPanel`/`ChatScreen`
+without navigation. Record: `docs/rag-design.md` §17 D-Z8 (relocated dir)/D-Z10 (admission-epoch half)/D-Z11
+(identity, reconciliation, locator — NEW). T07/T08/T11/T12/T13-a implemented. Suite on this machine:
+416 / 5,958 (5,879 / 78) = +4 files / +40 tests over the head 45df38b1 (412 / 5,918, recounted here);
+typecheck + build green; real kiwix-tools not installed here.
+
+_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 3a — server and manager generations: review
+H3 / M2 / M9 closed.**_ `KiwixServer` keeps per-child records whose late callbacks can never touch a newer
+child; `ZimService` owns a monotonic pack revision, ONE generation allocator for library builds and children,
+and one FIFO chain — the only writer of `library.<build>.xml` — publishing a single `{ revision, build,
+generation, port, xml }` tuple only after rechecks at every await. Concurrent asks share one start (a cancelled
+ask stops waiting without cancelling it; pack change / lock / quit abort it); a start failure latches by revision;
+teardown is single-flight and bounded (SIGTERM → 2 s → SIGKILL → 3 s → "not confirmed": PID kept in the crash
+reaper, file kept). `kiwix-manage` runs under the pre-spawn verifier (hashless marker → `skip-legacy`, residual
+R-1), registers its PID, honours abort and settles only after its child is terminal. T05-a / T06-a implemented
+(`zim-service-lifecycle.test.ts`, 22 tests on fake children). Suite on the rebased tree (`527c1143` + P3a):
+412 / 5,918 (5,839 / 78); typecheck + build green; real kiwix-tools not installed here. Record: `docs/rag-design.md`
+§17 D-Z10; P3b consumes `suspend()` + the admission seam + the teardown bound, P5 consumes `serverState()`.
+
+_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 2 — evidence identity and
+provenance (H2, M11).**_ `buildEvidenceSourceSnapshots` guards `sourceKind === 'archive'`
+before the document-id and legacy exact-title branches (same guard at read time): an
+archive citation is always `identity:'unresolved'` with no document id/hash; freshness
+reports `'unverifiable'`. `EvidenceSourceSnapshot` gained four ADDITIVE fields
+(`sourceKind`, `archiveTitle`, `packId`, `articlePath`; absent ⇒ `'document'`; no schema
+migration) carried through the HTML/PDF evidence pack, the Markdown transcript export and
+`EvidencePane`; document sources unchanged. Saved pre-merge reviews are disposable
+(re-run, no migration). Review context stays honest unavailable — no "Open article" yet
+(owner: P6, after P3b). Tests: T03-a flipped `it.fails`→`it`; T03-b/T04-a implemented;
+T04-b RECORDED (real Electron printToPDF ran here: 4-page EN/DE archive PDFs carry archive title,
+pack id, article path and the archive warning). Baselines M3/M8 untouched. Suite: 411 / 5,870 (5,791 / 78), +29 over P0; typecheck + build green. Electron printToPDF ran (Smart App Control probe passed); real kiwix-tools not run.
+
+_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 1b — D2 remedy re-ruled: cooperative
+slicing, not a worker.**_ Why: laptop leg 1 (owner's i7-1185G7, Node 24) failed gate (i) at 55–63 ms vs
+50 while (ii) passed; the scanner loop is the floor, and a worker's blast radius (main rollup entry,
+first-party `asarUnpack`, pool/lifecycle in P3b's boundary, an owner-only packaged-load smoke class)
+was judged larger than slicing's (`html.ts` + two await sites, provable in Vitest). Shipped: the
+`zimArticleSlices` generator (yields every 32 Ki work units and after every 32 Ki-char text piece,
+cut before an `&`), `zimArticleToSegmentsAsync(html, { …, signal? })` (`setImmediate` between slices,
+rejects on abort), the incremental tidy; output byte-identical to P1 on 45 inputs; `arm.ts` propagates
+the ask abort. 14900K P-core: per-slice p95 ≤ 0.99 ms vs the 1.67 ms early-warning third of the 5 ms
+gate (PASS; the raw batch max 2.7 ms is random-index jitter); the 1 MiB sync total rose ≈ 15 % (price
+of divisibility, recorded not gated). The reporter's i7-8550U then ran BOTH: the P1 converter (1 MiB 73–130 ms vs 50, fails every run —
+this core class is 4.6–8× a 14900K P-core) and P1b's Section D at 32 Ki and 16 Ki: per-slice p95
+2.4–2.7 ms at 16 Ki vs the 5 ms bound (PASS; 1 MiB families' max < 3 ms), the batch's residual 6–9 ms
+maxima being random-index GC pauses (now counted by the script). `DEFAULT_SLICE_WORK` = 16 Ki from
+that run; T02-c recorded; the worker stays the fallback only. Suite: 411 / 5,866 (5,787 / 78) — the load-flaky `zim-client` 8 MiB
+legs (one `ECONNRESET` under fork load, green alone) now carry one retry; typecheck clean, build green.
+Pointers: `docs/rag-design.md` §17 D-Z3 "P1b", `scripts/zim-html-perf.mjs` Section D.
+
+_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 1 — parser finding H1 closed: a linear
+forward scanner.**_ `zimArticleToSegments` is now a single-cursor scanner with memoised failed
+lookaheads (every input index examined at most K = 5 times; proof in html.ts's "LINEAR FORWARD
+SCANNER" header) replacing the O(n²) regex tokenizer. New contract: `{ maxChars?, maxWork? }` →
+`{ title, segments, truncated, work }`; never throws; `PackArticle.partial` (main → preload →
+`ArticleModal`) shows a hint line instead of silently presenting a partial article as complete.
+CI oracle is the deterministic `work` counter, never wall-clock; four attributed non-Wikipedia
+fixtures added (T02-a/T02-b implemented). **14900K early warning (plain Node, this machine):**
+P-core 15–16 ms / 29–30 ms vs the ≈17 ms / 50 ms one-third gate (both pass, margin thin on (i));
+E-core fails gate (i). **Owner's i7-1185G7 (Node 24) already FAILS gate (i): 55–63 ms vs 50; gate (ii)
+86–107 vs 150 passes** — superseded the same evening by the D2 re-ruling (Phase 1b entry above).
+Baselines H2/M3/M8 untouched. Suite: 411 / 5,854 (5,775 / 78), +13 over P0; a first run failed only
+the load-sensitive `zim-client` 8 MiB over-ceiling test (green alone) — given a 60 s budget, re-run
+green; typecheck clean, build green. Pointers: `docs/rag-design.md` §17 D-Z3, `scripts/zim-html-perf.mjs`.
+
+_2026-09-05 — **ZIM knowledge packs (PR #294 → #301), Phase 0 — integration baseline on the PR's own
+branch `feat/zim-knowledge-packs`.**_ Master `bfdb514a` merged IN (merge commit `3b321571`, no rewrite;
+the two known conflicts resolved — `CHANGELOG.md` both entries kept, `Transcript.tsx` the archive-opening
+and the answer-speed props both kept). Integrated baseline on this machine: 409 files / 5,824 tests
+(5,745 passed / 78 skipped) → after P0 411 / 5,841 (5,762 / 78); typecheck + build green. P0 landed: the
+anchored `/zim/` ignore rule (L2); the PR's §5 item renumbered 20 → **21** (master's finished #290/#291
+item 20 collapsed, narrative to `docs/build-log.md`) + the three in-doc pointers; the #293 excerpt framing
+proven for archive excerpts (T01, `zim-prompt-framing.test.ts`; `EXCERPT_GUARD_LINE` wording KEPT — the
+grounded-QA eval gate could not run here, residual R-5 → recorded at P7 as D-Z14); H2/M3/M8 `it.fails`
+baselines (`zim-regressions.test.ts`, setup outside the inverted bodies; the review's H1 timing case
+dropped — P1 pins it with a work counter); the checked-in required-check inventory
+`tests/fixtures/zim/required-checks.json` + its `repo-hygiene.test.ts` validator; the 8 MiB response
+ceiling tested; the tautological byte-identity test replaced by a fixture captured from master `bfdb514a`
+(L6); the EN/DE `projectCount` plural pair re-joined. Real tools / Electron: not run (Smart App Control,
+exit `0xC0E90002`). Phases 1–7 follow as PRs INTO the branch; #294 alone goes to master and closes #301.
+
+_2026-09-04 — **ZIM knowledge packs — MVP BUILT (feat/zim-knowledge-packs; design
+record: rag-design §17).**_ Offline ZIM archives (e.g. Wikipedia) as opt-in per-chat
+retrieval sources: kiwix-serve as the THIRD sidecar family (spike 2026-08-22 ruled out
+node-libzim on Windows), query-time Xapian search → shared chunker → the existing
+reranker via a new optional external-arm seam in `retrieve()` (no-arm path byte-identical,
+pinned). New: `knowledge_packs` table, `packs:*` IPC, scope `packIds`, archive citations +
+offline article viewer, Documents-screen packs panel, drive `zim/` dir. Deliberate MVP
+cuts + follow-ups in §5 item 21. Suite green (5660+), typecheck green.
+
+## 2026-09-06 — BUILD_STATE §5 item 20 retired verbatim (P6)
+
+Collapsed to a 3-line pointer in `BUILD_STATE.md` §5 item 20 at the ZIM knowledge-packs wave's
+Phase 6 records step (#301), to make room under the §5 500-line budget. Full text as it stood
+before the collapse:
+
+**#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line — CLOSED
+2026-09-04** (PRs #295, #300, #297, #299 merged — the four stacked PRs; #290/#291/#298 closed;
+every #298 hardware box ticked the same day on the i9-9900X / RTX 3090; the captured b9849
+transcript is pinned as `tests/fixtures/chat-sse-timings-b9849.txt`). Records: `architecture.md`
+"Chat & streaming" → "Per-answer speed line" §1–§3; `benchmark.md` / `model-benchmarks.md` §6.5
+(thresholds deliberately NOT retuned). Narrative: the 2026-09-04 dated entry above; the item text
+as it stood before this collapse is in `docs/build-log.md` (retired verbatim 2026-09-05, ZIM wave
+Phase 0). Residuals: none.
+
+## 2026-09-06 — BUILD_STATE §5 item 21 (c)/(h) retired verbatim (P4)
+
+Collapsed to one-line pointers in `BUILD_STATE.md` §5 item 21 at the ZIM knowledge-packs wave's
+Phase 4 records step (#301), to make room under the §5 500-line budget. Full text as it stood
+before the collapse:
+
+(c) **Evidence review identity for archive citations — DONE in P2** (2026-09-05, #301 review
+H2/M11): unresolved by construction, pack id + article path exported through HTML/PDF/Markdown;
+residual = "Open article" from a review row (owner: P6, after P3b).
+
+(h) **R-7 (P3b, 2026-09-06) — closed with recorded limits:** the dedicated `zim-transient/`
+cleanup is tested with the actual filenames in both workspace modes (startup / session start),
+and at lock, quit, failed registration, superseded rebuild and an unconfirmed manager child on
+the real encrypted vault (`zim-ipc-session.test.ts`, `zim-transients.test.ts`); limits in
+`known-limitations.md`: an unconfirmed child's file waits for the next session start, a file a
+stray process holds open is left and reported.
+
 
 ## Retired `BUILD_STATE.md` SECTIONS (moved 2026-08-20)
 
@@ -912,6 +1082,31 @@ MVP-era examples from this audit — the depth-mode plumbing, `runtime_events` �
 since shipped in Phases 19–20).
 
 
+### BUILD_STATE §5 item 20 — the #290/#291 speed-figures wave (retired verbatim 2026-09-05, ZIM wave Phase 0)
+
+> Item 20 as it stood in BUILD_STATE §5 before the ZIM knowledge-packs wave (PR #294 → #301) collapsed it
+> on 2026-09-05 to outcome + record pointers (the wave was CLOSED on 2026-09-04: PRs #295, #300, #297, #299
+> merged; #290/#291/#298 closed; the collapse freed §5 budget for the wave's item 21). The item text below
+> is verbatim; it carries no relative links, so nothing was de-linkified.
+
+20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line (opened
+    2026-09-04; three stacked PRs on one lineage).** PR 1 (`fix/290-291-pr1-sse-timings-seam`):
+    the `readChatSSE` seam — `onFinish(reason, timings?)`, `RuntimeTimings` in `runtime/index.ts`.
+    PR 2 (#291): `measureTokensPerSecond` reports `predicted_per_second` (decode tokens, prefill
+    excluded) with the chunk count as the flagged fallback; `BenchmarkResult.speedBasis`; the card
+    says "Decode speed" + the token count; MTP record §7 watch item → observed. PR 3 (#290): chat
+    only — one ephemeral `chat:speed:<id>` payload per finished answer, `tok/s · s to first
+    token · tokens`, EN/DE, nothing persisted. The PRs used "Refs", not "Closes": the "matches
+    llama-server's `print_timing` within rounding" legs need a real runtime and the execution
+    machine cannot launch one (Smart App Control, exit `0xC0E90002`) — verification issue
+    **#298** (the #291 reporter) carried both acceptance lists and the reconstructed rung-1a argv.
+    **#298 VERIFIED 2026-09-04, every box ticked** (figures in the dated entry); the captured b9849
+    transcript is committed by PR 4 (`fix/290-291-pr4-timings-fixture`, which closes
+    #290/#291/#298). PRs: #295 → #296 → #297 → PR 4 (stacked; merge in order, re-basing each onto
+    master as the one below lands). Remaining after merge: nothing — collapse this item. Thresholds (`VERY_LOW_TOKENS_PER_SECOND`,
+    `SLOW_PICK_TOKENS_PER_SECOND`) deliberately NOT retuned — they now compare a decode figure
+    against probe-basis calibration (recorded in `docs/benchmark.md` / `model-benchmarks.md` §6.5).
+
 ### BUILD_STATE §5 items 11–14 — the closed audit rounds' wave narratives (retired verbatim)
 
 > Their outcome lines, ledger pointers and still-open residuals stayed in BUILD_STATE §5 under
@@ -1356,6 +1551,55 @@ tag triggers the release workflow's draft build).
 
 
 ---
+
+_2026-09-04 — **#290/#291 wave, PR 1 of 3 (`fix/290-291-pr1-sse-timings-seam`): the parser seam.
+`readChatSSE` now reads llama-server's top-level `timings` off any chunk and hands the last one
+up through `onFinish(reason, timings?)` at `[DONE]`/close — never on an abort, error frame or
+watchdog trip; one shared `RuntimeTimings` type in `runtime/index.ts`; every existing `onFinish`
+caller source-compatible.**_ Blast-radius re-analysis in the PR description (the app never logs the
+sidecar argv; the finish hand-up moved from the finish chunk to the sentinel). §5 item 20 tracks the
+wave; #290/#291 stay OPEN until the reporter runs the hardware legs (verification issue **#298**,
+assigned to the #291 reporter). PR 1 = #295 (375 / 5,645 / 74). Master `b4e0ed06` recounted: 375 / 5,633 / 74 raw.
+**PR 2 (`fix/290-291-pr2-decode-speed`, #291):** `measureTokensPerSecond` → `SpeedReading`
+(`predicted_per_second` when timings are present, chunk fallback flagged), the early `break`
+removed, `BENCHMARK_PROMPT` now a paragraph so the 64-token cap fills, `BenchmarkResult.speedBasis`,
+the card says "Decode speed" + token window / "≈ approximate"; thresholds NOT retuned (basis
+recorded in `benchmark.md`, `model-benchmarks.md` §6.5); MTP record §7 watch item → observed.
+PR 2 = #296 (375 / 5,654 / 74). **PR 3 (`fix/290-291-pr3-answer-speed-line`, #290):** chat
+only — `GenerateOptions.onTimings` (completed streams only) → `withChatStream` `sendTimings` →
+ONE ephemeral `chat:speed:<id>` `AnswerSpeed` payload (tok/s + tokens from the server timings,
+TTFT on the `first_token` clock) keyed to the persisted message id; `ChatScreen` session map →
+`Transcript` line `42 tok/s · 1.8 s to first token · 615 tokens` (EN/DE); nothing persisted;
+design record: `architecture.md` "Chat & streaming" → "Per-answer speed line" §1–§3. PR 3 = #297
+(376 / 5,670 / 74; +37 tests over master across the stack). Dev launch not possible on this
+machine (Smart App Control blocks `electron.exe` and the sidecar) — build + suite only.
+**#298 VERIFIED on hardware the same day** (the #291 reporter, i9-9900X / RTX 3090, pinned b9849,
+every box ticked: Diagnostics 28.2 / 25.9 MTP and 21.8 no-MTP vs `print_timing` 28.20 / 25.87 /
+21.84; prefill-independent; speed line 32 / 28 tok/s + token counts exact, abort / reload / mock /
+German / document-answer legs clean; the app's argv confirmed from `/proc` — no `-fa`). **PR 4
+(`fix/290-291-pr4-timings-fixture`):** the captured b9849 transcript committed as
+`tests/fixtures/chat-sse-timings-b9849.txt` (+ `chat-sse-timings-fixture.test.ts`), the records
+corrected (the issue's 47.9 was a `-fa` build; b9849 does 26–32 t/s there); closes #290/#291/#298.
+
+_2026-09-04 — **Phase F PR 6 (PR #293, `fix/pf-code1-rag-excerpt-framing`): #228 shipped — the excerpt
+block of `buildGroundedPrompt` / `buildCompareWholeDocPrompt` is framed as document content, not
+instructions (BEGIN/END markers + a guard line, user turn only, `rag/grounded-data.ts`). The eval
+probe passed at midday (`llama-server.exe --version` → `version: 9849`, exit 0), so the grounded-QA
+gate ran before/after on all ten K: chat GGUFs: level within noise on the ranked models (§52, the
+#228 addendum row + the "Phase F addendum" paragraph). Phase F COMPLETE; #217 closed.**_ Review
+catches repaired in-PR (the compare notice hoisted out of the block; echoed framing scrubbed). Suite
+on the branch (this machine): 375 / 5,633 / 74 raw (the Electron smoke ran; 374 / 5,627 / 74
+excluding it), +5 tests over master `03080b85`. Dev launch OK (app-data dev root).
+
+_2026-09-04 — **Phase F close-out (PR #292, docs only): Phase F is complete except #228. PRs 1–5
+(#283 `6329f40e`, #284 `94c9faf8`, #285 `a6d19700`, #287 `533945b8`, #289 `f30c73fc`) closed #274,
+#240/#243/#250, #248/#226, #236/#221, #247/#225; the RAG excerpt framing (#228, "wrap, gated by
+the grounded-QA eval") stays open — the eval probe (`K:\runtime\llama.cpp\win\llama-server.exe
+--version`) exits `0xC0E90002` again on the execution machine (Smart App Control), recorded on
+#228.**_ §5 item 19 collapsed to outcome + pointer + residuals; the five 2026-09-04 entries
+archived verbatim to `docs/build-log.md`; §52 gained the "Phase F close-out" paragraph. Suite on
+master `f30c73fc` (this machine): 375 / 5,628 / 74 raw (the Electron smoke ran; 374 / 5,622 / 74
+excluding it). No code, no launch smoke.
 
 _2026-09-04 — **Phase F PR 5 (#289, closes #247 / #225): the workspace database carries
 `PRAGMA user_version` = `SCHEMA_VERSION` (`services/db.ts`, read before any write): a newer stamp

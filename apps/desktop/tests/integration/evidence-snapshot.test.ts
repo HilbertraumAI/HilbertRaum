@@ -427,6 +427,78 @@ describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
     })
   })
 
+  it('an archive citation never resolves to a same-titled document and keeps its locator (PR #294 review H2/M11)', () => {
+    const db = freshDb()
+    // A library document whose title IS the cited article's title: the legacy title branch
+    // would otherwise hand the archive source this document's id, sha and availability.
+    seedDocument(db, { title: 'Treibhausgas', sha256: 'ee'.repeat(32), mime: 'application/pdf' })
+    const docId = seedDocument(db, {
+      title: 'Klimabericht.pdf',
+      sha256: 'ff'.repeat(32),
+      mime: 'application/pdf'
+    })
+    const { messageId } = seedAnswer(db, {
+      content: 'Aus dem Archiv. [S1]\n\nAus der Bibliothek. [S2]',
+      citations: [
+        {
+          label: 'S1',
+          sourceTitle: 'Treibhausgas',
+          section: 'Landwirtschaft',
+          snippet: 'Methan aus der Landwirtschaft.',
+          sourceKind: 'archive',
+          packId: 'pack-climate',
+          archiveTitle: 'Wikipedia (DE)',
+          articlePath: 'A/Treibhausgas'
+        },
+        {
+          label: 'S2',
+          sourceTitle: 'Klimabericht.pdf',
+          documentId: docId,
+          chunkId: 'chunk-2',
+          pageNumber: 4,
+          snippet: 'Der Bericht nennt Methan.'
+        }
+      ],
+      coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 8 }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId)
+
+    // The archive source claims NO document identity — and keeps the article title plus the
+    // stable locator (pack id + entry path) it needs for display and export.
+    expect(detail.sources[0]).toMatchObject({
+      key: 'S1',
+      identity: 'unresolved',
+      documentId: null,
+      documentSha256: null,
+      mimeType: null,
+      availabilityAtCreation: null,
+      documentTitle: 'Treibhausgas',
+      sectionLabel: 'Landwirtschaft',
+      sourceKind: 'archive',
+      archiveTitle: 'Wikipedia (DE)',
+      packId: 'pack-climate',
+      articlePath: 'A/Treibhausgas'
+    })
+    // The document source in the SAME review is untouched by the guard.
+    expect(detail.sources[1]).toMatchObject({
+      key: 'S2',
+      identity: 'resolved',
+      availabilityAtCreation: 'available',
+      documentId: docId,
+      documentTitle: 'Klimabericht.pdf',
+      documentSha256: 'ff'.repeat(32),
+      mimeType: 'application/pdf',
+      pageNumber: 4,
+      sourceKind: 'document',
+      archiveTitle: null,
+      packId: null,
+      articlePath: null
+    })
+    // Marker links are unaffected: the answer really cited both labels.
+    expect(detail.items[0]!.links.map((l) => l.evidenceKey)).toEqual(['S1'])
+    expect(detail.items[1]!.links.map((l) => l.evidenceKey)).toEqual(['S2'])
+  })
+
   it('an empty answer yields an item-less review (nothing to decide; gate vacuously eligible)', () => {
     const db = freshDb()
     const { messageId } = seedAnswer(db, { content: '' })

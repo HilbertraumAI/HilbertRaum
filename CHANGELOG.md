@@ -27,6 +27,57 @@ from its first public `1.0.0` release onward.
 
 ### Added
 
+- **Knowledge packs: ask an offline Wikipedia (or any ZIM archive).** Register ZIM
+  files — e.g. from the Kiwix library — as knowledge packs (Documents → Knowledge
+  packs, or just drop them into the drive’s `zim/` folder), tick them as sources in a
+  documents chat, and answers draw on them with citations that name the archive and
+  open the article offline. Fully local: the pack server binds to 127.0.0.1 only,
+  archives are used in place and never copied. Needs the kiwix-tools binaries on the
+  drive — still a manual step in this release (see the user guide §7b).
+- **Knowledge packs are found once, not on every open.** The list is discovered when you
+  unlock and by an explicit **Refresh** in *Documents → Knowledge packs*, instead of a
+  fresh drive scan every time the panel opens or a message is sent — packs load
+  instantly, and copying a new archive onto the drive shows up after Refresh. A pack
+  whose file was replaced by a different archive is now shown as such ("Different
+  archive") instead of quietly answering from the wrong one. Locking or quitting the app
+  stops the pack server and removes its small generated index file. Opening an alias article
+  (a redirect entry — about half of a Wikipedia archive's titles) shows the article it points
+  to instead of an error. A large article that the bundled Windows pack server occasionally
+  delivers only in part is re-requested instead of being reported as unavailable or dropped from
+  the answer. Known limit on Windows: an archive can only be added from a path
+  without umlauts or accents (the bundled kiwix-manage cannot read such paths) — the drive's
+  `zim/` folder always works.
+- **Evidence reviews now name the knowledge pack, not a same-named document.** Reviewing an
+  answer that cites a knowledge-pack article records the archive, the article and its pack
+  id honestly, and shows identity as not verifiable against the workspace instead of
+  matching it to a similarly named document — the review, its HTML/PDF evidence pack and
+  the Markdown transcript export all name the pack. Reviews created on a pre-release
+  knowledge-pack build that cite an archive must be re-run.
+- **Adding several knowledge packs at once now reports exactly what happened.** If some of
+  the chosen archives could not be added, you are told how many were added and how many
+  were not — never the technical reason a file failed. Answers and the article viewer now
+  double-check with the pack server that it is still the same one that was running a moment
+  ago, and retry once if it was restarted mid-question, instead of silently trusting
+  whatever answers on that port. One privacy limit to know: other programs running under
+  your own user account can read the enabled packs while the workspace is unlocked, through
+  the pack server, which has no password of its own; locking or quitting the app stops it.
+- **Answer from knowledge packs alone, and see what each one did.** A new **Search my
+  documents** toggle in the sources picker lets you answer from ticked knowledge packs
+  only — files attached to the chat are still used either way — and every answer now
+  shows a "Knowledge packs:" line reporting whether each ticked pack was searched, and why
+  not when it wasn't (over the pack limit, no full-text search index, timed out, …), even
+  when nothing was cited. Search is now shared fairly across up to 12 ticked packs within
+  a time limit, so one slow or empty pack no longer crowds out the others, and a pack with
+  no full-text search index is now detected and skipped instead of returning nothing on
+  every question.
+- **Knowledge-pack review, picker and accessibility polish.** An evidence review that cites
+  a knowledge-pack article now has its own *Open article* button, same as in chat. A
+  greyed-out pack in the sources picker always says why it can't be ticked — file missing,
+  a different archive at that location, disabled, or no full-text search index — and the
+  Knowledge packs panel now shows a "No full-text index" badge on such a pack directly.
+  Enable/Disable/Remove and *Open article* buttons name the pack or article they act on to a
+  screen reader. The evidence-pack export's source column is now labelled "Source" (was
+  "Document"), since it lists both documents and archives.
 - **Each finished chat answer now shows how fast it was generated.** A small line under the
   answer reads, for example, "42 tok/s · 1.8 s to first token · 615 tokens": the model's decode
   speed as reported by the AI engine, how long you waited for the first word, and how many

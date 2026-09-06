@@ -300,6 +300,97 @@ describe('option flags in the rendered pack (spec §16.2)', () => {
   })
 })
 
+describe('ZIM wave (#294 review M11) — archive provenance survives the HTML renderer', () => {
+  function archiveDetail(over: Partial<import('../../src/shared/types').EvidenceSourceSnapshot> = {}) {
+    return makeDetail({
+      sources: [
+        {
+          key: 's1',
+          machineLabel: 'S1',
+          kind: 'direct_excerpt',
+          identity: 'unresolved',
+          documentId: null,
+          documentTitle: 'Klimawandel',
+          documentSha256: null,
+          mimeType: null,
+          pageNumber: null,
+          sectionLabel: 'Übersicht',
+          snippet: 'Auszug…',
+          sourceChunkId: null,
+          availabilityAtCreation: null,
+          sourceKind: 'archive',
+          archiveTitle: 'Wikipedia (DE)',
+          packId: 'pack-uuid-1',
+          articlePath: 'A/Klimawandel',
+          ...over
+        }
+      ]
+    })
+  }
+
+  it('renders the archive title, pack id and article path', () => {
+    const html = render(archiveDetail())
+    expect(html).toContain(`${t('en', 'packExport.evidence.archive')}: Wikipedia (DE)`)
+    expect(html).toContain(`${t('en', 'packExport.evidence.packId')}: pack-uuid-1`)
+    expect(html).toContain(`${t('en', 'packExport.evidence.article')}: A/Klimawandel`)
+  })
+
+  it('escapes a hostile archiveTitle/articlePath/packId — never renders them raw', () => {
+    const HOSTILE = `<script>alert("x&y'z")</script>`
+    const NON_ASCII = 'Klimawandel – Übersicht/ß'
+    const html = render(
+      archiveDetail({
+        archiveTitle: HOSTILE,
+        packId: `${HOSTILE}-id`,
+        articlePath: `${NON_ASCII}/${HOSTILE}`
+      })
+    )
+    expect(html).not.toContain(HOSTILE)
+    expect(html).toContain('&lt;script&gt;alert(&quot;x&amp;y&#39;z&quot;)&lt;/script&gt;')
+    expect(html).toContain(NON_ASCII)
+  })
+
+  it('shows the archive warning, never identityUnresolved, for an archive card', () => {
+    const html = render(archiveDetail())
+    expect(html).toContain(t('en', 'packExport.evidence.archiveIdentity'))
+    expect(html).not.toContain(t('en', 'packExport.evidence.identityUnresolved'))
+  })
+
+  it('the source-register table row shows the archive type + availability strings, no SHA', () => {
+    const html = render(archiveDetail())
+    expect(html).toContain(t('en', 'packExport.sources.typeArchive'))
+    expect(html).toContain(t('en', 'packExport.sources.availabilityArchive'))
+    // No hash exists for an archive article — the existing "unavailable" string, never invented.
+    expect(html).not.toContain('ab'.repeat(32))
+  })
+
+  it('DE renders the archive strings localized', () => {
+    const html = render(archiveDetail(), { language: 'de' })
+    expect(html).toContain(t('de', 'packExport.evidence.archive'))
+    expect(html).toContain(t('de', 'packExport.evidence.archiveIdentity'))
+    expect(html).toContain(t('de', 'packExport.sources.typeArchive'))
+    expect(html).toContain(t('de', 'packExport.sources.availabilityArchive'))
+  })
+
+  it('the §16.1.6 archive plural warning fires only when archiveSources > 0 (EN + DE)', () => {
+    const withArchive = render(archiveDetail())
+    expect(withArchive).toContain(t('en', 'review.summary.sourcesArchive.one', { count: 1 }))
+    const withArchiveDe = render(archiveDetail(), { language: 'de' })
+    expect(withArchiveDe).toContain(t('de', 'review.summary.sourcesArchive.one', { count: 1 }))
+    const documentOnly = render(makeDetail())
+    expect(documentOnly).not.toContain(t('en', 'review.summary.sourcesArchive.one', { count: 1 }))
+  })
+
+  it('a document-only detail renders no archive strings at all', () => {
+    const html = render(makeDetail())
+    expect(html).not.toContain(t('en', 'packExport.evidence.archive') + ':')
+    expect(html).not.toContain(t('en', 'packExport.evidence.archiveIdentity'))
+    expect(html).not.toContain(t('en', 'packExport.sources.typeArchive'))
+    expect(html).not.toContain(t('en', 'packExport.sources.availabilityArchive'))
+    expect(html).not.toContain(t('en', 'review.source.archive'))
+  })
+})
+
 describe('honesty rendering', () => {
   it('unresolved identity and resolved-but-missing sources get DISTINCT copy', () => {
     const detail = makeDetail({

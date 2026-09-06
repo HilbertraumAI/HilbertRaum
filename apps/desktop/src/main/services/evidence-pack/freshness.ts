@@ -124,6 +124,14 @@ function sourceVerdict(
   db: Db,
   s: EvidenceSourceSnapshot
 ): { state: EvidenceSourceFreshnessState; currentSha: string | null } {
+  // Knowledge packs (PR #294 review H2): an ARCHIVE source is a ZIM article, not a workspace
+  // document — identity and content-hash verification are unavailable BY CONSTRUCTION (there
+  // is no `documents` row to look up and no source hash to compare), so the verdict can only
+  // be 'unverifiable'. Explicit and FIRST, so the verdict never rests on the identity repair
+  // alone: a stored snapshot wrongly claiming a resolved identity plus a document id still
+  // cannot make an archive source read 'unchanged', 'changed' or 'missing'. Its fingerprint
+  // part stays the plain `src:<key>=unverifiable` state literal (no observed value exists).
+  if (s.sourceKind === 'archive') return { state: 'unverifiable', currentSha: null }
   // BINDING (plan §14 P3 watch-out): an unresolved identity has nothing to compare —
   // it can only ever be 'unverifiable', never 'changed' and never 'missing'.
   if (s.identity !== 'resolved' || !s.documentId) return { state: 'unverifiable', currentSha: null }

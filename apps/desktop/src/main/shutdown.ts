@@ -21,8 +21,9 @@ export interface ShutdownDeps {
   streamSettled?: Map<string, Promise<void>>
   /** Flush the encrypted diagnostics log before `lock()` zeroes the vault key. */
   detachVaultKey?: () => void
-  /** Logger (`error`, plus `info` for the two quit-progress lines. (#238) */
-  log?: Pick<typeof realLog, 'error' | 'info'>
+  /** Logger (`error`, plus `info` for the two quit-progress lines. (#238) `warn` is OPTIONAL —
+   *  only the #301 ZIM "cleanup NOT confirmed" line uses it, and it falls back to `info`. */
+  log?: Pick<typeof realLog, 'error' | 'info'> & Partial<Pick<typeof realLog, 'warn'>>
 }
 
 /**
@@ -129,6 +130,16 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   } catch {
     /* best-effort */
   }
+  // #301 (H4): and every knowledge-pack operation — an ask's arm, an article read, a parked
+  // native-picker wait, a running reconciliation. Its OWN try (two registries sharing one catch
+  // would make the second silently optional). On quit `ctx.zim.stop()` below is terminal, so a
+  // cancelled operation can never come back; the settle and the transient cleanup follow inside
+  // the deadline section.
+  try {
+    ctx?.zimOps?.abortAll()
+  } catch {
+    /* best-effort */
+  }
   // REL-4: abort in-flight chat/RAG streams so each partial reply persists (see the ordering note
   // above). Best-effort per controller — a misbehaving canceller must not block the rest of teardown.
   try {
@@ -162,7 +173,9 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
         ctx?.vision?.stop() ?? Promise.resolve(),
         // The TranslateGemma sidecar (TG wave) is a 5th co-resident llama-server — permanent stop()
         // so its child + its KV cache of recent source/translation text never orphan on quit.
-        ctx?.translator?.stop?.() ?? Promise.resolve()
+        ctx?.translator?.stop?.() ?? Promise.resolve(),
+        // The kiwix-serve sidecar (ZIM wave): stop + remove its generated temp library.xml.
+        ctx?.zim?.stop() ?? Promise.resolve()
       ])
     } catch (err) {
       log.error('Error stopping sidecars on quit', String(err))
@@ -185,6 +198,11 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
     // (pdfjs, mammoth) outlives it; the sweep below (outside this section, so a deadline that
     // abandons this settle still reaches it) shreds its transient before the lock.
     await awaitPlaintextOpsSettled(ctx, log)
+    // #301 (H4/M4): the knowledge-pack operations aborted above — same bound — then shred what
+    // an operation that could not cancel still tracks and run the dedicated `zim-transient/`
+    // cleanup. `ctx.zim.stop()` in the sidecar block already ran the same (idempotent) cleanup,
+    // so a deadline that abandons this section still leaves the directory handled.
+    await settleAndCleanZimTransients(ctx, log)
   }, log)
   sweepPlaintextOps(ctx, log)
   // #238: by now no window is left (Windows/Linux quit after window-all-closed), so this line
@@ -479,6 +497,45 @@ async function awaitPlaintextOpsSettled(
     if (!settled) log.info('quit: plaintext operations still running at the settle bound', { live: ops.size() })
   } catch (err) {
     log.error('Error settling plaintext operations on quit', String(err))
+  }
+}
+
+/**
+ * Await the aborted knowledge-pack operations within `SHUTDOWN_TASK_SETTLE_TIMEOUT_MS`, shred
+ * whatever `library.<n>.xml` / `meta-<n>/library.xml` they still track, then run the dedicated
+ * `zim-transient/` cleanup (#301, findings H4/M4). Best-effort — quit never fails over a pack.
+ * The report says "NOT confirmed" (counts only: no pack title, no path) whenever anything was
+ * left behind, e.g. the file of a child that could not be confirmed dead.
+ */
+async function settleAndCleanZimTransients(
+  ctx: AppContext | null,
+  log: Pick<typeof realLog, 'error' | 'info'> & Partial<Pick<typeof realLog, 'warn'>>
+): Promise<void> {
+  const ops = ctx?.zimOps
+  const zim = ctx?.zim
+  if (!ops && !zim) return
+  const warn = log.warn ?? log.info
+  try {
+    if (ops) {
+      const settled = await ops.awaitSettled(SHUTDOWN_TASK_SETTLE_TIMEOUT_MS)
+      if (!settled) {
+        log.info('quit: knowledge-pack operations still running at the settle bound', { live: ops.size() })
+      }
+      const swept = ops.sweepRegistered()
+      if (swept > 0) log.info('quit: swept registered knowledge-pack transients', { swept })
+    }
+    const report = zim?.cleanupTransients('quit')
+    if (!report) return
+    if (report.confirmed) log.info('quit: ZIM transients cleaned')
+    else
+      warn('quit: ZIM cleanup NOT confirmed', {
+        kept: report.kept,
+        unknownEntries: report.unknownEntries,
+        unsettledOps: report.unsettledOps,
+        unconfirmedChildren: report.unconfirmedChildren
+      })
+  } catch (err) {
+    log.error('Error settling knowledge-pack operations on quit', String(err))
   }
 }
 

@@ -32,6 +32,13 @@ export interface KeywordSearchOptions {
   collectionIds?: string[] | null
   /** Include `lifecycle='archived'` documents. Default false (plan C1). */
   includeArchived?: boolean
+  /**
+   * Knowledge packs (#301 P4, finding M10): the resolved deny-all document scope
+   * (`RetrievalScope.noDocuments`) — passed straight into the shared `buildScopeFilter`, which
+   * is fail-closed (`0`), so a keyword search under it returns no hits. `retrieve` skips this
+   * arm entirely under the flag; the pass-through exists so a direct caller cannot lose it.
+   */
+  noDocuments?: boolean
 }
 
 export interface KeywordHit {
@@ -62,7 +69,9 @@ export function keywordSearchChunks(
     {
       documentIds: options.documentIds,
       collectionIds: options.collectionIds,
-      includeArchived: options.includeArchived
+      includeArchived: options.includeArchived,
+      // Deny-all document scope (#301 P4, M10) — fail-closed in the shared builder.
+      ...(options.noDocuments ? { noDocuments: true as const } : {})
     },
     'c.document_id'
   )

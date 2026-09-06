@@ -1721,6 +1721,8 @@ export const en = {
   'diag.audit.evidence_review_ready': 'Evidence review marked ready',
   'diag.audit.evidence_review_deleted': 'Evidence review deleted',
   'diag.audit.evidence_pack_exported': 'Evidence pack exported',
+  'diag.audit.knowledge_pack_added': 'Knowledge pack added',
+  'diag.audit.knowledge_pack_removed': 'Knowledge pack removed',
   'diag.accel.gpuFallbackName': 'Graphics card',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Built-in demo mode',
@@ -2284,6 +2286,9 @@ export const en = {
   'main.dialog.exportLog': 'Save diagnostic logs',
   'main.dialog.filterDocuments': 'Documents',
   'main.dialog.filterAll': 'All files',
+  'main.zim.unavailable': 'Knowledge packs are not available in this session.',
+  'main.zim.dialogTitle': 'Add knowledge packs',
+  'main.zim.filterZim': 'ZIM archives',
   'main.dialog.chooseImage': 'Choose an image',
   'main.dialog.filterImages': 'Images',
   // #120 item 4: the images IPC refusal backstops (near-dead text — the renderer shows its own
@@ -2408,6 +2413,120 @@ export const en = {
   'chat.scope.projectNamed': 'Project: {name}',
   'chat.scope.projectCount.one': '{count} project',
   'chat.scope.projectCount.other': '{count} projects',
+  // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
+  'chat.scope.packsTitle': 'Knowledge packs',
+  'chat.scope.packUnavailable': 'not available',
+  'chat.scope.packNamed': 'Pack: {name}',
+  'chat.scope.packCount.one': '{count} knowledge pack',
+  'chat.scope.packCount.other': '{count} knowledge packs',
+  // Documents toggle (#301 P4, finding M10): the explicit "answer from the packs, not from my
+  // documents" choice. The hint names what stays ON — chat attachments are never dropped, so
+  // "only these packs" alone would be a false promise in a chat with files.
+  'chat.scope.documentsToggle': 'Search my documents',
+  'chat.scope.documentsToggleHint':
+    'Off: answers come from the ticked knowledge packs only. Files attached to this chat are still used.',
+  'chat.scope.documentsOffSuffix': 'documents off',
+  'chat.scope.documentsOffNoPacks': 'no sources — turn documents on or tick a knowledge pack',
+  // D6 (#301 P4, plan §9.21 (e)8): a SELECTED pack that cannot take part stays tickable so it can
+  // be UNticked, and says why. Nothing is hidden — a pack that vanished from the registry still
+  // renders as a row the user can clear.
+  'chat.scope.packDisabled': 'disabled',
+  'chat.scope.packRemoved': 'Removed pack',
+  // A plural PAIR even though `MAX_SELECTED_PACKS` is 12 today: the cap is a constant the
+  // product may move, and the CODE-8 net (i18n.test.ts) exists so a counting key can never
+  // render "Up to 1 knowledge packs per chat" the day it does.
+  'chat.scope.packLimit.one': 'Up to {count} knowledge pack per chat',
+  'chat.scope.packLimit.other': 'Up to {count} knowledge packs per chat',
+  // ---- Per-answer knowledge-pack outcomes (#301 P4, findings M6/M7 — PackOutcomesNotice) ----
+  // One line per pack the ask selected: searched with its passage count, or not searched / failed
+  // with a fixed reason. CODES map to this copy — never a path, a filename or a tool's stderr.
+  'chat.packs.outcome.summary': 'Knowledge packs: {searched} searched · {other} not searched or failed',
+  'chat.packs.outcome.removedPack': 'a removed pack',
+  'chat.packs.outcome.passages.one': '{count} passage',
+  'chat.packs.outcome.passages.other': '{count} passages',
+  'chat.packs.outcome.unknown': 'Knowledge packs: outcome not recorded for this older answer',
+  'chat.packs.outcome.searched': 'searched',
+  'chat.packs.outcome.selection-limit': 'not searched: selection limit (12 per chat)',
+  'chat.packs.outcome.removed': 'not searched: pack removed',
+  'chat.packs.outcome.disabled': 'not searched: pack disabled',
+  'chat.packs.outcome.file-missing': 'not searched: file missing',
+  'chat.packs.outcome.identity-mismatch': 'not searched: different archive at this location',
+  'chat.packs.outcome.not-served': 'not searched: name collision with another pack',
+  'chat.packs.outcome.not-searchable': 'not searched: no full-text index',
+  'chat.packs.outcome.tools-missing': 'not searched: kiwix-tools not installed',
+  'chat.packs.outcome.mode': 'not searched: whole-document answers read the document only',
+  'chat.packs.outcome.search-failed': 'failed: search error',
+  'chat.packs.outcome.read-failed': 'failed: no article could be read',
+  'chat.packs.outcome.timeout': 'failed: timed out',
+  'chat.packs.outcome.deadline': 'not searched: out of time for this question',
+  'chat.packs.outcome.server-restarted': 'failed: the pack server restarted during this question',
+  'chat.sources.openArticle': 'Open article',
+  'chat.article.title': 'Article',
+  'chat.article.from': 'From {archive} — offline copy',
+  'chat.article.loading': 'Loading the article…',
+  'chat.article.unavailable': 'This article is not available right now. The pack may be disabled, removed, or its drive unplugged.',
+  'chat.article.partial': 'Only the first part of this article could be shown.',
+  // ---- #301 P6 (a11y pass; plan §9.23 (b)4/(b)6 and decision (c)5) — BEGIN -----------------
+  // Reason-specific popover hints. The picker greys an ineligible pack with the SAME reason the
+  // arm's `classifyPackSelection` records, so the row and the per-answer outcome can never tell
+  // different stories. `chat.scope.packUnavailable` above stays the fallback for the pre-P3b
+  // null-reason state; `packNotSearchable` mirrors the arm skipping a confirmed `searchable:'no'`.
+  'chat.scope.packMissing': 'file missing',
+  'chat.scope.packMismatch': 'different archive at this location',
+  'chat.scope.packNotSearchable': 'no full-text index',
+  // The article action's ACCESSIBLE name (the visible text stays the bare "Open article"): an
+  // answer or a review can carry several archive cards, and "Open article" ×5 in a screen
+  // reader's button list names none of them.
+  'chat.sources.openArticleNamed': 'Open article: {title}',
+  // ---- #301 P6 — END ------------------------------------------------------------------------
+  'docs.section.sources': 'Reference',
+  'docs.section.packs': 'Knowledge packs',
+  'packs.add': 'Add packs…',
+  'packs.addBusy': 'Adding…',
+  'packs.refresh': 'Refresh',
+  'packs.lead': 'ZIM archives (for example an offline Wikipedia) the chat can answer from. Files are used in place and never copied; drop archives into the drive’s zim folder or add them here.',
+  'packs.loading': 'Loading packs…',
+  'packs.refreshing': 'Checking the drive for packs…',
+  'packs.emptyTitle': 'No knowledge packs yet',
+  'packs.emptyLine': 'Add a ZIM archive, or copy one into the drive’s zim folder and reopen this view.',
+  'packs.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See the user guide for the manual install step.',
+  'packs.addedToast.one': 'Knowledge pack added',
+  'packs.addedToast.other': '{count} knowledge packs added',
+  // #301 P5, finding L1 (plan §9.19 (c)3): the typed add-result DTO's outcomes. `addPartial` is
+  // the generic banner for a mixed add; each `addFailed.*` is the reason-specific banner for an
+  // all-fail add — no free text (manager stderr/path) ever reaches these strings.
+  'packs.addPartial': '{failed} of {total} archives could not be added.',
+  'packs.addFailed.notAZim': 'The chosen file is not a readable ZIM archive.',
+  'packs.addFailed.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See the user guide for the manual install step.',
+  'packs.addFailed.manager': 'The archive could not be read by kiwix-manage. Check that the file is complete and try again.',
+  'packs.addFailed.other': 'The archive could not be added.',
+  'packs.removedToast': 'Knowledge pack removed',
+  'packs.articleCount.one': '{count} article',
+  'packs.articleCount.other': '{count} articles',
+  'packs.state.enabled': 'Enabled',
+  'packs.state.disabled': 'Disabled',
+  'packs.state.missing': 'File missing',
+  'packs.state.missingTitle': 'The archive file could not be found — is the drive plugged in?',
+  'packs.state.identityMismatch': 'Different archive',
+  'packs.state.identityMismatchTitle': 'The file at this pack’s location is a different archive — remove this pack and add the file again',
+  // #301 P6 (plan §9.23 (a) row 5, (c)5): confirmed by the `/suggest` probe at a reconcile's
+  // end (P4 M7) — the pack stays enabled/readable, just skipped by the ask.
+  'packs.state.notSearchable': 'No full-text index',
+  'packs.state.notSearchableTitle':
+    'This archive has no full-text search index. It is skipped when asking, but its articles stay readable.',
+  'packs.enable': 'Enable',
+  'packs.disable': 'Disable',
+  'packs.working': 'Working…',
+  'packs.remove': 'Remove',
+  // #301 P6 (plan §9.23 (b)6): accessible names for the per-row action buttons — visible
+  // text stays the plain verb; the name a screen reader announces includes the pack title.
+  'packs.enableNamed': 'Enable {title}',
+  'packs.disableNamed': 'Disable {title}',
+  'packs.removeNamed': 'Remove {title}',
+  'packs.listLabel': 'Knowledge packs',
+  'packs.removeTitle': 'Remove this knowledge pack?',
+  'packs.removeConfirm': 'Remove pack',
+  'packs.removeBody': 'The pack is removed from HilbertRaum only — the archive file on disk is not touched. Chats that used it simply stop retrieving from it.',
   'chat.scope.docCount.one': '{count} document',
   'chat.scope.docCount.other': '{count} documents',
   'chat.scope.filesInChat.one': '{count} file in this chat',
@@ -2754,6 +2873,10 @@ export const en = {
   'review.source.kind.whole_document_provenance': 'Whole-document provenance',
   'review.source.kind.structured_record': 'Extracted record',
   'review.source.unresolved': 'Source identity could not be determined',
+  // ZIM wave (#294 review M11): DISTINCT from the legacy document claim above — an archive
+  // article was never resolvable against a workspace document in the first place.
+  'review.source.archive':
+    'Knowledge-pack article — its identity and content cannot be verified against the workspace',
   'review.source.missingAtCreation': 'Source was not available when this review was created',
   // P4 per-card freshness badges (spec §15.4/§15.5 copy; text + icon, never color-only).
   // Unresolved sources keep ONLY the unresolved badge — their current state cannot be
@@ -2843,6 +2966,12 @@ export const en = {
   'review.summary.sourcesCount.other': '{count} sources',
   'review.summary.sourcesUnresolved.one': '{count} source identity could not be determined',
   'review.summary.sourcesUnresolved.other': '{count} source identities could not be determined',
+  // ZIM wave (#294 review M11): archives are excluded from sourcesUnresolved above — this is
+  // their own, distinct count.
+  'review.summary.sourcesArchive.one':
+    '{count} source is a knowledge-pack article that cannot be verified against the workspace',
+  'review.summary.sourcesArchive.other':
+    '{count} sources are knowledge-pack articles that cannot be verified against the workspace',
   'review.summary.sourcesMissing.one':
     '{count} source was not available when this review was created',
   'review.summary.sourcesMissing.other':
@@ -2913,7 +3042,7 @@ export const en = {
   // HTML from the pack's language option; a persisted pack is a frozen snapshot and is
   // never re-localized later). Reused in the pack: review.status.*, review.decision.*,
   // review.relation.*, review.link.cited/.reviewer, review.summary.unavailable/.truncated,
-  // review.summary.sourcesUnresolved/.sourcesMissing, chat.sources.marker. ----
+  // review.summary.sourcesUnresolved/.sourcesMissing/.sourcesArchive, chat.sources.marker. ----
   'packExport.docTitle': 'Evidence pack',
   'packExport.privacy': 'Created locally by HilbertRaum. No cloud services were involved.',
   'packExport.disclaimer':
@@ -2967,11 +3096,18 @@ export const en = {
   'packExport.evidence.kindStructured': 'Structured extraction record',
   'packExport.evidence.page': 'Page {n}',
   'packExport.evidence.sectionLabel': 'Section',
+  // ZIM wave (#294 review M11): the archive card's readable pack line + its mono locator.
+  'packExport.evidence.archive': 'Knowledge pack',
+  'packExport.evidence.packId': 'Pack id',
+  'packExport.evidence.article': 'Article',
   'packExport.evidence.excerpt': 'Persisted excerpt',
   'packExport.evidence.noExcerpt': 'No excerpt was persisted for this source.',
   'packExport.evidence.relations': 'Reviewer relations',
   'packExport.evidence.identityUnresolved':
     'The identity of this source document could not be verified against the workspace.',
+  // M11: DISTINCT from the legacy document claim above — never both on one card.
+  'packExport.evidence.archiveIdentity':
+    'This source is an article from a knowledge pack (ZIM archive), not a workspace document. Its identity and content are not verified against the workspace; the pack id and article path identify it.',
   'packExport.evidence.missingAtCreation':
     'This source document was already missing from the workspace when the review was created.',
   // P4 at-export per-card states (spec §15.4/§15.5 wording).
@@ -3013,8 +3149,13 @@ export const en = {
     '{count} source documents are no longer present in the workspace.',
   'packExport.coverage.acknowledged': 'The reviewer acknowledged this change on {date}.',
   'packExport.section.sources': 'Source register',
-  'packExport.sources.colTitle': 'Document',
+  // #301 P6 (plan §9.23 (c)3 i): renamed from "Document" — the register's first column
+  // header sits over archive rows too.
+  'packExport.sources.colTitle': 'Source',
   'packExport.sources.colType': 'File type',
+  // ZIM wave (#294 review M11): the type/availability values an archive row shows instead
+  // of a mime type / the generic "cannot be verified" claim.
+  'packExport.sources.typeArchive': 'Knowledge-pack article (ZIM archive)',
   'packExport.sources.colSha': 'SHA-256 at review time',
   'packExport.sources.colAvailability': 'Availability at review creation',
   'packExport.sources.colAvailabilityExport': 'Availability at export',
@@ -3022,6 +3163,7 @@ export const en = {
   'packExport.sources.availabilityMissing': 'Missing',
   'packExport.sources.availabilityChanged': 'Changed since review',
   'packExport.sources.availabilityUnknown': 'Cannot be verified',
+  'packExport.sources.availabilityArchive': 'Archive article — not verifiable against the workspace',
   'packExport.sources.hashExcluded': 'Excluded by export options',
   'packExport.sources.pathNote': 'Original file paths are never included in an evidence pack.',
   'packExport.section.generation': 'Generation details',

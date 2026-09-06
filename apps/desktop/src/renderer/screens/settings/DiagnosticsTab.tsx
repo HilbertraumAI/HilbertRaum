@@ -77,7 +77,9 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
   evidence_review_created: 'diag.audit.evidence_review_created',
   evidence_review_ready: 'diag.audit.evidence_review_ready',
   evidence_review_deleted: 'diag.audit.evidence_review_deleted',
-  evidence_pack_exported: 'diag.audit.evidence_pack_exported'
+  evidence_pack_exported: 'diag.audit.evidence_pack_exported',
+  knowledge_pack_added: 'diag.audit.knowledge_pack_added',
+  knowledge_pack_removed: 'diag.audit.knowledge_pack_removed'
 }
 
 function auditLabel(type: AuditEventType, t: I18n['t']): string {

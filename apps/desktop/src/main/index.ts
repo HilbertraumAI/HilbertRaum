@@ -26,6 +26,10 @@ import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModel
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerCollectionsIpc } from './ipc/registerCollectionsIpc'
+import { registerZimIpc } from './ipc/registerZimIpc'
+import { ZimService } from './services/zim'
+import { cleanupZimTransients, zimTransientDir } from './services/zim/transients'
+import { startKnowledgePackSession } from './services/zim/session'
 import { registerEvidenceReviewsIpc } from './ipc/registerEvidenceReviewsIpc'
 import { registerSkillsIpc } from './ipc/registerSkillsIpc'
 import { registerBuiltinSkillAnalysisHandlers } from './services/skills/analysis'
@@ -60,6 +64,7 @@ import {
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
+import type { KnowledgePacksChangedEvent } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { findManifestById, launchContextTokens, resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
@@ -180,6 +185,28 @@ function initBackend(): void {
     isDev
   )
   workspace.init()
+  // Knowledge packs (#301, findings L3/M4, residual R-7): the CRASH sweep of this workspace's
+  // `zim-transient/` — the plaintext `library.<n>.xml` / `meta-<n>/library.xml` a hard exit,
+  // a power loss or a killed process left behind. Runs in BOTH workspace modes (the directory
+  // exists in plaintext_dev too) and with an EMPTY keep set (no child of THIS process can own
+  // anything yet). It deliberately runs even when `isRecoveryBlocked()`: the directory never
+  // holds user data, its removal cannot interfere with the `.recovery` salvage of the last
+  // session's newest data, and leaving pack titles + absolute paths lying in plaintext until
+  // the block clears would be the worse outcome. Contained and link-refusing (transients.ts).
+  {
+    const report = cleanupZimTransients(zimTransientDir(paths.workspacePath), paths.workspacePath, {
+      keep: new Set<string>()
+    })
+    if (report.confirmed) {
+      if (report.removed > 0) log.info('Startup: ZIM transients swept', { removed: report.removed })
+    } else {
+      // Counts only — never a pack title, never a path (the sentinel rule).
+      log.warn('Startup: ZIM transient sweep NOT confirmed', {
+        removed: report.removed,
+        unknownEntries: report.unknownEntries
+      })
+    }
+  }
   log.info('Workspace state', workspace.getState())
   if (workspace.isRecoveryBlocked()) {
     // #242: the salvage of the last session's newest data is blocked by a held recovery
@@ -255,6 +282,14 @@ function initBackend(): void {
       win.webContents.send(EVENTS.runtimeNotice, message)
     }
     log.info('Runtime notice', { message })
+  }
+  // #301 P3b, finding L7 (plan §9.17 (e)3): the pack-set update broadcast — the
+  // `notifyRenderer` shape, guarded per-window since a pack change can land between a window
+  // closing and its BrowserWindow instance being dropped from `getAllWindows()`.
+  const notifyKnowledgePacksChanged = (event: KnowledgePacksChangedEvent): void => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(EVENTS.knowledgePacksChanged, event)
+    }
   }
   // The crash handler needs the manager and the manager's factory needs the handler —
   // late-bind through a ref.
@@ -417,6 +452,11 @@ function initBackend(): void {
   // #237: the registry of plaintext-materialising operations; the lock/quit teardowns abort,
   // settle and sweep it (see `shutdown.ts` / `registerWorkspaceIpc.ts`).
   const plaintextOps = createPlaintextOps()
+  // #301 (H4): a SECOND instance of the same registry, dedicated to the knowledge-pack
+  // operations (an ask's arm, an article read, a registration incl. the native picker wait, the
+  // reconciliation). Separate so the lock/quit ZIM settle is its own bounded step and the paths
+  // it tracks are only `zim-transient/` files, never a document transient.
+  const zimOps = createPlaintextOps()
   const docTasks = new DocTaskManager({
     getDb: () => workspace.requireDb(),
     getRuntime: () => runtime.active(),
@@ -512,8 +552,29 @@ function initBackend(): void {
     audit,
     docTasks,
     plaintextOps,
+    zimOps,
     skills
   }
+  // Knowledge packs (ZIM wave): registry + lazy kiwix-serve sidecar. Built here — not inside
+  // registerZimIpc — so the quit teardown reaches it via `ctx.zim`. Spawns nothing until the
+  // first ask with packs in scope (or a registration runs kiwix-manage briefly).
+  ctx.zim = new ZimService({
+    rootPath: paths.rootPath,
+    isDev,
+    // #301 (H4): the real admission pair. Every operation captures `unlockEpoch()` when it
+    // begins and re-checks both after every await — so a lock refuses in-flight pack work, and
+    // a lock + unlock (a NEW session with a NEW database) refuses it too, even though
+    // `workspaceAdmitsWork` is true again by then.
+    admission: {
+      admitsWork: () => workspaceAdmitsWork(workspace),
+      epoch: () => workspace.unlockEpoch()
+    },
+    ops: zimOps,
+    // #301 (L3/M4): the transient library builds live inside the workspace, not in the host's
+    // temp directory, so lock / quit / session start own them.
+    transientDir: zimTransientDir(paths.workspacePath),
+    notify: notifyKnowledgePacksChanged
+  })
   // The vision sidecar orchestrator (image-understanding plan §10). Built here — not inside
   // registerImagesIpc — so the workspace-lock + quit teardown paths can reach it via `ctx.vision`.
   // Lazy: it spawns nothing until the first analyze of an available model.
@@ -593,6 +654,7 @@ function initBackend(): void {
   registerChatIpc(ctx)
   registerDocsIpc(ctx)
   registerCollectionsIpc(ctx)
+  registerZimIpc(ctx)
   registerEvidenceReviewsIpc(ctx)
   registerSkillsIpc(ctx)
   registerDocTasksIpc(ctx)
@@ -617,6 +679,10 @@ function initBackend(): void {
   // Plaintext-dev post-unlock seam for the local API (encrypted workspaces start it
   // after unlock/create in registerWorkspaceIpc); no-op unless policy ∧ setting permit.
   maybeStartLocalApi(ctx as AppContext)
+  // Plaintext-dev knowledge-pack session seam (#301, L7 / D3): the workspace is already open at
+  // startup here, so this is its session start — clean the transients, then reconcile the drive
+  // folder once, both AFTER this function returns (never on the startup path).
+  startKnowledgePackSession(ctx as AppContext)
 
   // Log the offline posture and install a defensive tripwire that flags any
   // attempt to reach a REMOTE host while offline (loopback is exempt — dev renderer +

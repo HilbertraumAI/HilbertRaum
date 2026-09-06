@@ -140,6 +140,15 @@ const SOURCE_KINDS: ReadonlySet<string> = new Set([
  * are kept only when correctly typed. `kind` defaults to 'whole_document_provenance' — the
  * WEAKEST claim (provenance, not a direct citation) — and `identity` to 'unresolved' (cannot
  * verify), so a corrupted snapshot never gains evidential strength from the repair.
+ *
+ * Knowledge packs (PR #294 review H2/M11): the four additive fields are carried through, and
+ * the H2 rule is enforced HERE too, not only at write time — a stored snapshot marked
+ * `sourceKind: 'archive'` reads back as `identity: 'unresolved'` with null document
+ * id/hash/mime/availability whatever the JSON claims (same repair rule: a corrupted snapshot
+ * never gains evidential strength). `sourceKind` is 'archive' only when the stored value is
+ * literally 'archive'; an ABSENT field reads as 'document' — reviews written before the field
+ * existed are disposable, and an archive is NEVER inferred from a matching title or a null
+ * document id (no detection, invalidation or migration of pre-merge reviews).
  */
 export function parseSourceSnapshots(json: string | null): EvidenceSourceSnapshot[] {
   if (!json) return []
@@ -148,7 +157,8 @@ export function parseSourceSnapshots(json: string | null): EvidenceSourceSnapsho
     if (!Array.isArray(v)) return []
     return v.filter(isSourceSnapshot).map((raw) => {
       const s = raw as Record<string, unknown>
-      const identity = s.identity === 'resolved' ? 'resolved' : 'unresolved'
+      const isArchive = s.sourceKind === 'archive'
+      const identity = !isArchive && s.identity === 'resolved' ? 'resolved' : 'unresolved'
       const availability =
         s.availabilityAtCreation === 'available' || s.availabilityAtCreation === 'missing'
           ? s.availabilityAtCreation
@@ -161,15 +171,22 @@ export function parseSourceSnapshots(json: string | null): EvidenceSourceSnapsho
             ? (s.kind as EvidenceSourceSnapshot['kind'])
             : 'whole_document_provenance',
         identity,
-        documentId: typeof s.documentId === 'string' ? s.documentId : null,
+        documentId: !isArchive && typeof s.documentId === 'string' ? s.documentId : null,
         documentTitle: s.documentTitle as string,
-        documentSha256: typeof s.documentSha256 === 'string' ? s.documentSha256 : null,
-        mimeType: typeof s.mimeType === 'string' ? s.mimeType : null,
+        documentSha256:
+          !isArchive && typeof s.documentSha256 === 'string' ? s.documentSha256 : null,
+        mimeType: !isArchive && typeof s.mimeType === 'string' ? s.mimeType : null,
         pageNumber: typeof s.pageNumber === 'number' ? s.pageNumber : null,
         sectionLabel: typeof s.sectionLabel === 'string' ? s.sectionLabel : null,
         snippet: typeof s.snippet === 'string' ? s.snippet : null,
         sourceChunkId: typeof s.sourceChunkId === 'string' ? s.sourceChunkId : null,
-        availabilityAtCreation: identity === 'resolved' ? availability : null
+        availabilityAtCreation: identity === 'resolved' ? availability : null,
+        sourceKind: isArchive ? ('archive' as const) : ('document' as const),
+        // Locators belong to archive sources only: a document row carrying them is corrupt
+        // data, and the display layers key on sourceKind, so they read as null there.
+        archiveTitle: isArchive && typeof s.archiveTitle === 'string' ? s.archiveTitle : null,
+        packId: isArchive && typeof s.packId === 'string' ? s.packId : null,
+        articlePath: isArchive && typeof s.articlePath === 'string' ? s.articlePath : null
       }
     })
   } catch {

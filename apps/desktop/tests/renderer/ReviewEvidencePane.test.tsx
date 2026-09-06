@@ -178,6 +178,196 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
     expect(cardTitles()).toContain('doc-3.pdf')
   })
 
+  it('ZIM wave (#294 review M11): archive card shows its own badge + where-line, no unresolved badge and no "Open source in context" button (EN + DE)', () => {
+    const archiveSource: EvidenceSourceSnapshot = {
+      ...makeDetail().sources[0]!,
+      key: 'sArchive',
+      machineLabel: 'S2',
+      identity: 'unresolved',
+      documentId: null,
+      documentSha256: null,
+      mimeType: null,
+      documentTitle: 'Klimawandel',
+      sectionLabel: 'Übersicht',
+      pageNumber: null,
+      sourceKind: 'archive',
+      archiveTitle: 'Wikipedia (DE)',
+      packId: 'pack-uuid-1',
+      articlePath: 'A/Klimawandel'
+    }
+    render(
+      <EvidencePane
+        sources={[archiveSource]}
+        coverage={{ mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }}
+        selectedItem={null}
+        readOnly={false}
+        freshness={null}
+        onLink={vi.fn()}
+        onUnlink={vi.fn()}
+        onSetRelation={vi.fn()}
+        onOpenContext={vi.fn()}
+        t={tEn}
+        tCount={tCountEn}
+      />
+    )
+    expect(screen.getByText(tEn('review.source.archive'))).toBeInTheDocument()
+    expect(screen.queryByText(tEn('review.source.unresolved'))).not.toBeInTheDocument()
+    expect(screen.getByText('Wikipedia (DE) · Übersicht')).toBeInTheDocument()
+    expect(screen.queryByText(tEn('review.sourceContext.open'))).not.toBeInTheDocument()
+
+    cleanup()
+    const tDe = (key: MessageKey, params?: MessageParams): string => t('de', key, params)
+    const tCountDe = (key: CountMessageKey, count: number, params?: MessageParams): string =>
+      tCount('de', key, count, params)
+    render(
+      <EvidencePane
+        sources={[archiveSource]}
+        coverage={{ mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }}
+        selectedItem={null}
+        readOnly={false}
+        freshness={null}
+        onLink={vi.fn()}
+        onUnlink={vi.fn()}
+        onSetRelation={vi.fn()}
+        onOpenContext={vi.fn()}
+        t={tDe}
+        tCount={tCountDe}
+      />
+    )
+    expect(screen.getByText(tDe('review.source.archive'))).toBeInTheDocument()
+    expect(screen.queryByText(tDe('review.source.unresolved'))).not.toBeInTheDocument()
+    expect(screen.queryByText(tDe('review.sourceContext.open'))).not.toBeInTheDocument()
+  })
+
+  // ---- "Open article" from an archive review row (#301 P6, plan §9.23 (c)2) ---------------
+  // The §9.13 residual: P2 deliberately left an archive row with NO way to read the article
+  // (the viewer bridge waited on P3b's locator contract). It exists now, and the row opens it
+  // from its OWN frozen snapshot — never a live registry lookup.
+
+  const archiveSnapshot = (over: Partial<EvidenceSourceSnapshot> = {}): EvidenceSourceSnapshot => ({
+    ...makeDetail().sources[0]!,
+    key: 'sArchive',
+    machineLabel: 'S2',
+    identity: 'unresolved',
+    documentId: null,
+    documentSha256: null,
+    mimeType: null,
+    documentTitle: 'Treibhausgas',
+    sectionLabel: 'Landwirtschaft',
+    pageNumber: null,
+    sourceKind: 'archive',
+    archiveTitle: 'Klimawandel von Wikipedia',
+    packId: 'pack-uuid-1',
+    articlePath: 'A/Treibhausgas',
+    ...over
+  })
+
+  function renderArchive(
+    source: EvidenceSourceSnapshot,
+    onOpenArticle?: (s: EvidenceSourceSnapshot) => void
+  ): void {
+    render(
+      <EvidencePane
+        sources={[source]}
+        coverage={{ mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }}
+        selectedItem={null}
+        readOnly={false}
+        freshness={null}
+        onLink={vi.fn()}
+        onUnlink={vi.fn()}
+        onSetRelation={vi.fn()}
+        onOpenContext={vi.fn()}
+        onOpenArticle={onOpenArticle}
+        t={tEn}
+        tCount={tCountEn}
+      />
+    )
+  }
+
+  it('#301 P6: an archive row offers a NAMED "Open article" and hands back its own frozen snapshot', () => {
+    const onOpenArticle = vi.fn()
+    const source = archiveSnapshot()
+    renderArchive(source, onOpenArticle)
+    // The accessible name carries the article title (§9.23 (b)6); the visible word pair does not.
+    const button = screen.getByRole('button', {
+      name: tEn('chat.sources.openArticleNamed', { title: 'Treibhausgas' })
+    })
+    expect(button).toHaveTextContent(tEn('chat.sources.openArticle'))
+    fireEvent.click(button)
+    // The SNAPSHOT itself — the caller reads packId/articlePath off it, so a renamed pack in the
+    // live registry can never redirect this row to a different archive.
+    expect(onOpenArticle).toHaveBeenCalledTimes(1)
+    expect(onOpenArticle.mock.calls[0][0]).toBe(source)
+    // Unchanged by this phase: an archive is still never offered "Open source in context"
+    // (there is no workspace document behind it).
+    expect(screen.queryByText(tEn('review.sourceContext.open'))).not.toBeInTheDocument()
+  })
+
+  it('#301 P6: a pre-P2 archive row without a locator renders NO "Open article" button', () => {
+    // A snapshot frozen before the locator fields existed cannot be opened — offering a
+    // control that can only fail is worse than not offering it.
+    const onOpenArticle = vi.fn()
+    renderArchive(archiveSnapshot({ packId: null, articlePath: 'A/Treibhausgas' }), onOpenArticle)
+    expect(screen.queryByText(tEn('chat.sources.openArticle'))).not.toBeInTheDocument()
+    cleanup()
+    renderArchive(archiveSnapshot({ packId: 'pack-uuid-1', articlePath: null }), onOpenArticle)
+    expect(screen.queryByText(tEn('chat.sources.openArticle'))).not.toBeInTheDocument()
+    // …and a caller that passes no handler at all gets no button either (callback gating).
+    cleanup()
+    renderArchive(archiveSnapshot())
+    expect(screen.queryByText(tEn('chat.sources.openArticle'))).not.toBeInTheDocument()
+    expect(onOpenArticle).not.toHaveBeenCalled()
+  })
+
+  it('#301 P6: a DOCUMENT row never offers "Open article" (it keeps "Open source in context")', () => {
+    const onOpenArticle = vi.fn()
+    render(
+      <EvidencePane
+        sources={[makeDetail().sources[0]!]}
+        coverage={{ mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }}
+        selectedItem={null}
+        readOnly={false}
+        freshness={null}
+        onLink={vi.fn()}
+        onUnlink={vi.fn()}
+        onSetRelation={vi.fn()}
+        onOpenContext={vi.fn()}
+        onOpenArticle={onOpenArticle}
+        t={tEn}
+        tCount={tCountEn}
+      />
+    )
+    expect(screen.getByText(tEn('review.sourceContext.open'))).toBeInTheDocument()
+    expect(screen.queryByText(tEn('chat.sources.openArticle'))).not.toBeInTheDocument()
+  })
+
+  it('ZIM wave (#294 review M11): the filter matches the archive title too', () => {
+    const sources = makeSources(30)
+    const archived: EvidenceSourceSnapshot = {
+      ...sources[5]!,
+      sourceKind: 'archive',
+      archiveTitle: 'UNIQUE_PACK_TITLE',
+      packId: 'p1',
+      articlePath: 'A/x'
+    }
+    renderPane([...sources.slice(0, 5), archived, ...sources.slice(6)])
+    const input = screen.getByLabelText(tEn('review.evidence.filterLabel'))
+    fireEvent.change(input, { target: { value: 'unique_pack_title' } })
+    expect(cardTitles()).toEqual([archived.documentTitle])
+  })
+
+  it('ZIM wave (#294 review M11): a document card is unchanged — unresolved badge stays, no archive badge', () => {
+    const documentSource: EvidenceSourceSnapshot = {
+      ...makeDetail().sources[0]!,
+      key: 'sDoc',
+      identity: 'unresolved',
+      documentId: null
+    }
+    renderPane([documentSource])
+    expect(screen.getByText(tEn('review.source.unresolved'))).toBeInTheDocument()
+    expect(screen.queryByText(tEn('review.source.archive'))).not.toBeInTheDocument()
+  })
+
   it('matcher covers section label and page number; filter change RESETS the reveal (FIX-5b)', () => {
     const sources = makeSources(60).map((s, i) =>
       i === 40 ? { ...s, sectionLabel: 'Anhang B', pageNumber: 77 } : s

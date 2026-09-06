@@ -1,5 +1,5 @@
 import type { Db } from '../db'
-import type { Citation, CoverageInfo, Message } from '../../../shared/types'
+import type { Citation, CoverageInfo, KnowledgePackOutcome, Message } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
 import {
   ANALYSIS_RESPONSE_RESERVE_TOKENS,
@@ -374,6 +374,10 @@ export interface WholeDocTreeDeps {
   /** W2 scope notice (§2.1): prepended to the streamed + persisted answer when the scope was auto-
    *  narrowed to this document. App-authored, content-free. Absent ⇒ no prefix. */
   answerPrefix?: string
+  /** Knowledge packs (#301 P4, plan §9.21 (e)5): the `skipped / mode` outcomes for the packs this
+   *  chat selected — a whole-document rescue reads the DOCUMENT, so it must say the packs took no
+   *  part rather than stay silent. Absent ⇒ no outcomes (a chat with no pack selected). */
+  packOutcomes?: KnowledgePackOutcome[]
 }
 
 /**
@@ -410,6 +414,9 @@ export interface WholeDocMapReduceInput {
   onCompactionStart?: (kind: 'analysis') => void
   /** W2 scope notice (§2.1): prepended to the streamed + persisted answer. Absent ⇒ no prefix. */
   answerPrefix?: string
+  /** Knowledge packs (#301 P4, plan §9.21 (e)5): the `skipped / mode` outcomes persisted with the
+   *  answer — this path read the document, so the ticked packs took no part in it. */
+  packOutcomes?: KnowledgePackOutcome[]
   /** The whole-document material: node summaries (tree) OR de-overlapped chunk texts (chunk path). */
   sourceTexts: string[]
   /** Provenance for THIS answer: real leaf CHUNKS only (M2), never node summaries. */
@@ -435,6 +442,7 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     onToken,
     onCompactionStart,
     answerPrefix,
+    packOutcomes,
     sourceTexts,
     citations,
     chunksCovered,
@@ -642,6 +650,8 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     content,
     citations,
     coverage,
+    // #301 P4: the honest "this answer read the document, the ticked packs took no part" record.
+    packOutcomes,
     // The fence shaped the answer at every step, so the skill is always stamped here.
     skillId: skill?.installId ?? null,
     autoFired: skill?.autoFired === true,
@@ -671,7 +681,8 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
     signal,
     onToken,
     onCompactionStart,
-    answerPrefix
+    answerPrefix,
+    packOutcomes
   } = deps
 
   // Pre-model gate (pure reads): a ready tree + at least one usable node summary, else fall back.
@@ -711,6 +722,7 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
     onToken,
     onCompactionStart,
     answerPrefix,
+    packOutcomes,
     sourceTexts: nodeTexts,
     citations,
     chunksCovered,

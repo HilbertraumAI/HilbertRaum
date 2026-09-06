@@ -2,6 +2,7 @@ import { memo, useEffect, useId, useMemo, useState, useSyncExternalStore } from 
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { EvidenceReviewDetail, EvidenceReviewItem } from '@shared/types'
 import { AssistantMarkdown } from '../chat/AssistantMarkdownLazy'
+import { ArticleModal, type ArticleTarget } from '../chat/ArticleModal'
 import { Button, ConfirmDialog, Modal, useToast } from '../components'
 import { formatCitationLabel, localizeServerCopy } from '../lib/displayMap'
 import { useEventCallback } from '../lib/useEventCallback'
@@ -87,6 +88,13 @@ export function ReviewScreen({
   const [actionBusy, setActionBusy] = useState(false)
   /** P4 (D-5): the snapshot key whose source-in-context modal is open; null = closed. */
   const [contextKey, setContextKey] = useState<string | null>(null)
+  /**
+   * #301 P6 (plan §9.23 (c)2): the archive article the reviewer asked to read; null = closed.
+   * Built from the FROZEN snapshot's own locator — the review never consults the live registry,
+   * so a renamed pack still opens (`packs:getArticle` resolves by archive UUID) and a deleted or
+   * unplugged one yields the viewer's honest unavailable state.
+   */
+  const [articleTarget, setArticleTarget] = useState<ArticleTarget | null>(null)
   const questionId = useId()
 
   useEffect(() => {
@@ -208,6 +216,13 @@ export function ReviewScreen({
       onUnlink={(itemId, key) => void unlinkEvidence(itemId, key)}
       onSetRelation={(itemId, key, relation) => void linkEvidence(itemId, key, relation)}
       onOpenContext={(key) => setContextKey(key)}
+      onOpenArticle={(s) =>
+        setArticleTarget(
+          s.packId && s.articlePath
+            ? { packId: s.packId, articlePath: s.articlePath, archiveTitle: s.archiveTitle }
+            : null
+        )
+      }
       t={t}
       tCount={tCount}
     />
@@ -460,6 +475,12 @@ export function ReviewScreen({
         onClose={() => setContextKey(null)}
         t={t}
       />
+
+      {/* #301 P6 (plan §9.23 (c)2): the SAME offline article viewer the chat uses, mounted
+          beside the source-in-context modal. It reads through `packs:getArticle` with the
+          frozen snapshot's pack id + article path; a removed / disabled / unplugged pack
+          resolves to null and the viewer says so — the review itself never changes. */}
+      <ArticleModal target={articleTarget} onClose={() => setArticleTarget(null)} />
 
       <ConfirmDialog
         open={confirmClear}

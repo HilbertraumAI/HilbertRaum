@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { detectFilenameScope } from '../../src/main/services/rag/scope'
+import { buildScopeFilter } from '../../src/main/services/retrieval-scope'
 
 const docs = [
   { id: 'd1', title: 'contract.pdf' },
@@ -69,5 +70,47 @@ describe('detectFilenameScope', () => {
   it('returns null for an empty corpus or empty question', () => {
     expect(detectFilenameScope('contract', [])).toBeNull()
     expect(detectFilenameScope('   ', docs)).toBeNull()
+  })
+})
+
+// Knowledge packs (#301 P4, finding M10): the ONE SQL scope builder under the resolved
+// deny-all document scope. The full end-to-end consumer sweep is T10-a
+// (tests/integration/zim-regressions.test.ts); these pin the builder's own contract.
+describe('buildScopeFilter — deny-all document scope (noDocuments, M10)', () => {
+  it('returns the constant-false predicate with no params', () => {
+    expect(buildScopeFilter({ noDocuments: true, collectionIds: null, documentIds: null }, 'd.id')).toEqual({
+      sql: '0',
+      params: []
+    })
+  })
+
+  it('is checked FIRST, so a contradictory spread with ids still set stays fail-closed', () => {
+    // `{ ...scope, documentIds: [x] }` is how narrowing callers refine a scope; leaving the
+    // flag set is a contradiction, and the honest reading of it is "no documents".
+    expect(
+      buildScopeFilter(
+        { noDocuments: true, collectionIds: ['c1'], documentIds: ['d1'], includeArchived: true },
+        'd.id'
+      )
+    ).toEqual({ sql: '0', params: [] })
+  })
+
+  it('leaves every other scope byte-identical (no flag = the pre-P4 behaviour)', () => {
+    // Whole corpus with the archived exclusion — the default path.
+    expect(buildScopeFilter({ collectionIds: null, documentIds: null }, 'd.id')).toEqual({
+      sql: "NOT EXISTS (SELECT 1 FROM documents da WHERE da.id = d.id AND da.lifecycle = 'archived')",
+      params: []
+    })
+    // No filter at all when archived documents are included too.
+    expect(
+      buildScopeFilter({ collectionIds: null, documentIds: null, includeArchived: true }, 'd.id')
+    ).toBeNull()
+    // The id union is unchanged (placeholders only, ids bound as params).
+    const union = buildScopeFilter(
+      { collectionIds: ['c1'], documentIds: ['d1', 'd2'], includeArchived: true },
+      'c.document_id'
+    )
+    expect(union?.params).toEqual(['c1', 'd1', 'd2'])
+    expect(union?.sql).toContain('c.document_id IN (?, ?)')
   })
 })

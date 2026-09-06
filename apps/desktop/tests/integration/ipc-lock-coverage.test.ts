@@ -42,6 +42,7 @@ import { registerAuditIpc } from '../../src/main/ipc/registerAuditIpc'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBenchmarkIpc } from '../../src/main/ipc/registerBenchmarkIpc'
 import { registerCollectionsIpc } from '../../src/main/ipc/registerCollectionsIpc'
+import { registerZimIpc } from '../../src/main/ipc/registerZimIpc'
 import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
 import { registerLocalApiIpc } from '../../src/main/ipc/registerLocalApiIpc'
 import { IPC } from '../../src/shared/ipc'
@@ -102,6 +103,16 @@ const MODULES: Array<{
   { name: 'registerRagIpc', register: registerRagIpc, exempt: new Set<string>() },
   { name: 'registerBenchmarkIpc', register: registerBenchmarkIpc, exempt: new Set<string>() },
   { name: 'registerCollectionsIpc', register: registerCollectionsIpc, exempt: new Set<string>() },
+  // Knowledge packs (ZIM wave): every registration/read/mutation channel is DB-backed; only the
+  // tools-installed + refreshing status probe is workspace-agnostic (in-memory service state).
+  // `packs:refresh` (#301 P3b, finding L7) schedules a DB-touching reconciliation and is
+  // therefore NOT exempt — `requireUnlocked()` is its first statement like every other handler
+  // here, so it is covered automatically by the loop below.
+  {
+    name: 'registerZimIpc',
+    register: registerZimIpc,
+    exempt: new Set<string>([IPC.getKnowledgePackStatus])
+  },
   // EP-1 Phase 1: every evidence-review handler is DB-backed — none are exempt.
   {
     name: 'registerEvidenceReviewsIpc',

@@ -22,6 +22,19 @@ export type PlaintextOpKind =
   | 'export'
   /** A doc-task's own transient (the OCR source PDF, a materialised output's `.parse.md`). */
   | 'doc-task'
+  // Knowledge packs (#301, finding H4). These run on a SECOND instance of this registry
+  // (`ctx.zimOps`), so the ZIM settle/sweep is its own bounded lock step and the paths it
+  // tracks are only ZIM transients (`library.<n>.xml` / `meta-<n>/library.xml` under the
+  // workspace's own `zim-transient/` dir). Same contract, different instance.
+  /** One ask's retrieval arm — registered with the ask's own signal as its parent. */
+  | 'zim-ask'
+  /** One article read for the citation viewer. */
+  | 'zim-article'
+  /** A registration (the native picker wait AND the per-file registration under it) and the
+   *  user's remove / enable mutations. */
+  | 'zim-register'
+  /** The background pack reconciliation (session start, explicit Refresh). */
+  | 'zim-reconcile'
 
 /** One registered operation. Obtained from `PlaintextOpsRegistry.register()`. */
 export interface PlaintextOp {

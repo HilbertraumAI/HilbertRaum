@@ -119,9 +119,13 @@ user's machine, and that is exactly where the door stops.
 
 A four-tier product ladder beyond the Lite MVP (aspirational; several line-items have since
 shipped into the base app — e.g. the reranker, collection scoping, the contract-brief skill,
-audio transcription, and the Office-tier review workflow as **Evidence Pack / Review Mode**:
+audio transcription, the Office-tier review workflow as **Evidence Pack / Review Mode**:
 verify a document-grounded answer, record decisions, export a local HTML/PDF evidence pack —
-EP-1, 2026-07-18, architecture.md design record):
+EP-1, 2026-07-18, architecture.md design record; and the Office/Knowledge tier's "knowledge
+bases" item as opt-in **knowledge packs** — offline ZIM archives (e.g. an offline Wikipedia)
+searched per-chat via a local kiwix-serve sidecar, 2026-09,
+[`rag-design.md`](rag-design.md) §17 — not an acquired knowledge base, no all-ZIM-quality
+claim, no full-ingestion, and no in-app provisioning yet):
 
 - **Office / Knowledge Drive** — better RAG, folder-level knowledge bases, contract review
   workflow, GDPR/DPIA assistant, audit logs, admin settings.

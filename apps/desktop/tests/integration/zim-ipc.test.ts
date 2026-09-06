@@ -1,0 +1,315 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
+
+// Knowledge packs (ZIM wave): the packs:* IPC surface — dialog-in-handler registration
+// (no renderer-supplied paths), the DB-only list, remove/enable, the ids-only audit
+// rule, and the scope round-trip (packIds persist through setScope → resolveScope).
+
+const ipcState = vi.hoisted(() => ({
+  handlers: new Map<string, unknown>(),
+  dialogPaths: [] as string[],
+  dialogCancel: false
+}))
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
+    removeHandler: (channel: string) => ipcState.handlers.delete(channel)
+  },
+  BrowserWindow: { getFocusedWindow: () => null },
+  dialog: {
+    showOpenDialog: async () => ({ canceled: ipcState.dialogCancel, filePaths: ipcState.dialogPaths })
+  },
+  app: { getVersion: () => '0.0.0-test' }
+}))
+
+import { registerZimIpc } from '../../src/main/ipc/registerZimIpc'
+import { IPC } from '../../src/shared/ipc'
+import { openDatabase, type Db } from '../../src/main/services/db'
+import { seedSettings } from '../../src/main/services/settings'
+import { createConversation, setScope } from '../../src/main/services/chat'
+import { resolveScope } from '../../src/main/services/collections'
+import { retrievablePacks, type PackDeps } from '../../src/main/services/zim/packs'
+import { readZimHeader } from '../../src/main/services/zim/identity'
+import { packUuid, writeZimFixture } from '../helpers/zim-header'
+import * as packs from '../../src/main/services/zim/packs'
+import type { AppContext } from '../../src/main/services/context'
+import type { KnowledgePack, KnowledgePackAddResult } from '../../src/shared/types'
+import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+
+const handlers = ipcState.handlers as unknown as IpcHandlers
+
+// The pack whose name/title must NEVER reach the audit log (the collections PROJECT_SENTINEL rule).
+const TITLE_SENTINEL = 'XPACKTITLE_SENTINEL_meine-krankheit'
+const FILE_SENTINEL = 'XPACKFILE_SENTINEL_wikipedia_med'
+
+interface Harness {
+  ctx: AppContext
+  db: Db
+  zimDir: string
+  auditCalls: Array<{ type: string; message: string; metadata: unknown }>
+}
+
+/** A ZimService stand-in over the REAL packs registry with a fake kiwix-manage. */
+function fakeZimService(db: () => Db, zimDir: string): unknown {
+  const deps: PackDeps = {
+    zimDir,
+    // #301 P3b: the fake manager READS the fixture's 80-byte header and echoes that uuid, so
+    // manager and header agree by construction — exactly what the real kiwix-manage does.
+    manageAdd: async (libraryXmlPath, zimPath) => {
+      const leaf = basename(zimPath)
+      if (leaf.includes('corrupt')) throw new Error(`Cannot add ZIM ${zimPath} to the library.`)
+      const { uuid } = readZimHeader(zimPath)
+      appendFileSync(
+        libraryXmlPath,
+        `<book id="${uuid}" path="${zimPath.replace(/\\/g, '/')}" ` +
+          `title="${TITLE_SENTINEL} ${leaf}" language="deu" date="2026-07-01" articleCount="42" />\n`
+      )
+    }
+  }
+  return {
+    toolsInstalled: () => true,
+    listPacks: (d: Db) => packs.listPacks(d),
+    reconcile: async (d: Db) => {
+      await packs.reconcile(d, deps)
+    },
+    refreshing: () => false,
+    revision: () => 0,
+    registerPack: (d: Db, p: string) => packs.registerPack(d, deps, p),
+    removePack: (d: Db, id: string) => packs.removePack(d, id),
+    setPackEnabled: (d: Db, id: string, enabled: boolean) => packs.setPackEnabled(d, id, enabled),
+    getArticle: async () => null,
+    makeArm: () => null,
+    // #301 P3b: `packs:add` opens the native picker under a service-owned operation. This
+    // stand-in has no operation registry, so it returns the always-admitted no-op shape the
+    // real service also uses when `ctx.zimOps` is absent. The SESSION behaviour (a lock
+    // aborting a parked picker, the late result refused) is driven against the REAL service in
+    // zim-ipc-session.test.ts, not here.
+    beginRegistration: () => ({
+      signal: new AbortController().signal,
+      epoch: null,
+      assert: () => undefined,
+      track: () => undefined,
+      release: () => undefined
+    }),
+    suspend: async () => {},
+    cleanupTransients: () => ({
+      removed: 0,
+      kept: 0,
+      unknownEntries: 0,
+      unsettledOps: 0,
+      unconfirmedChildren: 0,
+      confirmed: true
+    }),
+    whenSettled: async () => {},
+    stop: async () => {}
+  }
+}
+
+function makeHarness(): Harness {
+  ipcState.handlers.clear()
+  ipcState.dialogPaths = []
+  ipcState.dialogCancel = false
+  const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-zimipc-'))
+  const workspacePath = join(rootPath, 'workspace')
+  const zimDir = join(rootPath, 'zim')
+  mkdirSync(workspacePath, { recursive: true })
+  mkdirSync(zimDir, { recursive: true })
+  const db = openDatabase(join(workspacePath, 'test.sqlite'))
+  seedSettings(db)
+  const auditCalls: Harness['auditCalls'] = []
+  const ctx = {
+    trustedSenders: ANY_SENDER,
+    paths: { rootPath, workspacePath },
+    db,
+    workspace: { isUnlocked: () => true },
+    audit: (type: string, message: string, metadata: unknown) =>
+      auditCalls.push({ type, message, metadata }),
+    zim: fakeZimService(() => db, zimDir)
+  } as unknown as AppContext
+  registerZimIpc(ctx)
+  return { ctx, db, zimDir, auditCalls }
+}
+
+/** A real 80-byte ZIM header whose UUID is derived from the leaf, so the fixtures of one test
+ *  file never collide while the manager still reads its id out of the FILE (#301 P3b). */
+function addZimFile(dir: string, leaf: string): string {
+  return writeZimFixture(join(dir, leaf), packUuid('0000abcd', leaf.slice(0, 6)), {
+    trailing: `body of ${leaf}`
+  })
+}
+
+beforeEach(() => {
+  ipcState.handlers.clear()
+})
+
+describe('packs IPC', () => {
+  it('adds packs via the main-side dialog and audits ids/counts ONLY', async () => {
+    const h = makeHarness()
+    ipcState.dialogPaths = [addZimFile(h.zimDir, `${FILE_SENTINEL}.zim`)]
+    const result = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+    expect(result.outcome).toBe('success')
+    expect(result.failed).toBe(0)
+    expect(result.failureReason).toBeNull()
+    expect(result.added).toHaveLength(1)
+    expect(result.added[0]?.title).toContain(TITLE_SENTINEL)
+    expect(h.auditCalls).toHaveLength(1)
+    expect(h.auditCalls[0]?.type).toBe('knowledge_pack_added')
+    // The ids-only privacy rule: neither the pack title nor its filename may ride the audit.
+    const audited = JSON.stringify(h.auditCalls)
+    expect(audited).not.toContain(TITLE_SENTINEL)
+    expect(audited).not.toContain(FILE_SENTINEL)
+    expect(h.auditCalls[0]?.metadata).toMatchObject({ articleCount: 42 })
+  })
+
+  it('returns the cancelled DTO on a cancelled dialog and registers nothing (#301 P5, finding L1)', async () => {
+    const h = makeHarness()
+    ipcState.dialogCancel = true
+    const result = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+    expect(result).toEqual({ outcome: 'cancelled', added: [], failed: 0, failureReason: null })
+    expect(h.auditCalls).toHaveLength(0)
+  })
+
+  it('resolves the failure DTO — no throw, no sentinel — when every chosen archive fails to register', async () => {
+    const h = makeHarness()
+    const badPath = addZimFile(h.zimDir, `${FILE_SENTINEL}_corrupt.zim`)
+    ipcState.dialogPaths = [badPath]
+    const { result } = await invoke(handlers, IPC.addKnowledgePacks)
+    const dto = result as KnowledgePackAddResult
+    expect(dto.outcome).toBe('failure')
+    expect(dto.added).toHaveLength(0)
+    expect(dto.failed).toBe(1)
+    // The fake manager throws a plain Error (not `KiwixManageError`), so the classifier's
+    // fallback bucket applies — see `classifyAddFailure` in registerZimIpc.ts.
+    expect(dto.failureReason).toBe('other')
+    const json = JSON.stringify(dto)
+    expect(json).not.toContain(FILE_SENTINEL)
+    expect(json).not.toContain(badPath)
+    expect(h.auditCalls).toHaveLength(0)
+  })
+
+  it('resolves the partial DTO for a MIXED add — the good pack survives, the sentinel/path never ride the result (#301 P5, finding L1)', async () => {
+    const h = makeHarness()
+    const goodPath = addZimFile(h.zimDir, 'good-mixed.zim')
+    const badPath = addZimFile(h.zimDir, `${FILE_SENTINEL}_corrupt.zim`)
+    ipcState.dialogPaths = [goodPath, badPath]
+    const { result } = await invoke(handlers, IPC.addKnowledgePacks)
+    const dto = result as KnowledgePackAddResult
+    expect(dto.outcome).toBe('partial')
+    expect(dto.added).toHaveLength(1)
+    expect(dto.added[0]?.leaf).toBe('good-mixed.zim')
+    expect(dto.failed).toBe(1)
+    expect(dto.failureReason).toBe('other')
+    const json = JSON.stringify(dto)
+    expect(json).not.toContain(FILE_SENTINEL)
+    expect(json).not.toContain(badPath)
+    expect(json).not.toContain('\\')
+    // Exactly one `knowledge_pack_added` — the failed file never rides the audit.
+    expect(h.auditCalls.filter((c) => c.type === 'knowledge_pack_added')).toHaveLength(1)
+  })
+
+  it('list is DATABASE-ONLY: a file dropped into zim/ appears only after a reconciliation (L7)', async () => {
+    const h = makeHarness()
+    addZimFile(h.zimDir, 'dropped.zim')
+    // The old handler ran a full drive discovery here — a kiwix-manage spawn with a 30 s
+    // timeout per unknown file, on every Chat mount and after every toggle.
+    const before = (await invoke(handlers, IPC.listKnowledgePacks)).result as KnowledgePack[]
+    expect(before.map((p) => p.leaf)).not.toContain('dropped.zim')
+    // The session-start / Refresh pass is what discovers it.
+    await (h.ctx.zim as unknown as { reconcile: (db: Db) => Promise<void> }).reconcile(h.db)
+    const listed = (await invoke(handlers, IPC.listKnowledgePacks)).result as KnowledgePack[]
+    expect(listed.map((p) => p.leaf)).toContain('dropped.zim')
+  })
+
+  it('remove audits the id; enable/disable round-trips', async () => {
+    const h = makeHarness()
+    ipcState.dialogPaths = [addZimFile(h.zimDir, 'a.zim')]
+    const { result } = await invoke(handlers, IPC.addKnowledgePacks)
+    const [pack] = (result as KnowledgePackAddResult).added
+    await invoke(handlers, IPC.setKnowledgePackEnabled, pack!.id, false)
+    expect(retrievablePacks(h.db, h.zimDir, [pack!.id])).toHaveLength(0)
+    await invoke(handlers, IPC.removeKnowledgePack, pack!.id)
+    expect(h.auditCalls.map((c) => c.type)).toContain('knowledge_pack_removed')
+    expect((await invoke(handlers, IPC.listKnowledgePacks)).result as KnowledgePack[]).not.toContainEqual(
+      expect.objectContaining({ id: pack!.id })
+    )
+  })
+
+  it('status reports tools-not-installed when the service is absent', async () => {
+    makeHarness()
+    ipcState.handlers.clear()
+    registerZimIpc({
+      trustedSenders: ANY_SENDER,
+      workspace: { isUnlocked: () => true }
+    } as unknown as AppContext)
+    expect((await invoke(handlers, IPC.getKnowledgePackStatus)).result).toEqual({
+      toolsInstalled: false,
+      refreshing: false,
+      revision: 0
+    })
+  })
+
+  // #301 P3b, finding L7 (plan §9.17 (e)2-3): packs:refresh schedules a reconciliation and
+  // returns at once; packs:status carries the refreshing flag; packs:list never triggers
+  // discovery — it is asserted here as a spy on the same fake service the harness already
+  // drives (the real single-flight/serialization behaviour is zim-ipc-session.test.ts's T13-a).
+  it('refresh returns { started: true } and calls reconcile exactly once', async () => {
+    const h = makeHarness()
+    const svc = h.ctx.zim as unknown as { reconcile: (db: Db) => Promise<void> }
+    const reconcileSpy = vi.spyOn(svc, 'reconcile')
+    const { result } = await invoke(handlers, IPC.refreshKnowledgePacks)
+    expect(result).toEqual({ started: true })
+    // Fire-and-forget: the handler must not await the reconciliation before resolving.
+    expect(reconcileSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('status reports the refreshing flag from the service', async () => {
+    const h = makeHarness()
+    const svc = h.ctx.zim as unknown as { refreshing: () => boolean }
+    const spy = vi.spyOn(svc, 'refreshing').mockReturnValue(true)
+    expect((await invoke(handlers, IPC.getKnowledgePackStatus)).result).toMatchObject({
+      refreshing: true
+    })
+    spy.mockRestore()
+  })
+
+  it('list never calls reconcile or discovery, even with unregistered files on the drive', async () => {
+    const h = makeHarness()
+    addZimFile(h.zimDir, 'never-discovered.zim')
+    const svc = h.ctx.zim as unknown as { reconcile: (db: Db) => Promise<void> }
+    const reconcileSpy = vi.spyOn(svc, 'reconcile')
+    const before = (await invoke(handlers, IPC.listKnowledgePacks)).result as KnowledgePack[]
+    expect(before.map((p) => p.leaf)).not.toContain('never-discovered.zim')
+    expect(reconcileSpy).not.toHaveBeenCalled()
+  })
+
+  it('getPackArticle rejects malformed args with null, never a throw', async () => {
+    makeHarness()
+    expect((await invoke(handlers, IPC.getPackArticle, 42, null)).result).toBeNull()
+  })
+})
+
+describe('scope round-trip', () => {
+  it('packIds persist through setScope → resolveScope and survive narrowing spreads', () => {
+    const h = makeHarness()
+    const conv = createConversation(h.db, { mode: 'documents' })
+    setScope(h.db, conv.id, { collectionIds: [], documentIds: [], packIds: ['uuid-a', 'uuid-b'] })
+    const scope = resolveScope(h.db, conv.id)
+    expect(scope.packIds).toEqual(['uuid-a', 'uuid-b'])
+    // The rag handler narrows via spread ({ ...scope, … }) — packs must ride along.
+    const narrowed = { ...scope, collectionIds: null, documentIds: ['doc-1'] }
+    expect(narrowed.packIds).toEqual(['uuid-a', 'uuid-b'])
+  })
+
+  it('a pack-less scope serializes byte-identically to the pre-wave shape', () => {
+    const h = makeHarness()
+    const conv = createConversation(h.db, { mode: 'documents' })
+    setScope(h.db, conv.id, { collectionIds: [], documentIds: ['d1'] })
+    const row = h.db
+      .prepare('SELECT scope_v2_json FROM conversations WHERE id = ?')
+      .get(conv.id) as { scope_v2_json: string }
+    expect(row.scope_v2_json).toBe('{"collectionIds":[],"documentIds":["d1"]}')
+    expect(resolveScope(h.db, conv.id).packIds).toBeNull()
+  })
+})

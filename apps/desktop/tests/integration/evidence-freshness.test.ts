@@ -288,6 +288,47 @@ describe('freshness engine (spec §21.2) — stored-fact comparison only', () =>
     expect(fresh.outdated).toBe(true)
   })
 
+  it('an archive source is unverifiable by construction: a same-titled document changing is not its drift (PR #294 review H2)', () => {
+    const { db } = freshDb()
+    // The decoy carries the article's exact title; the review also cites a real document.
+    const decoyId = seedDocument(db, { title: 'Treibhausgas', sha256: 'aa'.repeat(32) })
+    const docId = seedDocument(db, { title: 'Klimabericht.pdf', sha256: 'bb'.repeat(32) })
+    const { messageId } = seedAnswer(db, {
+      content: 'Aus dem Archiv. [S1]\n\nAus der Bibliothek. [S2]',
+      citations: [
+        {
+          label: 'S1',
+          sourceTitle: 'Treibhausgas',
+          snippet: 'Methan aus der Landwirtschaft.',
+          sourceKind: 'archive',
+          packId: 'pack-climate',
+          archiveTitle: 'Wikipedia (DE)',
+          articlePath: 'A/Treibhausgas'
+        },
+        { label: 'S2', sourceTitle: 'Klimabericht.pdf', documentId: docId, snippet: 'Der Bericht.' }
+      ],
+      coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 6 }
+    })
+    const reviewId = createEvidenceReviewFromMessage(db, messageId, {}).id
+
+    expect(computeEvidenceReviewFreshness(db, reviewId)!.sources).toEqual([
+      { key: 'S1', state: 'unverifiable' },
+      { key: 'S2', state: 'unchanged' }
+    ])
+    // Re-ingesting the SAME-TITLED document is not this archive source's drift: under the
+    // defect S1 was pinned to that row and this would have read 'changed' + outdated.
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('cc'.repeat(32), decoyId)
+    const fresh = computeEvidenceReviewFreshness(db, reviewId)!
+    expect(fresh.sources).toContainEqual({ key: 'S1', state: 'unverifiable' })
+    expect(fresh.outdated).toBe(false)
+    // The cited document still drifts normally.
+    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('dd'.repeat(32), docId)
+    const drifted = computeEvidenceReviewFreshness(db, reviewId)!
+    expect(drifted.sources).toContainEqual({ key: 'S2', state: 'changed' })
+    expect(drifted.sources).toContainEqual({ key: 'S1', state: 'unverifiable' })
+    expect(drifted.outdated).toBe(true)
+  })
+
   it('the outdated overlay never erases ready (spec §18.4)', () => {
     const { db } = freshDb()
     const { reviewId, docId } = seedReview(db)
@@ -829,6 +870,56 @@ describe('source-in-context (D-5) — stored extraction only', () => {
     const ctx = getEvidenceSourceContext(db, detail.id, 'S1')!
     expect(ctx.located).toBe(true)
     expect(ctx.match).toBe(longText.slice(0, 200))
+  })
+
+  it('an archive source has no context at all — null, even with a same-titled document and its chunks present (PR #294 review H2)', () => {
+    const { db } = freshDb()
+    // The decoy document has the article's title AND stored chunks holding the very snippet:
+    // everything the ladder would need, if the archive source were ever pointed at it.
+    const decoyId = seedDocument(db, { title: 'Treibhausgas', sha256: 'aa'.repeat(32) })
+    seedChunk(db, {
+      documentId: decoyId,
+      index: 0,
+      text: 'Methan aus der Landwirtschaft ist ein Treibhausgas.',
+      page: 3
+    })
+    const docId = seedDocument(db, { title: 'Klimabericht.pdf', sha256: 'bb'.repeat(32) })
+    seedChunk(db, { documentId: docId, index: 0, text: 'Der Bericht nennt Methan.', page: 1 })
+    const { messageId } = seedAnswer(db, {
+      content: 'Aus dem Archiv. [S1]\n\nAus der Bibliothek. [S2]',
+      citations: [
+        {
+          label: 'S1',
+          sourceTitle: 'Treibhausgas',
+          snippet: 'Methan aus der Landwirtschaft ist ein Treibhausgas.',
+          sourceKind: 'archive',
+          packId: 'pack-climate',
+          archiveTitle: 'Wikipedia (DE)',
+          articlePath: 'A/Treibhausgas'
+        },
+        {
+          label: 'S2',
+          sourceTitle: 'Klimabericht.pdf',
+          documentId: docId,
+          snippet: 'Der Bericht nennt Methan.'
+        }
+      ],
+      coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 4 }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    // Honest unavailable: there is no workspace document behind an archive article, so the
+    // reader claims nothing (the review row's "Open article", added in #301 P6, goes through
+    // packs:getArticle with the snapshot's pack id + article path — never through this reader).
+    expect(getEvidenceSourceContext(db, detail.id, 'S1')).toBeNull()
+    // The document source in the same review still resolves its stored context.
+    const ctx = getEvidenceSourceContext(db, detail.id, 'S2')!
+    expect(ctx).toMatchObject({
+      documentTitle: 'Klimabericht.pdf',
+      availability: 'available',
+      hashState: 'match',
+      located: true,
+      match: 'Der Bericht nennt Methan.'
+    })
   })
 })
 

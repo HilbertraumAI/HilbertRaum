@@ -2039,7 +2039,12 @@ compared not re-hashed per spec §21.2); a documentId whose row is GONE stays
 absent). A legacy citation resolves by EXACT title match only when the match is UNIQUE —
 zero or multiple matches leave `identity:'unresolved'` (availability null: it cannot be
 known). Unresolved ≠ missing is load-bearing: Phase-4 freshness may only say "cannot verify"
-for unresolved sources, never "changed"/"deleted".
+for unresolved sources, never "changed"/"deleted". **Archive exception (P2, PR #294 review
+H2, #301):** a citation with `sourceKind: 'archive'` (a ZIM knowledge-pack article) never
+enters either branch — the resolver checks `sourceKind` first and forces
+`identity:'unresolved'` with null `documentId`/`documentSha256`/`mimeType`/
+`availabilityAtCreation`, even when stale or malformed data also supplies a document id or
+an exact-matching document title exists. §17 D-Z5 records the archive-specific fields.
 
 ### 16.3 Truncation and coverage honesty (§14.10)
 
@@ -2108,3 +2113,843 @@ the `chunks` table (the stored extraction), resolved main-side from the review's
 snapshot (renderer sends review id + source key only), located via the snapshotted chunk id
 (document-verified) or a stored-text containment search — never a re-read of the source
 file, and an unlocatable excerpt is said to be unlocatable, never approximated.
+
+---
+
+## 17. ZIM knowledge packs — design record (kiwix-serve retrieval arm, 2026-09-04)
+
+**What it is.** The user registers ZIM archives (openZIM/Kiwix format — e.g. an offline
+Wikipedia from library.kiwix.org) as *knowledge packs* and opts a chat into them via the
+scope popover; the ask then retrieves from the packs *query-time* alongside the document
+corpus, with citations that name the archive + article + section and open a read-only
+offline article viewer. Files are registered in place, never copied.
+
+### The decisions and the facts they rest on
+
+- **D-Z1 — kiwix-serve sidecar, not libzim bindings.** `@openzim/libzim` does not install
+  on Windows (no Windows libzim binary upstream, no Windows target in its binding.gyp,
+  node-gyp requires MSVC) — established by the 2026-08-22 spike. kiwix-serve (kiwix-tools)
+  ships Windows binaries, starts in ~0.5 s, idles at ~52 MB RSS, and its embedded Xapian
+  full-text search answers in 40–200 ms. `services/zim/serve.ts` (`KiwixServer`) is a
+  compact LlamaServer sibling: shared `findFreePort`/bind-race-retry-once, the crash-reap
+  PID registry (`SidecarFamily` gained `'kiwix_tools'`), pre-spawn binary verification, and
+  a bounded teardown policy (SIGTERM → 2 s → SIGKILL → 3 s → reported "not confirmed",
+  the PID kept in the crash reaper — the full record is D-Z10). The start is lazy and
+  shared per pack revision; a start failure latches by revision until the pack set
+  changes, but an aborted start never latches. No idle teardown (read-only content
+  server, trivial RSS): an unexpected death makes the next ask spawn a NEW generation
+  over the SAME library build, not a rebuild.
+- **D-Z2 — node:http, never fetch.** Node 24's undici crashes (`assert(!this.paused)`) on
+  kiwix-serve/libmicrohttpd response framing, keep-alive or not — reproduced on this exact
+  combination: Node 24.19.0, Electron 43.4.0 (= Node 24), kiwix-tools 3.8.1 win-x86_64, spike
+  2026-08-22 (§2.2). That is an observation about this combination, not a claim that every
+  undici/runtime version fails the same way. `services/zim/client.ts` uses `node:http` with a
+  non-keepalive agent, loopback-only by construction, 8 MiB body ceiling.
+- **D-Z3 — query-time retrieval, no embeddings.** A full-Wikipedia pack has millions of
+  articles; pre-embedding is off the table and unnecessary: the ZIM's own Xapian index is
+  the recall stage and the existing reranker (§11) is the precision stage. Per ask and per
+  pack: `/search?books.id=<uuid>` top-5 articles → `/raw/.../content/<path>` HTML →
+  `zimArticleToSegments` (html.ts — a single-cursor **linear forward scanner** with
+  memoised failed lookaheads: every input index is examined at most K = 5 times; the proof
+  is the "LINEAR FORWARD SCANNER — complexity record" header comment in that file, PR #294
+  review H1. Sections → heading `sectionLabel`s, mw-ref sups dropped, `<math alttext>`
+  LaTeX kept, tables/figures dropped) → the SAME `chunkSegments` chunker → top-4
+  chunks/article by query-term overlap, ≤24 candidates total.
+
+  **Truncation / budget contract.** The converter takes `{ maxChars?, maxWork? }`
+  (defaults 1 MiB / 4×`maxChars`) and never throws: a cut reports
+  `truncated: { reason: 'maxChars' | 'workBudget' | 'unterminated', at, what? }` (the work
+  budget takes precedence over the char cap), but the segments produced before the cut are
+  always returned, so a partial article still contributes retrieval chunks (`arm.ts`
+  unchanged) and the viewer's `PackArticle.partial` flag tells the user only the first part
+  was shown instead of presenting a partial extraction as the whole article. The contract is
+  identical on the async form, `zimArticleToSegmentsAsync` (P1b), that the ask path now calls.
+
+  The **2026-08-22 end-to-end spike figure** (search + fetch + convert, warm, this
+  machine): 82–165 ms, inside the ≤300 ms acceptance budget before rerank — kept as a
+  distinct measurement from the parser-only figures below (review DOC-2 flagged the two as
+  conflated).
+
+  **Measured (P1, 2026-09-05).** Workload: Section A pathology families (unclosed-`<`,
+  unmatched-quote, unterminated-comment/-script, repeated-`<`, entity-heavy, deep-nesting,
+  wellformed synthetic Parsoid-like) at 30k/60k/300k/1 MiB chars; Section B = 60
+  conversions of five synthetic ~30 KB Parsoid-like articles (no real mwoffliner articles
+  available on this machine — stated explicitly as synthetic). Hardware: i9-14900K (8
+  P-cores + 16 E-cores), Node v24.19.0, plain Node (no Electron), the P1 tree on
+  `9125c6df`. Cold = first call of a given input in the process; warm = median of 20 runs
+  after 5 warm-ups (batch: median of 10 passes). Gate thresholds: laptop (i) ≤ 50 ms /
+  (ii) ≤ 150 ms; one-third early-warning rule ≈ 16.67 ms / 50 ms (assumes a P-core).
+
+  | run (affinity) | 1 MiB worst warm | worst family | batch warm | (i) vs 16.67 ms | (ii) vs 50 ms |
+  |---|---|---|---|---|---|
+  | P-cores pinned, run A | 16.23 ms | wellformed | 29.56 ms | 0.97× PASS | 0.59× PASS |
+  | P-cores pinned, run B | 15.25 ms | repeated-lt | 28.74 ms | 0.92× PASS | 0.57× PASS |
+  | E-cores pinned | 27.79 ms | wellformed | 46.66 ms | 1.67× FAIL | 0.93× PASS |
+  | unpinned, 3 runs | 33.28–36.21 ms | entity-heavy | 48.38–64.85 ms | 2.00–2.17× FAIL | 0.97–1.30× (2/3 FAIL) |
+
+  Per-size P-core MAX (warm): 30k 0.74 ms, 60k 0.94 ms, 300k 4.45 ms, 1 MiB 16.23 ms; the
+  batch's per-conversion mean is ≈0.49 ms on a P-core. The unclosed-`<` pathology that took
+  ~188 ms at 30k chars before P1 now takes 0.43 ms at 30k and 17.9 ms at 1 MiB.
+
+  **Verdict (14900K early warning, one-third rule, assumes a P-core) — superseded.** This
+  reading of the ORIGINAL D2 gate (a worst-case article and a batch figure, weighed against a
+  possible worker follow-up) is kept below for its measured numbers, but the decision it was
+  building toward is superseded the same day (§9.11): D2's remedy was re-ruled from a worker
+  to **cooperative slicing** (the P1b section below), whose gate is the per-slice stall,
+  ruled **≤ 5 ms on the i7-8550U** reference. **Laptop leg 3** (below) is the decisive run: at
+  `DEFAULT_SLICE_WORK` = 16 Ki it **PASSED** — p95 2.4–2.7 ms against the 5 ms bound — so
+  `DEFAULT_SLICE_WORK` is fixed at 16 Ki and no worker is added. **B02** (owner ruling):
+  because the decisive laptop figure was NOT within 20 % of the gate, P7's re-check runs the
+  14900K's Section D figures ÷ 3 as a proxy rather than re-running the laptop.
+
+  **Laptop leg 1 — owner's i7-1185G7 (Tiger Lake, 4C/8T, 15.8 GiB), 2026-09-05, from the
+  `ce062b6c` zip, `--gate laptop`, synthetic batch articles, unpinned.** Not the decisive
+  reference machine (the i7-8550U is slower per core and still pending) — an upper bound on what
+  the reference can do. Node 24 is the app's runtime (Electron 43); the Node 22 runs are
+  informative only.
+
+  | run | Node | 1 MiB worst warm (family) | cold | batch warm | batch cold | (i) vs 50 ms | (ii) vs 150 ms |
+  |---|---|---|---|---|---|---|---|
+  | 1 | 24.20.0 | 56.99 ms (entity-heavy) | 82.42 ms | 85.69 ms | 79.05 ms | 1.14× FAIL | 0.57× PASS |
+  | 2 | 24.20.0 | 55.12 ms (deep-nesting) | 74.86 ms | 96.27 ms | 110.07 ms | 1.10× FAIL | 0.64× PASS |
+  | 3 | 24.20.0 | 62.85 ms (wellformed) | 118.68 ms | 106.81 ms | 169.21 ms | 1.26× FAIL | 0.71× PASS |
+  | 1 | 22.23.1 | 31.88 ms (wellformed) | 49.13 ms | 51.11 ms | 73.93 ms | 0.64× PASS | 0.34× PASS |
+  | 2 | 22.23.1 | 32.22 ms (entity-heavy) | 52.33 ms | 49.53 ms | 61.97 ms | 0.64× PASS | 0.33× PASS |
+  | 3 | 22.23.1 | 46.30 ms (wellformed) | 44.70 ms | 57.33 ms | 99.52 ms | 0.93× PASS | 0.38× PASS |
+
+  Caveats: power plan / AC state not recorded; the 30k MAX drifted 1.78 → 4.52 → 5.52 ms across
+  the three Node 24 runs within 25 s (throttling or background load), so the Node 24 figures are
+  noisy upward — but even the best Node 24 run fails gate (i) by 10 %, and Node 22 vs 24 on the
+  same machine differ ~1.8× (runtime or heat; not separable from this data). Where the 1 MiB time
+  goes (14900K P-core, all families 13–16 ms): the scanner loop itself is the floor;
+  `decodeEntities` is ~7 of the 13 ms only on the entity-heavy family. **Reading:** on the app's
+  runtime a machine faster than the reference already fails gate (i) while gate (ii) passes with
+  a 30–40 % margin; the i7-8550U cannot do better, so under D2 as ruled the worker follow-up PR
+  is expected before P4 unless the owner re-rules the 1 MiB worst-case gate (e.g. a 512 KiB
+  `maxChars` — the largest observed maxi article is ~0.5 MB — or accepting a one-off 60–90 ms
+  stall for a pathological 1 MiB article). Decision: pending the i7-8550U figure and that ruling.
+
+  **Laptop leg 2 — the reporter's i7-8550U (the slow-hardware reference), 2026-09-05, on the P1
+  converter `ce062b6c` (before slicing), `--gate laptop`, unpinned, AC power, High performance
+  plan, Node 24.18.0, Windows 11 Pro 26200.** Warm 1 MiB worst case 130.13 / 95.84 / 79.38 /
+  72.97 ms (run 1 was the first process after setup; runs 2–4 settled) vs 50 ms — FAIL 1.46–2.60×
+  in every run; 60 × 30 KB synthetic batch 249.97 / 133.99 / 126.59 ms vs 150 ms — fail once, pass
+  twice (0.84–0.89×), 2.1–4.2 ms per conversion; a fourth run over three REAL kiwix-serve articles
+  (46–293 KB, mean ~160 KB, 1.5–9.7× the assumed size) totalled 307 ms — not comparable to the
+  30 KB assumption, per-char consistent with Section A. Per-family 1 MiB warm (run 3): unclosed-lt
+  46.6, repeated-lt 79.4, entity-heavy 57.7, deep-nesting 76.2, wellformed 59.6 ms. **Reading:** this
+  core class is 4.6–8× slower than a 14900K P-core on this workload, not the 2.5–3× the one-third
+  rule assumed — the rule under-warned; under D2 as originally ruled the reference fails gate (i)
+  outright, which is what the re-ruling (P1b, below) answers. The decisive figure is now the
+  reference's PER-SLICE stall on the P1b converter (Section D, pending — the reporter's next run;
+  the P1b converter was not on the laptop yet). Expectation from the ratio: 14900K p95 0.5–1.0 ms ×
+  4.6–8 ≈ 2.5–8 ms against the 5 ms bound, so `DEFAULT_SLICE_WORK` may need to drop to 16 Ki
+  (the perf script's `--slice-work` flag lets the laptop try both in one session; the CPU total
+  is unchanged either way).
+
+  **P1b — cooperative slicing (re-ruled remedy, 2026-09-05).** D2's remedy is re-ruled from a
+  worker to cooperative slicing: a worker's blast radius (a new main rollup entry, first-party
+  `asarUnpack`, a pool/lifecycle boundary, an owner-only packaged-load smoke class) was judged
+  larger than slicing's, which is `html.ts` plus two `await` call sites, fully provable in
+  Vitest — mechanism in that file's "COOPERATIVE SLICING (P1b)" header comment. `zimArticleSlices`
+  is now the one implementation: a generator yielding every `DEFAULT_SLICE_WORK` work units
+  (32,768, halved from 65,536 after measurement) and, independently, after every emitted
+  `TEXT_PIECE_CHARS`-sized text piece (the cut is backed up to the last `&` so no entity
+  straddles it). `zimArticleToSegments` drains it unchanged; the new
+  `zimArticleToSegmentsAsync(html, { …, signal? })` awaits `setImmediate` between slices (the
+  event loop's check phase, so IPC and socket reads get through — a microtask would not) and
+  checks the caller's `AbortSignal` before every slice, rejecting with `signal.reason` and
+  running no further slice — an ordinary ~30 KB article (one slice) still resolves in the same
+  tick.
+
+  Gate (iii) is the longest uninterruptible main-thread stall between two yields, ruled ≤5 ms
+  on the i7-8550U reference (early-warning third ≈1.67 ms on a 14900K P-core); the (i)/(ii)
+  totals stay recorded as CPU/latency facts, not gated. It is read on the p95 across pooled
+  slices AND the median-of-three run max (each family/batch timed three runs; `max` = median
+  of the three runs' maxima): a lone max more than ~3× the p95 at a random slice index is
+  scheduling jitter, not real indivisible work — a genuine one would show a FIXED worst-slice
+  index across runs.
+
+  14900K P-core Section D (both pinned runs, every family at 1 MiB):
+
+  | family | slices | max ms | p95 ms | median ms |
+  |---|---|---|---|---|
+  | unclosed-lt | 43 | 0.57–0.64 | 0.47–0.51 | 0.41–0.42 |
+  | unmatched-quote | 32 | 0.16–0.18 | 0.08–0.09 | 0.07 |
+  | unterminated-comment | 1 | 0.02 | 0.02 | 0.02 |
+  | unterminated-script | 1 | 0.02 | 0.02 | 0.02 |
+  | repeated-lt | 63 | 0.64–0.82 | 0.56–0.57 | 0.47–0.48 |
+  | entity-heavy | 33 | 0.52–0.60 | 0.50–0.56 | 0.44 |
+  | deep-nesting | 32 | 0.75–0.99 | 0.72 | 0.61–0.63 |
+  | wellformed | 32 | 0.65–0.86 | 0.71–0.99 | 0.52–0.54 |
+  | batch (60 conversions) | 60 | 2.71–2.77 | 0.53–0.58 | 0.49–0.50 |
+
+  **Verdict.** (iii) PASSES on p95 and on the median-of-three max for every 1 MiB family. The
+  script's raw verdict line still reads FAIL 1.63–1.66×: that figure is the batch leg's max, a
+  single ~30 KB article (one slice, median 0.5 ms) taking 2.7 ms at a random position — per the
+  reading rule above that is scheduling jitter, not the verdict. The two steps that were genuinely
+  indivisible before the follow-up (~13 ms of `decodeEntities` over one huge text run at a fixed
+  slice 0, ~2.2 ms of trailing whole-buffer tidy at the fixed last slice) now cost ~0.6–0.7 ms and
+  no longer sit at a fixed index. The sync 1 MiB totals rose ≈15% over P1 (the price of
+  divisibility: generator driving, text pieces, incremental tidy) — recorded as a CPU/latency
+  fact under the re-ruled gate, not hidden. Decisive i7-8550U per-slice figure: pending (owner).
+  **Laptop leg 3 — the reporter's i7-8550U on the P1b converter (`5f68cec4`), 2026-09-05, the
+  decisive per-slice run.** Conditions as leg 2 (AC, High performance, Node 24.18, no pinning);
+  32 Ki and 16 Ki slice sizes, three synthetic runs each plus one real-fixture run each.
+
+  | series | 1 MiB families: median-of-3 max | 1 MiB p95 | batch max | batch p95 | batch median |
+  |---|---|---|---|---|---|
+  | 32 Ki (3 runs) | 3.32 / 5.21 / 3.71 ms (wellformed) | 3.15–3.72 ms | 7.61 / 7.83 / 9.36 ms | 1.78–2.17 ms | 1.37–1.52 ms |
+  | 16 Ki (3 runs) | 2.76 / 2.97 / 2.69 ms | 2.37–2.72 ms | 7.49 / 8.25 / 6.12 ms | 0.98–1.74 ms | 0.75–0.99 ms |
+  | 32 Ki real fixtures | 6.18 ms (wellformed) | 4.14 ms | 5.37 ms | 0.78 ms | 0.59 ms |
+  | 16 Ki real fixtures | 5.12 ms (wellformed) | 2.14 ms | 5.99 ms | 0.49 ms | 0.31 ms |
+
+  Every run PASSES (iii-p95) at both sizes (0.43–0.83×) and FAILS the raw (iii) max (1.20–1.87×)
+  — and, as the reporter observed, the failing max is the batch leg's, at a random article,
+  unchanged when the slice size halves (60 → 120 slices), i.e. not scan work. The script now
+  counts GC events per row (a `PerformanceObserver` on `gc`): on the 14900K the three batch
+  passes show 5 minor collections totalling ~10 ms, ~2 ms each, at random articles — the same
+  shape the laptop shows at its speed (6–9 ms). Those are allocation-driven pauses that hit the
+  synchronous path identically and are outside what slicing can divide; reducing allocation is
+  a separate constant-factor task, not part of the gate. **Decision (2026-09-05): `DEFAULT_SLICE_WORK`
+  = `TEXT_PIECE_CHARS` = 16 Ki** — on the reference every 1 MiB family's median-of-three max
+  is under 3 ms and p95 2.4–2.7 ms (32 Ki reached 5.2 ms / 3.7 ms), at ~0 % overhead; an ordinary
+  ~30 KB article becomes two slices (one macrotask hop). Gate (iii) reading on the reference:
+  **PASS** on p95 and on the 1 MiB families' median-of-three max; the batch's residual maxima are
+  GC, recorded. The CPU totals on the reference (facts, not gated): 1 MiB 53–80 ms, synthetic
+  batch 87–103 ms (one slow run 168), real-fixture batch 188–210 ms (size caveat). T02-c is
+  thereby recorded; P7's re-check (B02) runs Section D at 16 Ki on the final build.
+
+  **P7 re-check (Section D, 16 Ki, final build — B02's 14900K ÷ 3 proxy; 2026-09-06, i9-14900K
+  P-cores pinned, Node 24.19.0, `--gate early-warning`, three runs):** per-slice p95 **0.36 /
+  0.54 / 0.58 ms** vs the 1.67 ms one-third line — PASS (0.22–0.35×), i.e. 1.1–1.7 ms projected
+  vs the 5 ms bound (the reference measured 2.4–2.7 ms directly); the 1 MiB families'
+  median-of-three max ≤ 0.6 ms (worst: unclosed-`<` / deep-nesting). The batch's raw maxima
+  2.5–2.9 ms sit at a random slice index with 3–5 GC events (6–12 ms) per three passes — the
+  GC-pause class the reference run recorded, outside slicing (the script's strict raw line
+  reads FAIL on that number; the ruled reading is p95 + median-of-three max). Recorded, not
+  gated: (i) 1 MiB sync total 18.4–19.2 ms warm (cold 22–24 ms) — the ≈ 15 % price of
+  divisibility; (ii) the 60-conversion batch 31–33 ms vs 50. No laptop re-run: the reference's
+  decisive figure was not within 20 % of the bound. Logs: `tmp/zim-wave/p7/d2/` (maintainer-local).
+- **D-Z4 — one seam in `retrieve()`.** An optional `ExternalRetrievalArm` (parameter 8)
+  appends candidates between the chunk-row join and the rerank, so rerank, dedup, token
+  budget and `[Sn]` labelling treat archive and document chunks uniformly. No reranker →
+  round-robin interleave (a straight trim would always drop the appended arm). Arm
+  failure is logged and swallowed — an unplugged pack drive never breaks a document ask.
+  The no-arm path is pinned against a retrieval result captured from pre-arm master `bfdb514a`
+  (`tests/fixtures/zim/no-arm-retrieval-master-bfdb514a.json`, review L6, `zim-arm.test.ts`).
+  **Reranker failure and abort (P4, 2026-09-06; review M3).** The interleave now runs
+  whenever no reranker RANKED the candidates — absent or threw — not only when it is
+  absent, so a reranker exception degrades to the same round-robin as no reranker at all.
+  A `StaleServerError` from the arm (both request-guard attempts discarded) is an ORDINARY
+  error → one `server-restarted` outcome per eligible pack, and the ask continues with
+  whatever the document arms found. An `AbortError`, from either the reranker or the arm,
+  is NEVER converted into a fallback or an outcome — it propagates out of `retrieve()`
+  unchanged.
+  **Fair allocation (P4, 2026-09-06; review M8).** `MAX_EXTERNAL_CANDIDATES = 24` stays the
+  GLOBAL admitted-candidate bound; for N eligible packs (N ≤ `MAX_SELECTED_PACKS = 12`)
+  each gets a provisional quota `floor(24/N)` plus one extra for the first `24 mod N`
+  packs in `title COLLATE NOCASE, id` order — an UPPER bound on how much a pack fetches
+  (≤ `ARTICLES_PER_PACK = 5` articles, ≤ `CHUNKS_PER_ARTICLE = 4` chunks each), not a
+  guaranteed minimum. Admission happens only after every pack has SETTLED: round-robin,
+  one candidate per pack per round in pack order, until 24 are admitted or every pack is
+  exhausted — a short/empty/failed pack's unused share reclaims to the others (bounded by
+  what they already fetched; a reclaim never triggers a further fetch), and a
+  late-completing pack's best hit still reaches the reranker. `PACK_SEARCH_CONCURRENCY = 2`
+  workers pull the ordered queue; `EXTERNAL_RETRIEVAL_DEADLINE_MS = 20_000` bounds the
+  whole per-ask attempt AND its one admitted retry together (the combined signal is
+  created once, outside the request guard, so the guard's `op.assert()` never mistakes the
+  deadline for a cancellation) — a pack cut mid-flight is `failed/timeout`, one never
+  started before the deadline is `skipped/deadline`, and whatever was already assembled is
+  kept. `MAX_SELECTED_PACKS = 12` bounds the popover, the chip, the arm and the outcomes
+  with ONE constant; a persisted selection above it (older data, a hand-edited setting) is
+  trimmed deterministically in title order and every trimmed pack gets
+  `skipped/selection-limit` — which makes the `N > 24` allocation branch unreachable, so it
+  is not implemented.
+  **Per-ask outcomes (P4, 2026-09-06; review M6/M7).** `classifyPackSelection`
+  (`zim/packs.ts`) classifies every selected pack id BEFORE any eligibility filter — a
+  missing tools bundle, an all-unavailable or all-unsearchable selection can no longer
+  erase what the user ticked; `makeArm` now returns an arm for every non-empty selection
+  (null only when nothing was selected at all), because a null arm used to erase the very
+  facts the user needs. `KnowledgePackOutcome { packId, title, status: 'searched' |
+  'skipped' | 'failed', reason, found, admitted }` — the reason code is the whole
+  diagnostic, never a path or stderr — is persisted with the answer as additive
+  `messages.pack_outcomes_json` (parsed through a tolerant whitelist,
+  `parsePackOutcomes`), so it survives reload, regenerate/restore and export; `chat:done`
+  already carries the full persisted `Message`, so no new IPC channel or preload change
+  exists — the carriage is the message itself. `PackOutcomesNotice` renders it under the
+  answer — a collapsed summary, one row per outcome — even for a zero-citation or
+  no-context answer; a legacy answer that cited an archive but carries no outcomes shows an
+  explicit "outcome not recorded" line instead of silence. A whole-document, compare or
+  grounded-data answer produces `skipped/mode` for every selected pack via `packTitles` —
+  packs are still not queried on those paths, but the answer now SAYS so.
+- **D-Z5 — synthetic identity, honest exclusions.** Archive chunks carry
+  `chunkId 'zim:<packId>:<path>#<n>'`, `documentId 'zim:<packId>'`, `sourceKind:
+  'archive'`. Their citations carry `packId`/`archiveTitle`/`articlePath` and **no**
+  `documentId`/`chunkId` (the evidence-pack resolver reads a non-null documentId as a
+  real row). Coverage math excludes archive chunks; a pure-archive answer records no
+  coverage fraction. The prompt meta line reads `| Archive: <title> | Section: <heading>`.
+  **P2 (2026-09-05, PR #294 review H2/M11, #301) — evidence identity and provenance.**
+  `buildEvidenceSourceSnapshots` (`evidence-pack/snapshot.ts`) checks
+  `c.sourceKind === 'archive'` BEFORE both the document-id branch and the legacy
+  exact-title branch: an archive citation is always `identity:'unresolved'` with null
+  `documentId`/`documentSha256`/`mimeType`/`availabilityAtCreation`, even when stale or
+  malformed data also supplies a document id. The same guard runs at READ time in
+  `parseSourceSnapshots` (`services/evidence-reviews.ts`); freshness reports such a source
+  `'unverifiable'` by an explicit archive branch (never `'changed'`/`'missing'`, §16.2/
+  §16.5), and the source-in-context handler returns null for it (no workspace file to
+  read). `EvidenceSourceSnapshot` (`shared/types.ts`) gained four ADDITIVE fields —
+  `sourceKind: 'document' | 'archive'` (always written; stored JSON without the field
+  reads as `'document'`), `archiveTitle`, `packId` (`knowledge_packs.id`), `articlePath`
+  — carried through every whitelist/re-modelling layer into the HTML/PDF evidence pack
+  (a distinct archive card, warning and register row; document sources render
+  byte-identically to before), the Markdown transcript export, and
+  `EvidencePane`/`ReviewSummaryView` (a distinct unresolved-archive badge, no "Open
+  source in context"). No new storage column, `SCHEMA_VERSION` unchanged. **Saved-review
+  compatibility is disposable** (owner ruling 2026-09-05): a review created on a pre-merge ZIM
+  build that cites an archive may carry a wrongly resolved document identity and must be
+  re-run — no detection, invalidation or migration flow, and the app never rewrites a
+  frozen review or infers an archive from a matching title (CHANGELOG). **Review context:
+  "Open article" (P6, as built).** An archive row's citation now opens through the shared
+  `ArticleModal` via `EvidencePane.onOpenArticle` — using the review's own FROZEN snapshot
+  locator (`packId` + `articlePath`), never a live document lookup, so `packs:getArticle`
+  resolves it by UUID even after the pack is renamed; a removed, disabled or
+  currently-unplugged pack reports the same honest "unavailable" state as chat, and a
+  pre-P2 row with no locator renders no button at all. Tested for unavailable/renamed/deleted
+  packs (`ReviewEvidencePane.test.tsx`, `ReviewScreen.test.tsx`).
+- **D-Z6 — registered in place; kiwix-manage is the metadata reader.** Packs are multi-GB,
+  public, read-only — the deliberate exception to the §1 copy-into-workspace rule. One
+  `kiwix-manage add` into a throwaway library.xml reads the archive header and yields
+  uuid/title/language/date/articleCount; it runs through libkiwix's own `Book::update`,
+  which reads through libzim like every other library operation — libzim is part of the
+  pinned bundle (`kiwix-serve --version` reports `libzim 9.4.0`), not something the app
+  avoids. A pack's identity is that header UUID, never its filename (D-Z11): `resolvePack`
+  tries `<drive>/zim/<leaf>` first, then the recorded path, and takes the FIRST candidate
+  whose own header UUID matches the registered row — a wrong-UUID file at either location is
+  skipped, never trusted by name. Removal is a **tombstone** (`removed_at`) and disabling is
+  a flag, both preserved by UUID through `reconcile()`, never by filename — a tombstoned or
+  disabled UUID copied under a `zim/` leaf that still matches by NAME stays exactly as the
+  user left it (caught by test); only a genuinely unknown UUID is inserted as a new row.
+- **D-Z7 — opt-in per chat.** `DocumentScope.packIds` (additive; a pack-less scope
+  serializes byte-identically), resolved by `resolveScope` into `RetrievalScope.packIds`,
+  consumed ONLY by the arm — `buildScopeFilter` never sees it. Packs add query-time
+  latency, so they are never silently included. The separate, explicit choice to answer
+  from packs alone (dropping the document corpus) is a different flag — see D-Z12.
+- **D-Z8 — no renderer loopback, no HTML.** The CSP (window-security.ts) blocks both an
+  iframe to `127.0.0.1` and a renderer fetch, deliberately. The article viewer
+  (`packs:getArticle` → ArticleModal) ships main-extracted plain sectioned text — the
+  same converter retrieval uses — so the renderer keeps its no-innerHTML posture and no
+  sanitizer dependency exists. The generated library is one immutable
+  `library.<build>.xml` per pack revision, now under `<workspacePath>/zim-transient/`
+  (P3b, L3/M4 — relocated off the host's OS temp dir) alongside registration's throwaway
+  `meta-<n>/library.xml` files — a new file per rebuild, never rewritten in place,
+  plaintext while present in BOTH workspace modes. Removed at lock, at quit and at every
+  session start (containment + link checks; `transients.ts`), never while the child that
+  read it could still be writing it: the file of a child whose death could not be
+  confirmed is kept and reported, and removed by the next session-start cleanup.
+- **D-Z9 — dialog-in-handler registration.** `packs:add` opens the native picker AND
+  registers inside one main-side handler, so no path is ever ACCEPTED FROM the renderer —
+  the renderer never supplies or sees a file-dialog result. The other direction is narrower
+  than "no path": the `KnowledgePack` row the main process sends back over `packs:list` /
+  `packs:add` does carry the file's basename (`leaf`, e.g. `wikipedia_de_climate.zim`) — used
+  for the portable `<drive>/zim/<leaf>` resolution, and unread by the renderer today — but
+  never the full recorded filesystem path (there is no `recordedPath`/`recorded_path` field
+  on the shared type). Audit is ids/counts only — pack titles and filenames are content
+  (sentinel-tested).
+- **D-Z10 — service generations: one writer, one published tuple, bounded teardown
+  (P3a, 2026-09-05; PR #294 review H3 / M2 / M9).** `ZimService` (`services/zim/index.ts`)
+  publishes one coherent configuration per pack revision — `{ revision, build,
+  generation, port, library.<build>.xml }`. A pack-set change bumps a monotonic
+  revision; every library build and every kiwix-serve child (a bind-race retry and a
+  crash restart included) draws a distinct monotonic generation from one
+  service-owned allocator, so a generation never repeats in a process. A single promise
+  chain is the only writer of library files and the only path that stops or starts a
+  child; each start gets its own immutable XML path, captures its revision and
+  cancellation before the first await, and rechecks after verification, the manager
+  work, port allocation and the health probe — publishing only a tuple that is still
+  current, or else cleaning its own build so the caller retries under the current
+  revision.
+  Concurrent asks share one start: a cancelled ask stops waiting without cancelling the
+  shared start, and only a pack change, lock or quit aborts it, with every waiter
+  rechecking before it consumes a result. Teardown (`serve.ts`'s `killRecord`/`stop()`)
+  is single-flight and self-bounded — SIGTERM, 2 s, SIGKILL, 3 s — and a child that
+  still cannot be confirmed dead stays in the crash-reap registry and keeps its file;
+  the teardown then reports that outcome rather than "complete", which is exactly what
+  the lock and quit paths must surface too, never a silent "cleanup complete". A start
+  failure latches by revision until the pack set changes; an aborted start never
+  latches.
+  `kiwix-manage` (`tools.ts`) runs under the same pre-spawn verifier — a hashless
+  install marker resolves `skip-legacy` and keeps launching under a logged warning
+  rather than integrity verification (residual R-1, open until the provisioning wave
+  proves both binaries' hashes/verification/repair) — registers every PID, honours the
+  caller's abort, and settles only after its child reaches a terminal state or the
+  bound expires, so no directory is ever removed while the child may still be writing
+  it. `ZimService.serverState()` exposes `{ revision, build, generation, port, alive }`
+  for the P5 alive/generation request guard. The admission-epoch half (P3b, 2026-09-06;
+  review H4): every knowledge-pack operation — an ask's arm, an article read, a
+  registration (the native picker wait included) and the reconcile — is a registered,
+  cancellable operation that captures the workspace's unlock epoch and re-asserts
+  admission, epoch and its own cancellation after every await and before every database
+  write or content return, releasing in a `finally`. Lock and quit abort the registry
+  that owns these operations, suspend the sidecar (bounded, non-latching — the child is
+  killed, not permanently stopped), await the operations within the shared 5 s bound,
+  shred what they still track and run the dedicated transient cleanup (D-Z11 below). A
+  failed lock admits new work at once — nothing latched — and never revives cancelled
+  work: an old operation's aborted signal, not the epoch, is what keeps refusing it even
+  after admission is restored.
+  **The request guard (P5, 2026-09-06; review M1, owner ruling D1(a)):** every request the
+  ask arm and the article viewer send to kiwix-serve runs inside `ZimService.withServer`:
+  the service captures the published tuple — revision, generation, port, alive — before the
+  request and reads it again after the response; a response observed across a change of
+  that tuple is discarded whatever it contained, and the request is retried exactly once,
+  only while the same unlocked session still admits the operation and it was not cancelled,
+  and only after the served set has been recomputed under the current revision. The guard
+  detects an observed lifecycle change of the app's own child; it does not authenticate the
+  server, because kiwix-serve has none — that boundary and its residual windows are recorded
+  in `security-model.md` as R-9.
+
+- **D-Z11 — identity, reconciliation, locator (P3b, 2026-09-06; review M5 / L4 / L7).**
+  A pack's identity is the UUID at bytes 8–23 of its 80-byte ZIM header (`identity.ts`),
+  checked on every file resolution and at every library build — never the filename, so a
+  wrong-UUID leaf at the drive's conventional location no longer hides a correct external
+  file, and a file whose header now names a DIFFERENT archive surfaces as
+  `identity-mismatch` rather than silently serving the wrong content under an old title.
+  `packs:list` reads the registry ONLY — no disk probe, no availability write; ONE
+  serialized reconciliation (single-flight, a Refresh arriving mid-pass coalesces into
+  exactly one more) runs at session start (after the unlock/create/startup promise has
+  already resolved — D3, never on that critical path) and on an explicit Refresh. The
+  reconcile owns only path/size/availability columns and the INSERT of a genuinely
+  unknown UUID; it never writes `enabled`/`removed_at`, so a user's remove or disable
+  always wins over a late-arriving reconciliation pass, even one that started earlier and
+  finishes after the user's action (A07). Serving names follow the pinned libkiwix 14.1
+  rule exactly; a name collision keeps the ascending-UUID winner and excludes every later
+  same-name book from the served library, so the server itself never sees the collision.
+  The citation locator stays `packId + articlePath`: the route is resolved against the
+  CURRENT serving map on every read, never carried as a stored hint, so old citations,
+  renamed files, restarts and drive-letter changes all resolve correctly and a renderer
+  can never select another pack. A `/raw` read that answers a **redirect status** (a ZIM
+  alias entry — kiwix-serve 3.8.1 sends `302 Location: /content/<book>/<target>` and does
+  **not** follow archive redirects; P7 T19) is followed **exactly one hop, same book only**
+  (`client.ts` `redirectTargetFor`): another book's name, an absolute-URL / protocol-relative /
+  relative location, a second redirect, or a target the entry-key contract refuses all
+  resolve to the honest `null`, never another book's text; the stored locator is unchanged by
+  the hop. An `EVENTS.knowledgePacksChanged` (`packs:changed`)
+  broadcast — `{ epoch, revision, refreshing, reason }` — reaches every window on
+  reconcile start/end and on register/remove/enable, emitted only after the producing
+  operation's `assert()` so a pass that finished under an old epoch announces nothing;
+  `PacksPanel` and `ChatScreen` subscribe and refetch, ignoring an event whose epoch is
+  below the last one seen.
+  **Searchability (P4, 2026-09-06; review M7).** Three additive, nullable columns
+  (`db.ts` `ensureColumn`, no `SCHEMA_VERSION` bump): `knowledge_packs.searchable`
+  (`'yes' | 'no'`, NULL = unknown — CONFIRMED only), `searchable_key` (the fingerprint the
+  verdict was taken under) and `ftindex_hint` (the archive's own `_ftindex` tag, parsed at
+  registration/discovery). A tag is a HINT only — it never sets `searchable` and never
+  affects eligibility; unknown and confirmed-`'yes'` packs are both searched, so nothing is
+  filtered out before its capability is established. The verdict comes only from a
+  validated `probeSearchable` (`client.ts`): `GET /suggest?content=<serving name>&term=the
+  &count=1` — `'yes'` iff HTTP 200 and the body is a JSON array containing an entry with
+  `kind: "pattern"`, `'no'` iff 200 and a valid array without one; every other case (404,
+  any other non-200, malformed or non-array JSON, a timeout, a network error, an abort) is
+  unknown and writes nothing — a 404 or a transient failure can never confirm "no". The
+  probe runs at the END of `reconcileOnce`, after `reconcile()`/`assert()` and BEFORE
+  `reconcile-end` (so the panel refetches once and already sees the verdicts):
+  `probeUnknownSearchability` collects every enabled ∧ available row whose `searchable IS
+  NULL` and, only if that list is non-empty, opens ONE `withServer(db, op, …)` call that
+  probes each present pack sequentially; `'yes'`/`'no'` is written together with
+  `searchable_key` only after the guard accepted the batch and a final `op.assert()`
+  passed — a `StaleServerError` or an `AbortError` writes nothing, so unknown stays
+  unknown. The key (`<file size>:<file mtime>:<kiwix-serve binary size>:<mtime>`) resets a
+  row to unknown whenever it changes — a replaced file, a healed path with a different
+  size, or a tools-bundle swap all re-probe automatically; Refresh re-runs the same pass.
+  Cost, accepted: a session whose registered packs are all confirmed wakes no sidecar at
+  all; a session with one unknown pack costs one background sidecar start (~0.8 s) at that
+  session's reconcile. A confirmed-`'no'` pack is skipped by the ask (outcome
+  `not-searchable`) but stays fully readable in the article viewer, which never consults
+  `searchable`.
+- **D-Z12 — scope (P4, 2026-09-06; review M10, ruling D4).** The user's intent to answer
+  without the document corpus is an explicit, additive `DocumentScope.documentsOff?: true`
+  — persisted by BOTH scope owners (`serializeDocumentScope` in `chat.ts`,
+  `parseDocumentScope`'s field whitelist in `collections.ts`) and NEVER derived from an
+  empty selection: the legacy empty scope (`{ collectionIds: [], documentIds: [] }`) still
+  means the whole corpus, and `{ …, packIds: ['p'] }` without the flag still means "all
+  documents AND pack p" — the combination the 2026-09-05 interim fix (88be37ec's
+  `packsOnly` derivation from an empty scope) made inexpressible is expressible again;
+  that interim fix is SUPERSEDED here. `resolveScope` turns the flag into the resolved
+  `RetrievalScope.noDocuments?: true` — the explicit deny-all — ONLY when no file is
+  attached to the chat: the ticked collections and hand-picked documents are dropped
+  BEFORE the attachment union, then attachments are unioned exactly as always, so
+  "documents off with files attached" resolves to exactly those files, never to deny-all.
+  Every consumer honours the resolved flag: `buildScopeFilter` (the one SQL builder)
+  returns `{ sql: '0', params: [] }` FIRST, before any narrowing spread, so a
+  contradictory scope stays fail-closed; the resident-vector fast path
+  (`VectorIndexOptions.noDocuments`) is guarded — `canIterateResident()` returns false and
+  `search()` returns `[]` before either scan; and `retrieve()` skips both document arms
+  BEFORE the question is embedded (no query embed, no resident-cache load, no FTS query)
+  rather than merely filtering their output afterwards. The popover's explicit
+  **Documents** toggle ("Search my documents") sits above the packs list whenever packs
+  are registered; unticking emits the flag with the document sources cleared, ticking any
+  collection or adding a document clears it again (an emit never carries the flag together
+  with a document source), and the copy is explicit that attachments stay active — "Only
+  these packs" is never used as copy, because it would be false with attachments in scope.
+- **D-Z13 — access boundary (P5, 2026-09-06; review M1 / L1 / L5 / L8 / L9; owner ruling
+  D1(a); residual R-9).** The request guard's contract is summarized in D-Z10's "The request
+  guard" paragraph above and in `security-model.md`'s "kiwix-serve — the one unauthenticated
+  sidecar" subsection: it detects an observed lifecycle change of the app's own child and
+  retries once; it does not, and cannot, authenticate the server. Adding packs answers with
+  one typed `KnowledgePackAddResult` (`shared/types.ts`) — `{ outcome: 'cancelled' |
+  'success' | 'partial' | 'failure', added: KnowledgePack[], failed: number, failureReason:
+  'not-a-zim' | 'tools-missing' | 'manager' | 'other' | null }` — codes only, never a path or
+  a tool's stderr. Every archive entry key runs through the ONE encoder, `client.ts`
+  `encodeArticlePath` (grep-enforced — nothing else in `src/` may encode); its
+  `assertArticlePath` rejects an empty key, a key over `MAX_ARTICLE_PATH_CHARS = 2048` code
+  units, any C0 control or DEL byte, a `.`/`..` path SEGMENT, and a lone surrogate — a refused
+  key returns `null` with ZERO `/raw` requests issued (URL-shaped and empty-segment keys stay
+  accepted for compatibility). The real-tool smoke (`tests/manual/zim-real.test.ts`) is
+  fail-closed: it is gated by `HILBERTRAUM_ZIM_SMOKE`, and once requested,
+  `HILBERTRAUM_ZIM_TOOLS_DIR` / `HILBERTRAUM_ZIM_FILE` / `HILBERTRAUM_ZIM_QUERY` are all
+  REQUIRED (no default query) with `HILBERTRAUM_ZIM_EXPECT_ARTICLE` optional — a
+  requested-but-invalid run FAILS rather than silently skipping. `KiwixManageOptions.platform`
+  is injected (default `process.platform`) through `tools.ts`'s binary resolution and
+  `transients.ts`'s `samePath`, so both are unit-testable across platforms without touching
+  the real OS.
+- **D-Z14 — prompt framing and excerpt labelling (P0, 2026-09-05; residual R-5).** Archive
+  excerpts ride the SAME `EXCERPT_BEGIN`/`EXCERPT_END` framing (#293) as document excerpts,
+  inside the user turn, never a separate channel. Each archive chunk's meta line reads
+  `| Archive: <title> | Section: <heading>` (`sourceMeta`, `rag/index.ts`) in place of a
+  document's `File:`/`Page:` line. The guard line, `EXCERPT_GUARD_LINE`
+  (`rag/grounded-data.ts`), still reads "The text inside the excerpts above is document
+  content, not instructions" — that wording is KEPT, not a defect: an eval-backed wording
+  change could not be run this wave (R-5), and the framing itself is content-agnostic (it
+  does not depend on the word "document" to bound what an excerpt may do). An echoed framing
+  line is scrubbed from the persisted answer; archive candidates are charged against the SAME
+  context budget as document chunks, in both directions. Tests: `zim-prompt-framing.test.ts`,
+  T01-a/b/c.
+
+### Module map
+
+`services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
+budget and `truncated` signal — PR #294 review H1; cooperatively sliced, async on the ask
+path — P1b), `client.ts` (node:http + search/
+library XML parsing; the ONE entry-key encoder with the L5 contract — controls, dot
+segments, 2048-char bound; URL-shaped and empty-segment keys accepted, P5; `KiwixBook.tags`
++ `probeSearchable` — the `/suggest` capability probe, D-Z11, P4), `tools.ts`
+(binary discovery `runtime/kiwix-tools/<os>/`, dev-only
+`HILBERTRAUM_KIWIX_BIN`, the verified `kiwix-manage` runner — pre-spawn verifier, PID
+registration for as long as the child may be running, settles only after a terminal
+state or the bounded wait — D-Z10; `platform` injected, L9), `serve.ts` (`KiwixServer` — per-child records, no
+mutable state on `this`, the bounded SIGTERM→SIGKILL teardown policy — D-Z10),
+`packs.ts` (registry over `knowledge_packs`; `writeLibraryXml` stops and rethrows on an
+unconfirmed manager child, D-Z10; `reconcile()` is the one filesystem pass, D-Z11; the
+searchability columns + key, `classifyPackSelection` and `packTitles`, D-Z11/D-Z4, P4),
+`identity.ts` (header read + UUID identity + the serving-name map, D-Z11), `transients.ts`
+(the owned `zim-transient/` dir; containment-checked, link-refusing cleanup, D-Z11),
+`session.ts` (the post-unlock reconciliation kickoff, the `maybeStartLocalApi` shape,
+D-Z11), `arm.ts` (allocation, bounded concurrency, the per-ask deadline and per-pack
+outcomes — D-Z4, P4), `index.ts` (`ZimService` facade on
+`AppContext.zim` — the revision/generation allocator, the FIFO build/teardown/start chain
+and the published tuple, D-Z10; the operation registry and admission-epoch checks, the
+`packs:changed` notify hook, D-Z11; `withServer` — the alive/generation request guard with
+one admitted retry (D-Z10, P5); `runArm` and the searchability probe run from the end of
+`reconcileOnce`, D-Z11/D-Z4, P4; quit teardown in shutdown.ts). IPC:
+`ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt; `packs:add` answers the
+typed `KnowledgePackAddResult`, L1). `services/retrieval-scope.ts` (`buildScopeFilter`
+fail-closed under deny-all, D-Z12, P4) and `services/embeddings/index.ts` /
+`services/rag/hybrid.ts` (the `noDocuments` resident-vector and keyword-scan guards,
+D-Z12, P4).
+Renderer: `documents/PacksPanel.tsx`, ScopePopover pack sources (the Documents toggle, the
+12-pack cap, D6 — D-Z12, P4; reason-specific greyed-row hints and non-modal-popover a11y,
+P6), SourcesDisclosure "Open
+article", `chat/ArticleModal.tsx`, NEW `chat/PackOutcomesNotice.tsx` (the per-answer
+outcomes notice, D-Z4, P4), `review/EvidencePane.tsx` + `screens/ReviewScreen.tsx` ("Open
+article" from an evidence-review archive row, NEW, P6). Shapes: [`data-contracts.md`](data-contracts.md)
+"Knowledge packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit) —
+`zim-html` runs four attributed synthetic non-Wikipedia fixtures under
+`tests/fixtures/zim/` (Parsoid data-mw, zimit/warc2zim, DevDocs, Stack Exchange/sotoki)
+in normal CI — `zim-service-lifecycle.test.ts` (unit, NEW, P3a) exercises the
+generation/publication races and the manager contract: test T05 parks the verifier,
+port allocator, manager call and health probe in turn against an overlapping
+`stop()`/`invalidateLibrary()`/restart, plus a cancelled waiter beside a live one, a
+lock (`suspend()`) aborting every waiter, a revision-keyed failure latch cleared by a
+pack change, and an ignored SIGTERM escalating to SIGKILL and reporting the child
+unconfirmed with its PID and file kept; test T06 walks `kiwix-manage`'s verifier
+outcomes (match/mismatch/hashless), PID registration bounded to the child's lifetime,
+and timeout/abort settling only after a terminal state — `zim-arm/zim-ipc`
+(integration), `KnowledgePacks.test.tsx` (renderer, incl. the `partial`-hint case);
+real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES_DIR`).
+`zim-ipc-session.test.ts` (integration, NEW, P3b) drives the REAL service + registry over
+the real vault harness: test T07 walks lock-during-picker/discovery/registration/rebuild/
+start/probe/HTTP-read, each proving no post-lock write or content response and a clean
+transient dir; test T08 covers a failed-lock recovery that admits new work without
+reviving cancelled work, one reconciliation pass per create/unlock/plaintext-dev startup
+seam, and a terminal quit; test T12 proves the collision/Unicode/locator contract end to
+end (a rename/restart/drive-letter change all resolve the same citation); test T13 proves
+`packs:list` performs no discovery, a parked reconcile plus two Refreshes coalesce into
+exactly one rerun, the `packs:changed` notices carry the correct epoch and stop at a lock,
+and a user remove/disable during a parked pass wins; test T17 (P5, the `withServer` request
+guard) lives in the same file — child death/reused port/stale response rejected with exactly
+one admitted retry, no retry into a new session or after cancellation, the L5 entry-key
+contract enforced with zero `/raw` requests on a refused key, and the cancelled/partial
+(mixed)/failed `packs:add` DTO outcomes with no path or stderr leak. `zim-transients.test.ts`
+(unit, NEW, P3b) exercises the standalone cleanup in both workspace modes: containment/link
+refusal,
+the keep set, unknown entries left in place. `zim-identity.test.ts` (unit, NEW, P3b) pins
+the header parse, the UUID byte order and the `servingNameFor` slugification against the
+pinned libkiwix 14.1 rule; `zim-packs.test.ts` test T11-a proves identity-based resolution
+and that a tombstoned/disabled UUID stays that way across rename/copy/replacement.
+`zim-smoke-env.test.ts` (unit, NEW, P5) pins the fail-closed `HILBERTRAUM_ZIM_SMOKE` gate
+(`zimSmokeEnv`) against every requested-but-invalid input; `zim-real.test.ts` (manual, P5) is
+the gated real-tool smoke itself — fail-closed once requested, a genuine skip otherwise.
+`scripts/zim-html-perf.mjs` prints the D2 measurement table outside Vitest/Electron
+(`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`), including
+Section D's per-slice cooperative-slicing gate (P1b) — each `--gate` profile now also
+carries a `slice` threshold alongside `oneMiB`/`batch`.
+P4 (2026-09-06; review M3/M6/M7/M8/M10) by file: `zim-regressions.test.ts` — T09-c
+(reranker present/absent/throwing + abort discipline over ≥ 8 document chunks) and T10-a
+(every §5.4 truth-table row through persist/parse/resolve, the resident-vector bypass with
+real embeddings, a throwing embedder under true packs-only, and the chip agreement);
+`zim-packs.test.ts` — T14-a (the searchability migration, tag/probe matrix, file/tool
+fingerprint reset, a probe across a child death, confirmed-no still readable);
+`zim-regressions.test.ts` — T15-b (1/3/7/12 packs and a 13-pack persisted selection,
+varied completion order, the concurrency-2 and deadline bounds); `zim-ipc-session.test.ts`
+— T16-a (twelve outcome legs over the real vault harness: all failed, zero hits, missing
+tools, removed/disabled selection, mixed, all fetches failed, two concurrent chats, a
+mid-ask scope change, reload, regenerate/restore, export, whole-doc/compare `mode`).
+P6 (2026-09-06; design and frontend review) by file: `KnowledgePacks.test.tsx` — T18-a (the
+UI acceptance row, seven legs (a)–(g): every pack/scope/outcome state in both languages,
+empty source sets, 200-character non-ASCII titles, popover/modal keyboard + focus-trap +
+Escape + restoration, disabled controls emit nothing, the live searchability refresh, the
+outcomes notice over every reason code); `ReviewEvidencePane.test.tsx` / `ReviewScreen.test.tsx`
+(the review-row "Open article": unavailable/renamed/deleted); NEW
+`tests/unit/zim-ui-layout-rules.test.ts` (the wrap/ellipsis/24px-target CSS rules); `i18n.test.ts`
+(the house-dash repairs).
+
+### Deliberately not built (MVP cut; §5 item 21 tracks the follow-ups)
+
+Provisioning of the `kiwix_tools` family (runtime-sources.yaml, engine downloader,
+DRIVE-NOTICES, commercial-drive checks, fetch scripts — binaries are placed manually);
+persistent article import (Tier 2); an in-app ZIM catalog/downloader; evidence review
+over archive citations (they resolve as honest 'unresolved'); packs on the whole-document
+/ compare paths (disclosed per answer as `mode`, not queried — P4); quality guarantees
+for non-Wikimedia ZIMs. Serving names are computed
+by the pinned libkiwix 14.1 rule (D-Z11) rather than read back from the running server —
+the real-tool check of that mapping is P7's (T19), not assumed. The name-collision surface
+(D-Z11's "excludes every later same-name book") is deliberately not shown on the
+`PacksPanel` row (P6): it is a property of the served library, computed at build time, not
+a `KnowledgePack` field — the per-answer outcome's `not-served` row already tells the user
+"not searched: name collision with another pack"; a `packs:status` addition to surface it
+in the panel is registered on the P9 successor issue #340 (BUILD_STATE §5 item 21).
+
+### Real acceptance (T19, P7 — the machine-drivable legs, 2026-09-06)
+
+Run by the maintainer on the **i9-14900K** (Windows 11 26200, Node 24.19.0, Vitest 3.2.6; Smart
+App Control permissive that day) on the P7 records tree (the integration head 11463dd9 + master
+ddd704ad; the redirect leg re-run with the T19 fix a4967594 in the tree) — **the orchestrator's real-tool run, not the owner's sign-off**. Tools: **kiwix-tools
+3.8.1 win-x86_64** at `K:\runtime\kiwix-tools\win` (`--version`: libkiwix 14.1.1, libzim 9.4.0,
+libxapian 1.4.23, libcurl 8.4.0; ICU 74 DLLs; the three exes Authenticode-signed by Association
+Kiwix — `model-policy.md`'s inventory has every hash; no install marker ⇒ the verifier's
+`skip-legacy`, R-1). Archives (SHA-256 / header UUID): **A** indexed
+`wikipedia_de_climate-change_nopic_2026-07.zim` (27,404,405 B; `64F145CB…5ED3`;
+`d30cd05e-b9ae-b7c2-52d7-c2b308e56554`; 4102 articles; tag `_ftindex:yes`); **B** index-less
+`wikipedia_de_climate-change_mini_noindex_2026-07.zim` (8,538,848 B; `DC769F14…339C`;
+`bebade2f-a843-139f-7354-ab3fb795dec4`; built with zim-tools 3.8.0 `zimrecreate -j` from the mini
+edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the mini edition, indexed
+(9,556,131 B; `2AFEC1F6…4A28`; `bef783b2-e7eb-2998-adef-c763b17f2eaa`). Logs under
+`tmp/zim-wave/p7/` (maintainer-local; the inventory row T19-a carries the summary).
+
+- **The fail-closed smoke** (`npm test -- tests/manual/zim-real.test.ts`, the D-Z13 env) on A:
+  GREEN 2/2 — real `kiwix-manage` registration (the manager's id = our header UUID), the real
+  sidecar, the serving-name assertion, Xapian search → **19 candidates in 102–105 ms** (first
+  "Treibhausgas"), the viewer read, the known entry, then disable → one `skipped / disabled`
+  outcome and zero candidates. This run found the smoke's LAST assertion stale since P4 (it still
+  expected `makeArm` → `null` after disabling; P4 ruled that every non-empty selection gets an arm
+  so the disabled pack can report "not searched: disabled") — re-aligned in the P7 records PR,
+  test-only. On B the smoke fails at "candidates > 0" by design (it needs an indexed archive —
+  `packaging.md`); with a wrong tools dir it FAILS 2/2, never skips.
+- **Searchability on the pinned binary (M7, D-Z11):** after registration both rows carry
+  `ftindex_hint: yes`; the reconcile-end probe wrote A `searchable: yes`, B `searchable: no`.
+  Raw `/suggest?content=<name>&term=the&count=1`: A answers a `kind:"path"` title match plus the
+  synthetic `{"value":"the ","label":"containing 'the'...","kind":"pattern"}` entry; B answers
+  the title match only — never a `pattern` entry, not even for a title-hitting term
+  (`term=Treib`). `/search?books.id=<B>` → **404** `<error>Fulltext search unavailable</error>`;
+  on A → 200. The arm over [A, B] → 19 candidates (all A) and outcomes `[B: skipped /
+  not-searchable, A: searched 19/19]`; B's `getArticle('Treibhausgas')` still reads (title
+  "Treibhausgas") — the readable ≠ searchable split holds on real tools.
+- **Serving names (L4, D-Z11):** `servingNameFor` equalled `library.names` for A
+  (`wikipedia_de_climate-change_nopic_2026-07`), B and C registered from
+  `…\Klimawandel ARGER+TEST_Case E.zim` → `klimawandel_argerplustest_case_e`; each answers 200 on
+  `/suggest`; the upper-cased name answers 404 (names are exact); `/catalog/v2/entries` lists
+  exactly the three UUIDs.
+- **A real name collision (M5):** B's archive copied under A's basename and re-registered (same
+  UUID, new path) → `excluded = [{ packId: A, collidesWith: B }]` (`bebade2f` < `d30cd05e`, the
+  ascending-UUID rule), the catalog no longer lists A, the arm over [A, B] → 0 candidates with
+  outcomes `[B: not-searchable, A: not-served]`. Raw kiwix-serve with BOTH books in one
+  `library.xml` logs "Path collision: … can't share the same URL path … Therefore, only '<the
+  smaller-UUID book>' will be served." — the rule `computeServedSet` mirrors; and its catalog
+  STILL lists both books while only one answers under the name, which is why a loser must be
+  left out of the XML rather than badged.
+- **Entry paths (L4/L5):** a real umlaut article `CO2-Preis_mit_Klimaprämie` opens (12 sections);
+  literal-percent (`CO2-%C3%84quivalent`) and literal-plus keys → 404 → `null` (no double
+  decoding); a dot segment is refused by `assertArticlePath` before any request.
+  **Finding 1 (FIXED — `client.ts` `fetchArticleHtml` / `redirectTargetFor`, merged into this
+  branch at `a4967594`; tests T19-b / T19-c):** `CO2-Äquivalent`,
+  `CO2-Äquivalente`, `CO2-Ausstoß`, `CO2-Fußabdruck` are ZIM **redirect entries** (aliases —
+  roughly half of a Wikipedia ZIM's entries); kiwix-serve answers them under `/raw` with
+  `302 Location: /content/<book>/<target>` (targets `Treibhauspotential`, `Kohlenstoffdioxid`,
+  `CO2-Bilanz`) — it does NOT follow archive redirects, contrary to the spike-era assumption —
+  and `fetchArticleHtml` threw "HTTP 302", so the viewer could not open an alias. The fix follows
+  exactly ONE same-book hop (another book's target, a chain, a relative or absolute-URL location
+  or a target that fails the entry-key contract all resolve to the honest `null`).
+  **Finding 2 (registered, not fixed — an upstream limit):** `kiwix-manage` 3.8.1 (win-x86_64)
+  cannot add an archive whose PATH contains non-ASCII characters (`Klimawandel Ärger Ünïcode.zim`
+  → "Cannot add ZIM … to the library.", exit 1 — from Node's spawn AND from PowerShell, so it is
+  the tool's own narrow-argv path handling); `kiwix-serve` DOES serve the same file from a UTF-8
+  `library.xml` (hand-written: healthy, `/raw/klimawandel_arger_unicode/content/index` → 200), so
+  the limit is registration-only. In the app `registerPack` throws `KiwixManageError` → the add
+  result reports `failureReason: 'manager'` — honest but unhelpful copy for this cause; recorded in
+  `known-limitations.md`, `troubleshooting.md` and the P9 successor issue #340.
+- **R-9 window (iii) — same-port bind on Windows:** with kiwix-serve listening on 127.0.0.1:58614
+  (one Listen row owned by `kiwix-serve` in `Get-NetTCPConnection`), a Node `listen()` on the port
+  → `EADDRINUSE`; a .NET socket bind without `ReuseAddress` → `AddressAlreadyInUse`; WITH
+  `SO_REUSEADDR` → **`AccessDenied` (WSAEACCES)**. A second same-user listener cannot take the
+  held port on this platform + binary: window (iii) is CLOSED here (`security-model.md`); windows
+  (i) and (ii) stand as recorded.
+- **The D2 per-slice re-check:** D-Z3 "P7 re-check" (p95 0.36–0.58 ms on a P-core, PASS).
+- **T18-b — the real-Electron visual review (run by the orchestrator at the owner's request,
+  2026-09-06, Electron 43.4.0 via Playwright `_electron`, the same machine and bundle):** a
+  scratch drive root with the real tools and four real archives (A indexed; B index-less; C the
+  mini as the disabled 200-character-title pack; C again under `stackexchange_unix.zim` behind a
+  seeded row of another UUID → a REAL "Different archive"; a seeded file-less row → "File
+  missing"), the mock runtime for the answer text, everything else real. Recorded in both
+  themes × both languages (light only where the surface is transient or the leg is a layout
+  check): every panel badge and reason line; the picker's greyed rows each naming their reason,
+  a selected-then-disabled pack staying deselectable (D6), Enter on the chip opening and Escape
+  returning focus to the chip; the documents-off chip copy; the transcript's archive cards with
+  "Open article" in `--accent`; the outcomes notice ("Knowledge packs: 1 searched · 0 not
+  searched or failed" → "searched · 16 passages" / "20 Fundstellen"); the ArticleModal's ready,
+  loading and unavailable states (accessible name = the article title once loaded, "Article"
+  while loading; description "From <archive> — offline copy"; six Tabs stay inside; Escape
+  returns focus to the "Open article" button); the review row's "Open article" over the review
+  screen; no horizontal scroll at 900 px or 200 % zoom on the panel, popover, transcript and
+  modal; keyboard focus rings on Refresh, Enable/Disable, Remove and the pack checkbox. Not
+  drivable here and standing on T18-a: the empty state, the add-failure banners (native picker),
+  the 13-pack cap, the partial-article state; the tools-missing state stands from the P6
+  pre-check. Accepted deviation: the non-modal ScopePopover (design-guidelines §11.15 decision 1).
+  Observations for #340, not defects: the pre-ask chip still names a ticked pack that was disabled
+  afterwards (the row and the per-answer note say "disabled"); the raw ISO 639-3 code in the
+  meta line. Screenshots and the check log: `tmp/zim-wave/p7/t18b-shots/` (maintainer-local).
+  **Finding 3 (upstream — kiwix-serve 3.8.1 win-x86_64 / libmicrohttpd; mitigated in the P7 fix
+  PR 2, branch `feat/zim-p7-fix-raw-stall`):** 3 of 27 real article opens hung for exactly 15 s
+  (the client's timeout, logged `Pack article read failed {"error":"AbortError"}`) and then showed
+  the unavailable state while kiwix-serve stayed alive. Isolated against a raw kiwix-serve with no
+  app code (`t19-raw-stall*.log`): a `GET /raw/<book>/content/<entry>` of any entry above ~80 KB
+  **stops short** on ~5–20 % of attempts — the `200` status line, `Content-Length` and most of
+  the body arrive within a few milliseconds, then the last part never does (always the same cut
+  for a given entry: 195,590 of 234,141 B for `Treibhauseffekt`, 456,710 of 508,338 B for
+  `Klimawandel`, 260,870 of 294,238 B for `Treibhausgas`) and the connection simply hangs
+  (84 KB 2/40, 211 KB 4/40, 234 KB 2–8 per 40–60, 294 KB 6/40, 508 KB 8/40, 707 KB 4/40) while
+  a 24 KB entry never stalled in 180 reads; the same with `curl.exe`, with keep-alive on or off,
+  with `--threads 1 / 4 / 16`, with 0 / 400 / 2500 ms between reads; the successful responses
+  carry `Content-Length` + `Connection: close`; the next request is answered normally. In the app a
+  stalled read cost the viewer 15 s → "unavailable" and the ask arm one silently skipped article
+  (a real ask took 40 s and returned 16 instead of 20 passages). Mitigation (fix PR 2, commit
+  0eb79f1f): `fetchArticleHtml` reads through `readRawArticle` with `ARTICLE_READ_TIMEOUT_MS =
+  4_000` and `ARTICLE_READ_ATTEMPTS = 3` — a retry ONLY when an attempt's own timer elapsed before the body
+  completed (`KiwixTimeoutError` — whether the cut came before the headers or, as measured,
+  mid-body), on a fresh connection; the caller's own abort (the ask deadline, a cancellation, a
+  lock) is rethrown at once, a non-timeout socket error and the over-ceiling body stay errors,
+  any HTTP status that completes keeps its existing semantics, the redirect hop's request
+  is retried the same way, and the request guard's lifecycle retry is untouched (a stall never
+  reaches the server's lifecycle). The other routes (`/suggest`, `/search`, the health probe) are
+  unchanged — the stall was measured on `/raw` bodies only. Tests: `zim-client.test.ts` describe
+  "fetchArticleHtml retries a stalled /raw read (#301 P7 T19)" (eight legs — a never-answered
+  attempt, three cut-short attempts, the caller's abort, a cut-short body retried with the partial
+  body discarded, a mid-body socket error NOT retried, completed statuses untouched, the redirect
+  hop, the other routes — plus two `kiwixGet` classification legs), the `zim-ipc-session` leg
+  "T19 an article whose first /raw read is cut short still opens whole…" (a paragraph past the cut
+  reaches the viewer), the `zim-arm` leg "… an article whose first read is cut short keeps its
+  chunks"; reporting
+  it upstream rides the P8 issue #339 (the pinned bundle is P8's). **Proof on the real archive
+  (the rebuilt app, 60 consecutive article opens in real Electron):** 6 reads were cut short
+  (bytes received 130,310 / 195,590 of the entries' lengths), every one was retried and
+  completed — five on the second attempt (~4.1 s to open), one on the third (8.1 s) — zero
+  "article read failed" lines, every open ended on the real article; before the fix the same
+  sample had 12 of 60 opens end in the unavailable state.
+- **The owner's legs (2026-09-06, the owner on the i9-14900K with the real K: HilbertRaum
+  drive — an encrypted workspace from 2026-08-20, kiwix-tools 3.8.1 in `runtime\kiwix-tools\win`,
+  the indexed pack in `zim\`, the index-less one added from `zim-external\` outside the drive, the
+  P7 tree run with `HILBERTRAUM_DRIVE_ROOT=K:\`, a real model — gemma4-e2b-it-qat-q4 on the GPU —
+  for the answers; procedure `tmp/zim-wave/p7/t19-owner-legs.md`, maintainer-local):**
+  **(vii) live lock / unlock / failed lock — PASSED.** With a pack server up after a real ask
+  (one `kiwix-serve.exe`, `zim-transient\library.<n>.xml` present): Lock now → the gate, the
+  child gone, `zim-transient\` empty, a fresh `hilbertraum.sqlite.enc`, no plaintext DB left;
+  unlock → a second pack question answered with citations from a fresh server and an article of
+  the OLD answer still opened; failed lock (a read-only `.enc` makes the re-encrypt's final rename
+  fail) → the "Could not lock the workspace — it stays open and your data is safe" banner, the
+  pack server gone, and after re-selecting the model a third pack question answered with citations
+  (pack work is admitted again — the non-latching recovery); then a normal lock and unlock with the
+  chat intact. **Observation (not a pack defect — issue #344):** the lock teardown stops the
+  chat engine (`ctx.runtime.stop()`) and only the post-unlock seam restarts it, so after a FAILED
+  lock the app asks for a model again before the next question. **(vi) the relocated drive with
+  persisted citations — PASSED.** Quit, `Set-Partition K → M`, launched with `M:\`, unlocked: the
+  `zim\` pack still Enabled (drive-relative resolution), the pack added from `K:\zim-external\…`
+  honestly "File missing" (its recorded path names the old letter); "Open article" on the first
+  answer's citation (written under K:) opened; a new ask cited; letter set back to K:, both packs
+  available again after Refresh. **(viii) the offline ask + viewer with Wi-Fi off (BUILD_STATE §5
+  item 21(d), the airplane-mode acceptance) — PASSED:** launched from the K: drive with the
+  network off, unlocked, a pack question answered with archive citations and an article opened
+  in the viewer — nothing waited on the network.
+  **Two more observations from the owner's setup (registered on #340):** a pack added through
+  "Add packs…" keeps `searchable: unknown` — tickable, no badge — until the next Refresh or unlock
+  (the probe runs only at a reconcile's end; an ask in between reports "search failed" for an
+  index-less pack); and a real model echoes the `<math alttext>` LaTeX the converter keeps
+  (`$\text{CO}_2$` in an answer) — strip or render math in excerpts and answers.
+
+### §-anchor legend (working-paper citations)
+
+The ZIM-wave plan file (`tmp/pr-294-zim-knowledge-packs-plan-2026-09-04.md`, git-ignored) is
+deleted once its load-bearing content is folded into docs. Code comments across
+`src/main/services/zim/**`, `src/main/ipc/registerZimIpc.ts` and their tests still cite it as
+`plan §N` — this legend resolves those citations against the D-Z records above (and one
+renderer-review record) so the citations stay resolvable after the plan file is gone.
+
+| Plan citation | Resolves to |
+|---|---|
+| §9.15 | D-Z10 (service generations, publication, teardown) |
+| §9.17 (a) | D-Z10 (the admission-epoch paragraph) |
+| §9.17 (c) | D-Z10 (lock/quit teardown) + D-Z8 (transients) |
+| §9.17 (d) | D-Z11 (identity, locator, serving names) |
+| §9.17 (e) | D-Z11 (discovery, Refresh, `packs:changed`) |
+| §9.19 (a) | D-Z13 (the request guard's contract; the guard's own text lives in D-Z10) |
+| §9.19 (b) | D-Z13 (the entry-key contract) |
+| §9.19 (c) | D-Z13 (the add DTO) |
+| §9.19 (d) | D-Z13 (the smoke gate) |
+| §9.21 (c) | D-Z4 (fair allocation) |
+| §9.21 (d) | D-Z11 (searchability) |
+| §9.21 (e) | D-Z4 (per-ask outcomes) + D-Z12 (scope) |
+| §9.23 (a)–(d) | [`design-guidelines.md`](design-guidelines.md) §11.15 |
+| §2.4 | D-Z11 (the ZIM header layout) |
+| §2.5 | D-Z11 (searchability detection) |
+| §9.11 | D-Z3 |
+| §9.17 (b) | D-Z8 (the lock / failed-lock transient-cleanup policy) |
+| §9.19 (e) | D-Z13 (injected `platform` through `tools.ts` argv and `transients.ts` `samePath`) |
+| §9.19 (f) | D-Z13 + [`security-model.md`](security-model.md) "kiwix-serve — the one unauthenticated sidecar" (the R-9 mirror sentence, pinned by T17-b) |
+| §9.21 (a) | D-Z12 (documents-off scope resolution) |
+| §9.21 (b) | D-Z4 (reranker-failure interleave and abort discipline) |
+| §0.3 | the required-check inventory (`tests/fixtures/zim/required-checks.json`) + its `repo-hygiene.test.ts` validator |
+| §2.2 | D-Z1 / D-Z11 (the pinned kiwix-serve routes + the `/suggest` contract); "Real acceptance (T19, P7)" above for the observed behaviour |
+| §5.1 (P1) | D-Z3 |
+| §5.4 (P4) | D-Z4 / D-Z11 / D-Z12 |
+
+Inside the ZIM-wave files (`services/zim/**`, `ipc/registerZimIpc.ts`, `renderer/chat/ScopePopover.tsx`,
+`renderer/chat/PackOutcomesNotice.tsx`, `renderer/screens/documents/PacksPanel.tsx`, the ZIM
+parts of `shared/types.ts`, and their tests) a bare **`§7` / `ruling §7`** means this plan's
+**owner-decisions table** — the rulings D1–D6, `MAX_SELECTED_PACKS = 12`, the outcome-persistence
+and saved-review policies — all recorded in D-Z4 / D-Z12 / D-Z13 and BUILD_STATE §5 item 21.
+The one exception inside a ZIM file is `zim-prompt-framing.test.ts`'s `plan §8`, which is the
+#228 excerpt-framing eval paper (residual R-5, D-Z14). Everywhere **outside** those files, a
+`plan §7` / `§8` / `§10` / `§11` / `§9.1` / `§9.3` / `§9.4` / other `§5.x` citation (evidence-pack,
+skills, vision, doctasks, translation, context-compaction, chat/db/context, the shared IPC/type
+files, the i18n catalogs and their tests) belongs to an OLDER, unrelated working paper — the EP-1
+spec, the Skills plan, the image-understanding plan, the context-compaction and translation
+plans — and resolves through that paper's own legend (this file's EP-1 record above; the Skills
+and image-understanding design records in `architecture.md`), **not** through this table.

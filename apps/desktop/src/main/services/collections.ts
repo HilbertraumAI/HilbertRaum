@@ -476,9 +476,24 @@ export function parseDocumentScope(json: string | null): DocumentScope | null {
     const documentIds = Array.isArray(o.documentIds)
       ? o.documentIds.filter((x): x is string => typeof x === 'string' && x.length > 0)
       : []
+    // Knowledge packs (ZIM wave): additive, tolerant like the id arrays — a pre-wave row
+    // parses to no packs, and junk entries are dropped, never fatal.
+    const packIds = Array.isArray(o.packIds)
+      ? o.packIds.filter((x): x is string => typeof x === 'string' && x.length > 0)
+      : []
     // A present-but-empty scope is the explicit "All documents" choice — keep it distinct
     // from an absent (NULL) scope, which falls through to the Library default.
-    return { collectionIds, documentIds, includeArchived: o.includeArchived === true }
+    return {
+      collectionIds,
+      documentIds,
+      includeArchived: o.includeArchived === true,
+      ...(packIds.length > 0 ? { packIds } : {}),
+      // #301 P4 (finding M10, ruling D4): the user's explicit "answer without my documents"
+      // choice, whitelisted like every other field — ONLY the literal `true` survives, so a
+      // hand-edited `"documentsOff": "yes"` or `1` reads as absent (documents on). Never
+      // inferred from empty id arrays: the legacy empty scope keeps its whole-corpus meaning.
+      ...(o.documentsOff === true ? { documentsOff: true as const } : {})
+    }
   } catch {
     return null
   }
@@ -516,6 +531,15 @@ interface ScopeRow {
  * `hasExplicitDocSelection` is set from the user's HAND-PICKED docs BEFORE attachments are
  * merged (N2), so filename auto-scope (plan §10.1 rule 5) can tell a deliberate pick from an
  * attachment. An empty composed scope (explicit "All documents") ⇒ whole corpus.
+ *
+ * Knowledge packs (#301 P4, finding M10, ruling D4): a composite scope carrying `documentsOff`
+ * DROPS the ticked collections and hand-picked documents (no retained project/hand-pick union)
+ * and clears `hasExplicitDocSelection`, then unions the chat attachments exactly as always —
+ * "documents off with files attached" resolves to EXACTLY those files. Only when nothing
+ * remains does the collapse set `noDocuments: true`, the explicit deny-all state every consumer
+ * honours (`buildScopeFilter` → `0`, the resident-vector fast path, `retrieve`'s pre-embed
+ * skip). `null`/empty ids keep their whole-corpus meaning verbatim; a legacy `scope_json` /
+ * `collection_id` row can never carry the flag, so it can never resolve to deny-all.
  */
 export function resolveScope(db: Db, conversationId: string): RetrievalScope {
   const row = prepareCached(
@@ -529,11 +553,16 @@ export function resolveScope(db: Db, conversationId: string): RetrievalScope {
   let hasExplicitDocSelection = false
 
   const v2 = parseDocumentScope(row?.scope_v2_json ?? null)
+  const documentsOff = v2?.documentsOff === true
   if (v2) {
-    collectionIds = v2.collectionIds
-    documentIds = [...v2.documentIds]
+    // Documents off (M10): the user's document sources are dropped here, BEFORE the attachment
+    // union below — that is the whole difference between "exactly the attachments" and "the old
+    // project selection plus the attachments". `includeArchived` is meaningless with no
+    // document source but stays a faithful read-back of the stored scope.
+    collectionIds = documentsOff ? [] : v2.collectionIds
+    documentIds = documentsOff ? [] : [...v2.documentIds]
     includeArchived = v2.includeArchived === true
-    hasExplicitDocSelection = v2.documentIds.length > 0
+    hasExplicitDocSelection = !documentsOff && v2.documentIds.length > 0
   } else {
     const legacy = parseLegacyScope(row?.scope_json ?? null)
     if (legacy) {
@@ -562,6 +591,15 @@ export function resolveScope(db: Db, conversationId: string): RetrievalScope {
     collectionIds: collectionIds.length > 0 ? collectionIds : null,
     documentIds: documentIds.length > 0 ? documentIds : null,
     includeArchived,
-    hasExplicitDocSelection
+    hasExplicitDocSelection,
+    // Knowledge packs (ZIM wave): pass-through for the ZIM retrieval arm only — the SQL
+    // scope filter never sees it. Only the composite scope can carry packs (legacy scopes
+    // predate the feature). Scope-narrowing spreads ({ ...scope, … }) keep it intact.
+    packIds: v2?.packIds && v2.packIds.length > 0 ? v2.packIds : null,
+    // #301 P4 (M10): the deny-all document state, set HERE and nowhere else, and only when the
+    // user turned documents off AND no attachment survived the union — with attachments the
+    // scope is exactly those files. Set at the same collapse as the ids so it can never
+    // disagree with them.
+    ...(documentsOff && documentIds.length === 0 ? { noDocuments: true as const } : {})
   }
 }

@@ -2380,3 +2380,151 @@ _**History.** Many bullets carry short finding ids (`D77`, `SKA-24`, `C1`, `audi
 resolve through the design records and their §-anchor legends in
 [`architecture.md`](architecture.md) / [`rag-design.md`](rag-design.md). The underlying audit
 reports and phase plans were working papers; their full text lives in git history._
+
+## Knowledge packs — ZIM archives ([`rag-design.md`](rag-design.md) §17)
+
+- **kiwix-tools is not provisioned yet.** The sidecar binaries (`kiwix-serve`,
+  `kiwix-manage`) are NOT in runtime-sources.yaml, the engine downloader, DRIVE-NOTICES,
+  or the drive scripts — they must be placed manually under `runtime/kiwix-tools/<os>/` — unzip the WHOLE
+  kiwix-tools archive there (the Windows build needs its ICU DLLs beside the exes)
+  (download kiwix-tools from kiwix.org; §5 item 21 tracks the provisioning wave). Until
+  the provisioning wave adds an in-app installer, the packs panel names what's missing —
+  manually provisioned packs (the binaries correctly placed, archives registered) already
+  work end to end; only the in-app install step is missing.
+- **On Windows, an archive can only be added from a path made of ASCII characters.** The
+  pinned `kiwix-manage` 3.8.1 refuses to read a file whose folder or file name contains an
+  umlaut, an accent or any other non-ASCII character ("Cannot add ZIM … to the library.") — a
+  limit of the tool's own path handling, found on real tools at P7 (`rag-design.md` §17 "Real
+  acceptance"). The panel reports the add as failed with the generic "could not be read by
+  kiwix-manage" message; the workaround is to put the file in the drive's `zim/` folder or any
+  other path without such characters (a Windows user folder such as `C:\Users\Jörg\Downloads`
+  hits this). Serving is not affected — a pack registered from an ASCII path stays readable and
+  searchable. A reason-specific message, or reading the archive's metadata without
+  `kiwix-manage`, is on the P9 successor issue #340.
+- **A redirect entry (an alias title) opens the article it points to — one hop, same pack.**
+  About half of a Wikipedia ZIM's entries are redirects; `kiwix-serve` answers them with a 302
+  rather than the target's bytes, and the viewer follows exactly one such hop inside the same
+  pack (P7 fix). A redirect to another pack, a chain of redirects, or a target that fails the
+  entry-key rules shows the honest "article unavailable" state instead — never another pack's
+  text.
+- **The pinned Windows pack server sometimes cuts a large article read short.** kiwix-serve
+  3.8.1 (win-x86_64) cuts roughly one in ten to twenty reads of an article larger than about
+  80 KB short — the response starts normally and the last part of the body never arrives —
+  measured against the raw server with no app code, with two different HTTP clients and every
+  thread setting; small entries never stall (P7 real acceptance,
+  `rag-design.md` §17 "Real acceptance" finding 3; an upstream defect, tracked for the
+  provisioning wave on #339). The app detects a stalled read with a short timeout (4 s per attempt) and
+  retries it on a fresh connection, up to three attempts (P7 fix; `ARTICLE_READ_TIMEOUT_MS` /
+  `ARTICLE_READ_ATTEMPTS` in `client.ts`), so an article normally still opens and still reaches
+  the answer; only a read that stalls on all three attempts (about one in a thousand at the
+  measured rate) shows "article unavailable" or costs the answer that one article, and the
+  per-answer note then reports what was searched.
+- **Multipart `.zimaa` archives are unsupported (R-2).** A ZIM split across multiple
+  `.zim<aa|ab|…>` parts is not read by this app; only a single-file `.zim` archive is. This
+  is unsupported AND UNTESTED: no code path explicitly rejects a multipart archive, and no
+  test currently pins that rejection.
+- **Packs ride the RELEVANCE ask path only.** Whole-document reads, compares, and
+  doc-task flows are document reads by definition and never consult packs.
+- **A pure-archive answer records no coverage fraction** (there is no document corpus to
+  be “N of M sections” over). **Evidence review resolves archive citations as honest
+  `unresolved` by construction**, not by matching-title accident: the resolver and its
+  read-time whitelist both check `sourceKind` before any document-id/title branch runs
+  (PR #294 review H2, #301). There is no full-archive content hash, so a review can
+  never verify or date an archive article — freshness reports it "cannot be verified",
+  never "changed" — and that stays a limitation, not a defect. The review, its HTML/PDF
+  evidence pack and the Markdown transcript export still record the pack id and article
+  path even though identity is unresolved. A review row's archive citation now opens
+  through the same "Open article" viewer as chat (P6): it resolves by the pack's UUID
+  against the review's own frozen snapshot, so a renamed pack still opens; a removed or
+  currently-unplugged pack says the article is unavailable, same as chat. Evidence reviews created on a pre-release knowledge-pack
+  build that cite an archive may carry a wrongly resolved document identity and must be
+  re-run; the app never rewrites a frozen review.
+- **Serving names are computed, not read back from the running server.** Every enabled
+  pack's serving name follows the pinned libkiwix 14.1 `getHumanReadableIdFromPath` rule
+  exactly (`identity.ts`); when two packs would compute the SAME name, the smaller UUID
+  wins by libkiwix's own ascending-map-order rule and the later pack is excluded from the
+  served library until it is renamed, rather than answering under the winner's name (the
+  panel does not say so — deferred to the P9 successor issue #340 (opened at the #294 merge;
+  BUILD_STATE §5 item 21), since it is a served-library fact rather than a pack-row fact; the
+  per-answer note says "not searched: name collision with another pack"). The real-tool check that our computed map still matches a
+  pinned kiwix-serve build is P7's (T19), not assumed here.
+- **At most twelve packs take part in one ask, and not every candidate they find is
+  used.** Ticking a 13th pack is refused; an older or hand-edited selection above the
+  12-pack limit is trimmed in title order, with a per-answer note that it was not
+  searched. Of the up to 24 archive candidates admitted per ask, each ticked pack's share
+  is decided round-robin, in title order, only after every pack has finished searching —
+  a short or empty pack's unused share goes to the others — and at most two packs are
+  searched at a time, under a twenty-second limit for the whole question (a pack cut off
+  mid-search is reported as "failed: timed out", one never reached in time as "not
+  searched: out of time for this question"). None of this considers language: a German question against an
+  English pack simply scores poorly; the reranker sorts it out when present, and without
+  one, expect occasional off-language chunks. Aggregation or superlative questions ("which
+  scientists are famous Austrians") tend to surface list or enumeration articles rather than
+  a clean answer, because no single passage carries what the question asks for — a
+  retrieval-shape limit, not a defect. Every ticked pack gets one line in the
+  "Knowledge packs:" note under the answer — searched (and how much it contributed) or
+  not searched/failed with a short reason — even on an answer that cites nothing at all;
+  an older answer, from before this note existed, says "outcome not recorded" instead.
+- **Whether a pack can be searched is confirmed only by asking it, once.** A ZIM
+  archive's own metadata tag is a hint only. The app confirms full-text search capability
+  with one request to the pack server (cached against the archive file and the
+  kiwix-tools build, so a replaced file or a new tools install re-checks automatically,
+  and Refresh re-runs it too); until that check completes, the pack is treated as
+  searchable. A 404, a timeout, a malformed reply, or a reply observed across a
+  pack-server restart never confirms "no" — only a clean, positive or negative reply
+  does. A pack confirmed to have no full-text index is skipped for asking ("not searched:
+  no full-text index") but stays fully readable in the article viewer, which never
+  consults this check.
+- **Turning off "Search my documents" does not affect files attached to the chat.**
+  With the toggle off, a chat answers only from its ticked knowledge packs plus any files
+  you attached directly to it — a project selection or a hand-picked document is dropped,
+  an attachment is not. The plain, empty "All documents" selection is unaffected by this
+  feature and still means the whole document corpus. Turning documents back on, or
+  picking a collection or a document while off, resets to the ordinary all-documents (or
+  attachments-only) behavior — there is no separate "restore my previous selection" step.
+- **Content licensing is the user’s call.** Registration accepts any readable ZIM;
+  nothing checks the archive’s license terms (relevant only for redistribution, not
+  for private use).
+- **Very large or malformed articles convert partially.** An article whose markup
+  exceeds 1 MiB, whose scan exhausts the work budget, or whose HTML is unterminated is
+  converted only up to the cut: retrieval uses the text extracted before it, and the
+  article viewer shows a hint that only the first part of the article could be
+  displayed rather than presenting the partial extraction as the whole article. The
+  parser no longer stalls the main process for a whole article (P1b: the conversion is
+  cooperatively sliced and abortable on the ask path); the slow-hardware per-slice figure
+  (the i7-8550U reference laptop) is now recorded — laptop leg 3 PASSED at
+  `DEFAULT_SLICE_WORK` = 16 Ki, p95 2.4–2.7 ms against the 5 ms bound — see
+  [`rag-design.md`](rag-design.md) §17 D-Z3.
+- **A kiwix-serve or kiwix-manage child that cannot be confirmed stopped within the
+  teardown bound** (SIGTERM → SIGKILL → a bounded wait — ≈5 s total for kiwix-serve,
+  ≈3 s for kiwix-manage) is reported as cleanup NOT CONFIRMED, never "complete": its
+  PID stays on the crash-reap list and its `library.<n>.xml` build (or, for
+  registration, its throwaway metadata temp directory) is left under
+  `workspace/zim-transient/` until the next session start removes it. Separately,
+  **kiwix-manage on a legacy hashless install marker runs with a logged warning
+  instead of integrity verification** (residual R-1) — retained until the
+  provisioning wave above proves both binaries' verification and repair.
+- **`workspace/zim-transient/` (P3b) holds only the generated library XML the pack
+  server reads** — `library.<build>.xml` and, during registration, a throwaway
+  `meta-<n>/library.xml` — plaintext while present in both workspace modes, and
+  removed at lock, at quit and at every session start after a containment check
+  (a symlinked or junctioned `zim-transient/` dir is refused outright, never followed).
+  Explicit limits: a file belonging to a child whose death could not be confirmed waits
+  for the NEXT session start, not the current cleanup pass; a file a stray process still
+  holds open on Windows is left in place and reported, never silently called clean.
+- **The pack server has no password of its own (residual R-9).** While the workspace is
+  unlocked and a knowledge pack has been used in a chat, other programs running under
+  your own user account on this computer can read the enabled packs through the pack
+  server, which has no password of its own; locking or quitting stops it. `kiwix-serve`
+  has no request-authentication feature upstream at all, so the app bounds the window a
+  same-user "port squatter" could exploit with the request guard (`ZimService.withServer`):
+  every request is checked against the app's own server lifecycle before and after, a
+  response observed across a lifecycle change is discarded, and the request is retried
+  at most once — this detects a lifecycle change of the app's own child, never the
+  server's identity. Residual windows: the brief race between picking a port and the
+  child binding it, a delayed notification of the child's exit, and whether a second
+  same-user process can bind the port while `kiwix-serve` still holds it (left to the
+  real-tool acceptance run). `--urlRootLocation` exists in kiwix-tools 3.8.1 and is
+  deliberately NOT used — a path prefix in argv is readable by any local process, so it
+  would be obscurity, not authentication (residual R-8, a documented unused option).
+  Revisited only if upstream kiwix-serve adds authentication.

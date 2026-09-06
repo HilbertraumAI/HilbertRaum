@@ -709,6 +709,49 @@ queued behind it; wait for the task to finish (or cancel it), then translate.
 
 ---
 
+## 7b. Knowledge packs — ask an offline Wikipedia
+
+A *knowledge pack* is a ZIM archive — a compressed offline copy of a reference site.
+The Kiwix project publishes thousands (Wikipedia in ~100 languages, Wiktionary,
+Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
+
+1. **One-time setup:** the kiwix-tools programs must sit under
+   `runtime/kiwix-tools/win` (or `mac`/`linux`) on your drive — see
+   [`known-limitations.md`](known-limitations.md) “Knowledge packs” while the
+   installer step is still manual.
+2. **Add packs:** copy `.zim` files into the drive’s `zim/` folder (found when you
+   unlock, and on Refresh), or use *Documents → Knowledge packs → Add packs…* for files
+   stored elsewhere. Files are used in place — nothing is copied. The list updates
+   itself when you unlock; use **Refresh** under Knowledge packs after copying files
+   while the app is open.
+3. **Use them in a chat:** in a documents chat, open the sources picker
+   (“Answering from…”) and tick the packs under *Knowledge packs*. Packs are
+   per-chat and off by default. You can tick up to 12 packs in one chat.
+4. **Answer from packs only, if you want:** untick **Search my documents** at the top of
+   the sources picker to answer only from the ticked knowledge packs — files you attached
+   directly to this chat are still used either way.
+5. **Read the source:** answers cite pack articles like documents; *Open article* on a
+   citation shows the article text offline — also from an evidence review's archive row.
+6. **See what each pack did:** under an answer, a “Knowledge packs:” line lists every
+   ticked pack — searched (and how much it contributed), or not searched/failed with a
+   short reason, such as over the 12-pack limit, no full-text search index, or the pack
+   server restarted mid-question. In the sources picker, a greyed-out pack always says why
+   it can't be ticked — file missing, a different archive at that location, disabled, or no
+   full-text search index; the panel itself shows a "No full-text index" badge on such a pack.
+
+Removing a pack's registration (the **Remove** button) only forgets it — the file itself is
+never deleted. An article from a pack that has no full-text search index is still readable:
+use *Open article* on it directly, even though that pack is skipped when the app searches.
+Whole-document reads and document comparisons never consult knowledge packs — the answer
+says so. A pack greyed out in an older chat's saved selection (because it's no longer
+available) can still be unticked.
+
+Everything stays on this computer: the pack server listens on 127.0.0.1 only and asking
+never leaves this machine. One limit to know: While the workspace is unlocked and a
+knowledge pack has been used in a chat, other programs running under your own user
+account on this computer can read the enabled packs through the pack server, which has
+no password of its own; locking or quitting stops it.
+
 ## 8. Ask about an image
 
 The **Images** screen lets you ask a question about **one picture** — a screenshot, a chart, a
