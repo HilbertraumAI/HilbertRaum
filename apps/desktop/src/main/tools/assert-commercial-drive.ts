@@ -67,6 +67,8 @@ interface DriveInputs {
   runtime: RuntimeSources | null
   whisper: RuntimeSources | null
   ocr: OcrSources | null
+  /** The optional kiwix_tools family (#339 P8-1), passed through the gate's `families` option. */
+  kiwix: RuntimeSources | null
   problems: string[]
   summary: string[]
 }
@@ -88,6 +90,9 @@ function readDriveInputs(root: string): DriveInputs {
   let runtime: RuntimeSources | null = null
   let whisper: RuntimeSources | null = null
   let ocr: OcrSources | null = null
+  // #339 P8-1: the optional kiwix_tools family rides the gate's `families` option — the three
+  // positionals above are frozen; every further family goes through the keyed map.
+  let kiwix: RuntimeSources | null = null
   const pin = join(manifestsDir, 'runtime-sources.yaml')
   if (!existsSync(pin)) {
     problems.push('model-manifests/runtime-sources.yaml missing on the drive — run prepare-drive')
@@ -106,15 +111,17 @@ function readDriveInputs(root: string): DriveInputs {
         runtime = res.sources
         whisper = res.whisper ?? null
         ocr = res.ocr ?? null
+        kiwix = res.families?.kiwix_tools ?? null
         summary.push(
           `runtime pin llama_cpp ${runtime.version}` +
             (whisper ? `, whisper_cpp ${whisper.version}` : ', no whisper_cpp block') +
-            (ocr ? `, ocr ${ocr.version}` : ', no ocr block')
+            (ocr ? `, ocr ${ocr.version}` : ', no ocr block') +
+            (kiwix ? `, kiwix_tools ${kiwix.version} (optional)` : ', no kiwix_tools block')
         )
       }
     }
   }
-  return { manifests, runtime, whisper, ocr, problems, summary }
+  return { manifests, runtime, whisper, ocr, kiwix, problems, summary }
 }
 
 export async function main(argv: string[], out: (line: string) => void = console.log): Promise<number> {
@@ -130,7 +137,11 @@ export async function main(argv: string[], out: (line: string) => void = console
     inputs.runtime,
     inputs.whisper,
     inputs.ocr,
-    { platforms: args.platforms as KitPlatform[], appVersion: args.appVersion }
+    {
+      platforms: args.platforms as KitPlatform[],
+      appVersion: args.appVersion,
+      families: { kiwix_tools: inputs.kiwix }
+    }
   )
   const problems = [...inputs.problems, ...result.problems]
   const ok = problems.length === 0
