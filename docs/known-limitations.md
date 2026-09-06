@@ -2419,7 +2419,7 @@ reports and phase plans were working papers; their full text lives in git histor
   a short or empty pack's unused share goes to the others — and at most two packs are
   searched at a time, under a twenty-second limit for the whole question (a pack cut off
   mid-search is reported as "failed: timed out", one never reached in time as "not
-  searched: ask deadline"). None of this considers language: a German question against an
+  searched: out of time for this question"). None of this considers language: a German question against an
   English pack simply scores poorly; the reranker sorts it out when present, and without
   one, expect occasional off-language chunks. Every ticked pack gets one line in the
   "Knowledge packs:" note under the answer — searched (and how much it contributed) or

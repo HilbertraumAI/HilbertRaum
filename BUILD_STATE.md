@@ -39,7 +39,7 @@ deadline shared with the request guard's one retry. Searchability is confirmed o
 reconcile's end, cached against the file/tool fingerprint; a confirmed-no pack stays readable. Every selected pack gets one
 persisted outcome per ask, shown under the answer even with zero citations, "unknown" on legacy rows; whole-doc/compare answers now
 say packs were not queried. Record: `docs/rag-design.md` §17 D-Z4 (M3/M8/M6 facts), D-Z11 (searchability half), NEW D-Z12 (scope).
-Suite on this machine: <SUITE>; typecheck + build green; real kiwix-tools not installed here.
+Suite on this machine: 418 / 6,035 (5,955 / 79) = +1 file / +34 tests over the head 31869fc5 (417 / 6,001, recounted here); one full run needed the known 8 MiB-leg retries under a foreign test load; typecheck + build green; real kiwix-tools not installed here.
 
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 5 — access boundary and hygiene: review
 M1 / L1 / L5 / L8 / L9 / DOC-1 closed.**_ Every kiwix-serve request from the ask arm and article
