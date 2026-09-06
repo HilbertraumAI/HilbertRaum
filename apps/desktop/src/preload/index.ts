@@ -33,6 +33,7 @@ import type {
   DownloadJob,
   DriveStatus,
   EngineDownloadJob,
+  EngineDownloadRequest,
   EngineStatus,
   EvidenceExportRecord,
   EvidenceLinkInput,
@@ -175,8 +176,16 @@ const api = {
   // ---- In-app engine (llama.cpp sidecar) downloader ----
   /** Is the real AI engine installed, and (if not) can it be fetched for this host? */
   getEngineStatus: (): Promise<EngineStatus> => ipcRenderer.invoke(IPC.getEngineStatus),
-  /** Start fetching + extracting the host's llama-server build. Gated like model downloads. */
-  downloadEngine: (): Promise<EngineDownloadJob> => ipcRenderer.invoke(IPC.downloadEngine),
+  /**
+   * Start fetching + extracting the host's engine build(s). Gated like model downloads. No
+   * argument = the DEFAULT install (every missing required family: llama.cpp, whisper.cpp) —
+   * never an optional one. `{ families: ['kiwix_tools'] }` is how the consent dialog installs
+   * the knowledge-pack tools after the user acknowledged their licence (#339 P8-2).
+   */
+  downloadEngine: (request?: EngineDownloadRequest): Promise<EngineDownloadJob> =>
+    request === undefined
+      ? ipcRenderer.invoke(IPC.downloadEngine)
+      : ipcRenderer.invoke(IPC.downloadEngine, request),
   /** Poll the engine-download job's progress/status. */
   getEngineJob: (jobId: string): Promise<EngineDownloadJob> =>
     ipcRenderer.invoke(IPC.getEngineJob, jobId),

@@ -3,8 +3,9 @@ import { refreshGpuProbeAfterRuntimeInstall } from './registerBenchmarkIpc'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { EngineDownloadJob, EngineStatus } from '../../shared/types'
-import { EngineDownloadManager, engineStatus } from '../services/runtime-download'
+import { EngineDownloadManager, engineStatus, parseEngineDownloadRequest } from '../services/runtime-download'
 import { registeredSidecarPids } from '../services/runtime/sidecar'
+import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
 import { log } from '../services/logging'
@@ -44,6 +45,11 @@ export function whisperSidecarInUse(): boolean {
   return registeredSidecarPids('whisper_cpp').length > 0
 }
 
+/** Is a kiwix-serve / kiwix-manage child executing from `runtime/kiwix-tools/<os>/` (#339 P8-2)? */
+export function kiwixToolsInUse(): boolean {
+  return registeredSidecarPids('kiwix_tools').length > 0
+}
+
 export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManager): void {
   const ipcHandle = guardedHandleFor(ctx)
   const engine =
@@ -55,6 +61,16 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
   // itself is not re-run, and a probe that already lists a device is left alone.
   engine.onInstalled((families) => {
     if (families.includes('llama_cpp')) void refreshGpuProbeAfterRuntimeInstall(ctx)
+    // #339 P8-2: the knowledge-pack tools just arrived — the packs panel's status re-resolves
+    // the binaries on its next read, and the searchability cache key carries the tools
+    // fingerprint (rag-design §17 D-Z11/D-Z15), so one background reconcile re-probes every
+    // pack with the new bundle and announces the result through `packs:changed`. Only while
+    // the workspace still admits work: a lock that landed mid-download owns the teardown.
+    if (families.includes('kiwix_tools') && ctx.zim && workspaceAdmitsWork(ctx.workspace)) {
+      ctx.zim.reconcile(ctx.db).catch((err) => {
+        log.warn('Knowledge-pack reconcile after the tools install failed', String(err))
+      })
+    }
   })
 
   const gates = (): DownloadGates => {
@@ -70,11 +86,16 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
 
   ipcHandle(
     IPC.downloadEngine,
-    (): Promise<EngineDownloadJob> =>
+    (_e, raw?: unknown): Promise<EngineDownloadJob> =>
       engine.start({
         rootPath: ctx.paths.rootPath,
         manifestsDir: ctx.manifestsDir ?? null,
         gates: gates(),
+        // #339 P8-2: the OPTIONAL argument. Absent = the default install (required families
+        // only — the manager never reaches an optional family without it). The consent dialog
+        // sends `{ families: ['kiwix_tools'] }` after the licence acknowledgement; the payload
+        // is renderer input and is validated against the code's own family names.
+        ...parseEngineDownloadRequest(raw),
         // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install pre-cleans the dir the
         // LIVE chat sidecar executes from — the manager refuses a job that would touch it
         // while a model runtime is up OR still starting (friendly copy; stop the model first).
@@ -84,7 +105,10 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
         // and a whisper_cpp install mid-transcription/dictation. Installs touching only the other
         // family still proceed.
         llamaSidecarActive: llamaSidecarInUse(),
-        whisperActive: whisperSidecarInUse()
+        whisperActive: whisperSidecarInUse(),
+        // #339 P8-1 R-e / P8-2: a kiwix_tools (re-)install pre-cleans the dir a live
+        // kiwix-serve / kiwix-manage child executes from — refused while one is registered.
+        kiwixToolsActive: kiwixToolsInUse()
       })
   )
 

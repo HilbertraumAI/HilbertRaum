@@ -2469,6 +2469,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.engine.knowledgePackToolsRunning':
     'Die Wissenspaket-Werkzeuge können nicht ersetzt werden, während ein Paket bereitgestellt wird. ' +
     'Sperre den Arbeitsbereich oder warte, bis die aktuelle Frage beantwortet ist, und versuche es dann erneut.',
+  // #339 P8-2: die downloadEngine-Anfrage nannte etwas, das keine Engine-Familie ist.
+  'main.engine.badRequest': 'Die Anfrage zur Engine-Installation wurde nicht verstanden. Bitte versuche es erneut.',
   'main.docs.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Dokumente zu verwalten.',
   'main.docs.processing':
     'Dieses Dokument wird noch verarbeitet. Warte, bis der Import fertig ist.',

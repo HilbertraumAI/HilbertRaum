@@ -2443,6 +2443,8 @@ export const en = {
   // #339 P8-1: the kiwix_tools family pre-cleans runtime/kiwix-tools/<os>/ on (re-)install.
   'main.engine.knowledgePackToolsRunning':
     "The knowledge-pack tools can't be replaced while a pack is being served. Lock the workspace or wait for the current question to finish, then try again.",
+  // #339 P8-2: the `downloadEngine` payload named something that is not an engine family.
+  'main.engine.badRequest': 'The engine install request was not understood. Please try again.',
   'main.docs.locked': 'Workspace is locked. Unlock it to manage documents.',
   'main.docs.processing': 'This document is still being processed. Wait for the import to finish.',
   'main.docs.tooManyPaths': 'Too many files were selected at once. Choose a folder instead.',

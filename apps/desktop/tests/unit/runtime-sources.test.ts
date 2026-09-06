@@ -282,6 +282,22 @@ describe('validateRuntimeSources', () => {
       }
     })
 
+    // #339 P8-2: the pinned archive size the consent dialog shows before any request is made.
+    it('accepts a positive-integer size_bytes per build and rejects anything else', () => {
+      const ok = validateRuntimeSources({
+        ...base(),
+        kiwix_tools: { version: '3.8.1', optional: true, builds: [{ ...kiwixBuild, size_bytes: 18301924 }, { ...kiwixBuild, os: 'linux', url: 'https://x.test/l.tar.gz', extract_to: 'runtime/kiwix-tools/linux', runtime_files: undefined }] }
+      })
+      expect(ok.errors).toEqual([])
+      expect(ok.families?.kiwix_tools?.builds[0]?.sizeBytes).toBe(18301924)
+      expect(ok.families?.kiwix_tools?.builds[1]?.sizeBytes).toBeUndefined()
+      for (const size_bytes of [0, -1, 1.5, '18301924', null]) {
+        const bad = validateRuntimeSources({ ...base(), kiwix_tools: { version: '3.8.1', builds: [{ ...kiwixBuild, size_bytes }] } })
+        expect(bad.ok, JSON.stringify(size_bytes)).toBe(false)
+        expect(bad.errors.some((e) => e.includes('size_bytes')), JSON.stringify(size_bytes)).toBe(true)
+      }
+    })
+
     it('rejects a non-boolean optional flag and a non-mapping block', () => {
       const bad = validateRuntimeSources({ ...base(), kiwix_tools: { version: '3.8.1', optional: 'yes', builds: [kiwixBuild] } })
       expect(bad.ok).toBe(false)

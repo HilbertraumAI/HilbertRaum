@@ -59,6 +59,12 @@ export interface RuntimeBuild {
    * marker. Absent (every llama / whisper build) = nothing beyond the executables.
    */
   runtimeFiles?: string[]
+  /**
+   * The archive's size in bytes as pinned with its SHA-256 (#339 P8-2) — what the consent
+   * dialog shows BEFORE any request is made (the engine job's `totalBytes` only exists once
+   * the download started). Declarative; a positive integer when present. Absent = unknown.
+   */
+  sizeBytes?: number
 }
 
 export interface RuntimeSources {
@@ -260,6 +266,17 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
           })
         }
       }
+      // #339 P8-2: the pinned archive size the consent dialog shows. Optional; when present it
+      // must be a positive integer (a wrong size is a pin error, not a runtime concern).
+      const sizeRaw = b['size_bytes']
+      let sizeBytes: number | undefined
+      let sizeOk = true
+      if (sizeRaw !== undefined) {
+        if (typeof sizeRaw !== 'number' || !Number.isInteger(sizeRaw) || sizeRaw <= 0) {
+          errors.push(`${where}.size_bytes must be a positive integer when present`)
+          sizeOk = false
+        } else sizeBytes = sizeRaw
+      }
       if (
         typeof osRaw === 'string' &&
         OS_KEYS.includes(osRaw as RuntimeOs) &&
@@ -269,7 +286,8 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
         typeof shaRaw === 'string' &&
         typeof extractTo === 'string' &&
         !isUnsafeDrivePath(extractTo.trim()) &&
-        runtimeFilesOk
+        runtimeFilesOk &&
+        sizeOk
       ) {
         builds.push({
           os: osRaw as RuntimeOs,
@@ -278,7 +296,8 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
           url: url.trim(),
           sha256: shaRaw.trim().toLowerCase(),
           extractTo: extractTo.trim(),
-          ...(runtimeFiles && runtimeFiles.length > 0 ? { runtimeFiles } : {})
+          ...(runtimeFiles && runtimeFiles.length > 0 ? { runtimeFiles } : {}),
+          ...(sizeBytes !== undefined ? { sizeBytes } : {})
         })
       }
     })

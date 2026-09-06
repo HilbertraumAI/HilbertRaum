@@ -118,6 +118,8 @@ interface EnginePlan {
   plan: RuntimeDownloadPlan
   /** From the CODE spec (`SIDECAR_FAMILY_SPECS`), never from the drive's yaml (#339 P8-1). */
   optional: boolean
+  /** The code-side licence string an optional family's consent dialog shows (#339 P8-2). */
+  license: string | null
 }
 
 /**
@@ -143,9 +145,40 @@ function availableEngines(
       alsoRequired: spec.alsoRequired,
       declaredExecutables: sources.executables
     })
-    out.push({ family: spec.family, version: sources.version, build, plan, optional: spec.optional === true })
+    out.push({
+      family: spec.family,
+      version: sources.version,
+      build,
+      plan,
+      optional: spec.optional === true,
+      license: spec.license ?? null
+    })
   }
   return out
+}
+
+/**
+ * Validate the renderer's `downloadEngine` payload (#339 P8-2). Renderer input is untrusted:
+ * anything but "absent" or `{ families: [<known family>, …] }` is rejected with friendly copy,
+ * and the parsed list is rebuilt from the code's own family names (never the caller's strings
+ * echoed back). Absent / `{}` = the default install (`families` undefined).
+ */
+export function parseEngineDownloadRequest(raw: unknown): { families?: EngineFamily[] } {
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error(tMain('main.engine.badRequest'))
+  const families = (raw as { families?: unknown }).families
+  if (families === undefined) return {}
+  if (!Array.isArray(families) || families.length === 0) {
+    throw new Error(tMain('main.engine.badRequest'))
+  }
+  const known = SIDECAR_FAMILY_SPECS.map((s) => s.family)
+  const out: EngineFamily[] = []
+  for (const f of families) {
+    const match = known.find((k) => k === f)
+    if (!match || out.includes(match)) throw new Error(tMain('main.engine.badRequest'))
+    out.push(match)
+  }
+  return { families: out }
 }
 
 /**
@@ -173,7 +206,18 @@ export function engineStatus(
     version: llama?.version ?? null,
     backend: llama?.build.backend ?? null,
     missingFamilies: missingRequired.map((e) => e.family),
-    missingOptionalFamilies: missingOptional.map((e) => e.family)
+    missingOptionalFamilies: missingOptional.map((e) => e.family),
+    // #339 P8-2: what the consent dialog states, from the pin + the code-side spec — never copy.
+    optionalFamilies: engines
+      .filter((e) => e.optional)
+      .map((e) => ({
+        family: e.family,
+        version: e.version,
+        sizeBytes: e.build.sizeBytes ?? null,
+        url: e.build.url,
+        license: e.license ?? 'unknown',
+        installed: !missingOptional.includes(e)
+      }))
   }
 }
 
