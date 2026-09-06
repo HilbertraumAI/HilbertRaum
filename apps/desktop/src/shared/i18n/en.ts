@@ -2448,7 +2448,7 @@ export const en = {
     "The voice engine can't be replaced while audio is being transcribed. Wait for it to finish, then try again.",
   // #339 P8-1: the kiwix_tools family pre-cleans runtime/kiwix-tools/<os>/ on (re-)install.
   'main.engine.knowledgePackToolsRunning':
-    "The knowledge-pack tools can't be replaced while a pack is being served. Lock the workspace or wait for the current question to finish, then try again.",
+    "The knowledge-pack tools can't be replaced while a pack is being served. Lock the workspace or wait for the current question to finish, then try again — or restart the app if the notice stays.",
   // #339 P8-2: the `downloadEngine` payload named something that is not an engine family.
   'main.engine.badRequest': 'The engine install request was not understood. Please try again.',
   'main.docs.locked': 'Workspace is locked. Unlock it to manage documents.',
