@@ -175,6 +175,12 @@ interface SessionHooks {
     headers?: Record<string, string>
     body: string
   } | null
+  /**
+   * The per-ATTEMPT `/raw` timeout of the stall retry (`ARTICLE_READ_TIMEOUT_MS`, #301 P7 T19).
+   * A hook rather than a fixed dep so ONE leg can shrink it: every other article read in this
+   * file keeps the shipped 4 s, T07's parked-read-under-lock leg included.
+   */
+  articleTimeoutMs?: number
 }
 
 interface SessionHarness {
@@ -394,7 +400,12 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
         healthTimeoutMs: 1_000,
         healthIntervalMs: 1,
         killGraceMs: 5,
-        forceKillWaitMs: 5
+        forceKillWaitMs: 5,
+        // Read at CALL time (#301 P7 T19), so the stall-retry leg shrinks the per-attempt
+        // budget for itself and leaves every other read on the shipped default.
+        get articleTimeoutMs(): number | undefined {
+          return hooks.articleTimeoutMs
+        }
       }
     })
   const svc = makeService()
@@ -1257,6 +1268,57 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const crossBook = await invoke(handlers, IPC.getPackArticle, packId, alias)
       expect(crossBook.result).toBeNull()
       expect(rawsSinceMark(mark)).toEqual([aliasUrl])
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('T19 an article whose first /raw read is never answered still opens: the stall is retried inside the same guard window', async () => {
+    // The measured kiwix-serve 3.8.1 (win-x86_64) fault: ~5–20 % of `/raw` reads of an entry
+    // above ~80 KB receive nothing at all — no headers, no bytes — while the server stays
+    // alive and answers the next request normally. Before the retry the viewer showed
+    // "This article is not available right now" after the client's 15 s timeout.
+    const h = await sessionHarness()
+    try {
+      const packId = await h.registerPack('klima.zim', '66666666-0000-4000-8000-000000000000')
+      const library = (await h.svc.ensureServer(h.db())) as ServedLibrary
+      const name = library.names.get(packId)!
+      const entry = 'A/Treibhauseffekt' // one of the measured stallers (234 KB in the archive)
+      const entryUrl = `/raw/${encodeURIComponent(name)}/content/${encodeArticlePath(entry)}`
+      const html =
+        '<html><body><h1>Treibhauseffekt</h1><p>' +
+        'Der Treibhauseffekt beschreibt die Erwärmung der Atmosphäre. '.repeat(40) +
+        '</p></body></html>'
+      h.hooks.respond = (url) => (url === entryUrl ? { status: 200, body: html } : null)
+      // Shrunk for this leg only: the shipped budget is 4 s per attempt.
+      h.hooks.articleTimeoutMs = 300
+      let stalls = 0
+      h.hooks.beforeRespond = (url) => {
+        // The FIRST read of this entry is accepted and never answered — the promise is left
+        // pending on purpose, exactly like a socket kiwix-serve never writes to.
+        if (url === entryUrl && stalls === 0) {
+          stalls++
+          return new Promise<void>(() => undefined)
+        }
+        return Promise.resolve()
+      }
+
+      const mark = h.requests.length
+      const opened = (await invoke(handlers, IPC.getPackArticle, packId, entry)).result as {
+        title: string
+        sections: Array<{ label: string | null; text: string }>
+      } | null
+
+      // The viewer gets the article, not the honest-but-wrong "unavailable" null.
+      expect(opened).not.toBeNull()
+      expect(opened!.title).toBe('Treibhauseffekt')
+      expect(opened!.sections.map((s) => s.text).join('\n')).toContain('Erwärmung der Atmosphäre')
+      // Two reads of the SAME route and nothing else: the retry is a fresh request inside the
+      // one request-guard window, so the guard's own lifecycle retry is untouched.
+      expect(h.requests.slice(mark).filter((u) => u.startsWith('/raw/'))).toEqual([entryUrl, entryUrl])
+      expect(stalls).toBe(1)
+      // No child was restarted for it — the server tuple never changed across the stall.
+      expect(h.svc.serverState()).toMatchObject({ port: h.httpPort, alive: true })
     } finally {
       await h.close()
     }

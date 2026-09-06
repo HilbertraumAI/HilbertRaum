@@ -57,6 +57,14 @@ function bigArticleHtml(): string {
 }
 /** Set by the fake sidecar once the big article's body has been written. */
 let bigArticleServed = false
+/**
+ * Article titles whose NEXT `/raw` read the fake sidecar accepts and never answers — the
+ * measured kiwix-serve 3.8.1 stall (#301 P7 T19). The title is removed as it fires, so the
+ * retry finds the article served normally, exactly as the real server behaves.
+ */
+const stallOnce = new Set<string>()
+/** Every article title the fake sidecar was asked for over `/raw`, in order. */
+const rawReads: string[] = []
 
 function searchXml(bookUrlId: string, titles: string[]): string {
   const items = titles
@@ -92,6 +100,10 @@ beforeAll(async () => {
     }
     if (url.pathname.startsWith('/raw/')) {
       const article = decodeURIComponent(url.pathname.split('/content/')[1] ?? '').replace(/_/g, ' ')
+      rawReads.push(article)
+      // #301 P7 T19: accepted, then nothing at all — no headers, no bytes. The client's
+      // per-attempt timeout is what ends it, and the retry gets the article below.
+      if (stallOnce.delete(article)) return
       // One article whose fetch fails: the arm must skip THAT HIT and keep the others.
       if (article === 'Kaputt') {
         res.writeHead(500)
@@ -157,6 +169,41 @@ describe('collectPackCandidates', () => {
     expect(first.articlePath).toBe('Treibhausgas')
     // The overlap picker prefers the section naming the query terms.
     expect(first.text).toContain('Landwirtschaft')
+  })
+
+  it('#301 P7 T19 an article whose first read is never answered keeps its chunks', async () => {
+    // Before the stall retry, kiwix-serve 3.8.1 (win-x86_64) leaving a `/raw` read unanswered
+    // cost the ask that article ENTIRELY and silently: `fetchArticleHtml` rejected on the 15 s
+    // timeout and the arm's per-hit `continue` swallowed it (a measured ask returned 16 of 20
+    // passages after 40 s). The retry makes the stall invisible to the ask.
+    const packs = [{ id: 'pack-climate', title: 'Klimawandel von Wikipedia' }]
+    const question = 'Wie entsteht Treibhausgas in der Landwirtschaft?'
+    const { candidates: unstalled } = await collectPackCandidates(port, packs, question)
+
+    rawReads.length = 0
+    stallOnce.add('Treibhausgas') // the top hit — the one that used to disappear
+    const { candidates, outcomes } = await collectPackCandidates(
+      port,
+      packs,
+      question,
+      undefined,
+      undefined,
+      // Shrunk for this leg only; the shipped per-attempt budget is 4 s.
+      { articleTimeoutMs: 300 }
+    )
+
+    expect(stallOnce.size).toBe(0) // the stall really fired
+    // Same candidates, in the same order, as the run where nothing stalled.
+    expect(candidates.map((c) => c.chunkId)).toEqual(unstalled.map((c) => c.chunkId))
+    expect(candidates.some((c) => c.sourceTitle === 'Treibhausgas')).toBe(true)
+    expect(outcomes[0]).toMatchObject({
+      packId: 'pack-climate',
+      status: 'searched',
+      reason: null,
+      found: candidates.length
+    })
+    // Exactly ONE extra read, of the stalled article alone — the other hit is fetched once.
+    expect(rawReads).toEqual(['Treibhausgas', 'Treibhausgas', 'Treibhauspotential'])
   })
 
   it('P1b an aborted ask signal propagates out of collectPackCandidates instead of an empty list', async () => {
