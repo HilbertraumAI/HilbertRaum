@@ -27,6 +27,38 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-06 — ZIM follow-up wave steps 1–6: the dated entry retired verbatim (open-issues wave)
+
+_2026-09-06 — **ZIM follow-up wave, step 1 — #344 (`fix/344-failed-lock-rearm`, working paper `tmp/344-failed-lock-rearm.md`, git-ignored):** a FAILED lock left the chat
+engine stopped (and an opted-in local API down) — the teardown stops every sidecar before the re-encrypt and only the post-unlock seam restarted the two eager ones. The lock
+handler's single AUD-02 disarm point now re-runs exactly those two restarts (`maybeAutoStartActiveModel`, `maybeStartLocalApi`) after `cancelLock()`; the successful-lock, quit and
+unlock paths are untouched, no epoch moves. Test: `lock-admission-race.test.ts` "a FAILED lock re-arms the chat engine …" (real vault + handler + `RuntimeManager`, a chat-path ask after
+the failure; red with the fix reverted). Docs: troubleshooting "Could not lock the workspace", CHANGELOG, rag-design §17 owner-leg annotation. **Step 2 — #340 residual (a), the
+post-registration searchability probe (`fix/340-post-registration-probe`, stacked on step 1; paper `tmp/340-residuals.md`):** `ZimService.scheduleSearchabilityProbe` — once per completed
+`packs:add` batch and on enable, the reconcile's key pass first, the same guarded probe and conditional write, a `'mutation'` notice after a verdict; record rag-design **D-Z15**; test
+`zim-ipc-session` "#340 …" (four legs, red without the trigger). Owner questions (b) non-ASCII message vs metadata and (c) LaTeX strip / normalise / render posted on #340 — their
+code waits. **Step 3 — 21(l) the collision surface (`feat/340-packs-status-excluded`, stacked on step 2):** `KnowledgePackStatus.excluded?` from the service's memory (registry
+recompute at reconcile end + every mutation, the build authoritative, reset on suspend; the exempt channel never reads the DB), a "Not served" badge naming the winner on the
+loser's row; record rag-design **D-Z16**; tests `zim-ipc-session` "#340 packs:status.excluded …", `KnowledgePacks.test.tsx`. **Step 4 — 21(l) the UI nits (`fix/340-packs-ui-nits`, stacked
+on step 3; record design-guidelines §11.15 "Follow-up wave"):** per-row busy, an unavailable pack can be disabled, the language NAME in the meta line, the chip's "(disabled)" /
+"(not available)" state, `.footer-menu-btn`'s own shrink rule, no `reconcile-start` refetch. **Step 5 — #339 P8-1** (`feat/339-p8-1-kiwix-family`, design paper
+`tmp/339-p8-1-design.md`): the `kiwix_tools` family contract landed (record rag-design **D-Z17**); the consent step and the source-bundle code still wait on the owner's rulings.
+**Step 6 — #340 L3** (`feat/340-l3-search-rewrite`, paper `tmp/340-capabilities-plan.md` C1): the question → `/search` pattern rewrite (record rag-design **D-Z18**; measured on the real
+K: pack raw-server 6/9 → 9/9 hit@5; fixture `quality-questions-de.json`, replayed by the manual smoke). Next: L1 / L2 (owner questions first), then C2–C4; (b)/(c) wait for the owner. **MERGED 2026-09-06 on the owner's instruction:** #348, #349, #350, #351, #354, #355, #356 → master bottom-up
+with merge commits (each child retargeted to master, every one CLEAN), tip `ab0f060d`; branches kept; #344 closed by the merge._
+
+## 2026-09-06 — ZIM open-issues wave: item 21 (l) retired verbatim
+
+    (l) **P7 residual register (2026-09-06):** the collision surface — CLOSED, follow-up wave step 3 (`packs:status.excluded`, rag-design D-Z16; the per-answer "not-served" row stays); the five PacksPanel / ChatScreen / meta-line / footer-button nits — CLOSED, follow-up wave step 4 (design-guidelines §11.15 "Follow-up wave");
+    accepted deviation: the ScopePopover is non-modal (design-guidelines §11.15 decision 1, P6); T18-b — RECORDED 2026-09-06 (run by the orchestrator at the owner's request in real Electron against the real packs; rag-design §17 "Real acceptance" → "T18-b"; it surfaced T19 finding 3: kiwix-serve 3.8.1 win-x86_64 cuts ~5–20 % of large /raw reads short (the body's last part never arrives) — upstream, mitigated by the P7 fix PR 2, upstream report on #339); T19 the owner's Electron/drive legs — (vi) the relocated drive with
+    persisted citations and (vii) live lock/unlock/failed lock PASSED 2026-09-06 on the real K: drive (rag-design §17 "Real acceptance" → "The owner's legs"; observations: a failed lock leaves the chat
+    engine stopped until a model is re-selected — #344, FIXED in the follow-up wave (2026-09-06 dated entry); a pack added via Add packs… stays searchability-unknown until Refresh — FIXED, D-Z15 (follow-up wave step 2); LaTeX echoed in answers — #340, owner ruling pending), (viii) the offline ask + viewer PASSED
+    (item (d) closed) — T19 complete; the orchestrator's machine legs are recorded in rag-design §17 "Real acceptance"; R-1 open
+    until P8 (the acceptance bundle has no install marker ⇒ `skip-legacy`); R-2 multipart unsupported; R-4 Authenticode — result recorded at P7 in model-policy.md; R-6 → P9; R-9 accepted
+    (2026-09-05). From P7's T19: kiwix-manage 3.8.1 refuses non-ASCII archive paths on Windows (registration-only — kiwix-serve serves such a file from UTF-8 XML; documented in
+    known-limitations / troubleshooting; a reason-specific message or metadata without kiwix-manage — P9); the retrieval-quality levers L1 (title-index `/suggest` arm), L2
+    (`ARTICLES_PER_PACK` scaling with archive size), L3 (question→keywords rewrite before `/search`) — P9 (L4, the aggregation-question expectation, landed in known-limitations).
+
 ## 2026-09-06 — ZIM knowledge-packs wave (PR #294 → #301): the Phase 0–6 dated entries retired verbatim (P7)
 
 Moved to make room under the BUILD_STATE.md preamble budget at the P7 close-out (master's #302 merge-in had pushed it over 200 lines); the ten entries below are unchanged from how they stood in BUILD_STATE.md. The wave summary entry that replaces them there stays in BUILD_STATE.md until the wave itself closes.
