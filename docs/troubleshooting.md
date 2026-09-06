@@ -595,13 +595,49 @@ just happened. The app can simply ask again.
 
 ### The panel says kiwix-tools are missing
 
-Knowledge packs are served by two small programs from the Kiwix project, kiwix-serve and
-kiwix-manage. Until the provisioning wave adds an in-app installer, you place them on the
-drive yourself: download the pinned kiwix-tools 3.8.1 release for your platform and unzip
-the **whole** bundle under `runtime/kiwix-tools/win` (or `mac`/`linux`). On Windows the five
-ICU DLLs (`icudt74.dll`, `icuin74.dll`, `icuio74.dll`, `icutu74.dll`, `icuuc74.dll`) must sit
-right beside `kiwix-serve.exe` and `kiwix-manage.exe` — kiwix-serve won't start without them.
-The version is pinned; a different kiwix-tools release is not supported.
+Knowledge packs are served by three small programs from the Kiwix project, kiwix-serve,
+kiwix-manage and kiwix-search. Until the provisioning wave adds an in-app installer (an
+in-app install step is being added, #339), place them on the drive yourself.
+
+**Preferred: run the fetch script.** From the repository, against the drive:
+
+- Windows: `scripts\fetch-runtime.ps1 -Target <drive-root> -Family kiwix_tools`
+- macOS/Linux: `scripts/fetch-runtime.sh --target <drive-root> --family kiwix_tools`
+
+The script downloads the pinned release, verifies it against the pinned SHA-256, extracts
+the whole bundle into `runtime/kiwix-tools/<os>/` and sets executable permissions on
+mac/linux. It writes a `.hilbertraum-runtime.json` install marker, so a later drive check
+recognizes the install (a hand-placed bundle has no marker — see
+[`known-limitations.md`](known-limitations.md) "Knowledge packs — ZIM archives").
+
+**Fallback: download and extract by hand.** Get the pinned kiwix-tools 3.8.1 release for
+your platform:
+
+- Windows: `https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip`
+- macOS (Apple Silicon): `https://download.kiwix.org/release/kiwix-tools/kiwix-tools_macos-arm64-3.8.1.tar.gz`
+- macOS (Intel): `https://download.kiwix.org/release/kiwix-tools/kiwix-tools_macos-x86_64-3.8.1.tar.gz`
+- Linux: `https://download.kiwix.org/release/kiwix-tools/kiwix-tools_linux-x86_64-3.8.1.tar.gz`
+
+The server publishes MD5 sidecars only (`<file>.md5`, no `.sha256`/`.sig`); the pinned
+SHA-256 for each build is recorded in [`model-policy.md`](model-policy.md) "Sidecar
+binaries — kiwix-tools" — check the download against it. The distro package (e.g. `apt
+install kiwix-tools` on Ubuntu, which installs 3.2.0) is **not** the pinned version and is
+not supported.
+
+On Windows, unzip the **whole** bundle under `runtime/kiwix-tools/win`. The five ICU DLLs
+(`icudt74.dll`, `icuin74.dll`, `icuio74.dll`, `icutu74.dll`, `icuuc74.dll`) must sit right
+beside `kiwix-serve.exe` and `kiwix-manage.exe` — kiwix-serve won't start without them.
+
+On macOS/Linux the `.tar.gz` extracts into a single top-level folder (for example
+`kiwix-tools_linux-x86_64-3.8.1/`) holding the three binaries and nothing else. Strip that
+folder on extraction so the binaries land directly under `runtime/kiwix-tools/<os>/` — for
+example: `tar -xzf kiwix-tools_linux-x86_64-3.8.1.tar.gz --strip-components=1 -C
+runtime/kiwix-tools/linux` (or extract normally and move the contents up a level) — then
+`chmod +x` the three binaries. `runtime/kiwix-tools/linux/kiwix-serve` must resolve
+directly; a bundle left one directory too deep is not picked up.
+
+The version is pinned; a different kiwix-tools release is not supported. Either way, the app
+picks the files up on **Refresh** under *Documents → Knowledge packs* — no restart needed.
 
 ### "The archive could not be read by kiwix-manage" — but the file is fine
 

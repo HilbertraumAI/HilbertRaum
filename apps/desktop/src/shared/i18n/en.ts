@@ -2714,7 +2714,7 @@ export const en = {
   'packs.refreshing': 'Checking the drive for packs…',
   'packs.emptyTitle': 'No knowledge packs yet',
   'packs.emptyLine': 'Add a ZIM archive, or copy one into the drive’s zim folder and reopen this view.',
-  'packs.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See the user guide for the manual install step.',
+  'packs.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See Troubleshooting → “The panel says kiwix-tools are missing” for the install step.',
   'packs.addedToast.one': 'Knowledge pack added',
   'packs.addedToast.other': '{count} knowledge packs added',
   // #301 P5, finding L1 (plan §9.19 (c)3): the typed add-result DTO's outcomes. `addPartial` is
@@ -2722,7 +2722,7 @@ export const en = {
   // all-fail add — no free text (manager stderr/path) ever reaches these strings.
   'packs.addPartial': '{failed} of {total} archives could not be added.',
   'packs.addFailed.notAZim': 'The chosen file is not a readable ZIM archive.',
-  'packs.addFailed.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See the user guide for the manual install step.',
+  'packs.addFailed.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See Troubleshooting → “The panel says kiwix-tools are missing” for the install step.',
   'packs.addFailed.manager': 'The archive could not be read by kiwix-manage. Check that the file is complete and try again.',
   'packs.addFailed.other': 'The archive could not be added.',
   'packs.removedToast': 'Knowledge pack removed',

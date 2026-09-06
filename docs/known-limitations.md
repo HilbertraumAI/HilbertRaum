@@ -2450,16 +2450,15 @@ reports and phase plans were working papers; their full text lives in git histor
 - **No user-reachable install of kiwix-tools exists yet.** The `kiwix_tools` family is now in
   `runtime-sources.yaml`, the in-app engine installer and the commercial-drive sell gate (#339
   P8-1) — but `downloadEngine()` still takes no arguments and no UI offers the family, so nothing
-  a user can click actually fetches it yet; that consent step is P8-2. Until then, placing the
-  binaries by hand is still the only way in: unzip the WHOLE kiwix-tools archive under
-  `runtime/kiwix-tools/<os>/` (the Windows build needs its ICU DLLs beside the exes; download
-  kiwix-tools from kiwix.org). A hand-placed bundle carries no install marker and is replaced
-  **wholesale** by the first in-app install once P8-2 ships (the installer pre-cleans the family's
-  directory before extracting) — so a manually provisioned drive is not stranded, it is simply
-  superseded the first time someone installs the family from inside the app. The drive scripts'
-  own `--family kiwix_tools` support follows in P8-3. Manually provisioned packs (the binaries
-  correctly placed, archives registered) already work end to end today; only the in-app install
-  step is missing.
+  a user can click actually fetches it yet; that consent step is P8-2. Until then, the drive
+  scripts' own `--family kiwix_tools` support (P8-3, PR #355) is the recommended way in — see
+  [`troubleshooting.md`](troubleshooting.md) "The panel says kiwix-tools are missing" for the
+  exact command and the manual-unzip fallback. A hand-placed bundle carries no install marker and
+  is replaced **wholesale** by the first in-app install once P8-2 ships (the installer pre-cleans
+  the family's directory before extracting) — so a manually provisioned drive is not stranded, it
+  is simply superseded the first time someone installs the family from inside the app. Manually
+  provisioned packs (the binaries correctly placed, archives registered) already work end to end
+  today; only the in-app install step is missing.
 - **On Windows, an archive can only be added from a path made of ASCII characters.** The
   pinned `kiwix-manage` 3.8.1 refuses to read a file whose folder or file name contains an
   umlaut, an accent or any other non-ASCII character ("Cannot add ZIM … to the library.") — a

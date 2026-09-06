@@ -797,8 +797,8 @@ Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
 
 1. **One-time setup:** the kiwix-tools programs must sit under
    `runtime/kiwix-tools/win` (or `mac`/`linux`) on your drive — see
-   [`known-limitations.md`](known-limitations.md) “Knowledge packs” while the
-   installer step is still manual.
+   [`troubleshooting.md`](troubleshooting.md) “The panel says kiwix-tools are
+   missing” while the installer step is still manual.
 2. **Add packs:** copy `.zim` files into the drive’s `zim/` folder (found when you
    unlock, and on Refresh), or use *Documents → Knowledge packs → Add packs…* for files
    stored elsewhere. Files are used in place — nothing is copied. The list updates
