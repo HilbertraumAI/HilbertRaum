@@ -41,8 +41,9 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    probe that outlives a lock, or a lock and a re-unlock, never writes. With no binary / no
    devices / a failed probe, `gpu` stays `null` and nothing blocks. The persisted probe is
    additionally refreshed **once per session** in the background (even when a benchmark already
-   exists), so a drive moved to another machine re-labels itself; Diagnostics' "Try GPU again"
-   (`gpu:try-again` IPC) invalidates the session cache and re-probes immediately.
+   exists — `prepareFirstBenchmark`, the cheap half of the first-run benchmark, fires it before
+   the model auto-start), so a drive moved to another machine re-labels itself; Diagnostics'
+   "Try GPU again" (`gpu:try-again` IPC) invalidates the session cache and re-probes immediately.
 3. **Drive speed** (`measureDriveSpeed`): writes a small temp file
    (`DRIVE_PROBE_BYTES = 8 MB` of random bytes) **inside the workspace**, times a sequential
    write (with `fsync`) then a read, and reports MB/s. The temp file is **always removed**
@@ -76,7 +77,11 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    active — it streams the prompt *"Write a short paragraph about privacy."* under a 64-token
    `max_tokens` cap (the paragraph wording fills the cap reliably; a one-sentence prompt finished in
    ~20 tokens, a window dominated by per-request overhead — issue #291). It is `null` when no
-   runtime is running. **What the number is (since #291):** llama-server's own
+   runtime is running. The automatic first-run / new-computer measurement is scheduled **behind
+   the model auto-start** since PR #303 P7 ("History per machine" → "Scheduling behind the
+   auto-start"), so on a machine with an active model it measures the freshly started runtime;
+   before, it ran ahead of the start and always skipped this leg. **What the number is (since
+   #291):** llama-server's own
    `timings.predicted_per_second` from the stream's final chunk — **decode tokens over decode
    time**, prefill and the first-token latency excluded, and TOKENS rather than SSE chunks (under
    MTP speculative decoding, #182, one chunk carries an accepted draft run of several tokens, which
@@ -330,18 +335,85 @@ rounds the same way). A result with no usable identity (an empty `cpuModel`, `ra
 blob persisted before these fields were reliably filled) has a **null key**: it is never filed in
 the history and never counts as "another computer", so an old workspace keeps behaving as before.
 
-**The moved-drive check** lives in `maybeRunFirstBenchmark`, which already runs after every
-unlock. If `lastBenchmark` exists and its key differs from this machine's:
+**The moved-drive check** lives in `prepareFirstBenchmark` (`ipc/registerBenchmarkIpc.ts`), the
+cheap half of the first-run benchmark, which runs after every unlock. If `lastBenchmark` exists
+and its key differs from this machine's:
 
 - a history entry for this machine is **restored** into `lastBenchmark` (so the ★ pick and the
   profile follow the machine, not the drive) and nothing is re-measured;
-- with no entry, this is a first run on a new computer and the benchmark runs in the background
-  exactly as on a fresh workspace.
+- with no entry, this is a first run on a new computer and the measurement is **owed**: it runs in
+  the background exactly as on a fresh workspace — scheduled behind the model auto-start, see
+  "Scheduling behind the auto-start" below.
 
 Either way the per-session GPU probe refresh still happens first. The `benchmarkHistory` write
 gate accepts an array of VALID results only (junk and unkeyed elements dropped, one record per
 machine, newest first, length capped; the 256 KB serialized cap applies to the list) — see
 "Schemas and legacy records" above.
+
+**Scheduling behind the auto-start (PR #303 audit L1 / SD2, owner decision G5).** The three
+post-unlock seams (the plaintext startup in `main/index.ts`, unlock and create in
+`registerWorkspaceIpc`) used to fire the first-run benchmark and `maybeAutoStartActiveModel`
+back to back. A model start is not an occupancy lane, so the benchmark's 8 MiB write/fsync probe
+contended with the start's multi-GB weight hash + load on the same drive, and `runtime.active()`
+was captured before the drive probe, so a start that reached ready seconds later never got its
+speed leg; the moved-drive check made that reachable on every unlock of a moved drive. The
+first-run benchmark is therefore **two halves**, run in this order at every seam:
+
+1. `prepareFirstBenchmark(ctx)` — synchronous, **before** the auto-start is even called: the
+   AUD-02 admission guard, the session-epoch capture, the per-session GPU probe refresh, and the
+   restore / same-machine seed / new-machine backfill writes with their `performance:changed`
+   pushes — a known computer's profile and ★ pick come back promptly, before anything heavy
+   starts. It returns a **decision**: `run: 'first-run' | 'new-machine' | null`, plus the epoch
+   and this machine's key.
+2. `maybeAutoStartActiveModel(ctx)` — now returns a promise that settles when the start
+   completed, was skipped (no model, toggle off, a runtime already up, locked) or failed (caught;
+   it never rejects).
+3. `scheduleFirstBenchmark(ctx, decision, started)` — the **measurement** half, `void`ed by the
+   seams (the handlers never block on it). With nothing owed it resolves `'not-needed'` at once.
+   Otherwise it waits for the start to settle — success **or** failure: a failed start still
+   permits the benchmark, just without the speed leg — then re-checks the world and runs
+   `runAndPersistBenchmark`, whose speed leg now sees the runtime the start brought up. The
+   settlement re-checks mirror `startModelRuntime`'s post-hash guards: `workspaceAdmitsWork`
+   (`'skipped-admission'`), the captured epoch (`'skipped-epoch'` — a lock AND a re-unlock
+   meanwhile; the new session re-checks on its own), the quit latch (`'skipped-shutdown'`), any
+   lane holding the model — a benchmark span, a chat, a doc task, a skill run
+   (`'skipped-busy'`, the same predicate the run itself refuses on, read in the same tick), and a
+   result for this computer persisted meanwhile by a manual run or another window
+   (`'skipped-already-current'`). A thrown run is `'failed'` with the warn log. No outcome is
+   retried within the session (below); Diagnostics runs the benchmark on demand at any time.
+
+The wait is **bounded** by `FIRST_BENCHMARK_SETTLE_TIMEOUT_MS` (120 s — sized to the common slow
+case: a ~5 GB GGUF on the ~70 MB/s stick #108 measured is hashed and then loaded, roughly a minute
+each; the pathological starts — a ladder walk of serial 180 s health timeouts plus the 90 s
+warm-up — are what the continuation exists for), but the bound is a **deferral boundary, not
+permission to overlap the load**: at the ceiling the scheduler resolves `'deferred'` and leaves
+exactly **one continuation** on the same settlement, which runs the settlement re-checks and then
+the measurement once the start actually settles; a session or process that ends first runs
+nothing (the next launch re-checks), and a start that never settles leaves it to the next launch
+too. Nothing cancels the user's model start, and no new occupancy lane exists. The timer is
+injectable (`deps.timer`) so the timeout is testable without real time; production passes no deps.
+
+**One automatic attempt per unlock session (SD2).** Since the moved-drive check, a key mismatch
+re-triggered a background run at every unlock until a same-machine result persisted, with no
+bound on a machine whose run keeps failing (no sidecar binary, an unwritable workspace). A
+module-level memo keyed on the workspace **DB handle and the session epoch** (the shape of the
+persisted-sample memo in `registerModelIpc`) records the attempt when a scheduling is
+**accepted**; a second prepare/schedule in the same session — a failed run included — resolves
+`'skipped-attempted'`; a lock + unlock (a new `Db`, a new epoch) re-checks; and a successful
+**manual** run persists a same-machine `lastBenchmark`, so the next `prepare` owes nothing and
+the re-check ends. The moved-drive re-check therefore repeats **once per unlock** until a
+same-machine result persists (`known-limitations.md`). `resetFirstBenchmarkForTests()` clears the
+memo; `maybeRunFirstBenchmark(ctx)` survives as the pre-split shape for tests (prepare, then
+schedule against an already-settled promise) and resolves to the outcome.
+
+**The late-write guard.** `runAndPersistBenchmark` captures the session epoch before its first
+await and, after the drive and speed legs, re-checks admission and the epoch **before** the one
+`updateSettings`: a lock (completed or under way), or a lock AND a re-unlock, completing during
+the legs makes it reject without writing — the result is deliberately not returned either, since
+the resolved value is documented as "the reconciled object that was written" (M6) — while the
+`finally` still releases the occupancy span and pushes the idle `performance:changed`. The busy
+refusal is the typed `BenchmarkBusyError` (the friendly localized lane copy as its message, the
+lane as a field), so the scheduler can tell it from a failure.
 
 **Upgrade backfill (PR #303 audit, M4).** A workspace from before the history existed holds the
 previous computer's result only in `lastBenchmark`, so whatever replaces that headline first
@@ -606,7 +678,7 @@ sample stay the model load — `read-speed.ts` fires its observer for every acce
 the persister applies the ranking per destination); a retry persist that actually wrote; the
 answer latch; a placement observation (after its persist, or after the skipped persist while
 locked); the moved-drive restore, the upgrade seed and the new-machine backfill in
-`maybeRunFirstBenchmark`; a completed GPU probe write (`probeAndPersistGpu`, incl. an empty
+`prepareFirstBenchmark`; a completed GPU probe write (`probeAndPersistGpu`, incl. an empty
 device list, so "Try GPU again" pushes through it); the chat runtime's transitions
 (`RuntimeManager.onChange` — starting, ready, stopped, subscribed in `initBackend`);
 resident-sidecar transitions for the "Models on this computer" rows (`onResidencyChange` on

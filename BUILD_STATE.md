@@ -29,55 +29,29 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-09-06 — **PR #303 audit remediation, P1 (same branch, master `ddd704ad` merged in first):** the
-M7 `_Host` and L7 empty-reading fixes of `ce741533` pinned (parser, verdict, renderer), stale `_Host`
-prose corrected, `skills.title` orphan removed, §5 item 20 archived to `docs/build-log.md` and
-collapsed, the remediation register added to item 21. Plan: `tmp/pr-303-fix-plan.md` (untracked).
-**P2:** M2/M4/M6/L2 repaired together in the new pure `services/benchmark-persistence.ts` (identity before
-source ranking under G3, outgoing-result backfill on the run / restore / startup-seed paths, commit-time
-re-resolution of a mid-run sample, samples written to `lastBenchmark` AND this machine's history entry,
-history-first write order); records in `benchmark.md` "Persistence" / "History per machine".
-**P3:** M1/M3/L3 — the screen is pushed, never polled: `EVENTS.performanceChanged` (payload-free,
-every live window, after each mutation: run start/end after persist + release, every accepted
-read-speed sample incl. a ranked loser, the answer latch, placements, restore/backfill/GPU-probe
-writes, chat-runtime starting/ready/stopped via a new `RuntimeManager.onChange`, resident-sidecar
-load/unload via `onResidencyChange` on the e5/reranker/translation/vision runtimes, the snapshot's
-settings keys); `running` = the held benchmark span; the observed rows are session latches only
-(G2: main-process lifetime, never a persisted fallback); `drive`/`speed` steps tick only on success;
-the renderer splits backend `running` from its own action, subscribes before the first read,
-serialises and stamps reads, and keeps read and action failures apart (retry button). Records:
-`benchmark.md` "Push, not poll" / "Progress", data-contracts (`EVENTS`, `api.onPerformanceChanged`).
-Dev launch smoke on a scratch root (CDP-driven): the push refresh verified live for an own run and an
-external run; it caught a React.StrictMode double-mount defect in the renderer's read drain (a stale
-reply left the remount's read un-issued; fixed + pinned). Measured: one `performance:get` read ≈ 100 ms
-in the dev build (the sync manifest scan, N6 / follow-up I5).
-**P4:** H1/L8/M5-residual — `shared/benchmark-schema.ts` validates `lastBenchmark`, `benchmarkHistory` and
-`modelPlacements` on read (in memory, never rewriting the DB) and on write (garbage ignored, never stored);
-the legacy profile-only record survives as an unknown-identity result with an empty `ranAt` that readers
-print as "unknown"; unkeyed entries never enter history; `launchContextTokens` resolves the displayed
-context (a zero-context manifest shows the settings default, never "0-token"); a stored placement counts as
-measured only when its context and backend match the current configuration (`placement.observedMismatch`
-otherwise, one EN/DE line); the screen and Diagnostics format a bad record as "–", never a throw.
-**P5:** M8/N1/N3 + DR1/DR2/DR5 — one machine-eligible GPU source: `settings.gpuProbe` stamped with
-`machineKey` (validated on read/write; a known-foreign probe supplies nothing, an unstamped legacy one
-stays eligible under G3), `shared/gpu-rules.ts` (`isUsefulDevice`, `primaryUsefulDevice`,
-`displayDevice`, `eligibleGpuProbe`; the profile bump re-exports it unchanged, G4) and
-`shared/performance-rules.ts` (the speed/read thresholds, no renderer copies), one paired name +
-memory for the tile, the benchmark record, the budget, `currentGpu` and the fold-in, no raw-settings
-fallback in the screen; the resident rows' device follows the configuration (GPU off / auto-disabled /
-observed CPU / translation `--device none`), the RAM total is class-aware (owner ruling), the free and
-working figures are attributed to the selected device by name (`ModelPlacement.devices`), and the tile
-says "Integrated, shared memory" / "Not recorded" where it used to say "Usable" / "No usable card".
-**P6:** L6/L8/N4/N5/T6 + DR4 — the Copy report and the other-computer rows carry the speed basis
-(measured "over N tokens", or "Approximate: counted chunks" with the chunk count; a legacy result
-without a basis is approximate with no invented window) and a neutral "Approximate" pill instead of
-Good/Slow; the report says "This computer" only for this machine, else "Another computer: cpu, RAM";
-the "Your model" copy says the first start is measured on this computer and that the drive keeps one
-record per model (a start elsewhere replaces it); an observed start whose log said nothing reads "The
-runtime did not report where the model landed."; the partial-offload copy interpolates the fit margin
-from `shared/performance-rules.ts` (`FIT_TARGET_MARGIN_MB`, `CARD_FREE_SLACK_MB`); "Drive speed" step
-and "…or file check" hint; German component smoke for the screen; the runtime-status and Diagnostics
-GPU labels name the display device (P5 residual)._
+_2026-09-06 — **PR #303 audit remediation on `feat/performance-screen` (master `ddd704ad` merged in
+first; one commit per phase, CI green on each; working ledger `tmp/pr-303-fix-plan-ledger.md`,
+untracked; durable record → `docs/benchmark.md` at P9).** P1 pinned the M7 `_Host` and L7
+empty-reading fixes of `ce741533`, removed the `skills.title` orphan, archived §5 item 20. P2 repaired
+M2/M4/M6/L2 together (`services/benchmark-persistence.ts`: identity before source ranking under G3,
+outgoing-result backfill, commit-time re-resolution, samples to both destinations). P3 made the screen
+pushed, never polled (`performance:changed` after every mutation incl. runtime and sidecar residency;
+`running` = the held span; observed rows = session latches; honest `drive`/`speed` steps; the renderer
+splits backend running from its own action) — the dev launch smoke caught and fixed a StrictMode
+double-mount defect and measured `performance:get` ≈ 100 ms (I5). P4 validates `lastBenchmark`,
+`benchmarkHistory`, `modelPlacements` on read and write (`shared/benchmark-schema.ts`; the legacy
+profile-only record survives unkeyed), resolves the displayed context with `launchContextTokens`, and
+counts a placement as measured only when its context/backend match the configuration. P5 made one
+machine-eligible GPU source (`gpuProbe.machineKey`, `shared/gpu-rules.ts`, paired name + memory,
+configuration-aware resident rows, class-aware RAM total, free/working figures by device; a CI-only
+same-millisecond sample clash was fixed by an injectable read-speed clock). P6 carried the speed basis
+into the report and rows, fixed the first-start / per-drive / observed-unknown / N4 / N5 copy, named
+the fit margin from `shared/performance-rules.ts`, added the German smoke and the display-device labels. P7 sequenced the first-run / moved-drive
+measurement behind the auto-start (L1/SD2, G5): `prepareFirstBenchmark` does the cheap seed /
+backfill / restore before `maybeAutoStartActiveModel` (now awaitable), `scheduleFirstBenchmark` waits
+for the start to settle under a 120 s bound and otherwise keeps one continuation, re-checks admission
+/ epoch / shutdown / busy / "already current" before running, allows one automatic attempt per unlock
+epoch, and the run refuses to persist into a session that locked or re-opened meanwhile._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -737,7 +711,7 @@ open round's item stays the last block of §5.)
     P2 ✅ M2/M4/M6/L2 persistence (identity before ranking, upgrade backfill, mid-run samples);
     P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ✅ H1/L8/M5-residual schemas +
     launch context; P5 ✅ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
-    P6 ✅ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ☐ L1/SD2 auto-start sequencing;
+    P6 ✅ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ✅ L1/SD2 auto-start sequencing;
     P8 ☐ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c);
     P11 ☐ close-out issues. Residual (c) above is the audit's HW1–HW3 acceptance; (a)–(g) stand.
 

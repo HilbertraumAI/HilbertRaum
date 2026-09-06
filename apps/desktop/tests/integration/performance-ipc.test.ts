@@ -22,6 +22,7 @@ vi.mock('electron', () => ({
 import {
   buildPerformanceSnapshot,
   maybeRunFirstBenchmark,
+  resetFirstBenchmarkForTests,
   runAndPersistBenchmark
 } from '../../src/main/ipc/registerBenchmarkIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
@@ -48,6 +49,7 @@ beforeEach(() => {
   resetPerformanceForTests()
   resetEffectiveReadForTests()
   resetModelPlacementForTests()
+  resetFirstBenchmarkForTests()
   setPerformanceChangedSink(null)
   inFlightStreams.clear()
 })

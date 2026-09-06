@@ -313,10 +313,18 @@ export function effectiveReadOrPersisted(ctx: AppContext): EffectiveReadSample |
  * Auto-start the selected (active) chat model in the background once the workspace is
  * usable (app launch for plaintext_dev; unlock/create for encrypted) — a restarted app
  * used to show an "active" model whose runtime silently was not running until the user
- * visited Models and pressed Start. Mirrors `maybeRunFirstBenchmark`: never throws,
- * never blocks; a failure is logged and the manual start path still works.
+ * visited Models and pressed Start. Never throws, never blocks; a failure is logged and the
+ * manual start path still works.
+ *
+ * Returns a promise that settles when the start COMPLETED (health + the #109 warm-up), was
+ * SKIPPED (no active model, the toggle off, a runtime already up, a locked workspace) or FAILED
+ * — the rejection is caught here with the warn log, so the promise never rejects. The first-run
+ * benchmark scheduler (`scheduleFirstBenchmark`, PR #303 audit L1 / owner decision G5) awaits
+ * it: the benchmark's drive probe and speed leg then never contend with the multi-GB weight
+ * hash + load, and the speed leg sees the runtime this start brought up. Callers that do not
+ * care keep `void maybeAutoStartActiveModel(ctx)`.
  */
-export function maybeAutoStartActiveModel(ctx: AppContext): void {
+export async function maybeAutoStartActiveModel(ctx: AppContext): Promise<void> {
   let modelId: string | null = null
   try {
     // AUD-02/AUD-03: `workspaceAdmitsWork` — never begin an auto-start while a lock teardown is
@@ -332,12 +340,14 @@ export function maybeAutoStartActiveModel(ctx: AppContext): void {
   }
   if (!modelId) return
   log.info('Auto-starting the active model runtime in the background', { modelId })
-  void startModelRuntime(ctx, modelId).catch((err) =>
+  try {
+    await startModelRuntime(ctx, modelId)
+  } catch (err) {
     log.warn('Auto-start of the active model failed (start it from the AI Model screen)', {
       modelId,
       error: String(err)
     })
-  )
+  }
 }
 
 export function registerModelIpc(ctx: AppContext): void {

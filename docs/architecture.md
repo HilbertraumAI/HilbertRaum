@@ -888,10 +888,15 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 - **RT-7 (KV cache lost on GPU→CPU fallback).** A full cold prefill after a mid-session GPU crash is
   bounded to one event; `--slot-save-path` + restore is real complexity/disk weighed against a rare path.
   Accepted residual for v1.
-- **RT-8 (first-run benchmark token-probe steal).** Already mitigated by startup ordering: the benchmark
-  fires before `maybeAutoStartActiveModel`, so `runtime.active()` is null and the 64-token probe is skipped
-  at true first-run; the steal only occurs in the rare warm-runtime + immediate-chat race, is bounded to
-  one first-run event, and a precise in-flight gate needs a streaming signal not cheaply available here.
+- **RT-8 (first-run benchmark token-probe steal).** Was mitigated by startup ordering (the benchmark fired
+  before `maybeAutoStartActiveModel`, so `runtime.active()` was null and the 64-token probe skipped at
+  first-run). Since PR #303 P7 that order is deliberately the REVERSE — the automatic measurement is
+  scheduled behind the auto-start's settlement (benchmark.md "Scheduling behind the auto-start"), so on
+  a machine with an active model the probe DOES run, on the freshly started runtime. The steal stays
+  bounded: the #185 busy check at the probe skips the leg when a chat is already in flight, a probe that
+  becomes contended mid-stream is discarded, the probe is capped at 64 tokens, and SD2 allows one
+  automatic attempt per unlock session. A precise in-flight gate still needs a streaming signal not
+  cheaply available here.
 - **RT-9 (§17(b) fixed user-turn fence reserve).** The `cache_prompt` prefix-reuse win is LATENT — no
   shipped skill trims its fence, so the current live-final-turn term never actually shifts the fence text —
   while switching to a fixed reserve changes the fence-SIZING formula, a prompt-assembly change that could
@@ -980,8 +985,13 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 - **Auto-start (post-MVP).** `maybeAutoStartActiveModel` starts the persisted `activeModelId` in the
   background once the workspace is usable (app launch for plaintext dev; unlock/create for
   encrypted), so a restarted app matches what Home shows. Same §7.4 install gate as the manual
-  `startRuntime`; fire-and-forget like `maybeRunFirstBenchmark` (failures are logged, manual start
-  still works). Opt-out via `AppSettings.autoStartActiveModel` (Settings toggle, default ON).
+  `startRuntime`; failures are logged, manual start still works. Since PR #303 P7 it returns a
+  `Promise<void>` that settles when the start completed, was skipped or failed (never rejects):
+  the first-run benchmark scheduler awaits it (benchmark.md "Scheduling behind the auto-start" —
+  the seams run `prepareFirstBenchmark` → `maybeAutoStartActiveModel` → `scheduleFirstBenchmark`
+  → `maybeStartLocalApi`, and the benchmark's measurement never overlaps the weight hash + load);
+  the seams themselves stay fire-and-forget. Opt-out via `AppSettings.autoStartActiveModel`
+  (Settings toggle, default ON).
 
 ## Chat & streaming (Phase 3)
 - **`services/chat.ts`** (spec §7.6) owns conversation/message persistence and prompt
@@ -2761,8 +2771,8 @@ adds is the safety machinery:
   bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, re-exported by
   `runtime/gpu.ts`, so the Performance screen rates a device by the same definition — `name` and
   `totalMb` are one selected device's, `displayDevice`); `benchmark.ts` itself keeps **zero
-  `child_process`**. `maybeRunFirstBenchmark`
-  additionally refreshes `settings.gpuProbe` once per session even when a benchmark already
+  `child_process`**. `prepareFirstBenchmark` (the cheap half of the first-run benchmark, PR #303
+  P7) additionally refreshes `settings.gpuProbe` once per session even when a benchmark already
   exists, so a drive moved between machines re-labels itself.
 - **`services/embeddings/e5.ts`** — `E5Embedder implements Embedder`, the real backend behind the same
   interface with the **manifest id + 384 dims**. It composes a `LlamaServer` started with `--embedding
@@ -3433,7 +3443,11 @@ pinned build is a manual smoke (like the GPU/PAID harnesses).**
   rest"); the export is the user choosing to take a copy *outside* the vault to share — never
   uploaded, no telemetry.
 - A never-benchmarked workspace is benchmarked **automatically in the background** after it becomes
-  usable (spec §2.1 first-run benchmark; `maybeRunFirstBenchmark`).
+  usable (spec §2.1 first-run benchmark). Since PR #303 P7 the seams run it in two halves around
+  the model auto-start — `prepareFirstBenchmark` (restore / seed / probe refresh, synchronous) →
+  `maybeAutoStartActiveModel` → `scheduleFirstBenchmark` (the measurement, behind the start's
+  settlement; bounded wait, one continuation, one attempt per unlock session) →
+  `maybeStartLocalApi` — see benchmark.md "Scheduling behind the auto-start".
 
 ## Audit log (Phase 19)
 
