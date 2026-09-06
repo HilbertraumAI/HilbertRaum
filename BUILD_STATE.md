@@ -29,7 +29,7 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — Phases 0–6 CLOSED, Phase 7 (records, real acceptance, merge) in progress.**_
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — WAVE CLOSED: Phases 0–7 complete, #294 MERGED to master (`92e86a07`, 16:12 UTC), #301 closed by the merge.**_
 The PR's review remediation — 28 findings (H1–H4, M1–M11, L1–L9 with L10 withdrawn, DOC-1–DOC-4; three assessed High, H3 and DOC-1/DOC-2 Medium) — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;
 master merged in at P0 (`bfdb514a`) and again at P7 (`ddd704ad`). Durable records: `rag-design.md` §17 D-Z1–D-Z14 (with a §-anchor legend),
 `data-contracts.md` "Knowledge packs", `security-model.md` "kiwix-serve — the one unauthenticated sidecar", `design-guidelines.md` §11.15. Correction to
@@ -38,9 +38,13 @@ tautological byte-identity test with a fixture captured from master `bfdb514a` (
 411/5,841 → P1 5,854 → P1b 5,866 → P2 5,870 → P3a 5,918 → P3b 5,958 → P5 6,001 → P4 6,035 → P6 6,060 (5,980 / 79). Phase PRs (verified via `gh pr list
 --state merged --base feat/zim-knowledge-packs`): #304 P0, #305 P1, #306 P1b, #307 P2, #309 P3a, #316 P3b, #317 P5, #328 P4, #336 P6. The ten per-phase
 dated entries (P0–P6 + the 2026-09-04 MVP entry) are verbatim in `docs/build-log.md` under the 2026-09-06 P7 heading.
-P7 (2026-09-06, this machine): master merged in (`f3d45517`, baseline 421 / 6,170 (6,088 / 79 / 2 = the preamble budget + the known OCR load race, green alone)); the T19 real-tool run found
-a redirect-entry defect (fix `a4967594`, +10 tests) and the stale last assertion of the real smoke; final code tree `bcff9a17`: build + typecheck green, **421 files / 6,180 tests (6,100 passed
-/ 79 skipped), exit 0** — the later commits are records-only; the Opus review found no defect candidate; T19's owner legs + T18-b pending — owner.
+P7 (2026-09-06): master merged in (`f3d45517`); PRs #337 (a ZIM redirect entry opens its target — T19 finding 1), #338 (records), #341 (retry a `/raw` read the pinned
+kiwix-serve cuts short — T19 finding 3, an UPSTREAM defect of kiwix-tools 3.8.1 win-x86_64), #342 (T18-b in real Electron), #343 (the owner's T19 legs on the real K:
+drive — relocated drive, live/failed lock, offline ask — all passed; item 21(d) closed), #345 (T19-a wording) → integration head `9f7fb8dd`; full suite on the final code
+tree 421 files / 6,193 tests (6,112 passed / 79 skipped / the known zim-arm abort load flake, green alone), typecheck + build green; the Opus review found no defect
+candidate; #294's CI green on the merge result with master `ddd704ad` (all four legs + ci-success). Follow-ups: #339 (P8 provisioning), #340 (P9 capabilities + the UI /
+searchability / LaTeX residuals), #344 (a failed lock leaves the chat engine stopped until a model is re-selected — not a pack defect). The working paper and its
+scratch tree were deleted after the merge; the maintainer-local evidence (screenshots, logs, the D5 bundle inputs) is archived outside the repo.
 
 _2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), ready for merge
 (owner squash-merge; keep the branch):** searchable On this drive / Browse views, task/family
