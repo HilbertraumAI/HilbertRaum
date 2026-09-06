@@ -2814,10 +2814,70 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   held port on this platform + binary: window (iii) is CLOSED here (`security-model.md`); windows
   (i) and (ii) stand as recorded.
 - **The D2 per-slice re-check:** D-Z3 "P7 re-check" (p95 0.36–0.58 ms on a P-core, PASS).
+- **T18-b — the real-Electron visual review (run by the orchestrator at the owner's request,
+  2026-09-06, Electron 43.4.0 via Playwright `_electron`, the same machine and bundle):** a
+  scratch drive root with the real tools and four real archives (A indexed; B index-less; C the
+  mini as the disabled 200-character-title pack; C again under `stackexchange_unix.zim` behind a
+  seeded row of another UUID → a REAL "Different archive"; a seeded file-less row → "File
+  missing"), the mock runtime for the answer text, everything else real. Recorded in both
+  themes × both languages (light only where the surface is transient or the leg is a layout
+  check): every panel badge and reason line; the picker's greyed rows each naming their reason,
+  a selected-then-disabled pack staying deselectable (D6), Enter on the chip opening and Escape
+  returning focus to the chip; the documents-off chip copy; the transcript's archive cards with
+  "Open article" in `--accent`; the outcomes notice ("Knowledge packs: 1 searched · 0 not
+  searched or failed" → "searched · 16 passages" / "20 Fundstellen"); the ArticleModal's ready,
+  loading and unavailable states (accessible name = the article title once loaded, "Article"
+  while loading; description "From <archive> — offline copy"; six Tabs stay inside; Escape
+  returns focus to the "Open article" button); the review row's "Open article" over the review
+  screen; no horizontal scroll at 900 px or 200 % zoom on the panel, popover, transcript and
+  modal; keyboard focus rings on Refresh, Enable/Disable, Remove and the pack checkbox. Not
+  drivable here and standing on T18-a: the empty state, the add-failure banners (native picker),
+  the 13-pack cap, the partial-article state; the tools-missing state stands from the P6
+  pre-check. Accepted deviation: the non-modal ScopePopover (design-guidelines §11.15 decision 1).
+  Observations for #340, not defects: the pre-ask chip still names a ticked pack that was disabled
+  afterwards (the row and the per-answer note say "disabled"); the raw ISO 639-3 code in the
+  meta line. Screenshots and the check log: `tmp/zim-wave/p7/t18b-shots/` (maintainer-local).
+  **Finding 3 (upstream — kiwix-serve 3.8.1 win-x86_64 / libmicrohttpd; mitigated in the P7 fix
+  PR 2, branch `feat/zim-p7-fix-raw-stall`):** 3 of 27 real article opens hung for exactly 15 s
+  (the client's timeout, logged `Pack article read failed {"error":"AbortError"}`) and then showed
+  the unavailable state while kiwix-serve stayed alive. Isolated against a raw kiwix-serve with no
+  app code (`t19-raw-stall*.log`): a `GET /raw/<book>/content/<entry>` of any entry above ~80 KB
+  **stops short** on ~5–20 % of attempts — the `200` status line, `Content-Length` and most of
+  the body arrive within a few milliseconds, then the last part never does (always the same cut
+  for a given entry: 195,590 of 234,141 B for `Treibhauseffekt`, 456,710 of 508,338 B for
+  `Klimawandel`, 260,870 of 294,238 B for `Treibhausgas`) and the connection simply hangs
+  (84 KB 2/40, 211 KB 4/40, 234 KB 2–8 per 40–60, 294 KB 6/40, 508 KB 8/40, 707 KB 4/40) while
+  a 24 KB entry never stalled in 180 reads; the same with `curl.exe`, with keep-alive on or off,
+  with `--threads 1 / 4 / 16`, with 0 / 400 / 2500 ms between reads; the successful responses
+  carry `Content-Length` + `Connection: close`; the next request is answered normally. In the app a
+  stalled read cost the viewer 15 s → "unavailable" and the ask arm one silently skipped article
+  (a real ask took 40 s and returned 16 instead of 20 passages). Mitigation (fix PR 2, commit
+  0eb79f1f): `fetchArticleHtml` reads through `readRawArticle` with `ARTICLE_READ_TIMEOUT_MS =
+  4_000` and `ARTICLE_READ_ATTEMPTS = 3` — a retry ONLY when an attempt's own timer elapsed before the body
+  completed (`KiwixTimeoutError` — whether the cut came before the headers or, as measured,
+  mid-body), on a fresh connection; the caller's own abort (the ask deadline, a cancellation, a
+  lock) is rethrown at once, a non-timeout socket error and the over-ceiling body stay errors,
+  any HTTP status that completes keeps its existing semantics, the redirect hop's request
+  is retried the same way, and the request guard's lifecycle retry is untouched (a stall never
+  reaches the server's lifecycle). The other routes (`/suggest`, `/search`, the health probe) are
+  unchanged — the stall was measured on `/raw` bodies only. Tests: `zim-client.test.ts` describe
+  "fetchArticleHtml retries a stalled /raw read (#301 P7 T19)" (eight legs — a never-answered
+  attempt, three cut-short attempts, the caller's abort, a cut-short body retried with the partial
+  body discarded, a mid-body socket error NOT retried, completed statuses untouched, the redirect
+  hop, the other routes — plus two `kiwixGet` classification legs), the `zim-ipc-session` leg
+  "T19 an article whose first /raw read is cut short still opens whole…" (a paragraph past the cut
+  reaches the viewer), the `zim-arm` leg "… an article whose first read is cut short keeps its
+  chunks"; reporting
+  it upstream rides the P8 issue #339 (the pinned bundle is P8's). **Proof on the real archive
+  (the rebuilt app, 60 consecutive article opens in real Electron):** 6 reads were cut short
+  (bytes received 130,310 / 195,590 of the entries' lengths), every one was retried and
+  completed — five on the second attempt (~4.1 s to open), one on the third (8.1 s) — zero
+  "article read failed" lines, every open ended on the real article; before the fix the same
+  sample had 12 of 60 opens end in the unavailable state.
 - **Not run here — the owner's legs (pending):** the relocated drive with persisted citations
   (K: → another letter, in Electron), live lock / unlock / failed lock with a running pack
-  server, the offline ask + viewer with Wi-Fi off (BUILD_STATE §5 item 21(d)), and the T18-b
-  real-visual checklist — each is recorded in the T19-a / T18-b inventory rows when run.
+  server, the offline ask + viewer with Wi-Fi off (BUILD_STATE §5 item 21(d)) — each is recorded
+  in the T19-a inventory row when run.
 
 ### §-anchor legend (working-paper citations)
 
