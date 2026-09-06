@@ -57,9 +57,10 @@ describe('zimArticleToSegments', () => {
     expect(all).toContain('25 m2 gemessen')
   })
 
-  it('emits each formula once, as its alttext LaTeX', () => {
-    const hits = all.match(/S\+O_\{2\}/g) ?? []
+  it('emits each formula once, normalised to plain text', () => {
+    const hits = all.match(/S\+O2→SO2/g) ?? []
     expect(hits).toHaveLength(1)
+    expect(all).not.toContain('\\displaystyle')
     expect(all).not.toContain('MJX-TeXAtom') // MathML internals never leak
   })
 
@@ -203,7 +204,10 @@ const NON_WIKIPEDIA: ReadonlyArray<{
   {
     file: 'parsoid-datamw.html',
     title: 'Ammonia synthesis',
-    contains: ['iron catalyst at high pressure and moderate temperature', 'N_2 + 3H_2'],
+    contains: [
+      'iron catalyst at high pressure and moderate temperature',
+      'N2 + 3H2 → 2NH3'
+    ],
     minSegments: 4,
     minChars: 1200,
     omits: [
@@ -323,6 +327,12 @@ describe('zimArticleToSegments — H1 linear scanner', () => {
       expect(r.segments.length, f.file).toBeGreaterThanOrEqual(f.minSegments)
       expect(text.length, f.file).toBeGreaterThanOrEqual(f.minChars)
     }
+  })
+
+  it('normalises a math alttext after decoding its entities (decode-then-normalise order)', () => {
+    const html = '<p><math alttext="\\text{CO}_2 &lt; 400"></math></p>'
+    const text = textOf(zimArticleToSegments(html))
+    expect(text).toContain('CO2 < 400')
   })
 
   it('emits a live, monotone counter: zero only for empty input, and never wall-clock', () => {
