@@ -208,6 +208,16 @@ function effectiveReadValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLangua
     : `${value} (${t('diag.bench.effectiveReadHash', { gb, when })})`
 }
 
+/**
+ * The "Last run" stamp. A record whose own date is unknown carries `ranAt: ''` (the
+ * `UNKNOWN_RAN_AT` sentinel the PR #303 audit H1 validators use rather than inventing a "now"
+ * for a legacy profile-only blob), and `new Date('')` prints "Invalid Date" — say "unknown".
+ */
+function lastRunValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
+  const ran = new Date(bench.ranAt)
+  return Number.isNaN(ran.getTime()) ? t('diag.app.unknown') : ran.toLocaleString(lang)
+}
+
 /** Plain-text rendering of the "Hardware benchmark" card for the Copy button. */
 function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
   const lines = [
@@ -221,7 +231,7 @@ function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLang
     `${t('diag.bench.effectiveRead')}: ${effectiveReadValue(bench, t, lang)}`,
     `${t('diag.bench.driveWrite')}: ${bench.driveWriteMbps != null ? `${fmtNum(bench.driveWriteMbps, lang)} MB/s` : t('diag.bench.notMeasured')}`,
     `${t('diag.bench.tokens')}: ${tokensPerSecondValue(bench, t, lang)}`,
-    `${t('diag.bench.lastRun')}: ${new Date(bench.ranAt).toLocaleString(lang)}`
+    `${t('diag.bench.lastRun')}: ${lastRunValue(bench, t, lang)}`
   ]
   // Warnings are persisted canonical English — localize the known set at render (D-L4).
   for (const w of bench.warnings) lines.push(`- ${localizeServerCopy(t, w)}`)
@@ -522,7 +532,7 @@ export function DiagnosticsTab(): JSX.Element {
               <dt>{t('diag.bench.tokens')}</dt>
               <dd>{tokensPerSecondValue(bench, t, lang)}</dd>
               <dt>{t('diag.bench.lastRun')}</dt>
-              <dd>{new Date(bench.ranAt).toLocaleString(lang)}</dd>
+              <dd>{lastRunValue(bench, t, lang)}</dd>
             </dl>
 
             {bench.warnings.length > 0 && (

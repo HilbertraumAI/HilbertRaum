@@ -70,4 +70,3 @@ export interface Translator {
    */
   onResidencyChange?(cb: () => void): () => void
 }
-

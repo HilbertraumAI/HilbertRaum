@@ -5,10 +5,12 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { fmt1 } from '../lib/format'
 import type { UiLanguage } from '@shared/i18n'
+import { isHardwareProfile } from '@shared/benchmark-schema'
 import type {
   BenchmarkProgressStep,
   BenchmarkResult,
   EffectiveReadSample,
+  HardwareProfile,
   ModelInfo,
   PerformanceSnapshot,
   PlacementKind
@@ -64,12 +66,33 @@ function fmtNum(n: number, lang: UiLanguage): string {
   return n.toLocaleString(lang)
 }
 
-function fmtDate(iso: string, lang: UiLanguage): string {
+/** The dash the tiles already use for a figure the app does not have. */
+const UNKNOWN = '–'
+
+// Defence in depth against a malformed persisted record (PR #303 audit H1). `getSettings`
+// validates every benchmark record now, so the snapshot should never carry one — but the
+// formatters below are the LAST thing between a stored blob and the screen, and
+// `toLocaleString` on `undefined` throws, which took the whole screen down (there is no error
+// boundary above it). A missing/NaN figure reads as the tiles' unknown dash instead, so one
+// bad row can only ever cost its own value.
+
+function fmt1Safe(n: number | null | undefined, lang: UiLanguage): string {
+  return typeof n === 'number' && Number.isFinite(n) ? fmt1(n, lang) : UNKNOWN
+}
+
+function fmtNumSafe(n: number | null | undefined, lang: UiLanguage): string {
+  return typeof n === 'number' && Number.isFinite(n) ? fmtNum(n, lang) : UNKNOWN
+}
+
+/** A record whose date is unknown carries `ranAt: ''` (`UNKNOWN_RAN_AT`) — never a fake "now". */
+function fmtDate(iso: string | null | undefined, lang: UiLanguage): string {
+  if (!iso) return UNKNOWN
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(lang)
 }
 
-function fmtDateTime(iso: string, lang: UiLanguage): string {
+function fmtDateTime(iso: string | null | undefined, lang: UiLanguage): string {
+  if (!iso) return UNKNOWN
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(lang)
 }
@@ -94,8 +117,13 @@ function driveTone(mbps: number): Tone {
   return mbps < SLOW_READ_MBPS ? 'warning' : 'success'
 }
 
-function profileTone(profile: BenchmarkResult['profile']): Tone {
-  return profile === 'UNKNOWN' ? 'neutral' : 'accent'
+/** The profile of a record, tolerant of a malformed one (H1): anything unrecognised is UNKNOWN. */
+function profileOf(profile: BenchmarkResult['profile'] | undefined): HardwareProfile {
+  return isHardwareProfile(profile) ? profile : 'UNKNOWN'
+}
+
+function profileTone(profile: BenchmarkResult['profile'] | undefined): Tone {
+  return profileOf(profile) === 'UNKNOWN' ? 'neutral' : 'accent'
 }
 
 /** Plain-text rendering of the "This computer" card for the Copy button (mirrors the
@@ -111,19 +139,19 @@ function buildReport(
     t('perf.card.title'),
     `${t('perf.tile.speed')}: ${
       bench.tokensPerSecond != null
-        ? `${fmtNum(bench.tokensPerSecond, lang)} ${t('perf.tile.speed.unit')} (${t('perf.tile.speed.sub', {
+        ? `${fmtNumSafe(bench.tokensPerSecond, lang)} ${t('perf.tile.speed.unit')} (${t('perf.tile.speed.sub', {
             model: modelName(bench.measuredModelId, models, t),
             when: fmtDate(bench.ranAt, lang)
           })})`
         : t('perf.tile.speed.none')
     }`,
-    `${t('perf.tile.memory')}: ${bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)} ${t('perf.tile.memory.unit')}` : t('diag.app.unknown')}`,
+    `${t('perf.tile.memory')}: ${bench.ramGb > 0 ? `${fmt1Safe(bench.ramGb, lang)} ${t('perf.tile.memory.unit')}` : t('diag.app.unknown')}`,
     `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')}`,
     `${t('perf.tile.graphics')}: ${
       bench.gpuVramMb != null ? `${vramGb(bench.gpuVramMb, lang)} ${t('perf.tile.graphics.unit')} (${bench.gpu ?? ''})` : t('perf.rating.none')
     }`,
     `${t('perf.tile.drive')}: ${
-      bench.effectiveRead ? `${fmtNum(bench.effectiveRead.mbps, lang)} ${t('perf.tile.drive.unit')}` : t('perf.tile.drive.none')
+      bench.effectiveRead ? `${fmtNumSafe(bench.effectiveRead.mbps, lang)} ${t('perf.tile.drive.unit')}` : t('perf.tile.drive.none')
     }`,
     `${t('diag.bench.profile')}: ${bench.profile}`,
     `${t('diag.bench.recommended')}: ${bench.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : t('diag.bench.noMatch')}`
@@ -180,7 +208,6 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const toast = useToast()
   const [snap, setSnap] = useState<PerformanceSnapshot | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
-  const [contextOverride, setContextOverride] = useState<number | null>(null)
   // The stored GPU probe, the graphics tile's last-resort figure (the snapshot normally folds
   // it into `current` main-side; this covers a main process older than that seam).
   const [probedGpu, setProbedGpu] = useState<{ name: string; totalMb: number } | null>(null)
@@ -243,7 +270,6 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
       .getSettings()
       .then((s) => {
         if (!fresh()) return
-        setContextOverride(s.contextTokensOverride ?? null)
         const d = s.gpuProbe?.devices?.[0]
         setProbedGpu(d ? { name: d.name, totalMb: d.totalMb } : null)
       })
@@ -389,9 +415,11 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     ? models.find((m) => m.id === bench.recommendedModelId) ?? null
     : null
   const recommendedName = bench?.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : null
-  // The context the recommended model would launch with: the user's override, else the
-  // model's own recommended window (the AI Model screen's "Automatic" resolution).
-  const contextTokens = contextOverride ?? recommended?.recommendedContextTokens ?? null
+  // The context the recommended model would launch with, resolved MAIN-SIDE by the launch
+  // path's own helper (PR #303 audit M5 residual): recomputing it here with `??` over the
+  // catalog entry showed a "0-token context" for a model whose manifest states no recommended
+  // window, while the runtime starts such a model on the settings default.
+  const contextTokens = snap?.placement.recommendedContextTokens ?? null
   const speedModelName = bench ? modelName(bench.measuredModelId, models, t) : ''
   const speedApprox = bench != null && bench.tokensPerSecond != null && bench.speedBasis?.basis !== 'timings'
   const canStartRecommended =
@@ -405,10 +433,10 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
       ? ' ' + (bench.effectiveRead.mbps < SLOW_READ_MBPS ? t('perf.verdict.driveSlow') : t('perf.verdict.driveFast'))
       : ''
     if (bench.tokensPerSecond != null) {
-      return t('perf.verdict.speed', { model: speedModelName, tps: fmtNum(bench.tokensPerSecond, lang) }) + drive
+      return t('perf.verdict.speed', { model: speedModelName, tps: fmtNumSafe(bench.tokensPerSecond, lang) }) + drive
     }
     if (recommendedName) {
-      return t('perf.verdict.noSpeed', { model: recommendedName, ram: fmt1(bench.ramGb, lang) }) + drive
+      return t('perf.verdict.noSpeed', { model: recommendedName, ram: fmt1Safe(bench.ramGb, lang) }) + drive
     }
     return t('perf.verdict.noRecommendation') + drive
   }
@@ -428,7 +456,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     return (
       <Tile
         label={t('perf.tile.speed')}
-        value={fmtNum(bench.tokensPerSecond, lang)}
+        value={fmtNumSafe(bench.tokensPerSecond, lang)}
         unit={t('perf.tile.speed.unit')}
         sub={
           t('perf.tile.speed.sub', { model: speedModelName, when: fmtDate(bench.ranAt, lang) }) +
@@ -455,10 +483,10 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     return (
       <Tile
         label={unified ? t('perf.tile.memory.unified') : t('perf.tile.memory')}
-        value={bench && bench.ramGb > 0 ? fmt1(bench.ramGb, lang) : null}
+        value={bench && bench.ramGb > 0 ? fmt1Safe(bench.ramGb, lang) : null}
         unit={t('perf.tile.memory.unit')}
         sub={bench ? [unified ? t('perf.tile.memory.unifiedSub') : null, cpu].filter(Boolean).join(' · ') : t('perf.notChecked')}
-        pill={t(`perf.profile.${bench?.profile ?? 'UNKNOWN'}`)}
+        pill={t(`perf.profile.${profileOf(bench?.profile)}`)}
         tone={bench ? profileTone(bench.profile) : 'neutral'}
       />
     )
@@ -586,6 +614,18 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             : t('perf.model.none')}
         </div>
         {p.model && <div className="perf-model-verdict">{[need, text].filter(Boolean).join(' ')}</div>}
+        {/* An earlier measurement that does not describe the current configuration (a different
+            context size, or a GPU start now forced onto the processor): the verdict above is the
+            estimate for the settings as they stand, and this says what was measured and when, so
+            the two never read as one contradicting claim. */}
+        {p.model && p.observedMismatch && (
+          <div className="perf-model-note hint">
+            {t('perf.model.measuredOther', {
+              context: p.observedMismatch.contextTokens.toLocaleString(lang),
+              when: fmtDate(p.observedMismatch.at, lang)
+            })}
+          </div>
+        )}
         <div className="perf-model-side">
           <Badge tone={pill.tone}>{t(pill.key)}</Badge>
           {p.model && v.kind === 'too_large' && (
@@ -856,20 +896,20 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 <div className="perf-row" key={`${entry.cpuModel}|${entry.ramGb}|${entry.ranAt}`}>
                   <div className="perf-row-main">
                     {entry.tokensPerSecond != null
-                      ? t('perf.others.row', { tps: fmtNum(entry.tokensPerSecond, lang), model: name })
+                      ? t('perf.others.row', { tps: fmtNumSafe(entry.tokensPerSecond, lang), model: name })
                       : t('perf.others.rowNoSpeed', { model: name })}
                   </div>
                   <div className="perf-row-sub">
                     {entry.gpuVramMb != null && entry.gpuVramMb > 0
                       ? t('perf.others.subGpu', {
                           cpu: entry.cpuModel || t('perf.unknownCpu'),
-                          ram: fmt1(entry.ramGb, lang),
+                          ram: fmt1Safe(entry.ramGb, lang),
                           vram: vramGb(entry.gpuVramMb, lang),
                           when: fmtDate(entry.ranAt, lang)
                         })
                       : t('perf.others.sub', {
                           cpu: entry.cpuModel || t('perf.unknownCpu'),
-                          ram: fmt1(entry.ramGb, lang),
+                          ram: fmt1Safe(entry.ramGb, lang),
                           when: fmtDate(entry.ranAt, lang)
                         })}
                   </div>
@@ -880,7 +920,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                       </Badge>
                     )}
                     {slowDrive && <Badge tone="warning">{t('perf.rating.slowDrive')}</Badge>}
-                    <Badge tone={profileTone(entry.profile)}>{t(`perf.profile.${entry.profile}`)}</Badge>
+                    <Badge tone={profileTone(entry.profile)}>{t(`perf.profile.${profileOf(entry.profile)}`)}</Badge>
                   </div>
                 </div>
               )

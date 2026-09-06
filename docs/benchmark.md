@@ -259,6 +259,41 @@ another computer re-evaluates on the next observer call or the post-start/list/v
 A sample-only update never touches `ranAt` — it is not a new run. Only the slow-read warning is
 re-keyed; every other warning is a benchmark-time fact.
 
+**Schemas and legacy records (PR #303 audit, H1/L8, owner decision G7).** `lastBenchmark`,
+`benchmarkHistory` and `modelPlacements` are JSON rows: they used to be parsed straight over the
+defaults, and the write gate checked only the TOP-LEVEL shape, so `{}` was an accepted history
+entry — it reached the startup fingerprinting, `maybeRunFirstBenchmark`, the #107 start-estimate
+memo, Diagnostics and the Performance screen, where the number formatter threw and blanked the
+screen. The pure validators now live in `shared/benchmark-schema.ts` (importable by main AND
+renderer, so both agree on what a trustworthy record is) and run on WRITE (`updateSettings`) and
+on READ (`getSettings`) — the read repairs in memory only and never rewrites the DB, so a row from
+an older build, a hand-edited workspace or a half-written blob can never crash a reader.
+`machineKey` moved into that module for the same reason (`services/performance.ts` re-exports it).
+
+- **Rejected**: anything that is not a plain object, and any object that carries neither a
+  parseable `ranAt` nor a real `HardwareProfile` — it says nothing about any machine. A placement
+  missing its `modelId` / backend / positive `contextTokens` / parseable `at`, filed under another
+  model's id, or claiming more GPU layers than total layers, goes the same way.
+- **Repaired, not rejected**: a figure that cannot be trusted becomes `null`; a malformed identity
+  becomes the unknown one, so `machineKey` returns `null` rather than half a key; an unrecognised
+  `profile` on a DATED record reads as `UNKNOWN` rather than discarding a real run.
+- **Legacy shapes that survive**: the `{ profile: 'BALANCED' }` blob an old workspace can still
+  hold stays a valid `lastBenchmark` with an unknown identity (G3: it keeps counting as "this
+  machine", never earns a history entry, never acquires a fabricated key) and an unknown DATE —
+  `ranAt` is the empty string, never a fabricated "now", and readers print "unknown" for it
+  (Diagnostics "Last run", the Performance screen's date formatters). A complete older result
+  keeps its ABSENT optional fields absent (`gpuVramMb`, `speedBasis`, `measuredModelId`,
+  `effectiveRead`): the screens read absence as "approximate" / "not recorded", so a fabricated
+  `null` would change what the copy claims.
+- **The history** additionally drops UNKEYED entries (they could never be matched again), keeps
+  one record per machine (newest `ranAt`), orders newest first and caps at
+  `MAX_BENCHMARK_HISTORY`. On write, garbage is ignored rather than stored: a `lastBenchmark`
+  that normalizes to nothing leaves the previous result standing.
+
+The screen's formatters are defensive anyway (a missing figure renders as the tiles' unknown dash
+instead of throwing): validation is the fix, but a data path must never be one bad row away from a
+blank page.
+
 **Commit-time re-resolution (M6).** `runAndPersistBenchmark` resolves the eligible sample before
 the run (so the warning derivation sees it) and **again after both the drive and the speed legs**
 — a model start or a cold hash can land a newer sample meanwhile, which the observer has already
@@ -290,8 +325,9 @@ unlock. If `lastBenchmark` exists and its key differs from this machine's:
   exactly as on a fresh workspace.
 
 Either way the per-session GPU probe refresh still happens first. The `benchmarkHistory` write
-gate accepts only an array of plain objects (junk elements dropped, length capped; the 256 KB
-serialized cap applies to the list).
+gate accepts an array of VALID results only (junk and unkeyed elements dropped, one record per
+machine, newest first, length capped; the 256 KB serialized cap applies to the list) — see
+"Schemas and legacy records" above.
 
 **Upgrade backfill (PR #303 audit, M4).** A workspace from before the history existed holds the
 previous computer's result only in `lastBenchmark`, so whatever replaces that headline first
@@ -343,6 +379,15 @@ card (the runtime's own 6 GiB, not-integrated gate) whose VRAM is the budget; `u
 Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
 `recommendedMaxWorkingSetSize` when the load log printed it, else 75 % of RAM (the Memory tile is
 labelled "Unified memory" and the graphics tile is hidden); `cpu` = no usable card, budget = RAM.
+**The context it launches with** is resolved main-side by the launch path's own helper,
+`launchContextTokens(settings, manifest)` — the user's `contextTokensOverride`, else the manifest's
+`recommended_context_tokens` when it states one, else `settings.contextTokens`. The screen used to
+recompute it with `??`, which differs in one real case: a manifest whose window is missing or `0`
+(the parser returns `0`) showed a "0-token context" while the runtime starts that very model on
+the settings default (PR #303 audit, M5 residual). The snapshot carries the resolved figure for
+the ACTIVE model (`placement.model.contextTokens`) and for the RECOMMENDED one
+(`placement.recommendedContextTokens`), so the screen and the Copy report never recompute either.
+
 **Observed first**: after a start, llama.cpp's own load log says where the model landed, and the
 chat ladder now reads it (`runtime/placement.ts`, one parser per attempt, fed by the sidecar's
 `onStderrData`; the chat server runs with `-lv 4` because the pinned build prints these lines
@@ -353,7 +398,17 @@ budget line. The reading is recorded
 once the rung is healthy (`recordModelPlacement`, stamped with the backend, the launched context
 and `machineKey`), latched for the session, and persisted per model id in
 `settings.modelPlacements` by the observer `registerBenchmarkIpc` registers; the snapshot uses it
-only for the active model and only when the record's machine is this one. **Verdict**
+only for the active model and only when the record's machine is this one. **Measured evidence must
+match the configuration** (PR #303 audit): a placement measures ONE start — this model, this
+machine, with a specific context and on a specific backend — so it counts as OBSERVED only while
+its `contextTokens` equal the context the model would launch with now AND its backend agrees with
+the configured execution (`gpuMode: 'off'` or `gpuAutoDisabled` admits a `cpu` record only;
+`'auto'` admits either, because the ladder decides per start). On a mismatch the record is KEPT in
+settings (the next matching start restores it, and it is still the truth about that start), the
+row falls back to the weights-only ESTIMATE — which is what the current settings would actually do
+— and the snapshot carries `placement.observedMismatch` so the copy can date the earlier
+measurement ("Measured earlier with a {context}-token context on {when}; the estimate above is for
+the current settings.") instead of presenting a fit the settings never asked for. **Verdict**
 (`placementVerdict`, pure): observed → 'gpu' when every layer is on the GPU (unified reads the
 same), 'partial' otherwise with the CPU-side bytes as the spill (CPU, CPU_Mapped and the
 backends' `*_Host` buffers), 'cpu' for a CPU backend, 'unknown' for a GPU start whose log carried

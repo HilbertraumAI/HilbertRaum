@@ -7,6 +7,7 @@ import type {
   BenchmarkProgressStep,
   BenchmarkResult,
   GpuDevice,
+  ModelPlacement,
   PerformanceSnapshot,
   ResidentModelRow
 } from '../../shared/types'
@@ -30,7 +31,7 @@ import { latestEffectiveReadBySource } from '../services/read-speed'
 import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
 import { gpuUsefulForProfile } from '../services/runtime/gpu'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
-import { discoverManifests } from '../services/models'
+import { discoverManifests, launchContextTokens } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -307,15 +308,23 @@ function buildPlacement(
   // buffers), so convert once here rather than show 19.8 "on disk" beside 18.9 "takes".
   const gib = (m: ModelManifest | undefined): number | null =>
     m ? Math.round(((m.sizeOnDiskGb * 1e9) / 1024 ** 3) * 10) / 10 : null
+  // The context a start would ACTUALLY use, resolved by the launch path's own helper
+  // (`launchContextTokens`) rather than re-derived here (PR #303 audit M5 residual). The old
+  // `??` chain differed from it in one real case: a manifest whose `recommended_context_tokens`
+  // is missing or 0 (the parser returns 0) showed a "0-token context" while the runtime starts
+  // on `settings.contextTokens`. One helper, one answer, for the active AND the recommended
+  // model — the screen no longer recomputes either.
+  const contextFor = (modelId: string | null): number | null =>
+    modelId == null ? null : launchContextTokens(settings, manifests.find((m) => m.id === modelId) ?? null)
   let model: PerformanceSnapshot['placement']['model'] = null
   if (activeId) {
-    const manifest = manifests.find((m) => m.id === activeId)
     model = {
       id: activeId,
-      sizeOnDiskGb: gib(manifest) ?? 0,
-      contextTokens: settings.contextTokensOverride ?? manifest?.recommendedContextTokens ?? settings.contextTokens
+      sizeOnDiskGb: gib(manifests.find((m) => m.id === activeId)) ?? 0,
+      contextTokens: contextFor(activeId) ?? settings.contextTokens
     }
   }
+  const recommendedContextTokens = contextFor(settings.lastBenchmark?.recommendedModelId ?? null)
   // Every model the app can hold (benchmark.md "Models on this computer"): chat and translation
   // auto-fit onto the card (on a machine with one); images, document search and voice are pinned
   // to the processor by design (contention immunity; vision/runtime.ts, embeddings/e5.ts,
@@ -403,14 +412,32 @@ function buildPlacement(
       ? latched
       : (settings.modelPlacements[activeId] ?? null)
     : null
-  const observed =
+  const mine =
     candidate && (here == null || candidate.machineKey == null || candidate.machineKey === here) ? candidate : null
+  // MEASURED EVIDENCE MUST MATCH THE CONFIGURATION (PR #303 audit). A placement is a
+  // measurement of ONE start: this model, this machine (above), with a specific context and on
+  // a specific backend. Change the context size, or force the processor after a GPU start, and
+  // the stored buffers describe a run the app would no longer perform — presenting them as
+  // "measured" would state a fit the current settings never asked for. The record is KEPT (the
+  // next matching start restores it, and it is still the truth about that start); the row falls
+  // back to the weights-only estimate, and the mismatch travels with the snapshot so the copy
+  // can say when the earlier measurement was taken. A configuration that forces the processor
+  // (`gpuMode: 'off'`, or the auto-disable after a GPU failure) admits only a `cpu` record; an
+  // 'auto' configuration admits either, because the ladder itself decides per start.
+  const cpuOnly = settings.gpuMode === 'off' || settings.gpuAutoDisabled
+  const matchesConfig = (p: ModelPlacement): boolean =>
+    p.contextTokens === (model?.contextTokens ?? null) && (!cpuOnly || p.backend === 'cpu')
+  const observed = mine && matchesConfig(mine) ? mine : null
+  const observedMismatch =
+    mine && !matchesConfig(mine) ? { contextTokens: mine.contextTokens, backend: mine.backend, at: mine.at } : null
   return {
     memoryClass,
     ramMb,
     vramMb,
     model,
+    recommendedContextTokens,
     observed,
+    observedMismatch,
     verdict: placementVerdict({ memoryClass, ramMb, vramMb, sizeOnDiskGb: model?.sizeOnDiskGb ?? null, observed }),
     models: rows,
     totals
@@ -431,6 +458,9 @@ function buildPlacement(
  * that. The Drive tile reads the persisted figure with its own source and date instead.
  */
 export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
+  // Every record below is already VALIDATED: `getSettings` normalizes `lastBenchmark`,
+  // `benchmarkHistory` and `modelPlacements` on read (PR #303 audit H1/L8), so the snapshot
+  // composes trustworthy records and nothing here has to defend against `{}`.
   const settings = getSettings(ctx.db)
   const sys = detectSystem()
   const here = machineKey(sys)

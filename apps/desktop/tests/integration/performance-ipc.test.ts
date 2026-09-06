@@ -309,14 +309,16 @@ describe('buildPerformanceSnapshot', () => {
     snap = buildPerformanceSnapshot(ctxWith(root, db))
     expect(snap.placement.observed).toBeNull()
 
-    // The session latch (this start) wins over the persisted record.
+    // The session latch (this start) wins over the persisted record. Its context matches the
+    // configured launch context, as the persisted one did — a latch measured with a DIFFERENT
+    // context is no longer presented as the measured fit (see performance-schema.test.ts).
     recordModelPlacement({
-      modelId: 'some-model', contextTokens: 8192, backend: 'gpu', gpuLayers: 10, totalLayers: 10,
+      modelId: 'some-model', contextTokens: 4096, backend: 'gpu', gpuLayers: 10, totalLayers: 10,
       gpuModelMb: 2500, cpuModelMb: 100, gpuKvMb: 300, cpuKvMb: null, metalMaxWorkingSetMb: null,
       machineKey: here, at: '2026-09-05T01:00:00Z'
     })
     snap = buildPerformanceSnapshot(ctxWith(root, db))
-    expect(snap.placement.observed?.contextTokens).toBe(8192)
+    expect(snap.placement.observed?.at).toBe('2026-09-05T01:00:00Z')
     expect(snap.placement.verdict.kind).toBe('gpu')
   })
 

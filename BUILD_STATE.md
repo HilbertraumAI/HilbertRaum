@@ -50,7 +50,14 @@ serialises and stamps reads, and keeps read and action failures apart (retry but
 Dev launch smoke on a scratch root (CDP-driven): the push refresh verified live for an own run and an
 external run; it caught a React.StrictMode double-mount defect in the renderer's read drain (a stale
 reply left the remount's read un-issued; fixed + pinned). Measured: one `performance:get` read ≈ 100 ms
-in the dev build (the sync manifest scan, N6 / follow-up I5)._
+in the dev build (the sync manifest scan, N6 / follow-up I5).
+**P4:** H1/L8/M5-residual — `shared/benchmark-schema.ts` validates `lastBenchmark`, `benchmarkHistory` and
+`modelPlacements` on read (in memory, never rewriting the DB) and on write (garbage ignored, never stored);
+the legacy profile-only record survives as an unknown-identity result with an empty `ranAt` that readers
+print as "unknown"; unkeyed entries never enter history; `launchContextTokens` resolves the displayed
+context (a zero-context manifest shows the settings default, never "0-token"); a stored placement counts as
+measured only when its context and backend match the current configuration (`placement.observedMismatch`
+otherwise, one EN/DE line); the screen and Diagnostics format a bad record as "–", never a throw._
 
 _2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
 third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
@@ -708,7 +715,7 @@ open round's item stays the last block of §5.)
     `docs/benchmark.md` at P9, one commit per phase, CI green each):** P1 ✅ M7/L7 pins, stale
     `_Host` prose, item 20 archived, `skills.title` orphan removed after the master merge;
     P2 ✅ M2/M4/M6/L2 persistence (identity before ranking, upgrade backfill, mid-run samples);
-    P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ☐ H1/L8/M5-residual schemas +
+    P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ✅ H1/L8/M5-residual schemas +
     launch context; P5 ☐ M8/N1/N3 one GPU source + the resident rows' device/RAM total;
     P6 ☐ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ☐ L1/SD2 auto-start sequencing;
     P8 ☐ T7/T8/T11/TH1/TH2; P9 ☐ D1–D5/L4/L5 docs; P10 ☐ cross-review + the local half of (c);

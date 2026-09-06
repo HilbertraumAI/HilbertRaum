@@ -14,6 +14,8 @@ import {
   type PerformanceSnapshot,
   type RuntimeStatus
 } from '../../src/shared/types'
+import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
+import { t } from '../../src/shared/i18n'
 import { stubApi } from '../helpers/renderer'
 
 // The Performance screen (design-guidelines §2, benchmark.md "Performance screen"): the
@@ -21,7 +23,10 @@ import { stubApi } from '../helpers/renderer'
 // the two actions that lead somewhere (AI Model for the pick / context size, Diagnostics
 // for the raw table). Copy is plain and encouraging: no "benchmark", no hardware shaming.
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  window.localStorage.clear()
+})
 
 function result(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
   return {
@@ -89,7 +94,11 @@ function placement(over: Partial<PerformanceSnapshot['placement']> = {}): Perfor
     ramMb: 16_077,
     vramMb: 24_822,
     model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, contextTokens: 8192 },
+    // Resolved MAIN-side by `launchContextTokens` since the PR #303 audit M5 residual fix: the
+    // screen reads it off the snapshot instead of recomputing it from the catalog entry.
+    recommendedContextTokens: 8192,
     observed: null,
+    observedMismatch: null,
     verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null },
     models: [
       { role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.4, device: 'gpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
@@ -853,4 +862,102 @@ describe('PerformanceScreen: the pushed refresh', () => {
     expect(api.getPerformance).toHaveBeenCalledTimes(2)
   })
 
+})
+
+// PR #303 audit P4 (H1 / L8 / M5 residual): the persisted benchmark records are validated on
+// both sides of the settings store now, and the screen reads the launch context off the
+// snapshot instead of recomputing it. These cover what the screen must do with what it is
+// handed — including a record that never should have reached it.
+describe('PerformanceScreen: malformed records and the resolved context', () => {
+  it('H1: a structurally invalid other-computer row costs its own figures, never the screen', async () => {
+    // The exact shape the old settings gate accepted and the snapshot exposed. `fmt1(undefined)`
+    // threw here, and there is no error boundary above this screen: the whole page went blank.
+    install(snapshot({ otherMachines: [{} as BenchmarkResult, office] }))
+    renderScreen()
+    // The screen is up, the healthy row beside the blob is complete…
+    expect(await screen.findByText('Other computers this drive has been used on')).toBeInTheDocument()
+    expect(screen.getByText(/Intel Core i9-13900K, 64\.0 GB RAM, 24\.0 GB VRAM/)).toBeInTheDocument()
+    // …and the blob reads as unknowns rather than crashing or inventing figures.
+    expect(screen.getByText(/Unknown CPU, – GB RAM/)).toBeInTheDocument()
+    expect(screen.getAllByText('Unknown').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('H1: a partially filled record renders the fields it has and dashes the ones it lacks', async () => {
+    const partial = { cpuModel: 'Half A Record', profile: 'LITE', ranAt: '2026-08-01T00:00:00Z' } as unknown as BenchmarkResult
+    install(snapshot({ otherMachines: [partial] }))
+    renderScreen()
+    expect(await screen.findByText(/Half A Record, – GB RAM/)).toBeInTheDocument()
+    // Its own profile pill (the current result carries the same one).
+    expect(screen.getAllByText('Lite')).toHaveLength(2)
+  })
+
+  it('H1: a current result with no usable figures still renders the card', async () => {
+    const legacy = { profile: 'BALANCED', ranAt: '' } as unknown as BenchmarkResult
+    install(snapshot({ current: legacy, otherMachines: [] }))
+    renderScreen()
+    // An unknown date says so instead of printing "Invalid Date" or an empty stamp.
+    expect(await screen.findByText('Checked –')).toBeInTheDocument()
+    expect(screen.getByText('Balanced')).toBeInTheDocument()
+  })
+
+  it('M5 residual: the context in the report is the snapshot’s, not a recomputed catalog value', async () => {
+    // The catalog says 8,192 for this model; the snapshot says what the runtime would ACTUALLY
+    // launch with (a manifest stating no window falls back to the settings default). The screen
+    // must state the snapshot's figure — recomputing produced "0-token context" for that model.
+    const { api } = install(snapshot({ placement: placement({ recommendedContextTokens: 4096 }) }))
+    renderScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    const text = api.copyToClipboard.mock.calls[0][0] as string
+    expect(text).toContain('4,096 tokens')
+    expect(text).not.toContain('8,192 tokens')
+    expect(text).not.toContain('0 tokens')
+  })
+
+  it('M5 residual: with nothing recommended the report states no context at all', async () => {
+    const { api } = install(snapshot({ placement: placement({ recommendedContextTokens: null }) }))
+    renderScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    expect(api.copyToClipboard.mock.calls[0][0] as string).not.toContain('Context size')
+  })
+
+  it('an earlier measurement under another configuration is dated, not presented as the fit', async () => {
+    install(
+      snapshot({
+        placement: placement({
+          observed: null,
+          observedMismatch: { contextTokens: 32_768, backend: 'gpu', at: '2026-09-01T00:00:00Z' }
+        })
+      })
+    )
+    renderScreen()
+    expect(await screen.findByText(/Measured earlier with a 32,768-token context on/)).toBeInTheDocument()
+    // The verdict beside it is still the estimate for the CURRENT settings.
+    expect(screen.getByText(/Needs at least 5\.8 GB for the weights/)).toBeInTheDocument()
+  })
+
+  it('the same line in German (D-L8: asserted from the catalog, never a retyped literal)', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    install(
+      snapshot({
+        placement: placement({
+          observed: null,
+          observedMismatch: { contextTokens: 32_768, backend: 'gpu', at: '2026-09-01T00:00:00Z' }
+        })
+      })
+    )
+    render(
+      <I18nProvider>
+        <ToastProvider>
+          <PerformanceScreen onNavigate={vi.fn()} />
+        </ToastProvider>
+      </I18nProvider>
+    )
+    const expected = t('de', 'perf.model.measuredOther', {
+      context: (32_768).toLocaleString('de'),
+      when: new Date('2026-09-01T00:00:00Z').toLocaleDateString('de')
+    })
+    expect(await screen.findByText(expected)).toBeInTheDocument()
+  })
 })

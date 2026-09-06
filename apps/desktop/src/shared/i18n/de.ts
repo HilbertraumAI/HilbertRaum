@@ -1848,6 +1848,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.model.unifiedEstimate': 'Sollte in den gemeinsamen Speicher passen ({ram} GB, bis zu {budget} GB für das Modell verfügbar).',
   'perf.model.tooLarge': 'Zu groß für diesen Computer ({budget} GB verfügbar). Wähle ein kleineres Modell.',
   'perf.model.unknown': 'Wo das Modell landet, wird beim ersten Start gemessen.',
+  'perf.model.measuredOther':
+    'Früher mit einem Kontext von {context} Token am {when} gemessen; die Schätzung oben gilt für die aktuellen Einstellungen.',
   'perf.model.choose': 'Kleineres Modell wählen',
   'perf.models.title': 'Modelle auf diesem Computer',
   'perf.models.hint':

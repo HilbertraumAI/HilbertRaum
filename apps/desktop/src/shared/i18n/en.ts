@@ -1809,6 +1809,11 @@ export const en = {
   'perf.model.unifiedEstimate': 'Should fit in unified memory ({ram} GB, up to {budget} GB available to the model).',
   'perf.model.tooLarge': 'Too large for this computer ({budget} GB available). Pick a smaller model.',
   'perf.model.unknown': 'Where the model lands is measured on its first start.',
+  // The stored measurement describes a start with a DIFFERENT context size, or a GPU start on a
+  // configuration that now forces the processor: the verdict above it is the estimate for the
+  // current settings, and this dates the measurement rather than letting the two contradict.
+  'perf.model.measuredOther':
+    'Measured earlier with a {context}-token context on {when}; the estimate above is for the current settings.',
   'perf.model.choose': 'Choose a smaller model',
   'perf.models.title': 'Models on this computer',
   'perf.models.hint':

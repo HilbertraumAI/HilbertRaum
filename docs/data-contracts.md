@@ -131,6 +131,36 @@ machine, and the two keys are always written in one `updateSettings` call, histo
 `benchmark.md` "History per machine") **and `modelPlacements`** (`Record<modelId, ModelPlacement>`,
 default `{}`: where each model's last start landed per llama.cpp's load log, stamped with
 `machineKey`; object-valued, size-capped); see `benchmark.md` "History per machine" / "Your model".
+**Since the PR #303 audit (H1/L8, owner decision G7) these three keys are VALIDATED, not merely
+shape-checked — on WRITE and on READ**, by the pure normalizers in
+[`shared/benchmark-schema.ts`](../apps/desktop/src/shared/benchmark-schema.ts)
+(`normalizeBenchmarkResult` / `normalizeBenchmarkHistory` / `normalizeModelPlacement(s)`, plus
+`normalizeEffectiveRead` / `normalizeSpeedBasis`; `machineKey` lives there too and
+`services/performance.ts` re-exports it):
+
+- `lastBenchmark` — a `BenchmarkResult` is valid when it is a plain object carrying EITHER a
+  parseable `ranAt` OR a real `HardwareProfile` (the LEGACY profile-only blob, kept valid by G3
+  with an unknown identity, `ranAt: ''` as the unknown-date sentinel — never a fabricated "now" —
+  and safe defaults). `{}` and friends are rejected. Every figure is finite and `>= 0` or `null`,
+  a malformed identity normalizes to the unknown one (so `machineKey` returns `null`, never half a
+  key), `warnings` keeps its strings, and the optional legacy fields (`gpuVramMb`, `speedBasis`,
+  `measuredModelId`, `effectiveRead`) stay ABSENT when the record has none — absence is what the
+  screens render as "approximate" / "not recorded".
+- `benchmarkHistory` — each element is normalized, invalid AND unkeyed entries are dropped (the
+  history is addressed by machine, so an entry `machineKey` cannot key could never be matched),
+  one record per key survives (newest `ranAt`), newest first, capped at `MAX_BENCHMARK_HISTORY`.
+- `modelPlacements` — each record must validate (non-empty `modelId`, `'gpu' | 'cpu'` backend,
+  positive whole `contextTokens`, parseable `at`; layer/buffer figures finite `>= 0` or `null`; an
+  ALL-NULL reading is valid — L7 renders it as `unknown`; a self-contradicting `gpuLayers >
+  totalLayers` is rejected) AND be filed under its own `modelId`.
+
+On WRITE, garbage is IGNORED (a `lastBenchmark` that normalizes to nothing leaves the previous
+result standing — the convention every mistyped value here follows; `null` is still the explicit
+clear), while the two collections store what survived. On READ the repair is IN MEMORY only: a row
+written by an older build, a hand-edited DB or a half-written blob is normalized for the caller
+and the stored row is left untouched, so `getSettings` keeps its no-side-effect contract. The
+256 KB `MAX_SETTINGS_OBJECT_BYTES` ceiling is a **`JSON.stringify(...).length` cap** (UTF-16 code
+units, not verified UTF-8 bytes) applied to the normalized value.
 **The post-MVP UX round added `autoStartActiveModel`** (boolean, default `true`) **and
 `checksumCache`** (`Record<path, {size, mtimeMs, sha256}>`, default `{}` — the persisted L2 of
 the weight-file hash cache).
@@ -543,8 +573,19 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   `'done'` always, and `'done'` PRECEDES the persist and the occupancy release). `performance:get`
   returns the `PerformanceSnapshot` the Performance screen renders (`current`, `currentMachine`,
   `currentGpu`, `otherMachines`, `running` (the `benchmark` occupancy span, read directly),
-  `placement: { memoryClass, ramMb, vramMb, model, observed, verdict, models: ResidentModelRow[],
-  totals: { ramAllMb, bothOnCard } }`, `observed: { lastAnswer, lastModelLoad, lastChecksum }`).
+  `placement: { memoryClass, ramMb, vramMb, model, recommendedContextTokens, observed,
+  observedMismatch, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }`,
+  `observed: { lastAnswer, lastModelLoad, lastChecksum }`). Two `placement` fields were added by
+  the PR #303 audit P4: **`recommendedContextTokens`** (`number | null`) is the context the
+  RECOMMENDED model would launch with, resolved main-side by the launch path's own
+  `launchContextTokens` — the screen used to recompute it with `??` and showed a "0-token context"
+  for a manifest stating no window, while the runtime starts such a model on
+  `settings.contextTokens` (M5 residual); **`observedMismatch`**
+  (`{ contextTokens, backend, at } | null`) reports a stored/latched placement that is real but
+  does not describe the current configuration (a different context size, or a GPU measurement
+  under a forced-CPU configuration) — the record is kept, `observed` goes `null` so the row falls
+  back to the weights-only ESTIMATE the current settings would actually produce, and the copy
+  dates the earlier measurement instead of presenting it as the fit.
   The observed figures are SESSION latches only — session = the main-process lifetime (they
   survive a workspace lock/unlock, an app restart clears them) — and never fall back to a
   persisted sample, foreign or same-machine (PR #303 audit M3/G2): the answer figures are never

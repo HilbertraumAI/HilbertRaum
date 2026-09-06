@@ -8,6 +8,7 @@ import type {
   ObservedAnswerSpeed,
   PlacementVerdict
 } from '../../shared/types'
+import { machineKey } from '../../shared/benchmark-schema'
 import { gpuUsefulForProfile } from './runtime/gpu'
 
 // The Performance screen's model (benchmark.md "Performance screen"): one benchmark result
@@ -20,17 +21,13 @@ import { gpuUsefulForProfile } from './runtime/gpu'
 export type MachineFields = Pick<BenchmarkResult, 'os' | 'arch' | 'cpuModel' | 'cpuCores' | 'ramGb'>
 
 /**
- * Fingerprint of the computer a result belongs to: OS, arch, CPU model + cores, and RAM
- * rounded to whole GB (`os.totalmem()` can drift by a few MB between boots of the same
- * machine; the Models screen rounds the same way). Returns null when the result carries
- * no usable identity (a detection failure, or a blob persisted before these fields were
- * reliably filled), so callers treat "unknown" as "keep what we have", never as "moved".
+ * Fingerprint of the computer a result belongs to (OS, arch, CPU model + cores, RAM rounded
+ * to whole GB), null for a result with no usable identity. The implementation moved to
+ * `shared/benchmark-schema.ts` with the PR #303 audit H1 validators — the history validator
+ * has to key on exactly this and the renderer must be able to import it — and is re-exported
+ * here so every existing `services/performance` import site is unchanged.
  */
-export function machineKey(fields: MachineFields | null | undefined): string | null {
-  if (!fields) return null
-  if (!fields.cpuModel || !(fields.ramGb > 0)) return null
-  return [fields.os, fields.arch, fields.cpuModel, fields.cpuCores, Math.round(fields.ramGb)].join('|')
-}
+export { machineKey }
 
 /**
  * The history after a fresh result: the entry for the same machine is replaced, the
