@@ -618,7 +618,17 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   wall-clock chunk-count fallback for a runtime without `timings` (the mock), over `tokens`
   streamed chunks. Persisted as **`BenchmarkResult.speedBasis?: { basis, tokens } | null`** —
   optional (absent on results persisted before the field existed, which were all chunk-based and
-  render as approximate; `null` = nothing measured). No migration.
+  render as approximate; `null` = nothing measured). No migration. Beside it, since issue #322
+  (2026-09-06, §6.5 amendment — **needs owner confirmation in review**),
+  **`BenchmarkResult.speedIdentity?: SpeedSampleIdentity | null`** = `{ memoryClass, deviceName,
+  contextTokens, backend }`: the NEXT-start class and budget device at benchmark time
+  (`GpuBenchmarkInput.memoryClass` / `.name`), the running model's launched window
+  (`ModelRuntime.contextWindow`) and its rung (`ModelRuntime.backend`) — each of the last three
+  null when unknown; normalised by `normalizeSpeedIdentity` (an unknown class nulls the record;
+  absence stays absent; `null` = nothing measured). `speedSignalFor(s, hereKey?)` hands the picker
+  a sample that carries an identity ONLY while its class and device name equal the next start's
+  (`nextStartMemoryFor`); the context and backend are recorded, not matched; a legacy sample
+  without the field steers as before.
 - **`buildWarnings(...)`** — spec §11.4 friendly copy. Since #110 the PRIMARY drive warning is
   the interpolated slow-read note (`effectiveReadMbps < SLOW_EFFECTIVE_READ_MBPS = 100`; no
   sample → no warning); the write-keyed slow-drive note (`< SLOW_DRIVE_MBPS = 30`) stays as the
@@ -637,8 +647,9 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   — the LIVE chat pick for the next start (PR #308 audit decision 8), computed by
   `liveChatRecommendation(settings, manifests)` in registerModelIpc.ts from the same inputs the
   `listModels` handler feeds `buildModelList`: `pickerMemoryFor(s)`, `machineRamGb()`,
-  `speedSignalFor(s)` (the persisted `{ tokensPerSecond, measuredModelId }` pairing; the handler
-  calls the same function), `basis` = the memory class the pick was judged against; null only
+  `speedSignalFor(s)` (the persisted `{ tokensPerSecond, measuredModelId }` pairing, handed over
+  only while its `speedIdentity` — class + budget device — matches the next start, #322; the
+  handler calls the same function), `basis` = the memory class the pick was judged against; null only
   without a catalog; `current.recommendedModelId` is the historical figure and is never rewritten —,
   `currentMachine`,
   `currentGpu` — the budget device for the next start, `{ name, totalMb, useful }` or null, the same

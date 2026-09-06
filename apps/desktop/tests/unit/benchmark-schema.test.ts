@@ -12,6 +12,7 @@ import {
   normalizeModelPlacements,
   normalizePlacementDevice,
   normalizeSpeedBasis,
+  normalizeSpeedIdentity,
   UNKNOWN_RAN_AT
 } from '../../src/shared/benchmark-schema'
 import {
@@ -50,6 +51,7 @@ function complete(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
     driveWriteMbps: 900,
     tokensPerSecond: 41,
     speedBasis: { basis: 'timings', tokens: 64 },
+    speedIdentity: { memoryClass: 'discrete', deviceName: 'NVIDIA GeForce RTX 3090', contextTokens: 8192, backend: 'gpu' },
     measuredModelId: 'qwen3.5-9b-ud-q4kxl',
     effectiveRead: { mbps: 430, bytes: 5_800_000_000, ms: 13_500, source: 'model_load', modelId: 'qwen', at: '2026-09-04T12:00:00Z' },
     profile: 'PRO',
@@ -211,6 +213,7 @@ describe('normalizeBenchmarkResult — the optional legacy fields keep their abs
     const old = complete()
     delete old.gpuVramMb
     delete old.speedBasis
+    delete old.speedIdentity
     delete old.measuredModelId
     delete old.effectiveRead
     const r = normalizeBenchmarkResult(structuredClone(old))!
@@ -218,6 +221,7 @@ describe('normalizeBenchmarkResult — the optional legacy fields keep their abs
     // sample as "not measured yet" — a null would claim the field was recorded as empty.
     expect('gpuVramMb' in r).toBe(false)
     expect('speedBasis' in r).toBe(false)
+    expect('speedIdentity' in r).toBe(false)
     expect('measuredModelId' in r).toBe(false)
     expect('effectiveRead' in r).toBe(false)
     expect(r).toEqual(old)
@@ -228,6 +232,40 @@ describe('normalizeBenchmarkResult — the optional legacy fields keep their abs
     expect(r.speedBasis).toBeNull()
     expect(r.effectiveRead).toBeNull()
     expect('speedBasis' in r).toBe(true)
+  })
+})
+
+describe('normalizeSpeedIdentity (issue #322)', () => {
+  it('accepts the shape; the class is load-bearing, the other three read as null when unusable', () => {
+    const full = { memoryClass: 'discrete', deviceName: 'NVIDIA GeForce RTX 3070', contextTokens: 8192, backend: 'gpu' }
+    expect(normalizeSpeedIdentity(full)).toEqual(full)
+    expect(normalizeSpeedIdentity({ memoryClass: 'cpu', deviceName: null, contextTokens: null, backend: null })).toEqual({
+      memoryClass: 'cpu',
+      deviceName: null,
+      contextTokens: null,
+      backend: null
+    })
+    // Unusable facts become null; the record survives on its class.
+    expect(normalizeSpeedIdentity({ memoryClass: 'unified', deviceName: 7, contextTokens: -1, backend: 'metal' })).toEqual({
+      memoryClass: 'unified',
+      deviceName: null,
+      contextTokens: null,
+      backend: null
+    })
+    expect(normalizeSpeedIdentity({ memoryClass: 'discrete', contextTokens: 4096.9 })).toMatchObject({ contextTokens: 4096 })
+    // No class, an unknown class, or not an object: nothing.
+    for (const raw of [null, undefined, 'discrete', {}, { memoryClass: 'gpu' }, { deviceName: 'x' }]) {
+      expect(normalizeSpeedIdentity(raw)).toBeNull()
+    }
+  })
+
+  it('a present-but-unusable identity on a result is kept as null, an absent one stays absent', () => {
+    const present = normalizeBenchmarkResult({ ...complete(), speedIdentity: { memoryClass: 'nope' } })!
+    expect(present.speedIdentity).toBeNull()
+    expect('speedIdentity' in present).toBe(true)
+    const legacy = complete()
+    delete legacy.speedIdentity
+    expect('speedIdentity' in normalizeBenchmarkResult(legacy)!).toBe(false)
   })
 })
 

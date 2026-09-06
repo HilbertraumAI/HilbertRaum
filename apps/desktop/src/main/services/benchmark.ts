@@ -19,7 +19,8 @@ import type {
   BenchmarkResult,
   EffectiveReadSample,
   HardwareProfile,
-  MemoryClass
+  MemoryClass,
+  SpeedSampleIdentity
 } from '../../shared/types'
 import type { ModelRuntime, RuntimeTimings } from './runtime'
 import { recommendChatModelId, recommendModelId } from './models'
@@ -585,6 +586,20 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   // Issue #52: record WHICH model produced the tok/s number — the currently loaded one,
   // which is often not the recommended one. null whenever nothing was measured.
   const measuredModelId = tokensPerSecond != null ? (deps.runtime?.modelId ?? null) : null
+  // Issue #322: WHAT the figure was measured under — the next start's class and budget device
+  // at this moment (the same `gpu` input the pick below is judged against), the running
+  // model's launched window and the rung it landed on — so the persisted sample can later be
+  // matched against the next start (`speedSignalFor`) instead of steering it under conditions
+  // that no longer hold. null whenever nothing was measured, like `speedBasis`.
+  const speedIdentity: SpeedSampleIdentity | null =
+    tokensPerSecond != null
+      ? {
+          memoryClass: deps.gpu?.memoryClass ?? 'cpu',
+          deviceName: deps.gpu?.name ?? null,
+          contextTokens: deps.runtime?.contextWindow?.() ?? null,
+          backend: deps.runtime?.backend ?? null
+        }
+      : null
 
   const gpuName = deps.gpu?.name ?? sys.gpu
   const gpuUseful = deps.gpu?.useful ?? false
@@ -638,6 +653,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     driveWriteMbps: drive.writeMbps,
     tokensPerSecond,
     speedBasis,
+    speedIdentity,
     measuredModelId,
     effectiveRead: deps.effectiveRead ?? null,
     profile,

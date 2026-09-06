@@ -85,14 +85,32 @@ export function pickerMemoryFor(
  * (tok/s + the model that produced it, issue #52), derived fresh from `lastBenchmark` on every
  * call — stateless, never compounds. Shared by the `listModels` handler and the Performance
  * snapshot's live recommendation so both surfaces read one signal.
+ *
+ * Sample identity (issue #322, §6.5 2026-09-06 amendment — pending owner confirmation): a
+ * sample that carries `speedIdentity` is handed over ONLY while its memory class and its budget
+ * device name are the NEXT start's (`nextStartMemoryFor`): a crawl measured on the card says
+ * nothing about a start the settings now force onto the processor, and a crawl on one card
+ * says nothing about another. The context is recorded but not matched — the step-down is an
+ * order-of-magnitude crawl gate on a decode figure, and the context is a setting users change
+ * often. A legacy sample without the field keeps steering exactly as before.
  */
-export function speedSignalFor(s: AppSettings): PickerSpeedSignal | null {
-  return s.lastBenchmark
-    ? {
-        tokensPerSecond: s.lastBenchmark.tokensPerSecond,
-        measuredModelId: s.lastBenchmark.measuredModelId ?? null
-      }
-    : null
+export function speedSignalFor(
+  s: AppSettings,
+  hereKey: string | null = machineKey(detectSystem())
+): PickerSpeedSignal | null {
+  const last = s.lastBenchmark
+  if (!last) return null
+  const identity = last.speedIdentity
+  if (identity) {
+    const next = nextStartMemoryFor(s, hereKey)
+    if (identity.memoryClass !== next.memoryClass || (identity.deviceName ?? null) !== (next.device?.name ?? null)) {
+      return null
+    }
+  }
+  return {
+    tokensPerSecond: last.tokensPerSecond,
+    measuredModelId: last.measuredModelId ?? null
+  }
 }
 
 /**

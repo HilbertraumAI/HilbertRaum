@@ -61,6 +61,7 @@ import { getSettings, seedSettings, updateSettings } from '../../src/main/servic
 import { IPC } from '../../src/shared/ipc'
 import type { AppContext } from '../../src/main/services/context'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
+import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { AppSettings, EngineDownloadJob, GpuDevice, ModelInfo, RuntimeStatus } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
@@ -666,4 +667,109 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     })
     return { promise, resolve }
   }
+})
+
+// Issue #322 — the persisted speed sample carries the identity it was measured under
+// (`BenchmarkResult.speedIdentity`: the next-start memory class, the budget device, the launched
+// context, the backend), and `speedSignalFor` hands the picker the sample only when that identity
+// matches the NEXT start: the same class and the same budget device (the context is recorded, not
+// matched — the crawl gate is an order-of-magnitude decode figure). A legacy sample without the
+// field keeps steering as before. Policy amendment to §6.5: NEEDS OWNER CONFIRMATION in review.
+describe('picker seams: the speed sample carries the identity it was measured under (#322 — needs owner confirmation)', () => {
+  const STALE_AT = '2026-08-20T00:00:00Z'
+  const ON_CARD8 = { memoryClass: 'discrete' as const, deviceName: CARD8.name, contextTokens: 8192, backend: 'gpu' as const }
+  const Q4 = 'qwen3.8-27b-ud-q4km'
+
+  /** A fake ACTIVE chat runtime on the card: streams a few chunks so the speed leg reads something. */
+  function runtimeOnCard(modelId: string): ModelRuntime {
+    return {
+      modelId,
+      backend: 'gpu',
+      contextWindow: () => 8192,
+      async start() {},
+      async stop() {},
+      async health() {
+        return { healthy: true, message: '', port: null }
+      },
+      async *chatStream() {
+        for (const chunk of ['one', 'two', 'three', 'four']) yield chunk
+      }
+    }
+  }
+
+  /** A saved 3 tok/s crawl on the 4B (the card pick), measured on the 8 GiB card — or a LEGACY one without identity. */
+  function savedCrawl(f: Fixture, opts: { legacy?: boolean } = {}): Fixture {
+    const identity = opts.legacy ? {} : { speedIdentity: ON_CARD8 }
+    updateSettings(f.ctx.db, {
+      lastBenchmark: {
+        ...detectSystem(),
+        gpu: CARD8.name,
+        gpuVramMb: CARD8.totalMb,
+        driveReadMbps: null,
+        driveWriteMbps: null,
+        tokensPerSecond: 3,
+        measuredModelId: CARD8_PICK,
+        ...identity,
+        profile: 'PRO',
+        recommendedModelId: CARD8_PICK,
+        warnings: [],
+        ranAt: STALE_AT
+      }
+    })
+    return f
+  }
+
+  /** The ★ through the real handler, asserting the snapshot's live recommendation agrees. */
+  async function both(f: Fixture): Promise<string | undefined> {
+    const star = await liveStar(f.ctx)
+    expect(buildPerformanceSnapshot(f.ctx).recommendation?.modelId).toBe(star)
+    return star
+  }
+
+  it('the benchmark records the class, the budget device, the launched context and the backend the sample was measured under', async () => {
+    const f = fixture({ probeReturns: [CARD8] })
+    ;(f.ctx.runtime as unknown as { active: () => ModelRuntime | null }).active = () => runtimeOnCard(CARD8_PICK)
+    const bench = await runAndPersistBenchmark(f.ctx)
+    expect(bench.tokensPerSecond).not.toBeNull()
+    expect(bench.measuredModelId).toBe(CARD8_PICK)
+    expect(bench.speedIdentity).toEqual(ON_CARD8)
+    // Persisted through the write gate and read back through the read gate intact.
+    expect(getSettings(f.ctx.db).lastBenchmark?.speedIdentity).toEqual(ON_CARD8)
+  })
+
+  it('with no runtime up nothing is measured and the identity is null, like the basis', async () => {
+    const f = fixture({ probeReturns: [CARD8] })
+    const bench = await runAndPersistBenchmark(f.ctx)
+    expect(bench.tokensPerSecond).toBeNull()
+    expect(bench.speedBasis).toBeNull()
+    expect(bench.speedIdentity).toBeNull()
+  })
+
+  it('same class and same card as the next start: the crawl still steps the pick, exactly as a legacy sample does', async () => {
+    const stepped = await both(savedCrawl(fixture({ probeReturns: [], persisted: [CARD8] })))
+    const legacy = await both(savedCrawl(fixture({ probeReturns: [], persisted: [CARD8] }), { legacy: true }))
+    expect(stepped).toBe(legacy)
+    expect(stepped).not.toBe(CARD8_PICK)
+  })
+
+  it('the GPU switched off since: a sample measured on the card is no evidence for the processor start — the RAM pick stands, no step-down', async () => {
+    const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings: { gpuMode: 'off' } }))
+    expect(await both(f)).toBe(RAM_PICK)
+  })
+
+  it('a legacy sample without identity keeps steering as before (GPU off: the RAM pick still steps down)', async () => {
+    const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings: { gpuMode: 'off' } }), { legacy: true })
+    expect(await both(f)).toBe(Q4)
+  })
+
+  it('a different card of the same size: no signal — the card pick, not the step', async () => {
+    const swapped: GpuDevice = { ...CARD8, name: 'NVIDIA GeForce RTX 4060' }
+    const f = savedCrawl(fixture({ probeReturns: [], persisted: [swapped] }))
+    expect(await both(f)).toBe(CARD8_PICK)
+  })
+
+  it('a different context size in Settings: still a signal (the context is recorded, not matched)', async () => {
+    const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings: { contextTokensOverride: 32_768 } }))
+    expect(await both(f)).not.toBe(CARD8_PICK)
+  })
 })

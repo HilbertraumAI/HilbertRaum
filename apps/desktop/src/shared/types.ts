@@ -1932,6 +1932,20 @@ export interface EffectiveReadSample {
   at: string
 }
 
+/**
+ * The conditions a benchmark's speed sample was measured under (`BenchmarkResult.speedIdentity`,
+ * issue #322). `memoryClass` / `deviceName` are the NEXT start's class and budget device at
+ * benchmark time (`GpuBenchmarkInput`); `contextTokens` is the running model's launched window
+ * (`ModelRuntime.contextWindow`), `backend` the rung the ladder landed on — each null when the
+ * runtime could not say.
+ */
+export interface SpeedSampleIdentity {
+  memoryClass: MemoryClass
+  deviceName: string | null
+  contextTokens: number | null
+  backend: 'gpu' | 'cpu' | 'mock' | null
+}
+
 export interface BenchmarkResult {
   os: string
   arch: string
@@ -1976,6 +1990,17 @@ export interface BenchmarkResult {
    * was measured. No migration.
    */
   speedBasis?: { basis: 'timings' | 'chunks'; tokens: number } | null
+  /**
+   * WHAT `tokensPerSecond` was measured UNDER (issue #322): the NEXT-start memory class at
+   * benchmark time, the budget device's name (null with no card for that start), the context
+   * window the running model was launched with, and the backend the ladder landed on. The
+   * picker's §6.5 step-down (`speedSignalFor`) consumes the sample only while the class and the
+   * device still match the next start — a GPU toggled off since, or a card swap, makes the crawl
+   * no evidence about the coming start; the context and backend are recorded, not matched.
+   * Optional: ABSENT on results persisted before the field existed — a legacy sample keeps
+   * steering as before. null when nothing was measured. No migration.
+   */
+  speedIdentity?: SpeedSampleIdentity | null
   /**
    * Id of the model the tokens/sec probe streamed through — the CURRENTLY LOADED model at
    * benchmark time, which is often NOT `recommendedModelId` (issue #52). null when nothing

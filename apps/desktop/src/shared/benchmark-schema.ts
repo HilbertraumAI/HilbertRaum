@@ -6,7 +6,8 @@ import {
   type GpuProbeResult,
   type HardwareProfile,
   type ModelPlacement,
-  type PlacementDevice
+  type PlacementDevice,
+  type SpeedSampleIdentity
 } from './types'
 
 // Structural validation for the persisted benchmark records (PR #303 audit H1 / L8, owner
@@ -163,6 +164,26 @@ export function normalizeSpeedBasis(raw: unknown): { basis: 'timings' | 'chunks'
 }
 
 /**
+ * `BenchmarkResult.speedIdentity` (issue #322) — the conditions the speed sample was measured
+ * under, or null. The memory class is load-bearing (the picker matches it): an unknown class
+ * makes the whole record null. The other three are recorded facts that may each be unknown:
+ * a non-string device name, a non-count context, or an unrecognised backend reads as null
+ * rather than discarding the class. Callers preserve ABSENCE themselves (the `speedBasis` rule).
+ */
+export function normalizeSpeedIdentity(raw: unknown): SpeedSampleIdentity | null {
+  if (!isRecord(raw)) return null
+  const memoryClass = raw.memoryClass
+  if (memoryClass !== 'discrete' && memoryClass !== 'unified' && memoryClass !== 'cpu') return null
+  const backend = raw.backend
+  return {
+    memoryClass,
+    deviceName: textOrNull(raw.deviceName),
+    contextTokens: count(raw.contextTokens),
+    backend: backend === 'gpu' || backend === 'cpu' || backend === 'mock' ? backend : null
+  }
+}
+
+/**
  * An `EffectiveReadSample` (#108) or null. Every field is load-bearing — the Drive tile prints
  * the throughput, the GB and the date, and `preferCandidate` ranks on `source` and `at` — so a
  * sample missing any of them is dropped rather than half-rendered.
@@ -226,6 +247,7 @@ export function normalizeBenchmarkResult(raw: unknown): BenchmarkResult | null {
   }
   if ('gpuVramMb' in raw) result.gpuVramMb = figure(raw.gpuVramMb)
   if ('speedBasis' in raw) result.speedBasis = normalizeSpeedBasis(raw.speedBasis)
+  if ('speedIdentity' in raw) result.speedIdentity = normalizeSpeedIdentity(raw.speedIdentity)
   if ('measuredModelId' in raw) result.measuredModelId = textOrNull(raw.measuredModelId)
   if ('effectiveRead' in raw) result.effectiveRead = normalizeEffectiveRead(raw.effectiveRead)
   return result

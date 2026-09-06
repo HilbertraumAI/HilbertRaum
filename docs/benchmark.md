@@ -226,7 +226,12 @@ never onto rank 0; with no lower ranked tier the pick keeps). An oversized loade
 is expected and never moves the pick. `runBenchmark` applies it with the just-measured values and
 `listModels` with the persisted ones, so Diagnostics and the Models screen ★ always agree; when
 the step fires, the persisted warnings gain `main.benchmark.warnRecommendationLowered` (canonical
-English) naming the measured model and figure. Full design record: `model-benchmarks.md` §6.5.
+English) naming the measured model and figure. Since issue #322 (2026-09-06, §6.5 "Sample
+identity" amendment — needs owner confirmation in review) the persisted sample also carries
+`BenchmarkResult.speedIdentity` (the next-start class, the budget device, the launched context,
+the backend at measurement time) and `speedSignalFor` consumes it only while the class and the
+device still match the next start; the context is recorded, not matched; a legacy sample without
+the field steers as before. Full design record: `model-benchmarks.md` §6.5.
 
 ## Warnings (spec §11.3 + §11.4)
 
