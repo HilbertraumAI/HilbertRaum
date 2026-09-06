@@ -39,7 +39,7 @@ buttons, `role="group"` checkbox blocks, `Modal.describedBy`. Decisions: the col
 served-library, not a pack-row, fact; deferred to P7 (a `packs:status` addition) — the per-answer "name collision" row already covers it; the source
 popover stays non-modal (Radix's modal variant aria-hides its own trigger chip and locks transcript scroll). Residuals: T18-b (owner's real-visual
 leg) pending — owner; the collision-surface follow-up; small PacksPanel residuals — all registered at P7 (§5 item 21(k)). Record:
-`design-guidelines.md` §11.15; `rag-design.md` §17 module map. Suite on this machine: <FILL> (the orchestrator fills after the full-suite recount).
+`design-guidelines.md` §11.15; `rag-design.md` §17 module map. Suite on this machine: 419 / 6,060 (5,980 / 79), exit 0 = +1 file / +25 tests over the head c3ea5581 (418 / 6,035, recounted here; its one failure was the known zim-client 8 MiB load flake); typecheck + build green; T18-b orchestrator pre-check in real Electron (both themes/languages, panel + picker) recorded in the inventory row — the owner's sign-off stays pending.
 
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 4 — retrieval honesty: review M3 / M6 / M7 / M8 / M10 closed.**_
 An explicit, additive `documentsOff` flag (never derived from emptiness) makes packs-only scope expressible again, superseding the

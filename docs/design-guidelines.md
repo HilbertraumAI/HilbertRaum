@@ -1091,10 +1091,11 @@ scope/outcome/lifecycle semantics changed. Code comments cite this section as **
    non-modal `Popover.Root` (Escape closes, focus returns to the trigger, nothing outside is
    hidden). A true dialog (`ArticleModal`) keeps its real focus trap — the difference is
    deliberate, recorded so the next popover doesn't "fix" it into a trap.
-2. **A reason that lives only in a tooltip does not exist for a screen reader.** Every greyed
-   picker row carried its reason (disabled / file missing / different archive / no full-text
-   index) as hover-only `title` text; §9 requires state to be announced, not just visible, so a
-   reason must sit in the accessible tree — name or description, never a bare `title`.
+2. **A reason that lives only in a tooltip does not exist for a screen reader.** The pack
+   panel's unavailable badges (file missing / different archive) carried their reason as
+   hover-only `title` text, and the picker's greyed rows said only "not available"; §9 requires
+   state to be announced, not just visible, so a reason must sit in the accessible tree — name
+   or description, never a bare `title` — and it must be the SAME reason the answer will name.
 3. **Pack-named action buttons in a list**, per §9: Enable/Disable/Remove per pack and "Open
    article" per citation need an accessible name that says which row — "Enable {pack title}",
    not "Enable" ×N (visible label text unchanged, naming rides `aria-label`).
