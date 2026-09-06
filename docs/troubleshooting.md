@@ -603,8 +603,8 @@ SHA-256-verifies the pinned kiwix-tools 3.8.1 release for your platform. That in
 **Settings → Allow internet access for model downloads and updates** to be on (it is on by
 default) and a drive policy that permits downloads.
 
-
-**Preferred: run the fetch script.** From the repository, against the drive:
+**Without the in-app path (a scripted or Linux/macOS drive): run the fetch script.** From the
+repository, against the drive:
 
 - Windows: `scripts\fetch-runtime.ps1 -Target <drive-root> -Family kiwix_tools`
 - macOS/Linux: `scripts/fetch-runtime.sh --target <drive-root> --family kiwix_tools`
