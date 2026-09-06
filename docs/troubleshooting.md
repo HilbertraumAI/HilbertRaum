@@ -639,7 +639,7 @@ directly; a bundle left one directory too deep is not picked up.
 The version is pinned; a different kiwix-tools release is not supported. Either way, the app
 picks the files up on **Refresh** under *Documents → Knowledge packs* — no restart needed.
 
-### "The archive could not be read by kiwix-manage" — but the file is fine
+### "kiwix-manage cannot read an archive whose … name contains …"
 
 On Windows the pinned kiwix-manage cannot open an archive whose folder or file name contains an
 umlaut, an accent or any other non-ASCII character (for example a file under

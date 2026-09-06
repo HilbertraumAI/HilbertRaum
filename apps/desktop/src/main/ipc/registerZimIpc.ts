@@ -33,17 +33,29 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
  * P5, finding L1, plan §9.19 (c)1). `ZimHeaderError` ⇒ the file is not a readable ZIM archive;
  * the "kiwix-tools is not installed" refusal (`ZimService.packDeps`) ⇒ tools missing;
  * `KiwixManageError` or the header/manager identity disagreement (`packs.ts registerPack`) ⇒
- * a manager problem; anything else ⇒ 'other'.
+ * a manager problem — UNLESS the tool actually ran and refused (`kind: 'exit'`, never a
+ * spawn/verify/timeout failure) on win32 over a path holding a non-ASCII character, which is
+ * the pinned kiwix-manage 3.8.1's known refusal (#340, owner ruling 2026-09-06, option M) and
+ * gets its own reason so the panel can name the workaround instead of the generic manager copy;
+ * anything else ⇒ 'other'.
  */
-function classifyAddFailure(err: unknown): KnowledgePackAddFailureReason {
+function classifyAddFailure(
+  err: unknown,
+  path: string,
+  platform: NodeJS.Platform
+): KnowledgePackAddFailureReason {
   if (err instanceof ZimHeaderError) return 'not-a-zim'
-  if (err instanceof KiwixManageError) return 'manager'
+  if (err instanceof KiwixManageError) {
+    if (err.kind === 'exit' && platform === 'win32' && /[^\x00-\x7F]/.test(path)) return 'path-unsupported'
+    return 'manager'
+  }
   if (err instanceof Error && /kiwix-tools is not installed/.test(err.message)) return 'tools-missing'
   if (err instanceof Error && /reported a different archive identity/.test(err.message)) return 'manager'
   return 'other'
 }
 
-export function registerZimIpc(ctx: AppContext): void {
+export function registerZimIpc(ctx: AppContext, opts: { platform?: NodeJS.Platform } = {}): void {
+  const platform = opts.platform ?? process.platform
   const ipcHandle = guardedHandleFor(ctx)
   const requireUnlocked = (): void => {
     // AUD-02: workspaceAdmitsWork, never a bare isUnlocked() (see registerCollectionsIpc).
@@ -151,7 +163,7 @@ export function registerZimIpc(ctx: AppContext): void {
             throw new Error(tMain('main.docs.locked'))
           }
           failed++
-          const reason = classifyAddFailure(err)
+          const reason = classifyAddFailure(err, path, platform)
           if (failureReason === null) failureReason = reason
           // Protected diagnostic ONLY: the error class + reason code, never the message or the
           // path (#301 P5, finding L1) — the manager's own stderr can carry an absolute path.

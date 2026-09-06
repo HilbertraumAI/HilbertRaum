@@ -37,6 +37,8 @@ function addFailedKey(reason: KnowledgePackAddFailureReason | null): MessageKey 
       return 'packs.addFailed.toolsMissing'
     case 'manager':
       return 'packs.addFailed.manager'
+    case 'path-unsupported':
+      return 'packs.addFailed.pathUnsupported'
     default:
       return 'packs.addFailed.other'
   }
