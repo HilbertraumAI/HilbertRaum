@@ -1291,4 +1291,308 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       await h.close()
     }
   })
+
+  // ---------------------------------------------------------------------------------------
+  // T17 — the ACCESS BOUNDARY (#301 P5, findings M1 / L1 / L5; plan §9.19 (a)/(g))
+  //
+  // kiwix-serve has no request authentication upstream (owner ruling D1(a), residual R-9), so
+  // the app cannot ask "is this our child answering?". What it CAN do is notice that its own
+  // child's lifecycle moved around a request: `ZimService.withServer` captures the published
+  // tuple (revision, generation, port, alive) before the request and reads it again after the
+  // response, discards anything observed across a change of it — a successful body included —
+  // and retries exactly once while the same unlocked session still admits the operation.
+  //
+  // The loopback server in this harness is deliberately the SQUATTER: it keeps answering on
+  // the very port a dead child held, which is exactly the M1 injection channel. The legs below
+  // are all controlled promises with entered/released boundaries; no sleep is ever the proof.
+  // ---------------------------------------------------------------------------------------
+  it('T17 child death / reused port / stale response rejected by the alive-generation guard with one admitted retry; no retry into a new session or after cancellation; articlePath route contract enforced; cancelled / partial / failed add (incl. a MIXED add) reported through the typed DTO with generic UI copy and no path or stderr leak', async () => {
+    const h = await sessionHarness({ settleBoundMs: 200 })
+    try {
+      // What a process squatting on the port would inject. If ANY of it reaches a candidate
+      // or an article, the guard did not do its job — it rides the search link (→ the
+      // candidate's `articlePath` and `chunkId`) and the article body (→ `sourceTitle`).
+      const SENTINEL = 'SQUATTER-INJECTED-EVIDENCE'
+      const SENTINEL_SEARCH_XML =
+        '<?xml version="1.0" encoding="UTF-8"?><rss><channel>' +
+        `<item><title>${SENTINEL}</title><link>/content/alpha/A/${SENTINEL}</link>` +
+        '<wordCount>99</wordCount></item></channel></rss>'
+      const SENTINEL_ARTICLE_HTML =
+        `<html><body><h1>${SENTINEL}</h1><p>` +
+        `${SENTINEL} says the opposite of the archive. `.repeat(40) +
+        '</p></body></html>'
+      const searchesSince = (mark: number): string[] =>
+        h.requests.slice(mark).filter((u) => u.startsWith('/search'))
+      const rawsSince = (mark: number): string[] =>
+        h.requests.slice(mark).filter((u) => u.startsWith('/raw/'))
+      const liveChild = (): ServeFakeChild => h.serveSpawns[h.serveSpawns.length - 1]!.child
+
+      const alpha = await h.registerPack('alpha.zim')
+
+      // ---- (1) CHILD DEATH MID-ASK: the parked /search response is discarded -------------
+      // The search is parked on the wire, the child dies underneath it, and the response is
+      // then released carrying the squatter's article. The guard sees `alive:false` on the
+      // second read of `serverState()` and throws the whole attempt away.
+      {
+        const warm = await h.svc.ensureServer(h.db())
+        expect(warm).toMatchObject({ port: h.httpPort })
+        const generationBefore = h.svc.serverState()!.generation
+        const spawnsBefore = h.serveSpawns.length
+        const mark = h.requests.length
+
+        const searchGate = serveGate<void>()
+        h.hooks.beforeRespond = (url) =>
+          url.startsWith('/search') ? searchGate.wait() : Promise.resolve()
+        let searchResponses = 0
+        h.hooks.respond = (url) => {
+          if (url.startsWith('/raw/') && url.includes(SENTINEL)) {
+            return { status: 200, body: SENTINEL_ARTICLE_HTML }
+          }
+          if (!url.startsWith('/search')) return null
+          searchResponses++
+          // ONLY the first response is the squatter's; the retry gets the honest fixture.
+          return searchResponses === 1 ? { status: 200, body: SENTINEL_SEARCH_XML } : null
+        }
+
+        const askP = h.svc.makeArm(h.db(), [alpha])!(
+          'alpha climate',
+          new AbortController().signal
+        )
+        await searchGate.entered
+        liveChild().emit('exit', 0, null) // it dies while OUR response is still in flight
+        h.hooks.beforeRespond = async () => undefined
+        searchGate.release()
+
+        const candidates = await askP
+        expect(searchResponses).toBe(2) // the attempt plus EXACTLY one retry
+        expect(searchesSince(mark)).toHaveLength(2)
+        expect(h.serveSpawns).toHaveLength(spawnsBefore + 1) // a genuinely new child…
+        expect(h.svc.serverState()!.generation).toBeGreaterThan(generationBefore) // …new generation
+        // The candidates come from the SECOND attempt only, and nothing the squatter said
+        // survived into the grounded prompt.
+        expect(candidates.length).toBeGreaterThan(0)
+        expect(JSON.stringify(candidates)).not.toContain(SENTINEL)
+        expect(candidates.every((c) => c.articlePath === 'A/Alpha')).toBe(true)
+        h.hooks.respond = () => null
+      }
+
+      // ---- (2) THE REUSED PORT: the same socket, accepted only because we stayed alive ----
+      // `findPort` hands back the same `httpPort` every time, so the retried child in leg (1)
+      // published on the exact port the dead child had held and the squatter had answered on.
+      // The port is therefore NOT what distinguishes the rejected response from this accepted
+      // one — the only difference is that our own generation stayed alive across it.
+      {
+        expect(h.svc.serverState()).toMatchObject({ port: h.httpPort, alive: true })
+        const generationsAtRequest: Array<number | null> = []
+        h.hooks.beforeRespond = async (url) => {
+          if (url.startsWith('/search')) {
+            generationsAtRequest.push(h.svc.serverState()?.generation ?? null)
+          }
+        }
+        const mark = h.requests.length
+        const candidates = await h.svc.makeArm(h.db(), [alpha])!(
+          'alpha climate',
+          new AbortController().signal
+        )
+        expect(candidates.length).toBeGreaterThan(0)
+        expect(searchesSince(mark)).toHaveLength(1) // accepted first time: no retry at all
+        expect(generationsAtRequest).toHaveLength(1)
+        // Before and after are the same live generation — the accept condition itself.
+        expect(h.svc.serverState()).toMatchObject({
+          port: h.httpPort,
+          alive: true,
+          generation: generationsAtRequest[0]
+        })
+        h.hooks.beforeRespond = async () => undefined
+      }
+
+      // ---- (3) STALE GENERATION: eligibility is RECOMPUTED, never the old list -----------
+      // A second pack is disabled while an article fetch is parked. `setPackEnabled` bumps the
+      // revision and tears the child down, so the response arrives across a lifecycle change
+      // and is discarded; the retry re-enters from `ensureServer` under the CURRENT revision,
+      // so the disabled pack is not in the new served set and is never searched again.
+      {
+        const bravo = await h.registerPack('bravo.zim')
+        const rebuilt = await h.svc.ensureServer(h.db())
+        expect(rebuilt!.names.has(bravo)).toBe(true)
+        const mark = h.requests.length
+
+        const rawGate = serveGate<void>()
+        h.hooks.beforeRespond = (url) =>
+          url.startsWith('/raw/') ? rawGate.wait() : Promise.resolve()
+        const askP = h.svc.makeArm(h.db(), [alpha, bravo])!(
+          'alpha climate',
+          new AbortController().signal
+        )
+        await rawGate.entered
+        h.svc.setPackEnabled(h.db(), bravo, false) // invalidateLibrary(): the publication drops
+        h.hooks.beforeRespond = async () => undefined
+        rawGate.release()
+
+        const candidates = await askP
+        const searches = searchesSince(mark)
+        expect(searches.filter((u) => u.includes(encodeURIComponent(alpha)))).toHaveLength(2)
+        // Searched once — by the DISCARDED attempt, which was built from the pre-change list.
+        // The retry never asks for it again: it re-queried `retrievablePacks` and re-read
+        // `library.names` for the attempt it was actually handed.
+        expect(searches.filter((u) => u.includes(encodeURIComponent(bravo)))).toHaveLength(1)
+        expect(candidates.length).toBeGreaterThan(0)
+        expect(candidates.every((c) => c.packId === alpha)).toBe(true)
+        expect((await h.svc.ensureServer(h.db()))!.names.has(bravo)).toBe(false)
+      }
+
+      // ---- (3b) …and the re-query is what does it, not merely the new serving map ---------
+      // Here the pack's FILE disappears mid-attempt. Nothing invalidates the library, so the
+      // retry restarts over the SAME build and `library.names` STILL carries the pack: only
+      // re-running `retrievablePacks` inside the callback — which resolves each pack by its
+      // header UUID — can notice that it is no longer retrievable.
+      {
+        const delta = await h.registerPack('delta.zim')
+        expect((await h.svc.ensureServer(h.db()))!.names.has(delta)).toBe(true)
+        const mark = h.requests.length
+
+        const rawGate = serveGate<void>()
+        h.hooks.beforeRespond = (url) =>
+          url.startsWith('/raw/') ? rawGate.wait() : Promise.resolve()
+        const askP = h.svc.makeArm(h.db(), [alpha, delta])!(
+          'alpha climate',
+          new AbortController().signal
+        )
+        await rawGate.entered
+        rmSync(join(h.zimDir, 'delta.zim')) // no revision bump: the published build stands
+        liveChild().emit('exit', 0, null) // …but the child dies, so the attempt is discarded
+        h.hooks.beforeRespond = async () => undefined
+        rawGate.release()
+
+        const candidates = await askP
+        const searches = searchesSince(mark)
+        expect(searches.filter((u) => u.includes(encodeURIComponent(alpha)))).toHaveLength(2)
+        expect(searches.filter((u) => u.includes(encodeURIComponent(delta)))).toHaveLength(1)
+        expect(candidates.every((c) => c.packId === alpha)).toBe(true)
+        // The reused build still names it — which is exactly why the map alone is not enough.
+        expect((await h.svc.ensureServer(h.db()))!.names.has(delta)).toBe(true)
+      }
+
+      // ---- (4) NO RETRY INTO A NEW SESSION: lock + unlock across a parked response --------
+      // The retry is admitted only while the SAME unlocked session still wants the work. A
+      // lock aborts the operation; the unlock that follows restores admission and starts a NEW
+      // epoch — and neither of those may turn into a second request under the new session.
+      {
+        const mark = h.requests.length
+        const gate = serveGate<void>()
+        h.hooks.beforeRespond = (url) =>
+          url.startsWith('/search') ? gate.wait() : Promise.resolve()
+        const askP = keepHandled(
+          h.svc.makeArm(h.db(), [alpha])!('alpha climate', new AbortController().signal)
+        )
+        await gate.entered
+
+        const { lockP } = await parkedLock(h)
+        h.releaseSuspend()
+        await lockP
+        expect(h.ctrl.isUnlocked()).toBe(false)
+        const unlocked = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
+        expect(unlocked.result).toMatchObject({ ok: true })
+        for (let i = 0; i < 20; i++) await tick() // let the new session's own pass finish
+
+        h.hooks.beforeRespond = async () => undefined
+        gate.release() // the parked response arrives in a session that is not its own
+        await expectAbortError(askP)
+        expect(searchesSince(mark)).toHaveLength(1) // never a second request
+      }
+
+      // ---- (5) NO RETRY AFTER CANCELLATION: the user's own abort ------------------------
+      {
+        const mark = h.requests.length
+        const gate = serveGate<void>()
+        h.hooks.beforeRespond = (url) =>
+          url.startsWith('/search') ? gate.wait() : Promise.resolve()
+        const askCtrl = new AbortController()
+        const askP = keepHandled(h.svc.makeArm(h.db(), [alpha])!('alpha climate', askCtrl.signal))
+        await gate.entered
+        askCtrl.abort()
+        h.hooks.beforeRespond = async () => undefined
+        gate.release()
+        await expectAbortError(askP)
+        expect(searchesSince(mark)).toHaveLength(1)
+      }
+
+      // ---- (6) EXACTLY ONE RETRY: a death during the retry as well -----------------------
+      // The retry budget is one, not "until it works": a server that keeps dying must produce
+      // an honest ordinary failure, not an unbounded loop against a possibly-hostile port.
+      {
+        // Start from a child that has already died, so BOTH attempts spawn their own and the
+        // spawn log counts them.
+        if (h.svc.serverState()?.alive) liveChild().emit('exit', 0, null)
+        const mark = h.requests.length
+        const spawnsBefore = h.serveSpawns.length
+        h.hooks.beforeRespond = async (url) => {
+          if (url.startsWith('/search')) liveChild().emit('exit', 0, null)
+        }
+        const askP = h.svc.makeArm(h.db(), [alpha])!(
+          'alpha climate',
+          new AbortController().signal
+        )
+        const err = await askP.then(
+          () => {
+            throw new Error('expected a StaleServerError rejection, but the ask resolved')
+          },
+          (e: unknown) => e
+        )
+        expect(err).toMatchObject({ name: 'StaleServerError', reason: 'child-died' })
+        // An ORDINARY error, not the #159 abort convention: the session still admits the work,
+        // so P4 reports "the pack server restarted during this question" as an outcome.
+        expect(err).not.toBeInstanceOf(DOMException)
+        expect(searchesSince(mark)).toHaveLength(2)
+        expect(h.serveSpawns).toHaveLength(spawnsBefore + 2)
+        h.hooks.beforeRespond = async () => undefined
+      }
+
+      // ---- (7) THE VIEWER: the same guard on getArticle, and the lock leg ----------------
+      {
+        // (a) death mid-read → one retry → the article of the SECOND attempt.
+        await h.svc.ensureServer(h.db())
+        const mark = h.requests.length
+        let rawResponses = 0
+        h.hooks.beforeRespond = async (url) => {
+          if (url.startsWith('/raw/') && rawResponses === 0) liveChild().emit('exit', 0, null)
+        }
+        h.hooks.respond = (url) => {
+          if (!url.startsWith('/raw/')) return null
+          rawResponses++
+          return rawResponses === 1 ? { status: 200, body: SENTINEL_ARTICLE_HTML } : null
+        }
+        const article = await h.svc.getArticle(h.db(), alpha, 'A/Alpha')
+        expect(article).not.toBeNull()
+        expect(article!.title).toBe('Alpha and the climate')
+        expect(JSON.stringify(article)).not.toContain(SENTINEL)
+        expect(rawsSince(mark)).toHaveLength(2)
+        h.hooks.respond = () => null
+        h.hooks.beforeRespond = async () => undefined
+
+        // (b) a lock lands during the read: the SERVICE refuses with the #159 AbortError and
+        //     the REAL `packs:getArticle` handler turns that into the viewer's honest null.
+        const gate = serveGate<void>()
+        h.hooks.beforeRespond = (url) =>
+          url.startsWith('/raw/') ? gate.wait() : Promise.resolve()
+        const handlerReadP = keepHandled(invoke(handlers, IPC.getPackArticle, alpha, 'A/Alpha'))
+        const serviceReadP = keepHandled(h.svc.getArticle(h.db(), alpha, 'A/Alpha'))
+        await gate.entered
+        const { lockP } = await parkedLock(h)
+        h.hooks.beforeRespond = async () => undefined
+        gate.release()
+        await expectAbortError(serviceReadP)
+        expect((await handlerReadP).result).toBeNull()
+        h.releaseSuspend()
+        await lockP
+        expect(h.ctrl.isUnlocked()).toBe(false)
+        h.ctrl.unlock('right-password')
+      }
+
+      // --- L5 legs (agent B) ---
+      // --- DTO legs (agent B) ---
+    } finally {
+      await h.close()
+    }
+  })
 })
