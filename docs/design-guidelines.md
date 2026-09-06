@@ -1154,6 +1154,20 @@ pack/popover/review renderer suites and `token-contrast.test.ts` all green; a re
 visual pass in both themes/languages is recorded separately (T18-b) — renderer mocks alone don't
 close visual acceptance (§11.4's standing caveat).
 
+**Follow-up wave (2026-09-06, #340 — the P6/P7 renderer residuals, decided as built):** (1) a
+pack row's Enable/Disable and Remove buttons disable only while THAT row is busy (another row's
+toggle or remove is an independent operation; Add packs… and Refresh keep their global disable);
+(2) an unavailable pack can be disabled, not only removed — the flag is the user's, whatever the
+file is doing; (3) the meta line shows the archive's language as a NAME in the UI language via
+`Intl.DisplayNames` ("German" / "Deutsch"), the raw ISO 639-3 code only when the platform cannot
+name it; (4) the "Answering from:" chip names a ticked pack that is disabled or unavailable WITH
+that state, in the popover row's own words ("Pack: … (disabled)"), so the readout never claims a
+source the ask will skip; (5) `.footer-menu-btn` carries its own `min-width: 0; max-width: 100%`
+(pinned by `zim-ui-layout-rules.test.ts`), not only under `.scope-footer-wrap`; (6) Chat refetches
+packs at `reconcile-end` / `mutation` only, never at `reconcile-start`. The collision surface is
+§17 D-Z16 (`packs:status.excluded` → the "Not served" badge naming the winner). Tests:
+`KnowledgePacks.test.tsx` ("#340 nits …", the chip-state leg), `ChatPacksRefresh.test.tsx`.
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

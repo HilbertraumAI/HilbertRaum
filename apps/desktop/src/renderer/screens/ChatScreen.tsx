@@ -565,6 +565,9 @@ export function ChatScreen({
     return window.api.onKnowledgePacksChanged?.((event: KnowledgePacksChangedEvent) => {
       if (event.epoch < lastPacksEpochRef.current) return
       lastPacksEpochRef.current = event.epoch
+      // #340 nit: `reconcile-start` announces that a pass BEGAN — the pack set cannot have moved
+      // yet, so refetching there and again at `reconcile-end` cost one extra DB read per pass.
+      if (event.reason === 'reconcile-start') return
       void (async () => {
         try {
           setPacks((await window.api.listKnowledgePacks?.()) ?? [])
