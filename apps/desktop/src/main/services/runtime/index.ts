@@ -304,6 +304,15 @@ export class RuntimeManager {
    */
   private externalPreemptionHook: ((reason: string) => void) | null = null
   private readonly externalTeardownTimeoutMs: number
+  /**
+   * Narrow change seam (PR #303 P3): fired synchronously AFTER every transition `status()`
+   * reports differently — a start admitted (`startingModelId` set), a start committed
+   * (`current` set, ready), a start settled without a commit (failed or cancelled), and a
+   * stop (`current` cleared). The main layer subscribes to push the Performance screen; the
+   * manager itself imports nothing Electron. Listeners are isolated: one that throws never
+   * fails a start or a stop.
+   */
+  private readonly changeListeners = new Set<() => void>()
 
   constructor(
     private readonly factory: RuntimeFactory,
@@ -336,6 +345,28 @@ export class RuntimeManager {
   /** Register/clear the external pre-emption hook (one consumer: local-API admission). */
   setExternalPreemption(hook: ((reason: string) => void) | null): void {
     this.externalPreemptionHook = hook
+  }
+
+  /**
+   * Subscribe to runtime transitions (starting, ready, stopped — see `changeListeners`);
+   * returns the unsubscribe. Fired after the state is committed, so `status()` read inside
+   * the callback already reports the new state.
+   */
+  onChange(cb: () => void): () => void {
+    this.changeListeners.add(cb)
+    return () => {
+      this.changeListeners.delete(cb)
+    }
+  }
+
+  private emitChange(): void {
+    for (const cb of this.changeListeners) {
+      try {
+        cb()
+      } catch {
+        /* a listener is an observer of the runtime, never a participant in its lifecycle */
+      }
+    }
   }
 
   /** Zero the gate for a new runtime epoch (see {@link gateEpoch}). */
@@ -489,6 +520,7 @@ export class RuntimeManager {
     // #107: when the start actually began — status() derives the elapsed time of the
     // "Starting…" window from it, so the renderer can show honest load progress.
     this.startingSince = Date.now()
+    this.emitChange()
     try {
       return await this.enqueue(() => this.doStart(opts))
     } finally {
@@ -497,6 +529,8 @@ export class RuntimeManager {
         this.startingModelId = null
         this.startingSince = null
         this.startingBytesTotal = null
+        // The window closed — ready (doStart already announced the commit) or not.
+        this.emitChange()
       }
     }
   }
@@ -550,6 +584,7 @@ export class RuntimeManager {
     // #107: the crash-restart window carries load progress too (it is the slowest start
     // the app performs — a full cold ladder re-walk); doStart re-stamps at queue-drain.
     this.startingSince = Date.now()
+    this.emitChange()
     try {
       return await this.enqueue(() => this.doStart(opts))
     } finally {
@@ -559,6 +594,7 @@ export class RuntimeManager {
         this.startingModelId = null
         this.startingSince = null
         this.startingBytesTotal = null
+        this.emitChange()
       }
     }
   }
@@ -605,6 +641,7 @@ export class RuntimeManager {
       // chatStream passes the generation gate with zero call-site changes.
       this.current = this.decorateWithGenerationGate(next)
       this.last = health
+      this.emitChange()
     } catch (err) {
       try {
         await next.stop()
@@ -625,7 +662,9 @@ export class RuntimeManager {
     const stopping = this.current
     this.current = null
     this.last = null
+    this.emitChange()
     await stopping.stop()
+
     // The runtime is gone — no stream of its epoch can legitimately still count.
     this.resetGenerationGate()
   }

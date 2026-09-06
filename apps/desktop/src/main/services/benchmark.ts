@@ -14,9 +14,17 @@ import { t } from '../../shared/i18n'
 import { perfMark } from './perf'
 import { throughputMbps } from './read-speed'
 import type { ModelManifest } from '../../shared/manifest'
-import type { BenchmarkResult, EffectiveReadSample, HardwareProfile } from '../../shared/types'
+import type {
+  BenchmarkProgressStep,
+  BenchmarkResult,
+  EffectiveReadSample,
+  HardwareProfile,
+  MemoryClass,
+  SpeedSampleIdentity
+} from '../../shared/types'
 import type { ModelRuntime, RuntimeTimings } from './runtime'
-import { recommendModelId, recommendModelIdByRam } from './models'
+import { recommendChatModelId, recommendModelId } from './models'
+import { SLOW_READ_MBPS, VERY_LOW_TOKENS_PER_SECOND } from '../../shared/performance-rules'
 
 // Hardware benchmarker (spec §7.3, §11). Detects RAM/CPU/OS, measures drive
 // read/write speed with a small temp file in the workspace, optionally estimates
@@ -25,8 +33,12 @@ import { recommendModelId, recommendModelIdByRam } from './models'
 // no network, no telemetry, no child_process. Every measurement is independently
 // resilient: a failed step yields a null value + a friendly warning, never a throw.
 
-/** Tokens/sec at or below this count as "very low" and downgrade the profile one step (spec §11.3). */
-export const VERY_LOW_TOKENS_PER_SECOND = 3
+/**
+ * Tokens/sec strictly below this count as "very low" and downgrade the profile one step (spec
+ * §11.3). Defined in `shared/performance-rules.ts` since the PR #303 audit (N3) so the
+ * Performance screen rates by the same figures; re-exported here unchanged.
+ */
+export { VERY_LOW_TOKENS_PER_SECOND }
 /** Drive WRITE throughput below this (MB/s) earns a non-blocking "slow drive" warning
  *  (spec §11.3). Calibrated against the fsync-bound write leg of the 8 MB probe; kept as
  *  the secondary check for genuinely broken media after #110 re-keyed the primary
@@ -39,9 +51,11 @@ export const SLOW_DRIVE_MBPS = 30
  * 88–99 s per 9B start at ~70 MB/s effective read vs 12–14 s from an SSD. 100 MB/s
  * separates the USB-stick class (~70) from SSDs (430+ measured) with margin on both
  * sides; checksum-pass samples are hash-CPU-bound at a few hundred MB/s and stay above
- * it on any healthy SSD (#108 measured 136 MB/s worst-case).
+ * it on any healthy SSD (#108 measured 136 MB/s worst-case). The value lives in
+ * `shared/performance-rules.ts` (`SLOW_READ_MBPS`, PR #303 audit N3) — the screen's "Slow"
+ * drive rating is the same threshold by construction.
  */
-export const SLOW_EFFECTIVE_READ_MBPS = 100
+export const SLOW_EFFECTIVE_READ_MBPS = SLOW_READ_MBPS
 /** Size of the temp file written to probe drive speed. Small + bounded so the UI never hangs. */
 export const DRIVE_PROBE_BYTES = 8 * 1024 * 1024 // 8 MB
 /** Bytes per gigabyte (GiB) used to convert total memory for classification + display. */
@@ -437,12 +451,46 @@ export function upsertSlowReadWarning(warnings: string[], effectiveReadMbps: num
   return kept
 }
 
-/** The GPU probe summary INJECTED into the benchmark (architecture.md GPU record §5.1/§8). */
+/**
+ * The GPU probe summary INJECTED into the benchmark (architecture.md GPU record §5.1/§8).
+ * `name`, `totalMb` and `budgetMb` describe ONE device — the BUDGET device `nextStartMemory`
+ * in services/performance.ts selects (the largest usable card by the shared
+ * `shared/gpu-rules.ts` rule; PR #308 audit decision 9 unified with PR #303 audit M8.2) — so a
+ * recorded result never pairs one device's name with another's memory.
+ */
 export interface GpuBenchmarkInput {
-  /** Display name of the primary probed device (→ `BenchmarkResult.gpu`). */
+  /**
+   * Display name of the BUDGET device (→ `BenchmarkResult.gpu`): the card the next start will
+   * fit against (`nextStartMemory` in services/performance.ts), not the first device listed.
+   * Null when the next start has no card — no device, an integrated-only machine, or the GPU
+   * switched off / auto-disabled.
+   */
   name: string | null
-  /** Pre-computed bump eligibility (`gpuUsefulForProfile` over the probed devices). */
+  /**
+   * Pre-computed PROFILE-BUMP eligibility (`gpuUsefulForProfile` over ALL probed devices,
+   * GPU record §8): does the hardware carry a usable card at all. Deliberately NOT the same
+   * question as `memoryClass`: the bump describes the machine, the class describes the NEXT
+   * START (it honours `gpuMode` / `gpuAutoDisabled` and names one budget device), so
+   * `{ useful: true, memoryClass: 'cpu' }` is a valid input — a card present, the GPU off.
+   */
   useful: boolean
+  /**
+   * Total memory of the budget device in MiB (→ `BenchmarkResult.gpuVramMb`, the graphics tile's
+   * figure); absent/null = unknown. NOT the picker's input — that is `budgetMb`.
+   */
+  totalMb?: number | null
+  /**
+   * The graphics-memory BUDGET of the budget device in raw MiB (`graphicsBudgetMib` in
+   * services/models.ts: the probe's free figure, else total − 1024; PR #308 audit decision 10)
+   * — what the §6.6 rule-C pick is judged against. Absent/null = unknown → the RAM pick.
+   */
+  budgetMb?: number | null
+  /**
+   * The computer's memory class for the next start (services/performance.ts
+   * `nextStartMemory`): 'discrete' makes the chat pick rule C against `budgetMb` (§6.6);
+   * absent → 'cpu', the RAM pick.
+   */
+  memoryClass?: MemoryClass
 }
 
 export interface RunBenchmarkDeps {
@@ -461,9 +509,11 @@ export interface RunBenchmarkDeps {
   /**
    * Latest honest effective-read sample (issue #108), injected by the caller
    * (registerBenchmarkIpc reads the session latch in services/read-speed.ts, falling
-   * back to the previously persisted sample so a re-run never loses it). NEVER measured
-   * in here — the sample is a byproduct of real model loads / checksum passes, and this
-   * module keeps its zero-`child_process`, probe-only I/O posture.
+   * back to the previously persisted sample — of THIS machine only — so a re-run never
+   * loses it; it re-resolves after the run too, `mergeSampleIntoResult`, so a sample
+   * landing mid-run is not overwritten). NEVER measured in here — the sample is a
+   * byproduct of real model loads / checksum passes, and this module keeps its
+   * zero-`child_process`, probe-only I/O posture.
    */
   effectiveRead?: EffectiveReadSample | null
   /**
@@ -477,6 +527,28 @@ export interface RunBenchmarkDeps {
   modelBusy?: () => boolean
   /** Injectable clock for deterministic `ranAt` in tests. */
   now?: () => Date
+  /**
+   * Called as each step COMPLETES SUCCESSFULLY: 'system' always; 'drive' only when the
+   * write/fsync probe produced figures (a failed probe reports nothing for the step, and the
+   * result carries `warnDriveProbe`); 'speed' only when a tokens/sec reading was actually
+   * obtained (not when no runtime was up, not when the leg was skipped as busy — #185 — and
+   * not when the probe failed); 'done' always, once the result is assembled. A later step
+   * therefore never implies an omitted earlier one succeeded, and 'done' means the PROBES are
+   * complete — the caller's persistence and occupancy release still follow it (the
+   * `performance:changed` push after those is the idle signal). The IPC layer forwards the
+   * steps to the renderer that started the run; the first-run path passes nothing. Never
+   * awaited, and a throwing callback never fails the run.
+   */
+  onProgress?: (step: BenchmarkProgressStep) => void
+
+}
+
+function report(deps: RunBenchmarkDeps, step: BenchmarkProgressStep): void {
+  try {
+    deps.onProgress?.(step)
+  } catch {
+    /* progress is a courtesy to the UI — never the run's problem */
+  }
 }
 
 /**
@@ -487,7 +559,12 @@ export interface RunBenchmarkDeps {
  */
 export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkResult> {
   const sys = detectSystem()
+  report(deps, 'system')
   const drive = await measureDriveSpeed(deps.workspacePath)
+  // L3: the step is a success tick, not a "we tried" tick — a failed probe (the error string
+  // set, figures null) reports nothing, and the result's `warnDriveProbe` says why.
+  if (!drive.error) report(deps, 'drive')
+
   // #185: `speedSkipped` distinguishes "no runtime was up, nothing to measure" (silent, the
   // long-standing behavior) from "a runtime WAS up but something else was using it" (warned).
   let speedSkipped = false
@@ -497,6 +574,11 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
       speedSkipped = true
     }
   })
+  // L3: only a READING completes the step. A runtime that was up but busy elsewhere (the leg
+  // skipped, `warnSpeedSkipped`), or whose probe failed, used to tick 'speed' anyway and the
+  // screen showed a measured step for a figure the card then lacked.
+  if (reading) report(deps, 'speed')
+
   const tokensPerSecond = reading?.tokensPerSecond ?? null
   // #291: HOW the figure was measured — the runtime's decode timings, or the chunk fallback —
   // plus the token/chunk count it covers, so the card can mark a fallback as approximate.
@@ -504,6 +586,20 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   // Issue #52: record WHICH model produced the tok/s number — the currently loaded one,
   // which is often not the recommended one. null whenever nothing was measured.
   const measuredModelId = tokensPerSecond != null ? (deps.runtime?.modelId ?? null) : null
+  // Issue #322: WHAT the figure was measured under — the next start's class and budget device
+  // at this moment (the same `gpu` input the pick below is judged against), the running
+  // model's launched window and the rung it landed on — so the persisted sample can later be
+  // matched against the next start (`speedSignalFor`) instead of steering it under conditions
+  // that no longer hold. null whenever nothing was measured, like `speedBasis`.
+  const speedIdentity: SpeedSampleIdentity | null =
+    tokensPerSecond != null
+      ? {
+          memoryClass: deps.gpu?.memoryClass ?? 'cpu',
+          deviceName: deps.gpu?.name ?? null,
+          contextTokens: deps.runtime?.contextWindow?.() ?? null,
+          backend: deps.runtime?.backend ?? null
+        }
+      : null
 
   const gpuName = deps.gpu?.name ?? sys.gpu
   const gpuUseful = deps.gpu?.useful ?? false
@@ -519,10 +615,17 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   // so the Diagnostics card and the Models screen ★ agree within one run.
   const ramRounded = Math.round(sys.ramGb)
   const speedSignal = { tokensPerSecond, measuredModelId }
-  const ramPick = recommendModelIdByRam(deps.manifests, ramRounded, 'chat', speedSignal)
+  // §6.6 rule C: on a discrete card the RAM pick stands where it fits the card's BUDGET (free
+  // memory, else total − 1024 — decision 10), else the best eligible model; unified memory and
+  // no-card machines keep the RAM pick. `totalMb` stays the tile's figure, never the budget.
+  const memory = {
+    memoryClass: deps.gpu?.memoryClass ?? 'cpu',
+    ramGb: ramRounded,
+    budgetMb: deps.gpu?.budgetMb ?? null
+  } as const
+  const ramPick = recommendChatModelId(deps.manifests, memory, speedSignal)
   // Did the signal actually move the pick? Feeds the named §6.5 warning below.
-  const recommendationLowered =
-    ramPick !== recommendModelIdByRam(deps.manifests, ramRounded, 'chat')
+  const recommendationLowered = ramPick !== recommendChatModelId(deps.manifests, memory)
   const recommendedModelId = ramPick ?? recommendModelId(deps.manifests, profile, 'chat')
   const warnings = buildWarnings({
     profile,
@@ -537,6 +640,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     effectiveReadMbps: deps.effectiveRead?.mbps ?? null
   })
 
+  report(deps, 'done')
   return {
     os: sys.os,
     arch: sys.arch,
@@ -544,10 +648,12 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     cpuCores: sys.cpuCores,
     ramGb: sys.ramGb,
     gpu: gpuName,
+    gpuVramMb: deps.gpu?.totalMb ?? null,
     driveReadMbps: drive.readMbps,
     driveWriteMbps: drive.writeMbps,
     tokensPerSecond,
     speedBasis,
+    speedIdentity,
     measuredModelId,
     effectiveRead: deps.effectiveRead ?? null,
     profile,

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   latestEffectiveRead,
+  latestEffectiveReadBySource,
   MIN_MODEL_LOAD_SAMPLE_BYTES,
   MIN_READ_SAMPLE_BYTES,
   MIN_READ_SAMPLE_MS,
@@ -9,6 +10,7 @@ import {
   recordModelLoadRead,
   resetEffectiveReadForTests,
   setEffectiveReadObserver,
+  setReadSpeedClockForTests,
   suppressNextModelLoadSample,
   throughputMbps
 } from '../../src/main/services/read-speed'
@@ -118,24 +120,93 @@ describe('effective-read latch (#108)', () => {
     expect(latestEffectiveRead()).toBeNull()
   })
 
-  it('the observer fires once per ACCEPTED sample and its throw never escapes', () => {
-    const seen: Array<string | null> = []
+  it('the observer fires once per ACCEPTED sample (ranked winner or not) and its throw never escapes', () => {
+    const seen: Array<{ ranked: string | null; checksum: string | null }> = []
     setEffectiveReadObserver(() => {
-      seen.push(latestEffectiveRead()?.modelId ?? null)
+      seen.push({
+        ranked: latestEffectiveRead()?.modelId ?? null,
+        checksum: latestEffectiveReadBySource('checksum')?.modelId ?? null
+      })
       throw new Error('persist failed — must not reach the producer')
     })
     expect(() => recordChecksumRead(6_000_000_000, 60_000, 'observed')).not.toThrow()
     recordChecksumRead(MIN_READ_SAMPLE_BYTES - 1, 60_000, 'rejected-by-floor')
-    // A ranking-rejected candidate notifies nobody either.
     recordModelLoadRead('/ignored.gguf', 10_000, 'load', 6_000_000_000)
+    // A checksum that LOSES the ranked slot to the model load still notifies (P3): its per-source
+    // latch moved — the observer sees the ranked latch unchanged and the checksum latch updated.
     recordChecksumRead(6_000_000_000, 60_000, 'outranked')
-    expect(seen).toEqual(['observed', 'load'])
+    expect(seen).toEqual([
+      { ranked: 'observed', checksum: 'observed' },
+      { ranked: 'load', checksum: 'observed' },
+      { ranked: 'load', checksum: 'outranked' }
+    ])
   })
+
 
   it('the observer sees the sample already latched (persistence reads the latch)', () => {
     const cb = vi.fn(() => expect(latestEffectiveRead()?.modelId).toBe('latched-first'))
     setEffectiveReadObserver(cb)
     recordChecksumRead(6_000_000_000, 60_000, 'latched-first')
     expect(cb).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('per-source latches (the Performance screen\'s observed rows)', () => {
+  beforeEach(() => resetEffectiveReadForTests())
+
+  it('keeps the newest sample of EACH source, unranked, while the ranked latch still prefers model_load', () => {
+    recordModelLoadRead('/m.gguf', 30_000, 'm1', 6_000_000_000)
+    recordChecksumRead(5_000_000_000, 40_000, 'm2')
+    // The ranked latch hides the checksum behind the model load…
+    expect(latestEffectiveRead()?.source).toBe('model_load')
+    // …the per-source view shows both, each the newest of its kind.
+    expect(latestEffectiveReadBySource('model_load')?.modelId).toBe('m1')
+    expect(latestEffectiveReadBySource('checksum')?.modelId).toBe('m2')
+    recordChecksumRead(5_000_000_000, 20_000, 'm3')
+    expect(latestEffectiveReadBySource('checksum')?.modelId).toBe('m3')
+  })
+
+  it('starts empty and clears with the test reset', () => {
+    expect(latestEffectiveReadBySource('model_load')).toBeNull()
+    expect(latestEffectiveReadBySource('checksum')).toBeNull()
+  })
+})
+
+describe('strictly increasing sample timestamps (PR #303 audit A-D4)', () => {
+  beforeEach(() => resetEffectiveReadForTests())
+
+  it('two samples under a frozen clock get distinct, increasing `at` values (ISO strings, 1 ms apart)', () => {
+    setReadSpeedClockForTests(() => new Date('2026-09-06T12:00:00.000Z'))
+    recordChecksumRead(6_000_000_000, 60_000, 'first')
+    const first = latestEffectiveReadBySource('checksum')!.at
+    recordChecksumRead(6_000_000_000, 60_000, 'second')
+    const second = latestEffectiveReadBySource('checksum')!.at
+    expect(first).toBe('2026-09-06T12:00:00.000Z')
+    expect(second).toBe('2026-09-06T12:00:00.001Z')
+  })
+
+  it('a clock that runs backwards is bumped past the previous accepted sample; a rejected sample never reaches the clock', () => {
+    const readings = ['2026-09-06T12:00:05.000Z', '2026-09-06T12:00:01.000Z', '2026-09-06T12:00:09.000Z']
+    let reads = 0
+    setReadSpeedClockForTests(() => new Date(readings[reads++]))
+    recordChecksumRead(6_000_000_000, 60_000, 'a')
+    recordChecksumRead(MIN_READ_SAMPLE_BYTES - 1, 60_000, 'rejected-by-floor')
+    const a = latestEffectiveReadBySource('checksum')!.at
+    recordChecksumRead(6_000_000_000, 60_000, 'b') // the clock says 4 s EARLIER than a
+    const b = latestEffectiveReadBySource('checksum')!.at
+    recordChecksumRead(6_000_000_000, 60_000, 'c') // the clock is ahead again: taken as is
+    const c = latestEffectiveReadBySource('checksum')!.at
+    expect([a, b, c]).toEqual(['2026-09-06T12:00:05.000Z', '2026-09-06T12:00:05.001Z', '2026-09-06T12:00:09.000Z'])
+    expect(reads).toBe(3)
+  })
+
+  it('a checksum in the same millisecond as a model load is a distinct sample in the per-source latches; the ranked latch keeps the load', () => {
+    setReadSpeedClockForTests(() => new Date('2026-09-06T12:00:00.000Z'))
+    recordModelLoadRead('/ignored.gguf', 10_000, 'load', 6_000_000_000)
+    recordChecksumRead(6_000_000_000, 60_000, 'hash')
+    const load = latestEffectiveReadBySource('model_load')!
+    const hash = latestEffectiveReadBySource('checksum')!
+    expect(hash.at > load.at).toBe(true)
+    expect(latestEffectiveRead()).toBe(load)
   })
 })

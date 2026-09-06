@@ -888,10 +888,15 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 - **RT-7 (KV cache lost on GPU→CPU fallback).** A full cold prefill after a mid-session GPU crash is
   bounded to one event; `--slot-save-path` + restore is real complexity/disk weighed against a rare path.
   Accepted residual for v1.
-- **RT-8 (first-run benchmark token-probe steal).** Already mitigated by startup ordering: the benchmark
-  fires before `maybeAutoStartActiveModel`, so `runtime.active()` is null and the 64-token probe is skipped
-  at true first-run; the steal only occurs in the rare warm-runtime + immediate-chat race, is bounded to
-  one first-run event, and a precise in-flight gate needs a streaming signal not cheaply available here.
+- **RT-8 (first-run benchmark token-probe steal).** Was mitigated by startup ordering (the benchmark fired
+  before `maybeAutoStartActiveModel`, so `runtime.active()` was null and the 64-token probe skipped at
+  first-run). Since PR #303 P7 that order is deliberately the REVERSE — the automatic measurement is
+  scheduled behind the auto-start's settlement (benchmark.md "Scheduling behind the auto-start"), so on
+  a machine with an active model the probe DOES run, on the freshly started runtime. The steal stays
+  bounded: the #185 busy check at the probe skips the leg when a chat is already in flight, a probe that
+  becomes contended mid-stream is discarded, the probe is capped at 64 tokens, and SD2 allows one
+  automatic attempt per unlock session. A precise in-flight gate still needs a streaming signal not
+  cheaply available here.
 - **RT-9 (§17(b) fixed user-turn fence reserve).** The `cache_prompt` prefix-reuse win is LATENT — no
   shipped skill trims its fence, so the current live-final-turn term never actually shifts the fence text —
   while switching to a fixed reserve changes the fence-SIZING formula, a prompt-assembly change that could
@@ -954,7 +959,11 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   comfortably, the lightest model meeting its minimum; else none. Used by `listModels` (live
   `machineRamGb()` = `totalmem` rounded to whole GB) and by the benchmark (same rounding, so the two
   surfaces always agree). The legacy `recommended_profiles` lookup remains the fallback when RAM is
-  unknown.
+  unknown. **2026-09-06 amendment (PR #308 audit):** on a machine with a usable discrete graphics
+  card (and graphics acceleration not switched off), `recommendChatModelId` dispatches instead to
+  `recommendModelIdByVram` (`services/models.ts`), which judges fit against the budget device's
+  free graphics memory rather than RAM, RAM still a hard floor, otherwise reusing the same rank
+  tiebreak — see `docs/model-benchmarks.md` §6.6.
 - **RAM gate (post-MVP).** `buildModelList` flags `insufficientRam` on models whose
   `recommended_min_ram_gb` exceeds the machine RAM; the AI Model screen disables Select/Start and
   shows a "Needs ≥N GB RAM" badge, and `startModelRuntime` refuses to load installed weights that
@@ -980,8 +989,13 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 - **Auto-start (post-MVP).** `maybeAutoStartActiveModel` starts the persisted `activeModelId` in the
   background once the workspace is usable (app launch for plaintext dev; unlock/create for
   encrypted), so a restarted app matches what Home shows. Same §7.4 install gate as the manual
-  `startRuntime`; fire-and-forget like `maybeRunFirstBenchmark` (failures are logged, manual start
-  still works). Opt-out via `AppSettings.autoStartActiveModel` (Settings toggle, default ON).
+  `startRuntime`; failures are logged, manual start still works. Since PR #303 P7 it returns a
+  `Promise<void>` that settles when the start completed, was skipped or failed (never rejects):
+  the first-run benchmark scheduler awaits it (benchmark.md "Scheduling behind the auto-start" —
+  the seams run `prepareFirstBenchmark` → `maybeAutoStartActiveModel` → `scheduleFirstBenchmark`
+  → `maybeStartLocalApi`, and the benchmark's measurement never overlaps the weight hash + load);
+  the seams themselves stay fire-and-forget. Opt-out via `AppSettings.autoStartActiveModel`
+  (Settings toggle, default ON).
 
 ## Chat & streaming (Phase 3)
 - **`services/chat.ts`** (spec §7.6) owns conversation/message persistence and prompt
@@ -2225,7 +2239,9 @@ Per-finding disposition (F-1…F-8):
 - **TG-4 — the Translate view (text path, plan §2 D6).** A new **7th primary** rail destination
   (`ScreenId 'translate'`, between Documents and Images — design-guidelines §2 now "7 primary +
   1 utility") for live TEXT translation on the SAME `ctx.translator` sidecar the doc-task uses (no
-  second model). A per-job streaming service `TranslateJobService` (`services/translation/jobs.ts`,
+  second model). (Rail superseded 2026-09-05: the rail is now three groups plus the brand mark,
+  with Skills folded into Settings as a tab — design-guidelines.md §2 is current, not this count.)
+  A per-job streaming service `TranslateJobService` (`services/translation/jobs.ts`,
   the vision image-job template) behind new IPC — `translate:start` → `{jobId}` (validates
   `isTranslationLangCode` + source ≠ target + non-empty + a model present; busy-REJECTs a second
   job; refuses while a doc task holds the lane), `translate:cancel`, `translate:getActive` for
@@ -2751,16 +2767,25 @@ adds is the safety machinery:
   unless `HILBERTRAUM_GPU_SMOKE` points at a provisioned drive**.
 - **The Phase-16 surface** on top of the ladder: Settings' "Use GPU acceleration" toggle binds
   `gpuMode 'auto' | 'off'` (default ON). The Settings "Diagnostics (advanced)" tab shows the **Acceleration** line (live
-  `RuntimeStatus.backend`/`gpuName` while running, else the persisted `settings.gpuProbe`), the
+  `RuntimeStatus.backend`/`gpuName` while running, else the snapshot's `currentGpu` — this
+  machine's ELIGIBLE probe as `performance:get` resolves it, never `settings.gpuProbe` read raw;
+  see benchmark.md "One eligible source" and issue #327), the
   **runtime build** line (`getRuntimeInstall` IPC `runtime:install` → the `.hilbertraum-runtime.json`
   marker), and the compatibility-mode notice with **"Try GPU again"** — a dedicated IPC
   (`gpu:try-again`) that clears `gpuAutoDisabled`/`gpuLastError`, invalidates the session probe
   cache, and re-probes + persists (hidden while the toggle is OFF, where it would do nothing).
-  The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful }`
+  The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful, totalMb, budgetMb, memoryClass }`
   (`gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated → the conservative `classifyProfile`
-  bump); `benchmark.ts` itself keeps **zero `child_process`**. `maybeRunFirstBenchmark`
-  additionally refreshes `settings.gpuProbe` once per session even when a benchmark already
-  exists, so a drive moved between machines re-labels itself.
+  bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, re-exported by
+  `runtime/gpu.ts`, so the Performance screen rates a device by the same definition — `name`,
+  `totalMb` and `budgetMb` are one device's, the BUDGET device `nextStartMemory` selects, PR #308
+  audit decision 9); `benchmark.ts` itself keeps **zero
+  `child_process`**. `prepareFirstBenchmark` (the cheap half of the first-run benchmark, PR #303
+  P7) additionally refreshes `settings.gpuProbe` once per session even when a benchmark already
+  exists, so a drive moved between machines re-labels itself; a completed chat-engine install
+  runs the same refresh (`refreshGpuProbeAfterRuntimeInstall`, issue #323) when this machine's
+  eligible probe lists no device, so a benchmark run before the binary existed is not frozen on
+  its empty probe.
 - **`services/embeddings/e5.ts`** — `E5Embedder implements Embedder`, the real backend behind the same
   interface with the **manifest id + 384 dims**. It composes a `LlamaServer` started with `--embedding
   --pooling mean` (the **same** prebuilt binary — **zero new npm deps**, no fragile native build), is
@@ -3071,8 +3096,18 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 |---|---|
 | `gpuMode: 'auto' \| 'off'` (user intent; Settings toggle) | `AppSettings` (encrypted DB) |
 | `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder; cleared by "Try GPU again" |
-| `gpuProbe` (devices + `probedAt`) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself |
-| Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) |
+| `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way). **Refreshed again when the chat engine is installed** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall` re-runs the same `probeAndPersistGpu` (cache invalidated first) when a `llama_cpp` install reaches `done` and this machine's eligible probe lists no device — the empty probe of a benchmark run before the binary existed; an eligible probe with a device, a whisper-only install, or a failed / cancelled one leaves it alone, and the benchmark is never re-run |
+| Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` still names `devices[0]`, the first device the driver listed, display only; it is not the budget device the picker or the Performance tile use |
+
+**Runtime record (PR #308 audit, 2026-09-06), not a picker change.** The chat server runs on
+b9849's default **four unified slots** (`n_slots = 4`, `kv_unified = true`) whenever the app's
+argv passes no `-np`; for a single-user chat app this costs real sliding-window/recurrent cache
+overhead the picker's `estimated_context_cache_gib` term accounts for (`model-benchmarks.md`
+§6.6), and whether to add `-np 1` is a runtime decision outside this section (BUILD_STATE §5 item
+21 (i)). Separately, llama.cpp's `--fit` offload spreads layers across **every** device
+`--list-devices` lists, integrated GPUs included (`common/fit.cpp`), so on a hybrid laptop the
+sidecar may itself place layers on the iGPU even though the picker's budget device deliberately
+excludes it from the recommendation (BUILD_STATE §5 item 22 (j)).
 
 "Try GPU again" is the dedicated `gpu:try-again` IPC: clears the flags **and** invalidates the
 session probe cache **and** re-probes + persists (a plain settings write would keep a
@@ -3430,7 +3465,11 @@ pinned build is a manual smoke (like the GPU/PAID harnesses).**
   rest"); the export is the user choosing to take a copy *outside* the vault to share — never
   uploaded, no telemetry.
 - A never-benchmarked workspace is benchmarked **automatically in the background** after it becomes
-  usable (spec §2.1 first-run benchmark; `maybeRunFirstBenchmark`).
+  usable (spec §2.1 first-run benchmark). Since PR #303 P7 the seams run it in two halves around
+  the model auto-start — `prepareFirstBenchmark` (restore / seed / probe refresh, synchronous) →
+  `maybeAutoStartActiveModel` → `scheduleFirstBenchmark` (the measurement, behind the start's
+  settlement; bounded wait, one continuation, one attempt per unlock session) →
+  `maybeStartLocalApi` — see benchmark.md "Scheduling behind the auto-start".
 
 ## Audit log (Phase 19)
 
@@ -9787,6 +9826,8 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   **6th primary nav destination** — `design-guidelines.md §2` updated to "6 primary + 1 utility"
   *at that wave's date*. (#151 AR-1: superseded by TG-4 — Translate joined and Images now sits
   5th of **7 primary + 1 utility**; §2 and the TG-4 note earlier in this file are current.)
+  (Further superseded 2026-09-05: the rail is now three groups plus the brand mark, with Skills
+  folded into Settings as a tab — design-guidelines.md §2, not the TG-4 note, is current.)
 - **Lifecycle wiring** — `ctx.vision` built once in `main/index.ts`; torn down on `will-quit` and on
   workspace **LOCK** (in `registerWorkspaceIpc`, beside `ctx.embedder.suspend()` — its KV cache holds
   the decoded image, so it must die before the vault re-encrypts).

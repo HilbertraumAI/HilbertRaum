@@ -1,4 +1,5 @@
 import { guardedHandleFor } from './guarded-handle'
+import { refreshGpuProbeAfterRuntimeInstall } from './registerBenchmarkIpc'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { EngineDownloadJob, EngineStatus } from '../../shared/types'
@@ -47,6 +48,14 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
   const ipcHandle = guardedHandleFor(ctx)
   const engine =
     manager ?? new EngineDownloadManager({ fetchImpl: fetch, log: (m, meta) => log.info(m, meta) })
+  // Issue #323: a benchmark run BEFORE the chat engine existed persisted an empty stamped GPU
+  // probe (PR #308 decision 6 — an honest "no card"), and nothing re-ran the probe until the
+  // next unlock, the next check or "Try GPU again". Installing the chat engine is the moment
+  // that answer can change, so it re-runs the once-per-session probe refresh — the benchmark
+  // itself is not re-run, and a probe that already lists a device is left alone.
+  engine.onInstalled((families) => {
+    if (families.includes('llama_cpp')) void refreshGpuProbeAfterRuntimeInstall(ctx)
+  })
 
   const gates = (): DownloadGates => {
     const { policy } = loadPolicy(ctx.paths.configPath, (m) => log.warn(m), { isDev: ctx.isDev })

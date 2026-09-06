@@ -52,7 +52,10 @@ folder):
   workspace like any other document, in `workspace/documents/`)
 - Generated outputs
 - Local debug/audit logs
-- App settings
+- App settings- Hardware check history (up to eight records of the computers this drive has been checked on —
+  processor, memory, graphics card, the model that was recommended, and when — plus the
+  graphics-card probe and where each model last landed; no computer names, user names or serial
+  numbers; nothing is sent anywhere)
 - Knowledge packs (offline ZIM archives, e.g. an offline Wikipedia) are used in place —
   never copied, and never encrypted by the workspace vault. The original file stays on disk
   after you lock the workspace and after you remove a pack's registration from the app
@@ -67,7 +70,6 @@ folder):
   and a knowledge pack has been used in a chat, other programs running under your own user
   account on this computer can read the enabled packs through the pack server, which has
   no password of its own; locking or quitting stops it.
-
 Two small things live outside the workspace: the app remembers display preferences (such as your
 chosen language) in the app-data folder that the built-in browser engine keeps on this computer,
 and anything you copy with a **Copy** button is placed on this computer's clipboard, just like

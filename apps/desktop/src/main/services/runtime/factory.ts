@@ -14,7 +14,9 @@ import type {
 } from './index'
 import { createMockRuntime } from './mock'
 import { createLlamaRuntime } from './llama'
+import { createPlacementParser, recordModelPlacement } from './placement'
 import { probeGpuDevices } from './gpu'
+import { displayDevice } from '../../../shared/gpu-rules'
 import { startModelPrefetch, type ModelPrefetch } from './prefetch'
 import { isNextModelLoadSuppressed, recordModelLoadRead } from '../read-speed'
 import {
@@ -166,11 +168,15 @@ export interface GpuLadderDeps {
 export interface LlamaRungOptions {
   extraArgs: string[]
   onUnexpectedExit: (info: UnexpectedExitInfo) => void
+  /** The placement parser's stderr feed for this attempt (benchmark.md "Your model"). */
+  onStderrData?: (text: string) => void
 }
 
 export interface RuntimeSelectionDeps {
   /** Drive root used to resolve `runtime/llama.cpp/<os>/llama-server`. */
   rootPath: string
+  /** The current machine's fingerprint, stamped on every placement record (optional). */
+  machineKey?: () => string | null
   /** Dev build — gates the dev-only `HILBERTRAUM_LLAMA_BIN` override (M-5). Default false. */
   isDev?: boolean
   /** Resolve the sidecar binary (defaults to `resolveLlamaServerPath`). */
@@ -279,6 +285,8 @@ class LadderRuntime implements ModelRuntime {
     private readonly rungs: Rung[],
     private readonly deps: {
       makeLlama: NonNullable<RuntimeSelectionDeps['makeLlama']>
+      /** The current machine's fingerprint for the placement record (services/performance.ts). */
+      machineKey?: () => string | null
       makeMock: NonNullable<RuntimeSelectionDeps['makeMock']>
       onSelect?: RuntimeSelectionDeps['onSelect']
       onWarmup?: RuntimeSelectionDeps['onWarmup']
@@ -329,8 +337,11 @@ class LadderRuntime implements ModelRuntime {
         ? probe(rung.binPath).catch(() => [] as GpuDevice[])
         : null
       if (rung.speculative) this.deps.onSpeculative?.(this.opts, 'enabled')
+      // One placement reading per attempt (a retried rung must not sum two loads).
+      const placement = createPlacementParser()
       const runtime = this.deps.makeLlama(this.opts, rung.binPath, {
         extraArgs: rung.extraArgs,
+        onStderrData: placement.onStderrData,
         // Only a crash of a runtime that actually landed on the GPU triggers the
         // auto-fallback; CPU-mode crashes keep today's behavior (error + manual restart).
         onUnexpectedExit: (info) => {
@@ -445,12 +456,27 @@ class LadderRuntime implements ModelRuntime {
         // what names the backend for the UI. Empty probe ⇒ this start IS CPU mode.
         const devices = await probePromise
         this.backend = devices.length > 0 ? 'gpu' : 'cpu'
-        this.gpuName = devices[0]?.name ?? null
+        // LABEL ONLY (PR #303 audit M8.2 / P5 residual): the device a reader may SHOW is the
+        // shared `displayDevice` one — the first USEFUL discrete device, else the first listed.
+        // On a hybrid [iGPU, dGPU] box `devices[0]` named the iGPU while the model actually ran
+        // on the dGPU. Rung selection, `--fit` and the "never -ngl" policy are untouched.
+        this.gpuName = displayDevice(devices)?.device.name ?? null
       } else {
         this.backend = 'cpu'
         this.gpuName = null
       }
       this.deps.onSelect?.('llama', this.opts, `started via ${rung.label} (backend: ${this.backend})`)
+      // benchmark.md "Your model": what this start's log said about where the model landed.
+      // Recorded after the backend label so the observation carries the same verdict the UI
+      // shows; the observer (IPC layer) persists it. Never throws into the start.
+      recordModelPlacement({
+        modelId: this.opts.modelId,
+        contextTokens: this.opts.contextTokens,
+        backend: this.backend === 'gpu' ? 'gpu' : 'cpu',
+        ...placement.reading(),
+        machineKey: this.deps.machineKey?.() ?? null,
+        at: new Date().toISOString()
+      })
 
       // #109: pay the one-time prefill/graph warm-up NOW, inside the "Starting…" window,
       // so start() only resolves once the user's real first prompt lands on a warmed path.
@@ -655,7 +681,8 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
       createLlamaRuntime(opts, {
         binPath,
         extraArgs: rung?.extraArgs,
-        onUnexpectedExit: rung?.onUnexpectedExit
+        onUnexpectedExit: rung?.onUnexpectedExit,
+        onStderrData: rung?.onStderrData
       }))
   const makeMock = deps.makeMock ?? createMockRuntime
   const gpu = deps.gpu ?? {}
@@ -707,6 +734,7 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
 
     return new LadderRuntime(opts, rungs, {
       makeLlama,
+      machineKey: deps.machineKey,
       makeMock,
       onSelect: deps.onSelect,
       onWarmup: deps.onWarmup,

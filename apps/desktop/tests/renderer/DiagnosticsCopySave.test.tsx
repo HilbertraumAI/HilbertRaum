@@ -5,8 +5,9 @@ import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type BenchmarkResult, type RuntimeStatus } from '../../src/shared/types'
+import { normalizeBenchmarkResult } from '../../src/shared/benchmark-schema'
 import { stubApi } from '../helpers/renderer'
-import { appStatus, driveStatus } from '../helpers/status'
+import { appStatus, driveStatus, performanceSnapshot } from '../helpers/status'
 
 // Diagnostics copy/save: the per-card "Copy" buttons (App & runtime, Hardware benchmark,
 // Logs) hand technical details to support without retyping, and "Save to file…" writes the
@@ -68,6 +69,9 @@ function stubDiagnostics(
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getRuntimeInstall: vi.fn(async () => null),
     getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: bench })),
+    // #327: the Acceleration line (on screen and in the App & runtime report) takes its device
+    // from the snapshot's eligible probe, not from `settings.gpuProbe` — this box has none.
+    getPerformance: vi.fn(async () => performanceSnapshot()),
     copyToClipboard: vi.fn(async (text: string) => {
       lastCopied = text
       return true
@@ -251,6 +255,30 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     await screen.findByText('Test CPU', { exact: false })
     expect(screen.getByText('30 (over 64 tokens)')).toBeInTheDocument()
     expect(screen.queryByText(/measured with the loaded model/)).not.toBeInTheDocument()
+  })
+
+  // PR #303 audit H1: `getSettings` validates `lastBenchmark` now, and the legacy `{ profile }`
+  // blob normalizes to a record with an UNKNOWN identity and an UNKNOWN date (`ranAt: ''`,
+  // never a fabricated "now"). This is the shape the tab is actually handed for such a
+  // workspace — it must render it, and say "unknown" rather than print "Invalid Date".
+  it('renders the normalized legacy result (unknown RAM, unknown date) without throwing', async () => {
+    const user = userEvent.setup()
+    const legacy = normalizeBenchmarkResult({ profile: 'BALANCED' })!
+    expect(legacy.ranAt).toBe('')
+    stubDiagnostics({}, legacy)
+    renderDiagnostics()
+
+    expect(await screen.findByText('Hardware benchmark')).toBeInTheDocument()
+    // Twice: the App-&-runtime profile row and the benchmark card's own.
+    expect(screen.getAllByText('BALANCED').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('No matching model')).toBeInTheDocument()
+    // RAM, CPU and OS already said "unknown"; the date now does too.
+    expect(screen.getAllByText('unknown').length).toBeGreaterThanOrEqual(2)
+    expect(screen.queryByText(/Invalid Date/)).not.toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('button', { name: 'Copy' })[1])
+    expect(lastCopied).toContain('Last run: unknown')
+    expect(lastCopied).not.toContain('Invalid Date')
   })
 
   it('copies the logs from a fresh tail read', async () => {

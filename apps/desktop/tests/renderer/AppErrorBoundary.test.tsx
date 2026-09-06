@@ -15,8 +15,8 @@ vi.mock('../../src/renderer/screens/HomeScreen', () => ({
     return <div>home recovered</div>
   }
 }))
-vi.mock('../../src/renderer/screens/SkillsScreen', () => ({
-  SkillsScreen: (): JSX.Element => <div>skills screen ok</div>
+vi.mock('../../src/renderer/screens/PerformanceScreen', () => ({
+  PerformanceScreen: (): JSX.Element => <div>performance screen ok</div>
 }))
 
 import { App } from '../../src/renderer/App'
@@ -64,7 +64,7 @@ describe('App — per-screen error boundary (FE-1)', () => {
     expect(await screen.findByText('Something went wrong on this screen')).toBeInTheDocument()
     // …and the nav rail survived (it lives outside the boundary), so the user is not trapped.
     const nav = screen.getByRole('navigation')
-    expect(within(nav).getByRole('button', { name: /Skills/ })).toBeInTheDocument()
+    expect(within(nav).getByRole('button', { name: /Performance/ })).toBeInTheDocument()
   })
 
   it('resets the boundary when navigating to another screen (re-mount clears the error)', async () => {
@@ -72,9 +72,9 @@ describe('App — per-screen error boundary (FE-1)', () => {
     stubShell()
     render(<App />)
     await screen.findByText('Something went wrong on this screen')
-    await user.click(within(screen.getByRole('navigation')).getByRole('button', { name: /Skills/ }))
+    await user.click(within(screen.getByRole('navigation')).getByRole('button', { name: /Performance/ }))
     // The fresh screen renders and the fallback is gone — navigating away cleared the boundary.
-    expect(await screen.findByText('skills screen ok')).toBeInTheDocument()
+    expect(await screen.findByText('performance screen ok')).toBeInTheDocument()
     expect(screen.queryByText('Something went wrong on this screen')).not.toBeInTheDocument()
   })
 

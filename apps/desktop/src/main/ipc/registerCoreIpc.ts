@@ -13,6 +13,8 @@ import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
 import { log, readLogTail, readLogFull } from '../services/logging'
 import { saveTextExport } from './save-export'
+import { notifyPerformanceChanged, PERFORMANCE_SETTINGS_KEYS } from './performance-notify'
+
 import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../../shared/types'
 
 // IPC for app/drive status + settings, the privacy policy surface (`getPolicy`),
@@ -156,6 +158,11 @@ export function registerCoreIpc(ctx: AppContext): void {
     // Keep the main-side cached UI language in step with the setting (D-L3) — the
     // post-validation value, so junk patches can't move it.
     if ('uiLanguage' in patch) applyUiLanguageSetting(result.uiLanguage)
+    // The Performance snapshot reads a few settings keys (the active slots, the context
+    // override, the GPU mode); a patch touching one pushes the screen's re-read. Deliberately
+    // NOT every settings write — the screen has no interest in the UI language or the theme.
+    if (PERFORMANCE_SETTINGS_KEYS.some((k) => k in patch)) notifyPerformanceChanged()
+
     // Local API start/stop/re-port on a live settings change (the seam precedent above).
     // A bind failure is logged + lands in `status().lastError` (running:false) — the P4
     // card reads THAT surface; the settings write itself always succeeds. Fire-and-forget

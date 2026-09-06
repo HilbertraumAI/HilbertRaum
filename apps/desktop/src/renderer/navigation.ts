@@ -1,12 +1,14 @@
-// Central navigation resolution (design-guidelines §2). The app has 8 real destinations
-// (Translate added as a primary between Documents and Images — TranslateGemma plan §2 D6,
-// making the rail "7 primary + 1 utility"; Images is image-understanding §6); everything else
-// screens may ask for is a VIRTUAL target resolved here:
+// Central navigation resolution (design-guidelines §2). The app has 8 real screens (Home is
+// reached through the brand mark since the 2026-09-05 rail rework: rail = Chat · Documents ·
+// Translate · Images ‖ AI Model · Performance ‖ Settings); everything else screens may ask
+// for is a VIRTUAL target resolved here:
+//   - 'performance'            → the Performance screen (2026-09 performance wave)
 //   - 'ask-documents'          → Chat screen opened in documents mode
 //   - 'settings:privacy'       → Settings, "Privacy & data" tab
 //   - 'settings:diagnostics'   → Settings, "Diagnostics (advanced)" tab
-//   - 'settings:skills'        → legacy alias for the 'skills' screen, from when Skills was a
-//     Settings tab; kept working so old entry points still resolve.
+//   - 'settings:skills' / 'skills' → Settings, "Skills" tab (rail rework 2026-09-05: Skills
+//     moved back from a rail destination into Settings; both spellings resolve there so every
+//     entry point from either era keeps working).
 //   - 'privacy' / 'diagnostics' → legacy aliases for the two above, from when these
 //     were real screens; every old entry point (offline badge, banners, screen hints)
 //     must keep working through them.
@@ -19,7 +21,7 @@ export type ScreenId =
   | 'translate'
   | 'images'
   | 'models'
-  | 'skills'
+  | 'performance'
   | 'settings'
   // Evidence review workspace (EP-1 plan §7.1): a full-window screen with NO nav-rail entry.
   // Deliberately NOT resolvable via resolveNavTarget — without a review/message id in App's
@@ -27,7 +29,7 @@ export type ScreenId =
   // to home and the screen is reachable ONLY via App.openReview (the chatScope idiom).
   | 'review'
 
-export type SettingsTab = 'general' | 'privacy' | 'diagnostics'
+export type SettingsTab = 'general' | 'privacy' | 'skills' | 'diagnostics'
 
 export interface NavResolution {
   screen: ScreenId
@@ -52,13 +54,14 @@ export function resolveNavTarget(target: string): NavResolution {
     case 'diagnostics':
       return { screen: 'settings', settingsTab: 'diagnostics' }
     case 'settings:skills':
-      return { screen: 'skills' }
+    case 'skills':
+      return { screen: 'settings', settingsTab: 'skills' }
     case 'home':
     case 'documents':
     case 'translate':
     case 'images':
     case 'models':
-    case 'skills':
+    case 'performance':
       return { screen: target }
     default:
       // Unknown target: land somewhere sensible rather than rendering nothing.

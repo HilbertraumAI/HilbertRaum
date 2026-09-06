@@ -186,6 +186,11 @@ export interface VisionAnalyzeOptions {
 export class VisionRuntime {
   readonly modelId: string
   private server: LlamaServer | null = null
+
+  /** Resident right now? (Torn down after the idle window.) */
+  isLoaded(): boolean {
+    return this.server !== null
+  }
   private starting: Promise<void> | null = null
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after teardown. */
   private stopped = false
@@ -212,11 +217,36 @@ export class VisionRuntime {
   private idleTeardownPromise: Promise<void> | null = null
   private readonly idleTimeoutMs: number
   private readonly idleClock: IdleClock
+  /** Residency listeners (`onResidencyChange`): fired after `isLoaded()` flips. */
+  private readonly residencyListeners = new Set<() => void>()
 
   constructor(private readonly opts: VisionRuntimeOptions) {
     this.modelId = opts.modelId
     this.idleTimeoutMs = opts.idleTimeoutMs ?? readIdleTimeoutMs()
     this.idleClock = opts.idleClock ?? REAL_IDLE_CLOCK
+  }
+
+  /**
+   * Subscribe to residency transitions (PR #303 P3): a successful cold start, the idle
+   * teardown, `stop()`, and an unexpected exit — everything that flips `isLoaded()`. Fired
+   * synchronously after the flip, before any kill is awaited. Observability only; a throwing
+   * listener never breaks the sidecar's lifecycle. Returns the unsubscribe.
+   */
+  onResidencyChange(cb: () => void): () => void {
+    this.residencyListeners.add(cb)
+    return () => {
+      this.residencyListeners.delete(cb)
+    }
+  }
+
+  private emitResidencyChange(): void {
+    for (const cb of this.residencyListeners) {
+      try {
+        cb()
+      } catch {
+        /* observability only */
+      }
+    }
   }
 
   /** Lazily spawn the vision sidecar (once). Concurrent callers share one start (single-flight). */
@@ -260,13 +290,17 @@ export class VisionRuntime {
         // outside `stop()`, so a lock/quit kill never trips it. (No device-fallback twin: unlike
         // translation, the vision sidecar has no GPU/CPU ladder — the CPU pin is fixed.)
         onUnexpectedExit: () => {
-          if (this.server === server) this.server = null
+          if (this.server === server) {
+            this.server = null
+            this.emitResidencyChange()
+          }
         }
       })
       this.starting = server
         .start()
         .then(() => {
           this.server = server
+          this.emitResidencyChange()
         })
         .catch((err) => {
           // #244: a teardown-ABORTED start is not a load fault — never latch
@@ -406,7 +440,10 @@ export class VisionRuntime {
     if (this.idleTeardownPromise) await this.idleTeardownPromise.catch(() => undefined)
     const server = this.server
     this.server = null
-    if (server) await server.stop()
+    if (server) {
+      this.emitResidencyChange()
+      await server.stop()
+    }
     // R7 (full-audit-2026-06-30, Phase C) — re-cancel AFTER the awaits so stop()'s postcondition
     // ("no idle timer is live when I return") holds LOCALLY, without relying on armIdleTimer's
     // guards. The literal race is ALREADY closed there — armIdleTimer returns early on BOTH
@@ -450,7 +487,9 @@ export class VisionRuntime {
     // Null the reference SYNCHRONOUSLY before awaiting the kill: an `analyze()` arriving
     // mid-teardown then sees `server === null` and cold-starts a fresh, independent child.
     this.server = null
+    this.emitResidencyChange()
     this.idleTeardownPromise = server.stop().finally(() => {
+
       this.idleTeardownPromise = null
     })
     await this.idleTeardownPromise

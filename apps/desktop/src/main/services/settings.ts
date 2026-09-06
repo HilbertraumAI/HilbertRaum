@@ -1,5 +1,11 @@
 import type { Db } from './db'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
+import {
+  normalizeBenchmarkHistory,
+  normalizeBenchmarkResult,
+  normalizeGpuProbe,
+  normalizeModelPlacements
+} from '../../shared/benchmark-schema'
 import { MAX_LOCAL_API_PORT, MIN_LOCAL_API_PORT } from '../../shared/local-api'
 
 /** Upper bound on any persisted string[] setting so a buggy/hostile renderer can't bloat the
@@ -66,6 +72,20 @@ export function getSettings(db: Db): AppSettings {
       /* ignore malformed rows */
     }
   }
+  // Validate the benchmark records BEFORE the merge (PR #303 audit H1/L8, owner decision G7).
+  // The rows above are parsed verbatim, so anything a `updateSettings` gate never saw — a row
+  // written by an older build, a hand-edited DB, a half-written blob — used to reach the
+  // startup fingerprinting, `maybeRunFirstBenchmark`, the #107 memo, Diagnostics and the
+  // Performance screen unchecked (a `{}` history entry crashed the screen in `fmt1`). The
+  // normalizers live in `shared/benchmark-schema.ts`, so main and renderer agree on what a
+  // trustworthy record is. This is an IN-MEMORY repair: a read never rewrites the DB (the
+  // stored row stays as it is until something legitimately writes that key), so `getSettings`
+  // keeps its no-side-effect contract on every hot path that calls it.
+  if ('lastBenchmark' in stored) stored.lastBenchmark = normalizeBenchmarkResult(stored.lastBenchmark)
+  if ('benchmarkHistory' in stored) stored.benchmarkHistory = normalizeBenchmarkHistory(stored.benchmarkHistory)
+  if ('modelPlacements' in stored) stored.modelPlacements = normalizeModelPlacements(stored.modelPlacements)
+  // The probe too (P5): the memory class, the VRAM budget and the graphics tile read it.
+  if ('gpuProbe' in stored) stored.gpuProbe = normalizeGpuProbe(stored.gpuProbe)
   // Merge stored values over defaults so new fields always have a value.
   return { ...DEFAULT_SETTINGS, ...(stored as Partial<AppSettings>) }
 }
@@ -84,7 +104,8 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // (`checksumCache: null` broke every checksum reader — BE-1, full-audit 2026-07-10).
     // Non-null values must match the default's primitive type; the null-default keys carry
     // no type information in DEFAULT_SETTINGS, so each gets an explicit shape check
-    // (bounded string / plain object; `contextTokensOverride` has its own clamp below).
+    // (bounded string / plain object; `contextTokensOverride` has its own clamp below, and the
+    // three benchmark-record keys are additionally VALIDATED field by field further down).
     // Unknown/mistyped entries are dropped. OWN keys only (#251): `in` also matched
     // inherited names, so a JSON.parse-built `{"__proto__": …}` patch persisted a junk row.
     if (!Object.hasOwn(DEFAULT_SETTINGS, key)) continue
@@ -108,7 +129,10 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // start-hot readers touch) is applied once, below, to every non-primitive write (#251).
     // `value === null` (a legitimate clear of the null-default pair) is accepted upstream and
     // never reaches here.
-    if ((key === 'lastBenchmark' || key === 'gpuProbe' || key === 'checksumCache') && value !== null) {
+    if (
+      (key === 'lastBenchmark' || key === 'gpuProbe' || key === 'checksumCache' || key === 'modelPlacements') &&
+      value !== null
+    ) {
       if (typeof value !== 'object' || Array.isArray(value)) continue
     }
     // Array-typed defaults (any future `string[]` setting) pass the
@@ -117,7 +141,39 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // `safeIdArray`/`parseDocumentScope` pattern so a non-array/oversized renderer value is
     // never persisted verbatim into the encrypted blob.
     let toStore: unknown = value
-    if (Array.isArray(def)) {
+    // The three benchmark-record keys are VALIDATED, not just shape-checked (PR #303 audit
+    // H1/L8, owner decision G7): the old gate accepted any plain object, so `{}` was a valid
+    // history entry and `{ m: {} }` a valid placement map, and both reached readers that
+    // assume real figures. The normalizers (`shared/benchmark-schema.ts`) are the same ones
+    // `getSettings` applies on read, so a value that survives a write reads back unchanged.
+    // Garbage is IGNORED, never stored: a `lastBenchmark` that normalizes to nothing leaves
+    // the previous result in place (the convention every mistyped value here follows —
+    // `null` is still the explicit clear), while the two COLLECTIONS keep their existing
+    // element-wise semantics and store what survived, which for an all-junk payload is empty.
+    if (key === 'benchmarkHistory') {
+      // The one array-of-OBJECTS setting: valid results only (a junk element is dropped, never
+      // persisted), one per machine, newest first, capped at the per-machine history size. An
+      // UNKEYED entry is dropped too — the history is addressed by machine. The
+      // serialized-size cap below still applies to the whole list.
+      if (!Array.isArray(value)) continue
+      toStore = normalizeBenchmarkHistory(value)
+    } else if (key === 'modelPlacements') {
+      // Gated at the top level only until now (L8): `{ m: {} }` and `{ m: 'x' }` were stored
+      // and a `{}` record reached `placementVerdict`. Each record must validate AND be filed
+      // under its own model id.
+      toStore = normalizeModelPlacements(value)
+    } else if (key === 'lastBenchmark' && value !== null) {
+      const normalized = normalizeBenchmarkResult(value)
+      if (normalized == null) continue
+      toStore = normalized
+    } else if (key === 'gpuProbe' && value !== null) {
+      // P5: validated devices (junk items dropped), a parseable `probedAt`, and the machine
+      // stamp kept exactly as given — absent stays absent (an unstamped legacy probe is never
+      // re-stamped, G3). A value with no `devices` array is not a probe and is ignored.
+      const normalized = normalizeGpuProbe(value)
+      if (normalized == null) continue
+      toStore = normalized
+    } else if (Array.isArray(def)) {
       if (!Array.isArray(value)) continue
       toStore = (value as unknown[]).filter((x) => typeof x === 'string').slice(0, MAX_SETTINGS_ARRAY)
     }

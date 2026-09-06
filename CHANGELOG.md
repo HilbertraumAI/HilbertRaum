@@ -26,7 +26,43 @@ from its first public `1.0.0` release onward.
 ## [Unreleased]
 
 ### Added
-
+- **A quieter left navigation.** The sidebar now has three groups: Chat, Documents, Translate
+  and Images for everyday work; AI Model and Performance for the machine; Settings at the
+  bottom. The HilbertRaum mark at the top is the Home button and lights up when you are on
+  Home, so the separate Home entry is gone. Skills moved into Settings as its own tab; the
+  skill picker in the chat composer is unchanged.
+- **A new Performance page in the left navigation.** It answers, in plain words, what this
+  computer can run and how fast: one sentence, then four tiles for speed, memory, graphics
+  memory and drive, each with a rating word, and a "Your model" line that says where your
+  current model lands on this computer: in graphics memory, partly on the graphics card with
+  the rest in RAM, on the processor, or too large, with the sizes behind the verdict once the
+  model has started. Apple Silicon shows one unified memory figure. A "Models on this computer"
+  card lists every model the app can hold (chat, translation, images, document search, voice),
+  where each runs and whether it is loaded right now, and sums what the graphics card and the
+  RAM would need with everything loaded at once. Below it, figures from real use (your last answer, the last model
+  start, the last file check) and one result for every computer this drive has been plugged
+  into. The check runs on its own the first time and whenever the drive lands on a different
+  computer; on a computer it already knows, the earlier result is restored so the recommended
+  model follows the machine. While a check runs you see its steps instead of a plain "Running…"
+  button, and if no model has run yet the page offers to start the recommended one and measure.
+  The technical table stays on Settings → Diagnostics. English and German.
+- **A new computer's first check never borrows another computer's drive-speed reading.**
+  Plugging this drive into a computer it hasn't seen before measures that computer's own read
+  speed from scratch; a warning about a slow drive, or the lack of one, always reflects this
+  computer, never whichever computer the drive was in last.
+- **The Performance page refreshes itself and stays precise about what it measured.** It updates
+  in place the moment a check finishes, a model starts, or a file is verified, with no need to
+  leave and come back. A speed reading counted from streamed chunks rather than the model's own
+  timing is marked Approximate everywhere it appears, including another computer's row and the
+  copied report, which also always names the computer it describes. The graphics-memory tile
+  says plainly when a chip's memory is Integrated and shared with the rest of the computer, and
+  shows Not recorded, instead of guessing, for a computer this drive visited before the check
+  could record its card. When a model only partly fits in graphics memory, the explanation now
+  states the exact safety margin the AI engine reserves. After a check you started with the
+  keyboard, focus returns to Check again.
+- **Checking your computer's speed no longer competes with starting a model.** The automatic
+  first-time check now waits for a model that is already starting up to finish loading before it
+  measures your drive, instead of reading and loading at the same time.
 - **Knowledge packs: ask an offline Wikipedia (or any ZIM archive).** Register ZIM
   files — e.g. from the Kiwix library — as knowledge packs (Documents → Knowledge
   packs, or just drop them into the drive’s `zim/` folder), tick them as sources in a
@@ -77,8 +113,7 @@ from its first public `1.0.0` release onward.
   Knowledge packs panel now shows a "No full-text index" badge on such a pack directly.
   Enable/Disable/Remove and *Open article* buttons name the pack or article they act on to a
   screen reader. The evidence-pack export's source column is now labelled "Source" (was
-  "Document"), since it lists both documents and archives.
-- **Each finished chat answer now shows how fast it was generated.** A small line under the
+  "Document"), since it lists both documents and archives.- **Each finished chat answer now shows how fast it was generated.** A small line under the
   answer reads, for example, "42 tok/s · 1.8 s to first token · 615 tokens": the model's decode
   speed as reported by the AI engine, how long you waited for the first word, and how many
   tokens the answer took. It appears for answers generated in the current session only — nothing
@@ -198,6 +233,16 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **On a computer with a graphics card, the recommended chat model only changes when your
+  computer's usual RAM-based pick would not fit on the card.** A model only runs at card speed
+  when it fits the card, so the star pick on the AI Model screen and the check on the Performance
+  page now check whether the RAM-based pick also fits the graphics card's current free memory
+  (with room for the runtime's working buffers); if it does, nothing changes, and if it does not,
+  the best model that does fit takes its place. RAM is still respected either way: a model that
+  needs more RAM than the computer has is never recommended. The graphics card that counts is the
+  single largest one that is not a shared on-chip graphics chip; a shared on-chip chip, and
+  graphics acceleration switched off in Settings, are both treated as having no card, which keeps
+  the RAM-based pick — as do Apple Silicon computers.
 - **Every request from the app window to the main process now checks where it came from.**
   Only the app's own window can invoke the internal commands (opening documents, reading
   settings, running the models); a request from anywhere else is refused before it runs. Nothing
@@ -230,6 +275,10 @@ from its first public `1.0.0` release onward.
   privacy notice and the security documentation now also say which small things live outside the
   drive: display preferences in the computer's browser profile, and anything you copy on its
   clipboard.
+- **A drive on an unfamiliar computer keeps checking itself until it succeeds, once per unlock.**
+  A failed automatic check on a computer this drive doesn't recognize now tries again once each
+  time you unlock, rather than repeatedly for the rest of that session; Check again on the
+  Performance page always works right away in the meantime.
 
 ## [0.1.59] — 2026-08-21
 

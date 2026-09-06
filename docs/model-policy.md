@@ -61,21 +61,31 @@ Sizes/RAM come from each manifest
 (catalog with source links in the [README](../README.md)). **Auto-tier** is the
 `recommended_profiles` list each manifest declares.
 > ‡ **Promotions are LIVE via `recommendation_rank`, not `recommended_profiles`.** The
-> production picker is **RAM-best-fit** (`recommendModelIdByRam`) and ignores `recommended_
-> profiles` (that list is only the legacy no-RAM path, which is one-model-per-profile). Rather
-> than mis-encode the **Phase-29** winners there, each manifest carries a `recommendation_rank`
+> production picker is **RAM-best-fit** (`recommendModelIdByRam`) on unified memory, on a machine
+> without a usable discrete graphics card, and with graphics acceleration off — and it ignores
+> `recommended_profiles` (that list is only the legacy no-RAM path, which is one-model-per-profile).
+> **2026-09-06 amendment (PR #308 audit):** on a machine with a usable discrete card,
+> `recommendChatModelId` dispatches instead to `recommendModelIdByVram`, which reuses the exact
+> same `recommendation_rank` tiebreak and RAM floor, judged against the card's free graphics
+> memory instead of RAM (`model-benchmarks.md` §6.6) — the RAM pick above stands wherever it also
+> fits the card, and only steps down when it does not. Rather than mis-encode the **Phase-29**
+> winners in `recommended_profiles`, each manifest carries a `recommendation_rank`
 > (higher = preferred) that the picker now uses as the tiebreak among models that fit the
 > machine's RAM (the **quality-aware recommender** follow-up — `model-benchmarks.md` §6.2, tiers
-> since recalibrated by §6.3). Net effect on real hardware (newest-Qwen promotion, owner decision
-> 2026-07-12; handed to the Qwen3.8 pair 2026-08-16; reverted 2026-08-20 when upstream deleted
-> the Qwen3.8 files (issue #196) and RESTORED the same day to their measured `UD-*` successors,
-> `model-benchmarks.md` §6.4 + §9.4 + §9.5; asserted in `benchmark.test.ts` and
+> since recalibrated by §6.3). Net effect on real hardware, RAM path (newest-Qwen promotion, owner
+> decision 2026-07-12; handed to the Qwen3.8 pair 2026-08-16; reverted 2026-08-20 when upstream
+> deleted the Qwen3.8 files (issue #196) and RESTORED the same day to their measured `UD-*`
+> successors, `model-benchmarks.md` §6.4 + §9.4 + §9.5; asserted in `benchmark.test.ts` and
 > `committed-catalog.test.ts`): **≤12 GB → Qwen3.5 4B, 12–15 GB → Gemma 4 E2B (#153),
 > 16–23 GB → Qwen3.5 9B, 24 GB → Qwen3.8 27B UD-Q4_K_M, ≥32 GB → Qwen3.8 27B UD-Q5_K_M**;
 > Granite, both MoEs, the three withdrawn Qwen3.8 static K-quants, and the superseded former
-> winners (Ministral, Gemma 4 12B, the Qwen3.6 pair — all still ranked and selectable) are
-> never auto-recommended. The "Auto-tier" column above is the declared `recommended_profiles`
-> (kept as-is); the live recommendation is `recommendation_rank` + RAM-best-fit.
+> winners (Ministral, Gemma 4 12B, the Qwen3.6 pair — all still ranked and selectable) are never
+> the RAM-path auto-pick — nor the card-path one, which honors the same rank guard, except that a
+> very small card budget (below the smallest ranked model's threshold) can fall through to the
+> smallest RANK-0 model as the honest fit (`model-benchmarks.md` §6.6 rule 6; an owner-open
+> question, not a change made here). The "Auto-tier" column above is the declared
+> `recommended_profiles` (kept as-is); the live recommendation is `recommendation_rank` +
+> RAM-best-fit (or the card's free-memory-best-fit on a discrete GPU).
 Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
 12–14B: 16→14). Adding a model is
 **manifest-only** (no code change): drop a YAML in
@@ -113,7 +123,8 @@ refresh — same established-quantizer posture as `qwen3-4b-instruct-2507-q4`):
   the b9849 binary; the §9.1 through-the-app smokes for the 9B, the 27Bs, and the 35B-A3B remain
   open — see the manual-smoke checklist in `model-benchmarks.md` §9 / the BUILD_STATE "Qwen3.5
   Unsloth wave" entry.
-- **None are auto-recommended.** All four carry `recommendation_rank: 0` + `recommended_profiles: []`
+- **None are auto-recommended (RAM path; the card path honors the same rank-0 exclusion — §6.6).**
+  All four carry `recommendation_rank: 0` + `recommended_profiles: []`
   and `bundled_on_preconfigured_drive: false`: selectable manually on the AI Model screen, never the
   RAM-best-fit auto-pick, never bundled — **until the offline benchmark harness promotes them** with
   a real rank (`model-benchmarks.md` §9 promotion criteria). Public benchmark scores do not count;
@@ -184,7 +195,8 @@ repos ungated), 140+ languages:
   level and slip past the picker's preferRanked guard (caught by the wave-invariant tests).
   *(Superseded 2026-08-09 by the #153 promotion: ranked 3, the E2B now carries its honest
   rec-RAM 12 and that "hijack" is the ratified pick — see the amendment below.)*
-- **None are auto-recommended.** All four carry `recommendation_rank: 0` + `recommended_profiles:
+- **None are auto-recommended (RAM path; the card path honors the same rank-0 exclusion — §6.6).**
+  All four carry `recommendation_rank: 0` + `recommended_profiles:
   []` + `bundled_on_preconfigured_drive: false` — selectable manually, never the RAM-best-fit
   auto-pick, never bundled, **until the local German/English grounded-QA eval promotes them**
   (`model-benchmarks.md` §9; public scores do not count). Wave tracking + full research record:
@@ -226,7 +238,9 @@ recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_pa
 no-RAM picker), `recommendation_rank` (integer, default 0; higher = preferred among models that fit
 the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
 `supports_thinking_mode` (below), `speculative_decoding` (below), a `download` block (below),
-and — for a `role: vision`
+`estimated_context_cache_gib` (number ≥ 0; the graphics-memory picker's per-model context-cache
+term, PR #308 §6.6 rule C — absent defaults to 0.5 GiB in code, so the field is set only for the
+seven models whose figure was actually measured), and — for a `role: vision`
 model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
 vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools`, `dimensions`,
 `bundled_on_preconfigured_drive`) are ignored by the validator.

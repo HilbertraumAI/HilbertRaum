@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
-import { answerSpeedFrom, withChatStream } from '../../src/main/ipc/chat-stream'
+import { answerSpeedFrom, setAnswerSpeedObserver, withChatStream } from '../../src/main/ipc/chat-stream'
 import {
   ChatRequestError,
   ChatStreamError,
@@ -99,6 +99,28 @@ describe('withChatStream (M-A2)', () => {
       expect(speed.ttftMs).toBeGreaterThanOrEqual(0)
       // Ephemeral (R14): nothing of it in the recovery buffers or the message.
       expect(sent[2].args[0]).not.toHaveProperty('tokensPerSecond')
+    })
+
+    it('hands the same payload to the answer-speed observer (the Performance screen latch), which can never fail the answer', async () => {
+      const seen: unknown[] = []
+      setAnswerSpeedObserver((speed) => {
+        seen.push(speed)
+        throw new Error('observer bug')
+      })
+      try {
+        const { event, sent } = fakeEvent()
+        await withChatStream(event, 'c1', 'label', async (_s, sendToken, _r, _c, _u, sendTimings) => {
+          sendToken('hello')
+          sendTimings?.(timings)
+          return msg('hello')
+        })
+        expect(seen).toHaveLength(1)
+        expect(seen[0]).toEqual(sent[1].args[0])
+        // The throwing observer changed nothing on the wire.
+        expect(sent.map((s) => s.channel)).toEqual(['chat:token:c1', 'chat:speed:c1', 'chat:done:c1'])
+      } finally {
+        setAnswerSpeedObserver(null)
+      }
     })
 
     it('emits nothing when the run never hands timings up (the mock runtime, document answers)', async () => {

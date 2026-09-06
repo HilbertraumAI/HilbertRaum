@@ -10,7 +10,9 @@ import {
   type ModelRole
 } from '../../shared/manifest'
 import type {
+  GpuDevice,
   HardwareProfile,
+  MemoryClass,
   ModelDownloadInfo,
   ModelInfo,
   ModelState,
@@ -22,6 +24,7 @@ import { perfMark, perfMs } from './perf'
 import { recordChecksumRead } from './read-speed'
 import type { Db } from './db'
 import { getSettings, updateSettings } from './settings'
+import { SLOW_TOKENS_PER_SECOND } from '../../shared/performance-rules'
 
 // Model manager (spec §7.4): discover manifests, verify checksums, compute model
 // states, recommend by hardware profile, and select the active chat/embedding model.
@@ -800,8 +803,10 @@ export interface PickerSpeedSignal {
 
 /** A loaded-model probe STRICTLY below this steps the recommendation down one size tier
  *  (model-benchmarks.md §6.5). Distinct from `VERY_LOW_TOKENS_PER_SECOND` (3), which steps
- *  the legacy PROFILE down — the two thresholds serve different surfaces on purpose. */
-export const SLOW_PICK_TOKENS_PER_SECOND = 5
+ *  the legacy PROFILE down — the two thresholds serve different surfaces on purpose. The value
+ *  is `shared/performance-rules.ts`' `SLOW_TOKENS_PER_SECOND` (PR #303 audit N3): the
+ *  Performance screen's "Slow" speed rating is this very gate, never a re-typed copy. */
+export const SLOW_PICK_TOKENS_PER_SECOND = SLOW_TOKENS_PER_SECOND
 
 /** The comfortable-stage ordering (§6.2): capacity first, then rank, then disk size. */
 function comfortableOrder(a: ModelManifest, b: ModelManifest): number {
@@ -825,11 +830,18 @@ function preferRanked(fits: ModelManifest[]): ModelManifest[] {
  * — the #52 lesson — and must never move the pick). The step re-runs the comfortable stage
  * below the pick's whole capacity band over RANKED models only, so it can never land on a
  * rank-0 model; with no lower ranked tier, the original pick stays.
+ *
+ * `eligible` (the card path, §6.6 rule C step 3; PR #308 audit R1/R2): when given, the measured
+ * model counts only if it is in the pick's eligible pool (fits the card AND passes the RAM
+ * floor — a crawl on a model the card cannot hold says nothing about a model it can), and the
+ * destination must itself be eligible, else the pick stays. Omitted (the RAM path) → the
+ * pre-#308 predicate, byte-identical.
  */
 function applySpeedSignal(
   candidates: ModelManifest[],
   pick: ModelManifest,
-  signal: PickerSpeedSignal | null | undefined
+  signal: PickerSpeedSignal | null | undefined,
+  eligible?: (m: ModelManifest) => boolean
 ): ModelManifest {
   if (!signal) return pick
   const tps = signal.tokensPerSecond
@@ -839,8 +851,10 @@ function applySpeedSignal(
     : undefined
   if (!measured) return pick
   if (measured.recommendedRamGb > pick.recommendedRamGb) return pick
+  if (eligible && !eligible(measured)) return pick
   const lower = candidates
     .filter((m) => m.recommendationRank > 0 && m.recommendedRamGb < pick.recommendedRamGb)
+    .filter((m) => !eligible || eligible(m))
     .sort(comfortableOrder)
   return lower[0] ?? pick
 }
@@ -900,6 +914,161 @@ export function recommendModelIdByRam(
       a.sizeOnDiskGb - b.sizeOnDiskGb
   )
   return runnable[0]?.id ?? null
+}
+
+// ---- Graphics-memory-aware pick (model-benchmarks.md §6.6; rule C since the PR #308 audit,
+// 2026-09-06 — decisions 1, 2, 4, 7, 10, 11). Raw MiB throughout (decision 7): the probe reports
+// MiB, the estimate is in MiB, nothing is rounded to a nominal tier; labels round on their own.
+
+/** llama.cpp's `--fit-target` default: the margin the fit keeps free on the card, MiB. */
+export const VRAM_FIT_MARGIN_MIB = 1024
+/** Working (compute) buffers the runtime reserves beside the weights, as a share of the weights
+ *  (the rig's 27B measured 2.8 GiB on 18.4 GiB of weights at a 2048-token batch, ~15 %). */
+export const VRAM_WORKING_SHARE = 0.15
+/**
+ * The context-cache term for a manifest that carries no `estimated_context_cache_gib`, GiB
+ * (8k tokens on a 27B measured 0.5 under an earlier launch; decision 11 makes the figure
+ * per-model — the seven decision models carry config-derived values, everything else defaults).
+ */
+export const VRAM_DEFAULT_CONTEXT_CACHE_GIB = 0.5
+/**
+ * The idle desktop use a card is assumed to carry when the probe reports no free figure, MiB
+ * (decision 10: `budget = freeMb ?? totalMb − 1024`; the public `--list-devices` lines in the
+ * audit's D3 table show 0.6–1.5 GiB in use on an idle Windows desktop). NOT the fit margin above
+ * — that one is the runtime's own reservation and applies on top of the budget.
+ */
+export const GRAPHICS_IDLE_ALLOWANCE_MIB = 1024
+
+/**
+ * The manifest's decimal "size on disk" (GB, 1e9) as UNROUNDED MiB — the unit the probe reports
+ * in. Shared with the Performance screen's pre-start estimate (`placementVerdict`, decision 8) so
+ * the two surfaces cannot disagree by a rounding step.
+ */
+export function weightsMib(m: ModelManifest): number {
+  return (m.sizeOnDiskGb * 1e9) / 1024 ** 2
+}
+
+/**
+ * What the runtime needs on the card to hold EVERY layer of this model, MiB: the weights, the
+ * working buffers beside them (15 %), the context cache at the model's recommended window under
+ * the app's launch (the manifest's `estimated_context_cache_gib`, else 0.5 GiB), and the fit's
+ * own 1 GiB margin. The measured check behind the terms: Gemma 4 12B peaked at 9,720 MiB on the
+ * rig (6,653 weights + 2,432 cache + ~635 compute); this reads 11,159 with the margin.
+ */
+export function estimateGraphicsNeedMib(m: ModelManifest): number {
+  const w = weightsMib(m)
+  const cacheGib = m.estimatedContextCacheGib ?? VRAM_DEFAULT_CONTEXT_CACHE_GIB
+  return w * (1 + VRAM_WORKING_SHARE) + cacheGib * 1024 + VRAM_FIT_MARGIN_MIB
+}
+
+/** Would every layer of this model land on a card offering `budgetMib` (see `graphicsBudgetMib`)? */
+export function fitsGraphicsMemory(m: ModelManifest, budgetMib: number): boolean {
+  return estimateGraphicsNeedMib(m) <= budgetMib
+}
+
+/**
+ * The graphics-memory BUDGET the fit is judged against (decision 10): the probe's free figure
+ * for the budget device — what llama.cpp's own fit targets (`free − margin`) — or, when the probe
+ * carries no free figure, the total less the idle-desktop allowance. Null with no device. Both
+ * seams (`pickerMemoryFor` for the Models ★, `probeAndPersistGpu` for the benchmark) call this
+ * one function so they can never disagree on the figure.
+ */
+export function graphicsBudgetMib(device: Pick<GpuDevice, 'totalMb' | 'freeMb'> | null | undefined): number | null {
+  if (!device) return null
+  const free: unknown = device.freeMb
+  if (typeof free === 'number' && Number.isFinite(free)) return free
+  return device.totalMb - GRAPHICS_IDLE_ALLOWANCE_MIB
+}
+
+/** Rule C's fallback order among ELIGIBLE models: rank first, then comfortable tier, then size. */
+function eligibleOrder(a: ModelManifest, b: ModelManifest): number {
+  return (
+    b.recommendationRank - a.recommendationRank ||
+    b.recommendedRamGb - a.recommendedRamGb ||
+    b.sizeOnDiskGb - a.sizeOnDiskGb
+  )
+}
+
+/**
+ * Graphics-memory-aware recommendation — RULE C (model-benchmarks.md §6.6 as amended by the
+ * PR #308 audit, decision 1). On a computer whose next start uses a discrete card:
+ *
+ *   1. `base` = the RAM pick, computed WITHOUT the speed signal (`recommendModelIdByRam`, its
+ *      stage logic untouched — the tier ratifications are the RAM picker's).
+ *   2. eligible(m) = fits the card (`fitsGraphicsMemory` at `budgetMib`) AND passes the RAM floor
+ *      (`recommended_min_ram_gb` ≤ RAM; the Models screen refuses to start a model over it, and
+ *      the pick must never point at a refused model). Unknown RAM keeps the floor open, as the
+ *      pre-rule-C card path did. `candidate = base` when base is eligible — the established
+ *      recommendation stands wherever the card can hold it (decision 2: the 9B, not Gemma 12B,
+ *      where both fit). Otherwise `candidate` = the highest-RANKED eligible model, ties by
+ *      comfortable tier then size — ranked models ONLY (a rank-0 model is never the automatic
+ *      pick, #326). Otherwise (no ranked model eligible: a small or nearly full card beside a big
+ *      catalog) `candidate = base` — the documented no-fit fallback:
+ *      the RAM pick partially offloads, which is still the catalog's best answer.
+ *   3. The §6.5 speed step-down applies ONCE, to `candidate`, restricted to the eligible pool on
+ *      both ends (`applySpeedSignal` with `eligible`): a crawl measured on a model the card cannot
+ *      hold never lowers a fitting pick (R2), and the step never lands on a model that fails the
+ *      RAM floor or the card (R1). A no-fit fallback therefore never steps — nothing eligible
+ *      exists to step to.
+ *
+ * Unknown / non-positive budget → the RAM path with the signal, exactly as before. Unified and
+ * cpu classes never reach this function (`recommendChatModelId`), so their picks are unchanged.
+ */
+export function recommendModelIdByVram(
+  manifests: ModelManifest[],
+  budgetMib: number,
+  ramGb: number,
+  role: ModelRole = 'chat',
+  speedSignal?: PickerSpeedSignal | null
+): string | null {
+  if (!Number.isFinite(budgetMib) || budgetMib <= 0) return recommendModelIdByRam(manifests, ramGb, role, speedSignal)
+  const candidates = manifests.filter((m) => m.role === role)
+  const ramKnown = Number.isFinite(ramGb) && ramGb > 0
+  const eligible = (m: ModelManifest): boolean =>
+    fitsGraphicsMemory(m, budgetMib) && (!ramKnown || m.recommendedMinRamGb <= ramGb)
+
+  const baseId = recommendModelIdByRam(manifests, ramGb, role)
+  const base = baseId ? candidates.find((m) => m.id === baseId) : undefined
+  let candidate: ModelManifest | undefined
+  if (base && eligible(base)) {
+    candidate = base
+  } else {
+    // STRICTLY ranked (owner decision 2026-09-06, issue #326): a rank-0 model is never the
+    // automatic pick (model-policy.md), so when no RANKED model fits the card the no-fit
+    // fallback below applies — the RAM pick, partially offloaded — rather than a rank-0 fit.
+    const pool = candidates.filter((c) => c.recommendationRank > 0 && eligible(c)).sort(eligibleOrder)
+    candidate = pool[0] ?? base
+  }
+  if (!candidate) return null
+  return applySpeedSignal(candidates, candidate, speedSignal, eligible).id
+}
+
+/** What the chat picker needs to know about the computer's memory (benchmark.md "Your model"). */
+export interface PickerMemory {
+  memoryClass: MemoryClass
+  /** Whole GB, as `machineRamGb()` reports it. */
+  ramGb: number
+  /**
+   * The graphics-memory budget of the next start's card in raw MiB — `graphicsBudgetMib` of the
+   * budget device (`nextStartMemory`): the probe's free figure, else total − 1024 — or null when
+   * there is no card / the figure is unknown (→ the RAM pick).
+   */
+  budgetMb: number | null
+}
+
+/**
+ * The chat recommendation for this computer: rule C against the card's budget on a discrete
+ * card, by RAM on unified memory (one pool) and on a machine without a usable card.
+ */
+export function recommendChatModelId(
+  manifests: ModelManifest[],
+  memory: PickerMemory,
+  speedSignal?: PickerSpeedSignal | null
+): string | null {
+  if (memory.memoryClass === 'discrete' && memory.budgetMb != null && memory.budgetMb > 0) {
+    return recommendModelIdByVram(manifests, memory.budgetMb, memory.ramGb, 'chat', speedSignal)
+  }
+  return recommendModelIdByRam(manifests, memory.ramGb, 'chat', speedSignal)
 }
 
 function toModelInfo(
@@ -968,6 +1137,16 @@ export interface BuildModelListOptions {
    */
   speedSignal?: PickerSpeedSignal | null
   /**
+   * The computer's memory class for the NEXT start and the budget device's graphics-memory
+   * budget in raw MiB (`graphicsBudgetMib`: the probe's free figure, else total − 1024; §6.6
+   * rule C, PR #308 audit decisions 9/10). On a discrete card the chat pick is rule C against
+   * the budget; unified / cpu keep the RAM pick. Omitted → the RAM pick (legacy callers and
+   * tests unchanged). Both come from `pickerMemoryFor` in registerModelIpc.ts, the same
+   * decision the benchmark makes.
+   */
+  memoryClass?: MemoryClass
+  graphicsBudgetMb?: number | null
+  /**
    * Optional verification-progress sink. Called once per model that will be hashed (with
    * a 1-based step index + the byte-weighted overall totals), throttled within a file by
    * `sha256File`, plus a terminal `done` event. `overallBytesTotal === 0` ⇒ nothing to
@@ -1000,7 +1179,11 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   // speed signal applies to the chat pick only.
   const recommendedChat =
     ram != null
-      ? recommendModelIdByRam(all, ram, 'chat', opts.speedSignal)
+      ? recommendChatModelId(
+          all,
+          { memoryClass: opts.memoryClass ?? 'cpu', ramGb: ram, budgetMb: opts.graphicsBudgetMb ?? null },
+          opts.speedSignal
+        )
       : recommendModelId(all, opts.profile, 'chat')
   const recommendedEmbed =
     ram != null

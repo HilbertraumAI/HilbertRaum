@@ -369,8 +369,26 @@ export class EngineDownloadManager {
    * valid marker). This latch keeps the manager busy until `run()` actually settles.
    */
   private runSettled = true
+  /** Issue #323: told the families a finished job installed, AFTER `job.status = 'done'`. */
+  private readonly installedListeners = new Set<(families: EngineFamily[]) => void>()
 
   constructor(private readonly deps: EngineDownloadDeps = {}) {}
+
+  /**
+   * Subscribe to completed installs (issue #323): `cb` receives the families a job installed,
+   * once, after the job reached `'done'` — every binary is on the drive and every marker is
+   * written by then. Never for a failed or cancelled job. A listener fault is logged and never
+   * fails the finished job (the same rule as the model downloader's `onModelInstalled`, #40).
+   * Returns the unsubscribe. The IPC layer wires this to the GPU-probe refresh: a benchmark
+   * run before the chat engine existed persisted an empty probe, and installing the engine is
+   * the moment that answer can change.
+   */
+  onInstalled(cb: (families: EngineFamily[]) => void): () => void {
+    this.installedListeners.add(cb)
+    return () => {
+      this.installedListeners.delete(cb)
+    }
+  }
 
   /**
    * Validate the gates, resolve which engine families are missing, and start fetching them
@@ -524,6 +542,16 @@ export class EngineDownloadManager {
     }
     job.binaryPath = firstBinary
     job.status = 'done'
+    // Issue #323: the install is complete and recorded — tell the subscribers which families
+    // landed. Each listener is isolated: a fault there must never fail the finished job.
+    const families = installs.map((e) => e.family)
+    for (const listener of this.installedListeners) {
+      try {
+        listener(families)
+      } catch (err) {
+        this.deps.log?.('Engine install listener failed (install itself succeeded)', String(err))
+      }
+    }
   }
 
   /**

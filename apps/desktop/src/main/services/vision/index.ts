@@ -39,9 +39,14 @@ export interface VisionAnalyzer {
   }): Promise<string>
   /** Optional teardown (the real `VisionRuntime` has one; test fakes may omit it). */
   stop?(): Promise<void>
+  /** Optional: is the sidecar resident right now? (Performance screen.) */
+  isLoaded?(): boolean
   /** Optional (#117): true once this runtime latched a FAILED start. The service discards such
    *  an instance after the failing job settles, so the next analyze rebuilds fresh. */
   isStartFailed?(): boolean
+  /** Optional (PR #303 P3): subscribe to `isLoaded()` flips; returns the unsubscribe. The
+   *  service forwards them to its own `onResidencyChange` subscribers. */
+  onResidencyChange?(cb: () => void): () => void
 }
 
 export interface VisionServiceDeps {
@@ -78,6 +83,11 @@ export class VisionService {
   private activeJobId: string | null = null
   /** Lazily built once a model is available; reused across analyses. */
   private runtime: VisionAnalyzer | null = null
+
+  /** Is the vision sidecar resident right now? (Performance screen.) */
+  isLoaded(): boolean {
+    return this.runtime?.isLoaded?.() ?? false
+  }
   /**
    * Set WHILE `stop()` (workspace LOCK / quit) tears the runtime down, cleared in its `finally` —
    * the VisionService-level analogue of the e5/reranker `tearingDown` latch (F19, GPU §5.5c).
@@ -94,8 +104,40 @@ export class VisionService {
   private tearingDown = false
   /** When the last FAILED runtime start settled (#117), or null. Gates the cooldown fast-fail. */
   private startFailedAt: number | null = null
+  /** Residency listeners (`onResidencyChange`), forwarded from every runtime this service builds. */
+  private readonly residencyListeners = new Set<() => void>()
 
   constructor(private readonly deps: VisionServiceDeps) {}
+
+  /**
+   * Subscribe to `isLoaded()` transitions across every runtime this service builds (PR #303
+   * P3): the runtime is rebuilt after a lock/quit teardown or a failed start, so the
+   * subscription lives on the SERVICE and each new runtime is attached as it is created
+   * (`attachRuntime`). Returns the unsubscribe. Observability only.
+   */
+  onResidencyChange(cb: () => void): () => void {
+    this.residencyListeners.add(cb)
+    return () => {
+      this.residencyListeners.delete(cb)
+    }
+  }
+
+  private emitResidencyChange(): void {
+    for (const cb of this.residencyListeners) {
+      try {
+        cb()
+      } catch {
+        /* observability only */
+      }
+    }
+  }
+
+  /** Build the runtime through the injected factory and forward its residency flips. */
+  private attachRuntime(status: VisionStatus): VisionAnalyzer {
+    const runtime = this.deps.createRuntime(status)
+    runtime.onResidencyChange?.(() => this.emitResidencyChange())
+    return runtime
+  }
 
   private get startFailureCooldownMs(): number {
     return this.deps.startFailureCooldownMs ?? VISION_START_FAILURE_COOLDOWN_MS
@@ -183,7 +225,8 @@ export class VisionService {
       }
 
       this.set(jobId, { jobId, state: 'starting' })
-      const runtime = (this.runtime ??= this.deps.createRuntime(status))
+      const runtime = (this.runtime ??= this.attachRuntime(status))
+
 
       this.set(jobId, { jobId, state: 'analyzing' })
       const answer = await runtime.analyze({

@@ -21,7 +21,7 @@ export const en = {
   'nav.translate': 'Translate',
   'nav.images': 'Images',
   'nav.models': 'AI Model',
-  'nav.skills': 'Skills',
+  'nav.performance': 'Performance',
   'nav.settings': 'Settings',
   'app.lockNow': 'Lock now',
   'app.lockNowTitle': 'Re-encrypt and lock the workspace',
@@ -1239,6 +1239,7 @@ export const en = {
   'settings.tabsAria': 'Settings sections',
   'settings.tab.general': 'General',
   'settings.tab.privacy': 'Privacy & data',
+  'settings.tab.skills': 'Skills',
   'settings.tab.diagnostics': 'Diagnostics (advanced)',
   'settings.loading': 'Loading settings…',
   'settings.saved': 'Saved',
@@ -1315,8 +1316,7 @@ export const en = {
   'settings.changePassword.submitBusy': 'Changing…',
   'settings.changePassword.toast': 'Password changed',
 
-  // ---- Skills (rail destination — SkillsScreen.tsx + settings/SkillsTab.tsx, skills plan §15) ----
-  'skills.title': 'Skills',
+  // ---- Skills (settings/SkillsTab.tsx, skills plan §15) ----
   'skills.intro': 'Skills teach the assistant how to do a specific task. They add guidance to its answers — they never reach the internet or other folders on your computer.',
   // #46 — the per-skill what/needs/limits lines behind the composer's first-selection info card
   // (`shared/skill-info.ts`). Each is ONE calm sentence, distilled from user-guide §9 and
@@ -1756,6 +1756,221 @@ export const en = {
   // main-process message after friendlyIpcError stripped the transport prefix.
   'diag.gpu.tryFailed': 'Trying the graphics card again didn’t work: {error}',
   'diag.refresh': 'Refresh',
+  // ---- Performance screen (PerformanceScreen.tsx; benchmark.md "Performance screen") ----
+  'perf.title': 'Performance',
+  'perf.lead':
+    'How fast this computer runs your AI model, measured on this device. Nothing is sent anywhere.',
+  'perf.card.title': 'This computer',
+  'perf.checkedAt': 'Checked {when}',
+  'perf.notChecked': 'Not checked yet',
+  'perf.otherMachine':
+    'This result was measured on a different computer. Check again to measure this one.',
+  // The Copy report's first line when the result on screen is NOT this machine's: the report
+  // travels into a support message, where a heading of "This computer" would misattribute
+  // every figure under it (PR #303 audit L6). Names the machine the result recorded.
+  'perf.report.otherComputer': 'Another computer: {cpu}, {ram} GB RAM',
+  'perf.verdict.speed': 'Runs {model} at about {tps} tokens per second.',
+  // The LIVE recommendation (PerformanceSnapshot.recommendation), named with the memory it was
+  // judged against: the card's graphics memory, the unified pool, or RAM (perf.basis.*).
+  'perf.verdict.noSpeed':
+    '{model} is the best fit for this computer’s {basis}. Speed is measured once a model has run.',
+  'perf.basis.discrete': 'graphics memory',
+  'perf.basis.unified': 'unified memory',
+  'perf.basis.cpu': 'RAM',
+  // The saved result's own pick, shown only where it differs from the live one (historical).
+  'perf.recommendation.atCheckTime': 'Recommended at the time of the check',
+  // The Copy report's line for the LIVE pick (the same one the AI Model screen stars), so a
+  // report compared with someone else's shows what the app would actually pick (issue #325).
+  'perf.recommendation.next': 'Recommended for the next start',
+  'perf.verdict.noRecommendation': 'No model in the catalog matches this computer yet.',
+  'perf.verdict.notChecked':
+    'A quick check measures memory, drive speed and, once a model runs, generation speed.',
+  'perf.verdict.driveFast': 'Model starts from this drive are fast.',
+  'perf.verdict.driveSlow': 'Model starts from this drive are slow.',
+  'perf.tile.speed': 'Speed',
+  'perf.tile.speed.unit': 'tokens / s',
+  'perf.tile.speed.sub': 'Measured with {model} on {when}',
+  'perf.tile.speed.approx': 'Approximate: counted chunks, not runtime timings',
+  // The #291 window a chunk-basis figure covers. The timings basis reuses
+  // `diag.bench.tokensOver` ("over {tokens} tokens") so the Copy report, the other-computer
+  // rows and Diagnostics all word that fact identically.
+  'perf.tile.speed.chunks': '{chunks} chunks',
+  'perf.tile.speed.none': 'Not measured yet',
+  'perf.tile.speed.noneHint': 'Start a model, then check again',
+  'perf.tile.memory': 'Memory',
+  'perf.tile.memory.unit': 'GB RAM',
+  'perf.tile.memory.unified': 'Unified memory',
+  'perf.tile.memory.unifiedSub': 'Shared by the processor and the graphics cores',
+  'perf.model.title': 'Your model',
+  'perf.model.line': '{model} · {size} GB on disk · {context}-token context',
+  'perf.model.none': 'No model selected yet. Pick one on the AI Model screen.',
+  'perf.model.need': 'Takes {need} GB with this context.',
+  'perf.model.needEstimate':
+    'Needs at least {need} GB for the weights, plus the context cache, which the first start measures.',
+  'perf.model.gpu': 'Fits in graphics memory ({budget} GB): all {layers} layers on the GPU.',
+  'perf.model.gpuEstimate': 'Should fit in graphics memory ({budget} GB).',
+  'perf.model.partial':
+    'Graphics memory holds {budget} GB: {gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. Answers slower.',
+  // With the free figure: why a card that would hold the model still spilled (something else
+  // held part of it at start, plus the runtime's fixed safety margin). `{margin}` is
+  // `FIT_TARGET_MARGIN_MB` in GB (shared/performance-rules.ts) — never a literal, so the
+  // three sentences below can never drift from the constant (PR #303 audit DR4).
+  'perf.model.partialFree':
+    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM: only {free} GB of the card\u2019s {budget} GB was free when the model started, and the runtime keeps a {margin} GB safety margin. Answers slower. Restart the model once the card is free.',
+  // The card WAS free: the fit still moved whole layers off because model + cache + working
+  // buffers + its fixed margin came within a layer of the free memory.
+  'perf.model.partialMargin':
+    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. The card was free ({free} of {budget} GB), but the runtime also sets aside {working} GB of working buffers and a {margin} GB safety margin, and moves whole layers off the card when the sum gets close. Answers slower.',
+  'perf.model.partialMarginNoWorking':
+    '{gpuLayers} of {layers} layers on the GPU, about {spill} GB runs from RAM. The card was free ({free} of {budget} GB), but the runtime also sets aside working buffers and a {margin} GB safety margin, and moves whole layers off the card when the sum gets close. Answers slower.',
+  'perf.model.partialEstimate':
+    'Graphics memory holds {budget} GB: about {spill} GB will run from RAM. Answers slower.',
+  'perf.model.cpu': 'Runs on the processor from RAM ({budget} GB).',
+  'perf.model.cpuEstimate': 'Will run on the processor from RAM ({budget} GB).',
+  'perf.model.unified': 'Fits in unified memory ({ram} GB, up to {budget} GB available to the model).',
+  'perf.model.unifiedEstimate': 'Should fit in unified memory ({ram} GB, up to {budget} GB available to the model).',
+  'perf.model.tooLarge': 'Too large for this computer ({budget} GB available). Pick a smaller model.',
+  // Nothing measured yet: the ESTIMATE variant. It names the computer the measurement is taken
+  // on, because a placement is only ever read back on the machine that recorded it (PR #303
+  // audit L8) — the same rule `perf.model.measuredOther` states for the context/backend.
+  'perf.model.unknown': 'Where the model lands is measured the first time it starts on this computer.',
+  // A start WAS observed and the log said nothing about the offload (a build below log
+  // verbosity 4): honest about the runtime's silence, never "measured on its first start",
+  // which would invite a restart that changes nothing (PR #303 audit, owner gate (c)).
+  'perf.model.unknownObserved': 'The runtime did not report where the model landed.',
+  // Under any estimate: one record per model lives on the DRIVE, so it follows the drive, not
+  // the computer. A start on another computer replaces it and the row falls back here.
+  'perf.model.perDrive':
+    'The drive keeps one record per model, so a start on another computer replaces the one measured here.',
+  // The stored measurement describes a start with a DIFFERENT context size, or a GPU start on a
+  // configuration that now forces the processor: the verdict above it is the estimate for the
+  // current settings, and this dates the measurement rather than letting the two contradict.
+  'perf.model.measuredOther':
+    'Measured earlier with a {context}-token context on {when}; the estimate above is for the current settings.',
+  // The active model is on the card RIGHT NOW (the runtime reports the GPU rung and the placement
+  // evidence says the card): tells "still running there" from "measured earlier" once the GPU
+  // toggle flips off while the model keeps running (issue #325).
+  'perf.model.runningOnCard': 'Running on the graphics card right now.',
+  'perf.model.choose': 'Choose a smaller model',
+  'perf.models.title': 'Models on this computer',
+  'perf.models.hint':
+    'Chat and translation share the graphics card. Images, document search and voice run on the processor by design, so they cost RAM, not graphics memory.',
+  'perf.role.chat': 'Chat',
+  'perf.role.translation': 'Translation',
+  'perf.role.vision': 'Images',
+  'perf.role.reranker': 'Document search (ranking)',
+  'perf.role.embeddings': 'Document search (index)',
+  'perf.role.transcriber': 'Voice',
+  'perf.models.row': '{model} · {size} GB',
+  'perf.models.rowNoSize': '{model}',
+  'perf.models.none': 'No model installed for this.',
+  'perf.models.device.gpu': 'graphics card',
+  'perf.models.device.cpu': 'processor, by design',
+  // Chat / translation on the processor because of the machine or the configuration (no usable
+  // card, GPU switched off or auto-disabled, an observed CPU start) — not a design pin.
+  'perf.models.device.processor': 'processor',
+  'perf.models.loaded': 'loaded now',
+  'perf.models.notLoaded': 'not loaded',
+  'perf.models.lifetime.session': 'stays loaded',
+  'perf.models.lifetime.idle': 'unloads when idle',
+  'perf.models.lifetime.per-use': 'runs only while working',
+  'perf.models.split': '{gpuLayers} of {layers} layers on the card',
+  'perf.models.card': 'Graphics card: chat {chat} GB + translation {translation} GB, of {vram} GB.',
+  'perf.models.cardBoth':
+    'Both are on the card right now. Whichever started second got what was left and runs slower; stop and start it once the other has unloaded.',
+  'perf.models.ram': 'Everything loaded at once needs about {sum} GB of {ram} GB RAM.',
+  // Apple Silicon: one pool for everything, compared against what Metal lets models take.
+  'perf.models.memory': 'Everything loaded at once needs about {sum} GB of the {budget} GB of unified memory available to models.',
+  'perf.models.ramTooMuch': 'Too much at once',
+  'perf.models.ramOk': 'Fits',
+  'perf.place.gpu': 'On GPU',
+  'perf.place.partial': 'Partly on GPU',
+  'perf.place.cpu': 'On processor',
+  'perf.place.tooLarge': 'Too large',
+  'perf.place.unknown': 'Not measured',
+  'perf.tile.graphics': 'Graphics memory',
+  'perf.tile.graphics.unit': 'GB VRAM',
+  'perf.tile.graphics.none': 'No usable graphics card. Models run on the processor.',
+  // A card may be present: the GPU is switched off in Settings or auto-disabled after a crash.
+  'perf.tile.graphics.off': 'Graphics acceleration is off. Models run on the processor.',
+  'perf.tile.graphics.small': 'Under {min} GB: models run on the processor.',
+  // An integrated device (shared system memory): named with its figure, never rated "Usable"
+  // and never blamed on size — the memory is not the card's own (PR #303 audit M8.1).
+  'perf.tile.graphics.integrated': 'Integrated, shared memory: models run on the processor.',
+  'perf.tile.graphics.unitShared': 'GB shared',
+  // A result from ANOTHER computer that predates the graphics figure: the app never probed
+  // that machine for it, so it claims nothing either way (PR #303 audit N1).
+  'perf.tile.graphics.notRecorded': 'That check did not record the graphics card.',
+  'perf.rating.usable': 'Usable',
+  'perf.rating.small': 'Small',
+  'perf.rating.integrated': 'Integrated',
+  'perf.rating.notRecorded': 'Not recorded',
+  'perf.rating.none': 'None',
+  'perf.others.subGpu': '{cpu}, {ram} GB RAM, {vram} GB VRAM · {when}',
+  'perf.tile.drive': 'Drive',
+  'perf.tile.drive.unit': 'MB/s read',
+  'perf.tile.drive.load': 'From a model load on {when}, {gb} GB read',
+  'perf.tile.drive.hash': 'From a file check on {when}, {gb} GB read',
+  'perf.tile.drive.none': 'Not measured yet',
+  // N4: a full file check measures the read speed too (`source: 'checksum'`), so the empty
+  // state must not promise only a model start.
+  'perf.tile.drive.noneHint': 'Measured by the first model start or file check',
+  'perf.rating.good': 'Good',
+  'perf.rating.slow': 'Slow',
+  'perf.rating.fast': 'Fast',
+  'perf.rating.pending': 'Pending',
+  'perf.rating.approx': 'Approximate',
+  'perf.rating.slowDrive': 'Slow drive',
+  'perf.profile.TINY': 'Tiny',
+  'perf.profile.LITE': 'Lite',
+  'perf.profile.BALANCED': 'Balanced',
+  'perf.profile.PRO': 'Pro',
+  'perf.profile.UNKNOWN': 'Unknown',
+  'perf.check': 'Check this computer',
+  'perf.checkAgain': 'Check again',
+  'perf.running': 'Running…',
+  'perf.startAndMeasure': 'Start {model} and measure',
+  'perf.contextSize': 'Change context size',
+  'perf.copy': 'Copy report',
+  'perf.autoNote':
+    'Runs on its own the first time and whenever this drive is plugged into a different computer.',
+  'perf.failed': 'Check failed: {error}',
+  // The screen re-reads its figures whenever the app says something changed; when that read
+  // fails the figures already on screen stay, this says so, and the retry sits beside it.
+  'perf.loadFailed': 'Could not read the latest figures: {error}',
+  'perf.retry': 'Try again',
+  'perf.step.system': 'Hardware detected',
+  // N5: the step measures the drive, and the tile beside it reports "MB/s read" — calling the
+  // step "write speed" contradicted the figure it leads to.
+  'perf.step.drive': 'Drive speed',
+  'perf.step.speed': 'Generation speed with {model}',
+  'perf.step.speedSkipped': 'Generation speed (no model running, skipped)',
+  'perf.step.hint': 'About half a minute. You can keep using the app.',
+  'perf.observed.title': 'Observed while you worked',
+  // The rows are session latches, but the READ samples behind them are also persisted into the
+  // benchmark records (the Drive tile above shows them with their own source and date). The
+  // copy says which half is session-only so it never reads as "none of this is kept" (L8).
+  'perf.observed.hint':
+    'Real figures from normal use, not a test prompt. These rows last for this session; the read speeds they show are also kept with the drive figures above.',
+  'perf.observed.none': 'Nothing observed yet this session. Ask the model something, or start it.',
+  'perf.observed.answer': 'Last answer: {tps} tokens / s, first token after {ttft} s',
+  'perf.observed.answerSub': '{model}, {when}, {tokens} tokens',
+  'perf.observed.load': 'Model start: {seconds} s',
+  'perf.observed.loadSub': '{model}, {gb} GB read from this drive at {mbps} MB/s',
+  'perf.observed.check': 'File check: {seconds} s',
+  'perf.observed.checkSub': 'Full file check of {model} on {when}, {gb} GB read',
+  'perf.observed.oncePerModel': 'Once per model',
+  'perf.others.title': 'Other computers this drive has been used on',
+  'perf.others.hint':
+    'Each computer keeps its own result, so the recommended model follows the machine, not the drive.',
+  'perf.others.none': 'None yet. Plug the drive into another computer and it checks itself.',
+  'perf.others.row': '{tps} tokens / s with {model}',
+  'perf.others.rowNoSpeed': '{model} recommended, speed not measured',
+  'perf.others.sub': '{cpu}, {ram} GB RAM · {when}',
+  'perf.footer': 'The full technical report with every raw figure stays in Settings, Diagnostics.',
+  'perf.footerLink': 'Open Diagnostics',
+  'perf.unknownModel': 'the loaded model',
+  'perf.unknownCpu': 'Unknown CPU',
   'diag.bench.title': 'Hardware benchmark',
   'diag.bench.hint':
     'Measures RAM, CPU, and drive speed on this device to recommend a model. Runs ' +
@@ -2011,6 +2226,11 @@ export const en = {
     'so the recommended model was moved down one size tier to keep answers quick on this ' +
     'computer.',
   'main.benchmark.locked': 'Workspace is locked. Unlock it to run the benchmark.',
+  // PR #303 audit A-D2: the late-write guard's refusal — the legs finished, but the workspace
+  // was locked (or locked and re-opened) meanwhile, so nothing was written. One message for both.
+  'main.benchmark.lockedDuringRun':
+    'The workspace was locked while the benchmark ran, so the result was not saved. Run the ' +
+    'benchmark again.',
 
   // EMISSION set (D-L5): ephemeral strings localized at the emission site via tMain()
   // — IPC throws, runtime notices, preflight problems, task-status errors, dialog

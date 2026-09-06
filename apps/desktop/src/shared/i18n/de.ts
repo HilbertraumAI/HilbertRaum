@@ -57,7 +57,7 @@ export const de: Record<keyof typeof en, string> = {
   'nav.translate': 'Übersetzen',
   'nav.images': 'Bilder',
   'nav.models': 'KI-Modell',
-  'nav.skills': 'Skills',
+  'nav.performance': 'Leistung',
   'nav.settings': 'Einstellungen',
   'app.lockNow': 'Jetzt sperren',
   'app.lockNowTitle': 'Arbeitsbereich wieder verschlüsseln und sperren',
@@ -1281,6 +1281,7 @@ export const de: Record<keyof typeof en, string> = {
   'settings.tabsAria': 'Einstellungsbereiche',
   'settings.tab.general': 'Allgemein',
   'settings.tab.privacy': 'Privatsphäre & Daten',
+  'settings.tab.skills': 'Skills',
   'settings.tab.diagnostics': 'Diagnose (erweitert)',
   'settings.loading': 'Einstellungen werden geladen…',
   'settings.saved': 'Gespeichert',
@@ -1366,8 +1367,7 @@ export const de: Record<keyof typeof en, string> = {
   'settings.changePassword.submitBusy': 'Wird geändert…',
   'settings.changePassword.toast': 'Passwort geändert',
 
-  // ---- Skills (Rail-Ziel — SkillsScreen.tsx + settings/SkillsTab.tsx, Skills-Plan §15) ----
-  'skills.title': 'Skills',
+  // ---- Skills (settings/SkillsTab.tsx, Skills-Plan §15) ----
   'skills.intro': 'Skills bringen der KI bei, eine bestimmte Aufgabe zu erledigen. Sie ergänzen ihre Antworten um Hinweise – sie greifen nie auf das Internet oder andere Ordner auf deinem Computer zu.',
   // #46 – die Was/Braucht/Grenzen-Zeilen der Info-Karte bei der ersten Skill-Auswahl
   // (`shared/skill-info.ts`). Je EIN ruhiger Satz, destilliert aus user-guide §9 und
@@ -1799,6 +1799,186 @@ export const de: Record<keyof typeof en, string> = {
   // CODE-27 (full-audit 2026-07-11): die Fehlerzeile des erneuten GPU-Versuchs.
   'diag.gpu.tryFailed': 'Der erneute Versuch mit der Grafikkarte hat nicht geklappt: {error}',
   'diag.refresh': 'Aktualisieren',
+  // ---- Leistungs-Bildschirm (PerformanceScreen.tsx) ----
+  'perf.title': 'Leistung',
+  'perf.lead':
+    'Wie schnell dieser Computer dein KI-Modell ausführt, gemessen auf diesem Gerät. Nichts wird irgendwohin gesendet.',
+  'perf.card.title': 'Dieser Computer',
+  'perf.checkedAt': 'Geprüft {when}',
+  'perf.notChecked': 'Noch nicht geprüft',
+  'perf.otherMachine':
+    'Dieses Ergebnis wurde auf einem anderen Computer gemessen. Prüfe erneut, um diesen zu messen.',
+  // Die erste Zeile des kopierten Berichts, wenn das Ergebnis NICHT von diesem Rechner stammt.
+  'perf.report.otherComputer': 'Anderer Computer: {cpu}, {ram} GB RAM',
+  'perf.verdict.speed': 'Führt {model} mit etwa {tps} Token pro Sekunde aus.',
+  // perf.basis.* stehen im Dativ nach "zum" — sie werden nur in diesem Satz verwendet.
+  'perf.verdict.noSpeed':
+    '{model} passt am besten zum {basis} dieses Computers. Die Geschwindigkeit wird gemessen, sobald ein Modell gelaufen ist.',
+  'perf.basis.discrete': 'Grafikspeicher',
+  'perf.basis.unified': 'gemeinsamen Speicher',
+  'perf.basis.cpu': 'Arbeitsspeicher',
+  'perf.recommendation.atCheckTime': 'Empfohlen zum Zeitpunkt der Prüfung',
+  'perf.recommendation.next': 'Empfohlen für den nächsten Start',
+  'perf.verdict.noRecommendation': 'Noch kein Modell im Katalog passt zu diesem Computer.',
+  'perf.verdict.notChecked':
+    'Eine kurze Prüfung misst Arbeitsspeicher, Laufwerksgeschwindigkeit und, sobald ein Modell läuft, die Generierungsgeschwindigkeit.',
+  'perf.verdict.driveFast': 'Modellstarts von diesem Laufwerk sind schnell.',
+  'perf.verdict.driveSlow': 'Modellstarts von diesem Laufwerk sind langsam.',
+  'perf.tile.speed': 'Geschwindigkeit',
+  'perf.tile.speed.unit': 'Token / Sek.',
+  'perf.tile.speed.sub': 'Gemessen mit {model} am {when}',
+  'perf.tile.speed.approx': 'Ungefähr: gezählte Chunks, nicht die Laufzeit-Messung',
+  // #291: das Fenster, über das eine Chunk-basierte Zahl gilt (die Laufzeit-Messung nutzt
+  // `diag.bench.tokensOver`).
+  'perf.tile.speed.chunks': '{chunks} Chunks',
+  'perf.tile.speed.none': 'Noch nicht gemessen',
+  'perf.tile.speed.noneHint': 'Starte ein Modell und prüfe dann erneut',
+  'perf.tile.memory': 'Arbeitsspeicher',
+  'perf.tile.memory.unit': 'GB RAM',
+  'perf.tile.memory.unified': 'Gemeinsamer Speicher',
+  'perf.tile.memory.unifiedSub': 'Von Prozessor und Grafikkernen gemeinsam genutzt',
+  'perf.model.title': 'Dein Modell',
+  'perf.model.line': '{model} · {size} GB auf dem Laufwerk · Kontext von {context} Token',
+  'perf.model.none': 'Noch kein Modell ausgewählt. Wähle eines auf dem KI-Modell-Bildschirm.',
+  'perf.model.need': 'Belegt {need} GB mit diesem Kontext.',
+  'perf.model.needEstimate':
+    'Braucht mindestens {need} GB für die Gewichte, plus den Kontext-Cache, den der erste Start misst.',
+  'perf.model.gpu': 'Passt in den Grafikspeicher ({budget} GB): alle {layers} Schichten auf der GPU.',
+  'perf.model.gpuEstimate': 'Sollte in den Grafikspeicher passen ({budget} GB).',
+  'perf.model.partial':
+    'Der Grafikspeicher fasst {budget} GB: {gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM. Antworten langsamer.',
+  // `{margin}` ist `FIT_TARGET_MARGIN_MB` in GB (shared/performance-rules.ts), nie ein
+  // Literal — PR #303 Audit DR4.
+  'perf.model.partialFree':
+    '{gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM: Beim Start des Modells waren nur {free} GB der {budget} GB der Karte frei, und die Laufzeit hält {margin} GB Sicherheitsreserve. Antworten langsamer. Starte das Modell neu, sobald die Karte frei ist.',
+  'perf.model.partialMargin':
+    '{gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM. Die Karte war frei ({free} von {budget} GB), aber die Laufzeit reserviert zusätzlich {working} GB Arbeitspuffer und {margin} GB Sicherheitsreserve und verschiebt ganze Schichten von der Karte, wenn die Summe knapp wird. Antworten langsamer.',
+  'perf.model.partialMarginNoWorking':
+    '{gpuLayers} von {layers} Schichten auf der GPU, etwa {spill} GB laufen aus dem RAM. Die Karte war frei ({free} von {budget} GB), aber die Laufzeit reserviert zusätzlich Arbeitspuffer und {margin} GB Sicherheitsreserve und verschiebt ganze Schichten von der Karte, wenn die Summe knapp wird. Antworten langsamer.',
+  'perf.model.partialEstimate':
+    'Der Grafikspeicher fasst {budget} GB: etwa {spill} GB werden aus dem RAM laufen. Antworten langsamer.',
+  'perf.model.cpu': 'Läuft auf dem Prozessor aus dem RAM ({budget} GB).',
+  'perf.model.cpuEstimate': 'Wird auf dem Prozessor aus dem RAM laufen ({budget} GB).',
+  'perf.model.unified': 'Passt in den gemeinsamen Speicher ({ram} GB, bis zu {budget} GB für das Modell verfügbar).',
+  'perf.model.unifiedEstimate': 'Sollte in den gemeinsamen Speicher passen ({ram} GB, bis zu {budget} GB für das Modell verfügbar).',
+  'perf.model.tooLarge': 'Zu groß für diesen Computer ({budget} GB verfügbar). Wähle ein kleineres Modell.',
+  // Schätzung: nennt den Computer, auf dem gemessen wird (PR #303 Audit L8).
+  'perf.model.unknown': 'Wo das Modell landet, wird beim ersten Start auf diesem Computer gemessen.',
+  // Ein Start wurde beobachtet, das Log sagte aber nichts (Owner-Entscheidung (c)).
+  'perf.model.unknownObserved': 'Die Laufzeit hat nicht gemeldet, wo das Modell gelandet ist.',
+  // Ein Datensatz pro Modell liegt auf dem LAUFWERK, nicht auf dem Computer.
+  'perf.model.perDrive':
+    'Das Laufwerk behält einen Datensatz pro Modell, ein Start auf einem anderen Computer ersetzt also den hier gemessenen.',
+  'perf.model.measuredOther':
+    'Früher mit einem Kontext von {context} Token am {when} gemessen; die Schätzung oben gilt für die aktuellen Einstellungen.',
+  'perf.model.runningOnCard': 'Läuft gerade auf der Grafikkarte.',
+  'perf.model.choose': 'Kleineres Modell wählen',
+  'perf.models.title': 'Modelle auf diesem Computer',
+  'perf.models.hint':
+    'Chat und Übersetzung teilen sich die Grafikkarte. Bilder, Dokumentsuche und Sprache laufen absichtlich auf dem Prozessor, sie kosten also RAM, keinen Grafikspeicher.',
+  'perf.role.chat': 'Chat',
+  'perf.role.translation': 'Übersetzung',
+  'perf.role.vision': 'Bilder',
+  'perf.role.reranker': 'Dokumentsuche (Ranking)',
+  'perf.role.embeddings': 'Dokumentsuche (Index)',
+  'perf.role.transcriber': 'Sprache',
+  'perf.models.row': '{model} · {size} GB',
+  'perf.models.rowNoSize': '{model}',
+  'perf.models.none': 'Kein Modell dafür installiert.',
+  'perf.models.device.gpu': 'Grafikkarte',
+  'perf.models.device.cpu': 'Prozessor, absichtlich',
+  'perf.models.device.processor': 'Prozessor',
+  'perf.models.loaded': 'jetzt geladen',
+  'perf.models.notLoaded': 'nicht geladen',
+  'perf.models.lifetime.session': 'bleibt geladen',
+  'perf.models.lifetime.idle': 'wird bei Leerlauf entladen',
+  'perf.models.lifetime.per-use': 'läuft nur während der Arbeit',
+  'perf.models.split': '{gpuLayers} von {layers} Schichten auf der Karte',
+  'perf.models.card': 'Grafikkarte: Chat {chat} GB + Übersetzung {translation} GB, von {vram} GB.',
+  'perf.models.cardBoth':
+    'Beide sind gerade auf der Karte. Das später gestartete bekam den Rest und läuft langsamer; stoppe und starte es, sobald das andere entladen ist.',
+  'perf.models.ram': 'Alles gleichzeitig geladen braucht etwa {sum} GB von {ram} GB RAM.',
+  'perf.models.memory': 'Alles gleichzeitig geladen braucht etwa {sum} GB von den {budget} GB gemeinsamem Speicher, die Modellen zur Verfügung stehen.',
+  'perf.models.ramTooMuch': 'Zu viel auf einmal',
+  'perf.models.ramOk': 'Passt',
+  'perf.place.gpu': 'Auf der GPU',
+  'perf.place.partial': 'Teils auf der GPU',
+  'perf.place.cpu': 'Auf dem Prozessor',
+  'perf.place.tooLarge': 'Zu groß',
+  'perf.place.unknown': 'Nicht gemessen',
+  'perf.tile.graphics': 'Grafikspeicher',
+  'perf.tile.graphics.unit': 'GB VRAM',
+  'perf.tile.graphics.none': 'Keine nutzbare Grafikkarte. Modelle laufen auf dem Prozessor.',
+  'perf.tile.graphics.off': 'Grafikbeschleunigung ist aus. Modelle laufen auf dem Prozessor.',
+  'perf.tile.graphics.small': 'Unter {min} GB: Modelle laufen auf dem Prozessor.',
+  'perf.tile.graphics.integrated': 'Integriert, gemeinsamer Speicher: Modelle laufen auf dem Prozessor.',
+  'perf.tile.graphics.unitShared': 'GB gemeinsam',
+  'perf.tile.graphics.notRecorded': 'Diese Prüfung hat die Grafikkarte nicht erfasst.',
+  'perf.rating.usable': 'Nutzbar',
+  'perf.rating.small': 'Klein',
+  'perf.rating.integrated': 'Integriert',
+  'perf.rating.notRecorded': 'Nicht erfasst',
+  'perf.rating.none': 'Keine',
+  'perf.others.subGpu': '{cpu}, {ram} GB RAM, {vram} GB VRAM · {when}',
+  'perf.tile.drive': 'Laufwerk',
+  'perf.tile.drive.unit': 'MB/s lesen',
+  'perf.tile.drive.load': 'Aus einem Modellstart am {when}, {gb} GB gelesen',
+  'perf.tile.drive.hash': 'Aus einer Dateiprüfung am {when}, {gb} GB gelesen',
+  'perf.tile.drive.none': 'Noch nicht gemessen',
+  // N4: eine vollständige Dateiprüfung misst sie ebenfalls.
+  'perf.tile.drive.noneHint': 'Wird beim ersten Modellstart oder bei der ersten Dateiprüfung gemessen',
+  'perf.rating.good': 'Gut',
+  'perf.rating.slow': 'Langsam',
+  'perf.rating.fast': 'Schnell',
+  'perf.rating.pending': 'Ausstehend',
+  'perf.rating.approx': 'Ungefähr',
+  'perf.rating.slowDrive': 'Langsames Laufwerk',
+  'perf.profile.TINY': 'Klein',
+  'perf.profile.LITE': 'Leicht',
+  'perf.profile.BALANCED': 'Ausgewogen',
+  'perf.profile.PRO': 'Pro',
+  'perf.profile.UNKNOWN': 'Unbekannt',
+  'perf.check': 'Diesen Computer prüfen',
+  'perf.checkAgain': 'Erneut prüfen',
+  'perf.running': 'Läuft…',
+  'perf.startAndMeasure': '{model} starten und messen',
+  'perf.contextSize': 'Kontextgröße ändern',
+  'perf.copy': 'Bericht kopieren',
+  'perf.autoNote':
+    'Läuft von selbst beim ersten Mal und immer, wenn dieses Laufwerk an einen anderen Computer angeschlossen wird.',
+  'perf.failed': 'Prüfung fehlgeschlagen: {error}',
+  'perf.loadFailed': 'Die aktuellen Werte konnten nicht gelesen werden: {error}',
+  'perf.retry': 'Erneut versuchen',
+  'perf.step.system': 'Hardware erkannt',
+  // N5: die Kachel daneben zeigt „MB/s lesen“ — der Schritt darf nicht „Schreiben“ heißen.
+  'perf.step.drive': 'Laufwerksgeschwindigkeit',
+  'perf.step.speed': 'Generierungsgeschwindigkeit mit {model}',
+  'perf.step.speedSkipped': 'Generierungsgeschwindigkeit (kein Modell läuft, übersprungen)',
+  'perf.step.hint': 'Etwa eine halbe Minute. Du kannst die App weiter benutzen.',
+  'perf.observed.title': 'Während der Arbeit beobachtet',
+  // Die Zeilen sind Sitzungs-Latches, die Lese-Messwerte dahinter werden aber zusätzlich in den
+  // Benchmark-Datensätzen gespeichert (Laufwerkskachel oben) — L8.
+  'perf.observed.hint':
+    'Echte Werte aus dem normalen Gebrauch, kein Test-Prompt. Diese Zeilen gelten für diese Sitzung; die gezeigten Lesegeschwindigkeiten werden zusätzlich bei den Laufwerkswerten oben gespeichert.',
+  'perf.observed.none': 'In dieser Sitzung noch nichts beobachtet. Frag das Modell etwas oder starte es.',
+  'perf.observed.answer': 'Letzte Antwort: {tps} Token / Sek., erstes Token nach {ttft} s',
+  'perf.observed.answerSub': '{model}, {when}, {tokens} Token',
+  'perf.observed.load': 'Modellstart: {seconds} s',
+  'perf.observed.loadSub': '{model}, {gb} GB von diesem Laufwerk mit {mbps} MB/s gelesen',
+  'perf.observed.check': 'Dateiprüfung: {seconds} s',
+  'perf.observed.checkSub': 'Vollständige Dateiprüfung von {model} am {when}, {gb} GB gelesen',
+  'perf.observed.oncePerModel': 'Einmal pro Modell',
+  'perf.others.title': 'Andere Computer, an denen dieses Laufwerk benutzt wurde',
+  'perf.others.hint':
+    'Jeder Computer behält sein eigenes Ergebnis, damit das empfohlene Modell zum Gerät passt, nicht zum Laufwerk.',
+  'perf.others.none': 'Noch keine. Schließe das Laufwerk an einen anderen Computer an, und es prüft sich selbst.',
+  'perf.others.row': '{tps} Token / Sek. mit {model}',
+  'perf.others.rowNoSpeed': '{model} empfohlen, Geschwindigkeit nicht gemessen',
+  'perf.others.sub': '{cpu}, {ram} GB RAM · {when}',
+  'perf.footer': 'Der vollständige technische Bericht mit allen Rohwerten bleibt unter Einstellungen, Diagnose.',
+  'perf.footerLink': 'Diagnose öffnen',
+  'perf.unknownModel': 'dem geladenen Modell',
+  'perf.unknownCpu': 'Unbekannte CPU',
   'diag.bench.title': 'Hardware-Benchmark',
   'diag.bench.hint':
     'Misst RAM, CPU und Laufwerksgeschwindigkeit dieses Geräts, um ein Modell zu ' +
@@ -2052,6 +2232,9 @@ export const de: Record<keyof typeof en, string> = {
     'Sekunde, daher wurde die Modell-Empfehlung eine Größenstufe herabgesetzt, damit ' +
     'Antworten auf diesem Computer schnell bleiben.',
   'main.benchmark.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um den Benchmark auszuführen.',
+  'main.benchmark.lockedDuringRun':
+    'Der Arbeitsbereich wurde während des Benchmarks gesperrt, daher wurde das Ergebnis nicht ' +
+    'gespeichert. Führe den Benchmark noch einmal aus.',
 
   // Emission set (D-L5): localized at the emission site via tMain().
   // #236: die native Rückfrage, bevor ein http(s)-Link aus einer Antwort oder einem

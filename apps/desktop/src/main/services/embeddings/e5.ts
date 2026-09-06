@@ -189,6 +189,11 @@ export class E5Embedder implements Embedder {
   readonly id: string
   readonly dimensions: number
   private server: LlamaServer | null = null
+
+  /** Resident right now? (The sidecar is lazy-started and then held for the session.) */
+  isLoaded(): boolean {
+    return this.server !== null
+  }
   private starting: Promise<void> | null = null
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false
@@ -221,10 +226,35 @@ export class E5Embedder implements Embedder {
    * (180 s by default) of a wedged cold start it is about to kill anyway. One per start.
    */
   private startAbort: AbortController | null = null
+  /** Residency listeners (`onResidencyChange`): fired after `isLoaded()` flips. */
+  private readonly residencyListeners = new Set<() => void>()
 
   constructor(private readonly opts: E5EmbedderOptions) {
     this.id = opts.id
     this.dimensions = opts.dimensions ?? DEFAULT_DIMENSIONS
+  }
+
+  /**
+   * Subscribe to residency transitions (PR #303 P3): the lazy start landing and the
+   * suspend/stop teardown — everything that flips `isLoaded()`. Fired synchronously after
+   * the flip, before the kill is awaited. Observability only; a throwing listener never
+   * breaks the sidecar's lifecycle. Returns the unsubscribe.
+   */
+  onResidencyChange(cb: () => void): () => void {
+    this.residencyListeners.add(cb)
+    return () => {
+      this.residencyListeners.delete(cb)
+    }
+  }
+
+  private emitResidencyChange(): void {
+    for (const cb of this.residencyListeners) {
+      try {
+        cb()
+      } catch {
+        /* observability only */
+      }
+    }
   }
 
   /** Lazily spawn the embeddings sidecar (once). Concurrent callers share one start. */
@@ -279,6 +309,7 @@ export class E5Embedder implements Embedder {
         .start()
         .then(() => {
           this.server = server
+          this.emitResidencyChange()
         })
         .catch((err) => {
           const error = err instanceof Error ? err : new Error(String(err))
@@ -491,9 +522,13 @@ export class E5Embedder implements Embedder {
       }
       const server = this.server
       this.server = null
-      if (server) await server.stop()
+      if (server) {
+        this.emitResidencyChange()
+        await server.stop()
+      }
     } finally {
       // Cleared so a post-suspend embed() can lazily restart (suspend() permits a fresh start;
+
       // only stop()'s separate, permanent `stopped` latch blocks that).
       this.tearingDown = false
     }

@@ -5,10 +5,12 @@ import type { AppContext } from '../services/context'
 import type {
   AppSettings,
   EffectiveReadSample,
+  LiveRecommendation,
   ModelInfo,
   ModelState,
   RuntimeInstallInfo,
-  RuntimeStatus
+  RuntimeStatus,
+  SpeedSampleIdentity
 } from '../../shared/types'
 import type { ModelManifest } from '../../shared/manifest'
 import { readRuntimeMarker } from '../services/assets'
@@ -19,21 +21,30 @@ import {
   computeInstallState,
   createSettingsHashStore,
   discoverManifests,
+  graphicsBudgetMib,
   invalidateChecksum,
   launchContextTokens,
   machineRamGb,
   manifestFiles,
+  recommendChatModelId,
   selectModel,
-  weightPath
+  weightPath,
+  type BuildModelListOptions,
+  type PickerSpeedSignal
 } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
+import { nextStartMemoryFor, type NextStartMemory } from '../services/performance'
+import { notifyPerformanceChanged } from './performance-notify'
 import {
   latestEffectiveRead,
   preferCandidate,
   setEffectiveReadObserver,
   suppressNextModelLoadSample
 } from '../services/read-speed'
-import { upsertSlowReadWarning } from '../services/benchmark'
+import { detectSystem } from '../services/benchmark'
+import { machineKey } from '../services/performance'
+import { effectiveReadPatch, eligiblePersistedSample } from '../services/benchmark-persistence'
+import type { Db } from '../services/db'
 import { loadPolicy } from '../services/policy'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -50,6 +61,94 @@ import { perfMark, perfMs } from '../services/perf'
  * (`require_sha256_match: true` / `allow_unverified_models: false`) unverified weights
  * are rejected no matter what the toggle says; this also disables the mock fallback.
  */
+/**
+ * The memory inputs the chat ★ pick goes by (§6.6; PR #308 audit decisions 6 and 9): the class
+ * and the BUDGET device for the NEXT start, read through `nextStartMemoryFor` from the
+ * ELIGIBLE persisted probe (`eligibleGpuProbe`, PR #303 audit M8.3: a probe stamped with
+ * another machine's key supplies nothing, an unstamped legacy one stays eligible) and the two
+ * GPU flags — the same call `probeAndPersistGpu` and the Performance screen make, so the
+ * Models ★ and the benchmark can never name different cards. `hereKey` defaults to this
+ * machine's identity; the seam tests pass it to pin the foreign-probe case. Exported so the
+ * seam test can pin what the `listModels` handler feeds `buildModelList`.
+ */
+export function pickerMemoryFor(
+  s: AppSettings,
+  hereKey: string | null = machineKey(detectSystem())
+): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb'> {
+  const next = nextStartMemoryFor(s, hereKey)
+  // The budget is the device's FREE figure (else total − 1024), raw MiB — decision 10; the same
+  // `graphicsBudgetMib` call `probeAndPersistGpu` makes for the benchmark.
+  return { memoryClass: next.memoryClass, graphicsBudgetMb: graphicsBudgetMib(next.device) }
+}
+
+/**
+ * The §6.5 speed signal the chat ★ goes by (issue #95): the persisted Diagnostics pairing
+ * (tok/s + the model that produced it, issue #52), derived fresh from `lastBenchmark` on every
+ * call — stateless, never compounds. Shared by the `listModels` handler and the Performance
+ * snapshot's live recommendation so both surfaces read one signal.
+ *
+ * Sample identity (issue #322, §6.5 2026-09-06 amendment, owner-confirmed): a sample that
+ * carries `speedIdentity` counts only when the NEXT start (`nextStartMemoryFor`) runs on a path
+ * NO FASTER than the one the sample was measured on — the crawl is an upper bound on what a
+ * slower path can do, never evidence about a faster one:
+ *   - measured on the card, next start on the SAME card → counts;
+ *   - measured on the card, next start on the processor (GPU switched off, auto-disabled) →
+ *     counts (the processor will be slower still; dropping it would move the pick UP on the
+ *     slowest configuration the machine has);
+ *   - measured on the processor (the ladder's CPU rung, whatever the class was), next start on
+ *     the card → dropped (a processor crawl says nothing about the card);
+ *   - measured on a DIFFERENT card → dropped (ambiguous without the sizes; rare);
+ *   - measured on the mock runtime → never counts (its figures are not the machine's).
+ * The context is recorded but not matched — the step-down is an order-of-magnitude crawl gate
+ * on a decode figure, and the context is a setting users change often. A legacy sample without
+ * the field keeps steering exactly as before.
+ */
+export function speedSignalFor(
+  s: AppSettings,
+  hereKey: string | null = machineKey(detectSystem())
+): PickerSpeedSignal | null {
+  const last = s.lastBenchmark
+  if (!last) return null
+  const identity = last.speedIdentity
+  if (identity && !sampleCountsForNextStart(identity, nextStartMemoryFor(s, hereKey))) return null
+  return {
+    tokensPerSecond: last.tokensPerSecond,
+    measuredModelId: last.measuredModelId ?? null
+  }
+}
+
+/** The one-directional rule above, pure: does a sample measured under `identity` describe `next`? */
+export function sampleCountsForNextStart(identity: SpeedSampleIdentity, next: NextStartMemory): boolean {
+  if (identity.backend === 'mock') return false
+  // The path the sample was measured on: the card only when the ladder actually landed there
+  // under a card class; a CPU rung (or an unknown backend) under any class is the processor.
+  const measuredOnCard = identity.backend === 'gpu' && identity.memoryClass !== 'cpu'
+  const nextOnCard = next.memoryClass !== 'cpu'
+  if (!nextOnCard) return true // the processor is never faster than what was measured
+  if (!measuredOnCard) return false // a processor crawl says nothing about the card
+  return (identity.deviceName ?? null) === (next.device?.name ?? null)
+}
+
+/**
+ * The LIVE chat recommendation for the next start (PR #308 audit decision 8, finding R4), from
+ * the SAME inputs the `listModels` handler feeds `buildModelList`: `pickerMemoryFor(s)` (class +
+ * budget), `machineRamGb()` (whole GB — `buildModelList` reads `opts.machineRamGb` as is) and
+ * `speedSignalFor(s)`; the two `??` defaults mirror `buildModelList`'s own. `buildPerformanceSnapshot`
+ * returns it as `PerformanceSnapshot.recommendation`, so the Performance verdict and its "Start …
+ * and measure" target can never diverge from the Models ★ — the saved
+ * `lastBenchmark.recommendedModelId` is what the check said at the time and is left untouched.
+ */
+export function liveChatRecommendation(s: AppSettings, manifests: ModelManifest[]): LiveRecommendation {
+  const memory = pickerMemoryFor(s)
+  const basis = memory.memoryClass ?? 'cpu'
+  const modelId = recommendChatModelId(
+    manifests,
+    { memoryClass: basis, ramGb: machineRamGb(), budgetMb: memory.graphicsBudgetMb ?? null },
+    speedSignalFor(s)
+  )
+  return { modelId, basis }
+}
+
 function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
   const { policy } = loadPolicy(ctx.paths.configPath, undefined, { isDev: ctx.isDev })
   const developer = s.developerMode || ctx.isDev
@@ -208,9 +307,15 @@ function manifestReadBytes(rootPath: string, manifest: ModelManifest): number | 
   }
 }
 
-/** The `at` of the sample most recently written to settings — lets the persist helper
- *  no-op without a settings read on every poll/list call once a sample is stored. */
-let lastPersistedAt: string | null = null
+/**
+ * The sample most recently written to EVERY eligible destination — lets the persist helper
+ * no-op without a settings read on every poll/list call once a sample is stored. Scoped to
+ * the workspace DB handle and this machine's key: a lock/unlock (a new `Db`) or a drive on
+ * another computer re-evaluates rather than trusting a memo made against other settings.
+ * Set only after a successful write to all eligible destinations, so a failed or deferred
+ * write (a locked workspace, a closed DB) leaves it unset and the next call retries.
+ */
+let persistedSampleMemo: { at: string; db: Db; key: string | null } | null = null
 
 /** #107: the effective-read sample resolved once per "Starting…" window (keyed on the
  *  starting model), so the 2.5 s status poll never re-reads settings mid-window. A
@@ -219,60 +324,79 @@ let startingSampleMemo: { forModelId: string; sample: EffectiveReadSample | null
 
 /**
  * Fold the session's latest honest effective-read sample (services/read-speed.ts) into
- * the persisted `settings.lastBenchmark` (#108) — AND re-key the one warning that
- * tracks it (#110, `upsertSlowReadWarning`): the only automatic benchmark runs before
- * any model exists, so without this the primary slow-read warning would never appear on
- * the default journey, and a stale one could contradict the freshly updated Diagnostics
- * row beside it. Registered as the read-speed OBSERVER (fires on every recorded sample,
- * including a background download path with no model IPC afterwards) and also invoked
- * after start/list/verify as cheap retries for samples whose observer-time persist hit
- * a locked workspace. The cross-session source ranking is enforced here too
- * (`preferCandidate`): a fresh session's checksum sample never overwrites last
- * session's persisted model-load sample. Never throws (persistGpuFailure precedent).
+ * the persisted benchmark result for THIS machine (#108) — `settings.lastBenchmark` when
+ * that result is this machine's (or unkeyed on either side, G3) AND this machine's
+ * `benchmarkHistory` entry when one exists (L2: a restore after a round trip used to bring
+ * back the stale copy) — re-keying the one warning that tracks the sample (#110,
+ * `upsertSlowReadWarning`): the only automatic benchmark runs before any model exists, so
+ * without this the primary slow-read warning would never appear on the default journey,
+ * and a stale one could contradict the freshly updated Diagnostics row beside it. A
+ * foreign `lastBenchmark` is never touched (a local sample never rides another computer's
+ * result); with no eligible destination at all the sample stays un-handled — a benchmark
+ * is never fabricated just to store it. Registered as the read-speed OBSERVER (fires on
+ * every recorded sample, including a background download path with no model IPC
+ * afterwards) and also invoked after start/list/verify as cheap retries for samples whose
+ * observer-time persist hit a locked workspace. The cross-session source ranking is
+ * enforced per destination (`effectiveReadPatch` → `preferCandidate`): a fresh session's
+ * checksum sample never overwrites last session's persisted model-load sample. Never
+ * throws (persistGpuFailure precedent). Exported as the explicit retry seam (and for the
+ * persistence tests); production callers are this module's handlers and the observer
+ * registered in `registerModelIpc`.
+ *
+ * The `performance:changed` push (P3): a retry call pushes only when it actually WROTE (the
+ * Drive tile's persisted figure moved); the observer wiring pushes on every accepted sample
+ * regardless (the observed rows read the per-source latches, which moved even when the
+ * persist was a ranked no-op) — see `persistPendingEffectiveRead`.
  */
-function persistEffectiveRead(ctx: AppContext): void {
+export function persistEffectiveRead(ctx: AppContext): void {
+  if (persistPendingEffectiveRead(ctx)) notifyPerformanceChanged()
+}
+
+/** The persist itself; true when a settings write happened, false on a no-op or a deferral. */
+function persistPendingEffectiveRead(ctx: AppContext): boolean {
   try {
     const sample = latestEffectiveRead()
-    if (!sample || sample.at === lastPersistedAt) return
-    const lastBenchmark = getSettings(ctx.db).lastBenchmark
-    if (!lastBenchmark) return
-    if (lastBenchmark.effectiveRead?.at === sample.at) {
-      lastPersistedAt = sample.at
-      return
+    if (!sample) return false
+    const here = machineKey(detectSystem())
+    const db = ctx.db // throws while locked → the catch below, memo untouched, retried later
+    const memo = persistedSampleMemo
+    if (memo && memo.at === sample.at && memo.db === db && memo.key === here) return false
+    const patch = effectiveReadPatch(getSettings(db), sample, here)
+    if (patch === null) return false // no eligible destination yet — not handled, retry next call
+    // Ordering (no multi-key transaction in the settings store): history first, then
+    // lastBenchmark — a crash between the two loses at most the headline copy, never a machine.
+    let wrote = false
+    if (patch.benchmarkHistory || patch.lastBenchmark) {
+      updateSettings(db, { benchmarkHistory: patch.benchmarkHistory, lastBenchmark: patch.lastBenchmark })
+      wrote = true
     }
-    if (!preferCandidate(sample, lastBenchmark.effectiveRead)) {
-      // The persisted sample outranks this one — mark it handled so the next call
-      // doesn't re-read settings just to lose the same comparison.
-      lastPersistedAt = sample.at
-      return
-    }
-    updateSettings(ctx.db, {
-      lastBenchmark: {
-        ...lastBenchmark,
-        effectiveRead: sample,
-        warnings: upsertSlowReadWarning(lastBenchmark.warnings ?? [], sample.mbps)
-      }
-    })
-    lastPersistedAt = sample.at
+    persistedSampleMemo = { at: sample.at, db, key: here }
+    return wrote
   } catch (err) {
     log.warn('Could not persist the effective-read sample', { error: String(err) })
+    return false
   }
 }
 
 /**
  * The current effective-read sample for consumers OUTSIDE the recording path (#108):
- * this session's latch vs the persisted one under the SAME source ranking the latch
- * itself uses (`preferCandidate`) — so a session checksum sample never shadows last
- * session's persisted model-load sample here either (it would bake the worse figure
- * into a fresh benchmark's warnings, or a wrong #107 estimate). The single definition
- * of this fallback, shared by the benchmark injection and the progress estimate; a
- * settings error (locked workspace) reads as latch-only.
+ * this session's latch (always this machine's) vs the persisted sample THIS machine may
+ * carry (`eligiblePersistedSample`: identity before ranking — a foreign `lastBenchmark`'s
+ * sample is never a candidate, this machine's own history entry is), under the SAME
+ * source ranking the latch itself uses (`preferCandidate`) — so a session checksum sample
+ * never shadows last session's persisted model-load sample here either (it would bake the
+ * worse figure into a fresh benchmark's warnings, or a wrong #107 estimate), while a local
+ * checksum sample does beat a foreign persisted model-load one. The single definition of
+ * this fallback, shared by the benchmark injection (before AND after the run, M6) and the
+ * progress estimate; a settings error (locked workspace) reads as latch-only. Detection
+ * (`detectSystem`) is a handful of `node:os` calls — computed per call, never memoized for
+ * the process (the #107 poll memoizes the whole result per "Starting…" window itself).
  */
 export function effectiveReadOrPersisted(ctx: AppContext): EffectiveReadSample | null {
   const latched = latestEffectiveRead()
   let persisted: EffectiveReadSample | null = null
   try {
-    persisted = getSettings(ctx.db).lastBenchmark?.effectiveRead ?? null
+    persisted = eligiblePersistedSample(getSettings(ctx.db), machineKey(detectSystem()))
   } catch {
     persisted = null
   }
@@ -284,10 +408,18 @@ export function effectiveReadOrPersisted(ctx: AppContext): EffectiveReadSample |
  * Auto-start the selected (active) chat model in the background once the workspace is
  * usable (app launch for plaintext_dev; unlock/create for encrypted) — a restarted app
  * used to show an "active" model whose runtime silently was not running until the user
- * visited Models and pressed Start. Mirrors `maybeRunFirstBenchmark`: never throws,
- * never blocks; a failure is logged and the manual start path still works.
+ * visited Models and pressed Start. Never throws, never blocks; a failure is logged and the
+ * manual start path still works.
+ *
+ * Returns a promise that settles when the start COMPLETED (health + the #109 warm-up), was
+ * SKIPPED (no active model, the toggle off, a runtime already up, a locked workspace) or FAILED
+ * — the rejection is caught here with the warn log, so the promise never rejects. The first-run
+ * benchmark scheduler (`scheduleFirstBenchmark`, PR #303 audit L1 / owner decision G5) awaits
+ * it: the benchmark's drive probe and speed leg then never contend with the multi-GB weight
+ * hash + load, and the speed leg sees the runtime this start brought up. Callers that do not
+ * care keep `void maybeAutoStartActiveModel(ctx)`.
  */
-export function maybeAutoStartActiveModel(ctx: AppContext): void {
+export async function maybeAutoStartActiveModel(ctx: AppContext): Promise<void> {
   let modelId: string | null = null
   try {
     // AUD-02/AUD-03: `workspaceAdmitsWork` — never begin an auto-start while a lock teardown is
@@ -303,12 +435,14 @@ export function maybeAutoStartActiveModel(ctx: AppContext): void {
   }
   if (!modelId) return
   log.info('Auto-starting the active model runtime in the background', { modelId })
-  void startModelRuntime(ctx, modelId).catch((err) =>
+  try {
+    await startModelRuntime(ctx, modelId)
+  } catch (err) {
     log.warn('Auto-start of the active model failed (start it from the AI Model screen)', {
       modelId,
       error: String(err)
     })
-  )
+  }
 }
 
 export function registerModelIpc(ctx: AppContext): void {
@@ -317,8 +451,13 @@ export function registerModelIpc(ctx: AppContext): void {
   // (including one from a background download's cold-file hash, which has no model IPC
   // afterwards to piggyback on). The explicit persistEffectiveRead calls after
   // start/list/verify remain as cheap retries for observer-time persists that hit a
-  // locked workspace.
-  setEffectiveReadObserver(() => persistEffectiveRead(ctx))
+  // locked workspace. The SINGLE observer wiring for the process: persist first, then the
+  // Performance push — on EVERY accepted sample (P3), including a checksum that lost the
+  // ranked slot to an earlier model load, whose per-source latch the observed rows show.
+  setEffectiveReadObserver(() => {
+    persistPendingEffectiveRead(ctx)
+    notifyPerformanceChanged()
+  })
   // F16 (audit-postmerge-2026-06-29): the DB-touching model handlers (list/select/verify/start all
   // read ctx.db via getSettings/selectModel/computeInstallState) fail-close when locked but throw
   // the raw English vault string; gate them with the localized copy (parity). stopRuntime + the two
@@ -346,15 +485,14 @@ export function registerModelIpc(ctx: AppContext): void {
       runningModelId: ctx.runtime.activeModelId(),
       hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),
       machineRamGb: machineRamGb(),
+      // §6.6: the ★ pick goes by graphics memory on a discrete card, the SAME rule
+      // runBenchmark applies, so the Performance screen and the Models screen agree.
+      ...pickerMemoryFor(s),
       // §6.5 signal-aware step-down (issue #95): feed the persisted Diagnostics pairing
       // (tok/s + the model that produced it, issue #52) into the chat recommendation.
-      // Derived fresh from lastBenchmark on every call — stateless, never compounds.
-      speedSignal: s.lastBenchmark
-        ? {
-            tokensPerSecond: s.lastBenchmark.tokensPerSecond,
-            measuredModelId: s.lastBenchmark.measuredModelId ?? null
-          }
-        : null,
+      // Derived fresh from lastBenchmark on every call — stateless, never compounds; the same
+      // function feeds the Performance snapshot's live recommendation (`liveChatRecommendation`).
+      speedSignal: speedSignalFor(s),
       // RT-3: the chat path (the workspace gate into Chat) passes lazyVerify so only the
       // active model is hashed on a cold cache — the full corpus of multi-GB GGUFs is
       // hashed only on an explicit Models-screen visit. Display-only; the start gate
@@ -381,6 +519,8 @@ export function registerModelIpc(ctx: AppContext): void {
     log.info('Select model', { modelId })
     const result = selectModel(ctx.db, ctx.manifestsDir, modelId)
     ctx.audit?.('model_selected', `Model selected: ${modelId}`, { modelId })
+    // The Performance snapshot keys its "Your model" block on the active slots.
+    notifyPerformanceChanged()
     return result
   })
 
@@ -447,6 +587,8 @@ export function registerModelIpc(ctx: AppContext): void {
     log.info('Use model (select + start)', { modelId })
     selectModel(ctx.db, ctx.manifestsDir, modelId)
     ctx.audit?.('model_selected', `Model selected: ${modelId}`, { modelId })
+    notifyPerformanceChanged()
+
     // Mirror startRuntime: free the runtime slot from any yielding deep-index build before the
     // start tears down / replaces llama-server.
     ctx.docTasks?.abortActiveBuild()

@@ -130,6 +130,16 @@ export interface ModelManifest {
    * (`recommendation_rank`), default 0.
    */
   recommendationRank: number
+  /**
+   * The context cache (KV + recurrent state) the runtime allocates for this model at its
+   * `recommended_context_tokens` under the app's launch (llama-server b9849 defaults: four
+   * unified slots, ubatch 2048), in GiB — the per-model cache term of the graphics-memory fit
+   * estimate (`estimateGraphicsNeedMib` in services/models.ts; model-benchmarks.md §6.6,
+   * PR #308 audit decision 11). Optional in YAML (`estimated_context_cache_gib`, number ≥ 0);
+   * absent → the picker books its 0.5 GiB default. Config-derived (`tmp/PR-308-check-kv.json`
+   * at the time of writing); the GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
+   */
+  estimatedContextCacheGib?: number
   licenseReview: LicenseReview
   /** Optional download metadata. Absent on manifests with no upstream source. */
   download?: DownloadSpec
@@ -368,6 +378,19 @@ export function validateManifest(raw: unknown): ValidationResult {
     }
   }
 
+  // Optional per-model context-cache estimate for the graphics-memory fit (decision 11): a
+  // non-negative number of GiB when present. Wrong type or a negative value is an error, not a
+  // silent default — the field moves a recommendation, so a typo must fail the manifest.
+  let estimatedContextCacheGib: number | undefined
+  const ecc = raw['estimated_context_cache_gib']
+  if (ecc !== undefined) {
+    if (typeof ecc !== 'number' || !Number.isFinite(ecc) || ecc < 0) {
+      errors.push('"estimated_context_cache_gib" must be a non-negative number when present')
+    } else {
+      estimatedContextCacheGib = ecc
+    }
+  }
+
   // Required license-review gate (spec §7.4 / model-policy.md).
   const lr = raw['license_review']
   let licenseReview: LicenseReview = {
@@ -471,6 +494,7 @@ export function validateManifest(raw: unknown): ValidationResult {
       sha256,
       recommendedProfiles,
       recommendationRank,
+      ...(estimatedContextCacheGib !== undefined ? { estimatedContextCacheGib } : {}),
       licenseReview,
       ...(download ? { download } : {}),
       ...(inputModalities ? { inputModalities } : {}),

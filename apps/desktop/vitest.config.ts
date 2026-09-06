@@ -29,7 +29,12 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.{ts,tsx}'],
-    setupFiles: ['./tests/setup.ts'],
+    // Issue #335: `setup-temp-roots.ts` records every `hilbertraum-*` / `hr-*` root a file mints
+    // under the OS temp dir and removes them in that file's `afterAll`; `global-temp-roots.ts`
+    // sweeps, after the forks exit, the roots an open sqlite handle kept locked on Windows.
+    // See tests/helpers/temp-roots.ts. Before this, a full run leaked ~2,500 roots.
+    setupFiles: ['./tests/setup.ts', './tests/setup-temp-roots.ts'],
+    globalSetup: ['./tests/global-temp-roots.ts'],
     globals: true,
     reporters: ['default', new FullSuiteGuard(expectedFiles)],
     // Pin the pool explicitly (don't ride vitest's default) so collection behaviour is

@@ -87,6 +87,14 @@ npm run test:watch                              # watch mode (re-runs affected t
   pinned literal-by-literal by `tests/unit/window-security.test.ts` — do **not** edit CSP or
   `webPreferences` inline in `index.ts`/the OCR rasterizer; change the module next to its tests
   (a deliberate change there is a deliberate security decision).
+- **Temp roots are cleaned up by the harness (issue #335).** A suite may mint its scratch root
+  with `mkdtempSync(join(tmpdir(), 'hilbertraum-<suite>-'))` (or an `hr-` prefix) and forget it:
+  `tests/setup-temp-roots.ts` records every such root a file creates directly under the OS temp
+  dir and removes them in that file's `afterAll`; a root an open sqlite handle still locks on
+  Windows is swept by `tests/global-temp-roots.ts` after the forks exit (design and the pure
+  helpers: `tests/helpers/temp-roots.ts`). Before this, a full run left ~2,500 roots behind.
+  Still close your DB handles in a teardown where you can (the Performance fixture's
+  `closePerformanceFixture()` is the model) — the sweep is the safety net, not the plan.
 - **No fixed sleeps in tests — gate on observable state.** A `setTimeout(r, N)` that waits for
   "the loop to probably get there" flakes under parallel-fork CPU starvation. Instead, expose a
   "reached" flag/promise from the fake seam or poll-until on observable state with a hard

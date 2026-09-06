@@ -25,11 +25,16 @@ import type { EffectiveReadSample } from '../../shared/types'
 // the page cache — both are the honest effective rate of that load.
 //
 // Module-level session latch (precedent: `checksumCacheStats` in models.ts). The IPC
-// layer persists the latest sample onto `settings.lastBenchmark.effectiveRead`
-// (registerModelIpc, notified via the observer below so a sample recorded by ANY
+// layer persists the latest sample onto the benchmark result for THIS machine — the
+// `effectiveRead` of `settings.lastBenchmark` when that is this machine's result, and of
+// this machine's `settings.benchmarkHistory` entry (`persistEffectiveRead` in
+// registerModelIpc, notified via the observer below so a sample recorded by ANY
 // producer — including a background download's cold-file hash — persists without each
 // producer remembering to call it) and injects it into `runBenchmark`
-// (registerBenchmarkIpc) — this module stays free of DB/settings imports.
+// (registerBenchmarkIpc) — this module stays free of DB/settings imports. The samples
+// this module latches are always LOCAL (measured on the running computer); a persisted
+// sample is only carried forward when its machine identity allows it
+// (services/benchmark-persistence.ts — identity before the ranking below).
 
 /** Below this byte count the timing is dominated by fixed costs, not throughput. */
 export const MIN_READ_SAMPLE_BYTES = 64 * 1024 * 1024
@@ -46,8 +51,41 @@ export const MIN_READ_SAMPLE_MS = 250
 export const MIN_MODEL_LOAD_SAMPLE_BYTES = 2 * 1024 ** 3
 
 let latest: EffectiveReadSample | null = null
+/** The newest sample PER SOURCE, unranked: the Performance screen shows the last model
+ *  start and the last file check side by side, where the ranked `latest` would hide a
+ *  checksum behind any model-load sample. */
+const latestBySource: Record<EffectiveReadSample['source'], EffectiveReadSample | null> = {
+  model_load: null,
+  checksum: null
+}
 let suppressNextModelLoad = false
 let observer: (() => void) | null = null
+/**
+ * The clock a sample's `at` comes from. A sample is identified by that ISO timestamp (millisecond
+ * resolution) everywhere downstream — the persister's per-destination "already carries this
+ * sample" check, the handled memo, the ranking's tie order — so two samples recorded within ONE
+ * millisecond would read as one. Real loads and hashes take seconds; a test recording two in a
+ * row on a fast runner does not (PR #303 P5 CI: the fast sample after a slow one was ignored
+ * on ubuntu/Node 24). `nextSampleAt` therefore never hands out a repeated `at` (A-D4, below);
+ * tests that need to READ specific timestamps still install a clock through the seam below.
+ */
+let clock: () => Date = () => new Date()
+/**
+ * The previous ACCEPTED sample's `at`, epoch ms (PR #303 audit A-D4). Because `at` is the
+ * sample's identity, two samples must never share one: a clock that repeats or runs backwards
+ * (a coarse timer, a time step, a checksum landing in the same millisecond as a model load) is
+ * bumped to the previous sample's `at` + 1 ms — strictly increasing for the life of the process,
+ * whatever the clock says. A sample the floors reject never advances it.
+ */
+let lastAcceptedAtMs: number | null = null
+
+/** The next sample's `at`: the clock, bumped past the previous accepted sample when it repeats or runs backwards. */
+function nextSampleAt(): string {
+  let ms = clock().getTime()
+  if (lastAcceptedAtMs != null && ms <= lastAcceptedAtMs) ms = lastAcceptedAtMs + 1
+  lastAcceptedAtMs = ms
+  return new Date(ms).toISOString()
+}
 
 /** MB/s from a byte count + elapsed ms (MB = 1e6 bytes), one decimal — the single
  *  definition shared with `measureDriveSpeed` (benchmark.ts imports it from here).
@@ -59,9 +97,11 @@ export function throughputMbps(bytes: number, ms: number): number | null {
 
 /**
  * The source-ranking rule, in one place (also applied by `persistEffectiveRead` against
- * the PERSISTED sample, so a fresh session's checksum sample can never overwrite last
- * session's model-load sample): a candidate loses only when it is a `checksum` sample
- * and the incumbent is a `model_load` one; otherwise the newer candidate wins.
+ * each PERSISTED destination, so a fresh session's checksum sample can never overwrite
+ * last session's model-load sample): a candidate loses only when it is a `checksum` sample
+ * and the incumbent is a `model_load` one; otherwise the newer candidate wins. Applied
+ * only among samples of the SAME machine — a foreign persisted sample is excluded before
+ * this rule runs (benchmark-persistence.ts `sampleEligible`).
  */
 export function preferCandidate(
   candidate: EffectiveReadSample,
@@ -87,16 +127,22 @@ function record(
     ms: Math.round(ms),
     source,
     modelId,
-    at: new Date().toISOString()
+    at: nextSampleAt()
   }
-  if (!preferCandidate(candidate, latest)) return
-  latest = candidate
+  latestBySource[source] = candidate
+  if (preferCandidate(candidate, latest)) latest = candidate
+  // The observer fires for EVERY accepted sample, including one that lost the ranked `latest`
+  // selection (a checksum after a model load): the per-source latch above still moved, and the
+  // Performance screen's observed rows read that one. The persister behind the observer reads
+  // the ranked `latest` and applies `preferCandidate` per destination, so a lower-ranked sample
+  // notifies without ever overwriting a better persisted one.
   try {
     observer?.()
   } catch {
     /* persistence is an observer concern — it must never throw into a hash/start */
   }
 }
+
 
 /**
  * Record a model-load window read: the window's byte total over the elapsed
@@ -158,19 +204,38 @@ export function latestEffectiveRead(): EffectiveReadSample | null {
   return latest
 }
 
+/** The newest sample of ONE source this session (no ranking), or null. */
+export function latestEffectiveReadBySource(
+  source: EffectiveReadSample['source']
+): EffectiveReadSample | null {
+  return latestBySource[source]
+}
+
 /**
- * Register the single sample observer (the IPC layer's persister). Persistence is a
- * property of RECORDING, not of each producing call site — a sample recorded by a
- * background download's cold-file hash persists even if no model IPC runs afterwards.
- * Last registration wins (one persister per process); never throws into producers.
+ * Register the single sample observer (the IPC layer's persister + Performance-screen
+ * notifier). Persistence is a property of RECORDING, not of each producing call site — a
+ * sample recorded by a background download's cold-file hash persists even if no model IPC
+ * runs afterwards. Fires once per ACCEPTED sample of either source, whether or not it won the
+ * ranked `latest` slot (see `record`). Last registration wins (one persister per process);
+ * never throws into producers.
  */
+
 export function setEffectiveReadObserver(cb: (() => void) | null): void {
   observer = cb
 }
 
-/** Test seam: clear the session latch, suppression, and observer. */
+/** Test seam: the clock every recorded sample is stamped with (null restores the wall clock). */
+export function setReadSpeedClockForTests(fn: (() => Date) | null): void {
+  clock = fn ?? (() => new Date())
+}
+
+/** Test seam: clear the session latch, the timestamp memo, suppression, clock and observer. */
 export function resetEffectiveReadForTests(): void {
+  clock = () => new Date()
+  lastAcceptedAtMs = null
   latest = null
+  latestBySource.model_load = null
+  latestBySource.checksum = null
   suppressNextModelLoad = false
   observer = null
 }

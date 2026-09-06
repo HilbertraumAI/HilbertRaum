@@ -51,7 +51,16 @@ import { createLocalApiServer, maybeStartLocalApi } from './services/local-api/l
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerEngineIpc } from './ipc/registerEngineIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
-import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
+import {
+  registerBenchmarkIpc,
+  observeAnswerSpeed,
+  prepareFirstBenchmark,
+  scheduleFirstBenchmark
+} from './ipc/registerBenchmarkIpc'
+import { notifyPerformanceChanged } from './ipc/performance-notify'
+import { setAnswerSpeedObserver } from './ipc/chat-stream'
+import { machineKey } from './services/performance'
+import { detectSystem } from './services/benchmark'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
@@ -360,6 +369,8 @@ function initBackend(): void {
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({
       rootPath: paths.rootPath,
+      // Stamps each placement record with this machine (benchmark.md "Your model").
+      machineKey: () => machineKey(detectSystem()),
       // M-5: the dev-only HILBERTRAUM_LLAMA_BIN override is honoured only in a dev build.
       isDev,
       onSelect: (kind, opts, reason) => {
@@ -619,7 +630,18 @@ function initBackend(): void {
       isDev,
       gpu: gpuSignals
     })
+    // The replacement is a fresh instance: re-attach the Performance push to it.
+    ctx.translator?.onResidencyChange?.(notifyPerformanceChanged)
   }
+  // The Performance screen's push (PR #303 P3, G6): every transition of the chat runtime
+  // (starting / ready / stopped) and every resident sidecar loading or unloading (the
+  // "Models on this computer" rows) tells every window to re-read `performance:get`. The
+  // services stay Electron-free — the subscriptions live here, at the composition seam.
+  runtime.onChange(notifyPerformanceChanged)
+  embedder.onResidencyChange?.(notifyPerformanceChanged)
+  reranker?.onResidencyChange?.(notifyPerformanceChanged)
+  translator?.onResidencyChange?.(notifyPerformanceChanged)
+  ctx.vision.onResidencyChange(notifyPerformanceChanged)
   // Best-effort first reconcile (skills plan §8). In plaintext_dev the DB is already open; in
   // encrypted mode `requireDb()` throws while locked, so swallow it — a later phase reconciles on
   // unlock, and S3 ships no surface that reads skills yet.
@@ -665,17 +687,29 @@ function initBackend(): void {
   registerEngineIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
+  // The Performance screen's "last answer" figure: every finished chat answer's #290 speed
+  // payload lands in the session latch, tagged with the model that produced it, and the
+  // screen is told (`observeAnswerSpeed`). Local-API answers do not pass through this
+  // observer and therefore never latch.
+  const appCtx = ctx as AppContext
+  setAnswerSpeedObserver((speed) => observeAnswerSpeed(appCtx, speed))
+
   registerAuditIpc(ctx)
   registerLocalApiIpc(ctx)
 
-  // Spec §2.1 first-run benchmark: a plaintext-dev workspace is already open at
-  // startup — benchmark it in the background if it never was. Encrypted workspaces get
-  // the same treatment after unlock/create (registerWorkspaceIpc).
-  maybeRunFirstBenchmark(ctx)
-  // Bring the selected model's runtime back up in the background so a
-  // restarted app matches what the Home screen shows. Encrypted workspaces do this
-  // after unlock/create (registerWorkspaceIpc) — settings are unreadable until then.
-  maybeAutoStartActiveModel(ctx)
+  // Spec §2.1 first-run benchmark + the model auto-start, in the P7 order (PR #303 audit L1,
+  // owner decision G5; encrypted workspaces run the same sequence after unlock/create in
+  // registerWorkspaceIpc — settings are unreadable until then). A plaintext-dev workspace is
+  // already open at startup, so: the CHEAP preparation first (a known computer's result is
+  // restored, the history seeded, the GPU probe refreshed — synchronous, so the profile and ★
+  // pick are right before anything heavy starts); then the selected model's runtime comes back
+  // up in the background, so a restarted app matches what the Home screen shows; then the
+  // benchmark's MEASUREMENT is scheduled behind that start's settlement — its drive probe and
+  // speed leg never contend with the multi-GB weight hash + load, and the speed leg sees the
+  // runtime the start brought up. Neither call blocks startup.
+  const firstBenchmark = prepareFirstBenchmark(ctx)
+  const autoStarted = maybeAutoStartActiveModel(ctx)
+  void scheduleFirstBenchmark(ctx, firstBenchmark, autoStarted)
   // Plaintext-dev post-unlock seam for the local API (encrypted workspaces start it
   // after unlock/create in registerWorkspaceIpc); no-op unless policy ∧ setting permit.
   maybeStartLocalApi(ctx as AppContext)

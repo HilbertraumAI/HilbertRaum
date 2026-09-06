@@ -31,6 +31,12 @@ export interface Embedder {
   readonly dimensions: number
   /** Embed a batch of texts into L2-normalized vectors (one per input, in order). */
   embed(texts: string[], opts?: EmbedOptions): Promise<Float32Array[]>
+  /** Optional: is the sidecar resident right now? (Performance screen, benchmark.md "Models on this computer".) */
+  isLoaded?(): boolean
+  /** Optional (PR #303 P3): subscribe to `isLoaded()` flips; returns the unsubscribe. The mock
+   *  embedder holds nothing and never flips, so it omits this. */
+  onResidencyChange?(cb: () => void): () => void
+
   /**
    * Release any backing resources (e.g. the real embedder's loopback sidecar). Optional
    * — the mock embedder holds nothing. Called on `will-quit`; PERMANENT (a racing lazy

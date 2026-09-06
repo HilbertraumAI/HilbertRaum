@@ -23,6 +23,10 @@ recommended_ram_gb: 32
 recommendation_rank: 3
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
+# Context cache at 8k under the app launch (b9849 defaults: 4 unified slots): 512 MiB full-attention
+# KV (16 layers x 4 heads x 256) + 4 x 144 MiB recurrent state = 1.063 GiB (no SWA cache); the
+# picker's graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit decision 11).
+estimated_context_cache_gib: 1.1
 supports_thinking_mode: true
 # MTP speculative decoding, OPT-IN (issue #182 record in architecture.md; §9.4 addendum).
 # §9.5 successor gate: the draft head is still in-GGUF for THIS file, VERIFIED 2026-08-20 on

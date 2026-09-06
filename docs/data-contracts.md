@@ -123,6 +123,72 @@ foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `c
 wins; a commercial `policy.json` can force it back off), `workspaceMode:'plaintext_dev'`,
 `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
 (JSON `BenchmarkResult | null`, default `null`) — the persisted hardware profile lives here.
+**The performance wave (2026-09-05) added `BenchmarkResult.gpuVramMb`** (the total MiB of the
+SAME device `gpu` names — the BUDGET device `nextStartMemory` selects for the NEXT start (the
+largest usable card by the `shared/gpu-rules.ts` rule; PR #308 audit decision 9 unified with the
+PR #303 audit P5 pairing rule at the merge of the two) — null with the GPU off or auto-disabled or
+on an integrated-only machine even when a device is probed, never the first device listed; optional;
+absent on older results) **and `benchmarkHistory`** (`BenchmarkResult[]`, default `[]`,
+one entry per computer keyed by `machineKey`, capped at `MAX_BENCHMARK_HISTORY = 8`; the write
+gate keeps plain-object elements only; since the PR #303 audit an outgoing `lastBenchmark` from
+another computer is backfilled into it before being replaced, the cap evicts the oldest OTHER
+machine, and the two keys are always written in one `updateSettings` call, history first — see
+`benchmark.md` "History per machine") **and `modelPlacements`** (`Record<modelId, ModelPlacement>`,
+default `{}`: where each model's last start landed per llama.cpp's load log, stamped with
+`machineKey`; object-valued, size-capped); see `benchmark.md` "History per machine" / "Your model".
+**Since the PR #303 audit (H1/L8, owner decision G7) these three keys are VALIDATED, not merely
+shape-checked — on WRITE and on READ**, by the pure normalizers in
+[`shared/benchmark-schema.ts`](../apps/desktop/src/shared/benchmark-schema.ts)
+(`normalizeBenchmarkResult` / `normalizeBenchmarkHistory` / `normalizeModelPlacement(s)`, plus
+`normalizeEffectiveRead` / `normalizeSpeedBasis`; `machineKey` lives there too and
+`services/performance.ts` re-exports it):
+
+- `lastBenchmark` — a `BenchmarkResult` is valid when it is a plain object carrying EITHER a
+  parseable `ranAt` OR a real `HardwareProfile` (the LEGACY profile-only blob, kept valid by G3
+  with an unknown identity, `ranAt: ''` as the unknown-date sentinel — never a fabricated "now" —
+  and safe defaults). `{}` and friends are rejected. Every figure is finite and `>= 0` or `null`,
+  a malformed identity normalizes to the unknown one (so `machineKey` returns `null`, never half a
+  key), `warnings` keeps its strings, and the optional legacy fields (`gpuVramMb`, `speedBasis`,
+  `measuredModelId`, `effectiveRead`) stay ABSENT when the record has none — absence is what the
+  screens render as "approximate" / "not recorded".
+- `benchmarkHistory` — each element is normalized, invalid AND unkeyed entries are dropped (the
+  history is addressed by machine, so an entry `machineKey` cannot key could never be matched),
+  one record per key survives (newest `ranAt`), newest first, capped at `MAX_BENCHMARK_HISTORY`.
+- `modelPlacements` — each record must validate (non-empty `modelId`, `'gpu' | 'cpu'` backend,
+  positive whole `contextTokens`, parseable `at`; layer/buffer figures finite `>= 0` or `null`; an
+  ALL-NULL reading is valid — L7 renders it as `unknown`; a self-contradicting `gpuLayers >
+  totalLayers` is rejected) AND be filed under its own `modelId`. Since P5 a record may carry
+  **`devices?: PlacementDevice[]`** (DR2) — the log's `device_info` rows `{ label, name, totalMb,
+  freeMb, computeMb }`, validated per row (both join keys non-empty strings, figures finite or
+  null; junk rows dropped, a non-array reads as `[]`, absence stays absent).
+- `gpuProbe` (P5) — `{ devices: GpuDevice[], probedAt, machineKey? }` via `normalizeGpuProbe`,
+  behind the unchanged top-level object gate: a `devices` ARRAY is required (junk items dropped —
+  a device needs a non-empty `name` and a finite `totalMb`; `id` reads as `''` and `freeMb` as
+  `0` when unusable; an all-junk list is an EMPTY probe, which is a result), `probedAt` a
+  parseable date or the unknown sentinel, and **`machineKey`** (M8.3, owner decision G3) — the
+  computer the probe ran on, written by `probeAndPersistGpu` — a string or `null`, kept ABSENT
+  when the stored probe has none: an unstamped legacy probe is never re-stamped, readers
+  (`eligibleGpuProbe` in `shared/gpu-rules.ts`) treat it as eligible until a local refresh
+  replaces it, and a probe stamped with another machine's key supplies nothing. Every path of
+  `probeAndPersistGpu` that reaches the write persists this session's stamped answer — a probe
+  that cannot run (no binary) or that threw writes `{ devices: [], probedAt, machineKey }` like an
+  empty successful probe (PR #308 audit decision 6; an empty stamped result re-stamps no old
+  device), each only after the admission + unlock-epoch re-check. **Installing the chat engine
+  refreshes it** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `registerEngineIpc`
+  → `refreshGpuProbeAfterRuntimeInstall` (registerBenchmarkIpc.ts) re-runs `probeAndPersistGpu`
+  (cache invalidated first; the same admission / epoch checks and push) when a `llama_cpp` install
+  reaches `done` and this machine's ELIGIBLE probe lists no device — the empty stamped probe of a
+  benchmark run before the binary existed, a missing probe, or a foreign-stamped one; an eligible
+  probe that already lists a device is left alone, a whisper-only / failed / cancelled install
+  changes nothing, and the benchmark itself is never re-run.
+
+On WRITE, garbage is IGNORED (a `lastBenchmark` that normalizes to nothing leaves the previous
+result standing — the convention every mistyped value here follows; `null` is still the explicit
+clear), while the two collections store what survived. On READ the repair is IN MEMORY only: a row
+written by an older build, a hand-edited DB or a half-written blob is normalized for the caller
+and the stored row is left untouched, so `getSettings` keeps its no-side-effect contract. The
+256 KB `MAX_SETTINGS_OBJECT_BYTES` ceiling is a **`JSON.stringify(...).length` cap** (UTF-16 code
+units, not verified UTF-8 bytes) applied to the normalized value.
 **The post-MVP UX round added `autoStartActiveModel`** (boolean, default `true`) **and
 `checksumCache`** (`Record<path, {size, mtimeMs, sha256}>`, default `{}` — the persisted L2 of
 the weight-file hash cache).
@@ -148,7 +214,9 @@ qwen2.5-vl vision, in `model-manifests/{chat,embeddings,reranker,transcriber,tra
 `model-policy.md` is the authoritative catalog and manifest count — this doc no longer restates a
 hard total (the number drifted twice, see DOC-3/F-20).
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
-`verifyChecksum`, `computeInstallState`, `recommendModelId`, `buildModelList`, `selectModel`.
+`verifyChecksum`, `computeInstallState`, `recommendChatModelId` (dispatching to
+`recommendModelIdByRam` / `recommendModelIdByVram`; `recommendModelId` is the legacy
+profile-based fallback — PR #308 §6.6), `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
 `shared/types.ts`. `local_path` resolved against the **drive root**.
 ✅ **`services/runtime/`** — `ModelRuntime` interface + `RuntimeManager` (single active runtime,
@@ -347,6 +415,15 @@ flag list is code-owned; extras are appended last in `buildArgs`, so a free-form
 override `--host`). The ladder gates the rung on a probed GPU with the weight's bytes +
 `MTP_VRAM_HEADROOM_MB` free, and forced-CPU rungs never carry the flags. Design record:
 `architecture.md` "MTP speculative decoding".
+✅ **Graphics-memory cache term (PR #308 audit decision 11, 2026-09-06):** manifest
+`estimated_context_cache_gib` (optional; a number ≥ 0 — wrong type or a negative value is a
+validation error, never a silent default) → `ModelManifest.estimatedContextCacheGib?: number`
+(ABSENT when omitted; the 0.5 GiB default is the picker's, `VRAM_DEFAULT_CONTEXT_CACHE_GIB`). It is
+the per-model context-cache term of `estimateGraphicsNeedMib` (services/models.ts, §6.6 rule C):
+the cache the runtime allocates at the model's recommended window under the app's launch (b9849
+defaults, four unified slots, ubatch 2048). Carried by exactly the seven decision models (Gemma 4
+12B 2.4, 26B-A4B 1.5, E2B 0.1, Qwen3.8 27B UD-Q4/Q5 1.1, Qwen3.5 9B 0.4, 4B 0.3; pinned in
+`committed-catalog.test.ts`); the GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
 
 ### Document ingestion (Phase 4 live)
 ✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
@@ -476,7 +553,30 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 - **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
   throws (failed probe → `''`/`0`); `detectSystem` itself always reports `gpu: null` — the
   REAL probe lives in `runtime/gpu.ts` and is **injected** by the IPC layer (Phase 16:
-  `RunBenchmarkDeps.gpu: { name, useful }`), keeping this module `child_process`-free.
+  `RunBenchmarkDeps.gpu: { name, useful, totalMb?, budgetMb?, memoryClass? }`), keeping this module
+  `child_process`-free. `name` / `totalMb` are the **budget device's** (`nextStartMemory` in
+  `services/performance.ts`, PR #308 audit decisions 6/9); `totalMb` is the graphics TILE's figure
+  (→ `BenchmarkResult.gpuVramMb`), never the picker's input. **`budgetMb`** (P3, decision 10) is
+  the picker's input: `graphicsBudgetMib(device)` = the probe's `freeMb`, else `totalMb − 1024`
+  (`GRAPHICS_IDLE_ALLOWANCE_MIB`), raw MiB; absent/null → the RAM pick. `useful` and `memoryClass`
+  answer different questions: `useful` = `gpuUsefulForProfile` over ALL probed devices (the hardware
+  carries a usable card; the profile bump), `memoryClass` = the NEXT start's class (honours
+  `gpuMode` / `gpuAutoDisabled`, names one budget device), so `{ useful: true, memoryClass: 'cpu' }`
+  is a valid input — a card present, the GPU switched off.
+- **`PickerMemory`** (`services/models.ts`) — `{ memoryClass, ramGb, budgetMb: number | null }`, the
+  input of `recommendChatModelId(manifests, memory, speedSignal?)`: `discrete` with a positive
+  `budgetMb` → **§6.6 rule C** (`recommendModelIdByVram(manifests, budgetMib, ramGb, role, signal)`:
+  the RAM pick stands where `fitsGraphicsMemory(m, budgetMib)` — `estimateGraphicsNeedMib(m)` =
+  unrounded weights MiB × 1.15 + (`estimatedContextCacheGib` ?? 0.5) × 1024 + 1,024 — AND
+  `recommendedMinRamGb ≤ ramGb`; else the highest-RANKED eligible model, ties by tier then size,
+  ranked-only guard; else the RAM pick (partial-offload fallback); the §6.5 step-down applies once,
+  confined to the eligible pool on both ends); every other class, or no budget → the RAM pick,
+  byte-identical to `recommendModelIdByRam`. Both seams build it from ONE decision: `pickerMemoryFor(s)`
+  (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb`) and
+  `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb`), each calling `graphicsBudgetMib` on
+  `nextStartMemory`'s device. `weightsMib(m)` is the shared unrounded GB → MiB conversion the
+  Performance pre-start estimate reuses (decision 8). The committed grid, thresholds and the seven
+  cache terms are pinned in `committed-catalog.test.ts` ("§6.6 rule C").
 - **`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })`** — pure; spec §11.3
   thresholds + the conservative Phase-16 GPU bump (`gpuUseful` is precomputed by
   `gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated) + low-tok/sec downgrade; invalid
@@ -503,10 +603,18 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   read-speed OBSERVER (fires on every accepted sample, so a background download path persists
   too) and **also re-keys the slow-read warning in place** (`upsertSlowReadWarning`): the only
   automatic benchmark runs before any model exists, so the #110 warning must track the sample
-  between benchmark runs — and is removed again when a fast sample lands. Injected into
-  `runBenchmark` via `RunBenchmarkDeps.effectiveRead` (ranking-aware carry-forward). Feeds the
-  Diagnostics "Measured read speed" row (which carries the sample's own date — the card's "Last
-  run" describes the benchmark, not this row), the #110 gate, and the #107 estimate.
+  between benchmark runs — and is removed again when a fast sample lands. Since the PR #303
+  audit (M2/L2/M6) the persisted sample is **identity-gated**: it is written to, and carried
+  forward from, results of THIS machine only — `lastBenchmark` when its `machineKey` is this
+  machine's or unknown on either side (G3: compatibility, not provenance; an unkeyed result
+  never gets a fabricated key or a history entry) **and** this machine's `benchmarkHistory`
+  entry, each compared separately (`services/benchmark-persistence.ts`); a foreign headline is
+  never touched, and with no eligible destination the sample stays un-handled for a later retry.
+  `ranAt` is unchanged by a sample-only update. Injected into `runBenchmark` via
+  `RunBenchmarkDeps.effectiveRead` (identity-gated, ranking-aware carry-forward) and
+  re-resolved after the run so a sample landing mid-run is folded in, never overwritten. Feeds
+  the Diagnostics "Measured read speed" row (which carries the sample's own date — the card's
+  "Last run" describes the benchmark, not this row), the #110 gate, and the #107 estimate.
 - **`measureTokensPerSecond(runtime)`** → `SpeedReading | null` (only when a runtime is
   active; the paragraph prompt under a 64-token cap). Since #291: `{ tokensPerSecond, basis,
   tokens }` — `basis: 'timings'` is llama-server's own `predicted_per_second` (decode only,
@@ -514,18 +622,105 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
   wall-clock chunk-count fallback for a runtime without `timings` (the mock), over `tokens`
   streamed chunks. Persisted as **`BenchmarkResult.speedBasis?: { basis, tokens } | null`** —
   optional (absent on results persisted before the field existed, which were all chunk-based and
-  render as approximate; `null` = nothing measured). No migration.
+  render as approximate; `null` = nothing measured). No migration. Beside it, since issue #322
+  (2026-09-06, §6.5 amendment, owner-confirmed),
+  **`BenchmarkResult.speedIdentity?: SpeedSampleIdentity | null`** = `{ memoryClass, deviceName,
+  contextTokens, backend }`: the NEXT-start class and budget device at benchmark time
+  (`GpuBenchmarkInput.memoryClass` / `.name`), the running model's launched window
+  (`ModelRuntime.contextWindow`) and its rung (`ModelRuntime.backend`) — each of the last three
+  null when unknown; normalised by `normalizeSpeedIdentity` (an unknown class nulls the record;
+  absence stays absent; `null` = nothing measured). `speedSignalFor(s, hereKey?)` →
+  `sampleCountsForNextStart(identity, nextStartMemoryFor(s, hereKey))` hands the picker a sample
+  that carries an identity only when the next start runs on a path NO FASTER than the measured
+  one (§6.5 "Sample identity"): a card measurement counts for the same card and for a processor
+  start; a processor measurement counts for a processor start only; a different card and the
+  mock never count; the context is recorded, not matched; a legacy sample without the field
+  steers as before.
 - **`buildWarnings(...)`** — spec §11.4 friendly copy. Since #110 the PRIMARY drive warning is
   the interpolated slow-read note (`effectiveReadMbps < SLOW_EFFECTIVE_READ_MBPS = 100`; no
   sample → no warning); the write-keyed slow-drive note (`< SLOW_DRIVE_MBPS = 30`) stays as the
   secondary broken-media check with unchanged copy. Warnings warn, never block. Preflight feeds
   probe figures only and binds its note by exact canonical-English match.
 - **`runBenchmark(deps)`** → `BenchmarkResult` (the existing `shared/types.ts` shape):
-  detection + drive + optional tokens/sec + `classifyProfile` + `recommendModelId` + warnings +
+  detection + drive + optional tokens/sec + `classifyProfile` + `recommendChatModelId` + warnings +
   the injected `effectiveRead`.
 - **`ipc/registerBenchmarkIpc.ts`** — `runBenchmark()` (`benchmark:run`); runs it, persists to
-  `settings.lastBenchmark`, returns the result. Registered in `initBackend()`; exposed on
-  preload `api.runBenchmark` + `PreloadApi`.
+  `settings.lastBenchmark` + `settings.benchmarkHistory`, returns the result, and streams
+  `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window — a step only when it
+  succeeded (`'drive'` only on a successful probe, `'speed'` only on an obtained reading,
+  `'done'` always, and `'done'` PRECEDES the persist and the occupancy release). `performance:get`
+  returns the `PerformanceSnapshot` the Performance screen renders (`current`,
+  **`recommendation: LiveRecommendation | null`** = `{ modelId: string | null; basis: MemoryClass }`
+  — the LIVE chat pick for the next start (PR #308 audit decision 8), computed by
+  `liveChatRecommendation(settings, manifests)` in registerModelIpc.ts from the same inputs the
+  `listModels` handler feeds `buildModelList`: `pickerMemoryFor(s)`, `machineRamGb()`,
+  `speedSignalFor(s)` (the persisted `{ tokensPerSecond, measuredModelId }` pairing, handed over
+  only when its `speedIdentity` describes a path no slower than the next start's, #322; the
+  handler calls the same function), `basis` = the memory class the pick was judged against; null only
+  without a catalog; `current.recommendedModelId` is the historical figure and is never rewritten —,
+  `currentMachine`,
+  `currentGpu` — the budget device for the next start, `{ name, totalMb, useful }` or null, the same
+  device `BenchmarkResult.gpu` and the `listModels` ★ go by, never `settings.gpuProbe.devices[0]` —,
+  `otherMachines`, `running` (the `benchmark` occupancy span, read directly),
+  `placement: { memoryClass, ramMb, vramMb, model, recommendedContextTokens, observed,
+  observedMismatch, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }` (the
+  pre-start `verdict` on a discrete card is `estimateGraphicsNeedMib(manifest) ≤
+  graphicsBudgetMib(device)` — the picker's fit — with `needMb` = the unrounded weights and
+  `budgetMb` = the card's total; `PlacementVerdictInput` in services/performance.ts carries
+  `graphicsBudgetMb`, `manifest` and the base's `gpuName` for it),
+  `observed: { lastAnswer, lastModelLoad, lastChecksum }`). **P5 (M8 / DR1 / DR5), merged with
+  PR #308 decisions 6/9**: `currentGpu` is `{ name, totalMb, useful } | null` — the ELIGIBLE
+  probe's BUDGET device for the next start (`eligibleGpuProbe`, `shared/gpu-rules.ts`, then
+  `nextStartMemoryFor` in services/performance.ts: the largest usable card, `useful` = the shared
+  `isUsefulDevice` verdict on it; `name` and `totalMb` always describe one device; null with no
+  eligible probe, no usable device, or the GPU switched off / auto-disabled — the screen never
+  falls back to the raw settings probe, and reads `getSettings` for the two GPU flags only);
+  `current` gets that device folded in (name and memory together) only for the current machine
+  and only when it predates `gpuVramMb`; `placement.memoryClass` and `placement.vramMb` are the
+  NEXT start's (`cpu` / null when the flags force the processor, whatever the probe lists — the
+  same answer `pickerMemoryFor` gives the Models ★); `ResidentModelRow.device` is where a row
+  runs under the CURRENT configuration (`'cpu'` for chat/translation under a `cpu` class — no
+  usable card, GPU off / auto-disabled — or when the matching observed start was on the CPU
+  backend, or the translation sidecar's posture is `--device none`); `totals.ramAllMb` is
+  class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the observed chat spill +
+  the live translation spill on `discrete`; the full sum on `unified`, compared against the
+  unified budget) and `totals.bothOnCard` requires both rows on the card with observed layers.
+  The verdict is asked for the EFFECTIVE class (the next start's, and `cpu` when the observed
+  start was CPU). Two `placement` fields were added by
+  the PR #303 audit P4: **`recommendedContextTokens`** (`number | null`) is the context the
+  RECOMMENDED model would launch with — the live `recommendation.modelId`, the model the screen's
+  CTA starts, never the id saved with the check (PR #308 decision 8 on top of #303 M5) — resolved
+  main-side by the launch path's own
+  `launchContextTokens` — the screen used to recompute it with `??` and showed a "0-token context"
+  for a manifest stating no window, while the runtime starts such a model on
+  `settings.contextTokens` (M5 residual); **`observedMismatch`**
+  (`{ contextTokens, backend, at } | null`) reports a stored/latched placement that is real but
+  does not describe the current configuration (a different context size, or a GPU measurement
+  under a forced-CPU configuration) — the record is kept, `observed` goes `null` so the row falls
+  back to the weights-only ESTIMATE the current settings would actually produce (on a discrete
+  card that estimate is the picker's fit above), and the copy
+  dates the earlier measurement instead of presenting it as the fit.
+  The observed figures are SESSION latches only — session = the main-process lifetime (they
+  survive a workspace lock/unlock, an app restart clears them) — and never fall back to a
+  persisted sample, foreign or same-machine (PR #303 audit M3/G2): the answer figures are never
+  persisted; the read samples persist SEPARATELY into the benchmark records (`effectiveRead` on
+  `lastBenchmark` and this machine's history entry) where the Drive tile reads them with their
+  own source and date. Local-API answers never pass through the chat observer and never latch.
+  Registered in `initBackend()`; exposed on preload `api.runBenchmark` / `api.getPerformance` /
+  `api.onBenchmarkProgress` / `api.onPerformanceChanged`.
+- **`EVENTS.performanceChanged`** (`performance:changed`, PR #303 audit G6) — a PAYLOAD-FREE
+  main → renderer push to every live window: "something `performance:get` reads changed, re-read
+  it". Emitted by `notifyPerformanceChanged()` (`ipc/performance-notify.ts`) only AFTER a
+  mutation — a benchmark run taking / releasing its span (the release push, after the persist,
+  is the idle signal; a busy-refused run emits nothing), every accepted read-speed sample
+  (including a ranked loser), the answer latch, a placement observation, the restore / seed /
+  backfill / GPU-probe writes (every `probeAndPersistGpu` write, the empty probe of a probe that
+  could not run or threw included), chat-runtime transitions (`RuntimeManager.onChange`),
+  resident-sidecar transitions (`onResidencyChange` on the embedder, reranker, translation and
+  vision runtimes), and the snapshot's settings keys (`PERFORMANCE_SETTINGS_KEYS`) — and never
+  from a getter. The read stays gated; the event carries nothing to gate. Preload:
+  `onPerformanceChanged(cb: () => void): () => void` (returns the unsubscribe). No polling.
+
 - **Renderer:** `DiagnosticsScreen` Run-benchmark button → RAM / CPU / OS-arch / measured read
   speed (`effectiveRead` or "not measured yet") / drive write / tokens-sec / profile /
   recommended model + warnings; re-loads `lastBenchmark` on mount. `HomeScreen` profile reflects

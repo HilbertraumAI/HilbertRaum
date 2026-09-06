@@ -28,7 +28,83 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-06 — **Follow-up wave on `feat/performance-screen` (#303), one commit per issue, ledger `tmp/followups-303-ledger.md`:**
+#325 closed `4293f95f` (GPU-off tile never falls back to a recorded card; Copy report carries the live pick; "Running on the graphics card right now." line — visual unverified);
+#323 closed `b0b26eec` (a completed chat-engine install re-runs the probe refresh when this machine's eligible probe is empty); #335 closed `6f1bcde1` (the harness records and removes every suite's temp root; ~2,500 leaked roots per run → 0); #322 closed — `speedIdentity` + the one-directional gate in `speedSignalFor` (a sample counts for a next start no faster than the measured path; §6.5 2026-09-06 amendment, owner-confirmed on review of the first draft)._
 
+_2026-09-06 — **PR #308 audit remediation (`feat/vram-aware-picker`, stacked on #303):** R1–R6 closed —
+P1 sync (`7aae2716`), P2 budget device + next-start class (`81661c69`), P2a empty-probe persistence
+(`8cb4422d`), P3 rule C on the free-memory budget + per-model cache term (`bf9a09b0`), P4 live
+Performance recommendation (`a468f6e1`), P5 records (`e4b762e9`); base re-merged as #303 landed (the
+second merge unified #303 P5's `gpu-rules` with this wave's helper). Decisions 1–11 adopted; record
+`model-benchmarks.md` §6.6 (2026-09-06 amendment) + §6.5; **owner sign-off given 2026-09-06** in the PR
+review. #318 hardware legs (not a gate); (h)–(k) → #320 / #319 / #320 / #321 (all: keep, measure first);
+#324 omitted; #326 → strictly ranked card-path fallback; residuals #322, #323, #325; #327 fixed by #303._
+
+_2026-09-06 — **PR #303 audit remediation on `feat/performance-screen` (master `ddd704ad` merged in
+first; one commit per phase, CI green on each; working ledger `tmp/pr-303-fix-plan-ledger.md`,
+untracked; durable record → `docs/benchmark.md` at P9).** P1 pinned the M7 `_Host` and L7
+empty-reading fixes of `ce741533`, removed the `skills.title` orphan, archived §5 item 20. P2 repaired
+M2/M4/M6/L2 together (`services/benchmark-persistence.ts`: identity before source ranking under G3,
+outgoing-result backfill, commit-time re-resolution, samples to both destinations). P3 made the screen
+pushed, never polled (`performance:changed` after every mutation incl. runtime and sidecar residency;
+`running` = the held span; observed rows = session latches; honest `drive`/`speed` steps; the renderer
+splits backend running from its own action) — the dev launch smoke caught and fixed a StrictMode
+double-mount defect and measured `performance:get` ≈ 100 ms (I5). P4 validates `lastBenchmark`,
+`benchmarkHistory`, `modelPlacements` on read and write (`shared/benchmark-schema.ts`; the legacy
+profile-only record survives unkeyed), resolves the displayed context with `launchContextTokens`, and
+counts a placement as measured only when its context/backend match the configuration. P5 made one
+machine-eligible GPU source (`gpuProbe.machineKey`, `shared/gpu-rules.ts`, paired name + memory,
+configuration-aware resident rows, class-aware RAM total, free/working figures by device; a CI-only
+same-millisecond sample clash was fixed by an injectable read-speed clock). P6 carried the speed basis
+into the report and rows, fixed the first-start / per-drive / observed-unknown / N4 / N5 copy, named
+the fit margin from `shared/performance-rules.ts`, added the German smoke and the display-device labels. P7 sequenced the first-run / moved-drive
+measurement behind the auto-start (L1/SD2, G5): `prepareFirstBenchmark` does the cheap seed /
+backfill / restore before `maybeAutoStartActiveModel` (now awaitable), `scheduleFirstBenchmark` waits
+for the start to settle under a 120 s bound and otherwise keeps one continuation, re-checks admission
+/ epoch / shutdown / busy / "already current" before running, allows one automatic attempt per unlock
+epoch, and the run refuses to persist into a session that locked or re-opened meanwhile. P8 closed the test gaps (T7/T8/T11/TH1/TH2): the history-order assertion names both
+identities, a source-text + behavioural pin covers the answer-speed observer wiring, the 300 ms sleep
+became an await on P7's outcome, one shared teardown closes the fixture's DBs and removes its temp
+roots (2,683 leaked roots from earlier runs cleared), and a ladder-to-placement wiring test drives
+the real rung factory with a fake sidecar's stderr (one parser per attempt; the persister writes,
+skips while locked, and survives a throwing observer). P9 wrote the durable record — `docs/benchmark.md` "Audit remediation record — PR #303"
+§1–§5 (decisions, a 63-row disposition matrix, the design as built, what is not verified, a §-anchor
+legend) — plus user-guide §5a "Performance", the privacy inventories in `PRIVACY.md` /
+`security-model.md`, the known-limitations block, the `architecture.md` supersession notes, and the
+DR11 host-conditional assertion turned into a fixed expectation. P10 cross-reviewed the candidate `07dd9085` (Opus over the Fable phases, Fable
+over the Opus phases, both over the Sonnet docs and the P0 delta inventory): no user-facing defect;
+four low main-process items, one schema hardening gap, a keyboard focus loss after "Check again" and
+issue #327 (the Diagnostics acceleration line bypassing the eligible-probe rule, filed by the PR #308
+review against this branch) repaired with fail-before/pass-after tests; the audit probes re-run at the
+candidate pass every main-process case (22 / 2 superseded by design / 1 retired); HW3 performed live
+over CDP — EN/DE, light/dark, 880/1024/1280 px, the German rail at weight 600, a real Tab walk and
+Enter activation all passed; a synthetic moved-drive restart verified M2/M4/P7 end to end. Blocked
+legs (screen-reader announcements; a first-run, chat or model-load while mounted — no runtime here)
+carried into the follow-up issues. P11 closed the wave without a source change: follow-up
+issues #329–#334 (a real partial-offload log, the two-computer round trip, the blocked HW3 legs,
+hybrid / Apple Silicon hardware, the slow-media read cost, slow-USB sequencing) and #335 (temp-root
+hygiene in other suites), the record's issue and commit references filled, the changelog entry,
+the keyboard-focus repair re-verified live in the dev app. Merge is the owner's call; the branch
+stays._
+
+_2026-09-05: **Graphics-memory-aware picker (`feat/vram-aware-picker`, stacked on #303):** the total-memory
+rule shipped here is **superseded** by the 2026-09-06 PR #308 audit amendment above (rule C on free memory; §6.6)._
+
+_2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
+third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
+the same branch (owner decision): three groups (Chat · Documents · Translate · Images ‖ AI Model ·
+Performance ‖ Settings), Home behind the brand mark (lit on Home), Skills back into Settings as a
+tab (`skills` target resolves there); design-guidelines §2 rewritten.** Verdict + four rated tiles (speed, RAM, VRAM via
+`BenchmarkResult.gpuVramMb`, drive) and the "Your model" row (memory class discrete / unified /
+cpu, the chat ladder's placement parser over llama.cpp's load log, `settings.modelPlacements`,
+`placementVerdict`), the session's observed figures (last
+answer via a `chat:speed` observer, last model start / file check via per-source read-speed
+latches), and one result per computer (`settings.benchmarkHistory`, `machineKey`). The moved-drive
+check in `maybeRunFirstBenchmark` restores a known machine's result or benchmarks a new one;
+`benchmark:progress` streams the run's steps. Diagnostics keeps the raw table. Records:
+`docs/benchmark.md` "History per machine" / "Performance screen", data-contracts (settings
+storage + IPC). §5 item 22 tracks the residuals._
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — WAVE CLOSED: Phases 0–7 complete, #294 MERGED to master (`92e86a07`, 16:12 UTC), #301 closed by the merge.**_
 The PR's review remediation — 28 findings (H1–H4, M1–M11, L1–L9 with L10 withdrawn, DOC-1–DOC-4; three assessed High, H3 and DOC-1/DOC-2 Medium) — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;
 master merged in at P0 (`bfdb514a`) and again at P7 (`ddd704ad`). Durable records: `rag-design.md` §17 D-Z1–D-Z14 (with a §-anchor legend),
@@ -609,10 +685,8 @@ open round's item stays the last block of §5.)
       compare, `as unknown as` private-field injection — convert to behavioural assertions when
       touched; `FullSuiteGuard` cannot see dropped individual tests.
 
-20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line — CLOSED
-    2026-09-04** (PRs #295/#300/#297/#299; #290/#291/#298 closed). Records: `architecture.md`
+20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line — CLOSED    2026-09-04** (PRs #295/#300/#297/#299; #290/#291/#298 closed). Records: `architecture.md`
     "Per-answer speed line" §1–§3, `benchmark.md` / `model-benchmarks.md` §6.5. Text as it stood: `docs/build-log.md`, retired 2026-09-06 (P6). Residuals: none.
-
 ---
 21. **ZIM knowledge packs — follow-up register (registered at the 2026-09-04 MVP; durable
     record: [`docs/rag-design.md`](docs/rag-design.md) §17 "Deliberately not built").**
@@ -643,6 +717,9 @@ open round's item stays the last block of §5.)
     (2026-09-05). From P7's T19: kiwix-manage 3.8.1 refuses non-ASCII archive paths on Windows (registration-only — kiwix-serve serves such a file from UTF-8 XML; documented in
     known-limitations / troubleshooting; a reason-specific message or metadata without kiwix-manage — P9); the retrieval-quality levers L1 (title-index `/suggest` arm), L2
     (`ARTICLES_PER_PACK` scaling with archive size), L3 (question→keywords rewrite before `/search`) — P9 (L4, the aggregation-question expectation, landed in known-limitations).
+
+22. **Performance screen residuals (opened 2026-09-05, `feat/performance-screen`; numbered 21 on the branch until the PR #294 merge of 2026-09-06 — master's 21 is the ZIM register above; every "§5 item 21 (a)–(k)" citation of the Performance wave now reads 22).** Shipped: the rail destination, per-machine history + moved-drive restore, observed rows, step progress, "Start \<model\> and measure", plus (PR #308, 2026-09-06) the graphics-memory picker rule C on the free budget and the Performance snapshot's live recommendation. Still open, owner call each: (a) a Home readiness row ("This computer: Balanced, about 12 tokens/s") plus a moved-drive notice with a "Check this computer" action (the mock-up's Home artboard; today the re-check is silent in the background); (b) the Diagnostics benchmark card could shrink to the raw table + Copy now that the answer lives on Performance; (c) the hardware legs on the rig: a real moved-drive round trip between two machines (restore, then new-machine background run) and the German rail label width at the 600 weight; (d) model-load duration per machine in the history rows (the `model_load` sample carries it; only the current machine shows it today); (e) "Your model": the context-cache estimate from the GGUF header stays open; the card estimate itself is now rule C on the free budget (PR #308, `model-benchmarks.md` §6.6 2026-09-06 amendment) with owner sign-off pending in review, not the SHIPPED-but-unreviewed total-memory rule this line previously described; (f) the fit margin: on the rig the 27B Q5 lands 62/66 layers on a FREE 24 GB card (model 18.9 GiB + ~2.9 GiB working buffers + the fit's fixed 1 GiB margin comes within a layer of the free memory); options are a smaller `--fit-target`, a smaller ubatch for the largest models, or a full-offload rung when the app's own estimate says it fits (the "never -ngl" rule would need a decision); owner call, the row now states the reason; (g) start-order contention between chat and translation on one card (the "Models on this computer" card now names it): force translation to the processor while chat holds the card, or reclaim the card when translation goes idle, owner call; (h) device choice / iGPU naming: the picker's budget device excludes integrated GPUs by name (`looksIntegrated`) rather than a runtime device-type flag, and on a Mac with the GPU switched off the class still reads `unified` (P2 decision) — is the name heuristic complete enough — decided 2026-09-06: keep the conservative heuristic until #318 leg 5, issue #320; #303 P5 landed its own `shared/gpu-rules.ts` source (`isUsefulDevice` / `primaryUsefulDevice`, first-useful order) and the 2026-09-06 merge of `be177a34` into `feat/vram-aware-picker` unified the two (one rule module, the largest usable card, `nextStartMemoryFor` over the eligible probe); (i) the chat server's b9849 default of four unified slots (no `-np` passed) costs real cache overhead the picker's `estimated_context_cache_gib` now estimates around — should the app pass `-np 1` for a single-user session — decided 2026-09-06: measure both settings in #318 leg 1 first, issue #319; (j) llama.cpp's `--fit` still spreads layers over every listed device, integrated ones included, so a hybrid laptop's iGPU can still take layers the picker's budget device excluded from the recommendation — should the app pass `--device` to exclude it at launch too — decided 2026-09-06: keep the never-`--device` rule until #318 leg 5, issue #320; (k) every 6 GB laptop card measured for the #308 audit reports below the runtime's 6,144 MiB `discrete` gate (N8) — should the gate be lowered — decided 2026-09-06: keep until #318 leg 4, issue #321.
+    **Audit remediation register (PR #303 review of 2026-09-05: M1–M8, L1–L8, H1, D1–D5, T1–T12; fixed on the same branch before merge from 2026-09-06; durable disposition record lands in `docs/benchmark.md` at P9, one commit per phase, CI green each):** P1 ✅ M7/L7 pins, stale `_Host` prose, item 20 archived, `skills.title` orphan removed after the master merge; P2 ✅ M2/M4/M6/L2 persistence (identity before ranking, upgrade backfill, mid-run samples); P3 ✅ M1/M3/L3 `performance:changed` push + honest steps; P4 ✅ H1/L8/M5-residual schemas + launch context; P5 ✅ M8/N1/N3 one GPU source + the resident rows' device/RAM total; P6 ✅ L6/L8/N4/N5/T6 provenance + copy + German smoke; P7 ✅ L1/SD2 auto-start sequencing; P8 ✅ T7/T8/T11/TH1/TH2; P9 ✅ D1–D5/L4/L5 docs — durable record `docs/benchmark.md` "Audit remediation record — PR #303" §1–§5; P10 ✅ cross-review + the local half of (c) (repairs `ab01e14b`); P11 ✅ close-out: issues #329–#334 (open acceptance) + #335 (temp-root hygiene elsewhere), record / changelog final. Residual (c) above is the audit's HW1–HW3 acceptance (→ #329–#334); (a)–(k) stand.
 
 ## 6. Open issues / risks
 

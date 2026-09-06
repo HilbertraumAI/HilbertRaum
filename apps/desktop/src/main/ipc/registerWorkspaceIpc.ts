@@ -8,7 +8,7 @@ import {
   WrongPasswordError,
   workspaceAdmitsWork
 } from '../services/workspace-vault'
-import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
+import { prepareFirstBenchmark, scheduleFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { maybeStartLocalApi } from '../services/local-api/lifecycle'
 import { startKnowledgePackSession } from '../services/zim/session'
@@ -180,10 +180,16 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       ctx.audit?.('workspace_unlocked', 'Workspace unlocked')
       // Settings are readable now — main-side emissions follow the user's language.
       refreshUiLanguage(ctx)
-      // First unlock of a never-benchmarked workspace → background benchmark.
-      maybeRunFirstBenchmark(ctx)
-      // Bring the selected model's runtime back up in the background.
-      maybeAutoStartActiveModel(ctx)
+      // The first-run / moved-drive benchmark and the model auto-start, in the P7 order (PR #303
+      // audit L1, owner decision G5; the same sequence as the plaintext startup in main/index.ts):
+      // the CHEAP preparation first — a known computer's result restored, the history seeded, the
+      // GPU probe refreshed, synchronously — then the selected model's runtime back up in the
+      // background, then the benchmark's MEASUREMENT scheduled behind that start's settlement so
+      // its drive probe never contends with the weight hash + load and its speed leg sees the
+      // runtime. The handler never awaits the scheduler.
+      const firstBenchmark = prepareFirstBenchmark(ctx)
+      const autoStarted = maybeAutoStartActiveModel(ctx)
+      void scheduleFirstBenchmark(ctx, firstBenchmark, autoStarted)
       // Post-unlock seam for the local API (policy ∧ setting gated; D3/D7).
       maybeStartLocalApi(ctx)
       // Knowledge packs (#301, finding L7; owner ruling D3): clean this workspace's ZIM
@@ -286,12 +292,13 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         ctx.audit?.('workspace_created', 'Workspace created', { mode })
         // Settings are readable now — main-side emissions follow the user's language.
         refreshUiLanguage(ctx)
-        // A fresh workspace has never been benchmarked → background benchmark.
-        maybeRunFirstBenchmark(ctx)
-        // A fresh workspace has no active model yet; this is a no-op then, but covers
-        // re-created vaults that restored settings.
-        maybeAutoStartActiveModel(ctx)
-        // Third post-unlock seam (create runs the same pair as unlock): a re-created
+        // The same P7 sequence as unlock (above): a fresh workspace has never been benchmarked
+        // and has no active model yet — the auto-start is a no-op then and the measurement runs
+        // at once — but a re-created vault that restored settings gets the full order.
+        const firstBenchmark = prepareFirstBenchmark(ctx)
+        const autoStarted = maybeAutoStartActiveModel(ctx)
+        void scheduleFirstBenchmark(ctx, firstBenchmark, autoStarted)
+        // Third post-unlock seam (create runs the same sequence as unlock): a re-created
         // vault that restored `localApiEnabled: true` starts the endpoint here.
         maybeStartLocalApi(ctx)
         // …and the third knowledge-pack session seam (#301, D3): a re-created vault may sit on

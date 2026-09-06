@@ -14,6 +14,7 @@ import type {
   BenchmarkResult,
   DriveStatus,
   LocalApiStatus,
+  PerformanceSnapshot,
   RuntimeInstallInfo,
   RuntimeStatus
 } from '@shared/types'
@@ -89,12 +90,27 @@ function auditLabel(type: AuditEventType, t: I18n['t']): string {
 
 /**
  * The "Acceleration" line (architecture.md GPU record §8): the live backend when a
- * model is running, else what the cached probe says this machine offers. Friendly
+ * model is running, else what this machine's ELIGIBLE probe says it offers. Friendly
  * tone — CPU is presented as normal, never degraded.
+ *
+ * ONE ELIGIBLE GPU SOURCE (issue #327). The device comes from the snapshot's `currentGpu`
+ * (`performance:get`), which main computes as `displayDevice(eligibleGpuProbe(probe, hereKey))`
+ * — the same device the ladder labels a GPU start with and the Performance screen shows: on a
+ * hybrid [iGPU, dGPU] box the dGPU, where `devices[0]` named the iGPU (PR #303 audit M8.2 / P5
+ * residual). It used to read `settings.gpuProbe.devices` RAW, which skipped the machine-stamp
+ * check: a probe recorded on ANOTHER computer (the drive moved, settings restored) had this
+ * line announcing "graphics acceleration available: <card>" while the Performance screen
+ * correctly said the machine has none. The renderer has no `hereKey` of its own, so the
+ * eligible device is taken main-side rather than re-derived here.
+ *
+ * Null `currentGpu` — no eligible probe, no device in it, or the read failed — is the CPU
+ * wording: naming no card is the honest answer, and it is what the machine will actually do.
+ * It is a LABEL either way: nothing about which devices the runtime may use changes, and the
+ * probe's full device list is still unfiltered everywhere it is enumerated.
  */
 function accelerationLabel(
   runtime: RuntimeStatus | null,
-  settings: AppSettings | null,
+  currentGpu: PerformanceSnapshot['currentGpu'],
   t: I18n['t']
 ): string {
   if (runtime?.running && runtime.backend) {
@@ -103,8 +119,7 @@ function accelerationLabel(
     if (runtime.backend === 'mock') return t('diag.accel.mock')
     return t('diag.accel.cpu')
   }
-  const probed = settings?.gpuProbe?.devices ?? []
-  if (probed.length > 0) return t('diag.accel.gpuAvailable', { name: probed[0].name })
+  if (currentGpu) return t('diag.accel.gpuAvailable', { name: currentGpu.name })
   return t('diag.accel.cpu')
 }
 
@@ -148,7 +163,7 @@ function localApiStatusLine(api: LocalApiStatus | null | undefined, t: I18n['t']
 function buildAppRuntimeReport(
   app: AppStatus | null,
   runtime: RuntimeStatus | null,
-  settings: AppSettings | null,
+  currentGpu: PerformanceSnapshot['currentGpu'],
   install: RuntimeInstallInfo | null,
   t: I18n['t']
 ): string {
@@ -158,7 +173,7 @@ function buildAppRuntimeReport(
     `${t('diag.app.selectedModel')}: ${app?.activeModelId ?? t('diag.app.noneSelected')}`,
     `${t('diag.app.profile')}: ${app?.hardwareProfile ?? t('diag.app.unknown')}`,
     `${t('diag.app.runtime')}: ${runtimeStatusLine(runtime, t)}`,
-    `${t('diag.app.acceleration')}: ${accelerationLabel(runtime, settings, t)}`,
+    `${t('diag.app.acceleration')}: ${accelerationLabel(runtime, currentGpu, t)}`,
     `${t('diag.localApi.label')}: ${localApiStatusLine(app?.localApi, t)}`,
     `${t('diag.app.runtimeBuild')}: ${
       install ? `llama.cpp ${install.version} (${install.backend})` : t('diag.app.noInstallMarker')
@@ -210,6 +225,16 @@ function effectiveReadValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLangua
     : `${value} (${t('diag.bench.effectiveReadHash', { gb, when })})`
 }
 
+/**
+ * The "Last run" stamp. A record whose own date is unknown carries `ranAt: ''` (the
+ * `UNKNOWN_RAN_AT` sentinel the PR #303 audit H1 validators use rather than inventing a "now"
+ * for a legacy profile-only blob), and `new Date('')` prints "Invalid Date" — say "unknown".
+ */
+function lastRunValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
+  const ran = new Date(bench.ranAt)
+  return Number.isNaN(ran.getTime()) ? t('diag.app.unknown') : ran.toLocaleString(lang)
+}
+
 /** Plain-text rendering of the "Hardware benchmark" card for the Copy button. */
 function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
   const lines = [
@@ -223,7 +248,7 @@ function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLang
     `${t('diag.bench.effectiveRead')}: ${effectiveReadValue(bench, t, lang)}`,
     `${t('diag.bench.driveWrite')}: ${bench.driveWriteMbps != null ? `${fmtNum(bench.driveWriteMbps, lang)} MB/s` : t('diag.bench.notMeasured')}`,
     `${t('diag.bench.tokens')}: ${tokensPerSecondValue(bench, t, lang)}`,
-    `${t('diag.bench.lastRun')}: ${new Date(bench.ranAt).toLocaleString(lang)}`
+    `${t('diag.bench.lastRun')}: ${lastRunValue(bench, t, lang)}`
   ]
   // Warnings are persisted canonical English — localize the known set at render (D-L4).
   for (const w of bench.warnings) lines.push(`- ${localizeServerCopy(t, w)}`)
@@ -237,6 +262,10 @@ export function DiagnosticsTab(): JSX.Element {
   const [app, setApp] = useState<AppStatus | null>(null)
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
+  /** The Acceleration line's device: the snapshot's machine-ELIGIBLE one, never the raw
+   *  `settings.gpuProbe` (#327 — see `accelerationLabel`). Null until the read lands, and null
+   *  again if it fails, which reads as the CPU wording. */
+  const [currentGpu, setCurrentGpu] = useState<PerformanceSnapshot['currentGpu']>(null)
   const [install, setInstall] = useState<RuntimeInstallInfo | null>(null)
   const [logTail, setLogTail] = useState<string[] | null>(null)
   const [showLogs, setShowLogs] = useState(false)
@@ -271,6 +300,19 @@ export function DiagnosticsTab(): JSX.Element {
     window.api?.getAppStatus().then((s) => mountedRef.current && setApp(s)).catch(() => mountedRef.current && setApp(null))
     window.api?.getRuntimeStatus().then((s) => mountedRef.current && setRuntime(s)).catch(() => mountedRef.current && setRuntime(null))
     window.api?.getSettings().then((s) => mountedRef.current && setSettings(s)).catch(() => mountedRef.current && setSettings(null))
+    // #327: the Acceleration line's device comes from the snapshot's ELIGIBLE probe, computed
+    // main-side against THIS machine's key — the raw `settings.gpuProbe` read above is for the
+    // compatibility-mode notice and the toggle only. BEST-EFFORT: a rejected read (or a bridge
+    // that has no such method) leaves `currentGpu` null and the line on the CPU wording rather
+    // than failing the card, so the await is wrapped instead of chained off a bare promise.
+    void (async () => {
+      try {
+        const perf = await window.api?.getPerformance()
+        if (mountedRef.current) setCurrentGpu(perf?.currentGpu ?? null)
+      } catch {
+        if (mountedRef.current) setCurrentGpu(null)
+      }
+    })()
   }, [])
 
   const refreshLogs = useCallback(async (): Promise<void> => {
@@ -382,6 +424,10 @@ export function DiagnosticsTab(): JSX.Element {
       async () => {
         const next = await window.api.tryGpuAgain()
         if (mountedRef.current) setSettings(next)
+        // #327 follow-through (P10 re-review): the Acceleration line reads the snapshot's
+        // eligible device, not the returned settings, so re-read it — a successful retry that
+        // finds a card must name it at once, not after the next Refresh or remount.
+        void refreshStatus()
       },
       (message) => {
         if (mountedRef.current) setGpuRetryError(message)
@@ -424,7 +470,7 @@ export function DiagnosticsTab(): JSX.Element {
           <dt>{t('diag.app.runtime')}</dt>
           <dd>{runtimeStatusLine(runtime, t)}</dd>
           <dt>{t('diag.app.acceleration')}</dt>
-          <dd>{accelerationLabel(runtime, settings, t)}</dd>
+          <dd>{accelerationLabel(runtime, currentGpu, t)}</dd>
           <dt>{t('diag.localApi.label')}</dt>
           <dd>{localApiStatusLine(app?.localApi, t)}</dd>
           <dt>{t('diag.app.runtimeBuild')}</dt>
@@ -462,7 +508,7 @@ export function DiagnosticsTab(): JSX.Element {
           <Button
             size="sm"
             title={t('diag.copyTitle')}
-            onClick={() => copyReport(buildAppRuntimeReport(app, runtime, settings, install, t))}
+            onClick={() => copyReport(buildAppRuntimeReport(app, runtime, currentGpu, install, t))}
           >
             {t('diag.copy')}
           </Button>
@@ -524,7 +570,7 @@ export function DiagnosticsTab(): JSX.Element {
               <dt>{t('diag.bench.tokens')}</dt>
               <dd>{tokensPerSecondValue(bench, t, lang)}</dd>
               <dt>{t('diag.bench.lastRun')}</dt>
-              <dd>{new Date(bench.ranAt).toLocaleString(lang)}</dd>
+              <dd>{lastRunValue(bench, t, lang)}</dd>
             </dl>
 
             {bench.warnings.length > 0 && (

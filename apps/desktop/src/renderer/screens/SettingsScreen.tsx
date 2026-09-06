@@ -15,13 +15,15 @@ import { setThemeSetting } from '../theme'
 import { useT } from '../i18n'
 import { PrivacyTab } from './settings/PrivacyTab'
 import { DiagnosticsTab } from './settings/DiagnosticsTab'
+import { SkillsTab } from './settings/SkillsTab'
 import type { SettingsTab } from '../navigation'
 import type { MessageKey, UiLanguageSetting } from '@shared/i18n'
 import type { AppSettings, ThemeSetting } from '@shared/types'
 
-// Settings (guidelines §2): one utility destination with three tabs.
+// Settings (guidelines §2): one utility destination with four tabs.
 // "General" = the everyday settings; "Privacy & data" and "Diagnostics (advanced)"
-// were once standalone screens and now live here as tabs. The tab
+// were once standalone screens and now live here as tabs; "Skills" came back as a tab in
+// the 2026-09-05 rail rework (the composer's skill picker is the everyday entry). The tab
 // switcher reuses SegmentedControl (roving tabindex + arrow keys, guidelines §6).
 // The open tab is owned by App.tsx so navigate('settings:privacy') etc. can land on
 // the right tab from anywhere; standalone use (tests) falls back to internal state.
@@ -32,6 +34,7 @@ import type { AppSettings, ThemeSetting } from '@shared/types'
 const TAB_CHOICES: Array<{ value: SettingsTab; labelKey: MessageKey }> = [
   { value: 'general', labelKey: 'settings.tab.general' },
   { value: 'privacy', labelKey: 'settings.tab.privacy' },
+  { value: 'skills', labelKey: 'settings.tab.skills' },
   { value: 'diagnostics', labelKey: 'settings.tab.diagnostics' }
 ]
 
@@ -79,6 +82,7 @@ export function SettingsScreen({ tab, onTabChange }: SettingsScreenProps): JSX.E
       </div>
       {activeTab === 'general' && <GeneralTab />}
       {activeTab === 'privacy' && <PrivacyTab />}
+      {activeTab === 'skills' && <SkillsTab />}
       {activeTab === 'diagnostics' && <DiagnosticsTab />}
     </div>
   )
