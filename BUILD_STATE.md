@@ -29,6 +29,18 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 4 — retrieval honesty: review M3 / M6 / M7 / M8 / M10 closed.**_
+An explicit, additive `documentsOff` flag (never derived from emptiness) makes packs-only scope expressible again, superseding the
+2026-09-05 interim fix; `resolveScope`'s deny-all keeps chat attachments in scope, is fail-closed through `buildScopeFilter` and the
+resident-vector fast path, and `retrieve` skips the document arms before embedding. Document/archive candidates interleave whenever
+no reranker RANKED them — absent or threw — and a cancellation is never turned into a fallback. At most 12 packs run per ask; the 24
+admitted candidates are allocated round-robin in title order after every pack settles, ≤ 2 packs at once, under a 20 s per-ask
+deadline shared with the request guard's one retry. Searchability is confirmed only by a validated `/suggest` probe run at a
+reconcile's end, cached against the file/tool fingerprint; a confirmed-no pack stays readable. Every selected pack gets one
+persisted outcome per ask, shown under the answer even with zero citations, "unknown" on legacy rows; whole-doc/compare answers now
+say packs were not queried. Record: `docs/rag-design.md` §17 D-Z4 (M3/M8/M6 facts), D-Z11 (searchability half), NEW D-Z12 (scope).
+Suite on this machine: <SUITE>; typecheck + build green; real kiwix-tools not installed here.
+
 _2026-09-06 — **ZIM knowledge packs (PR #294 → #301), Phase 5 — access boundary and hygiene: review
 M1 / L1 / L5 / L8 / L9 / DOC-1 closed.**_ Every kiwix-serve request from the ask arm and article
 viewer runs inside `ZimService.withServer`: captures the revision/generation/port/alive tuple before
@@ -706,10 +718,9 @@ open round's item stays the last block of §5.)
     knownFamilies gate throws on the new family — needs the pinned GPL-3.0 text +
     prose), commercial-drive checkFamily, script-drift matrices. Until then binaries are
     manual (known-limitations). (b) **Tier 2**: persistent import of selected articles
-    into the corpus. (c) **Evidence review identity for archive citations — DONE in P2**
-    (2026-09-05, #301 review H2/M11): unresolved by construction, pack id + article path
-    exported through HTML/PDF/Markdown; residual = "Open article" from a review row
-    (owner: P6, after P3b). (d) The manual acceptance leg: the airplane-mode demo on a
+    into the corpus. (c) evidence identity for archive citations — DONE in P2, record
+    rag-design D-Z5; residual "Open article" from a review → P6.
+    (d) The manual acceptance leg: the airplane-mode demo on a
     real drive with `wikipedia_de_*` packs + kiwix-tools 3.8.1 (the §17 user story).
     (e) Observation for item 1b's matrix, measured 2026-09-04 on the i7-8550U + UHD 620:
     GPU auto-offload gains nothing on pp (56 vs 57 t/s) and LOSES 45 percent on tg
@@ -720,15 +731,15 @@ open round's item stays the last block of §5.)
     (g) **R-1 registered (P3a, 2026-09-05):** `kiwix-manage` on a hashless install marker runs as
     `skip-legacy` (one logged warning) — no integrity claim for the manager until (a) proves install
     hashes for serve AND manage; kiwix-serve already had the same tolerance. Record: rag-design D-Z10.
-    (h) **R-7 (P3b, 2026-09-06) — closed with recorded limits:** the dedicated `zim-transient/` cleanup is
-    tested with the actual filenames in both workspace modes (startup / session start), and at lock, quit,
-    failed registration, superseded rebuild and an unconfirmed manager child on the real encrypted vault
-    (`zim-ipc-session.test.ts`, `zim-transients.test.ts`); limits in `known-limitations.md`: an unconfirmed
-    child's file waits for the next session start, a file a stray process holds open is left and reported.
+    (h) R-7 closed with recorded limits in P3b — record known-limitations `zim-transient/` bullet.
     (i) **R-9 accepted (P5, 2026-09-06):** kiwix-serve is the one sidecar without request authentication
     (upstream has none); bounded by the `withServer` alive/generation guard + one admitted retry; recorded
     in security-model / PRIVACY / known-limitations; R-8 (`--urlRootLocation`) stays a documented unused
     option; R-1 still open until (a).
+    (j) **P4 closed (2026-09-06):** M3/M6/M7/M8/M10 — effective documents-off scope, reranker-failure
+    interleave, fair pack allocation under a per-ask deadline, refreshable searchability and per-ask
+    pack outcomes; record: rag-design D-Z4/D-Z11/D-Z12. Residuals: none new. Still owed: the Documents
+    toggle / outcome-notice visual pass (P6, T18), the `/suggest` probe's real-tool check (P7, T19).
 
 ## 6. Open issues / risks
 

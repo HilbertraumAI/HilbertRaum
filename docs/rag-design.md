@@ -2322,6 +2322,51 @@ offline article viewer. Files are registered in place, never copied.
   failure is logged and swallowed — an unplugged pack drive never breaks a document ask.
   The no-arm path is pinned against a retrieval result captured from pre-arm master `bfdb514a`
   (`tests/fixtures/zim/no-arm-retrieval-master-bfdb514a.json`, review L6, `zim-arm.test.ts`).
+  **Reranker failure and abort (P4, 2026-09-06; review M3).** The interleave now runs
+  whenever no reranker RANKED the candidates — absent or threw — not only when it is
+  absent, so a reranker exception degrades to the same round-robin as no reranker at all.
+  A `StaleServerError` from the arm (both request-guard attempts discarded) is an ORDINARY
+  error → one `server-restarted` outcome per eligible pack, and the ask continues with
+  whatever the document arms found. An `AbortError`, from either the reranker or the arm,
+  is NEVER converted into a fallback or an outcome — it propagates out of `retrieve()`
+  unchanged.
+  **Fair allocation (P4, 2026-09-06; review M8).** `MAX_EXTERNAL_CANDIDATES = 24` stays the
+  GLOBAL admitted-candidate bound; for N eligible packs (N ≤ `MAX_SELECTED_PACKS = 12`)
+  each gets a provisional quota `floor(24/N)` plus one extra for the first `24 mod N`
+  packs in `title COLLATE NOCASE, id` order — an UPPER bound on how much a pack fetches
+  (≤ `ARTICLES_PER_PACK = 5` articles, ≤ `CHUNKS_PER_ARTICLE = 4` chunks each), not a
+  guaranteed minimum. Admission happens only after every pack has SETTLED: round-robin,
+  one candidate per pack per round in pack order, until 24 are admitted or every pack is
+  exhausted — a short/empty/failed pack's unused share reclaims to the others (bounded by
+  what they already fetched; a reclaim never triggers a further fetch), and a
+  late-completing pack's best hit still reaches the reranker. `PACK_SEARCH_CONCURRENCY = 2`
+  workers pull the ordered queue; `EXTERNAL_RETRIEVAL_DEADLINE_MS = 20_000` bounds the
+  whole per-ask attempt AND its one admitted retry together (the combined signal is
+  created once, outside the request guard, so the guard's `op.assert()` never mistakes the
+  deadline for a cancellation) — a pack cut mid-flight is `failed/timeout`, one never
+  started before the deadline is `skipped/deadline`, and whatever was already assembled is
+  kept. `MAX_SELECTED_PACKS = 12` bounds the popover, the chip, the arm and the outcomes
+  with ONE constant; a persisted selection above it (older data, a hand-edited setting) is
+  trimmed deterministically in title order and every trimmed pack gets
+  `skipped/selection-limit` — which makes the `N > 24` allocation branch unreachable, so it
+  is not implemented.
+  **Per-ask outcomes (P4, 2026-09-06; review M6/M7).** `classifyPackSelection`
+  (`zim/packs.ts`) classifies every selected pack id BEFORE any eligibility filter — a
+  missing tools bundle, an all-unavailable or all-unsearchable selection can no longer
+  erase what the user ticked; `makeArm` now returns an arm for every non-empty selection
+  (null only when nothing was selected at all), because a null arm used to erase the very
+  facts the user needs. `KnowledgePackOutcome { packId, title, status: 'searched' |
+  'skipped' | 'failed', reason, found, admitted }` — the reason code is the whole
+  diagnostic, never a path or stderr — is persisted with the answer as additive
+  `messages.pack_outcomes_json` (parsed through a tolerant whitelist,
+  `parsePackOutcomes`), so it survives reload, regenerate/restore and export; `chat:done`
+  already carries the full persisted `Message`, so no new IPC channel or preload change
+  exists — the carriage is the message itself. `PackOutcomesNotice` renders it under the
+  answer — a collapsed summary, one row per outcome — even for a zero-citation or
+  no-context answer; a legacy answer that cited an archive but carries no outcomes shows an
+  explicit "outcome not recorded" line instead of silence. A whole-document, compare or
+  grounded-data answer produces `skipped/mode` for every selected pack via `packTitles` —
+  packs are still not queried on those paths, but the answer now SAYS so.
 - **D-Z5 — synthetic identity, honest exclusions.** Archive chunks carry
   `chunkId 'zim:<packId>:<path>#<n>'`, `documentId 'zim:<packId>'`, `sourceKind:
   'archive'`. Their citations carry `packId`/`archiveTitle`/`articlePath` and **no**
@@ -2456,7 +2501,59 @@ offline article viewer. Files are registered in place, never copied.
   reconcile start/end and on register/remove/enable, emitted only after the producing
   operation's `assert()` so a pass that finished under an old epoch announces nothing;
   `PacksPanel` and `ChatScreen` subscribe and refetch, ignoring an event whose epoch is
-  below the last one seen. P4 adds the searchability half of this record.
+  below the last one seen.
+  **Searchability (P4, 2026-09-06; review M7).** Three additive, nullable columns
+  (`db.ts` `ensureColumn`, no `SCHEMA_VERSION` bump): `knowledge_packs.searchable`
+  (`'yes' | 'no'`, NULL = unknown — CONFIRMED only), `searchable_key` (the fingerprint the
+  verdict was taken under) and `ftindex_hint` (the archive's own `_ftindex` tag, parsed at
+  registration/discovery). A tag is a HINT only — it never sets `searchable` and never
+  affects eligibility; unknown and confirmed-`'yes'` packs are both searched, so nothing is
+  filtered out before its capability is established. The verdict comes only from a
+  validated `probeSearchable` (`client.ts`): `GET /suggest?content=<serving name>&term=the
+  &count=1` — `'yes'` iff HTTP 200 and the body is a JSON array containing an entry with
+  `kind: "pattern"`, `'no'` iff 200 and a valid array without one; every other case (404,
+  any other non-200, malformed or non-array JSON, a timeout, a network error, an abort) is
+  unknown and writes nothing — a 404 or a transient failure can never confirm "no". The
+  probe runs at the END of `reconcileOnce`, after `reconcile()`/`assert()` and BEFORE
+  `reconcile-end` (so the panel refetches once and already sees the verdicts):
+  `probeUnknownSearchability` collects every enabled ∧ available row whose `searchable IS
+  NULL` and, only if that list is non-empty, opens ONE `withServer(db, op, …)` call that
+  probes each present pack sequentially; `'yes'`/`'no'` is written together with
+  `searchable_key` only after the guard accepted the batch and a final `op.assert()`
+  passed — a `StaleServerError` or an `AbortError` writes nothing, so unknown stays
+  unknown. The key (`<file size>:<file mtime>:<kiwix-serve binary size>:<mtime>`) resets a
+  row to unknown whenever it changes — a replaced file, a healed path with a different
+  size, or a tools-bundle swap all re-probe automatically; Refresh re-runs the same pass.
+  Cost, accepted: a session whose registered packs are all confirmed wakes no sidecar at
+  all; a session with one unknown pack costs one background sidecar start (~0.8 s) at that
+  session's reconcile. A confirmed-`'no'` pack is skipped by the ask (outcome
+  `not-searchable`) but stays fully readable in the article viewer, which never consults
+  `searchable`.
+- **D-Z12 — scope (P4, 2026-09-06; review M10, ruling D4).** The user's intent to answer
+  without the document corpus is an explicit, additive `DocumentScope.documentsOff?: true`
+  — persisted by BOTH scope owners (`serializeDocumentScope` in `chat.ts`,
+  `parseDocumentScope`'s field whitelist in `collections.ts`) and NEVER derived from an
+  empty selection: the legacy empty scope (`{ collectionIds: [], documentIds: [] }`) still
+  means the whole corpus, and `{ …, packIds: ['p'] }` without the flag still means "all
+  documents AND pack p" — the combination the 2026-09-05 interim fix (88be37ec's
+  `packsOnly` derivation from an empty scope) made inexpressible is expressible again;
+  that interim fix is SUPERSEDED here. `resolveScope` turns the flag into the resolved
+  `RetrievalScope.noDocuments?: true` — the explicit deny-all — ONLY when no file is
+  attached to the chat: the ticked collections and hand-picked documents are dropped
+  BEFORE the attachment union, then attachments are unioned exactly as always, so
+  "documents off with files attached" resolves to exactly those files, never to deny-all.
+  Every consumer honours the resolved flag: `buildScopeFilter` (the one SQL builder)
+  returns `{ sql: '0', params: [] }` FIRST, before any narrowing spread, so a
+  contradictory scope stays fail-closed; the resident-vector fast path
+  (`VectorIndexOptions.noDocuments`) is guarded — `canIterateResident()` returns false and
+  `search()` returns `[]` before either scan; and `retrieve()` skips both document arms
+  BEFORE the question is embedded (no query embed, no resident-cache load, no FTS query)
+  rather than merely filtering their output afterwards. The popover's explicit
+  **Documents** toggle ("Search my documents") sits above the packs list whenever packs
+  are registered; unticking emits the flag with the document sources cleared, ticking any
+  collection or adding a document clears it again (an emit never carries the flag together
+  with a document source), and the copy is explicit that attachments stay active — "Only
+  these packs" is never used as copy, because it would be false with attachments in scope.
 
 ### Module map
 
@@ -2464,26 +2561,35 @@ offline article viewer. Files are registered in place, never copied.
 budget and `truncated` signal — PR #294 review H1; cooperatively sliced, async on the ask
 path — P1b), `client.ts` (node:http + search/
 library XML parsing; the ONE entry-key encoder with the L5 contract — controls, dot
-segments, 2048-char bound; URL-shaped and empty-segment keys accepted, P5), `tools.ts`
+segments, 2048-char bound; URL-shaped and empty-segment keys accepted, P5; `KiwixBook.tags`
++ `probeSearchable` — the `/suggest` capability probe, D-Z11, P4), `tools.ts`
 (binary discovery `runtime/kiwix-tools/<os>/`, dev-only
 `HILBERTRAUM_KIWIX_BIN`, the verified `kiwix-manage` runner — pre-spawn verifier, PID
 registration for as long as the child may be running, settles only after a terminal
 state or the bounded wait — D-Z10; `platform` injected, L9), `serve.ts` (`KiwixServer` — per-child records, no
 mutable state on `this`, the bounded SIGTERM→SIGKILL teardown policy — D-Z10),
 `packs.ts` (registry over `knowledge_packs`; `writeLibraryXml` stops and rethrows on an
-unconfirmed manager child, D-Z10; `reconcile()` is the one filesystem pass, D-Z11),
+unconfirmed manager child, D-Z10; `reconcile()` is the one filesystem pass, D-Z11; the
+searchability columns + key, `classifyPackSelection` and `packTitles`, D-Z11/D-Z4, P4),
 `identity.ts` (header read + UUID identity + the serving-name map, D-Z11), `transients.ts`
 (the owned `zim-transient/` dir; containment-checked, link-refusing cleanup, D-Z11),
 `session.ts` (the post-unlock reconciliation kickoff, the `maybeStartLocalApi` shape,
-D-Z11), `arm.ts` (candidate production), `index.ts` (`ZimService` facade on
+D-Z11), `arm.ts` (allocation, bounded concurrency, the per-ask deadline and per-pack
+outcomes — D-Z4, P4), `index.ts` (`ZimService` facade on
 `AppContext.zim` — the revision/generation allocator, the FIFO build/teardown/start chain
 and the published tuple, D-Z10; the operation registry and admission-epoch checks, the
 `packs:changed` notify hook, D-Z11; `withServer` — the alive/generation request guard with
-one admitted retry (D-Z10, P5); quit teardown in shutdown.ts). IPC:
+one admitted retry (D-Z10, P5); `runArm` and the searchability probe run from the end of
+`reconcileOnce`, D-Z11/D-Z4, P4; quit teardown in shutdown.ts). IPC:
 `ipc/registerZimIpc.ts` (`packs:*`, lock-gated; status exempt; `packs:add` answers the
-typed `KnowledgePackAddResult`, L1).
-Renderer: `documents/PacksPanel.tsx`, ScopePopover pack sources, SourcesDisclosure "Open
-article", `chat/ArticleModal.tsx`. Shapes: [`data-contracts.md`](data-contracts.md)
+typed `KnowledgePackAddResult`, L1). `services/retrieval-scope.ts` (`buildScopeFilter`
+fail-closed under deny-all, D-Z12, P4) and `services/embeddings/index.ts` /
+`services/rag/hybrid.ts` (the `noDocuments` resident-vector and keyword-scan guards,
+D-Z12, P4).
+Renderer: `documents/PacksPanel.tsx`, ScopePopover pack sources (the Documents toggle, the
+12-pack cap, D6 — D-Z12, P4), SourcesDisclosure "Open
+article", `chat/ArticleModal.tsx`, NEW `chat/PackOutcomesNotice.tsx` (the per-answer
+outcomes notice, D-Z4, P4). Shapes: [`data-contracts.md`](data-contracts.md)
 "Knowledge packs". Tests: `zim-html/zim-tools/zim-client/zim-serve/zim-packs` (unit) —
 `zim-html` runs four attributed synthetic non-Wikipedia fixtures under
 `tests/fixtures/zim/` (Parsoid data-mw, zimit/warc2zim, DevDocs, Stack Exchange/sotoki)
@@ -2525,6 +2631,17 @@ the gated real-tool smoke itself — fail-closed once requested, a genuine skip 
 (`node --no-warnings scripts/zim-html-perf.mjs --gate laptop|early-warning`), including
 Section D's per-slice cooperative-slicing gate (P1b) — each `--gate` profile now also
 carries a `slice` threshold alongside `oneMiB`/`batch`.
+P4 (2026-09-06; review M3/M6/M7/M8/M10) by file: `zim-regressions.test.ts` — T09-c
+(reranker present/absent/throwing + abort discipline over ≥ 8 document chunks) and T10-a
+(every §5.4 truth-table row through persist/parse/resolve, the resident-vector bypass with
+real embeddings, a throwing embedder under true packs-only, and the chip agreement);
+`zim-packs.test.ts` — T14-a (the searchability migration, tag/probe matrix, file/tool
+fingerprint reset, a probe across a child death, confirmed-no still readable);
+`zim-regressions.test.ts` — T15-b (1/3/7/12 packs and a 13-pack persisted selection,
+varied completion order, the concurrency-2 and deadline bounds); `zim-ipc-session.test.ts`
+— T16-a (twelve outcome legs over the real vault harness: all failed, zero hits, missing
+tools, removed/disabled selection, mixed, all fetches failed, two concurrent chats, a
+mid-ask scope change, reload, regenerate/restore, export, whole-doc/compare `mode`).
 
 ### Deliberately not built (MVP cut; §5 item 21 tracks the follow-ups)
 
@@ -2532,6 +2649,7 @@ Provisioning of the `kiwix_tools` family (runtime-sources.yaml, engine downloade
 DRIVE-NOTICES, commercial-drive checks, fetch scripts — binaries are placed manually);
 persistent article import (Tier 2); an in-app ZIM catalog/downloader; evidence review
 over archive citations (they resolve as honest 'unresolved'); packs on the whole-document
-/ compare paths; quality guarantees for non-Wikimedia ZIMs. Serving names are computed
+/ compare paths (disclosed per answer as `mode`, not queried — P4); quality guarantees
+for non-Wikimedia ZIMs. Serving names are computed
 by the pinned libkiwix 14.1 rule (D-Z11) rather than read back from the running server —
 the real-tool check of that mapping is P7's (T19), not assumed.
