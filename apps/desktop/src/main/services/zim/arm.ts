@@ -249,7 +249,12 @@ export async function collectPackCandidates(
     try {
       expansion = await opts.expand(question, signal)
     } catch (err) {
-      if (aborted()) throw err
+      // The expander cannot tell the two aborts apart, so the arm does it here (review finding,
+      // 2026-09-07): the ASK's cancellation is rethrown like every other cancellation; the per-ask
+      // DEADLINE elapsing mid-expansion degrades — no expansion, the workers no-op under the
+      // fired signal, and every pack settles `deadline` exactly as it did before this stage.
+      const cancelled = opts.askSignal ? opts.askSignal.aborted : aborted()
+      if (cancelled) throw err
       expansion = null
     }
   }
@@ -274,7 +279,10 @@ export async function collectPackCandidates(
     const servedName = names?.get(pack.id)
     if (expansion.listTitle !== null && servedName !== undefined) {
       try {
-        let rows = await suggestTitles(port, servedName, expansion.listTitle, EXPANSION_TITLE_ROWS, signal)
+        // A title lookup is one small JSON: it gets the probe budget (`DF_PROBE_TIMEOUT_MS`), not
+        // the client's 15 s default — the same argument as the #353 probes.
+        const lookup = { timeoutMs: DF_PROBE_TIMEOUT_MS }
+        let rows = await suggestTitles(port, servedName, expansion.listTitle, EXPANSION_TITLE_ROWS, signal, lookup)
         // The title index is PREFIX-only (R-6): a model title one word too long or inflected at
         // its end ("… nach CO2-Emissionen" against "… nach CO2-Emission pro Kopf", measured
         // 2026-09-07) matches nothing, so one shorter prefix — the title minus its last word —
@@ -289,7 +297,7 @@ export async function collectPackCandidates(
             const lower = title.toLowerCase()
             return tail.filter((t) => lower.includes(t)).length
           }
-          rows = (await suggestTitles(port, servedName, words.slice(0, -1).join(' '), EXPANSION_TITLE_ROWS * 2, signal))
+          rows = (await suggestTitles(port, servedName, words.slice(0, -1).join(' '), EXPANSION_TITLE_ROWS * 2, signal, lookup))
             .map((row, index) => ({ row, index, score: score(row.title) }))
             .sort((a, b) => b.score - a.score || a.index - b.index)
             .map((r) => r.row)
@@ -367,6 +375,12 @@ export async function collectPackCandidates(
       ...extra.slice(0, EXPANSION_ARTICLES_PER_PACK).map((hit) => ({ hit, fromExpansion: true })),
       ...hits.map((hit) => ({ hit, fromExpansion: false }))
     ]
+    // The expansion's chunks take at most HALF the pack's quota (review finding, 2026-09-07):
+    // on a multi-pack ask the quota is small (12 for two packs, 8 for three), and one list
+    // article at `LIST_ARTICLE_CHUNKS` fetched first would otherwise fill it before a single
+    // plain hit was read. Half keeps the plain search's hits in every ask.
+    const expansionCap = Math.ceil(item.quota / 2)
+    let expansionChunks = 0
     let attempted = 0
     let read = 0
     for (const { hit, fromExpansion } of queue) {
@@ -374,6 +388,7 @@ export async function collectPackCandidates(
       // provisional quota, the remaining hits are not fetched at all.
       if (item.candidates.length >= item.quota) break
       if (!fromExpansion && attempted >= ARTICLES_PER_PACK) break
+      if (fromExpansion && expansionChunks >= expansionCap) continue
       // The published serving map (`Published.names`, #301 P3b/L4) is the route authority. A
       // hit whose parsed `urlId` is not the name this pack is served under is SKIPPED —
       // defensive within one generation: the search was filtered by `books.id`, so a
@@ -392,7 +407,9 @@ export async function collectPackCandidates(
         continue
       }
       if (html === null) continue // 404: the entry vanished between search and fetch
-      read++
+      // `attempted`/`read` describe the PLAIN hits only, so the `read-failed` verdict below keeps
+      // its meaning ("the pack's search hits were unreadable") whatever the expansion read.
+      if (!fromExpansion) read++
       // Cooperatively sliced (P1b): the main thread is handed back between slices and the
       // signal is honoured at every slice boundary. An abort here is the ask's or the
       // deadline's and is classified below; any other converter failure costs this ONE
@@ -407,11 +424,13 @@ export async function collectPackCandidates(
       const chunks = chunkSegments(article.segments, CHUNK_DEFAULTS)
       const title = article.title ?? hit.title
       // A LIST article keeps more chunks (D-Z20): its name rows never overlap the question.
-      const keep = LIST_TITLE_RE.test(title) ? LIST_ARTICLE_CHUNKS : CHUNKS_PER_ARTICLE
+      const wanted = LIST_TITLE_RE.test(title) ? LIST_ARTICLE_CHUNKS : CHUNKS_PER_ARTICLE
+      const keep = fromExpansion ? Math.min(wanted, expansionCap - expansionChunks) : wanted
       const scored = chunks
         .map((c, i) => ({ c, i, overlap: overlapScore(c.text, terms) }))
         .sort((a, b) => b.overlap - a.overlap || a.i - b.i)
         .slice(0, keep)
+      if (fromExpansion) expansionChunks += scored.length
       for (const { c, i, overlap } of scored) {
         item.candidates.push({
           chunkId: `zim:${pack.id}:${hit.articlePath}#${i}`,

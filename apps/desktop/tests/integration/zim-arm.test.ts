@@ -1010,12 +1010,14 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
     // exactly as before; 'Kohlekraftwerk' — in both lists — is read once.
     expect(rawReads).toEqual([LIST_ARTICLE, 'Kraftwerk Tuoketuo', ...plainReads])
     const list = candidates.filter((c) => c.sourceTitle === LIST_ARTICLE)
-    expect(list.length).toBeGreaterThan(CHUNKS_PER_ARTICLE)
-    expect(list.length).toBeLessThanOrEqual(LIST_ARTICLE_CHUNKS)
+    // The fixture list article chunks into more than LIST_ARTICLE_CHUNKS pieces, so the count
+    // pins the constant itself (one pack: the quota's half, 12, does not bind).
+    expect(list.length).toBe(LIST_ARTICLE_CHUNKS)
     expect(candidates.filter((c) => c.sourceTitle === 'Kohlekraftwerk').length).toBeLessThanOrEqual(CHUNKS_PER_ARTICLE)
-    expect(outcomes).toEqual([
-      { packId: 'pack-expand', title: 'Klimawandel von Wikipedia', status: 'searched', reason: null, found: candidates.length, admitted: candidates.length }
-    ])
+    expect(candidates.filter((c) => c.sourceTitle === 'Kohleausstieg').length).toBeGreaterThan(0)
+    expect(outcomes).toHaveLength(1)
+    expect(outcomes[0]).toMatchObject({ packId: 'pack-expand', status: 'searched', reason: null })
+    expect(outcomes[0]!.found).toBeGreaterThan(LIST_ARTICLE_CHUNKS)
   })
 
   it('#340 L3-b: a null expansion, a throwing expander and no expander at all produce the SAME arm — no /suggest, no concept search, the plain reads', async () => {
@@ -1103,5 +1105,54 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
     await collectPackCandidates(port, packs, QUESTION, undefined, undefined, { expand: async () => EXPANSION })
     expect(suggestRequests).toEqual([])
     expect(rawReads).toEqual(['Kraftwerk Tuoketuo', ...plainReads])
+  })
+
+  it('#340 L3-b: the per-ask DEADLINE elapsing during the expansion is an outcome, never a cancellation — every pack settles deadline, nothing is searched', async () => {
+    reset()
+    const deadline = new AbortController()
+    const ask = new AbortController() // the ask itself is NOT cancelled
+    const expand = async (_q: string, signal?: AbortSignal): Promise<null> => {
+      deadline.abort() // the arm's combined deadline fires while the model is still thinking
+      expect(signal?.aborted).toBe(true)
+      const err = new Error('deadline')
+      err.name = 'AbortError'
+      throw err
+    }
+    const { candidates, outcomes } = await collectPackCandidates(
+      port,
+      [...packs, { id: 'pack-climate', title: 'Klimawandel' }],
+      QUESTION,
+      deadline.signal,
+      names,
+      { expand, askSignal: ask.signal }
+    )
+    expect(candidates).toEqual([])
+    expect(outcomes.map((o) => [o.packId, o.status, o.reason])).toEqual([
+      ['pack-expand', 'skipped', 'deadline'],
+      ['pack-climate', 'skipped', 'deadline']
+    ])
+    expect(expandSearches).toEqual([])
+    expect(rawReads).toEqual([])
+  })
+
+  it('#340 L3-b: on a three-pack ask the expansion takes at most half the pack quota, so the plain hits are still read', async () => {
+    reset()
+    const three = [...packs, { id: 'pack-climate', title: 'Klimawandel' }, { id: 'pack-mixed', title: 'Gemischt' }]
+    const { candidates, outcomes } = await collectPackCandidates(port, three, QUESTION, undefined, names, {
+      expand: async () => EXPANSION
+    })
+    // quota per pack = floor(24 / 3) = 8 → the expansion may hold 4 of it: the list article is
+    // trimmed to 4 chunks and the concept hit is NOT fetched (the cap is reached); the other
+    // half of the quota goes to the plain hits, exactly as the quota always bounded them (the
+    // first plain article fills it here — before this stage two plain articles fitted, so a
+    // multi-pack ask trades one plain article for the expansion's list article).
+    const quota = packQuota(0, 3)
+    expect(quota).toBe(8)
+    const mine = rawReads.filter((r) => [LIST_ARTICLE, 'Kraftwerk Tuoketuo', ...plainReads].includes(r))
+    expect(mine).toEqual([LIST_ARTICLE, 'Kohlekraftwerk'])
+    const list = candidates.filter((c) => c.sourceTitle === LIST_ARTICLE)
+    expect(list.length).toBeLessThanOrEqual(Math.ceil(quota / 2))
+    expect(candidates.some((c) => c.sourceTitle === 'Kohlekraftwerk' || c.sourceTitle === 'Kohleausstieg')).toBe(true)
+    expect(outcomes.find((o) => o.packId === 'pack-expand')?.status).toBe('searched')
   })
 })

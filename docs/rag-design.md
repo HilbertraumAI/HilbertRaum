@@ -2859,7 +2859,10 @@ offline article viewer. Files are registered in place, never copied.
   (thinking off), temperature 0, `EXPAND_MAX_TOKENS = 96`, the D55 `responseSchema` (the same
   grammar-constrained-JSON machinery `classify.ts` uses), and its own `EXPAND_TIMEOUT_MS = 6_000`
   bound INSIDE `arm.ts`'s 20 s `EXTERNAL_RETRIEVAL_DEADLINE_MS` — a stuck call leaves the packs
-  fourteen seconds, never nothing (measured 2026-09-07 with the default 4B model on an i9-14900K
+  fourteen seconds, never nothing; and when the arm's DEADLINE itself elapses mid-expansion the
+  arm degrades exactly as before this stage — no expansion, every pack settles `deadline` — while
+  the ask's own cancellation is rethrown (the arm, not the expander, tells the two apart via
+  `askSignal`; measured 2026-09-07 with the default 4B model on an i9-14900K
   at -ngl 0: 2.7–4.0 s per call with the system prompt prefilled from scratch; the app runtime
   sets `cache_prompt`, so from the second ask on only the question is prefilled). When the title
   index knows nothing under the model's title, one shorter prefix — the title minus its last word
@@ -2877,9 +2880,15 @@ offline article viewer. Files are registered in place, never copied.
   trimmed, null unless it holds a letter and fits `EXPAND_MAX_TITLE_CHARS = 80`. `arm.ts`
   `collectPackCandidates` calls the expander once before any pack is searched, then per pack:
   the title (`suggestTitles`, `/suggest`, `EXPANSION_TITLE_ROWS = 3`) and the concept query
-  (`searchPack`) each add up to `EXPANSION_ARTICLES_PER_PACK = 2` NEW articles, fetched BEFORE the
-  plain search's hits so the plain `ARTICLES_PER_PACK` cap can never starve them — the plain
-  pattern still runs unchanged and every one of its hits is kept. A fetched article whose title
+  (`searchPack`) together add at most `EXPANSION_ARTICLES_PER_PACK = 2` NEW articles, fetched BEFORE the
+  plain search's hits so the plain `ARTICLES_PER_PACK` cap can never starve them, and they may
+  hold at most HALF the pack's quota (`Math.ceil(quota / 2)`) so the plain hits are always read
+  after them — the plain pattern runs unchanged; on a one-pack ask (quota 24) every plain hit is
+  still fetched, on a multi-pack ask the quota was always the bound and the expansion's list
+  article now takes the slot one plain article used to have. The expansion is memoised per ask
+  in `runArm`, so the guard's single admitted retry never pays for a second model call. Note:
+  the call enters the runtime as an in-app generation like the answer itself, so a pack-scoped
+  ask pre-empts an external (local-API) generation a few seconds earlier than before. A fetched article whose title
   matches `Liste …` / `List of …` keeps `LIST_ARTICLE_CHUNKS = 8` chunks instead of
   `CHUNKS_PER_ARTICLE`: a list's name rows carry none of the question's words, so the overlap
   picker would otherwise trim exactly the rows a "which … are the largest" question needs — the

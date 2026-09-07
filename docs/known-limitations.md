@@ -2529,7 +2529,7 @@ reports and phase plans were working papers; their full text lives in git histor
   one, expect occasional off-language chunks. Aggregation or superlative questions ("which
   scientists are famous Austrians") get one extra step before the search: the app asks the
   local model for the concepts and the likely list-article title (one short model call per
-  pack question, roughly one to three seconds on a processor-only machine), which finds the
+  pack question, measured at two to five seconds on a processor-only machine), which finds the
   list article in the cases we measured. A question whose answer is spread across an
   article's individual rows, rather than named on the page itself, can still miss; and on a
   machine where that model call takes longer than six seconds, the question falls back to
