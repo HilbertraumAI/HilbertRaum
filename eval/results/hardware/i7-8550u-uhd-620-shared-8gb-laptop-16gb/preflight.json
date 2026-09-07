@@ -1,0 +1,236 @@
+{
+  "issue": 318,
+  "kind": "preflight-only",
+  "date": "2026-09-07",
+  "hw_slug": "i7-8550u-uhd-620-shared-8gb-laptop-16gb",
+  "legs_detected": [],
+  "legs_reason": "one integrated Vulkan device, no discrete device; the leg derivation rule's 'anything else' case. The NAME gate decides it, not the size: the probe's 8119 MiB clears the 6144 MiB USABLE_VRAM_MB gate, but looksIntegrated matches /uhd/i so isUsefulDevice is false. No budget device, memory class = cpu, RAM pick stands; the §6.6 grid has no row for this class.",
+  "drive_root": "<drive>",
+  "drive_root_note": "No mounted drive root on this machine carries runtime/llama.cpp/win/llama-server.exe (three roots present: the system disk, a cloud-storage mount, an empty mapped root). A complete AI Kit layout is staged in a directory on the system disk instead, and the operator confirmed its use as the drive root for this session. The other llama-server.exe hits on the system disk were an unrelated local LLM tool and temp-dir test fixtures, not AI Kit layouts.",
+  "runtime": {
+    "version_line": "version: 9849 (799fcc04a)",
+    "built_with": "Clang 20.1.8 for Windows x86_64",
+    "manifest": {
+      "version": "b9849",
+      "backend": "vulkan",
+      "os": "win",
+      "arch": "x64"
+    },
+    "llama_server_sha256_per_runtime_manifest": "d6ae64cf1e8a985720efe75e9c5f0e9cecbb64056bb9959fe897fac76059c5c5",
+    "launches": true,
+    "launches_note": "the binary runs on this machine (Smart App Control is not blocking it, unlike the PR #308 audit machine)"
+  },
+  "list_devices_raw": [
+    "Available devices:",
+    "  Vulkan0: Intel(R) UHD Graphics 620 (8119 MiB, 7457 MiB free)"
+  ],
+  "list_devices_order": "integrated first (only device)",
+  "cpu": {
+    "name": "Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz",
+    "cores": 4,
+    "logical": 8
+  },
+  "ram": {
+    "total_bytes": 17027698688,
+    "total_gib": 15.86,
+    "rounded_gb": 16
+  },
+  "chassis": {
+    "win32_chassis_types": [
+      10
+    ],
+    "form_factor": "laptop"
+  },
+  "graphics": {
+    "probe": {
+      "name": "Intel(R) UHD Graphics 620",
+      "total_mib": 8119,
+      "free_mib": 7457,
+      "type": "integrated (shared memory)"
+    },
+    "wmi": {
+      "name": "Intel(R) UHD Graphics 620",
+      "adapter_ram_bytes": 1073741824,
+      "driver_version": "31.0.101.2135",
+      "driver_date": "2025-03-06"
+    },
+    "vulkaninfo": {
+      "instance_version": "1.3.301",
+      "api_version": "1.3.215",
+      "driver_version": "101.2135",
+      "driver_id": "DRIVER_ID_INTEL_PROPRIETARY_WINDOWS",
+      "device_type": "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU",
+      "vendor_id": "0x8086",
+      "device_id": "0x5917",
+      "memory_heaps": [
+        {
+          "index": 0,
+          "size_bytes": 8513849344,
+          "size_gib": 7.93,
+          "size_mib": 8119,
+          "budget_bytes": 7819721421,
+          "budget_gib": 7.28,
+          "budget_mib": 7457,
+          "usage_bytes": 0,
+          "flags": [
+            "MEMORY_HEAP_DEVICE_LOCAL_BIT"
+          ]
+        }
+      ],
+      "memory_types": "3 types, all heap 0: DEVICE_LOCAL; DEVICE_LOCAL|HOST_VISIBLE|HOST_COHERENT; DEVICE_LOCAL|HOST_VISIBLE|HOST_COHERENT|HOST_CACHED",
+      "note": "no separate 214 MiB BAR heap on this device (single unified heap), so open question (e) does not apply here",
+      "probe_correspondence": "the probe's total/free are heap 0 size and VK_EXT_memory_budget exactly: 8513849344 B = 8119.1 MiB, budget 7819721421 B = 7457.4 MiB"
+    },
+    "discrepancy": "WMI AdapterRAM 1 GiB vs probe 8119 MiB shared; the probe's figure is used (that is what the picker sees)"
+  },
+  "os": {
+    "product": "Windows 11 Pro for Workstations",
+    "version": "10.0.26200",
+    "display_version": "25H2",
+    "ubr": 9168
+  },
+  "nvidia_smi": "not present (no NVIDIA device)",
+  "models_on_drive_for_legs": {
+    "qwen3.5-9b-ud-q4kxl": {
+      "file": "qwen3.5-9b-ud-q4kxl.gguf",
+      "size_bytes": 5966095584,
+      "present": true,
+      "manifest_sha256": "6f5d30666c2d8ae16a306e616d95341dcf3cc46810df84d7e6f5a7d1e4c1b293",
+      "measured_sha256": "6f5d30666c2d8ae16a306e616d95341dcf3cc46810df84d7e6f5a7d1e4c1b293",
+      "hash_verified_this_session": true
+    },
+    "qwen3.5-4b-ud-q4kxl": {
+      "file": "qwen3.5-4b-ud-q4kxl.gguf",
+      "size_bytes": 2912109728,
+      "present": true,
+      "manifest_sha256": "b252c5610a42ca82d20fe2a12813e9d069eed89292907e26c783eeb0bc961bc7",
+      "measured_sha256": "b252c5610a42ca82d20fe2a12813e9d069eed89292907e26c783eeb0bc961bc7",
+      "hash_verified_this_session": true
+    },
+    "gemma4-12b-it-qat-q4": {
+      "present": false
+    },
+    "qwen3.8-27b-ud-q4km": {
+      "present": false
+    },
+    "qwen3.8-27b-ud-q5km": {
+      "present": false
+    }
+  },
+  "app_argv_reconstructed_rung1_chat_9b": [
+    "llama-server.exe",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "<p>",
+    "--model",
+    "<drive>\\models\\chat\\qwen3.5-9b-ud-q4kxl.gguf",
+    "--ctx-size",
+    "8192",
+    "--threads",
+    "4",
+    "--batch-size",
+    "2048",
+    "--ubatch-size",
+    "2048",
+    "--jinja",
+    "--reasoning-format",
+    "deepseek",
+    "-lv",
+    "4"
+  ],
+  "app_argv_sources_origin_master_740b0f27": {
+    "--host/--port/--model/--ctx-size/--threads": "apps/desktop/src/main/services/runtime/sidecar.ts:511-538 (buildArgs)",
+    "--threads value": "defaultThreadCount = max(1, floor(cpus().length / 2)) = 4 on this 8-logical box, sidecar.ts:90-98",
+    "--ctx-size value": "launchContextTokens = contextTokensOverride ?? (manifest.recommendedContextTokens || settings.contextTokens), services/models.ts:176-182 (spelled out at services/chat.ts:1452); the 9B manifest carries recommended_context_tokens: 8192",
+    "--batch-size/--ubatch-size": "min(ctx, CHAT_MAX_PHYSICAL_BATCH=2048), runtime/llama.ts:49 and :460; emitted only when physicalBatchSize is set, sidecar.ts:516-523",
+    "--jinja --reasoning-format deepseek -lv 4": "CHAT_SERVER_ARGS, runtime/llama.ts:39, appended via llama.ts:461",
+    "rung 1 extra args": "none — explicitly NO -ngl / --device, runtime/factory.ts:763-764",
+    "rung 1a extra args": "MTP_SERVER_ARGS --spec-type draft-mtp --spec-draft-n-max 2, factory.ts:95, pushed at factory.ts:758 only when the manifest sets speculative_decoding: mtp. Neither the 9B nor the 4B manifest does (only qwen3.8-27b-ud-q5km among the leg models), so rung 1 only here.",
+    "rung 2": "--device none, factory.ts:770 — the only way the app forces CPU",
+    "--fit-target/--fit-ctx/-np/--parallel/-ngl/--device": "not emitted on the chat path (repo-wide grep over apps/desktop/src: --device appears only in embeddings/e5.ts:290, reranker/llama.ts:196, translation/runtime.ts:53, vision/runtime.ts:54 and factory.ts:770; --parallel only in translation/runtime.ts:38 and vision/runtime.ts:71). The 1024 MiB fit margin is llama.cpp's own --fit-target default, mirrored in code as VRAM_FIT_MARGIN_MIB at services/models.ts:938 but never passed.",
+    "env": "LLAMA_API_KEY, sidecar.ts:633"
+  },
+  "picker_trace_for_this_machine": {
+    "USABLE_VRAM_MB": 6144,
+    "probe_total_mib": 8119,
+    "clears_size_gate": true,
+    "looksIntegrated": true,
+    "looksIntegrated_pattern_hit": "/uhd/i",
+    "isUsefulDevice": false,
+    "budget_device": null,
+    "memory_class": "cpu",
+    "source": "apps/desktop/src/shared/gpu-rules.ts:25 (USABLE_VRAM_MB), :37 (looksIntegrated), :68 (isUsefulDevice)"
+  },
+  "predicted_star_for_this_class": "RAM path (memory class cpu): expected qwen3.5-9b-ud-q4kxl at 16 GB — comfortable stage, recommended_ram_gb 16 <= 16, rank 3, winning the disk-size tiebreak over the equally ranked 4B (models.ts:906-931) — unless a stored §6.5 speed step-down applies. No §6.6 card prediction to test.",
+  "starts_performed": 0,
+  "app_report": {
+    "note": "Two Performance-screen runs on 2026-09-07 via npm run dev off origin/master 740b0f27; the pinned Kit had been removed from this machine, so the runtime is the dev root llama.cpp, not b9849. The picker reasons from the probe + settings flags, not the runtime build.",
+    "run1_gpu_off": {
+      "gpuMode": "off",
+      "gpuAutoDisabled": false,
+      "gpuLastError": null,
+      "graphics_tile": "Grafikbeschleunigung ist aus. Modelle laufen auf dem Prozessor. (kind: off)",
+      "profile": "LITE",
+      "tokensPerSecond": 3,
+      "recommendedModelId": "gemma4-e2b-it-qat-q4",
+      "speedIdentity": {
+        "memoryClass": "cpu",
+        "deviceName": null,
+        "contextTokens": 8192,
+        "backend": "cpu"
+      },
+      "verdict": "inconclusive for the name gate: gpuMode off short-circuits rule 1 before budget-device selection"
+    },
+    "run2_gpu_auto": {
+      "gpuMode": "auto",
+      "gpuAutoDisabled": false,
+      "gpuLastError": null,
+      "gpuProbe": {
+        "name": "Intel(R) UHD Graphics 620",
+        "totalMb": 8119,
+        "freeMb": 7457,
+        "probedAt": "2026-09-07T11:45:51.541Z"
+      },
+      "graphics_tile": "Keine (kind: none — currentGpu is the budget device and is null with no usable card)",
+      "profile": "TINY",
+      "tokensPerSecond": 2.9,
+      "recommendedModelId": "gemma4-e2b-it-qat-q4",
+      "basis": "Arbeitsspeicher (RAM)",
+      "speedIdentity": {
+        "memoryClass": "cpu",
+        "deviceName": null,
+        "contextTokens": 8192,
+        "backend": "cpu"
+      },
+      "gpu": null,
+      "gpuVramMb": null,
+      "speedBasis": {
+        "basis": "timings",
+        "tokens": 64
+      },
+      "effectiveRead": {
+        "mbps": 491.3,
+        "bytes": 5966095584,
+        "ms": 12144,
+        "source": "model_load",
+        "modelId": "qwen3.5-9b-ud-q4kxl"
+      },
+      "placement_9b": {
+        "backend": "cpu",
+        "cpuModelMb": 7384.75,
+        "cpuKvMb": 256,
+        "gpuModelMb": null
+      },
+      "verdict": "CONFIRMS the prediction: GPU on, device probed at 8119 MiB (clears the 6144 gate), yet memoryClass stays cpu with no budget device — the looksIntegrated name gate is what excludes it"
+    },
+    "corrections": [
+      "My predicted tile wording (\"Integriert, gemeinsamer Speicher\") was wrong; the tile shows \"Keine\". Correct by design: currentGpu is the budget device (registerBenchmarkIpc.ts:957,:984), null with no usable card, so graphicsFigure never reaches its kind:device branch and the integrated wording is unreachable on an integrated-only machine."
+    ],
+    "observations_not_defects": [
+      "The copy report renders kind:none as bare \"Keine\" (perf.rating.none) while the tile carries the fuller perf.tile.graphics.none, so a pasted report from an integrated-only machine does not show that a probed 8119 MiB device was excluded.",
+      "Profile flipped LITE -> TINY between runs differing only by 3.0 vs 2.9 tok/s. Threshold crossing, not a ratchet: classifyProfile recomputes from (ramGb, gpuUseful, tps) each run and VERY_LOW_TOKENS_PER_SECOND is exactly 3 (performance-rules.ts:19, benchmark.ts:137-145)."
+    ],
+    "cross_check": "The app stored gpuProbe reads 8119/7457 MiB for Intel(R) UHD Graphics 620 — byte-identical to llama-server --list-devices in the preflight."
+  }
+}
