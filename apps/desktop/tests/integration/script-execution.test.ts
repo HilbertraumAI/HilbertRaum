@@ -122,12 +122,20 @@ const LEGS: Leg[] = [
     flag: (n) => `-${n}`,
     run: (script, args) => {
       // GitHub's windows runner exports a PSModulePath meant for PowerShell 7; inherited by
-      // Windows PowerShell 5.1 it hides 5.1's own module directory, so `Get-FileHash`
-      // (Microsoft.PowerShell.Utility) fails to autoload and every hashing script dies with
-      // CommandNotFoundException (#310's verify-models cases were the first to hash on CI).
-      // Dropping the variable lets 5.1 rebuild its default path, as on any user's machine.
-      const env = { ...process.env }
-      delete env.PSModulePath
+      // Windows PowerShell 5.1 it hides 5.1's own module directory, so `Get-FileHash` (a script
+      // function of 5.1's Microsoft.PowerShell.Utility) fails to autoload and every hashing
+      // script dies with CommandNotFoundException (#310's verify-models cases were the first to
+      // hash on CI). Replace it — case-insensitively, Windows env names are — with 5.1's own
+      // default module path, which is what any user's machine gives the script.
+      const env: NodeJS.ProcessEnv = {}
+      for (const [k, v] of Object.entries(process.env)) if (!/^psmodulepath$/i.test(k)) env[k] = v
+      const sysRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
+      env.PSModulePath = [
+        process.env.ProgramFiles ? join(process.env.ProgramFiles, 'WindowsPowerShell', 'Modules') : null,
+        join(sysRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')
+      ]
+        .filter((p): p is string => p !== null)
+        .join(';')
       return spawnSync(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(SCRIPTS, script), ...args],
