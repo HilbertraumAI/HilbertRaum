@@ -1,0 +1,55 @@
+# U-A2 — the tail of the Diagnostics log export on computer A (the two A sessions of workspace U at 22:35 and 22:36 local; everything before 20:25Z is the U-B1 log; UTC timestamps).
+
+2026-09-07T20:25:00.417Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T20:25:01.507Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T20:25:01.507Z [INFO] quit: ZIM transients cleaned
+2026-09-07T20:25:01.507Z [INFO] quit: locking workspace
+2026-09-07T20:35:16.703Z [INFO] Workspace resolved {"root":"H:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-07T20:35:16.712Z [INFO] Workspace state {"state":"locked","mode":"encrypted","plaintextAllowed":false,"encryptionRequired":true}
+2026-09-07T20:35:16.712Z [INFO] Model manifests directory {"manifestsDir":"H:\model-manifests"}
+2026-09-07T20:35:16.745Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-07T20:35:16.745Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-07T20:35:16.746Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-07T20:35:16.746Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-07T20:35:16.747Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-07T20:35:16.749Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-07T20:35:25.122Z [INFO] Workspace unlocked
+2026-09-07T20:35:25.128Z [INFO] Drive is back on a known computer: restored its benchmark result {"profile":"PRO","recommendedModelId":"qwen3.6-27b-q5"}
+2026-09-07T20:35:25.128Z [INFO] Auto-starting the active model runtime in the background {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:35:25.142Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-07T20:35:25.144Z [INFO] Model prefetch started {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:35:25.146Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T20:35:25.146Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-07T20:35:45.181Z [WARN] Model prefetch failed — the load proceeds unassisted {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:35:45.354Z [WARN] Model could not be loaded on this computer — the GPU is not the suspect {"modelId":"qwen3.5-9b-ud-q4kxl","reason":"llama-server exited before becoming healthy (code 3221225504)"}
+2026-09-07T20:35:45.354Z [INFO] Runtime notice {"message":"qwen3.5-9b-ud-q4kxl konnte auf diesem Computer nicht geladen werden — die Antworten sind simuliert, bis du ein anderes Modell auswählst."}
+2026-09-07T20:35:45.354Z [INFO] Runtime backend selected {"kind":"mock","modelId":"qwen3.5-9b-ud-q4kxl","reason":"all llama-server start attempts failed: llama-server exited before becoming healthy (code 3221225504)"}
+2026-09-07T20:35:59.296Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T20:35:59.296Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T20:35:59.296Z [INFO] quit: ZIM transients cleaned
+2026-09-07T20:35:59.296Z [INFO] quit: locking workspace
+2026-09-07T20:36:33.018Z [INFO] Workspace resolved {"root":"H:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-07T20:36:33.020Z [INFO] Workspace state {"state":"locked","mode":"encrypted","plaintextAllowed":false,"encryptionRequired":true}
+2026-09-07T20:36:33.020Z [INFO] Model manifests directory {"manifestsDir":"H:\model-manifests"}
+2026-09-07T20:36:33.041Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-07T20:36:33.041Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-07T20:36:33.041Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-07T20:36:33.042Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-07T20:36:33.042Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-07T20:36:33.044Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-07T20:36:37.587Z [INFO] Workspace unlocked
+2026-09-07T20:36:37.592Z [INFO] Drive is back on a known computer: restored its benchmark result {"profile":"PRO","recommendedModelId":"qwen3.6-27b-q5"}
+2026-09-07T20:36:37.593Z [INFO] Auto-starting the active model runtime in the background {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:36:37.606Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-07T20:36:37.608Z [INFO] Model prefetch started {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:36:37.610Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T20:36:37.610Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-07T20:36:52.061Z [INFO] Model prefetch done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:36:56.628Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: cpu)"}
+2026-09-07T20:37:00.309Z [INFO] Model warm-up generation done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:37:59.128Z [INFO] Benchmark complete {"profile":"BALANCED","recommendedModelId":"qwen3.6-27b-q4","ramGb":63.7}
+
+# Reading:
+# - RESTORE at 20:35:25Z: "Drive is back on a known computer: restored its benchmark result" (PRO / 27B = the 0.1.57 result) — the M4 backfill + restore. The auto-start of the 9B (active in U since the i7 session) then failed at 20:35:45Z: the prefetch read failed and llama-server exited with 0xC0000020 (STATUS_INVALID_FILE_FOR_SECTION — the weight file could not be mapped). Windows' System log at 22:35:41 local shows a UASPStor 129 device reset on the USB disk with 19 retried I/Os, and at 22:35:45 an exFAT event 50 "Datenverlust beim Schreiben" for H:workspacehilbertraum.sqlite-wal: a USB glitch on the drive, not the app (see the protocol). The owner quit (20:35:59Z).
+# - The SECOND unlock (20:36:37Z) logged the restore AGAIN, which means the first session's restore write did not survive — consistent with the lost WAL write. The second session's writes did (the report's 22:37:59 run is the persisted state).
+# - "backend: cpu" at 20:36:56Z is the session-probe race again (auto-start at unlock); this time the 9B genuinely ran slowly (2.7 tok/s) and the manual check downgraded A's profile to BALANCED with its own warnings — A's real (degraded) sample, persisted to A's headline and entry only.

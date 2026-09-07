@@ -1,0 +1,20 @@
+# probe-race.mjs on computer A (i9-14900K, RTX 3080 Ti, drive H:, app closed, card idle at 2.5 GB used), 2026-09-07 ~19:20.
+# The drive's llama-server (b9849, Vulkan) loads the 9B on the card while the app's device probe
+# (`llama-server --list-devices`, the same binary) is fired repeatedly and timed. The app's probe
+# timeout is 10 s (DEFAULT_PROBE_TIMEOUT_MS) and a timed-out probe resolves to [] and is cached for the session.
+
+[1.1s] probe idle-before: 1070 ms, status=0, err=null, devices=2
+[2.2s] probe t+0.3s (load starting): 749 ms, status=0, err=null, devices=2
+[2.5s] probe next (still loading?): 295 ms, status=0, err=null, devices=2
+[2.7s] probe next: 278 ms, status=0, err=null, devices=2
+[10.4s] probe next: 7678 ms, status=0, err=null, devices=2
+[31.8s] probe t+~20s (ready=false): 1398 ms, status=0, err=null, devices=2
+[32.4s] server exit code=null sig=SIGKILL
+[34.7s] probe after kill: 1359 ms, status=0, err=null, devices=2
+
+# Reading: the probe that overlapped the server's own Vulkan init / weight upload took 7.7 s (idle: ~1 s).
+# In the app the probe is fired at unlock in the same tick as the auto-start of the active model
+# (prefetch + server spawn), so on a moved drive with an active model it can exceed the 10 s bound;
+# the empty result is then the session's answer for the graphics tile, the memory basis of the
+# recommendation and the "backend" label. Earlier drive-relative path experiment (probe-shape.mjs,
+# run under Node 24 and under Electron 43's node): the path shape is not a factor.

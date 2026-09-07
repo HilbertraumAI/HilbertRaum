@@ -1,0 +1,22 @@
+# U-A1 — pasted by the machine owner 2026-09-07 from HilbertRaum 0.1.57 (portable exe launched from the drive via Start HilbertRaum.cmd) on computer A, Settings → Diagnostics, right after creating the encrypted workspace U and letting the first-run benchmark finish. No model selected, no model started (so no read-speed sample and no decode figure). This build has no benchmarkHistory; the result below is the workspace's only lastBenchmark.
+
+App & Laufzeit
+App-Version: HilbertRaum 0.1.57
+Ausgewähltes Modell: keins ausgewählt
+Hardware-Profil: PRO
+Laufzeit: Gestoppt
+Beschleunigung: NVIDIA GeForce RTX 3080 Ti (GPU verfügbar)
+Lokale API: Aus
+Laufzeit-Build: llama.cpp b9849 (vulkan)
+
+Hardware-Benchmark
+Zugewiesenes Profil: PRO
+Empfohlenes Modell: qwen3.6-27b-q5
+RAM: 63,7 GB
+CPU: Intel(R) Core(TM) i9-14900K (32 Kerne)
+OS / Architektur: win32 (x64)
+GPU: NVIDIA GeForce RTX 3080 Ti
+Gemessene Lesegeschwindigkeit: noch nicht gemessen — der Start eines Modells misst sie
+Laufwerk schreiben: 281,4 MB/s
+Token / Sek.: nicht gemessen (starte zuerst ein Modell)
+Letzter Lauf: 7.9.2026, 18:11:41

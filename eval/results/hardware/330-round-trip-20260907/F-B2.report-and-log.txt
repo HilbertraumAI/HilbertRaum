@@ -1,0 +1,38 @@
+# F-B2 — the machine owner's results file from computer B (drive E: there), 2026-09-07 22:25 local: Performance screen → Copy report after unlocking workspace F back on the i7, then the log export (only the B session's lines are kept here; the earlier lines repeat F-A1/F-B1/F-A2/F-A3). Owner's confirmation of the on-screen "Andere Computer" row: it showed the i9 with the F-A3 figures (99.7 tok/s, 19:11:29), no longer the F-A1 ones ("shows what you said"). User path redacted.
+
+Dieser Computer
+Geschwindigkeit: 22 Token / Sek. (Gemessen mit Qwen3.5 9B (UD-Q4_K_XL) am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 31,9 GB RAM
+CPU: Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz (12 Kerne)
+Grafikspeicher: 8,1 GB VRAM (NVIDIA GeForce GTX 1070 Ti)
+Laufwerk: 505 MB/s lesen
+Zugewiesenes Profil: BALANCED
+Empfohlen für den nächsten Start: Qwen3.5 4B (UD-Q4_K_XL) (Grafikspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.6 27B Q5_K_M
+Kontextgröße: 4.096 Token
+Letzter Lauf: 7.9.2026, 18:28:02
+
+2026-09-07T20:25:50.701Z [INFO] Workspace resolved {"root":"E:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-07T20:25:50.709Z [INFO] Workspace state {"state":"locked","mode":"encrypted","plaintextAllowed":false,"encryptionRequired":true}
+2026-09-07T20:25:50.709Z [INFO] Model manifests directory {"manifestsDir":"E:\\model-manifests"}
+2026-09-07T20:25:50.763Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-07T20:25:50.764Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-07T20:25:50.764Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-07T20:25:50.764Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-07T20:25:50.765Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-07T20:25:50.769Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-07T20:26:01.236Z [INFO] Workspace unlocked
+2026-09-07T20:26:01.243Z [INFO] Drive is back on a known computer: restored its benchmark result {"profile":"BALANCED","recommendedModelId":"qwen3.6-27b-q5"}
+2026-09-07T20:26:01.247Z [INFO] Auto-starting the active model runtime in the background {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:26:01.270Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-07T20:26:01.273Z [INFO] Model prefetch started {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:26:01.276Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T20:26:01.276Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-07T20:26:03.003Z [INFO] Model prefetch done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:26:13.089Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-07T20:26:18.768Z [INFO] Model warm-up generation done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+
+# Reading:
+# - RESTORE on B: "Drive is back on a known computer: restored its benchmark result" (BALANCED / 27B) at 20:26:01Z, no run; "Last run" still 18:28:02 = the F-B1 run. B's headline is its own (22 tok/s, BALANCED, 4,096-token context).
+# - The i9 row carried A's LATER sample (F-A3) → on A the manual run updated the headline AND the history entry together (L2/M6), and B's entry was untouched by it.
+# - The read figure 42.4 → 505 MB/s is this session's auto-start sample (page-cache-warm prefetch, 1.7 s) folded into the restored headline in place; the launcher was used (detectedFromAppLocation false) and the probe found the card ("backend: gpu", 8.1 GB VRAM) — the prefetch was instantaneous, so nothing raced the probe.

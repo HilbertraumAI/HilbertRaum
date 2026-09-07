@@ -1,0 +1,27 @@
+# F-A3 — the tail of the Diagnostics log export on computer A (the 19:09 session; everything before 16:55Z is in F-A2.log.txt; UTC; user path redacted).
+
+2026-09-07T16:55:44.924Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T16:55:45.845Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T16:55:45.845Z [INFO] quit: ZIM transients cleaned
+2026-09-07T16:55:45.845Z [INFO] quit: locking workspace
+2026-09-07T17:09:36.289Z [INFO] Workspace resolved {"root":"H:","preparedDrive":true,"detectedFromAppLocation":true}
+2026-09-07T17:09:36.314Z [INFO] Workspace state {"state":"locked","mode":"encrypted","plaintextAllowed":false,"encryptionRequired":true}
+2026-09-07T17:09:36.314Z [INFO] Model manifests directory {"manifestsDir":"C:\Users\<user>\AppData\Local\Temp\<portable-extract>\resources\model-manifests"}
+2026-09-07T17:09:36.337Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-07T17:09:36.337Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-07T17:09:36.338Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-07T17:09:36.339Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-07T17:09:36.340Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-07T17:09:36.343Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-07T17:09:42.156Z [INFO] Workspace unlocked
+2026-09-07T17:09:42.161Z [INFO] Auto-starting the active model runtime in the background {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T17:09:42.177Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-07T17:09:42.178Z [INFO] Model prefetch started {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T17:09:42.181Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T17:09:42.181Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-07T17:09:56.835Z [INFO] Model prefetch done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T17:10:06.971Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: cpu)"}
+2026-09-07T17:10:07.241Z [INFO] Model warm-up generation done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T17:11:29.793Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.8-27b-ud-q5km","ramGb":63.7}
+
+# Reading: same-machine unlock (no moved-drive line, correctly: the headline already belonged to A), auto-start of the 9B labelled "backend: cpu" (empty device probe again), then the manual "Erneut prüfen" run at 17:11:29Z = 19:11:29 local — the later sample under test.

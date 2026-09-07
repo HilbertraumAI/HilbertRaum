@@ -1,0 +1,19 @@
+# F-A2 — pasted by the machine owner 2026-09-07 from HilbertRaum 0.1.59 on computer A, Performance screen → Copy report, right after unlocking workspace F back on A (the drive had been on the i7 in between). This launch double-clicked the exe directly (log: detectedFromAppLocation true, manifests read from the exe's bundled copy), not the launcher .cmd.
+
+Dieser Computer
+Geschwindigkeit: 98,4 Token / Sek. (Gemessen mit Qwen3.5 9B (UD-Q4_K_XL) am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 63,7 GB RAM
+CPU: Intel(R) Core(TM) i9-14900K (32 Kerne)
+Grafikspeicher: 11,8 GB VRAM (NVIDIA GeForce RTX 3080 Ti)
+Laufwerk: 346,1 MB/s lesen
+Zugewiesenes Profil: PRO
+Empfohlen für den nächsten Start: Qwen3.8 27B UD-Q5_K_M (Arbeitsspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.5 9B (UD-Q4_K_XL)
+Kontextgröße: 8.192 Token
+Letzter Lauf: 7.9.2026, 18:15:01
+
+# Reading:
+# - RESTORE: "Last run" is still 18:15:01 (A's F-A1 run) and the log line at 16:52:24Z is "Drive is back on a known computer: restored its benchmark result"; no "Benchmark complete" followed. A's speed (98.4 tok/s), profile (PRO) and check-time pick (9B) are A's own, none of the i7's (22 tok/s, BALANCED, 42 MB/s).
+# - The read figure changed 119.9 → 346.1 MB/s: the auto-start's prefetch of the 9B (16:52:24–16:52:38Z) produced a newer same-machine sample, folded into the restored headline by the observer with "Last run" untouched (L2 again).
+# - "Empfohlen für den nächsten Start: Qwen3.8 27B UD-Q5_K_M (Arbeitsspeicher)": a RAM-basis live pick from the bundled manifest set (the launcher was not used, so the drive's manifests were not the catalogue), while the 9B came up "backend: cpu" on the 3080 Ti — see the protocol's findings; not part of the identity/persistence checks.
+# - The owner did not paste the "Andere Computer" section for this step; the i7 row's persistence is checked at F-A3/F-B2.

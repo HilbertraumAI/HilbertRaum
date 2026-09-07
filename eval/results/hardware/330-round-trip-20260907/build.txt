@@ -1,0 +1,11 @@
+# Build under test (#330)
+
+- artifact: HilbertRaum-0.1.59-portable.exe, 110,756,547 bytes, packaged 2026-09-07 18:04 on A (ps-work)
+- source: master 28692184 (merge of PR #377, 2026-09-07), branch hw/330-two-computer-round-trip-20260907
+- command: npm run package:win (electron-vite build + electron-builder --win portable; electron 43.4.0)
+- sha256: 259e9d9a32dc81cfcb94211b05ec57ed087301386ac7bacd724fca13a4e42823
+
+# Staging build (upgraded variant only)
+
+- artifact: HilbertRaum-0.1.57-portable.exe, 110,655,957 bytes, built 2026-08-18 (apps/desktop/release, v0.1.57 tag bf26c07c)
+- sha256 prefix: b589ed027af21534

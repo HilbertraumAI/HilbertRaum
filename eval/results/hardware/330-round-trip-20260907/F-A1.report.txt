@@ -1,0 +1,29 @@
+# F-A1 — pasted by the machine owner 2026-09-07 from HilbertRaum 0.1.59 (build 259e9d9a…, portable exe launched from the drive via Start HilbertRaum.cmd) on computer A, Performance screen → Copy report, after creating the fresh encrypted workspace F, letting the first-run check finish, then starting Qwen3.5 9B from the Performance screen ("Start … and measure"), which ran the check a second time with the speed leg. No "Other computers" section: the drive has been on one computer so far.
+
+Dieser Computer
+Geschwindigkeit: 98,4 Token / Sek. (Gemessen mit Qwen3.5 9B (UD-Q4_K_XL) am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 63,7 GB RAM
+CPU: Intel(R) Core(TM) i9-14900K (32 Kerne)
+Grafikspeicher: 11,8 GB VRAM (NVIDIA GeForce RTX 3080 Ti)
+Laufwerk: 119,9 MB/s lesen
+Zugewiesenes Profil: PRO
+Empfohlen für den nächsten Start: Qwen3.5 9B (UD-Q4_K_XL) (Grafikspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.5 9B (UD-Q4_K_XL)
+Kontextgröße: 8.192 Token
+Letzter Lauf: 7.9.2026, 18:15:01
+
+# Same moment, Settings → Diagnostics, hardware benchmark card:
+
+Hardware-Benchmark
+Zugewiesenes Profil: PRO
+Empfohlenes Modell: qwen3.5-9b-ud-q4kxl
+RAM: 63,7 GB
+CPU: Intel(R) Core(TM) i9-14900K (32 Kerne)
+OS / Architektur: win32 (x64)
+GPU: NVIDIA GeForce RTX 3080 Ti
+Gemessene Lesegeschwindigkeit: 119,9 MB/s (aus einer Dateiprüfung am 7.9.2026, 1,3 GB gelesen)
+Laufwerk schreiben: 124 MB/s
+Decodier-Geschwindigkeit (Token / Sek.): 98,4 (über 64 Token; gemessen mit dem geladenen Modell qwen3.5-9b-ud-q4kxl)
+Letzter Lauf: 7.9.2026, 18:15:01
+
+# Reading: the read figure (119.9 MB/s over 1.3 GB) is the mmproj checksum sample that finished at 16:15:12Z, AFTER the 18:15:01 run — the observer (`persistEffectiveRead`, L2) updated the headline in place without changing "Last run".
