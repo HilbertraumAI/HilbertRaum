@@ -1,0 +1,13 @@
+# Pasted 2026-09-07 from the current source build (dev 0.1.59, HILBERTRAUM_DRIVE_ROOT=K:), Leistung screen > Bericht kopieren, after 'Dieses Modell verwenden' on Gemma 4 12B (app log: Use model 09:59:33, started via rung 1 (default args, GPU auto-offload) (backend: gpu) at 09:59:57, check re-run 10:00:08).
+
+Dieser Computer
+Geschwindigkeit: 36,2 Token / Sek. (Gemessen mit Gemma 4 12B Instruct QAT Q4 am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 63,7 GB RAM
+CPU: Intel(R) Core(TM) i9-14900K (32 Kerne)
+Grafikspeicher: 11,8 GB VRAM (NVIDIA GeForce RTX 3080 Ti)
+Laufwerk: 292,7 MB/s lesen
+Zugewiesenes Profil: PRO
+Empfohlen für den nächsten Start: Qwen3.5 9B (UD-Q4_K_XL) (Grafikspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.5 9B (UD-Q4_K_XL)
+Kontextgröße: 8.192 Token
+Letzter Lauf: 7.9.2026, 10:00:08

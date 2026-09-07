@@ -1,0 +1,1561 @@
+{
+  "hw_slug": "i9-14900k-rtx-3080-ti-12gb-64gb",
+  "leg": "3",
+  "variant": "desktop-use",
+  "model_id": "gemma4-12b-it-qat-q4",
+  "model_file": "gemma4-12b-it-qat-q4.gguf",
+  "model_bytes": 6975879296,
+  "runtime": "9849 (799fcc04a)",
+  "argv": "--host 127.0.0.1 --port 61443 --model <drive>\\models\\chat\\gemma4-12b-it-qat-q4.gguf --ctx-size 8192 --threads 16 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4",
+  "extra_args": [],
+  "ctx": 8192,
+  "threads": 16,
+  "physical_batch": 2048,
+  "before": {
+    "list_devices": "Available devices:\r\n  Vulkan0: NVIDIA GeForce RTX 3080 Ti (12084 MiB, 11316 MiB free)\r\n  Vulkan1: Intel(R) UHD Graphics 770 (32606 MiB, 48060 MiB free)",
+    "nvidia_smi": {
+      "used": 5453,
+      "total": 12288,
+      "free": 6632
+    },
+    "desktop": "ordinary use: browser with several tabs + a playing video, VS Code open (nvidia-smi ~5.5 GB used, +2.7 GB over the idle baseline)",
+    "at": "2026-09-07T08:07:07.587Z"
+  },
+  "load_ms": 22619,
+  "after_load": {
+    "nvidia_smi": {
+      "used": 9663,
+      "total": 12288,
+      "free": 2422
+    },
+    "at": "2026-09-07T08:07:31.780Z"
+  },
+  "prompt_tokens": 2041,
+  "request_ms": 224495,
+  "tokens_predicted": 512,
+  "timings": {
+    "cache_n": 0,
+    "prompt_n": 2042,
+    "prompt_ms": 20034.836,
+    "prompt_per_token_ms": 9.811379040156709,
+    "prompt_per_second": 101.92247143924712,
+    "predicted_n": 512,
+    "predicted_ms": 204377.927,
+    "predicted_per_token_ms": 399.175638671875,
+    "predicted_per_second": 2.5051628985355157
+  },
+  "peak_nvidia_smi": {
+    "t": 1788768573981,
+    "used": 10682,
+    "total": 12288,
+    "free": 1403
+  },
+  "samples": [
+    {
+      "t": 1788768451839,
+      "used": 9663,
+      "total": 12288,
+      "free": 2422
+    },
+    {
+      "t": 1788768452842,
+      "used": 9781,
+      "total": 12288,
+      "free": 2304
+    },
+    {
+      "t": 1788768453843,
+      "used": 9787,
+      "total": 12288,
+      "free": 2298
+    },
+    {
+      "t": 1788768454846,
+      "used": 9790,
+      "total": 12288,
+      "free": 2295
+    },
+    {
+      "t": 1788768455858,
+      "used": 9784,
+      "total": 12288,
+      "free": 2301
+    },
+    {
+      "t": 1788768456869,
+      "used": 9787,
+      "total": 12288,
+      "free": 2298
+    },
+    {
+      "t": 1788768457877,
+      "used": 9781,
+      "total": 12288,
+      "free": 2304
+    },
+    {
+      "t": 1788768458891,
+      "used": 9780,
+      "total": 12288,
+      "free": 2305
+    },
+    {
+      "t": 1788768459902,
+      "used": 9767,
+      "total": 12288,
+      "free": 2318
+    },
+    {
+      "t": 1788768460910,
+      "used": 9780,
+      "total": 12288,
+      "free": 2305
+    },
+    {
+      "t": 1788768461922,
+      "used": 9777,
+      "total": 12288,
+      "free": 2308
+    },
+    {
+      "t": 1788768462927,
+      "used": 9780,
+      "total": 12288,
+      "free": 2305
+    },
+    {
+      "t": 1788768463931,
+      "used": 9780,
+      "total": 12288,
+      "free": 2305
+    },
+    {
+      "t": 1788768464943,
+      "used": 9788,
+      "total": 12288,
+      "free": 2297
+    },
+    {
+      "t": 1788768465957,
+      "used": 9786,
+      "total": 12288,
+      "free": 2299
+    },
+    {
+      "t": 1788768466964,
+      "used": 9784,
+      "total": 12288,
+      "free": 2301
+    },
+    {
+      "t": 1788768467976,
+      "used": 9778,
+      "total": 12288,
+      "free": 2307
+    },
+    {
+      "t": 1788768468984,
+      "used": 9778,
+      "total": 12288,
+      "free": 2307
+    },
+    {
+      "t": 1788768469995,
+      "used": 9776,
+      "total": 12288,
+      "free": 2309
+    },
+    {
+      "t": 1788768471008,
+      "used": 9776,
+      "total": 12288,
+      "free": 2309
+    },
+    {
+      "t": 1788768472021,
+      "used": 9779,
+      "total": 12288,
+      "free": 2306
+    },
+    {
+      "t": 1788768473033,
+      "used": 9785,
+      "total": 12288,
+      "free": 2300
+    },
+    {
+      "t": 1788768474044,
+      "used": 9781,
+      "total": 12288,
+      "free": 2304
+    },
+    {
+      "t": 1788768475058,
+      "used": 9780,
+      "total": 12288,
+      "free": 2305
+    },
+    {
+      "t": 1788768476066,
+      "used": 9780,
+      "total": 12288,
+      "free": 2305
+    },
+    {
+      "t": 1788768477080,
+      "used": 9785,
+      "total": 12288,
+      "free": 2300
+    },
+    {
+      "t": 1788768478085,
+      "used": 9781,
+      "total": 12288,
+      "free": 2304
+    },
+    {
+      "t": 1788768479091,
+      "used": 9776,
+      "total": 12288,
+      "free": 2309
+    },
+    {
+      "t": 1788768480106,
+      "used": 9780,
+      "total": 12288,
+      "free": 2305
+    },
+    {
+      "t": 1788768481117,
+      "used": 9781,
+      "total": 12288,
+      "free": 2304
+    },
+    {
+      "t": 1788768482130,
+      "used": 9785,
+      "total": 12288,
+      "free": 2300
+    },
+    {
+      "t": 1788768483144,
+      "used": 9785,
+      "total": 12288,
+      "free": 2300
+    },
+    {
+      "t": 1788768484158,
+      "used": 9781,
+      "total": 12288,
+      "free": 2304
+    },
+    {
+      "t": 1788768485171,
+      "used": 9781,
+      "total": 12288,
+      "free": 2304
+    },
+    {
+      "t": 1788768486177,
+      "used": 9777,
+      "total": 12288,
+      "free": 2308
+    },
+    {
+      "t": 1788768487186,
+      "used": 9771,
+      "total": 12288,
+      "free": 2314
+    },
+    {
+      "t": 1788768488188,
+      "used": 9772,
+      "total": 12288,
+      "free": 2313
+    },
+    {
+      "t": 1788768489197,
+      "used": 9772,
+      "total": 12288,
+      "free": 2313
+    },
+    {
+      "t": 1788768490198,
+      "used": 9772,
+      "total": 12288,
+      "free": 2313
+    },
+    {
+      "t": 1788768491203,
+      "used": 9776,
+      "total": 12288,
+      "free": 2309
+    },
+    {
+      "t": 1788768492219,
+      "used": 9776,
+      "total": 12288,
+      "free": 2309
+    },
+    {
+      "t": 1788768493228,
+      "used": 9775,
+      "total": 12288,
+      "free": 2310
+    },
+    {
+      "t": 1788768494241,
+      "used": 9773,
+      "total": 12288,
+      "free": 2312
+    },
+    {
+      "t": 1788768495249,
+      "used": 9773,
+      "total": 12288,
+      "free": 2312
+    },
+    {
+      "t": 1788768496258,
+      "used": 9776,
+      "total": 12288,
+      "free": 2309
+    },
+    {
+      "t": 1788768497264,
+      "used": 9785,
+      "total": 12288,
+      "free": 2300
+    },
+    {
+      "t": 1788768498275,
+      "used": 9783,
+      "total": 12288,
+      "free": 2302
+    },
+    {
+      "t": 1788768499288,
+      "used": 9783,
+      "total": 12288,
+      "free": 2302
+    },
+    {
+      "t": 1788768500292,
+      "used": 9786,
+      "total": 12288,
+      "free": 2299
+    },
+    {
+      "t": 1788768501300,
+      "used": 9782,
+      "total": 12288,
+      "free": 2303
+    },
+    {
+      "t": 1788768502313,
+      "used": 9782,
+      "total": 12288,
+      "free": 2303
+    },
+    {
+      "t": 1788768503321,
+      "used": 9783,
+      "total": 12288,
+      "free": 2302
+    },
+    {
+      "t": 1788768504331,
+      "used": 9785,
+      "total": 12288,
+      "free": 2300
+    },
+    {
+      "t": 1788768505338,
+      "used": 9767,
+      "total": 12288,
+      "free": 2318
+    },
+    {
+      "t": 1788768506349,
+      "used": 9766,
+      "total": 12288,
+      "free": 2319
+    },
+    {
+      "t": 1788768507359,
+      "used": 9762,
+      "total": 12288,
+      "free": 2323
+    },
+    {
+      "t": 1788768508374,
+      "used": 9762,
+      "total": 12288,
+      "free": 2323
+    },
+    {
+      "t": 1788768509386,
+      "used": 9762,
+      "total": 12288,
+      "free": 2323
+    },
+    {
+      "t": 1788768510400,
+      "used": 9758,
+      "total": 12288,
+      "free": 2327
+    },
+    {
+      "t": 1788768511408,
+      "used": 9758,
+      "total": 12288,
+      "free": 2327
+    },
+    {
+      "t": 1788768512420,
+      "used": 9758,
+      "total": 12288,
+      "free": 2327
+    },
+    {
+      "t": 1788768513428,
+      "used": 9758,
+      "total": 12288,
+      "free": 2327
+    },
+    {
+      "t": 1788768514429,
+      "used": 9758,
+      "total": 12288,
+      "free": 2327
+    },
+    {
+      "t": 1788768515443,
+      "used": 9755,
+      "total": 12288,
+      "free": 2330
+    },
+    {
+      "t": 1788768516454,
+      "used": 9752,
+      "total": 12288,
+      "free": 2333
+    },
+    {
+      "t": 1788768517470,
+      "used": 9755,
+      "total": 12288,
+      "free": 2330
+    },
+    {
+      "t": 1788768518482,
+      "used": 9767,
+      "total": 12288,
+      "free": 2318
+    },
+    {
+      "t": 1788768519495,
+      "used": 9801,
+      "total": 12288,
+      "free": 2284
+    },
+    {
+      "t": 1788768520499,
+      "used": 10002,
+      "total": 12288,
+      "free": 2083
+    },
+    {
+      "t": 1788768521503,
+      "used": 10005,
+      "total": 12288,
+      "free": 2080
+    },
+    {
+      "t": 1788768522511,
+      "used": 9994,
+      "total": 12288,
+      "free": 2091
+    },
+    {
+      "t": 1788768523513,
+      "used": 9987,
+      "total": 12288,
+      "free": 2098
+    },
+    {
+      "t": 1788768524514,
+      "used": 9981,
+      "total": 12288,
+      "free": 2104
+    },
+    {
+      "t": 1788768525518,
+      "used": 9914,
+      "total": 12288,
+      "free": 2171
+    },
+    {
+      "t": 1788768526526,
+      "used": 9835,
+      "total": 12288,
+      "free": 2250
+    },
+    {
+      "t": 1788768527528,
+      "used": 9871,
+      "total": 12288,
+      "free": 2214
+    },
+    {
+      "t": 1788768528539,
+      "used": 9870,
+      "total": 12288,
+      "free": 2215
+    },
+    {
+      "t": 1788768529549,
+      "used": 9870,
+      "total": 12288,
+      "free": 2215
+    },
+    {
+      "t": 1788768530558,
+      "used": 9870,
+      "total": 12288,
+      "free": 2215
+    },
+    {
+      "t": 1788768531565,
+      "used": 9845,
+      "total": 12288,
+      "free": 2240
+    },
+    {
+      "t": 1788768532580,
+      "used": 9852,
+      "total": 12288,
+      "free": 2233
+    },
+    {
+      "t": 1788768533589,
+      "used": 9860,
+      "total": 12288,
+      "free": 2225
+    },
+    {
+      "t": 1788768534596,
+      "used": 9865,
+      "total": 12288,
+      "free": 2220
+    },
+    {
+      "t": 1788768535605,
+      "used": 9866,
+      "total": 12288,
+      "free": 2219
+    },
+    {
+      "t": 1788768536610,
+      "used": 9863,
+      "total": 12288,
+      "free": 2222
+    },
+    {
+      "t": 1788768537619,
+      "used": 9847,
+      "total": 12288,
+      "free": 2238
+    },
+    {
+      "t": 1788768538631,
+      "used": 9844,
+      "total": 12288,
+      "free": 2241
+    },
+    {
+      "t": 1788768539641,
+      "used": 9847,
+      "total": 12288,
+      "free": 2238
+    },
+    {
+      "t": 1788768540652,
+      "used": 9846,
+      "total": 12288,
+      "free": 2239
+    },
+    {
+      "t": 1788768541661,
+      "used": 9831,
+      "total": 12288,
+      "free": 2254
+    },
+    {
+      "t": 1788768542665,
+      "used": 9925,
+      "total": 12288,
+      "free": 2160
+    },
+    {
+      "t": 1788768543674,
+      "used": 9915,
+      "total": 12288,
+      "free": 2170
+    },
+    {
+      "t": 1788768544686,
+      "used": 9913,
+      "total": 12288,
+      "free": 2172
+    },
+    {
+      "t": 1788768545698,
+      "used": 9910,
+      "total": 12288,
+      "free": 2175
+    },
+    {
+      "t": 1788768546709,
+      "used": 9904,
+      "total": 12288,
+      "free": 2181
+    },
+    {
+      "t": 1788768547719,
+      "used": 9884,
+      "total": 12288,
+      "free": 2201
+    },
+    {
+      "t": 1788768548730,
+      "used": 9881,
+      "total": 12288,
+      "free": 2204
+    },
+    {
+      "t": 1788768549740,
+      "used": 9875,
+      "total": 12288,
+      "free": 2210
+    },
+    {
+      "t": 1788768550742,
+      "used": 9879,
+      "total": 12288,
+      "free": 2206
+    },
+    {
+      "t": 1788768551755,
+      "used": 9874,
+      "total": 12288,
+      "free": 2211
+    },
+    {
+      "t": 1788768552765,
+      "used": 9874,
+      "total": 12288,
+      "free": 2211
+    },
+    {
+      "t": 1788768553779,
+      "used": 9872,
+      "total": 12288,
+      "free": 2213
+    },
+    {
+      "t": 1788768554793,
+      "used": 9885,
+      "total": 12288,
+      "free": 2200
+    },
+    {
+      "t": 1788768555803,
+      "used": 9876,
+      "total": 12288,
+      "free": 2209
+    },
+    {
+      "t": 1788768556802,
+      "used": 9846,
+      "total": 12288,
+      "free": 2239
+    },
+    {
+      "t": 1788768557815,
+      "used": 9849,
+      "total": 12288,
+      "free": 2236
+    },
+    {
+      "t": 1788768558815,
+      "used": 9845,
+      "total": 12288,
+      "free": 2240
+    },
+    {
+      "t": 1788768559824,
+      "used": 9845,
+      "total": 12288,
+      "free": 2240
+    },
+    {
+      "t": 1788768560835,
+      "used": 9848,
+      "total": 12288,
+      "free": 2237
+    },
+    {
+      "t": 1788768561849,
+      "used": 9848,
+      "total": 12288,
+      "free": 2237
+    },
+    {
+      "t": 1788768562862,
+      "used": 9853,
+      "total": 12288,
+      "free": 2232
+    },
+    {
+      "t": 1788768563871,
+      "used": 9857,
+      "total": 12288,
+      "free": 2228
+    },
+    {
+      "t": 1788768564884,
+      "used": 9867,
+      "total": 12288,
+      "free": 2218
+    },
+    {
+      "t": 1788768565893,
+      "used": 9866,
+      "total": 12288,
+      "free": 2219
+    },
+    {
+      "t": 1788768566904,
+      "used": 9877,
+      "total": 12288,
+      "free": 2208
+    },
+    {
+      "t": 1788768567914,
+      "used": 9880,
+      "total": 12288,
+      "free": 2205
+    },
+    {
+      "t": 1788768568927,
+      "used": 9872,
+      "total": 12288,
+      "free": 2213
+    },
+    {
+      "t": 1788768569937,
+      "used": 10627,
+      "total": 12288,
+      "free": 1458
+    },
+    {
+      "t": 1788768570951,
+      "used": 10632,
+      "total": 12288,
+      "free": 1453
+    },
+    {
+      "t": 1788768571961,
+      "used": 10615,
+      "total": 12288,
+      "free": 1470
+    },
+    {
+      "t": 1788768572974,
+      "used": 10632,
+      "total": 12288,
+      "free": 1453
+    },
+    {
+      "t": 1788768573981,
+      "used": 10682,
+      "total": 12288,
+      "free": 1403
+    },
+    {
+      "t": 1788768574987,
+      "used": 10341,
+      "total": 12288,
+      "free": 1744
+    },
+    {
+      "t": 1788768575998,
+      "used": 10078,
+      "total": 12288,
+      "free": 2007
+    },
+    {
+      "t": 1788768577004,
+      "used": 10073,
+      "total": 12288,
+      "free": 2012
+    },
+    {
+      "t": 1788768578016,
+      "used": 10066,
+      "total": 12288,
+      "free": 2019
+    },
+    {
+      "t": 1788768579031,
+      "used": 10074,
+      "total": 12288,
+      "free": 2011
+    },
+    {
+      "t": 1788768580040,
+      "used": 10074,
+      "total": 12288,
+      "free": 2011
+    },
+    {
+      "t": 1788768581051,
+      "used": 10071,
+      "total": 12288,
+      "free": 2014
+    },
+    {
+      "t": 1788768582059,
+      "used": 10071,
+      "total": 12288,
+      "free": 2014
+    },
+    {
+      "t": 1788768583068,
+      "used": 10071,
+      "total": 12288,
+      "free": 2014
+    },
+    {
+      "t": 1788768584068,
+      "used": 10087,
+      "total": 12288,
+      "free": 1998
+    },
+    {
+      "t": 1788768585077,
+      "used": 10080,
+      "total": 12288,
+      "free": 2005
+    },
+    {
+      "t": 1788768586083,
+      "used": 10079,
+      "total": 12288,
+      "free": 2006
+    },
+    {
+      "t": 1788768587094,
+      "used": 10070,
+      "total": 12288,
+      "free": 2015
+    },
+    {
+      "t": 1788768588102,
+      "used": 10067,
+      "total": 12288,
+      "free": 2018
+    },
+    {
+      "t": 1788768589118,
+      "used": 10071,
+      "total": 12288,
+      "free": 2014
+    },
+    {
+      "t": 1788768590125,
+      "used": 10073,
+      "total": 12288,
+      "free": 2012
+    },
+    {
+      "t": 1788768591125,
+      "used": 10075,
+      "total": 12288,
+      "free": 2010
+    },
+    {
+      "t": 1788768592133,
+      "used": 10071,
+      "total": 12288,
+      "free": 2014
+    },
+    {
+      "t": 1788768593144,
+      "used": 10070,
+      "total": 12288,
+      "free": 2015
+    },
+    {
+      "t": 1788768594144,
+      "used": 10070,
+      "total": 12288,
+      "free": 2015
+    },
+    {
+      "t": 1788768595150,
+      "used": 10069,
+      "total": 12288,
+      "free": 2016
+    },
+    {
+      "t": 1788768596165,
+      "used": 10067,
+      "total": 12288,
+      "free": 2018
+    },
+    {
+      "t": 1788768597168,
+      "used": 10050,
+      "total": 12288,
+      "free": 2035
+    },
+    {
+      "t": 1788768598175,
+      "used": 10046,
+      "total": 12288,
+      "free": 2039
+    },
+    {
+      "t": 1788768599188,
+      "used": 10039,
+      "total": 12288,
+      "free": 2046
+    },
+    {
+      "t": 1788768600193,
+      "used": 10021,
+      "total": 12288,
+      "free": 2064
+    },
+    {
+      "t": 1788768601201,
+      "used": 10026,
+      "total": 12288,
+      "free": 2059
+    },
+    {
+      "t": 1788768602204,
+      "used": 10047,
+      "total": 12288,
+      "free": 2038
+    },
+    {
+      "t": 1788768603218,
+      "used": 10047,
+      "total": 12288,
+      "free": 2038
+    },
+    {
+      "t": 1788768604228,
+      "used": 10046,
+      "total": 12288,
+      "free": 2039
+    },
+    {
+      "t": 1788768605240,
+      "used": 10047,
+      "total": 12288,
+      "free": 2038
+    },
+    {
+      "t": 1788768606254,
+      "used": 10046,
+      "total": 12288,
+      "free": 2039
+    },
+    {
+      "t": 1788768607261,
+      "used": 10045,
+      "total": 12288,
+      "free": 2040
+    },
+    {
+      "t": 1788768608267,
+      "used": 10044,
+      "total": 12288,
+      "free": 2041
+    },
+    {
+      "t": 1788768609281,
+      "used": 10044,
+      "total": 12288,
+      "free": 2041
+    },
+    {
+      "t": 1788768610296,
+      "used": 10040,
+      "total": 12288,
+      "free": 2045
+    },
+    {
+      "t": 1788768611306,
+      "used": 10037,
+      "total": 12288,
+      "free": 2048
+    },
+    {
+      "t": 1788768612318,
+      "used": 10041,
+      "total": 12288,
+      "free": 2044
+    },
+    {
+      "t": 1788768613329,
+      "used": 10041,
+      "total": 12288,
+      "free": 2044
+    },
+    {
+      "t": 1788768614336,
+      "used": 10041,
+      "total": 12288,
+      "free": 2044
+    },
+    {
+      "t": 1788768615351,
+      "used": 10044,
+      "total": 12288,
+      "free": 2041
+    },
+    {
+      "t": 1788768616362,
+      "used": 10048,
+      "total": 12288,
+      "free": 2037
+    },
+    {
+      "t": 1788768617368,
+      "used": 10087,
+      "total": 12288,
+      "free": 1998
+    },
+    {
+      "t": 1788768618376,
+      "used": 10078,
+      "total": 12288,
+      "free": 2007
+    },
+    {
+      "t": 1788768619383,
+      "used": 10076,
+      "total": 12288,
+      "free": 2009
+    },
+    {
+      "t": 1788768620391,
+      "used": 10054,
+      "total": 12288,
+      "free": 2031
+    },
+    {
+      "t": 1788768621393,
+      "used": 10061,
+      "total": 12288,
+      "free": 2024
+    },
+    {
+      "t": 1788768622403,
+      "used": 10056,
+      "total": 12288,
+      "free": 2029
+    },
+    {
+      "t": 1788768623415,
+      "used": 10055,
+      "total": 12288,
+      "free": 2030
+    },
+    {
+      "t": 1788768624427,
+      "used": 10054,
+      "total": 12288,
+      "free": 2031
+    },
+    {
+      "t": 1788768625441,
+      "used": 10018,
+      "total": 12288,
+      "free": 2067
+    },
+    {
+      "t": 1788768626448,
+      "used": 10018,
+      "total": 12288,
+      "free": 2067
+    },
+    {
+      "t": 1788768627459,
+      "used": 10018,
+      "total": 12288,
+      "free": 2067
+    },
+    {
+      "t": 1788768628469,
+      "used": 10017,
+      "total": 12288,
+      "free": 2068
+    },
+    {
+      "t": 1788768629477,
+      "used": 10035,
+      "total": 12288,
+      "free": 2050
+    },
+    {
+      "t": 1788768630485,
+      "used": 10041,
+      "total": 12288,
+      "free": 2044
+    },
+    {
+      "t": 1788768631496,
+      "used": 10033,
+      "total": 12288,
+      "free": 2052
+    },
+    {
+      "t": 1788768632504,
+      "used": 10031,
+      "total": 12288,
+      "free": 2054
+    },
+    {
+      "t": 1788768633516,
+      "used": 10031,
+      "total": 12288,
+      "free": 2054
+    },
+    {
+      "t": 1788768634522,
+      "used": 10053,
+      "total": 12288,
+      "free": 2032
+    },
+    {
+      "t": 1788768635535,
+      "used": 10051,
+      "total": 12288,
+      "free": 2034
+    },
+    {
+      "t": 1788768636545,
+      "used": 10067,
+      "total": 12288,
+      "free": 2018
+    },
+    {
+      "t": 1788768637550,
+      "used": 10071,
+      "total": 12288,
+      "free": 2014
+    },
+    {
+      "t": 1788768638550,
+      "used": 10065,
+      "total": 12288,
+      "free": 2020
+    },
+    {
+      "t": 1788768639557,
+      "used": 10075,
+      "total": 12288,
+      "free": 2010
+    },
+    {
+      "t": 1788768640573,
+      "used": 10081,
+      "total": 12288,
+      "free": 2004
+    },
+    {
+      "t": 1788768641587,
+      "used": 10090,
+      "total": 12288,
+      "free": 1995
+    },
+    {
+      "t": 1788768642594,
+      "used": 10083,
+      "total": 12288,
+      "free": 2002
+    },
+    {
+      "t": 1788768643602,
+      "used": 10076,
+      "total": 12288,
+      "free": 2009
+    },
+    {
+      "t": 1788768644603,
+      "used": 10076,
+      "total": 12288,
+      "free": 2009
+    },
+    {
+      "t": 1788768645609,
+      "used": 10038,
+      "total": 12288,
+      "free": 2047
+    },
+    {
+      "t": 1788768646617,
+      "used": 10039,
+      "total": 12288,
+      "free": 2046
+    },
+    {
+      "t": 1788768647621,
+      "used": 10057,
+      "total": 12288,
+      "free": 2028
+    },
+    {
+      "t": 1788768648631,
+      "used": 10060,
+      "total": 12288,
+      "free": 2025
+    },
+    {
+      "t": 1788768649638,
+      "used": 10092,
+      "total": 12288,
+      "free": 1993
+    },
+    {
+      "t": 1788768650651,
+      "used": 10091,
+      "total": 12288,
+      "free": 1994
+    },
+    {
+      "t": 1788768651664,
+      "used": 10086,
+      "total": 12288,
+      "free": 1999
+    },
+    {
+      "t": 1788768652680,
+      "used": 10083,
+      "total": 12288,
+      "free": 2002
+    },
+    {
+      "t": 1788768653690,
+      "used": 10078,
+      "total": 12288,
+      "free": 2007
+    },
+    {
+      "t": 1788768654695,
+      "used": 10083,
+      "total": 12288,
+      "free": 2002
+    },
+    {
+      "t": 1788768655702,
+      "used": 10076,
+      "total": 12288,
+      "free": 2009
+    },
+    {
+      "t": 1788768656709,
+      "used": 10078,
+      "total": 12288,
+      "free": 2007
+    },
+    {
+      "t": 1788768657715,
+      "used": 10070,
+      "total": 12288,
+      "free": 2015
+    },
+    {
+      "t": 1788768658723,
+      "used": 10065,
+      "total": 12288,
+      "free": 2020
+    },
+    {
+      "t": 1788768659731,
+      "used": 10057,
+      "total": 12288,
+      "free": 2028
+    },
+    {
+      "t": 1788768660739,
+      "used": 10050,
+      "total": 12288,
+      "free": 2035
+    },
+    {
+      "t": 1788768661743,
+      "used": 10055,
+      "total": 12288,
+      "free": 2030
+    },
+    {
+      "t": 1788768662748,
+      "used": 10052,
+      "total": 12288,
+      "free": 2033
+    },
+    {
+      "t": 1788768663752,
+      "used": 10053,
+      "total": 12288,
+      "free": 2032
+    },
+    {
+      "t": 1788768664755,
+      "used": 10061,
+      "total": 12288,
+      "free": 2024
+    },
+    {
+      "t": 1788768665756,
+      "used": 10061,
+      "total": 12288,
+      "free": 2024
+    },
+    {
+      "t": 1788768666772,
+      "used": 10061,
+      "total": 12288,
+      "free": 2024
+    },
+    {
+      "t": 1788768667773,
+      "used": 10048,
+      "total": 12288,
+      "free": 2037
+    },
+    {
+      "t": 1788768668774,
+      "used": 10064,
+      "total": 12288,
+      "free": 2021
+    },
+    {
+      "t": 1788768669779,
+      "used": 10058,
+      "total": 12288,
+      "free": 2027
+    },
+    {
+      "t": 1788768670785,
+      "used": 10054,
+      "total": 12288,
+      "free": 2031
+    },
+    {
+      "t": 1788768671799,
+      "used": 10058,
+      "total": 12288,
+      "free": 2027
+    },
+    {
+      "t": 1788768672808,
+      "used": 10061,
+      "total": 12288,
+      "free": 2024
+    },
+    {
+      "t": 1788768673821,
+      "used": 10061,
+      "total": 12288,
+      "free": 2024
+    },
+    {
+      "t": 1788768674830,
+      "used": 10071,
+      "total": 12288,
+      "free": 2014
+    },
+    {
+      "t": 1788768675838,
+      "used": 10075,
+      "total": 12288,
+      "free": 2010
+    },
+    {
+      "t": 1788768676347,
+      "used": 10075,
+      "total": 12288,
+      "free": 2010
+    }
+  ],
+  "after_stop": {
+    "nvidia_smi": {
+      "used": 5730,
+      "total": 12288,
+      "free": 6355
+    },
+    "list_devices": "Available devices:\r\n  Vulkan0: NVIDIA GeForce RTX 3080 Ti (12084 MiB, 11316 MiB free)\r\n  Vulkan1: Intel(R) UHD Graphics 770 (32606 MiB, 48060 MiB free)",
+    "exit": {
+      "code": null,
+      "sig": "SIGTERM"
+    }
+  },
+  "prompt_text_in_log": false,
+  "fit": {
+    "offloaded": [
+      "0.16.439.387 I load_tensors: offloaded 49/49 layers to GPU"
+    ],
+    "buffers": [
+      "0.16.439.389 I load_tensors:   CPU_Mapped model buffer size =   787.50 MiB",
+      "0.16.439.391 I load_tensors:      Vulkan0 model buffer size =  6637.63 MiB",
+      "0.19.914.966 I llama_context: Vulkan_Host  output buffer size =     4.00 MiB",
+      "0.19.915.550 I llama_kv_cache:    Vulkan0 KV buffer size =   128.00 MiB",
+      "0.19.992.711 I llama_kv_cache:    Vulkan0 KV buffer size =  1920.00 MiB",
+      "0.21.067.052 I sched_reserve:    Vulkan0 compute buffer size =   541.07 MiB",
+      "0.21.067.059 I sched_reserve: Vulkan_Host compute buffer size =   116.08 MiB"
+    ],
+    "kv": [
+      "0.00.152.332 I srv  llama_server: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true",
+      "0.00.785.009 I llama_model_loader: - kv  21:                  gemma4.rope.freq_base_swa f32              = 10000.000000",
+      "0.00.785.017 I llama_model_loader: - kv  30:            gemma4.attention.key_length_swa u32              = 256",
+      "0.00.785.018 I llama_model_loader: - kv  31:          gemma4.attention.value_length_swa u32              = 256",
+      "0.00.785.018 I llama_model_loader: - kv  33:            gemma4.rope.dimension_count_swa u32              = 256",
+      "0.01.153.535 I print_info: n_ctx_train           = 262144",
+      "0.01.153.555 I print_info: n_swa                 = 1024",
+      "0.01.153.555 I print_info: is_swa_any            = 1",
+      "0.01.153.593 I print_info: freq_base_swa         = 10000.0",
+      "0.01.153.594 I print_info: freq_scale_swa        = 1",
+      "0.01.153.594 I print_info: n_embd_head_k_swa     = 256",
+      "0.01.153.594 I print_info: n_embd_head_v_swa     = 256",
+      "0.01.153.594 I print_info: n_rot_swa             = 256",
+      "0.01.153.595 I print_info: n_ctx_orig_yarn       = 262144",
+      "0.19.914.505 I llama_context: constructing llama_context",
+      "0.19.914.512 I llama_context: n_seq_max     = 4",
+      "0.19.914.512 I llama_context: n_ctx         = 8192",
+      "0.19.914.513 I llama_context: n_ctx_seq     = 8192",
+      "0.19.914.513 I llama_context: n_batch       = 2048",
+      "0.19.914.513 I llama_context: n_ubatch      = 2048",
+      "0.19.914.513 I llama_context: causal_attn   = 1",
+      "0.19.914.514 I llama_context: flash_attn    = auto",
+      "0.19.914.514 I llama_context: kv_unified    = true",
+      "0.19.914.516 I llama_context: freq_base     = 1000000.0",
+      "0.19.914.517 I llama_context: freq_scale    = 1",
+      "0.19.914.517 I llama_context: n_rs_seq      = 0",
+      "0.19.914.518 I llama_context: n_outputs_max = 4",
+      "0.19.914.518 I llama_context: n_ctx_seq (8192) < n_ctx_train (262144) -- the full capacity of the model will not be utilized",
+      "0.19.914.966 I llama_context: Vulkan_Host  output buffer size =     4.00 MiB",
+      "0.19.914.972 I llama_kv_cache_iswa: creating non-SWA KV cache, size = 8192 cells",
+      "0.19.990.788 I llama_kv_cache_iswa: creating     SWA KV cache, size = 6144 cells",
+      "0.22.496.223 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 8192, kv_unified = 'true'",
+      "0.22.496.721 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 8192",
+      "0.22.497.155 I slot   load_model: id  1 | task -1 | new slot, n_ctx = 8192",
+      "0.22.497.158 I slot   load_model: id  2 | task -1 | new slot, n_ctx = 8192",
+      "0.22.497.158 I slot   load_model: id  3 | task -1 | new slot, n_ctx = 8192",
+      "0.24.302.077 I slot   operator(): id  3 | task 0 | new prompt, n_ctx_slot = 8192, n_keep = 0, task.n_tokens = 2042",
+      "0.24.302.411 I slot   operator(): id  3 | task 0 | cached n_tokens = 0, memory_seq_rm [0, end)",
+      "0.24.698.019 I slot   operator(): id  3 | task 0 | cached n_tokens = 2038, memory_seq_rm [2038, end)"
+    ],
+    "fit": [
+      "# leg3-desktop-use — argv: <drive>\\runtime\\llama.cpp\\win\\llama-server.exe --host 127.0.0.1 --port 61443 --model <drive>\\models\\chat\\gemma4-12b-it-qat-q4.gguf --ctx-size 8192 --threads 16 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4",
+      "0.00.161.217 I cmn  common_init_: fitting params to device memory ...",
+      "0.00.161.218 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)",
+      "0.00.161.223 I common_params_fit_impl: getting device memory data for initial parameters:",
+      "0.00.719.796 I common_params_fit_impl: projected to use 9226 MiB of device memory vs. 11312 MiB of free device memory",
+      "0.00.719.800 I common_params_fit_impl: will leave 2086 >= 1024 MiB of free device memory, no changes needed",
+      "0.00.719.807 I common_fit_params: successfully fit params to free device memory",
+      "0.00.719.811 I common_fit_params: fitting params to free memory took 0.55 seconds",
+      "0.22.496.223 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 8192, kv_unified = 'true'",
+      "0.22.498.573 I srv          init: idle slots will be saved to prompt cache and cleared upon starting a new task",
+      "0.22.509.708 I srv  update_slots: all slots are idle",
+      "4.08.721.258 I srv  update_slots: all slots are idle"
+    ],
+    "device": [
+      "0.00.148.279 I cmn  common_param: device_info:",
+      "0.00.150.428 I cmn  common_param:   - Vulkan0 : NVIDIA GeForce RTX 3080 Ti (12084 MiB, 11316 MiB free)",
+      "0.00.152.256 I cmn  common_param:   - Vulkan1 : Intel(R) UHD Graphics 770 (32606 MiB, 48060 MiB free)",
+      "0.00.161.217 I cmn  common_init_: fitting params to device memory ...",
+      "0.00.161.223 I common_params_fit_impl: getting device memory data for initial parameters:",
+      "0.00.669.736 I common_memory_breakdown_print: |   - Vulkan0 (RTX 3080 Ti) | 12084 = 11312 + (9226 =  6637 +    2048 +     541) +       -8455 |",
+      "0.00.719.796 I common_params_fit_impl: projected to use 9226 MiB of device memory vs. 11312 MiB of free device memory",
+      "0.00.719.800 I common_params_fit_impl: will leave 2086 >= 1024 MiB of free device memory, no changes needed",
+      "0.00.719.807 I common_fit_params: successfully fit params to free device memory",
+      "0.00.944.665 I llama_prepare_model_devices: using device Vulkan0 (NVIDIA GeForce RTX 3080 Ti) (0000:01:00.0) - 11312 MiB free",
+      "0.16.439.391 I load_tensors:      Vulkan0 model buffer size =  6637.63 MiB",
+      "0.19.915.550 I llama_kv_cache:    Vulkan0 KV buffer size =   128.00 MiB",
+      "0.19.992.711 I llama_kv_cache:    Vulkan0 KV buffer size =  1920.00 MiB",
+      "0.21.067.052 I sched_reserve:    Vulkan0 compute buffer size =   541.07 MiB"
+    ]
+  },
+  "excerpt": [
+    "# leg3-desktop-use — argv: <drive>\\runtime\\llama.cpp\\win\\llama-server.exe --host 127.0.0.1 --port 61443 --model <drive>\\models\\chat\\gemma4-12b-it-qat-q4.gguf --ctx-size 8192 --threads 16 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4",
+    "0.00.148.279 I cmn  common_param: device_info:",
+    "0.00.152.332 I srv  llama_server: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true",
+    "0.00.161.217 I cmn  common_init_: fitting params to device memory ...",
+    "0.00.161.218 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)",
+    "0.00.161.223 I common_params_fit_impl: getting device memory data for initial parameters:",
+    "0.00.719.796 I common_params_fit_impl: projected to use 9226 MiB of device memory vs. 11312 MiB of free device memory",
+    "0.00.719.800 I common_params_fit_impl: will leave 2086 >= 1024 MiB of free device memory, no changes needed",
+    "0.00.719.807 I common_fit_params: successfully fit params to free device memory",
+    "0.00.719.811 I common_fit_params: fitting params to free memory took 0.55 seconds",
+    "0.00.785.009 I llama_model_loader: - kv  21:                  gemma4.rope.freq_base_swa f32              = 10000.000000",
+    "0.00.785.017 I llama_model_loader: - kv  30:            gemma4.attention.key_length_swa u32              = 256",
+    "0.00.785.018 I llama_model_loader: - kv  31:          gemma4.attention.value_length_swa u32              = 256",
+    "0.00.785.018 I llama_model_loader: - kv  33:            gemma4.rope.dimension_count_swa u32              = 256",
+    "0.00.944.665 I llama_prepare_model_devices: using device Vulkan0 (NVIDIA GeForce RTX 3080 Ti) (0000:01:00.0) - 11312 MiB free",
+    "0.01.153.535 I print_info: n_ctx_train           = 262144",
+    "0.01.153.555 I print_info: n_swa                 = 1024",
+    "0.01.153.555 I print_info: is_swa_any            = 1",
+    "0.01.153.593 I print_info: freq_base_swa         = 10000.0",
+    "0.01.153.594 I print_info: freq_scale_swa        = 1",
+    "0.01.153.594 I print_info: n_embd_head_k_swa     = 256",
+    "0.01.153.594 I print_info: n_embd_head_v_swa     = 256",
+    "0.01.153.594 I print_info: n_rot_swa             = 256",
+    "0.01.153.595 I print_info: n_ctx_orig_yarn       = 262144",
+    "0.01.153.602 I load_tensors: loading model tensors, this can take a while... (mmap = true, direct_io = false)",
+    "0.16.439.382 I load_tensors: offloading output layer to GPU",
+    "0.16.439.387 I load_tensors: offloading 47 repeating layers to GPU",
+    "0.16.439.387 I load_tensors: offloaded 49/49 layers to GPU",
+    "0.16.439.389 I load_tensors:   CPU_Mapped model buffer size =   787.50 MiB",
+    "0.16.439.391 I load_tensors:      Vulkan0 model buffer size =  6637.63 MiB",
+    "0.19.914.512 I llama_context: n_ctx         = 8192",
+    "0.19.914.513 I llama_context: n_ctx_seq     = 8192",
+    "0.19.914.514 I llama_context: kv_unified    = true",
+    "0.19.914.518 I llama_context: n_ctx_seq (8192) < n_ctx_train (262144) -- the full capacity of the model will not be utilized",
+    "0.19.914.966 I llama_context: Vulkan_Host  output buffer size =     4.00 MiB",
+    "0.19.914.972 I llama_kv_cache_iswa: creating non-SWA KV cache, size = 8192 cells",
+    "0.19.915.550 I llama_kv_cache:    Vulkan0 KV buffer size =   128.00 MiB",
+    "0.19.990.788 I llama_kv_cache_iswa: creating     SWA KV cache, size = 6144 cells",
+    "0.19.992.711 I llama_kv_cache:    Vulkan0 KV buffer size =  1920.00 MiB",
+    "0.21.067.052 I sched_reserve:    Vulkan0 compute buffer size =   541.07 MiB",
+    "0.21.067.059 I sched_reserve: Vulkan_Host compute buffer size =   116.08 MiB",
+    "0.22.496.223 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 8192, kv_unified = 'true'",
+    "0.22.496.721 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 8192",
+    "0.22.497.155 I slot   load_model: id  1 | task -1 | new slot, n_ctx = 8192",
+    "0.22.497.158 I slot   load_model: id  2 | task -1 | new slot, n_ctx = 8192",
+    "0.22.497.158 I slot   load_model: id  3 | task -1 | new slot, n_ctx = 8192",
+    "0.22.498.573 I srv          init: idle slots will be saved to prompt cache and cleared upon starting a new task",
+    "0.22.509.708 I srv  update_slots: all slots are idle",
+    "0.24.302.077 I slot   operator(): id  3 | task 0 | new prompt, n_ctx_slot = 8192, n_keep = 0, task.n_tokens = 2042",
+    "4.08.721.258 I srv  update_slots: all slots are idle"
+  ],
+  "app_report": {
+    "source": "same app session as leg 3 baseline; not re-run under this desktop load",
+    "starred": "qwen3.5-9b-ud-q4kxl",
+    "memory_class": "discrete",
+    "budget_device": "NVIDIA GeForce RTX 3080 Ti, 11.8 GB VRAM"
+  },
+  "vulkaninfo_under_load": {
+    "heap0_size_gib": 11.8,
+    "budget_gib": 11.05,
+    "usage": 0,
+    "note": "identical to idle reading while nvidia-smi showed 5,774 MiB used"
+  }
+}
