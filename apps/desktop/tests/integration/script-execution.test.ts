@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parse as parseYaml } from 'yaml'
+import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
+import { buildChecksumsJson, type ChecksumsJson } from '../../src/main/services/drive'
 
 // Executes the drive-builder scripts (#233, #234) — unlike script-drift.test.ts, which is
 // text-only by charter. Every case is OFFLINE and deterministic: the fetch-runtime cases
@@ -281,6 +285,116 @@ for (const leg of LEGS) {
         for (const file of files) expect(out, `${os}/${arch}: expected ${file} in the plan`).toContain(file)
         // Nothing extracted — dry run touches no network and creates no runtime/ tree.
         expect(existsSync(join(root, 'runtime', 'kiwix-tools'))).toBe(false)
+      })
+    })
+
+    // #310: verify-models must enumerate every file a multi-file weight declares, not just the
+    // primary GGUF — this executes the real script (unlike script-drift.test.ts's text-only
+    // checks) against a small on-disk shard set with REAL sha256 hashes, entirely offline
+    // (verify-models never touches the network).
+    describe('verify-models enumerates every declared file (#310)', () => {
+      const verifier = `verify-models.${leg.ext}`
+
+      const sha256Of = (content: string): string => createHash('sha256').update(content).digest('hex')
+
+      const manifestYaml = (fields: Record<string, string>, extra: string[] = []): string =>
+        [
+          `id: ${fields.id}`,
+          `display_name: ${fields.id}`,
+          'family: shard-test',
+          'role: chat',
+          'format: gguf',
+          'runtime: llama_cpp',
+          'license: test',
+          'size_on_disk_gb: 0.000001',
+          'recommended_min_ram_gb: 1',
+          'recommended_ram_gb: 1',
+          'recommended_context_tokens: 2048',
+          `local_path: ${fields.localPath}`,
+          `sha256: ${fields.sha256}`,
+          'license_review:',
+          '  status: approved',
+          '  reviewed_by: test',
+          "  reviewed_at: '2026-09-07'",
+          '  notes: test fixture',
+          ...extra,
+          ''
+        ].join('\n')
+
+      /** A three-file shard model (shard 1 + two declared siblings) plus a single-file model. */
+      function buildTempDrive(withThirdShard: boolean): { root: string; manifests: ModelManifest[] } {
+        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-verify-'))
+        mkdirSync(join(root, 'model-manifests'), { recursive: true })
+        mkdirSync(join(root, 'models', 'chat'), { recursive: true })
+
+        const c1 = 'shard-one', c2 = 'shard-two', c3 = 'shard-three', cs = 'single-file-weight'
+        const [sha1, sha2, sha3, shaS] = [c1, c2, c3, cs].map(sha256Of)
+
+        writeFileSync(join(root, 'models', 'chat', 'x-00001-of-00003.gguf'), c1)
+        writeFileSync(join(root, 'models', 'chat', 'x-00002-of-00003.gguf'), c2)
+        if (withThirdShard) writeFileSync(join(root, 'models', 'chat', 'x-00003-of-00003.gguf'), c3)
+        writeFileSync(join(root, 'models', 'chat', 'single.gguf'), cs)
+
+        const shardYaml = manifestYaml(
+          { id: 'shard-test-chat', localPath: 'models/chat/x-00001-of-00003.gguf', sha256: sha1 },
+          [
+            'files:',
+            '  - local_path: models/chat/x-00002-of-00003.gguf',
+            `    sha256: ${sha2}`,
+            '  - local_path: models/chat/x-00003-of-00003.gguf',
+            `    sha256: ${sha3}`
+          ]
+        )
+        const singleYaml = manifestYaml({
+          id: 'single-test-chat',
+          localPath: 'models/chat/single.gguf',
+          sha256: shaS
+        })
+
+        writeFileSync(join(root, 'model-manifests', 'shard-test.yaml'), shardYaml)
+        writeFileSync(join(root, 'model-manifests', 'single-test.yaml'), singleYaml)
+
+        const manifests = [shardYaml, singleYaml].map((y) => {
+          const result = validateManifest(parseYaml(y))
+          if (!result.ok) throw new Error(`fixture manifest invalid: ${result.errors.join('; ')}`)
+          return result.manifest as ModelManifest
+        })
+        return { root, manifests }
+      }
+
+      const sortedEntries = (entries: ChecksumsJson['entries']): ChecksumsJson['entries'] =>
+        [...entries].sort((a, b) => `${a.id}:${a.local_path}`.localeCompare(`${b.id}:${b.local_path}`))
+
+      it('--generate reports every shard VERIFIED with an (file N/M) label and matches buildChecksumsJson', async () => {
+        const { root, manifests } = buildTempDrive(true)
+        const r = leg.run(verifier, [f('Target'), root, f('Generate')])
+        const out = text(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toContain('(file 2/3)')
+        expect(out).toContain('(file 3/3)')
+        expect(out).toContain('shard-test-chat')
+        expect(out).toContain('single-test-chat')
+        // Every reported line for these two models is VERIFIED — real hashes, present files.
+        for (const line of out.split('\n')) {
+          if (line.includes('shard-test-chat') || line.includes('single-test-chat')) {
+            expect(line, `expected VERIFIED: ${line}`).toContain('VERIFIED')
+          }
+        }
+        const checksumsPath = join(root, 'config', 'checksums.json')
+        expect(existsSync(checksumsPath)).toBe(true)
+        const written = JSON.parse(readFileSync(checksumsPath, 'utf8')) as ChecksumsJson
+        const expected = await buildChecksumsJson(root, manifests)
+        expect(sortedEntries(written.entries)).toEqual(sortedEntries(expected.entries))
+      })
+
+      it('a missing declared sibling reports MISSING with its (file N/M) label and fails --strict', () => {
+        const { root } = buildTempDrive(false)
+        const r = leg.run(verifier, [f('Target'), root, f('Strict')])
+        const out = text(r)
+        expect(r.status, out).not.toBe(0)
+        expect(out).toContain('MISSING')
+        expect(out).toContain('(file 3/3)')
+        expect(out).toMatch(/MISSING\s+shard-test-chat \(file 3\/3\)/)
       })
     })
 

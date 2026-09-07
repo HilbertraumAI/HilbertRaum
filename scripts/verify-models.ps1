@@ -103,6 +103,44 @@ function Get-MmprojBlock([string]$text) {
   return ($out -join "`n")
 }
 
+# Extract the indented body of a top-level `files:` mapping — the ADDITIONAL required files of
+# a multi-file weight (#310, e.g. a GGUF shard set's shards 2..N) — the same shape as
+# Get-MmprojBlock. Emitted AFTER local_path/sha256/download/mmproj in every manifest
+# (model-policy.md key-order rule), so it never poisons the flat top-level reads.
+function Get-FilesBlock([string]$text) {
+  $out = New-Object System.Collections.Generic.List[string]
+  $inBlk = $false
+  foreach ($line in ($text -split "`n")) {
+    if (-not $inBlk) {
+      if ($line -match '^files:\s*$') { $inBlk = $true }
+    } elseif ($line -match '^\S') {
+      break
+    } else {
+      $out.Add($line)
+    }
+  }
+  return ($out -join "`n")
+}
+
+# Split a `files:` block (as text, e.g. from Get-FilesBlock) into one member's raw text per
+# list entry (#310). A member starts at its own `- local_path:` line (the leading `- ` is
+# stripped so Get-ManifestField sees `local_path:` at the front) and runs to the next one.
+function Get-FilesMembers([string]$block) {
+  $members = New-Object System.Collections.Generic.List[string]
+  $current = New-Object System.Collections.Generic.List[string]
+  foreach ($line in ($block -split "`n")) {
+    if ($line -match '^\s*-\s*local_path:') {
+      if ($current.Count -gt 0) { $members.Add(($current -join "`n")) }
+      $current = New-Object System.Collections.Generic.List[string]
+      $current.Add(($line -replace '^\s*-\s*', ''))
+    } elseif ($current.Count -gt 0) {
+      $current.Add($line)
+    }
+  }
+  if ($current.Count -gt 0) { $members.Add(($current -join "`n")) }
+  return $members
+}
+
 # Classify one weight file against its expected hash (mirrors services/models.ts verifyChecksum).
 function Get-WeightStatus([string]$weight, [string]$sha) {
   if (-not (Test-Path $weight)) { return 'MISSING' }
@@ -148,6 +186,12 @@ foreach ($mf in $manifestFiles) {
   $mmprojLocal = Get-ManifestField $mmprojBlock 'local_path'
   $mmprojSha = (Get-ManifestField $mmprojBlock 'sha256'); if ($mmprojSha) { $mmprojSha = $mmprojSha.ToLower() }
 
+  # #310: the ADDITIONAL required files of a multi-file weight (a GGUF shard set's shards
+  # 2..N), each verified with an " (file N/M)" label — M is the primary plus every declared
+  # file (mmproj is reported separately and does not count towards M).
+  $fileMembers = Get-FilesMembers (Get-FilesBlock $text)
+  $totalFiles = 1 + $fileMembers.Count
+
   if ($SupportedRuntimeFormats[$runtime] -ne $format) {
     Write-WeightResult $id '' 'UNSUPPORTED'
     continue
@@ -159,6 +203,17 @@ foreach ($mf in $manifestFiles) {
     $mmprojWeight = Join-Path $Target ($mmprojLocal -replace '/', [IO.Path]::DirectorySeparatorChar)
     Write-WeightResult $id ' (mmproj)' (Get-WeightStatus $mmprojWeight $mmprojSha)
   }
+  $fileIdx = 2
+  foreach ($member in $fileMembers) {
+    $fLocal = Get-ManifestField $member 'local_path'
+    $fSha = Get-ManifestField $member 'sha256'; if ($fSha) { $fSha = $fSha.ToLower() }
+    if ($fLocal) {
+      $fWeight = Join-Path $Target ($fLocal -replace '/', [IO.Path]::DirectorySeparatorChar)
+      $label = " (file {0}/{1})" -f $fileIdx, $totalFiles
+      Write-WeightResult $id $label (Get-WeightStatus $fWeight $fSha)
+    }
+    $fileIdx++
+  }
 }
 
 if ($Generate) {
@@ -167,10 +222,16 @@ if ($Generate) {
     $id = Get-ManifestField $text 'id'
     $localPath = Get-ManifestField $text 'local_path'
     if (-not $localPath) { continue }
-    # One entry per FILE: the GGUF, plus a vision model's mmproj projector (DIST-2).
+    # One entry per FILE: the GGUF, a vision model's mmproj projector (DIST-2), plus every
+    # ADDITIONAL declared file (#310) — same order as manifestFiles().
     $paths = @($localPath)
     $mmprojLocal = Get-ManifestField (Get-MmprojBlock $text) 'local_path'
     if ($mmprojLocal) { $paths += $mmprojLocal }
+    $fileMembers = Get-FilesMembers (Get-FilesBlock $text)
+    foreach ($member in $fileMembers) {
+      $fLocal = Get-ManifestField $member 'local_path'
+      if ($fLocal) { $paths += $fLocal }
+    }
     foreach ($lp in $paths) {
       $weight = Join-Path $Target ($lp -replace '/', [IO.Path]::DirectorySeparatorChar)
       $present = Test-Path $weight
