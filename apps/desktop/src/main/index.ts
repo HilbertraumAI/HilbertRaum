@@ -66,6 +66,7 @@ import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
 import { RuntimeManager } from './services/runtime'
 import {
+  clearModelLoadLatch,
   createGpuCrashAutoFallback,
   createSelectingRuntimeFactory,
   createSpeculativeCrashAutoFallback
@@ -406,9 +407,11 @@ function initBackend(): void {
       // machine's GPU — nothing is persisted here (no `gpuAutoDisabled`, no `gpuLastError`,
       // no new audit type; the `runtime_started` entry already records `backend: 'mock'`).
       // The user is told which model, over the existing ephemeral runtime:notice channel.
+      // #372: also fired with acceleration off (no GPU verdict to hold), and again — with no
+      // rung spawned — on a later start of a model the ladder latched this session.
       onModelLoadFailure: (opts, reason) => {
         perfMark('runtime_model_load_failed', { modelId: opts.modelId })
-        log.warn('Model could not be loaded on any rung — the GPU is not the suspect', {
+        log.warn('Model could not be loaded on this computer — the GPU is not the suspect', {
           modelId: opts.modelId,
           reason
         })
@@ -634,7 +637,10 @@ function initBackend(): void {
   // transcriber/reranker/embedder keep the documented restart requirement for now — their
   // handles are captured at wiring time in registerDocsIpc / ingestion deps, so a ctx
   // re-assignment alone would activate them inconsistently.
-  ctx.onModelInstalled = () => {
+  ctx.onModelInstalled = (modelId) => {
+    // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model
+    // BEFORE the translator rule below can return early (that rule is about a different slot).
+    clearModelLoadLatch(modelId)
     if (!ctx || !shouldReplaceTranslator(ctx.translator)) return
     ctx.translator = composeTranslator({
       rootPath: paths.rootPath,

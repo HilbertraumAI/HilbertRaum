@@ -35,6 +35,7 @@ import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
 import { EngineDownloadManager, hostRuntimeArch, hostRuntimeOs, type ExtractFn } from '../../src/main/services/runtime-download'
 import { SIDECAR_FAMILY_SPECS, type FetchFn } from '../../src/main/services/assets'
 import { llamaServerBinaryName, registerSidecarChild, unregisterSidecarChild } from '../../src/main/services/runtime/sidecar'
+import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import { updateSettings } from '../../src/main/services/settings'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb } from '../helpers/performance-fixture'
@@ -145,6 +146,10 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
 
   it('the argument-less call still never fetches kiwix_tools, and installing the chat engine reconciles nothing', async () => {
     const d = makeDrive()
+    // #372: a new runtime binary may load what the old one could not — the completed
+    // chat-engine install re-arms EVERY model the ladder latched as unloadable this session.
+    latchModelLoad('a', 'unknown model architecture')
+    latchModelLoad('b', 'unknown model architecture')
     const { result } = await invoke(d.handlers, IPC.downloadEngine)
     const job = await settle(d, result as EngineDownloadJob)
     expect(job.status).toBe('done')
@@ -154,6 +159,19 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     expect(String(d.fetchSpy.mock.calls[0]?.[0])).not.toContain('kiwix')
     await new Promise((r) => setTimeout(r, 20))
     expect(d.reconcile).not.toHaveBeenCalled()
+    expect(modelLoadLatchReason('a')).toBeNull()
+    expect(modelLoadLatchReason('b')).toBeNull()
+  })
+
+  it('installing only the optional kiwix_tools family leaves the #372 latch alone (no new chat runtime)', async () => {
+    const d = makeDrive()
+    latchModelLoad('a', 'unknown model architecture')
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['kiwix_tools'] })
+    const job = await settle(d, result as EngineDownloadJob)
+    expect(job.status).toBe('done')
+    await vi.waitFor(() => expect(d.reconcile).toHaveBeenCalledTimes(1))
+    expect(modelLoadLatchReason('a')).toBe('unknown model architecture')
+    clearModelLoadLatches()
   })
 
   it('refuses a malformed payload before any gate or network is touched', async () => {

@@ -18,6 +18,13 @@ vi.mock('electron', () => ({
 }))
 
 import { maybeRunFirstBenchmark, tryGpuAgain } from '../../src/main/ipc/registerBenchmarkIpc'
+import {
+  clearModelLoadLatches,
+  isSpeculativeSuppressed,
+  latchModelLoad,
+  modelLoadLatchReason,
+  suppressSpeculative
+} from '../../src/main/services/runtime/factory'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import {
@@ -88,6 +95,19 @@ describe('tryGpuAgain', () => {
     expect(result.gpuMode).toBe('auto')
     expect(result.gpuProbe?.devices).toEqual([RTX])
     expect(getSettings(db).gpuProbe?.devices).toEqual([RTX])
+  })
+
+  it('re-arms the #182 speculative latch but LEAVES the #372 unloadable-model latch alone', async () => {
+    // "Try GPU again" is about the graphics card. A model no rung could load is not a card
+    // problem, so this button is not its reset — verify / re-download / engine install are.
+    const root = rootWithBinary()
+    const db = seededDb(root)
+    suppressSpeculative('m')
+    latchModelLoad('m', 'unknown model architecture')
+    await tryGpuAgain(ctxWith(root, db, fakeProbe([RTX])))
+    expect(isSpeculativeSuppressed('m')).toBe(false)
+    expect(modelLoadLatchReason('m')).toBe('unknown model architecture')
+    clearModelLoadLatches()
   })
 })
 

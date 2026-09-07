@@ -47,7 +47,10 @@ import {
 //
 // `gpuMode: 'off'` (Settings) and `gpuAutoDisabled` (a previously detected problem)
 // skip rung 1. A rung-1 failure reports through `onGpuFailure` so the caller persists
-// `gpuAutoDisabled` + `gpuLastError` — no repeated GPU health timeouts on later starts.
+// `gpuAutoDisabled` + `gpuLastError` — no repeated GPU health timeouts on later starts —
+// once a forced-CPU rung proves the model loads here (#312); every rung dying of the model
+// instead names the MODEL (`onModelLoadFailure`) and latches it for the session (#372), so
+// no repeated health timeouts on later starts of THAT model either.
 // GPU state is INJECTED (read-callbacks), never read from the DB here — keeps the
 // ladder pure and unit-testable with the existing fake seams.
 
@@ -135,6 +138,47 @@ export function isSpeculativeSuppressed(modelId: string): boolean {
 /** Re-arm every latched model (wired to "Try GPU again"; also the test reset). */
 export function clearSpeculativeSuppression(): void {
   speculativeSuppressed.clear()
+}
+
+/**
+ * #372: models the ladder has already blamed THIS SESSION (`onModelLoadFailure` fired — every
+ * rung died of the model, not the device), keyed by model id, valued by the reason it was
+ * blamed with. A second start of such a model goes straight to the notice + the rung-4 mock
+ * instead of re-walking the rungs: each rung can wait the full health timeout (180 s), so a
+ * repeat attempt on a corrupt or unsupported weight used to cost up to three timeouts before
+ * the user got the demo runtime again.
+ *
+ * Same idiom as {@link speculativeSuppressed} (#182): module-level, session-scoped, never
+ * persisted — a wrong latch must not outlive the process. It has its OWN clearing rule
+ * (architecture.md GPU record §5.2, #372): "Try GPU again" is about the graphics card and does
+ * NOT touch it; what re-arms a model is evidence that the FILE or the RUNTIME changed —
+ * "Verify checksum" on the model (a re-verified file is a new file), an in-app download of
+ * that model (`onModelInstalled`), a chat-engine install (a new binary may load what the old
+ * one could not — every latch clears), and an app restart (session-only anyway).
+ *
+ * Only a failure `failureSignature` recognises latches (a sidecar throw shape; never a bind
+ * race), so a transient port collision can never exile a good model for the whole session.
+ */
+const modelLoadLatched = new Map<string, string>()
+
+/** Latch this model as unloadable for the rest of the session (the ladder's blame path). */
+export function latchModelLoad(modelId: string, reason: string): void {
+  modelLoadLatched.set(modelId, reason)
+}
+
+/** The reason {@link latchModelLoad} recorded for this model this session, or null. */
+export function modelLoadLatchReason(modelId: string): string | null {
+  return modelLoadLatched.get(modelId) ?? null
+}
+
+/** Re-arm ONE model — "Verify checksum" on it, or a completed in-app download of it. */
+export function clearModelLoadLatch(modelId: string): void {
+  modelLoadLatched.delete(modelId)
+}
+
+/** Re-arm EVERY model — a chat-engine (runtime binary) install; also the test reset. */
+export function clearModelLoadLatches(): void {
+  modelLoadLatched.clear()
 }
 
 /** GPU-ladder hooks; all optional — omitting them yields plain rung-1-only behavior. */
@@ -230,6 +274,13 @@ export interface RuntimeSelectionDeps {
    * as the GPU rung — the model, not this machine's device, is the common cause. Nothing is
    * persisted (`gpuAutoDisabled` stays untouched); the caller names the MODEL to the user.
    * The walk still ends on the rung-4 mock, whose replies disclose that they are simulated.
+   *
+   * #372: ALSO fired when every rung failed and no GPU verdict was held at all — acceleration
+   * off, `gpuAutoDisabled` already persisted, or the GPU rung's failure was a bind race — so
+   * the model is named whatever the cause ("could not be loaded on this computer" stays
+   * accurate); `onGpuFailure` never fires on that path. And fired AGAIN, without any rung
+   * spawned, on every later start of a model this session already latched as unloadable
+   * ({@link modelLoadLatchReason}) — the user is told once more why the replies are simulated.
    */
   onModelLoadFailure?: (opts: RuntimeStartOptions, reason: string) => void
   /** Test seam: override the prefetch reader (default {@link startModelPrefetch}). */
@@ -320,6 +371,17 @@ class LadderRuntime implements ModelRuntime {
     let pendingGpuFailure: { reason: string; signature: string | null } | null = null
     /** #312: the last forced-CPU rung's failure class — the control side of the comparison. */
     let cpuSignature: string | null = null
+    // #372: this model was already blamed this session — every rung died of the model. Do not
+    // pay the rung health timeouts again: name it once more and go straight to the rung-4
+    // mock, exactly the outcome the first walk reached, minus the wait. Checked AFTER the
+    // CODE-2 cancel point so a cancelled start still settles as cancelled, never as the mock.
+    const latched = modelLoadLatchReason(this.opts.modelId)
+    if (latched !== null) {
+      if (this.cancelled) throw cancelledStartError()
+      this.deps.onModelLoadFailure?.(this.opts, latched)
+      await this.fallBackToMock(`model latched as unloadable this session (#372): ${latched}`)
+      return
+    }
     // #182: the #108 read sample and the #114 prefetch belong to the first rung we actually
     // SPAWN, which is no longer the same thing as `rungs[0]`: a skipped speculative rung
     // consumes index 0 without opening a load window, and gating on the index would have
@@ -539,24 +601,46 @@ class LadderRuntime implements ModelRuntime {
     // classes, or a shape `failureSignature` does not recognise on either side — stays a
     // device verdict, exactly as before: unknown evidence must never un-blame a real GPU
     // fault and reinstate a multi-minute health timeout on every later start.
+    const reason = lastError instanceof Error ? lastError.message : String(lastError)
     if (pendingGpuFailure) {
       const modelFault = cpuSignature !== null && cpuSignature === pendingGpuFailure.signature
-      if (modelFault) this.deps.onModelLoadFailure?.(this.opts, pendingGpuFailure.reason)
+      if (modelFault) this.blameModel(pendingGpuFailure.reason)
       else this.deps.gpu.onGpuFailure?.(pendingGpuFailure.reason)
       pendingGpuFailure = null
+    } else if (lastError !== null) {
+      // #372: no GPU verdict was held — acceleration is off, `gpuAutoDisabled` is already
+      // persisted (no GPU rung ran), or the GPU rung's failure was a bind race (REL-1, never
+      // held). There is no device comparison to make and nothing to persist; the model is
+      // still the thing that could not be loaded on this computer, so name it. The latch
+      // needs a recognised failure class (never a bind race): a transient port collision on
+      // the last rung fires the notice but must not exile the model for the session.
+      const latch = cpuSignature !== null && !isBindRaceError(reason)
+      if (latch) this.blameModel(reason)
+      else this.deps.onModelLoadFailure?.(this.opts, reason)
     }
 
     // Rung 4 — the existing graceful fallback: the app can never be stuck. The mock's
     // replies are visibly simulated, and the next start retries the ladder — from rung 2
     // when the rung-1 failure was persisted as a device fault, and from rung 1 again when
-    // #312 blamed the model instead (the auto-disable flag was never written).
+    // #312 blamed the model instead (the auto-disable flag was never written) — unless
+    // #372 latched the model, in which case the next start skips the walk entirely.
+    await this.fallBackToMock(`all llama-server start attempts failed: ${reason}`)
+  }
+
+  /** #312/#372: the model is the common cause — name it to the user, latch it for the session. */
+  private blameModel(reason: string): void {
+    latchModelLoad(this.opts.modelId, reason)
+    this.deps.onModelLoadFailure?.(this.opts, reason)
+  }
+
+  /** Rung 4: commit the mock runtime (the app can never be stuck) and log why. */
+  private async fallBackToMock(selectReason: string): Promise<void> {
     const mock = this.deps.makeMock(this.opts)
     await mock.start()
     this.inner = mock
     this.backend = 'mock'
     this.gpuName = null
-    const reason = lastError instanceof Error ? lastError.message : String(lastError)
-    this.deps.onSelect?.('mock', this.opts, `all llama-server start attempts failed: ${reason}`)
+    this.deps.onSelect?.('mock', this.opts, selectReason)
   }
 
   /**

@@ -52,6 +52,7 @@ import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { IPC } from '../../src/shared/ipc'
 import { clearChecksumCache, primeChecksum } from '../../src/main/services/models'
+import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppSettings, AppStatus, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
@@ -586,6 +587,27 @@ describe('registerModelIpc', () => {
     const { result } = await invoke(handlers, IPC.verifyModel, 'qwen3-4b-instruct-q4')
     expect(result).toBe('missing') // no weights on disk in this fixture
     await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(/Unknown model id/)
+  })
+
+  it('verifyModel re-arms the #372 unloadable-model latch for THAT model only (a re-verified file is a new file)', async () => {
+    const ctx = {
+      db: seededDb(),
+      manifestsDir: REPO_MANIFESTS,
+      paths: noWeightPaths(),
+      isDev: true,
+      runtime: { activeModelId: () => null }
+    } as unknown as AppContext
+    reg(ctx)
+    latchModelLoad('qwen3-4b-instruct-q4', 'unknown model architecture')
+    latchModelLoad('other-model', 'unknown model architecture')
+    await invoke(handlers, IPC.verifyModel, 'qwen3-4b-instruct-q4')
+    expect(modelLoadLatchReason('qwen3-4b-instruct-q4')).toBeNull()
+    expect(modelLoadLatchReason('other-model')).toBe('unknown model architecture')
+    // An unknown id throws BEFORE the clear — nothing else is re-armed by a bad request.
+    latchModelLoad('qwen3-4b-instruct-q4', 'again')
+    await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(/Unknown model id/)
+    expect(modelLoadLatchReason('qwen3-4b-instruct-q4')).toBe('again')
+    clearModelLoadLatches()
   })
 
   // #310: the multi-file seams of the model IPC — the re-verify button's per-file cache
